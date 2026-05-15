@@ -16,6 +16,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -25,7 +26,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/arch.hpp>
 
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include "test_golden_impls.hpp"
 #include "tt_metal/impl/data_format/bfloat16_utils.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
@@ -46,7 +47,8 @@ struct MulReduceScalarConfig {
 
 constexpr uint32_t TILE_BYTE_SIZE = 2 * 32 * 32;  // bfloat16: 2 bytes * 32 * 32 elements
 
-bool run_mul_reduce_scalar_test(IDevice* device, const MulReduceScalarConfig& config) {
+bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulReduceScalarConfig& config) {
+    IDevice* device = mesh_device.get_devices()[0];
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord core = {0, 0};
 
@@ -129,7 +131,16 @@ bool run_mul_reduce_scalar_test(IDevice* device, const MulReduceScalarConfig& co
 
     tt_metal::detail::WriteToBuffer(*src0_dram_buffer, packed_input0);
     tt_metal::detail::WriteToBuffer(*src1_dram_buffer, packed_input1);
-    tt_metal::detail::LaunchProgram(device, program, true, true);
+
+    // Wrap the program into a MeshWorkload and dispatch via the mesh command queue.
+    // This path works under both fast dispatch and slow dispatch, unlike detail::LaunchProgram.
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> result_vec;
     tt_metal::detail::ReadFromBuffer(*dst_dram_buffer, result_vec);
@@ -168,21 +179,13 @@ bool run_mul_reduce_scalar_test(IDevice* device, const MulReduceScalarConfig& co
 using namespace tt::tt_metal::unit_tests::compute::mul_reduce_scalar;
 
 // Test fixture that automatically skips if not on Blackhole
-class MulReduceScalarTest : public MeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {
-protected:
-    void SetUp() override {
-        MeshDeviceSingleCardFixture::SetUp();
-        if (this->arch_ != tt::ARCH::BLACKHOLE) {
-            GTEST_SKIP() << "Test only runs on Blackhole architecture";
-        }
-    }
-};
+class MulReduceScalarTest : public LLKBlackholeSingleCardFixture, public testing::WithParamInterface<int> {};
 
 // Single parametrized test
 TEST_P(MulReduceScalarTest, MulReduceScalar) {
-    IDevice* device = devices_[0]->get_devices()[0];
+    auto& mesh_device = *devices_[0];
     int num_tiles = GetParam();
-    ASSERT_TRUE(run_mul_reduce_scalar_test(device, {.num_tiles = num_tiles}));
+    ASSERT_TRUE(run_mul_reduce_scalar_test(mesh_device, {.num_tiles = num_tiles}));
 }
 
 // Instantiate the test suite with different tile counts

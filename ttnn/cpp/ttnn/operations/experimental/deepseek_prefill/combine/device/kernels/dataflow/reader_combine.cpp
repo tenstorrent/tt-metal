@@ -373,6 +373,7 @@ void kernel_main() {
                 noc_async_write_barrier();
                 noc_inline_dw_write(idle_metadata_noc_addrs[current_idle_core], batch_count);
             }
+            noc_async_write_barrier();
 
             // Signal the idle core that the metadata batch is ready in its c_9.
             noc_semaphore_inc(idle_start_noc_addrs[current_idle_core], 1);

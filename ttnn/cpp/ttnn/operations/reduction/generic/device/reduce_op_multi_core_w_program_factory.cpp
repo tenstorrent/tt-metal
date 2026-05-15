@@ -58,6 +58,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
             num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
     }
+    TT_FATAL(num_cores > 0, "Reduce W requires at least one worker core");
 
     ProgramDescriptor desc;
 
@@ -217,6 +218,9 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     } else {
         cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
     }
+    TT_FATAL(
+        cores.size() == num_cores, "Resolved core list size {} must match split num_cores {}", cores.size(), num_cores);
+    TT_FATAL(num_rows == 0 || !cores.empty(), "Non-zero reduce workload requires non-empty core list");
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
         const CoreCoord& core = cores[i];
         uint32_t num_rows_per_core = 0;
@@ -244,6 +248,13 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
                 num_tiles_read / out_dim_divider              // output tile start index
             });
         num_tiles_read += num_tensor_tiles_per_core;
+        if (i == num_cores - 1) {
+            TT_FATAL(
+                num_tiles_read == num_rows * Wt,
+                "Reduce W assigned {} input tiles, expected {}",
+                num_tiles_read,
+                num_rows * Wt);
+        }
     }
 
     desc.kernels.push_back(std::move(reader_desc));

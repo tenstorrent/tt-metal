@@ -49,7 +49,7 @@ struct LocalDFBInterface {
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (pack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 61, "LocalDFBInterface (pack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 87, "LocalDFBInterface (pack TRISC) size is incorrect");
 
 #elif defined(COMPILE_FOR_TRISC)
 
@@ -73,7 +73,7 @@ struct LocalDFBInterface {
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (unpack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 60, "LocalDFBInterface (unpack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 86, "LocalDFBInterface (unpack TRISC) size is incorrect");
 
 #else
 
@@ -95,6 +95,7 @@ struct LocalDFBInterface {
     uint8_t tc_idx;
 
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
+    uint8_t threshold;         // When this value is met, ISR to post/ack credits will fire. Used when last reads don't meet this value.
     uint8_t
         num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
@@ -105,7 +106,7 @@ struct LocalDFBInterface {
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 17, "DFBTCSlot size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 86, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 121, "LocalDFBInterface size is incorrect");
 
 #endif
 
@@ -121,7 +122,7 @@ inline LocalDFBInterface& get_local_dfb_interface(uint32_t logical_dfb_id) {
 // It is used by the ISR to understand which tile counters need to update which credits (post/ack)
 struct TxnDFBDescriptor {
     uint8_t num_counters;
-    dfb::PackedTileCounter tile_counters[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
+    dfb::PackedTileCounter tile_counters[18];
     union {
         uint8_t tiles_to_post;
         uint8_t tiles_to_ack;

@@ -43,7 +43,7 @@ PreAllGatherWelfordProgramFactory::cached_program_t PreAllGatherWelfordProgramFa
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t single_tile_size = tt::tile_size(cb_data_format);

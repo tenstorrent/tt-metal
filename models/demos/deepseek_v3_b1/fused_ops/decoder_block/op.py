@@ -145,7 +145,6 @@ class DecoderBlock:
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
-        metadata_tensor,
         sdpa_scale,
         sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer,
@@ -202,7 +201,6 @@ class DecoderBlock:
         persistent_mode=False,
         termination_semaphore=None,
         is_torus=True,
-        forward_metadata=False,
     ):
         """Build io_tensors and mesh_program_descriptor without executing.
 
@@ -227,7 +225,6 @@ class DecoderBlock:
             dkv_matmul_weights_tensor,
             dkv_rmsnorm_gamma_tensor,
             kv_cache_tensor,
-            metadata_tensor,
             sdpa_scale,
             None,
             sdpa_kv_cache_buffer,
@@ -257,7 +254,6 @@ class DecoderBlock:
             upstream_socket=upstream_socket,
             fabric_config=fabric_config,
             broadcast_topology_override=broadcast_topology_override,
-            forward_metadata=forward_metadata,
         )
 
         moe = MoeOp(
@@ -296,8 +292,8 @@ class DecoderBlock:
             termination_semaphore=termination_semaphore,
             bcast_sender_coord=sender_coord,
             is_torus=is_torus,
-            forward_metadata_size_bytes=DeepseekMetadata.aligned_size_bytes() if forward_metadata else 0,
-            metadata_l1_addr=metadata_addr if forward_metadata else 0,
+            forward_metadata_size_bytes=DeepseekMetadata.aligned_size_bytes(),
+            metadata_l1_addr=metadata_addr,
         )
 
         moe._build_descriptors()
@@ -324,7 +320,6 @@ class DecoderBlock:
             qrope_sin_tensor,
             krope_cos_tensor,
             krope_sin_tensor,
-            metadata_tensor,
             kv_cache_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,

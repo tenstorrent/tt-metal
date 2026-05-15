@@ -15,7 +15,7 @@
 #include "api/compute/eltwise_unary/trigonometry.h"
 #include "api/compute/eltwise_unary/where.h"
 #include "api/compute/compute_kernel_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -25,8 +25,8 @@ void kernel_main() {
 
     constexpr float M_PI = 3.14159265358979323846f;
 
-    experimental::CircularBuffer cb_in(cb_input);
-    experimental::CircularBuffer cb_out(cb_output);
+    CircularBuffer cb_in(cb_input);
+    CircularBuffer cb_out(cb_output);
 
     init_sfpu(cb_input, cb_output);
 

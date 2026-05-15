@@ -246,7 +246,6 @@ DEFAULT_RMSE_THRESHOLD = 0.05
 from tests.nightly.sdpa_perf_utils import (
     post_process_ops_log,
     compute_sdpa_flops,
-    compute_cores_used as compute_ring_joint_cores_used,
     compute_math_utilization as compute_ring_joint_utilization,
     create_balanced_chunk_order,
     reorder_tensor_chunks,
@@ -989,7 +988,6 @@ def test_ring_joint_attention_create_perf_table(model_name):
     total_cores = mesh_config.total_cores
 
     ccl_cores = full_grid_rows  # Full column height for CCL
-    ccl_overhead_pct = (ccl_cores * 100.0) / total_cores
 
     subdir = "ttnn_ring_joint_sdpa_performance"
     perf_results = []
@@ -1027,13 +1025,16 @@ def test_ring_joint_attention_create_perf_table(model_name):
         s = sq  # sq is already global sequence length
         local_seq_len = sq // ring_size
         local_nhq = nhq // mesh_config.tp_size
-        local_nhk = nhk // mesh_config.tp_size if nhk != 1 else 1  # MLA case: nhk=1 (not sharded)
-        local_nhv = nhv // mesh_config.tp_size
 
         try:
             run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
             r = post_process_ops_log(
-                subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
+                subdir,
+                float_columns=float_cols,
+                columns=cols,
+                op_name="RingJointSDPADeviceOperation",
+                sum_vals=False,
+                has_signposts=False,
             )
 
             measured_core_count = int(r["CORE COUNT"][0]) if len(r["CORE COUNT"]) > 0 else 0
@@ -1045,54 +1046,46 @@ def test_ring_joint_attention_create_perf_table(model_name):
             fpu_util_max = float(fpu_util_col.max()) if len(fpu_util_col) > 0 else 0.0
 
             B = b
-            batch_parallel = min(B, total_compute_cores)
-            nh_parallel = min(total_compute_cores // batch_parallel, local_nhq)
-            max_q_parallel = total_compute_cores // (batch_parallel * nh_parallel)
-
-            cores_used = compute_ring_joint_cores_used(s, q_chunk_size, total_compute_cores, local_nhq, ring_size, b)
-            cores_idle = total_compute_cores - cores_used
-            compute_util_pct = (cores_used * 100.0) / total_compute_cores
-
-            k_num_chunks = math.ceil(s / k_chunk_size)
             local_q_num_chunks = math.ceil(local_seq_len / q_chunk_size)
-            q_per_core = math.ceil(local_q_num_chunks / max_q_parallel) if max_q_parallel > 0 else local_q_num_chunks
+            local_k_num_chunks = math.ceil(local_seq_len / k_chunk_size)
+            # Each ring step iterates over the device's local K shard (padded up to k_chunk_size),
+            # so total K chunks traversed is ring_size * local_k_num_chunks — not ceil(s / k_chunk_size),
+            # which would amortize per-device padding globally.
+            k_num_chunks = ring_size * local_k_num_chunks
+
+            total_work_items = B * local_nhq * local_q_num_chunks
+            q_per_core = (
+                math.ceil(total_work_items / total_compute_cores) if total_compute_cores > 0 else total_work_items
+            )
             iters_per_core = q_per_core * k_num_chunks
 
             # Padding waste
             local_q_padded = local_q_num_chunks * q_chunk_size
             global_q_padded = local_q_padded * ring_size
-            local_k_num_chunks = math.ceil(local_seq_len / k_chunk_size)
             local_k_padded = local_k_num_chunks * k_chunk_size
             global_k_padded = local_k_padded * ring_size
             actual_work = s * s
             padded_work = global_q_padded * global_k_padded
             total_waste_pct = ((padded_work - actual_work) / padded_work) * 100 if padded_work > 0 else 0
 
-            # Slot waste
-            total_q_slots = max_q_parallel * q_per_core if max_q_parallel > 0 else local_q_num_chunks
-            wasted_q_slots = max(0, total_q_slots - local_q_num_chunks)
+            # Slot waste: leftover capacity after distributing (b, h, q) work items flatly across all cores.
+            total_q_slots = q_per_core * total_compute_cores
+            wasted_q_slots = max(0, total_q_slots - total_work_items)
             slot_waste_pct = (wasted_q_slots / total_q_slots) * 100 if total_q_slots > 0 else 0
 
-            # Math utilization
-            effective_cores = measured_core_count - measured_core_count % 10
+            # Math utilization — tracy reports SDPA + CCL cores together; strip the CCL contribution
+            # by rounding down to the nearest multiple of grid_rows (CCL adds < grid_rows cores).
+            effective_cores = (measured_core_count // mesh_config.grid_rows) * mesh_config.grid_rows
             heads_per_device = local_nhq
             utilization = compute_ring_joint_utilization(
                 local_seq_len, s, d_q, d_v, heads_per_device, duration_ns, effective_cores, is_causal
             )
 
-            ring_efficiency = (cores_used * 100.0) / total_cores
-
             perf_results.append(
                 {
                     "q_chunk_size": q_chunk_size,
                     "k_chunk_size": k_chunk_size,
-                    "measured_core_count": measured_core_count,
-                    "cores_used": cores_used,
-                    "cores_idle": cores_idle,
-                    "compute_util_pct": compute_util_pct,
-                    "ccl_cores": ccl_cores,
-                    "ccl_overhead_pct": ccl_overhead_pct,
-                    "ring_efficiency": ring_efficiency,
+                    "cores_used": effective_cores,
                     "iters_per_core": iters_per_core,
                     "total_waste_pct": total_waste_pct,
                     "slot_waste_pct": slot_waste_pct,
@@ -1105,7 +1098,7 @@ def test_ring_joint_attention_create_perf_table(model_name):
             )
             logger.info(
                 f"q={q_chunk_size}, k={k_chunk_size}: {duration_ns/1e6:.3f} ms, "
-                f"util={utilization:.1f}%, cores={cores_used}/{total_compute_cores} ({compute_util_pct:.0f}%), "
+                f"util={utilization:.1f}%, cores={effective_cores}/{total_compute_cores}, "
                 f"iters/core={iters_per_core}"
             )
 
@@ -1130,7 +1123,7 @@ def test_ring_joint_attention_create_perf_table(model_name):
     mm_flops = compute_sdpa_flops(s, s, d_q, d_v, nhq, is_causal)
 
     # Print summary table
-    print(f"\n{'='*190}")
+    print(f"\n{'='*150}")
     print(
         f"Ring Joint Attention Performance Sweep ({model_name.upper()}): b={b}, nh={nhq} (global), s={s}, d_q={d_q}, d_v={d_v}, causal={is_causal}"
     )
@@ -1138,9 +1131,9 @@ def test_ring_joint_attention_create_perf_table(model_name):
     print(f"Total MM FLOPs (all devices): {mm_flops:,} ({mm_flops/1e9:.2f} GFLOPs)")
     print(f"Per-device workload: Q={s // ring_size} tokens, K/V={s} tokens (via ring), {local_nhq} heads")
     print(f"Core Allocation: {total_compute_cores} compute + {ccl_cores} CCL = {total_cores} total cores")
-    print(f"{'='*190}")
-    header = "| Rank | q_chunk | k_chunk | Duration (ms) | Compute Used | Compute Idle | Compute Util | CCL Cores | Ring Eff | Iters/Core | Pad Waste | Slot Waste | FPU Util (%)  | Math Util |"
-    sep = "|------|---------|---------|---------------|--------------|--------------|--------------|-----------|----------|------------|-----------|------------|---------------|-----------|"
+    print(f"{'='*150}")
+    header = "| Rank | q_chunk | k_chunk | Duration (ms) | Cores Used | Iters/Core | Pad Waste | Slot Waste | FPU Util (%)  | Math Util |"
+    sep = "|------|---------|---------|---------------|------------|------------|-----------|------------|---------------|-----------|"
     print(header)
     print(sep)
 
@@ -1148,8 +1141,7 @@ def test_ring_joint_attention_create_perf_table(model_name):
         fpu_range = f"{result['fpu_util_min']:.1f}-{result['fpu_util_max']:.1f}"
         print(
             f"| {rank:4d} | {result['q_chunk_size']:7d} | {result['k_chunk_size']:7d} | {result['duration_ms']:13.3f} | "
-            f"{result['cores_used']:12d} | {result['cores_idle']:12d} | {result['compute_util_pct']:11.0f}% | "
-            f"{result['ccl_cores']:9d} | {result['ring_efficiency']:7.0f}% | {result['iters_per_core']:10d} | "
+            f"{result['cores_used']:10d} | {result['iters_per_core']:10d} | "
             f"{result['total_waste_pct']:8.1f}% | {result['slot_waste_pct']:9.1f}% | {fpu_range:>13} | {result['utilization']:8.1f}% |"
         )
 
@@ -1165,18 +1157,11 @@ def test_ring_joint_attention_create_perf_table(model_name):
             f"\nBest configuration: q_chunk_size={best['q_chunk_size']}, "
             f"k_chunk_size={best['k_chunk_size']} "
             f"({best['duration_ms']:.3f} ms, {best['utilization']:.1f}% math util, "
-            f"{best['cores_used']}/{total_compute_cores} compute cores, {best['ccl_cores']} CCL cores, "
-            f"{best['ring_efficiency']:.1f}% ring eff, {best['iters_per_core']} iters/core, "
+            f"{best['cores_used']}/{total_compute_cores} compute cores, {best['iters_per_core']} iters/core, "
             f"{best['total_waste_pct']:.1f}% pad waste, {best['slot_waste_pct']:.1f}% slot waste)"
         )
 
-        print(f"\nRing Joint Attention Analysis:")
-        print(f"  Ring size: {ring_size} devices")
-        print(f"  CCL overhead: {best['ccl_cores']} cores ({best['ccl_overhead_pct']:.1f}% of total)")
-        print(f"  Per-device sequence: {s // ring_size} tokens")
-        print(f"  Total coordination: {ring_size} devices x {best['ccl_cores']} CCL cores each")
-
-    print(f"{'='*190}\n")
+    print(f"{'='*150}\n")
 
 
 # === TEST 5: PERFORMANCE CHECK (CI-gated by SDPA_PERF_CHECKS=1) ===
@@ -1187,7 +1172,7 @@ RING_JOINT_PERF_CHECK_CONFIGS = [
     # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
     # 4-device ring (QuietBox)
     ("wan2_2_1xGLX", 288, 512, 4, 68.9),
-    ("mla_100k", 160, 320, 4, 58.4),
+    ("mla_100k", 160, 320, 4, 61.7),
 ]
 
 

@@ -7,6 +7,7 @@
 
 #include "hostdev/dev_msgs.h"
 #include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdev/realtime_profiler_msgs.h"
 using namespace tt::tt_metal::wormhole::active_eth;
 
 #include "eth_l1_address_map.h"
@@ -29,6 +30,10 @@ namespace active_eth_dev_msgs {
 
 namespace active_eth_fabric_telemetry {
 #include "hal/generated/fabric_telemetry_impl.hpp"
+}
+
+namespace active_eth_realtime_profiler_msgs {
+#include "hal/generated/realtime_profiler_msgs_impl.hpp"
 }
 
 HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
@@ -143,7 +148,8 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
         false /*supports_dfbs*/,
         false /*supports_receiving_multicast_cmds*/,
         active_eth_dev_msgs::create_factory(),
-        active_eth_fabric_telemetry::create_factory()};
+        active_eth_fabric_telemetry::create_factory(),
+        active_eth_realtime_profiler_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::wormhole

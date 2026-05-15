@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "api/tensor/tensor_accessor.h"
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 // Simple kernel that copies [start_page, end_page) pages from src to dst.
 void kernel_main() {
@@ -23,7 +23,7 @@ void kernel_main() {
 
     auto accessor_src = TensorAccessor(args_src, bank_base_address_src);
 
-    experimental::CircularBuffer cb(cb_id);
+    CircularBuffer cb(cb_id);
 
     constexpr uint32_t one_tile = 1;
     auto pages = accessor_src.pages(start_page, end_page);

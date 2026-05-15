@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
-#include "experimental/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
 
 void kernel_main() {
     const uint32_t in0_cb = get_compile_time_arg_val(0);
@@ -23,11 +23,11 @@ void kernel_main() {
     uint32_t in0_block_size_bytes = get_arg_val<uint32_t>(7);
     uint32_t in1_block_size_bytes = get_arg_val<uint32_t>(8);
 
-    experimental::CircularBuffer cb0(in0_cb);
-    experimental::CircularBuffer cb1(in1_cb);
-    experimental::Noc noc;
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_src0;
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_src1;
+    CircularBuffer cb0(in0_cb);
+    CircularBuffer cb1(in1_cb);
+    Noc noc;
+    AllocatorBank<AllocatorBankType::DRAM> dram_src0;
+    AllocatorBank<AllocatorBankType::DRAM> dram_src1;
 
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;

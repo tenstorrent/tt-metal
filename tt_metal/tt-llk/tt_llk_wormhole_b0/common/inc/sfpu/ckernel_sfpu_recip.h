@@ -27,7 +27,7 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat in)
     // If in ≠ ±0 and in ≠ ±inf, then x = in * 2**(127-in.Exp).
     // If in = ±0 or in = ±inf, then x = ±1.
     // Then negative_x = -x.
-    sfpi::vFloat negative_x = sfpi::setman(sfpi::vConstNeg1, sfpi::reinterpret<sfpi::vInt>(in));
+    sfpi::vFloat negative_x = sfpi::setman(sfpi::vConstNeg1, in);
 
     // Quadratic initial estimate: y = k2 - k1*x + k0*x**2.
     sfpi::vFloat y = sfpi::vConstFloatPrgm1 + sfpi::vConstFloatPrgm0 * negative_x;
@@ -70,7 +70,7 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat in)
 
     // Apply scaling factor, and set sign to match input.
     y = y * scale;
-    y = sfpi::setsgn(y, in);
+    y = sfpi::copysgn(y, in);
 
     return y;
 }
@@ -82,25 +82,23 @@ inline void _calculate_reciprocal_internal_(const int iterations)
     for (int d = 0; d < iterations; d++)
     {
         sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat out;
 
         if constexpr (APPROXIMATION_MODE)
         {
-            sfpi::dst_reg[0] = _sfpu_reciprocal_<0>(in);
+            out = _sfpu_reciprocal_<0>(in);
+        }
+        else if constexpr (is_fp32_dest_acc_en)
+        {
+            out = _sfpu_reciprocal_<2>(in);
         }
         else
         {
-            if constexpr (is_fp32_dest_acc_en)
-            {
-                sfpi::dst_reg[0] = _sfpu_reciprocal_<2>(in);
+            out = _sfpu_reciprocal_<1>(in);
+            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
             }
-            else
-            {
-                sfpi::vFloat out = _sfpu_reciprocal_<1>(in);
-                sfpi::dst_reg[0] = sfpi::float_to_fp16b(out, sfpi::RoundMode::NearestEven);
-            }
-        }
-
-        sfpi::dst_reg++;
+            sfpi::dst_reg[0] = out;
+            sfpi::dst_reg++;
     }
 }
 

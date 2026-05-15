@@ -6,11 +6,47 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
 using namespace tt::tt_fabric;
 using tt::tt_metal::distributed::MeshShape;
+
+namespace {
+
+using MockMeshTargetNode = uint32_t;
+using MockMeshGlobalNode = uint64_t;
+
+// Same grid topology as tests in test_topology_solver.cpp (unit-edge 2D mesh).
+template <typename NodeId>
+AdjacencyGraph<NodeId> mock_cluster_test_create_2d_mesh_graph(size_t rows, size_t cols) {
+    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
+    AdjacencyMap adj_map;
+    auto get_node_id = [cols](size_t row, size_t col) -> size_t { return row * cols + col; };
+    for (size_t row = 0; row < rows; ++row) {
+        for (size_t col = 0; col < cols; ++col) {
+            size_t node_id = get_node_id(row, col);
+            std::vector<NodeId> neighbors;
+            if (col > 0) {
+                neighbors.push_back(static_cast<NodeId>(get_node_id(row, col - 1)));
+            }
+            if (col < cols - 1) {
+                neighbors.push_back(static_cast<NodeId>(get_node_id(row, col + 1)));
+            }
+            if (row > 0) {
+                neighbors.push_back(static_cast<NodeId>(get_node_id(row - 1, col)));
+            }
+            if (row < rows - 1) {
+                neighbors.push_back(static_cast<NodeId>(get_node_id(row + 1, col)));
+            }
+            adj_map[static_cast<NodeId>(node_id)] = neighbors;
+        }
+    }
+    return AdjacencyGraph<NodeId>(adj_map);
+}
+
+}  // namespace
 
 // =============================================================================
 // Pure Unit Tests - No Fixture, Synthetic Data
@@ -188,6 +224,41 @@ TEST_F(MockClusterTopologyFixture, HopCalculations_WithRealTopology) {
 
     // 2D hops should be >= 1D hops (Manhattan distance >= linear)
     EXPECT_GE(max_2d, max_1d);
+}
+
+// After the same MetalContext + auto-discovery path as HopCalculations_WithRealTopology, run RELAXED topology
+// mapping with the SAT engine at Galaxy-scale (4×8 unit-edge mesh). This matches the ~32-node mapper scale that
+// stress-tested multi-solve SAT; we expect a single fast solve when there are no preferred constraints.
+TEST_F(MockClusterTopologyFixture, TopologyMapping_RelaxedSat_AtGalaxyMeshScale_IsFast) {
+    auto shapes = get_mesh_shapes_from_control_plane();
+    bool have_galaxy_scale_rect_mesh = false;
+    for (const auto& mesh_shape : shapes) {
+        if (mesh_shape.dims() >= 2 && mesh_shape.mesh_size() == 32 &&
+            ((mesh_shape[0] == 4 && mesh_shape[1] == 8) || (mesh_shape[0] == 8 && mesh_shape[1] == 4))) {
+            have_galaxy_scale_rect_mesh = true;
+            break;
+        }
+    }
+    if (!have_galaxy_scale_rect_mesh) {
+        GTEST_SKIP() << "No 32-node 4×8 (or 8×4) mesh in control plane; skipping RELAXED SAT regression";
+    }
+
+    auto target_graph = mock_cluster_test_create_2d_mesh_graph<MockMeshTargetNode>(4, 8);
+    auto global_graph = mock_cluster_test_create_2d_mesh_graph<MockMeshGlobalNode>(4, 8);
+    MappingConstraints<MockMeshTargetNode, MockMeshGlobalNode> constraints;
+
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /* quiet_mode= */ true,
+        TopologyMappingSolverEngine::Sat);
+
+    EXPECT_TRUE(result.success) << result.error_message;
+    EXPECT_EQ(result.target_to_global.size(), 32u);
+    EXPECT_LT(result.stats.elapsed_time.count(), 10'000'000)
+        << "RELAXED SAT for 4×8 unit-edge mesh should complete quickly after mock cluster init";
 }
 
 // =============================================================================

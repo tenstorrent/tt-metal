@@ -6,6 +6,7 @@
 
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_fast_tilize.h"
 
 /*************************************************************************
  * LLK ELTWISE UNARY DATACOPY

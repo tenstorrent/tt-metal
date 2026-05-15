@@ -4,12 +4,14 @@
 
 #include "reduce_op_device_operation.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <bit>
 #include <cmath>
+#include <limits>
 #include <numeric>
 
 namespace ttnn::prim {
@@ -69,6 +71,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_cols);
     }
+    TT_FATAL(num_cores > 0, "Reduce H requires at least one worker core");
 
     // Current sharding only supports width, and that input and output are sharded
     if (use_width_sharding) {
@@ -163,41 +166,74 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
 
     if (operation_attributes.negate) {
         // The reduce_h_neg kernel pushes ntiles tiles per inner-loop iteration
-        // via push_back(ntiles).  The CB FIFO write pointer only wraps when it
-        // exactly reaches fifo_limit, so the CB size must be a multiple of
-        // every push size that occurs.
-        //
-        // For a core with Wt_per_core columns and row_chunk == chunk_size:
-        //   - Wt_per_core >= chunk_size: push sizes are chunk_size (full
-        //     chunks) and Wt_per_core % chunk_size (partial last chunk).
-        //   - Wt_per_core < chunk_size:  the only push size is Wt_per_core
-        //     (no full-sized chunk ever occurs).
-        //
-        // Compute the LCM of only the push sizes that actually occur across
-        // both core groups to avoid unnecessarily inflating the CB allocation.
-        uint32_t negate_cb_tiles = 1;
-        auto include_push_sizes = [&](uint32_t cols_per_core) {
-            if (cols_per_core == 0) {
-                return;
-            }
-            if (cols_per_core >= chunk_size) {
-                negate_cb_tiles = std::lcm(negate_cb_tiles, chunk_size);
-                uint32_t partial = cols_per_core % chunk_size;
-                if (partial > 0) {
-                    negate_cb_tiles = std::lcm(negate_cb_tiles, partial);
-                }
-            } else {
-                negate_cb_tiles = std::lcm(negate_cb_tiles, cols_per_core);
-            }
-        };
-        include_push_sizes(num_cols_per_core_group_1);
-        if (num_cols_per_core_group_2 > 0) {
-            include_push_sizes(num_cols_per_core_group_2);
+        // via push_back(ntiles).  The CB FIFO write pointer only wraps when
+        // wr_ptr exactly reaches fifo_limit, so it is not enough for the CB
+        // size to be a multiple of each individual push size — the cumulative
+        // offset across the inner Ht loop must also wrap to 0 at the end of
+        // each nc iteration.  Per nc, the kernel advances wr_ptr by
+        // Ht * Wt_per_core regardless of how that splits into chunk_size and
+        // partial pushes, so sizing the CB at Ht * Wt_per_core makes the
+        // trajectory land on fifo_limit exactly.  For two core groups, the
+        // single-CB option uses Ht * lcm(Wt_g1, Wt_g2) so the same allocation
+        // works for both groups.
+        const uint32_t compute_Wt_g1 =
+            use_width_sharding ? (NC == 0 ? 0 : num_cols_per_core_group_1 / NC) : num_cols_per_core_group_1;
+        const uint32_t compute_Wt_g2 = use_width_sharding ? 0 : num_cols_per_core_group_2;
+        uint32_t per_nc_advance = 0;
+        if (compute_Wt_g2 == 0) {
+            per_nc_advance = compute_Wt_g1;
+        } else if (compute_Wt_g1 == 0) {
+            per_nc_advance = compute_Wt_g2;
+        } else {
+            per_nc_advance = std::lcm(compute_Wt_g1, compute_Wt_g2);
         }
+        TT_FATAL(
+            per_nc_advance > 0,
+            "Negate H reduce: per-core Wt resolved to 0 (g1={}, g2={}, NC={}, sharded={})",
+            compute_Wt_g1,
+            compute_Wt_g2,
+            NC,
+            use_width_sharding);
+        // Compute in uint64_t to mirror h_reduce_negate_fits_in_l1 and avoid
+        // uint32_t overflow before the L1 fit check / CB sizing.
+        const uint64_t negate_cb_tiles = static_cast<uint64_t>(Ht) * per_nc_advance;
+
+        // L1 fit check: c_4 (acc) and c_5 (ineg) are each sized at
+        // negate_cb_tiles.  If the combined allocation would not fit in the
+        // available L1 budget, the caller is expected to fall back to external
+        // negation — see ttnn::prim::h_reduce_negate_fits_in_l1 in common.cpp,
+        // which mirrors this calculation.
+        const uint64_t per_cb_bytes = negate_cb_tiles * dst_single_tile_size;
+        const uint64_t negate_cb_bytes = 2ull * per_cb_bytes;
+        const auto lowest_address = device->lowest_occupied_compute_l1_address();
+        uint64_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
+        const uint64_t base_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        TT_FATAL(
+            max_l1_space > base_addr,
+            "Negate H reduce: L1 base allocator address {} >= lowest occupied address {}; no room for CBs",
+            base_addr,
+            max_l1_space);
+        max_l1_space -= base_addr;
+        TT_FATAL(
+            negate_cb_bytes <= max_l1_space,
+            "Negate H reduce: cb_acc + cb_ineg ({} B for {} tiles) would not fit in available L1 ({} B). "
+            "Caller must use h_reduce_negate_fits_in_l1 to choose the external-negate fallback.",
+            negate_cb_bytes,
+            negate_cb_tiles,
+            max_l1_space);
+        // CBDescriptor.total_size is uint32_t; the L1 fit check above already
+        // bounds per_cb_bytes by the per-core L1 budget (well under 4 GiB),
+        // but assert the narrowing explicitly so any future budget change
+        // surfaces here instead of producing a silently-truncated CB size.
+        TT_FATAL(
+            per_cb_bytes <= std::numeric_limits<uint32_t>::max(),
+            "Negate H reduce: per-CB size {} B exceeds uint32_t total_size range",
+            per_cb_bytes);
+        const uint32_t per_cb_total_size = static_cast<uint32_t>(per_cb_bytes);
 
         uint32_t acc_cb_index = CBIndex::c_4;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = negate_cb_tiles * dst_single_tile_size,
+            .total_size = per_cb_total_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(acc_cb_index),
@@ -208,7 +244,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
 
         uint32_t ineg_cb_index = CBIndex::c_5;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = negate_cb_tiles * dst_single_tile_size,
+            .total_size = per_cb_total_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(ineg_cb_index),
@@ -346,6 +382,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     } else {
         cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
     }
+    TT_FATAL(
+        cores.size() == num_cores, "Resolved core list size {} must match split num_cores {}", cores.size(), num_cores);
     if (use_width_sharding) {
         TT_FATAL(NC != 0, "Batch size NC must be non-zero (shape[0]={}, shape[1]={})", shape[0], shape[1]);
         uint32_t shard_Wt = num_cols_per_core_group_1 / NC;
@@ -392,6 +430,13 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
                     num_cols_read       // output tile start index
                 });
             num_cols_read += num_cols_per_core;
+            if (i == num_cores - 1) {
+                TT_FATAL(
+                    num_cols_read == num_cols,
+                    "Reduce H assigned {} columns across cores, expected {}",
+                    num_cols_read,
+                    num_cols);
+            }
         }
     }
 

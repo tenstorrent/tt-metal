@@ -367,12 +367,12 @@ def device_mesh_iterator(mesh_shape):
             yield m0, m1, device
 
 
-def get_batch_cluster_idxr(cluster_axis, batch, batch_per_device):
+def get_batch_cluster_idxr(cluster_axis, batch, batches_per_device):
     def _idxr(m0, m1, b):
         if cluster_axis == 0:
-            return m1 * batch + m0 * batch_per_device + b
+            return m1 * batch + m0 * batches_per_device + b
         elif cluster_axis == 1:
-            return m0 * batch + m1 * batch_per_device + b
+            return m0 * batch + m1 * batches_per_device + b
         else:
             return b
 
@@ -611,7 +611,7 @@ def _expert_tensor_to_list(expert_tensor: torch.Tensor) -> list[torch.Tensor]:
 )
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("layer_id, num_layers", [(0, 1)])
-@pytest.mark.parametrize("batches_per_device", [32])
+@pytest.mark.parametrize("batches_per_device", [3, 8, 16, 32])
 @pytest.mark.parametrize("shard_dim", [0])
 @pytest.mark.parametrize("routed_experts_per_device", [2])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -661,6 +661,7 @@ def test_optimized_moe_decode_block(
     combine_data_parallel_core_dim,
     enable_trace,
     num_iterations,
+    dispatch_persistent_buffers,
     shared_expert_mode,
 ):
     ############################################
@@ -676,6 +677,7 @@ def test_optimized_moe_decode_block(
     batch = batches_per_device * num_dispatch_devices
     total_tokens = batch * seq
     tokens_per_device = batch // num_dispatch_devices
+
     routed_experts = routed_experts_per_device * num_devices
     routed_experts_per_cluster = routed_experts // num_replicated_devices
 
@@ -1240,7 +1242,23 @@ def test_optimized_moe_decode_block(
 
         # unsqueeze
         # [select_experts_k, tokens_per_device, hidden_size] -> [select_experts_k, 1, tokens_per_device, hidden_size]
-        tt_unsqueezed_output = ttnn.unsqueeze(tt_tilized_compute_output, dim=1)
+        tt_unsqueezed_output = ttnn.unsqueeze(tt_combine_output, dim=1)
+
+        if batches_per_device == ttnn.TILE_SIZE:
+            tt_tilized_compute_output = ttnn.experimental.deepseek_moe_post_combine_tilize(
+                tt_unsqueezed_output,
+                output_memory_config=post_combine_tilize_output_memory_config,
+            )
+
+        else:
+            output_tensor_shape = list(tt_unsqueezed_output.shape)
+            output_tensor_shape[2] = ((output_tensor_shape[2] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            tt_tilized_compute_output = ttnn.tilize_with_val_padding(
+                tt_unsqueezed_output,
+                output_tensor_shape=output_tensor_shape,
+                pad_value=0.0,
+                memory_config=post_combine_tilize_output_memory_config,
+            )
 
         # scale with scores
         # [tokens_per_device, 1, seq, select_experts_k] -> [select_experts_k, 1, tokens_per_device, seq]
@@ -1269,8 +1287,8 @@ def test_optimized_moe_decode_block(
             output_memory_config=fast_reduce_output_memory_config,
         )
 
+        # [select_experts_k, tokens_per_device, hidden_size // num_replicated_devices] final per device shape
         if mesh_shape[1 - cluster_axis] == 8:
-            # [select_experts_k, tokens_per_device, hidden_size // num_replicated_devices] final per device shape
             tt_final_output = ttnn.experimental.deepseek_moe_reduce_scatter(
                 tt_fast_reduce_output_tensors,
                 output_memory_config=rs_output_memory_config,

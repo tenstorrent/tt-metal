@@ -68,7 +68,7 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
 #endif
 
     // Scale by 2^k via exponent manipulation
-    sfpi::vInt p_exp = sfpi::exexp_nodebias(poly);
+    sfpi::vInt p_exp = sfpi::exexp(poly, sfpi::ExponentMode::NoDebias);
     sfpi::vInt new_exp = p_exp + k_int;
 
     // FTZ: if exponent underflows, result is 0
@@ -126,7 +126,7 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
         // Round-to-nearest for bf16 destination (SFPSTORE defaults to truncation)
         sfpi::vFloat result = beta_reciprocal * sp;
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
         sfpi::dst_reg[0] = result;
     }

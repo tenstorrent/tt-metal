@@ -78,6 +78,14 @@ bool generate_link_metrics(
 void reset_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor, const tt_metal::AsicTopology& asic_topology);
 
+std::vector<EthChannelIdentifier> collect_retrained_link_identifiers(
+    const tt_metal::AsicTopology& missing_topology, const PhysicalSystemDescriptor& physical_system_descriptor);
+
+void log_link_retrain_summary(
+    const std::unordered_map<EthChannelIdentifier, uint32_t>& link_retrain_counts,
+    uint32_t total_retrain_iterations,
+    const std::filesystem::path& output_path);
+
 tt_metal::AsicTopology build_reset_topology(
     const std::string& reset_host,
     uint32_t reset_tray_id,

@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "internal/risc_attribs.h"
+#include "api/core_local_mem.h"
 #include "api/debug/dprint.h"
 // TODO FIXME: this build system is ridiculously stupid
 #ifdef COMPILE_FOR_TRISC
@@ -13,7 +14,7 @@
 #endif
 
 void kernel_main() {
-    volatile uint32_t tt_l1_ptr* results = (volatile uint32_t tt_l1_ptr*)RESULTS_ADDR;
+    CoreLocalMem<uint32_t> results(RESULTS_ADDR);
     constexpr uint32_t kCommonRTASeparation = 1024;
     uint64_t hartid = 0;
 #ifdef COMPILE_FOR_DM
@@ -32,13 +33,13 @@ void kernel_main() {
 
 #ifdef COORDS_ADDR
 #ifdef DATA_MOVEMENT
-        volatile uint32_t tt_l1_ptr* coords = (volatile uint32_t tt_l1_ptr*)COORDS_ADDR;
-        coords[0] = my_x[noc_index];
-        coords[1] = my_y[noc_index];
-        coords[2] = get_absolute_logical_x();
-        coords[3] = get_absolute_logical_y();
-        coords[4] = get_relative_logical_x();
-        coords[5] = get_relative_logical_y();
+    CoreLocalMem<uint32_t> coords(COORDS_ADDR);
+    coords[0] = my_x[noc_index];
+    coords[1] = my_y[noc_index];
+    coords[2] = get_absolute_logical_x();
+    coords[3] = get_absolute_logical_y();
+    coords[4] = get_relative_logical_x();
+    coords[5] = get_relative_logical_y();
 #endif
 #endif
 }

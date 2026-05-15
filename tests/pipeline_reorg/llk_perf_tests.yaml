@@ -1,0 +1,204 @@
+# LLK perf — matrix for llk-perf / llk-perf-impl; speed-of-light, -n 15 consumer, perf marker.
+# Code coverage is collected in LLK e2e (`llk_e2e_tests.yaml` → llk-e2e-impl), not here (perf and coverage builds don't mix for LLK python_tests).
+# One matrix row per --group, like tests/pipeline_reorg/ttnn-tests.yaml.
+# LLK perf tests are no longer triggered on PR label "llk:performance"
+
+- name: llk_perf_wormhole group 1/5
+  split_group: 1
+  team: llk
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    mkdir -p perf_data
+    pytest --speed-of-light --compile-producer -n 10 -m "perf" --timeout=60 \
+      --splits 5 --group 1 \
+      --junitxml=pytest-report-wormhole-1-compile.xml .
+    pytest --speed-of-light --compile-consumer -n 15 -x -m "perf" --timeout=60 \
+      --splits 5 --group 1 \
+      --override-ini="addopts=-v" \
+      --junitxml=pytest-report-wormhole-1-run.xml .
+    junitparser merge pytest-report-wormhole-1-compile.xml pytest-report-wormhole-1-run.xml pytest-report-wormhole-1.xml
+  skus:
+    wh_n150_civ2:
+      timeout: 69
+  owner_id: U07J3K6KS1K
+
+- name: llk_perf_wormhole group 2/5
+  split_group: 2
+  team: llk
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    mkdir -p perf_data
+    pytest --speed-of-light --compile-producer -n 10 -m "perf" --timeout=60 \
+      --splits 5 --group 2 \
+      --junitxml=pytest-report-wormhole-2-compile.xml .
+    pytest --speed-of-light --compile-consumer -n 15 -x -m "perf" --timeout=60 \
+      --splits 5 --group 2 \
+      --override-ini="addopts=-v" \
+      --junitxml=pytest-report-wormhole-2-run.xml .
+    junitparser merge pytest-report-wormhole-2-compile.xml pytest-report-wormhole-2-run.xml pytest-report-wormhole-2.xml
+  skus:
+    wh_n150_civ2:
+      timeout: 69
+  owner_id: U07J3K6KS1K
+
+- name: llk_perf_wormhole group 3/5
+  split_group: 3
+  team: llk
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    mkdir -p perf_data
+    pytest --speed-of-light --compile-producer -n 10 -m "perf" --timeout=60 \
+      --splits 5 --group 3 \
+      --junitxml=pytest-report-wormhole-3-compile.xml .
+    pytest --speed-of-light --compile-consumer -n 15 -x -m "perf" --timeout=60 \
+      --splits 5 --group 3 \
+      --override-ini="addopts=-v" \
+      --junitxml=pytest-report-wormhole-3-run.xml .
+    junitparser merge pytest-report-wormhole-3-compile.xml pytest-report-wormhole-3-run.xml pytest-report-wormhole-3.xml
+  skus:
+    wh_n150_civ2:
+      timeout: 69
+  owner_id: U07J3K6KS1K
+
+- name: llk_perf_wormhole group 4/5
+  split_group: 4
+  team: llk
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    mkdir -p perf_data
+    pytest --speed-of-light --compile-producer -n 10 -m "perf" --timeout=60 \
+      --splits 5 --group 4 \
+      --junitxml=pytest-report-wormhole-4-compile.xml .
+    pytest --speed-of-light --compile-consumer -n 15 -x -m "perf" --timeout=60 \
+      --splits 5 --group 4 \
+      --override-ini="addopts=-v" \
+      --junitxml=pytest-report-wormhole-4-run.xml .
+    junitparser merge pytest-report-wormhole-4-compile.xml pytest-report-wormhole-4-run.xml pytest-report-wormhole-4.xml
+  skus:
+    wh_n150_civ2:
+      timeout: 69
+  owner_id: U07J3K6KS1K
+
+- name: llk_perf_wormhole group 5/5
+  split_group: 5
+  team: llk
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    mkdir -p perf_data
+    pytest --speed-of-light --compile-producer -n 10 -m "perf" --timeout=60 \
+      --splits 5 --group 5 \
+      --junitxml=pytest-report-wormhole-5-compile.xml .
+    pytest --speed-of-light --compile-consumer -n 15 -x -m "perf" --timeout=60 \
+      --splits 5 --group 5 \
+      --override-ini="addopts=-v" \
+      --junitxml=pytest-report-wormhole-5-run.xml .
+    junitparser merge pytest-report-wormhole-5-compile.xml pytest-report-wormhole-5-run.xml pytest-report-wormhole-5.xml
+  skus:
+    wh_n150_civ2:
+      timeout: 69
+  owner_id: U07J3K6KS1K
+
+- name: llk_perf_blackhole group 1/5
+  split_group: 1
+  team: llk
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    mkdir -p perf_data
+    pytest --speed-of-light --compile-producer -n 10 -m "perf" --timeout=60 \
+      --splits 5 --group 1 \
+      --junitxml=pytest-report-blackhole-1-compile.xml .
+    pytest --speed-of-light --compile-consumer -n 15 -x -m "perf" --timeout=60 \
+      --splits 5 --group 1 \
+      --override-ini="addopts=-v" \
+      --junitxml=pytest-report-blackhole-1-run.xml .
+    junitparser merge pytest-report-blackhole-1-compile.xml pytest-report-blackhole-1-run.xml pytest-report-blackhole-1.xml
+  skus:
+    bh_p150b_civ2:
+      timeout: 107
+  owner_id: U07J3K6KS1K
+
+- name: llk_perf_blackhole group 2/5
+  split_group: 2
+  team: llk
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    mkdir -p perf_data
+    pytest --speed-of-light --compile-producer -n 10 -m "perf" --timeout=60 \
+      --splits 5 --group 2 \
+      --junitxml=pytest-report-blackhole-2-compile.xml .
+    pytest --speed-of-light --compile-consumer -n 15 -x -m "perf" --timeout=60 \
+      --splits 5 --group 2 \
+      --override-ini="addopts=-v" \
+      --junitxml=pytest-report-blackhole-2-run.xml .
+    junitparser merge pytest-report-blackhole-2-compile.xml pytest-report-blackhole-2-run.xml pytest-report-blackhole-2.xml
+  skus:
+    bh_p150b_civ2:
+      timeout: 107
+  owner_id: U07J3K6KS1K
+
+- name: llk_perf_blackhole group 3/5
+  split_group: 3
+  team: llk
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    mkdir -p perf_data
+    pytest --speed-of-light --compile-producer -n 10 -m "perf" --timeout=60 \
+      --splits 5 --group 3 \
+      --junitxml=pytest-report-blackhole-3-compile.xml .
+    pytest --speed-of-light --compile-consumer -n 15 -x -m "perf" --timeout=60 \
+      --splits 5 --group 3 \
+      --override-ini="addopts=-v" \
+      --junitxml=pytest-report-blackhole-3-run.xml .
+    junitparser merge pytest-report-blackhole-3-compile.xml pytest-report-blackhole-3-run.xml pytest-report-blackhole-3.xml
+  skus:
+    bh_p150b_civ2:
+      timeout: 107
+  owner_id: U07J3K6KS1K
+
+- name: llk_perf_blackhole group 4/5
+  split_group: 4
+  team: llk
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    mkdir -p perf_data
+    pytest --speed-of-light --compile-producer -n 10 -m "perf" --timeout=60 \
+      --splits 5 --group 4 \
+      --junitxml=pytest-report-blackhole-4-compile.xml .
+    pytest --speed-of-light --compile-consumer -n 15 -x -m "perf" --timeout=60 \
+      --splits 5 --group 4 \
+      --override-ini="addopts=-v" \
+      --junitxml=pytest-report-blackhole-4-run.xml .
+    junitparser merge pytest-report-blackhole-4-compile.xml pytest-report-blackhole-4-run.xml pytest-report-blackhole-4.xml
+  skus:
+    bh_p150b_civ2:
+      timeout: 107
+  owner_id: U07J3K6KS1K
+
+- name: llk_perf_blackhole group 5/5
+  split_group: 5
+  team: llk
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    mkdir -p perf_data
+    pytest --speed-of-light --compile-producer -n 10 -m "perf" --timeout=60 \
+      --splits 5 --group 5 \
+      --junitxml=pytest-report-blackhole-5-compile.xml .
+    pytest --speed-of-light --compile-consumer -n 15 -x -m "perf" --timeout=60 \
+      --splits 5 --group 5 \
+      --override-ini="addopts=-v" \
+      --junitxml=pytest-report-blackhole-5-run.xml .
+    junitparser merge pytest-report-blackhole-5-compile.xml pytest-report-blackhole-5-run.xml pytest-report-blackhole-5.xml
+  skus:
+    bh_p150b_civ2:
+      timeout: 107
+  owner_id: U07J3K6KS1K

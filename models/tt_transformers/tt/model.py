@@ -580,11 +580,19 @@ class Transformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
         batch_size=1,
+        page_tables_per_layer=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        if page_tables_per_layer is None:
+            # vLLM hybrid bridges (HybridAttentionForCausalLM subclasses) stash
+            # the per-layer list on the model handle for the duration of a
+            # forward call rather than threading the kwarg through Generator's
+            # many ttnn_prefill_forward call sites. Pick it up here when set.
+            page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
         return self.forward(
             x,
             current_pos=None,
@@ -598,7 +606,97 @@ class Transformer(LightweightModule):
             get_last_token=get_last_token,
             kv_cache=kv_cache,
             batch_size=batch_size,
+            page_tables_per_layer=page_tables_per_layer,
         )
+
+    def _page_table_mesh_mapper(self, B):
+        """Mesh mapper for per-layer page tables, matching the layout that
+        :meth:`prepare_decode_inputs_host` uses for the legacy single
+        ``page_table`` kwarg: shard the batch dim across mesh axis 1 on
+        Galaxy when ``B>1``, replicate otherwise. The hybrid bridge
+        chunks the global page table per-DP before calling into a
+        submesh, so ``B`` here is the per-DP batch — same value the
+        legacy path sees on entry to ``prepare_decode_inputs_host``.
+        """
+        return ttnn.ShardTensor2dMesh(
+            self.mesh_device,
+            dims=(None, -2) if (self.args.is_galaxy and B > 1) else (None, None),
+            mesh_shape=self.args.cluster_shape,
+        )
+
+    def _page_tables_to_ttnn(self, page_tables_per_layer):
+        """Resolve a per-layer list of ``torch.Tensor`` page tables to a
+        list of *persistent* ttnn device tensors (allocate-only).
+
+        Tracing bakes each input tensor's device address into the captured
+        graph; replaying the trace reads from those exact addresses
+        regardless of any new ttnn objects created on the Python side.
+        Allocating fresh device tensors on every call would therefore
+        make traced inference read stale memory at the original
+        addresses, so we lazily allocate one persistent device tensor per
+        layer on first use and *only* update contents from outside the
+        traced ``ttnn_*_forward`` calls (writes are forbidden during trace
+        capture). The hybrid bridge calls
+        :meth:`update_persistent_per_layer_page_tables` *before* invoking
+        ``Generator``'s decode/prefill which executes traces — that's
+        where content updates happen.
+
+        First call (warmup compile) populates the persistent buffers from
+        the input torch tensors; subsequent calls return the existing
+        buffers unchanged. ``None`` entries propagate; already-ttnn
+        entries pass through.
+        """
+        if page_tables_per_layer is None:
+            return None
+        persistent = getattr(self, "_persistent_per_layer_page_tables", None)
+        n = len(page_tables_per_layer)
+        if persistent is None or len(persistent) != n:
+            persistent = []
+            for pt in page_tables_per_layer:
+                if pt is None:
+                    persistent.append(None)
+                    continue
+                if isinstance(pt, ttnn.Tensor):
+                    persistent.append(pt)
+                    continue
+                persistent.append(
+                    ttnn.from_torch(
+                        pt,
+                        device=self.mesh_device,
+                        dtype=ttnn.int32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=self._page_table_mesh_mapper(pt.shape[0]),
+                    )
+                )
+            self._persistent_per_layer_page_tables = persistent
+        return persistent
+
+    def update_persistent_per_layer_page_tables(self, page_tables_per_layer):
+        """Update content of persistent per-layer page_table device
+        tensors in place. Called by the hybrid bridge *before* invoking
+        ``Generator``'s decode/prefill so traced replay observes the new
+        block IDs at the captured addresses. Must be called outside trace
+        capture (writes forbidden inside).
+
+        No-op if persistent tensors haven't been allocated yet (first
+        call goes through :meth:`_page_tables_to_ttnn`'s allocation).
+        """
+        if page_tables_per_layer is None:
+            return
+        persistent = getattr(self, "_persistent_per_layer_page_tables", None)
+        if persistent is None or len(persistent) != len(page_tables_per_layer):
+            return
+        for i, pt in enumerate(page_tables_per_layer):
+            if pt is None or persistent[i] is None or isinstance(pt, ttnn.Tensor):
+                continue
+            host_pt = ttnn.from_torch(
+                pt,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._page_table_mesh_mapper(pt.shape[0]),
+            )
+            ttnn.copy_host_to_device_tensor(host_pt, persistent[i])
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
         ttnn.plus_one(current_pos, skip_negative_entries=True)
@@ -613,6 +711,7 @@ class Transformer(LightweightModule):
         kv_cache=None,
         sampling_on_device=False,
         capture_sampling_trace=False,
+        page_tables_per_layer=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -623,6 +722,12 @@ class Transformer(LightweightModule):
 
         x_embed = self._transform_decode_inputs_device(x)
 
+        if page_tables_per_layer is None:
+            # See ttnn_prefill_forward: hybrid bridges stash the per-layer list
+            # on the model when active, since Generator doesn't thread the kwarg.
+            page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
+
         tt_logits = self.forward(
             x_embed,
             current_pos,
@@ -631,6 +736,7 @@ class Transformer(LightweightModule):
             mode=Mode.DECODE,
             page_table=page_table,
             kv_cache=kv_cache,
+            page_tables_per_layer=page_tables_per_layer,
         )
 
         if sampling_on_device and self.sampling is not None:
@@ -693,11 +799,18 @@ class Transformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
         batch_size=1,
+        page_tables_per_layer=None,
     ):
         if mode == Mode.DECODE:
             # Run prefetcher if it is enabled
             if self.prefetcher is not None:
                 self.prefetcher.run()
+
+        if page_tables_per_layer is not None and len(page_tables_per_layer) != len(self.layers):
+            raise ValueError(
+                f"page_tables_per_layer has {len(page_tables_per_layer)} entries "
+                f"but model has {len(self.layers)} layers"
+            )
 
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
@@ -714,6 +827,14 @@ class Transformer(LightweightModule):
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
 
+            # vLLM hybrid kv-cache-groups: each attention layer gets its own
+            # paged pool (sliding-window vs full-attention have different
+            # block counts). When ``page_tables_per_layer`` is None we fall
+            # back to broadcasting the single ``page_table`` to every layer
+            # — byte-equivalent to the pre-hybrid path used by every legacy
+            # caller (demos, unit tests, non-hybrid vLLM bridges).
+            layer_page_table = page_tables_per_layer[i] if page_tables_per_layer is not None else page_table
+
             x = layer(
                 x,
                 current_pos,
@@ -721,7 +842,7 @@ class Transformer(LightweightModule):
                 rot_mats_local=rot_mats_local,
                 user_id=user_id,
                 mode=mode,
-                page_table=page_table,
+                page_table=layer_page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,

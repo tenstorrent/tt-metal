@@ -6,7 +6,7 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<3>();
 
     const auto s0 = TensorAccessor(dst_args, input_addr);
-    experimental::CircularBuffer cb_input(input_cb_id);
+    CircularBuffer cb_input(input_cb_id);
 
     bool within_input_region;
     uint32_t input_page_offset = start_offset;

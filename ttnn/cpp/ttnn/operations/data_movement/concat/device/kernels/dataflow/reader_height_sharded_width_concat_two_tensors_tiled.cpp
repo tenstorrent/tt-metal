@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t input0_cb_id = get_compile_time_arg_val(0);
@@ -34,11 +34,11 @@ void kernel_main() {
 #endif
     constexpr uint32_t group_stride = input0_stride + input1_stride;
 
-    experimental::CircularBuffer input0_cb(input0_cb_id);
-    experimental::CircularBuffer input1_cb(input1_cb_id);
-    experimental::CircularBuffer input0_transpose_cb(input0_transpose_cb_id);
-    experimental::CircularBuffer input1_transpose_cb(input1_transpose_cb_id);
-    experimental::CircularBuffer concat_cb(concat_cb_id);
+    CircularBuffer input0_cb(input0_cb_id);
+    CircularBuffer input1_cb(input1_cb_id);
+    CircularBuffer input0_transpose_cb(input0_transpose_cb_id);
+    CircularBuffer input1_transpose_cb(input1_transpose_cb_id);
+    CircularBuffer concat_cb(concat_cb_id);
 
     const uint32_t base_l1_read_addr_0 = input0_transpose_cb.get_read_ptr();
     const uint32_t base_l1_read_addr_1 = input1_transpose_cb.get_read_ptr();

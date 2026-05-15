@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_b1.weights.cache.types import (
     Shard2dMeshMapper,
     ShardMeshMapper,
     SourceTensorSelection,
+    SramCompressedTensorTarget,
     TensorTarget,
 )
 
@@ -38,6 +39,15 @@ def create_overlapped_tensor(*args, **kwargs):
 def get_or_create_bspm_expert(*args, **kwargs):
     """Lazy wrapper — defers bspm_expert_cache imports until first call."""
     from models.demos.deepseek_v3_b1.weights.cache.bspm_expert_cache import get_or_create_bspm_expert as _fn
+
+    return _fn(*args, **kwargs)
+
+
+def get_or_create_sram_compressed_expert(*args, **kwargs):
+    """Lazy wrapper — defers sram_compressed_cache imports until first call."""
+    from models.demos.deepseek_v3_b1.weights.cache.sram_compressed_cache import (
+        get_or_create_sram_compressed_expert as _fn,
+    )
 
     return _fn(*args, **kwargs)
 
@@ -83,10 +93,12 @@ __all__ = [
     "Shard2dMeshMapper",
     "ShardMeshMapper",
     "SourceTensorSelection",
+    "SramCompressedTensorTarget",
     "OverlappedTensorSpec",
     "TensorCache",
     "TensorCacheProtocol",
     "TensorTarget",
     "create_overlapped_tensor",
     "get_or_create_bspm_expert",
+    "get_or_create_sram_compressed_expert",
 ]

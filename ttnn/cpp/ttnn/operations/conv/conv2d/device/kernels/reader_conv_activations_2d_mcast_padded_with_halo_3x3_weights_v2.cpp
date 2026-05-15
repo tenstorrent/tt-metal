@@ -21,23 +21,23 @@
 //                                                 because the sender still needs to send to the output core)
 template <uint32_t act_mcast_num_cores>
 void multicast_data(
-    experimental::Noc noc,
-    experimental::MulticastEndpoint mcast_ep,
+    Noc noc,
+    MulticastEndpoint mcast_ep,
     bool is_receiver_core,
     experimental::CB src_cb,
     uint32_t src_offset,
     McastDst& dst,
     uint32_t total_bytes) {
-    auto src = experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(src_cb);
+    auto src = use<CircularBuffer::AddrSelector::READ_PTR>(src_cb);
     if (is_receiver_core) {
         if constexpr (act_mcast_num_cores > 0) {
-            noc.async_write_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+            noc.async_write_multicast<Noc::McastMode::INCLUDE_SRC>(
                 src, mcast_ep, total_bytes, act_mcast_num_cores + 1, {.offset_bytes = src_offset}, dst, true);
         } else {
             // Sender is the only receiver — can't use multicast loopback (hangs with 0 destinations)
             noc.async_write(
                 src,
-                experimental::UnicastEndpoint{},
+                UnicastEndpoint{},
                 total_bytes,
                 {.offset_bytes = src_offset},
                 {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = dst.addr});
@@ -64,8 +64,8 @@ template <
     uint32_t block_tile_count,
     uint32_t tile_size>
 void mcast_block_chunked(
-    experimental::Noc noc,
-    experimental::MulticastEndpoint mcast_ep,
+    Noc noc,
+    MulticastEndpoint mcast_ep,
     experimental::CB src_cb_obj,
     bool is_receiver_core,
     experimental::CB dst_cb_obj,
@@ -161,24 +161,24 @@ void kernel_main() {
     constexpr bool split_reader_cb_shared = get_compile_time_arg_val(33) == 1;
 
     // Experimental API objects
-    experimental::Noc noc;
-    experimental::Semaphore<> act_mcast_sender_sem(get_compile_time_arg_val(16));
-    experimental::Semaphore<> act_mcast_receiver_sem(get_compile_time_arg_val(17));
-    experimental::MulticastEndpoint mcast_ep;
+    Noc noc;
+    Semaphore<> act_mcast_sender_sem(get_compile_time_arg_val(16));
+    Semaphore<> act_mcast_receiver_sem(get_compile_time_arg_val(17));
+    MulticastEndpoint mcast_ep;
     experimental::CB cb_act_obj(cb_id_act);
     experimental::CB cb_act_rm_obj(cb_id_act_row_major_bfloat16);
     experimental::CB cb_tilized_in0_obj(tilized_in0_cb_id);
     experimental::CB cb_reader_indices_obj(cb_reader_indices);
     experimental::CB cb_sharded_act_obj(cb_id_sharded_act);
 
-    experimental::Semaphore<> reserve_done_sem(0);
-    experimental::Semaphore<> write_done_sem(0);
+    Semaphore<> reserve_done_sem(0);
+    Semaphore<> write_done_sem(0);
     if constexpr (split_reader_cb_shared) {
         // When the split reader CB is shared, both readers write to the same circular buffer.
         // Synchronization is required: the main reader signals when CB space is reserved,
         // and the second reader signals when it has finished writing its portion.
-        reserve_done_sem = experimental::Semaphore<>(get_compile_time_arg_val(34));
-        write_done_sem = experimental::Semaphore<>(get_compile_time_arg_val(35));
+        reserve_done_sem = Semaphore<>(get_compile_time_arg_val(34));
+        write_done_sem = Semaphore<>(get_compile_time_arg_val(35));
     }
 
     if constexpr (needs_act_block_zero_out) {
@@ -293,7 +293,7 @@ void kernel_main() {
                         // We should also multicast VALID flag to destinations for receiver semaphore
                         if constexpr (act_mcast_num_cores) {
                             act_mcast_receiver_sem.set(VALID);
-                            act_mcast_receiver_sem.set_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+                            act_mcast_receiver_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
                                 noc,
                                 act_mcast_rect.noc_x_start,
                                 act_mcast_rect.noc_y_start,

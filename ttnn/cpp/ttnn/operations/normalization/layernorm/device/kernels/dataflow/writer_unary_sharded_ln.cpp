@@ -8,7 +8,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "reshard_writer.hpp"
-#include "experimental/tensor.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
@@ -44,11 +44,11 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t cb_out_resharded = get_named_compile_time_arg_val("cb_out_resharded");
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_gamma_obj(cb_gamma);
-    experimental::CircularBuffer cb_beta_obj(cb_beta);
-    experimental::CircularBuffer cb_out_obj(cb_out);
-    experimental::CircularBuffer cb_out_resharded_obj(cb_out_resharded);
+    Noc noc;
+    CircularBuffer cb_gamma_obj(cb_gamma);
+    CircularBuffer cb_beta_obj(cb_beta);
+    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_out_resharded_obj(cb_out_resharded);
 
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
 

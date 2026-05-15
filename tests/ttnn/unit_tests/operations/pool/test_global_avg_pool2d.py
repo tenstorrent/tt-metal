@@ -83,3 +83,44 @@ def test_global_avg_pool2d_non_tile_aligned(
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
     assert_with_pcc(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "h_w, channels, grid_end",
+    [
+        (49, 1280, (7, 0)),  # 1280 ch (EfficientNet head), 8-way ND shard; h_w=49 is not tile-aligned
+        (25, 320, (4, 0)),
+        (20, 64, (0, 0)),
+    ],
+)
+def test_global_avg_pool2d_nd_sharded_row_major_non_tile_aligned_h(device, h_w, channels, grid_end):
+    torch.manual_seed(0)
+
+    end_x, end_y = grid_end
+    grid_size = device.compute_with_storage_grid_size()
+    if end_x >= grid_size.x or end_y >= grid_size.y:
+        pytest.skip(f"Device grid {grid_size.x}x{grid_size.y} is smaller than required {end_x + 1}x{end_y + 1}")
+
+    num_cores = (end_x + 1) * (end_y + 1)
+    assert channels % num_cores == 0, "channels must split evenly across cores"
+    assert h_w % 32 != 0, "test targets non-tile-aligned H*W"
+
+    torch_input = torch.randn(1, 1, h_w, channels, dtype=torch.bfloat16)
+    torch_output = torch_input.mean(dim=2, keepdim=True)
+
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(end_x, end_y))])
+    shard_shape = ttnn.Shape([1, 1, h_w, channels // num_cores])
+    memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(shard_shape, grid))
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=memory_config,
+        device=device,
+    )
+
+    output_tensor = ttnn.global_avg_pool2d(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output, output_tensor, 0.99)

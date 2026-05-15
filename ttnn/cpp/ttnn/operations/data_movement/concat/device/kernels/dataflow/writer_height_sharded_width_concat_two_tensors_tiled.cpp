@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include <api/debug/dprint.h>
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t input0_cb_id = get_compile_time_arg_val(0);
@@ -28,8 +28,8 @@ void kernel_main() {
 
     constexpr uint32_t width_len_bytes = tile_size * (input0_num_tiles_width + input1_num_tiles_width);
 
-    experimental::CircularBuffer output_cb(output_cb_id);
-    experimental::CircularBuffer output_transpose_cb(output_transpose_cb_id);
+    CircularBuffer output_cb(output_cb_id);
+    CircularBuffer output_transpose_cb(output_transpose_cb_id);
 
     const uint32_t base_l1_write_addr = output_cb.get_write_ptr();
     uint32_t l1_write_addr = base_l1_write_addr;

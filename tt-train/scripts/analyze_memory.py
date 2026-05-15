@@ -45,6 +45,18 @@ def extract_number_of_parameters(content: str, start_pos: int) -> Optional[int]:
     return None
 
 
+def extract_available_device_memory_mb(content: str, start_pos: int) -> Optional[int]:
+    """Extract the available device memory from logs before the memory summary"""
+    # Search forward from a reasonable position before start
+    search_start = max(0, start_pos - 1000)
+    text_before = content[search_start:start_pos]
+    text_before = text_before.replace(",", "")
+    match = re.search(r"Available Device Memory:\s+([\d.]+)\s*MB", text_before)
+    if match:
+        return float(match.group(1))
+    return None
+
+
 def parse_memory_section(section: str) -> Dict[str, Dict[str, float]]:
     """Parse a memory usage summary section and extract metrics"""
     metrics = {}
@@ -76,7 +88,7 @@ def parse_memory_section(section: str) -> Dict[str, Dict[str, float]]:
 
 def find_memory_summaries(
     content: str,
-) -> List[Tuple[str, Dict[str, Dict[str, float]], Optional[int]]]:
+) -> List[Tuple[str, Dict[str, Dict[str, float]], Optional[int], Optional[float]]]:
     """Find all memory usage summary sections in the log file"""
     summaries = []
 
@@ -91,6 +103,9 @@ def find_memory_summaries(
         # Try to extract number of parameters
         num_params = extract_number_of_parameters(content, match.start())
 
+        # Try to extract the available device memory
+        device_memory_mb = extract_available_device_memory_mb(content, match.start())
+
         # Try to find a section name (e.g., "tinyllama (memory_efficient)")
         name_search_start = max(0, match.start() - 1000)
         text_before = content[name_search_start : match.start()]
@@ -100,11 +115,11 @@ def find_memory_summaries(
         section_name = "Unknown"
         for line in reversed(lines):
             line = line.strip()
-            if line and not line.startswith("#") and "Number of parameters" not in line:
+            if line and not line.startswith("#") and "Total parameters" not in line:
                 section_name = line
                 break
 
-        summaries.append((section_name, metrics, num_params))
+        summaries.append((section_name, metrics, num_params, device_memory_mb))
 
     return summaries
 
@@ -410,8 +425,7 @@ def main(raw_args=None):
     parser.add_argument(
         "--device_memory",
         type=float,
-        default=12 * 1024 * 1024 * 1024,  # 12 GB default
-        help="Available device memory in bytes (default: 12GB)",
+        help="Available device memory in bytes (can be extracted from logs if not provided)",
     )
 
     parser.add_argument(
@@ -473,7 +487,7 @@ def main(raw_args=None):
     # If model size not provided, try to extract from logs
     if model_size_bytes is None:
         # Try to get from first summary with parameters
-        for name, metrics, num_params in summaries:
+        for name, metrics, num_params, device_memory in summaries:
             if num_params:
                 # Assume 2 bytes per parameter (bf16)
                 model_size_bytes = num_params * 2
@@ -485,6 +499,22 @@ def main(raw_args=None):
     if model_size_bytes is None:
         raise ValueError("Error: Model size not provided and could not be extracted from logs")
 
+    # Determine available device DRAM
+    device_memory_bytes = args.device_memory
+
+    # If device memory not provided, try to extract from logs
+    if device_memory_bytes is None:
+        # Try to get from first summary with device memory
+        for name, metrics, num_params, device_memory in summaries:
+            if device_memory is not None:
+                # device_memory arg is in bytes, so match that
+                device_memory_bytes = device_memory * (1024 * 1024)
+                print(f"Available device memory, calculated from logs: {device_memory:.2f} MB")
+                break
+
+    if device_memory_bytes is None:
+        raise ValueError("Error: Device memory not provided and could not be extracted from logs")
+
     # Determine optimizer size (default: 2 * model_size, bf16)
     optimizer_size_bytes = args.optimizer_size if args.optimizer_size is not None else (2 * model_size_bytes)
 
@@ -493,7 +523,7 @@ def main(raw_args=None):
 
     # Analyze each summary
     visualization_data = []
-    for name, metrics, num_params in summaries:
+    for name, metrics, num_params, device_memory in summaries:
         breakdown = analyze_memory_summary(
             name,
             metrics,
@@ -501,7 +531,7 @@ def main(raw_args=None):
             model_size_bytes,
             optimizer_size_bytes,
             gradients_size_bytes,
-            args.device_memory,
+            device_memory_bytes,
             args.use_actual_sizes,
         )
         if breakdown:

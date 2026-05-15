@@ -11,7 +11,7 @@
 #include "api/compute/eltwise_unary/clamp.h"
 #include "api/compute/eltwise_unary/rsub.h"
 #include "api/compute/compute_kernel_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -22,9 +22,9 @@ void kernel_main() {
     constexpr auto cb_output = tt::CBIndex::c_2;
     constexpr auto cb_tmp0 = tt::CBIndex::c_1;
 
-    experimental::CircularBuffer cb_in(cb_input);
-    experimental::CircularBuffer cb_out(cb_output);
-    experimental::CircularBuffer cb_tmp(cb_tmp0);
+    CircularBuffer cb_in(cb_input);
+    CircularBuffer cb_out(cb_output);
+    CircularBuffer cb_tmp(cb_tmp0);
 
     init_sfpu(cb_input, cb_output);
     for (uint32_t i = 0; i < num_tiles; ++i) {

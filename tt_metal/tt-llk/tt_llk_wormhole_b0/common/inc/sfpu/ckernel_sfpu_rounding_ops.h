@@ -144,7 +144,7 @@ sfpi_inline sfpi::vFloat _round_even_(sfpi::vFloat v)
     v_if (exp < 23)
     {
         // v.{Exp,Man}=tmp.{Exp,Man}; retaining original sign.
-        v = sfpi::setsgn(tmp, v);
+        v = sfpi::copysgn(tmp, v);
     }
     v_endif;
     return v;
@@ -188,7 +188,7 @@ sfpi_inline void _calculate_stochastic_round_()
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::vFloat x   = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = sfpi::float_to_fp16b(x, sfpi::RoundMode::Stochastic);
+        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(x, sfpi::RoundMode::Stochastic);
         sfpi::dst_reg++;
     }
 }

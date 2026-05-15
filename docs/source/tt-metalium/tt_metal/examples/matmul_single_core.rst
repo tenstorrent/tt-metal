@@ -354,8 +354,8 @@ The overall execution flow is managed by enqueuing commands:
     // Don't need to set runtime args for compute kernel, as everything is passed as compile-time args
 
     // Upload input data to device
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a.data(), false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b.data(), false);
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
 
     // execute program, and read results
     distributed::MeshWorkload workload;

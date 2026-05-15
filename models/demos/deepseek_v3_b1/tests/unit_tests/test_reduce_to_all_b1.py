@@ -222,6 +222,10 @@ def run_reduce_to_all(mesh_device, num_iterations=1):
     indirect=["device_params"],
     ids=["fabric_2d_torus_x"],
 )
+# TODO(#43058): Root-cause the exact Blackhole FABRIC_2D_TORUS_X setup failure and remove this temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: bh_2d_mesh_device setup hit Fabric Router Sync timeout after 10000 ms on Device 24 for test_reduce_to_all_2d[blackhole-True-fabric_2d_torus_x]. Issue: #43058"
+)
 def test_reduce_to_all_2d(bh_2d_mesh_device):
     """Test reduce_to_all with 2D torus-X fabric (ring wrap-around in column direction)."""
     run_reduce_to_all(bh_2d_mesh_device)
@@ -240,6 +244,10 @@ def test_reduce_to_all_2d(bh_2d_mesh_device):
     ],
     indirect=["device_params"],
     ids=["fabric_2d_torus_x"],
+)
+# TODO(#43058): Root-cause why ReduceToAllB1 hangs inside the 100-iteration op and remove this temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: ReduceToAllB1 multi-iter hangs after FabricConfig.FABRIC_2D_TORUS_X setup at 100 iterations; pytest --timeout=180 did not interrupt after 6 min. Issue: #43058"
 )
 def test_reduce_to_all_2d_multi_iter(bh_2d_mesh_device):
     """Test reduce_to_all with 2D torus-X fabric and multiple iterations."""

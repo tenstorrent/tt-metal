@@ -21,7 +21,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "common/mesh_dispatch_fixture.hpp"
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 namespace tt::tt_metal {
 
@@ -30,7 +30,7 @@ namespace tt::tt_metal {
 
 class RISCVAtomicsFixture : public MeshDispatchFixture {
 protected:
-    static constexpr CoreCoord core = {0, 0};
+    static constexpr experimental::metal2_host_api::NodeCoord core = {0, 0};
     static constexpr uint32_t SENTINEL{0xABABABAB};
     static constexpr uint32_t iterations{2000};
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/riscv_atomics.cpp";
@@ -54,6 +54,10 @@ protected:
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
         l1_unreserved_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
         is_quasar = arch_ == tt::ARCH::QUASAR;
+        if (is_quasar) {
+            // Metal 2.0 reserves DM0/DM1 for runtime; user kernels get at most 6 threads
+            num_dms_ = std::min(num_dms_, 6u);
+        }
         // Number of uint32_t words per atomic_type: Quasar uses 64-bit atomics (2 words), BH uses 32-bit (1 word)
         word_count_32b = is_quasar ? 2 : 1;
     }
@@ -76,13 +80,47 @@ protected:
 
         // Same Kernel is launched on all DMs
         if (arch_ == tt::ARCH::QUASAR) {
-            auto kernel = tt::tt_metal::experimental::quasar::CreateKernel(
-                program,
-                kernel_path,
-                core,
-                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                    .num_threads_per_cluster = num_dms_, .defines = dm_defines});
-            SetRuntimeArgs(program, kernel, core, runtime_args);
+            constexpr const char* DM_KERNEL = "dm_kernel";
+
+            experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines defines_vec(
+                dm_defines.begin(), dm_defines.end());
+
+            experimental::metal2_host_api::KernelSpec dm_kernel_spec{
+                .unique_id = DM_KERNEL,
+                .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
+                .num_threads = static_cast<uint8_t>(num_dms_),
+                .compiler_options = {.defines = defines_vec},
+                .runtime_arguments_schema =
+                    {
+                        .named_runtime_args = {"l1_counter_addr", "increment_times"},
+                    },
+                .config_spec =
+                    experimental::metal2_host_api::DataMovementConfiguration{
+                        .gen2_data_movement_config =
+                            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            };
+
+            experimental::metal2_host_api::WorkUnitSpec main_wu{
+                .unique_id = "main",
+                .kernels = {DM_KERNEL},
+                .target_nodes = core,
+            };
+
+            experimental::metal2_host_api::ProgramSpec spec{
+                .program_id = "riscv_atomics",
+                .kernels = {dm_kernel_spec},
+                .work_units = {main_wu},
+            };
+            program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device_, spec);
+
+            experimental::metal2_host_api::ProgramRunParams params;
+            params.kernel_run_params = {{
+                .kernel_spec_name = DM_KERNEL,
+                .named_runtime_args =
+                    {{.node = core,
+                      .args = {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
+            }};
+            experimental::metal2_host_api::SetProgramRunParameters(program, params);
         } else {
             // BH:
             for (uint32_t dm_id = 0; dm_id < num_dms_; dm_id++) {
@@ -103,7 +141,8 @@ protected:
     }
 };
 
-// DM0 (writer) atomically stores SENTINEL to L1, other DM(s) (reader) spin on atomic load until they see it.
+// The lowest-numbered DM thread (writer) atomically stores SENTINEL to L1,
+// remaining DM thread(s) (readers) spin on atomic load until they see it.
 // Host reads back each reader's result slot and verifies SENTINEL was observed.
 TEST_F(RISCVAtomicsFixture, TestAtomicLoadStoreRISCV) {
     std::map<std::string, std::string> dm_defines = {

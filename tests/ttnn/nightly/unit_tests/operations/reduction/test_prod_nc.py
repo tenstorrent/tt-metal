@@ -73,9 +73,7 @@ def test_prod_dims(input_shape, dims, device):
     torch_output = torch.prod(torch_input, dims[0], True)
 
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_output_cpu = (
-        ttnn.prod(tt_input, tt_output, dims=dims).cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
-    )
+    tt_output_cpu = ttnn.prod(tt_input, tt_output, dims=dims).cpu().to(cpu_layout).to_torch()
 
     rtol = atol = 0.1
     passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)

@@ -1,0 +1,245 @@
+name: "[internal] Blackhole e2e tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+      enabled-skus:
+        required: true
+        type: string
+      model:
+        required: false
+        type: string
+        default: "all"
+        description: "Filter test rows by model-name (untagged rows always run)"
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.filter-matrix.outputs.matrix || steps.prepare.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/blackhole_e2e_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            e2e
+      - name: Build test matrix for enabled SKUs
+        id: prepare
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+      - name: Filter test matrix by model
+        id: filter-matrix
+        if: inputs.model != 'all'
+        env:
+          MATRIX: ${{ steps.prepare.outputs.matrix }}
+        run: |
+          filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+          count=$(echo "$filtered" | jq 'length')
+          if [[ "$count" -eq 0 ]]; then
+            echo "::warning::No e2e tests match model '${{ inputs.model }}' for enabled SKU(s) '${{ inputs.enabled-skus }}'; e2e matrix is empty and jobs will be skipped."
+          fi
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$filtered" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  blackhole-e2e-tests:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        ARCH_NAME: blackhole
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - ${{ (!contains(join(matrix.test-group.runs_on, ' '), 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
+        - "${{ (matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/localdev/blackhole_demos/huggingface_data:ro') || (matrix.test-group['weights-cache-mode'] == 'local-disk' && '/localdev/blackhole_demos/huggingface_data:/localdev/blackhole_demos/huggingface_data:ro') || '/no_hf_cache' }}"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: Mark repository as safe directory
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        if: ${{ !startsWith(matrix.test-group.sku, 'bh_p100') && !startsWith(matrix.test-group.sku, 'bh_p150') }}
+        timeout-minutes: 10
+        with:
+          runner-label: ${{ (matrix.test-group.sku == 'bh_deskbox' && 'BH-DeskBox') || (matrix.test-group.sku == 'bh_loudbox' && 'BH-LoudBox') || (matrix.test-group.sku == 'bh_llmbox' && 'BH-LLMBox') || (matrix.test-group.sku == 'bh_quietbox_2' && 'BH-QB-GE') || (matrix.test-group.sku == 'bh_p300' && 'P300-viommu') || '' }}
+      - name: ${{ matrix.test-group.name }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          mkdir -p generated/test_logs
+          # tee combined stdout+stderr to a per-leg .log for ai-summary.
+          # Brace group: cmd may be multiple shell statements.
+          # PIPESTATUS: preserve real exit code (tee would mask it).
+          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' /' '__')
+          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
+          {
+            ${{ matrix.test-group.cmd }}
+          } 2>&1 | tee "$LOG_FILE"
+          exit ${PIPESTATUS[0]}
+      - name: Check latency/BW results
+        id: check-data
+        if: ${{ !cancelled() && matrix.test-group.upload_fabric_data == true }}
+        uses: ./docker-job/.github/actions/check-latency-bw-results
+        with:
+          path: /work
+          arch: blackhole
+          check_bw: "true"
+          check_latency: "true"
+      - name: Upload BW results
+        if: ${{ !cancelled() && github.ref_name == 'main' && matrix.test-group.upload_fabric_data == true && steps.check-data.outcome == 'success' && steps.check-data.outputs.has_benchmark_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_bandwidth_benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
+      - name: Upload latency data
+        if: ${{ !cancelled() && github.ref_name == 'main' && matrix.test-group.upload_fabric_data == true && steps.check-data.outcome == 'success' && steps.check-data.outputs.has_latency_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_latency_benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
+      - name: Print tt-smi data on failure
+        if: ${{ failure() }}
+        run: |
+          tt-smi -s
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - name: Generate gtest annotations on failure
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
+        if: ${{ failure() }}
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() && matrix.test-group.owner_id != null }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
+  ai-run-summary:
+    name: "AI Run Summary"
+    needs: [load-test-matrix, blackhole-e2e-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: extract-matrix
+        env:
+          MATRIX: ${{ needs.load-test-matrix.outputs.matrix }}
+        run: |
+          # load-test-matrix exposes the flat array of leg dicts directly
+          # (unlike the legacy {"test-group":[...]} wrapper used in
+          # blackhole-multi-card-unit-tests-impl.yaml). Validate-parse via
+          # jq and default to [] when the upstream output is empty.
+          if [ -z "$MATRIX" ]; then
+            EXPECTED="[]"
+          else
+            EXPECTED=$(echo "$MATRIX" | jq -c '. // []')
+          fi
+          {
+            echo "matrix<<EOF"
+            echo "$EXPECTED"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: ${{ steps.extract-matrix.outputs.matrix }}
+          run-result: ${{ needs.blackhole-e2e-tests.result }}
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi

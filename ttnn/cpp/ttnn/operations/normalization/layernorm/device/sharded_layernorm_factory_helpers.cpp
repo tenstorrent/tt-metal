@@ -922,6 +922,7 @@ void add_kernel_descriptors(
     compute_all_to_all_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = kernel_config.math_fidelity,
         .fp32_dest_acc_en = kernel_config.fp32_dest_acc_en,
+        .dst_full_sync_en = kernel_config.dst_full_sync_en,
         .math_approx_mode = kernel_config.math_approx_mode};
     program_descriptor.kernels.push_back(std::move(compute_all_to_all_kernel_desc));
 
@@ -938,6 +939,7 @@ void add_kernel_descriptors(
         compute_not_all_to_all_kernel_desc.config = ComputeConfigDescriptor{
             .math_fidelity = kernel_config.math_fidelity,
             .fp32_dest_acc_en = kernel_config.fp32_dest_acc_en,
+            .dst_full_sync_en = kernel_config.dst_full_sync_en,
             .math_approx_mode = kernel_config.math_approx_mode};
         program_descriptor.kernels.push_back(std::move(compute_not_all_to_all_kernel_desc));
     }

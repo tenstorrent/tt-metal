@@ -119,6 +119,7 @@ jobs:
           echo "TT_METAL_WATCHER=2" >> $GITHUB_ENV
           echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
           echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
+          echo "TT_METAL_WATCHER_DISABLE_ETH=1" >> $GITHUB_ENV
 
       - name: Run a test
         id: test

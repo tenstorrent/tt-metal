@@ -16,7 +16,7 @@ inputs:
     required: false
     default: ''
   namespace:
-    description: 'Kubernetes namespace for the allocation'
+    description: 'Target namespace for the allocation'
     required: false
     default: 'ttop-ci'
 
@@ -71,4 +71,4 @@ runs:
       shell: bash
       run: |
         echo "Waiting for allocation to be ready..."
-        kubectl wait --for=jsonpath='{.status.phase}'=Allocated allocation/${{ inputs.allocationName }} --timeout=999m -n ${{ inputs.namespace }}
+        kubectl -n ${{ inputs.namespace }} wait --for=jsonpath='{.status.phase}'=Allocated allocation/${{ inputs.allocationName }} --timeout=999m

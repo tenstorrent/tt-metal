@@ -308,6 +308,10 @@ def compute_combined_validation_matrix(
         scopes = ["model_traced", "lead_models"]
     elif scope_target in {"model_traced", "lead_models"}:
         scopes = [scope_target]
+    elif scope_target == "none":
+        # Models-filter narrowed the request to no remaining targets — emit
+        # an empty matrix so downstream conditional steps simply skip.
+        return {"include": []}
     else:
         print(f"Unsupported validation scope target: {scope_target}", file=sys.stderr)
         sys.exit(1)

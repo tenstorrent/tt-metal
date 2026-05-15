@@ -13,7 +13,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // Runtime arg: number of independent column-reductions this core must perform.
@@ -43,9 +43,9 @@ void kernel_main() {
     // Circular buffer where the final variance/std output tile is written.
     constexpr auto cb_out = tt::CBIndex::c_16;
 
-    experimental::CircularBuffer cb_in_obj(cb_in);
-    experimental::CircularBuffer cb_scalar_obj(cb_scalar);
-    experimental::CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_scalar_obj(cb_scalar);
+    CircularBuffer cb_out_obj(cb_out);
 
     // Destination register indices inside the Tensix DST register file.
     // Welford's LLK uses three adjacent dst registers:

@@ -49,7 +49,7 @@ void kernel_main() {
     experimental::CB input_cb(input_cb_id);
     experimental::CB scalar_cb(scalar_cb_id);
     experimental::CB fill_cb(fill_cb_id);
-    experimental::Noc noc;
+    Noc noc;
 
     uint32_t fill_stick_addr = fill_cb.get_write_ptr();
     if constexpr (fill_is_zero) {

@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_padded_slice ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::PaddedSlice ALIAS ttnn_op_experimental_padded_slice)
 
@@ -23,11 +25,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        padded_slice.cpp
-        device/padded_slice_device_operation.cpp
-        device/padded_slice_utils.cpp
-        device/padded_slice_rm_program_factory.cpp
-        device/padded_slice_tile_program_factory.cpp
+        ${TTNN_OP_EXPERIMENTAL_PADDED_SLICE_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_padded_slice PRIVATE ${FixmeOpIncDirs})

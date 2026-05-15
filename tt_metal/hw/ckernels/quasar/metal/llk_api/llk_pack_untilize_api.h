@@ -14,7 +14,7 @@
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "llk_pack_untilize.h"
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK PACK UNTILIZE

@@ -34,6 +34,9 @@ triage.progress_disabled = True  # Disable progress bars for tests
 
 # Mapping of hang application paths to their expected test results
 HANG_APP_ADD_2_INTEGERS = "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
+HANG_APP_TTNN_ADD_INTEGERS = (
+    "tools/tests/triage/hang_apps/ttnn_add_integers_hang/triage_hang_app_ttnn_add_integers_hang"
+)
 HANG_APP_EXPECTED_RESULTS = {
     HANG_APP_ADD_2_INTEGERS: {
         "lightweight_asserts": {
@@ -59,6 +62,36 @@ HANG_APP_EXPECTED_RESULTS = {
                     "line": 40,
                 },
             },
+        },
+    },
+    HANG_APP_TTNN_ADD_INTEGERS: {
+        "lightweight_asserts": {
+            "kernel_name": "add_2_tiles_hang",
+            "risc_names": {"trisc0", "trisc1", "trisc2"},
+            "first_callstack_file": "add_2_tiles_hang.cpp",
+            "first_callstack_line": 40,
+        },
+        "callstacks": {
+            "device_to_check": 0,
+            "location_to_check": "0,0",
+            "cores_to_check": {
+                "trisc0": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 40,
+                },
+                "trisc1": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 40,
+                },
+                "trisc2": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 40,
+                },
+            },
+        },
+        "running_operations": {
+            "expected_op_name_contains": "AddIntegersHang",
+            "assert_no_na": True,
         },
     },
 }
@@ -140,7 +173,7 @@ def cause_hang_with_app(request):
             10,
         ),
         (
-            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data
+            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, fast dispatch
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
@@ -154,7 +187,7 @@ def cause_hang_with_app(request):
             60,
         ),
         (
-            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data
+            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, slow dispatch
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
@@ -165,6 +198,35 @@ def cause_hang_with_app(request):
                     "TT_METAL_SLOW_DISPATCH_MODE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
+            },
+            60,
+        ),
+        (
+            # TTNN-dispatched hang: auto detection, fast dispatch
+            HANG_APP_TTNN_ADD_INTEGERS,
+            [],
+            {
+                "auto_timeout": True,
+                "env": {
+                    "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
+                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/triage-test-ttnn",
+                },
+                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_TTNN_ADD_INTEGERS],
+            },
+            60,
+        ),
+        (
+            # TTNN-dispatched hang: auto detection, slow dispatch
+            HANG_APP_TTNN_ADD_INTEGERS,
+            [],
+            {
+                "auto_timeout": True,
+                "env": {
+                    "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
+                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/inspector-ttnn",
+                    "TT_METAL_SLOW_DISPATCH_MODE": "1",
+                },
+                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_TTNN_ADD_INTEGERS],
             },
             60,
         ),
@@ -366,7 +428,40 @@ class TestTriage:
         assert len(result) > 0, "Expected at least one configuration entry"
 
     def test_dump_running_operations(self):
-        self.run_triage_script("dump_running_operations.py")
+        result = self.run_triage_script("dump_running_operations.py")
+
+        expected = self.expected_results.get("running_operations")
+        if not expected:
+            return
+
+        assert result is not None, "Expected non-None result from dump_running_operations.py"
+        assert len(result) > 0, "Expected at least one running operation in dump_running_operations output"
+
+        live_ops = [op for op in result if op.host_assigned_id]
+        assert len(live_ops) > 0, (
+            "Expected at least one running op with a non-zero host_assigned_id; "
+            "got only background entries (op_id == 0)"
+        )
+
+        if expected.get("assert_no_na"):
+            for op in live_ops:
+                assert op.operation_name != "N/A", (
+                    f"Op id {op.host_assigned_id}: operation_name resolved to N/A. "
+                    f"Dispatcher host_assigned_id failed to lookup against "
+                    f"Inspector getMeshWorkloadRuntimeEntries()."
+                )
+                assert op.operation_parameters != "N/A", (
+                    f"Op id {op.host_assigned_id}: operation_parameters resolved to N/A. "
+                    f"Op was named '{op.operation_name}' but params were empty in Inspector."
+                )
+
+        expected_name = expected.get("expected_op_name_contains")
+        if expected_name:
+            matching = [op for op in live_ops if expected_name in op.operation_name]
+            assert len(matching) > 0, (
+                f"No running op with name containing '{expected_name}'. "
+                f"Got: {[op.operation_name for op in live_ops]}"
+            )
 
     def test_dump_watcher_ringbuffer(self):
         self.run_triage_script("dump_watcher_ringbuffer.py")

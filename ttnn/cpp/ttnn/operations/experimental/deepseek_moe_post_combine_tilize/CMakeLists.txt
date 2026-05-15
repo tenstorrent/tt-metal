@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_deepseek_moe_post_combine_tilize ${LIB_TYPE})
 add_library(
     TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
@@ -28,9 +30,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/deepseek_moe_post_combine_tilize_device_operation.cpp
-        device/deepseek_moe_post_combine_tilize_program_factory.cpp
-        deepseek_moe_post_combine_tilize.cpp
+        ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_MOE_POST_COMBINE_TILIZE_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_deepseek_moe_post_combine_tilize PRIVATE ${FixmeOpIncDirs})

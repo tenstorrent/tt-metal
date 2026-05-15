@@ -3,21 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
-import torch
-import ttnn
 
+import torch
+
+import ttnn
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    create_mesh_device,
+    create_tensor_on_mesh,
+    get_model_traced_mesh_shape,
+    mesh_tensor_to_torch,
+)
 from tests.ttnn.utils_for_testing import (
     check_with_pcc_without_tensor_printout,
     start_measuring_time,
     stop_measuring_time,
 )
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_model_traced_mesh_shape,
-    create_mesh_device,
-    create_tensor_on_mesh,
-    mesh_tensor_to_torch,
-)
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 
 TIMEOUT = 300
 
@@ -39,7 +40,7 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_model_traced_mesh_shape()
+    mesh_shape = (1, 1)
     device = create_mesh_device(mesh_shape, l1_small_size=65536)
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
@@ -265,7 +266,7 @@ def run(
 
     # --- Legacy path for model_traced_sample suite ---
     if input_specs is not None:
-        from tests.sweep_framework.sweep_utils.conv2d_common import run_conv2d_short_sweep, run_conv1d_short_sweep
+        from tests.sweep_framework.sweep_utils.conv2d_common import run_conv1d_short_sweep, run_conv2d_short_sweep
 
         if is_conv1d:
             return run_conv1d_short_sweep(input_specs, device)

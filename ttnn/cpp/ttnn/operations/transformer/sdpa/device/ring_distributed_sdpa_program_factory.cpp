@@ -269,6 +269,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         1,      // arg 20: lightweight causal mask
         0,      // arg 21: use_streaming_compute — always false for ring distributed (causal)
         0,      // arg 22: out_subblock_h — unused when streaming is off
+        0,      // arg 23: k_partial_col — non-streaming, no partial mask emitted
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 

@@ -7,7 +7,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -36,7 +36,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
 
     IDevice* dev = devices_[0]->get_devices()[0];
     auto mesh_device = devices_[0];
-    constexpr CoreCoord core = {0, 0};
+    const experimental::metal2_host_api::NodeCoord node{0, 0};
 
     // These addresses have been randomly chosen
     uint32_t l1_address = 1000 * 1024;
@@ -49,40 +49,114 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();
 
-    const uint32_t sem_id = tt_metal::CreateSemaphore(program, core, 0);
+    // Metal 2.0 reserves DM0/DM1; max 6 user DM threads per node.
+    // Reduced from 4+4=8 to 3+3=6 loopback stages to fit within the limit.
+    constexpr uint32_t num_loopback_stages = 3;
 
-    std::vector<KernelHandle> dm_dram_to_l1_kernels;
-    dm_dram_to_l1_kernels.reserve(4);
-    for (uint32_t i = 0; i < 4; i++) {
-        dm_dram_to_l1_kernels.push_back(experimental::quasar::CreateKernel(
-            program,
-            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp",
-            core,
-            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = {sem_id}}));
-    }
+    constexpr const char* DRAM_TO_L1_0 = "dram_to_l1_0";
+    constexpr const char* DRAM_TO_L1_1 = "dram_to_l1_1";
+    constexpr const char* DRAM_TO_L1_2 = "dram_to_l1_2";
+    constexpr const char* L1_TO_DRAM_0 = "l1_to_dram_0";
+    constexpr const char* L1_TO_DRAM_1 = "l1_to_dram_1";
+    constexpr const char* L1_TO_DRAM_2 = "l1_to_dram_2";
 
-    std::vector<KernelHandle> dm_l1_to_dram_kernels;
-    dm_l1_to_dram_kernels.reserve(4);
-    for (uint32_t i = 0; i < 4; i++) {
-        dm_l1_to_dram_kernels.push_back(experimental::quasar::CreateKernel(
-            program,
-            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp",
-            core,
-            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = {sem_id}}));
-    }
+    auto make_dram_to_l1_spec = [](const char* id) {
+        return experimental::metal2_host_api::KernelSpec{
+            .unique_id = id,
+            .source =
+                experimental::metal2_host_api::KernelSpec::SourceFilePath{
+                    OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp"},
+            .num_threads = 1,
+            .semaphore_bindings = {{.semaphore_spec_name = "sem", .accessor_name = "sem"}},
+            .runtime_arguments_schema =
+                {
+                    .named_runtime_args = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
+                },
+            .config_spec =
+                experimental::metal2_host_api::DataMovementConfiguration{
+                    .gen2_data_movement_config =
+                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        };
+    };
 
+    auto make_l1_to_dram_spec = [](const char* id) {
+        return experimental::metal2_host_api::KernelSpec{
+            .unique_id = id,
+            .source =
+                experimental::metal2_host_api::KernelSpec::SourceFilePath{
+                    OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp"},
+            .num_threads = 1,
+            .semaphore_bindings = {{.semaphore_spec_name = "sem", .accessor_name = "sem"}},
+            .runtime_arguments_schema =
+                {
+                    .named_runtime_args = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
+                },
+            .config_spec =
+                experimental::metal2_host_api::DataMovementConfiguration{
+                    .gen2_data_movement_config =
+                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        };
+    };
+
+    experimental::metal2_host_api::SemaphoreSpec sem{
+        .unique_id = "sem",
+        .target_nodes = node,
+    };
+
+    experimental::metal2_host_api::WorkUnitSpec main_wu{
+        .unique_id = "main",
+        .kernels = {DRAM_TO_L1_0, DRAM_TO_L1_1, DRAM_TO_L1_2, L1_TO_DRAM_0, L1_TO_DRAM_1, L1_TO_DRAM_2},
+        .target_nodes = node,
+    };
+
+    experimental::metal2_host_api::ProgramSpec spec{
+        .program_id = "dm_loopback",
+        .kernels =
+            {make_dram_to_l1_spec(DRAM_TO_L1_0),
+             make_dram_to_l1_spec(DRAM_TO_L1_1),
+             make_dram_to_l1_spec(DRAM_TO_L1_2),
+             make_l1_to_dram_spec(L1_TO_DRAM_0),
+             make_l1_to_dram_spec(L1_TO_DRAM_1),
+             make_l1_to_dram_spec(L1_TO_DRAM_2)},
+        .semaphores = {sem},
+        .work_units = {main_wu},
+    };
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+
+    const char* dram_to_l1_names[] = {DRAM_TO_L1_0, DRAM_TO_L1_1, DRAM_TO_L1_2};
+    const char* l1_to_dram_names[] = {L1_TO_DRAM_0, L1_TO_DRAM_1, L1_TO_DRAM_2};
+
+    experimental::metal2_host_api::ProgramRunParams params;
     uint32_t signal_value = 0;
-    for (uint32_t i = 0; i < 4; i++) {
-        SetRuntimeArgs(program, dm_dram_to_l1_kernels[i], core, {dram_address, l1_address, 4, 0, signal_value});
+    for (uint32_t i = 0; i < num_loopback_stages; i++) {
+        params.kernel_run_params.push_back(
+            {.kernel_spec_name = dram_to_l1_names[i],
+             .named_runtime_args = {
+                 {.node = node,
+                  .args = {
+                      {"dram_addr", dram_address},
+                      {"l1_addr", l1_address},
+                      {"dram_buffer_size", 4u},
+                      {"dram_bank_id", 0u},
+                      {"signal_value", signal_value}}}}});
         dram_address += 1024;
         signal_value++;
 
-        SetRuntimeArgs(program, dm_l1_to_dram_kernels[i], core, {dram_address, l1_address, 4, 0, signal_value});
+        params.kernel_run_params.push_back(
+            {.kernel_spec_name = l1_to_dram_names[i],
+             .named_runtime_args = {
+                 {.node = node,
+                  .args = {
+                      {"dram_addr", dram_address},
+                      {"l1_addr", l1_address},
+                      {"dram_buffer_size", 4u},
+                      {"dram_bank_id", 0u},
+                      {"signal_value", signal_value}}}}});
         l1_address += sizeof(uint32_t);
         signal_value++;
     }
+    experimental::metal2_host_api::SetProgramRunParameters(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

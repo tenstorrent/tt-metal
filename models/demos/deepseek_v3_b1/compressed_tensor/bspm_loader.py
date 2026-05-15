@@ -29,6 +29,7 @@ Prerequisites:
 from __future__ import annotations
 
 import struct
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -250,6 +251,59 @@ def load_bspm_for_expert(
         )
 
     return flat_codes.reshape(tr, tc)
+
+
+# ---------------------------------------------------------------------------
+# Production assignment provider factory
+# ---------------------------------------------------------------------------
+
+
+def make_bspm_assignment_provider(
+    bspm_path: str | Path,
+    proj_shapes: list[tuple[int, int]],
+) -> Callable[[int, int], np.ndarray]:
+    """Return a provider callable that loads the BSPM file once and serves all calls from cache.
+
+    The returned callable has signature ``(expert_idx, proj_idx) -> np.ndarray`` and can be
+    passed directly to ``prepare_compressed_sram_slots(assignment_provider=...)``.
+
+    Loading the file once avoids the N_experts × n_projections redundant reads that would
+    occur if each call independently invoked ``load_bspm_for_expert``.
+
+    Args:
+        bspm_path: Path to a .bspm file.
+        proj_shapes: List of ``(K, N)`` weight shapes, one per projection index.
+            ``proj_shapes[proj_idx]`` gives the weight matrix dimensions so the flat
+            per-expert code vector can be reshaped to ``(K // 32, N // 32)``.
+
+    Returns:
+        Callable ``(expert_idx: int, proj_idx: int) -> np.ndarray`` — int8 array of shape
+        ``(tile_rows, tile_cols)`` with tt-metal COMPRESSED_FORMATS indices.
+    """
+    data = load_bspm_for_layer(bspm_path)
+    codes = data["codes"]  # (n_experts, n_projections, tiles_per_proj), already remapped
+    n_experts = data["n_experts"]
+    n_projections = data["n_projections"]
+    tiles_per_proj = data["tiles_per_proj"]
+
+    # Validate proj_shapes up front so mismatches are caught at factory construction time.
+    for proj_idx, (K, N) in enumerate(proj_shapes):
+        tr, tc = K // 32, N // 32
+        if tr * tc != tiles_per_proj:
+            raise ValueError(
+                f"proj_shapes[{proj_idx}]=({K},{N}) → {tr}×{tc}={tr * tc} tiles, "
+                f"but BSPM tiles_per_proj={tiles_per_proj}. Check proj_shapes."
+            )
+
+    def provider(expert_idx: int, proj_idx: int) -> np.ndarray:
+        if expert_idx < 0 or expert_idx >= n_experts:
+            raise IndexError(f"expert_idx={expert_idx} out of range [0, {n_experts})")
+        if proj_idx < 0 or proj_idx >= n_projections:
+            raise IndexError(f"proj_idx={proj_idx} out of range [0, {n_projections})")
+        K, N = proj_shapes[proj_idx]
+        return codes[expert_idx, proj_idx].reshape(K // 32, N // 32)
+
+    return provider
 
 
 # ---------------------------------------------------------------------------

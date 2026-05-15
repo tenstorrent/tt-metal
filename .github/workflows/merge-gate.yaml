@@ -101,9 +101,21 @@ jobs:
       tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
       tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
       build-workflows-changed: ${{ steps.find-changes.outputs.build-workflows-changed }}
+      llk-wormhole-changed: ${{ steps.find-changes.outputs.llk-wormhole-changed }}
+      llk-blackhole-changed: ${{ steps.find-changes.outputs.llk-blackhole-changed }}
+      llk-common-changed: ${{ steps.find-changes.outputs.llk-common-changed }}
+      llk-sfpi-changed: ${{ steps.find-changes.outputs.llk-sfpi-changed }}
+      llk-unit-tests-changed: ${{ steps.find-changes.outputs.llk-unit-tests-changed }}
+      llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
     steps:
+      # Use the in-tree action (same as pr-gate.yaml) so the llk-* outputs above are
+      # available; the previously-pinned @v0.63.0 predates the llk-unit-tests-changed flag.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: .github
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
+        uses: ./.github/actions/find-changed-files
 
   build:
     if: ${{ github.ref_name == 'main' ||
@@ -402,6 +414,104 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       timeout: 11
 
+  load-llk-unit-test-matrix:
+    needs: find-changes
+    if: ${{
+        github.event.action != 'destroyed' &&
+        github.event_name != 'pull_request' &&
+        (github.ref_name == 'main' ||
+         needs.find-changes.outputs.llk-wormhole-changed == 'true' ||
+         needs.find-changes.outputs.llk-blackhole-changed == 'true' ||
+         needs.find-changes.outputs.llk-common-changed == 'true' ||
+         needs.find-changes.outputs.llk-sfpi-changed == 'true' ||
+         needs.find-changes.outputs.llk-unit-tests-changed == 'true' ||
+         needs.find-changes.outputs.llk-ci-changed == 'true')
+      }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_unit_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: |
+          pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "unit"
+      - name: Build unified test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          if [[ "${{ github.ref_name }}" == "main" ||
+                "${{ needs.find-changes.outputs.llk-common-changed }}" == "true" ||
+                "${{ needs.find-changes.outputs.llk-sfpi-changed }}" == "true" ||
+                "${{ needs.find-changes.outputs.llk-unit-tests-changed }}" == "true" ||
+                "${{ needs.find-changes.outputs.llk-ci-changed }}" == "true" ||
+                ( "${{ needs.find-changes.outputs.llk-wormhole-changed }}" == "true" &&
+                  "${{ needs.find-changes.outputs.llk-blackhole-changed }}" == "true" ) ]]; then
+            enabled_skus="ALL_SKUS_IN_TESTS"
+          elif [[ "${{ needs.find-changes.outputs.llk-wormhole-changed }}" == "true" ]]; then
+            enabled_skus="wh_n150_civ2"
+          elif [[ "${{ needs.find-changes.outputs.llk-blackhole-changed }}" == "true" ]]; then
+            enabled_skus="bh_p150b_civ2"
+          else
+            enabled_skus="ALL_SKUS_IN_TESTS"
+          fi
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${enabled_skus}" \
+            ./.github/sku_config.yaml
+
+  # The LLK unit-test binary is dispatch-agnostic (see LLK* fixtures in
+  # tests/tt_metal/tt_metal/llk/llk_device_fixture.hpp); nightly still runs
+  # the full suite under slow dispatch. Merge gate shards FD by arch and runs
+  # the SD-only/Quasar slice from tests/pipeline_reorg/llk_unit_tests.yaml.
+  llk-unit-tests:
+    needs: [ build, find-changes, load-llk-unit-test-matrix ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        github.event_name != 'pull_request' &&
+        (github.ref_name == 'main' ||
+         needs.find-changes.outputs.llk-wormhole-changed == 'true' ||
+         needs.find-changes.outputs.llk-blackhole-changed == 'true' ||
+         needs.find-changes.outputs.llk-common-changed == 'true' ||
+         needs.find-changes.outputs.llk-sfpi-changed == 'true' ||
+         needs.find-changes.outputs.llk-unit-tests-changed == 'true' ||
+         needs.find-changes.outputs.llk-ci-changed == 'true') &&
+        needs.load-llk-unit-test-matrix.outputs.matrix != '[]'
+      }}
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-llk-unit-test-matrix.outputs.matrix) }}
+    uses: ./.github/workflows/llk-unit-tests.yaml
+    with:
+      test-name: ${{ matrix.test-group.name }}
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner_label }}
+      runs-on-labels: ${{ toJSON(matrix.test-group.runs_on) }}
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      dispatch-mode: ${{ matrix.test-group.dispatch_mode }}
+      enable-llk-asserts: true
+      timeout: ${{ matrix.test-group.timeout }}
+      gtest-filter: ${{ matrix.test-group.gtest_filter }}
+      gtest-shard-total: ${{ matrix.test-group.gtest_shard_total || 1 }}
+      gtest-shard-index: ${{ matrix.test-group.gtest_shard_index || 0 }}
+
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:
@@ -415,14 +525,14 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, docker-images, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests]
+    needs: [static-checks, docker-images, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, load-llk-unit-test-matrix, llk-unit-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, code-analysis, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, load-llk-unit-test-matrix, llk-unit-tests"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')

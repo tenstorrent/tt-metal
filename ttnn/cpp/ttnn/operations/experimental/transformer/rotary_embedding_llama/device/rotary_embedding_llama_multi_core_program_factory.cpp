@@ -43,6 +43,20 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
     const uint32_t n_heads = input.padded_shape()[1];
     const uint32_t seq_len_t = input.padded_shape()[2] / TILE_HEIGHT;
     const uint32_t head_dim_t = input.padded_shape()[3] / TILE_WIDTH;
+    const uint32_t cos_seq_len_t = cos.padded_shape()[2] / TILE_HEIGHT;
+    const uint32_t sin_seq_len_t = sin.padded_shape()[2] / TILE_HEIGHT;
+    const uint32_t rotary_seq_len_t = std::min({seq_len_t, cos_seq_len_t, sin_seq_len_t});
+
+    if (seq_len_t != cos_seq_len_t || seq_len_t != sin_seq_len_t) {
+        log_warning(
+            tt::LogOp,
+            "rotary_embedding_llama sequence tile coverage mismatch: input_Ht={}, cos_Ht={}, sin_Ht={}, "
+            "rotary_Ht={}. Tiles beyond rotary_Ht will be zero-filled in the output.",
+            seq_len_t,
+            cos_seq_len_t,
+            sin_seq_len_t,
+            rotary_seq_len_t);
+    }
 
     // Flag for whether or not sin/cos vary per head. If false, they will be broadcasted across heads.
     const bool freq_per_head = cos.padded_shape()[1] == n_heads;
@@ -146,6 +160,12 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
             .set_page_size(output_cb_index, output_single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
+    uint32_t zero_cb_index = CBIndex::c_27;
+    tt_metal::CircularBufferConfig cb_zero_config =
+        tt_metal::CircularBufferConfig(head_dim_t * output_single_tile_size, {{zero_cb_index, output_cb_data_format}})
+            .set_page_size(zero_cb_index, output_single_tile_size);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_zero_config);
+
     std::map<std::string, std::string> kernel_defines;
     kernel_defines["RELOAD_IMPL"] = use_reload_impl ? "1" : "0";
 
@@ -164,6 +184,9 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
         (std::uint32_t)seq_len_t,
         (std::uint32_t)head_dim_t,
         (std::uint32_t)freq_per_head,
+        (std::uint32_t)cos_seq_len_t,
+        (std::uint32_t)sin_seq_len_t,
+        (std::uint32_t)rotary_seq_len_t,
     };
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
@@ -171,9 +194,11 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
     tt::tt_metal::TensorAccessorArgs(trans_mat_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
+        (std::uint32_t)zero_cb_index,
         (std::uint32_t)n_heads,
         (std::uint32_t)head_dim_t,
         (std::uint32_t)seq_len_t,
+        (std::uint32_t)rotary_seq_len_t,
     };
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
 
@@ -202,6 +227,7 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
         (std::uint32_t)output_cb_index,
         (std::uint32_t)head_dim_t,
         (std::uint32_t)n_heads,
+        (std::uint32_t)rotary_seq_len_t,
     };
 
     auto rotary_embedding_kernel_id = tt_metal::CreateKernel(

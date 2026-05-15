@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
 
@@ -23,8 +23,8 @@ void kernel_main() {
     constexpr uint32_t num_trids = get_compile_time_arg_val(2);
     constexpr auto src_args = TensorAccessorArgs<3>();
 
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in1(cb_id_in1);
 
     const auto s0 = TensorAccessor(src_args, src_addr + aligned_input_width_offset_bytes);
     uint32_t stick_id = start_id;

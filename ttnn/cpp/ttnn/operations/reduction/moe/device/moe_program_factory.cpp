@@ -58,9 +58,15 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
     uint32_t Wt = input_shape[3] / tile_width;
+    uint32_t Kt = (k + tile_width - 1) / tile_width;
+
     // for streaming in input
     uint32_t num_cb_unit = 2;
     uint32_t cb_in_units = 2 * num_cb_unit;
+
+    // values and topk_indices tensors are fully computed and buffered
+    uint32_t topk_mask_cb_units = Kt;
+    uint32_t values_and_topk_indices_cb_units = Ht * Kt;
 
     ProgramDescriptor desc;
 
@@ -91,7 +97,7 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
 
     uint32_t topk_mask_cb_index = tt::CBIndex::c_2;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = cb_in_units * topk_mask_tile_size,
+        .total_size = topk_mask_cb_units * topk_mask_tile_size,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(topk_mask_cb_index),
@@ -153,7 +159,7 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     // topk values
     uint32_t values_cb_index = tt::CBIndex::c_7;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_cb_unit * value_tile_size,
+        .total_size = values_and_topk_indices_cb_units * value_tile_size,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(values_cb_index),
@@ -165,7 +171,7 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     // topk indices
     uint32_t output_ind_cb_index = tt::CBIndex::c_8;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_cb_unit * index_tile_size,
+        .total_size = values_and_topk_indices_cb_units * index_tile_size,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_ind_cb_index),

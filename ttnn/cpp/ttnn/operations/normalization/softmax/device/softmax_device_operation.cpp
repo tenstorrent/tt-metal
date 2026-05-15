@@ -13,6 +13,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/normalization/shard_spec_validation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -325,6 +326,12 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                     shard_shape[0],
                     shard_shape[1],
                     tensors_args.input_tensor.tensor_spec().tile().get_width());
+
+                const auto& a = tensors_args.input_tensor;
+                if (a.is_sharded()) {
+                    ttnn::operations::normalization::detail::validate_sharded_input(
+                        a, program_config.compute_with_storage_grid_size);
+                }
             }
         },
         attributes.program_config);

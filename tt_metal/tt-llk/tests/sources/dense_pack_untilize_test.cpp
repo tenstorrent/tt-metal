@@ -73,6 +73,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#include "llk_pack_untilize.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -87,8 +88,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.pack_src, formats.pack_dst, params.in0_tile_r_dim, params.num_faces / 2);
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_untilize_<BLOCK_CT_DIM * 2, FULL_CT_DIM * 2, false, 0, true>(
-        L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, params.in0_tile_r_dim, params.num_faces / 2, 0 /* tile_dst_rt_offset */);
+    _llk_pack_untilize_<BLOCK_CT_DIM * 2, FULL_CT_DIM * 2, false, 0, true>(L1_ADDRESS(params.buffer_Res[0]), params.num_faces / 2, 0 /* tile_dst_rt_offset */);
     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 

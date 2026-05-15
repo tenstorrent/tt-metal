@@ -9,7 +9,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -21,11 +21,11 @@ void kernel_main() {
     constexpr auto cb_out0 = tt::CBIndex::c_16;  // Fp32
     constexpr auto cb_out1 = tt::CBIndex::c_17;  // Bfp8_b
 
-    experimental::CircularBuffer cbin0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cbin1(tt::CBIndex::c_1);
-    experimental::CircularBuffer cbin2(tt::CBIndex::c_2);
-    experimental::CircularBuffer cbout0(tt::CBIndex::c_16);
-    experimental::CircularBuffer cbout1(tt::CBIndex::c_17);
+    CircularBuffer cbin0(tt::CBIndex::c_0);
+    CircularBuffer cbin1(tt::CBIndex::c_1);
+    CircularBuffer cbin2(tt::CBIndex::c_2);
+    CircularBuffer cbout0(tt::CBIndex::c_16);
+    CircularBuffer cbout1(tt::CBIndex::c_17);
 
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
     binary_tiles_init<false, ELWADD>(cb_in0, cb_in1);

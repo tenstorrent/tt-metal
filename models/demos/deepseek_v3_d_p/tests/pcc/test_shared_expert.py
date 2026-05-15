@@ -22,7 +22,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
-    "batch_seq_len, emb_dim, hidden_dim",
+    "seq_len_per_chip, emb_dim, hidden_dim",
     [
         (4096, 7 * 1024, 2 * 1024),
         (3200, 7 * 1024, 2 * 1024),
@@ -48,13 +48,21 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
             id="ring-4",
         ),
+        pytest.param(
+            (2, 4),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="linear"),
+            id="mesh-2x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 def test_shared_expert_pcc(
     mesh_device,
     device_params,
-    batch_seq_len: int,
+    seq_len_per_chip: int,
     emb_dim: int,
     hidden_dim: int,
     num_links: int,
@@ -71,16 +79,16 @@ def test_shared_expert_pcc(
     5. Output matches torch reference with PCC > 0.97
     """
 
-    activations_dtype = ttnn.bfloat8_b
-    weights_dtype = ttnn.bfloat4_b
+    activations_dtype = ttnn.bfloat16
+    weights_dtype = ttnn.bfloat8_b
 
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
     logger.debug(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
-    logger.debug(f"batch_seq_len={batch_seq_len}, emb_dim={emb_dim}, hidden_dim={hidden_dim}")
+    logger.debug(f"seq_len_per_chip={seq_len_per_chip}, emb_dim={emb_dim}, hidden_dim={hidden_dim}")
 
     # Add Tracy signpost for profiling
-    signpost(f"SharedExpert PCC test - {mesh_shape=} {batch_seq_len=} {num_links=} {topology=}")
+    signpost(f"SharedExpert PCC test - {mesh_shape=} {seq_len_per_chip=} {num_links=} {topology=}")
 
     # Query available ethernet links
     actual_num_links = get_num_links(mesh_device, cluster_axis=1)  # Query along mesh columns
@@ -118,19 +126,21 @@ def test_shared_expert_pcc(
     # ========================================
     # Step 3: Create input tensor
     # ========================================
-    # For torch: full tensor [batch_seq_len, emb_dim]
-    torch_input = torch.randn(batch_seq_len, emb_dim, dtype=torch.float32)
+    # 3D input matching test_ttnn_moe.py convention (post all-gather):
+    #   shape = [dispatch_group_size, seq_len_per_chip, emb_dim]
+    # Sharded along dim 0 across mesh rows (DP), replicated across mesh cols (TP).
+    dispatch_group_size = mesh_shape[0]
+    torch_input = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.float32)
     logger.debug(f"Created torch input: {torch_input.shape}")
 
-    # For ttnn: replicated tensor [batch_seq_len, emb_dim] on all devices
     tt_input = ttnn.from_torch(
         torch_input,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, None)),
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         dtype=activations_dtype,
     )
-    logger.debug(f"Created ttnn input (replicated): {tt_input.shape}")
+    logger.debug(f"Created ttnn input (SP-sharded, TP-replicated): {tt_input.shape}")
 
     # ========================================
     # Step 4: Run forward passes
@@ -158,7 +168,7 @@ def test_shared_expert_pcc(
     pcc_passed, pcc_message = assert_with_pcc(
         torch_output.to(torch.float32),
         tt_output_torch.to(torch.float32),
-        pcc=0.97,
+        pcc=0.999,
     )
 
     logger.debug(f"PCC comparison: {pcc_message}")

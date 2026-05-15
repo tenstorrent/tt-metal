@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -18,8 +18,8 @@ void kernel_main() {
     // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
     const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb(cb_id_out);
+    Noc noc;
+    CircularBuffer cb(cb_id_out);
 
 #ifdef OUT_SHARDED
     cb.wait_front(num_pages);

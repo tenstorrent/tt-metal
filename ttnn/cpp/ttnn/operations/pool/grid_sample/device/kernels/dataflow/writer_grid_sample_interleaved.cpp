@@ -20,7 +20,7 @@ void kernel_main() {
     const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     experimental::CB out_cb(cb_id_out0);
-    experimental::Noc noc;
+    Noc noc;
 
     uint32_t end_stick_id = start_stick_id + num_sticks_to_write;
 

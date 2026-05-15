@@ -1,0 +1,122 @@
+name: "[internal] LLK unit tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      test-name:
+        required: false
+        type: string
+        default: ""
+      runs-on-labels:
+        required: false
+        type: string
+        default: ""
+        description: "JSON-encoded runs-on labels from .github/sku_config.yaml"
+      arch:
+        required: true
+        type: string
+      runner-label:
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: number
+        default: 40
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      dispatch-mode:
+        required: true
+        type: string
+        description: "Dispatch mode: 'fd' for fast dispatch, 'sd' for slow dispatch"
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
+        default: true
+        type: boolean
+      gtest-filter:
+        required: false
+        default: "*"
+        type: string
+        description: "gtest filter expression (default: * = run all)"
+      gtest-shard-total:
+        required: false
+        default: 1
+        type: number
+        description: "Total number of gtest shards (>=1). Sets GTEST_TOTAL_SHARDS."
+      gtest-shard-index:
+        required: false
+        default: 0
+        type: number
+        description: "0-based gtest shard index (must be < gtest-shard-total). Sets GTEST_SHARD_INDEX."
+
+jobs:
+  llk-unit-tests:
+    name: >-
+      ${{ inputs.test-name || format('LLK {0} {1} {2}', inputs.dispatch-mode, inputs.arch, inputs.runner-label) }}${{
+        inputs.gtest-shard-total > 1 && format(' shard {0}/{1}', inputs.gtest-shard-index, inputs.gtest-shard-total) || ''
+      }}
+    runs-on: >-
+      ${{
+        inputs.runs-on-labels != '' && fromJSON(inputs.runs-on-labels)
+        || (inputs.runner-label == 'P100' || inputs.runner-label == 'P150') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
+        || (inputs.runner-label == 'p150b') && 'tt-ubuntu-2204-p150b-stable'
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+      }}
+    container:
+      image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        LD_LIBRARY_PATH: /work/build/lib
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        TT_METAL_HOME: /work
+        GTEST_TOTAL_SHARDS: ${{ inputs.gtest-shard-total }}
+        GTEST_SHARD_INDEX: ${{ inputs.gtest-shard-index }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+          auto-triage: true
+      - name: Run LLK unit tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: |
+          mkdir -p generated/test_reports
+          if [ "${{ inputs.dispatch-mode }}" = "sd" ]; then
+            export TT_METAL_SLOW_DISPATCH_MODE=1
+            echo "Running in slow dispatch mode"
+          elif [ "${{ inputs.dispatch-mode }}" = "fd" ]; then
+            unset TT_METAL_SLOW_DISPATCH_MODE
+            echo "Running in fast dispatch mode"
+          else
+            echo "Unsupported dispatch mode: '${{ inputs.dispatch-mode }}'. Expected one of: fd, sd." >&2
+            exit 1
+          fi
+          echo "Running: ./build/test/tt_metal/unit_tests_llk --gtest_filter=${{ inputs.gtest-filter }}"
+          ./build/test/tt_metal/unit_tests_llk --gtest_filter='${{ inputs.gtest-filter }}'
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - name: Generate gtest annotations on failure
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
+        if: ${{ failure() }}

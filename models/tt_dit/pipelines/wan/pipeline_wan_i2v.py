@@ -26,7 +26,7 @@ class ImagePrompt(NamedTuple):
 
 
 class WanPipelineI2V(WanPipeline):
-    def __init__(self, *args, target_height: int = 0, target_width: int = 0, **kwargs):
+    def __init__(self, *args, height: int = 0, width: int = 0, **kwargs):
         # Update I2V specific defaults
         if "checkpoint_name" not in kwargs:
             kwargs["checkpoint_name"] = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
@@ -35,8 +35,8 @@ class WanPipelineI2V(WanPipeline):
                 kwargs["checkpoint_name"], subfolder="scheduler", trust_remote_code=True
             )
 
-        # initialize without warmup
-        super().__init__(*args, model_type="i2v", run_warmup=False, **kwargs)
+        # initialize without warmup; pass height/width so the decoder also gets production blocking dims
+        super().__init__(*args, model_type="i2v", run_warmup=False, height=height, width=width, **kwargs)
 
         self.tt_vae_encoder = WanEncoder(
             base_dim=self.vae.config.base_dim,
@@ -62,9 +62,7 @@ class WanPipelineI2V(WanPipeline):
         )
 
         # warmup buffers
-        self.warmup_buffers(
-            height=target_height, width=target_width, image_prompt=Image.new("RGB", (target_width, target_height))
-        )
+        self.warmup_buffers(height=height, width=width, image_prompt=Image.new("RGB", (width, height)))
 
     @staticmethod
     def create_pipeline(*args, **kwargs):

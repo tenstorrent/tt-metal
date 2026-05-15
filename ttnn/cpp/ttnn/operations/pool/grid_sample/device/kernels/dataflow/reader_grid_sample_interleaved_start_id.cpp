@@ -41,7 +41,7 @@ void kernel_main() {
     const auto input_tensor_accessor = TensorAccessor(src_args, input_addr);
 
     experimental::CB grid_cb(grid_cb_index);
-    experimental::Noc noc;
+    Noc noc;
 
     const uint32_t end_id = start_page_id + num_pages;
 

@@ -12,7 +12,6 @@
 #include "ckernel_template.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
-#include "llk_memory_checks.h"
 #include "llk_pack_common.h"
 
 using namespace ckernel;
@@ -198,12 +197,7 @@ template <
     bool narrow_row                  = false,
     std::uint32_t tile_dst_ct_offset = 0,
     bool dense                       = false>
-inline void _llk_pack_untilize_(
-    const std::uint32_t address,
-    [[maybe_unused]] const std::uint32_t pack_dst_format,
-    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t num_faces                   = 4,
-    const std::uint32_t tile_dst_rt_offset          = 0)
+inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t num_faces = 4, const std::uint32_t tile_dst_rt_offset = 0)
 {
     static_assert(block_ct_dim <= (dense ? 16 : 8), "block_ct_dim must be <= 8 when not dense, <= 16 when dense");
     static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");

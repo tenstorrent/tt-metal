@@ -382,7 +382,16 @@ int main(int argc, char* argv[]) {
     constexpr uint32_t MAX_RETRAINS_BEFORE_FAILURE =
         5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
     uint32_t num_retrains = 0;
+    std::unordered_map<EthChannelIdentifier, uint32_t> link_retrain_counts;
     while (!missing_asic_topology.empty() && link_retrain_supported && num_retrains < MAX_RETRAINS_BEFORE_FAILURE) {
+        auto retrained_links = collect_retrained_link_identifiers(missing_asic_topology, physical_system_descriptor);
+        for (const auto& link_id : retrained_links) {
+            link_retrain_counts[link_id]++;
+        }
+        log_output_rank0(
+            "Link Retrain Iteration " + std::to_string(num_retrains + 1) + ": Retraining " +
+            std::to_string(retrained_links.size()) + " link endpoints");
+
         reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
         links_reset = true;
         num_retrains++;
@@ -402,10 +411,12 @@ int main(int argc, char* argv[]) {
 
     distributed_context.barrier();
     if (num_retrains == MAX_RETRAINS_BEFORE_FAILURE && !missing_asic_topology.empty()) {
+        log_link_retrain_summary(link_retrain_counts, num_retrains, input_args.output_path);
         TT_THROW("Encountered unrecoverable state. Please check the system and try again.");
         return -1;
     }
     if (links_reset) {
+        log_link_retrain_summary(link_retrain_counts, num_retrains, input_args.output_path);
         // Return and ask user to run again, otherwise some incorrect HW states might persist and cause hangs
         log_output_rank0("Ethernet Links were Retrained. Please run the validation tool again to issue traffic.");
         return 0;

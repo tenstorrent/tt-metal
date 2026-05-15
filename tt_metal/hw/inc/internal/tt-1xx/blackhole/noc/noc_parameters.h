@@ -378,6 +378,7 @@
 #define NOC_PCIE_WRITE_ALIGNMENT_BYTES 16
 #define NOC_DRAM_READ_ALIGNMENT_BYTES 64
 #define NOC_DRAM_WRITE_ALIGNMENT_BYTES 16
+#define NOC_REG_ALIGNMENT_BYTES 4
 
 #define L1_ALIGNMENT                                                                              \
     (static_cast<uint32_t>(                                                                       \

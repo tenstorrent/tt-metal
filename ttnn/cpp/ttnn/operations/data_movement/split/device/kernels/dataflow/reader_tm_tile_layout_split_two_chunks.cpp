@@ -6,9 +6,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 // #define DEBUG
 #ifdef DEBUG
@@ -36,8 +36,8 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(in0_tensor_args, in0_tensor_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
 
     uint32_t tensor_stride = out_num_tiles_per_tensor_x;
     uint32_t tensor_stride_cum = 0;

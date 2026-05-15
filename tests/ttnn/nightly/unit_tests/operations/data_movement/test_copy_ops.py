@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, tt_dtype_to_torch_dtype
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp, tt_dtype_to_torch_dtype
 from tests.ttnn.unit_tests.operations.test_utils import get_ttnn_torch_dtype
 
 pytestmark = pytest.mark.use_module_device
@@ -37,6 +37,25 @@ def run_copy_test(N, C, H, W, layout, device):
 @pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
 def test_copy(N, C, H, W, layout, device):
     run_copy_test(N, C, H, W, layout, device)
+
+
+@pytest.mark.parametrize(
+    "N, C, H, W,",
+    ((1, 1, 32, 64),),
+)
+def test_copy_uint16(N, C, H, W, device):
+    torch.manual_seed(2005)
+    shape = [N, C, H, W]
+
+    input = torch.randint(0, 100, shape, dtype=torch.int16)
+    input = ttnn.from_torch(input, ttnn.uint16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    input_b = torch.zeros(shape, dtype=torch.int16)
+    input_b = ttnn.from_torch(input_b, ttnn.uint16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    ttnn.copy(input, input_b)
+    assert input_b.shape == input.shape
+    assert_equal(ttnn.to_torch(input), ttnn.to_torch(input_b))
 
 
 def run_assign_test(N, C, H, W, memory_config, dtype, device):

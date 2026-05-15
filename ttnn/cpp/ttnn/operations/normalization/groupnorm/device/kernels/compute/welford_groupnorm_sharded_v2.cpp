@@ -19,7 +19,7 @@
 #include "api/compute/welford.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
@@ -87,16 +87,16 @@ void kernel_main() {
     constexpr int cb_outbeta_id = cb_out0_id;
 #endif
 
-    experimental::CircularBuffer cb_beta(cb_beta_id);
-    experimental::CircularBuffer cb_eps(cb_eps_id);
-    experimental::CircularBuffer cb_ex2pe(cb_ex2pe_id);
-    experimental::CircularBuffer cb_ex_global(cb_ex_global_id);
-    experimental::CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    experimental::CircularBuffer cb_gamma(cb_gamma_id);
-    experimental::CircularBuffer cb_in(cb_in_id);
-    experimental::CircularBuffer cb_input_mask(cb_input_mask_id);
-    experimental::CircularBuffer cb_x(cb_x_id);
-    experimental::CircularBuffer cb_xmm(cb_xmm_id);
+    CircularBuffer cb_beta(cb_beta_id);
+    CircularBuffer cb_eps(cb_eps_id);
+    CircularBuffer cb_ex2pe(cb_ex2pe_id);
+    CircularBuffer cb_ex_global(cb_ex_global_id);
+    CircularBuffer cb_ex_partial(cb_ex_partial_id);
+    CircularBuffer cb_gamma(cb_gamma_id);
+    CircularBuffer cb_in(cb_in_id);
+    CircularBuffer cb_input_mask(cb_input_mask_id);
+    CircularBuffer cb_x(cb_x_id);
+    CircularBuffer cb_xmm(cb_xmm_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
@@ -235,8 +235,8 @@ void kernel_main() {
         cb_ex_global.wait_front(2 * num_groups);
         cb_ex2pe.reserve_back(num_groups);
         // (Var + eps)
-        add_tiles_init(cb_ex_global_id, cb_eps_id);
         reconfig_data_format_srcb(cb_eps_id);
+        add_tiles_init(cb_ex_global_id, cb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
             add_tiles(cb_ex_global_id, cb_eps_id, 1 + (g << 1), 0, dst0);
@@ -281,8 +281,8 @@ void kernel_main() {
 
                     // // Now let us do the actual computation for the current group here
                     // // a. x-u
-                    sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
                     reconfig_data_format(cb_in0_id, cb_ex_global_id);
+                    sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
 
                     tile_regs_acquire();
 #ifdef TILIZE_IN
@@ -299,8 +299,8 @@ void kernel_main() {
                     const uint32_t mask_offset = g * block_w;
                     const uint32_t mask_index = mask_offset + block_w_index;
 
-                    mul_tiles_bcast_scalar_init_short(cb_input_mask_id, cb_ex2pe_id);
                     reconfig_data_format(cb_in0_id, cb_input_mask_id, cb_ex_global_id, cb_ex2pe_id);
+                    mul_tiles_bcast_scalar_init_short(cb_input_mask_id, cb_ex2pe_id);
                     tile_regs_acquire();
                     mul_tiles_bcast_scalar(cb_input_mask_id, cb_ex2pe_id, mask_index, g, dst0);
                     tile_regs_commit();
@@ -311,8 +311,8 @@ void kernel_main() {
 
                     // // c. a * b
                     cb_xmm.wait_front(2);
-                    mul_tiles_init(cb_xmm_id, cb_xmm_id);
                     reconfig_data_format(cb_input_mask_id, cb_xmm_id, cb_ex2pe_id, cb_xmm_id);
+                    mul_tiles_init(cb_xmm_id, cb_xmm_id);
                     tile_regs_acquire();
                     mul_tiles(cb_xmm_id, cb_xmm_id, 0, 1, dst0);
                     tile_regs_commit();
@@ -387,8 +387,8 @@ void kernel_main() {
                 ++tile_id;
 
                 if constexpr (do_gamma) {
-                    mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
                     reconfig_data_format_srcb(cb_xmm_id, cb_gamma_id);
+                    mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
 
                     cb_x.wait_front(1);
                     tile_regs_acquire();
@@ -403,8 +403,8 @@ void kernel_main() {
                 }
 
                 if constexpr (do_beta) {
-                    add_bcast_rows_init_short(cb_x_id, cb_beta_id);
                     reconfig_data_format_srcb(do_gamma ? cb_gamma_id : cb_xmm_id, cb_beta_id);
+                    add_bcast_rows_init_short(cb_x_id, cb_beta_id);
 
                     cb_x.wait_front(1);
                     tile_regs_acquire();
@@ -419,8 +419,8 @@ void kernel_main() {
                 }
 
                 // Write out the final output
-                copy_tile_init(cb_x_id);
                 reconfig_data_format_srcb(do_beta ? cb_beta_id : cb_xmm_id, cb_x_id);
+                copy_tile_init(cb_x_id);
 
                 cb_x.wait_front(1);
                 tile_regs_acquire();
@@ -432,7 +432,7 @@ void kernel_main() {
 #else
                 auto write_cb_id = cb_out0_id;
 #endif
-                experimental::CircularBuffer write_cb(write_cb_id);
+                CircularBuffer write_cb(write_cb_id);
                 write_cb.reserve_back(1);
                 tile_regs_wait();
                 pack_tile(dst0, write_cb_id);

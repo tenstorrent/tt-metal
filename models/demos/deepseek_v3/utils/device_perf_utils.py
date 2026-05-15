@@ -16,6 +16,15 @@ from collections import defaultdict
 
 from loguru import logger
 
+from models.demos.deepseek_v3.utils.signpost_names import (
+    DECODE_EXECUTE_TRACE_SAMPLE_ON_DEVICE_SIGNPOST,
+    DECODE_EXECUTE_TRACE_SIGNPOST,
+    DECODE_TRACE_CAPTURE_SIGNPOST,
+    DECODE_WARMUP_SIGNPOST,
+    FIRST_DENSE_LAYER_SIGNPOST,
+    FIRST_MOE_LAYER_SIGNPOST,
+)
+
 # ============================================================================
 # CSV filtering helpers  (from process_decode_demo_profile.py)
 # ============================================================================
@@ -73,29 +82,32 @@ def _parse_signposts(rows, *, op_code_idx=0, op_type_idx=1):
     in_warmup = False
 
     for idx, name in signpost_positions:
-        if name == "decode_warmup":
+        if name == DECODE_WARMUP_SIGNPOST:
             if warmup_open is None:
                 warmup_open = idx
                 in_warmup = True
             else:
                 warmup_close = idx
                 in_warmup = False
-        elif name == "decode_trace_capture":
+        elif name == DECODE_TRACE_CAPTURE_SIGNPOST:
             if trace_capture_open is None:
                 trace_capture_open = idx
             else:
                 trace_capture_close = idx
-        elif name == "decode_execute_trace":
+        elif name == DECODE_EXECUTE_TRACE_SIGNPOST:
             if len(trace_exec_opens) == len(trace_exec_closes):
                 trace_exec_opens.append(idx)
             else:
                 trace_exec_closes.append(idx)
-        elif name == "first_dense_layer" and in_warmup:
+        elif name == DECODE_EXECUTE_TRACE_SAMPLE_ON_DEVICE_SIGNPOST:
+            if len(trace_exec_opens) > len(trace_exec_closes):
+                trace_exec_closes.append(idx)
+        elif name == FIRST_DENSE_LAYER_SIGNPOST and in_warmup:
             if first_dense_layer_warmup_open is None:
                 first_dense_layer_warmup_open = idx
             else:
                 first_dense_layer_warmup_close = idx
-        elif name == "first_moe_layer" and in_warmup:
+        elif name == FIRST_MOE_LAYER_SIGNPOST and in_warmup:
             if first_moe_layer_warmup_open is None:
                 first_moe_layer_warmup_open = idx
             else:
@@ -486,6 +498,13 @@ def process_profile_stats(filtered_csv_path, merged_csv_path):
     """
     rows = _read_filtered_csv(filtered_csv_path)
     reference = _get_warmup_reference(rows)
+    if not reference:
+        num_trace_executions = _get_num_trace_executions(rows)
+        raise ValueError(
+            "No warmup reference ops found in the filtered DeepSeek decode profile CSV. "
+            f"Check that {DECODE_WARMUP_SIGNPOST} signposts bracket the untraced decode warmup "
+            f"(trace executions found: {num_trace_executions})."
+        )
 
     level_counts = defaultdict(int)
     for op_info in reference:

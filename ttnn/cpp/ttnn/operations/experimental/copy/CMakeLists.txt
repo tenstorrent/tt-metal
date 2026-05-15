@@ -1,10 +1,12 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_copy ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Copy ALIAS ttnn_op_experimental_copy)
 
 tt_reuse_precompile_headers(ttnn_op_experimental_copy TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_copy)
 
-target_sources(ttnn_op_experimental_copy PRIVATE typecast/typecast.cpp)
+target_sources(ttnn_op_experimental_copy PRIVATE ${TTNN_OP_EXPERIMENTAL_COPY_SRCS})
 
 target_include_directories(ttnn_op_experimental_copy PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(

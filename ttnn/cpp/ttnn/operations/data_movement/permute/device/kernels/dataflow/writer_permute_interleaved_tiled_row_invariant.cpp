@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 // ------------------------------------------------------------------
 // 1) unflatten_index<RANK>:
@@ -110,7 +110,7 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_out0);
 
     const auto s = TensorAccessor(dst_args, dst_addr);
-    experimental::CircularBuffer cb_out(cb_id_out0);
+    CircularBuffer cb_out(cb_id_out0);
 
     // ------------------------------------------------------------------------
     // 3) Height dimension remainder logic
@@ -282,7 +282,7 @@ void kernel_main() {
     // 7) Handle padding if needed
     // ------------------------------------------------------------------------
     if constexpr (needs_padding) {
-        experimental::CircularBuffer cb1(tt::CBIndex::c_1);
+        CircularBuffer cb1(tt::CBIndex::c_1);
         cb1.wait_front(1);
         uint32_t l1_read_ptr = cb1.get_read_ptr();
 

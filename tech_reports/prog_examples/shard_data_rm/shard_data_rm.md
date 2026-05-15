@@ -182,7 +182,7 @@ Once the data is written to the circular buffer, `cb_push_back` is called to mak
 # Program execution
 
 ``` cpp
-distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec.data(), false);
+distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, false);
 workload.add_program(device_range, std::move(program));
 distributed::EnqueueMeshWorkload(cq, workload, false);
 distributed::Finish(cq);

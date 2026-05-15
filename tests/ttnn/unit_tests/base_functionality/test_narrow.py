@@ -6,7 +6,50 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, tt_dtype_to_torch_dtype
+from tests.ttnn.utils_for_testing import (
+    assert_allclose,
+    assert_equal,
+    assert_with_pcc,
+    tt_dtype_to_torch_dtype,
+)
+
+
+def assert_quality(
+    expected_result,
+    actual_result,
+    ttnn_dtype,
+    bf4_pcc=0.95,
+    bf8_rtol=0.05,
+    bf8_atol=0.025,
+):
+    """
+     Performs dtype-aware assertions
+
+    For bfloat8_b, performs assert_allclose with rtol + atol.
+    For bfloat4_b, PCC assertion is done.
+    All other dtypes are checked with assert_equal.
+
+    Args:
+        expected_result: reference tensor (ttnn or torch).
+        actual_result:   tensor to compare against the reference (ttnn or torch).
+        ttnn_dtype:      the ttnn dtype that determines comparison strategy.
+        bf4_pcc:         PCC threshold for bfloat4_b (default 0.95).
+        bf8_rtol:        relative tolerance for bfloat8_b (default 0.05).
+        bf8_atol:        absolute tolerance floor for bfloat8_b (default 0.025).
+
+    Note: assert_quality is NOT appropriate for cross-precision dtype conversions
+
+    Returns:
+        tuple: A tuple containing:
+            - quality_passed (bool): True if the check passes, False otherwise
+            - quality_message (str): A message describing the comparison result
+    """
+    if ttnn_dtype == ttnn.bfloat8_b:
+        return assert_allclose(expected_result, actual_result, rtol=bf8_rtol, atol=bf8_atol)
+    elif ttnn_dtype == ttnn.bfloat4_b:
+        return assert_with_pcc(expected_result, actual_result, bf4_pcc)
+    else:
+        return assert_equal(expected_result, actual_result)
 
 
 @pytest.mark.parametrize(
@@ -145,11 +188,8 @@ def test_narrow(input_shape, dim, start, length, memory_config, layout, dtype, d
     assert memory_config.buffer_type == ttnn_output.memory_config().buffer_type
     assert memory_config.memory_layout == ttnn_output.memory_config().memory_layout
     output = ttnn.to_torch(ttnn_output)
-    if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
-        target_pcc = 0.95 if dtype == ttnn.bfloat4_b else 0.99
-        assert_with_pcc(torch_result, output, target_pcc)
-    else:
-        assert_equal(torch_result, output)
+    # bf8_atol=0.05: unseeded randn input; worst observed bf8 delta across runs is ~0.047
+    assert_quality(torch_result, output, dtype, bf8_atol=0.05)
 
 
 @pytest.mark.parametrize(
@@ -217,4 +257,5 @@ def test_narrow_regression(input_shape, dim, start, length, memory_config, layou
     assert memory_config.buffer_type == ttnn_output.memory_config().buffer_type
     assert memory_config.memory_layout == ttnn_output.memory_config().memory_layout
     output = ttnn.to_torch(ttnn_output)
-    assert_with_pcc(torch_result, output, 0.99)
+    # bf8_atol=0.05: unseeded randn input; worst observed bf8 delta across runs is ~0.047
+    assert_quality(torch_result, output, dtype, bf8_atol=0.05)

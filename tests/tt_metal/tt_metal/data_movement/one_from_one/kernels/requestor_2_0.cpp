@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/endpoints.h"
 #include "api/debug/dprint.h"
 
 // L1 to L1 request
@@ -17,8 +17,8 @@ void kernel_main() {
     uint32_t responder_x_coord = get_arg_val<uint32_t>(0);
     uint32_t responder_y_coord = get_arg_val<uint32_t>(1);
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_endpoint;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_endpoint;
 
     {
         DeviceZoneScopedN("RISCV1");

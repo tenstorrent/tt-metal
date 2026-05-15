@@ -75,7 +75,7 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
                 - Input tensors must be on-device and rank 4.
                 - Unsharded runs: :attr:`input_tensor` must be interleaved.
                 - Sharded runs: inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32).
-                - When using :attr:`residual_input_tensor` with sharding, it must match the :attr:`input_tensor` padded shape and sharding.
+                - When using :attr:`residual_input_tensor`, it must match the :attr:`input_tensor` logical and padded shape, and sharding spec for sharded inputs.
                 - When using Welford algorithm (use_welford=True), :attr:`recip_tensor` must be provided.
         )doc",
         &ttnn::layer_norm_pre_all_gather,

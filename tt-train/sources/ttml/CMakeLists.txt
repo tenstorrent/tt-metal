@@ -49,6 +49,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/single_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/losses.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/losses.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.hpp
@@ -69,6 +71,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/softmax_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_ffn_swiglu_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rand_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/randn_op.cpp
@@ -126,6 +129,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_program_factory.cpp
+    # Select Target Logit (per-token target-logit selection for distributed cross-entropy forward)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/select_target_logit/select_target_logit.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/select_target_logit/device/select_target_logit_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/select_target_logit/device/select_target_logit_program_factory.cpp
+    # Subtract At Target (per-token scalar subtraction at target positions for distributed cross-entropy backward)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/subtract_at_target.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_program_factory.cpp
     # CrossEntropy Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/cross_entropy_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.cpp
@@ -146,6 +157,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/silu_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.cpp
+    # MoE Group
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_group/moe_group.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_group/device/moe_group_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_group/device/moe_group_program_factory.cpp
     # SwiGLU Elemwise Backward (fused eltwise backward)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_device_operation.cpp
@@ -178,6 +193,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_fw/polynorm_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_fw/device/polynorm_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_fw/device/polynorm_fw_program_factory.cpp
+    # PolyNorm Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_bw/polynorm_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_bw/device/polynorm_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_bw/device/polynorm_bw_program_factory.cpp
     # AdamW Optimizer (consolidated: supports both half and full precision)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.cpp

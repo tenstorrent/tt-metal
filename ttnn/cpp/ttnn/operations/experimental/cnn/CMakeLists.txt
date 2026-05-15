@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_cnn OBJECT)
 add_library(TTNN::Ops::Experimental::CNN ALIAS ttnn_op_experimental_cnn)
 
@@ -29,13 +31,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        convert_to_chw/convert_to_chw.cpp
-        convert_to_chw/device/convert_to_chw_device_operation.cpp
-        convert_to_chw/device/convert_to_chw_program_factory.cpp
-        convert_to_hwc/convert_to_hwc.cpp
-        convert_to_hwc/device/convert_to_hwc_device_operation.cpp
-        convert_to_hwc/device/convert_to_hwc_program_factory.cpp
-        convert_to_hwc/device/gather.cpp
+        ${TTNN_OP_EXPERIMENTAL_CNN_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_cnn PRIVATE ${FixmeOpIncDirs})

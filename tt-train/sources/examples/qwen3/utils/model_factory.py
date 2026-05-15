@@ -38,12 +38,15 @@ def create_ttml_model(
     tp_size=1,
     checkpoint=False,
     track_memory=False,
-    sharded_loss=False,
 ):
     """Instantiate a ttml Qwen3 model (single-device or TP).
 
     Returns ``(model, config, tie, shard_dim, mode_str)``.
     Weight loading is left to the caller (see :func:`load_hf_weights`).
+
+    In TP mode the LM head emits vocab-sharded logits ([..., V/tp_size] per
+    device) and callers should pair it with
+    :func:`ttml.ops.distributed.vocab_parallel_cross_entropy_loss`.
     """
     use_tp = tp_size > 1
     runner = RunnerType.MemoryEfficient if checkpoint else RunnerType.Default
@@ -54,10 +57,6 @@ def create_ttml_model(
     print(f"\nCreating ttml model ({mode_str}, max_seq_len={max_seq_len})...")
     t0 = time.time()
 
-    if sharded_loss and not use_tp:
-        print("  WARNING: --sharded_loss requires TP mode, ignoring.")
-        sharded_loss = False
-
     with empty_init():
         if use_tp:
             shard_dim = 1
@@ -67,12 +66,9 @@ def create_ttml_model(
                 shard_dim=shard_dim,
                 use_checkpoint=checkpoint,
                 track_memory=track_memory,
-                sharded_loss=sharded_loss,
             )
             if checkpoint:
                 print("  Gradient checkpointing: ENABLED")
-            if sharded_loss:
-                print("  Sharded loss: ENABLED (LM head gather_output=False)")
         else:
             shard_dim = None
             model = Qwen3(config, track_memory=track_memory)

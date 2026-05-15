@@ -10,7 +10,7 @@
 #include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
@@ -25,8 +25,8 @@ void kernel_main() {
     constexpr auto cb_tilize = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
 
-    experimental::CircularBuffer cb_tilize_exp(cb_tilize);
-    experimental::CircularBuffer cb_out_exp(cb_out);
+    CircularBuffer cb_tilize_exp(cb_tilize);
+    CircularBuffer cb_out_exp(cb_out);
 
     unary_op_init_common(cb_in, cb_out);
     transpose_wh_init(cb_tilize, cb_out);

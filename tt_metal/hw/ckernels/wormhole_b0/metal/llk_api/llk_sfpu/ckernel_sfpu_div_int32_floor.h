@@ -49,7 +49,7 @@ sfpi_inline void calculate_div_int32_body(
 
     // Combines the sign and exponent of -1.0 with the mantissa of `b_f`.
     // Scale the input value to the range [1.0, 2.0), and make it negative.
-    sfpi::vFloat neg_b_f = sfpi::setman(sfpi::vConstNeg1, sfpi::reinterpret<sfpi::vInt>(b_f));
+    sfpi::vFloat neg_b_f = sfpi::setman(sfpi::vConstNeg1, b_f);
     // Linear approximation.
     sfpi::vFloat inv_b_f = sfpi::vConstFloatPrgm2 + sfpi::vConstFloatPrgm1 * neg_b_f;
     sfpi::vFloat scale = sfpi::setman(b_f, 0);
@@ -85,7 +85,7 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
 
     sfpi::vUInt MASK_11 = 0x7ff;
-    sfpi::vUInt q = sfpi::exman9(q_f);
+    sfpi::vUInt q = sfpi::exman(q_f);
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
     // the target `a`.  Note: we only care about the top ~21 bits.
@@ -104,8 +104,8 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vFloat lo = q1 * b0 + MANTISSA_ALIGNMENT_OFFSET;
     hi = q1 * b1 + hi;
 
-    sfpi::vInt qb = sfpi::exman9(lo) << 11;
-    qb += sfpi::exman9(hi) << 22;
+    sfpi::vInt qb = sfpi::exman(lo) << 11;
+    qb += sfpi::exman(hi) << 22;
 
     // Compute remainder.
     // a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
@@ -128,9 +128,9 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vFloat mid = correction_f * b1 + MANTISSA_ALIGNMENT_OFFSET;
     sfpi::vFloat top = correction_f * b2 + MANTISSA_ALIGNMENT_OFFSET;
 
-    sfpi::vInt tmp = sfpi::exman9(low);
-    tmp += sfpi::exman9(mid) << 11;
-    tmp += sfpi::exman9(top) << 22;
+    sfpi::vInt tmp = sfpi::exman(low);
+    tmp += sfpi::exman(mid) << 11;
+    tmp += sfpi::exman(top) << 22;
 
     v_if(r < 0) {
         q -= correction;

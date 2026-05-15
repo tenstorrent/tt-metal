@@ -6,8 +6,8 @@
 
 #include "hw/inc/api/compile_time_args.h"
 #include "hw/inc/api/dataflow/dataflow_api.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 #include "hw/inc/internal/tt-1xx/risc_common.h"
 
 template <bool use_legacy_api>
@@ -21,7 +21,7 @@ void access_memory(uint32_t src_addr, uint32_t end_addr, uint32_t num_iterations
                 data++;
             }
         } else {
-            experimental::CoreLocalMem<std::uint32_t> mem(src_addr);
+            CoreLocalMem<std::uint32_t> mem(src_addr);
             while (mem.get_address() < end_addr) {
                 [[maybe_unused]] volatile uint32_t word = mem[0];
                 mem++;
@@ -54,7 +54,7 @@ void kernel_main() {
         uint64_t bar;
     };
 
-    experimental::CoreLocalMem<TestStruct> struct_mem(src_addr);
+    CoreLocalMem<TestStruct> struct_mem(src_addr);
     struct_mem->foo = pattern;
     struct_mem->bar = pattern + 1;
     while (struct_mem->foo != pattern) {
@@ -63,14 +63,14 @@ void kernel_main() {
     }
 
     // Try writing with operator[]
-    experimental::CoreLocalMem<std::uint32_t> mem(src_addr);
+    CoreLocalMem<std::uint32_t> mem(src_addr);
     for (uint32_t i = 0; i < num_bytes / sizeof(uint32_t); i++) {
         mem[i] = pattern + i;
     }
 
     // Try sending with NoC API
-    experimental::Noc noc;
-    experimental::UnicastEndpoint unicast_endpoint;
+    Noc noc;
+    UnicastEndpoint unicast_endpoint;
     noc.async_write(
         mem,
         unicast_endpoint,

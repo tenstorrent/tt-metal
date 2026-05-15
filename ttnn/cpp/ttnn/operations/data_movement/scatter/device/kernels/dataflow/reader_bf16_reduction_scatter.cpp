@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "../scatter_bf16_reduction_common.hpp"
 
 #include <array>
@@ -158,11 +158,11 @@ void kernel_main() {
 
     std::array<uint32_t, N> coord{from_id<N>(start_stick_id, input_dims)};
 
-    experimental::CircularBuffer input_cb(ctas.input_cb);
-    experimental::CircularBuffer fp32_temp_cb(ctas.fp32_temp_cb);
-    experimental::CircularBuffer output_cb(ctas.output_cb);
-    experimental::CircularBuffer index_cb(ctas.index_cb);
-    experimental::CircularBuffer source_cb(ctas.source_cb);
+    CircularBuffer input_cb(ctas.input_cb);
+    CircularBuffer fp32_temp_cb(ctas.fp32_temp_cb);
+    CircularBuffer output_cb(ctas.output_cb);
+    CircularBuffer index_cb(ctas.index_cb);
+    CircularBuffer source_cb(ctas.source_cb);
 
     for (uint32_t input_stick_id = start_stick_id; input_stick_id < start_stick_id + sticks_for_core;
          ++input_stick_id) {

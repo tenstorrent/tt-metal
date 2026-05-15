@@ -14,14 +14,21 @@ models:
     filename: "nanogpt_shakespeare"
     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
     args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml"
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt_char.yaml"
       - "--track_memory"
 
   - name: "NanoLlama3 Shakespeare"
     filename: "nanollama_shakespeare"
     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
     args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3.yaml"
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3_char.yaml"
+      - "--track_memory"
+
+  - name: "Nano Deepseek (Char) Shakespeare"
+    filename: "nano_deepseek_char_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nano_deepseek_char.yaml"
       - "--track_memory"
 
   - name: "TinyLlama Shakespeare"
@@ -30,6 +37,14 @@ models:
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama.yaml"
       - "--track_memory"
+    skip-card:
+      - "n150"
+      - "n300"
+      - "p100"
+    tokenize:
+      text_file: "data/shakespeare.txt"
+      hf_tokenizer: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+      output_file: "data/tokenized_shakespeare_tinyllama"
 
   - name: "Linear Regression"
     filename: "linear_regression"
@@ -37,3 +52,31 @@ models:
     args:
       - "--track_memory"
       - "--verbose"
+
+  - name: "Qwen 3 1.7B Shakespeare"
+    filename: "qwen3_1.7b_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_qwen3_17b.yaml"
+      - "--max_steps 500"
+      - "--track_memory"
+    skip-card:
+      - "n150"
+      - "n300"
+      - "p100"
+    tokenize:
+      text_file: "data/shakespeare.txt"
+      hf_tokenizer: "Qwen/Qwen3-1.7B"
+      output_file: "data/tokenized_shakespeare_qwen3"
+
+  - name: "Tiny Deepseek (Char) Shakespeare"
+    filename: "tiny_deepseek_char_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tiny_deepseek_char.yaml"
+      - "--max_steps 1000"
+      - "--track_memory"
+    skip-card:
+      - "n150"
+      - "n300"
+      - "p100"

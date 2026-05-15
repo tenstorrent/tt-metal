@@ -298,6 +298,7 @@ struct KernelConfig {
     // Compute config
     tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
+    bool dst_full_sync_en = false;
     bool math_approx_mode = false;
 };
 

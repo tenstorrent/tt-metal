@@ -30,10 +30,6 @@ on:
         description: 'Enable lightweight kernel asserts'
         default: false
         type: boolean
-      enable-llk-asserts:
-        description: 'Enable LLK asserts'
-        default: false
-        type: boolean
       gtest_filter:
         required: false
         default: "*"
@@ -73,9 +69,6 @@ jobs:
               ./build/test/tt_metal/unit_tests_device --gtest_filter=$GTEST_FILTER
               ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=$GTEST_FILTER
             auto-triage: false
-          - name: llk
-            cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter=$GTEST_FILTER
-            auto-triage: true
           - name: FD2
             cmd: |
               { [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_cpp_fd2_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/scripts/run_cpp_fd2_tests.sh
@@ -119,7 +112,6 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
-          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
           auto-triage: ${{ !inputs.enable-watcher && matrix.test-group.auto-triage }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}

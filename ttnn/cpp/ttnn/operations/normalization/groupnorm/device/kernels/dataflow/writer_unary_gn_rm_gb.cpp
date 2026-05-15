@@ -7,11 +7,11 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr bool is_mcast_sender = get_named_compile_time_arg_val("is_mcast_sender") == 1;
@@ -80,11 +80,11 @@ void kernel_main() {
     constexpr uint32_t cb_out_id = (fuse_gamma or fuse_beta) ? cb_out0_id : cb_reread_write_out_id;
 #endif
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_input_mask(cb_input_mask_id);
-    experimental::CircularBuffer cb_gamma(cb_gamma_id);
-    experimental::CircularBuffer cb_beta(cb_beta_id);
-    experimental::CircularBuffer cb_out(cb_out_id);
+    Noc noc;
+    CircularBuffer cb_input_mask(cb_input_mask_id);
+    CircularBuffer cb_gamma(cb_gamma_id);
+    CircularBuffer cb_beta(cb_beta_id);
+    CircularBuffer cb_out(cb_out_id);
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_out_id);
     const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask_id);
@@ -119,7 +119,7 @@ void kernel_main() {
             for (uint32_t j = 0; j < block_w; ++j) {
                 noc.async_read(
                     mask,
-                    experimental::CoreLocalMem<uint32_t>(l1_write_addr_input_mask),
+                    CoreLocalMem<uint32_t>(l1_write_addr_input_mask),
                     input_mask_single_tile_size_bytes,
                     {.page_id = input_mask_tile_id},
                     {});
@@ -176,7 +176,7 @@ void kernel_main() {
                         uint32_t tile_id = gamma_tile_start_id + w;
                         noc.async_read(
                             gamma,
-                            experimental::CoreLocalMem<uint32_t>(l1_write_addr_gamma),
+                            CoreLocalMem<uint32_t>(l1_write_addr_gamma),
                             64,
                             {.page_id = tile_id},
                             {});
@@ -187,11 +187,11 @@ void kernel_main() {
                     // Copy the second set of 32 bytes into the second face
                     l1_write_addr_gamma = base_l1_write_addr_gamma;
 
-                    experimental::UnicastEndpoint self_ep_gamma;
+                    UnicastEndpoint self_ep_gamma;
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
                         noc.async_read(
                             self_ep_gamma,
-                            experimental::CoreLocalMem<uint32_t>(l1_write_addr_gamma + 512),
+                            CoreLocalMem<uint32_t>(l1_write_addr_gamma + 512),
                             32,
                             {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_gamma + 32},
                             {});
@@ -218,7 +218,7 @@ void kernel_main() {
                         uint32_t tile_id = beta_tile_start_id + w;
                         noc.async_read(
                             beta,
-                            experimental::CoreLocalMem<uint32_t>(l1_write_addr_beta),
+                            CoreLocalMem<uint32_t>(l1_write_addr_beta),
                             64,
                             {.page_id = tile_id},
                             {});
@@ -229,11 +229,11 @@ void kernel_main() {
                     // Copy the second set of 32 bytes into the second face
                     l1_write_addr_beta = base_l1_write_addr_beta;
 
-                    experimental::UnicastEndpoint self_ep_beta;
+                    UnicastEndpoint self_ep_beta;
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
                         noc.async_read(
                             self_ep_beta,
-                            experimental::CoreLocalMem<uint32_t>(l1_write_addr_beta + 512),
+                            CoreLocalMem<uint32_t>(l1_write_addr_beta + 512),
                             32,
                             {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_beta + 32},
                             {});
@@ -269,7 +269,7 @@ void kernel_main() {
                         // for the cases where our last group does not span the length of our max tile span for a group
                         if ((index_g_offset + nt) < row_tile_max_index) {
                             noc.async_write(
-                                experimental::CoreLocalMem<uint32_t>(l1_read_addr),
+                                CoreLocalMem<uint32_t>(l1_read_addr),
                                 dst_a,
                                 single_tile_size_bytes,
                                 {},

@@ -59,5 +59,4 @@ jobs:
           cutoff-commit: ${{ inputs.cutoff_commit }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          # SLACK_WEBHOOK_URL is removed in favor of SLACK_BOT_TOKEN + channel logic in the action
           SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id != '' && inputs.slack_channel_id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}

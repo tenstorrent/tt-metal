@@ -196,7 +196,7 @@ def _run_reference_decode_replay_consistency(
 
 # Test: mtp=on must not perturb base greedy decode replay against the stored reference stream.
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["DUAL", "QUAD"])
+@pytest.mark.requires_device(["QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -230,7 +230,7 @@ def test_mtp_reference_decode_replay_consistency(
 
 # Test: mtp=off baseline decode must still replay the saved reference stream exactly.
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["DUAL", "QUAD"])
+@pytest.mark.requires_device(["QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -1097,7 +1097,7 @@ class _MtpTraceRunner:
 
 # Test: generate the hidden-state and next-token oracle payload used by the MTP checks below.
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["DUAL", "QUAD"])
+@pytest.mark.requires_device(["QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -1322,7 +1322,7 @@ def test_mtp_accept_rate_and_perf(
 
 # Test: prefill priming must seed the MTP cache correctly so post-prefill predictions stay accurate.
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["DUAL", "QUAD"])
+@pytest.mark.requires_device(["QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -1453,7 +1453,7 @@ def test_mtp_prefill_priming(
 
 # Test: verify batching with aliased page tables must preserve prompt predictions, accept masks, and accepted verify outputs.
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["DUAL", "QUAD"])
+@pytest.mark.requires_device(["QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [

@@ -593,7 +593,19 @@ class Transformer(TTTransformer):
         kv_cache=None,
         visual_pos_masks=None,
         deepstack_visual_embeds=None,
+        page_tables_per_layer=None,
     ):
+        # The parent ``ttnn_*_forward`` always passes ``page_tables_per_layer``
+        # (the hybrid kv-cache-groups kwarg). Qwen3-VL is non-hybrid today so
+        # the list is None in practice, but accept it and route per-layer the
+        # same way the parent does so behaviour stays aligned if/when this
+        # model is ever migrated.
+        if page_tables_per_layer is not None and len(page_tables_per_layer) != len(self.layers):
+            raise ValueError(
+                f"page_tables_per_layer has {len(page_tables_per_layer)} entries "
+                f"but model has {len(self.layers)} layers"
+            )
+
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
             activation_dtype = self.decoders_optimizations.get_tensor_dtype(decoder_id=i, tensor=TensorGroup.ACTIVATION)
@@ -602,6 +614,7 @@ class Transformer(TTTransformer):
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
 
+            layer_page_table = page_tables_per_layer[i] if page_tables_per_layer is not None else page_table
             x = layer(
                 x,
                 current_pos,
@@ -609,7 +622,7 @@ class Transformer(TTTransformer):
                 rot_mats_local=rot_mats_local,
                 user_id=user_id,
                 mode=mode,
-                page_table=page_table,
+                page_table=layer_page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,

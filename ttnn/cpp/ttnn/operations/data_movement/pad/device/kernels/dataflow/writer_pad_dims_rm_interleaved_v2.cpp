@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -20,7 +20,7 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<6>();
 
     const auto s = TensorAccessor(dst_args, dst_addr);
-    experimental::CircularBuffer cb_out0_exp(cb_out0);
+    CircularBuffer cb_out0_exp(cb_out0);
 
     uint32_t i_page = start_page_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core;) {

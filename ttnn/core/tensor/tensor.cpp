@@ -79,11 +79,6 @@ Tensor::Tensor(
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
     Tensor(HostTensor(std::move(buffer), std::move(tensor_spec), TensorTopology{})) {}
 
-Tensor::Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-    tensor_id(Tensor::next_tensor_id()),
-    tensor_attributes(
-        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
-
 Tensor::Tensor(HostTensor tensor) :
     tensor_id(Tensor::next_tensor_id()),
     tensor_attributes(std::make_shared<TensorAttributes>(HostStorage(std::move(tensor)))) {}

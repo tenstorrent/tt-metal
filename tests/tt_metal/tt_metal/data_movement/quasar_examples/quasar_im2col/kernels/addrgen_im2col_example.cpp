@@ -23,12 +23,11 @@
 // Total addresses: 3 * 3 * k*k = 81
 //
 // Compile-time args:
-//   0: (unused)
-//   1: (unused)
-//   2: num_of_addresses — must equal vertical_iters * horz_iters * k * k
+//   num_of_addresses — must equal vertical_iters * horz_iters * k * k
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
+#include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include <cstdint>
 
@@ -63,7 +62,7 @@ constexpr uint32_t total_addresses =
     ((uint32_t)(vert_end / vert_stride)) * ((uint32_t)(horz_end / horz_stride)) * k * k;  // 3 * 3 * 9 = 81
 
 void kernel_main() {
-    constexpr uint32_t num_of_addresses = get_compile_time_arg_val(2);
+    constexpr uint32_t num_of_addresses = get_arg(args::num_of_addresses);
 
     reset_addrgen_0();
 

@@ -82,6 +82,11 @@ Tensor generic_reduction_with_deprecated_correction(
     std::optional<bool> correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     if (correction.has_value()) {
+        // Re-acquire the GIL: this function is registered via bind_function<>(),
+        // which applies nb::call_guard<nb::gil_scoped_release>(), so the GIL is
+        // released by default. PyErr_WarnEx / PyExc_DeprecationWarning are Python
+        // C API and require the GIL.
+        nb::gil_scoped_acquire acquire;
         PyErr_WarnEx(
             PyExc_DeprecationWarning,
             "The 'correction' parameter is deprecated and will be removed in a future release.",

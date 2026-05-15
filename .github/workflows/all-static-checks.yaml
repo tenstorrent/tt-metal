@@ -34,6 +34,7 @@ jobs:
           python-version: 3.11
 
       - name: Run Pre-commit
+        id: pre-commit
         uses: pre-commit/action@v3.0.1
         env:
           PRE_COMMIT_FROM_REF: ${{ github.event_name == 'pull_request' && format('refs/remotes/origin/{0}', github.event.pull_request.base.ref) || 'HEAD^' }}
@@ -42,7 +43,26 @@ jobs:
           extra_args: |
             --from-ref ${{ env.PRE_COMMIT_FROM_REF }} \
             --to-ref ${{ env.PRE_COMMIT_TO_REF }}
-        continue-on-error: false
+        continue-on-error: true
+
+      - name: Suggest pre-commit fixes as inline PR comments
+        if: |
+          steps.pre-commit.outcome == 'failure' &&
+          github.event_name == 'pull_request' &&
+          !github.event.pull_request.head.repo.fork
+        uses: reviewdog/action-suggester@aa38384ceb608d00f84b4690cacc83a5aba307ff  # v1.24.0
+        with:
+          tool_name: pre-commit
+          github_token: ${{ github.token }}
+          filter_mode: diff_context
+          cleanup: false
+
+      - name: Fail if pre-commit hooks require changes
+        if: steps.pre-commit.outcome == 'failure'
+        run: |
+          echo "::error::Pre-commit hooks failed. Suggested fixes posted as PR review comments above."
+          echo "To fix locally: pre-commit run --from-ref origin/main --to-ref HEAD"
+          exit 1
   check-black:
     runs-on: ubuntu-latest
     steps:

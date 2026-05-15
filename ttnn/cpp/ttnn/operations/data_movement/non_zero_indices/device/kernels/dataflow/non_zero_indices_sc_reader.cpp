@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 #include "api/debug/dprint.h"
 
@@ -31,10 +31,10 @@ void kernel_main() {
     const auto out0 = TensorAccessor(dst0_args, output_addr_0);
     const auto out1 = TensorAccessor(dst1_args, output_addr_1, aligned_elements * element_size);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer input_cb(input_cb_index);
-    experimental::CircularBuffer output_cb_0(output_cb_index_0);
-    experimental::CircularBuffer output_cb_1(output_cb_index_1);
+    Noc noc;
+    CircularBuffer input_cb(input_cb_index);
+    CircularBuffer output_cb_0(output_cb_index_0);
+    CircularBuffer output_cb_1(output_cb_index_1);
 
     input_cb.reserve_back(1);
     uint32_t input_l1_addr = input_cb.get_write_ptr();
@@ -70,7 +70,7 @@ void kernel_main() {
     output_addr_ptr[0] = num_non_zero_indices;
     // Use WRITE_PTR since data was written via get_write_ptr()
     noc.async_write(
-        experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(output_cb_0),
+        use<CircularBuffer::AddrSelector::WRITE_PTR>(output_cb_0),
         out0,
         32,
         {.offset_bytes = 0},
@@ -80,7 +80,7 @@ void kernel_main() {
 
     // Use WRITE_PTR since data was written via get_write_ptr()
     noc.async_write(
-        experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(output_cb_1),
+        use<CircularBuffer::AddrSelector::WRITE_PTR>(output_cb_1),
         out1,
         aligned_elements * 4,
         {.offset_bytes = 0},

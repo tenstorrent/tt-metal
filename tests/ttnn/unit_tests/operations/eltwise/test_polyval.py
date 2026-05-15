@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
 def torch_polyval(input_tensor, coeff):
@@ -31,4 +31,4 @@ def test_polyval(device, shape, coeff):
 
     output_tensor = ttnn.polyval(input_tensor_a, coeff)
     output_tensor = ttnn.to_torch(output_tensor).squeeze(0)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)

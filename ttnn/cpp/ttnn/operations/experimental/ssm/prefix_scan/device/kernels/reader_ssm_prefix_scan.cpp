@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
-#include "experimental/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
 
 constexpr uint32_t NUM_TILES_IN_TILIZED_CHUNK = 32;
 
@@ -24,10 +24,10 @@ void kernel_main() {
     const uint32_t bx_shard_l1_addr = get_arg_val<uint32_t>(3);
     const uint32_t h_shard_l1_addr = get_arg_val<uint32_t>(4);
 
-    experimental::CircularBuffer cb_in(cb_in_id);
-    experimental::CircularBuffer cb_h_in(cb_h_in_id);
-    experimental::Noc noc;
-    experimental::UnicastEndpoint shard_src;
+    CircularBuffer cb_in(cb_in_id);
+    CircularBuffer cb_h_in(cb_h_in_id);
+    Noc noc;
+    UnicastEndpoint shard_src;
 
     const uint32_t local_noc_x = my_x[noc.get_noc_id()];
     const uint32_t local_noc_y = my_y[noc.get_noc_id()];
@@ -79,7 +79,7 @@ void kernel_main() {
                 {.offset_bytes = 0});
             noc.async_read_barrier();
             if (bytes_to_copy < chunk_bytes) {
-                experimental::CoreLocalMem<volatile uint32_t> pad(cb_in.get_write_ptr() + bytes_to_copy);
+                CoreLocalMem<volatile uint32_t> pad(cb_in.get_write_ptr() + bytes_to_copy);
                 const uint32_t padding_words = (chunk_bytes - bytes_to_copy) / sizeof(uint32_t);
                 for (uint32_t w = 0; w < padding_words; w++) {
                     pad[w] = 0;
@@ -97,7 +97,7 @@ void kernel_main() {
                 {.offset_bytes = 0});
             noc.async_read_barrier();
             if (bytes_to_copy < chunk_bytes) {
-                experimental::CoreLocalMem<volatile uint32_t> pad(cb_in.get_write_ptr() + bytes_to_copy);
+                CoreLocalMem<volatile uint32_t> pad(cb_in.get_write_ptr() + bytes_to_copy);
                 const uint32_t padding_words = (chunk_bytes - bytes_to_copy) / sizeof(uint32_t);
                 for (uint32_t w = 0; w < padding_words; w++) {
                     pad[w] = 0;

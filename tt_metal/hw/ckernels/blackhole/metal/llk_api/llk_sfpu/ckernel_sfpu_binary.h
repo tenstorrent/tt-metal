@@ -81,7 +81,7 @@ inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_i
             v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
             v_else {
                 result = std::numeric_limits<float>::infinity();
-                result = sfpi::setsgn(result, in0);
+                result = sfpi::copysgn(result, in0);
             }
             v_endif;
         }

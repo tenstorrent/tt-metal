@@ -33,7 +33,7 @@ void kernel_main() {
     // Initialize DRAM address generator for interleaved memory access
     const auto dst = TensorAccessor(dst_args, dst_addr);
 
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB input_cb(input_cb_id);
 
     // Processing loop bounds and state variables
@@ -51,7 +51,7 @@ void kernel_main() {
         // Process each tile in the width dimension
         for (uint32_t tile_idx = 0; tile_idx < tiles_per_width_dim; tile_idx++) {
             input_cb.wait_front(tiles_per_channel_dim);
-            auto src = experimental::use<experimental::CB::AddrSelector::WRITE_PTR>(input_cb);
+            auto src = use<experimental::CB::AddrSelector::WRITE_PTR>(input_cb);
             uint32_t src_offset = 0;
 
             const uint32_t width_limit =

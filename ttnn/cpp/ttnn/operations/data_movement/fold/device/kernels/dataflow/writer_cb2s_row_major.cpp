@@ -32,7 +32,7 @@ void kernel_main() {
     constexpr uint32_t elements_per_pixel = pixel_size / element_size;
     constexpr uint32_t elements_per_aligned_pixel = aligned_pixel_size / element_size;
 
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB src_cb_obj(src_cb);
     experimental::CB dst_cb_obj(dst_cb);
 

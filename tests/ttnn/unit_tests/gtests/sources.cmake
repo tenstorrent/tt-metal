@@ -62,6 +62,7 @@ set(UNIT_TESTS_TTNN_ACCESSOR_SOURCES
     accessor/test_accessor_benchmarks.cpp
     accessor/test_tensor_accessor.cpp
     accessor/test_tensor_accessor_on_device.cpp
+    accessor/test_tensor_accessor_strided_dfb.cpp
 )
 
 set(UNIT_TESTS_TTNN_TENSOR_SOURCES

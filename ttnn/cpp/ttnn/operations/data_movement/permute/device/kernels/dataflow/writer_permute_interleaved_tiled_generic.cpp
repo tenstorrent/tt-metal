@@ -3,7 +3,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // X = output width
@@ -74,7 +74,7 @@ void kernel_main() {
     constexpr uint32_t X_t = X_p / TILE_HEIGHT;
 
     constexpr auto cb_out = tt::CBIndex::c_2;
-    experimental::CircularBuffer cb_out_exp(cb_out);
+    CircularBuffer cb_out_exp(cb_out);
 
     //--------------------------------------------------------------------------
     // 3) Runtime Arguments
@@ -264,7 +264,7 @@ void kernel_main() {
         // We'll reuse 'dest_multi_idx' for tile indexing
         dest_multi_idx[RANK - 2] = y_t;  // fix the tile dimension in the RANK-2 dimension
 
-        experimental::CircularBuffer cb3(tt::CBIndex::c_3);
+        CircularBuffer cb3(tt::CBIndex::c_3);
         cb3.wait_front(1);
         uint32_t l1_read_ptr = cb3.get_read_ptr();
 

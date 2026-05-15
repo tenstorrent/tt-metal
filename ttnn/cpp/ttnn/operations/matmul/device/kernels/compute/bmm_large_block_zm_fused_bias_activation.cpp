@@ -8,7 +8,7 @@
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "internal/mod_div_lib.h"
 
 #ifdef FUSE_BIAS
@@ -16,7 +16,9 @@
 #endif
 
 #include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#ifdef SFPU_ACTIVATION
+#include "bmm_fused_activation.hpp"
+#endif
 
 // Please update
 // tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
@@ -42,8 +44,8 @@
  */
 template <uint32_t in0_block_num_tiles, uint32_t block_size = 4>
 FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in0_cb_id) {
-    experimental::CircularBuffer in0_transpose_cb(in0_transpose_cb_id);
-    experimental::CircularBuffer in0_cb(in0_cb_id);
+    CircularBuffer in0_transpose_cb(in0_transpose_cb_id);
+    CircularBuffer in0_cb(in0_cb_id);
     constexpr uint32_t num_blocks = in0_block_num_tiles / block_size;
     constexpr uint32_t last_block_size = in0_block_num_tiles % block_size;
     // Lets do 2 passes: One loop until last and one last for the left overs
@@ -93,7 +95,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
-    experimental::CircularBuffer mm_partials_cb(mm_partials_cb_id);
+    CircularBuffer mm_partials_cb(mm_partials_cb_id);
     // Reconfigure input
     copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
     mm_partials_cb.wait_front(out_subblock_num_tiles);
@@ -115,8 +117,8 @@ inline void reblock_and_untilize(
     uint32_t out_subblock_h,
     uint32_t interm_cb_id,
     uint32_t out_cb_id) {
-    experimental::CircularBuffer interm_cb(interm_cb_id);
-    experimental::CircularBuffer out_cb(out_cb_id);
+    CircularBuffer interm_cb(interm_cb_id);
+    CircularBuffer out_cb(out_cb_id);
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     interm_cb.wait_front(num_tiles_in_row_of_subblocks);
 
@@ -190,11 +192,11 @@ void kernel_main() {
     // as input for the matmul call.
     constexpr uint32_t in0_transpose_cb_id = get_named_compile_time_arg_val("cb_in0");
 
-    experimental::CircularBuffer in0_cb(in0_cb_id);
-    experimental::CircularBuffer in1_cb(in1_cb_id);
-    experimental::CircularBuffer out_cb(out_cb_id);
-    experimental::CircularBuffer mm_partials_cb(mm_partials_cb_id);
-    experimental::CircularBuffer untilize_mode_out_cb(untilize_mode_out_cb_id);
+    CircularBuffer in0_cb(in0_cb_id);
+    CircularBuffer in1_cb(in1_cb_id);
+    CircularBuffer out_cb(out_cb_id);
+    CircularBuffer mm_partials_cb(mm_partials_cb_id);
+    CircularBuffer untilize_mode_out_cb(untilize_mode_out_cb_id);
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = get_named_compile_time_arg_val("cb_bias");
@@ -202,14 +204,20 @@ void kernel_main() {
     constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
     constexpr bool row_broadcast_bias = (bool)get_compile_time_arg_val(18);
-    experimental::CircularBuffer bias_cb(bias_cb_id);
+    CircularBuffer bias_cb(bias_cb_id);
 #else
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
 #endif
-    experimental::CircularBuffer mm_out_cb(mm_out_cb_id);
+    CircularBuffer mm_out_cb(mm_out_cb_id);
 
-#ifdef SFPU_OP_INIT_ACTIVATION
-    SFPU_OP_INIT_ACTIVATION
+#ifdef SFPU_ACTIVATION
+    constexpr KernelActivation activation_type =
+        static_cast<KernelActivation>(get_named_compile_time_arg_val("activation_type"));
+    constexpr uint32_t activation_param0 = get_named_compile_time_arg_val("activation_param0");
+    constexpr uint32_t activation_param1 = get_named_compile_time_arg_val("activation_param1");
+    constexpr uint32_t activation_param2 = get_named_compile_time_arg_val("activation_param2");
+
+    ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
 #endif
 
 #ifdef IN1_TRANSPOSE_TILE
@@ -332,16 +340,18 @@ void kernel_main() {
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
-// If we fuse bias, we will pack out and run bias + optional sfpu in a separate loop
-#if not defined FUSE_BIAS and defined SFPU_OP_INIT_ACTIVATION
-                                for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                                    SFPU_OP_FUNC_ACTIVATION
-                                }
-#endif
                                 tile_regs_commit();
-                                // Pack out to output buffer
                                 mm_out_cb.reserve_back(out_subblock_num_tiles);
+
+#if defined SFPU_ACTIVATION and not defined FUSE_BIAS
+                                apply_activation_from_pack<
+                                    activation_type,
+                                    activation_param0,
+                                    activation_param1,
+                                    activation_param2>(out_subblock_num_tiles);
+#else
                                 tile_regs_wait();
+#endif
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                                 PACK((pack_reconfig_data_format(mm_out_cb_id)));
@@ -358,7 +368,6 @@ void kernel_main() {
                                 PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 #endif
-
                                 uint32_t start_dst_index = 0;
                                 pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
 
@@ -469,24 +478,31 @@ void kernel_main() {
                                 bias_tile_idx++;
                             }
                         }
-// if there's no SFPU fusion, we commit the regs so packer can start packing
-#ifndef SFPU_OP_INIT_ACTIVATION
                         tile_regs_commit();
-#endif
 
                         mm_partials_cb.pop_front(out_subblock_num_tiles);
 
-// sfpu activation
-#ifdef SFPU_OP_INIT_ACTIVATION
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            SFPU_OP_FUNC_ACTIVATION
-                        }
-                        tile_regs_commit();
-#endif
-
                         // Pack out to output buffer
                         untilize_mode_out_cb.reserve_back(out_subblock_num_tiles);
+
+#ifdef SFPU_ACTIVATION
+                        PACK(TTI_SEMWAIT(
+                            p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                            semaphore::t6_sem(semaphore::MATH_PACK),
+                            p_stall::STALL_ON_ZERO));
+
+                        // Flip destination register offset for PACKER access
+                        PACK(TT_SETC16(
+                            DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+
+                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                            ActivationApplyHelper<activation_type, activation_param0, activation_param1>::apply(i);
+                        }
+
+                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+#else
                         tile_regs_wait();
+#endif
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, untilize_mode_out_cb_id);
                         }

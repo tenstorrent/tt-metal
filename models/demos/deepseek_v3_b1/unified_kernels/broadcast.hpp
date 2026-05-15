@@ -75,6 +75,10 @@ struct Broadcast {
         static constexpr uint32_t num_neighbors = numNeighbors;
         static constexpr uint32_t num_links = numLinks;
         static constexpr uint32_t num_connections = num_neighbors * num_links;
+        // A broadcast with fewer chunks than configured links can only exercise
+        // the first `num_chunks` links. Keep the RT-arg layout unchanged, but do
+        // not open or close links that can never carry traffic.
+        static constexpr uint32_t effective_num_links = numChunks < numLinks ? numChunks : numLinks;
         static constexpr bool is_root = isRoot != 0;
         static constexpr uint32_t chunk_size_bytes = chunkSizeBytes;
         static constexpr uint32_t last_chunk_size_bytes = lastChunkSizeBytes;
@@ -154,7 +158,9 @@ struct Broadcast {
                         connections[connection_idx] =
                             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
                                 arg_idx);
-                        connections[connection_idx].open_start();
+                        if (link_idx < CTArgs::effective_num_links) {
+                            connections[connection_idx].open_start();
+                        }
                     }
                 }
 
@@ -162,7 +168,7 @@ struct Broadcast {
                     const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
                     const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
                     const auto connection_direction = get_next_hop_router_direction(dst_mesh_id, dst_chip_id);
-                    for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
+                    for (uint32_t link_idx = 0; link_idx < CTArgs::effective_num_links; link_idx++) {
                         const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + link_idx;
                         headers[connection_idx] = PacketHeaderPool::allocate_header();
                         fabric_set_single_hop_unicast_route_from_direction(
@@ -174,8 +180,11 @@ struct Broadcast {
                     }
                 }
 
-                for (uint32_t connection_idx = 0; connection_idx < CTArgs::num_connections; connection_idx++) {
-                    connections[connection_idx].open_finish();
+                for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
+                    for (uint32_t link_idx = 0; link_idx < CTArgs::effective_num_links; link_idx++) {
+                        const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + link_idx;
+                        connections[connection_idx].open_finish();
+                    }
                 }
             }
 #endif
@@ -288,7 +297,7 @@ struct Broadcast {
                             send_multi_chunk(connection_idx, src_base_addr, chunk_idx, chunk_size);
                         }
 
-                        if (++current_link == CTArgs::num_links) {
+                        if (++current_link == CTArgs::effective_num_links) {
                             current_link = 0;
                             // flush only when about to reuse a packet header
                             if constexpr (CTArgs::num_neighbors > 0) {
@@ -334,15 +343,18 @@ struct Broadcast {
                     if constexpr (CTArgs::out_num_tiles != 0) {
                         cb_push_back(CTArgs::cb_out_id, CTArgs::out_num_tiles);
                     }
-                    for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
+                    for (uint32_t link_idx = 0; link_idx < CTArgs::effective_num_links; link_idx++) {
                         if (link_counters[link_idx] > 0) {
                             unified_kernels::semaphore_dec(sem_ptrs[link_idx], link_counters[link_idx]);
                         }
                     }
                 }
 
-                for (uint32_t i = 0; i < CTArgs::num_connections; i++) {
-                    connections[i].close();
+                for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
+                    for (uint32_t link_idx = 0; link_idx < CTArgs::effective_num_links; link_idx++) {
+                        const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + link_idx;
+                        connections[connection_idx].close();
+                    }
                 }
 
                 noc_async_full_barrier();

@@ -66,6 +66,7 @@ class DeepSeekPrefillConfig:
         self.config = config
         self.dispatch_group_size = dispatch_group_size
         self.num_dispatch_groups = num_dispatch_groups
+        self.num_links = num_links
 
         experts_per_chip = config.num_experts // (dispatch_group_size * num_dispatch_groups)
         self.experts_per_chip = experts_per_chip
@@ -144,7 +145,7 @@ class DeepSeekPrefillConfig:
         self.permuted_weights = None  # Set by mlp.py after host-side permutation
         self._per_expert_weights = None
 
-        logger.info(
+        logger.debug(
             f"DeepSeekPrefillConfig: experts_per_chip={experts_per_chip}, "
             f"max_dispatched={max_dispatched}, max_buf={max_dispatch_buffer_token_size}, "
             f"dgs={dispatch_group_size}, ndg={num_dispatch_groups}"
@@ -305,7 +306,9 @@ def _forward_prefill_deepseek_chunk(
     # Step 1: All-gather x across TP axis
     x_full_is_new = False
     if mesh_device.shape[1] > 1 and hidden_states.shape[-1] < config.hidden_size:
-        x_full = ttnn.all_gather(hidden_states, dim=-1, cluster_axis=1, num_links=4, topology=ttnn.Topology.Linear)
+        x_full = ttnn.all_gather(
+            hidden_states, dim=-1, cluster_axis=1, num_links=pc.num_links, topology=ttnn.Topology.Linear
+        )
         x_full_is_new = True
     else:
         x_full = hidden_states
@@ -487,7 +490,7 @@ def _forward_prefill_deepseek_chunk(
     ttnn.deallocate(scores_for_reduce)
 
     if mesh_device.shape[1] > 1:
-        output = ttnn.all_reduce(summed, cluster_axis=1, num_links=4, topology=ttnn.Topology.Linear)
+        output = ttnn.all_reduce(summed, cluster_axis=1, num_links=pc.num_links, topology=ttnn.Topology.Linear)
         if output is not summed:
             ttnn.deallocate(summed)
     else:

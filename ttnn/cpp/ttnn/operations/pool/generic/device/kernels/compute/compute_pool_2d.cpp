@@ -58,8 +58,17 @@ void kernel_main() {
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
     constexpr uint32_t num_faces_in_input_tile =
         (max_sticks_for_reduction < TILE_HEIGHT || window_size_hw <= FACE_HEIGHT) ? 2 : 4;
-    constexpr uint32_t num_faces_in_output_tile = 2;
-    constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
+    // "Single partial tile per core that fits in one face": when there is only one output tile
+    // per core (in_c < TILE_WIDTH) and it fits in a single face (in_c <= FACE_WIDTH), pack just
+    // one face for that tile. The host correspondingly aligns output_shard_width to FACE_WIDTH,
+    // so the per-shard layout has no internal padding and downstream consumers (e.g.
+    // sharded_to_interleaved) read contiguous data.
+    constexpr bool single_partial_fits_in_face = last_tile_is_partial && in_c <= FACE_WIDTH;
+    constexpr uint32_t num_faces_in_output_tile = single_partial_fits_in_face ? 1 : 2;
+    // When the last tile has exactly FACE_WIDTH valid channels (channels % 32 == 16) OR the only
+    // tile is partial-fits-in-one-face, pack 1 face for the last tile.
+    constexpr uint32_t num_faces_in_last_output_tile =
+        last_tile_is_partial && (in_c % TILE_WIDTH == FACE_WIDTH || single_partial_fits_in_face) ? 1 : 2;
     constexpr uint32_t num_out_sticks = 1;
 
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::AVG;
@@ -134,7 +143,8 @@ void kernel_main() {
                 tilize_reconfig ? (last_c_block ? partial_iter_output_tiles : max_tiles_per_iter) : max_tiles_per_iter;
             const uint32_t number_of_tiles = last_c_block ? partial_iter_output_tiles : max_tiles_per_iter;
             const uint32_t output_faces =
-                (last_tile_is_partial && last_c_block)
+                (last_tile_is_partial && last_c_block &&
+                 (in_c % TILE_WIDTH == FACE_WIDTH || single_partial_fits_in_face))
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
             if constexpr (!is_output_tiled) {
@@ -198,7 +208,7 @@ void kernel_main() {
 
                     fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                     fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                    fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
+                    fast_tilize_uninit(pre_tilize_cb_id, out_cb_id, in_ntiles_c);
 
                     out_cb.push_back(in_ntiles_c);
                     pre_tilize_cb.pop_front(TILE_HEIGHT * in_ntiles_c);

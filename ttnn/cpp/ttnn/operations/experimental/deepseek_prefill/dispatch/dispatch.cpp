@@ -29,7 +29,8 @@ std::array<ttnn::Tensor, 2> dispatch(
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    bool use_fp8_dispatch) {
     auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
@@ -73,7 +74,8 @@ std::array<ttnn::Tensor, 2> dispatch(
         usable_topology,
         memory_config_,
         subdevice_core_range_set,
-        use_l1_small_for_semaphores);
+        use_l1_small_for_semaphores,
+        use_fp8_dispatch);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch

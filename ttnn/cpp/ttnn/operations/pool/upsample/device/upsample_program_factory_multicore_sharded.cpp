@@ -2,24 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/pool/upsample/device/upsample_device_operation.hpp"
+
 #include <sys/types.h>
 #include <cstdint>
 #include <vector>
 
-#include "ttnn/operations/cb_utils.hpp"
-
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_sharded.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 using namespace tt;
+
+namespace {
 
 struct StickInterval {
     uint16_t core_x, core_y;
@@ -30,7 +32,7 @@ struct StickInterval {
         core_x(cx), core_y(cy), offset_start(start), offset_end(start) {}
 };
 
-static Tensor create_config_tensor(
+Tensor create_config_tensor(
     IDevice* device,
     ShardSpec shard_spec,
     const uint32_t batch_size,
@@ -55,7 +57,6 @@ static Tensor create_config_tensor(
 
     auto logical_cores = corerange_to_cores(
         shard_spec.grid, shard_spec.num_cores(), shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    auto ranges = shard_spec.grid.ranges();
 
     if (!is_height_sharded) {
         auto all_cores = shard_spec.grid;
@@ -152,7 +153,7 @@ static Tensor create_config_tensor(
         const uint32_t remainder =
             (elems_per_core_reader - (slice_length % elems_per_core_reader)) % elems_per_core_reader;
         if (remainder != 0) {
-            for (int i = 0; i < remainder / config_buffer_entry_size; i++) {
+            for (uint32_t i = 0; i < remainder / config_buffer_entry_size; i++) {
                 config_vector.push_back(0);  // core x
                 config_vector.push_back(0);  // core y
                 config_vector.push_back(1);  // stick offset start
@@ -202,7 +203,7 @@ static Tensor create_config_tensor(
 // Returns a reduced CoreRangeSet containing only cores that have actual work.
 // For height sharding: returns first N cores from the grid.
 // For block sharding: keeps all channel cores, reduces NHW dimension.
-static CoreRangeSet get_cores_with_work(
+CoreRangeSet get_cores_with_work(
     const CoreRangeSet& all_cores,
     uint32_t total_nhw,
     uint32_t nsticks_per_core,
@@ -241,11 +242,11 @@ static CoreRangeSet get_cores_with_work(
     return CoreRangeSet(CoreRange(range.start_coord, new_end));
 }
 
-UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreShardedProgramFactory::create(
-    const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor) {
+}  // namespace
+
+UpsampleMultiCoreShardedProgramFactory::Resources UpsampleMultiCoreShardedProgramFactory::prepare_resources(
+    const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& /*output_tensor*/) {
     const auto& input = input_tensor;
-    auto& output = output_tensor;
-    // This factory only supports integer scale factors
     TT_FATAL(
         operations::pool::upsample::is_integer_scale(operation_attributes.scale_factor_h) &&
             operations::pool::upsample::is_integer_scale(operation_attributes.scale_factor_w),
@@ -253,40 +254,80 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
         operation_attributes.scale_factor_h,
         operation_attributes.scale_factor_w);
     const uint32_t scale_factor_h = static_cast<uint32_t>(operation_attributes.scale_factor_h);
+
+    distributed::MeshDevice* device = input.device();
+    const auto shard_spec = input.shard_spec().value();
+    const uint32_t in_w = input.padded_shape()[2];
+    const uint32_t input_nsticks_per_core = shard_spec.shape[0];
+    const bool is_height_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    const uint32_t total_nhw = input.padded_shape()[0] * input.padded_shape()[1] * in_w;
+
+    const TensorMemoryLayout memory_layout = input.memory_config().memory_layout();
+    TT_FATAL(
+        memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+        "Unsupported sharding layout");
+
+    const CoreRangeSet cores_with_work = get_cores_with_work(
+        shard_spec.grid, total_nhw, input_nsticks_per_core, is_height_sharded, shard_spec.orientation);
+
+    Tensor config_tensor = create_config_tensor(
+        device, shard_spec, input.padded_shape()[0], input.padded_shape()[1], in_w, scale_factor_h, is_height_sharded);
+
+    const auto shard_shape = std::array<uint32_t, 2>({1, static_cast<uint32_t>(config_tensor.logical_shape()[-1])});
+    const auto config_tensor_shard_orientation =
+        input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ? ShardOrientation::COL_MAJOR
+                                                                                   : shard_spec.orientation;
+    // Use cores_with_work for config tensor sharding - only cores that have actual work need config data
+    const ShardSpec config_shard_spec(cores_with_work, shard_shape, config_tensor_shard_orientation);
+    const MemoryConfig config_memory_config{
+        TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
+
+    return Resources{.config_tensor_device = config_tensor.to_device(device, config_memory_config)};
+}
+
+namespace {
+const Tensor& require_resources(const std::optional<Tensor>& cfg) {
+    TT_FATAL(cfg.has_value(), "prepare_resources must run before create_descriptor for sharded upsample");
+    return *cfg;
+}
+}  // namespace
+
+ProgramDescriptor UpsampleMultiCoreShardedProgramFactory::create_descriptor(
+    const UpsampleParams& operation_attributes,
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    Resources& resources) {
+    const auto& input = input_tensor;
+    auto& output = output_tensor;
+
+    const uint32_t scale_factor_h = static_cast<uint32_t>(operation_attributes.scale_factor_h);
     const uint32_t scale_factor_w = static_cast<uint32_t>(operation_attributes.scale_factor_w);
 
-    Program program = CreateProgram();
     distributed::MeshDevice* device = input.device();
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
     TT_FATAL(input.logical_shape()[-1] == output.logical_shape()[-1], "Expected input and output channels to match");
-    TT_FATAL(
-        input.layout() == tt_metal::Layout::ROW_MAJOR,
-        "Only row-major layout is currently supported in nearest upsample");
+    TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only row-major layout is currently supported in nearest upsample");
 
     uint32_t input_stick_nbytes = input.padded_shape()[-1] * input.element_size();
     uint32_t output_stick_nbytes = output.padded_shape()[-1] * output.element_size();
     TT_FATAL(input_stick_nbytes == output_stick_nbytes, "Input and output sticks should have same size");
 
-    uint32_t in_w = input.padded_shape()[2];
+    const uint32_t in_w = input.padded_shape()[2];
 
-    auto shard_spec = input.shard_spec().value();
-    auto all_cores = shard_spec.grid;
-    uint32_t ncores = shard_spec.num_cores();
+    const auto shard_spec = input.shard_spec().value();
+    const auto all_cores = shard_spec.grid;
+    const uint32_t ncores = shard_spec.num_cores();
     uint32_t ncores_x = device->compute_with_storage_grid_size().x;
 
-    auto out_shard_spec = output.shard_spec().value();
+    const auto out_shard_spec = output.shard_spec().value();
     TT_FATAL(
         out_shard_spec.num_cores() == ncores,
         "Output tensor should have same number of cores {} as input tensor {}",
         out_shard_spec.num_cores(),
         ncores);
-
-    if (input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-        TT_THROW("Unsupported sharding layout");
-    }
 
     // extra limitation to avoid post upsample step of resharding
     if (input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -300,26 +341,45 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
     const bool is_height_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     const uint32_t total_nhw = input.padded_shape()[0] * input.padded_shape()[1] * in_w;
 
-    // Get reduced core set - only cores that actually have work
+    // Reduced core set - only cores that actually have work
     const CoreRangeSet cores_with_work =
         get_cores_with_work(all_cores, total_nhw, input_nsticks_per_core, is_height_sharded, shard_spec.orientation);
 
+    ProgramDescriptor desc;
+
     uint32_t next_cb_index = CBIndex::c_0;
-    const uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
+    constexpr uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
     const uint32_t aligned_input_stick_nbytes = tt::round_up(input_stick_nbytes, input.buffer()->alignment());
     const uint32_t in_cb_pagesize = aligned_input_stick_nbytes;
     const uint32_t in_cb_npages = input_nsticks_per_core * buffering_factor;
 
-    auto [in_cb_id, cb_src0] = tt::tt_metal::create_cb(
-        next_cb_index++, program, all_cores, in_cb_pagesize, in_cb_npages, input_cb_data_format, input.buffer());
+    const uint32_t in_cb_id = next_cb_index++;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in_cb_pagesize * in_cb_npages,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(in_cb_id),
+            .data_format = input_cb_data_format,
+            .page_size = in_cb_pagesize,
+        }}},
+        .buffer = input.buffer(),
+    });
 
     // output sharded CB with upsampled data
-    uint32_t out_cb_pagesize =
-        tt::round_up(output_stick_nbytes, output.buffer()->alignment());  // aligned output stick n bytes
-    uint32_t out_cb_npages = output_nsticks_per_core * buffering_factor;
+    const uint32_t out_cb_pagesize = tt::round_up(output_stick_nbytes, output.buffer()->alignment());
+    const uint32_t out_cb_npages = output_nsticks_per_core * buffering_factor;
 
-    auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
-        next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, output_cb_data_format, output.buffer());
+    const uint32_t out_cb_id = next_cb_index++;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out_cb_pagesize * out_cb_npages,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(out_cb_id),
+            .data_format = output_cb_data_format,
+            .page_size = out_cb_pagesize,
+        }}},
+        .buffer = output.buffer(),
+    });
 
     log_debug(LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
     log_debug(LogOp, "output_cb: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
@@ -331,89 +391,63 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
         input_nsticks_per_core,
         output_nsticks_per_core);
 
-    // create config tensor
-    Tensor config_tensor;
-    if ((input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) ||
-        (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED)) {
-        config_tensor = create_config_tensor(
-            device,
-            shard_spec,
-            input.padded_shape()[0],
-            input.padded_shape()[1],
-            in_w,
-            scale_factor_h,
-            input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED);
-    } else {
-        TT_THROW("Unsupported sharding layout");
-    }
-    auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.logical_shape()[-1]});
-    auto config_tensor_shard_orientation = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED
-                                               ? ShardOrientation::COL_MAJOR
-                                               : shard_spec.orientation;
-    // Use cores_with_work for config tensor sharding - only cores that have actual work need config data
-    ShardSpec config_shard_spec(cores_with_work, shard_shape, config_tensor_shard_orientation);
-    MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
-    auto config_tensor_device = config_tensor.to_device(device, memory_config);
-
-    tt::DataFormat config_df = tt::DataFormat::RawUInt16;
-    const auto& config_storage = config_tensor_device.device_storage();
-    auto* config_buffer = config_storage.get_buffer();
-    auto config_buffer_page_size = config_buffer->page_size();
+    // Config tensor lives on resources so its buffer outlives this descriptor
+    // and the cached Program (the config CB references the buffer pointer
+    // directly via UpdateDynamicCircularBufferAddress).
+    Buffer* const config_buffer = require_resources(resources.config_tensor_device).buffer();
+    constexpr tt::DataFormat config_df = tt::DataFormat::RawUInt16;
+    const uint32_t config_buffer_page_size = config_buffer->page_size();
 
     // Create config CB only for cores that have work
-    auto [config_cb_id, config_cb] = tt::tt_metal::create_cb(
-        next_cb_index++, program, cores_with_work, config_buffer_page_size, 1, config_df, &*config_buffer);
+    const uint32_t config_cb_id = next_cb_index++;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = config_buffer_page_size,
+        .core_ranges = cores_with_work,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(config_cb_id),
+            .data_format = config_df,
+            .page_size = config_buffer_page_size,
+        }}},
+        .buffer = config_buffer,
+    });
 
-    // Kernels
-
-    std::vector<uint32_t> writer_compile_time_args = {
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
         in_cb_id,
         out_cb_id,
-        false,
+        0,  // is_reader = false
         config_cb_id,
         input_stick_nbytes,
         input_nsticks_per_core,
         scale_factor_h,
         scale_factor_w,
         // number of intervals in config tensor per core, 4 is number of bfloat16 elements per entry
-        static_cast<uint32_t>(config_tensor.logical_shape()[-1] / 4),
+        static_cast<uint32_t>(require_resources(resources.config_tensor_device).logical_shape()[-1] / 4),
     };
-    // Only dispatch kernels to cores that have actual work
-    std::string writer_kernel_fname =
+
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = writer_compile_time_args;
+    reader_compile_time_args[2] = 1;  // is_reader = true
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
-    auto writer_kernel =
-        CreateKernel(program, writer_kernel_fname, cores_with_work, WriterDataMovementConfig(writer_compile_time_args));
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = cores_with_work;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
-    std::vector<uint32_t> reader_compile_time_args = writer_compile_time_args;
-    reader_compile_time_args[2] = true;  // reader
-
-    std::string reader_kernel_fname =
+    KernelDescriptor reader_desc;
+    // Same kernel source as writer — branches on the is_reader CT arg.
+    reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
-    CreateKernel(program, reader_kernel_fname, cores_with_work, ReaderDataMovementConfig(reader_compile_time_args));
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = cores_with_work;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    return cached_program_t{
-        std::move(program),
-        shared_variables_t{
-            .writer_kernel = writer_kernel,
-            .cb_src0 = cb_src0,
-            .out_cb = out_cb,
-            .config_cb = config_cb,
-            .config_storage = config_storage,
-            .config_buffer = config_buffer,
-        }};
-}
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(reader_desc));
 
-void UpsampleMultiCoreShardedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const UpsampleParams& /*operation_attributes*/,
-    const Tensor& input_tensor,
-    Tensor& output_tensor) {
-    auto& program = cached_program.program;
-    auto* src_buffer = input_tensor.buffer();
-    auto* dst_buffer = output_tensor.buffer();
-
-    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_src0, *src_buffer);
-    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.out_cb, *dst_buffer);
+    return desc;
 }
 
 }  // namespace ttnn::prim

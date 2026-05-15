@@ -79,7 +79,7 @@ inline void execute_high_fidelity_gapool()
  * @param idst Destination tile index (0-7)
  */
 template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void _llk_math_mul_reduce_scalar_move_dest_to_src_(std::uint32_t idst = 0)
+inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::uint32_t idst = 0)
 {
     if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
     {

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_relu.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
@@ -50,12 +50,16 @@ ALWI void relu_tile(uint32_t idst) { MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT(_
 ALWI void relu_max_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT(_relu_max_, RC, APPROX, idst, param0));
 }
+ALWI void relu_max_tile_pack(uint32_t idst, uint32_t param0) {
+    PACK(SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT(_relu_max_, RC, APPROX, idst, param0));
+}
 
 ALWI void relu_max_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_INT(_relu_max_, RC, APPROX, idst, param0));
 }
 
 ALWI void relu_max_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(relu_max, APPROX)); }
+ALWI void relu_max_tile_init_pack() { PACK(SFPU_UNARY_KERNEL_INIT(relu_max, APPROX)); }
 
 // clang-format off
 /**

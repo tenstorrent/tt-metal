@@ -6,7 +6,7 @@
 
 #include "api/compute/common.h"
 #include "api/compute/transpose_wh.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 // DeepSeek Top32 headers (repo-relative; JIT adds -I only for this file's directory).
 #if defined(TRISC_UNPACK)
@@ -33,10 +33,10 @@ void kernel_main() {
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
     constexpr uint32_t cb_out1 = tt::CBIndex::c_17;
 
-    experimental::CircularBuffer cb0(cb_in0);
-    experimental::CircularBuffer cb1(cb_in1);
-    experimental::CircularBuffer cb16(cb_out0);
-    experimental::CircularBuffer cb17(cb_out1);
+    CircularBuffer cb0(cb_in0);
+    CircularBuffer cb1(cb_in1);
+    CircularBuffer cb16(cb_out0);
+    CircularBuffer cb17(cb_out1);
 
     ckernel::compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
 

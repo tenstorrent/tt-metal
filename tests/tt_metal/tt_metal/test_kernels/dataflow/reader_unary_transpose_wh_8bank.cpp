@@ -5,32 +5,40 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #else
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 // #include "api/debug/dprint.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
+#ifdef ARCH_QUASAR
+    uint32_t N = get_arg(args::N);
+    uint32_t Ht = get_arg(args::Ht);
+    uint32_t Wt = get_arg(args::Wt);
+    uint32_t HtWt = get_arg(args::HtWt);
+#else
     // skip args 1,2,3 for compat with reader_unary, reader_unary_8bank
+    uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t N = get_arg_val<uint32_t>(4);  // args match the order of reader_unary
     uint32_t Ht = get_arg_val<uint32_t>(5);
     uint32_t Wt = get_arg_val<uint32_t>(6);
     uint32_t HtWt = get_arg_val<uint32_t>(7);
-
-    constexpr uint32_t in_id = get_compile_time_arg_val(0);
-    constexpr auto src_args = TensorAccessorArgs<1>();
-#ifdef ARCH_QUASAR
-    experimental::DataflowBuffer dfb_in(in_id);
-#else
-    experimental::CircularBuffer cb(in_id);
 #endif
 
-    experimental::Noc noc;
+#ifdef ARCH_QUASAR
+    DataflowBuffer dfb_in(dfb::out);
+#else
+    constexpr uint32_t in_id = get_compile_time_arg_val(0);
+    constexpr auto src_args = TensorAccessorArgs<1>();
+    CircularBuffer cb(in_id);
+#endif
+
+    Noc noc;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
@@ -43,7 +51,11 @@ void kernel_main() {
     uint32_t i_tile_N = 0;  // first tile in current batch
     uint32_t i_tile = 0;
 
+#ifdef ARCH_QUASAR
+    const auto s = TensorAccessor(ta::src_tensor);
+#else
     const auto s = TensorAccessor(src_args, src_addr);
+#endif
 
     // this reader will read a NHW tensor in NWH order
     for (uint32_t n = 0; n < N; n++) {

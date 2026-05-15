@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_deepseek_prefill_dispatch ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch ALIAS ttnn_op_experimental_deepseek_prefill_dispatch)
 
@@ -7,8 +9,7 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_dispatch)
 target_sources(
     ttnn_op_experimental_deepseek_prefill_dispatch
     PRIVATE
-        device/dispatch_device_operation.cpp
-        device/dispatch_program_factory.cpp
+        ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_DISPATCH_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_deepseek_prefill_dispatch PRIVATE ${FixmeOpIncDirs})

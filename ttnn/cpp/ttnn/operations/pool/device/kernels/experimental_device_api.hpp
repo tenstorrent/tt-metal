@@ -2,20 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Convenience header that includes all experimental device 2.0 APIs
+// Convenience header that includes all device 2.0 APIs
 // and provides short type aliases for kernel code in conv/pool operations.
 // Safe to include from both dataflow and compute (TRISC) kernels.
 
 #pragma once
 
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 #ifndef COMPILE_FOR_TRISC
-#include "experimental/noc.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
 #endif
 
 namespace experimental {
@@ -72,6 +72,18 @@ template <typename Dst>
 FORCE_INLINE void read_with_state(Noc noc, const Dst& dst, uint32_t src_addr) {
     UnicastEndpoint ep;
     noc.async_read_with_state<Noc::VcSelection::DEFAULT, 1>(ep, dst, 0, local_addr(src_addr, noc.get_noc_id()), {});
+}
+
+// Set the active transaction id (NOC_PACKET_TAG) for subsequent async_read* calls on this
+// Noc's read cmd_buf.  Trid persists across set_read_state / read_with_state (those write
+// different cmd_buf registers).  Pair with async_read_barrier_with_trid to wait on just
+// this batch of reads.  Pass trid=0 to clear (untagged reads = no per-trid accounting).
+FORCE_INLINE void set_read_trid(Noc noc, uint32_t trid) { noc_async_read_set_trid(trid, noc.get_noc_id()); }
+
+// Block until reads tagged `trid` on this noc are flushed.  Other in-flight reads with
+// different trids continue independently.
+FORCE_INLINE void async_read_barrier_with_trid(Noc noc, uint32_t trid) {
+    noc.template async_read_barrier<Noc::BarrierMode::TXN_ID>(trid);
 }
 
 #endif

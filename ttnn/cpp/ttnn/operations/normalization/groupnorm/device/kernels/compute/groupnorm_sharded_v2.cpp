@@ -151,25 +151,25 @@ void kernel_main() {
     constexpr bool use_negative_mask = false;
 #endif
 
-    experimental::CircularBuffer cb_beta(cb_beta_id);
-    experimental::CircularBuffer cb_eps(cb_eps_id);
-    experimental::CircularBuffer cb_ex(cb_ex_id);
-    experimental::CircularBuffer cb_ex2pe(cb_ex2pe_id);
-    experimental::CircularBuffer cb_ex_external(cb_ex_external_id);
-    experimental::CircularBuffer cb_ex_global(cb_ex_global_id);
-    experimental::CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    experimental::CircularBuffer cb_gamma(cb_gamma_id);
-    experimental::CircularBuffer cb_in(cb_in_id);
-    experimental::CircularBuffer cb_in_negative_mask(cb_in_negative_mask_id);
-    experimental::CircularBuffer cb_inbeta(cb_inbeta_id);
-    experimental::CircularBuffer cb_input_mask(cb_input_mask_id);
-    experimental::CircularBuffer cb_ones(cb_ones_id);
-    experimental::CircularBuffer cb_out(cb_out_id);
-    experimental::CircularBuffer cb_outbeta(cb_outbeta_id);
-    experimental::CircularBuffer cb_outgamma(cb_outgamma_id);
-    experimental::CircularBuffer cb_scaler(cb_scaler_id);
-    experimental::CircularBuffer cb_scaler_global(cb_scaler_global_id);
-    experimental::CircularBuffer cb_x(cb_x_id);
+    CircularBuffer cb_beta(cb_beta_id);
+    CircularBuffer cb_eps(cb_eps_id);
+    CircularBuffer cb_ex(cb_ex_id);
+    CircularBuffer cb_ex2pe(cb_ex2pe_id);
+    CircularBuffer cb_ex_external(cb_ex_external_id);
+    CircularBuffer cb_ex_global(cb_ex_global_id);
+    CircularBuffer cb_ex_partial(cb_ex_partial_id);
+    CircularBuffer cb_gamma(cb_gamma_id);
+    CircularBuffer cb_in(cb_in_id);
+    CircularBuffer cb_in_negative_mask(cb_in_negative_mask_id);
+    CircularBuffer cb_inbeta(cb_inbeta_id);
+    CircularBuffer cb_input_mask(cb_input_mask_id);
+    CircularBuffer cb_ones(cb_ones_id);
+    CircularBuffer cb_out(cb_out_id);
+    CircularBuffer cb_outbeta(cb_outbeta_id);
+    CircularBuffer cb_outgamma(cb_outgamma_id);
+    CircularBuffer cb_scaler(cb_scaler_id);
+    CircularBuffer cb_scaler_global(cb_scaler_global_id);
+    CircularBuffer cb_x(cb_x_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN

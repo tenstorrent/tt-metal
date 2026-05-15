@@ -1,5 +1,7 @@
 get_filename_component(OP_NAME "${CMAKE_CURRENT_SOURCE_DIR}" NAME)
 
+include(sources.cmake)
+
 add_library(ttnn_op_point_to_point ${LIB_TYPE})
 add_library(TTNN::Ops::PointToPoint ALIAS ttnn_op_point_to_point)
 
@@ -25,10 +27,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/host/point_to_point_device_op.cpp
-        device/host/send_program_factory.cpp
-        device/host/receive_program_factory.cpp
-        point_to_point.cpp
+        ${TTNN_OP_POINT_TO_POINT_SRCS}
 )
 
 target_include_directories(ttnn_op_point_to_point PRIVATE ${FixmeOpIncDirs})

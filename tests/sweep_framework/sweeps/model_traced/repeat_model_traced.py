@@ -121,7 +121,32 @@ def run(
         input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.repeat(input_tensor, repetition_vector, **op_kwargs)
+    # Reproduce master's exact call form (positional vs `repeat_dims=` kwarg,
+    # ttnn.Shape vs plain list) so the trace records the same arg key /
+    # value type master saw — the config_hash is sensitive to both.
+    _absent = kwargs.get("__absent_keys__", set()) or set()
+    _master_arg1 = kwargs.get("arg1")
+    # repeat_dims is in the function signature (so it's bound to the local
+    # parameter, not kwargs). Use the local variable directly to detect the
+    # Shape-dict form master recorded.
+    _master_repeat_dims = repeat_dims
+
+    def _wrap_if_shape_meta(meta, plain):
+        if isinstance(meta, dict) and meta.get("type") == "Shape":
+            try:
+                return ttnn.Shape(list(plain))
+            except Exception:
+                return plain
+        return plain
+
+    if "arg1" in _absent and "repeat_dims" not in _absent:
+        # Master called ttnn.repeat(input, repeat_dims=<Shape>) — named form.
+        rep_arg = _wrap_if_shape_meta(_master_repeat_dims, repetition_vector)
+        output_tensor = ttnn.repeat(input_tensor, repeat_dims=rep_arg, **op_kwargs)
+    else:
+        # Master called positionally: ttnn.repeat(input, <Shape>) or (input, <list>).
+        rep_arg = _wrap_if_shape_meta(_master_arg1, repetition_vector)
+        output_tensor = ttnn.repeat(input_tensor, rep_arg, **op_kwargs)
     mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)

@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_kv_cache ${LIB_TYPE})
 add_library(TTNN::Ops::KvCache ALIAS ttnn_op_kv_cache)
 
@@ -18,18 +20,13 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES kv_cache.hpp
+        FILES ${TTNN_OP_KV_CACHE_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/update_cache_device_operation.cpp
-        device/fill_cache_multi_core_program_factory.cpp
-        device/update_cache_multi_core_program_factory.cpp
-        device/zero_cache_range_device_operation.cpp
-        device/zero_cache_range_program_factory.cpp
-        kv_cache.cpp
+        ${TTNN_OP_KV_CACHE_SRCS}
 )
 
 target_include_directories(ttnn_op_kv_cache PRIVATE ${FixmeOpIncDirs})

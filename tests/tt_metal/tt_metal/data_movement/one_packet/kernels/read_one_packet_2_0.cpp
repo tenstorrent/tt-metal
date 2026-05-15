@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint_pages.h"
 #include "api/debug/dprint.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/endpoints.h"
 
 
 void kernel_main() {
@@ -19,8 +19,8 @@ void kernel_main() {
     uint32_t responder_x_coord = get_arg_val<uint32_t>(2);
     uint32_t responder_y_coord = get_arg_val<uint32_t>(3);
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_endpoint;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_endpoint;
 
     DeviceTimestampedData("Number of transactions", num_packets);
     DeviceTimestampedData("Transaction size in bytes", packet_size_bytes);

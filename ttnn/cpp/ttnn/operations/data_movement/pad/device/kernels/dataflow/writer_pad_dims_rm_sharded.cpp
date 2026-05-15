@@ -4,11 +4,11 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
-    experimental::CircularBuffer cb(cb_id);
+    CircularBuffer cb(cb_id);
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
 
     for (uint32_t i = 0; i < num_bytes_risc / 2; ++i) {
@@ -28,7 +28,7 @@ inline __attribute__((always_inline)) void fill_pad_cb_with_val(
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_zero(
     const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
-    experimental::CircularBuffer cb(cb_id);
+    CircularBuffer cb(cb_id);
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     uint32_t pad_val_addr = cb.get_write_ptr();
     uint32_t l1_write_addr = pad_val_addr;
@@ -70,8 +70,8 @@ void kernel_main() {
 
     constexpr auto cb_pad = tt::CBIndex::c_1;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
-    experimental::CircularBuffer cb_pad_exp(cb_pad);
-    experimental::CircularBuffer cb_out0_exp(cb_out0);
+    CircularBuffer cb_pad_exp(cb_pad);
+    CircularBuffer cb_out0_exp(cb_out0);
 
     uint32_t pad_val_addr = cb_pad_exp.get_read_ptr();
     uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);

@@ -362,3 +362,48 @@ def test_rotary_embedding_row_major(W, Z, Y, X, cache_size, device):
     p, o = comp_pcc(pt_out, tt_got_back)
     logger.info(o)
     assert p
+
+
+# Regression for issue #43910.
+@pytest.mark.parametrize(
+    "input_seq, head_dim",
+    [
+        (32, 32),
+        (32, 64),
+        (128, 32),
+        (128, 64),
+    ],
+)
+def test_rotary_embedding_rejects_cos_seq_smaller_than_input_seq(input_seq, head_dim, device):
+    torch.manual_seed(0)
+    batch, n_heads = 1, 32
+    x = torch.randn([batch, n_heads, input_seq, head_dim]).bfloat16().float()
+    cos = torch.randn([1, 1, 1, head_dim]).bfloat16().float()
+    sin = torch.randn([1, 1, 1, head_dim]).bfloat16().float()
+
+    xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    cost = ttnn.Tensor(cos, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    sint = ttnn.Tensor(sin, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    with pytest.raises(RuntimeError, match="Cosine cache must cover the input sequence length"):
+        ttnn.experimental.rotary_embedding(xt, cost, sint)
+
+
+@pytest.mark.parametrize("token_idx", [0, 5, 31])
+@pytest.mark.parametrize("head_dim", [32, 64])
+def test_rotary_embedding_rejects_cos_seq_not_covering_token_index(token_idx, head_dim, device):
+    torch.manual_seed(0)
+    batch, n_heads = 1, 32
+    x = torch.randn([1, batch, n_heads, head_dim]).bfloat16().float()
+    cos = torch.randn([1, 1, 1, head_dim]).bfloat16().float()
+    sin = torch.randn([1, 1, 1, head_dim]).bfloat16().float()
+
+    xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    cost = ttnn.Tensor(cos, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    sint = ttnn.Tensor(sin, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    if token_idx == 0:
+        ttnn.experimental.rotary_embedding(xt, cost, sint, token_idx)
+    else:
+        with pytest.raises(RuntimeError, match="Cosine cache must cover the token index"):
+            ttnn.experimental.rotary_embedding(xt, cost, sint, token_idx)

@@ -26,7 +26,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli_w_tile_dimensions
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
@@ -176,7 +176,7 @@ def test_eltwise_binary(
 
     # Generate stimuli with correct face dimensions for smaller tiles
     # Uses generate_stimuli_w_tile_dimensions which computes face_r_dim and num_faces from tile_dimensions
-    src_A, _, src_B, _ = generate_stimuli_w_tile_dimensions(
+    src_A, _, src_B, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format_B,  # Use different format for src_B
@@ -385,7 +385,7 @@ def test_eltwise_binary_bfp4_b(
 
     # Generate stimuli with correct face dimensions for smaller tiles
     # Uses generate_stimuli_w_tile_dimensions which computes face_r_dim and num_faces from tile_dimensions
-    src_A, _, src_B, _ = generate_stimuli_w_tile_dimensions(
+    src_A, _, src_B, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format_B,  # Use different format for src_B
@@ -574,7 +574,7 @@ def test_eltwise_binary_dest_reuse(
         f"output tile count ({tile_cnt_output})"
     )
 
-    src_A, _, src_B, _ = generate_stimuli_w_tile_dimensions(
+    src_A, _, src_B, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -759,13 +759,12 @@ def test_eltwise_binary_int8_format(
 
     # Generate stimuli with correct face dimensions for smaller tiles
     # Uses generate_stimuli_w_tile_dimensions which computes face_r_dim and num_faces from tile_dimensions
-    src_A, _, src_B, _ = generate_stimuli_w_tile_dimensions(
+    src_A, _, src_B, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format_B,  # Use different format for src_B
         input_dimensions_B=input_dimensions,
         tile_dimensions=tile_dimensions,
-        negative_values=True,  # Test eltwadd with negative values,
     )
 
     # Use modulo to get even distribution in range -50 to +50 (avoids bunching at boundaries and avoid overflow so we can test exact results against golden)

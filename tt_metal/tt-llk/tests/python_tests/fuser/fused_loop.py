@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from .fuser_config import GlobalConfig
     from .block_data import BlockData
 
-from helpers.llk_params import PerfRunType
+from helpers.llk_params import L1Accumulation, PerfRunType
 
 
 class FusedLoop:
@@ -46,7 +46,12 @@ class FusedLoop:
             return code
         code += f"for (std::uint32_t tile_x = 0; tile_x < {block.block_tiles_x}; tile_x++) {{\n"
         code += f"for (std::uint32_t tile_y = 0; tile_y < {block.block_tiles_y}; tile_y++) {{\n"
-        code += f"std::uint32_t l1_tile_id = {block.tile_count_x} * ({block.block_y} + tile_y) + ({block.block_x} + tile_x);\n"
+        if operation.pack_l1_accumulation == L1Accumulation.Yes:
+            code += (
+                f"std::uint32_t l1_tile_id = tile_y * {block.tile_count_x} + tile_x;\n"
+            )
+        else:
+            code += f"std::uint32_t l1_tile_id = {block.tile_count_x} * ({block.block_y} + tile_y) + ({block.block_x} + tile_x);\n"
         code += (
             f"std::uint32_t dest_tile_id = tile_y * {block.block_tiles_x} + tile_x;\n"
         )

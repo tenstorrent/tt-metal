@@ -8,12 +8,12 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 pytestmark = pytest.mark.use_module_device
 
 
-def run_relational_test(device, h, w, ttnn_function, pcc=0.9999):
+def run_relational_test(device, h, w, ttnn_function):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
@@ -30,10 +30,11 @@ def run_relational_test(device, h, w, ttnn_function, pcc=0.9999):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    # Cast bool→float because comp_equal uses subtraction which doesn't support bool tensors
+    assert_equal(torch_output_tensor.float(), output_tensor.float())
 
 
-def run_relational_z_test(device, h, w, ttnn_function, pcc=0.9999):
+def run_relational_z_test(device, h, w, ttnn_function):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -46,7 +47,7 @@ def run_relational_z_test(device, h, w, ttnn_function, pcc=0.9999):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    assert_equal(torch_output_tensor.float(), output_tensor.float())
 
 
 @pytest.mark.parametrize("h", [64])
@@ -121,7 +122,7 @@ def test_ne(device, h, w):
     run_relational_test(device, h, w, ttnn.ne)
 
 
-def run_relational_test_with_scalar(device, h, w, scalar, ttnn_function, pcc=0.9999):
+def run_relational_test_with_scalar(device, h, w, scalar, ttnn_function):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
@@ -136,7 +137,7 @@ def run_relational_test_with_scalar(device, h, w, scalar, ttnn_function, pcc=0.9
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    assert_equal(torch_output_tensor.float(), output_tensor.float())
 
 
 @pytest.mark.parametrize("scalar", [3])
@@ -236,7 +237,7 @@ def test_expand_and_broadcast(device, h, w):
     tt_output = ttnn.lt(a, b)
     tt_output = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output.float(), tt_output.float())
 
 
 @pytest.mark.parametrize("h", [500])
@@ -252,7 +253,7 @@ def test_expand_and_broadcast_reversed(device, h, w):
     output = ttnn.lt(input_tensor_b, input_tensor_a)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.9999)
+    assert_equal(torch_output.float(), output.float())
 
 
 @pytest.mark.parametrize("atol", [1e-8, 1e-10])
@@ -276,7 +277,7 @@ def test_isclose(device, h, w, atol, rtol):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor.float(), output_tensor.float())
 
 
 @pytest.mark.parametrize(
@@ -307,18 +308,14 @@ def test_isclose(device, h, w, atol, rtol):
         ttnn.ge,
     ],
 )
-@pytest.mark.parametrize(
-    "use_legacy",
-    [False, True],
-)
-def test_binary_relational_ttnn(input_shapes, ttnn_function, range1, range2, use_legacy, device):
+def test_binary_relational_ttnn(input_shapes, ttnn_function, range1, range2, device):
     low1, high1 = range1
     low2, high2 = range2
     in_data1 = torch.randint(low1, high1, input_shapes, dtype=torch.int32)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     in_data2 = torch.randint(low2, high2, input_shapes, dtype=torch.int32)
     input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor1, input_tensor2, use_legacy=use_legacy)
+    output_tensor = ttnn_function(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data1, in_data2)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -346,11 +343,7 @@ def test_binary_relational_ttnn(input_shapes, ttnn_function, range1, range2, use
         ttnn.ge,
     ],
 )
-@pytest.mark.parametrize(
-    "use_legacy",
-    [False, True],
-)
-def test_binary_relational_edge_case_ttnn(input_shapes, ttnn_function, use_legacy, device):
+def test_binary_relational_edge_case_ttnn(input_shapes, ttnn_function, device):
     torch.manual_seed(213919)
 
     # Generate a uniform range of values across the valid int32 range
@@ -368,7 +361,7 @@ def test_binary_relational_edge_case_ttnn(input_shapes, ttnn_function, use_legac
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn_function(input_tensor1, input_tensor2, use_legacy=use_legacy)
+    output_tensor = ttnn_function(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data1, in_data2)
 
@@ -401,7 +394,7 @@ def test_binary_relational_scalar_ttnn(device, input_shapes, scalar, ttnn_functi
     in_data = torch.randint(-100, 100, input_shapes, dtype=torch.int32)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn_function(input_tensor, scalar, use_legacy=None)
+    output_tensor = ttnn_function(input_tensor, scalar)
     output_tensor = ttnn.to_torch(output_tensor)
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data, scalar)

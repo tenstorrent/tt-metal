@@ -15,6 +15,9 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
+
+namespace pre_add = norm::kernel_util::compute::pre_add;
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -32,16 +35,25 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
 
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
 
-    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;  // x**2
+    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;                           // x**2
+    constexpr uint32_t cb_res = tt::CBIndex::c_5;                          // residual b (unused when !FUSE_PRE_ADD)
+    constexpr uint32_t cb_inp = FUSE_PRE_ADD ? tt::CBIndex::c_3 : cb_in0;  // fused a + b, or just a
 
-    binary_op_init_common(cb_inp, cb_reduce, cb_x2);
+    if constexpr (FUSE_PRE_ADD) {
+        binary_op_init_common(cb_in0, cb_res, cb_inp);
+    } else {
+        binary_op_init_common(cb_inp, cb_reduce, cb_x2);
+    }
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+        // Fuse pre-add: cb_inp = cb_in0 + cb_res (no-op when !FUSE_PRE_ADD)
+        pre_add::one_row<FUSE_PRE_ADD>(cb_in0, cb_res, cb_inp, Wt, blk);
+
         /*
          * x**2
          */

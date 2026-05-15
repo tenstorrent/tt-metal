@@ -85,6 +85,7 @@ on:
       - "(Galaxy) Sanity"
       - "(Galaxy) Health"
       - "(Galaxy) DeepSeek tests"
+      - "DeepSeek V3 Multi-Host Tests"
       - "(TM-DM) Data Movement Test Suite"
       - "(TM-Fabric) Fabric Tests"
       - "Profiler CI"

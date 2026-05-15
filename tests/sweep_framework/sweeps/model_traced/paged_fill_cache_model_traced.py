@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import re
+
 import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -46,6 +48,27 @@ parameters = {
 
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+def _parse_mesh_coords(raw):
+    """Parse traced mesh_coords payload back to a set[ttnn.MeshCoordinate].
+
+    The master trace stores mesh_coords as ``{'type': 'set', 'value': '{MeshCoordinate([0, 1])}'}``
+    or as the raw repr-string.  Returning ``None`` lets the op fall back to
+    "all chips", matching prior sweep behavior when no mesh_coords were traced.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        text = raw.get("value", "")
+    else:
+        text = str(raw)
+    coords = set()
+    for m in re.finditer(r"MeshCoordinate\(\[([^\]]+)\]\)", text):
+        nums = [int(x.strip()) for x in m.group(1).split(",") if x.strip()]
+        if nums:
+            coords.add(ttnn.MeshCoordinate(*nums))
+    return coords or None
 
 
 def mesh_device_fixture():
@@ -143,7 +166,13 @@ def run(
         _seq_len = shape_b[2]
         _bidx = int(op_kwargs.get("batch_idx", 0))
         _page_idx_row = torch_input_tensor_c.to(torch.int64).reshape(torch_input_tensor_c.shape[0], -1)
-        if 0 <= _bidx < _page_idx_row.shape[0]:
+        # On a sharded mesh, page_table.shape[0] (= "batch slots") and
+        # input_b.shape[0] (= per-chip-replicated batch dim) may not agree —
+        # e.g. text_demo traces have page_table batch=4 but input_b
+        # batch=1. The device op reads the per-chip slice; the torch
+        # golden must guard both indices to avoid an IndexError on the
+        # input_b side when batch_idx >= input_b.shape[0].
+        if 0 <= _bidx < _page_idx_row.shape[0] and _bidx < torch_input_tensor_b.shape[0]:
             _pages = _page_idx_row[_bidx].tolist()
             for _chunk_idx, _page in enumerate(_pages):
                 _start = _chunk_idx * _page_size
@@ -212,22 +241,43 @@ def run(
     if "batch_idx" not in op_kwargs or op_kwargs["batch_idx"] is None:
         op_kwargs["batch_idx"] = 0
 
+    # mesh_coords is stripped by build_op_kwargs (infra key) — recover it from
+    # the raw test vector so the trace recorder names the per-coord variant
+    # distinctly. Without this, all configs that differ only in mesh_coords
+    # collapse to a single trace entry and validation reports them missing.
+    mesh_coords_set = _parse_mesh_coords(kwargs.get("mesh_coords"))
+    if mesh_coords_set is not None:
+        op_kwargs["mesh_coords"] = mesh_coords_set
+
     start_time = start_measuring_time()
+    # Master used `page_table=` named for 128 cfgs and positional `arg2` for 1.
+    # __absent_keys__ tells us which form the vector preserved.
+    _used_named_pt = kwargs.get("page_table_shape") not in (None, "__ABSENT__")
+    # paged_fill_cache mutates input_tensor_a (the cache) in place; we don't
+    # consume the return value, so call it for its side effect only.
     try:
-        output_tensor = ttnn.experimental.paged_fill_cache(
-            input_tensor_a,  # cache_tensor
-            input_tensor_b,  # input_tensor
-            input_tensor_c,  # page_table
-            **op_kwargs,
-        )
+        if _used_named_pt:
+            ttnn.experimental.paged_fill_cache(
+                input_tensor_a,
+                input_tensor_b,
+                page_table=input_tensor_c,
+                **op_kwargs,
+            )
+        else:
+            ttnn.experimental.paged_fill_cache(
+                input_tensor_a,
+                input_tensor_b,
+                input_tensor_c,
+                **op_kwargs,
+            )
     except TypeError:
-        output_tensor = ttnn.experimental.paged_fill_cache(
-            input_tensor_a,  # cache_tensor
-            input_tensor_b,  # input_tensor
-            input_tensor_c,  # page_table
+        # Fallback for builds without the page_table keyword binding.
+        ttnn.experimental.paged_fill_cache(
+            input_tensor_a,
+            input_tensor_b,
+            input_tensor_c,
             **op_kwargs,
         )
-    # paged_fill_cache modifies cache_tensor in place, so output is the same as input_tensor_a
     output_tensor = input_tensor_a
     mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)

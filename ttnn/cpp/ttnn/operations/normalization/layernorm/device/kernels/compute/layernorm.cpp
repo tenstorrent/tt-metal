@@ -24,7 +24,7 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 #include "layernorm_compute_utils.h"
 
@@ -61,23 +61,23 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_xmm = get_named_compile_time_arg_val("cb_xmm");  // x minus mean
 #endif
-    experimental::CircularBuffer cb_xmm_obj(cb_xmm);
+    CircularBuffer cb_xmm_obj(cb_xmm);
     constexpr auto cb_ex = get_named_compile_time_arg_val("cb_ex");          // E[x]
     constexpr auto cb_ex2 = get_named_compile_time_arg_val("cb_ex2");        // E[(x-E[x])^2]
     constexpr auto cb_xmm2 = get_named_compile_time_arg_val("cb_xmm2");      // xmm^2
     constexpr auto cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");    // E[(x-E[x])^2]+eps
     constexpr auto cb_fusion = get_named_compile_time_arg_val("cb_fusion");  // stream gamma/beta
-    experimental::CircularBuffer cb_eps_obj(cb_eps);
-    experimental::CircularBuffer cb_in_obj(cb_in);
-    experimental::CircularBuffer cb_inb_obj(cb_inb);
-    experimental::CircularBuffer cb_out_obj(cb_out);
-    experimental::CircularBuffer cb_gamma_obj(cb_gamma);
-    experimental::CircularBuffer cb_beta_obj(cb_beta);
-    experimental::CircularBuffer cb_ex_obj(cb_ex);
-    experimental::CircularBuffer cb_ex2_obj(cb_ex2);
-    experimental::CircularBuffer cb_xmm2_obj(cb_xmm2);
-    experimental::CircularBuffer cb_ex2pe_obj(cb_ex2pe);
-    experimental::CircularBuffer cb_fusion_obj(cb_fusion);
+    CircularBuffer cb_eps_obj(cb_eps);
+    CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_inb_obj(cb_inb);
+    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_gamma_obj(cb_gamma);
+    CircularBuffer cb_beta_obj(cb_beta);
+    CircularBuffer cb_ex_obj(cb_ex);
+    CircularBuffer cb_ex2_obj(cb_ex2);
+    CircularBuffer cb_xmm2_obj(cb_xmm2);
+    CircularBuffer cb_ex2pe_obj(cb_ex2pe);
+    CircularBuffer cb_fusion_obj(cb_fusion);
 
     constexpr auto cb_in_rm =
         get_named_compile_time_arg_val("cb_in_rm");  // input row-major (if row-major input, otherwise unused)
@@ -96,7 +96,7 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_x = cb_in;
 #endif
-    experimental::CircularBuffer cb_x_obj(cb_x);
+    CircularBuffer cb_x_obj(cb_x);
 
 #ifdef TILIZE_IN
     binary_op_init_common(cb_in_rm, cb_in_rm, cb_in);
@@ -111,7 +111,7 @@ void kernel_main() {
     cb_eps_obj.wait_front(1);  // comes from the reader
 
     constexpr int cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
-    experimental::CircularBuffer cb_im_or_out_obj(cb_im_or_out);
+    CircularBuffer cb_im_or_out_obj(cb_im_or_out);
 
     // Intermediate buffers need to be reserved/pushed/popped
     // in full blocks
@@ -282,7 +282,7 @@ void kernel_main() {
                 reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
                 ACQ();
                 uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
-                experimental::CircularBuffer cb_outg_obj(cb_outg);
+                CircularBuffer cb_outg_obj(cb_outg);
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                 cb_outg_obj.reserve_back(block.full_block_size());
                 cb_gamma_obj.wait_front(

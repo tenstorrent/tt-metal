@@ -14,7 +14,7 @@
 #include "api/compute/eltwise_unary/tanh_derivative.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/compute_kernel_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
@@ -24,9 +24,9 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_1;
     constexpr auto cb_grad_in = tt::CBIndex::c_2;
 
-    experimental::CircularBuffer exp_cb_grad_out(cb_grad_out);
-    experimental::CircularBuffer exp_cb_input(cb_input);
-    experimental::CircularBuffer exp_cb_grad_in(cb_grad_in);
+    CircularBuffer exp_cb_grad_out(cb_grad_out);
+    CircularBuffer exp_cb_input(cb_input);
+    CircularBuffer exp_cb_grad_in(cb_grad_in);
 
     unary_op_init_common(cb_grad_out, cb_grad_in);
     tanh_derivative_tile_init<false>();

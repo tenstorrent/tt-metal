@@ -1,0 +1,115 @@
+# This file defines the test matrix for LLK unit tests in merge gate.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   team: The team that owns the test budget.
+#   arch: Architecture string for downstream tooling.
+#   runner_label: Legacy runner label used by the reusable LLK workflow.
+#   dispatch_mode: "fd" for fast dispatch, "sd" for slow dispatch.
+#   gtest_filter: Filter passed to unit_tests_llk.
+#
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: LLK FD wormhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  gtest_filter: "*"
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: llk
+  arch: wormhole_b0
+  runner_label: N150
+  dispatch_mode: fd
+  gtest_shard_total: 4
+  gtest_shard_index: 0
+
+- name: LLK FD wormhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  gtest_filter: "*"
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: llk
+  arch: wormhole_b0
+  runner_label: N150
+  dispatch_mode: fd
+  gtest_shard_total: 4
+  gtest_shard_index: 1
+
+- name: LLK FD wormhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  gtest_filter: "*"
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: llk
+  arch: wormhole_b0
+  runner_label: N150
+  dispatch_mode: fd
+  gtest_shard_total: 4
+  gtest_shard_index: 2
+
+- name: LLK FD wormhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  gtest_filter: "*"
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: llk
+  arch: wormhole_b0
+  runner_label: N150
+  dispatch_mode: fd
+  gtest_shard_total: 4
+  gtest_shard_index: 3
+
+- name: LLK FD blackhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*'
+  gtest_filter: "-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*"
+  skus:
+    bh_p150b_civ2:
+      timeout: 15
+  team: llk
+  arch: blackhole
+  runner_label: p150b
+  dispatch_mode: fd
+  gtest_shard_total: 2
+  gtest_shard_index: 0
+
+- name: LLK FD blackhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*'
+  gtest_filter: "-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*"
+  skus:
+    bh_p150b_civ2:
+      timeout: 15
+  team: llk
+  arch: blackhole
+  runner_label: p150b
+  dispatch_mode: fd
+  gtest_shard_total: 2
+  gtest_shard_index: 1
+
+- name: LLK SD wormhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
+  gtest_filter: "LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*"
+  skus:
+    wh_n150_civ2:
+      timeout: 40
+  team: llk
+  arch: wormhole_b0
+  runner_label: N150
+  dispatch_mode: sd
+
+- name: LLK SD blackhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*-LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3'
+  gtest_filter: "LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*-LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3"
+  skus:
+    bh_p150b_civ2:
+      timeout: 40
+  team: llk
+  arch: blackhole
+  runner_label: p150b
+  dispatch_mode: sd

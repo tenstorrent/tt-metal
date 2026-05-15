@@ -17,7 +17,7 @@
 #endif
 
 #ifdef TRISC_PACK
-#include "llk_pack_api.h"
+#include "llk_pack_reduce_api.h"
 #endif
 
 namespace ckernel {

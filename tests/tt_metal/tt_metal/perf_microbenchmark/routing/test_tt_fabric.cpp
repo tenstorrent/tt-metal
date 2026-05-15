@@ -89,8 +89,14 @@ int main(int argc, char** argv) {
     if (cmdline_parser.show_progress()) {
         ProgressMonitorConfig progress_config;
         progress_config.enabled = true;
+        progress_config.granular = cmdline_parser.show_progress_detail();
         progress_config.poll_interval_seconds = cmdline_parser.get_progress_interval();
         progress_config.hung_threshold_seconds = cmdline_parser.get_hung_threshold();
+        progress_config.hung_confirmation_rounds = cmdline_parser.get_hung_confirmation_rounds();
+        progress_config.wait_on_hang = cmdline_parser.wait_on_hang();
+        progress_config.summary_file = cmdline_parser.get_validation_summary_file();
+        progress_config.detail_file = cmdline_parser.get_validation_detail_file();
+
         test_context.enable_progress_monitoring(progress_config);
     }
 

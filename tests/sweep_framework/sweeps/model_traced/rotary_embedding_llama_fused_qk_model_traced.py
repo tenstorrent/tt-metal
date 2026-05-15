@@ -382,13 +382,22 @@ def run(
     if isinstance(result, (list, tuple)) and len(result) == 2:
         output_tensor_q = mesh_tensor_to_torch(result[0], device if is_mesh_device else None)
         output_tensor_k = mesh_tensor_to_torch(result[1], device if is_mesh_device else None)
+        # If mesh assembly doubled the output (replicate_with_topology sends
+        # full tensor to each device, mesh_tensor_to_torch concatenates),
+        # fall back to device 0.
+        if is_mesh_device:
+            if list(output_tensor_q.shape[-2:]) != list(shape_a[-2:]):
+                dev_tensors = ttnn.get_device_tensors(result[0])
+                output_tensor_q = ttnn.to_torch(dev_tensors[0])
+            if list(output_tensor_k.shape[-2:]) != list(shape_b[-2:]):
+                dev_tensors = ttnn.get_device_tensors(result[1])
+                output_tensor_k = ttnn.to_torch(dev_tensors[0])
     else:
         e2e_perf = stop_measuring_time(start_time)
         return [(False, f"Expected tuple of 2 tensors, got {type(result)}"), e2e_perf]
 
     e2e_perf = stop_measuring_time(start_time)
 
-    # Verify outputs are valid (non-NaN, non-zero, correct shapes)
     q_valid = not torch.isnan(output_tensor_q).any() and output_tensor_q.numel() > 0
     k_valid = not torch.isnan(output_tensor_k).any() and output_tensor_k.numel() > 0
 

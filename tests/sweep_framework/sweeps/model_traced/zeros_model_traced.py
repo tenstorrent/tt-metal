@@ -93,16 +93,17 @@ def run(
     torch_output_tensor = torch.zeros(shape, dtype=torch.float32)
 
     start_time = start_measuring_time()
-    # ttnn.zeros creates a zero tensor with the given shape
+    # Pass shape as kwarg so the trace recorder names it `shape` (not `arg0`).
     output_tensor = ttnn.zeros(
-        shape,
+        shape=shape,
         dtype=dtype_val,
         layout=layout_val,
         device=device,
         memory_config=output_memory_config,
         **op_kwargs,
     )
-    mesh_composer = get_mesh_composer(device, kwargs.get("input_a_tensor_placement")) if is_mesh_device else None
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement")
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 

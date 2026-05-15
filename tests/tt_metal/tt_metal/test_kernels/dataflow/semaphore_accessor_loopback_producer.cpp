@@ -6,9 +6,9 @@
 // The sole purpose is to exercise the sem-accessor-name → ID resolution machinery
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc_semaphore.h"
+#include "api/dataflow/noc_semaphore.h"
 
 void kernel_main() {
-    experimental::Semaphore s(sem::signal);
+    Semaphore s(sem::signal);
     s.up(1);
 }

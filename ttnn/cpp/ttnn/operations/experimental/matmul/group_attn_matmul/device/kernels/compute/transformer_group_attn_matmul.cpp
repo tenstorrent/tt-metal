@@ -7,7 +7,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 using std::uint32_t;
 
@@ -50,11 +50,11 @@ void kernel_main() {
     constexpr uint32_t cb_intermed1 = tt::CBIndex::c_4;
     constexpr uint32_t out_cb_id = tt::CBIndex::c_5;
 
-    experimental::CircularBuffer cb_in0_obj(cb_in0);
-    experimental::CircularBuffer cb_in1_obj(cb_in1);
-    experimental::CircularBuffer cb_intermed0_obj(cb_intermed0);
-    experimental::CircularBuffer cb_intermed1_obj(cb_intermed1);
-    experimental::CircularBuffer cb_out_obj(out_cb_id);
+    CircularBuffer cb_in0_obj(cb_in0);
+    CircularBuffer cb_in1_obj(cb_in1);
+    CircularBuffer cb_intermed0_obj(cb_intermed0);
+    CircularBuffer cb_intermed1_obj(cb_intermed1);
+    CircularBuffer cb_out_obj(out_cb_id);
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t num_rows_in_one_tile = 32;

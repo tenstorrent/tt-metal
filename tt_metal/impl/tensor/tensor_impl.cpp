@@ -267,6 +267,20 @@ template std::vector<uint16_t> encode_tensor_data<uint16_t>(
 template std::vector<uint8_t> encode_tensor_data<uint8_t>(
     ttsl::Span<const uint8_t> logical_data, const TensorSpec& tensor_spec, uint8_t pad_value);
 
+// Referenced from tensor_apis.cpp; explicit instantiations ensure symbols survive Release --gc-sections linking.
+template std::vector<bfloat16> to_tile_major_layout<bfloat16>(
+    const Shape2D& shape, const Tile& tile, ttsl::Span<const bfloat16> data_to_convert);
+template std::vector<float> to_tile_major_layout<float>(
+    const Shape2D& shape, const Tile& tile, ttsl::Span<const float> data_to_convert);
+template std::vector<int32_t> to_tile_major_layout<int32_t>(
+    const Shape2D& shape, const Tile& tile, ttsl::Span<const int32_t> data_to_convert);
+template std::vector<uint32_t> to_tile_major_layout<uint32_t>(
+    const Shape2D& shape, const Tile& tile, ttsl::Span<const uint32_t> data_to_convert);
+template std::vector<uint16_t> to_tile_major_layout<uint16_t>(
+    const Shape2D& shape, const Tile& tile, ttsl::Span<const uint16_t> data_to_convert);
+template std::vector<uint8_t> to_tile_major_layout<uint8_t>(
+    const Shape2D& shape, const Tile& tile, ttsl::Span<const uint8_t> data_to_convert);
+
 template <typename T>
 std::vector<T> decode_tensor_data(ttsl::Span<const T> physical_data, const TensorSpec& tensor_spec) {
     if (physical_data.size() == 0) {

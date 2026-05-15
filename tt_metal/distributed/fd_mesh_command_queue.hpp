@@ -62,8 +62,7 @@ private:
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program,
-        std::unordered_set<uint32_t>& chip_ids_in_workload,
-        uint32_t program_runtime_id);
+        std::unordered_set<uint32_t>& chip_ids_in_workload);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it.  Go signals
     // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
     // This function generates and writes dispatch commands forwarding go signals to these subgrids.
@@ -74,13 +73,6 @@ private:
         bool mcast_go_signals,
         bool unicast_go_signals,
         const program_dispatch::ProgramDispatchMetadata& dispatch_md);
-    // When the device profiler is not enabled, launch messages are identical across all physical devices running the
-    // same program, to reduce state managed on host. When the profiler is enabled, the host_assigned_id field in the
-    // launch message must be unique across physical devices to accurately capture program execution time on host and
-    // device. This API is responsible for updating the launch message before writing it to each device (see
-    // tt_metal/api/tt-metalium/dev_msgs.h for a description of how the host_assigned_id field is generated).
-    void update_launch_messages_for_device_profiler(
-        ProgramCommandSequence& program_cmd_seq, uint32_t program_runtime_id, IDevice* device);
     // Clear the num_workers_completed counter on the dispatcher cores corresponding to this CQ.
     void clear_expected_num_workers_completed();
     // Access a reference system memory manager, which acts as a global host side state manager for

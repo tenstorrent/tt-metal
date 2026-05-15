@@ -23,7 +23,7 @@ Owner:
     tt-vjovanovic
 """
 
-from triage import triage_singleton, ScriptConfig, run_script
+from triage import triage_singleton, ScriptConfig, TTTriageError, run_script
 from parse_inspector_logs import get_data as get_logs_data, get_log_directory
 from mpi4py import MPI
 import asyncio
@@ -39,7 +39,7 @@ script_config = ScriptConfig(
 InspectorData = inspector_capnp.Inspector
 
 
-class InspectorException(Exception):
+class InspectorException(TTTriageError):
     pass
 
 
@@ -204,10 +204,10 @@ def run(args, context) -> InspectorData:
         return InspectorRpcSerialized(log_directory)
     except:
         raise InspectorException(
-            "There is no Inspector RPC data, cannot continue. "
-            "Use --inspector-log-path to load saved Inspector data, or --inspector-rpc-host/--inspector-rpc-port "
-            "to connect to a live Inspector. Ensure Inspector was enabled in Metal with TT_METAL_INSPECTOR=1 and "
-            "TT_METAL_INSPECTOR_RPC=1."
+            f"Inspector unavailable (no live RPC at {rpc_host}:{rpc_port}, no serialized logs at {log_directory}). "
+            "This usually means no Metal workload is currently running — there's nothing to triage.\n"
+            "  If you're debugging a live hang, keep the process alive while running triage in another terminal.\n"
+            "  If you're analyzing a past run, point --inspector-log-path at the saved logs."
         )
 
 

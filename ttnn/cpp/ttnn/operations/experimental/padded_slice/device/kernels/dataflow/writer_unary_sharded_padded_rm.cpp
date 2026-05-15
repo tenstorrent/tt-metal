@@ -14,7 +14,7 @@ void kernel_main() {
     constexpr uint32_t cb_temp_pad = get_compile_time_arg_val(1);
     constexpr uint32_t output_elem_size = get_compile_time_arg_val(2);
 
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB cb_out_obj(cb_id_out);
     experimental::CB cb_temp_pad_obj(cb_temp_pad);
 
@@ -54,7 +54,7 @@ void kernel_main() {
     }
 
     // pad_size_bytes is runtime; issue each read as a single-packet UnicastEndpoint NOC transfer
-    experimental::UnicastEndpoint self_ep;
+    UnicastEndpoint self_ep;
     const auto pad_src = experimental::local_addr(pad_addr + unpadded_row_size_bytes, noc.get_noc_id());
 
     uint32_t write_offset = unpadded_row_size_bytes;

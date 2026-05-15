@@ -3,7 +3,7 @@
 ## Overview
 vLLM is an [open-source LLM serving library](https://github.com/vllm-project/vllm). We use vLLM to serve our models in production because of the features it enables. On the serving side, vLLM supports continuous batching (see [LLMs Tech Report - Continuous Batching](./llms.md#34-continuous-batching) for more info) and [paged attention](https://arxiv.org/pdf/2309.06180). In addition, vLLM provides an OpenAI-compatible server which is useful for deployment.
 
-Tenstorrent maintains a [fork of vLLM](https://github.com/tenstorrent/vllm/tree/dev) for serving models on Tenstorrent hardware. The [vLLM README](https://github.com/tenstorrent/vllm/tree/dev/tt_metal/README.md) has instructions for setting up the environment and running the inference example.
+Tenstorrent maintains a [fork of vLLM](https://github.com/tenstorrent/vllm/tree/dev) for serving models on Tenstorrent hardware. The [vLLM TT plugin README](https://github.com/tenstorrent/vllm/tree/dev/plugins/vllm-tt-plugin/README.md) has instructions for setting up the environment and running the inference example.
 
 **Quick Links for vLLM's public docs**:
 - vLLM Docs Homepage: https://docs.vllm.ai/en/latest
@@ -47,11 +47,11 @@ In order to add vLLM support to a new Tenstorrent model, the following requireme
    - `prefill_forward` (**image+text models**): same as text-only models with an additional kwarg (`pixel_values`) for the image inputs.
 
 ## Testing the Model in vLLM
-Once the model meets all of the requirements specified in [Implementation Requirements for Model Integration](#implementation-requirements-for-model-integration), it can be tested in vLLM by following the instructions in the [vLLM README](https://github.com/tenstorrent/vllm/tree/dev/tt_metal/README.md) and doing the following:
+Once the model meets all of the requirements specified in [Implementation Requirements for Model Integration](#implementation-requirements-for-model-integration), it can be tested in vLLM by following the instructions in the [vLLM TT plugin README](https://github.com/tenstorrent/vllm/tree/dev/plugins/vllm-tt-plugin/README.md) and doing the following:
 1. The model needs to be registered using `ModelRegistry.register_model` and added to the list of supported models in [vllm/platforms/tt.py](https://github.com/tenstorrent/vllm/blob/dev/vllm/platforms/tt.py).
-2. Testing offline inference, continuous batching, and performance (see [Running the Offline Inference Example](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md#running-the-offline-inference-example)).
-3. Testing various sequence lengths of increasing size using the `--test_increasing_seq_lens` option of [examples/offline_inference_tt.py](https://github.com/tenstorrent/vllm/blob/dev/examples/offline_inference_tt.py).
-4. Testing model serving of asynchronous requests with the server example (see [Running the Server Example](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md#running-the-server-example)).
+2. Testing offline inference, continuous batching, and performance (see [Running the Offline Inference Example](https://github.com/tenstorrent/vllm/blob/dev/plugins/vllm-tt-plugin/README.md#running-the-offline-inference-example)).
+3. Testing various sequence lengths of increasing size using the `--test_increasing_seq_lens` option of [plugins/vllm-tt-plugin/examples/offline_inference_tt.py](https://github.com/tenstorrent/vllm/blob/dev/plugins/vllm-tt-plugin/examples/offline_inference_tt.py).
+4. Testing model serving of asynchronous requests with the server example (see [Running the Server Example](https://github.com/tenstorrent/vllm/blob/dev/plugins/vllm-tt-plugin/README.md#running-the-server-example)).
 
 ## vLLM Modifications
 Occasionally, additional changes may be needed on the vLLM side to support a new model (e.g. supporting a new type of model, inputs of a different modality, or customizing the KV cache initialization). If this is the case, please make a pull request to the [dev branch](https://github.com/tenstorrent/vllm/tree/dev) (which acts as our main branch, and is not permitted to be committed to directly). The main files for our TT vLLM backend are the following:

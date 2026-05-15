@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // X = output width
@@ -179,7 +179,7 @@ void kernel_main() {
         }
 
         // Reserve a slot in the circular buffer, get L1 pointer
-        experimental::CircularBuffer cb(tt::CBIndex::c_0);
+        CircularBuffer cb(tt::CBIndex::c_0);
         cb.reserve_back(1);
         uint32_t src_buffer_l1_addr = cb.get_write_ptr();
 
@@ -271,7 +271,7 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     if constexpr (needs_y_padding) {
         // We store one chunk of padding in c_3
-        experimental::CircularBuffer cb3(tt::CBIndex::c_3);
+        CircularBuffer cb3(tt::CBIndex::c_3);
         cb3.reserve_back(1);
         uint32_t l1_write_addr = cb3.get_write_ptr();
         tt::data_movement::common::fill_with_val(l1_write_addr, num_writes, padding_val_packed);

@@ -239,8 +239,11 @@ class Attention(Module):
             spatial
         )  # [batch_size, spatial_sequence_length / sp_factor, 3 * n_local_heads * head_dim (in this order)]
         local_heads = self.n_local_heads
+        # Explicit memory_config: forward the input qkv layout to the inner reshapes so the
+        # Q/K/V outputs keep the spec the downstream SDPA op is tuned for (matches the
+        # layout main was implicitly producing pre-#42543).
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-            qkv, num_heads=local_heads, transpose_key=False
+            qkv, num_heads=local_heads, transpose_key=False, memory_config=qkv.memory_config()
         )  # [batch_size, n_local_heads, spatial_sequence_length / sp_factor, head_dim]
 
         q = self.norm_q(q)
@@ -253,7 +256,7 @@ class Attention(Module):
         if self.add_qkv_proj is not None:
             add_qkv = self.add_qkv_proj(prompt)
             add_q, add_k, add_v = ttnn.transformer.split_query_key_value_and_split_heads(
-                add_qkv, num_heads=local_heads, transpose_key=False
+                add_qkv, num_heads=local_heads, transpose_key=False, memory_config=add_qkv.memory_config()
             )
             add_q = self.norm_added_q(add_q)
             add_k = self.norm_added_k(add_k)

@@ -4,8 +4,8 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     uint32_t lock_addr = get_arg_val<uint32_t>(0);
@@ -16,10 +16,10 @@ void kernel_main() {
     uint32_t self_noc_x = get_arg_val<uint32_t>(5);
     uint32_t self_noc_y = get_arg_val<uint32_t>(6);
 
-    experimental::Noc noc;
-    experimental::UnicastEndpoint unicast_endpoint;
-    experimental::CoreLocalMem<uint32_t> src_buffer(src_buffer_addr);
-    experimental::CoreLocalMem<uint32_t> lock_buffer(lock_addr);
+    Noc noc;
+    UnicastEndpoint unicast_endpoint;
+    CoreLocalMem<uint32_t> src_buffer(src_buffer_addr);
+    CoreLocalMem<uint32_t> lock_buffer(lock_addr);
 
     {
         auto lock = lock_buffer.scoped_lock(lock_num_elements);

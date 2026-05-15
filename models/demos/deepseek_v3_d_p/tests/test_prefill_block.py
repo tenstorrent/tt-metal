@@ -11,6 +11,8 @@ Uses HF DeepseekV3Model layer as the reference: creates a model with random weig
 extracts those weights into our TT state_dict format, and compares forward passes.
 """
 
+from pathlib import Path
+
 import pytest
 import torch
 from loguru import logger
@@ -24,6 +26,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
@@ -127,17 +130,49 @@ def test_prefill_block(
         f"input_source={input_source}"
     )
 
-    # --- Build HF reference model and extract weights ---
-    profiler.start("weights_creation")
-    torch.manual_seed(42)
-    num_layers = layer_idx + 1
-    hf_model = create_hf_model(config, num_layers)
-    hf_sd = hf_model.state_dict()
-    state_dict = extract_layer_state_dict(hf_sd, layer_idx, hf_model.layers[layer_idx])
-    profiler.end("weights_creation")
+    # --- Cache setup ---
+    is_dense = layer_idx < DeepSeekV3Config.NUM_DENSE_LAYERS
+    cache_dir = Path(f"/tmp/deepseek_v3_prefill_block/{layer_type}_{sp_factor}x{tp_factor}mesh_{isl_total}isl")
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- Create input ---
-    if input_source == "abc_1k":
+    init_checker(cache_dir)
+    ttnn_cache_complete = TtPrefillBlock.check_cache_complete(cache_dir, layer_idx, is_dense)
+    torch_ref_cache = cache_dir / f"torch_reference_{input_source}.pt"
+
+    ref_cache_loadable = torch_ref_cache.exists() and (pcc_validation or input_source == "abc_1k")
+    need_hf_model = not ttnn_cache_complete or ((pcc_validation or input_source == "abc_1k") and not ref_cache_loadable)
+    logger.info(
+        f"Cache status: TTNN={ttnn_cache_complete}, ref_cache={torch_ref_cache.exists()}, "
+        f"need_hf_model={need_hf_model}"
+    )
+
+    # --- Build HF reference model and extract weights ---
+    num_layers = layer_idx + 1
+    hf_model = None
+    if need_hf_model:
+        profiler.start("weights_creation")
+        torch.manual_seed(42)
+        hf_model = create_hf_model(config, num_layers)
+        hf_sd = hf_model.state_dict()
+        state_dict = extract_layer_state_dict(hf_sd, layer_idx, hf_model.layers[layer_idx])
+        profiler.end("weights_creation")
+    else:
+        logger.info("TTNN cache complete, skipping torch weight creation")
+        state_dict = {}
+
+    # --- Resolve torch_input and torch reference (single decision point for ref_cache) ---
+    torch_output = None
+    ref_kvpe = None
+    if ref_cache_loadable:
+        logger.info(f"Loading cached reference from {torch_ref_cache}")
+        profiler.start("reference_loading")
+        ref_cached = torch.load(torch_ref_cache, weights_only=True)
+        torch_input = ref_cached["torch_input"]
+        if pcc_validation:
+            torch_output = ref_cached["torch_output"]
+            ref_kvpe = ref_cached["ref_kvpe"]
+        profiler.end("reference_loading")
+    elif input_source == "abc_1k":
         profiler.start("tokenization")
         prompts = load_prompts_from_json(str(ABC_1K_PATH))
         prompt_text = prompts[0] if isinstance(prompts, list) else prompts
@@ -154,10 +189,7 @@ def test_prefill_block(
         torch.manual_seed(123)
         torch_input = torch.randn(1, isl_total, emb_dim, dtype=torch.bfloat16)
 
-    # --- Torch reference (only when pcc_validation is enabled) ---
-    torch_output = None
-    ref_kvpe = None
-    if pcc_validation:
+    if pcc_validation and torch_output is None:
         profiler.start("torch_reference")
         logger.info("Running torch reference forward...")
         position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
@@ -178,6 +210,34 @@ def test_prefill_block(
             logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
         profiler.end("torch_reference")
 
+        logger.info(f"Saving reference to {torch_ref_cache}")
+        torch.save(
+            {"torch_input": torch_input, "torch_output": torch_output, "ref_kvpe": ref_kvpe},
+            torch_ref_cache,
+        )
+
+    # Free HF model early
+    if hf_model is not None:
+        del hf_model
+
+    # --- Build TTNN cache if needed ---
+    if not ttnn_cache_complete:
+        logger.info("Building TTNN cache...")
+        profiler.start("ttnn_cache_build")
+        TtPrefillBlock.build_ttnn_cache(
+            state_dict=state_dict,
+            layer_idx=layer_idx,
+            cache_path=cache_dir,
+            mesh_device=mesh_device,
+            config=config,
+            seq_len=isl_total,
+            num_links=num_links,
+            topology=topology,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+        )
+        profiler.end("ttnn_cache_build")
+
     # --- TT block ---
     profiler.start("tt_block_creation")
     block_kwargs = dict(
@@ -191,6 +251,7 @@ def test_prefill_block(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        weight_cache_path=cache_dir,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode

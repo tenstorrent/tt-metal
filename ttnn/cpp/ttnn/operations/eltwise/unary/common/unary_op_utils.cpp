@@ -848,6 +848,9 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     if (name == "hardsigmoid") {
         return UnaryWithParam(UnaryOpType::HARDSIGMOID);
     }
+    if (name == "hardtanh") {
+        return UnaryWithParam(UnaryOpType::HARDTANH, {-1.0f, 1.0f});  // min=-1, max=1 (default values)
+    }
     if (name == "sqrt") {
         return UnaryWithParam(UnaryOpType::SQRT, {static_cast<float>(false)});
     }
@@ -906,7 +909,9 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::XIELU, {0.8f, 0.8f});  // alpha_p=0.8, alpha_n=0.8
     }
     if (name == "selu") {
-        return UnaryWithParam(UnaryOpType::SELU);
+        float alpha = 1.67326319217681884765625f;
+        float lambda = 1.05070102214813232421875f;
+        return UnaryWithParam(UnaryOpType::SELU, {alpha, lambda});
     }
     if (name == "alt_complex_rotate90") {
         return UnaryWithParam(UnaryOpType::ALT_COMPLEX_ROTATE90);

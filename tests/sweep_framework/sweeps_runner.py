@@ -982,7 +982,8 @@ def enable_profiler():
     os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
     os.environ["ENABLE_TRACY"] = "1"
     os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
-    os.environ["TT_METAL_PROFILER_SYNC"] = "1"
+    # TT_METAL_PROFILER_SYNC skipped: triggers syncAllDevices() on ETH cores,
+    # which deadlocks on Galaxy due to residual fabric state between test iterations.
 
 
 def disable_profiler():

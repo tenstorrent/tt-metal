@@ -7,6 +7,7 @@
 
 #include "hostdev/dev_msgs.h"
 #include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdev/realtime_profiler_msgs.h"
 using namespace tt::tt_metal::wormhole::idle_eth;
 
 #include <cstdint>
@@ -30,6 +31,10 @@ namespace idle_eth_dev_msgs {
 
 namespace idle_eth_fabric_telemetry {
 #include "hal/generated/fabric_telemetry_impl.hpp"
+}
+
+namespace idle_eth_realtime_profiler_msgs {
+#include "hal/generated/realtime_profiler_msgs_impl.hpp"
 }
 
 HalCoreInfoType create_idle_eth_mem_map() {
@@ -117,7 +122,8 @@ HalCoreInfoType create_idle_eth_mem_map() {
         false /*supports_dfbs*/,
         false /*supports_receiving_multicast_cmds*/,
         idle_eth_dev_msgs::create_factory(),
-        idle_eth_fabric_telemetry::create_factory()};
+        idle_eth_fabric_telemetry::create_factory(),
+        idle_eth_realtime_profiler_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::wormhole

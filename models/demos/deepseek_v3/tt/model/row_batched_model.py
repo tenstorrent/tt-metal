@@ -33,6 +33,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
+from models.demos.deepseek_v3.utils.signpost_names import FIRST_DENSE_LAYER_SIGNPOST, FIRST_MOE_LAYER_SIGNPOST
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -314,19 +315,19 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             # Profile mode: run only first dense layer + first MoE layer
             # First dense layer (MLP)
             if cfg["mlp_decoder_block"]:
-                signpost(header="first_dense_layer")
+                signpost(header=FIRST_DENSE_LAYER_SIGNPOST)
                 x = DecoderBlock2D.forward_decode(
                     x, position_idxs, cfg["mlp_decoder_block"][0], rope_tensors, page_tables[0]
                 )
-                signpost(header="first_dense_layer")
+                signpost(header=FIRST_DENSE_LAYER_SIGNPOST)
             # First MoE layer
             if cfg["moe_decoder_block"]:
-                signpost(header="first_moe_layer")
+                signpost(header=FIRST_MOE_LAYER_SIGNPOST)
                 moe_page_table_idx = len(cfg["mlp_decoder_block"])
                 x = MoEDecoderBlock2D.forward_decode(
                     x, position_idxs, cfg["moe_decoder_block"][0], rope_tensors, page_tables[moe_page_table_idx]
                 )
-                signpost(header="first_moe_layer")
+                signpost(header=FIRST_MOE_LAYER_SIGNPOST)
 
         else:
             # Normal mode: run all layers

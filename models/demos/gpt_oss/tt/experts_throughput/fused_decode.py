@@ -229,7 +229,7 @@ def fused_decode_forward(
 
     tt_output = ttnn.all_reduce(
         tt_sum,
-        num_links=4,
+        num_links=fused_config.num_links,
         topology=ttnn.Topology.Ring,
         cluster_axis=1,
         memory_config=ttnn.L1_MEMORY_CONFIG,

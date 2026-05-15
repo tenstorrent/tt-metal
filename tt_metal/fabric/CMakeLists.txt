@@ -77,6 +77,7 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
         protobuf::libprotobuf
+        kissat::kissat
 )
 
 tt_reuse_precompile_headers(fabric TT::CommonPCH)

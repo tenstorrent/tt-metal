@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_index_fill ${LIB_TYPE})
 add_library(TTNN::Ops::IndexFill ALIAS ttnn_op_index_fill)
 
@@ -26,9 +28,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/index_fill_device_operation.cpp
-        device/index_fill_multi_core_factory.cpp
-        index_fill.cpp
+        ${TTNN_OP_INDEX_FILL_SRCS}
 )
 
 target_include_directories(ttnn_op_index_fill PRIVATE ${FixmeOpIncDirs})

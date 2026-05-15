@@ -29,12 +29,14 @@ set(UNIT_TESTS_API_SOURCES
     tensor/test_tensor_sharding.cpp
     tensor/test_host_tensor.cpp
     tensor/test_mesh_tensor.cpp
+    tensor/test_tensor_types.cpp
     test_banked.cpp
     test_bit_utils.cpp
     test_filesystem_utils.cpp
     test_buffer_region.cpp
     test_compile_time_args.cpp
     test_compile_defines.cpp
+    test_compiler_include_paths.cpp
     test_direct.cpp
     test_dram_kernels.cpp
     test_dram_to_l1_multicast.cpp

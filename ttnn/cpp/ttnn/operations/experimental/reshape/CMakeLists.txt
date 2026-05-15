@@ -1,10 +1,12 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_reshape ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Reshape ALIAS ttnn_op_experimental_reshape)
 
 tt_reuse_precompile_headers(ttnn_op_experimental_reshape TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_reshape)
 
-target_sources(ttnn_op_experimental_reshape PRIVATE view.cpp)
+target_sources(ttnn_op_experimental_reshape PRIVATE ${TTNN_OP_EXPERIMENTAL_RESHAPE_SRCS})
 
 target_include_directories(ttnn_op_experimental_reshape PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(

@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
@@ -19,7 +19,7 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_compile_time_arg_val(3);
     const uint32_t tile_size_bytes = get_tile_size(cb_id_in0);
 
-    experimental::CircularBuffer cb_in(cb_id_in0);
+    CircularBuffer cb_in(cb_id_in0);
 
     constexpr auto src_args = TensorAccessorArgs<4>();
     const auto accessor_src = TensorAccessor(src_args, src_addr);

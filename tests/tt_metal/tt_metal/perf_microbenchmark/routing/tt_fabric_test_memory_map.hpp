@@ -10,6 +10,19 @@
 
 namespace tt::tt_fabric::fabric_tests {
 
+// Per-config result entry written by kernels and read by host-side progress monitor.
+// Layout must match the kernel-side definition in tt_fabric_test_kernels_utils.hpp exactly.
+struct PerConfigResult {
+    uint32_t packets_low;
+    uint32_t packets_high;
+};
+
+// Word index in the result buffer where per-config results begin.
+// Words 0-31 are reserved for existing aggregate fields (status, word_cnt, cycles, iter, etc.).
+static constexpr uint32_t PER_CONFIG_RESULT_BASE_WORD_INDEX = 32;
+
+static_assert(sizeof(PerConfigResult) == 8, "PerConfigResult must be 8 bytes (2 words)");
+
 struct BaseMemoryRegion {
     uint32_t start;
     uint32_t size;
@@ -173,6 +186,20 @@ struct CommonMemoryMap {
     // Mux termination sync address
     uint32_t get_mux_termination_sync_address() const { return mux_termination_sync.start; }
     uint32_t get_mux_termination_sync_size() const { return mux_termination_sync.size; }
+
+    // Per-config result region validation
+    static uint32_t get_per_config_region_size_bytes(uint8_t num_configs) {
+        return PER_CONFIG_RESULT_BASE_WORD_INDEX * sizeof(uint32_t) + num_configs * sizeof(PerConfigResult);
+    }
+
+    void validate_per_config_capacity(uint8_t num_configs) const {
+        TT_FATAL(
+            get_per_config_region_size_bytes(num_configs) <= result_buffer.size,
+            "Per-config result region ({} bytes for {} configs) exceeds result buffer ({} bytes)",
+            get_per_config_region_size_bytes(num_configs),
+            num_configs,
+            result_buffer.size);
+    }
 };
 
 /**

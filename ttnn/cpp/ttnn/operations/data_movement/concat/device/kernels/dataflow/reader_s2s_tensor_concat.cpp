@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(0);
@@ -11,7 +11,7 @@ void kernel_main() {
     constexpr uint32_t output_stride = get_compile_time_arg_val(2);
     constexpr uint32_t num_input_tensors = get_compile_time_arg_val(3);
 
-    experimental::CircularBuffer output_cb(output_cb_id);
+    CircularBuffer output_cb(output_cb_id);
     const uint32_t base_l1_write_addr = output_cb.get_write_ptr();
 
     uint32_t arg_idx = 0;
@@ -21,7 +21,7 @@ void kernel_main() {
         const uint32_t input_write_offset = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t input_read_offset = get_arg_val<uint32_t>(arg_idx++);
 
-        experimental::CircularBuffer input_cb(input_id);
+        CircularBuffer input_cb(input_id);
         uint32_t l1_write_addr = base_l1_write_addr + input_write_offset;
         uint32_t l1_read_addr = input_cb.get_read_ptr() + input_read_offset;
         noc_async_read_one_packet_set_state(get_noc_addr(l1_read_addr), page_size);

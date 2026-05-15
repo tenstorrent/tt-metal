@@ -5,6 +5,10 @@
 #include "api/numeric/bfloat16.h"
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
@@ -69,40 +73,47 @@ void kernel_main() {
         calculate_and_prepare_reduce_scaler<scaler_sum_cb_id, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     // read k, p, temp
 
+    Noc noc;
+    CircularBuffer cb_k(cb_id_k);
+    CircularBuffer cb_p(cb_id_p);
+    CircularBuffer cb_temp(cb_id_temp);
+    CircularBuffer cb_rand(rand_tile_index);
+    CircularBuffer cb_final_indices(output_final_indices_rm_cb_index);
+    CircularBuffer cb_local_values(output_local_values_cb_index);
+    CircularBuffer cb_local_indices(output_local_indices_cb_index);
+    CircularBuffer cb_out(cb_id_out);
+
     const auto addrg_k = TensorAccessor(k_args, k_addr);
-    cb_reserve_back(cb_id_k, 1);
-    uint32_t cb_id_k_ptr = get_write_ptr(cb_id_k);
-    uint64_t k_noc_addr = get_noc_addr(0, addrg_k);
+    cb_k.reserve_back(1);
+    uint32_t cb_id_k_ptr = cb_k.get_write_ptr();
     // Read the entire aligned chunk to avoid NOC alignment issues
-    noc_async_read(k_noc_addr, cb_id_k_ptr, k_chunk_size);
-    noc_async_read_barrier();
-    cb_push_back(cb_id_k, 1);
-    volatile tt_l1_ptr uint32_t* k_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_id_k_ptr);
+    noc.async_read(addrg_k, cb_k, k_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    cb_k.push_back(1);
+    CoreLocalMem<volatile uint32_t> k_ptr(cb_id_k_ptr);
     // Index into the chunk to get this core's value
     uint32_t k = k_ptr[core_id];
 
     const auto addrg_p = TensorAccessor(p_args, p_addr);
-    cb_reserve_back(cb_id_p, 1);
-    uint32_t cb_id_p_ptr = get_write_ptr(cb_id_p);
-    uint64_t p_noc_addr = get_noc_addr(0, addrg_p);
+    cb_p.reserve_back(1);
+    uint32_t cb_id_p_ptr = cb_p.get_write_ptr();
     // Read the entire aligned chunk to avoid NOC alignment issues
-    noc_async_read(p_noc_addr, cb_id_p_ptr, p_chunk_size);
-    noc_async_read_barrier();
-    cb_push_back(cb_id_p, 1);
-    volatile tt_l1_ptr uint16_t* p_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_id_p_ptr);
+    noc.async_read(addrg_p, cb_p, p_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    cb_p.push_back(1);
+    CoreLocalMem<volatile uint16_t> p_ptr(cb_id_p_ptr);
     // Index into the chunk to get this core's value
     uint32_t p = p_ptr[core_id];
 
     const auto addrg_temp = TensorAccessor(temp_args, temp_addr);
-    // cb_reserve_back(cb_id_temp, 1);
-    uint32_t cb_id_temp_ptr = get_write_ptr(cb_id_temp);
-    uint64_t temp_noc_addr = get_noc_addr(0, addrg_temp);
+    // cb_temp.reserve_back(1);
+    uint32_t cb_id_temp_ptr = cb_temp.get_write_ptr();
     // Read the entire aligned chunk to avoid NOC alignment issues
-    noc_async_read(temp_noc_addr, cb_id_temp_ptr, temp_chunk_size);
-    noc_async_read_barrier();
-    // cb_push_back(cb_id_temp, 1);
+    noc.async_read(addrg_temp, cb_temp, temp_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    // cb_temp.push_back(1);
 
-    volatile tt_l1_ptr uint16_t* temp_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_id_temp_ptr);
+    CoreLocalMem<volatile uint16_t> temp_ptr(cb_id_temp_ptr);
     // Index into the chunk to get this core's value
     uint16_t temp = temp_ptr[core_id];
     uint32_t temp_packed = (static_cast<uint32_t>(temp) << 16) + static_cast<uint32_t>(temp);
@@ -111,27 +122,22 @@ void kernel_main() {
     constexpr uint32_t one = 1;
     generate_mask<cb_id_mask, one>(one, ids_per_batch / 32, k - 1);
     // get random number
-    cb_wait_front(rand_tile_index, 1);
-    uint32_t cb_rand_addr = get_read_ptr(rand_tile_index);
-    volatile tt_l1_ptr uint16_t* rand_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_rand_addr);
+    cb_rand.wait_front(1);
+    CoreLocalMem<volatile uint16_t> rand_values(cb_rand.get_read_ptr());
     uint16_t rand = rand_values[0];
     // wait for compute kernel
-    cb_wait_front(output_final_indices_rm_cb_index, 32);
-    cb_wait_front(output_local_values_cb_index, 1);
-    cb_wait_front(output_local_indices_cb_index, 1);
+    cb_final_indices.wait_front(32);
+    cb_local_values.wait_front(1);
+    cb_local_indices.wait_front(1);
     // Read producer-written compute outputs from these CBs in L1.
-    uint32_t cb_local_values_addr = get_read_ptr(output_local_values_cb_index);
-    volatile tt_l1_ptr uint16_t* local_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_local_values_addr);
+    CoreLocalMem<volatile uint16_t> local_values(cb_local_values.get_read_ptr());
 
-    uint32_t cb_local_indices_addr = get_read_ptr(output_local_indices_cb_index);
-    volatile tt_l1_ptr uint16_t* local_indices = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_local_indices_addr);
+    CoreLocalMem<volatile uint16_t> local_indices(cb_local_indices.get_read_ptr());
 
-    uint32_t cb_final_indices_addr = get_read_ptr(output_final_indices_rm_cb_index);
-    volatile tt_l1_ptr uint32_t* final_indices =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_final_indices_addr + core_id * final_indices_stick_size);
+    CoreLocalMem<volatile uint32_t> final_indices(cb_final_indices.get_read_ptr() + core_id * final_indices_stick_size);
 
-    uint32_t out_addr = get_write_ptr(cb_id_out);
-    volatile tt_l1_ptr uint32_t* index_out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
+    uint32_t out_addr = cb_out.get_write_ptr();
+    CoreLocalMem<volatile uint32_t> index_out(out_addr);
 
     uint32_t start_id_local_phase_0 = core_id * FACE_WIDTH;
     // each user is on 1 core, so core_id = user_id
@@ -217,14 +223,18 @@ void kernel_main() {
     }
 
     // Release consumed CBs
-    cb_pop_front(rand_tile_index, 1);
-    cb_pop_front(output_local_values_cb_index, 1);
-    cb_pop_front(output_local_indices_cb_index, 1);
-    cb_pop_front(output_final_indices_rm_cb_index, 32);
+    cb_rand.pop_front(1);
+    cb_local_values.pop_front(1);
+    cb_local_indices.pop_front(1);
+    cb_final_indices.pop_front(32);
 
     const auto s_out = TensorAccessor(dst_args, dst_addr);
-    uint64_t dst_noc_addr = get_noc_addr(0, s_out);
     // Write individual core result - output buffer should handle alignment
-    noc_async_write(out_addr + core_id * 4, dst_noc_addr + core_id * 4, 4);
-    noc_async_write_barrier();
+    noc.async_write(
+        use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_out),
+        s_out,
+        4,
+        {.offset_bytes = core_id * 4},
+        {.page_id = 0, .offset_bytes = core_id * 4});
+    noc.async_write_barrier();
 }

@@ -4,7 +4,7 @@
 
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // compile-time args
@@ -20,9 +20,9 @@ void kernel_main() {
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t first_tile = 0;
 
-    experimental::CircularBuffer cb_in0_obj(cb_in0);
-    experimental::CircularBuffer cb_in1_obj(cb_in1);
-    experimental::CircularBuffer cb_out0_obj(cb_out0);
+    CircularBuffer cb_in0_obj(cb_in0);
+    CircularBuffer cb_in1_obj(cb_in1);
+    CircularBuffer cb_out0_obj(cb_out0);
 
     constexpr uint32_t num_input_tiles_iter = num_input_tiles / input_granularity;
 

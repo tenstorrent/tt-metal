@@ -1,0 +1,281 @@
+# This file defines the test matrix for the Blackhole e2e pipeline (e2e, integration, perf, unit,
+# DeepSeek prefill).
+
+# Each entry represents a parallel job with the following keys:
+#   id: Stable slug for workflow_dispatch / jq filtering.
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#   model-name: (Optional) Model identifier; rows are kept when workflow_dispatch
+#     `model` matches this value or when the row has no `model-name` (always-run).
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# --- e2e ---
+- id: bh-grid-110-cores-panoptic-deeplab-demo
+  name: 110 cores panoptic-deeplab demo
+  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1800
+  skus:
+    bh_p150b_civ2:
+      timeout: 30
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: models
+
+# --- integration ---
+- id: bh-fabric-infra-integration
+  name: fabric infra unit tests
+  cmd: |
+    TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
+    TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_at_least_2x2_mesh.yaml
+    TT_FABRIC_PROFILE_RX_CH_FWD=1 TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_code_profiling.yaml
+  skus:
+    bh_deskbox:
+      timeout: 15
+    bh_llmbox:
+      timeout: 15
+    bh_loudbox:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U0883RN6CRE # William Ly
+  team: scaleout
+
+- id: bh-ccl-nightly-integration
+  name: ccl nightly tests
+  cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
+  skus:
+    bh_deskbox:
+      timeout: 60
+    bh_llmbox:
+      timeout: 60
+    bh_loudbox:
+      timeout: 60
+    bh_p300:
+      timeout: 60
+    bh_quietbox_2:
+      timeout: 60
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+
+- id: bh-sdpa-nightly-integration
+  name: sdpa nightly tests
+  cmd: pytest tests/nightly/blackhole/sdpa/ -svv
+  skus:
+    bh_deskbox:
+      timeout: 60
+    bh_llmbox:
+      timeout: 60
+    bh_loudbox:
+      timeout: 60
+    bh_p300:
+      timeout: 60
+    bh_quietbox_2:
+      timeout: 60
+  owner_id: U07RD9YRFT9 # Slavko Krstic
+  team: ttnn
+
+- id: bh-grid-110-cores-panoptic-deeplab
+  name: 110 cores panoptic-deeplab
+  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/
+  skus:
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: models
+
+- id: bh-grid-110-cores-bevformer
+  name: 110 cores bevformer
+  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/bevformer/tests/pcc/
+  skus:
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models
+
+# --- perf ---
+- id: bh-fabric-sanity-benchmark
+  name: fabric sanity benchmark
+  cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
+  upload_fabric_data: true
+  skus:
+    bh_deskbox:
+      timeout: 15
+    bh_llmbox:
+      timeout: 15
+    bh_loudbox:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U0883RN6CRE # William Ly
+  team: scaleout
+
+- id: bh-ring-sdpa-perf
+  name: ring sdpa perf tests
+  # Skip QB1 (bh_llmbox / 4xP150): perf differs slightly from QB2 (2xP300);
+  # running on one machine class lets us keep a tighter tolerance (PR #44069).
+  cmd: |
+    SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
+    SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
+  skus:
+    bh_deskbox:
+      timeout: 10
+    bh_loudbox:
+      timeout: 10
+    bh_p300:
+      timeout: 10
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U07RD9YRFT9 # Slavko Krstic
+  team: ttnn
+
+# --- unit ---
+- id: bh-fabric-ttnn-udm-unit
+  name: fabric and ttnn UDM unit tests
+  cmd: |
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2DUDMModeFixture.*:*ChannelTrimming*"
+    ./build/test/ttnn/unit_tests_ttnn_udm
+  skus:
+    bh_deskbox:
+      timeout: 20
+    bh_llmbox:
+      timeout: 20
+    bh_loudbox:
+      timeout: 20
+    bh_p300:
+      timeout: 20
+    bh_quietbox_2:
+      timeout: 20
+  owner_id: U0883RN6CRE # William Ly
+  team: scaleout
+
+- id: bh-grid-20-cores-ttnn-sharding
+  name: ttnn sharding on 20 cores
+  cmd: pytest tests/ttnn/unit_tests/base_functionality/test_bh_20_cores_sharding.py::test_sharding_on_bh_20_cores
+  skus:
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U08ARDXARPF # Ilija Anastasijevic
+  team: ttnn
+
+# --- unit (fast) ---
+# Fast multi-card legs that the legacy blackhole-multi-card-unit-tests-impl.yaml
+# also runs in post-commit (fast-only: true). Kept in e2e to match the run-count
+# observed on the pre-reorg reference run.
+- id: bh-fabric-fast-unit
+  name: fabric fast unit tests (1D, 2D, single erisc)
+  cmd: |
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+  skus:
+    bh_deskbox:
+      timeout: 15
+    bh_llmbox:
+      timeout: 15
+    bh_loudbox:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U0883RN6CRE # William Ly
+  team: scaleout
+
+- id: bh-ttnn-ops-fast-unit
+  name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
+  cmd: |
+    pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
+    # Disabled due to issue https://github.com/tenstorrent/tt-metal/issues/41040
+    # pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
+  skus:
+    bh_deskbox:
+      timeout: 15
+    bh_llmbox:
+      timeout: 15
+    bh_loudbox:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+
+- id: bh-host-io-fast-unit-viommu
+  name: Host IO fast unit test (viommu only)
+  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
+  skus:
+    bh_p300:
+      timeout: 10
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models
+
+# --- stress (continuous gate) ---
+- id: bh-fabric-stability-stress
+  name: fabric stability nightly tests
+  cmd: TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ./tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml
+  skus:
+    bh_deskbox:
+      timeout: 15
+    bh_llmbox:
+      timeout: 15
+    bh_loudbox:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U0883RN6CRE # William Ly
+  team: scaleout
+
+- id: bh-ttnn-stress
+  name: ttnn stress tests
+  cmd: pytest tests/ttnn/stress_tests/
+  skus:
+    bh_p150b_civ2:
+      timeout: 45
+    bh_llmbox:
+      timeout: 45
+  owner_id: U084DDYSWCW # Adrian Morrison
+  team: ttnn
+
+# --- deepseek_prefill ---
+- id: bh-lb-deepseek-prefill
+  name: bh_lb_DeepSeek_PREFILL
+  model-name: deepseek
+  cmd: |
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc" --timeout 1800
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2 and pcc_check' -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_rope_prefill.py -k '4x2' -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py -vvv --tb=short --timeout=900
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer0 and device" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_moe_grouped_topk.py -k "realistic" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900
+  skus:
+    bh_loudbox:
+      timeout: 70 # PR #43775: FP8 combine adds runtime; bumped from 68 to 70
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models
+
+- id: bh-qb-deepseek-prefill
+  name: bh_qb_DeepSeek_PREFILL
+  model-name: deepseek
+  cmd: |
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc" --timeout 1800
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '2x2 and pcc_check' -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_dispatch_combine_l1_small_semaphores.py -vvv --tb=short
+  skus:
+    bh_llmbox:
+      timeout: 40
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models

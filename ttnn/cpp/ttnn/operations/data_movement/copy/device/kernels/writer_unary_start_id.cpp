@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
@@ -13,7 +13,7 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    experimental::CircularBuffer cb_out(cb_id_out);
+    CircularBuffer cb_out(cb_id_out);
 
 #ifdef OUT_SHARDED
     cb_out.wait_front(num_tiles);

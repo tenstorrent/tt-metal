@@ -372,7 +372,11 @@ void kernel_main() {
                         q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
                     uint32_t q_high_idx;
                     if constexpr (is_causal) {
-                        q_high_idx = q_low_idx + Sq_chunk_t;
+                        // Clamp to total K-tile extent (Skt = k_num_chunks * Sk_chunk_t). Without
+                        // this, when Q-chunk extends past K (e.g., Sq_chunk_t > k_num_chunks*Sk_chunk_t),
+                        // the K-loop pushes more chunks than compute consumes → CB deadlock.
+                        const uint32_t q_high_unclamped = q_low_idx + Sq_chunk_t;
+                        q_high_idx = q_high_unclamped < Skt ? q_high_unclamped : Skt;
                     } else {
                         q_high_idx = Skt;
                     }

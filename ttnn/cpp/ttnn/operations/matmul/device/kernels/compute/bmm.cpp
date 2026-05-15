@@ -6,7 +6,7 @@
 
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 using std::uint32_t;
 
@@ -27,9 +27,9 @@ void kernel_main() {
     constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
 
-    experimental::CircularBuffer in0_cb(cb_in0);
-    experimental::CircularBuffer in1_cb(cb_in1);
-    experimental::CircularBuffer out_cb(cb_out);
+    CircularBuffer in0_cb(cb_in0);
+    CircularBuffer in1_cb(cb_in1);
+    CircularBuffer out_cb(cb_out);
 
     mm_init(cb_in0, cb_in1, cb_out);
 

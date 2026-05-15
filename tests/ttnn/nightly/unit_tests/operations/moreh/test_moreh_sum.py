@@ -116,17 +116,14 @@ def get_backward_tensors(
 
 
 def moreh_sum(input_shape, dim, keepdim, use_provide_output, compute_kernel_options, device, dtype=ttnn.bfloat16):
-    (tt_input, tt_output, output_shape, _, torch_input) = get_tensors(
-        input_shape, dim, device, keepdim=keepdim, npu_dtype=dtype
-    )
+    (tt_input, tt_output, _, _, torch_input) = get_tensors(input_shape, dim, device, keepdim=keepdim, npu_dtype=dtype)
     torch_output = torch.sum(torch_input, dim, keepdim)
 
     if not use_provide_output:
         tt_output = None
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_output_cpu = (
+    tt_output_cpu = ttnn.to_torch(
         ttnn.operations.moreh.sum(
             tt_input,
             dim,
@@ -134,10 +131,6 @@ def moreh_sum(input_shape, dim, keepdim, use_provide_output, compute_kernel_opti
             output=tt_output,
             compute_kernel_config=compute_kernel_config,
         )
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(output_shape)
-        .to_torch()
     )
 
     # test for equivalance
@@ -275,21 +268,16 @@ def test_moreh_sum_fp32_dest_acc(input_shape, dim, compute_kernel_options, devic
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    (tt_input, tt_output, output_shape, torch_output_shape, torch_input) = get_tensors(
+    (tt_input, tt_output, _, torch_output_shape, torch_input) = get_tensors(
         input_shape, dim, device, use_randint=False, keepdim=True
     )
     torch_input = torch_input.float()
     torch_output = torch.sum(torch_input, dim, True)
 
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_output_cpu = (
+    tt_output_cpu = ttnn.to_torch(
         ttnn.operations.moreh.sum(
             tt_input, dim, keepdim=True, output=tt_output, compute_kernel_config=compute_kernel_config
         )
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(output_shape)
-        .to_torch()
     )
 
     rtol = atol = 0.1
@@ -323,8 +311,7 @@ def moreh_sum_backward(
     torch_output = torch.sum(torch_input, dim, keepdim)
     torch_output.backward(torch_output_grad)
 
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_input_grad_cpu = (
+    tt_input_grad_cpu = ttnn.to_torch(
         ttnn.operations.moreh.sum_backward(
             tt_output_grad,
             input=tt_input,
@@ -333,10 +320,6 @@ def moreh_sum_backward(
             input_grad=tt_input_grad,
             compute_kernel_config=compute_kernel_config,
         )
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(input_shape)
-        .to_torch()
     )
 
     # test for equivalance
@@ -470,8 +453,7 @@ def test_moreh_sum_backward_fp32_dest_acc(input_shape, dim, compute_kernel_optio
     torch_output = torch.sum(torch_input, dim)
     torch_output.backward(torch_output_grad)
 
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_input_grad_cpu = (
+    tt_input_grad_cpu = ttnn.to_torch(
         ttnn.operations.moreh.sum_backward(
             tt_output_grad,
             input=tt_input,
@@ -479,10 +461,6 @@ def test_moreh_sum_backward_fp32_dest_acc(input_shape, dim, compute_kernel_optio
             input_grad=tt_input_grad,
             compute_kernel_config=compute_kernel_config,
         )
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(input_shape)
-        .to_torch()
     )
 
     rtol = atol = 0.1
@@ -536,13 +514,13 @@ def test_moreh_sum_integer(input_shape, dim, data_type, device):
     normalized_dim = dim if dim >= 0 else len(input_shape) + dim
 
     torch_output = torch.sum(torch_input, normalized_dim, True)
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
 
-    tt_output = ttnn.operations.moreh.sum(
-        tt_input, dim=normalized_dim, keepdim=True, output=tt_output, compute_kernel_config=compute_kernel_config
+    tt_output_cpu = ttnn.to_torch(
+        ttnn.operations.moreh.sum(
+            tt_input, dim=normalized_dim, keepdim=True, output=tt_output, compute_kernel_config=compute_kernel_config
+        )
     )
 
-    tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(tt_output_shape).to_torch()
     logger.debug(f"{torch.equal(torch_output, tt_output_cpu)}")
 
     assert torch.equal(torch_output, tt_output_cpu)

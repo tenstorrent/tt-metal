@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -71,6 +72,11 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_CLEAR_L1,    // Clear L1 memory on device init
     TT_METAL_CLEAR_DRAM,  // Clear DRAM on device init
+
+    // ========================================
+    // HOST MEMORY
+    // ========================================
+    TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES,  // Maximum cached pinned host memory
 
     // ========================================
     // DEBUG & TESTING
@@ -208,6 +214,7 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS,  // Timeout for fabric router sync in milliseconds
     TT_METAL_FABRIC_OPT_LEVEL,               // Override fabric kernel compiler optimization level
+    TT_TOPOLOGY_SOLVER_ENGINE,               // sat|dfs: topology mapping backend (fabric)
 
     // ========================================
     // JIT BUILD CONFIGURATION
@@ -516,6 +523,39 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: 0 (don't clear)
         // Usage: export TT_METAL_CLEAR_DRAM=1
         case EnvVarID::TT_METAL_CLEAR_DRAM: this->clear_dram = is_env_enabled(value); break;
+
+        // ========================================
+        // HOST MEMORY
+        // ========================================
+
+        // TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES
+        // Maximum host memory bytes held by the pinned memory cache.
+        // Default: 4GB
+        // Usage: export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=4294967296
+        case EnvVarID::TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: {
+            std::string limit_value = trim_copy(value);
+            if (limit_value.empty() || limit_value.front() == '-') {
+                TT_THROW("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES must be a non-negative byte count: {}", value);
+            }
+
+            try {
+                size_t parse_pos = 0;
+                unsigned long long parsed_limit = std::stoull(limit_value, &parse_pos, 0);
+                if (parse_pos != limit_value.size()) {
+                    TT_THROW("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES must be a byte count: {}", value);
+                }
+                if (parsed_limit > std::numeric_limits<size_t>::max()) {
+                    TT_THROW("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES value out of range: {}", value);
+                }
+                this->pinned_memory_cache_limit_bytes = static_cast<size_t>(parsed_limit);
+            } catch (const std::invalid_argument&) {
+                TT_THROW("Invalid TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: {}", value);
+            } catch (const std::out_of_range&) {
+                TT_THROW("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES value out of range: {}", value);
+            }
+            break;
+        }
+
         // ========================================
         // DEBUG & TESTING
         // ========================================
@@ -1418,6 +1458,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                     "Invalid TT_METAL_FABRIC_OPT_LEVEL value: '{}'. Valid values: O0, O1, O2, O3, Os, Oz, Ofast",
                     value);
             }
+            break;
+        }
+
+        // TT_TOPOLOGY_SOLVER_ENGINE
+        // If set to sat/1/true/yes, topology mapping uses the SAT backend when solver_engine is Auto (same rule as
+        // tt::tt_fabric::topology_mapping_use_sat_engine). Value is snapshotted here at Metal init.
+        // Usage: export TT_TOPOLOGY_SOLVER_ENGINE=sat
+        case EnvVarID::TT_TOPOLOGY_SOLVER_ENGINE: {
+            const std::string lowered = to_lower_copy(trim_copy(std::string(value)));
+            this->topology_mapping_use_sat_engine_ =
+                lowered == "sat" || lowered == "1" || lowered == "true" || lowered == "yes";
             break;
         }
 

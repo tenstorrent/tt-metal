@@ -70,11 +70,17 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
 
     // ========== Core Dimensions ==========
     // B = batch size, PNH = padded num Q heads, S = sequence length, DH = head dim
+    //
+    // With block_size_override set, this call reads a K/V cache allocated for a
+    // different layer's shape; Q's last dim drives DH. Without it, k_shape[3] is used
+    // and the strict q.head_dim == k.head_dim check in validate keeps legacy callers
+    // byte-identical.
+    const bool has_block_size_override = operation_attributes.block_size_override.has_value();
     uint32_t B = q_shape[1];
     uint32_t PNH = q_shape[2];
     uint32_t S = k_shape[2];
-    uint32_t DH = k_shape[3];
-    uint32_t vDH = use_mla ? head_dim_v : v_shape[3];
+    uint32_t DH = has_block_size_override ? q_shape[3] : k_shape[3];
+    uint32_t vDH = use_mla ? head_dim_v : (has_block_size_override ? q_shape[3] : v_shape[3]);
     uint32_t Bkv = k_shape[0];
     uint32_t Bmask = attn_mask.has_value() ? attn_mask->padded_shape()[0] : Bkv;
     uint32_t num_kv_heads = k_shape[1];
@@ -89,10 +95,13 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         B = page_table_tensor->is_sharded() ? page_table_tensor->padded_shape()[0] /
                                                   page_table_tensor->memory_config().shard_spec()->grid.num_cores()
                                             : page_table_tensor->padded_shape()[0];
-        uint32_t block_size = k_shape[2];
-        original_block_size = input_tensor_k.logical_shape()[2];
+        uint32_t block_size = operation_attributes.block_size_override.value_or(k_shape[2]);
+        // original_block_size gates the sub-tile padding mask. With an override active,
+        // validate already enforces it's a multiple of TILE_HEIGHT (no padding path).
+        original_block_size = has_block_size_override ? block_size : input_tensor_k.logical_shape()[2];
         page_block_size_t = block_size / TILE_HEIGHT;
-        S = page_table_tensor.value().padded_shape()[-1] * S;
+        // kv_seq_len = max_num_blocks_per_seq * effective block_size.
+        S = page_table_tensor.value().padded_shape()[-1] * block_size;
         has_block_padding = original_block_size < TILE_HEIGHT;
     }
 

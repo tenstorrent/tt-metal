@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -22,8 +22,8 @@ void kernel_main() {
     // program cache hits.
     const auto s0 = TensorAccessor(dst_args, dst_addr, stick_size);
 
-    // Create experimental CircularBuffer for Device 2.0 API
-    experimental::CircularBuffer cb_out0(cb_id_out0);
+    // Create CircularBuffer for Device 2.0 API
+    CircularBuffer cb_out0(cb_id_out0);
 
     uint32_t i_stick = start_id;
     uint32_t sticks_read = 0;

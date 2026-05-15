@@ -68,7 +68,7 @@ inline void calculate_erfinv() {
         v_else { result = calculate_erfinv_body<true>(abs_v); }
         v_endif;
 
-        result = sfpi::setsgn(result, v);  // restore sign
+        result = sfpi::copysgn(result, v);  // restore sign
 
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;

@@ -560,7 +560,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         tilize_e_t_output_data_format);
 
     // Assume indices tensor is sharded in L1
-    tt::tt_metal::create_cb(
+    const auto indices_cb_output = tt::tt_metal::create_cb(
         indices_tensor_cb_id,
         program,
         tilize_core_range_set,
@@ -568,9 +568,10 @@ MoEComputeMeshWorkloadFactory::create_at(
         tilize_indices_pages,  // double buffer buffer packets
         tilize_indices_data_format,
         tilize_indices_tensor.buffer());
+    const auto indices_cb_handle = std::get<1>(indices_cb_output);
 
     // Assume scores tensor is sharded in L1
-    tt::tt_metal::create_cb(
+    const auto scores_cb_output = tt::tt_metal::create_cb(
         scores_tensor_cb_id,
         program,
         tilize_core_range_set,
@@ -578,6 +579,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         tilize_input_scores_pages,
         tilize_input_scores_data_format,
         tilize_input_scores_tensor.buffer());
+    const auto scores_cb_handle = std::get<1>(scores_cb_output);
 
     // For each batch's tokens, we need to read the relevant experts from the mapping tensor
     // For in range (tokens) every time tokens/batch increments, read in new mapping tensor page
@@ -800,7 +802,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"mesh_rows", mesh_view.num_rows()},
         {"mesh_cols", mesh_view.num_cols()},
         {"linearized_mesh_coord", linearized_mesh_coord},
-        {"cluster_axis", (uint32_t)(args.combine_params.axis.has_value() ? args.combine_params.axis.value() : 1)},
+        {"cluster_axis", args.combine_params.axis},
 
         // Coordinates for non-drain-sync to drain-sync synchronization
         {"drain_core_noc_x", (uint32_t)tilize_drain_core_physical.x},
@@ -1220,9 +1222,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Combine parameters (copy from args and set worker_cores for this mesh)
     TT_FATAL(args.combine_params.num_links > 0, "num_links must be greater than 0");
-    TT_FATAL(
-        !args.combine_params.axis.has_value() || args.combine_params.axis.value() < 2,
-        "cluster_axis must be 0 or 1");
+    TT_FATAL(args.combine_params.axis < 2, "cluster_axis must be 0 or 1");
 
     auto combine_params = args.combine_params;
     combine_params.worker_cores = combine_cores;
@@ -1265,6 +1265,8 @@ MoEComputeMeshWorkloadFactory::create_at(
          .tilize_cores = tilize_cores,
          .matmul_kernel_handles = {matmul_dm0_kernel_handle, matmul_dm1_kernel_handle, matmul_compute_kernel_handle},
          .matmul_cores = matmul_cores,
+         .indices_cb_handle = indices_cb_handle,
+         .scores_cb_handle = scores_cb_handle,
          .sharded_output_cb_handle = sharded_output_cb_handle,
          .matmul_writer_cb_handle = matmul_writer_cb_handle,
          .combine_kernel_handles = {combine_reader_kernel_id, combine_writer_kernel_id},
@@ -1291,6 +1293,12 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
         const auto& shared_variables = cached_workload.shared_variables.at(range);
 
         // Update sharded circular buffer address
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(
+            program, shared_variables.indices_cb_handle, *tensor_args.tilize_expert_indices_tensor.buffer());
+
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(
+            program, shared_variables.scores_cb_handle, *tensor_args.tilize_expert_scores_tensor.buffer());
+
         tt::tt_metal::UpdateDynamicCircularBufferAddress(
             program, shared_variables.sharded_output_cb_handle, *tilize_output_tensor.buffer());
 

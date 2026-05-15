@@ -47,6 +47,8 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     ],
     indirect=True,
 )
+# TODO(#42713): Investigate the 4x2 Blackhole hang/error and remove this temporary skip.
+@pytest.mark.skip(reason="Hang or error when tested on 4x2. Issue: #42713")
 def test_broadcast_rms_fused(
     bh_2d_mesh_device,
     mesh_rows,

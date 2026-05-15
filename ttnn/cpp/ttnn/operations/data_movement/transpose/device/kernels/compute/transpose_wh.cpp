@@ -5,15 +5,15 @@
 #include <cstdint>
 
 #include "api/compute/transpose_wh.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t NHtWt = get_arg_val<uint32_t>(0);
 
     transpose_wh_init(tt::CBIndex::c_0, tt::CBIndex::c_16);
 
-    experimental::CircularBuffer cb_in(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb_out(tt::CBIndex::c_16);
+    CircularBuffer cb_in(tt::CBIndex::c_0);
+    CircularBuffer cb_out(tt::CBIndex::c_16);
 
     // transpose a row-major block:
     // - assumes the tiles come in in column major order from reader

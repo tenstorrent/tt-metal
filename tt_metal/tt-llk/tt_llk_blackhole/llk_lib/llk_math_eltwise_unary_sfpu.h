@@ -10,7 +10,6 @@
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 #include "ckernel_sfpu.h"
-#include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
 #include "llk_sfpu_types.h"
@@ -58,7 +57,6 @@ inline void eltwise_unary_sfpu_configure_addrmod()
 
 inline void eltwise_unary_sfpu_configure_mop();
 
-template <DstSync Dst>
 inline void _llk_math_eltwise_unary_sfpu_start_(const std::uint32_t dst_index)
 {
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);

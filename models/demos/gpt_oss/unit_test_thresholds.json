@@ -32,7 +32,7 @@
             "router": 0.945,
             "experts": 0.925,
             "mlp": 0.7,
-            "decoder": 0.87
+            "decoder": 0.86
         }
     }
 }

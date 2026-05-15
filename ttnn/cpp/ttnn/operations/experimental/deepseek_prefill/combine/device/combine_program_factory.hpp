@@ -21,6 +21,8 @@ struct CombineSharedVariables {
     std::vector<CoreCoord> zero_init_cores;
     std::vector<CoreCoord> idle_cores;
     GlobalSemaphore init_semaphore;       // Initialized in create_at()
+    GlobalSemaphore exit_semaphore;       // Separate sem for the exit handshake (avoids
+                                          // init/exit race on combine_devices==2 pairs)
     uint32_t zero_init_semaphore_id = 0;  // Local semaphore ID for reader->writer sync
     uint32_t zero_init_barrier_semaphore_id = 0;     // Barrier: writer signals reader after global init
     uint32_t counter_ready_semaphore_id = 0;         // Sender signals idle cores after token count multicast
@@ -44,7 +46,8 @@ struct CombineProgramFactory {
         const CombineInputs& tensor_args,
         ttnn::Tensor& tensor_return_value,
         const MeshCoordinateRangeSet& tensor_coords,
-        const GlobalSemaphore& init_semaphore);
+        const GlobalSemaphore& init_semaphore,
+        const GlobalSemaphore& exit_semaphore);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,

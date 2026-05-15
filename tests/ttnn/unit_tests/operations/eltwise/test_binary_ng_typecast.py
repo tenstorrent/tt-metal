@@ -144,7 +144,7 @@ def test_binary_w_typecast(input_shapes, in_dtype, out_dtype, layout, ttnn_fn, d
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b, dtype=in_dtype, device=device, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    out_tt = ttnn_op(input_tensor_a, input_tensor_b, dtype=getattr(ttnn, out_dtype), use_legacy=False)
+    out_tt = ttnn_op(input_tensor_a, input_tensor_b, dtype=getattr(ttnn, out_dtype))
 
     output_tensor = ttnn.to_torch(out_tt)
 
@@ -197,7 +197,7 @@ def test_opt_output_no_typecast(input_shapes, dtype, layout, ttnn_fn, device):
     )
     out_tt = ttnn.from_torch(out, dtype=dtype, device=device, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     cq_id = 0
-    ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
+    ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -252,7 +252,7 @@ def test_opt_output_bf8b(input_shapes, dtype, ttnn_fn, device):
         out, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
+    ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -296,7 +296,7 @@ def test_sub_typecast(input_shapes, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, use_legacy=False)
+    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(output_tensor)
 
     golden_fn = ttnn.get_golden_function(ttnn.sub)
@@ -340,7 +340,7 @@ def test_sub_typecast_a(input_shapes, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, use_legacy=False)
+    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(output_tensor)
 
     golden_fn = ttnn.get_golden_function(ttnn.sub)
@@ -384,7 +384,7 @@ def test_sub_typecast_b(input_shapes, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, use_legacy=False)
+    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(output_tensor)
 
     golden_fn = ttnn.get_golden_function(ttnn.sub)
@@ -432,7 +432,7 @@ def test_sub_opt_output_typecast_inputs(input_shapes, device):
         out, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
+    ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn.sub)
@@ -482,7 +482,7 @@ def test_sub_opt_output_typecast_out(input_shapes, device):
         out, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
+    ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn.sub)
@@ -530,7 +530,7 @@ def test_sub_opt_output_typecast_a(input_shapes, device):
         out, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
+    ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn.sub)
@@ -578,7 +578,7 @@ def test_sub_opt_output_typecast_b(input_shapes, device):
         out, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
+    ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn.sub)
@@ -622,7 +622,7 @@ def test_inplace_sub_typecast(input_shapes, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    ttnn.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id, use_legacy=False)
+    ttnn.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(input_tensor_a)
 
     golden_fn = ttnn.get_golden_function(ttnn.sub_)
@@ -666,7 +666,7 @@ def test_inplace_sub_typecast_a(input_shapes, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    ttnn.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id, use_legacy=False)
+    ttnn.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(input_tensor_a)
 
     golden_fn = ttnn.get_golden_function(ttnn.sub_)
@@ -710,7 +710,7 @@ def test_inplace_sub_typecast_b(input_shapes, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    ttnn.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id, use_legacy=False)
+    ttnn.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(input_tensor_a)
 
     golden_fn = ttnn.get_golden_function(ttnn.sub_)
@@ -769,7 +769,7 @@ def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device):
     )
 
     cq_id = 0
-    ttnn_op(input_tensor_a, scalar, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
+    ttnn_op(input_tensor_a, scalar, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -815,7 +815,7 @@ def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, 
         memory_config=memory_config,
     )
 
-    output = ttnn_op(input_tensor_a, scalar, use_legacy=False)
+    output = ttnn_op(input_tensor_a, scalar)
     tt_output_tensor = ttnn.to_torch(output)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -864,7 +864,7 @@ def test_edgecase_dims_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memo
         memory_config=memory_config,
     )
 
-    output = ttnn_op(input_tensor_a, scalar, dtype=ttnn.uint32, use_legacy=False)
+    output = ttnn_op(input_tensor_a, scalar, dtype=ttnn.uint32)
     tt_output_tensor = ttnn.to_torch(output)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -928,7 +928,7 @@ def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memo
         memory_config=memory_config,
     )
 
-    output = ttnn_op(input_tensor_a, input_tensor_b, dtype=ttnn.float32, use_legacy=False)
+    output = ttnn_op(input_tensor_a, input_tensor_b, dtype=ttnn.float32)
     tt_output_tensor = ttnn.to_torch(output)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -991,7 +991,7 @@ def test_edgecase_dims_eltwise_broadcast_logical(input_shapes, ttnn_fn, memory_c
         memory_config=memory_config,
     )
 
-    output = ttnn_op(input_tensor_a, input_tensor_b, dtype=ttnn.float32, use_legacy=False)
+    output = ttnn_op(input_tensor_a, input_tensor_b, dtype=ttnn.float32)
     tt_output_tensor = ttnn.to_torch(output)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -1042,5 +1042,5 @@ def test_binary_div(
     input_tensor_b = ttnn.from_torch(
         torch_input_b, layout=input_layout, memory_config=memory_config, dtype=input_dtype, device=device
     )
-    output_tensor = ttnn.divide(input_tensor_a, input_tensor_b, dtype=output_dtype, use_legacy=False)
+    output_tensor = ttnn.divide(input_tensor_a, input_tensor_b, dtype=output_dtype)
     assert_with_pcc(torch_output, ttnn.to_torch(output_tensor), 0.999)

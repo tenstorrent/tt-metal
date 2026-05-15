@@ -351,7 +351,7 @@ After program execution, the host reads back L1 memory from every core and verif
 
 ## Test Cases
 
-All 26 configurations are defined in `test_matmul_common.hpp` and shared by 1D v1, 1D v2, and 2D.
+All 28 configurations are defined in `test_matmul_common.hpp` and shared by 1D v1, 1D v2, and 2D.
 Test names follow the pattern: `ID{id}_R{r}_C{c}_K{k}_sr{sr}_sc{sc}_sk{sk}_X{x}Y{y}_bank{b}` where `{id}` is the BASE id from the config. The actual profiler `test_id` has the per-variant offset added (see [Per-variant test IDs](#per-variant-test-ids)).
 
 ### Grid Shape Tests
@@ -416,6 +416,20 @@ These test the three key relationships between K and C that affect v2's rotating
 | 1023 | 2x4       | 2 | K < C        | Only columns 0-1 send; columns 2-3 are always receivers. |
 | 1024 | 2x3       | 3 | K = C        | Each column sends exactly once — balanced workload. |
 | 1025 | 2x3       | 5 | K % C != 0   | Columns 0-1 send twice, column 2 sends once — uneven. |
+
+### Subblock Sweep Tests (perf characterization)
+
+These tests sweep one subblock dimension to characterize per-transaction bandwidth/latency on the in0 multicast path (1027, 1029) or the in1 path (1028) or both (1030). All use a 4x4 grid.
+
+| ID   | K | Sweep var | Sweep range | Held | Purpose |
+|------|---|-----------|-------------|------|---------|
+| 1026 | 4 | `subblock_k_dim` | {1, 2, 4, 8} | sub_r=4, sub_c=4 | K subblock size sweep — characterizes K-loop scaling. |
+| 1027 | 8 | `subblock_r_dim` | {1, 2, 4, 8, 16, 32} | sub_c=1, sub_k=1 | R subblock size sweep — varies in0 transaction size; K-loop runs 8 iterations per sweep point. |
+| 1028 | 8 | `subblock_c_dim` | {1, 2, 4, 8, 16, 32} | sub_r=1, sub_k=1 | C subblock size sweep — varies in1 per-core read size from DRAM. |
+| 1029 | 1 | `subblock_r_dim` | {1, 2, 4, 8, 16, 32, 64, 128, 256} | sub_c=1, sub_k=1 | R subblock size sweep, **single transaction** (K=1). Lets each data point be a single multicast of `subblock_r * 2048` bytes (no K-loop overhead). Extends past 1027 to characterize multicast bandwidth as a function of single-transaction size. |
+| 1030 | 8 | (sub_r, sub_c) 2D | sub_r ∈ {1, 2, 4, 8, 16}; sub_c ∈ {1, 2, 4, 8, 16, 32} | sub_k=1 | 2D Cartesian sweep over (in0, in1) sizes — 30 sweep points. sub_r is capped at 16 so the largest (sub_r=16, sub_c=32) corner fits col-0 L1 (~1 MiB). |
+
+For 1029 and 1030 the kernel issues per-K-subblock transactions, so `Number of transactions` in the profiler equals K. For 1029 each sweep point is one transaction; for 1030 each sweep point is K=8 transactions per core.
 
 ## Running the Tests
 

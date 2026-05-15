@@ -8,8 +8,7 @@
 #include "ttnn/distributed/tensor_topology.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/allocator_state.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/allocator.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal::experimental::unit_mesh {
@@ -20,14 +19,15 @@ void synchronize_parent_allocator_with_submeshes(tt::tt_metal::distributed::Mesh
     auto* parent_allocator = parent_mesh->allocator().get();
     TT_FATAL(parent_allocator != nullptr, "Parent mesh must have an allocator");
 
-    tt::tt_metal::AllocatorState merged_state;
+    std::vector<tt::tt_metal::Allocator*> submesh_allocators;
+    submesh_allocators.reserve(parent_mesh->get_submeshes().size());
     for (const auto& submesh : parent_mesh->get_submeshes()) {
         auto* submesh_allocator = submesh->allocator().get();
         TT_FATAL(submesh_allocator != nullptr, "Submesh must have an allocator");
-        merged_state.merge(submesh_allocator->extract_state());
+        submesh_allocators.push_back(submesh_allocator);
     }
 
-    parent_allocator->override_state(merged_state);
+    tt::tt_metal::experimental::synchronize_allocator_state(parent_allocator, submesh_allocators);
 }
 
 }  // namespace

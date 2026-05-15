@@ -457,7 +457,6 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
     LLK_ASSERT(math_fidelity == MathFidelity::LoFi || eltwise_binary_type == ELWMUL, "Math fidelity larger than LoFi only works with Eltwise multiply");
-    [[maybe_unused]] constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
     // Dest counter always jumps by 32x32 tile spacing regardless of actual tile size
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);

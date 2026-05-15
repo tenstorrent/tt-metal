@@ -769,6 +769,11 @@ def comp_equal(golden, calculated):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
 
+    # If either tensor is zero-volume, broadcasting can still yield an empty delta and
+    # crash torch.max(); defer entirely to torch.equal (False on shape mismatch).
+    if golden.numel() == 0 or calculated.numel() == 0:
+        return torch.equal(golden, calculated), f"{golden} != {calculated}"
+
     atol_delta = torch.max(torch.abs(golden - calculated)).item()
     rtol_delta = torch.max(torch.abs(golden - calculated) / torch.abs(calculated)).item()
     return (

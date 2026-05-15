@@ -19,6 +19,44 @@
 
 #include "api/debug/dprint.h"
 
+
+FORCE_INLINE void wait_all_tcs_initialized(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs, uint64_t hartid) {
+    WAYPOINT("TCIW");
+    bool all_tcs_initialized = false;
+    while (!all_tcs_initialized) {
+        all_tcs_initialized = true;
+        volatile uint8_t* base_ptr = reinterpret_cast<volatile uint8_t*>(dfb_config_base);
+
+        for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
+            volatile dfb_initializer_t* init_ptr = reinterpret_cast<volatile dfb_initializer_t*>(base_ptr);
+
+            if (hartid == 0) {
+                // At this point DM0 configured the ISR. Other DMs need to ensure that the ISR is configured before they start running kernels.
+                init_ptr->implicit_sync_configured = 1;
+            }
+
+            uint16_t risc_mask = (init_ptr->risc_mask_bits.tensix_mask << 8) | init_ptr->risc_mask_bits.dm_mask;
+            uint8_t num_riscs = static_cast<uint8_t>(__builtin_popcount(risc_mask));
+
+            volatile dfb_initializer_per_risc_t* per_risc_base =
+                reinterpret_cast<volatile dfb_initializer_per_risc_t*>(base_ptr + sizeof(dfb_initializer_t));
+
+            // Loop over per_risc: count producers that have set tc_init_done (each per_risc is separate cache line)
+            uint8_t producers_done = 0;
+            for (uint8_t i = 0; i < num_riscs; i++) {
+                if (per_risc_base[i].flags.is_producer && per_risc_base[i].num_tcs_and_init.tc_init_done) {
+                    producers_done++;
+                }
+            }
+            all_tcs_initialized &= ((producers_done == init_ptr->num_producers) && (init_ptr->implicit_sync_configured == 1));
+
+            base_ptr += sizeof(dfb_initializer_t) + (num_riscs * sizeof(dfb_initializer_per_risc_t));
+        }
+    }
+    WAYPOINT("TCID");
+    // DPRINT << "all_tcs_initialized" << ENDL();
+}
+
 FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base, uint32_t local_dfb_mask) {
     uint64_t hartid;
 #ifdef COMPILE_FOR_TRISC
@@ -131,6 +169,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 #ifndef COMPILE_FOR_TRISC
             if (per_risc_ptr->flags.is_producer) {
                 dfb_interface.num_txn_ids = init_ptr->producer_txn_descriptor.num_txn_ids;
+                dfb_interface.threshold = init_ptr->producer_txn_descriptor.num_entries_to_process_threshold;
                 dfb_interface.num_entries_per_txn_id = init_ptr->producer_txn_descriptor.num_entries_per_txn_id;
                 dfb_interface.num_entries_per_txn_id_per_tc =
                     init_ptr->producer_txn_descriptor.num_entries_per_txn_id_per_tc;
@@ -139,6 +178,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 }
             } else {
                 dfb_interface.num_txn_ids = init_ptr->consumer_txn_descriptor.num_txn_ids;
+                dfb_interface.threshold = init_ptr->consumer_txn_descriptor.num_entries_to_process_threshold;
                 dfb_interface.num_entries_per_txn_id = init_ptr->consumer_txn_descriptor.num_entries_per_txn_id;
                 dfb_interface.num_entries_per_txn_id_per_tc =
                     init_ptr->consumer_txn_descriptor.num_entries_per_txn_id_per_tc;
@@ -171,9 +211,9 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 reinterpret_cast<volatile dfb_initializer_per_risc_t*>(base_ptr + sizeof(dfb_initializer_t));
 
             uint8_t num_producer_tcs = 0;
-            uint8_t producer_tcs[dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+            uint8_t producer_tcs[16] = {};
             uint8_t num_consumer_tcs = 0;
-            uint8_t consumer_tcs[dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+            uint8_t consumer_tcs[16] = {};
             for (uint8_t i = 0; i < num_riscs; i++) {
                 volatile dfb_initializer_per_risc_t* per_risc_ptr = per_risc_base + i;
 
@@ -290,6 +330,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         } else {
             disable_dfb_tile_isr();
         }
+
     }  // end if (hartid == 0)
 #endif
 
@@ -342,32 +383,6 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     }
 
     // After setting up g_dfb_interface, wait for all TCs to be initialized
-    bool all_tcs_initialized = false;
-    while (!all_tcs_initialized) {
-        all_tcs_initialized = true;
-        base_ptr = reinterpret_cast<volatile uint8_t*>(dfb_config_base);
-
-        for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
-            volatile dfb_initializer_t* init_ptr = reinterpret_cast<volatile dfb_initializer_t*>(base_ptr);
-
-            uint16_t risc_mask = (init_ptr->risc_mask_bits.tensix_mask << 8) | init_ptr->risc_mask_bits.dm_mask;
-            uint8_t num_riscs = static_cast<uint8_t>(__builtin_popcount(risc_mask));
-
-            volatile dfb_initializer_per_risc_t* per_risc_base =
-                reinterpret_cast<volatile dfb_initializer_per_risc_t*>(base_ptr + sizeof(dfb_initializer_t));
-
-            // Loop over per_risc: count producers that have set tc_init_done (each per_risc is separate cache line)
-            uint8_t producers_done = 0;
-            for (uint8_t i = 0; i < num_riscs; i++) {
-                if (per_risc_base[i].flags.is_producer && per_risc_base[i].num_tcs_and_init.tc_init_done) {
-                    producers_done++;
-                }
-            }
-            all_tcs_initialized &= (producers_done == init_ptr->num_producers);
-
-            base_ptr += sizeof(dfb_initializer_t) + (num_riscs * sizeof(dfb_initializer_per_risc_t));
-        }
-    }
-    // DPRINT << "all_tcs_initialized" << ENDL();
+    wait_all_tcs_initialized(dfb_config_base, num_dfbs, hartid);
     // DEVICE_PRINT("all_tcs_initialized\n");
 }

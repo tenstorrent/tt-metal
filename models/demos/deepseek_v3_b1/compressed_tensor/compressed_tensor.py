@@ -32,6 +32,7 @@ import ttnn
 
 from .assigner import CompressedTensorAssigner
 from .tile_utils import (
+    _PACK_FN,
     BFP_MANT_BITS,
     COMPRESSED_FORMATS,
     DEFAULT_TILE_HW,
@@ -182,21 +183,58 @@ class CompressedTensor:
         min_shard_bytes: int = 0,
         per_core_allocation: bool = False,
         mesh_mapper_config=None,
+        keep_packed_data: bool = False,
     ) -> None:
+        self._init_fields(
+            shape=tensor.shape,
+            assignment=assignment,
+            memory_config=memory_config,
+            tile_hw=tile_hw,
+            min_shard_bytes=min_shard_bytes,
+            per_core_allocation=per_core_allocation,
+            mesh_mapper_config=mesh_mapper_config,
+            keep_packed_data=keep_packed_data,
+        )
+        self._pack_data_and_assignment(
+            tensor, memory_config, assignment_memory_config, device, self._per_core_allocation, mesh_mapper_config
+        )
+
+    def _init_fields(
+        self,
+        *,
+        shape,
+        assignment: np.ndarray,
+        memory_config,
+        tile_hw: int,
+        min_shard_bytes: int,
+        per_core_allocation: bool,
+        mesh_mapper_config,
+        keep_packed_data: bool = False,
+    ) -> None:
+        """Populate metadata fields shared by ``__init__`` and :meth:`from_packed_artifacts`.
+
+        Sets up tensor geometry (shape, tile counts), the full-tensor
+        assignment array, and the empty per-device dicts that the pack /
+        upload pipeline populates.  Does **not** touch device tensors —
+        callers are responsible for either running the regular pack
+        (``__init__``) or hydrating ``self._packed_shard_data`` and calling
+        :meth:`_finalize_uploads` (warm-load constructor).
+        """
         assert (
             memory_config is not None and memory_config.is_sharded()
         ), "CompressedTensor requires a sharded memory_config (kernel needs contiguous tile data in L1/DRAM)"
 
         # Fold batch dims into height
+        shape_tuple = tuple(int(d) for d in shape)
         h = 1
-        for d in tensor.shape[:-1]:
+        for d in shape_tuple[:-1]:
             h *= d
 
         # --- Tensor geometry (full tensor) ---
-        self.shape = tensor.shape  # original ND tensor shape
+        self.shape = shape_tuple  # original ND tensor shape
         self.tile_hw = tile_hw  # tile dimension (typically 32)
         self.tiles_h = h // tile_hw  # tile rows (batch dims folded in)
-        self.tiles_w = tensor.shape[-1] // tile_hw  # tile columns
+        self.tiles_w = shape_tuple[-1] // tile_hw  # tile columns
 
         # --- Packed data on device ---
         self.data = None  # ttnn.Tensor: uint8, packed BFP tile bytes (lockstep mode)
@@ -225,15 +263,25 @@ class CompressedTensor:
         self._multi_device_data_per_core = {}
         self._multi_device_assignment_per_core = {}
 
+        # --- Post-pack byte buffers (kept until upload finishes) ---
+        # Populated by ``_pack_single_device`` / ``_pack_multi_device`` (or by
+        # :meth:`from_packed_artifacts` on warm load).  Consumed by
+        # :meth:`_finalize_uploads` and exposed via
+        # :meth:`extract_packed_artifacts` for cache write-through.
+        # ``_keep_packed_data`` controls whether ``_finalize_uploads`` keeps
+        # them around for a subsequent ``extract_packed_artifacts`` call
+        # (cache cold-write path) or drops them in place to bound peak host
+        # memory (the default; matches pre-cache behaviour).
+        self._packed_shard_data: dict = {}  # {MeshCoordinate: list[list[np.ndarray]]}
+        self._packed_shard_sizes: dict = {}  # {MeshCoordinate: list[int]}
+        self._keep_packed_data: bool = keep_packed_data
+
         assert assignment.shape == (
             self.tiles_h,
             self.tiles_w,
         ), f"Assignment shape {assignment.shape} doesn't match tile grid ({self.tiles_h}, {self.tiles_w})"
 
         self._assignment_flat = assignment.astype(np.int8).ravel().copy()
-        self._pack_data_and_assignment(
-            tensor, memory_config, assignment_memory_config, device, per_core_allocation, mesh_mapper_config
-        )
 
     # ==================================================================
     # Public API
@@ -250,8 +298,16 @@ class CompressedTensor:
         quantize_fn=ttnn_quantize_fn,
         per_core_allocation: bool = False,
         mesh_mapper_config=None,
+        keep_packed_data: bool = False,
     ) -> CompressedTensor:
-        """Convenience: run assignment then pack in one step."""
+        """Convenience: run assignment then pack in one step.
+
+        ``keep_packed_data=True`` retains the post-pack host byte buffers on
+        the returned instance so a follow-up :meth:`extract_packed_artifacts`
+        can serialize them (used by the SRAM hot-expert disk cache).  Leave
+        at the default to free those buffers as soon as device upload
+        finishes.
+        """
         result = assigner.assign(tensor, quantize_fn)
         return cls(
             tensor,
@@ -261,6 +317,7 @@ class CompressedTensor:
             assignment_memory_config=assignment_memory_config,
             per_core_allocation=per_core_allocation,
             mesh_mapper_config=mesh_mapper_config,
+            keep_packed_data=keep_packed_data,
         )
 
     @classmethod
@@ -273,10 +330,12 @@ class CompressedTensor:
         assignment_memory_config=None,
         tile_hw: int = DEFAULT_TILE_HW,
         min_shard_bytes: int = 0,
+        keep_packed_data: bool = False,
     ) -> CompressedTensor:
         """Create CompressedTensor from a pre-computed BSPM assignment.
 
         Bypasses CompressedTensorAssigner — uses the provided assignment directly.
+        See :meth:`from_torch` for ``keep_packed_data``.
         """
         return cls(
             tensor,
@@ -286,6 +345,7 @@ class CompressedTensor:
             assignment_memory_config=assignment_memory_config,
             tile_hw=tile_hw,
             min_shard_bytes=min_shard_bytes,
+            keep_packed_data=keep_packed_data,
         )
 
     def to_torch(self) -> torch.Tensor:
@@ -506,7 +566,7 @@ class CompressedTensor:
     # ==================================================================
 
     def _pack_single_device(self, tensor, memory_config, assignment_memory_config, device, per_core_allocation):
-        """Pack data for a single device."""
+        """Pack data for a single device, then dispatch through :meth:`_finalize_uploads`."""
         coord0 = self._default_device_coord
         data_np = self._to_2d(tensor)
         shard_mapping = compute_shard_page_mapping(tensor.shape, memory_config, self.tile_hw)
@@ -516,6 +576,10 @@ class CompressedTensor:
             shard_mapping, self._assignment_flat
         )
         self._per_device_assignment_flat[coord0] = self._assignment_flat
+        # Single-device case: per-device shape == full shape.
+        self._per_device_tiles_h = self.tiles_h
+        self._per_device_tiles_w = self.tiles_w
+        self._per_device_shape = self.shape
 
         # Compress each shard's tiles
         shard_data, shard_data_sizes = [], []
@@ -529,61 +593,10 @@ class CompressedTensor:
             tile_formats.extend(tile_format_list)
         self._per_device_tile_formats[coord0] = tile_formats
 
-        alignment = _get_alignment(memory_config.buffer_type)
-        self.max_shard_size = max(_align(max(shard_data_sizes), alignment), alignment)
+        self._packed_shard_data[coord0] = shard_data
+        self._packed_shard_sizes[coord0] = shard_data_sizes
 
-        logical_shape = ttnn.Shape(list(tensor.shape))
-        self.spec = ttnn.TensorSpec(logical_shape, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, memory_config.buffer_type)
-
-        if per_core_allocation:
-            self._multi_device_data_per_core[coord0] = self._create_per_core_tensors(
-                shard_data,
-                shard_data_sizes,
-                _bfp_utils.get_dram_alignment(),
-                memory_config,
-                device,
-                shard_mapping,
-            )
-        else:
-            data_torch = self._concat_shards_padded(shard_data, shard_data_sizes, self.max_shard_size, memory_config)
-            data_memory_config = self._make_sharded_mem_config(memory_config, self.max_shard_size)
-            self.data = ttnn.from_torch(
-                data_torch,
-                dtype=ttnn.uint8,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=data_memory_config,
-            )
-
-        # Assignment tensor
-        if assignment_memory_config is not None:
-            assert (
-                assignment_memory_config.is_sharded()
-            ), "assignment_memory_config must be sharded when data memory_config is sharded"
-            if per_core_allocation:
-                self._multi_device_assignment_per_core[coord0] = self._create_per_core_assignment_tensors(
-                    tensor.shape,
-                    memory_config,
-                    assignment_memory_config,
-                    device,
-                    shard_mapping,
-                    self._assignment_flat,
-                )
-            else:
-                assign_bytes, assign_mem = self._pack_sharded_assignment(
-                    tensor.shape,
-                    memory_config,
-                    assignment_memory_config.buffer_type,
-                    assignment_memory_config,
-                    self._assignment_flat,
-                )
-                self.assignment = ttnn.from_torch(
-                    assign_bytes,
-                    dtype=ttnn.uint8,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=device,
-                    memory_config=assign_mem,
-                )
+        self._finalize_uploads(memory_config, assignment_memory_config, device)
 
     # ==================================================================
     # Multi-device packing
@@ -723,7 +736,7 @@ class CompressedTensor:
         return replicated
 
     def _pack_multi_device(self, tensor, memory_config, assignment_memory_config, device, per_core_allocation):
-        """Pack data for multi-device mesh. Splits tensor per device and packs independently."""
+        """Pack data for multi-device mesh, then dispatch through :meth:`_finalize_uploads`."""
         num_devices = self._num_devices
 
         # Split tensor + assignment per device
@@ -745,8 +758,8 @@ class CompressedTensor:
         self._per_device_shape = per_device_shape
 
         # Pack each device independently
-        all_shard_data = {}  # {MeshCoordinate: shard_data}
-        all_shard_sizes = {}  # {MeshCoordinate: shard_data_sizes}
+        all_shard_data = self._packed_shard_data  # {MeshCoordinate: shard_data}
+        all_shard_sizes = self._packed_shard_sizes  # {MeshCoordinate: shard_data_sizes}
 
         # Optimization: devices that differ only on replicated axes have identical data.
         # Build a reuse key from shard-axis coordinates only; pack once per unique key.
@@ -792,22 +805,311 @@ class CompressedTensor:
             self._per_device_assignment_flat[coord] = dev_assignment
             packed_cache[shard_key] = coord
 
-        # Global max shard size across all devices
+        self._finalize_uploads(memory_config, assignment_memory_config, device)
+
+    # ==================================================================
+    # Upload finalization (shared by cold pack + warm cache load)
+    # ==================================================================
+
+    def _finalize_uploads(self, memory_config, assignment_memory_config, device):
+        """Compute ``max_shard_size`` / ``spec`` and create device tensors.
+
+        Reads the post-pack byte buffers stashed on
+        ``self._packed_shard_data`` / ``self._packed_shard_sizes`` (populated
+        either by :meth:`_pack_single_device` / :meth:`_pack_multi_device`
+        on cold runs, or by :meth:`from_packed_artifacts` on warm cache
+        loads) and dispatches to the existing per-core / lockstep upload
+        helpers.
+        """
+        all_shard_data = self._packed_shard_data
+        all_shard_sizes = self._packed_shard_sizes
+        per_core_allocation = self._per_core_allocation
+
         alignment = _get_alignment(memory_config.buffer_type)
         global_max = max(sz for dev_sizes in all_shard_sizes.values() for sz in dev_sizes)
-        self.max_shard_size = _align(global_max, alignment)
+        # Single-device path historically rounded up to ``alignment`` even
+        # when the global max was smaller; preserve that floor so warm-load
+        # tensors land at byte-identical sizes.
+        if self._num_devices == 1:
+            self.max_shard_size = max(_align(global_max, alignment), alignment)
+        else:
+            self.max_shard_size = _align(global_max, alignment)
 
-        logical_shape = ttnn.Shape(list(tensor.shape))
+        logical_shape = ttnn.Shape(list(self.shape))
         self.spec = ttnn.TensorSpec(logical_shape, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, memory_config.buffer_type)
 
-        if per_core_allocation:
-            self._pack_multi_device_per_core(
-                all_shard_data, all_shard_sizes, memory_config, assignment_memory_config, device
-            )
+        if self._num_devices > 1:
+            if per_core_allocation:
+                self._pack_multi_device_per_core(
+                    all_shard_data, all_shard_sizes, memory_config, assignment_memory_config, device
+                )
+            else:
+                self._pack_multi_device_lock_step(
+                    all_shard_data, all_shard_sizes, memory_config, assignment_memory_config, device
+                )
         else:
-            self._pack_multi_device_lock_step(
-                all_shard_data, all_shard_sizes, memory_config, assignment_memory_config, device
+            coord0 = self._default_device_coord
+            shard_data = all_shard_data[coord0]
+            shard_data_sizes = all_shard_sizes[coord0]
+            shard_mapping = self._per_device_shard_mapping[coord0]
+            if per_core_allocation:
+                self._multi_device_data_per_core[coord0] = self._create_per_core_tensors(
+                    shard_data,
+                    shard_data_sizes,
+                    _bfp_utils.get_dram_alignment(),
+                    memory_config,
+                    device,
+                    shard_mapping,
+                )
+            else:
+                data_torch = self._concat_shards_padded(
+                    shard_data, shard_data_sizes, self.max_shard_size, memory_config
+                )
+                data_memory_config = self._make_sharded_mem_config(memory_config, self.max_shard_size)
+                self.data = ttnn.from_torch(
+                    data_torch,
+                    dtype=ttnn.uint8,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=device,
+                    memory_config=data_memory_config,
+                )
+
+            if assignment_memory_config is not None:
+                assert (
+                    assignment_memory_config.is_sharded()
+                ), "assignment_memory_config must be sharded when data memory_config is sharded"
+                if per_core_allocation:
+                    self._multi_device_assignment_per_core[coord0] = self._create_per_core_assignment_tensors(
+                        self.shape,
+                        memory_config,
+                        assignment_memory_config,
+                        device,
+                        shard_mapping,
+                        self._assignment_flat,
+                    )
+                else:
+                    assign_bytes, assign_mem = self._pack_sharded_assignment(
+                        self.shape,
+                        memory_config,
+                        assignment_memory_config.buffer_type,
+                        assignment_memory_config,
+                        self._assignment_flat,
+                    )
+                    self.assignment = ttnn.from_torch(
+                        assign_bytes,
+                        dtype=ttnn.uint8,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=device,
+                        memory_config=assign_mem,
+                    )
+
+        # Drop post-pack host buffers unless the caller explicitly opts in
+        # (cache cold-write path).  Without this, a ``prepare_*`` loop that
+        # accumulates dozens of CompressedTensors holds onto multi-GB of
+        # already-uploaded packed bytes for the lifetime of the layer.
+        if not self._keep_packed_data:
+            self._packed_shard_data = {}
+            self._packed_shard_sizes = {}
+
+    # ==================================================================
+    # Warm cache hydration / extraction
+    # ==================================================================
+
+    @classmethod
+    def from_packed_artifacts(
+        cls,
+        *,
+        shape,
+        assignment_flat: np.ndarray,
+        per_device_shard_data: dict,
+        per_device_assignment_flat: dict | None = None,
+        per_device_shape=None,
+        device,
+        memory_config,
+        assignment_memory_config=None,
+        per_core_allocation: bool = False,
+        mesh_mapper_config=None,
+        tile_hw: int = DEFAULT_TILE_HW,
+        min_shard_bytes: int = 0,
+    ) -> CompressedTensor:
+        """Build a :class:`CompressedTensor` from pre-packed BFP shard bytes.
+
+        Skips the (expensive) BFP pack pipeline and goes straight to device
+        upload.  Used by the SRAM hot-expert disk cache to hydrate a
+        ``CompressedTensor`` on warm runs at ``ttnn.from_torch`` cost only.
+
+        Args:
+            shape: Full ND tensor shape (matches what the cold path's
+                ``tensor.shape`` would yield).
+            assignment_flat: Flat ``int8`` row-major full-tensor assignment
+                array (``tiles_h * tiles_w`` entries).
+            per_device_shard_data: ``{MeshCoordinate: [shard0_bytes,
+                shard1_bytes, ...]}``.  Each shard's bytes are a single
+                ``np.uint8`` ndarray containing the concatenated per-tile
+                BFP packed payload (no inter-shard padding).  Empty shards
+                must use a length-0 array.
+            per_device_assignment_flat: Optional ``{MeshCoordinate:
+                np.ndarray(int8)}`` mapping with the per-device chunked
+                assignment array (matches the cold path's
+                ``self._per_device_assignment_flat[coord]`` exactly).  Must
+                be supplied when ``mesh_mapper_config`` is non-trivial; on
+                single-device builds the wrapper sets it to
+                ``{coord0: assignment_flat}`` and may pass ``None``.
+            per_device_shape: Optional per-device tensor shape (must match
+                the cold path).  Defaults to ``shape`` (single-device).
+            device, memory_config, assignment_memory_config,
+            per_core_allocation, mesh_mapper_config, tile_hw,
+            min_shard_bytes: Same semantics as the regular constructor;
+                forwarded to :meth:`_finalize_uploads`.
+
+        Returns:
+            A device-resident ``CompressedTensor`` byte-equivalent to one
+            built by ``__init__`` from the same source weights + assigner.
+        """
+        ct = cls.__new__(cls)
+        # Stage 1: metadata fields (mirrors __init__).
+        # Shape comes from the cache; assignment must already be the same
+        # int8 array the assigner produced on cold pack.
+        assignment_arr = np.asarray(assignment_flat, dtype=np.int8)
+        h = 1
+        for d in tuple(shape)[:-1]:
+            h *= int(d)
+        tiles_h = h // tile_hw
+        tiles_w = int(shape[-1]) // tile_hw
+        ct._init_fields(
+            shape=shape,
+            assignment=assignment_arr.reshape(tiles_h, tiles_w),
+            memory_config=memory_config,
+            tile_hw=tile_hw,
+            min_shard_bytes=min_shard_bytes,
+            per_core_allocation=per_core_allocation,
+            mesh_mapper_config=mesh_mapper_config,
+            keep_packed_data=False,
+        )
+
+        # Stage 2: derive per-device geometry that the upload helpers expect.
+        if mesh_mapper_config is not None and device is not None:
+            num_devices = device.get_num_devices()
+        else:
+            num_devices = 1
+        ct._num_devices = num_devices
+        ct._mesh_shape = device.shape if device is not None else None
+
+        # Resolve per-device shape (single-device == full shape).
+        pds = tuple(int(d) for d in (per_device_shape or shape))
+        per_device_2d_h = 1
+        for d in pds[:-1]:
+            per_device_2d_h *= d
+        ct._per_device_tiles_h = per_device_2d_h // tile_hw
+        ct._per_device_tiles_w = pds[-1] // tile_hw
+        ct._per_device_shape = pds
+
+        # Per-device assignments: default to full assignment for every coord
+        # (right answer for replicate / single-device).  Caller must pass an
+        # explicit dict for true mesh-shard cases.
+        if per_device_assignment_flat is None:
+            per_device_assignment_flat = {coord: ct._assignment_flat for coord in ct._iter_mesh_coords()}
+
+        # Populate per-device dicts from cached bytes.
+        for coord, shards in per_device_shard_data.items():
+            shard_mapping = compute_shard_page_mapping(pds, memory_config, tile_hw)
+            assignment_flat_for_dev = np.asarray(per_device_assignment_flat[coord], dtype=np.int8)
+            ct._per_device_shard_mapping[coord] = shard_mapping
+            ct._per_device_assignment_flat[coord] = assignment_flat_for_dev
+            ct._per_device_core_assignment[coord] = ct._build_core_assignment_from(
+                shard_mapping, assignment_flat_for_dev
             )
+
+            # Re-derive ``tile_formats`` (mantissa-bits per tile, in
+            # shard-major + slot order) from the per-device assignment +
+            # shard mapping so the unpack/inspection paths see the same
+            # layout the cold pack would have produced.
+            tile_formats: list[int] = []
+            shard_sizes: list[int] = []
+            for _core, page_indices in shard_mapping:
+                shard_total = 0
+                for page_idx in page_indices:
+                    fmt = _FMT_IDX_TO_MANT_BITS[int(assignment_flat_for_dev[page_idx])]
+                    tile_formats.append(fmt)
+                    shard_total += bfp_tile_packed_size(fmt)
+                shard_sizes.append(shard_total)
+            ct._per_device_tile_formats[coord] = tile_formats
+
+            # Validate cached bytes against re-derived shard sizes — guards
+            # against fingerprint collisions that would silently corrupt
+            # weights on warm runs.
+            assert len(shards) == len(
+                shard_sizes
+            ), f"Cached shard count {len(shards)} != expected {len(shard_sizes)} for coord {coord}"
+            for i, (cached_bytes, expected_size) in enumerate(zip(shards, shard_sizes)):
+                arr = np.asarray(cached_bytes, dtype=np.uint8).ravel()
+                if expected_size == 0:
+                    assert (
+                        arr.size == 0
+                    ), f"Cached shard {i} on coord {coord} has {arr.size} bytes, expected 0 (assignment-derived)"
+                else:
+                    assert arr.size == expected_size, (
+                        f"Cached shard {i} on coord {coord} has {arr.size} bytes, "
+                        f"expected {expected_size} from assignment-derived format codes"
+                    )
+
+            # Wrap each shard's bytes as ``[ndarray]`` — the upload helpers
+            # iterate over per-shard byte lists and ``np.concatenate`` them
+            # before sending to ``ttnn.from_torch``; a single-element list
+            # is bitwise-identical to the cold path's per-tile list.
+            ct._packed_shard_data[coord] = [[np.asarray(b, dtype=np.uint8).ravel()] for b in shards]
+            ct._packed_shard_sizes[coord] = shard_sizes
+
+        # Stage 3: device upload — same code path as the cold pack.
+        ct._finalize_uploads(memory_config, assignment_memory_config, device)
+        return ct
+
+    def extract_packed_artifacts(self, *, drop: bool = True) -> dict:
+        """Return cache-ready post-pack byte buffers, optionally dropping the host copy.
+
+        Mirror image of :meth:`from_packed_artifacts`: produces a flat dict
+        the SRAM disk cache can serialize after a cold pack.  When
+        ``drop=True`` (the default), the in-memory copies on
+        ``self._packed_shard_data`` / ``self._packed_shard_sizes`` are
+        cleared so the caller can write to disk and immediately release the
+        host buffers; pass ``drop=False`` to inspect the artifacts without
+        invalidating the live tensor.
+        """
+        per_device = {}
+        for coord, shard_data in self._packed_shard_data.items():
+            # Each entry in ``shard_data`` is a list of per-tile
+            # ``np.ndarray`` views into the batched packer's output.
+            # Concatenate to one contiguous bytes buffer per shard for
+            # storage; round-trip back through ``from_packed_artifacts``
+            # produces the same downstream device tensors.
+            shards_concat: list[np.ndarray] = []
+            for tiles in shard_data:
+                if not tiles:
+                    shards_concat.append(np.empty(0, dtype=np.uint8))
+                elif len(tiles) == 1:
+                    shards_concat.append(np.asarray(tiles[0], dtype=np.uint8).ravel())
+                else:
+                    shards_concat.append(np.concatenate([np.asarray(t, dtype=np.uint8).ravel() for t in tiles]))
+            per_device[coord] = {
+                "shard_bytes": shards_concat,
+                "shard_sizes": list(self._packed_shard_sizes[coord]),
+                "assignment_flat": self._per_device_assignment_flat[coord].astype(np.int8).copy(),
+            }
+
+        artifacts = {
+            "shape": tuple(int(d) for d in self.shape),
+            "tile_hw": self.tile_hw,
+            "assignment_flat": self._assignment_flat.astype(np.int8).copy(),
+            "per_device_shape": tuple(int(d) for d in self._per_device_shape) or tuple(int(d) for d in self.shape),
+            "mesh_shape": tuple(int(self._mesh_shape[i]) for i in range(self._mesh_shape.dims()))
+            if self._mesh_shape is not None
+            else None,
+            "per_device": per_device,
+        }
+        if drop:
+            self._packed_shard_data = {}
+            self._packed_shard_sizes = {}
+        return artifacts
 
     def _pack_multi_device_lock_step(
         self, all_shard_data, all_shard_sizes, memory_config, assignment_memory_config, device
@@ -1086,15 +1388,85 @@ class CompressedTensor:
 
     @staticmethod
     def _compress_shard(data_np, page_indices, assignment_flat, tiles_w, tile_hw):
-        """Compress all tiles for one shard. Returns (tile_data_list, tile_format_list, total_bytes)."""
-        tile_data_list, tile_format_list, total_bytes = [], [], 0
-        for page_idx in page_indices:
-            tile_data, tile_format = CompressedTensor._compress_tile(
-                data_np, page_idx, assignment_flat, tiles_w, tile_hw
+        """Compress all tiles for one shard. Returns (tile_data_list, tile_format_list, total_bytes).
+
+        Tiles are grouped by their assigned format (mantissa bits) and each
+        format group is packed in a single batched ``pack_as_bfpN_tiles``
+        call.  The C++ packer (``tt_metal/impl/data_format/blockfloat_common.cpp``)
+        accepts an arbitrary-length flat float32 buffer, processes one tile
+        at a time internally, and emits the packed bytes in tile-major
+        order at exactly ``bfp_tile_packed_size(fmt)`` bytes per tile.
+        Splitting that output back into per-tile chunks reproduces the
+        original per-tile ``pack_bfp_tile`` output byte-for-byte while
+        collapsing one Python↔C++ crossing per tile down to one per
+        (shard, format) group — typically 1× for single-format SRAM hot
+        experts, ≤4× for mixed-format BSPM.
+        """
+        n = len(page_indices)
+        tile_data_list: list = [None] * n
+        tile_format_list: list = [None] * n
+        total_bytes = 0
+        tile_elems = tile_hw * tile_hw
+
+        # Group slots by tile format (mantissa bits).
+        by_fmt: dict[int, list[tuple[int, int]]] = {}
+        for slot, page_idx in enumerate(page_indices):
+            fmt = _FMT_IDX_TO_MANT_BITS[int(assignment_flat[page_idx])]
+            by_fmt.setdefault(fmt, []).append((slot, int(page_idx)))
+
+        for fmt, members in by_fmt.items():
+            if fmt == 0:
+                # bfp0: zero-byte tile; no pack needed.
+                empty = np.array([], dtype=np.uint8)
+                for slot, _ in members:
+                    tile_data_list[slot] = empty
+                    tile_format_list[slot] = 0
+                continue
+
+            # Stack tiles into one (n_tiles * tile_hw * tile_hw,) flat
+            # float32 buffer in row-major-per-tile order.  ``data_np`` is
+            # already float32 (from ``_to_2d``) so no dtype conversion is
+            # needed here.
+            n_tiles = len(members)
+            tiles_flat = np.empty(n_tiles * tile_elems, dtype=np.float32)
+            for k, (_, page_idx) in enumerate(members):
+                tr = page_idx // tiles_w
+                tc = page_idx % tiles_w
+                tiles_flat[k * tile_elems : (k + 1) * tile_elems] = data_np[
+                    tr * tile_hw : (tr + 1) * tile_hw,
+                    tc * tile_hw : (tc + 1) * tile_hw,
+                ].ravel()
+
+            # One batched C++ pack call for all tiles of this format.
+            # Note: the binding holds the Python GIL for the duration of the
+            # pack, so multi-threading at the Python level (Option E-Python)
+            # does not help.  For cold-run pack speedups, the win has to land
+            # inside the C++ packer (OpenMP inside ``pack_as_bfpN_tiles``);
+            # for warm runs the SRAM compressed-tensor disk cache (Option H,
+            # see ``weights/cache/sram_compressed_cache.py``) skips this step
+            # entirely.
+            pack_fn = _PACK_FN[fmt]
+            packed_u32 = np.asarray(pack_fn(tiles_flat, row_major_input=True))
+            packed_bytes = packed_u32.view(np.uint8)
+            per_tile_bytes = bfp_tile_packed_size(fmt)
+            assert packed_bytes.size == per_tile_bytes * n_tiles, (
+                f"Batched pack size mismatch: got {packed_bytes.size} bytes, "
+                f"expected {per_tile_bytes * n_tiles} ({n_tiles} tiles × {per_tile_bytes})"
             )
-            tile_data_list.append(tile_data)
-            tile_format_list.append(tile_format)
-            total_bytes += len(tile_data)
+
+            # Slice the batched output and assign per-tile views back at
+            # the original slots.  The slices share memory with
+            # ``packed_u32``; numpy keeps the base array alive via the
+            # views' ``base`` chain, so the C++-allocated buffer stays
+            # valid for the lifetime of any slice referenced by the
+            # caller.  Downstream consumers (``_concat_shards_padded``,
+            # ``_create_per_core_tensors``) iterate or concatenate these
+            # arrays and don't require independently-owned memory.
+            for k, (slot, _) in enumerate(members):
+                tile_data_list[slot] = packed_bytes[k * per_tile_bytes : (k + 1) * per_tile_bytes]
+                tile_format_list[slot] = fmt
+                total_bytes += per_tile_bytes
+
         return tile_data_list, tile_format_list, total_bytes
 
     @staticmethod

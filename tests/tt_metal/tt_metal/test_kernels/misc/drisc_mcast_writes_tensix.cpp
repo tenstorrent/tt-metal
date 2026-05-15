@@ -7,11 +7,11 @@
 // 2. Double buffered DRISC L1 reads from DRAM over DMA and unicast to Tensix L1 (using TRIDs).
 //    We measure max possible bandwidth using this test
 
-#include "experimental/noc.h"
+#include "api/dataflow/noc.h"
 #include "experimental/drisc_mode.h"
 #include "experimental/gddr_dma.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     const uint32_t src_gddr_addr = get_arg_val<uint32_t>(0);
@@ -24,14 +24,14 @@ void kernel_main() {
     const uint32_t num_bytes = get_arg_val<uint32_t>(7);
     const uint32_t num_subordinates = get_arg_val<uint32_t>(8);
 
-    experimental::Noc noc;
-    experimental::UnicastEndpoint src;
+    Noc noc;
+    UnicastEndpoint src;
     // Stream mode: required for DRISC to initiate NOC traffic and for
     // remote cores to reach DRISC L1 over NOC.
     experimental::drisc_set_stream_mode();
 
 #if defined(MULTICAST)
-    experimental::MulticastEndpoint dst;
+    MulticastEndpoint dst;
     // Read chunk from GDDR into DRISC L1
     constexpr uint8_t tx_stream = 0;
     experimental::dma_async_read(tx_stream, src_gddr_addr, drisc_l1_addr, num_bytes);
@@ -52,7 +52,7 @@ void kernel_main() {
     noc.async_write_barrier();
 #else
     const uint32_t total_iters = get_arg_val<uint32_t>(9);
-    experimental::UnicastEndpoint dst;
+    UnicastEndpoint dst;
     // Single-stream double-buffered: both halves share stream 0 and are
     // pipelined via two pre-fired DMA reads
     constexpr uint8_t tx_stream = 0;
@@ -82,8 +82,8 @@ void kernel_main() {
     // Maintains 2 outstanding DMAs throughout (interleaved consume/refill)
     for (uint32_t i = 0; i < total_iters - 1; i++) {
         experimental::dma_async_read_wait_n(tx_stream, 1);                        // A[i] ready (oldest)
-        noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(trid_A);  // prev A acked
-        noc.async_write<experimental::Noc::TxnIdMode::ENABLED>(
+        noc.async_write_barrier<Noc::BarrierMode::TXN_ID>(trid_A);  // prev A acked
+        noc.async_write<Noc::TxnIdMode::ENABLED>(
             src,
             dst,
             half_buffer_bytes,
@@ -91,13 +91,13 @@ void kernel_main() {
             {.noc_x = tensix_noc_x_start, .noc_y = tensix_noc_y_start, .addr = tensix_dst_A},
             NOC_UNICAST_WRITE_VC,
             trid_A);
-        noc.async_writes_flushed<experimental::Noc::ResponseMode::NON_POSTED, experimental::Noc::BarrierMode::TXN_ID>(
+        noc.async_writes_flushed<Noc::ResponseMode::NON_POSTED, Noc::BarrierMode::TXN_ID>(
             trid_A);
         experimental::dma_async_read(tx_stream, src_A, dst_A, half_buffer_bytes);  // refill A
 
         experimental::dma_async_read_wait_n(tx_stream, 1);                        // B[i] ready (oldest now)
-        noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(trid_B);  // prev B acked
-        noc.async_write<experimental::Noc::TxnIdMode::ENABLED>(
+        noc.async_write_barrier<Noc::BarrierMode::TXN_ID>(trid_B);  // prev B acked
+        noc.async_write<Noc::TxnIdMode::ENABLED>(
             src,
             dst,
             half_buffer_bytes,
@@ -105,7 +105,7 @@ void kernel_main() {
             {.noc_x = tensix_noc_x_start, .noc_y = tensix_noc_y_start, .addr = tensix_dst_B},
             NOC_UNICAST_WRITE_VC,
             trid_B);
-        noc.async_writes_flushed<experimental::Noc::ResponseMode::NON_POSTED, experimental::Noc::BarrierMode::TXN_ID>(
+        noc.async_writes_flushed<Noc::ResponseMode::NON_POSTED, Noc::BarrierMode::TXN_ID>(
             trid_B);
         experimental::dma_async_read(tx_stream, src_B, dst_B, half_buffer_bytes);  // refill B
         src_A += num_bytes;
@@ -114,8 +114,8 @@ void kernel_main() {
 
     // Final A: oldest of the two outstanding reads is A[last].
     experimental::dma_async_read_wait_n(tx_stream, 1);                        // A[last] ready
-    noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(trid_A);  // prev A acked
-    noc.async_write<experimental::Noc::TxnIdMode::ENABLED>(
+    noc.async_write_barrier<Noc::BarrierMode::TXN_ID>(trid_A);  // prev A acked
+    noc.async_write<Noc::TxnIdMode::ENABLED>(
         src,
         dst,
         half_buffer_bytes,
@@ -126,8 +126,8 @@ void kernel_main() {
 
     // Final B: drain the remaining outstanding read.
     experimental::dma_async_read_wait_n(tx_stream, 0);                        // B[last] ready
-    noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(trid_B);  // prev B acked
-    noc.async_write<experimental::Noc::TxnIdMode::ENABLED>(
+    noc.async_write_barrier<Noc::BarrierMode::TXN_ID>(trid_B);  // prev B acked
+    noc.async_write<Noc::TxnIdMode::ENABLED>(
         src,
         dst,
         half_buffer_bytes,
@@ -137,13 +137,13 @@ void kernel_main() {
         trid_B);
 
     // Drain: wait for the final two NOC writes to be acked.
-    noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(trid_A);
-    noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(trid_B);
+    noc.async_write_barrier<Noc::BarrierMode::TXN_ID>(trid_A);
+    noc.async_write_barrier<Noc::BarrierMode::TXN_ID>(trid_B);
 
     uint64_t end = get_timestamp();
     uint64_t total_time = end - start;
     // Timing stored immediately after data buffer. Host reads at drisc_l1_addr + num_bytes
-    experimental::CoreLocalMem<uint64_t> total_time_res(drisc_l1_addr);
+    CoreLocalMem<uint64_t> total_time_res(drisc_l1_addr);
     uint32_t offset = num_bytes / sizeof(uint64_t);
     total_time_res[offset] = total_time;
 #endif

@@ -7,13 +7,13 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t num_rows = get_compile_time_arg_val(0);
 
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb16(tt::CBIndex::c_16);
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
 

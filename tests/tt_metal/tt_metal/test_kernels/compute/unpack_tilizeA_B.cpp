@@ -7,7 +7,7 @@
 #include "api/compute/tilize.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/debug/dprint_tensix.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 // #include "api/debug/dprint.h"
 inline void tilizeA_B_binary_init(
@@ -26,9 +26,9 @@ void kernel_main() {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
 
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb1(tt::CBIndex::c_1);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb1(tt::CBIndex::c_1);
+    CircularBuffer cb16(tt::CBIndex::c_16);
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     tilizeA_B_binary_init(tt::CBIndex::c_0, tt::CBIndex::c_1, per_core_block_tile_cnt, tt::CBIndex::c_16);

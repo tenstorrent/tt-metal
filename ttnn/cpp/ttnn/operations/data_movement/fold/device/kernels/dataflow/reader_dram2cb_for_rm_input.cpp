@@ -20,7 +20,7 @@ void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     const auto s_in = TensorAccessor(src_args, src_addr);
 
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB cb_in0(cb_id_in0);
 
     uint32_t src_index = get_arg_val<uint32_t>(1);

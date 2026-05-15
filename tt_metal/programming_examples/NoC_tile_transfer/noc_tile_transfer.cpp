@@ -58,7 +58,7 @@ int main() {
 
     // Source data preparation and DRAM transfer
     const uint16_t input_data = 14;  // Example input data
-    std::vector<uint16_t> src_vec(1, input_data);
+    std::vector<uint16_t> src_vec(buffer_config.size / sizeof(uint16_t), input_data);
     distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, false);
 
     // L1 circular buffer setup

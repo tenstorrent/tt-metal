@@ -112,12 +112,36 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          ${{ matrix.test-group.cmd }}
+          mkdir -p generated/test_logs
+          # tee combined stdout+stderr to a per-leg .log for ai-summary.
+          # Brace group: cmd may be multiple shell statements.
+          # PIPESTATUS: preserve real exit code (tee would mask it).
+          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' /' '__')
+          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
+          {
+            ${{ matrix.test-group.cmd }}
+          } 2>&1 | tee "$LOG_FILE"
+          exit ${PIPESTATUS[0]}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -125,3 +149,39 @@ jobs:
           prefix: "test_reports_"
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+
+  ai-run-summary:
+    name: "AI Run Summary"
+    needs: [load-test-matrix, galaxy-deepseek-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: ${{ needs.load-test-matrix.outputs.matrix }}
+          run-result: ${{ needs.galaxy-deepseek-tests.result }}
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi

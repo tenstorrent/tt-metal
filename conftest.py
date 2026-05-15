@@ -3,28 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-import pytest
-import torch
-import random
+import json
 import os
-import numpy as np
+import random
+import subprocess
+from datetime import datetime
 from functools import partial
 from operator import contains, eq, getitem
 from pathlib import Path
-import json
-import multiprocess
-from queue import Empty
-import signal
-import time
-import psutil
-import subprocess
-from datetime import datetime
 
+import numpy as np
+import pytest
+import torch
 from loguru import logger
 
 from models.tt_transformers.demo.trace_region_config import get_supported_trace_region_size
-from tests.scripts.common import run_process_and_get_result
-from tests.scripts.common import get_updated_device_params
+from tests.scripts.common import get_updated_device_params, run_process_and_get_result
 
 # Constants for device configurations
 SIX_U_NUM_PCIE_DEVICES = 32
@@ -912,21 +906,6 @@ def pytest_addoption(parser):
         default=None,
         help="Size of chip grid for the test to run on. Grid size is defined by number of cores in row x number of cores in column, e.g., 8x8",
     )
-    parser.addoption(
-        "--trace-params",
-        action="store_true",
-        default=False,
-        help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files). By default, only tensor metadata is saved. To include tensor values, call ttnn.operation_tracer.enable_tensor_value_serialization(True). See tech_reports/ttnn/operation-tracing.md for details.",
-    )
-
-
-def pytest_configure(config):
-    """Set a flag in ttnn.operation_tracer when --trace-params is enabled."""
-    if config.getoption("--trace-params", default=False):
-        # Set a module-level flag that can be checked by operation_tracer
-        import ttnn.operation_tracer
-
-        ttnn.operation_tracer._ENABLE_TRACE = True
 
 
 @pytest.fixture

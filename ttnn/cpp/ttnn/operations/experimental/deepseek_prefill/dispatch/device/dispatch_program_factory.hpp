@@ -22,6 +22,8 @@ struct DispatchSharedVariables {
     std::vector<CoreCoord> cores;
     std::vector<CoreCoord> idle_cores;
     GlobalSemaphore init_semaphore;          // Initialized in create_at()
+    GlobalSemaphore exit_semaphore;          // Separate sem for the exit handshake (avoids
+                                             // init/exit reuse race; mirrors combine fix)
     GlobalSemaphore cross_device_semaphore;  // Initialized in create_at()
     std::vector<uint32_t> data_ready_semaphore_ids;
     std::vector<uint32_t> start_semaphore_ids;
@@ -45,6 +47,7 @@ struct DispatchProgramFactory {
         tensor_return_value_t& tensor_return_value,
         const MeshCoordinateRangeSet& tensor_coords,
         const GlobalSemaphore& init_semaphore,
+        const GlobalSemaphore& exit_semaphore,
         const GlobalSemaphore& cross_device_semaphore);
 
     static void override_runtime_arguments(

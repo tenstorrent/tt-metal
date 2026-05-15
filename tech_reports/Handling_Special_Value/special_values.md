@@ -70,7 +70,6 @@ ALWI uint32_t get_compute_special_value_flags()
 ALWI uint32_t get_compute_special_value_flags_fpu(uint32_t special_value_flags_reg)
 ALWI uint32_t get_compute_special_value_flags_sfpu(uint32_t special_value_flags_reg)
 ALWI void clear_compute_special_value_flags()
-ALWI void store_compute_special_value_flags_to_l1(uint32_t l1_addr)
 ```
 All APIs execute on MATH thread only (trisc1).
 

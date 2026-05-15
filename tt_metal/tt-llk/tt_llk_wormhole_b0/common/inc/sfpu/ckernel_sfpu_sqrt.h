@@ -119,14 +119,11 @@ inline void _calculate_sqrt_internal_(const int iterations)
     for (int d = 0; d < iterations; d++)
     {
         sfpi::vFloat tmp = _calculate_sqrt_body_<APPROXIMATION_MODE, RECIPROCAL, FAST_APPROX>(sfpi::dst_reg[0]);
-        if constexpr (fp32_dest_acc_en)
+        if constexpr (!fp32_dest_acc_en)
         {
-            sfpi::dst_reg[0] = tmp;
+            tmp = sfpi::convert<sfpi::vFloat16b>(tmp, sfpi::RoundMode::NearestEven);
         }
-        else
-        {
-            sfpi::dst_reg[0] = sfpi::float_to_fp16b(tmp, sfpi::RoundMode::NearestEven);
-        }
+        sfpi::dst_reg[0] = tmp;
         sfpi::dst_reg++;
     }
 }

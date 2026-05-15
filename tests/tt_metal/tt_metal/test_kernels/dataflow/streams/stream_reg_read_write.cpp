@@ -6,8 +6,12 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
+#include "experimental/drisc_mode.h"
 
 void kernel_main() {
+#ifdef COMPILE_FOR_DRISC
+    experimental::drisc_set_stream_mode();
+#endif
     uint32_t target_noc_x = get_arg_val<uint32_t>(0);
     uint32_t target_noc_y = get_arg_val<uint32_t>(1);
     uint32_t stream_id = get_arg_val<uint32_t>(2);
@@ -24,4 +28,8 @@ void kernel_main() {
     // Read back value that was written, store in L1 of this core for host to validate
     noc_async_read(dest_addr, l1_write_addr, 4);
     noc_async_read_barrier();
+
+#ifdef COMPILE_FOR_DRISC
+    experimental::drisc_set_noc2axi_mode();
+#endif
 }

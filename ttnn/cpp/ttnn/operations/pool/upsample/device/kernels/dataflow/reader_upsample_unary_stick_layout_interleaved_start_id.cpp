@@ -18,7 +18,7 @@ void kernel_main() {
     const auto s0 = TensorAccessor(src_args, src_addr);
 
     experimental::CB in_cb(cb_id_in0);
-    experimental::Noc noc;
+    Noc noc;
 
     const uint32_t end_id = start_page_id + num_pages;
 

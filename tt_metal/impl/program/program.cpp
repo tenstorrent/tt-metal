@@ -326,6 +326,9 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
         std::unordered_map<std::string, uint32_t> named_compile_args(
             kernel_descriptor.named_compile_time_args.begin(), kernel_descriptor.named_compile_time_args.end());
 
+        std::vector<std::filesystem::path> compiler_include_paths(
+            kernel_descriptor.compiler_include_paths.begin(), kernel_descriptor.compiler_include_paths.end());
+
         auto config = std::visit(
             tt::stl::overloaded{
                 [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
@@ -333,14 +336,16 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         std::move(compile_args),
                         std::move(defines),
                         std::move(named_compile_args),
-                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
+                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                        std::move(compiler_include_paths)};
                 },
                 [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return WriterDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
                         std::move(named_compile_args),
-                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
+                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                        std::move(compiler_include_paths)};
                 },
                 [&](const DataMovementConfigDescriptor& dm_descriptor)
                     -> std::variant<DataMovementConfig, ComputeConfig> {
@@ -352,6 +357,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                        .compiler_include_paths = std::move(compiler_include_paths),
                     };
                 },
                 [&](const ComputeConfigDescriptor& compute_descriptor)
@@ -367,6 +373,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
+                        .compiler_include_paths = std::move(compiler_include_paths),
                     };
                 },
             },
@@ -525,6 +532,36 @@ std::vector<KernelSpecName> ProgramImpl::get_registered_kernel_names() const {
     if (metal2_registry_) {
         names.reserve(metal2_registry_->kernel_handles.size());
         for (const auto& [name, handle] : metal2_registry_->kernel_handles) {
+            names.push_back(name);
+        }
+    }
+    return names;
+}
+
+void ProgramImpl::register_tensor_parameter(const std::string& name, const TensorSpec& spec) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(name, spec);
+    TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
+}
+
+const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& name) const {
+    if (!metal2_registry_) {
+        return nullptr;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() const {
+    std::vector<std::string> names;
+    if (metal2_registry_) {
+        names.reserve(metal2_registry_->tensor_parameter_layouts.size());
+        for (const auto& [name, spec] : metal2_registry_->tensor_parameter_layouts) {
             names.push_back(name);
         }
     }
@@ -1434,11 +1471,9 @@ uint32_t detail::ProgramImpl::create_semaphore(const CoreRangeSet& crs, uint32_t
         MetalContext::instance().is_coord_in_range(crs.ranges().back().end_coord, core_type),
         "Coordinates out of range");
 
-    // The allocated ID must be free on every core in crs. Find the max ID that's free on each
-    // range (they each return the smallest free ID on their cores) and use that everywhere.
     std::optional<uint32_t> semaphore_id;
+    std::bitset<NUM_SEMAPHORES> used_semaphore_ids;
     for (const auto& core_range : crs.ranges()) {
-        std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 CoreCoord logical_core(x, y);
@@ -1450,21 +1485,22 @@ uint32_t detail::ProgramImpl::create_semaphore(const CoreRangeSet& crs, uint32_t
                         NUM_SEMAPHORES);
                 }
                 for (const auto& semaphore : existing) {
-                    semaphore_histogram[semaphore.get().id()]++;
+                    used_semaphore_ids.set(semaphore.get().id());
                 }
             }
         }
-        std::optional<uint32_t> candidate;
-        for (uint32_t sem_id = 0; sem_id < semaphore_histogram.size(); sem_id++) {
-            if (semaphore_histogram[sem_id] == 0) {
-                candidate = sem_id;
-                break;
-            }
-        }
-        TT_FATAL(candidate.has_value(), "Unable to initialize semaphores on core range {}", core_range.str());
-        semaphore_id = semaphore_id.has_value() ? std::max(*semaphore_id, *candidate) : candidate;
     }
-    TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
+    for (uint32_t sem_id = 0; sem_id < NUM_SEMAPHORES; sem_id++) {
+        if (!used_semaphore_ids.test(sem_id)) {
+            semaphore_id = sem_id;
+            break;
+        }
+    }
+    TT_FATAL(
+        semaphore_id.has_value(),
+        "Unable to initialize semaphore on CoreRangeSet {}: all {} IDs are in use",
+        crs.str(),
+        NUM_SEMAPHORES);
 
     this->add_semaphore(crs, *semaphore_id, initial_value, core_type);
     return *semaphore_id;
