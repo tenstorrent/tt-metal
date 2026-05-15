@@ -4,60 +4,50 @@
   <meta charset="utf-8">
   <title>DFlash tt-metal Bringup Tests</title>
   <style>
-    @page { size: A4 portrait; margin: 8mm 10mm 8mm 10mm; }
+    @page { size: A4 portrait; margin: 6mm 8mm 6mm 8mm; }
     html, body { margin: 0; padding: 0; }
     body {
       background: #fffff8;
       color: #111;
       font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Cambria, Georgia, serif;
-      font-size: 8.15pt;
-      line-height: 1.22;
+      font-size: 8pt;
+      line-height: 1.1;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
-    main { display: grid; grid-template-columns: 1.58fr 1fr; column-gap: 6mm; }
-    h1 { margin: 0 0 1.2mm; font-size: 17pt; line-height: 1.03; font-weight: normal; }
-    h2 { margin: 3mm 0 1mm; font-size: 10.4pt; font-weight: normal; font-style: italic; }
-    p { margin: 0 0 1.2mm; }
+    h1 { margin: 0 0 0.7mm; font-size: 16pt; line-height: 1.02; font-weight: normal; }
+    h2 { margin: 1.5mm 0 0.65mm; font-size: 9.5pt; font-weight: normal; font-style: italic; }
+    p { margin: 0 0 0.75mm; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.84em; }
+    main { display: grid; grid-template-columns: 1.78fr 0.88fr; column-gap: 4.5mm; }
     .meta {
       border-top: 0.4pt solid #111;
       border-bottom: 0.4pt solid #999;
-      padding: 1mm 0;
-      margin-bottom: 2.5mm;
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(5, 1fr);
       gap: 2mm;
-      font-size: 7.3pt;
+      margin-bottom: 1.5mm;
+      padding: 0.65mm 0;
+      font-size: 6.9pt;
     }
     .label { font-variant: small-caps; letter-spacing: 0.03em; color: #555; }
-    .accent { color: #8a1a1a; }
-    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.86em; }
-    table { width: 100%; border-collapse: collapse; margin: 0.7mm 0 1.5mm; }
-    th, td { border-bottom: 0.25pt solid #c8c3ac; padding: 0.55mm 0.8mm 0.45mm 0; vertical-align: top; }
-    thead th {
-      border-top: 0.45pt solid #555;
-      border-bottom: 0.45pt solid #555;
-      font-weight: normal;
-      font-style: italic;
-      color: #333;
-    }
-    .tight td { padding-top: 0.38mm; padding-bottom: 0.32mm; }
-    .aside {
-      border-left: 1.5pt solid #d9b56f;
-      padding-left: 2mm;
-      color: #333;
-    }
+    .aside { border-left: 1.4pt solid #d9b56f; padding-left: 2mm; color: #333; }
     .aside h2 { margin-top: 0; }
-    .note { color: #555; font-size: 7.35pt; }
-    .workstream { border-left: 2pt solid var(--c); padding-left: 1.4mm; }
+    .note { color: #555; font-size: 6.9pt; line-height: 1.08; }
+    table { width: 100%; border-collapse: collapse; margin: 0.45mm 0 0.85mm; }
+    th, td { border-bottom: 0.25pt solid #c8c3ac; padding: 0.26mm 0.5mm 0.22mm 0; vertical-align: top; }
+    thead th { border-top: 0.45pt solid #555; border-bottom: 0.45pt solid #555; font-weight: normal; font-style: italic; }
+    .test { border-left: 1.8pt solid var(--c); padding-left: 1.1mm; }
     .host { --c: #9fc7df; }
     .stage { --c: #a8d4a5; }
     .combo { --c: #c5addd; }
-    .report { --c: #efb1b5; }
-    .checks { --c: #f1c27d; }
-    ul { margin: 0.4mm 0 1.2mm 3.2mm; padding: 0; }
-    li { margin: 0.25mm 0; }
-    .small { font-size: 7.25pt; line-height: 1.16; }
+    .setup { --c: #f1c27d; }
+    .risk { --c: #efb1b5; }
+    .ok { color: #1b6b36; font-weight: normal; }
+    .bad { color: #8a1a1a; font-weight: normal; }
+    ul { margin: 0.25mm 0 0.75mm 2.7mm; padding: 0; }
+    li { margin: 0.13mm 0; }
+    .small { font-size: 7.1pt; line-height: 1.13; }
   </style>
 </head>
 <body>
@@ -65,123 +55,105 @@
   <div class="meta">
     <div><span class="label">Approach</span><br><code>dflash</code></div>
     <div><span class="label">Target</span><br><code>moonshotai/Kimi-K2.5</code></div>
+    <div><span class="label">Drafter</span><br><code>z-lab/Kimi-K2.5-DFlash</code></div>
     <div><span class="label">Branch</span><br><code>jrock/agent-dflash_block_diffusion-tests</code></div>
-    <div><span class="label">Base</span><br><code>origin/main@7aa26e4b1f</code></div>
+    <div><span class="label">Test tip</span><br><code>d6ef3245df</code></div>
   </div>
 
   <main>
     <section>
-      <h2>evidence trail</h2>
+      <h2>remote golden run</h2>
       <p>
-        The golden implementation at
-        <code>/Users/jrock/repos/flows/spec-decode-paper-reproduction/dflash_block_diffusion_agent_23/golden_dflash_block_diffusion_agent_23</code>
-        identifies Kimi-K2.5 target execution and a DFlash drafter reference
-        (<code>z-lab/Kimi-K2.5-DFlash</code>). The tt-metal checkout is
-        <code>/Users/jrock/agent/28/tt-metal</code>.
+        The 128-token DFlash GPU reference was copied to
+        <code>/proj_sw/user_dev/jrock/agent/tt-metal</code> and run with real pytest.
+        <span class="ok">6 passed</span>, 6 pipeline cases deselected. Wall clock:
+        <code>6.641s</code>; pytest runtime: <code>5.10s</code>.
       </p>
-      <table class="tight">
-        <thead><tr><th>work</th><th>path</th><th>reference</th><th>commit</th></tr></thead>
-        <tbody>
-          <tr class="workstream host">
-            <td>host replay</td>
-            <td><code>tests/unit_tests/test_dflash_decode_manager_logic.py</code></td>
-            <td><code>reference_kimi_k2_5_dflash.pt</code>; golden host replay</td>
-            <td><code>this commit</code></td>
-          </tr>
-          <tr class="workstream combo">
-            <td>combined drafter</td>
-            <td><code>tests/unit_tests/test_dflash_combined_drafter.py</code></td>
-            <td><code>reference_kimi_k2_5_dflash.pt</code>; captured full-config run</td>
-            <td><code>this commit</code></td>
-          </tr>
-          <tr class="workstream combo">
-            <td>full drafter</td>
-            <td><code>tests/unit_tests/test_dflash_full_drafter.py</code></td>
-            <td><code>reference_kimi_k2_5_dflash.pt</code>; local full-config GPU capture</td>
-            <td><code>this commit</code></td>
-          </tr>
-        </tbody>
-      </table>
-
-      <h2>stage mapping</h2>
       <table>
-        <thead>
-          <tr><th>stage</th><th>test</th><th>golden boundary</th><th>reference</th><th>commit</th></tr>
-        </thead>
+        <thead><tr><th>test</th><th>what it verifies</th><th>status</th><th>call time</th></tr></thead>
         <tbody>
-          <tr class="workstream stage">
-            <td><code>pre_decoder_fused</code></td>
-            <td><code>test_dflash_stage_pre_decoder_fused.py</code></td>
-            <td><code>golden_pre_decoder_fused_stages</code></td>
-            <td><code>reference_kimi_k2_5_dflash.pt</code></td>
-            <td><code>this commit</code></td>
+          <tr class="test host">
+            <td><code>test_dflash_decode_manager_logic.py</code><br><code>test_dflash_spec_decode_manager_logic_matches_golden_reference</code></td>
+            <td>Replays host decode-manager logic; checks generated/output tokens, acceptance, host writes, packet stats, and avg committed tokens.</td>
+            <td class="ok">✅ pass</td><td><code>3.34s</code></td>
           </tr>
-          <tr class="workstream stage">
-            <td><code>decoder_layer_*</code></td>
-            <td><code>test_dflash_stage_decoder_layer.py</code></td>
-            <td><code>golden_decoder_layer_stages</code></td>
-            <td><code>reference_kimi_k2_5_dflash.pt</code></td>
-            <td><code>this commit</code></td>
+          <tr class="test stage">
+            <td><code>test_dflash_stage_pre_decoder_fused.py</code><br><code>test_dflash_stage_pre_decoder_fused_matches_golden_reference</code></td>
+            <td>Checks target context projection, rotary cos/sin, and decoder input per captured pass.</td>
+            <td class="ok">✅ pass</td><td><code>0.36s</code></td>
           </tr>
-          <tr class="workstream stage">
-            <td><code>post_decoder_fused</code></td>
-            <td><code>test_dflash_stage_post_decoder_fused.py</code></td>
-            <td><code>golden_post_decoder_fused_stages</code></td>
-            <td><code>reference_kimi_k2_5_dflash.pt</code></td>
-            <td><code>this commit</code></td>
+          <tr class="test stage">
+            <td><code>test_dflash_stage_decoder_layer.py</code><br><code>test_dflash_stage_decoder_layer_matches_golden_reference</code></td>
+            <td>Checks each captured decoder-layer invocation against golden output; validates layer bounds.</td>
+            <td class="ok">✅ pass</td><td><code>0.14s</code></td>
+          </tr>
+          <tr class="test stage">
+            <td><code>test_dflash_stage_post_decoder_fused.py</code><br><code>test_dflash_stage_post_decoder_fused_matches_golden_reference</code></td>
+            <td>Checks final norm, drafter logits, greedy tokens, block proposal, and host packet.</td>
+            <td class="ok">✅ pass</td><td><code>0.15s</code></td>
+          </tr>
+          <tr class="test combo">
+            <td><code>test_dflash_combined_drafter.py</code><br><code>test_dflash_combined_drafter_matches_golden_reference</code></td>
+            <td>Checks the minimal combined drafter contract across distinct stage kinds.</td>
+            <td class="ok">✅ pass</td><td><code>0.16s</code></td>
+          </tr>
+          <tr class="test combo">
+            <td><code>test_dflash_full_drafter.py</code><br><code>test_dflash_full_drafter_matches_golden_reference</code></td>
+            <td>Checks full-config drafter metadata, all layer captures, output trace, and device-fit metadata.</td>
+            <td class="ok">✅ pass</td><td><code>0.14s</code></td>
           </tr>
         </tbody>
       </table>
 
-      <h2>checks</h2>
-      <table class="tight">
-        <thead><tr><th>scope</th><th>command / result</th></tr></thead>
+      <h2>setup record</h2>
+      <table>
+        <thead><tr><th>step</th><th>result</th><th>evidence</th></tr></thead>
         <tbody>
-          <tr class="workstream checks"><td>setup</td><td><code>git clone</code>, <code>fetch main jrock/blaze-multi-spec</code>, branch from <code>origin/main</code>, submodules: passed.</td></tr>
-          <tr class="workstream checks"><td>capture</td><td><code>capture_real_reference.py --num-tokens 8</code> on RunPod <code>h200-8x</code>: wrote local ignored <code>reference_kimi_k2_5_dflash.pt</code>.</td></tr>
-          <tr class="workstream checks"><td>syntax</td><td><code>python -m py_compile</code> on host, stage, generator, helper, combined, and full-drafter tests: passed.</td></tr>
-          <tr class="workstream checks"><td>golden replay</td><td>plain-Python import invocation of all <code>.pt</code>-backed DFlash tests: passed.</td></tr>
-          <tr class="workstream checks"><td>pytest</td><td>not run locally; default Python lacks <code>pytest</code>.</td></tr>
+          <tr class="test setup"><td>reference capture</td><td class="ok">✅ pass</td><td>RunPod <code>h200-8x</code>, <code>--num-tokens 128</code>: 147 prompt, 128 generated, 20 passes, avg committed <code>6.7</code>; file <code>880M</code>.</td></tr>
+          <tr class="test setup"><td>remote copy</td><td class="ok">✅ pass</td><td>Branch and reference copied to <code>/proj_sw/user_dev/jrock/agent/tt-metal</code>.</td></tr>
+          <tr class="test setup"><td>submodules</td><td class="ok">✅ pass</td><td><code>git submodule update --init --recursive</code> completed for llama, tracy, and UMD.</td></tr>
+          <tr class="test setup"><td>venv</td><td class="ok">✅ pass</td><td>Out-of-tree <code>/tmp</code> venv completed with <code>pytest 9.0.3</code> and CPU <code>torch 2.7.1</code>.</td></tr>
+          <tr class="test risk"><td>build</td><td class="bad">❌ blocked</td><td><code>build_metal.sh</code> hit the <code>/proj_sw</code> write limit while downloading Boost and saving CMake cache.</td></tr>
+          <tr class="test setup"><td>pytest</td><td class="ok">✅ pass</td><td><code>pytest -q -p no:cacheprovider --confcutdir=.../tests ... -k use_golden</code>.</td></tr>
         </tbody>
       </table>
     </section>
 
     <aside class="aside">
-      <h2>branch record</h2>
-      <p><span class="label">Remote</span><br><code>origin git@github.com:tenstorrent/tt-metal.git</code></p>
-      <p><span class="label">Push target</span><br><code>origin/jrock/agent-dflash_block_diffusion-tests</code></p>
-      <p><span class="label">Pre-report tip</span><br><code>this commit</code></p>
-      <p><span class="label">Report path</span><br><code>models/demos/blaze_spec_decode/dflash_moonshotai_kimi_k2_5/tests/spec_decode_reports/tt_metal_tests_report_dflash.html</code></p>
+      <h2>provenance</h2>
+      <p><span class="label">Golden implementation</span><br><code>.../golden_dflash_block_diffusion_agent_23</code></p>
+      <p><span class="label">Local checkout</span><br><code>/Users/jrock/agent/28/tt-metal</code></p>
+      <p><span class="label">Remote checkout</span><br><code>/proj_sw/user_dev/jrock/agent/tt-metal</code></p>
+      <p><span class="label">Remote runner</span><br><code>yyzo-bh-04</code> IRD container; host-side tests did not use devices.</p>
 
-      <h2>device fit</h2>
-      <p>
-        The minimal DFlash drafter has four distinct stage kinds and fits one Galaxy.
-        The full drafter test counts every original decoder-layer stage instance from
-        <code>reference_kimi_k2_5_dflash.pt</code>; one Galaxy provides four
-        <code>4x2</code> slots and a four-Galaxy pod provides sixteen.
-      </p>
-
-      <h2>assumptions</h2>
-      <ul>
-        <li>All implementation tests consume one local, uncommitted full Kimi reference capture.</li>
-        <li>Tests are bringup contracts; they do not run hardware kernels.</li>
-        <li>Implementation tests expose <code>use_golden</code>; the pipeline branch is strict xfail until real hooks exist.</li>
-        <li>Main lacks the DFlash production module and dynamic multi-spec host hook.</li>
-      </ul>
-
-      <h2>next steps</h2>
-      <ul>
-        <li>Use <code>dflash_golden_ops</code> as the golden reference while wiring real pipeline stages.</li>
-        <li>Regenerate <code>reference_kimi_k2_5_dflash.pt</code> from <code>capture_real_reference.py</code> when changing prompt, token cap, model snapshot, or capture schema.</li>
-        <li>Wire <code>ModelPipeline.run_inference</code> to DFlash block proposals.</li>
-        <li>Run the pytest suite in a tt-metal Python environment with pytest installed.</li>
-        <li>Use the captured tensor sections as hardware PCC checks when device modules exist.</li>
-      </ul>
-
+      <h2>reservation note</h2>
       <p class="note">
-        Reference branch <code>origin/jrock/blaze-multi-spec</code> was inspected only for
-        <code>test_run_inference.py</code>; no merge, checkout, cherry-pick, or unrelated copy was used.
+        Two YYZ compute reservations on <code>yyzeon16</code> failed before use: missing
+        <code>jq</code>, no container, and failed <code>ird connect-to</code>. A reachable YYZ IRD
+        reservation ran the host-only pytest validation.
       </p>
+
+      <h2>reference contents</h2>
+      <ul>
+        <li><code>openai/openai_humaneval</code>, index 0.</li>
+        <li>Full-shape stage tensors and combined/full-drafter outputs.</li>
+        <li>Host trace: proposals, verification packets, writes, tokens, acceptance.</li>
+        <li>No weights stored; checkpoints remain the weight source.</li>
+      </ul>
+
+      <h2>replacement boundary</h2>
+      <p class="note">
+        Each test has one switch: <code>use_golden=True</code> returns reference outputs;
+        <code>use_golden=False</code> is the future device or host-pipeline call and raises
+        <code>NotImplementedError</code> today.
+      </p>
+
+      <h2>next</h2>
+      <ul>
+        <li>Rerun <code>build_metal.sh</code> on a writable checkout or after clearing quota.</li>
+        <li>Replace golden call sites with the DFlash device modules as stages come online.</li>
+        <li>Use the same <code>.pt</code> tensor sections as PCC/shape references for hardware tests.</li>
+      </ul>
     </aside>
   </main>
 </body>
