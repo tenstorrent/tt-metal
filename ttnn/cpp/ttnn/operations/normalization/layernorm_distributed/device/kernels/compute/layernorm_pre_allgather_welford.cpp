@@ -39,7 +39,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
-    constexpr uint32_t cb_x2 = tt::CBIndex::c_1;           // x**2
+    constexpr uint32_t cb_scratch = tt::CBIndex::c_1;      // scratch for post-Welford transpose
     constexpr uint32_t cb_reciprocals = tt::CBIndex::c_2;  // recip table
 #if FUSE_PRE_ADD
     constexpr uint32_t cb_res = tt::CBIndex::c_5;         // residual b
@@ -53,7 +53,7 @@ void kernel_main() {
 #if FUSE_PRE_ADD
     binary_op_init_common(cb_in0, cb_res, cb_inp);
 #else
-    compute_kernel_hw_startup(cb_inp, cb_inp, cb_x2);
+    compute_kernel_hw_startup(cb_inp, cb_inp, cb_scratch);
 #endif
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, W>;
@@ -156,7 +156,7 @@ void kernel_main() {
             cb_push_back(cb_m2_spill, 1);
         }
 
-        // Finalize: reload accumulator and write mean and variance to cb_x2.
+        // Finalize: reload accumulator and write mean and variance to cb_scratch.
         cb_wait_front(cb_mean_spill, 1);
         cb_wait_front(cb_m2_spill, 1);
         tile_regs_acquire();
@@ -171,20 +171,20 @@ void kernel_main() {
         cb_pop_front(cb_mean_spill, 1);
         cb_pop_front(cb_m2_spill, 1);
 
-        cb_reserve_back(cb_x2, 2);
+        cb_reserve_back(cb_scratch, 2);
         tile_regs_wait();
-        pack_reconfig_data_format(cb_mean_spill, cb_x2);
-        pack_tile(dst1, cb_x2);
-        pack_tile(dst2, cb_x2);
-        cb_push_back(cb_x2, 2);
+        pack_reconfig_data_format(cb_mean_spill, cb_scratch);
+        pack_tile(dst1, cb_scratch);
+        pack_tile(dst2, cb_scratch);
+        cb_push_back(cb_scratch, 2);
         tile_regs_release();
 #else
         reconfig_data_format(cb_inp, cb_inp);
-        pack_reconfig_data_format(cb_x2);
+        pack_reconfig_data_format(cb_scratch);
 
         tile_regs_acquire();
         uint32_t start_N = 0;
-        transpose_wh_init(cb_inp, cb_x2);
+        transpose_wh_init(cb_inp, cb_scratch);
         welford_init();
 
         // When the input CB carries Float32 with fp32_dest_acc_en=true, the program factory
@@ -219,23 +219,23 @@ void kernel_main() {
         //  transpose_wh_dest_init_short();
         //  transpose_wh_dest(dst1);
         //  transpose_wh_dest(dst2);
-        cb_reserve_back(cb_x2, 2);
+        cb_reserve_back(cb_scratch, 2);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(dst1, cb_x2);
-        pack_tile(dst2, cb_x2);
-        cb_push_back(cb_x2, 2);
+        pack_tile(dst1, cb_scratch);
+        pack_tile(dst2, cb_scratch);
+        cb_push_back(cb_scratch, 2);
         tile_regs_release();
 #endif
 
-        reconfig_data_format(cb_x2, cb_x2);
+        reconfig_data_format(cb_scratch, cb_scratch);
         pack_reconfig_data_format(cb_out);
-        transpose_wh_init_short(cb_x2);
+        transpose_wh_init_short(cb_scratch);
         tile_regs_acquire();
-        cb_wait_front(cb_x2, 2);  // cumulative wait
-        transpose_wh_tile(cb_x2, 0, dst0);
-        transpose_wh_tile(cb_x2, 1, dst1);
-        cb_pop_front(cb_x2, 2);
+        cb_wait_front(cb_scratch, 2);  // cumulative wait
+        transpose_wh_tile(cb_scratch, 0, dst0);
+        transpose_wh_tile(cb_scratch, 1, dst1);
+        cb_pop_front(cb_scratch, 2);
 
         tile_regs_commit();
         tile_regs_wait();
