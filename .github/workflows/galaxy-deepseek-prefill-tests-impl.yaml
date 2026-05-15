@@ -94,7 +94,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -128,7 +128,6 @@ jobs:
             ${{ matrix.test-group.cmd }}
           } 2>&1 | tee "$LOG_FILE"
           exit ${PIPESTATUS[0]}
-          ${{ matrix.test-group.cmd }}
       - name: Publish PCC summary
         if: ${{ !cancelled() }}
         run: |

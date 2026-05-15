@@ -72,11 +72,11 @@ TRACE_PCC_THRESHOLD_HOST = 0.96
 TRACE_PCC_THRESHOLD_DEVICE_BF16 = 0.88
 TRACE_PCC_THRESHOLD_DEVICE_FP32 = 0.88
 
-TRACE_DIR_BASE = Path(os.getenv("DEEPSEEK_V3_TRACE_DIR", "/data/ddjekic/bit_sculpt/results/deepseek-r1-0528"))
+TRACE_DIR_BASE = Path(os.getenv("DEEPSEEK_V3_TRACE_DIR", "/mnt/MLPerf/deepseek-prefill-cache"))
 ILLIAD_1024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2"
 ILLIAD_25024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2_25024"
-ABC_1k_PADD_RIGHT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_right_1024"
-ABC_1k_PADD_LEFT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_left_1024"
+ABC_1K_PAD_RIGHT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_right_1024"
+ABC_1K_PAD_LEFT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_left_1024"
 LONGBOOK_QA_ENG_25024 = TRACE_DIR_BASE / "longbook_qa_eng_25088"
 
 # Input sources: "random" = random token IDs, "json_prompts" = test_prompts_1024.json,
