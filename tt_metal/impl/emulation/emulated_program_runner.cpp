@@ -142,6 +142,14 @@ thread_local uint32_t __emule_l1_unreserved_base = 0;
 thread_local const uint64_t* __emule_l1_tensor_ranges = nullptr;
 thread_local uint32_t __emule_l1_tensor_ranges_count = 0;
 
+// DRAM mirror of the L1 OOB-tensor state. Consumed by the check inside
+// __emule_dram_ptr below. dram_unreserved_base is the start of user-
+// allocatable DRAM as reported by the allocator (mirrors l1_unreserved_base);
+// accesses below it are reserved system regions and pass through.
+thread_local uint32_t __emule_dram_unreserved_base = 0;
+thread_local const uint64_t* __emule_dram_tensor_ranges = nullptr;
+thread_local uint32_t __emule_dram_tensor_ranges_count = 0;
+
 // Core map for cross-core NOC address resolution (shared across all threads).
 thread_local std::unordered_map<uint64_t, tt_emule::Core*>* __emule_core_map = nullptr;
 
@@ -179,6 +187,31 @@ static constexpr uint32_t NOC_NODE_MASK = (1 << NOC_NODE_ID_BITS) - 1;
 
 // C-linkage bridge functions for JIT kernels.
 extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
+    // Out-of-bounds-tensor sanitizer for DRAM. Active only when
+    // emulated_program_runner populated the live DRAM ranges (i.e.
+    // TT_EMULE_STRICT_TENSOR is set). Accesses below dram_unreserved_base are
+    // reserved system regions and pass through; at-or-above must hit a live
+    // DRAM tensor extent.
+    if (__emule_dram_tensor_ranges != nullptr &&
+        static_cast<uint32_t>(offset) >= __emule_dram_unreserved_base) {
+        uint32_t addr = static_cast<uint32_t>(offset);
+        bool in_tensor = false;
+        for (uint32_t i = 0; i < __emule_dram_tensor_ranges_count; ++i) {
+            uint64_t packed = __emule_dram_tensor_ranges[i];
+            uint32_t r_start = static_cast<uint32_t>(packed >> 32);
+            uint32_t r_end = static_cast<uint32_t>(packed);
+            if (addr >= r_start && addr < r_end) {
+                in_tensor = true;
+                break;
+            }
+        }
+        if (!in_tensor) {
+            fprintf(stderr,
+                    "[ASAN ERROR] Out-of-Bounds Write: Attempted to access DRAM address 0x%x which is not part of any allocated tensor\n",
+                    addr);
+            abort();
+        }
+    }
     return __emule_bridge_dram ? __emule_bridge_dram + offset : nullptr;
 }
 
@@ -1528,6 +1561,9 @@ struct EmuleOobTensorState {
     uint32_t l1_unreserved_base = 0;
     const uint64_t* tensor_ranges = nullptr;
     uint32_t tensor_ranges_count = 0;
+    uint32_t dram_unreserved_base = 0;
+    const uint64_t* dram_tensor_ranges = nullptr;
+    uint32_t dram_tensor_ranges_count = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -1617,6 +1653,9 @@ static void launch_cores(
                             __emule_l1_unreserved_base = oob_state.l1_unreserved_base;
                             __emule_l1_tensor_ranges = oob_state.tensor_ranges;
                             __emule_l1_tensor_ranges_count = oob_state.tensor_ranges_count;
+                            __emule_dram_unreserved_base = oob_state.dram_unreserved_base;
+                            __emule_dram_tensor_ranges = oob_state.dram_tensor_ranges;
+                            __emule_dram_tensor_ranges_count = oob_state.dram_tensor_ranges_count;
 
                             __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
                             __emule_trisc_id = 0;
@@ -1680,6 +1719,9 @@ static void launch_cores(
                             __emule_l1_unreserved_base = 0;
                             __emule_l1_tensor_ranges = nullptr;
                             __emule_l1_tensor_ranges_count = 0;
+                            __emule_dram_unreserved_base = 0;
+                            __emule_dram_tensor_ranges = nullptr;
+                            __emule_dram_tensor_ranges_count = 0;
                         });
                     }
 
@@ -1806,19 +1848,28 @@ void execute_program_emulated(IDevice* device, Program& program) {
     // ranges null so the inline check in __emule_local_l1_to_ptr is a no-op.
     EmuleOobTensorState oob_state;
     std::vector<uint64_t> live_ranges_snapshot;
+    std::vector<uint64_t> dram_live_ranges_snapshot;
+    // Sentinel for the "no live ranges" case — vector::data() on an empty
+    // vector may return nullptr, which would short-circuit the check and let
+    // accesses through. A non-null sentinel with count=0 forces the check to
+    // run and abort, which is the correct behavior when no tensor is live.
+    static const uint64_t kEmptyRange = 0;
     if (emule_strict_tensor_enabled()) {
         live_ranges_snapshot = tt::tt_metal::emule::LiveL1Ranges::snapshot(device_id);
         oob_state.l1_unreserved_base = static_cast<uint32_t>(
             device->allocator()->get_base_allocator_addr(HalMemType::L1));
-        // Always pass a non-null pointer so the inline check fires even when
-        // no tensors are allocated — kernels touching the user region with
-        // nothing live IS OOB. data() on an empty vector may be null, so use
-        // a sentinel.
-        static const uint64_t kEmptyRange = 0;
         oob_state.tensor_ranges = live_ranges_snapshot.empty()
             ? &kEmptyRange
             : live_ranges_snapshot.data();
         oob_state.tensor_ranges_count = static_cast<uint32_t>(live_ranges_snapshot.size());
+
+        dram_live_ranges_snapshot = tt::tt_metal::emule::LiveDramRanges::snapshot(device_id);
+        oob_state.dram_unreserved_base = static_cast<uint32_t>(
+            device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
+        oob_state.dram_tensor_ranges = dram_live_ranges_snapshot.empty()
+            ? &kEmptyRange
+            : dram_live_ranges_snapshot.data();
+        oob_state.dram_tensor_ranges_count = static_cast<uint32_t>(dram_live_ranges_snapshot.size());
     }
 
     launch_cores(core_setups, dram_data, core_map_ptr, oob_state);

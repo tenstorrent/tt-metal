@@ -438,6 +438,11 @@ void Buffer::allocate_impl() {
                 device_->id(),
                 static_cast<uint32_t>(address_),
                 static_cast<uint32_t>(address_ + size_));
+        } else if (buffer_type_ == BufferType::DRAM) {
+            tt::tt_metal::emule::LiveDramRanges::add(
+                device_->id(),
+                static_cast<uint32_t>(address_),
+                static_cast<uint32_t>(address_ + size_));
         }
 #endif
 
@@ -487,6 +492,9 @@ void Buffer::deallocate_impl() {
 #ifdef TT_METAL_USE_EMULE
             if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
                 tt::tt_metal::emule::LiveL1Ranges::remove(
+                    device_->id(), static_cast<uint32_t>(address_));
+            } else if (buffer_type_ == BufferType::DRAM) {
+                tt::tt_metal::emule::LiveDramRanges::remove(
                     device_->id(), static_cast<uint32_t>(address_));
             }
 #endif
