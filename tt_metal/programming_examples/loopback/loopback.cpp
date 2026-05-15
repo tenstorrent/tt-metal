@@ -129,7 +129,7 @@ int main() {
             "Result vector size {} does not match input vector size {}",
             result_vec.size(),
             input_vec.size());
-        for (int i = 0; i < input_vec.size(); i++) {
+        for (size_t i = 0; i < input_vec.size(); i++) {
             if (input_vec[i] != result_vec[i]) {
                 pass = false;
                 break;
