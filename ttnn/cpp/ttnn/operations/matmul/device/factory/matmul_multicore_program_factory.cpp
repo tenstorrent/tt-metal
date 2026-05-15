@@ -61,7 +61,11 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
 
     const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    TT_FATAL(
+        operation_attributes.program_config.has_value(),
+        "program_config must be provided for MatmulMultiCoreProgramFactory");
+    auto pc = std::get<operations::matmul::MatmulMultiCoreProgramConfig>(operation_attributes.program_config.value());
+    auto compute_with_storage_grid_size = pc.allowed_worker_cores.value().bounding_box().grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t c_batch_size = get_batch_size(cshape);
     auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / TILE_HW;
