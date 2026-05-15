@@ -73,10 +73,10 @@ Tensor<T> initialize_tensor(
     std::array<uint32_t, 4>& shape, Initialize init_type, int rand_min_val = 0, int rand_max_val = 100, int seed = 0) {
     std::vector<T> values;
     auto rand_float = std::bind(std::uniform_real_distribution<float>(rand_min_val, rand_max_val), std::mt19937(seed));
-    for (auto w = 0; w < shape[0]; w++) {
-        for (auto z = 0; z < shape[1]; z++) {
-            for (auto y = 0; y < shape[2]; y++) {
-                for (auto x = 0; x < shape[3]; x++) {
+    for (auto w = 0u; w < shape[0]; w++) {
+        for (auto z = 0u; z < shape[1]; z++) {
+            for (auto y = 0u; y < shape[2]; y++) {
+                for (auto x = 0u; x < shape[3]; x++) {
                     float val;
                     switch (init_type) {
                         case Initialize::ZEROS: val = 0; break;
@@ -131,10 +131,10 @@ Tensor<T> permute_nhwc_to_nchw(const Tensor<T>& input) {
     auto output_volume = out_shape[0] * out_shape[1] * out_shape[2] * out_shape[3];
     std::vector<T> out = std::vector<T>(output_volume, 0);
     auto input_values = input.get_values();
-    for (auto w = 0; w < out_shape[0]; w++) {              // N
-        for (auto z = 0; z < out_shape[1]; z++) {          // Z
-            for (auto y = 0; y < out_shape[2]; y++) {      // Y
-                for (auto x = 0; x < out_shape[3]; x++) {  // X
+    for (auto w = 0u; w < out_shape[0]; w++) {              // N
+        for (auto z = 0u; z < out_shape[1]; z++) {          // Z
+            for (auto y = 0u; y < out_shape[2]; y++) {      // Y
+                for (auto x = 0u; x < out_shape[3]; x++) {  // X
                     auto out_idx = x + (y * out_shape[3]) + (z * out_shape[3] * out_shape[2]) +
                                    (w * out_shape[3] * out_shape[2] * out_shape[1]);
                     auto in_idx = z + (x * in_shape[3]) + (y * in_shape[3] * in_shape[2]) +

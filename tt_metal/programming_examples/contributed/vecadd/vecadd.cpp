@@ -211,7 +211,7 @@ int main(int argc, char** argv) {
     bfloat16* a_bf16 = reinterpret_cast<bfloat16*>(a_data.data());
     bfloat16* b_bf16 = reinterpret_cast<bfloat16*>(b_data.data());
     bfloat16* c_bf16 = reinterpret_cast<bfloat16*>(c_data.data());
-    for (int i = 0; i < n; i++) {
+    for (size_t i = 0; i < n; i++) {
         std::cout << "  " << static_cast<float>(a_bf16[i]) << " + " << static_cast<float>(b_bf16[i]) << " = "
                   << static_cast<float>(c_bf16[i]) << "\n";
     }

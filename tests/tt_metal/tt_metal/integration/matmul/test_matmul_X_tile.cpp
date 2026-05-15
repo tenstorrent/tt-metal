@@ -239,6 +239,7 @@ static void matmul_tile_quasar(
         .entry_size = ctx.single_tile_size_bfp16b,
         .num_entries = ctx.num_input_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
+        .alias_with = {},
         .disable_implicit_sync = true,
     };
     experimental::metal2_host_api::DataflowBufferSpec src1_dfb_spec{
@@ -246,6 +247,7 @@ static void matmul_tile_quasar(
         .entry_size = ctx.single_tile_size_bfp16b,
         .num_entries = ctx.num_input_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
+        .alias_with = {},
         .disable_implicit_sync = true,
     };
     experimental::metal2_host_api::DataflowBufferSpec dst_dfb_spec{
@@ -253,6 +255,7 @@ static void matmul_tile_quasar(
         .entry_size = ctx.single_tile_size_out0,
         .num_entries = ctx.num_tiles,
         .data_format_metadata = cfg.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b,
+        .alias_with = {},
         .disable_implicit_sync = true,
     };
 
@@ -273,6 +276,9 @@ static void matmul_tile_quasar(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
         .runtime_arguments_schema =
             {.named_runtime_args =
                  {"src0_addr",
@@ -284,11 +290,13 @@ static void matmul_tile_quasar(
                   "in1_block_tile_cnt",
                   "in0_block_size_bytes",
                   "in1_block_size_bytes",
-                  "with_bias"}},
+                  "with_bias"},
+             .named_common_runtime_args = {}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -302,11 +310,15 @@ static void matmul_tile_quasar(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
+        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}, .named_common_runtime_args = {}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     // The Quasar matmul_block.cpp kernel uses named CTAs. Map cfg.compute_kernel_args (positional)
@@ -338,7 +350,7 @@ static void matmul_tile_quasar(
         .unique_id = COMPUTE,
         .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{cfg.compute_kernel},
         .num_threads = 1,
-        .compiler_options = {.defines = compute_defines},
+        .compiler_options = {.include_paths = {}, .defines = compute_defines},
         .dfb_bindings =
             {{
                  .dfb_spec_name = SRC0_DFB,
@@ -358,13 +370,18 @@ static void matmul_tile_quasar(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
         .compile_time_arg_bindings = compute_cta_bindings,
+        .runtime_arguments_schema = {},
         .config_spec =
             experimental::metal2_host_api::ComputeConfiguration{
                 .math_fidelity = cfg.math_fidelity,
                 .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
                 .dst_full_sync_en = cfg.dst_full_sync_en,
+                .unpack_to_dest_mode = {},
             },
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
@@ -377,6 +394,9 @@ static void matmul_tile_quasar(
         .program_id = "matmul_X_tile",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
+        .remote_dataflow_buffers = {},
+        .semaphores = {},
+        .tensor_parameters = {},
         .work_units = {wu},
     };
 

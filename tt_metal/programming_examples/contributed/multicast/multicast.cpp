@@ -102,9 +102,9 @@ void verify_tiles(
                 fmt::print("\n[{} TILE]\n", label);
             }
 
-            for (int i = 0; i < TILE_HEIGHT; i++) {
-                for (int j = 0; j < TILE_WIDTH; j++) {
-                    int idx = tile_num.has_value() ? tile_elem_idx(tile_num.value(), i, j) : (i * TILE_WIDTH) + j;
+            for (uint32_t i = 0; i < TILE_HEIGHT; i++) {
+                for (uint32_t j = 0; j < TILE_WIDTH; j++) {
+                    uint32_t idx = tile_num.has_value() ? tile_elem_idx(tile_num.value(), i, j) : (i * TILE_WIDTH) + j;
                     fmt::print("{} ", static_cast<float>(data[idx]));
                 }
                 fmt::print("\n");
@@ -125,9 +125,9 @@ void verify_tiles(
             print_tile("RECEIVED", received_tiles, tile);
         }
         // iterate over ith tile's elements, check whether they match with golden's elements.
-        for (int i = 0; i < TILE_HEIGHT && tile_match; i++) {
-            for (int j = 0; j < TILE_WIDTH; j++) {
-                int idx = tile_elem_idx(tile, i, j);
+        for (uint32_t i = 0; i < TILE_HEIGHT && tile_match; i++) {
+            for (uint32_t j = 0; j < TILE_WIDTH; j++) {
+                uint32_t idx = tile_elem_idx(tile, i, j);
                 float received = static_cast<float>(received_tiles[idx]);
                 float golden = static_cast<float>(golden_tile[(i * TILE_WIDTH) + j]);
                 if (received != golden) {
