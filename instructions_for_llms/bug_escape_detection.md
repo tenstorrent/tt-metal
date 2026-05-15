@@ -302,8 +302,18 @@ Delete BEFORE/AFTER branches from GitHub.
 Page ID: 2424012846
 URL: https://tenstorrent.atlassian.net/wiki/spaces/MI6/pages/2424012846/bug+escapes
 
+**This page is the single source of truth for campaign status and run links.**
+Every GHA run URL dispatched during this campaign must be recorded on this page immediately
+after dispatch — not just at the end. If someone asks "where are we?", the answer is always
+"check Confluence" — not a Slack status report.
+
 The page has four sections. Move each escape between sections as its status changes.
 Never delete an entry — only move it and update its status field.
+
+**Update the page after EVERY state transition:**
+- After dispatch (Step 4b midpoint or Step 5): add run links immediately
+- After each run completes: update PASS/FAIL result inline
+- After verdict: move to the appropriate section
 
 **After Step 3 (Opus pre-classification passes) → add to "🔍 Under Investigation":**
 ```
