@@ -94,10 +94,17 @@ inline bool _divisible_by_pow_two_(const std::uint32_t value, const std::uint32_
 }
 
 /**
- * @brief Helper function to ensure valid tile sizes are programmed into the buffer descriptor
+ * @brief Helper function to ensure valid tile sizes are programmed into the buffer descriptor.
+ * valid tile sizes:
+    1x16: x=16, y=1, z=1
+    2x16: x=16, y=2, z=1
+    4x16: x=16, y=4, z=1
+    8x16: x=16, y=8, z=1
+    16x16: x=16, y=16, z=1
+    32x32: x=16, y=16, z=4
  * @param buf_desc: Contains L1 buffer descriptor information
  */
-void validate_buffer_desc(const buffer_descriptor_u& buf_desc)
+inline void validate_buffer_desc(const buffer_descriptor_u& buf_desc)
 {
     LLK_ASSERT(buf_desc.f.x_dim == 16, "x_dim must be 16");
     LLK_ASSERT(
