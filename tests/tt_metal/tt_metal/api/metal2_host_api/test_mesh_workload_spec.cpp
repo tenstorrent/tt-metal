@@ -62,9 +62,10 @@ TEST_F(MeshWorkloadSpecTestQuasar, EmptyMeshWorkloadSpecFails) {
 // and produces a MeshWorkload containing exactly that program.
 TEST_F(MeshWorkloadSpecTestQuasar, SingleProgramSPMDSucceeds) {
     MeshWorkloadSpec spec;
-    spec.programs.emplace_back(
-        distributed::MeshCoordinateRange(mesh_device_->shape()),  //
-        MakeMinimalValidProgramSpec());
+    spec.programs.push_back({
+        .program = MakeMinimalValidProgramSpec(),
+        .target_range = distributed::MeshCoordinateRange(mesh_device_->shape()),
+    });
 
     distributed::MeshWorkload workload = MakeMeshWorkloadFromSpec(*mesh_device_, spec);
 
@@ -76,8 +77,10 @@ TEST_F(MeshWorkloadSpecTestQuasar, SingleProgramSPMDSucceeds) {
 TEST_F(MeshWorkloadSpecTestQuasar, OutOfBoundsRangeFails) {
     MeshWorkloadSpec spec;
     // (1, 1) is out of bounds for a {1, 1} mesh — valid coords are only (0, 0).
-    distributed::MeshCoordinateRange out_of_bounds(distributed::MeshCoordinate(1, 1));
-    spec.programs.emplace_back(out_of_bounds, MakeMinimalValidProgramSpec());
+    spec.programs.push_back({
+        .program = MakeMinimalValidProgramSpec(),
+        .target_range = distributed::MeshCoordinateRange(distributed::MeshCoordinate(1, 1)),
+    });
 
     EXPECT_THAT(
         [&] { MakeMeshWorkloadFromSpec(*mesh_device_, spec); },
@@ -91,7 +94,10 @@ TEST_F(MeshWorkloadSpecTestQuasar, InvalidProgramSpecPropagatesValidationFailure
     invalid_spec.program_id = "empty_program";
 
     MeshWorkloadSpec spec;
-    spec.programs.emplace_back(distributed::MeshCoordinateRange(mesh_device_->shape()), invalid_spec);
+    spec.programs.push_back({
+        .program = invalid_spec,
+        .target_range = distributed::MeshCoordinateRange(mesh_device_->shape()),
+    });
 
     EXPECT_THAT(
         [&] { MakeMeshWorkloadFromSpec(*mesh_device_, spec); },

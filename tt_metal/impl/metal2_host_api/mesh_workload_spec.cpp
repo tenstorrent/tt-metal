@@ -20,17 +20,18 @@ distributed::MeshWorkload MakeMeshWorkloadFromSpec(
     // out-of-bounds is caught here because downstream enqueue surfaces it as a cryptic
     // "MeshDeviceViewImpl::is_local rejects unknown coordinate" failure.)
     const auto mesh_range = distributed::MeshCoordinateRange(mesh_device.shape());
-    for (const auto& entry : spec.programs) {
+    for (const auto& placement : spec.programs) {
         TT_FATAL(
-            mesh_range.contains(entry.first),
+            mesh_range.contains(placement.target_range),
             "MeshWorkloadSpec range {} is out of bounds for mesh of shape {}",
-            entry.first,
+            placement.target_range,
             mesh_device.shape());
     }
 
     distributed::MeshWorkload mesh_workload;
-    for (const auto& [range, program_spec] : spec.programs) {
-        mesh_workload.add_program(range, MakeProgramFromSpec(mesh_device, program_spec, skip_validation));
+    for (const auto& placement : spec.programs) {
+        mesh_workload.add_program(
+            placement.target_range, MakeProgramFromSpec(mesh_device, placement.program, skip_validation));
     }
     return mesh_workload;
 }

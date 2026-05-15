@@ -27,7 +27,12 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 // - A valid MeshWorkloadSpec must contain at least one program.
 //
 struct MeshWorkloadSpec {
-    std::vector<std::pair<distributed::MeshCoordinateRange, ProgramSpec>> programs;
+    // A ProgramSpec paired with its target placement on the mesh.
+    struct ProgramPlacement {
+        ProgramSpec program;
+        distributed::MeshCoordinateRange target_range;
+    };
+    std::vector<ProgramPlacement> programs;
 };
 
 //------------------------------------------------
