@@ -1,48 +1,100 @@
-name: "(triage) Cursor CLI smoke test"
+name: "(triage) CI Triage Orchestrator"
 
 on:
   workflow_dispatch:
+    inputs:
+      create-issues:
+        description: "Create GitHub issues for deterministic failures"
+        type: boolean
+        default: false
+      issue-repo:
+        description: "Repository to create issues in"
+        type: string
+        default: "ebanerjeeTT/issue_dump"
+      target-repo:
+        description: "Repository to analyze workflow data from"
+        type: string
+        default: "tenstorrent/tt-metal"
+      max-issues:
+        description: "Maximum issues to create (0 = unlimited, useful for testing)"
+        type: number
+        default: 0
+      issue-numbers:
+        description: >-
+          Optional. Comma/whitespace-separated list of issue numbers, `#123`
+          tokens, or full GitHub issue URLs. Leave empty to process every
+          open CI-triage issue.
+        required: false
+        type: string
+        default: ""
+      skip-assigning-for-issues-that-already-have-owners:
+        description: >-
+          When true (default), any issue that already has a recommended-owner
+          comment is skipped before any expensive work runs. Uncheck to force
+          re-resolution on every issue.
+        required: false
+        type: boolean
+        default: true
+      reassign-to-someone-else:
+        description: >-
+          Re-resolve and exclude the prior owner(s); requires the skip flag
+          above to be false. Mutually exclusive with refresh-owner-recommendation.
+        required: false
+        type: boolean
+        default: false
+      refresh-owner-recommendation:
+        description: >-
+          Re-resolve without excluding prior owners; requires the skip flag
+          above to be false. Mutually exclusive with reassign-to-someone-else.
+        required: false
+        type: boolean
+        default: false
+      extra-context-for-agent:
+        description: >-
+          Optional dev hint appended to the agent prompt under EXTRA INPUT FROM
+          DEVS. When set, the pipeline_reorg fast path is bypassed. Requires the
+          skip flag above to be false.
+        required: false
+        type: string
+        default: ""
+      llm-backend:
+        description: "LLM backend for the resolver agent fallback: 'cursor' (default) or 'copilot' (uses AUTO_TRIAGE_TOKEN, no Cursor quota)"
+        required: false
+        type: string
+        default: "cursor"
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  cursor-cli-smoke-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+  auto-issues:
+    uses: tenstorrent/tt-auto-triage/.github/workflows/triage-ci.yaml@main
+    with:
+      create-issues: ${{ inputs.create-issues }}
+      issue-repo: ${{ inputs.issue-repo }}
+      target-repo: ${{ inputs.target-repo }}
+      max-issues: ${{ fromJSON(inputs.max-issues) }}
+    secrets:
+      AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+      CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
 
-      - name: Ensure CURSOR_API_KEY is configured
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          if [ -z "$CURSOR_API_KEY" ]; then
-            echo "Missing secret CURSOR_API_KEY"
-            exit 1
-          fi
-
-      - name: Install Cursor CLI
-        run: |
-          set -euo pipefail
-          install_script="$(mktemp)"
-          curl --fail --show-error --silent --location \
-            --proto '=https' --tlsv1.2 \
-            https://cursor.com/install \
-            -o "$install_script"
-          bash "$install_script"
-          rm -f "$install_script"
-          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
-
-      - name: Run simple Cursor prompt
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          set -euo pipefail
-          output="$(agent -p "Reply with exactly: CURSOR_CI_OK")"
-          echo "Agent output: $output"
-          if [[ "$output" != *"CURSOR_CI_OK"* ]]; then
-            echo "Unexpected agent output; expected CURSOR_CI_OK"
-            exit 1
-          fi
+  assign-owners:
+    uses: tenstorrent/tt-auto-triage/.github/workflows/triage-ci.yaml@ebanerjee/triage-assign-owners
+    with:
+      assign-owners: true
+      issue-repo: ebanerjeeTT/issue_dump
+      target-repo: tenstorrent/tt-metal
+      issue-numbers: ${{ inputs.issue-numbers }}
+      skip-assigning-for-issues-that-already-have-owners: ${{ inputs.skip-assigning-for-issues-that-already-have-owners }}
+      reassign-to-someone-else: ${{ inputs.reassign-to-someone-else }}
+      refresh-owner-recommendation: ${{ inputs.refresh-owner-recommendation }}
+      extra-context-for-agent: ${{ inputs.extra-context-for-agent }}
+      llm-backend: ${{ inputs.llm-backend }}
+    secrets:
+      AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_WRITE_TOKEN: ${{ secrets.AUTO_TRIAGE_TOKEN }}
+      CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+      COPILOT_PAT: ${{ secrets.AUTO_TRIAGE_TOKEN }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
