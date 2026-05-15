@@ -24,9 +24,42 @@ Multi-device (mesh) support:
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import torch
 from loguru import logger
+
+# ---------------------------------------------------------------------------
+# Build-phase timing aggregator (debug-only, no functional behavior)
+# ---------------------------------------------------------------------------
+# Filled by ``_pack_multi_device`` / ``_finalize_uploads`` /
+# ``_pack_multi_device_lock_step``; drained + logged by callers that want a
+# per-layer breakdown of the routed-DRAM CT build cost (see
+# ``prepare_moe_routed_experts_bspm_tp8``).  Kept module-level so we don't
+# have to thread a timing object through every from_bspm/from_torch call.
+_BUILD_TIMING: dict[str, float] = {
+    "calls": 0.0,
+    "split_per_device": 0.0,
+    "compress_shards": 0.0,
+    "finalize_concat_shards": 0.0,
+    "finalize_torch_cat": 0.0,
+    "finalize_from_torch": 0.0,
+}
+
+
+def reset_build_timing() -> None:
+    """Zero out the per-phase build-time accumulator."""
+    for k in _BUILD_TIMING:
+        _BUILD_TIMING[k] = 0.0
+
+
+def pop_build_timing() -> dict[str, float]:
+    """Return a copy of the current accumulator and reset it to zero."""
+    snapshot = dict(_BUILD_TIMING)
+    reset_build_timing()
+    return snapshot
+
 
 import ttnn
 
@@ -824,8 +857,12 @@ class CompressedTensor:
         """Pack data for multi-device mesh, then dispatch through :meth:`_finalize_uploads`."""
         num_devices = self._num_devices
 
+        _BUILD_TIMING["calls"] += 1
+
         # Split tensor + assignment per device
+        _t0 = time.perf_counter()
         per_device_slices = self._split_per_device(tensor, device)
+        _BUILD_TIMING["split_per_device"] += time.perf_counter() - _t0
         assert len(per_device_slices) == num_devices
 
         # All devices have the same per-device shape (even split)
@@ -851,6 +888,7 @@ class CompressedTensor:
         replicated_axes = self._get_replicated_axes()
         packed_cache = {}  # {shard_key: coord} — first coord packed for each unique shard key
 
+        _t_compress = 0.0
         for coord, dev_tensor, dev_assignment in per_device_slices:
             coord_tuple = tuple(coord[i] for i in range(self._mesh_shape.dims()))
             shard_key = tuple(coord_tuple[ax] for ax in range(len(coord_tuple)) if ax not in replicated_axes)
@@ -874,6 +912,7 @@ class CompressedTensor:
             # Pack shards for this device
             shard_data, shard_data_sizes = [], []
             tile_formats = []
+            _t_c = time.perf_counter()
             for _core, page_indices in shard_mapping:
                 tile_data_list, tile_format_list, shard_bytes = self._compress_shard(
                     dev_data_np, page_indices, dev_assignment, tiles_w, self.tile_hw
@@ -881,6 +920,7 @@ class CompressedTensor:
                 shard_data.append(tile_data_list)
                 shard_data_sizes.append(shard_bytes)
                 tile_formats.extend(tile_format_list)
+            _t_compress += time.perf_counter() - _t_c
 
             all_shard_data[coord] = shard_data
             all_shard_sizes[coord] = shard_data_sizes
@@ -889,6 +929,8 @@ class CompressedTensor:
             self._per_device_core_assignment[coord] = self._build_core_assignment_from(shard_mapping, dev_assignment)
             self._per_device_assignment_flat[coord] = dev_assignment
             packed_cache[shard_key] = coord
+
+        _BUILD_TIMING["compress_shards"] += _t_compress
 
         self._finalize_uploads(memory_config, assignment_memory_config, device)
 
@@ -1306,19 +1348,24 @@ class CompressedTensor:
             max_shard_bytes = self._min_shard_bytes
 
         # Concatenate per-device padded data along dim 0
+        _t0 = time.perf_counter()
         per_device_torch = []
         for coord in self._iter_mesh_coords():
             dev_torch = self._concat_shards_padded(
                 all_shard_data[coord], all_shard_sizes[coord], max_shard_bytes, memory_config
             )
             per_device_torch.append(dev_torch)
+        _BUILD_TIMING["finalize_concat_shards"] += time.perf_counter() - _t0
 
         # Stack along dim 0 for ShardTensorToMesh
+        _t1 = time.perf_counter()
         combined = torch.cat(per_device_torch, dim=0)
+        _BUILD_TIMING["finalize_torch_cat"] += time.perf_counter() - _t1
         data_memory_config = self._make_sharded_mem_config(memory_config, max_shard_bytes)
         mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
         device_for_torch = device if self._move_to_device else None
 
+        _t2 = time.perf_counter()
         self.data = ttnn.from_torch(
             combined,
             dtype=ttnn.uint8,
@@ -1327,6 +1374,7 @@ class CompressedTensor:
             memory_config=data_memory_config,
             mesh_mapper=mesh_mapper,
         )
+        _BUILD_TIMING["finalize_from_torch"] += time.perf_counter() - _t2
 
         # Assignment tensor
         if assignment_memory_config is not None:

@@ -1321,6 +1321,14 @@ def prepare_moe_routed_experts_bspm_tp8(
     results: list[list[CompressedTensor]] = [[], [], []]
     routed_t0 = time.perf_counter()
     proj_elapsed: list[float] = [0.0, 0.0, 0.0]
+    # Reset CT build-phase accumulator so the per-layer breakdown logged below
+    # only reflects this layer's routed-experts work.
+    from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import pop_build_timing as _ct_pop_build_timing
+    from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import (
+        reset_build_timing as _ct_reset_build_timing,
+    )
+
+    _ct_reset_build_timing()
     for proj_idx, (proj_name, shard_dim, proj_subblock_k, proj_subblock_n) in enumerate(proj_specs):
         proj_t0 = time.perf_counter()
         keys = [_key(layer_idx, f"mlp.experts.{e}.{proj_name}.weight") for e in range(num_routed_experts)]
@@ -1409,6 +1417,23 @@ def prepare_moe_routed_experts_bspm_tp8(
         proj_elapsed[1],
         proj_elapsed[2],
         mode,
+    )
+    # Per-phase CT build cost.  ``calls`` counts cold ``_pack_multi_device``
+    # entries (one per expert*projection that missed the packed-artifacts
+    # disk cache); warm hits via ``from_packed_artifacts`` only contribute
+    # to the ``finalize_*`` phases, so a small ``compress_shards`` value
+    # next to a non-zero ``finalize_from_torch`` indicates a warm-cache run.
+    _ct_t = _ct_pop_build_timing()
+    logger.info(
+        "  CT build breakdown (layer {}): cold_calls={:.0f} | "
+        "split={:.3f}s compress={:.3f}s | concat={:.3f}s torch_cat={:.3f}s from_torch={:.3f}s",
+        layer_idx,
+        _ct_t["calls"],
+        _ct_t["split_per_device"],
+        _ct_t["compress_shards"],
+        _ct_t["finalize_concat_shards"],
+        _ct_t["finalize_torch_cat"],
+        _ct_t["finalize_from_torch"],
     )
 
     routed = MoERoutedExpertWeights(
