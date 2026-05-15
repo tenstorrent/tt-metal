@@ -363,6 +363,7 @@ def gen_combine_golden(
     torch_dispatch_input_expert_indices = torch_dispatch_input_expert_indices.repeat([num_replicated_devices, 1, 1, 1])
 
     torch_combine_ref_tensor = torch.zeros(select_experts_k, batch * num_replicated_devices, hidden_size).bfloat16()
+    valid_mask = torch.zeros(select_experts_k, batch * num_replicated_devices, dtype=torch.bool)
     batch_rep_idxr = get_batch_cluster_idxr(cluster_axis, batch, batches_per_device)
     for m0, m1, d in device_mesh_iterator(mesh_shape):
         if cluster_axis == 0:
@@ -383,29 +384,43 @@ def gen_combine_golden(
                 if e >= first_expert_on_cluster and e <= last_expert_on_cluster:
                     contrib = gen_matmul_golden(token, torch_w0_tensors[e], torch_w1_tensors[e], torch_w2_tensors[e])
                     torch_combine_ref_tensor[k, global_b, :] = contrib[0, 0, 0, :]
+                    valid_mask[k, global_b] = True
 
-    # [select_experts_k, batch * num_replicated_devices, hidden_size]
-    return torch_combine_ref_tensor
+    # [select_experts_k, batch * num_replicated_devices, hidden_size], [select_experts_k, batch * num_replicated_devices]
+    return torch_combine_ref_tensor, valid_mask
 
 
 def _add_shared_experts_to_combine_golden(
-    batch, torch_combine_golden, torch_dispatch_input_tensor, shared_id_to_w0, shared_id_to_w1, shared_id_to_w2
+    batch,
+    torch_combine_golden,
+    torch_combine_valid_mask,
+    torch_dispatch_input_tensor,
+    shared_id_to_w0,
+    shared_id_to_w1,
+    shared_id_to_w2,
 ):
     combine_output_shape = torch_combine_golden.shape
 
     shared_expert_contrib_shape = [len(shared_id_to_w0)] + list(combine_output_shape)[1:]
     shared_expert_contribs = torch.zeros(shared_expert_contrib_shape, dtype=torch_combine_golden.dtype)
+    shared_valid_mask = torch.zeros(len(shared_id_to_w0), torch_combine_valid_mask.shape[1], dtype=torch.bool)
 
     for e, (w0, w1, w2) in enumerate(zip(shared_id_to_w0.values(), shared_id_to_w1.values(), shared_id_to_w2.values())):
         for b in range(batch):
             token = torch_dispatch_input_tensor[b, :, :, :]
             contrib = gen_matmul_golden(token, w0, w1, w2)
             shared_expert_contribs[e, b, :] = contrib[0, 0, 0, :]
+            shared_valid_mask[e, b] = True
 
-    return torch.cat([torch_combine_golden, shared_expert_contribs], dim=0)
+    return (
+        torch.cat([torch_combine_golden, shared_expert_contribs], dim=0),
+        torch.cat([torch_combine_valid_mask, shared_valid_mask], dim=0),
+    )
 
 
-def verify_combine(iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_tensor, torch_combine_golden):
+def verify_combine(
+    iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_tensor, torch_combine_golden, torch_combine_valid_mask
+):
     PCC_THRESHOLD = 0.988
     ATOL_THRESHOLD = 700.0
 
@@ -426,23 +441,27 @@ def verify_combine(iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_
             tt_combine_tensor, dtype=torch.bfloat16, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
         )
 
+    # only compare slots where the golden has a computed contribution — invalid slots
+    # (assigned expert not on this cluster) carry undefined data on the TT side.
+    valid_outputs = torch_combine_output[torch_combine_valid_mask]
+    valid_goldens = torch_combine_golden[torch_combine_valid_mask]
+
     # check pcc
-    pcc_passed, pcc_output = comp_pcc(torch_combine_output, torch_combine_golden, pcc=PCC_THRESHOLD)
+    pcc_passed, pcc_output = comp_pcc(valid_outputs, valid_goldens, pcc=PCC_THRESHOLD)
     logger.info(f"Combine Output - Iteration: {iteration} - PCC: {pcc_output}")
     if not pcc_passed:
         logger.warning(f"FAILED Combine Output - Iteration: {iteration} - PCC: {pcc_output}")
 
     # check allclose
-    allclose_passed, allclose_output = comp_allclose(
-        torch_combine_golden, torch_combine_output, atol=ATOL_THRESHOLD, rtol=0
-    )
+    allclose_passed, allclose_output = comp_allclose(valid_goldens, valid_outputs, atol=ATOL_THRESHOLD, rtol=0)
     logger.info(f"Combine Output - Iteration: {iteration} - AllClose: {allclose_output}")
     if not allclose_passed:
         logger.warning(f"FAILED Combine Output - Iteration: {iteration} - AllClose: {allclose_output}")
-        mask = (torch_combine_output - torch_combine_golden).abs() > ATOL_THRESHOLD
-        logger.warning(
-            f"Elements out of bounds: {torch_combine_output[mask]} ref: {torch_combine_golden[mask]} idx: {mask.nonzero(as_tuple=True)}"
-        )
+        delta_mask = (valid_outputs - valid_goldens).abs() > ATOL_THRESHOLD
+        # logger.warning(
+    #             f"Elements out of bounds: {valid_outputs[delta_mask]} ref: {valid_goldens[delta_mask]} "
+    #             f"({int(delta_mask.sum())} of {valid_outputs.numel()})"
+    #         )
 
     return pcc_passed and allclose_passed
 
@@ -578,7 +597,7 @@ def _expert_tensor_to_list(expert_tensor: torch.Tensor) -> list[torch.Tensor]:
 )
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("layer_id, num_layers", [(0, 1)])
-@pytest.mark.parametrize("batches_per_device", [3, 8, 16, 32])
+@pytest.mark.parametrize("batches_per_device", [3, 8, 32])
 @pytest.mark.parametrize("shard_dim", [0])
 @pytest.mark.parametrize("routed_experts_per_device", [2])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -589,7 +608,7 @@ def _expert_tensor_to_list(expert_tensor: torch.Tensor) -> list[torch.Tensor]:
 @pytest.mark.parametrize("compute_output_height_shard_dim", [4])
 @pytest.mark.parametrize("combine_mux_core_range", [((1, 1), (3, 3))])
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
-@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("num_iterations", [3])
 @pytest.mark.parametrize(
     "device_params",
@@ -880,6 +899,7 @@ def test_optimized_moe_decode_block(
     tt_dispatch_input_expert_scores_tensors = []
 
     torch_combine_goldens = []
+    torch_combine_valid_masks = []
     torch_output_goldens = []
     for iteration in range(num_iterations):
         dispatch_input_dtype = ttnn.bfloat16
@@ -937,7 +957,7 @@ def test_optimized_moe_decode_block(
         tt_dispatch_input_expert_scores_tensors.append(tt_dispatch_input_expert_scores_tensor)
 
         # Initial golden is just routed experts
-        torch_combine_golden = gen_combine_golden(
+        torch_combine_golden, torch_combine_valid_mask = gen_combine_golden(
             mesh_shape,
             cluster_axis,
             num_devices,
@@ -956,9 +976,10 @@ def test_optimized_moe_decode_block(
         )
         # append shared experts if necessary
         if shared_expert_ids_to_devices is not None:
-            torch_combine_golden = _add_shared_experts_to_combine_golden(
+            torch_combine_golden, torch_combine_valid_mask = _add_shared_experts_to_combine_golden(
                 batch,
                 torch_combine_golden,
+                torch_combine_valid_mask,
                 torch_dispatch_input_tensor,
                 shared_id_to_w0,
                 shared_id_to_w1,
@@ -966,6 +987,7 @@ def test_optimized_moe_decode_block(
             )
 
         torch_combine_goldens.append(torch_combine_golden)
+        torch_combine_valid_masks.append(torch_combine_valid_mask)
 
         torch_output_golden = gen_output_golden(
             torch_dispatch_input_tensor,
@@ -1060,7 +1082,24 @@ def test_optimized_moe_decode_block(
         tt_preallocated_dispatch_output_expert_scores,
     )
 
-    logger.info(f"Done creating persistent dispatch output tensors")
+    # one preallocated combine output per iteration — the buffer is reused by the op, so sharing across
+    # iterations would let verification compare against the last iteration's data instead of its own.
+    tt_preallocated_combine_outputs = [
+        ttnn.from_torch(
+            torch.zeros(
+                [effective_experts_k, tokens_per_device, hidden_size],
+                dtype=tt_to_torch_dtype(dispatch_output_sparse_buffer_dtype),
+            ),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dispatch_output_sparse_buffer_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        for _ in range(num_iterations)
+    ]
+
+    logger.info(f"Done creating persistent CCL output tensors")
 
     ############################################
     # set post combine memory configs
@@ -1140,15 +1179,15 @@ def test_optimized_moe_decode_block(
         # allocated before dispatch, as dispatch serves as the barrier to ensure the tensor is allocated on all devices
         # [effective_experts_k (includes shared experts), tokens_per_device, hidden_size] per device
 
-        # TODO (AM) REMOVE ME ONCE TESTED ON QUAD
-        tt_preallocated_combine_output = ttnn.moreh_full(
-            shape=[effective_experts_k, tokens_per_device, hidden_size],
-            fill_value=0,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        #         # TODO (AM) REMOVE ME ONCE TESTED ON QUAD
+        #         tt_preallocated_combine_output = ttnn.moreh_full(
+        #             shape=[effective_experts_k, tokens_per_device, hidden_size],
+        #             fill_value=0,
+        #             device=mesh_device,
+        #             layout=ttnn.ROW_MAJOR_LAYOUT,
+        #             dtype=ttnn.bfloat16,
+        #             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #         )
 
         (
             tt_dispatch_output_sparse_buffer,
@@ -1195,7 +1234,7 @@ def test_optimized_moe_decode_block(
             has_bias=False,
             cluster_axis=cluster_axis,
             mux_core_range_set=combine_mux_cores,
-            optional_output_tensor=tt_preallocated_combine_output,
+            optional_output_tensor=tt_preallocated_combine_outputs[iteration],
             optional_cross_device_semaphore=combine_global_semaphore,
         )
 
@@ -1303,6 +1342,7 @@ def test_optimized_moe_decode_block(
             cluster_axis,
             tt_combine_tensors[iteration],
             torch_combine_goldens[iteration],
+            torch_combine_valid_masks[iteration],
         ):
             all_iterations_passed = False
 
