@@ -1,5 +1,5 @@
-name: "(triage-tests) On-demand triage tests"
-run-name: "(triage-tests) ${{ inputs.runner-labels }}${{ inputs.ref && format(' @ {0}', inputs.ref) || '' }}"
+name: "(triage) On-demand triage tests"
+run-name: "(triage) ${{ inputs.runner-labels }}${{ inputs.ref && format(' @ {0}', inputs.ref) || '' }}"
 
 on:
   workflow_dispatch:
