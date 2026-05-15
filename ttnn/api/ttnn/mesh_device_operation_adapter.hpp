@@ -16,6 +16,9 @@
 #include <type_traits>
 #include <concepts>
 #include <variant>
+#include <vector>
+#include <array>
+#include <tuple>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/operation_concepts.hpp"
