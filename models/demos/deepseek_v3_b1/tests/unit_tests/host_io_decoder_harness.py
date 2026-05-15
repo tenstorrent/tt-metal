@@ -1319,8 +1319,9 @@ def run_sweep(
 # KIMI_K26_PORT_NOTES
 # ============================================================================
 #
-# Status snapshot (2026-05-15) of Kimi K2.6 on-device validation through this
-# harness. Referenced from the ``pytest.mark.skip`` reasons in
+# Status snapshot (2026-05-15, revised after a closer look at the upstream
+# branches and the kimi26_d_p sister demo's actual implementation).
+# Referenced from the ``pytest.mark.skip`` reasons in
 # ``test_host_io_decoder_sweep_e2e.py`` and from
 # ``micro_ops/deepseek_moe_gate/op.py:DeepseekMoeGateSingleCore``.
 #
@@ -1341,56 +1342,116 @@ def run_sweep(
 #   harness will route to dense but the trace was produced treating them as
 #   MoE. See ``_check_metadata_consistency``.
 #
-# What does NOT work — the 384-expert MoE gate kernel blocker
-# -----------------------------------------------------------
-# ``micro_ops/deepseek_moe_gate/op.py:DeepseekMoeGateSingleCore`` hardcodes a
-# ``(16, 16) = 256`` input tile and implements DeepSeek's grouped top-k
-# (16 groups × 16, top-2-per-group → top-4-groups → top-8). Kimi K2.6 has
-# 1 group × 384 experts, plain ``topk(sigmoid(scores) + bias, k=8)``. The
-# kernel cannot be reused.
+# The MoE gate-kernel blocker — actual shape
+# ------------------------------------------
+# Kimi K2.6 cannot run MoE layers (1-60) on this code path because the gate
+# routing kernel is locked to DeepSeek-V3's grouped-routing config at three
+# layers:
 #
-# Three porting options for whoever picks up Kimi MoE on this code path:
+# 1. ``micro_ops/deepseek_moe_gate/op.py:DeepseekMoeGateSingleCore`` —
+#    asserts ``expected_input_tile_size == (16, 16) == 256`` experts and
+#    invokes the grouped LLK primitive.
+# 2. ``ttnn.experimental.deepseek_prefill.moe_grouped_topk`` — the
+#    *generalized-signature* TTNN op (``n_groups, summed_experts_per_group,
+#    topk_groups, n_activated_experts`` as runtime args) but its
+#    ``device/moe_grouped_topk_device_operation.cpp`` validate() hardcodes::
 #
-# - **C1. Port from** ``models/demos/kimi26_d_p/``. Active feature branch
-#   ``origin/ddjekic/kimi26_bringup`` already has ``tt/moe/tt_moe_gate_prefill.py``,
-#   ``tt_dispatch.py``, ``tt_combine.py``. Adapter work: that demo uses
-#   dispatch/combine MoE primitives; this ``_b1`` line uses bcast/reduce.
-#   Estimated weeks of focused integration work, but the kernel + algorithm
-#   are proven.
-# - **C2. Wait for / land** ``origin/gchoudhary/41826-generalize-moe_compute-shape-support``
-#   (also ``origin/dchen/moe_compute*``). That refactor makes the MoE compute
-#   accept arbitrary ``(n_routed_experts, top_k, n_groups, …)`` — right
-#   abstraction for Kimi K2.5, DS V4 Pro (384/top-6), Ling-1T (256/top-8),
-#   GLM-4.7 (160/top-8), Mistral Large 3, Gemma 4 26B, DS-OCR. See
-#   ``tests/nightly/tg/ccl/moe/test_moe_compute_6U.py`` for the full target
-#   matrix. **Strongly preferred** if landing is on a reasonable timeline.
-# - **C3. New kernel from scratch.** ``UngroupedTopKGateSingleCore`` alongside
-#   the DeepSeek one — e.g. ``(16, 24) = 384`` tile or ``(32, 16) = 512``
-#   padded with –∞ dummies. Teach ``HostIoDecoderStage`` to dispatch by config.
-#   ~3-4 weeks of new kernel work. Only useful for Kimi-family configs.
+#        TT_FATAL(attributes.n_groups == 8, ...);
+#        TT_FATAL(attributes.topk_groups == 4, ...);
+#        TT_FATAL(scores.logical_shape()[-1] == 256, ...);
 #
-# When the gate-kernel blocker is resolved, flip these e2e cases from
-# ``pytest.mark.skip`` to ``pytest.mark.skipif`` against ``--hf-model-path``
-# existence (the prefix knob is already in place):
+#    The Python interface looks parameterized but the C++ implementation
+#    isn't. This is the load-bearing constraint.
+# 3. The underlying LLK primitive ``deepseek_moe_gate`` (under
+#    ``kernel_includes/tt_llk/.../llk_math_deepseek_moe_gate_*.h``) is a
+#    bitonic-topk over a 16-element face — a hardware-specific SFPU primitive
+#    sized to DeepSeek's per-group width.
 #
-#   - kimi_safetensors_flat_moe_layer1_modeA
-#   - kimi_safetensors_per_step_moe_layer30_modeA
+# Kimi K2.6's routing config (from bit_sculpt's ``config/models.json``) is:
+# ``n_groups=1, experts_per_group=384, topk_groups=1, top_k=8,
+# scoring_func=sigmoid, routed_scaling_factor=2.827``. That is mathematically
+# the *degenerate* case of grouped routing (one global group), and equivalent
+# to plain ungrouped top-8 over 384.
 #
-# Other Kimi-MoE-layer cases (different layers, Mode B fanout, …) can be added
-# alongside. The ``language_model.`` prefix is already wired into the e2e
-# config dicts so no test changes needed beyond the skip → skipif flip.
+# Upstream activity (corrected)
+# -----------------------------
+# - ``origin/gchoudhary/41826-generalize-moe_compute-shape-support`` (51
+#   commits ahead of main, latest 2026-05-14) and ``origin/dchen/moe_compute*``
+#   are **NOT** generalizing the gate. They generalize the *expert side* —
+#   dispatch/combine, ring A2A packet splitting, shard distribution, expert
+#   compute — for Ling-1T (hidden=8192), GPT-OSS, etc.
+#   See ``tests/nightly/tg/ccl/moe/test_moe_compute_6U.py`` for that work's
+#   target matrix.
+#   **Do not wait for these branches to unblock Kimi gate routing — they
+#   won't.**
+# - ``origin/ddjekic/kimi26_bringup`` is the full Kimi 2.6 demo on the
+#   ``_d_p`` (distributed-prefill) sister demo line. Its gate kernel is
+#   ``models/demos/kimi26_d_p/tt/moe/tt_moe_gate_prefill.py``. Critically it
+#   defines a ``GateComputeMode`` enum with explicit host fallbacks because
+#   the device op doesn't support Kimi::
 #
-# Re-validate at flip time
-# ------------------------
-# 1. ``_check_metadata_consistency`` ``moe_layer_offset`` warning fires
-#    correctly for any Kimi case (offset=1 vs harness's effective offset).
-# 2. ``NUM_DENSE_LAYERS`` constant at the top of this file may need to become
-#    a per-config field (``moe_layer_offset`` on ``HostIoDecoderSweepConfig``)
-#    if you want to actually *route* Kimi layers correctly rather than just
-#    *warn* about the mismatch.
-# 3. ``CacheWeightProvider.load_moe_layer`` calls ``prepare_moe_layer_weights``
-#    with ``num_routed_experts=NUM_ROUTED_EXPERTS`` (==256 from
-#    ``weights/prepare.py``). That constant also needs lifting to a config /
-#    per-model knob before Kimi can run.
+#       DEVICE = "device"                       # everything device — fails for Kimi
+#       HOST_GROUPED_GATE = "host_grouped_gate" # matmul device, grouped-topk host
+#       HOST_MATMUL = "host_matmul"             # matmul host, grouped-topk device
+#       HOST_ALL = "host_all"                   # everything host
+#
+#   The grouped-topk-host mode is the production fallback shipping today on
+#   ``_d_p`` for Kimi.
+#
+# Reframed options for picking up the Kimi MoE work on ``_b1``
+# ------------------------------------------------------------
+# - **C1' (host-fallback gate, ~1-2 days, RECOMMENDED for validation infra).**
+#   Port ``kimi26_d_p``'s ``HOST_GROUPED_GATE`` recipe into this code path:
+#   keep the gate matmul on device, but after it, pull the
+#   ``(batch, n_experts)`` logits to host, run grouped-topk in plain torch
+#   (which handles ``n_groups=1`` trivially), push the resulting
+#   ``(batch, top_k)`` scores + indices back to device. The downstream MoE
+#   dispatch/combine pipeline consumes these tensors identically regardless of
+#   where they came from. Reference algorithm already lives in
+#   ``DeepseekMoeGateSingleCore.golden`` (60 lines), just needs parameterization
+#   over ``(n_groups, topk_groups, n_experts, top_k,
+#   routed_scaling_factor)``. Cost: one host roundtrip + ~384-element CPU
+#   topk per MoE layer per token. Negligible for PCC validation; not
+#   production-throughput. **This is what this harness wants** — its purpose
+#   is correctness validation against bit_sculpt reference traces.
+#
+# - **C2 (device kernel generalization, weeks).** Lift the three TT_FATALs in
+#   ``moe_grouped_topk_device_operation.cpp:validate()`` and teach the LLK /
+#   SFPU bitonic-topk primitive to handle ``(n_groups=1, n_experts=384,
+#   top_k=8)``. This is real LLK work because the 16-element face primitive
+#   doesn't fit 384 directly — likely needs a multi-tile path. Production
+#   route, but **no one is actively doing this work right now** on any
+#   branch I checked. Don't block on it.
+#
+# - **C3 (new ungrouped kernel from scratch, ~3-4 weeks).** Write
+#   ``UngroupedTopKGateSingleCore`` alongside the DeepSeek one — e.g.
+#   ``(16, 24) = 384`` tile or ``(32, 16) = 512`` padded with –∞ dummies — and
+#   teach ``HostIoDecoderStage`` to dispatch by config. Only useful if the
+#   ungrouped pattern needs to be fast; likely superseded by C2.
+#
+# Recommendation: do **C1'** when the time comes to validate Kimi MoE PCC on
+# this harness. The cost is small and the path is proven on ``_d_p``.
+#
+# Concrete edits when C1' lands
+# -----------------------------
+# 1. Add ``gate_compute_mode: Literal["device", "host_grouped_gate"] = "device"``
+#    to ``HostIoDecoderSweepConfig``; default preserves DeepSeek path.
+# 2. Lift ``NUM_ROUTED_EXPERTS`` (currently the ==256 constant in
+#    ``weights/prepare.py``) and ``routed_scaling_factor`` (the
+#    ``scaling_factor=2.5`` in ``DeepseekMoeGateSingleCore``) to config
+#    fields on ``HostIoDecoderSweepConfig``.
+# 3. Optionally lift ``NUM_DENSE_LAYERS`` to ``moe_layer_offset`` config so
+#    layer-type routing is correct for Kimi (preflight currently only *warns*
+#    on the mismatch; once we want to validate Kimi layers 1-2 as MoE we
+#    need actual routing).
+# 4. Flip these e2e cases from ``pytest.mark.skip`` to
+#    ``pytest.mark.skipif`` against ``--hf-model-path`` existence (the
+#    ``weight_key_prefix`` knob is already in place)::
+#
+#      - kimi_safetensors_flat_moe_layer1_modeA
+#      - kimi_safetensors_per_step_moe_layer30_modeA
+#
+# The Kimi-dense layer-0 case (``kimi_safetensors_flat_dense_layer0_modeA``)
+# is already at ``skipif(weights-not-staged)`` — no gate kernel involved.
 #
 # ============================================================================
