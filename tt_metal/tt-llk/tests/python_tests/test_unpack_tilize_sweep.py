@@ -37,18 +37,8 @@ from helpers.utils import passed_test
     # Int32 is Int32→Int32 only (unpacker constraint); concatenated via same=True.
     formats=lambda narrow_tile: (
         input_output_formats(
-            [
-                DataFormat.Float32,
-                DataFormat.Float16,
-                DataFormat.Float16_b,
-                DataFormat.Bfp8_b,
-            ]
-            if narrow_tile == NarrowTile.No
-            else [
-                DataFormat.Float32,
-                DataFormat.Float16,
-                DataFormat.Float16_b,
-            ]
+            [DataFormat.Float32, DataFormat.Float16, DataFormat.Float16_b]
+            + ([DataFormat.Bfp8_b] if narrow_tile == NarrowTile.No else [])
         )
         + input_output_formats([DataFormat.Int32], same=True)
     ),
