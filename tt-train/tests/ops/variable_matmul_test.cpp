@@ -1188,6 +1188,58 @@ TEST_F(VariableMatmulTest, OnDeviceOffsets_InputRow_ZeroPadRowsProduceZeroOutput
     EXPECT_LT(zero_input_err, 1e-3F) << "InputRow zero-input rows produced non-zero output: max_abs=" << zero_input_err;
 }
 
+// Mimics moe_ffn bwd dX_via_gate matmul: in0 has real rows + trailing zero rows
+// within the OutputRow-selected M range. Matmul output for zero-input rows MUST
+// be zero — this test exposes whether OutputRow's M_tiles override correctly
+// produces zero output for zero input across cores.
+TEST_F(VariableMatmulTest, OnDeviceOffsets_OutputRow_ZeroInputRowsProduceZeroOutput) {
+    const uint32_t M_input = 128, K = 128, N = 64;
+    const uint32_t T_cap = 256;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto in0_h = xt::xarray<float>::from_shape({1U, 1U, M_input, K});
+    auto& rng = ttml::autograd::ctx().get_generator();
+    std::mt19937 rng_local(rng());
+    std::uniform_real_distribution<float> dist(0.0F, 1.0F);
+    for (uint32_t m = 0; m < M_input; ++m) {
+        for (uint32_t k = 0; k < K; ++k) {
+            in0_h(0, 0, m, k) = (m < 48U) ? dist(rng_local) : 0.0F;
+        }
+    }
+    auto in0 = ttml::core::from_xtensor(in0_h, device);
+    auto weight = create_random_device_tensor(K, N, device);
+    auto parent_out = ttml::core::zeros(ttnn::Shape({1U, 1U, T_cap, N}), device, ttnn::DataType::BFLOAT16);
+
+    std::vector<uint32_t> offsets_host = {0U, 64U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+
+    ttml::metal::variable_matmul(
+        in0,
+        weight,
+        kConfig,
+        std::nullopt,
+        0U,
+        0U,
+        0U,
+        0U,
+        parent_out,
+        0U,
+        offsets,
+        ttml::metal::OffsetsRole::OutputRow,
+        0U);
+
+    auto written = ttml::core::to_vector<float>(parent_out);
+
+    float zero_input_err = 0.0F;
+    for (uint32_t m = 48U; m < 64U; ++m) {
+        for (uint32_t n = 0; n < N; ++n) {
+            zero_input_err = std::max(zero_input_err, std::abs(written[m * N + n]));
+        }
+    }
+    EXPECT_LT(zero_input_err, 1.0F) << "OutputRow zero-input rows produced non-zero output: max_abs=" << zero_input_err;
+}
+
 TEST_F(VariableMatmulTest, WriteAtOffset_NoTranspose) {
     const uint32_t M_e = 128, K = 128, N = 256, M_parent = 512;
     auto* device = &ttml::autograd::ctx().get_device();
