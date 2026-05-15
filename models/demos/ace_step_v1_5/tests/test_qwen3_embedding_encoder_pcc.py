@@ -13,6 +13,7 @@ import torch
 from transformers import AutoModel, AutoTokenizer
 
 import ttnn
+from models.demos.ace_step_v1_5.tests._dit_decoder_pcc_common import assert_pcc_print
 from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
 
 # Same default checkpoint root as ``run_prompt_to_wav`` (HF hub cache layout).
@@ -61,10 +62,8 @@ def test_qwen3_encoder_pcc_vs_torch(device):
     # TTNN returns [B,1,S,H] vs torch [B,S,H]
     y_tt_np = y_tt_np.reshape(y_ref.shape)
 
-    a = y_ref.reshape(-1).astype(np.float64)
-    b = y_tt_np.reshape(-1).astype(np.float64)
-    pearson = float(np.corrcoef(a, b)[0, 1])
-    rmse = float(np.sqrt(np.mean((a - b) ** 2)))
-    max_abs = float(np.max(np.abs(a - b)))
-    # ~0.99+ vs ``AutoModel`` in bf16 (matches TTNN weights/math width).
-    assert pearson >= 0.99, f"Pearson {pearson:.4f} below threshold; rmse={rmse:.4g} max_abs={max_abs:.4g}"
+    assert_pcc_print(
+        "qwen3_embedding_encoder",
+        torch.from_numpy(y_ref),
+        torch.from_numpy(y_tt_np),
+    )

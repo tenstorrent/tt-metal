@@ -7,6 +7,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from models.demos.ace_step_v1_5.tests._dit_decoder_pcc_common import assert_pcc_print
 from models.demos.ace_step_v1_5.torch_ref.dit_decoder_core import (
     TorchAceStepDiTCoreRef,
     TorchTimestepEmbeddingRef,
@@ -18,7 +19,6 @@ from models.demos.ace_step_v1_5.ttnn_impl.dit_decoder_core import (
     TtAceStepDiTCore,
     TtTimestepEmbedding,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def test_timestep_embedding_matches_torch(mesh_device):
@@ -57,8 +57,8 @@ def test_timestep_embedding_matches_torch(mesh_device):
     temb = ttnn.to_torch(temb_tt).to(torch.bfloat16)
     tp = ttnn.to_torch(tp_tt).to(torch.bfloat16)
 
-    assert_with_pcc(temb_ref, temb, pcc=0.999)
-    assert_with_pcc(tp_ref, tp, pcc=0.999)
+    assert_pcc_print("timestep_embedding_temb", temb_ref, temb)
+    assert_pcc_print("timestep_embedding_proj", tp_ref, tp)
 
 
 def test_dit_decoder_core_matches_torch(mesh_device):
@@ -110,9 +110,7 @@ def test_dit_decoder_core_matches_torch(mesh_device):
     y_tt = tt_core(x_tt, tp_tt, enc_tt)
     y = ttnn.to_torch(y_tt).to(torch.bfloat16)
 
-    # NOTE: This tiny config exercises SDPA + rotary + BF16 paths; due to differing
-    # numerics between torch reference and device kernels, we use a slightly looser PCC.
-    assert_with_pcc(y_ref, y, pcc=0.97)
+    assert_pcc_print("dit_decoder_core_mha", y_ref, y)
 
 
 def test_dit_decoder_core_gqa_matches_torch(mesh_device):
@@ -165,5 +163,4 @@ def test_dit_decoder_core_gqa_matches_torch(mesh_device):
     y_tt = tt_core(x_tt, tp_tt, enc_tt)
     y = ttnn.to_torch(y_tt).to(torch.bfloat16)
 
-    # GQA + repeat_interleave is slightly noisier than full MHA on device BF16 SDPA.
-    assert_with_pcc(y_ref, y, pcc=0.95)
+    assert_pcc_print("dit_decoder_core_gqa", y_ref, y)

@@ -27,6 +27,7 @@ from safetensors import safe_open
 from transformers import AutoModel, AutoTokenizer
 
 import ttnn
+from models.demos.ace_step_v1_5.tests._dit_decoder_pcc_common import assert_pcc_print
 from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
 from models.demos.ace_step_v1_5.ttnn_impl.text_projector import TtAceStepTextProjector, load_text_projector_weight_numpy
 
@@ -100,12 +101,11 @@ def test_ttnn_text_condition_embedding_pcc_vs_torch(device):
     projected_tt = projector_tt.forward_from_hidden(text_tt, activation_dtype=getattr(ttnn, "bfloat16", None))
     projected_tt_np = ttnn.to_torch(projected_tt).float().reshape(projected_ref.shape).numpy()
 
-    pearson = _pearson(projected_ref, projected_tt_np)
-    rmse = float(np.sqrt(np.mean((projected_ref.astype(np.float64) - projected_tt_np.astype(np.float64)) ** 2)))
-    # The projector widens Qwen hidden states from 1024 -> 2048 and amplifies the existing BF16
-    # Qwen encoder drift. This threshold is a regression guard for the implemented end-to-end
-    # lightweight condition path, not a bit-exact projector-only test.
-    assert pearson >= 0.98, f"projected condition PCC={pearson:.6f}, rmse={rmse:.6g}"
+    assert_pcc_print(
+        "ttnn_text_condition_embedding",
+        torch.from_numpy(projected_ref),
+        torch.from_numpy(projected_tt_np),
+    )
 
 
 @pytest.mark.skipif(
@@ -135,4 +135,8 @@ def test_ttnn_context_latents_match_torch_cat(device):
     ctx_tt = ttnn.concat([src_tt, mask_tt], dim=-1)
     got = ttnn.to_torch(ctx_tt).float().numpy()
 
-    np.testing.assert_allclose(got, ref, rtol=0.0, atol=0.0)
+    assert_pcc_print(
+        "ttnn_context_latents_cat",
+        torch.from_numpy(ref),
+        torch.from_numpy(got),
+    )

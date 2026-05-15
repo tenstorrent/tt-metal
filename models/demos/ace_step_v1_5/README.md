@@ -123,18 +123,20 @@ python3 models/demos/ace_step_v1_5/run_prompt_to_wav.py \
   - Device → host at the end (final outputs for PCC comparison)
 - **One-to-one mapping**: every Torch module has a TTNN equivalent.
 
-## Attention modes (`attention_impl`)
+## DiT decoder PCC tests (demo path)
 
-`AceConfig.attention_impl` / `AceConfigTTNN.attention_impl`:
+Production DiT code lives in `ttnn_impl/dit_decoder_core.py` (`TtAceStepDiTLayer`, `TtAceStepAttentionSDPA`, …). Layer PCC tests target that stack:
 
-| Value | Torch module | TTNN module |
-|-------|----------------|-------------|
-| `"explicit"` | `MultiHeadSelfAttention` | `MultiHeadSelfAttentionTTNN` (matmul + softmax + causal mask) |
-| `"sdpa"` | `MultiHeadSelfAttentionSDPA` (`F.scaled_dot_product_attention`) | `MultiHeadSelfAttentionSDPATTNN` (`ttnn.transformer.scaled_dot_product_attention`) |
+| Test file | Component |
+|-----------|-----------|
+| `test_pcc_adaln.py` | Scale-shift AdaLN modulation inside `TtAceStepDiTLayer` |
+| `test_pcc_attention.py` | `TtAceStepAttentionSDPA` (self + cross, GQA) |
+| `test_pcc_block.py` | `TtQwen3MLP` + full `TtAceStepDiTLayer` |
+| `test_pcc_dit_decoder_core.py` | Full `TtAceStepDiTCore` |
 
-Use the same string on both configs so `TransformerBlock` / `TransformerBlockTTNN` stay aligned.
+`ttnn_impl/modules.py` is a legacy block library for small experiments; it is **not** used by `run_prompt_to_wav.py`.
 
-TTNN SDPA rejects TILE tensors whose **logical** head dimension is smaller than the tile padding on that axis (e.g. head_dim 16 inside 32-wide tiles). The TTNN module zero-pads Q/K/V along head_dim to the next multiple of **32** before SDPA and slices the output back to the real `d_head`, with **`scale = 1/sqrt(d_head)`** so scaling still matches PyTorch.
+TTNN SDPA in `dit_decoder_core` uses **tile-aligned `head_dim`** (often 32). Self-attention pads sequence length to a tile multiple and masks padded keys so softmax matches the torch reference.
 
 ## Layout
 
@@ -163,7 +165,7 @@ export MESH_DEVICE=N150   # or N300 / T3K
 
 ## Notes
 
-- PCC threshold in tests is set to `>= -0.9` per request (very lenient). You can tighten it later.
+- PCC tests print the score and assert at **0.99** via ``assert_pcc_print`` in ``tests/_dit_decoder_pcc_common.py``.
 - The `mesh_device` pytest fixture is **session-scoped** (one `open_mesh_device` per process). Opening and closing a mesh around every test exhausts Metal context IDs and can trigger invalid `context_id` / teardown crashes on distributed meshes.
 
 ## TTNN demo (`ttnn_impl/full_pipeline.py`) — weights default to **Base**

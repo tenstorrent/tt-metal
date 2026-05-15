@@ -8,13 +8,12 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
-from loguru import logger
 
 import ttnn
+from models.demos.ace_step_v1_5.tests._dit_decoder_pcc_common import assert_pcc_print
 from models.demos.ace_step_v1_5.torch_ref.output_head import OutputHeadConfig, TorchAceStepDiTOutputHead
 from models.demos.ace_step_v1_5.ttnn_impl.output_head import TtAceStepDiTOutputHead
 from models.demos.ace_step_v1_5.ttnn_impl.patchify import PatchifyMetadata
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @dataclass(frozen=True)
@@ -91,5 +90,4 @@ def test_output_head_matches_torch(device, torch_seed):
     y_tt = tt_head(x_tt, temb_tt, meta)
     y_tt_torch = ttnn.to_torch(y_tt).float()
 
-    _pcc_ok, pcc_msg = assert_with_pcc(y_ref, y_tt_torch, pcc=0.99)
-    logger.info(f"[ace_step_v1_5][output_head] {pcc_msg} (threshold=0.99, ok={_pcc_ok})")
+    assert_pcc_print("output_head", y_ref, y_tt_torch)

@@ -15,14 +15,12 @@ import json
 import numpy as np
 import pytest
 import torch
-from loguru import logger
 from safetensors.torch import save_file
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.demos.ace_step_v1_5.tests._dit_decoder_pcc_common import PCC_THRESHOLD, assert_pcc_print
 from models.demos.ace_step_v1_5.torch_ref.full_pipeline import AceStepV15TorchPipeline
 from models.demos.ace_step_v1_5.ttnn_impl.full_pipeline import AceStepV15TTNNPipeline
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def _make_random_safetensors(
@@ -363,9 +361,12 @@ class TestDiTPipelinePCC:
         assert (
             torch_out.shape == ttnn_out.shape
         ), f"Shape mismatch: torch={tuple(torch_out.shape)} vs ttnn={tuple(ttnn_out.shape)}"
-        pcc_passed, pcc_msg = comp_pcc(torch_out, ttnn_out, pcc=pcc_threshold)
-        logger.info(f"Single-step PCC (B={B}, T={T}, step={timestep_index}): {pcc_msg}")
-        assert_with_pcc(torch_out, ttnn_out, pcc=pcc_threshold)
+        assert_pcc_print(
+            f"e2e_single_step_B{B}_T{T}_step{timestep_index}",
+            torch_out,
+            ttnn_out,
+            pcc=pcc_threshold,
+        )
 
     def test_pcc_single_step_b1(self, tmp_path):
         """PCC for single forward, B=1."""
@@ -375,7 +376,7 @@ class TestDiTPipelinePCC:
             T=64,
             cond_seq_len=4,
             timestep_index=0,
-            pcc_threshold=0.95,
+            pcc_threshold=PCC_THRESHOLD,
         )
 
     def test_pcc_single_step_b2(self, tmp_path):
@@ -386,7 +387,7 @@ class TestDiTPipelinePCC:
             T=32,
             cond_seq_len=8,
             timestep_index=1,
-            pcc_threshold=0.95,
+            pcc_threshold=PCC_THRESHOLD,
         )
 
     def test_pcc_multi_step_denoising(self, tmp_path):
@@ -474,6 +475,4 @@ class TestDiTPipelinePCC:
         torch_final = torch_final[:, :min_seq, :]
         ttnn_final = ttnn_final[:, :min_seq, :]
 
-        pcc_passed, pcc_msg = comp_pcc(torch_final, ttnn_final, pcc=0.90)
-        logger.info(f"Multi-step denoising PCC ({num_steps} steps): {pcc_msg}")
-        assert_with_pcc(torch_final, ttnn_final, pcc=0.90)
+        assert_pcc_print(f"e2e_multi_step_denoising_{num_steps}steps", torch_final, ttnn_final)
