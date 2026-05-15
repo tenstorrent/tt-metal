@@ -479,7 +479,7 @@ inline void reconfig_packer_data_format(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    [[maybe_unused]] const std::uint32_t face_r_dim,
+    const std::uint32_t face_r_dim,
     const std::uint32_t tile_c_dim,
     const std::uint32_t num_faces,
     const bool partial_face)
@@ -570,15 +570,13 @@ inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t face_r_dim          = FACE_R_DIM,
-    const std::uint32_t tile_c_dim          = TILE_C_DIM,
-    const std::uint32_t num_faces           = 4,
-    const bool partial_face                 = false,
-    [[maybe_unused]] const bool narrow_tile = false,
-    const std::uint32_t relu_config         = 0)
+    const std::uint32_t face_r_dim  = FACE_R_DIM,
+    const std::uint32_t tile_c_dim  = TILE_C_DIM,
+    const std::uint32_t num_faces   = 4,
+    const bool partial_face         = false,
+    const std::uint32_t relu_config = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    LLK_ASSERT(!narrow_tile, "narrow_tile: this parameter is unused");
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format & 0xF), static_cast<DataFormat>(pack_dst_format & 0xF)),
         "Unsupported packer to L1 conversion.");
@@ -827,7 +825,7 @@ enum class PackerProgramType
 /**
  * Validates that all packers' config and counters match the expected formats and face dimension.
  * On mismatch, issues DEVICE_PRINT (when enabled) and LLK_ASSERT. Typically invoked via
- * `LLK_ASSERT_BLOCK(are_packers_configured_correctly<...>(...))` in llk_pack_api.h.
+ * `LLK_ASSERT_BLOCK(are_packers_configured_correctly<...>(...))` in llk_pack_tile_api.h.
  *
  * @param pack_src_format   Expected input data format for all packers
  * @param pack_dst_format   Expected output data format for all packers

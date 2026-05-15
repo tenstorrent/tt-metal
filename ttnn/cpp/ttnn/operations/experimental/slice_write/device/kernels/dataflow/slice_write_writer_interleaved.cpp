@@ -59,7 +59,7 @@ void kernel_main() {
     const auto s0 = TensorAccessor(dst_args, dst_addr, output_stick_size);
     const uint32_t noc_write_size = std::min(output_stick_size, input_stick_size);
 
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB cb_out0(cb_id_out0);
 
     uint32_t dst_stick_id = start_id;

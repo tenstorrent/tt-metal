@@ -18,6 +18,7 @@ from models.common.llama_models import (
     extract_images_from_messages,
     sample_top_p,
 )
+from models.common.model_capabilities import ModelCapabilitiesMixin
 from models.common.sampling import (
     SamplingParams,
     broadcast_sampling_params,
@@ -51,7 +52,7 @@ def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
 
-class Generator(WarmupForwardMixin):
+class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
@@ -512,7 +513,18 @@ class Generator(WarmupForwardMixin):
         if not isinstance(prompt_lens, list):
             prompt_lens = prompt_lens.tolist()
 
-        prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
+        # Pad by uncached suffix length: only (seq_len - num_cached) tokens reach the kernel.
+        # int() normalizes numpy.int64 from vLLM callers (bit_length() requires a Python int).
+        num_cached_per_user = [int(n) for n in start_pos] if start_pos is not None else [0] * len(prompt_lens)
+        assert len(num_cached_per_user) == len(
+            prompt_lens
+        ), f"start_pos length {len(num_cached_per_user)} != prompt_lens length {len(prompt_lens)}"
+        for i, (seq_len, num_cached) in enumerate(zip(prompt_lens, num_cached_per_user)):
+            assert 0 <= num_cached < seq_len, f"user {i}: num_cached={num_cached} must be < seq_len={seq_len}"
+        prefill_seq_lens = [
+            get_padded_prefill_len(seq_len - num_cached)
+            for seq_len, num_cached in zip(prompt_lens, num_cached_per_user)
+        ]
         # Row-sharded batched prefill: process 1 user per row per iteration.
         # Only used when device sampling is active (sampling_params is not None)
         # and the prompt uses the harmony chat template (first token is <|start|>=200006).
@@ -545,6 +557,9 @@ class Generator(WarmupForwardMixin):
             and len(set(prefill_seq_lens)) == 1
             and self.data_parallel == 1
             and not getattr(self.model_args[0], "disable_batched_prefill", False)
+            and all(
+                n == 0 for n in num_cached_per_user
+            )  # batched path feeds full tokens; incompatible with cached prefixes
         )
 
         if use_batched_prefill and sampling_on_device_requested:
@@ -2502,18 +2517,35 @@ class Generator(WarmupForwardMixin):
             super().__del__()
 
 
+def _mesh_shape_tuple(mesh_shape):
+    return tuple(int(dim) for dim in mesh_shape)
+
+
+def _galaxy_data_parallel_submesh_shape(devices_per_group):
+    # Galaxy DP groups should follow the 4x8 row-oriented view recommended by
+    # the runtime, so DP=4 maps to four routeable 1x8 T3K-like submeshes.
+    if devices_per_group >= 8 and devices_per_group % 8 == 0:
+        return ttnn.MeshShape(devices_per_group // 8, 8)
+    # Smaller DP groups still use contiguous 1D row submeshes; callers select
+    # linear CCL when these groups are too small for ring topology.
+    return ttnn.MeshShape(1, devices_per_group)
+
+
 def create_submeshes(mesh_device, data_parallel):
-    if not isinstance(mesh_device, ttnn.MeshDevice) or data_parallel == 1:
+    mesh_device_type = getattr(ttnn, "MeshDevice", None)
+    if mesh_device_type is None:
+        mesh_device_type = getattr(getattr(ttnn, "device", None), "Device", None)
+    if mesh_device_type is None or not isinstance(mesh_device, mesh_device_type) or data_parallel == 1:
         return [mesh_device]
 
-    num_rows, num_cols = mesh_device.shape
+    num_rows, num_cols = _mesh_shape_tuple(mesh_device.shape)
     num_devices = num_rows * num_cols
     assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
 
-    if num_rows == 8 and num_cols == 4 and num_cols % data_parallel == 0:
-        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(num_rows, num_cols // data_parallel))
-        for submesh in submeshes:
-            submesh.reshape(ttnn.MeshShape(1, num_devices // data_parallel))
-        return submeshes
+    if num_devices == 32:
+        if (num_rows, num_cols) != (4, 8):
+            logger.info(f"Reshaping 32-device mesh from {(num_rows, num_cols)} to (4, 8) for DP submeshes")
+            mesh_device.reshape(ttnn.MeshShape(4, 8))
+        return mesh_device.create_submeshes(_galaxy_data_parallel_submesh_shape(num_devices // data_parallel))
 
     return mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
