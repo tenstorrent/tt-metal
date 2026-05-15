@@ -1600,6 +1600,7 @@ def _run_slice_k(
     fmt_ratios=None,
     k_parallel_per_bank=1,
     num_loop_iters=1,
+    primary_at_last_offset=False,
 ):
     """K-sliced path: HEIGHT_SHARDED SRAM, separate output grids."""
     cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
@@ -1873,6 +1874,7 @@ def _run_hybrid_expert_multi_device(
             fmt_ratios,
             k_parallel_per_bank=k_parallel_per_bank,
             num_loop_iters=num_loop_iters,
+            primary_at_last_offset=primary_at_last_offset,
         )
     elif accum_experts:
         _run_accum(
