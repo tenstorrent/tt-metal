@@ -223,6 +223,7 @@ class TTAdaINResBlock1:
                 device=self.device,
                 compute_config=ck,
                 memory_config=memory_config,
+                preserve_input_dtype=True,
             )
             xt = ad2.forward(xt, style_bs, compute_kernel_config=ck, memory_config=memory_config)
             xt = _tt_snake1d(xt, stage_params.alpha2, memory_config=memory_config)
@@ -232,6 +233,7 @@ class TTAdaINResBlock1:
                 device=self.device,
                 compute_config=ck,
                 memory_config=memory_config,
+                preserve_input_dtype=True,
             )
             x_new = ttnn.add(xt, x, memory_config=memory_config)
             ttnn.deallocate(xt)
