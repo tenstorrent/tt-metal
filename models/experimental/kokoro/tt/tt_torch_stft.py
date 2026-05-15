@@ -390,16 +390,35 @@ class TTTorchSTFT:
 
         Returns:
             ``(magnitude, phase)`` each ``[B, K, F]`` (TILE layout).
+
+        Uses the strided conv2d path (n_fft-length inner products per frame) rather than
+        the large [L, K*F] matmul for better numerical precision on near-zero bins.
         """
         L_in = int(x_bL.shape[-1])
         if L_in != self.params.input_length:
             raise ValueError(f"input length mismatch: got {L_in}, expected {self.params.input_length}")
         if x_bL.dtype != ttnn.float32:
             x_bL = ttnn.typecast(x_bL, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        X_real = self._matmul_to_bkf(x_bL, self.params.stft_real)
-        X_imag = self._matmul_to_bkf(x_bL, self.params.stft_imag)
 
-        # Match tt_old stabilization: sqrt(real^2 + imag^2 + eps).
+        p = self.params
+        B = int(x_bL.shape[0])
+
+        # Reshape [B, L] → [B, 1, L, 1] in ROW_MAJOR for slice/concat ops in padding.
+        x_bL_rm = ttnn.to_layout(x_bL, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_n1lc = ttnn.reshape(x_bL_rm, [B, 1, L_in, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x_bL_rm)
+
+        # Reflection-pad by n_fft//2 on each side → [B, 1, L_padded, 1].
+        x_padded = _reflect_pad_1d_dim2(x_n1lc, L_in, p.conv_pad_len)
+        ttnn.deallocate(x_n1lc)
+        L_padded = L_in + 2 * p.conv_pad_len
+
+        # Strided conv2d computes windowed DFT coefficients — [B, K, F] each.
+        X_real = self._conv_real(x_padded, B, L_padded)
+        X_imag = self._conv_imag(x_padded, B, L_padded)
+        ttnn.deallocate(x_padded)
+
+        # sqrt(real^2 + imag^2 + eps) stabilization.
         mag_sq = ttnn.add(
             ttnn.multiply(X_real, X_real, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             ttnn.multiply(X_imag, X_imag, memory_config=ttnn.DRAM_MEMORY_CONFIG),
@@ -411,7 +430,6 @@ class TTTorchSTFT:
         magnitude = ttnn.sqrt(mag_sq, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(mag_sq)
         phase = ttnn.atan2(X_imag, X_real, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # Match old STFT edge-case behavior for branch cut at negative real axis.
         corr_mask = ttnn.logical_and(
             ttnn.eq(X_imag, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             ttnn.lt(X_real, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG),
@@ -421,7 +439,6 @@ class TTTorchSTFT:
         phase = ttnn.where(corr_mask, pi_fill, phase, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(corr_mask)
         ttnn.deallocate(pi_fill)
-
         ttnn.deallocate(X_real)
         ttnn.deallocate(X_imag)
         return magnitude, phase
