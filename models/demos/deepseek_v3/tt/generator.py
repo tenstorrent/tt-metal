@@ -3092,6 +3092,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         user_id = 0
         original_sample_on_device = getattr(self, "sample_on_device", False)
+        original_sampling_params = getattr(self, "sampling_params", None)
         if sample_on_device is None or self.vllm_context:
             sample_on_device_list = [False, True] if can_sample_on_device else [False]
         else:
@@ -3112,7 +3113,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 )
                 if sample_on_device:
                     self._validate_and_initialize_sampling(
-                        None,
+                        original_sampling_params,
                         sample_on_device,
                         enable_trace=enable_trace,
                     )
@@ -3135,7 +3136,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         if getattr(self, "sample_on_device", False) != original_sample_on_device:
             # Warmup may initialize sampling internals; restore the caller's expected mode.
             self._validate_and_initialize_sampling(
-                None,
+                original_sampling_params,
                 original_sample_on_device,
                 enable_trace=enable_trace,
             )
