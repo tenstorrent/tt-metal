@@ -30,14 +30,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
 
+    const std::uint32_t num_faces = _llk_unpack_tilize_num_faces_wrapper_(params.num_faces);
+
     // Initialize tilize unpacker
-    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, FACE_R_DIM, params.NARROW_TILE);
+    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, FACE_R_DIM, params.NARROW_TILE, num_faces);
 
     std::uint32_t read_offset = 0;
 
     const std::uint32_t block_ct_dim = _llk_unpack_tilize_block_ct_dim_wrapper_(params.BLOCK_CT_DIM);
-
-    const std::uint32_t num_faces = _llk_unpack_tilize_num_faces_wrapper_(params.num_faces);
 
     // Main tilize loop - handle different tile configurations
     for (std::uint32_t row = 0; row < params.BLOCK_RT_DIM; ++row)
