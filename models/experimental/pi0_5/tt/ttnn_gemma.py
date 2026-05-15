@@ -405,12 +405,14 @@ class GemmaAttentionTTNN:
             packer_l1_acc=True,
         )
 
-        # SDPA compute config - HiFi2 sufficient for attention (matches tt_transformers)
+        # SDPA compute config — packer_l1_acc=True keeps softmax accumulators
+        # on-chip (matches the SigLIP / ViT-BH-hiRes §5.4 path). Running 10×
+        # per inference in the denoise loop, this is a cheap precision win.
         self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
     def forward(
@@ -578,7 +580,7 @@ class GemmaAttentionTTNN:
             output = ttnn.linear(
                 attn_concat,
                 self.o_proj,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 program_config=oproj_pcfg,
@@ -587,7 +589,7 @@ class GemmaAttentionTTNN:
             output = ttnn.linear(
                 attn_concat,
                 self.o_proj,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 core_grid=self.core_grid,
@@ -779,7 +781,7 @@ class GemmaMLPTTNN:
             )
 
             common_kwargs = dict(
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
@@ -1065,7 +1067,9 @@ def build_sharded_norm_pcfg(
 # packer accumulate into L1 directly.
 _RMS_NORM_COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
-    math_approx_mode=True,
+    math_approx_mode=False,  # was True — precision A/B: keep fp32_dest_acc_en=False
+    # to avoid halving the dst-register budget (which trips
+    # subblock_wt <= 4 in the sharded LN kernel).
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )

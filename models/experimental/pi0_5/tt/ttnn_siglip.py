@@ -334,11 +334,15 @@ class SigLIPAttentionTTNN:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # SDPA compute kernel — match ViT-BH-hiRes (§5.4): packer_l1_acc=True
+        # to keep softmax accumulators on-chip and reduce L1 traffic. HiFi2 vs
+        # HiFi4: BH HiFi2 already gives sufficient softmax precision for SigLIP;
+        # leaving HiFi4 as a future A/B if accuracy regresses.
         self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
