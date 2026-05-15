@@ -39,11 +39,18 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen3_6_galaxy_v2.tt.ttnn_delta_rule_ops_fp32 import recurrent_gated_delta_rule_ttnn_fp32
+from models.demos.qwen3_6_galaxy_v2.tt.ttnn_delta_rule_ops_fp32 import (
+    _fp32_compute_cfg_hifi4,
+    recurrent_gated_delta_rule_ttnn_fp32,
+)
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_ttnn,  # kept for back-compat; not used in fp32 path
 )
-from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import chunk_gated_delta_rule_ttnn
+from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
+    _recurrent_read_query_program_config,
+    chunk_gated_delta_rule_ttnn,
+    l2_norm_ttnn,
+)
 
 
 # ----------------------------------------------------------------------------
@@ -165,6 +172,7 @@ class TtQwen36DeltaAttention(LightweightModule):
         tt_ccl,
         dtype=ttnn.bfloat16,
         use_tt_lang_beta_g: bool = False,
+        use_tt_lang_recurrent: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -174,6 +182,10 @@ class TtQwen36DeltaAttention(LightweightModule):
         # the TtTransformer / decoder layer hierarchy.
         env_flag = os.environ.get("QWEN36_TT_LANG_BETA_G", "").strip()
         self.use_tt_lang_beta_g = use_tt_lang_beta_g or (env_flag == "1")
+        # V2-18: optional partial tt-lang recurrent kernel (per-head state
+        # update only, readout matmul remains external).
+        env_flag_rec = os.environ.get("QWEN36_TT_LANG_RECURRENT", "").strip()
+        self.use_tt_lang_recurrent = use_tt_lang_recurrent or (env_flag_rec == "1")
 
         self.mesh_device = mesh_device
         self.args = args
@@ -248,6 +260,14 @@ class TtQwen36DeltaAttention(LightweightModule):
         self._beta_g_kernel_state = None
         if self.use_tt_lang_beta_g:
             self._beta_g_kernel_state = self._build_beta_g_kernel_state()
+
+        # V2-18: partial tt-lang recurrent kernel state. The kernel handles
+        # state_new[h] = state[h] * decay[h] + outer(k_col, v_row) * beta[h]
+        # for one head per launch; readout (q @ state_new) is external. Only
+        # constructed when the flag is on so the safe path stays free.
+        self._recurrent_kernel_state = None
+        if self.use_tt_lang_recurrent:
+            self._recurrent_kernel_state = self._build_recurrent_kernel_state()
 
     # ------------------------------------------------------------------
     # Weight construction helpers (ported from v1 _build_weights)
@@ -892,6 +912,482 @@ class TtQwen36DeltaAttention(LightweightModule):
         g = ttnn.multiply(ttnn.neg(A_exp, memory_config=mem), sp, memory_config=mem)
         return beta, g
 
+    # ------------------------------------------------------------------
+    # V2-18: partial tt-lang recurrent kernel (per-head state update only)
+    # ------------------------------------------------------------------
+    # The kernel emitted by ``tt/kernels/recurrent_delta_rule_kernel.py``
+    # fuses the per-head state update (state*decay + outer(k,v)*beta) into
+    # a single ttnn.generic_op launch on a single-core grid=(1,1). It
+    # handles ONE head per launch — so wiring it into the 6-V-head/row
+    # decode path costs 6 launches per layer per step. The readout matmul
+    # (q @ state_new) is NOT fused into the kernel (the V2-17 kernel emits
+    # zeros for the readout output); we keep the existing batched matmul
+    # for the readout pattern.
+    #
+    # NOTE: this is a perf-measurement integration — see PERF.md V2-18.
+    # The hypothesis under test: does the kernel saving on the state update
+    # (6.68x at single-tile in isolation) yield ANY real-loop savings when
+    # converted to a per-head Python loop, vs the existing fp32 chain that
+    # runs the state update batched across all 6 heads via a single
+    # MatmulMultiCoreReuseProgramConfig launch.
+
+    _REC_KERNELS_DIR = Path(__file__).resolve().parent / "kernels" / "recurrent_delta_rule"
+    _REC_NUM_TENSORS = 8
+    _REC_TILE = 32
+    _REC_K_TILES = 4  # head_dim / 32 = 4
+    _REC_V_TILES = 4  # head_dim / 32 = 4
+    _REC_K_DIM = 4 * 32  # 128
+    _REC_V_DIM = 4 * 32  # 128
+    # Tensor signature (from V2-17 author script):
+    #   inputs:  [state, q, k, v, decay, beta]
+    #   outputs: [state_out, o]
+    # Reader reads [beta=5, decay=4, k=2, state=0, v=3].
+    # Writer writes [o=7, state_out=6].
+    _REC_KERNEL_TENSOR_INDICES = [
+        [],  # compute
+        [5, 4, 2, 0, 3],  # noc reader
+        [7, 6],  # noc writer
+    ]
+    # CB layout. V2-17 emitted with block_count=2 (and =4 for CB6) for the
+    # standalone test, totaling ~82KB. At real-decode L1 pressure that
+    # collides with the model's interleaved-tensor backing storage on
+    # core (0, 0). Shrink each CB to a single page (block_count=1) — the
+    # kernel uses ``wait_front(1)`` / ``pop_front(1)`` so single-buffering
+    # is functionally safe (sequential, no async pipeline depth needed).
+    # New CB total: 9 × 4096 = 36864 bytes (45% of original).
+    _REC_CB_CONFIGS = [
+        (1, 4096, 4096),  # CB 0 (state)
+        (1, 4096, 4096),  # CB 1 (q, unused in PoC)
+        (1, 4096, 4096),  # CB 2 (k)
+        (1, 4096, 4096),  # CB 3 (v)
+        (1, 4096, 4096),  # CB 4 (decay)
+        (1, 4096, 4096),  # CB 5 (beta)
+        (1, 4096, 4096),  # CB 6 (state_out)
+        (1, 4096, 4096),  # CB 7 (o)
+        (1, 4096, 4096),  # CB 8 (o_acc internal)
+    ]
+
+    def _build_recurrent_kernel_state(self):
+        kdir = self._REC_KERNELS_DIR
+        compute_path = str(kdir / "recurrent_compute.cpp")
+        read_path = str(kdir / "recurrent_read.cpp")
+        write_path = str(kdir / "recurrent_write.cpp")
+        for p in (compute_path, read_path, write_path):
+            assert Path(p).is_file(), (
+                f"missing emitted recurrent kernel: {p}. Run "
+                f"models/demos/qwen3_6_galaxy_v2/tt/kernels/recurrent_delta_rule_kernel.py "
+                f"in the 3.12 venv to regenerate."
+            )
+
+        # Single-core kernel grid. CBs total ~37KB (single-page each).
+        # Avoid core (0, 0) — on BH that physical core has runtime/dispatch
+        # L1 reservations that collide with the recurrent kernel's CBs
+        # (which need a larger contiguous L1 region than the beta/g kernel).
+        # The model's sub_core_grids documents cols 1-6 × rows 0-9 as
+        # Tensix workers; pick (2, 5) — interior of the worker grid.
+        core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5))])
+
+        # Pre-allocate the persistent broadcast "ones" tile [1, 1, 32, 32] fp32
+        # in DRAM (not L1). Keeping it out of L1 avoids contributing to L1
+        # pressure on core (0, 0) where dispatch + kernel CBs share L1.
+        ones_torch = torch.ones((1, 1, self._REC_TILE, self._REC_TILE), dtype=torch.float32)
+        ones_tile = ttnn.from_torch(
+            ones_torch,
+            device=self.mesh_device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        zeros_torch = torch.zeros((self._REC_TILE, self._REC_TILE), dtype=torch.float32)
+        zeros_tile = ttnn.from_torch(
+            zeros_torch,
+            device=self.mesh_device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        # Pre-allocate persistent zero pad templates for k_col [128, 32]
+        # and v_row [32, 128] in DRAM — used as the canvas for per-head k/v tiles.
+        k_col_zeros = torch.zeros((self._REC_K_DIM, self._REC_TILE), dtype=torch.float32)
+        v_row_zeros = torch.zeros((self._REC_TILE, self._REC_V_DIM), dtype=torch.float32)
+        k_col_template = ttnn.from_torch(
+            k_col_zeros,
+            device=self.mesh_device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        v_row_template = ttnn.from_torch(
+            v_row_zeros,
+            device=self.mesh_device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        return {
+            "compute_path": compute_path,
+            "read_path": read_path,
+            "write_path": write_path,
+            "core_ranges": core_ranges,
+            "ones_tile": ones_tile,
+            "zeros_tile": zeros_tile,
+            "k_col_template_spec": k_col_template.spec,
+            "v_row_template_spec": v_row_template.spec,
+            "state_per_head_spec": None,  # filled lazily on first call
+            "o_per_head_spec": None,  # filled lazily on first call
+            "scalar_tile_spec": ones_tile.spec,
+        }
+
+    def _launch_recurrent_kernel(self, state, q, k, v, decay, beta, state_out, o):
+        """Dispatch the V2-17 partial recurrent kernel via ttnn.generic_op.
+
+        All tensors are PER-HEAD fp32 TILE_LAYOUT:
+            state, state_out: [128, 128]
+            q, v:             [32, 128]   (only row 0 valid for v)
+            k:                [128, 32]   (only col 0 valid)
+            decay, beta:      [32, 32]    (scalar broadcast)
+            o:                [32, 128]   (kernel emits zeros — readout external)
+        """
+        st = self._recurrent_kernel_state
+        tensors = [state, q, k, v, decay, beta, state_out, o]
+        assert len(tensors) == self._REC_NUM_TENSORS
+
+        tensor_accessor_args = []
+        for t in tensors:
+            tensor_accessor_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+
+        cb_descriptors = []
+        for i, (block_count, page_size, total_size) in enumerate(self._REC_CB_CONFIGS):
+            cb_format = ttnn.CBFormatDescriptor(
+                buffer_index=i,
+                data_format=ttnn.float32,
+                page_size=page_size,
+            )
+            cb_descriptors.append(
+                ttnn.CBDescriptor(
+                    total_size=total_size,
+                    core_ranges=st["core_ranges"],
+                    format_descriptors=[cb_format],
+                )
+            )
+
+        cb_indices = list(range(len(self._REC_CB_CONFIGS)))
+        kernel_descriptors = []
+        paths = [
+            (st["compute_path"], "compute"),
+            (st["read_path"], "noc"),
+            (st["write_path"], "noc"),
+        ]
+        noc_idx = 0
+        for kernel_idx, (kernel_path, thread_type) in enumerate(paths):
+            tensor_indices = self._REC_KERNEL_TENSOR_INDICES[kernel_idx]
+            common_runtime_args = [tensors[idx].buffer_address() for idx in tensor_indices]
+            if thread_type == "compute":
+                compile_time_args = cb_indices
+                cfg = ttnn.ComputeConfigDescriptor()
+                cfg.fp32_dest_acc_en = True
+                cfg.math_fidelity = ttnn.MathFidelity.HiFi4
+                cfg.math_approx_mode = False
+                config = cfg
+            else:
+                compile_time_args = cb_indices + tensor_accessor_args
+                if noc_idx == 0:
+                    config = ttnn.ReaderConfigDescriptor()
+                else:
+                    config = ttnn.WriterConfigDescriptor()
+                noc_idx += 1
+            kernel_descriptors.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=kernel_path,
+                    core_ranges=st["core_ranges"],
+                    compile_time_args=compile_time_args,
+                    common_runtime_args=common_runtime_args,
+                    config=config,
+                )
+            )
+
+        program = ttnn.ProgramDescriptor(
+            kernels=kernel_descriptors,
+            cbs=cb_descriptors,
+            semaphores=[],
+        )
+        ttnn.generic_op(list(tensors), program)
+
+    def _recurrent_step_tt_lang(self, state, q, k, v, beta_v, decay):
+        """V2-18: per-head loop replacing _fused_decay_and_write_fp32 + readout.
+
+        Args (4-D, fp32, TILE_LAYOUT):
+            state : [B, H, K, V]    = [1, 6, 128, 128]
+            q     : [B, H, T=1, K]  = [1, 6, 1, 128]
+            k     : [B, H, T=1, K]  = [1, 6, 1, 128]
+            v     : [B, H, T=1, V]  = [1, 6, 1, 128]   (this is `delta`, not raw v)
+            beta_v: [B, H, T=1]     = [1, 6, 1]
+            decay : [B, H, T=1]     = [1, 6, 1]
+
+        Returns:
+            o   : [B, T=1, H, V]   fp32 (transposed back to [B, T, H, V])
+            h_new: [B, H, K, V]    fp32 — the updated state (caller writes
+                    back to the persistent buffer via ttnn.copy).
+        """
+        # Kernel runs on core (0, 0) with grid=(1, 1). Its CBs reserve the
+        # top ~100KB of L1 on that core, so any L1-INTERLEAVED tensor whose
+        # bank-residency includes core (0,0) can collide with the kernel
+        # CB region. To avoid the clash, route the per-head kernel inputs/
+        # outputs through DRAM_MEMORY_CONFIG. The non-kernel reductions
+        # (concat, matmul readout) live in L1 for bandwidth.
+        mem = ttnn.L1_MEMORY_CONFIG
+        kmem = ttnn.DRAM_MEMORY_CONFIG  # for tensors passed directly to the kernel
+        st = self._recurrent_kernel_state
+        cfg = _fp32_compute_cfg_hifi4()
+        B = state.shape[0]
+        H = state.shape[1]
+        K = state.shape[2]
+        V = state.shape[3]
+        assert B == 1, f"V2-18 kernel path assumes B=1 (max_batch_size); got {B}"
+        assert H == self.n_v_per_row, f"H={H} != n_v_per_row={self.n_v_per_row}"
+        assert K == self._REC_K_DIM and V == self._REC_V_DIM, f"V2-18 kernel was emitted at K=V=128; got K={K}, V={V}"
+
+        # All inputs are already 4-D TILE_LAYOUT:
+        #   state [B, H, K, V], q/k/v [B, H, 1, D], beta_v/decay [B, H, 1].
+        # beta/decay just need a fictitious last dim added for broadcast.
+        beta_4d = ttnn.reshape(beta_v, [B, H, 1, 1], memory_config=mem)
+        decay_4d = ttnn.reshape(decay, [B, H, 1, 1], memory_config=mem)
+
+        q_4d_tile = q
+        k_4d_tile = k
+        v_4d_tile = v
+
+        per_head_outs = []
+        per_head_states_new = []
+        for h_idx in range(H):
+            # Per-head state slice routed through DRAM (kernel input).
+            s_h = ttnn.slice(
+                state,
+                [0, h_idx, 0, 0],
+                [1, h_idx + 1, K, V],
+                memory_config=kmem,
+            )
+
+            # Per-head q/k/v slices — DRAM-resident for the kernel.
+            q_h = ttnn.slice(q_4d_tile, [0, h_idx, 0, 0], [1, h_idx + 1, self._REC_TILE, K], memory_config=kmem)
+            v_h = ttnn.slice(v_4d_tile, [0, h_idx, 0, 0], [1, h_idx + 1, self._REC_TILE, V], memory_config=kmem)
+            k_h_row = ttnn.slice(k_4d_tile, [0, h_idx, 0, 0], [1, h_idx + 1, self._REC_TILE, K], memory_config=kmem)
+            # k_col [128, 32] via transpose. transpose(-2, -1) on 4D → [1, 1, 128, 32].
+            k_h_col = ttnn.transpose(k_h_row, -2, -1, memory_config=kmem)
+            k_h_row.deallocate(True)
+
+            # Per-head decay / beta scalar broadcast tiles [1, 1, 32, 32] in DRAM.
+            decay_h_4d = ttnn.slice(decay_4d, [0, h_idx, 0, 0], [1, h_idx + 1, 1, 1], memory_config=mem)
+            decay_tile = ttnn.multiply(st["ones_tile"], decay_h_4d, memory_config=kmem)
+            decay_h_4d.deallocate(True)
+
+            beta_h_4d = ttnn.slice(beta_4d, [0, h_idx, 0, 0], [1, h_idx + 1, 1, 1], memory_config=mem)
+            beta_tile = ttnn.multiply(st["ones_tile"], beta_h_4d, memory_config=kmem)
+            beta_h_4d.deallocate(True)
+
+            # Outputs: per-head state_out [1, 1, 128, 128], per-head o [1, 1, 32, V] — DRAM.
+            state_new_h = ttnn.allocate_tensor_on_device(s_h.spec, self.mesh_device)
+            o_h_dummy = ttnn.allocate_tensor_on_device(q_h.spec, self.mesh_device)
+
+            # Launch kernel (state update only — o is zeros from the kernel).
+            self._launch_recurrent_kernel(
+                state=s_h,
+                q=q_h,
+                k=k_h_col,
+                v=v_h,
+                decay=decay_tile,
+                beta=beta_tile,
+                state_out=state_new_h,
+                o=o_h_dummy,
+            )
+
+            # External readout: o_h = q_row @ state_new_h → [1, 1, 32, V].
+            o_h = ttnn.matmul(
+                q_h,
+                state_new_h,
+                memory_config=mem,
+                compute_kernel_config=cfg,
+            )
+
+            # Per-head temporaries cleanup (kernel + matmul complete).
+            q_h.deallocate(True)
+            v_h.deallocate(True)
+            k_h_col.deallocate(True)
+            decay_tile.deallocate(True)
+            beta_tile.deallocate(True)
+            o_h_dummy.deallocate(True)
+            s_h.deallocate(True)
+
+            per_head_outs.append(o_h)
+            per_head_states_new.append(state_new_h)
+
+        # NOTE: do NOT deallocate q_4d_tile / k_4d_tile / v_4d_tile —
+        # they alias the caller's q / k / v via the metadata-only reshape +
+        # no-op to_layout(TILE) when the source is already TILE_LAYOUT.
+        # Similarly beta_4d / decay_4d alias the caller's beta_v / decay.
+        # Let the caller manage cleanup.
+
+        # ----- concat per-head results -----
+        # per_head_outs: list of [1, 1, 32, V]. Concat along dim 1 → [B, H, 32, V].
+        # Slice row 0 → [B, H, 1, V] (matches existing fp32 path's o_t shape).
+        # Then transpose 1↔2 → [B, T=1, H, V].
+        o_concat = ttnn.concat(per_head_outs, dim=1, memory_config=mem)
+        for o in per_head_outs:
+            o.deallocate(True)
+        # Slice row 0 of the tile-padded readout.
+        o_first_row = ttnn.slice(o_concat, [0, 0, 0, 0], [B, H, 1, V], memory_config=mem)
+        o_concat.deallocate(True)
+        # Transpose to [B, T=1, H, V] to match downstream contract.
+        o_out = ttnn.transpose(o_first_row, 1, 2, memory_config=mem)
+        # NOTE: o_first_row may alias o_out; don't deallocate.
+
+        # per_head_states_new: list of [1, 1, K, V]. Concat along dim 1.
+        h_new = ttnn.concat(per_head_states_new, dim=1, memory_config=mem)
+        for s in per_head_states_new:
+            s.deallocate(True)
+
+        return o_out, h_new
+
+    def recurrent_gated_delta_rule_tt_lang_decode(
+        self,
+        q,
+        k,
+        v,
+        beta,
+        g,
+        scale=None,
+        initial_state=None,
+    ):
+        """V2-18: full decode-step recurrent gated delta rule using V2-17 kernel.
+
+        Mirrors ``recurrent_gated_delta_rule_ttnn_fp32`` but at T=1 with the
+        per-head kernel for the inner state update. Same I/O contract:
+            q, k: [B, T=1, H, K]
+            v:    [B, T=1, H, V]
+            beta: [B, T=1, H]
+            g:    [B, T=1, H]
+            initial_state: [B, H, K, V] fp32 — read-only entry state
+        Returns:
+            o: [B, T=1, H, V] bfloat16
+            h_new: [B, H, K, V] fp32
+        """
+        mem = ttnn.L1_MEMORY_CONFIG
+        cfg = _fp32_compute_cfg_hifi4()
+
+        # ----- preprocessing (same as recurrent_gated_delta_rule_ttnn_fp32) -----
+        q = l2_norm_ttnn(q, dim=-1)
+        k = l2_norm_ttnn(k, dim=-1)
+
+        B = q.shape[0]
+        T = q.shape[1]
+        H = q.shape[2]
+        K = q.shape[3]
+        V = v.shape[3]
+        assert T == 1, f"V2-18 decode helper expects T=1, got T={T}"
+
+        if scale is None:
+            scale = K**-0.5
+
+        q_scaled = ttnn.multiply(q, scale, memory_config=mem)
+        q.deallocate(True)
+        q = q_scaled
+
+        # Transpose [B, T, H, D] → [B, H, T, D]
+        q_t = ttnn.transpose(q, 1, 2, memory_config=mem)
+        q.deallocate(True)
+        k_t = ttnn.transpose(k, 1, 2, memory_config=mem)
+        k.deallocate(True)
+        v_t = ttnn.transpose(v, 1, 2, memory_config=mem)
+        beta_t = ttnn.transpose(beta, 1, 2, memory_config=mem)
+        g_t = ttnn.transpose(g, 1, 2, memory_config=mem)
+
+        # fp32 promote
+        def _to_fp32(x):
+            if x.dtype == ttnn.float32:
+                return x
+            x_new = ttnn.typecast(x, ttnn.float32, memory_config=mem)
+            if x_new is not x:
+                x.deallocate(True)
+            return x_new
+
+        q_t = _to_fp32(q_t)
+        k_t = _to_fp32(k_t)
+        v_t = _to_fp32(v_t)
+        beta_t = _to_fp32(beta_t)
+        g_t = _to_fp32(g_t)
+        g_exp = ttnn.exp(g_t, memory_config=mem)
+        g_t.deallocate(True)
+
+        # Initial state into L1 (copy out of DRAM-resident persistent buffer).
+        if initial_state.dtype != ttnn.float32:
+            h = ttnn.typecast(initial_state, ttnn.float32, memory_config=mem)
+        else:
+            h = ttnn.to_memory_config(initial_state, mem)
+
+        # Keep everything at 4-D [B, H, T=1, D] / [B, H, T=1]. Reshape ops
+        # on tile-layout tensors with leading size-1 dims being dropped /
+        # restored have caused physical-layout mismatches with the kernel's
+        # tile-accessor expectations; avoid them by passing 4-D through.
+        q_step = q_t
+        k_step = k_t
+        v_step = v_t
+        beta_step = beta_t
+        decay_step = g_exp
+
+        # Compute v_read = k_row @ state  (batched, existing path).
+        # Reshape h to TILE_LAYOUT first (it already is from the persistent
+        # buffer / typecast, but be explicit).
+        if h.layout != ttnn.TILE_LAYOUT:
+            h_tile = ttnn.to_layout(h, ttnn.TILE_LAYOUT, memory_config=mem)
+            h.deallocate(True)
+            h = h_tile
+        read_query_prog_cfg = None
+        try:
+            read_query_prog_cfg = _recurrent_read_query_program_config(self.mesh_device, K, V)
+        except Exception:
+            pass
+
+        # k_step is already [B, H, 1, K] in TILE_LAYOUT (no reshape needed).
+        # v_read = k_row @ h → [B, H, 1, V]
+        v_read_4d = ttnn.matmul(
+            k_step,
+            h,
+            memory_config=mem,
+            program_config=read_query_prog_cfg,
+            compute_kernel_config=cfg,
+        )
+        delta_4d = ttnn.subtract(v_step, v_read_4d, memory_config=mem)
+        v_read_4d.deallocate(True)
+
+        # ----- per-head loop kernel state update + external readout -----
+        # NOTE: do NOT deallocate `h` afterward — when the persistent
+        # dn_state_buffer is already in L1, ttnn.to_memory_config(initial_state, L1)
+        # is a NO-OP that returns the same tensor (aliasing the persistent
+        # buffer). The existing fp32 path follows the same pattern.
+        o_step, h_new = self._recurrent_step_tt_lang(
+            state=h,
+            q=q_step,
+            k=k_step,
+            v=delta_4d,
+            beta_v=beta_step,
+            decay=decay_step,
+        )
+        delta_4d.deallocate(True)
+
+        # o_step is [B, T=1, H, V] from helper (already transposed back).
+        # Downstream norm/out_proj expects bf16.
+        o_bf16 = ttnn.typecast(o_step, ttnn.bfloat16, memory_config=mem)
+        if o_bf16 is not o_step:
+            o_step.deallocate(True)
+
+        return o_bf16, h_new
+
     def _gqa_expand_q_k(self, q, k, B, T):
         ratio = self.n_v_per_row // self.n_k_per_row
         mem = ttnn.DRAM_MEMORY_CONFIG
@@ -1167,15 +1663,27 @@ class TtQwen36DeltaAttention(LightweightModule):
         # V2-decode-debug: use the fp32-state fork so the recurrent state stays
         # at fp32 across decode steps (eliminates the per-layer bf16 round-trip
         # that was compounding to 64L PCC 0.30 — see ttnn_delta_rule_ops_fp32).
-        core_out, new_state = recurrent_gated_delta_rule_ttnn_fp32(
-            q=q_exp,
-            k=k_exp,
-            v=v_h,
-            beta=beta,
-            g=g,
-            initial_state=self.dn_state_buffer,
-            device=self.mesh_device,
-        )
+        # V2-18: optional partial tt-lang recurrent kernel (per-head loop with
+        # external readout matmul) — controlled by QWEN36_TT_LANG_RECURRENT=1.
+        if self.use_tt_lang_recurrent and self._recurrent_kernel_state is not None:
+            core_out, new_state = self.recurrent_gated_delta_rule_tt_lang_decode(
+                q=q_exp,
+                k=k_exp,
+                v=v_h,
+                beta=beta,
+                g=g,
+                initial_state=self.dn_state_buffer,
+            )
+        else:
+            core_out, new_state = recurrent_gated_delta_rule_ttnn_fp32(
+                q=q_exp,
+                k=k_exp,
+                v=v_h,
+                beta=beta,
+                g=g,
+                initial_state=self.dn_state_buffer,
+                device=self.mesh_device,
+            )
         q_exp.deallocate(True)
         k_exp.deallocate(True)
         v_h.deallocate(True)
