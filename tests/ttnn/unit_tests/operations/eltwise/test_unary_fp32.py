@@ -111,7 +111,7 @@ def test_relu_fp32(device, ttnn_function):
     assert status
 
 
-def run_unary_fp32_test_with_ulp(device, ttnn_function, torch_function, max_ulp):
+def run_unary_fp32_test_with_ulp(device, ttnn_function, torch_function, max_ulp, pcc_check=False, pcc=0.9999):
     all_bf16_values = generate_all_bfloat16_bitpatterns(torch.float32)
 
     # Flush subnormal inputs
@@ -131,7 +131,24 @@ def run_unary_fp32_test_with_ulp(device, ttnn_function, torch_function, max_ulp)
     # Thus, we flush golden output to 0.0 as well to verify this behavior
     y_torch = flush_subnormal_values_to_zero(y_torch)
 
-    assert_with_ulp(y_torch, tt_out, max_ulp, allow_nonfinite=True)
+    if pcc_check:
+        # PCC masks non-finite entries; verify NaN positions, Inf positions, and Inf signs match
+        # exactly so a regression that replaces golden NaNs with ±Inf (or flips sign) is still caught.
+        g_isnan, d_isnan = torch.isnan(y_torch), torch.isnan(tt_out)
+        g_isinf, d_isinf = torch.isinf(y_torch), torch.isinf(tt_out)
+        torch.testing.assert_close(g_isnan, d_isnan, msg="NaN positions differ between golden and device")
+        torch.testing.assert_close(g_isinf, d_isinf, msg="Inf positions differ between golden and device")
+        inf_both = g_isinf & d_isinf
+        if inf_both.any():
+            torch.testing.assert_close(
+                torch.signbit(y_torch[inf_both]),
+                torch.signbit(tt_out[inf_both]),
+                msg="Inf signs differ between golden and device",
+            )
+        finite_mask = torch.isfinite(y_torch) & torch.isfinite(tt_out)
+        assert_with_pcc(y_torch[finite_mask], tt_out[finite_mask], pcc)
+    else:
+        assert_with_ulp(y_torch, tt_out, max_ulp, allow_nonfinite=True)
 
 
 def test_atan_fp32(device):
@@ -139,14 +156,14 @@ def test_atan_fp32(device):
 
 
 def test_asin_fp32(device):
-    run_unary_fp32_test_with_ulp(device, ttnn.asin, torch.asin, max_ulp=100)
+    run_unary_fp32_test_with_ulp(device, ttnn.asin, torch.asin, max_ulp=100, pcc_check=True)
 
 
 def test_acos_fp32(device):
-    run_unary_fp32_test_with_ulp(device, ttnn.acos, torch.acos, max_ulp=100)
+    run_unary_fp32_test_with_ulp(device, ttnn.acos, torch.acos, max_ulp=100, pcc_check=True)
 
 
-def run_unary_test(device, h, w, ttnn_function, ulp=1, allow_nonfinite=False, pcc_check=False):
+def run_unary_test(device, h, w, ttnn_function, ulp=1, allow_nonfinite=False, pcc_check=False, pcc=0.9999):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.float32)
@@ -159,7 +176,7 @@ def run_unary_test(device, h, w, ttnn_function, ulp=1, allow_nonfinite=False, pc
     output_tensor = ttnn.to_torch(output_tensor)
 
     if pcc_check:
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+        assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     else:
         assert_with_ulp(torch_output_tensor, output_tensor, ulp, allow_nonfinite=allow_nonfinite)
 
@@ -179,7 +196,7 @@ def test_tanh(device, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_gelu(device, h, w):
-    run_unary_test(device, h, w, ttnn.gelu, pcc_check=True)
+    run_unary_test(device, h, w, ttnn.gelu, pcc_check=True, pcc=0.9996)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -209,7 +226,7 @@ def test_sinh(device, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_cosh(device, h, w):
-    run_unary_test(device, h, w, ttnn.cosh, pcc_check=True)
+    run_unary_test(device, h, w, ttnn.cosh, pcc_check=True, pcc=0.999)
 
 
 @pytest.mark.parametrize("h", [64])

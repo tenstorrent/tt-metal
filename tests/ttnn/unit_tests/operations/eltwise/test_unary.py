@@ -40,7 +40,9 @@ def create_full_range_tensor(input_shapes, dtype):
     return in_data
 
 
-def run_unary_test(device, h, w, ttnn_function, layout=ttnn.TILE_LAYOUT, ulp=2, allow_nonfinite=False, pcc_check=False):
+def run_unary_test(
+    device, h, w, ttnn_function, layout=ttnn.TILE_LAYOUT, ulp=2, allow_nonfinite=False, pcc_check=False, pcc=0.9999
+):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -53,13 +55,13 @@ def run_unary_test(device, h, w, ttnn_function, layout=ttnn.TILE_LAYOUT, ulp=2, 
     output_tensor = ttnn.to_torch(output_tensor)
 
     if pcc_check:
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+        assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     else:
         assert_with_ulp(torch_output_tensor, output_tensor, ulp, allow_nonfinite=allow_nonfinite)
 
 
 def run_unary_with_approx_mode_test(
-    device, h, w, ttnn_function, vector_mode, approx_mode, layout=ttnn.TILE_LAYOUT, ulp=2
+    device, h, w, ttnn_function, vector_mode, approx_mode, layout=ttnn.TILE_LAYOUT, ulp=2, approx_pcc=0.999
 ):
     torch.manual_seed(0)
 
@@ -69,11 +71,14 @@ def run_unary_with_approx_mode_test(
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
     output_tensor = ttnn_function(input_tensor, vector_mode=vector_mode, fast_and_approximate_mode=approx_mode)
-    # Verify output layout matches input layout
     assert output_tensor.layout == layout, f"Output layout {output_tensor.layout} should match input layout {layout}"
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+    if approx_mode:
+        # Fast-approximate path is intentionally looser than the ULP ≤ 5 cap; verify with PCC instead.
+        assert_with_pcc(torch_output_tensor, output_tensor, approx_pcc)
+    else:
+        assert_with_ulp(torch_output_tensor, output_tensor, ulp)
 
 
 def run_unary_test_fixed(
@@ -317,7 +322,7 @@ def test_unary_log_operations_ttnn(
         assert_with_pcc(tt_result, golden_tensor, pcc=0.99)
         assert torch.allclose(tt_result, golden_tensor, rtol=4e-2, atol=4e-2)
     else:
-        assert_with_ulp(tt_result, golden_tensor)
+        assert_with_ulp(tt_result, golden_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
@@ -422,7 +427,7 @@ def test_sigmoid(device, h, w, vector_mode, approx_mode, layout):
             )
 
     run_unary_with_approx_mode_test(
-        device, h, w, sigmoid_wrap(), vector_mode=vector_mode, approx_mode=approx_mode, layout=layout, ulp=3
+        device, h, w, sigmoid_wrap(), vector_mode=vector_mode, approx_mode=approx_mode, layout=layout, ulp=1
     )
 
 
@@ -869,7 +874,7 @@ def test_unary_angle_conversion_ttnn(input_shapes, device, ttnn_dtype, ttnn_func
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data1)
 
-    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -888,7 +893,7 @@ def test_unary_trunc_ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.trunc)
     golden_tensor = golden_function(in_data)
 
-    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -905,7 +910,7 @@ def test_unary_trunc_ttnn_opt(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.trunc)
     golden_tensor = golden_function(in_data)
 
-    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -982,9 +987,34 @@ def test_unary_inverse_hyperbolic_edge_case_ttnn(
     golden_tensor = golden_function(in_data1, device=device)
 
     if ttnn_dtype == ttnn.bfloat16:
-        assert_with_ulp(output_tensor, golden_tensor, allow_nonfinite=True)
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2, allow_nonfinite=True)
     else:
-        assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+        # PCC masks non-finite entries, so check the non-finite layout before PCC on the finite slice.
+        output_torch = ttnn.to_torch(output_tensor)
+        g_isnan, d_isnan = torch.isnan(golden_tensor), torch.isnan(output_torch)
+        g_isinf, d_isinf = torch.isinf(golden_tensor), torch.isinf(output_torch)
+        if ttnn_dtype == ttnn.float32:
+            # float32 preserves IEEE semantics; require exact NaN/Inf mask + Inf-sign equivalence.
+            torch.testing.assert_close(g_isnan, d_isnan, msg="NaN positions differ between golden and device")
+            torch.testing.assert_close(g_isinf, d_isinf, msg="Inf positions differ between golden and device")
+            inf_both = g_isinf & d_isinf
+            if inf_both.any():
+                torch.testing.assert_close(
+                    torch.signbit(golden_tensor[inf_both]),
+                    torch.signbit(output_torch[inf_both]),
+                    msg="Inf signs differ between golden and device",
+                )
+        else:
+            # bfloat8_b acosh of out-of-domain inputs returns ±Inf on device where the golden returns
+            # NaN — a pre-existing semantic gap. Still require that the non-finite *positions* match
+            # so a regression that returns finite values for out-of-domain inputs is caught.
+            g_nonfinite = ~torch.isfinite(golden_tensor)
+            d_nonfinite = ~torch.isfinite(output_torch)
+            torch.testing.assert_close(
+                g_nonfinite, d_nonfinite, msg="Non-finite positions differ between golden and device"
+            )
+        finite_mask = torch.isfinite(golden_tensor) & torch.isfinite(output_torch)
+        assert_with_pcc(output_torch[finite_mask], golden_tensor[finite_mask], pcc=0.999)
 
 
 @pytest.mark.parametrize(
@@ -1001,7 +1031,7 @@ def test_unary_acosh_ttnn(input_shapes, device):
     output_tensor = ttnn.acosh(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.acosh)
     golden_tensor = golden_function(in_data1, device=device)
-    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -1028,7 +1058,7 @@ def test_unary_asinh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     golden_tensor = golden_function(in_data1, device=device)
 
     if ttnn_dtype == ttnn.bfloat16:
-        assert_with_ulp(output_tensor, golden_tensor)
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2)
     else:
         assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.9999)
 
@@ -1097,7 +1127,7 @@ def test_unary_shrink_functions_ttnn(input_shapes, param, torch_dtype, ttnn_dtyp
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data, lambd=param)
 
-    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -1153,7 +1183,7 @@ def test_unary_shrink_functions_edge_case_ttnn(input_shapes, param, ttnn_functio
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data, lambd=param)
 
-    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -1172,7 +1202,7 @@ def test_unary_frac_ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.frac)
     golden_tensor = golden_function(in_data)
 
-    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -1189,7 +1219,7 @@ def test_unary_frac_ttnn_opt(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.frac)
     golden_tensor = golden_function(in_data)
 
-    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(

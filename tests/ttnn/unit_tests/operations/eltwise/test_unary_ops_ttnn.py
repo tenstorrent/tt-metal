@@ -920,6 +920,23 @@ def test_unary_celu(input_shapes, param, device):
     golden_tensor = golden_function(in_data, alpha=param)
 
     if math.isinf(param) or math.isnan(param):
-        assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+        # PCC masks non-finite entries. For these degenerate alphas the device returns ±inf where the
+        # torch golden returns NaN — a pre-existing semantic gap not in this PR's scope — so we can't
+        # demand exact NaN-mask equivalence. Instead require a high Jaccard overlap of the non-finite
+        # *positions* so regressions are caught in both directions: returning all-non-finite (low
+        # overlap with golden's mask) and returning all-finite (overlap = 0).
+        output_torch = ttnn.to_torch(output_tensor)
+        g_nonfinite = ~torch.isfinite(golden_tensor)
+        d_nonfinite = ~torch.isfinite(output_torch)
+        intersection = (g_nonfinite & d_nonfinite).sum().item()
+        union = (g_nonfinite | d_nonfinite).sum().item()
+        jaccard = intersection / max(union, 1)
+        assert jaccard >= 0.95, (
+            f"Non-finite mask Jaccard overlap {jaccard:.3f} < 0.95 between golden and device; "
+            f"non-finite handling appears regressed (golden non-finite frac="
+            f"{g_nonfinite.float().mean().item():.3f}, device={d_nonfinite.float().mean().item():.3f})."
+        )
+        finite_mask = torch.isfinite(golden_tensor) & torch.isfinite(output_torch)
+        assert_with_pcc(output_torch[finite_mask], golden_tensor[finite_mask], pcc=0.999)
     else:
         assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)

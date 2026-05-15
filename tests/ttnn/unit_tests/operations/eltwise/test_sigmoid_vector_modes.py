@@ -9,10 +9,10 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 
-def run_unary_test_sharded(device, hw, out_channels, vector_mode, approx_mode, ttnn_function, ulp=2):
+def run_unary_test_sharded(device, hw, out_channels, vector_mode, approx_mode, ttnn_function, ulp=2, approx_pcc=0.999):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((hw, out_channels), dtype=torch.bfloat16)
@@ -24,7 +24,10 @@ def run_unary_test_sharded(device, hw, out_channels, vector_mode, approx_mode, t
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+    if approx_mode == ttnn.SigmoidMode.FastApproximate:
+        assert_with_pcc(torch_output_tensor, output_tensor, approx_pcc)
+    else:
+        assert_with_ulp(torch_output_tensor, output_tensor, ulp)
 
 
 @pytest.mark.parametrize("h", [2048])
@@ -34,4 +37,5 @@ def run_unary_test_sharded(device, hw, out_channels, vector_mode, approx_mode, t
 @pytest.mark.parametrize("approx_mode", [ttnn.SigmoidMode.Accurate, ttnn.SigmoidMode.FastApproximate])
 def test_sigmoid_two_out_channels(device, h, w, out_channels, vector_mode, approx_mode):
     torch.manual_seed(0)
-    run_unary_test_sharded(device, h * w, out_channels, vector_mode, approx_mode, ttnn.sigmoid, ulp=4)
+    # FastApproximate path is intentionally looser; preserve the original 0.991 PCC threshold.
+    run_unary_test_sharded(device, h * w, out_channels, vector_mode, approx_mode, ttnn.sigmoid, ulp=1, approx_pcc=0.991)

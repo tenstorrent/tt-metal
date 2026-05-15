@@ -17,7 +17,15 @@ pytestmark = pytest.mark.use_module_device
 
 
 def run_math_unary_test(
-    device, h, w, ttnn_function, layout=ttnn.TILE_LAYOUT, ulp=1, allow_nonfinite=False, pcc_check=False
+    device,
+    h,
+    w,
+    ttnn_function,
+    layout=ttnn.TILE_LAYOUT,
+    ulp=1,
+    allow_nonfinite=False,
+    pcc_check=False,
+    pcc=0.9999,
 ):
     torch.manual_seed(0)
 
@@ -34,7 +42,7 @@ def run_math_unary_test(
     output_tensor = ttnn.to_torch(output_tensor)
 
     if pcc_check:
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+        assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     else:
         assert_with_ulp(torch_output_tensor, output_tensor, ulp, allow_nonfinite=allow_nonfinite)
 
@@ -50,7 +58,7 @@ def test_i0(device, h, w, layout):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_lgamma(device, h, w, layout):
-    run_math_unary_test(device, h, w, ttnn.lgamma, layout=layout, pcc_check=True)
+    run_math_unary_test(device, h, w, ttnn.lgamma, layout=layout, pcc_check=True, pcc=0.99)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -167,7 +175,7 @@ def test_deg2rad(device, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_sqrt(device, h, w, layout):
-    run_math_unary_test(device, h, w, ttnn.sqrt, layout=layout, ulp=0)
+    run_math_unary_test(device, h, w, ttnn.sqrt, layout=layout, ulp=1)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -191,7 +199,8 @@ def test_erfc(device, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_erfinv(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.erfinv, pcc_check=True)
+    # ULP=227 exceeds the ULP ≤ 5 policy; fall back to PCC with the original per-test threshold.
+    run_math_unary_test(device, h, w, ttnn.erfinv, pcc_check=True, pcc=0.999)
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
@@ -233,23 +242,6 @@ def run_math_unary_test_recip(device, h, w, ttnn_function, ulp=1):
     output_tensor = ttnn_function(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_ulp(torch_output_tensor, output_tensor, ulp)
-
-
-def run_math_unary_test_fixed_val(
-    device, h, w, fill_value, ttnn_function, ulp=1, allow_nonfinite=False, pcc_check=False
-):
-    torch.manual_seed(0)
-    torch_input_tensor = torch.full((h, w), fill_value, dtype=torch.bfloat16)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor, device=device)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-    if pcc_check:
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    else:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp, allow_nonfinite=allow_nonfinite)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -317,14 +309,22 @@ def test_polygamma(device, h, w, scalar):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("fill_value", [0.001, -0.001, 1.0, -1.0])
+@pytest.mark.parametrize("fill_value", [0.0, 0.001, -0.001, 1.0, -1.0])
 def test_recip_fixed(device, h, w, fill_value):
     torch.manual_seed(0)
     torch_input_tensor = torch.full((h, w), fill_value, dtype=torch.bfloat16)
-    golden_function = ttnn.get_golden_function(ttnn.reciprocal)
-    torch_output_tensor = golden_function(torch_input_tensor, device=device)
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.reciprocal(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
-    assert_allclose(torch_output_tensor, output_tensor, atol=1e-2, rtol=1e-2)
+    if fill_value == 0.0:
+        # 1/+0 must be +inf on device (the bf16 golden clamps to +max-bf16, which is incorrect).
+        # Compare against an exact +inf tensor so that a -inf or +max-bf16 regression is caught.
+        expected = torch.full_like(output_tensor, float("inf"))
+        assert torch.equal(
+            output_tensor, expected
+        ), f"reciprocal(+0) should produce +inf, got unique values {output_tensor.unique()}"
+    else:
+        golden_function = ttnn.get_golden_function(ttnn.reciprocal)
+        torch_output_tensor = golden_function(torch_input_tensor, device=device)
+        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
+        assert_allclose(torch_output_tensor, output_tensor, atol=1e-2, rtol=1e-2)

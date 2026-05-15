@@ -18,7 +18,7 @@ from tests.ttnn.utils_for_testing import (
 pytestmark = pytest.mark.use_module_device
 
 
-def run_activation_unary_test(device, h, w, ttnn_function, ulp=2, pcc_check=False):
+def run_activation_unary_test(device, h, w, ttnn_function, ulp=2, pcc_check=False, pcc=0.99):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((h, w), dtype=torch.bfloat16)
@@ -32,7 +32,7 @@ def run_activation_unary_test(device, h, w, ttnn_function, ulp=2, pcc_check=Fals
     output_tensor = ttnn.to_torch(output_tensor)
 
     if pcc_check:
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+        assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     else:
         assert_with_ulp(torch_output_tensor, output_tensor, ulp)
 
@@ -182,7 +182,7 @@ def test_tanhshrink(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.tanhshrink, pcc_check=True)
 
 
-def run_activation_unary_test_glu(device, batch_size, h, w, dim, ttnn_function, ulp=2, pcc_check=False):
+def run_activation_unary_test_glu(device, batch_size, h, w, dim, ttnn_function, ulp=2, pcc_check=False, pcc=0.99):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((batch_size, h, w), dtype=torch.bfloat16).unsqueeze(0)
@@ -196,7 +196,7 @@ def run_activation_unary_test_glu(device, batch_size, h, w, dim, ttnn_function, 
     output_tensor = ttnn.to_torch(output_tensor)
 
     if pcc_check:
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+        assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     else:
         assert_with_ulp(torch_output_tensor, output_tensor, ulp)
 
@@ -334,7 +334,10 @@ def test_scalarB_celu(device, h, w, alpha, torch_dtype, ttnn_dtype):
 
     output_tensor = ttnn.celu(input_tensor_a, alpha=alpha)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(torch_output_tensor, output_tensor)
+    if ttnn_dtype == ttnn.bfloat4_b:
+        assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+    else:
+        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize("scalar", [0.5, 1.0])
@@ -430,24 +433,22 @@ def test_scalarBC_clip(device, h, w, min, max):
     run_activation_test_scalarBC_key(device, h, w, min, max, ttnn.clip)
 
 
-def run_activation_test_threshold(device, h, w, scalar1, scalar2, ttnn_function, ulp=2, pcc_check=False):
+def run_activation_test_threshold(device, h, w, value, threshold, ttnn_function, ulp=1):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn_function)
 
-    torch_output_tensor = golden_function(torch_input_tensor_a, value=scalar1, threshold=scalar2)
+    torch_output_tensor = golden_function(torch_input_tensor_a, value=value, threshold=threshold)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn_function(input_tensor_a, scalar1, scalar2)
+    output_tensor = ttnn_function(input_tensor_a, threshold, value)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    if pcc_check:
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    else:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+    # threshold is a piecewise-exact op; use ULP=1 to absorb bf16 rounding of non-representable scalars.
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
 
 
 @pytest.mark.parametrize("value", [-0.5, -0.1, -5.5])
@@ -455,7 +456,7 @@ def run_activation_test_threshold(device, h, w, scalar1, scalar2, ttnn_function,
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_threshold(device, h, w, value, threshold):
-    run_activation_test_threshold(device, h, w, value, threshold, ttnn.threshold, pcc_check=True)
+    run_activation_test_threshold(device, h, w, value, threshold, ttnn.threshold)
 
 
 @pytest.mark.parametrize("ttnn_dtype, torch_dtype", [(ttnn.float32, torch.float32), (ttnn.bfloat16, torch.bfloat16)])

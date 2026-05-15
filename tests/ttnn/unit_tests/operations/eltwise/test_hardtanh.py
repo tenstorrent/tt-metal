@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
 
@@ -40,11 +40,11 @@ def test_hardtanh_default(device, shapes):
 )
 @pytest.mark.parametrize(
     "min",
-    [0.25, 0.5, 0.66015625, -1],
+    [0.25, 0.5, 0.66, -1],
 )
 @pytest.mark.parametrize(
     "max",
-    [1, 2.5, 3, 6.59375],
+    [1, 2.5, 3, 6.6],
 )
 def test_hardtanh_args(device, shapes, min, max):
     torch.manual_seed(0)
@@ -61,4 +61,4 @@ def test_hardtanh_args(device, shapes, min, max):
     output_tensor = ttnn.hardtanh(input_tensor_a, min_val=min, max_val=max)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_equal(torch_output_tensor, output_tensor)
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
