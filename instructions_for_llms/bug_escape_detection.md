@@ -70,14 +70,14 @@ Run the following SQL. Adjust `DATEADD` for backfill (60 days) vs incremental (1
 WITH ranked AS (
   SELECT
     tc.CICD_TEST_CASE_ID,
-    tc.NAME            AS test_name,
+    tc.TEST_NAME       AS test_name,
     tc.FILEPATH        AS test_filepath,
-    p.GIT_COMMIT_SHA   AS commit_sha,
+    p.GIT_COMMIT_HASH  AS commit_sha,
     p.PIPELINE_START_TS,
-    t.TEST_SUCCESS,
+    t.SUCCESS          AS test_success,
     -- Normalize failure signature: strip timestamps, addresses, runner paths
     REGEXP_REPLACE(
-      REGEXP_REPLACE(t.FAILURE_REASON, '0x[0-9a-fA-F]+', 'ADDR'),
+      REGEXP_REPLACE(t.ERROR_MESSAGE, '0x[0-9a-fA-F]+', 'ADDR'),
       '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:Z.]+', 'TS'
     ) AS norm_signature,
     ROW_NUMBER() OVER (
@@ -101,10 +101,10 @@ transitions AS (
     test_filepath,
     norm_signature,
     -- Collect consecutive pass/fail blocks
-    MAX(CASE WHEN TEST_SUCCESS = FALSE THEN commit_sha END)
+    MAX(CASE WHEN test_success = FALSE THEN commit_sha END)
       OVER (PARTITION BY CICD_TEST_CASE_ID ORDER BY rn
             ROWS BETWEEN CURRENT ROW AND 4 FOLLOWING) AS last_failing_sha,
-    MIN(CASE WHEN TEST_SUCCESS = TRUE THEN commit_sha END)
+    MIN(CASE WHEN test_success = TRUE THEN commit_sha END)
       OVER (PARTITION BY CICD_TEST_CASE_ID ORDER BY rn
             ROWS BETWEEN CURRENT ROW AND 4 FOLLOWING) AS first_passing_sha
   FROM ranked
