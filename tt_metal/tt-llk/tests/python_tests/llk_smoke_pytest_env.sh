@@ -3,8 +3,8 @@
 # Sourced from tests/pipeline_reorg/llk_smoke_tests.yaml matrix commands after cd tests/python_tests.
 case "${LLK_PYTEST_LOG_MODE:-verbose}" in
   ci-quiet)
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false --tb=short"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false --tb=short"
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
     ;;
   verbose|*)
     PYTEST_COMPILE_EXTRA=""
