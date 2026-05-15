@@ -39,13 +39,13 @@ void golden_matmul(
     float float_tmp;
     std::vector<bfloat16> c_bf(M * N, 0);
 
-    for (int i = 0; i < M; i++) {
-        for (int j = 0; j < N; j++) {
+    for (uint32_t i = 0; i < M; i++) {
+        for (uint32_t j = 0; j < N; j++) {
             idx_c = j + (i * N);
             idx_a = i * K;
             idx_b = j;
             c_f = 0;
-            for (int k_m = 0; k_m < K; k_m++) {
+            for (uint32_t k_m = 0; k_m < K; k_m++) {
                 float_tmp = static_cast<float>(a[idx_a]) * static_cast<float>(b[idx_b]);
                 c_f += float_tmp;
                 idx_a += 1;
@@ -267,10 +267,10 @@ void matmul_multicore_reuse(
      * Kernels - Runtime arguments
      */
     uint32_t num_blocks_read = 0;
-    for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
-        for (int output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
-            int core_idx_x = num_blocks_read % num_cores_x;
-            int core_idx_y = num_blocks_read / num_cores_x;
+    for (uint32_t output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
+        for (uint32_t output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
+            uint32_t core_idx_x = num_blocks_read % num_cores_x;
+            uint32_t core_idx_y = num_blocks_read / num_cores_x;
             CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
 
             // Write runtime args to device
