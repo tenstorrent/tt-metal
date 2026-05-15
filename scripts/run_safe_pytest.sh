@@ -218,7 +218,7 @@ emit_missing_ttexalens_warning() {
         echo "SAFE_PYTEST: Install with: uv pip install -r tools/triage/requirements.txt"
     fi
 }
-trap emit_missing_ttexalens_warning EXIT
+trap '_emit_device_timing; emit_missing_ttexalens_warning' EXIT
 
 if [[ "$DEV_MODE" == true ]]; then
     # Lightweight asserts: compiles ASSERT() as ebreak, halting the core at the
