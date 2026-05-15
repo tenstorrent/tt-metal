@@ -173,7 +173,7 @@ def fuse_lora_state_dict(
         alpha = alphas.get(base_path, float(rank))
         effective_scale = scale * (alpha / rank)
         delta = effective_scale * (ab["B"].to(torch.float32) @ ab["A"].to(torch.float32))
-        fused[diffusers_key] = base_weight.to(torch.float32).add_(delta).to(base_weight.dtype)
+        fused[diffusers_key] = (base_weight.to(torch.float32) + delta).to(base_weight.dtype)
         applied_pairs += 1
 
     applied_direct = 0
