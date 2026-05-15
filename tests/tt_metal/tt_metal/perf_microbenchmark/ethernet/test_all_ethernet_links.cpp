@@ -438,8 +438,8 @@ void validation(
     auto* sender_device = find_device_with_id(device_helper.devices, link.sender.chip);
     auto* receiver_device = find_device_with_id(device_helper.devices, link.receiver.chip);
     TT_FATAL(
-        sender_device->get_devices()[0]->id() == link.sender.chip and
-            receiver_device->get_devices()[0]->id() == link.receiver.chip,
+        static_cast<size_t>(sender_device->get_devices()[0]->id()) == link.sender.chip and
+            static_cast<size_t>(receiver_device->get_devices()[0]->id()) == link.receiver.chip,
         "Mismatch between chips");
 
     auto sender_virtual =
