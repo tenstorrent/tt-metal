@@ -37,13 +37,13 @@ constexpr uint32_t kTargetChunkBytes = 128U * 1024U;
 constexpr uint32_t kL1_ALIGN = 32U;
 
 uint32_t pick_num_chunks(uint32_t h) {
-    uint32_t row_bytes = h * 2U;
-    uint32_t strip_bytes = 32U * row_bytes;
+    const uint32_t row_bytes = h * 2U;
+    const uint32_t strip_bytes = 32U * row_bytes;
     uint32_t nc = (strip_bytes + kTargetChunkBytes - 1U) / kTargetChunkBytes;
     if (nc == 0U)
         nc = 1U;
     // ceil(h / TILE_WIDTH) — last tile may be partial when h isn't tile-aligned.
-    uint32_t Wt = tt::round_up(h, tt::constants::TILE_WIDTH) / tt::constants::TILE_WIDTH;
+    const uint32_t Wt = tt::round_up(h, tt::constants::TILE_WIDTH) / tt::constants::TILE_WIDTH;
     if (Wt > 0U && nc > Wt)
         nc = Wt;
     if (nc == 0U)
@@ -90,15 +90,15 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     // Core assignment: ALL cores run the combined scan+reader kernel.
     // No more separate scan core.
     // -------------------------------------------------------------------------
-    auto compute_grid = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = compute_grid.y;
+    const auto compute_grid = device->compute_with_storage_grid_size();
+    const uint32_t num_cores_y = compute_grid.y;
 
-    tt::tt_metal::CoreCoord lead_coord{0, 0};
-    tt::tt_metal::CoreRange full_range{
+    const tt::tt_metal::CoreCoord lead_coord{0, 0};
+    const tt::tt_metal::CoreRange full_range{
         tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{compute_grid.x - 1U, compute_grid.y - 1U}};
-    tt::tt_metal::CoreRangeSet all_cores{full_range};
+    const tt::tt_metal::CoreRangeSet all_cores{full_range};
 
-    uint32_t total_tiles = t_cap / tt::constants::TILE_HEIGHT;
+    const uint32_t total_tiles = t_cap / tt::constants::TILE_HEIGHT;
     // Use the CoreCoord overload (like layernorm_bw) — routes through
     // num_cores_to_corerangeset, avoiding the sub-grid placement bug in
     // the CoreRangeSet overload that throws "Failed to assign all N
@@ -107,15 +107,15 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     auto [num_workers, worker_all, worker_group_1, worker_group_2, tiles_group_1, tiles_group_2] =
         tt::tt_metal::split_work_to_cores(compute_grid, total_tiles);
 
-    uint32_t num_total_cores = num_workers;  // every core does scan + worker
+    const uint32_t num_total_cores = num_workers;  // every core does scan + worker
 
     // Per-core scan slice
-    uint32_t scan_slice_size = (total_rows + num_total_cores - 1U) / num_total_cores;
+    const uint32_t scan_slice_size = (total_rows + num_total_cores - 1U) / num_total_cores;
 
     // -------------------------------------------------------------------------
     // Circular buffers
     // -------------------------------------------------------------------------
-    uint32_t bf16_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint32_t bf16_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
 
     create_circular_buffer(
         program, all_cores, kCbSrc0, tt::DataFormat::Float16_b, bf16_tile_bytes, 2U * tiles_per_chunk);
@@ -125,7 +125,7 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     constexpr uint32_t kPlanCbBytes = 32U * sizeof(uint32_t);
     create_circular_buffer_bytes(program, all_cores, kCbPlan, tt::DataFormat::UInt32, kPlanCbBytes);
 
-    uint32_t offset_cb_bytes = tt::round_up((e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
+    const uint32_t offset_cb_bytes = tt::round_up((e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
     create_circular_buffer_bytes(program, all_cores, kCbOffset, tt::DataFormat::UInt32, offset_cb_bytes);
 
     // cb_ctrl: NCRISC reader publishes per-core active-block count after the
@@ -151,13 +151,13 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     // Stage scratch must hold the offsets DMA write of size off_page_bytes
     // = round_up((e_local+1)*4, kL1_ALIGN). Pin a 128 B floor so leids_buf
     // stays at a stable offset for small e_local.
-    uint32_t off_page_bytes_host = tt::round_up((e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
-    uint32_t kStageBytes = std::max<uint32_t>(off_page_bytes_host, 128U);
+    const uint32_t off_page_bytes_host = tt::round_up((e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
+    const uint32_t kStageBytes = std::max<uint32_t>(off_page_bytes_host, 128U);
     // leids_buf must match the kernel TensorAccessor's aligned page for the
     // leids tensor. On BH this is DRAM-aligned (64B), and using only the L1
     // alignment places shared_local_counts on top of the private counts array.
-    uint32_t leids_aligned_page_host = tt::round_up(e_local * sizeof(uint16_t), dram_align_bytes);
-    uint32_t kLeidsBufBytes = std::max<uint32_t>(leids_aligned_page_host, 32U);
+    const uint32_t leids_aligned_page_host = tt::round_up(e_local * sizeof(uint16_t), dram_align_bytes);
+    const uint32_t kLeidsBufBytes = std::max<uint32_t>(leids_aligned_page_host, 32U);
     constexpr uint32_t kPlanChunk = 32U;  // plan pre-fill burst size (entries per chunk)
     // Metadata / scores aligned page = round_up(K * sizeof(uint16), DRAM_ALIGNMENT). DRAM alignment
     // is arch-specific (32 B on WH, 64 B on BH) and must match the TensorAccessor's AlignedPageSize
@@ -168,9 +168,9 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     constexpr uint32_t kOverheadSlack = 64U;  // safety pad between sections (covers alignment carry-over)
     // counts(e_local) + offsets(e_local+1) + cursors(e_local) = 3*e_local + 1 uint32 entries.
     constexpr uint32_t kHeaderU32PerExpert = 3U;
-    uint32_t header_bytes = (kHeaderU32PerExpert * e_local + 1U) * sizeof(uint32_t);
+    const uint32_t header_bytes = (kHeaderU32PerExpert * e_local + 1U) * sizeof(uint32_t);
 
-    uint32_t overhead_bytes = kStageBytes + kLeidsBufBytes + header_bytes + kOverheadSlack;
+    const uint32_t overhead_bytes = kStageBytes + kLeidsBufBytes + header_bytes + kOverheadSlack;
     // Each shared table has num_total_cores slots; slot size =
     // round_up_to_align(e_local) uint32s (smallest multiple of the arch's L1
     // alignment that fits e_local). Arch-specific via HAL (16 B on WH/BH today,
@@ -179,19 +179,19 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     uint32_t shared_slot_u32 = tt::round_up(e_local, l1_align_u32);
     if (shared_slot_u32 < l1_align_u32)
         shared_slot_u32 = l1_align_u32;
-    uint32_t kSharedSlotBytes = shared_slot_u32 * sizeof(uint32_t);
-    uint32_t shared_table_bytes = num_total_cores * kSharedSlotBytes;
-    uint32_t two_shared_tables = 2U * shared_table_bytes;
-    uint32_t md_block_bytes = slice_block_rows * kMdAlignedPage + kMdAlignedPage;
+    const uint32_t kSharedSlotBytes = shared_slot_u32 * sizeof(uint32_t);
+    const uint32_t shared_table_bytes = num_total_cores * kSharedSlotBytes;
+    const uint32_t two_shared_tables = 2U * shared_table_bytes;
+    const uint32_t md_block_bytes = slice_block_rows * kMdAlignedPage + kMdAlignedPage;
     // sc_block holds scores in lock-step with md_block. scores is bf16 with the
     // same K count per row, so the aligned page size matches md_aligned_page.
-    uint32_t sc_block_bytes = slice_block_rows * kMdAlignedPage + kMdAlignedPage;
-    uint32_t plan_stage_bytes = tt::round_up(e_local * kPlanChunk * sizeof(uint32_t), kL1_ALIGN);
+    const uint32_t sc_block_bytes = slice_block_rows * kMdAlignedPage + kMdAlignedPage;
+    const uint32_t plan_stage_bytes = tt::round_up(e_local * kPlanChunk * sizeof(uint32_t), kL1_ALIGN);
     // gs_stage / ks_stage each hold e_local * kPlanChunk uint16-sized entries
     // (bf16 grouped_scores / uint16 k_slot).
-    uint32_t gs_stage_bytes = tt::round_up(e_local * kPlanChunk * sizeof(uint16_t), kL1_ALIGN);
-    uint32_t ks_stage_bytes = tt::round_up(e_local * kPlanChunk * sizeof(uint16_t), kL1_ALIGN);
-    uint32_t fill_bytes = tt::round_up(e_local * sizeof(uint32_t), kL1_ALIGN);
+    const uint32_t gs_stage_bytes = tt::round_up(e_local * kPlanChunk * sizeof(uint16_t), kL1_ALIGN);
+    const uint32_t ks_stage_bytes = tt::round_up(e_local * kPlanChunk * sizeof(uint16_t), kL1_ALIGN);
+    const uint32_t fill_bytes = tt::round_up(e_local * sizeof(uint32_t), kL1_ALIGN);
     uint32_t scan_scratch_bytes = overhead_bytes + two_shared_tables + md_block_bytes + sc_block_bytes +
                                   plan_stage_bytes + gs_stage_bytes + ks_stage_bytes + fill_bytes;
     scan_scratch_bytes = tt::round_up(scan_scratch_bytes, kL1_ALIGN);
@@ -200,14 +200,14 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     // Compute address of shared tables in cb_scan (offset within scratch).
     // Layout: stage(kStageBytes), leids_buf(kLeidsBufBytes), counts, offsets, cursors.
     // MUST be kL1_ALIGN-aligned for cross-core NOC writes to land correctly.
-    uint32_t shared_tables_offset_raw = kStageBytes + kLeidsBufBytes + header_bytes;
-    uint32_t shared_tables_offset = tt::round_up(shared_tables_offset_raw, kL1_ALIGN);
+    const uint32_t shared_tables_offset_raw = kStageBytes + kLeidsBufBytes + header_bytes;
+    const uint32_t shared_tables_offset = tt::round_up(shared_tables_offset_raw, kL1_ALIGN);
 
     // Phase semaphores
-    uint32_t scan_phase1_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
-    uint32_t scan_phase2_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
-    uint32_t scan_phase3_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
-    uint32_t plan_ready_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
+    const uint32_t scan_phase1_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
+    const uint32_t scan_phase2_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
+    const uint32_t scan_phase3_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
+    const uint32_t plan_ready_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
 
     // -------------------------------------------------------------------------
     // Buffer pointers
@@ -226,18 +226,18 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     // -------------------------------------------------------------------------
     // NOC coords used as CT args by the combined kernel
     // -------------------------------------------------------------------------
-    auto lead_virt = device->worker_core_from_logical_core(lead_coord);
+    const auto lead_virt = device->worker_core_from_logical_core(lead_coord);
 
     // Bounding NOC rectangle of the full worker grid — lead uses one multicast
     // per broadcast (phase2_sem + plan_ready_sem) via
     // mcast_sender_signal_receivers_loopback.
-    auto mcast_tl = device->worker_core_from_logical_core({0, 0});
-    auto mcast_br = device->worker_core_from_logical_core({compute_grid.x - 1U, compute_grid.y - 1U});
-    uint32_t mcast_sx = std::min(mcast_tl.x, mcast_br.x);
-    uint32_t mcast_ex = std::max(mcast_tl.x, mcast_br.x);
-    uint32_t mcast_sy = std::min(mcast_tl.y, mcast_br.y);
-    uint32_t mcast_ey = std::max(mcast_tl.y, mcast_br.y);
-    uint32_t mcast_num_dests_including_self = compute_grid.x * compute_grid.y;
+    const auto mcast_tl = device->worker_core_from_logical_core({0, 0});
+    const auto mcast_br = device->worker_core_from_logical_core({compute_grid.x - 1U, compute_grid.y - 1U});
+    const uint32_t mcast_sx = std::min(mcast_tl.x, mcast_br.x);
+    const uint32_t mcast_ex = std::max(mcast_tl.x, mcast_br.x);
+    const uint32_t mcast_sy = std::min(mcast_tl.y, mcast_br.y);
+    const uint32_t mcast_ey = std::max(mcast_tl.y, mcast_br.y);
+    const uint32_t mcast_num_dests_including_self = compute_grid.x * compute_grid.y;
 
     // -------------------------------------------------------------------------
     // Combined NCRISC kernel CT args

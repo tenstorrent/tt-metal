@@ -29,7 +29,7 @@ inline CoreSlice slice_for_core(uint32_t total, uint32_t num_cores, uint32_t cor
 
 // Per-(expert × core) work bounds derived from the offsets table. TILE_H is
 // the tile-row stride: offsets are stored in source rows, both kernels work
-// in 32-row tile-rows. Identical in moe_ungroup_reader and moe_ungroup_writer.
+// in 32-row tile-rows. Identical in moe_ungroup_reader and moe_ungroup_rmw_writer.
 struct ExpertCoreSlice {
     uint32_t expert_start_tr;     // absolute tile-row of expert e in grouped layout
     uint32_t my_start_tr_global;  // absolute tile-row where this core starts
