@@ -1285,8 +1285,7 @@ class TestConfig:
         )
 
         # Zero the device print buffer header before each kernel run so the
-        # first DEVICE_PRINT() observes wpos=rpos=0 and a free lock. The data
-        # area doesn't need clearing — the kernel always overwrites at wpos.
+        # first DEVICE_PRINT() observes wpos=rpos=0 and a free lock.
         if self.device_print_build == DevicePrintBuild.Yes:
             write_words_to_device(
                 TestConfig.TENSIX_LOCATION,
