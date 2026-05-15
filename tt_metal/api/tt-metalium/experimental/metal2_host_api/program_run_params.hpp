@@ -43,11 +43,11 @@ struct ProgramRunParams {
             NodeCoord node;
             std::unordered_map<std::string, uint32_t> args;
         };
-        std::vector<NodeNamedRTAs> named_runtime_args;
+        std::vector<NodeNamedRTAs> named_runtime_args = {};
 
         // Named Common Runtime Argument settings
         // Every arg in this kernel's RuntimeArgSchema::named_common_runtime_args must be set.
-        std::unordered_map<std::string, uint32_t> named_common_runtime_args;
+        std::unordered_map<std::string, uint32_t> named_common_runtime_args = {};
 
         // Unnamed runtime argument "varargs"
         // (these are specified per-node; length can vary per-node)
@@ -55,12 +55,12 @@ struct ProgramRunParams {
             NodeCoord node;
             std::vector<uint32_t> args;
         };
-        std::vector<NodeVarargs> runtime_varargs;
+        std::vector<NodeVarargs> runtime_varargs = {};
 
         // Unnamed common runtime argument "varargs"
         // (common to all nodes on which the kernel runs)
         using CommonVarargs = std::vector<uint32_t>;
-        CommonVarargs common_runtime_varargs;
+        CommonVarargs common_runtime_varargs = {};
     };
     // KernelRunParams must be specified for ALL kernels in the ProgramSpec.
     std::vector<KernelRunParams> kernel_run_params;

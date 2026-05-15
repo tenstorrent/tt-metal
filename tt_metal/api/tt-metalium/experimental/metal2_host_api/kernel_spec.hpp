@@ -161,8 +161,8 @@ struct KernelSpec {
         using Defines = std::vector<std::pair<std::string, std::string>>;
         using OptLevel = tt::tt_metal::KernelBuildOptLevel;
 
-        IncludePaths include_paths;         // -I <path>
-        Defines defines;                    // -D <name>=<value>
+        IncludePaths include_paths = {};     // -I <path>
+        Defines defines = {};               // -D <name>=<value>
         OptLevel opt_level = OptLevel::O2;  // -O<level>
         // Can add more options here as needed
     };
@@ -182,7 +182,7 @@ struct KernelSpec {
         DFBEndpointType endpoint_type;    // producer, consumer, or relay
         DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED;  // strided, all, or blocked
     };
-    std::vector<DFBBinding> dfb_bindings;
+    std::vector<DFBBinding> dfb_bindings = {};
 
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
@@ -191,7 +191,7 @@ struct KernelSpec {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
     };
-    std::vector<SemaphoreBinding> semaphore_bindings;
+    std::vector<SemaphoreBinding> semaphore_bindings = {};
 
     // Tensor bindings
     // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
@@ -200,7 +200,7 @@ struct KernelSpec {
         TensorParameterName tensor_parameter_name;  // identify the TensorBinding within the ProgramSpec
         std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
     };
-    std::vector<TensorBinding> tensor_bindings;
+    std::vector<TensorBinding> tensor_bindings = {};
 
     // TODO -- GlobalSemaphore bindings
     // TODO -- GlobalDataflowBuffer bindings
@@ -213,7 +213,7 @@ struct KernelSpec {
     // Compile time argument bindings
     // (Bound argument values cannot be changed between Program executions)
     using CompileTimeArgBindings = std::vector<std::pair<std::string, uint32_t>>;
-    CompileTimeArgBindings compile_time_arg_bindings;
+    CompileTimeArgBindings compile_time_arg_bindings = {};
     // TODO -- extend to support arbitrary POD types, including user-defined structs.
 
     //----------------------------------------------------------------------------
@@ -230,10 +230,10 @@ struct KernelSpec {
     //     Vararg indices are stable across schema changes (e.g., moving a named arg from RTA→CRTA).
     struct RuntimeArgSchema {
         // Named RTAs: names in declaration order. Must be unique valid C++ identifiers.
-        std::vector<std::string> named_runtime_args;
+        std::vector<std::string> named_runtime_args = {};
 
         // Named CRTAs: names in declaration order. Must be unique valid C++ identifiers.
-        std::vector<std::string> named_common_runtime_args;
+        std::vector<std::string> named_common_runtime_args = {};
 
         //----------------------
         // Advanced options

@@ -110,17 +110,17 @@ std::vector<T> convert_to_tile_layout(
     auto tile_HW = tile_H * tile_W;
     auto face_HW = face_H * face_W;
     TT_FATAL(data.size() % tile_HW == 0, "data size must be divisible by tile_HW");
-    int num_tiles = data.size() / tile_HW;
-    for (int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
+    uint32_t num_tiles = static_cast<uint32_t>(data.size() / tile_HW);
+    for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         std::vector<T> top_left;
         std::vector<T> top_right;
         std::vector<T> bottom_left;
         std::vector<T> bottom_right;
 
         if (transpose_face) {
-            for (int col = 0; col < tile_W; col++) {
-                int index = (tile_idx * tile_HW) + col;
-                for (int row = 0; row < tile_H; row++) {
+            for (uint32_t col = 0; col < tile_W; col++) {
+                uint32_t index = (tile_idx * tile_HW) + col;
+                for (uint32_t row = 0; row < tile_H; row++) {
                     if (row < face_H and col < face_W) {
                         top_left.push_back(data[index]);
                     } else if (row < face_H and col >= face_W) {
@@ -136,9 +136,9 @@ std::vector<T> convert_to_tile_layout(
                 }
             }
         } else {
-            int index = tile_idx * tile_HW;
-            for (int row = 0; row < tile_H; row++) {
-                for (int col = 0; col < tile_W; col++) {
+            uint32_t index = tile_idx * tile_HW;
+            for (uint32_t row = 0; row < tile_H; row++) {
+                for (uint32_t col = 0; col < tile_W; col++) {
                     if (row < face_H and col < face_W) {
                         top_left.push_back(data[index]);
                     } else if (row < face_H and col >= face_W) {
