@@ -2020,6 +2020,12 @@ class MLA1D(AbstractModule):
         chunk_size = cfg["mla_chunk"]
         mesh_shape = cfg["mesh_shape"]
 
+        if x.shape[2] > chunk_size and cfg["batch_size_per_row"] != 8:
+            raise ValueError(
+                f"MLA chunking (seq_len={x.shape[2]} > mla_chunk={chunk_size}) is only supported "
+                f"for 8 users per row, got batch_size_per_row={cfg['batch_size_per_row']}"
+            )
+
         sdpa_dp_factor = mla_tp_factor = mesh_shape[1]
 
         num_heads = cfg["num_heads"]

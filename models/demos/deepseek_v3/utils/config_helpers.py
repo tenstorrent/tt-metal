@@ -11,9 +11,15 @@ from types import NoneType
 from typing import Any, Mapping, Sequence
 
 import torch
+from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.utils.config_dataclass import ConfigWeight, DeepseekSamplingArgs, PrefillChunkSizes, SavedWeight
+from models.demos.deepseek_v3.utils.config_dataclass import (
+    ConfigWeight,
+    DeepseekSamplingArgs,
+    PrefillChunkSizes,
+    SavedWeight,
+)
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
@@ -106,6 +112,7 @@ def get_prefill_chunk_sizes(max_seq_len: int, num_rows: int) -> PrefillChunkSize
             break
     logger.info(f"Prefill chunks: {chunks_to_return}")
     return chunks_to_return
+
 
 _LEGACY_SAVED_WEIGHT_EMISSION_DEPTH = 0
 

@@ -114,6 +114,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         model_chunk = get_prefill_chunk_sizes(hf_config.max_seq_len, mesh_device.shape[0]).model_chunk
         model_cfg = {
             "model_chunk": model_chunk,
+            "batch_size_per_row": batch_size_per_row,
             "embedding": Embedding2D.prefill_model_config(hf_config, mesh_device),
             "mlp_decoder_block": [
                 DecoderBlock2D.prefill_model_config(
@@ -389,6 +390,11 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         converges on the target token's logits.
         """
         CHUNK_SIZE = cfg["model_chunk"]
+        if x.shape[2] > CHUNK_SIZE and cfg["batch_size_per_row"] != 8:
+            raise ValueError(
+                f"Model chunking (seq_len={x.shape[2]} > model_chunk={CHUNK_SIZE}) is only supported "
+                f"for 8 users per row, got batch_size_per_row={cfg['batch_size_per_row']}"
+            )
         logits = []
         hidden_for_mtp = []
         for start in range(0, x.shape[2], CHUNK_SIZE):
@@ -423,17 +429,89 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             #     ttnn.deallocate(pt_chunk)
             if logits_chunk is not None:
                 logits.append(logits_chunk)
-            if len(hidden_for_mtp_chunk) > 0:
-                hidden_for_mtp.append(hidden_for_mtp_chunk)
+            hidden_for_mtp.extend(hidden_for_mtp_chunk)
+        ccl = cfg["lm_head"]["ccl"]
         logits_chunks = logits
         logits = ttnn.concat(logits_chunks, dim=2)
         if len(logits_chunks) > 1:
             for logits_chunk in logits_chunks:
                 ttnn.deallocate(logits_chunk)
+            # All chunks produced logits (no prompt_len gating): each row currently
+            # holds [chunk0_rowN, chunk1_rowN, ...] interleaved, but downstream
+            # consumers index as if each row owned one contiguous global slice.
+            logits = cls._redistribute_chunked_seq(logits, len(logits_chunks), ccl)
         if len(hidden_for_mtp) == 0:
             return logits
-        hidden_for_mtp = ttnn.concat(hidden_for_mtp, dim=2)
+        hidden_chunks = hidden_for_mtp
+        hidden_for_mtp = ttnn.concat(hidden_chunks, dim=2)
+        if len(hidden_chunks) > 1:
+            for hidden_chunk in hidden_chunks:
+                ttnn.deallocate(hidden_chunk)
+            # MTP and last-hidden indexing both require row N to hold a contiguous
+            # global slice; per-chunk reduce_scatter + local concat produces an
+            # interleaved layout instead.
+            hidden_for_mtp = cls._redistribute_chunked_seq(hidden_for_mtp, len(hidden_chunks), ccl)
         return logits, hidden_for_mtp
+
+    @classmethod
+    def _redistribute_chunked_seq(
+        cls,
+        tensor: ttnn.Tensor,
+        num_chunks: int,
+        ccl: CCL,
+    ) -> ttnn.Tensor:
+        """Reorder a multi-chunk reduce-scattered tensor into a per-row contiguous global slice.
+
+        Input layout (per device on mesh row N): the local seq dim holds
+        ``[chunk0_rowN, chunk1_rowN, ..., chunk(M-1)_rowN]`` with each chunk's
+        row-N slice being ``CHUNK_SIZE / num_rows`` tokens. Output layout
+        (per device on mesh row N): the local seq dim holds the contiguous
+        global tokens ``[N*L_full, (N+1)*L_full)`` where
+        ``L_full = global_seq_len / num_rows``.
+        """
+        mesh_device = ccl.mesh_device
+        num_rows = int(mesh_device.shape[0])
+        if num_rows < 2 or num_chunks < 2:
+            return tensor
+
+        _, _, local_seq_len, feature_dim = tensor.shape
+        assert (
+            local_seq_len % num_chunks == 0
+        ), f"local seq len {local_seq_len} not divisible by num_chunks {num_chunks}"
+        chunk_local_len = local_seq_len // num_chunks
+
+        row_gather_cfg = ccl.populate_all_gather_runtime_args(
+            {
+                "cluster_axis": 0,
+                "dim": 2,
+                "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                "topology": ttnn.Topology.Linear,
+            }
+        )
+        # [1, 1, M*L, F] -> [1, 1, N*M*L, F]; layout is [row0_data | row1_data | ...].
+        gathered = ttnn.experimental.all_gather_async(tensor, **row_gather_cfg)
+        ttnn.deallocate(tensor)
+
+        # [1, 1, N*M*L, F] -> [N, M, L, F] -> [M, N, L, F] -> [1, 1, N*M*L, F] (global order).
+        gathered = ttnn.reshape(gathered, [num_rows, num_chunks, chunk_local_len, feature_dim])
+        gathered = ttnn.permute(gathered, (1, 0, 2, 3))
+        gathered = ttnn.reshape(gathered, [1, 1, num_rows * num_chunks * chunk_local_len, feature_dim])
+
+        # Every row now has identical full-sequence data in global order; reduce_scatter
+        # gives each row its contiguous slice (sum across cluster axis = N * data, so
+        # scale by 1/N to recover the original values).
+        row_rs_cfg = ccl.populate_reduce_scatter_runtime_args(
+            {
+                "cluster_axis": 0,
+                "dim": 2,
+                "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                "topology": ttnn.Topology.Linear,
+            }
+        )
+        scattered = ttnn.experimental.reduce_scatter_minimal_async(gathered, **row_rs_cfg)
+        ttnn.deallocate(gathered)
+        scattered = scattered * (1.0 / num_rows)
+        return scattered
 
     @classmethod
     def _forward_prefill(
