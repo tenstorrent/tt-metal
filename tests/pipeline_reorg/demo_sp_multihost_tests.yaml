@@ -29,6 +29,7 @@
     # NOTE: check where the python3 is coming from
     echo "============= SP1 superpod: checking python3 location ============="
     which python3
+    which tt-run
 
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
     # todo)) add proper stress test that can run for 2 hours -- repeat batches?
@@ -66,6 +67,7 @@
     # NOTE: check where the python3 is coming from
     echo "============= SP4 superpod: checking which python3 ============="
     which python3
+    which tt-run
 
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 -m ttnn.distributed.ttrun \
       --tcp-interface ens5f0np0 \
