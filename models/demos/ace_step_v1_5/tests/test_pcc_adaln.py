@@ -1,51 +1,60 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""PCC for ACE DiT scale-shift AdaLN modulation (``TtAceStepDiTLayer`` / demo DiT path)."""
+
 from __future__ import annotations
 
+import pytest
 import torch
 
-from models.demos.ace_step_v1_5.torch_ref.config import AceConfig
-from models.demos.ace_step_v1_5.torch_ref.modules import AdaLNZero
+from models.demos.ace_step_v1_5.tests._dit_decoder_pcc_common import (
+    assert_pcc_print,
+    modulation_chunks_torch,
+    tiny_dit_decoder_fixture,
+)
+from models.demos.ace_step_v1_5.torch_ref.dit_decoder_core import adaln_modulate_torch
 
 
-def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.float().flatten()
-    b = b.float().flatten()
-    n = min(a.numel(), b.numel())
-    if n == 0:
-        return 0.0
-    a = a[:n] - a[:n].mean()
-    b = b[:n] - b[:n].mean()
-    denom = a.square().sum().sqrt() * b.square().sum().sqrt() + 1e-12
-    return float((a * b).sum() / denom)
-
-
-def test_adalnzero_pcc(mesh_device):
+@pytest.mark.parametrize("which", ["self_attn", "mlp"])
+def test_dit_scale_shift_adaln_modulation_matches_torch(mesh_device, which: str):
+    """RMSNorm(x) * (1 + scale) + shift — same ops as ``TtAceStepDiTLayer`` self-attn and MLP branches."""
     import ttnn
 
-    B, S, D, C = 1, 32, 128, 128
-    cfg = AceConfig(d_model=D, n_heads=8, d_ff=256, cond_dim=C)
-    # Run the reference in bf16 so inputs/weights match (avoids bf16 vs fp32 matmul dtype errors).
-    torch_mod = AdaLNZero(cfg).to(dtype=torch.bfloat16).eval()
+    cfg, sd, d_model, seq_len, _enc_len = tiny_dit_decoder_fixture()
+    layer_idx = 0
+    b = 1
 
-    x = torch.randn(B, S, D, dtype=torch.bfloat16)
-    cond = torch.randn(B, C, dtype=torch.bfloat16)
-    y_ref = torch_mod(x, cond)
-
-    from models.demos.ace_step_v1_5.ttnn_impl.config import AceConfigTTNN
-    from models.demos.ace_step_v1_5.ttnn_impl.modules import AdaLNZeroTTNN
-
-    w = {
-        "w": torch_mod.cond_to_gb.weight.detach().to(torch.bfloat16),
-        "b": torch_mod.cond_to_gb.bias.detach().to(torch.bfloat16),
-    }
-    ttnn_mod = AdaLNZeroTTNN(
-        AceConfigTTNN(d_model=D, n_heads=8, d_ff=256, cond_dim=C), mesh_device=mesh_device, weights=w
+    torch.manual_seed(3)
+    x = torch.randn(b, 1, seq_len, d_model, dtype=torch.bfloat16)
+    timestep_proj = torch.randn(b, 6, d_model, dtype=torch.bfloat16)
+    shift_msa, scale_msa, _gate_msa, c_shift, c_scale, _c_gate = modulation_chunks_torch(
+        sd, layer_idx=layer_idx, timestep_proj_b6d=timestep_proj
     )
 
-    x_tt = ttnn.from_torch(x.unsqueeze(1), device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    cond_tt = ttnn.from_torch(cond.view(B, 1, 1, C), device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    y_tt = ttnn_mod(x_tt, cond_tt)
-    y = ttnn.to_torch(y_tt).squeeze(1)
+    if which == "self_attn":
+        norm_w = torch.from_numpy(sd[f"layers.{layer_idx}.self_attn_norm.weight"]).to(torch.bfloat16)
+        shift, scale = shift_msa, scale_msa
+    else:
+        norm_w = torch.from_numpy(sd[f"layers.{layer_idx}.mlp_norm.weight"]).to(torch.bfloat16)
+        shift, scale = c_shift, c_scale
 
-    score = pcc(y_ref, y)
-    print(f"[ace_step_v1_5][PCC] AdaLNZero: {score:.6f}", flush=True)
-    assert score >= -0.9
+    y_ref = adaln_modulate_torch(x, norm_w, float(cfg.rms_norm_eps), shift, scale)
+
+    x_tt = ttnn.from_torch(x, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    norm_w_tt = ttnn.from_torch(norm_w, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    shift_tt = ttnn.from_torch(shift, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    scale_tt = ttnn.from_torch(scale, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    x_norm = ttnn.rms_norm(
+        x_tt,
+        weight=norm_w_tt,
+        epsilon=float(cfg.rms_norm_eps),
+        memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
+    )
+    one_plus = ttnn.add(scale_tt, ttnn.ones_like(scale_tt))
+    y_tt = ttnn.add(ttnn.multiply(x_norm, one_plus), shift_tt)
+    y = ttnn.to_torch(y_tt).to(torch.bfloat16)
+
+    assert_pcc_print(f"dit_adaln_{which}", y_ref, y)

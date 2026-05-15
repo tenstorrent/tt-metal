@@ -179,6 +179,18 @@ def qwen3_mlp(x: torch.Tensor, *, w_gate: torch.Tensor, w_up: torch.Tensor, w_do
     return torch.matmul(h, w_down.t())
 
 
+def adaln_modulate_torch(
+    x: torch.Tensor,
+    norm_w: torch.Tensor,
+    eps: float,
+    shift: torch.Tensor,
+    scale: torch.Tensor,
+) -> torch.Tensor:
+    """ACE DiT AdaLN-style modulation used in ``TtAceStepDiTLayer``: norm(x) * (1 + scale) + shift."""
+    x_norm = rmsnorm_qwen3(x, norm_w, eps)
+    return x_norm * (1.0 + scale) + shift
+
+
 def make_tiny_state_dict(
     *,
     d_model: int,
@@ -406,81 +418,129 @@ class TorchAceStepDiTCoreRef:
                 rope_cos, rope_sin = rope(dummy, pos)
 
         for layer_idx in range(int(self.cfg.num_hidden_layers)):
-            sst = self._w(f"layers.{layer_idx}.scale_shift_table", device=device, dtype=compute_dtype)  # [1,6,D]
-            sst = sst + timestep_proj_b6d  # broadcast over batch
-            shift_msa, scale_msa, gate_msa, c_shift, c_scale, c_gate = [
-                sst[:, i : i + 1, :].unsqueeze(2) for i in range(6)
-            ]
-
-            self_norm_w = self._w(f"layers.{layer_idx}.self_attn_norm.weight", device=device, dtype=compute_dtype)
-            cross_norm_w = self._w(f"layers.{layer_idx}.cross_attn_norm.weight", device=device, dtype=compute_dtype)
-            mlp_norm_w = self._w(f"layers.{layer_idx}.mlp_norm.weight", device=device, dtype=compute_dtype)
-
-            # Self-attn
-            x_norm = rmsnorm_qwen3(x, self_norm_w, eps)
-            h_in = x_norm * (1 + scale_msa) + shift_msa
-
-            base = f"layers.{layer_idx}.self_attn"
-            attn_out = _attention_sdpa(
-                h_in,
-                wq=self._w(f"{base}.q_proj.weight", device=device, dtype=compute_dtype),
-                wk=self._w(f"{base}.k_proj.weight", device=device, dtype=compute_dtype),
-                wv=self._w(f"{base}.v_proj.weight", device=device, dtype=compute_dtype),
-                wo=self._w(f"{base}.o_proj.weight", device=device, dtype=compute_dtype),
-                q_norm_w=self._w(f"{base}.q_norm.weight", device=device, dtype=compute_dtype),
-                k_norm_w=self._w(f"{base}.k_norm.weight", device=device, dtype=compute_dtype),
-                n_heads=h,
-                n_kv_heads=int(self.cfg.num_key_value_heads),
-                head_dim=dh,
-                eps=eps,
-                encoder_hidden_states=None,
+            x = self.forward_layer(
+                layer_idx=layer_idx,
+                hidden_states=x,
+                timestep_proj_b6d=timestep_proj_b6d,
+                encoder_hidden_states=enc,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
-                trace_prefix=f"torch_ref.core.layer{layer_idx}.self.",
+                debug=debug,
             )
-            self._debug_put(debug, f"core.layer{layer_idx}.self.attn_out", attn_out.squeeze(1))
-            x = x + attn_out * gate_msa
-            self._debug_put(debug, f"core.layer{layer_idx}.after_self", x.squeeze(1))
-
-            # Cross-attn
-            x2 = rmsnorm_qwen3(x, cross_norm_w, eps)
-            base = f"layers.{layer_idx}.cross_attn"
-            ca = _attention_sdpa(
-                x2,
-                wq=self._w(f"{base}.q_proj.weight", device=device, dtype=compute_dtype),
-                wk=self._w(f"{base}.k_proj.weight", device=device, dtype=compute_dtype),
-                wv=self._w(f"{base}.v_proj.weight", device=device, dtype=compute_dtype),
-                wo=self._w(f"{base}.o_proj.weight", device=device, dtype=compute_dtype),
-                q_norm_w=self._w(f"{base}.q_norm.weight", device=device, dtype=compute_dtype),
-                k_norm_w=self._w(f"{base}.k_norm.weight", device=device, dtype=compute_dtype),
-                n_heads=h,
-                n_kv_heads=int(self.cfg.num_key_value_heads),
-                head_dim=dh,
-                eps=eps,
-                encoder_hidden_states=enc,
-                rope_cos=None,
-                rope_sin=None,
-                trace_prefix=f"torch_ref.core.layer{layer_idx}.cross.",
-            )
-            self._debug_put(debug, f"core.layer{layer_idx}.cross.attn_out", ca.squeeze(1))
-            x = x + ca
-            self._debug_put(debug, f"core.layer{layer_idx}.after_cross", x.squeeze(1))
-
-            # MLP
-            x3 = rmsnorm_qwen3(x, mlp_norm_w, eps)
-            h3 = x3 * (1 + c_scale) + c_shift
-            ff = qwen3_mlp(
-                h3,
-                w_gate=self._w(f"layers.{layer_idx}.mlp.gate_proj.weight", device=device, dtype=compute_dtype),
-                w_up=self._w(f"layers.{layer_idx}.mlp.up_proj.weight", device=device, dtype=compute_dtype),
-                w_down=self._w(f"layers.{layer_idx}.mlp.down_proj.weight", device=device, dtype=compute_dtype),
-            )
-            self._debug_put(debug, f"core.layer{layer_idx}.mlp.out", ff.squeeze(1))
-            x = x + ff * c_gate
-            self._debug_put(debug, f"core.layer{layer_idx}.block_out", x.squeeze(1))
 
         self._debug_put(debug, "core.out", x.squeeze(1))
         return x.squeeze(1)  # [B,S,D]
+
+    def condition_encoder_hidden_states(
+        self, encoder_hidden_states: torch.Tensor, *, device: torch.device | None = None
+    ) -> torch.Tensor:
+        """Project raw encoder states to hidden size (``condition_embedder``), shape ``[B,1,S_enc,D]``."""
+        compute_dtype = torch.bfloat16
+        device = device or encoder_hidden_states.device
+        d = int(self.cfg.hidden_size)
+        enc = encoder_hidden_states.to(dtype=compute_dtype, device=device).unsqueeze(1)
+        cond_w = self._w("condition_embedder.weight", device=device, dtype=compute_dtype)
+        cond_b = self._w("condition_embedder.bias", device=device, dtype=compute_dtype)
+        return torch.matmul(enc, cond_w.t()) + cond_b.view(1, 1, 1, d)
+
+    def forward_layer(
+        self,
+        *,
+        layer_idx: int,
+        hidden_states: torch.Tensor,
+        timestep_proj_b6d: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+        rope_cos: Optional[torch.Tensor] = None,
+        rope_sin: Optional[torch.Tensor] = None,
+        debug: Optional[dict[str, Any]] = None,
+    ) -> torch.Tensor:
+        """
+        One ``layers.{i}`` block (self-attn + cross-attn + gated MLP).
+
+        ``hidden_states``: ``[B,1,S,D]``; ``encoder_hidden_states``: ``[B,1,S_enc,D]`` after
+        ``condition_embedder`` (same as ``TtAceStepDiTLayer`` input).
+        """
+        layer_idx = int(layer_idx)
+        eps = float(self.cfg.rms_norm_eps)
+        h = int(self.cfg.num_attention_heads)
+        dh = int(self.cfg.head_dim)
+        compute_dtype = torch.bfloat16
+        device = hidden_states.device
+        x = hidden_states.to(dtype=compute_dtype, device=device)
+        timestep_proj_b6d = timestep_proj_b6d.to(dtype=compute_dtype, device=device)
+        enc = encoder_hidden_states.to(dtype=compute_dtype, device=device)
+
+        b, _one, s, d = x.shape
+        if rope_cos is None or rope_sin is None:
+            rope = self._rope(d_model=d, n_heads=h, head_dim=dh, max_seq_len=max(s, 512), device=device)
+            dummy = torch.zeros(b, s, d, dtype=torch.float32, device=device)
+            pos = torch.arange(s, dtype=torch.long, device=device).unsqueeze(0).expand(b, -1)
+            with torch.no_grad():
+                rope_cos, rope_sin = rope(dummy, pos)
+
+        sst = self._w(f"layers.{layer_idx}.scale_shift_table", device=device, dtype=compute_dtype)
+        sst = sst + timestep_proj_b6d
+        shift_msa, scale_msa, gate_msa, c_shift, c_scale, c_gate = [sst[:, i : i + 1, :].unsqueeze(2) for i in range(6)]
+
+        self_norm_w = self._w(f"layers.{layer_idx}.self_attn_norm.weight", device=device, dtype=compute_dtype)
+        cross_norm_w = self._w(f"layers.{layer_idx}.cross_attn_norm.weight", device=device, dtype=compute_dtype)
+        mlp_norm_w = self._w(f"layers.{layer_idx}.mlp_norm.weight", device=device, dtype=compute_dtype)
+
+        x_norm = rmsnorm_qwen3(x, self_norm_w, eps)
+        h_in = x_norm * (1 + scale_msa) + shift_msa
+        base = f"layers.{layer_idx}.self_attn"
+        attn_out = _attention_sdpa(
+            h_in,
+            wq=self._w(f"{base}.q_proj.weight", device=device, dtype=compute_dtype),
+            wk=self._w(f"{base}.k_proj.weight", device=device, dtype=compute_dtype),
+            wv=self._w(f"{base}.v_proj.weight", device=device, dtype=compute_dtype),
+            wo=self._w(f"{base}.o_proj.weight", device=device, dtype=compute_dtype),
+            q_norm_w=self._w(f"{base}.q_norm.weight", device=device, dtype=compute_dtype),
+            k_norm_w=self._w(f"{base}.k_norm.weight", device=device, dtype=compute_dtype),
+            n_heads=h,
+            n_kv_heads=int(self.cfg.num_key_value_heads),
+            head_dim=dh,
+            eps=eps,
+            encoder_hidden_states=None,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            trace_prefix=f"torch_ref.layer{layer_idx}.self.",
+        )
+        self._debug_put(debug, f"layer{layer_idx}.after_self", x.squeeze(1))
+        x = x + attn_out * gate_msa
+
+        x2 = rmsnorm_qwen3(x, cross_norm_w, eps)
+        base = f"layers.{layer_idx}.cross_attn"
+        ca = _attention_sdpa(
+            x2,
+            wq=self._w(f"{base}.q_proj.weight", device=device, dtype=compute_dtype),
+            wk=self._w(f"{base}.k_proj.weight", device=device, dtype=compute_dtype),
+            wv=self._w(f"{base}.v_proj.weight", device=device, dtype=compute_dtype),
+            wo=self._w(f"{base}.o_proj.weight", device=device, dtype=compute_dtype),
+            q_norm_w=self._w(f"{base}.q_norm.weight", device=device, dtype=compute_dtype),
+            k_norm_w=self._w(f"{base}.k_norm.weight", device=device, dtype=compute_dtype),
+            n_heads=h,
+            n_kv_heads=int(self.cfg.num_key_value_heads),
+            head_dim=dh,
+            eps=eps,
+            encoder_hidden_states=enc,
+            rope_cos=None,
+            rope_sin=None,
+            trace_prefix=f"torch_ref.layer{layer_idx}.cross.",
+        )
+        x = x + ca
+
+        x3 = rmsnorm_qwen3(x, mlp_norm_w, eps)
+        h3 = x3 * (1 + c_scale) + c_shift
+        ff = qwen3_mlp(
+            h3,
+            w_gate=self._w(f"layers.{layer_idx}.mlp.gate_proj.weight", device=device, dtype=compute_dtype),
+            w_up=self._w(f"layers.{layer_idx}.mlp.up_proj.weight", device=device, dtype=compute_dtype),
+            w_down=self._w(f"layers.{layer_idx}.mlp.down_proj.weight", device=device, dtype=compute_dtype),
+        )
+        x = x + ff * c_gate
+        self._debug_put(debug, f"layer{layer_idx}.block_out", x.squeeze(1))
+        return x
 
     def __call__(
         self,
@@ -495,4 +555,31 @@ class TorchAceStepDiTCoreRef:
             timestep_proj_b6d=timestep_proj_b6d,
             encoder_hidden_states=encoder_hidden_states,
             debug=debug,
+        )
+
+
+class TorchAceStepDiTLayerRef:
+    """Thin wrapper around :meth:`TorchAceStepDiTCoreRef.forward_layer` for PCC tests."""
+
+    def __init__(self, *, cfg: AceStepDecoderConfigTTNN, state_dict: dict[str, np.ndarray], layer_idx: int = 0) -> None:
+        self.cfg = cfg
+        self.layer_idx = int(layer_idx)
+        self._core = TorchAceStepDiTCoreRef(cfg=cfg, state_dict=state_dict)
+
+    def __call__(
+        self,
+        hidden_states: torch.Tensor,
+        timestep_proj_b6d: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+        *,
+        rope_cos: torch.Tensor | None = None,
+        rope_sin: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        return self._core.forward_layer(
+            layer_idx=self.layer_idx,
+            hidden_states=hidden_states,
+            timestep_proj_b6d=timestep_proj_b6d,
+            encoder_hidden_states=encoder_hidden_states,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
         )

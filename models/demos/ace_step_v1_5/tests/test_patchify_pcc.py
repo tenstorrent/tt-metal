@@ -8,12 +8,11 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
-from loguru import logger
 
 import ttnn
+from models.demos.ace_step_v1_5.tests._dit_decoder_pcc_common import assert_pcc_print
 from models.demos.ace_step_v1_5.torch_ref.patchify import depatchify_1d, patchify_1d
 from models.demos.ace_step_v1_5.ttnn_impl.patchify import TtAceStepDePatchify1D, TtAceStepPatchEmbed1D
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @dataclass(frozen=True)
@@ -76,8 +75,7 @@ def test_patch_embed_matches_torch(device, torch_seed):
     y_tt, _meta = tt_proj_in(x_tt)
     y_tt_torch = ttnn.to_torch(y_tt).float()
 
-    _pcc_ok, pcc_msg = assert_with_pcc(y_ref, y_tt_torch, pcc=0.99)
-    logger.info(f"[ace_step_v1_5][patch_embed] {pcc_msg} (threshold=0.99, ok={_pcc_ok})")
+    assert_pcc_print("patch_embed", y_ref, y_tt_torch)
 
 
 def test_depatchify_matches_torch(device, torch_seed):
@@ -96,5 +94,4 @@ def test_depatchify_matches_torch(device, torch_seed):
     y_tt = tt_proj_out(y_tt_patches, meta)
     y_tt_torch = ttnn.to_torch(y_tt).float()
 
-    _pcc_ok, pcc_msg = assert_with_pcc(y_ref, y_tt_torch, pcc=0.99)
-    logger.info(f"[ace_step_v1_5][depatchify] {pcc_msg} (threshold=0.99, ok={_pcc_ok})")
+    assert_pcc_print("depatchify", y_ref, y_tt_torch)
