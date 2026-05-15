@@ -19,6 +19,13 @@
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_silu.h"
 #include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "ckernel_sfpu_gelu.h"
+
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
+inline void llk_math_eltwise_unary_sfpu_gelu(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::calculate_gelu<APPROXIMATE, is_fp32_dest_acc_en, 8>, dst_index, vector_mode);
+}
 #endif
 
 namespace detail {
@@ -61,6 +68,20 @@ template <>
 inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SWIGLU>() {
     PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(0, 1, 0)));
     PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(2, 3, 2)));
+};
+
+template <>
+inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::GELU>() {
+    PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::gelu>(ckernel::sfpu::gelu_init<true, false>)));
+};
+
+template <>
+inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::GELU>() {
+    PACK((llk_math_eltwise_unary_sfpu_gelu<true, false>(0)));
+    PACK((llk_math_eltwise_unary_sfpu_gelu<true, false>(2)));
+
+    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
+    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
 };
 
 }  // namespace detail
