@@ -201,6 +201,56 @@ MeshCoordinate MeshDeviceViewImpl::find_device(ChipId device_id) const {
 
 bool MeshDeviceViewImpl::is_mesh_2d() const { return shape_2d_.has_value(); }
 
+// Generate a Hamiltonian cycle (visits every vertex exactly once, last vertex adjacent to first)
+// for an M x N grid where M is even, M > 1, and N > 1. Runs in O(M*N) time.
+//
+// Algorithm: "even-rows zigzag with return column"
+//   1. Row 0: traverse left to right across all N columns
+//   2. Rows 1..M-1: zigzag through columns 1..N-1 (reserving column 0 for the return path)
+//      - Odd rows go right to left (N-1 down to 1)
+//      - Even rows go left to right (1 up to N-1)
+//   3. Column 0: traverse bottom to top from row M-1 down to row 1
+//   Ring closure: last vertex (1,0) is adjacent to first vertex (0,0).
+//
+// When M is odd but N is even, the caller transposes (swaps row/col) to make M the even dimension.
+static std::vector<MeshCoordinate> generate_hamiltonian_cycle(size_t M, size_t N, bool transpose) {
+    std::vector<MeshCoordinate> cycle;
+    cycle.reserve(M * N);
+
+    auto emit = [&](size_t r, size_t c) {
+        if (transpose) {
+            cycle.emplace_back(static_cast<uint32_t>(c), static_cast<uint32_t>(r));
+        } else {
+            cycle.emplace_back(static_cast<uint32_t>(r), static_cast<uint32_t>(c));
+        }
+    };
+
+    // Row 0: left to right
+    for (size_t c = 0; c < N; ++c) {
+        emit(0, c);
+    }
+
+    // Rows 1 to M-1: zigzag through cols 1 to N-1
+    for (size_t r = 1; r < M; ++r) {
+        if (r % 2 == 1) {
+            for (size_t c = N - 1; c >= 1; --c) {
+                emit(r, c);
+            }
+        } else {
+            for (size_t c = 1; c < N; ++c) {
+                emit(r, c);
+            }
+        }
+    }
+
+    // Column 0: bottom to top (M-1 down to 1)
+    for (size_t r = M - 1; r >= 1; --r) {
+        emit(r, 0);
+    }
+
+    return cycle;
+}
+
 std::vector<MeshCoordinate> MeshDeviceViewImpl::get_line_coordinates(
     size_t length, const Shape2D& mesh_shape, const Shape2D& mesh_offset) {
     const auto [num_rows, num_cols] = mesh_shape;
@@ -215,35 +265,67 @@ std::vector<MeshCoordinate> MeshDeviceViewImpl::get_line_coordinates(
         num_rows,
         num_cols);
 
-    // Iterate in a zigzag pattern from top-left to bottom-right, starting at the offset.
     std::vector<MeshCoordinate> line_coords;
     line_coords.reserve(length);
 
-    // NOTE: Special case: For 2x4 or 4x2 mesh shapes, use perimeter traversal to avoid snake patterns
-    // that cause fabric initialization issues on T3K
-    // https://github.com/tenstorrent/tt-metal/issues/33737
-    if (mesh_shape == Shape2D(2, 4) || mesh_shape == Shape2D(4, 2)) {
-        auto ring_coords = get_ring_coordinates(mesh_shape, mesh_shape);
-        MeshCoordinate start_coord(start_row, start_col);
-        auto start_it = std::find(ring_coords.begin(), ring_coords.end(), start_coord);
-        TT_FATAL(
-            start_it != ring_coords.end(), "Mesh offset ({}, {}) not found in ring coordinates", start_row, start_col);
+    // Case 1: Single row or column — simple linear path, no ring possible
+    if (num_rows == 1 || num_cols == 1) {
+        // Zigzag starting from offset along the non-trivial dimension
+        size_t total = num_rows * num_cols;
+        TT_FATAL(length <= total, "Length {} exceeds grid size {}", length, total);
 
-        // check the length is less than or equal to the number of ring coordinates
-        TT_FATAL(
-            length <= ring_coords.size(),
-            "Length {} is greater than the number of ring coordinates {}",
-            length,
-            ring_coords.size());
-
-        size_t start_idx = std::distance(ring_coords.begin(), start_it);
-        for (size_t i = 0; i < length; ++i) {
-            line_coords.push_back(ring_coords[(start_idx + i) % ring_coords.size()]);
+        if (num_rows == 1) {
+            for (size_t i = 0; i < length; ++i) {
+                line_coords.emplace_back(
+                    static_cast<uint32_t>(start_row), static_cast<uint32_t>((start_col + i) % num_cols));
+            }
+        } else {
+            for (size_t i = 0; i < length; ++i) {
+                line_coords.emplace_back(
+                    static_cast<uint32_t>((start_row + i) % num_rows), static_cast<uint32_t>(start_col));
+            }
         }
         return line_coords;
     }
 
+    // Case 2: At least one even dimension — deterministic O(M*N) Hamiltonian cycle
+    // For WH_B0 architectures, at least one dimension is always even for grids > 1x1.
+    if (num_rows % 2 == 0 || num_cols % 2 == 0) {
+        bool transpose = (num_rows % 2 != 0);
+        size_t M = transpose ? num_cols : num_rows;
+        size_t N = transpose ? num_rows : num_cols;
+
+        auto cycle = generate_hamiltonian_cycle(M, N, transpose);
+        TT_FATAL(
+            cycle.size() == num_rows * num_cols,
+            "Hamiltonian cycle size {} != grid size {}",
+            cycle.size(),
+            num_rows * num_cols);
+        TT_FATAL(length <= cycle.size(), "Length {} exceeds cycle size {}", length, cycle.size());
+
+        // Find the offset position in the cycle and rotate
+        MeshCoordinate start_coord(start_row, start_col);
+        auto start_it = std::find(cycle.begin(), cycle.end(), start_coord);
+        TT_FATAL(
+            start_it != cycle.end(),
+            "Mesh offset ({}, {}) not found in Hamiltonian cycle for mesh shape ({}, {})",
+            start_row,
+            start_col,
+            num_rows,
+            num_cols);
+
+        size_t start_idx = std::distance(cycle.begin(), start_it);
+        for (size_t i = 0; i < length; ++i) {
+            line_coords.push_back(cycle[(start_idx + i) % cycle.size()]);
+        }
+        return line_coords;
+    }
+
+    // Case 3: Both dimensions odd and > 1 — DFS fallback (can't happen on WH_B0)
+    // A Hamiltonian cycle doesn't exist for grids where both dimensions are odd.
+    // Fall back to DFS with backtracking: try ring first, then accept any connected path.
     const MeshCoordinate start_coord(start_row, start_col);
+
     // Lambda to check if two coordinates are adjacent (direct neighbors only: up, down, left, right)
     // Does NOT consider diagonal neighbors
     auto are_adjacent = [](const MeshCoordinate& a, const MeshCoordinate& b) -> bool {
