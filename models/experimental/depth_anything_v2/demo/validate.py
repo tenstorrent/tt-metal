@@ -235,7 +235,7 @@ def main():
         print(f"  Max PCC:  {max(valid_pccs):.6f}")
     else:
         print("  No valid PCC results (inference failed)")
-    print(f"  FPS:      {fps:.2f} (target >= 15)")
+    print(f"  FPS:      {fps:.2f} (target >= 5, ViT-L; paper: 4.7 FPS on V100)")
     print(f"  Artifacts saved to: {OUTPUT_DIR}/")
     print("=" * 60)
 

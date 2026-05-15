@@ -44,11 +44,10 @@ echo ""
 echo "[3/6] Checking model files..."
 MODEL_DIR="models/experimental/depth_anything_v2"
 if [ ! -f "${MODEL_DIR}/tt/model_def.py" ]; then
-    echo "  Model files not found. Cloning branch..."
-    git clone --depth 1 --branch feat/depth-anything-v2 \
-        https://github.com/Ashutosh0x/tt-metal.git /tmp/tt-metal-dav2
-    cp -r /tmp/tt-metal-dav2/${MODEL_DIR} ${MODEL_DIR}
-    echo "  Model files copied."
+    echo "  ERROR: Model files not found at ${MODEL_DIR}/tt/model_def.py"
+    echo "  Please run this script from a checked-out tt-metal repo with the"
+    echo "  depth_anything_v2 model files present."
+    exit 1
 else
     echo "  Model files found at ${MODEL_DIR}"
 fi
@@ -71,14 +70,14 @@ echo ""
 echo "[5/6] Running PCC accuracy test..."
 echo "  pytest ${MODEL_DIR}/tests/test_depth_anything_v2_pcc.py"
 pytest ${MODEL_DIR}/tests/test_depth_anything_v2_pcc.py -v --tb=short 2>&1 | tee /tmp/pcc_results.txt
-PCC_EXIT=$?
+PCC_EXIT=${PIPESTATUS[0]}
 
 # 6. Run validation suite (FPS + PCC + visualization)
 echo ""
 echo "[6/6] Running full validation suite..."
 echo "  python ${MODEL_DIR}/demo/validate.py"
 python3 ${MODEL_DIR}/demo/validate.py 2>&1 | tee /tmp/validate_results.txt
-VAL_EXIT=$?
+VAL_EXIT=${PIPESTATUS[0]}
 
 # Summary
 echo ""

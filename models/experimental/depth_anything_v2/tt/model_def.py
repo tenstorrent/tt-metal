@@ -301,6 +301,19 @@ class TtDPTFusionStage:
         return ttnn.add(residual, x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # ------------------------------------------------------------------
+    def _upsample_to(self, x, target_h, target_w):
+        """Upsample x to (target_h, target_w), choosing the best method.
+
+        Uses on-device nearest-neighbor for exact 2x integer scales,
+        CPU bilinear round-trip for non-integer scales (e.g. 19->37).
+        """
+        if target_h is None and target_w is None:
+            return self._device_upsample_2x(x)
+        cur_h, cur_w = x.shape[2], x.shape[3]
+        if target_h == cur_h * 2 and target_w == cur_w * 2:
+            return self._device_upsample_2x(x)
+        return self._bilinear_upsample(x, target_h, target_w)
+
     def _device_upsample_2x(self, x):
         """On-device nearest-neighbor 2x upsample (no CPU round-trip).
 
@@ -353,6 +366,7 @@ class TtDPTFusionStage:
     def _projection_1x1(self, x, params):
         """1x1 convolution implemented as ttnn.linear after BCHW→BHWC reshape."""
         batch_size, channels, h, w = x.shape
+        out_channels = params.weight.shape[-1]  # Derive from weight, not hardcoded
         x = ttnn.permute(x, (0, 2, 3, 1))  # (B, H, W, C)
         x = _dram_tile(x)
         x = ttnn.reshape(x, (batch_size, h * w, channels))
@@ -362,8 +376,8 @@ class TtDPTFusionStage:
             bias=params.bias,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        x = ttnn.reshape(x, (batch_size, h, w, 256))
-        x = ttnn.permute(x, (0, 3, 1, 2))  # (B, 256, H, W)
+        x = ttnn.reshape(x, (batch_size, h, w, out_channels))
+        x = ttnn.permute(x, (0, 3, 1, 2))  # (B, out_channels, H, W)
         return x
 
     # ------------------------------------------------------------------
@@ -435,15 +449,7 @@ class TtDPTFusionStage:
             if fused is None:
                 # First layer (deepest) — no residual
                 hidden_state = self._pre_act_residual_block(hidden_state, fusion_params.residual_layer2)
-                if target_h is not None:
-                    # Non-integer scale (19->37): must use CPU bilinear
-                    cur_h, cur_w = hidden_state.shape[2], hidden_state.shape[3]
-                    if target_h == cur_h * 2 and target_w == cur_w * 2:
-                        hidden_state, _, _ = self._device_upsample_2x(hidden_state)
-                    else:
-                        hidden_state, _, _ = self._bilinear_upsample(hidden_state, target_h, target_w)
-                else:
-                    hidden_state, _, _ = self._device_upsample_2x(hidden_state)
+                hidden_state, _, _ = self._upsample_to(hidden_state, target_h, target_w)
                 hidden_state = self._projection_1x1(hidden_state, fusion_params.projection)
                 fused = hidden_state
             else:
@@ -455,11 +461,7 @@ class TtDPTFusionStage:
                 fh, fw = fused.shape[2], fused.shape[3]
                 nh, nw = new_feature.shape[2], new_feature.shape[3]
                 if fh != nh or fw != nw:
-                    # Check if exact 2x (on-device) or non-integer (CPU)
-                    if fh == nh * 2 and fw == nw * 2:
-                        new_feature, _, _ = self._device_upsample_2x(new_feature)
-                    else:
-                        new_feature, _, _ = self._bilinear_upsample(new_feature, target_h=fh, target_w=fw)
+                    new_feature, _, _ = self._upsample_to(new_feature, fh, fw)
 
                 # residual_layer1(new_feature) + fused
                 res1_out = self._pre_act_residual_block(new_feature, fusion_params.residual_layer1)
@@ -470,15 +472,8 @@ class TtDPTFusionStage:
                 # residual_layer2
                 fused = self._pre_act_residual_block(fused, fusion_params.residual_layer2)
 
-                # Upsample to next level: use on-device 2x when possible
-                if target_h is not None:
-                    cur_h, cur_w = fused.shape[2], fused.shape[3]
-                    if target_h == cur_h * 2 and target_w == cur_w * 2:
-                        fused, _, _ = self._device_upsample_2x(fused)
-                    else:
-                        fused, _, _ = self._bilinear_upsample(fused, target_h, target_w)
-                else:
-                    fused, _, _ = self._device_upsample_2x(fused)
+                # Upsample to next level
+                fused, _, _ = self._upsample_to(fused, target_h, target_w)
 
                 # 1x1 projection
                 fused = self._projection_1x1(fused, fusion_params.projection)
@@ -892,6 +887,8 @@ class TtDepthAnythingV2:
         depth map (B, 1, H_out, W_out)
     """
 
+    BATCH_SIZE = 1  # Only batch_size=1 is supported (CLS/pos embeddings are not broadcast)
+
     def __init__(self, config, parameters, device):
         """Initialize the TT Depth Anything V2 model.
 
@@ -901,12 +898,14 @@ class TtDepthAnythingV2:
             device: Target TT device.
 
         Note:
+            Only batch_size=1 is supported.  CLS token and position embeddings
+            are stored as (1, seqL, 1024) and are not broadcast across batches.
             TTNN execution config is derived internally from the target device and
             batch size, and is stored on ``self.config`` for internal use.
             The passed-in ``config`` is retained as ``self.hf_config``.
         """
         self.hf_config = config
-        self.config = get_model_config(batch_size=1, device=device)
+        self.config = get_model_config(batch_size=self.BATCH_SIZE, device=device)
         self.device = device
         # Recursively move all weights to device and wrap dicts with DictNamespace.
         self.parameters = self._move_to_device(parameters, device)
@@ -926,6 +925,18 @@ class TtDepthAnythingV2:
         self.fusion = TtDPTFusionStage(self.parameters["neck"]["fusion"], device)
         max_depth = getattr(self.hf_config, "max_depth", 80.0)
         self.head = TtDPTHead(self.parameters["head"], device, max_depth=max_depth)
+
+        # Pre-build attention mask for padding tokens (fixed for all forward passes).
+        # Sequence layout: [CLS(1 real + 31 pad), patches(1369 real + 167 pad)] = 1568
+        # Real tokens: position 0 (CLS), positions 32-1400 (patches)
+        # Padding tokens: positions 1-31, 1401-1567  -> set to -inf
+        seqL = self.config["seqL_padded"]  # 1568
+        mask = torch.zeros(1, 1, seqL, seqL)
+        mask[:, :, :, 1:32] = float("-inf")  # CLS padding keys
+        mask[:, :, :, 1401:seqL] = float("-inf")  # patch padding keys
+        self.attention_mask = ttnn.from_torch(
+            mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
 
     # ------------------------------------------------------------------
     def _move_to_device(self, params, device):
@@ -964,21 +975,8 @@ class TtDepthAnythingV2:
             dtype=ttnn.bfloat8_b,
         )
 
-        # ---- Attention mask for padding tokens ----------------------------
-        # Sequence layout: [CLS(1 real + 31 pad), patches(1369 real + 167 pad)] = 1568
-        # Real tokens: position 0 (CLS), positions 32-1400 (patches)
-        # Padding tokens: positions 1-31, 1401-1567  -> set to -inf
-        # Cached on first call to avoid recreating every forward pass.
-        if not hasattr(self, "_cached_attention_mask"):
-            import torch as _torch
-
-            mask_np = _torch.zeros(1, 1, seqL, seqL)
-            mask_np[:, :, :, 1:32] = float("-inf")  # CLS padding keys
-            mask_np[:, :, :, 1401:seqL] = float("-inf")  # patch padding keys
-            self._cached_attention_mask = ttnn.from_torch(
-                mask_np, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-            )
-        attention_mask = self._cached_attention_mask
+        # ---- Attention mask (pre-built in __init__) ------------------------
+        attention_mask = self.attention_mask
 
         # ---- 2. ViT-Large encoder (24 layers) --------------------------
         features = []
@@ -1223,10 +1221,10 @@ def custom_preprocessor(torch_model, name):
                 )
             ),
             # Position embeddings: original (1, 1370, 1024) [1 CLS + 1369 patches].
-            # Our sequence layout: [CLS(32 tokens), patches(1369), pad(7)] = 1408.
+            # Our sequence layout: [CLS(32 tokens), patches(1369), pad(167)] = 1568.
             # HF layout: [CLS(1), patches(1369)] = 1370.
             # Must rearrange: CLS pos -> slot 0 (pad 31 zeros to fill 32),
-            # then patch positions -> slots 32-1400, then pad to 1408.
+            # then patch positions -> slots 32-1400, then pad to 1568.
             "position_embeddings": _rm(
                 torch.cat(
                     [

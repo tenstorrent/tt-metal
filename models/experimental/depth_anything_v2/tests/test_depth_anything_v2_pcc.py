@@ -57,6 +57,6 @@ def test_depth_anything_v2_pcc(device):
     print(f"TTNN output shape:  {tt_output.shape}")
 
     # 5. PCC comparison
-    passing, pcc_value = comp_pcc(torch_output, tt_output)
+    passing, pcc_value = comp_pcc(torch_output, tt_output, pcc=0.99)
     print(f"PCC Result: passing={passing}, pcc={pcc_value}")
     assert passing, f"PCC {pcc_value} < 0.99 threshold"
