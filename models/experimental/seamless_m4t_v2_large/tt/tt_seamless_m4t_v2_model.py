@@ -838,9 +838,7 @@ class TTSeamlessM4Tv2Model:
         cross_4d: ttnn.Tensor,
     ) -> ttnn.Tensor:
         """Decoder + ``lm_head`` only — **no** padding or mask construction. Caller owns ``encoder_hidden`` and mask tensors."""
-        dec_out = self.text_decoder.forward(
-            ids_padded, pos_tt, encoder_hidden, causal_4d, cross_4d, trace_no_profiler=True
-        )
+        dec_out = self.text_decoder.forward(ids_padded, pos_tt, encoder_hidden, causal_4d, cross_4d)
         logits = self._lm_head(dec_out)
         ttnn.deallocate(dec_out)
         return logits
@@ -863,9 +861,7 @@ class TTSeamlessM4Tv2Model:
         buffers must remain stable for trace replay (same contract as ``forward_decoder_and_lm_head_trace``).
         """
         enc_out = self.text_encoder.forward(enc_ids_padded, enc_pos, enc_self_mask_4d)
-        dec_out = self.text_decoder.forward(
-            dec_ids_padded, dec_pos, enc_out, dec_causal_4d, dec_cross_4d, trace_no_profiler=True
-        )
+        dec_out = self.text_decoder.forward(dec_ids_padded, dec_pos, enc_out, dec_causal_4d, dec_cross_4d)
         logits = self._lm_head(dec_out)
         ttnn.deallocate(dec_out)
         return logits
@@ -905,9 +901,7 @@ class TTSeamlessM4Tv2Model:
         else:
             enc_out = enc_mid
 
-        dec_out = self.text_decoder.forward(
-            dec_ids_padded, dec_pos, enc_out, dec_causal_4d, dec_cross_4d, trace_no_profiler=True
-        )
+        dec_out = self.text_decoder.forward(dec_ids_padded, dec_pos, enc_out, dec_causal_4d, dec_cross_4d)
         logits = self._lm_head(dec_out)
         ttnn.deallocate(dec_out)
         return logits
