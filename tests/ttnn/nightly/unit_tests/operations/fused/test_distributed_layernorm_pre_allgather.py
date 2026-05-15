@@ -896,19 +896,12 @@ def test_pre_allgather_ignores_implicit_tile_padding(device, inp_shape):
 def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offset):
     """Welford pre_all_gather stats are accurate for Float32 input regardless of mean offset.
 
-    NOTE: layer_norm_pre_all_gather defaults to a non-Welford program factory; the Welford
-    path is only taken when LayerNormDefaultProgramConfig(use_welford=True) is passed (and
-    recip_tensor is supplied).  This test exercises that path explicitly.
-
-    Without the unpack_to_dest_mode=UnpackToDestFp32 fix in the welford program factory (and
-    the kernel-side replay-buffer recovery after transpose_wh_tile), the unpacker silently
-    downcasts fp32 through SrcA to TF32 (10 mantissa bits). Large-mean inputs (offset=1e6)
-    then break the Welford recurrence's (x - M) subtraction -- recovered mean/variance go
-    haywire compared to torch's fp64 result.
-
-    With the fix the recovered mean is within fp32 Welford noise of the fp64 reference even
-    at offset=1e6, and the variance is in the expected ~1.0 ballpark.  Without the fix the
-    assert at offset=1e6 fails dramatically.
+    The Welford kernel requires fp32 precision end-to-end: the input CB and the intermediate
+    scratch CB must both use Float32 format, and the unpacker must be configured with
+    unpack_to_dest_mode=UnpackToDestFp32 so that fp32 values are not silently downcast to
+    TF32 (10 mantissa bits) when routed through SrcA. When either of these conditions is
+    violated, the Welford (x - M) subtraction catastrophically loses precision at large offsets
+    because the subtracted values share a large common exponent.
     """
     torch.manual_seed(0)
     torch_input = torch.randn(inp_shape, dtype=torch.float32) + offset
@@ -924,6 +917,10 @@ def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offs
     width = inp_shape[-1]
     grid = device.compute_with_storage_grid_size()
     core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+
+    # NOTE: layer_norm_pre_all_gather defaults to a non-Welford program factory; the Welford
+    # path is only taken when LayerNormDefaultProgramConfig(use_welford=True) is passed (and
+    # recip_tensor is supplied). This test exercises that path explicitly.
     recip_tensor = ttnn.create_layer_norm_reciprocals(device, core_range_set, width)
 
     tt_inp = ttnn.from_torch(
@@ -950,22 +947,56 @@ def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offs
     tt_mean = actual[..., 0].to(torch.float64).squeeze(-1)
     tt_var = actual[..., 32].to(torch.float64).squeeze(-1)
 
-    # Mean tolerance scales with |offset|: each Welford (x - M) subtraction loses
-    # ~log2(|mean|/std) bits of precision, giving absolute mean error proportional to
-    # |offset|. At offset=1e6 the actual error is ~few hundred (out of ~1e6).  Loose
-    # enough to absorb that, tight enough to catch the TF32 catastrophe.
-    mean_atol = 1e-3
-    logger.info(
-        f"offset={offset} max_abs_err mean={(tt_mean - torch_mean).abs().max().item():.3e}"
-        f" var={(tt_var - torch_var).abs().max().item():.3e}"
-    )
-    assert torch.allclose(
-        tt_mean, torch_mean, rtol=1e-3, atol=mean_atol
-    ), f"offset={offset} mean mismatch: max_abs_err={(tt_mean - torch_mean).abs().max().item()}"
+    mean_pcc_threshold = 0.99999
+    mean_frob = 1e-5
+    if offset == 0.0:
+        # No catastrophic cancellation: Welford is accurate to fp32 noise (mean≈4e-8, var≈4e-7),
+        # so tolerances can be tight to catch any precision regression.
+        mean_check_pcc = True
+        mean_rtol = 1e-7
+        mean_atol = 1e-7
+        var_pcc_threshold = 0.99999
+        var_frob = 1e-5
+        var_rtol = 1e-5
+        var_atol = 1e-5
+    else:
+        # At large offset, Welford mean stagnates once delta/k < ULP(offset)/2; the final mean
+        # reflects only the first ~32 samples, giving low theoretical PCC (in 0.2–0.8 range,
+        # depending on the inputs).
+        # Intrinsic to stagnation, so PCC check is disabled.
+        mean_check_pcc = False
+        mean_rtol = 6e-7
+        mean_atol = 1e-5
+        # Variance error per row has long tail. The typical error is small, so PCC stays high.
+        # Relative Frobenius is larger here than for the mean: even though the variance's absolute
+        # error is smaller than the mean's, it's divided by ≈1.0 (variance is translation-invariant),
+        # while the mean's larger absolute error is dwarfed when divided by ≈1e6.
+        var_pcc_threshold = 0.95
+        var_frob = 0.05
+        var_rtol = 0.001
+        var_atol = 0.25
 
-    # Variance is translation-invariant so the reference value is ~1.0 in both cases.
-    # Without the fix at offset=1e6 the variance collapses (rel err ~1.0).  atol=0.5 is
-    # loose enough to absorb fp32 Welford noise but tight enough to catch the catastrophe.
-    assert torch.allclose(
-        tt_var, torch_var, rtol=0.01, atol=0.2
-    ), f"offset={offset} variance mismatch: max_abs_err={(tt_var - torch_var).abs().max().item()}"
+    mean_passed, mean_msg = assert_numeric_metrics(
+        torch_mean,
+        tt_mean,
+        rtol=mean_rtol,
+        atol=mean_atol,
+        frobenius_threshold=mean_frob,
+        pcc_threshold=mean_pcc_threshold,
+        check_pcc=mean_check_pcc,
+        assert_on_fail=False,
+    )
+    var_passed, var_msg = assert_numeric_metrics(
+        torch_var,
+        tt_var,
+        rtol=var_rtol,
+        atol=var_atol,
+        frobenius_threshold=var_frob,
+        pcc_threshold=var_pcc_threshold,
+        assert_on_fail=False,
+    )
+    assert mean_passed and var_passed, (
+        f"offset={offset}\n"
+        f"--- MEAN: {'PASSED' if mean_passed else 'FAILED'} ---\n{mean_msg}\n"
+        f"--- VARIANCE: {'PASSED' if var_passed else 'FAILED'} ---\n{var_msg}"
+    )
