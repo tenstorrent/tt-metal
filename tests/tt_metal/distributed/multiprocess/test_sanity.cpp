@@ -201,7 +201,7 @@ TEST_F(BigMeshDualRankTest2x4, SimpleShardedBufferTest) {
 
     // The expectation is that EnqueueWriteMeshBuffer/EnqueueReadMeshBuffer
     // should handle sharding/unsharding transparently, so dst should equal src
-    for (int i = 0; i < dst_vec.size(); i++) {
+    for (size_t i = 0; i < dst_vec.size(); i++) {
         auto shard_row = i / global_buffer_shape.width();
         auto shard_col = i % global_buffer_shape.width();
         auto device_row = shard_row / shard_shape.height();

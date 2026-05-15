@@ -825,7 +825,7 @@ TEST_P(T3kTopologyMapperWithCustomMappingFixture, T3kMeshGraphWithCustomMapping)
         const auto mesh_size = mesh_shape.mesh_size();
 
         // Verify all fabric nodes in this mesh
-        for (ChipId chip_id = 0; chip_id < mesh_size; ++chip_id) {
+        for (ChipId chip_id = 0; chip_id < static_cast<ChipId>(mesh_size); ++chip_id) {
             FabricNodeId fabric_node_id(mesh_id, chip_id);
 
             // Skip if this fabric node is not in the provided mapping (for multi-mesh cases)

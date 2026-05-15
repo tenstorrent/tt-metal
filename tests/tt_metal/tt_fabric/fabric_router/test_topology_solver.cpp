@@ -229,7 +229,7 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor) {
         const auto& adj_graph_from_graph = adjacency_map_from_graph.find(mesh_id)->second;
         EXPECT_EQ(adj_graph.get_nodes().size(), adj_graph_from_graph.get_nodes().size())
             << "Mesh " << mesh_id.get() << " should have the same number of nodes";
-        for (int i = 0; i < adj_graph.get_nodes().size(); i++) {
+        for (size_t i = 0; i < adj_graph.get_nodes().size(); i++) {
             EXPECT_EQ(
                 adj_graph.get_neighbors(adj_graph.get_nodes()[i]).size(),
                 adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).size())
@@ -264,7 +264,7 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor2) {
         const auto& adj_graph_from_graph = adjacency_map_from_graph.find(mesh_id)->second;
         EXPECT_EQ(adj_graph.get_nodes().size(), adj_graph_from_graph.get_nodes().size())
             << "Mesh " << mesh_id.get() << " should have the same number of nodes";
-        for (int i = 0; i < adj_graph.get_nodes().size(); i++) {
+        for (size_t i = 0; i < adj_graph.get_nodes().size(); i++) {
             EXPECT_EQ(
                 adj_graph.get_neighbors(adj_graph.get_nodes()[i]).size(),
                 adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).size())
