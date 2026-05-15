@@ -27,6 +27,7 @@ from helpers.pack import (
     pack_mxfp4,
     pack_mxfp8p,
     pack_mxfp8r,
+    pack_mxint2,
     pack_mxint4,
     pack_mxint8,
 )
@@ -35,6 +36,7 @@ from helpers.unpack import (
     unpack_mxfp4,
     unpack_mxfp8p,
     unpack_mxfp8r,
+    unpack_mxint2,
     unpack_mxint4,
     unpack_mxint8,
 )
@@ -452,6 +454,9 @@ def quantize_mx_stimuli(
     elif data_format == DataFormat.MxInt4:
         packed = pack_mxint4(tensor, num_faces=num_faces)
         return unpack_mxint4(packed, num_faces=num_faces)
+    elif data_format == DataFormat.MxInt2:
+        packed = pack_mxint2(tensor, num_faces=num_faces)
+        return unpack_mxint2(packed, num_faces=num_faces)
     else:
         # This should never happen due to validation above, but kept for safety
         raise ValueError(f"Unsupported MX format: {data_format}")
@@ -561,6 +566,7 @@ class SrcFormatModel:
             DataFormat.MxFp4: SrcFormatModel._mxfp4_to_tf32,
             DataFormat.MxInt8: SrcFormatModel._mxint8_to_tf32,
             DataFormat.MxInt4: SrcFormatModel._mxint4_to_tf32,
+            DataFormat.MxInt2: SrcFormatModel._mxint2_to_tf32,
             DataFormat.Fp8_e4m3: SrcFormatModel._fp8_e4m3_to_tf32,
         }
 
@@ -749,6 +755,21 @@ class SrcFormatModel:
         the source registers. Stimuli are stored as torch.bfloat16, so we delegate to
         Float16_b conversion. The pack/unpack functions handle the MxInt4 quantization
         roundtrip (2 nibbles per byte) separately.
+        """
+        return SrcFormatModel._fp16b_to_tf32(tensor)
+
+    @staticmethod
+    def _mxint2_to_tf32(
+        tensor: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Handles MxInt2 format (signed S1.0 elements with E8M0 block exponent).
+
+        L1-only storage format like MxInt8/MxInt4; hardware unpacks to
+        Float16/Float16_b/TF32 in the source registers. Stimuli are stored as
+        torch.bfloat16, so we delegate to Float16_b conversion. The
+        pack/unpack functions handle the MxInt2 quantization roundtrip (4
+        crumbs per byte) separately.
         """
         return SrcFormatModel._fp16b_to_tf32(tensor)
 

@@ -60,6 +60,7 @@ def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
             DataFormat.MxFp4,
             DataFormat.MxInt8,
             DataFormat.MxInt4,
+            DataFormat.MxInt2,
             DataFormat.Float16_b,
             DataFormat.Float16,
         ],

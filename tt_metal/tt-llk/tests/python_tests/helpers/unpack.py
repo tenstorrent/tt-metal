@@ -463,8 +463,8 @@ def _mxint_decode_blocks(scales_e8m0, int_blocks, elem_scale_divisor: float):
     Shared unpack core for MxInt formats. Given E8M0 scale bytes and a
     (num_blocks, 32) int8 array of per-element values, return the decoded
     bfloat16 tensor. `elem_scale_divisor` is the format's implicit scale
-    denominator (64 for MxInt8's 2^-6, 4 for MxInt4's 2^-2). NaN scale
-    (0xFF) zeros the block, matching MxFp unpack behavior.
+    denominator (64 for MxInt8's 2^-6, 4 for MxInt4's 2^-2, 1 for MxInt2's
+    2^0). NaN scale (0xFF) zeros the block, matching MxFp unpack behavior.
     """
     scales_array = np.frombuffer(bytes(scales_e8m0), dtype=np.uint8)
     scale_factors = np.where(
@@ -560,6 +560,57 @@ def unpack_mxint4(
     return _mxint_decode_blocks(scales_e8m0, int4_blocks, elem_scale_divisor=4.0)
 
 
+def unpack_mxint2(
+    packed_bytes,
+    num_faces=4,
+    face_r_dim=MAX_FACE_R_DIM,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
+    """
+    Unpack MxInt2 format (signed S1.0 with E8M0 block scale) to bfloat16 tensor.
+
+    Layout: [scales padded to 16B][packed crumbs padded to 16B], one E8M0
+    scale per 32-element block, 4 elements per byte (crumb layout: bits[1:0]
+    = even-most index, then [3:2], [5:4], [7:6]). Decoded value = int2 × 2^(scale_e8m0 − 127).
+    """
+    if use_srcs:
+        raise NotImplementedError("use_srcs=True not yet implemented for unpack_mxint2")
+
+    num_elements = face_r_dim * FACE_C_DIM * num_faces
+    num_scales = num_elements // MX_FORMAT_BLOCK_SIZE
+    scale_section_len = _align16(num_scales)
+    element_bytes_len = num_elements // 4  # 4 elements per byte
+
+    if len(packed_bytes) < scale_section_len + element_bytes_len:
+        raise ValueError(
+            "Invalid packed_bytes length for MxInt2: got "
+            f"{len(packed_bytes)} bytes, expected at least "
+            f"{scale_section_len + element_bytes_len} bytes."
+        )
+
+    scales_e8m0 = packed_bytes[:num_scales]
+    elements_bytes = packed_bytes[
+        scale_section_len : scale_section_len + element_bytes_len
+    ]
+
+    # Unpack 4 crumbs per byte: bits[1:0], [3:2], [5:4], [7:6].
+    packed_u8 = np.frombuffer(bytes(elements_bytes), dtype=np.uint8)
+    crumbs_u8 = np.empty(packed_u8.size * 4, dtype=np.uint8)
+    crumbs_u8[0::4] = packed_u8 & 0x03
+    crumbs_u8[1::4] = (packed_u8 >> 2) & 0x03
+    crumbs_u8[2::4] = (packed_u8 >> 4) & 0x03
+    crumbs_u8[3::4] = (packed_u8 >> 6) & 0x03
+    # Sign-extend each 2-bit value to int8: crumbs ≥ 2 are negative in 2's comp.
+    int2_as_int8 = np.where(
+        crumbs_u8 >= 2,
+        crumbs_u8.astype(np.int16) - 4,
+        crumbs_u8.astype(np.int16),
+    ).astype(np.int8)
+    int2_blocks = int2_as_int8.reshape(num_scales, MX_FORMAT_BLOCK_SIZE)
+    return _mxint_decode_blocks(scales_e8m0, int2_blocks, elem_scale_divisor=1.0)
+
+
 _UNPACKERS = {
     DataFormat.Float16: unpack_fp16,
     DataFormat.Float16_b: unpack_bfp16,
@@ -624,6 +675,8 @@ def unpack_res_tiles(
         unpack_func = unpack_mxint8
     elif output_format == DataFormat.MxInt4:
         unpack_func = unpack_mxint4
+    elif output_format == DataFormat.MxInt2:
+        unpack_func = unpack_mxint2
     else:
         unpack_func = _UNPACKERS[output_format]
 
@@ -645,6 +698,7 @@ def unpack_res_tiles(
             unpack_mxfp4,
             unpack_mxint8,
             unpack_mxint4,
+            unpack_mxint2,
         ]:
             unpacked_tile = unpack_func(
                 tile_data,

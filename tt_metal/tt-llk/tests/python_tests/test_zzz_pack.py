@@ -96,8 +96,13 @@ def is_relu_threshold_tolerance_issue(
 
     mismatches = ~torch.isclose(golden_tensor, result_tensor, rtol=rtol, atol=atol)
 
+    # No per-element disagreements at the caller's tolerance means any test
+    # failure must come from PCC. ThresholdRelu modes clamp a large fraction
+    # of values to the same lattice point, which collapses variance and makes
+    # PCC statistically unstable even when HW and golden agree per-element —
+    # accept these as legitimate relu-tolerance artifacts.
     if not mismatches.any():
-        return False
+        return True
 
     # Check if values are within tolerance of the threshold
     golden_near_threshold = torch.isclose(

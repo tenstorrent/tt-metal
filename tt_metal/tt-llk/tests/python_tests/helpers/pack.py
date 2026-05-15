@@ -767,8 +767,9 @@ def _mxint_block_scale_and_quantize(
     Args:
       elem_scale: integer factor in `round(scaled * elem_scale)`. Reflects the
                   format's implicit 2^-k scale (64 for MxInt8's 2^-6;
-                  4 for MxInt4's 2^-2).
-      elem_max:   symmetric clamp magnitude (127 for MxInt8; 7 for MxInt4).
+                  4 for MxInt4's 2^-2; 1 for MxInt2's 2^0).
+      elem_max:   symmetric clamp magnitude (127 for MxInt8; 7 for MxInt4;
+                  1 for MxInt2).
       fmt_name:   for error messages only.
 
     Returns: (scales_e8m0 as list[int], int_values as np.int8 array, shape (num_blocks, 32)).
@@ -914,6 +915,57 @@ def pack_mxint4(
     packed_bytes = ((nibbles[1::2] & 0x0F) << 4) | (nibbles[0::2] & 0x0F)
 
     # Layout: [scales padded to 16B][packed nibbles padded to 16B].
+    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(
+        packed_bytes.tolist()
+    )
+
+
+def pack_mxint2(
+    tensor,
+    num_faces=4,
+    face_r_dim=16,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
+    """
+    Pack tensor into MxInt2 format (signed S1.0 elements with E8M0 block scale).
+
+    MxInt2 uses 32-element blocks, each with:
+    - 1 shared E8M0 scale (8 bits)
+    - 32 signed-int2 elements (2 bits each, 4 packed per byte), 2's complement
+      with an implicit 2^0 scale. Range: ±1 (symmetric — the -2 encoding 0b10
+      is left unused). Only three element values are representable: -1, 0, +1.
+
+    Element-quad layout per byte (low bits to high): bits[1:0] = element at
+    index i, bits[3:2] = i+1, bits[5:4] = i+2, bits[7:6] = i+3. This mirrors
+    MxInt4's even-index-in-low convention extended to four elements.
+
+    Special-case handling (NaN→0 element, Inf→saturate, all-NaN/Inf block scale)
+    mirrors pack_mxint8.
+    """
+    if use_srcs:
+        raise NotImplementedError("use_srcs=True not yet implemented for pack_mxint2")
+
+    scales_e8m0, int_values = _mxint_block_scale_and_quantize(
+        tensor,
+        num_faces,
+        face_r_dim,
+        elem_scale=1,
+        elem_max=1,
+        fmt_name="pack_mxint2",
+    )
+
+    # Pack 4 crumbs per byte: bits[1:0]=i, [3:2]=i+1, [5:4]=i+2, [7:6]=i+3.
+    # int_values is signed int8 in [-1, +1]; mask to 2-bit 2's complement.
+    crumbs = int_values.flatten().astype(np.uint8) & 0x03
+    packed_bytes = (
+        (crumbs[0::4] & 0x03)
+        | ((crumbs[1::4] & 0x03) << 2)
+        | ((crumbs[2::4] & 0x03) << 4)
+        | ((crumbs[3::4] & 0x03) << 6)
+    )
+
+    # Layout: [scales padded to 16B][packed crumbs padded to 16B].
     return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(
         packed_bytes.tolist()
     )

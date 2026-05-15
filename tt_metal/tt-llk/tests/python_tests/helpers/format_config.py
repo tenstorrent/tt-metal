@@ -75,6 +75,9 @@ class DataFormat(Enum):
     MxInt4 = DataFormatInfo(
         "MxInt4", Fraction(1, 2)
     )  # QSR specific - signed S1.2 with block exp, 2 elements per byte
+    MxInt2 = DataFormatInfo(
+        "MxInt2", Fraction(1, 4)
+    )  # QSR specific - signed S1.0 with block exp, 4 elements per byte
     Fp8_e4m3 = DataFormatInfo("Fp8_e4m3", 1)
 
     @property
@@ -152,6 +155,7 @@ class DataFormat(Enum):
             DataFormat.MxFp4,
             DataFormat.MxInt8,
             DataFormat.MxInt4,
+            DataFormat.MxInt2,
         }
 
     def is_mx_fp_format(self) -> bool:
@@ -358,11 +362,14 @@ MX_FORMAT_MIN_MAGNITUDE = {
 # Max representable element magnitude for MxInt formats (signed 2's-complement
 # with implicit power-of-2 scale per OCP spec; no normal/subnormal split).
 # MxInt8 (S1.6, scale 2^-6): symmetric ±127/64; MxInt4 (S1.2, scale 2^-2):
-# symmetric ±7/4. (ws-tensix metadata says 15/8 for MxInt4, but its decode
-# formula at storage.py:419-434 actually yields 7/4 = raw_7 × 2^-2.)
+# symmetric ±7/4; MxInt2 (S1.0, scale 2^0): symmetric ±1 (only -1/0/+1
+# representable; the -2 encoding 0b10 is left unused for symmetry).
+# (ws-tensix metadata says 15/8 for MxInt4, but its decode formula at
+# storage.py:419-434 actually yields 7/4 = raw_7 × 2^-2.)
 MX_INT_MAX = {
     DataFormat.MxInt8: 127.0 / 64.0,
     DataFormat.MxInt4: 7.0 / 4.0,
+    DataFormat.MxInt2: 1.0,
 }
 
 # ============================================================================
@@ -668,6 +675,7 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.MxFp4: 22,
     DataFormat.MxInt8: 2,
     DataFormat.MxInt4: 3,
+    DataFormat.MxInt2: 11,
     DataFormat.Int32: 8,
     DataFormat.Int8: 14,
     DataFormat.UInt8: 17,

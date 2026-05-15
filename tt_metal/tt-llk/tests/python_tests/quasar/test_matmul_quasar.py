@@ -70,6 +70,7 @@ MATMUL_FORMAT = input_output_formats(
         DataFormat.MxFp8P,
         DataFormat.MxFp4,
         DataFormat.MxInt8,
+        DataFormat.MxInt4,
     ],
 )
 

@@ -101,6 +101,7 @@ UNPACK_TILIZE_FORMATS = input_output_formats(
         DataFormat.Int16,
         DataFormat.MxFp4,
         DataFormat.MxInt8,
+        DataFormat.MxInt4,
     ],
     same=True,  # Input format and output format are the same
 )

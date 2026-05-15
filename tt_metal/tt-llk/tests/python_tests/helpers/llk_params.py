@@ -26,6 +26,7 @@ format_dict = {
     DataFormat.MxFp4: torch.bfloat16,
     DataFormat.MxInt8: torch.bfloat16,
     DataFormat.MxInt4: torch.bfloat16,
+    DataFormat.MxInt2: torch.bfloat16,
     DataFormat.Fp8_e4m3: torch.bfloat16,
 }
 
@@ -478,6 +479,9 @@ format_tile_sizes = {
     # MxInt4: half byte per element (2 packed per byte) + 1 scale per 32 elements
     # 1024 elements = 32 blocks × (1 scale + 16 bytes of INT4 data) = 544 bytes
     DataFormat.MxInt4: 544,
+    # MxInt2: quarter byte per element (4 packed per byte) + 1 scale per 32 elements
+    # 1024 elements = 32 blocks × (1 scale + 8 bytes of INT2 data) = 288 bytes
+    DataFormat.MxInt2: 288,
     DataFormat.Fp8_e4m3: 1024,  # 1 byte per element, no exponent section
 }
 

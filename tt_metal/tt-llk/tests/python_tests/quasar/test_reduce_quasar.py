@@ -76,6 +76,7 @@ def generate_pool_type_and_math_fidelity_combinations():
             DataFormat.Float16,
             DataFormat.MxFp4,
             DataFormat.MxInt8,
+            DataFormat.MxInt4,
         ],
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],

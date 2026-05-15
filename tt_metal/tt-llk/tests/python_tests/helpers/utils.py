@@ -41,6 +41,7 @@ tolerances = {
     DataFormat.MxFp4: Tolerance(atol=0.5, rtol=0.35),
     DataFormat.MxInt8: Tolerance(atol=0.05, rtol=0.05),
     DataFormat.MxInt4: Tolerance(atol=0.5, rtol=0.35),
+    DataFormat.MxInt2: Tolerance(atol=1.0, rtol=0.5),
     DataFormat.Fp8_e4m3: Tolerance(atol=0.2, rtol=0.2),
 }
 

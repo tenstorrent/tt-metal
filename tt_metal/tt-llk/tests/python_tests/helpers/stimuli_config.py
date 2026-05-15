@@ -33,6 +33,7 @@ from .pack import (
     pack_mxfp4,
     pack_mxfp8p,
     pack_mxfp8r,
+    pack_mxint2,
     pack_mxint4,
     pack_mxint8,
     pack_uint8,
@@ -265,6 +266,7 @@ class StimuliConfig:
             DataFormat.MxFp4: pack_mxfp4,
             DataFormat.MxInt8: pack_mxint8,
             DataFormat.MxInt4: pack_mxint4,
+            DataFormat.MxInt2: pack_mxint2,
             DataFormat.Fp8_e4m3: pack_fp8_e4m3,
             DataFormat.UInt32: pack_uint32,
             DataFormat.Int16: pack_int16,
@@ -311,6 +313,7 @@ class StimuliConfig:
                 pack_mxfp4,
                 pack_mxint8,
                 pack_mxint4,
+                pack_mxint2,
             ):
                 return pack_function(
                     buffer_tile,
@@ -369,6 +372,7 @@ class StimuliConfig:
                 pack_mxfp4,
                 pack_mxint8,
                 pack_mxint4,
+                pack_mxint2,
             ):
                 return pack_function(
                     buffer_tile,

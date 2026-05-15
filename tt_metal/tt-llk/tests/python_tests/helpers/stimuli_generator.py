@@ -70,7 +70,7 @@ def generate_random_face(
         return _generate_mxfp4_face(
             size, const_face, const_value, sfpu, negative_values
         )
-    elif stimuli_format in (DataFormat.MxInt8, DataFormat.MxInt4):
+    elif stimuli_format in (DataFormat.MxInt8, DataFormat.MxInt4, DataFormat.MxInt2):
         # MxInt stimuli generation (no subnormal exclusion — MxInt has none)
         return _generate_mxint_face(
             stimuli_format, size, const_face, const_value, sfpu, negative_values
@@ -230,6 +230,7 @@ def _generate_mxint_face(
     Per-format ranges (symmetric):
     - MxInt8 (S1.6, 2^-6 scale): ±127/64 ≈ ±1.984, smallest |v|>0 is 1/64.
     - MxInt4 (S1.2, 2^-2 scale): ±7/4 = ±1.75,   smallest |v|>0 is 1/4.
+    - MxInt2 (S1.0, 2^0  scale): ±1,             smallest |v|>0 is 1.
 
     No NaN, no Inf, no subnormals. Uses a normal distribution at 50% of the
     format's max magnitude to give good representable-range coverage without
