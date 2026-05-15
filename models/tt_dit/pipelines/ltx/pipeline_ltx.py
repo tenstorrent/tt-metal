@@ -17,6 +17,7 @@ Reference: LTX-2/packages/ltx-pipelines/ + Wan pipeline_wan.py
 from __future__ import annotations
 
 import math
+import os
 from typing import TYPE_CHECKING
 
 import torch
@@ -28,6 +29,7 @@ from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
 from ...models.transformers.ltx.ltx_transformer import LTXTransformerModel
 from ...parallel.config import DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
+from ...utils import cache
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 if TYPE_CHECKING:
@@ -298,7 +300,17 @@ class LTXPipeline:
             apply_gated_attention=has_gate,
             cross_attention_adaln=cross_attention_adaln,
         )
-        self.transformer.load_torch_state_dict(state_dict)
+
+        ckpt_path = getattr(self, "_vae_checkpoint_path", None)
+        model_name = os.path.splitext(os.path.basename(ckpt_path))[0] if ckpt_path else "ltx-unknown"
+        cache.load_model(
+            self.transformer,
+            model_name=model_name,
+            subfolder="transformer",
+            parallel_config=self.parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=lambda: state_dict,
+        )
         logger.info(f"Loaded LTX transformer ({self.mode} mode) with {self.num_layers} layers")
 
     def load_text_encoder(
@@ -843,29 +855,39 @@ class LTXPipeline:
         """Load VAE decoder from saved config. Call after transformer weights are freed if needed."""
         if not self._vae_decoder_blocks:
             return
-        from safetensors.torch import load_file
-
         from ...models.vae.vae_ltx import LTXVideoDecoder
 
-        raw = load_file(self._vae_checkpoint_path)
-        vae_state = {}
-        for k, v in raw.items():
-            if k.startswith("vae.decoder."):
-                vae_state[k[len("vae.decoder.") :]] = v
-            elif k.startswith("vae.per_channel_statistics."):
-                # Only keep mean-of-means and std-of-means (required by TTNN VAE).
-                # Skip extra stats (channel, mean-of-stds, etc.) from some checkpoints.
-                short_key = k[len("vae.") :]
-                if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
-                    vae_state[short_key] = v
-        del raw
+        def _load_vae_state_dict() -> dict[str, torch.Tensor]:
+            from safetensors.torch import load_file
+
+            raw = load_file(self._vae_checkpoint_path)
+            vae_state = {}
+            for k, v in raw.items():
+                if k.startswith("vae.decoder."):
+                    vae_state[k[len("vae.decoder.") :]] = v
+                elif k.startswith("vae.per_channel_statistics."):
+                    short_key = k[len("vae.") :]
+                    if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
+                        vae_state[short_key] = v
+            del raw
+            return vae_state
+
         self.vae_decoder = LTXVideoDecoder(
             decoder_blocks=self._vae_decoder_blocks,
             causal=self._vae_causal,
             base_channels=self._vae_base_channels,
             mesh_device=self.mesh_device,
         )
-        self.vae_decoder.load_torch_state_dict(vae_state)
+
+        model_name = os.path.splitext(os.path.basename(self._vae_checkpoint_path))[0]
+        cache.load_model(
+            self.vae_decoder,
+            model_name=model_name,
+            subfolder="vae",
+            parallel_config=self.parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=_load_vae_state_dict,
+        )
         logger.info(f"Loaded TTNN VAE decoder ({len(self._vae_decoder_blocks)} blocks)")
 
     def load_connectors_from_checkpoint(self) -> None:
