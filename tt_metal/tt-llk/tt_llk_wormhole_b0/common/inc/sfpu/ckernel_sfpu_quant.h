@@ -12,9 +12,7 @@
 #include "llk_defs.h"
 #include "lltt.h"
 
-namespace ckernel
-{
-namespace sfpu
+namespace ckernel::sfpu
 {
 
 // Replay-buffer slots for the per-iteration register-only compute bodies of
@@ -232,5 +230,4 @@ inline void _init_quant_zero_point_(const std::uint32_t zero_point)
     _sfpu_load_imm32_(2, zero_point);
 }
 
-} // namespace sfpu
-} // namespace ckernel
+} // namespace ckernel::sfpu
