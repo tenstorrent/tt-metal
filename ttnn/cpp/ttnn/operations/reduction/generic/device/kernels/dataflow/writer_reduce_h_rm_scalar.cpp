@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/noc.h"
+#include "experimental/endpoints.h"
 #include "experimental/circular_buffer.h"
 #include "experimental/tensor.h"
 #include <tt-metalium/constants.hpp>
@@ -41,13 +42,19 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t W_logical = get_compile_time_arg_val(2);
     constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(3);
+#if defined(SHARDED_WIDTH_INPUT)
+    constexpr uint32_t shard_page_bytes = get_compile_time_arg_val(4);
+#else
     constexpr auto dst_args = TensorAccessorArgs<4>();
+#endif
 
     constexpr uint32_t cb_id_tile = tt::CBIndex::c_3;
     constexpr uint32_t face_w = tt::constants::TILE_WIDTH / 2;
 
     const uint32_t tile_size_bytes = get_tile_size(cb_id_tile);
+#if !defined(SHARDED_WIDTH_INPUT)
     const auto dst_accessor = TensorAccessor(dst_args, dst_addr);
+#endif
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_tile(cb_id_tile);
@@ -84,12 +91,24 @@ void kernel_main() {
             for (uint32_t face_col = 0; face_col < valid_cols; face_col += face_w) {
                 const uint32_t face_valid = (valid_cols - face_col) < face_w ? (valid_cols - face_col) : face_w;
                 const uint32_t src_idx_in_tile = tile_row0_face_offset_datums(face_col);
+#if defined(SHARDED_WIDTH_INPUT)
+                experimental::UnicastEndpoint dst_ep;
+                const uint32_t dst_row_addr =
+                    dst_addr + current_nc * shard_page_bytes + (w_base_col + face_col) * datum_bytes;
+                noc.async_write(
+                    cb_tile,
+                    dst_ep,
+                    face_valid * datum_bytes,
+                    {.offset_bytes = wt * tile_size_bytes + src_idx_in_tile * datum_bytes},
+                    {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = dst_row_addr});
+#else
                 noc.async_write(
                     cb_tile,
                     dst_accessor,
                     face_valid * datum_bytes,
                     {.offset_bytes = wt * tile_size_bytes + src_idx_in_tile * datum_bytes},
                     {.page_id = current_nc, .offset_bytes = (w_base_col + face_col) * datum_bytes});
+#endif
             }
         }
 

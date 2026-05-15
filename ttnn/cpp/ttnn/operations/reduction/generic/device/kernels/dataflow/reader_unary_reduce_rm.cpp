@@ -56,7 +56,12 @@ void kernel_main() {
     constexpr uint32_t ht_tiles_per_chunk = get_compile_time_arg_val(7);
     // H_logical is only consumed by the H reduce path (rows per NC slab in source). The W factory passes 0.
     constexpr uint32_t H_logical = get_compile_time_arg_val(8);
+#if defined(SHARDED_WIDTH_INPUT)
+    // Slot 9: shard page size bytes for direct local L1 reads (row_stride = shard_W * elem_bytes).
+    constexpr uint32_t shard_page_bytes = get_compile_time_arg_val(9);
+#else
     constexpr auto tensor_args = TensorAccessorArgs<9>();
+#endif
 
     static_assert(ht_tiles_per_chunk <= RM_MAX_HT_TILES_PER_CHUNK, "ht_tiles_per_chunk exceeds reader slab cap");
 
@@ -96,7 +101,9 @@ void kernel_main() {
     //
     // Source accessor + cached page byte count.
     //
+#if !defined(SHARDED_WIDTH_INPUT)
     const auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
+#endif
     const uint32_t page_bytes = get_local_cb_interface(cb_id_rm).fifo_page_size;
     const uint32_t valid_row_bytes = W_logical * elem_bytes;
 
@@ -134,8 +141,9 @@ void kernel_main() {
                     cb_rm.reserve_back(onepage);
 
                     rm_fill_page_with_clear_template(noc, cb_rm, page_bytes, clear_template_src, clear_template_bytes);
+#if !defined(SHARDED_WIDTH_INPUT)
                     rm_read_slab_into_page(noc, cb_rm, tensor_accessor, slabs[hti], w_range);
-
+#endif
                     noc.async_read_barrier();
                     cb_rm.push_back(onepage);
                 }
@@ -183,8 +191,23 @@ void kernel_main() {
                     cb_rm.reserve_back(onepage);
 
                     rm_fill_page_with_clear_template(noc, cb_rm, page_bytes, clear_template_src, clear_template_bytes);
+#if defined(SHARDED_WIDTH_INPUT)
+                    if (w_range.valid_bytes > 0) {
+                        experimental::UnicastEndpoint self_ep;
+                        for (uint32_t r = 0; r < slabs[hti].rows_in_pack; ++r) {
+                            const uint32_t row_addr =
+                                src_addr + (slabs[hti].first_page + r) * shard_page_bytes + w_range.chunk_start_bytes;
+                            noc.async_read(
+                                self_ep,
+                                cb_rm,
+                                w_range.valid_bytes,
+                                experimental::local_addr(row_addr, noc.get_noc_id()),
+                                {.offset_bytes = r * w_range.chunk_bytes});
+                        }
+                    }
+#else
                     rm_read_slab_into_page(noc, cb_rm, tensor_accessor, slabs[hti], w_range);
-
+#endif
                     noc.async_read_barrier();
                     cb_rm.push_back(onepage);
                 }

@@ -121,11 +121,33 @@ tt::tt_metal::TensorSpec build_reduce_output_row_major_tensor_spec(
     tt::tt_metal::DataType output_dtype,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
     using namespace tt::tt_metal;
+    const auto mem_layout = output_mem_config.memory_layout();
     TT_FATAL(
-        output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Dense row-major reduce output currently supports INTERLEAVED layout only, got {}",
-        output_mem_config.memory_layout());
-    return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), output_mem_config));
+        mem_layout == TensorMemoryLayout::INTERLEAVED || mem_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+            mem_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        "Dense row-major reduce output supports INTERLEAVED, HEIGHT_SHARDED, or WIDTH_SHARDED layout, got {}",
+        mem_layout);
+
+    TensorSpec tensor_spec(
+        output_shape,
+        TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), MemoryConfig(output_mem_config.buffer_type())));
+
+    if (mem_layout == TensorMemoryLayout::INTERLEAVED) {
+        return tensor_spec;
+    }
+
+    const auto& nd = output_mem_config.nd_shard_spec();
+    const auto& legacy = output_mem_config.shard_spec();
+    TT_FATAL(
+        nd.has_value() || legacy.has_value(),
+        "Sharded row-major reduce output requires shard_spec or nd_shard_spec on the output memory config");
+    const auto& grid = nd ? nd->grid : legacy->grid;
+    const auto orientation = nd ? nd->orientation : legacy->orientation;
+
+    if (mem_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        return tensor_spec.height_sharded(grid, orientation);
+    }
+    return tensor_spec.width_sharded(grid, orientation);
 }
 
 void validate_reduce_sharded_buffer_types(

@@ -73,10 +73,24 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM,
             "{} expects SUM math_op (mean is lowered from AVG before device launch)",
             path_name);
+        // W RM path: allow HEIGHT_SHARDED only; H RM path: allow WIDTH_SHARDED only.
+        const auto in_layout = tensor_args.memory_config().memory_layout();
+        const auto out_layout = operation_attributes.output_mem_config.memory_layout();
+        const auto allowed_sharded_layout = operation_attributes.row_major_w_dense_path
+                                                ? TensorMemoryLayout::HEIGHT_SHARDED
+                                                : TensorMemoryLayout::WIDTH_SHARDED;
         TT_FATAL(
-            !tensor_args.memory_config().is_sharded() && !operation_attributes.output_mem_config.is_sharded(),
-            "{} requires interleaved input and output memory configs",
-            path_name);
+            in_layout == TensorMemoryLayout::INTERLEAVED || in_layout == allowed_sharded_layout,
+            "{}: sharded input must use {} layout, got {}",
+            path_name,
+            allowed_sharded_layout,
+            in_layout);
+        TT_FATAL(
+            out_layout == TensorMemoryLayout::INTERLEAVED || out_layout == allowed_sharded_layout,
+            "{}: sharded output must use {} layout, got {}",
+            path_name,
+            allowed_sharded_layout,
+            out_layout);
     } else {
         TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to reduce must be tilized");
         TT_FATAL(
@@ -113,21 +127,49 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             program_grid);
         const uint32_t tile_height = tensor_args.tensor_spec().tile().get_height();
         const uint32_t tile_width = tensor_args.tensor_spec().tile().get_width();
-        TT_FATAL(
-            in_shard.shape[0] > 0 && in_shard.shape[1] > 0,
-            "Sharded reduce input: shard face shape must be positive, got [{}, {}]",
-            in_shard.shape[0],
-            in_shard.shape[1]);
-        TT_FATAL(
-            in_shard.shape[0] % tile_height == 0,
-            "Sharded reduce input: shard_shape[0]={} must be tile-height-aligned ({} px per tile face row)",
-            in_shard.shape[0],
-            tile_height);
-        TT_FATAL(
-            in_shard.shape[1] % tile_width == 0,
-            "Sharded reduce input: shard_shape[1]={} must be tile-width-aligned ({} px per tile face col)",
-            in_shard.shape[1],
-            tile_width);
+        if (!operation_attributes.row_major_w_dense_path && !operation_attributes.row_major_h_dense_path) {
+            // Tilized paths require tile-aligned shard dimensions.
+            TT_FATAL(
+                in_shard.shape[0] > 0 && in_shard.shape[1] > 0,
+                "Sharded reduce input: shard face shape must be positive, got [{}, {}]",
+                in_shard.shape[0],
+                in_shard.shape[1]);
+            TT_FATAL(
+                in_shard.shape[0] % tile_height == 0,
+                "Sharded reduce input: shard_shape[0]={} must be tile-height-aligned ({} px per tile face row)",
+                in_shard.shape[0],
+                tile_height);
+            TT_FATAL(
+                in_shard.shape[1] % tile_width == 0,
+                "Sharded reduce input: shard_shape[1]={} must be tile-width-aligned ({} px per tile face col)",
+                in_shard.shape[1],
+                tile_width);
+        } else if (operation_attributes.row_major_h_dense_path) {
+            // H reduce RM (ROW_MAJOR) with WIDTH_SHARDED. Two constraints:
+            //   1. Shard page (shard_W * elem_bytes) must be 16B aligned so that every row
+            //      in the L1 shard starts at a 16B boundary for NOC DMA. Tile-width alignment is
+            //      a TILE-layout constraint and is not the right check for ROW_MAJOR buffers.
+            //   2. W_logical must be exactly divisible by shard_W so all shards are full (no
+            //      partial last shard). Partial shards need per-core W_logical which the factory
+            //      does not currently support.
+            const uint32_t shard_W = in_shard.shape[1];
+            const uint32_t elem_bytes = tensor_args.dtype() == tt::tt_metal::DataType::FLOAT32 ? 4u : 2u;
+            const uint32_t shard_page_bytes = shard_W * elem_bytes;
+            TT_FATAL(
+                shard_W > 0 && shard_page_bytes % 16 == 0,
+                "H reduce RM (dense) WIDTH_SHARDED: shard page size ({} cols * {} bytes = {} bytes) "
+                "must be 16B aligned",
+                shard_W,
+                elem_bytes,
+                shard_page_bytes);
+            const uint32_t W_logical = tensor_args.logical_shape()[3];
+            TT_FATAL(
+                W_logical % shard_W == 0,
+                "H reduce RM (dense) WIDTH_SHARDED: W_logical={} must be divisible by shard_W={} "
+                "(partial last shard not supported)",
+                W_logical,
+                shard_W);
+        }
     }
 
     if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
