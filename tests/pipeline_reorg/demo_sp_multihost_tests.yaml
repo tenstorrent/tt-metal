@@ -26,13 +26,17 @@
       --output-dir $PIPELINE_DIR \
       /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
 
+    # NOTE: check where the python3 is coming from
+    echo "============= SP1 superpod: checking python3 location ============="
+    which python3
+
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
     # todo)) add proper stress test that can run for 2 hours -- repeat batches?
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 -m ttnn.distributed.ttrun \
       --tcp-interface ens5f0np0 \
       --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
       --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
-      python -m models.demos.deepseek_v3_b1.demo.cli \
+      python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 128000 \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
@@ -59,6 +63,10 @@
       /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod_ci.yaml
 
     echo "============= SP4 superpod: running tt-run ============="
+    # NOTE: check where the python3 is coming from
+    echo "============= SP4 superpod: checking which python3 ============="
+    which python3
+
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 -m ttnn.distributed.ttrun \
       --tcp-interface ens5f0np0 \
       --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output --wdir /home/user/tt-metal" \
