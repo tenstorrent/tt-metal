@@ -9,8 +9,6 @@
 
 namespace tt::tt_metal {
 
-MeshTensor::MeshTensor() = default;
-
 MeshTensor::MeshTensor(MeshTensor&& other) noexcept = default;
 
 MeshTensor& MeshTensor::operator=(MeshTensor&& other) noexcept = default;
@@ -21,12 +19,12 @@ MeshTensor::MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, Ten
 MeshTensor::~MeshTensor() = default;
 
 MeshTensorImpl& MeshTensor::impl() {
-    TT_FATAL(impl_ != nullptr, "MeshTensor is in default constructed state.");
+    TT_FATAL(impl_ != nullptr, "MeshTensor is in a moved-from state.");
     return *impl_;
 }
 
 const MeshTensorImpl& MeshTensor::impl() const {
-    TT_FATAL(impl_ != nullptr, "MeshTensor is in default constructed state.");
+    TT_FATAL(impl_ != nullptr, "MeshTensor is in a moved-from state.");
     return *impl_;
 }
 
@@ -38,11 +36,11 @@ std::shared_ptr<distributed::MeshBuffer> MeshTensor::mesh_buffer_invariant_break
 
 distributed::MeshDevice& MeshTensor::device() const { return *mesh_buffer().device(); }
 
-bool MeshTensor::is_initialized() const { return impl_ != nullptr; }
-
 const TensorSpec& MeshTensor::tensor_spec() const { return impl().spec(); }
 
 const TensorTopology& MeshTensor::tensor_topology() const { return impl().topology(); }
+
+bool MeshTensor::is_valueless_after_move() const { return impl_ == nullptr; }
 
 DeviceAddr MeshTensor::address() const { return mesh_buffer().address(); }
 
