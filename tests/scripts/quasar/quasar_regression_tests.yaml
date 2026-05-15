@@ -14,6 +14,32 @@
 #     env:
 #       TT_METAL_SOMETHING: 1
 
+unit_tests_legacy:
+  - filter: "*SingleDmL1Write*"
+    config: 1x3, 2x3, 2x3_DISPATCH
+
+  - filter: "*DmLoopback*"
+    config: 1x3
+
+  - filter: "*QuasarComputeKernelSingleThread*"
+    config: 1x3
+
+  - filter: "*QuasarComputeKernelMultipleThread*"
+    config: 1x3
+
+  - filter: "*QuasarCreateMultipleComputeKernelsSingleCluster*"
+    config: 1x3
+
+  - filter: "*MultiDmAddTwoInts*"
+    config: 2x3, 2x3_DISPATCH
+
+  - filter: "*Bmm"
+    config: 1x3
+    env:
+      TT_METAL_LOGGER_LEVEL: warning
+
+  - filter: "*LegacyVsNonLegacyTest.GlobalsAndTLS/Threaded"
+    config: 1x3
 
 unit_tests_debug_tools:
   - filter: "*WatcherAssertTests*Brisc"
@@ -56,32 +82,6 @@ unit_tests_api:
     config: 1x3
 
   - filter: "*QuasarCRTAUniqueL1Addresses*"
-    config: 1x3
-unit_tests_legacy:
-  - filter: "*SingleDmL1Write*"
-    config: 1x3, 2x3, 2x3_DISPATCH
-
-  - filter: "*DmLoopback*"
-    config: 1x3
-
-  - filter: "*QuasarComputeKernelSingleThread*"
-    config: 1x3
-
-  - filter: "*QuasarComputeKernelMultipleThread*"
-    config: 1x3
-
-  - filter: "*QuasarCreateMultipleComputeKernelsSingleCluster*"
-    config: 1x3
-
-  - filter: "*MultiDmAddTwoInts*"
-    config: 2x3, 2x3_DISPATCH
-
-  - filter: "*Bmm"
-    config: 1x3
-    env:
-      TT_METAL_LOGGER_LEVEL: warning
-
-  - filter: "*LegacyVsNonLegacyTest.GlobalsAndTLS/Threaded"
     config: 1x3
 
 unit_tests_device:
