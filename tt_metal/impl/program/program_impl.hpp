@@ -339,6 +339,12 @@ public:
     void register_semaphore_spec_name(const SemaphoreSpecName& name, uint32_t sem_id);
     void register_tensor_parameter(const std::string& name, const TensorSpec& spec);
 
+    // Metal 2.0: Program identifier from its ProgramSpec.
+    // Set by MakeProgramFromSpec; not populated for Programs constructed via other paths.
+    // Used by SetMeshWorkloadRunParameters to dispatch run params by program name.
+    void set_program_spec_name(const std::string& name);
+    const std::optional<std::string>& get_program_spec_name() const;
+
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
     KernelHandle get_kernel_handle(const KernelSpecName& name) const;
     uint32_t get_dfb_handle(const DFBSpecName& name) const;
@@ -460,6 +466,10 @@ private:
         std::unordered_map<std::string, TensorSpec> tensor_parameter_layouts;
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
+
+    // Metal 2.0: Set by MakeProgramFromSpec to the source ProgramSpec's program_id.
+    // Only populated for Metal 2.0 programs.
+    std::optional<std::string> program_spec_name_;
 
     // Semaphores
     std::vector<Semaphore> semaphores_;
