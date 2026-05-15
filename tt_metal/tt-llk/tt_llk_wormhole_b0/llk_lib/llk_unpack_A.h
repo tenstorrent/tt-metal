@@ -295,6 +295,9 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_A_uninit_(const std::uint32_t face_r_dim)
 {
-    constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_B;
-    TT_SETADCXX(UNP_SEL, face_r_dim * FACE_C_DIM - 1, 0x0);
+    TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
+    if constexpr (BType != BroadcastType::NONE)
+    {
+        TT_SETADCXX(p_setadc::UNP_B, face_r_dim * FACE_C_DIM - 1, 0x0);
+    }
 }
