@@ -137,6 +137,10 @@ protected:
 
     void SetUp() override {
         auto& shared = get_shared_devices();
+        ASSERT_TRUE(shared.initialized) << "Shared devices not initialized, if this is a derived fixture then "
+                                           "MeshDispatchFixture::SetUpTestSuite may have been overridden but not "
+                                           "MeshDispatchFixture::SetUp";
+
         if (shared.needs_recovery || shared.l1_small_size != l1_small_size_ || shared.trace_region_size != trace_region_size_) {
             destroy_shared_devices();
         }
@@ -151,6 +155,10 @@ protected:
     }
 
     void TearDown() override {
+        ASSERT_TRUE(get_shared_devices().initialized)
+            << "Shared devices not initialized, if this is a derived fixture then "
+               "MeshDispatchFixture::SetUpTestSuite may have been overridden but not "
+               "MeshDispatchFixture::TearDown";
         devices_.clear();
         if (HasFailure()) {
             get_shared_devices().needs_recovery = true;

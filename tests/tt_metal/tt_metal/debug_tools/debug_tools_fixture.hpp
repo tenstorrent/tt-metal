@@ -27,12 +27,40 @@ namespace tt::tt_metal {
 
 class DebugToolsMeshFixture : public MeshDispatchFixture {
 public:
-    using MeshDispatchFixture::TearDownTestSuite;
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
 
 protected:
     bool watcher_previous_enabled{};
+    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
 
-    void TearDown() override { MeshDispatchFixture::TearDown(); }
+    void SetUp() override {
+        std::vector<ChipId> ids;
+        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+            ids.push_back(id);
+        }
+        const auto& dispatch_core_config =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        id_to_device_ = distributed::MeshDevice::create_unit_meshes(
+            ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config);
+        this->devices_.clear();
+        for (const auto& [device_id, device] : id_to_device_) {
+            this->devices_.push_back(device);
+        }
+
+        this->DetectDispatchMode();
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        init_max_cbs();
+    }
+
+    void TearDown() override {
+        for (auto& [device_id, device] : id_to_device_) {
+            device->close();
+            device.reset();
+        }
+        id_to_device_.clear();
+        this->devices_.clear();
+    }
 
     template <typename T>
     void RunTestOnDevice(
