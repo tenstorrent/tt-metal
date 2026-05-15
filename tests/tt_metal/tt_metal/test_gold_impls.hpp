@@ -29,13 +29,13 @@ inline std::vector<uint16_t> gold_transpose_hc(std::vector<uint16_t> src_vec, st
     TensAddr addrt(shapeT);
 
     std::vector<uint16_t> transposed(src_vec.size());
-    for (int n = 0; n < shape[0]; n++) {
-        for (int c = 0; c < shape[1]; c++) {
-            for (int h = 0; h < shape[2]; h++) {
-                for (int w = 0; w < shape[3]; w++) {
+    for (uint32_t n = 0; n < shape[0]; n++) {
+        for (uint32_t c = 0; c < shape[1]; c++) {
+            for (uint32_t h = 0; h < shape[2]; h++) {
+                for (uint32_t w = 0; w < shape[3]; w++) {
                     auto toffs = addrt.offs(n, h, c, w);
                     auto offs = addr.offs(n, c, h, w);
-                    TT_FATAL(toffs < transposed.size() && offs < src_vec.size(), "Error");
+                    TT_FATAL(static_cast<size_t>(toffs) < transposed.size() && static_cast<size_t>(offs) < src_vec.size(), "Error");
                     transposed[toffs] = src_vec[offs];
                 }
             }
@@ -88,10 +88,10 @@ inline std::vector<uint16_t> gold_bcast_op(
     TensAddr addr(shape);
     std::vector<uint16_t> result(addr.numel());
     std::fill(result.begin(), result.end(), 0);
-    for (int n = 0; n < N; n++) {
-        for (int c = 0; c < C; c++) {
-            for (int h = 0; h < H; h++) {
-                for (int w = 0; w < W; w++) {
+    for (uint32_t n = 0; n < N; n++) {
+        for (uint32_t c = 0; c < C; c++) {
+            for (uint32_t h = 0; h < H; h++) {
+                for (uint32_t w = 0; w < W; w++) {
                     auto offs = addr.offs(n, c, h, w);
                     int b_index = 0;
                     switch (bcast_dim) {
@@ -148,10 +148,10 @@ inline std::vector<uint16_t> gold_bmm(
     std::vector<float> resultf(addrC.numel());
     std::fill(resultf.begin(), resultf.end(), 0);
 
-    for (int ib = 0; ib < nb; ib++) {
-        for (int m = 0; m < M; m++) {
-            for (int n = 0; n < N; n++) {
-                for (int k = 0; k < K; k++) {
+    for (uint32_t ib = 0; ib < nb; ib++) {
+        for (uint32_t m = 0; m < M; m++) {
+            for (uint32_t n = 0; n < N; n++) {
+                for (uint32_t k = 0; k < K; k++) {
                     auto offsA = addrA.offs(0, ib, m, k);
                     auto offsB = addrB.offs(0, ib, k, n);
                     auto offsC = addrC.offs(0, ib, m, n);
@@ -168,9 +168,9 @@ inline std::vector<uint16_t> gold_bmm(
     }
 
     // write back to fp16 after we accumulated in fp32
-    for (int ib = 0; ib < nb; ib++) {
-        for (int m = 0; m < M; m++) {
-            for (int n = 0; n < N; n++) {
+    for (uint32_t ib = 0; ib < nb; ib++) {
+        for (uint32_t m = 0; m < M; m++) {
+            for (uint32_t n = 0; n < N; n++) {
                 auto offsC = addrC.offs(0, ib, m, n);
                 result[offsC] = std::bit_cast<uint16_t>(bfloat16(resultf[offsC]));
             }

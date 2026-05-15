@@ -73,10 +73,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
                 experimental::metal2_host_api::KernelSpec::SourceFilePath{
                     OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check.cpp"},
             .num_threads = num_threads,
+            .dfb_bindings = {},
             .compile_time_arg_bindings = {{"kernel_id", kernel_id}},
             .runtime_arguments_schema =
                 {
                     .named_runtime_args = {"signal_address", "dram_dst_address", "dram_dst_bank_id", "l1_result_addr"},
+                    .named_common_runtime_args = {},
                 },
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
@@ -101,6 +103,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     experimental::metal2_host_api::ProgramSpec spec{
         .program_id = "globals_and_tls",
         .kernels = {k1, k2, k3},
+        .dataflow_buffers = {},
         .work_units = {main_wu},
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
@@ -115,6 +118,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
                        {"dram_dst_address", dram_address},
                        {"dram_dst_bank_id", dram_channel},
                        {"l1_result_addr", l1_result_addr}}}},
+            .named_common_runtime_args = {},
         };
     };
 
@@ -311,6 +315,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/simple_tls_check.cpp"},
         .num_threads = QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER,
+        .dfb_bindings = {},
         .runtime_arguments_schema =
             {
                 .named_runtime_args = {"l1_result_addr"},
@@ -340,6 +345,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     params.kernel_run_params = {{
         .kernel_spec_name = COMPUTE_KERNEL,
         .named_runtime_args = {{.node = node, .args = {{"l1_result_addr", l1_result_addr}}}},
+        .named_common_runtime_args = {},
     }};
     experimental::metal2_host_api::SetProgramRunParameters(program, params);
 

@@ -74,8 +74,8 @@ TEST_F(MeshDeviceSingleCardFixture, DramCopySticksMultiCore) {
             << "DRAM buffer size must be divisible by number of cores";
         uint32_t per_core_l1_size = src_dram_buffer->size() / (num_cores_r * num_cores_c);
         std::unordered_map<CoreCoord, uint32_t> core_to_l1_addr;
-        for (int i = start_core.y; i < start_core.y + num_cores_r; i++) {
-            for (int j = start_core.x; j < start_core.x + num_cores_c; j++) {
+        for (std::size_t i = start_core.y; i < start_core.y + num_cores_r; i++) {
+            for (std::size_t j = start_core.x; j < start_core.x + num_cores_c; j++) {
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
                 tt_metal::InterleavedBufferConfig l1_config{
                     .device = dev,
@@ -106,8 +106,8 @@ TEST_F(MeshDeviceSingleCardFixture, DramCopySticksMultiCore) {
 
         std::cout << "Num cores " << num_cores_r * num_cores_c << std::endl;
         uint32_t core_index = 0;
-        for (int i = start_core.y; i < start_core.y + num_cores_r; i++) {
-            for (int j = start_core.x; j < start_core.x + num_cores_c; j++) {
+        for (std::size_t i = start_core.y; i < start_core.y + num_cores_r; i++) {
+            for (std::size_t j = start_core.x; j < start_core.x + num_cores_c; j++) {
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
                 tt_metal::SetRuntimeArgs(
                     program,

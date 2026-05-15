@@ -377,12 +377,14 @@ static bool reader_datacopy_writer_quasar(
         .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
         .num_entries = static_cast<uint32_t>(test_config.num_tiles),
         .data_format_metadata = test_config.l1_input_data_format,
+        .alias_with = {},
     };
     experimental::metal2_host_api::DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
         .num_entries = static_cast<uint32_t>(test_config.num_tiles),
         .data_format_metadata = test_config.l1_output_data_format,
+        .alias_with = {},
     };
 
     const experimental::metal2_host_api::NodeCoord node{
@@ -400,9 +402,11 @@ static bool reader_datacopy_writer_quasar(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
+        .semaphore_bindings = {},
         .compile_time_arg_bindings = {{"use_dfbs", 1u}},
         .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"},
+             .named_common_runtime_args = {}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -421,9 +425,11 @@ static bool reader_datacopy_writer_quasar(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
+        .semaphore_bindings = {},
         .compile_time_arg_bindings = {{"use_dfbs", 1u}},
         .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"},
+             .named_common_runtime_args = {}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -449,6 +455,7 @@ static bool reader_datacopy_writer_quasar(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
+        .semaphore_bindings = {},
         .compile_time_arg_bindings = {{"per_core_tile_cnt", per_core_tile_cnt}, {"use_dfbs", 1u}},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
@@ -463,6 +470,7 @@ static bool reader_datacopy_writer_quasar(
         .program_id = "reader_datacopy_writer",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
+        .remote_dataflow_buffers = {},
         .work_units = {wu},
     };
 
@@ -481,6 +489,7 @@ static bool reader_datacopy_writer_quasar(
                        {"src_bank_id", 0u},
                        {"num_tiles", num_tiles_per_thread},
                        {"dram_page_stride", ctx.per_tile_stride}}}},
+            .named_common_runtime_args = {},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
@@ -491,9 +500,12 @@ static bool reader_datacopy_writer_quasar(
                        {"dst_bank_id", 0u},
                        {"num_tiles", num_tiles_per_thread},
                        {"dram_page_stride", ctx.per_tile_stride}}}},
+            .named_common_runtime_args = {},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,
+            .named_runtime_args = {},
+            .named_common_runtime_args = {},
         },
     };
     experimental::metal2_host_api::SetProgramRunParameters(program, params);

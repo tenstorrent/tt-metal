@@ -57,7 +57,7 @@ int main(int argc, char** /*argv*/) {
     auto devices = distributed::MeshDevice::create_unit_meshes(
         ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
 
-    for (int device_id = 0; device_id < num_devices; device_id++) {
+    for (size_t device_id = 0; device_id < num_devices; device_id++) {
         try {
             /*
              * Silicon accelerator setup

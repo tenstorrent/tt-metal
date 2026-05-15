@@ -54,10 +54,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
                 experimental::metal2_host_api::KernelSpec::SourceFilePath{
                     "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp"},
             .num_threads = num_threads,
+            .dfb_bindings = {},
             .compile_time_arg_bindings = {{"l1_address", l1_addr}},
             .runtime_arguments_schema =
                 {
                     .named_runtime_args = {"a", "b"},
+                    .named_common_runtime_args = {},
                 },
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
@@ -85,6 +87,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     experimental::metal2_host_api::ProgramSpec spec{
         .program_id = "multi_dm_add_two_ints",
         .kernels = {k0, k1, k2, k3},
+        .dataflow_buffers = {},
         .work_units = {wu_core0, wu_core1},
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
@@ -94,17 +97,21 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         {.kernel_spec_name = KERNEL_0,
          .named_runtime_args =
              {{.node = experimental::metal2_host_api::NodeCoord{0, 0}, .args = {{"a", 1}, {"b", 2}}},
-              {.node = experimental::metal2_host_api::NodeCoord{1, 0}, .args = {{"a", 1}, {"b", 2}}}}},
+              {.node = experimental::metal2_host_api::NodeCoord{1, 0}, .args = {{"a", 1}, {"b", 2}}}},
+         .named_common_runtime_args = {}},
         {.kernel_spec_name = KERNEL_1,
          .named_runtime_args =
              {{.node = experimental::metal2_host_api::NodeCoord{0, 0}, .args = {{"a", 3}, {"b", 4}}},
-              {.node = experimental::metal2_host_api::NodeCoord{1, 0}, .args = {{"a", 3}, {"b", 4}}}}},
+              {.node = experimental::metal2_host_api::NodeCoord{1, 0}, .args = {{"a", 3}, {"b", 4}}}},
+         .named_common_runtime_args = {}},
         {.kernel_spec_name = KERNEL_2,
          .named_runtime_args =
-             {{.node = experimental::metal2_host_api::NodeCoord{0, 0}, .args = {{"a", 5}, {"b", 6}}}}},
+             {{.node = experimental::metal2_host_api::NodeCoord{0, 0}, .args = {{"a", 5}, {"b", 6}}}},
+         .named_common_runtime_args = {}},
         {.kernel_spec_name = KERNEL_3,
          .named_runtime_args =
-             {{.node = experimental::metal2_host_api::NodeCoord{1, 0}, .args = {{"a", 7}, {"b", 8}}}}},
+             {{.node = experimental::metal2_host_api::NodeCoord{1, 0}, .args = {{"a", 7}, {"b", 8}}}},
+         .named_common_runtime_args = {}},
     };
     experimental::metal2_host_api::SetProgramRunParameters(program, params);
 

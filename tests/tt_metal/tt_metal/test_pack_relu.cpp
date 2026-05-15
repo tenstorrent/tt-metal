@@ -71,12 +71,14 @@ static void run_pack_relu_test(
         .entry_size = single_tile_size,
         .num_entries = 2,
         .data_format_metadata = tt::DataFormat::Float16_b,
+        .alias_with = {},
     };
     experimental::metal2_host_api::DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = single_tile_size,
         .num_entries = 2,
         .data_format_metadata = tt::DataFormat::Float16_b,
+        .alias_with = {},
     };
 
     experimental::metal2_host_api::KernelSpec reader_spec{
@@ -91,9 +93,11 @@ static void run_pack_relu_test(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
+        .semaphore_bindings = {},
         .compile_time_arg_bindings = {{"use_dfbs", 1u}},
         .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"},
+             .named_common_runtime_args = {}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -112,9 +116,11 @@ static void run_pack_relu_test(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
+        .semaphore_bindings = {},
         .compile_time_arg_bindings = {{"use_dfbs", 1u}},
         .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"},
+             .named_common_runtime_args = {}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -127,7 +133,7 @@ static void run_pack_relu_test(
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp"},
         .num_threads = 1,
-        .compiler_options = {.defines = {{"PACK_RELU", "1"}}},
+        .compiler_options = {.include_paths = {}, .defines = {{"PACK_RELU", "1"}}},
         .dfb_bindings =
             {{
                  .dfb_spec_name = INPUT_DFB,
@@ -141,8 +147,9 @@ static void run_pack_relu_test(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
+        .semaphore_bindings = {},
         .compile_time_arg_bindings = {{"per_core_tile_cnt", num_tiles}, {"use_dfbs", 1u}},
-        .runtime_arguments_schema = {.named_runtime_args = {"relu_config"}},
+        .runtime_arguments_schema = {.named_runtime_args = {"relu_config"}, .named_common_runtime_args = {}},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
 
@@ -156,6 +163,7 @@ static void run_pack_relu_test(
         .program_id = "pack_relu",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
+        .remote_dataflow_buffers = {},
         .work_units = {wu},
     };
 
@@ -179,6 +187,7 @@ static void run_pack_relu_test(
                        {"src_bank_id", 0u},
                        {"num_tiles", num_tiles},
                        {"dram_page_stride", src_aligned_page_size}}}},
+            .named_common_runtime_args = {},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
@@ -189,6 +198,7 @@ static void run_pack_relu_test(
                        {"dst_bank_id", 0u},
                        {"num_tiles", num_tiles},
                        {"dram_page_stride", dst_aligned_page_size}}}},
+            .named_common_runtime_args = {},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,

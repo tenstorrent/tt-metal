@@ -84,7 +84,8 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
                                  CoreRangeSet(dispatch_core_range_set),
                                  DataMovementConfig{
                                      .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                                     .noc = tt_metal::NOC::RISCV_0_default}););
+                                     .noc = tt_metal::NOC::RISCV_0_default,
+                                     .compile_args = {}}););
         } else if (dispatch_core_type == CoreType::ETH) {
             EXPECT_ANY_THROW(tt_metal::CreateKernel(
                                  program_,

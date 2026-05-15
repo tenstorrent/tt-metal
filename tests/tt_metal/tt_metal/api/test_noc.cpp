@@ -118,9 +118,9 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
 
     log_info(tt::LogTest, "Logical -- Virtual Mapping");
     log_info(tt::LogTest, "[Logical <-> Virtual] Coordinates");
-    for (int r = 0; r < logical_grid_size.y; r++) {
+    for (size_t r = 0; r < logical_grid_size.y; r++) {
         std::string output_row;
-        for (int c = 0; c < logical_grid_size.x; c++) {
+        for (size_t c = 0; c < logical_grid_size.x; c++) {
             const CoreCoord logical_coord(c, r);
             const auto noc_coord = mesh_device->worker_core_from_logical_core(logical_coord);
             output_row += "{L[x" + std::to_string(c);
@@ -184,12 +184,12 @@ TEST(NOC, TensixVerifyNocIdentityTranslationTable) {
             unit_tests::basic::test_noc::read_translation_table(mesh_device, CoreCoord(x, y), x_remap, y_remap);
             bool core_has_translation_error = false;
             // bottom 16 values are not remapped --> identity
-            for (int x = 0; x < 16; x++) {
+            for (uint32_t x = 0; x < 16; x++) {
                 EXPECT_EQ(x, x_remap[x]);
                 core_has_translation_error |= (x != x_remap[x]);
             }
             // bottom 16 values are not remapped --> identity
-            for (int y = 0; y < 16; y++) {
+            for (uint32_t y = 0; y < 16; y++) {
                 EXPECT_EQ(y, y_remap[y]);
                 core_has_translation_error |= (y != y_remap[y]);
             }
@@ -471,7 +471,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNocMisaligned) {
         tt_metal::detail::ReadFromDeviceL1(
             device, receiver_core, base_receiver_addr, num_writes * sizeof(uint32_t), readback);
         uint32_t expected_value = value_to_write;
-        for (int i = 0; i < num_writes; i++) {
+        for (uint32_t i = 0; i < num_writes; i++) {
             EXPECT_EQ(readback[i], expected_value);
             expected_value++;
         }
@@ -598,6 +598,7 @@ void run_local_noc_stream_reg_inc(
             MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
         auto config = tt_metal::DramConfig{
             .noc = tt_metal::NOC::NOC_0,
+            .compile_args = {},
         };
         stream_reg_kernel = CreateKernel(
             program_,
@@ -608,7 +609,7 @@ void run_local_noc_stream_reg_inc(
         core_type = CoreType::ETH;
         unreserved_base_addr =
             MetalContext::instance().hal().get_dev_addr(hal_programmable_core_type, HalL1MemAddrType::UNRESERVED);
-        tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0};
+        tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0, .compile_args = {}};
         if (hal_programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             config.eth_mode = Eth::SENDER;
         } else if (hal_programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
@@ -775,7 +776,7 @@ TEST_F(BlackholeSingleCardFixture, DramKernelDriscWritesTensixStreamReg) {
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/streams/stream_reg_read_write.cpp",
         logical_core_drisc,
-        DramConfig{.noc = NOC::NOC_0});
+        DramConfig{.noc = NOC::NOC_0, .compile_args = {}});
     SetRuntimeArgs(
         program,
         kid,

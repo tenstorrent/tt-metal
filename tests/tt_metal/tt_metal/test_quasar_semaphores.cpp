@@ -67,10 +67,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp"},
         .num_threads = 1,
+        .dfb_bindings = {},
         .semaphore_bindings = {{.semaphore_spec_name = "sem0", .accessor_name = "sem"}},
         .runtime_arguments_schema =
             {
                 .named_runtime_args = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
+                .named_common_runtime_args = {},
             },
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
@@ -84,7 +86,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/transform_pipeline.cpp"},
         .num_threads = 1,
-        .compiler_options = {.defines = {{"OUTGOING_SEM", "1"}, {"INCOMING_SEM", "1"}}},
+        .compiler_options = {.include_paths = {}, .defines = {{"OUTGOING_SEM", "1"}, {"INCOMING_SEM", "1"}}},
+        .dfb_bindings = {},
         .semaphore_bindings =
             {
                 {.semaphore_spec_name = "sem0", .accessor_name = "sem_in"},
@@ -108,10 +111,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp"},
         .num_threads = 1,
+        .dfb_bindings = {},
         .semaphore_bindings = {{.semaphore_spec_name = "sem1", .accessor_name = "sem"}},
         .runtime_arguments_schema =
             {
                 .named_runtime_args = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
+                .named_common_runtime_args = {},
             },
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
@@ -128,6 +133,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     experimental::metal2_host_api::ProgramSpec spec{
         .program_id = "multi_semaphore_pipeline",
         .kernels = {dm_reader_spec, dm_transform_spec, dm_writer_spec},
+        .dataflow_buffers = {},
         .semaphores = {sem0_spec, sem1_spec},
         .work_units = {main_wu},
     };
@@ -142,8 +148,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                    {{"dram_addr", dram_src_addr},
                     {"l1_addr", buf_a_addr},
                     {"num_elements", num_elements},
-                    {"dram_bank_id", 0u}}}}},
-        {.kernel_spec_name = DM_TRANSFORM},
+                    {"dram_bank_id", 0u}}}},
+         .named_common_runtime_args = {}},
+        {.kernel_spec_name = DM_TRANSFORM,
+         .named_runtime_args = {},
+         .named_common_runtime_args = {}},
         {.kernel_spec_name = DM_WRITER,
          .named_runtime_args =
              {{.node = node,
@@ -151,7 +160,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                    {{"dram_addr", dram_dst_addr},
                     {"l1_addr", buf_b_addr},
                     {"num_elements", num_elements},
-                    {"dram_bank_id", 0u}}}}},
+                    {"dram_bank_id", 0u}}}},
+         .named_common_runtime_args = {}},
     };
     experimental::metal2_host_api::SetProgramRunParameters(program, params);
 
@@ -228,7 +238,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/transform_pipeline.cpp"},
         .num_threads = 1,
-        .compiler_options = {.defines = {{"OUTGOING_SEM", "1"}}},
+        .compiler_options = {.include_paths = {}, .defines = {{"OUTGOING_SEM", "1"}}},
+        .dfb_bindings = {},
         .semaphore_bindings = {{.semaphore_spec_name = "sem_core_0", .accessor_name = "sem_out"}},
         .compile_time_arg_bindings =
             {
@@ -248,7 +259,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp"},
         .num_threads = 1,
-        .compiler_options = {.defines = {{"INCREMENT_REMOTE_SEM", "1"}}},
+        .compiler_options = {.include_paths = {}, .defines = {{"INCREMENT_REMOTE_SEM", "1"}}},
+        .dfb_bindings = {},
         .semaphore_bindings =
             {
                 {.semaphore_spec_name = "sem_core_0", .accessor_name = "sem"},
@@ -258,6 +270,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             {
                 .named_runtime_args =
                     {"dram_addr", "l1_addr", "num_elements", "dram_bank_id", "remote_noc_x", "remote_noc_y"},
+                .named_common_runtime_args = {},
             },
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
@@ -271,7 +284,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp"},
         .num_threads = 1,
-        .compiler_options = {.defines = {{"WAIT_FOR_REMOTE_SEM", "1"}}},
+        .compiler_options = {.include_paths = {}, .defines = {{"WAIT_FOR_REMOTE_SEM", "1"}}},
+        .dfb_bindings = {},
         .semaphore_bindings =
             {
                 {.semaphore_spec_name = "sem0_core_1", .accessor_name = "sem"},
@@ -280,6 +294,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         .runtime_arguments_schema =
             {
                 .named_runtime_args = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
+                .named_common_runtime_args = {},
             },
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
@@ -293,7 +308,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/transform_pipeline.cpp"},
         .num_threads = 1,
-        .compiler_options = {.defines = {{"INCOMING_SEM", "1"}, {"OUTGOING_SEM", "1"}}},
+        .compiler_options = {.include_paths = {}, .defines = {{"INCOMING_SEM", "1"}, {"OUTGOING_SEM", "1"}}},
+        .dfb_bindings = {},
         .semaphore_bindings =
             {
                 {.semaphore_spec_name = "sem0_core_1", .accessor_name = "sem_in"},
