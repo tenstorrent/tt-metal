@@ -1,8 +1,11 @@
-name: "(triage) Promote issue and notify assignees"
+name: "(triage) Notify assignees via Slack"
 
-# Dispatched by BrAIn after reviewing duplicates and selecting assignees.
-# Promotes the issue (removes triage label, adds assignees) OR closes as duplicate,
-# then DMs each assignee on Slack.
+# Dispatched by BrAIn as the final step of triage — BrAIn handles issue creation,
+# lifecycle run, duplicate check, and promotion directly via the GitHub API.
+# This workflow exists solely because BrAIn lacks native Slack DM access:
+#   - promote=false: just DM the assignees (use when BrAIn already promoted the issue)
+#   - promote=true:  also remove triage label + add assignees to issue before DMing
+#   - close_as_duplicate_of=N: close issue as duplicate instead of notifying
 
 on:
   workflow_dispatch:
@@ -17,9 +20,9 @@ on:
         default: ""
         type: string
       promote:
-        description: "true = remove triage label, add assignees; false = skip (use with close_as_duplicate_of)"
+        description: "true = also remove triage label + add assignees to issue; false = just DM (BrAIn already promoted)"
         required: false
-        default: "true"
+        default: "false"
         type: string
       close_as_duplicate_of:
         description: "Close this issue as a duplicate of this issue number (leave blank to promote instead)"

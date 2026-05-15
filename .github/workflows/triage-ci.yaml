@@ -1,4 +1,8 @@
-name: "(triage) Create and analyze issue"
+name: "(triage) Ping BrAIn for full triage"
+
+# Collects issue details and sends BrAIn a complete step-by-step triage prompt.
+# BrAIn handles everything: issue creation, lifecycle run, dupe check,
+# promotion, contributor discovery, and Slack DMs to assignees.
 
 on:
   workflow_dispatch:
@@ -17,170 +21,106 @@ on:
         default: ""
         type: string
       labels:
-        description: "Comma-separated additional labels (beyond 'triage' and 'CI auto triage')"
+        description: "Comma-separated extra labels (beyond 'triage' and 'CI auto triage')"
         required: false
         default: ""
         type: string
 
 jobs:
-  triage:
+  ping-brain:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      issues: write
-      contents: read
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 500
-
-      - name: Create issue, find duplicates and contributors, notify BrAIn
+      - name: Send triage prompt to BrAIn
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           INPUT_TITLE: ${{ inputs.title }}
           INPUT_BODY: ${{ inputs.body }}
           INPUT_RELATED_FILES: ${{ inputs.related_files }}
           INPUT_LABELS: ${{ inputs.labels }}
           GITHUB_ACTOR_INPUT: ${{ github.actor }}
-          GITHUB_REF_NAME_INPUT: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 << 'PYEOF'
-          import json, os, subprocess, time, urllib.request, urllib.parse, urllib.error
+          import json, os, urllib.request
 
-          REPO = "tenstorrent/tt-metal"
-          GH_TOKEN = os.environ["GH_TOKEN"]
           SLACK_TOKEN = os.environ["SLACK_BOT_TOKEN"]
-          TITLE = os.environ["INPUT_TITLE"]
-          BODY = os.environ["INPUT_BODY"]
-          RELATED_FILES = [f.strip() for f in os.environ.get("INPUT_RELATED_FILES", "").split(",") if f.strip()]
-          EXTRA_LABELS = [l.strip() for l in os.environ.get("INPUT_LABELS", "").split(",") if l.strip()]
-          BRANCH = os.environ.get("GITHUB_REF_NAME_INPUT", "ebanerjee/coordinating-triages")
-          ACTOR = os.environ.get("GITHUB_ACTOR_INPUT", "unknown")
-          BRAIN_CHANNEL = "C0B1F8Z7GQM"
-          BRAIN_UID = "U0AK48VCFM0"
+          TITLE       = os.environ["INPUT_TITLE"]
+          BODY        = os.environ["INPUT_BODY"]
+          FILES       = os.environ.get("INPUT_RELATED_FILES", "").strip()
+          LABELS      = os.environ.get("INPUT_LABELS", "").strip()
+          ACTOR       = os.environ.get("GITHUB_ACTOR_INPUT", "unknown")
+          RUN_URL     = os.environ.get("RUN_URL", "")
+          BRAIN_UID   = "U0AK48VCFM0"
+          CHANNEL     = "C0B1F8Z7GQM"
+          REPO        = "tenstorrent/tt-metal"
 
-          def gh_api(method, path, body=None):
-              url = f"https://api.github.com/{path}"
-              data = json.dumps(body).encode() if body else None
-              req = urllib.request.Request(url, data=data, method=method, headers={
-                  "Authorization": f"token {GH_TOKEN}",
-                  "Accept": "application/vnd.github+json",
-                  "X-GitHub-Api-Version": "2022-11-28",
-                  "Content-Type": "application/json",
-              })
-              with urllib.request.urlopen(req, timeout=30) as r:
-                  return json.loads(r.read())
+          all_labels = "triage, CI auto triage" + (f", {LABELS}" if LABELS else "")
+          files_line  = FILES if FILES else "(none provided)"
 
-          def slack_post(payload):
-              data = json.dumps(payload).encode()
-              req = urllib.request.Request(
-                  "https://slack.com/api/chat.postMessage",
-                  data=data,
-                  headers={"Authorization": f"Bearer {SLACK_TOKEN}", "Content-Type": "application/json"}
-              )
-              with urllib.request.urlopen(req, timeout=30) as r:
-                  return json.loads(r.read())
+          # Keyword hints for BrAIn's duplicate search (stripped common words)
+          SKIP = {"with","that","from","this","when","have","been","will","does","into","fail","test","error","the","and","for","not"}
+          keywords = " ".join(w for w in TITLE.split() if len(w) > 3 and w.lower() not in SKIP)[:80]
 
-          # Step 1: Create the issue
-          print("Creating issue...")
-          labels = ["triage", "CI auto triage"] + EXTRA_LABELS
-          issue = gh_api("POST", f"repos/{REPO}/issues", {
-              "title": TITLE,
-              "body": BODY,
-              "labels": labels,
-          })
-          issue_number = issue["number"]
-          issue_url = issue["html_url"]
-          print(f"Created issue #{issue_number}: {issue_url}")
+          text = f"""\
+<@{BRAIN_UID}> *Full triage pipeline requested* — handle end-to-end
 
-          # Step 2: Search for duplicate issues
-          print("\nSearching for duplicate issues...")
-          SKIP_WORDS = {"with","that","from","this","when","have","been","will","does","into","fail","test","error"}
-          keywords = " ".join(w for w in TITLE.split() if len(w) > 3 and w.lower() not in SKIP_WORDS)[:80]
-          search_q = f"repo:{REPO} is:issue {keywords}"
-          try:
-              result = gh_api("GET", f"search/issues?q={urllib.parse.quote(search_q)}&per_page=6")
-              dupe_candidates = [i for i in result.get("items", []) if i["number"] != issue_number][:5]
-          except Exception as e:
-              print(f"Dupe search failed: {e}")
-              dupe_candidates = []
-          print(f"Found {len(dupe_candidates)} candidate duplicate(s)")
+*Issue details:*
+• Title: {TITLE}
+• Labels to apply: {all_labels}
+• Related files: {files_line}
+• Triggered by: {ACTOR} | {RUN_URL}
 
-          # Step 3: Find git contributors for related files
-          print("\nFinding contributors via git log...")
-          contributor_counts = {}
-          for fpath in RELATED_FILES:
-              try:
-                  out = subprocess.check_output(
-                      ["git", "log", "--follow", "--format=%ae", "-n", "100", "--", fpath],
-                      text=True, stderr=subprocess.DEVNULL
-                  )
-                  for email in out.strip().splitlines():
-                      if email:
-                          contributor_counts[email] = contributor_counts.get(email, 0) + 1
-              except Exception as e:
-                  print(f"  git log failed for {fpath}: {e}")
+*Issue body:*
+{BODY}
 
-          BOT_PATTERNS = ["noreply", "bot@", "github-actions", "dependabot", "tenstorrent-github-bot"]
-          top_emails = [
-              (email, count)
-              for email, count in sorted(contributor_counts.items(), key=lambda x: -x[1])
-              if not any(p in email.lower() for p in BOT_PATTERNS)
-          ][:6]
-          print(f"Top contributor emails: {top_emails}")
+---
+*Steps to complete (in order):*
 
-          def email_to_gh_handle(email):
-              try:
-                  time.sleep(0.5)
-                  r = gh_api("GET", f"search/users?q={urllib.parse.quote(email)}+in:email&per_page=1")
-                  items = r.get("items", [])
-                  return items[0]["login"] if items else email.split("@")[0]
-              except Exception as e:
-                  print(f"  handle lookup failed for {email}: {e}")
-                  return email.split("@")[0]
+*1. Create the GitHub issue*
+POST https://api.github.com/repos/{REPO}/issues
+Body: title=<above>, body=<above>, labels=[{all_labels}]
 
-          resolved = []
-          for email, count in top_emails[:5]:
-              handle = email_to_gh_handle(email)
-              resolved.append((handle, count))
-          resolved = resolved[:3]
-          print(f"Resolved contributors: {resolved}")
+*2. Run the lifecycle workflow*
+Dispatch `triage-ci.yaml` on branch `ebanerjee/issue-lifecycle-test`
+(inputs: close-issues=false for dry-run, llm-backend=copilot)
 
-          # Step 4: Build and send Slack message to BrAIn
-          if dupe_candidates:
-              dupe_section = "\n*Possible duplicates - review before promoting:*\n"
-              for d in dupe_candidates:
-                  state_icon = "open" if d.get("state") == "open" else "closed"
-                  dupe_section += f"  [{state_icon}] #{d['number']} - {d['title'][:80]}\n  {d['html_url']}\n"
-          else:
-              dupe_section = "\n*Duplicates:* none found\n"
+*3. Check for duplicate issues*
+GET https://api.github.com/search/issues?q=repo:{REPO}+is:issue+{keywords}
+Review top results. Exclude the issue you just created.
 
-          if resolved:
-              contrib_section = "\n*Suggested assignees (by git history):*\n"
-              for handle, count in resolved:
-                  contrib_section += f"  - {handle} ({count} commits to related files)\n"
-              assignees_csv = ",".join(h for h, _ in resolved)
-          else:
-              contrib_section = "\n*Assignees:* no related files provided - pick manually\n"
-              assignees_csv = "HANDLE1,HANDLE2,HANDLE3"
+*4a. If duplicate found — close the new issue*
+• PATCH /repos/{REPO}/issues/<new_number> → state=closed, state_reason=not_planned
+• POST /repos/{REPO}/issues/<new_number>/labels → ["duplicate"]
+• POST a comment linking to the original issue
 
-          text = (
-              f"<@{BRAIN_UID}> New triage issue - action required\n\n"
-              f"*#{issue_number}:* {TITLE}\n{issue_url}\n"
-              f"{dupe_section}"
-              f"{contrib_section}"
-              f"\n*Action - dispatch triage-notify.yaml on `{BRANCH}`:*\n"
-              f"  Promote (no dupes): issue_number={issue_number} assignees={assignees_csv} promote=true\n"
-              f"  Close as duplicate: issue_number={issue_number} close_as_duplicate_of=<NUM> promote=false\n"
-              f"\nTriggered by {ACTOR}"
+*4b. If no duplicates — promote and assign*
+• DELETE /repos/{REPO}/issues/<new_number>/labels/triage
+• Find contributors: for each file in [{files_line}], run:
+  git log --follow --format="%ae" -n 100 -- <file> | sort | uniq -c | sort -rn | head -5
+  (filter out bots/noreply, resolve emails to GH handles via /search/users?q=<email>+in:email)
+• Pick top 3 handles as assignees
+• POST /repos/{REPO}/issues/<new_number>/assignees → [handle1, handle2, handle3]
+
+*5. Ping assignees on Slack*
+Dispatch `triage-notify.yaml` on branch `ebanerjee/coordinating-triages`:
+  issue_number=<new_number>
+  assignees=<handle1,handle2,handle3>
+  promote=false  (already promoted above)
+(triage-notify.yaml will look up Slack UIDs and DM each person)
+"""
+
+          data = json.dumps({"channel": CHANNEL, "text": text}).encode()
+          req = urllib.request.Request(
+              "https://slack.com/api/chat.postMessage",
+              data=data,
+              headers={"Authorization": f"Bearer {SLACK_TOKEN}", "Content-Type": "application/json"}
           )
+          with urllib.request.urlopen(req, timeout=30) as r:
+              resp = json.loads(r.read())
 
-          print("\nSending Slack notification to BrAIn...")
-          resp = slack_post({"channel": BRAIN_CHANNEL, "text": text})
           print(f"Slack: ok={resp.get('ok')} error={resp.get('error')!r}")
           if not resp.get("ok"):
               raise RuntimeError(f"Slack post failed: {resp.get('error')}")
-
-          print(f"\nDone. Issue #{issue_number} created and BrAIn notified.")
+          print("BrAIn notified.")
           PYEOF
