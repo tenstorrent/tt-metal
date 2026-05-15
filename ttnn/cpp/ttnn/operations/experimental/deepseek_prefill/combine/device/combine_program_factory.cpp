@@ -645,41 +645,26 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             /*buffering_factor=*/2 * block_ct_dim,
             /*cb_id=*/tt::CBIndex::c_0,
             "dispatched_buffer_idle");
-        // c_2 on idle cores: untilized output rows, one full batch (read_batch_size rows)
+        // c_2 on idle cores: untilized output rows, double-buffered (2 × read_batch_size).
+        // Lets compute pack batch N+1 into the second half while zero_init_writer is still
+        // routing batch N out of the first half — overlapping pack with NOC sends.
         detail::create_tensor_cb(
             program,
             idle_core_grid,
             output_tensor,
-            /*buffering_factor=*/read_batch_size,
+            /*buffering_factor=*/2 * read_batch_size,
             /*cb_id=*/tt::CBIndex::c_2,
             "untilize_idle");
-        // c_3 on idle cores: 1-page signal CB (reader->compute, mirrors c_17 on sender cores)
-        {
-            uint32_t signal_page_size = l1_alignment;
-            tt::tt_metal::CircularBufferConfig signal_cb_config =
-                tt::tt_metal::CircularBufferConfig(signal_page_size, {{tt::CBIndex::c_3, tt::DataFormat::UInt8}})
-                    .set_page_size(tt::CBIndex::c_3, signal_page_size);
-            tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, signal_cb_config);
-        }
-        // c_8 on idle cores: 1-page stop-signal CB (compute -> zero_init_writer).
-        // Compute pushes 0 per batch (meaning "a batch is ready on c_2") and ROUTE_INFO_SENTINEL
-        // when it exits its own loop, so zero_init_writer knows when to stop its send loop.
-        {
-            uint32_t stop_signal_page_size = l1_alignment;
-            tt::tt_metal::CircularBufferConfig stop_signal_cb_config =
-                tt::tt_metal::CircularBufferConfig(stop_signal_page_size, {{tt::CBIndex::c_8, tt::DataFormat::UInt8}})
-                    .set_page_size(tt::CBIndex::c_8, stop_signal_page_size);
-            tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, stop_signal_cb_config);
-        }
         // c_9 on idle cores: metadata-batch CB. reader_untilize on this core reads the
         // per-batch metadata pages from DRAM and pushes them here; zero_init_writer pops
         // batch_count pages each iteration and decides the per-batch path locally (sender
-        // no longer writes to this CB).  Sized for one batch in flight (read_batch_size
-        // pages), matching the buffer/untilize CBs.
+        // no longer writes to this CB).  Double-buffered (2 × read_batch_size) so
+        // reader_untilize can stage batch N+1's metadata while zero_init_writer is still
+        // consuming batch N — matches the double-buffered untilize CB (c_2).
         {
             uint32_t metadata_batch_page_size = detail::get_aligned_page_size(dispatched_metadata);
             auto metadata_fmt = tt::tt_metal::datatype_to_dataformat_converter(dispatched_metadata.dtype());
-            uint32_t metadata_batch_cb_size = read_batch_size * metadata_batch_page_size;
+            uint32_t metadata_batch_cb_size = 2 * read_batch_size * metadata_batch_page_size;
             tt::tt_metal::CircularBufferConfig metadata_batch_idle_config =
                 tt::tt_metal::CircularBufferConfig(metadata_batch_cb_size, {{tt::CBIndex::c_9, metadata_fmt}})
                     .set_page_size(tt::CBIndex::c_9, metadata_batch_page_size);
@@ -698,16 +683,16 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     std::vector<tt::tt_metal::KernelHandle> reader_untilize_kernel_ids;
     if (is_tile_layout) {
         // Compile-time args layout for reader_untilize (matching reader_untilize.cpp):
-        //   0-12: shared base (below, includes max_dispatch_buffer_token_size at 12)
-        //   13:   core_id   — local index within sender s's idle group (0..k_s-1)
-        //   14:   num_idle_cores — per-sender count k_s (for round-robin batch assignment)
-        //   15:   aligned_output_page_size
-        //   16:   aligned_experts_tok_counter_page_size
-        //   17:   cb_metadata_batch_id — CB this kernel pushes per-batch metadata pages into
-        //   18:   aligned_dispatched_metadata_page_size
-        //   19:   block_ct_dim — tiles per chunk pushed to cb_dispatched_buffer_id (matches the
+        //   0-11: shared base (below, includes max_dispatch_buffer_token_size at 11)
+        //   12:   core_id   — local index within sender s's idle group (0..k_s-1)
+        //   13:   num_idle_cores — per-sender count k_s (for round-robin batch assignment)
+        //   14:   aligned_output_page_size
+        //   15:   aligned_experts_tok_counter_page_size
+        //   16:   cb_metadata_batch_id — CB this kernel pushes per-batch metadata pages into
+        //   17:   aligned_dispatched_metadata_page_size
+        //   18:   block_ct_dim — tiles per chunk pushed to cb_dispatched_buffer_id (matches the
         //                       compute kernel's per-block consumption)
-        //   20+:  TensorAccessorArgs for dispatched_buffer, then TensorAccessorArgs for
+        //   19+:  TensorAccessorArgs for dispatched_buffer, then TensorAccessorArgs for
         //         dispatched_metadata (no num_senders — single-sender kernel)
         const uint32_t tile_height = dispatched_buffer.tensor_spec().tile().get_height();
         const uint32_t tile_width = dispatched_buffer.tensor_spec().tile().get_width();
@@ -720,11 +705,10 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             static_cast<uint32_t>(tt::CBIndex::c_2),           // 5:  cb_untilize_id
             (uint32_t)hidden_size,                             // 6:  hidden_size
             read_batch_size,                                   // 7:  read_batch_size
-            static_cast<uint32_t>(tt::CBIndex::c_3),           // 8:  cb_signal_id
-            detail::get_aligned_page_size(dispatched_buffer),  // 9:  aligned_dispatched_buffer_page_size
-            tile_height,                                       // 10: tile_height
-            tile_width,                                        // 11: tile_width
-            (uint32_t)max_dispatch_buffer_token_size,          // 12: max_dispatch_buffer_token_size
+            detail::get_aligned_page_size(dispatched_buffer),  // 8:  aligned_dispatched_buffer_page_size
+            tile_height,                                       // 9:  tile_height
+            tile_width,                                        // 10: tile_width
+            (uint32_t)max_dispatch_buffer_token_size,          // 11: max_dispatch_buffer_token_size
         };
 
         // Partitioned idle cores: each sender s owns a dedicated group of k_s idle cores.
@@ -738,14 +722,14 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             uint32_t k_s = static_cast<uint32_t>(sender_idle_groups[s].size());
             for (uint32_t j = 0; j < k_s; j++, global_idle_idx++) {
                 auto per_core_args = reader_untilize_compile_time_args_base;
-                per_core_args.push_back(j);    // 13: core_id (local to sender s's group)
-                per_core_args.push_back(k_s);  // 14: num_idle_cores (per-sender)
-                per_core_args.push_back(detail::get_aligned_page_size(output_tensor));        // 15
-                per_core_args.push_back(detail::get_aligned_page_size(expert_token_counts));  // 16
-                per_core_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_9));  // 17: cb_metadata_batch_id
-                per_core_args.push_back(detail::get_aligned_page_size(dispatched_metadata));  // 18
-                per_core_args.push_back(block_ct_dim);                                        // 19: block_ct_dim
-                // 20+: TensorAccessorArgs for dispatched_buffer + dispatched_metadata
+                per_core_args.push_back(j);    // 12: core_id (local to sender s's group)
+                per_core_args.push_back(k_s);  // 13: num_idle_cores (per-sender)
+                per_core_args.push_back(detail::get_aligned_page_size(output_tensor));        // 14
+                per_core_args.push_back(detail::get_aligned_page_size(expert_token_counts));  // 15
+                per_core_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_9));  // 16: cb_metadata_batch_id
+                per_core_args.push_back(detail::get_aligned_page_size(dispatched_metadata));  // 17
+                per_core_args.push_back(block_ct_dim);                                        // 18: block_ct_dim
+                // 19+: TensorAccessorArgs for dispatched_buffer + dispatched_metadata
                 tt::tt_metal::TensorAccessorArgs(dispatched_buffer.buffer()).append_to(per_core_args);
                 tt::tt_metal::TensorAccessorArgs(dispatched_metadata.buffer()).append_to(per_core_args);
 
@@ -819,7 +803,6 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         // In ROW_MAJOR the corresponding #if IS_TILE_LAYOUT block is compiled out, so these
         // trailing args are ignored — still pushed unconditionally to keep the kernel object stable.
         zi_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_2));     // cb_untilize_id
-        zi_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_8));     // cb_stop_signal_id
         zi_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_1));     // cb_experts_tok_counter_id
         zi_compile_time_args.push_back(detail::get_num_pages(expert_token_counts));  // experts_tok_counter_pages
         zi_compile_time_args.push_back(detail::get_aligned_page_size(expert_token_counts));  // counter page size
@@ -829,6 +812,10 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         zi_compile_time_args.push_back(
             detail::get_aligned_page_size(dispatched_metadata));  // aligned_dispatched_metadata_page_size
         zi_compile_time_args.push_back(linearized_mesh_coord);    // linearized_mesh_coord
+        zi_compile_time_args.push_back(operation_attributes.experts_per_chip);     // experts_per_chip
+        zi_compile_time_args.push_back(counter_offset);                            // counter_offset
+        zi_compile_time_args.push_back((uint32_t)max_dispatch_buffer_token_size);  // max_dispatch_buffer_token_size
+        zi_compile_time_args.push_back(full_ct_dim);                               // full_ct_dim (= hidden_size / 32)
 
         std::map<std::string, std::string> zi_defines;
         zi_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
@@ -891,25 +878,30 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             .compile_args = compile_time_args,
             .defines = writer_defines});
 
-    // Compute kernel on idle cores that untilizes dispatched_buffer data (TILE_LAYOUT only)
+    // Compute kernel on idle cores that untilizes dispatched_buffer data (TILE_LAYOUT only).
+    // Compile-time args are shared across all idle cores; per-sender values (core_id,
+    // num_idle_cores, expert range) are passed via SetRuntimeArgs below.  Initialized to 0
+    // so the compiler can prove definite-initialization for the !is_tile_layout case (the
+    // SetRuntimeArgs call below is guarded by the same is_tile_layout flag).
+    tt::tt_metal::KernelHandle untilize_compute_kernel_id = 0;
     if (is_tile_layout) {
-        tt::tt_metal::CreateKernel(
+        untilize_compute_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/compute/"
             "untilize_combine.cpp",
             idle_core_grid,
             tt::tt_metal::ComputeConfig{
                 .compile_args = {
-                    static_cast<uint32_t>(
-                        tt::CBIndex::c_3),  // 0: cb_signal_id (CB used for signaling on the same core that
-                                            //    data is loaded and ready to be untilized)
-                    static_cast<uint32_t>(tt::CBIndex::c_2),  // 1: cb_untilize_id (untilized dispatched_buffer data)
-                    static_cast<uint32_t>(tt::CBIndex::c_0),  // 2: cb_in_id (dispatched_buffer data)
-                    read_batch_size,                          // 3: read_batch_size
-                    full_ct_dim,                              // 4: full_ct_dim = hidden_size / 32
-                    block_ct_dim,                             // 5: block_ct_dim = largest divisor of full_ct_dim <= 8
-                    static_cast<uint32_t>(
-                        tt::CBIndex::c_8),  // 6: cb_stop_signal_id (compute -> zero_init_writer per-batch/stop)
+                    static_cast<uint32_t>(tt::CBIndex::c_2),     // 0: cb_untilize_id
+                    static_cast<uint32_t>(tt::CBIndex::c_0),     // 1: cb_in_id
+                    static_cast<uint32_t>(tt::CBIndex::c_1),     // 2: cb_experts_tok_counter_id
+                    detail::get_num_pages(expert_token_counts),  // 3: experts_tok_counter_pages
+                    operation_attributes.experts_per_chip,       // 4: experts_per_chip
+                    counter_offset,                              // 5: counter_offset
+                    (uint32_t)max_dispatch_buffer_token_size,    // 6: max_dispatch_buffer_token_size
+                    read_batch_size,                             // 7: read_batch_size
+                    full_ct_dim,                                 // 8: full_ct_dim = hidden_size / 32
+                    block_ct_dim,                                // 9: block_ct_dim
                 }});
     }
 
@@ -952,6 +944,9 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             // In ROW_MAJOR the trailing args are ignored (kernel compiled with IS_TILE_LAYOUT=0).
             if (is_tile_layout) {
                 uint32_t s = idle_sender_map[idle_idx];
+                uint32_t k_s = static_cast<uint32_t>(sender_idle_groups[s].size());
+                uint32_t expert_start = s * experts_per_core_range;
+                uint32_t expert_end = std::min((s + 1) * experts_per_core_range, operation_attributes.experts_per_chip);
                 // core_id = this idle core's local index within sender s's group (0..k_s-1).
                 uint32_t local_core_id = 0;
                 for (uint32_t j = 0; j < idle_idx; j++) {
@@ -965,6 +960,9 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                 zi_runtime_args.push_back(data_ready_semaphore_ids[s][local_core_id]);
                 zi_runtime_args.push_back(credits_semaphore_ids[s][local_core_id]);
                 zi_runtime_args.push_back(local_core_id);
+                zi_runtime_args.push_back(k_s);           // num_idle_cores
+                zi_runtime_args.push_back(expert_start);  // expert_start_idx
+                zi_runtime_args.push_back(expert_end);    // expert_end_idx
             }
 
             tt::tt_metal::SetRuntimeArgs(program, zero_init_kernel_id, zero_init_cores_vec[idle_idx], zi_runtime_args);
@@ -1078,8 +1076,17 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     if (is_tile_layout) {
         for (uint32_t j = 0; j < num_idle_cores; j++) {
             uint32_t s = idle_sender_map[j];
+            uint32_t k_s = static_cast<uint32_t>(sender_idle_groups[s].size());
             uint32_t expert_start = s * experts_per_core_range;
             uint32_t expert_end = std::min((s + 1) * experts_per_core_range, operation_attributes.experts_per_chip);
+            // local_core_id: this idle's index within sender s's group, found by counting prior
+            // idle_idxs that map to the same sender (idle_row_cores is grouped by sender).
+            uint32_t local_core_id = 0;
+            for (uint32_t k = 0; k < j; k++) {
+                if (idle_sender_map[k] == s) {
+                    local_core_id++;
+                }
+            }
             std::vector<uint32_t> idle_rt_args = {
                 counter_ready_semaphore_id,
                 dispatched_buffer.buffer()->address(),
@@ -1088,6 +1095,12 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                 dispatched_metadata.buffer()->address(),
             };
             tt::tt_metal::SetRuntimeArgs(program, reader_untilize_kernel_ids[j], idle_row_cores[j], idle_rt_args);
+
+            // Compute kernel walks the same expert/batch iteration as reader_untilize and
+            // zero_init_writer (no per-batch signal CB).  Per-sender k_s + local_core_id drive
+            // round-robin batch assignment within the group.
+            std::vector<uint32_t> compute_rt_args = {expert_start, expert_end, local_core_id, k_s};
+            tt::tt_metal::SetRuntimeArgs(program, untilize_compute_kernel_id, idle_row_cores[j], compute_rt_args);
         }
     }
 
