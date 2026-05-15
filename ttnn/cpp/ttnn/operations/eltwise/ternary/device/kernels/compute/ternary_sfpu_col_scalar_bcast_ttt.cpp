@@ -81,7 +81,12 @@ ALWI void process_tile(uint32_t freq, uint32_t tile_start, uint32_t num_tiles_pe
         using LoadA = LocalLoadTile<(uint32_t)predicate_cb, Dst::D0>;
         using LoadB = LocalLoadTile<(uint32_t)true_cb, Dst::D1>;
         using LoadC = LocalLoadTile<(uint32_t)false_cb, Dst::D2>;
-        using PackOut = PackTile<(uint32_t)cb_out, Dst::D0, PackTilePolicy::NoReserveNoPush>;
+        using PackOut = PackTile<
+            (uint32_t)cb_out,
+            Dst::D0,
+            PackTilePolicy::NoReserveNoPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>;
         eltwise_chain(1u, LoadA{}, LoadB{}, LoadC{}, LocalTernarySfpuStage{}, PackOut{});
 
         cb_push_back(cb_out, num_tiles_per_cycle);

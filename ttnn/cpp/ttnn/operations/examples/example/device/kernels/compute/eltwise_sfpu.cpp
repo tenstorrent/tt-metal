@@ -29,7 +29,17 @@ void kernel_main() {
     // D5/D8: caller-side BIG init at the top of MAIN().
     eltwise_chain_with_init(
         num_tiles,
-        CopyTile<tt::CBIndex::c_0, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<
+            tt::CBIndex::c_0,
+            Dst::D0,
+            CopyTilePolicy::WaitAndPop,
+            CbIndexMode::FirstTile,
+            CopyTileReconfig::None>{},
         SfpuOpChain{},
-        PackTile<tt::CBIndex::c_2, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            tt::CBIndex::c_2,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 }

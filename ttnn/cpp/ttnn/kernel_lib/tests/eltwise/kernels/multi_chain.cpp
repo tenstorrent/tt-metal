@@ -35,10 +35,15 @@ void kernel_main() {
     // 14.2: Copy + Sigmoid + Tanh + Pack (two SFPU ops in series)
     eltwise_chain(
         num_tiles,
-        CopyTile<cb_a, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_a, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         Sigmoid<Dst::D0>{},
         Tanh<Dst::D0>{},
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 #elif CHAIN_VARIANT == 1
     // 14.3: 2-input BinaryFpu Add + Pack (no extra CopyTile — BinaryFpu owns lifecycle)
     using BinElt = BinaryFpu<
@@ -51,7 +56,15 @@ void kernel_main() {
         CopyTilePolicy::WaitAndPop,
         CbIndexMode::FirstTile,
         Dst::D0>;
-    eltwise_chain(num_tiles, BinElt{}, PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    eltwise_chain(
+        num_tiles,
+        BinElt{},
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 #elif CHAIN_VARIANT == 2
     // 14.4: 2-input BinaryFpu Add + post-SFPU Sqrt + Pack — sqrt(a+b)
     using BinElt = BinaryFpu<
@@ -68,14 +81,24 @@ void kernel_main() {
         num_tiles,
         BinElt{},
         Sqrt<Approx::Exact, Dst::D0>{},
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 #elif CHAIN_VARIANT == 3
     // 14.5: Copy + Exp + Sqrt + Pack (chain-length 4 SFPU back-to-back)
     eltwise_chain(
         num_tiles,
-        CopyTile<cb_a, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_a, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         Exp<>{},
         Sqrt<Approx::Exact, Dst::D0>{},
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 #endif
 }

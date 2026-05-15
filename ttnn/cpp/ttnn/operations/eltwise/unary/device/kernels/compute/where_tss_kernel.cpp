@@ -46,11 +46,16 @@ void kernel_main() {
     // is single-stage and uses U4's deduced wrapper.
     eltwise_chain_with_init(
         num_tiles,
-        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         OptionalChainElement<USE_INT_FILL, FillInt<DataFormat::Int32, Dst::D1>>{packed_scalar1},
         OptionalChainElement<USE_INT_FILL, FillInt<DataFormat::Int32, Dst::D2>>{packed_scalar2},
         OptionalChainElement<!USE_INT_FILL, FillScalar<Dst::D1>>{*true_value},
         OptionalChainElement<!USE_INT_FILL, FillScalar<Dst::D2>>{*false_value},
         WhereSfpu{},
-        PackTile<cb_output, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_output,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 }

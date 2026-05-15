@@ -50,18 +50,38 @@ void kernel_main() {
                 // f(x) = (x != 0). Optional Negative if MINUS_INF.
                 eltwise_chain(
                     onetile,
-                    CopyTile<cb_x, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                    CopyTile<
+                        cb_x,
+                        Dst::D0,
+                        CopyTilePolicy::WaitAndPop,
+                        CbIndexMode::FirstTile,
+                        CopyTileReconfig::None>{},
                     UnaryNe<Dst::D0>{0u},
                     OptionalChainElement<kMinusInf, Negative<Dst::D0>>{},
-                    PackTile<cb_val, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                    PackTile<
+                        cb_val,
+                        Dst::D0,
+                        PackTilePolicy::PerTileReserveAndPush,
+                        PackTileIndexMode::FirstTile,
+                        PackTileReconfig::None>{});
 #else
                 // f(x) = |x| (Abs). Optional Negative if MINUS_INF.
                 eltwise_chain(
                     onetile,
-                    CopyTile<cb_x, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                    CopyTile<
+                        cb_x,
+                        Dst::D0,
+                        CopyTilePolicy::WaitAndPop,
+                        CbIndexMode::FirstTile,
+                        CopyTileReconfig::None>{},
                     Abs<Dst::D0>{},
                     OptionalChainElement<kMinusInf, Negative<Dst::D0>>{},
-                    PackTile<cb_val, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                    PackTile<
+                        cb_val,
+                        Dst::D0,
+                        PackTilePolicy::PerTileReserveAndPush,
+                        PackTileIndexMode::FirstTile,
+                        PackTileReconfig::None>{});
 #endif  // IS_ZERO
             }
 
@@ -76,8 +96,18 @@ void kernel_main() {
                     using namespace compute_kernel_lib;
                     eltwise_chain(
                         onetile,
-                        CopyTile<cb_val, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-                        PackTile<cb_cal, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                        CopyTile<
+                            cb_val,
+                            Dst::D0,
+                            CopyTilePolicy::WaitAndPop,
+                            CbIndexMode::FirstTile,
+                            CopyTileReconfig::None>{},
+                        PackTile<
+                            cb_cal,
+                            Dst::D0,
+                            PackTilePolicy::PerTileReserveAndPush,
+                            PackTileIndexMode::FirstTile,
+                            PackTileReconfig::None>{});
                 }
             } else {
 #ifdef IS_ZERO
@@ -138,14 +168,24 @@ void kernel_main() {
 #ifdef MINUS_INF
             eltwise_chain(
                 onetile,
-                CopyTile<cb_cal, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                CopyTile<cb_cal, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
                 Negative<Dst::D0>{},
-                PackTile<cb_y, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                PackTile<
+                    cb_y,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::None>{});
 #else
             eltwise_chain(
                 onetile,
-                CopyTile<cb_cal, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-                PackTile<cb_y, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                CopyTile<cb_cal, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+                PackTile<
+                    cb_y,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::None>{});
 #endif
         }
     }

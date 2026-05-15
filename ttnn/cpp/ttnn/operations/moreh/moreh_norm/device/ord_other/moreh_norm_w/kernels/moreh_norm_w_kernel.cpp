@@ -59,12 +59,18 @@ void kernel_main() {
             if (do_mask_w && (col_idx == Wt - 1)) {
                 compute_kernel_lib::eltwise_chain(
                     onetile,
-                    compute_kernel_lib::
-                        CopyTile<cb_x, compute_kernel_lib::Dst::D0, compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+                    compute_kernel_lib::CopyTile<
+                        cb_x,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                        compute_kernel_lib::CbIndexMode::FirstTile,
+                        compute_kernel_lib::CopyTileReconfig::None>{},
                     compute_kernel_lib::CopyTile<
                         cb_mask_w,
                         compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::CopyTilePolicy::NoWaitNoPop>{},
+                        compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                        compute_kernel_lib::CbIndexMode::FirstTile,
+                        compute_kernel_lib::CopyTileReconfig::None>{},
                     compute_kernel_lib::MaskPosInf<compute_kernel_lib::Dst::D0>{},
 #ifdef IS_ZERO
                     compute_kernel_lib::UnaryNe<compute_kernel_lib::Dst::D0>{0u},
@@ -75,12 +81,18 @@ void kernel_main() {
                     compute_kernel_lib::PackTile<
                         cb_val,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                        compute_kernel_lib::PackTileIndexMode::FirstTile,
+                        compute_kernel_lib::PackTileReconfig::None>{});
             } else {
                 compute_kernel_lib::eltwise_chain(
                     onetile,
-                    compute_kernel_lib::
-                        CopyTile<cb_x, compute_kernel_lib::Dst::D0, compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+                    compute_kernel_lib::CopyTile<
+                        cb_x,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                        compute_kernel_lib::CbIndexMode::FirstTile,
+                        compute_kernel_lib::CopyTileReconfig::None>{},
 #ifdef IS_ZERO
                     compute_kernel_lib::UnaryNe<compute_kernel_lib::Dst::D0>{0u},
 #else
@@ -90,7 +102,9 @@ void kernel_main() {
                     compute_kernel_lib::PackTile<
                         cb_val,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                        compute_kernel_lib::PackTileIndexMode::FirstTile,
+                        compute_kernel_lib::PackTileReconfig::None>{});
             }
 #else
             // PARTIAL migration: f(x) prologue (plain mask_tile path) via eltwise_chain.
@@ -104,12 +118,18 @@ void kernel_main() {
             if (do_mask_w && (col_idx == Wt - 1)) {
                 compute_kernel_lib::eltwise_chain(
                     onetile,
-                    compute_kernel_lib::
-                        CopyTile<cb_x, compute_kernel_lib::Dst::D0, compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+                    compute_kernel_lib::CopyTile<
+                        cb_x,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                        compute_kernel_lib::CbIndexMode::FirstTile,
+                        compute_kernel_lib::CopyTileReconfig::None>{},
                     compute_kernel_lib::CopyTile<
                         cb_mask_w,
                         compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::CopyTilePolicy::NoWaitNoPop>{},
+                        compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                        compute_kernel_lib::CbIndexMode::FirstTile,
+                        compute_kernel_lib::CopyTileReconfig::None>{},
                     compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
 #ifdef IS_ZERO
                     compute_kernel_lib::UnaryNe<compute_kernel_lib::Dst::D0>{0u},
@@ -119,12 +139,18 @@ void kernel_main() {
                     compute_kernel_lib::PackTile<
                         cb_val,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                        compute_kernel_lib::PackTileIndexMode::FirstTile,
+                        compute_kernel_lib::PackTileReconfig::None>{});
             } else {
                 compute_kernel_lib::eltwise_chain(
                     onetile,
-                    compute_kernel_lib::
-                        CopyTile<cb_x, compute_kernel_lib::Dst::D0, compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+                    compute_kernel_lib::CopyTile<
+                        cb_x,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                        compute_kernel_lib::CbIndexMode::FirstTile,
+                        compute_kernel_lib::CopyTileReconfig::None>{},
 #ifdef IS_ZERO
                     compute_kernel_lib::UnaryNe<compute_kernel_lib::Dst::D0>{0u},
 #else
@@ -133,7 +159,9 @@ void kernel_main() {
                     compute_kernel_lib::PackTile<
                         cb_val,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                        compute_kernel_lib::PackTileIndexMode::FirstTile,
+                        compute_kernel_lib::PackTileReconfig::None>{});
             }
 #endif  // MINUS_INF
 
@@ -148,8 +176,18 @@ void kernel_main() {
                     using namespace compute_kernel_lib;
                     eltwise_chain(
                         onetile,
-                        CopyTile<cb_val, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-                        PackTile<cb_cal, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                        CopyTile<
+                            cb_val,
+                            Dst::D0,
+                            CopyTilePolicy::WaitAndPop,
+                            CbIndexMode::FirstTile,
+                            CopyTileReconfig::None>{},
+                        PackTile<
+                            cb_cal,
+                            Dst::D0,
+                            PackTilePolicy::PerTileReserveAndPush,
+                            PackTileIndexMode::FirstTile,
+                            PackTileReconfig::None>{});
                 }
             } else {
 #ifdef IS_ZERO
@@ -213,14 +251,34 @@ void kernel_main() {
 #ifdef MINUS_INF
             eltwise_chain(
                 onetile,
-                CopyTile<cb_reduce, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                CopyTile<
+                    cb_reduce,
+                    Dst::D0,
+                    CopyTilePolicy::WaitAndPop,
+                    CbIndexMode::FirstTile,
+                    CopyTileReconfig::None>{},
                 Negative<Dst::D0>{},
-                PackTile<cb_y, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                PackTile<
+                    cb_y,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::None>{});
 #else
             eltwise_chain(
                 onetile,
-                CopyTile<cb_reduce, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-                PackTile<cb_y, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                CopyTile<
+                    cb_reduce,
+                    Dst::D0,
+                    CopyTilePolicy::WaitAndPop,
+                    CbIndexMode::FirstTile,
+                    CopyTileReconfig::None>{},
+                PackTile<
+                    cb_y,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::None>{});
 #endif
         }
     }

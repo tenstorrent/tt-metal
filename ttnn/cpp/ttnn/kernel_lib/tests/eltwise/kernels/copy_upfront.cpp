@@ -26,8 +26,14 @@ void kernel_main() {
     const uint32_t per_core_block_dim = get_compile_time_arg_val(1);
     const uint32_t num_tiles = per_core_block_count * per_core_block_dim;
 
-    using CopyElt = CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitUpfrontPopAtEnd, CbIndexMode::BlockIter>;
-    using PackElt = PackTile<cb_out, Dst::D0, PackTilePolicy::UpfrontReservePushAtEnd, PackTileIndexMode::BlockIter>;
+    using CopyElt =
+        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitUpfrontPopAtEnd, CbIndexMode::BlockIter, CopyTileReconfig::None>;
+    using PackElt = PackTile<
+        cb_out,
+        Dst::D0,
+        PackTilePolicy::UpfrontReservePushAtEnd,
+        PackTileIndexMode::BlockIter,
+        PackTileReconfig::None>;
 
     // D5/D8: caller-side BIG init at the top of MAIN().
     compute_kernel_hw_startup(cb_in, cb_in, cb_out);

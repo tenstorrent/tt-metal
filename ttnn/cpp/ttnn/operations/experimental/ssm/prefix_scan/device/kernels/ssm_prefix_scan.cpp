@@ -111,8 +111,13 @@ FORCE_INLINE void copy(uint32_t num_input_units = 1) {
     }
     eltwise_chain(
         1u,
-        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitNoPop, CbIndexMode::FirstTile>{},
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitNoPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
     // Don't pop the copied tile - caller can do it (matches original semantics).
 }
 

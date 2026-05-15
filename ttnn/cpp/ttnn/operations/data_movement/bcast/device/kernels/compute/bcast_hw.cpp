@@ -51,7 +51,15 @@ void kernel_main() {
         CbIndexMode::FirstTile,
         Dst::D0>;
     cb_wait_front(cb_b, 1);
-    eltwise_chain(num_tiles, BinElt{}, PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    eltwise_chain(
+        num_tiles,
+        BinElt{},
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 #else
     using BinElt = BinaryFpu<
         cb_a,
@@ -63,6 +71,14 @@ void kernel_main() {
         CopyTilePolicy::WaitAndPop,
         CbIndexMode::FirstTile,
         Dst::D0>;
-    eltwise_chain(num_tiles, BinElt{}, PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    eltwise_chain(
+        num_tiles,
+        BinElt{},
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 #endif
 }

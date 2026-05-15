@@ -56,9 +56,14 @@ void kernel_main() {
     // first; SFPU ternary op runs in DEST. Boot for the first reader's CB.
     eltwise_chain_with_init(
         num_tiles,
-        CopyTile<cb_in0, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-        CopyTile<cb_in1, Dst::D1, CopyTilePolicy::WaitAndPop>{},
-        CopyTile<cb_in2, Dst::D2, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_in0, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+        CopyTile<cb_in1, Dst::D1, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+        CopyTile<cb_in2, Dst::D2, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         TernarySfpuOpScalar<Dst::D0, Dst::D1, Dst::D2, Dst::D0>{scalar_arg},
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 }

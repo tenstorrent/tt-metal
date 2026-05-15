@@ -39,13 +39,25 @@ void kernel_main() {
                 CbIndexMode::FirstTile,
                 Dst::D0>;
             eltwise_chain(
-                num_output_tiles, AddBcast{}, PackTile<cb_out0, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                num_output_tiles,
+                AddBcast{},
+                PackTile<
+                    cb_out0,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::None>{});
         } else {
             // No-bcast path: just copy cb_in0 -> cb_out0 (cb_in1 unused per iteration).
             eltwise_chain(
                 num_output_tiles,
-                CopyTile<cb_in0, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-                PackTile<cb_out0, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                CopyTile<cb_in0, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+                PackTile<
+                    cb_out0,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::None>{});
         }
     }
 

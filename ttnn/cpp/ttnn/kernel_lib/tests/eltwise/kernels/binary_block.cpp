@@ -33,7 +33,12 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
 
     using BinElt = BinaryFpu<cb_a, cb_b, op, BroadcastDim::None, BinaryDataFormatReconfig::None>;
-    using PackElt = PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>;
+    using PackElt = PackTile<
+        cb_out,
+        Dst::D0,
+        PackTilePolicy::PerTileReserveAndPush,
+        PackTileIndexMode::FirstTile,
+        PackTileReconfig::None>;
 
     eltwise_chain(num_tiles, BinElt{}, PackElt{});
 }

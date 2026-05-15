@@ -169,8 +169,12 @@ void kernel_main() {
         using LoadA = LocalLoadTile<cb_eff_a, compute_kernel_lib::Dst::D0>;
         using LoadB = LocalLoadTile<cb_eff_b, compute_kernel_lib::Dst::D1>;
         using LoadC = LocalLoadTile<cb_eff_c, compute_kernel_lib::Dst::D2>;
-        using PackOut = compute_kernel_lib::
-            PackTile<cb_out, compute_kernel_lib::Dst::D0, compute_kernel_lib::PackTilePolicy::NoReserveNoPush>;
+        using PackOut = compute_kernel_lib::PackTile<
+            cb_out,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
+            compute_kernel_lib::PackTileIndexMode::FirstTile,
+            compute_kernel_lib::PackTileReconfig::None>;
         compute_kernel_lib::eltwise_chain(1u, LoadA{}, LoadB{}, LoadC{}, LocalTernarySfpuStage{}, PackOut{});
 
         cb_push_back(cb_out, num_tiles_per_cycle);

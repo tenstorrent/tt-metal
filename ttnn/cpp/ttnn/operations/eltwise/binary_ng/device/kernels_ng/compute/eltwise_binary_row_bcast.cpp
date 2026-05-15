@@ -105,7 +105,12 @@ void kernel_main() {
             BinaryDataFormatReconfig::None,
             CopyTilePolicy::NoWaitNoPop,
             CopyTilePolicy::NoWaitNoPop>;
-        using PackElt = PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>;
+        using PackElt = PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>;
         // BinaryFpu::init() emits the appropriate add/sub/mul_tiles_init internally.
         eltwise_chain(num_tiles_per_cycle, BinElt{}, PackElt{});
 #else

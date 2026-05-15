@@ -59,9 +59,19 @@ void kernel_main() {
                 using namespace compute_kernel_lib;
                 eltwise_chain(
                     onetile,
-                    CopyTile<cb_x, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                    CopyTile<
+                        cb_x,
+                        Dst::D0,
+                        CopyTilePolicy::WaitAndPop,
+                        CbIndexMode::FirstTile,
+                        CopyTileReconfig::None>{},
                     Abs<Dst::D0>{},
-                    PackTile<cb_xabs, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                    PackTile<
+                        cb_xabs,
+                        Dst::D0,
+                        PackTilePolicy::PerTileReserveAndPush,
+                        PackTileIndexMode::FirstTile,
+                        PackTileReconfig::None>{});
             }
 
             power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);
@@ -77,8 +87,18 @@ void kernel_main() {
                     using namespace compute_kernel_lib;
                     eltwise_chain(
                         onetile,
-                        CopyTile<cb_correct_xpow, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-                        PackTile<cb_xpowadd, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                        CopyTile<
+                            cb_correct_xpow,
+                            Dst::D0,
+                            CopyTilePolicy::WaitAndPop,
+                            CbIndexMode::FirstTile,
+                            CopyTileReconfig::None>{},
+                        PackTile<
+                            cb_xpowadd,
+                            Dst::D0,
+                            PackTilePolicy::PerTileReserveAndPush,
+                            PackTileIndexMode::FirstTile,
+                            PackTileReconfig::None>{});
                 }
             } else {
                 // PARTIAL migration: in-place accumulator add via eltwise_chain.

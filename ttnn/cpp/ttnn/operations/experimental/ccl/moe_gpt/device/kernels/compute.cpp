@@ -128,7 +128,9 @@ void kernel_main() {
         compute_kernel_lib::PackTile<
             cb_c2c_ones_tile,
             compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+            compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+            compute_kernel_lib::PackTileIndexMode::FirstTile,
+            compute_kernel_lib::PackTileReconfig::None>{});
 
     // Pack is always configured to Float16_b
     pack_reconfig_data_format(cb_s2c_in2);

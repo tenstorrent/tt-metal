@@ -281,8 +281,18 @@ void kernel_main() {
                         using namespace compute_kernel_lib;
                         eltwise_chain(
                             onetile,
-                            CopyTile<cb_xmm2, Dst::D0, CopyTilePolicy::NoWaitNoPop>{},
-                            PackTile<cb_xmm2sum, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                            CopyTile<
+                                cb_xmm2,
+                                Dst::D0,
+                                CopyTilePolicy::NoWaitNoPop,
+                                CbIndexMode::FirstTile,
+                                CopyTileReconfig::None>{},
+                            PackTile<
+                                cb_xmm2sum,
+                                Dst::D0,
+                                PackTilePolicy::PerTileReserveAndPush,
+                                PackTileIndexMode::FirstTile,
+                                PackTileReconfig::None>{});
                     }
                 } else {
                     tile_regs_acquire();

@@ -34,7 +34,15 @@ void kernel_main() {
             CopyTilePolicy::NoWaitNoPop,
             CbIndexMode::FirstTile,
             Dst::D0>;
-        eltwise_chain(num_tiles, MulBcast{}, PackTile<cb_y, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        eltwise_chain(
+            num_tiles,
+            MulBcast{},
+            PackTile<
+                cb_y,
+                Dst::D0,
+                PackTilePolicy::PerTileReserveAndPush,
+                PackTileIndexMode::FirstTile,
+                PackTileReconfig::None>{});
     }
 
     cb_pop_front(cb_clip_coef_clamped, onetile);

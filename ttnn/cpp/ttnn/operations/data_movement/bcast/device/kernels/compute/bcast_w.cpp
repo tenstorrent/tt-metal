@@ -52,7 +52,15 @@ void kernel_main() {
     for (uint32_t b = 0; b < B; ++b) {
         for (uint32_t h = 0; h < Ht; ++h) {
             cb_wait_front(cb_b, 1);
-            eltwise_chain(Wt, BinElt{}, PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+            eltwise_chain(
+                Wt,
+                BinElt{},
+                PackTile<
+                    cb_out,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::None>{});
             cb_pop_front(cb_b, 1);
         }
     }

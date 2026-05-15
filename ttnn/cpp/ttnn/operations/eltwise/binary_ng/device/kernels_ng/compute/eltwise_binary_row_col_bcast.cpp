@@ -108,8 +108,12 @@ ALWI void process_tile(uint32_t freq, uint32_t tile_start) {
             CbIndexMode::BlockIter,
             Dst::D0,
             CbIndexMode::BlockIter>;
-        using PackElt =
-            PackTile<(uint32_t)cb_out, Dst::D0, PackTilePolicy::NoReserveNoPush, PackTileIndexMode::BlockIter>;
+        using PackElt = PackTile<
+            (uint32_t)cb_out,
+            Dst::D0,
+            PackTilePolicy::NoReserveNoPush,
+            PackTileIndexMode::BlockIter,
+            PackTileReconfig::None>;
         eltwise_chain<num_tiles_per_cycle>(num_tiles_per_cycle, BinElt{}, PackElt{});
         exp_cb_out.push_back(num_tiles_per_cycle);
 #else

@@ -72,28 +72,42 @@ void kernel_main() {
             if (do_mask_h && (row_idx == Ht - 1)) {
                 compute_kernel_lib::eltwise_chain(
                     onetile,
-                    compute_kernel_lib::
-                        CopyTile<cb_x, compute_kernel_lib::Dst::D0, compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+                    compute_kernel_lib::CopyTile<
+                        cb_x,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                        compute_kernel_lib::CbIndexMode::FirstTile,
+                        compute_kernel_lib::CopyTileReconfig::None>{},
                     compute_kernel_lib::CopyTile<
                         cb_mask_h,
                         compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::CopyTilePolicy::NoWaitNoPop>{},
+                        compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                        compute_kernel_lib::CbIndexMode::FirstTile,
+                        compute_kernel_lib::CopyTileReconfig::None>{},
                     compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
                     compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
                     compute_kernel_lib::PackTile<
                         cb_xabs,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                        compute_kernel_lib::PackTileIndexMode::FirstTile,
+                        compute_kernel_lib::PackTileReconfig::None>{});
             } else {
                 compute_kernel_lib::eltwise_chain(
                     onetile,
-                    compute_kernel_lib::
-                        CopyTile<cb_x, compute_kernel_lib::Dst::D0, compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+                    compute_kernel_lib::CopyTile<
+                        cb_x,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                        compute_kernel_lib::CbIndexMode::FirstTile,
+                        compute_kernel_lib::CopyTileReconfig::None>{},
                     compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
                     compute_kernel_lib::PackTile<
                         cb_xabs,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                        compute_kernel_lib::PackTileIndexMode::FirstTile,
+                        compute_kernel_lib::PackTileReconfig::None>{});
             }
 
             power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);
@@ -109,8 +123,18 @@ void kernel_main() {
                     using namespace compute_kernel_lib;
                     eltwise_chain(
                         onetile,
-                        CopyTile<cb_correct_xpow, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-                        PackTile<cb_xpowadd, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                        CopyTile<
+                            cb_correct_xpow,
+                            Dst::D0,
+                            CopyTilePolicy::WaitAndPop,
+                            CbIndexMode::FirstTile,
+                            CopyTileReconfig::None>{},
+                        PackTile<
+                            cb_xpowadd,
+                            Dst::D0,
+                            PackTilePolicy::PerTileReserveAndPush,
+                            PackTileIndexMode::FirstTile,
+                            PackTileReconfig::None>{});
                 }
             } else {
                 // PARTIAL migration: in-place accumulator add via eltwise_chain.

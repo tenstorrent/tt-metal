@@ -40,9 +40,14 @@ void kernel_main() {
     // the SfpuOp CRTP base) but every hook is a no-op (zero runtime cost).
     eltwise_chain(
         num_tiles,
-        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         OptionalChainElement<DO_CLAMP, Clamp<Dst::D0>>{packed_scalar1, packed_scalar2},
-        PackTile<cb_tmp0, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_tmp0,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 
     // D5 row 4: re-boot for stage 2's CB triple (cb_tmp0 → cb_output).
     compute_kernel_hw_startup(cb_tmp0, cb_tmp0, cb_output);
@@ -53,10 +58,15 @@ void kernel_main() {
     //   D0 = log(D0)
     eltwise_chain(
         num_tiles,
-        CopyTile<cb_tmp0, Dst::D1, CopyTilePolicy::WaitNoPop>{},
-        CopyTile<cb_tmp0, Dst::D0, CopyTilePolicy::NoWaitPop>{},
+        CopyTile<cb_tmp0, Dst::D1, CopyTilePolicy::WaitNoPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+        CopyTile<cb_tmp0, Dst::D0, CopyTilePolicy::NoWaitPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         RsubUnary<Dst::D0>{0x3F800000u},  // 1.0f - x
         DivBinary<Dst::D1, Dst::D0, Dst::D0>{},
         Log<Approx::Exact, Dst::D0>{},
-        PackTile<cb_output, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_output,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 }

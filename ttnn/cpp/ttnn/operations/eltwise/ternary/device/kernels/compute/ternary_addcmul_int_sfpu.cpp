@@ -51,12 +51,17 @@ void kernel_main() {
     // Mirrors the original 4-DST-slot layout (D3 reused as scratch).
     eltwise_chain_with_init(
         num_tiles,
-        CopyTile<cb_in0, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-        CopyTile<cb_in1, Dst::D1, CopyTilePolicy::WaitAndPop>{},
-        CopyTile<cb_in2, Dst::D2, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_in0, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+        CopyTile<cb_in1, Dst::D1, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+        CopyTile<cb_in2, Dst::D2, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         FillInt<ADDCMUL_DATA_FORMAT, Dst::D3>{scalar_arg},
         MulIntInPlace<ADDCMUL_DATA_FORMAT, Dst::D3, Dst::D1, Dst::D3>{},
         MulIntInPlace<ADDCMUL_DATA_FORMAT, Dst::D3, Dst::D2, Dst::D2>{},
         AddIntInPlace<ADDCMUL_DATA_FORMAT, Dst::D0, Dst::D2, Dst::D0>{},
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 }

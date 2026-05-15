@@ -74,7 +74,12 @@ void kernel_main() {
     using LoadA = LocalLoadTile<cb_in0, Dst::D0>;
     using LoadB = LocalLoadTile<cb_in1, Dst::D1>;
     using LoadC = LocalLoadTile<cb_in2, Dst::D2>;
-    using PackOut = PackTile<cb_out, Dst::D0, PackTilePolicy::NoReserveNoPush>;
+    using PackOut = PackTile<
+        cb_out,
+        Dst::D0,
+        PackTilePolicy::NoReserveNoPush,
+        PackTileIndexMode::FirstTile,
+        PackTileReconfig::None>;
     LocalTernarySfpuStage tern_stage{};
     tern_stage.scalar_arg = scalar_arg;
 

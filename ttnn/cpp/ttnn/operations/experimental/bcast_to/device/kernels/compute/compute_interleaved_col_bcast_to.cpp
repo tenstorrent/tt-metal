@@ -42,11 +42,14 @@ void kernel_main() {
                         cb_id_src,
                         cb_id_dst,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+                        compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                        compute_kernel_lib::UnaryBcastReconfig::None>{},
                     compute_kernel_lib::PackTile<
                         cb_id_dst,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                        compute_kernel_lib::PackTileIndexMode::FirstTile,
+                        compute_kernel_lib::PackTileReconfig::None>{});
                 num_tiles_read += Wt - start_tw;
             }
         }

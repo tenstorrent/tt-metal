@@ -43,5 +43,13 @@ void kernel_main() {
         CbIndexMode::FirstTile,
         Dst::D0>;
 
-    eltwise_chain(num_tiles, BinElt{}, PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    eltwise_chain(
+        num_tiles,
+        BinElt{},
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 }

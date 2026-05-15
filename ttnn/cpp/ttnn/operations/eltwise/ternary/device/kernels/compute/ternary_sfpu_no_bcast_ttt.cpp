@@ -47,9 +47,14 @@ void kernel_main() {
     // D5/D8: caller-side BIG init at the top of MAIN().
     eltwise_chain_with_init(
         num_tiles,
-        CopyTile<cb_pre_in1, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-        CopyTile<cb_pre_in2, Dst::D1, CopyTilePolicy::WaitAndPop>{},
-        CopyTile<cb_pre_in3, Dst::D2, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_pre_in1, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+        CopyTile<cb_pre_in2, Dst::D1, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+        CopyTile<cb_pre_in3, Dst::D2, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         TernarySfpuOp<Dst::D0, Dst::D1, Dst::D2, Dst::D0>{},
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 }

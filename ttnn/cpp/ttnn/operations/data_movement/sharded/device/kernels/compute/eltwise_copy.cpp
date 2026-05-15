@@ -18,10 +18,12 @@ void kernel_main() {
             cb_in,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::CopyTilePolicy::WaitUpfrontPopAtEnd,
-            compute_kernel_lib::CbIndexMode::BlockIter>{},
+            compute_kernel_lib::CbIndexMode::BlockIter,
+            compute_kernel_lib::CopyTileReconfig::None>{},
         compute_kernel_lib::PackTile<
             cb_out,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::PackTilePolicy::UpfrontReservePushAtEnd,
-            compute_kernel_lib::PackTileIndexMode::BlockIter>{});
+            compute_kernel_lib::PackTileIndexMode::BlockIter,
+            compute_kernel_lib::PackTileReconfig::None>{});
 }

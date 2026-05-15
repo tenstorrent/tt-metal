@@ -114,7 +114,8 @@ void kernel_main() {
                 sin_interm_cb,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
-                compute_kernel_lib::PackTileIndexMode::BlockIter>{});
+                compute_kernel_lib::PackTileIndexMode::BlockIter,
+                compute_kernel_lib::PackTileReconfig::None>{});
         cb_push_back(sin_interm_cb, Wt);
         cb_pop_front(rotated_in_interm_cb, Wt);
 
@@ -142,7 +143,8 @@ void kernel_main() {
                     cos_interm_cb,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
-                    compute_kernel_lib::PackTileIndexMode::BlockIter>{});
+                    compute_kernel_lib::PackTileIndexMode::BlockIter,
+                    compute_kernel_lib::PackTileReconfig::None>{});
         } else {
             compute_kernel_lib::eltwise_chain<compute_kernel_lib::DEST_AUTO_LIMIT>(
                 Wt,
@@ -161,7 +163,8 @@ void kernel_main() {
                     cos_interm_cb,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
-                    compute_kernel_lib::PackTileIndexMode::BlockIter>{});
+                    compute_kernel_lib::PackTileIndexMode::BlockIter,
+                    compute_kernel_lib::PackTileReconfig::None>{});
         }
         cb_push_back(cos_interm_cb, Wt);
         cb_pop_front(in_cb, Wt);  // Done with input
@@ -191,7 +194,8 @@ void kernel_main() {
                     q_out_cb,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
-                    compute_kernel_lib::PackTileIndexMode::BlockIter>{});
+                    compute_kernel_lib::PackTileIndexMode::BlockIter,
+                    compute_kernel_lib::PackTileReconfig::None>{});
         } else {
             compute_kernel_lib::eltwise_chain<compute_kernel_lib::DEST_AUTO_LIMIT>(
                 Wt,
@@ -210,7 +214,8 @@ void kernel_main() {
                     k_out_cb,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
-                    compute_kernel_lib::PackTileIndexMode::BlockIter>{});
+                    compute_kernel_lib::PackTileIndexMode::BlockIter,
+                    compute_kernel_lib::PackTileReconfig::None>{});
         }
         cb_push_back(out_cb, Wt);
         cb_pop_front(sin_interm_cb, Wt);

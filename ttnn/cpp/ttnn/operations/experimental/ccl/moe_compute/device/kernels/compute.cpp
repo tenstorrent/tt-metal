@@ -173,7 +173,9 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_c2c_ones_tile,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                compute_kernel_lib::PackTileIndexMode::FirstTile,
+                compute_kernel_lib::PackTileReconfig::None>{});
         // Synchronize: UNPACK must wait for PACK to finish writing before the first
         // matmul_block read. The tile is never popped so one cb_wait_front suffices.
         cb_wait_front(cb_c2c_ones_tile, 1);

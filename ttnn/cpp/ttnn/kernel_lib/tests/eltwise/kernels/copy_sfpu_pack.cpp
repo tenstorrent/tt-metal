@@ -31,7 +31,12 @@ void kernel_main() {
     // D5/D8: caller-side BIG init at the top of MAIN().
     eltwise_chain_with_init(
         num_tiles,
-        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         ELTWISE_OP_BRACED,
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 }

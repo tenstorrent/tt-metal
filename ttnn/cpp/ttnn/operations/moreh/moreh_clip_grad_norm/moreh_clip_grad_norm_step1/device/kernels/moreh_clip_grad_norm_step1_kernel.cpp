@@ -67,43 +67,109 @@ void kernel_main() {
             if (mh && mw) {
                 eltwise_chain(
                     onetile,
-                    CopyTile<cb_x, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-                    CopyTile<cb_mask_h_w, Dst::D1, CopyTilePolicy::NoWaitNoPop, CbIndexMode::FirstTile>{},
+                    CopyTile<
+                        cb_x,
+                        Dst::D0,
+                        CopyTilePolicy::WaitAndPop,
+                        CbIndexMode::FirstTile,
+                        CopyTileReconfig::None>{},
+                    CopyTile<
+                        cb_mask_h_w,
+                        Dst::D1,
+                        CopyTilePolicy::NoWaitNoPop,
+                        CbIndexMode::FirstTile,
+                        CopyTileReconfig::None>{},
                     Mask<DataFormat::Float16_b, Dst::D0>{},
-                    CopyTile<cb_mask_h_w, Dst::D1, CopyTilePolicy::NoWaitNoPop, CbIndexMode::Pinned>{1u},
+                    CopyTile<
+                        cb_mask_h_w,
+                        Dst::D1,
+                        CopyTilePolicy::NoWaitNoPop,
+                        CbIndexMode::Pinned,
+                        CopyTileReconfig::None>{1u},
                     Mask<DataFormat::Float16_b, Dst::D0>{},
                     Abs<Dst::D0>{},
-                    PackTile<cb_xabs, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                    PackTile<
+                        cb_xabs,
+                        Dst::D0,
+                        PackTilePolicy::PerTileReserveAndPush,
+                        PackTileIndexMode::FirstTile,
+                        PackTileReconfig::None>{});
             } else if (mh) {
                 eltwise_chain(
                     onetile,
-                    CopyTile<cb_x, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-                    CopyTile<cb_mask_h_w, Dst::D1, CopyTilePolicy::NoWaitNoPop, CbIndexMode::FirstTile>{},
+                    CopyTile<
+                        cb_x,
+                        Dst::D0,
+                        CopyTilePolicy::WaitAndPop,
+                        CbIndexMode::FirstTile,
+                        CopyTileReconfig::None>{},
+                    CopyTile<
+                        cb_mask_h_w,
+                        Dst::D1,
+                        CopyTilePolicy::NoWaitNoPop,
+                        CbIndexMode::FirstTile,
+                        CopyTileReconfig::None>{},
                     Mask<DataFormat::Float16_b, Dst::D0>{},
                     Abs<Dst::D0>{},
-                    PackTile<cb_xabs, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                    PackTile<
+                        cb_xabs,
+                        Dst::D0,
+                        PackTilePolicy::PerTileReserveAndPush,
+                        PackTileIndexMode::FirstTile,
+                        PackTileReconfig::None>{});
             } else if (mw) {
                 eltwise_chain(
                     onetile,
-                    CopyTile<cb_x, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-                    CopyTile<cb_mask_h_w, Dst::D1, CopyTilePolicy::NoWaitNoPop, CbIndexMode::Pinned>{1u},
+                    CopyTile<
+                        cb_x,
+                        Dst::D0,
+                        CopyTilePolicy::WaitAndPop,
+                        CbIndexMode::FirstTile,
+                        CopyTileReconfig::None>{},
+                    CopyTile<
+                        cb_mask_h_w,
+                        Dst::D1,
+                        CopyTilePolicy::NoWaitNoPop,
+                        CbIndexMode::Pinned,
+                        CopyTileReconfig::None>{1u},
                     Mask<DataFormat::Float16_b, Dst::D0>{},
                     Abs<Dst::D0>{},
-                    PackTile<cb_xabs, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                    PackTile<
+                        cb_xabs,
+                        Dst::D0,
+                        PackTilePolicy::PerTileReserveAndPush,
+                        PackTileIndexMode::FirstTile,
+                        PackTileReconfig::None>{});
             } else {
                 eltwise_chain(
                     onetile,
-                    CopyTile<cb_x, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                    CopyTile<
+                        cb_x,
+                        Dst::D0,
+                        CopyTilePolicy::WaitAndPop,
+                        CbIndexMode::FirstTile,
+                        CopyTileReconfig::None>{},
                     Abs<Dst::D0>{},
-                    PackTile<cb_xabs, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                    PackTile<
+                        cb_xabs,
+                        Dst::D0,
+                        PackTilePolicy::PerTileReserveAndPush,
+                        PackTileIndexMode::FirstTile,
+                        PackTileReconfig::None>{});
             }
         }
 
         // PARTIAL migration: inline power_tile_to_cb body as 4 eltwise_chain stages.
-        //   Block A: |x|^p          (CopyTile<cb_xabs, WaitNoPop> + PowerIterative + [Recip] + PackTile<cb_xpow>)
-        //   Block B: log(|x|)       (CopyTile<cb_xabs, NoWaitPop> + Log + PackTile<cb_logx>)
-        //   Block C: exp(log * d)   (BinaryFpu<cb_logx, cb_decimal, Mul> + Exp + PackTile<cb_exp_lxmd>)
-        //   Block D: xpow*exp       (BinaryFpu<cb_xpow, cb_exp_lxmd, Mul> + PackTile<cb_correct_xpow>)
+        //   Block A: |x|^p          (CopyTile<cb_xabs, WaitNoPop, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile,
+        //   CopyTileReconfig::None> + PowerIterative + [Recip] + PackTile<cb_xpow, Dst::D0,
+        //   PackTilePolicy::PerTileReserveAndPush, PackTileIndexMode::FirstTile, PackTileReconfig::None>) Block B:
+        //   log(|x|)       (CopyTile<cb_xabs, NoWaitPop, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile,
+        //   CopyTileReconfig::None> + Log + PackTile<cb_logx, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
+        //   PackTileIndexMode::FirstTile, PackTileReconfig::None>) Block C: exp(log * d)   (BinaryFpu<cb_logx,
+        //   cb_decimal, Mul> + Exp + PackTile<cb_exp_lxmd, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
+        //   PackTileIndexMode::FirstTile, PackTileReconfig::None>) Block D: xpow*exp       (BinaryFpu<cb_xpow,
+        //   cb_exp_lxmd, Mul> + PackTile<cb_correct_xpow, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
+        //   PackTileIndexMode::FirstTile, PackTileReconfig::None>)
         {
             using namespace compute_kernel_lib;
             if (p_is_negative) {
@@ -204,11 +270,15 @@ void kernel_main() {
                 compute_kernel_lib::CopyTile<
                     cb_correct_xpow,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+                    compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                    compute_kernel_lib::CbIndexMode::FirstTile,
+                    compute_kernel_lib::CopyTileReconfig::None>{},
                 compute_kernel_lib::PackTile<
                     cb_xpowadd,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                    compute_kernel_lib::PackTileIndexMode::FirstTile,
+                    compute_kernel_lib::PackTileReconfig::None>{});
         } else {
             // cb_xpowadd = cb_correct_xpow + cb_xpowadd (in-place accumulator)
             compute_kernel_lib::eltwise_chain(

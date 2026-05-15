@@ -25,22 +25,34 @@ void kernel_main() {
         // Single tile: copy input[0] straight to final output.
         compute_kernel_lib::eltwise_chain(
             1,
-            compute_kernel_lib::
-                CopyTile<input_cb, compute_kernel_lib::Dst::D0, compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+            compute_kernel_lib::CopyTile<
+                input_cb,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                compute_kernel_lib::CbIndexMode::FirstTile,
+                compute_kernel_lib::CopyTileReconfig::None>{},
             compute_kernel_lib::PackTile<
                 final_output_cb,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                compute_kernel_lib::PackTileIndexMode::FirstTile,
+                compute_kernel_lib::PackTileReconfig::None>{});
     } else {
         // Seed: copy first input tile into the partial-product CB.
         compute_kernel_lib::eltwise_chain(
             1,
-            compute_kernel_lib::
-                CopyTile<input_cb, compute_kernel_lib::Dst::D0, compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+            compute_kernel_lib::CopyTile<
+                input_cb,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                compute_kernel_lib::CbIndexMode::FirstTile,
+                compute_kernel_lib::CopyTileReconfig::None>{},
             compute_kernel_lib::PackTile<
                 partial_prod_cb,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                compute_kernel_lib::PackTileIndexMode::FirstTile,
+                compute_kernel_lib::PackTileReconfig::None>{});
 
         // Middle iters: partial_prod = input[t] * partial_prod (in-place).
         for (uint32_t t = 1; t < num_tiles - 1; ++t) {

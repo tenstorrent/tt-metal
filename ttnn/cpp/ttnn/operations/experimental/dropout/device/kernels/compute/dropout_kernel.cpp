@@ -45,7 +45,12 @@ void kernel_main() {
 
     eltwise_chain(
         total_tiles,
-        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         Dropout<Dst::D0>{int_probability, int_scale_factor},
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 }

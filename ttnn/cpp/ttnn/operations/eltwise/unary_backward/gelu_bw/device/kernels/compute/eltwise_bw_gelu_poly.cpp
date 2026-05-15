@@ -41,9 +41,14 @@ void kernel_main() {
     // grad_in[i] = grad_out[i] * GELU'(input[i])
     eltwise_chain_with_init(
         num_tiles,
-        CopyTile<cb_grad_out, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-        CopyTile<cb_input, Dst::D1, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_grad_out, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+        CopyTile<cb_input, Dst::D1, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         GeluDerivative<Dst::D1>{},
         MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        PackTile<cb_grad_in, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_grad_in,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 }

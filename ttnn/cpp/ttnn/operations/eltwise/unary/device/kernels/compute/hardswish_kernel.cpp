@@ -22,17 +22,22 @@ void kernel_main() {
     // hardswish(x) = x * hardsigmoid(x) — both operands from DEST.
     eltwise_chain(
         num_tiles,
-        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitNoPop>{},
-        CopyTile<cb_input, Dst::D1, CopyTilePolicy::NoWaitPop>{},
+        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitNoPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+        CopyTile<cb_input, Dst::D1, CopyTilePolicy::NoWaitPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         Hardsigmoid<Dst::D0>{},
         MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        PackTile<cb_output, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_output,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 #endif
 #ifdef INP_FLOAT
     // hardswish(x) = hardsigmoid(x) * x — DEST_TO_SRCA reuse, CB→srcb, DEST→srca, multiply.
     eltwise_chain(
         num_tiles,
-        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitNoPop>{},
+        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitNoPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         Hardsigmoid<Dst::D0>{},
         DestReuseBinary<
             cb_input,
@@ -43,6 +48,11 @@ void kernel_main() {
             DestReuseReconfig::None,
             CopyTilePolicy::NoWaitPop,
             CbIndexMode::FirstTile>{},
-        PackTile<cb_output, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_output,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 #endif
 }

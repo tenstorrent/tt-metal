@@ -4,8 +4,9 @@
 // In-place CB recurrence test — cb_acc is BOTH the B input AND the pack target.
 // Lifecycle: wait_front(cb_acc, 1); compute(cb_in[0], cb_acc[0]) → DEST;
 //            cb_reserve_back(cb_acc, 1); pack(dst, cb_acc); cb_pop_front(cb_acc); cb_push_back(cb_acc).
-// Chain handles this naturally — BinaryFpu with CbB=cb_acc + PackTile<cb_acc> is the
-// "in-place" pattern. CB needs ≥ 2 pages to support wait+reserve simultaneously.
+// Chain handles this naturally — BinaryFpu with CbB=cb_acc + PackTile<cb_acc, Dst::D0,
+// PackTilePolicy::PerTileReserveAndPush, PackTileIndexMode::FirstTile, PackTileReconfig::None> is the "in-place"
+// pattern. CB needs ≥ 2 pages to support wait+reserve simultaneously.
 
 #include <cstdint>
 #include "api/compute/common.h"
@@ -29,8 +30,13 @@ void kernel_main() {
     // First iter: seed cb_acc from cb_in (stage 1 — pure copy).
     eltwise_chain(
         1,
-        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-        PackTile<cb_acc, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+        PackTile<
+            cb_acc,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 
     // Subsequent iters: cb_acc <- cb_acc + cb_in (in-place accumulate).
     using AccumElt = BinaryFpu<
@@ -45,6 +51,14 @@ void kernel_main() {
         Dst::D0>;
 
     if (num_iters > 1) {
-        eltwise_chain(num_iters - 1, AccumElt{}, PackTile<cb_acc, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        eltwise_chain(
+            num_iters - 1,
+            AccumElt{},
+            PackTile<
+                cb_acc,
+                Dst::D0,
+                PackTilePolicy::PerTileReserveAndPush,
+                PackTileIndexMode::FirstTile,
+                PackTileReconfig::None>{});
     }
 }

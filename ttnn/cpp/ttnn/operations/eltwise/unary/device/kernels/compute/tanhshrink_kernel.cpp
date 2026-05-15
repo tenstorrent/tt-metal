@@ -22,17 +22,22 @@ void kernel_main() {
     // tanhshrink(x) = x - tanh(x) — load x into D0, tanh(x) into D1, sub.
     eltwise_chain(
         num_tiles,
-        CopyTile<cb_input, Dst::D1, CopyTilePolicy::WaitNoPop>{},
+        CopyTile<cb_input, Dst::D1, CopyTilePolicy::WaitNoPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         Tanh<Dst::D1>{},
-        CopyTile<cb_input, Dst::D0, CopyTilePolicy::NoWaitPop>{},
+        CopyTile<cb_input, Dst::D0, CopyTilePolicy::NoWaitPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        PackTile<cb_output, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_output,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 #endif
 #ifdef INP_FLOAT
     // tanhshrink(x) = x - tanh(x) — DEST_TO_SRCB reuse: tanh(x) in DEST, CB→srca, DEST→srcb, sub.
     eltwise_chain(
         num_tiles,
-        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitNoPop>{},
+        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitNoPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         Tanh<Dst::D0>{},
         DestReuseBinary<
             cb_input,
@@ -43,6 +48,11 @@ void kernel_main() {
             DestReuseReconfig::None,
             CopyTilePolicy::NoWaitPop,
             CbIndexMode::FirstTile>{},
-        PackTile<cb_output, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_output,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 #endif
 }

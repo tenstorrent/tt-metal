@@ -97,7 +97,12 @@ void kernel_main() {
     // model; num_tiles_per_cycle is unused.
     (void)num_tiles_per_cycle;
     using BinElt = BinaryFpu<cb_post_lhs, cb_post_rhs, FPU_OP, BroadcastDim::None, BinaryDataFormatReconfig::None>;
-    using PackElt = PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>;
+    using PackElt = PackTile<
+        cb_out,
+        Dst::D0,
+        PackTilePolicy::PerTileReserveAndPush,
+        PackTileIndexMode::FirstTile,
+        PackTileReconfig::None>;
     eltwise_chain(num_tiles, BinElt{}, PackElt{});
 #endif
 }

@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Vertical-slice test (test plan row 14.1):
-//   eltwise_chain(N, CopyTile<cb_in> + Exp + PackTile<cb_out>)
+//   eltwise_chain(N, CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile,
+//   CopyTileReconfig::None> + Exp + PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
+//   PackTileIndexMode::FirstTile, PackTileReconfig::None>)
 
 #include <cstdint>
 
@@ -25,7 +27,12 @@ void kernel_main() {
 
     eltwise_chain(
         num_tiles,
-        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         Exp<>{},
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 }

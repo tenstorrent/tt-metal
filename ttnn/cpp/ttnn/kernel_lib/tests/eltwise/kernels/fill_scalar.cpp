@@ -26,5 +26,12 @@ void kernel_main() {
     // Fill-only chain (no CB-reader) — boot the engine using out_cb on both sides
     // (matches the legacy `EltwiseChainPipelineInit::run()` no-reader fallback).
     eltwise_chain_with_init(
-        num_tiles, FillScalar<Dst::D0>{FILL_VALUE}, PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        num_tiles,
+        FillScalar<Dst::D0>{FILL_VALUE},
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 }

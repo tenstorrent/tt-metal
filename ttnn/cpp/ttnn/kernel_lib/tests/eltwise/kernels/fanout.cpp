@@ -28,10 +28,20 @@ void kernel_main() {
     // (cb_outA) is enough; the second pack programs its own reconfig at element-time.
     eltwise_chain_with_init(
         num_tiles,
-        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitNoPop>{},
-        CopyTile<cb_in, Dst::D1, CopyTilePolicy::NoWaitPop>{},
+        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitNoPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+        CopyTile<cb_in, Dst::D1, CopyTilePolicy::NoWaitPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         Exp<Approx::Exact, Approx::Fast, Dst::D0>{},
         Sin<Dst::D1>{},
-        PackTile<cb_outA, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{},
-        PackTile<cb_outB, Dst::D1, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_outA,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{},
+        PackTile<
+            cb_outB,
+            Dst::D1,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 }

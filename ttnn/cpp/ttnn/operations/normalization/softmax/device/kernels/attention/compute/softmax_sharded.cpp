@@ -198,9 +198,9 @@ void kernel_main() {
         // the original block-sized pop. CopyTile uses BlockIter so each chain
         // iter consumes tile[i] for i in 0..block_w-1, matching the absolute-
         // index copy_tile(cb_in0, j*subblock_w + w, w) the prior loop emitted.
-        // PackTile<PerTileReserveAndPush + FirstTile> matches the per-tile
-        // reserve_back / pack_tile / push_back inside the original subblock
-        // loop (write pointer advances per push). Caller-side reconfigs above
+        // PackTile<PerTileReserveAndPush + FirstTile, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
+        // PackTileIndexMode::FirstTile, PackTileReconfig::None> matches the per-tile reserve_back / pack_tile /
+        // push_back inside the original subblock loop (write pointer advances per push). Caller-side reconfigs above
         // and the outer binary_op_init_common cover the chain's setup needs
         // (mid-MAIN chain — no extra hw startup per D5).
         compute_kernel_lib::eltwise_chain(
@@ -209,7 +209,8 @@ void kernel_main() {
                 cb_in0,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
-                compute_kernel_lib::CbIndexMode::BlockIter>{},
+                compute_kernel_lib::CbIndexMode::BlockIter,
+                compute_kernel_lib::CopyTileReconfig::None>{},
             compute_kernel_lib::Exp<
                 static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
                 compute_kernel_lib::Approx::Exact,
@@ -217,7 +218,9 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_exps,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                compute_kernel_lib::PackTileIndexMode::FirstTile,
+                compute_kernel_lib::PackTileReconfig::None>{});
         cb_in0_obj.pop_front(block_w);
 #endif
 #endif  // FUSED_SCALE_MASK
@@ -263,7 +266,9 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_out0,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                compute_kernel_lib::PackTileIndexMode::FirstTile,
+                compute_kernel_lib::PackTileReconfig::None>{});
         cb_recipsumexps_obj.pop_front(1);
         cb_exps_obj.pop_front(block_w);
     }

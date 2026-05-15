@@ -253,22 +253,21 @@ void kernel_main() {
             calc_numeric_stable(Wt, ndst, cb_in0, cb_max_scaler, cb_max, cb_exps);
 #else
             // Migrated: streaming copy + exp + pack via eltwise_chain.
-            // CopyTile<WaitAndPop, FirstTile> emits per-tile cb_wait_front(1) on
-            // cb_in0 + copy_tile(cb_in0, 0, slot) + cb_pop_front(1). Functionally
-            // equivalent to the prior wait_front(ndst) / pop_front(ndst) batched
-            // shape because the read pointer advances per pop. PackTile with
-            // PerTileReserveAndPush + FirstTile mirrors the per-tile
-            // reserve_back/pack/push_back the original loop emits. Caller still
-            // owns the pre-loop reconfig_data_format / pack_reconfig_data_format
-            // and binary_op_init_common above (mid-MAIN chain — no extra hw
-            // startup per D5).
+            // CopyTile<WaitAndPop, FirstTile, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile,
+            // CopyTileReconfig::None> emits per-tile cb_wait_front(1) on cb_in0 + copy_tile(cb_in0, 0, slot) +
+            // cb_pop_front(1). Functionally equivalent to the prior wait_front(ndst) / pop_front(ndst) batched shape
+            // because the read pointer advances per pop. PackTile with PerTileReserveAndPush + FirstTile mirrors the
+            // per-tile reserve_back/pack/push_back the original loop emits. Caller still owns the pre-loop
+            // reconfig_data_format / pack_reconfig_data_format and binary_op_init_common above (mid-MAIN chain — no
+            // extra hw startup per D5).
             compute_kernel_lib::eltwise_chain(
                 Wt,
                 compute_kernel_lib::CopyTile<
                     cb_in0,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::CopyTilePolicy::WaitAndPop,
-                    compute_kernel_lib::CbIndexMode::FirstTile>{},
+                    compute_kernel_lib::CbIndexMode::FirstTile,
+                    compute_kernel_lib::CopyTileReconfig::None>{},
                 compute_kernel_lib::Exp<
                     static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
                     compute_kernel_lib::Approx::Exact,
@@ -276,7 +275,9 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_exps,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                    compute_kernel_lib::PackTileIndexMode::FirstTile,
+                    compute_kernel_lib::PackTileReconfig::None>{});
 #endif
         }
 #endif
@@ -319,7 +320,9 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_out0,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                compute_kernel_lib::PackTileIndexMode::FirstTile,
+                compute_kernel_lib::PackTileReconfig::None>{});
         cb_recipsumexps_obj.pop_front(1);
         cb_exps_obj.pop_front(Wt);
     }  // NCHt loop

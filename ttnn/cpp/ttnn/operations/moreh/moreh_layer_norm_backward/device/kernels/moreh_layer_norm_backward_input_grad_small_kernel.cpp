@@ -279,8 +279,18 @@ void kernel_main() {
                     using namespace compute_kernel_lib;
                     eltwise_chain(
                         onetile,
-                        CopyTile<cb_dycopy, Dst::D0, CopyTilePolicy::NoWaitNoPop>{},
-                        PackTile<cb_dyadd, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                        CopyTile<
+                            cb_dycopy,
+                            Dst::D0,
+                            CopyTilePolicy::NoWaitNoPop,
+                            CbIndexMode::FirstTile,
+                            CopyTileReconfig::None>{},
+                        PackTile<
+                            cb_dyadd,
+                            Dst::D0,
+                            PackTilePolicy::PerTileReserveAndPush,
+                            PackTileIndexMode::FirstTile,
+                            PackTileReconfig::None>{});
                 }
             } else {
                 tile_regs_acquire();
@@ -347,8 +357,18 @@ void kernel_main() {
                     using namespace compute_kernel_lib;
                     eltwise_chain(
                         onetile,
-                        CopyTile<cb_ydy, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-                        PackTile<cb_ydyadd, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                        CopyTile<
+                            cb_ydy,
+                            Dst::D0,
+                            CopyTilePolicy::WaitAndPop,
+                            CbIndexMode::FirstTile,
+                            CopyTileReconfig::None>{},
+                        PackTile<
+                            cb_ydyadd,
+                            Dst::D0,
+                            PackTilePolicy::PerTileReserveAndPush,
+                            PackTileIndexMode::FirstTile,
+                            PackTileReconfig::None>{});
                 }
             } else {
                 tile_regs_acquire();

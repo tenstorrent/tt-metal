@@ -47,7 +47,12 @@ void kernel_main() {
     // tag the conditional ladder dispatches to.
     eltwise_chain_with_init(
         num_tiles,
-        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         OptionalChainElement<kCond, InnerT>{},
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 }

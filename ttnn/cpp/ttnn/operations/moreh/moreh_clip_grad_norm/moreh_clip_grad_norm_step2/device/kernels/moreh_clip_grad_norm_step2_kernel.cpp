@@ -41,12 +41,18 @@ void kernel_main() {
         if (tile_idx == 0) {
             compute_kernel_lib::eltwise_chain(
                 onetile,
-                compute_kernel_lib::
-                    CopyTile<cb_input, compute_kernel_lib::Dst::D0, compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+                compute_kernel_lib::CopyTile<
+                    cb_input,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                    compute_kernel_lib::CbIndexMode::FirstTile,
+                    compute_kernel_lib::CopyTileReconfig::None>{},
                 compute_kernel_lib::PackTile<
                     cb_x,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                    compute_kernel_lib::PackTileIndexMode::FirstTile,
+                    compute_kernel_lib::PackTileReconfig::None>{});
         } else {
             compute_kernel_lib::eltwise_chain(
                 onetile,
@@ -69,10 +75,15 @@ void kernel_main() {
         }
     }
     // PARTIAL migration: inline power_tile_to_cb body as 4 eltwise_chain stages.
-    //   Block A: x^p           (CopyTile<cb_x, WaitNoPop> + PowerIterative + [Recip] + PackTile<cb_xpow>)
-    //   Block B: log(x)        (CopyTile<cb_x, NoWaitPop> + Log + PackTile<cb_logx>)
-    //   Block C: exp(log(x)*d) (BinaryFpu<cb_logx, cb_decimal, Mul> + Exp + PackTile<cb_exp_lxmd>)
-    //   Block D: xpow * exp(.) (BinaryFpu<cb_xpow, cb_exp_lxmd, Mul> + PackTile<cb_y>)
+    //   Block A: x^p           (CopyTile<cb_x, WaitNoPop, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile,
+    //   CopyTileReconfig::None> + PowerIterative + [Recip] + PackTile<cb_xpow, Dst::D0,
+    //   PackTilePolicy::PerTileReserveAndPush, PackTileIndexMode::FirstTile, PackTileReconfig::None>) Block B: log(x)
+    //   (CopyTile<cb_x, NoWaitPop, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None> + Log +
+    //   PackTile<cb_logx, Dst::D0, PackTilePolicy::PerTileReserveAndPush, PackTileIndexMode::FirstTile,
+    //   PackTileReconfig::None>) Block C: exp(log(x)*d) (BinaryFpu<cb_logx, cb_decimal, Mul> + Exp +
+    //   PackTile<cb_exp_lxmd, Dst::D0, PackTilePolicy::PerTileReserveAndPush, PackTileIndexMode::FirstTile,
+    //   PackTileReconfig::None>) Block D: xpow * exp(.) (BinaryFpu<cb_xpow, cb_exp_lxmd, Mul> + PackTile<cb_y, Dst::D0,
+    //   PackTilePolicy::PerTileReserveAndPush, PackTileIndexMode::FirstTile, PackTileReconfig::None>)
     {
         using namespace compute_kernel_lib;
 

@@ -34,7 +34,12 @@ inline void run_addc_fpu(uint32_t num_tiles, uint32_t scalar_arg) {
                 cklib::DestReuseReconfig::None,
                 cklib::CopyTilePolicy::WaitAndPop,
                 cklib::CbIndexMode::FirstTile>{},
-            cklib::PackTile<cb_out, cklib::Dst::D0, cklib::PackTilePolicy::PerTileReserveAndPush>{});
+            cklib::PackTile<
+                cb_out,
+                cklib::Dst::D0,
+                cklib::PackTilePolicy::PerTileReserveAndPush,
+                PackTileIndexMode::FirstTile,
+                PackTileReconfig::None>{});
     } else {
         (void)scalar_arg;
         // out = input_a + input_b * input_c (no scalar)
@@ -50,7 +55,12 @@ inline void run_addc_fpu(uint32_t num_tiles, uint32_t scalar_arg) {
                 cklib::DestReuseReconfig::None,
                 cklib::CopyTilePolicy::WaitAndPop,
                 cklib::CbIndexMode::FirstTile>{},
-            cklib::PackTile<cb_out, cklib::Dst::D0, cklib::PackTilePolicy::PerTileReserveAndPush>{});
+            cklib::PackTile<
+                cb_out,
+                cklib::Dst::D0,
+                cklib::PackTilePolicy::PerTileReserveAndPush,
+                PackTileIndexMode::FirstTile,
+                PackTileReconfig::None>{});
     }
 }
 

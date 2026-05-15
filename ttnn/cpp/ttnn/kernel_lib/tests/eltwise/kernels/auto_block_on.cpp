@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // BlockSize > 1 validation:
-//   eltwise_chain<DEST_AUTO_LIMIT>(N, CopyTile<…, WaitUpfrontPopAtEnd, BlockIter>{},
-//                                Exp{}, PackTile<…, UpfrontReservePushAtEnd, BlockIter>{})
+//   eltwise_chain<DEST_AUTO_LIMIT>(N, CopyTile<…, WaitUpfrontPopAtEnd, BlockIter, CbIndexMode::FirstTile,
+//   CopyTileReconfig::None>{},
+//                                Exp{}, PackTile<…, UpfrontReservePushAtEnd, BlockIter, PackTileIndexMode::FirstTile,
+//                                PackTileReconfig::None>{})
 //
 // chain_lane_width = 1 (all elements at Dst::D0). BlockSize = DEST_AUTO_LIMIT / 1.
 // Reader pushes N tiles upfront; chain processes BlockSize tiles per outer iter via
@@ -29,7 +31,12 @@ void kernel_main() {
 
     eltwise_chain<DEST_AUTO_LIMIT>(
         num_tiles,
-        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitUpfrontPopAtEnd, CbIndexMode::BlockIter>{},
+        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitUpfrontPopAtEnd, CbIndexMode::BlockIter, CopyTileReconfig::None>{},
         Exp<>{},
-        PackTile<cb_out, Dst::D0, PackTilePolicy::UpfrontReservePushAtEnd, PackTileIndexMode::BlockIter>{});
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::UpfrontReservePushAtEnd,
+            PackTileIndexMode::BlockIter,
+            PackTileReconfig::None>{});
 }

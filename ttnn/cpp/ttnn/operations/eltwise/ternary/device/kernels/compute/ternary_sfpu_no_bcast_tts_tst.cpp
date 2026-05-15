@@ -72,19 +72,29 @@ void kernel_main() {
         // TST: tensor=false (D2), scalar=true (D1)
         eltwise_chain(
             num_tiles,
-            CopyTile<cb_pre_in1, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-            CopyTile<cb_pre_in2, Dst::D2, CopyTilePolicy::WaitAndPop>{},
+            CopyTile<cb_pre_in1, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+            CopyTile<cb_pre_in2, Dst::D2, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
             FillLlk<Dst::D1>{scalar_value},
             TernarySfpuOp<Dst::D0, Dst::D1, Dst::D2, Dst::D0>{},
-            PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+            PackTile<
+                cb_out,
+                Dst::D0,
+                PackTilePolicy::PerTileReserveAndPush,
+                PackTileIndexMode::FirstTile,
+                PackTileReconfig::None>{});
     } else {
         // TTS: tensor=true (D1), scalar=false (D2)
         eltwise_chain(
             num_tiles,
-            CopyTile<cb_pre_in1, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-            CopyTile<cb_pre_in2, Dst::D1, CopyTilePolicy::WaitAndPop>{},
+            CopyTile<cb_pre_in1, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+            CopyTile<cb_pre_in2, Dst::D1, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
             FillLlk<Dst::D2>{scalar_value},
             TernarySfpuOp<Dst::D0, Dst::D1, Dst::D2, Dst::D0>{},
-            PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+            PackTile<
+                cb_out,
+                Dst::D0,
+                PackTilePolicy::PerTileReserveAndPush,
+                PackTileIndexMode::FirstTile,
+                PackTileReconfig::None>{});
     }
 }

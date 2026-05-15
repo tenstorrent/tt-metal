@@ -42,10 +42,15 @@ void kernel_main() {
     //   D0 = x; D1 = x; D1 = -D1; D1 = exp(D1) (fast); logsigmoid(D0, D1) -> D0
     eltwise_chain_with_init(
         num_tiles,
-        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitNoPop>{},
-        CopyTile<cb_input, Dst::D1, CopyTilePolicy::NoWaitPop>{},
+        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitNoPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
+        CopyTile<cb_input, Dst::D1, CopyTilePolicy::NoWaitPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         Negative<Dst::D1>{},
         Exp<Approx::Fast, Approx::Exact, Dst::D1>{},
         LogSigmoidBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        PackTile<cb_output, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_output,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 }

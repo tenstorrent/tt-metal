@@ -30,9 +30,14 @@ void sigmoid(uint32_t width_tiles) {
     pack_reconfig_data_format(cb_sigmoid_scores);
     eltwise_chain(
         width_tiles,
-        CopyTile<cb_in_scores, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_in_scores, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::None>{},
         Sigmoid<Dst::D0>{},
-        PackTile<cb_sigmoid_scores, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_sigmoid_scores,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::None>{});
 }
 
 template <uint32_t cb_sigmoid_scores, uint32_t cb_in_bias, uint32_t cb_biased_scores>
