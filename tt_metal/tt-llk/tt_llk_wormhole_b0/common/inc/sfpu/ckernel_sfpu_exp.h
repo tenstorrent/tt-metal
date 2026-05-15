@@ -7,10 +7,12 @@
 #include <cstdint>
 #include <limits>
 
+// clang-format off: sfpi.h before polyval (polyval uses sfpi_inline); matches blackhole ordering
+#include "sfpi.h"
 #include "ckernel_sfpu_polyval.h"
+// clang-format on
 #include "ckernel_sfpu_recip.h"
 #include "lltt.h"
-#include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
 namespace ckernel::sfpu
