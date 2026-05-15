@@ -86,3 +86,13 @@ void run_kernel(RUNTIME_PARAMETERS)
 }
 
 #endif
+
+#ifdef LLK_TRISC_ISOLATE_SFPU
+
+void run_kernel(RUNTIME_PARAMETERS)
+{
+    DEVICE_PRINT("sfpu: u8={} i8={}\n", (std::uint8_t)3, (std::int8_t)-1);
+    DEVICE_PRINT("sfpu: str={}\n", CTSTR("_sfpu"));
+}
+
+#endif

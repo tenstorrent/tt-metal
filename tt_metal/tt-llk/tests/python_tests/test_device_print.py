@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from helpers.chip_architecture import ChipArchitecture
 from helpers.device_print import run_with_device_print
 from helpers.format_config import DataFormat
 from helpers.param_config import input_output_formats
@@ -59,3 +60,8 @@ def test_device_print():
     # Pack
     assert "pack: i64=-1000000" in full
     assert "_pack" in full
+
+    # SFPU is only built on Quasar
+    if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
+        assert "sfpu: u8=3 i8=-1" in full
+        assert "_sfpu" in full

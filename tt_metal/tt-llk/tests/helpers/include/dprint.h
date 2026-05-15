@@ -5,12 +5,13 @@
 // To use device print in an LLK test, build with -DDEBUG_PRINT_ENABLED
 // by setting device_print_build=DevicePrintBuild.Yes in TestConfig.
 // All print calls compile to nothing when the macro is not set.
-//
-// PROCESSOR_INDEX, LLK_DEVICE_PRINT_BUFFER_BASE and DPRINT_BUFFER_SIZE are
-// passed in by test_config.py at build time; see RISC_INFO,
+
+// PROCESSOR_INDEX, LLK_DEVICE_PRINT_BUFFER_BASE and DPRINT_BUFFER_SIZE
+// are passed in by test_config.py at build time; see RISC_INFO,
 // DEVICE_PRINT_BUFFER_BASE and DEVICE_PRINT_PER_THREAD_SIZE.
-// Disabled under COVERAGE: coverage linker scripts grow TRISC sections way
-// past the device print buffer slot, so they can't share L1.
+
+// Disabled under COVERAGE: coverage linker scripts grow TRISC sections
+// way past the device print buffer slot, so they can't share L1.
 // The alternative would require a lot more hacks; the only proper solution
 // is fixing the LLK infra memory layout across the board.
 
@@ -36,9 +37,11 @@ inline __attribute__((always_inline)) void invalidate_l1_cache()
 #endif
 }
 
-#endif // DEBUG_PRINT_ENABLED
-
 // We need to include this header after the above definitions.
-// Unconditionally included, as DEVICE_PRINT invocations
-// compile to nothing if the above macro is not defined.
 #include "api/debug/device_print.h"
+
+#else
+
+#define DEVICE_PRINT(fmt, ...)
+
+#endif // defined(DEBUG_PRINT_ENABLED) && !defined(COVERAGE)
