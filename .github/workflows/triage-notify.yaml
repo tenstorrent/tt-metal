@@ -1,193 +1,106 @@
 name: "(triage) Notify assignees via Slack"
 
-# Dispatched by BrAIn as the final step of triage — BrAIn handles issue creation,
-# lifecycle run, duplicate check, and promotion directly via the GitHub API.
-# This workflow exists solely because BrAIn lacks native Slack DM access:
-#   - promote=false: just DM the assignees (use when BrAIn already promoted the issue)
-#   - promote=true:  also remove triage label + add assignees to issue before DMing
-#   - close_as_duplicate_of=N: close issue as duplicate instead of notifying
+# Dispatched by BrAIn as the final step of triage.
+# BrAIn passes a message (with GitHub handles) + the list of handles to resolve.
+# This workflow converts each GitHub handle to a Slack <@UID> mention and posts
+# the final message to the channel. Exists because BrAIn lacks native Slack access.
 
 on:
   workflow_dispatch:
     inputs:
-      issue_number:
-        description: "GitHub issue number to operate on"
+      message:
+        description: "Message to post. Use GitHub handles (e.g. bkeith-TT) where you want Slack pings — they'll be substituted."
         required: true
         type: string
       assignees:
-        description: "Comma-separated GitHub handles to assign and DM (used when promote=true)"
-        required: false
-        default: ""
+        description: "Comma-separated GitHub handles to resolve and substitute into the message"
+        required: true
         type: string
-      promote:
-        description: "true = also remove triage label + add assignees to issue; false = just DM (BrAIn already promoted)"
+      channel:
+        description: "Slack channel ID to post into (default: C0B1F8Z7GQM = full-ci-triage)"
         required: false
-        default: "false"
-        type: string
-      close_as_duplicate_of:
-        description: "Close this issue as a duplicate of this issue number (leave blank to promote instead)"
-        required: false
-        default: ""
+        default: "C0B1F8Z7GQM"
         type: string
 
 jobs:
   notify:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      issues: write
     steps:
-      - name: Promote and notify
+      - name: Resolve handles and post to Slack
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          INPUT_ISSUE_NUMBER: ${{ inputs.issue_number }}
+          INPUT_MESSAGE:   ${{ inputs.message }}
           INPUT_ASSIGNEES: ${{ inputs.assignees }}
-          INPUT_PROMOTE: ${{ inputs.promote }}
-          INPUT_CLOSE_AS_DUPLICATE_OF: ${{ inputs.close_as_duplicate_of }}
+          INPUT_CHANNEL:   ${{ inputs.channel }}
         run: |
           python3 << 'PYEOF'
-          import json, os, urllib.request, urllib.parse, urllib.error
+          import json, os, urllib.request, urllib.parse
 
-          REPO = "tenstorrent/tt-metal"
-          GH_TOKEN = os.environ["GH_TOKEN"]
           SLACK_TOKEN = os.environ["SLACK_BOT_TOKEN"]
-          ISSUE_NUM = int(os.environ["INPUT_ISSUE_NUMBER"])
-          ASSIGNEES = [a.strip() for a in os.environ.get("INPUT_ASSIGNEES", "").split(",") if a.strip()]
-          PROMOTE = os.environ.get("INPUT_PROMOTE", "true").lower() == "true"
-          CLOSE_AS_DUP_OF = os.environ.get("INPUT_CLOSE_AS_DUPLICATE_OF", "").strip()
+          MESSAGE   = os.environ["INPUT_MESSAGE"]
+          ASSIGNEES = [a.strip() for a in os.environ["INPUT_ASSIGNEES"].split(",") if a.strip()]
+          CHANNEL   = os.environ.get("INPUT_CHANNEL", "C0B1F8Z7GQM")
 
-          # GitHub handle -> Slack UID (team roster)
+          # Hardcoded GitHub handle -> Slack UID (team roster)
           GH_TO_SLACK = {
-              "tt-rkim":      "U014XCQ9CF8",
-              "ttmchiou":     "U085LTYEC00",
-              "blozano-tt":   "U07J3K6KS1K",
-              "afuller-TT":   "U088NCP32NP",
-              "roseli-TT":    "U08DEGUJY3H",
-              "ebanerjeeTT":  "U08GTDV8MDH",
-              "nsextonTT":    "U08TVGQGGAE",
-              "arshahTT":     "U0908S3LUMD",
-              "jlakisTT":     "U0982FCD80N",
-              "jbakerTT":     "U096E1BFQQ0",
+              "tt-rkim":     "U014XCQ9CF8",
+              "ttmchiou":    "U085LTYEC00",
+              "blozano-tt":  "U07J3K6KS1K",
+              "afuller-TT":  "U088NCP32NP",
+              "roseli-TT":   "U08DEGUJY3H",
+              "ebanerjeeTT": "U08GTDV8MDH",
+              "nsextonTT":   "U08TVGQGGAE",
+              "arshahTT":    "U0908S3LUMD",
+              "jlakisTT":    "U0982FCD80N",
+              "jbakerTT":    "U096E1BFQQ0",
           }
 
-          def gh_api(method, path, body=None):
-              url = f"https://api.github.com/{path}"
-              data = json.dumps(body).encode() if body else None
-              req = urllib.request.Request(url, data=data, method=method, headers={
-                  "Authorization": f"token {GH_TOKEN}",
-                  "Accept": "application/vnd.github+json",
-                  "X-GitHub-Api-Version": "2022-11-28",
-                  "Content-Type": "application/json",
-              })
-              with urllib.request.urlopen(req, timeout=30) as r:
-                  return json.loads(r.read())
-
-          def slack_call(endpoint, payload=None, params=None):
-              if params:
-                  url = f"https://slack.com/api/{endpoint}?" + urllib.parse.urlencode(params)
-                  req = urllib.request.Request(url, headers={"Authorization": f"Bearer {SLACK_TOKEN}"})
-              else:
-                  data = json.dumps(payload).encode()
-                  req = urllib.request.Request(
-                      f"https://slack.com/api/{endpoint}",
-                      data=data,
-                      headers={"Authorization": f"Bearer {SLACK_TOKEN}", "Content-Type": "application/json"}
-                  )
-              with urllib.request.urlopen(req, timeout=30) as r:
-                  return json.loads(r.read())
-
-          def lookup_uid_by_email(email):
+          def lookup_by_email(email):
               try:
-                  resp = slack_call("users.lookupByEmail", params={"email": email})
+                  url = "https://slack.com/api/users.lookupByEmail?" + urllib.parse.urlencode({"email": email})
+                  req = urllib.request.Request(url, headers={"Authorization": f"Bearer {SLACK_TOKEN}"})
+                  with urllib.request.urlopen(req, timeout=10) as r:
+                      resp = json.loads(r.read())
                   if resp.get("ok"):
                       return resp["user"]["id"]
               except Exception as e:
                   print(f"  email lookup {email}: {e}")
               return None
 
-          def resolve_slack_uid(gh_handle):
-              uid = GH_TO_SLACK.get(gh_handle)
+          def resolve_uid(handle):
+              uid = GH_TO_SLACK.get(handle)
               if uid:
                   return uid
-              # Fallback: try tenstorrent.com email patterns
-              # Handles like "bkeith-TT" -> try bkeith@tenstorrent.com
-              clean = gh_handle.lower().replace("-tt", "").replace("tt-", "")
-              for email in [f"{clean}@tenstorrent.com"]:
-                  uid = lookup_uid_by_email(email)
-                  if uid:
-                      print(f"  Resolved {gh_handle} -> {uid} via {email}")
-                      return uid
-              return None
+              # Fallback: strip -TT / TT- suffix and try <name>@tenstorrent.com
+              clean = handle.lower().replace("-tt", "").replace("tt-", "")
+              uid = lookup_by_email(f"{clean}@tenstorrent.com")
+              if uid:
+                  print(f"  {handle} -> {uid} (via email fallback)")
+              return uid
 
-          # Fetch issue details
-          issue = gh_api("GET", f"repos/{REPO}/issues/{ISSUE_NUM}")
-          issue_url = issue["html_url"]
-          issue_title = issue["title"]
-          print(f"Operating on issue #{ISSUE_NUM}: {issue_title}")
+          # Substitute each GitHub handle in the message with <@UID>
+          final_message = MESSAGE
+          for handle in ASSIGNEES:
+              uid = resolve_uid(handle)
+              if uid:
+                  final_message = final_message.replace(handle, f"<@{uid}>")
+                  print(f"  {handle} -> <@{uid}>")
+              else:
+                  print(f"  {handle} -> no UID found, left as-is")
 
-          if CLOSE_AS_DUP_OF:
-              # Close as duplicate
-              dup_num = int(CLOSE_AS_DUP_OF)
-              try:
-                  dup_issue = gh_api("GET", f"repos/{REPO}/issues/{dup_num}")
-                  dup_url = dup_issue["html_url"]
-              except Exception:
-                  dup_url = f"https://github.com/{REPO}/issues/{dup_num}"
+          # Post to channel
+          data = json.dumps({"channel": CHANNEL, "text": final_message}).encode()
+          req = urllib.request.Request(
+              "https://slack.com/api/chat.postMessage",
+              data=data,
+              headers={"Authorization": f"Bearer {SLACK_TOKEN}", "Content-Type": "application/json"}
+          )
+          with urllib.request.urlopen(req, timeout=30) as r:
+              resp = json.loads(r.read())
 
-              gh_api("POST", f"repos/{REPO}/issues/{ISSUE_NUM}/comments", {
-                  "body": f"Closing as duplicate of #{dup_num}: {dup_url}\n\nIdentified during automated triage."
-              })
-              gh_api("POST", f"repos/{REPO}/issues/{ISSUE_NUM}/labels", {"labels": ["duplicate"]})
-              gh_api("PATCH", f"repos/{REPO}/issues/{ISSUE_NUM}", {
-                  "state": "closed",
-                  "state_reason": "not_planned",
-              })
-              print(f"Closed #{ISSUE_NUM} as duplicate of #{dup_num}")
-
-          elif PROMOTE:
-              print(f"Promoting issue #{ISSUE_NUM}, assignees: {ASSIGNEES}")
-
-              if ASSIGNEES:
-                  gh_api("POST", f"repos/{REPO}/issues/{ISSUE_NUM}/assignees", {"assignees": ASSIGNEES})
-
-              # Remove 'triage' label
-              try:
-                  req = urllib.request.Request(
-                      f"https://api.github.com/repos/{REPO}/issues/{ISSUE_NUM}/labels/triage",
-                      method="DELETE",
-                      headers={
-                          "Authorization": f"token {GH_TOKEN}",
-                          "Accept": "application/vnd.github+json",
-                      }
-                  )
-                  urllib.request.urlopen(req, timeout=30)
-                  print("  Removed 'triage' label")
-              except Exception as e:
-                  print(f"  Could not remove triage label: {e}")
-
-              assignee_mentions = " ".join(f"@{a}" for a in ASSIGNEES) if ASSIGNEES else "(none)"
-              gh_api("POST", f"repos/{REPO}/issues/{ISSUE_NUM}/comments", {
-                  "body": (
-                      f"Issue promoted from triage and assigned to: {assignee_mentions}\n\n"
-                      f"Duplicate check passed. Ready for investigation."
-                  )
-              })
-
-              # DM each assignee on Slack
-              for handle in ASSIGNEES:
-                  uid = resolve_slack_uid(handle)
-                  if uid:
-                      msg = (
-                          f"Hey <@{uid}>! You've been assigned to a triage issue in tt-metal:\n\n"
-                          f"*#{ISSUE_NUM}* - {issue_title}\n{issue_url}\n\n"
-                          f"This passed the duplicate check and is ready for investigation. "
-                          f"Please take a look when you get a chance!"
-                      )
-                      resp = slack_call("chat.postMessage", {"channel": uid, "text": msg})
-                      print(f"  DM'd {handle} ({uid}): ok={resp.get('ok')} error={resp.get('error')!r}")
-                  else:
-                      print(f"  No Slack UID for {handle} - skipping DM")
-
+          print(f"Slack: ok={resp.get('ok')} error={resp.get('error')!r}")
+          if not resp.get("ok"):
+              raise RuntimeError(f"Slack post failed: {resp.get('error')}")
           print("Done.")
           PYEOF
