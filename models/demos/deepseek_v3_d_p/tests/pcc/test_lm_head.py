@@ -190,13 +190,15 @@ def test_lm_head(
         logger.debug("run_full_pcc_check=False, skipping full PCC validation")
         return
 
-    # Convert and compare
+    # Convert and compare — use the production helper so column/row are handled correctly.
+    # Inline ConcatMesh2dToTensor(dims=(0, -1)) only works for column mode; in row mode
+    # the TP-replicated slices would be concat'd on vocab and produce a 4× too-wide tensor.
     logger.debug("Converting TTNN output to torch for comparison")
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
-    )
+    tt_output_torch = tt_model.logit_to_host(tt_output)
     logger.debug(f"TTNN output converted to torch: {tt_output_torch.shape}")
+    assert (
+        tt_output_torch.shape[-1] == vocab_size
+    ), f"Expected full vocab on last dim ({vocab_size}), got {tt_output_torch.shape[-1]}"
 
     logger.debug("Comparing outputs with PCC")
     pcc_passed, pcc_message = assert_with_pcc(

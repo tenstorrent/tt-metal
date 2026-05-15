@@ -204,6 +204,7 @@ class TtLMHead(LightweightModule):
         self.vocab_size = vocab_size
         self.num_devices = mesh_device.get_num_devices()
         self.sp_factor = mesh_device.shape[0]
+        self.dp_factor = mesh_device.shape[1]
         self.num_links = num_links
         self.topology = topology
         self.activations_dtype = activations_dtype
@@ -416,16 +417,14 @@ class TtLMHead(LightweightModule):
                     mesh_shape_override=ttnn.MeshShape(self.mesh_device.shape[0], self.mesh_device.shape[1]),
                 ),
             )
-        else:
-            # Row mode: output is TP-replicated, so only take one TP slice per SP row.
-            composer = ttnn.create_mesh_composer(
-                self.mesh_device,
-                config=ttnn.MeshComposerConfig(
-                    dims=(0, 1),
-                    mesh_shape_override=ttnn.MeshShape(self.mesh_device.shape[0], 1),
-                ),
-            )
-        return ttnn.to_torch(tt_logit, mesh_composer=composer).to(torch.bfloat16)
+            return ttnn.to_torch(tt_logit, mesh_composer=composer).to(torch.bfloat16)
+
+        # Row mode: output is TP-replicated by the all-reduce, so the 4 TP slices
+        # of each SP row are identical
+        shards = ttnn.get_device_tensors(tt_logit)
+        tp0_handles = [shards[sp_i * self.dp_factor + 0] for sp_i in range(self.sp_factor)]
+        host_pieces = [ttnn.to_torch(h).to(torch.bfloat16) for h in tp0_handles]
+        return torch.stack([p.squeeze(0) for p in host_pieces], dim=0)
 
     def select_first_token(self, logit_host: torch.Tensor, device_id: int, token_offset: int) -> torch.Tensor:
         return logit_host[device_id, 0, token_offset, :].unsqueeze(0).unsqueeze(0)
