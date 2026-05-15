@@ -656,17 +656,13 @@ class InputOutputFormat:
     def input_format_B(self) -> DataFormat:
         return self.input_B
 
+    def __repr__(self) -> str:
+        return self.__str__()
+
     def __str__(self):
+        if self.register_format_hint is not None:
+            return f"InputOutputFormat[L1_Input:{self.input},A(reg_hint):{self.register_format_hint},B(reg_hint):{self.register_format_hint},out:{self.output}]"
         return f"InputOutputFormat[A:{self.input},B:{self.input_B},out:{self.output}]"
-
-    def __repr__(self) -> str:
-        return self.__str__()
-
-    def __str__(self):
-        return f"InputOutputFormat[{self.input},{self.output}]"
-
-    def __repr__(self) -> str:
-        return self.__str__()
 
 
 def create_formats_for_testing(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]:

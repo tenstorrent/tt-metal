@@ -387,6 +387,8 @@ def infer_data_formats(
         unpacking_to_dest: Whether unpacking targets the destination register (default: False)
         chip_arch: The chip architecture (Wormhole or Blackhole). If None, will be detected automatically.
         input_format_B: Optional input data format for src_B if different from src_A, used for testing specific scenarios with different A and B formats.
+        unpacking_to_srcs: Whether unpacking also targets SrcS (default: False). When True, the SrcS unpack-out is inferred via a separate path.
+        register_format_hint: Optional opt-in SrcA/SrcB-only register format (e.g. MxFp4_2x_A / MxFp4_2x_B). When set, overrides the default unpack_*_dst inferred for the input (e.g. for MxFp4 input, default is Float16_b). Only valid for MxFp4 input, and incompatible with unpacking_to_dest=True.
 
     Returns:
         FormatConfig struct containing all inferred formats. The same_src_format field
