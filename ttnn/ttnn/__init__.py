@@ -586,17 +586,65 @@ import atexit as _atexit
 def _ttnn_cleanup():
     """Release Python-side references to C++ operation wrappers before interpreter shutdown.
 
-    nanobind's leak checker fires before module dicts are fully cleared on some
-    Python versions. Explicitly clearing REGISTERED_OPERATIONS ensures the
-    reference count on C++ wrapper objects reaches zero before the check.
+    nanobind's leak checker (Py_AtExit) fires before CPython clears module dicts
+    for multi-phase init (PEP 489) extension modules.  Three reference paths keep
+    each C++ wrapper instance alive:
+
+      1. _ttnn.operations.<category>.<op_name>  (C++ submodule dict attr)
+      2. ttnn.<op_name>  (Python module attr -> FastOperation -> .function)
+      3. REGISTERED_OPERATIONS.operations  (set -> FastOperation -> .function)
+
+    The previous implementation only cleared path 3.  We now clear all three.
     """
     try:
+        import sys
+
         from ttnn.decorators import REGISTERED_OPERATIONS
 
+        # --- Path 2: delete Python-module attrs (ttnn.op_name) ----------------
+        ttnn_mod = sys.modules.get("ttnn")
+        if ttnn_mod is not None:
+            for op in list(REGISTERED_OPERATIONS.operations):
+                # python_fully_qualified_name is e.g. "ttnn.logaddexp" or
+                # "ttnn.experimental.foo".  Walk the dotted path to find the
+                # leaf module and attribute name.
+                parts = op.python_fully_qualified_name.split(".")
+                if len(parts) >= 2:
+                    leaf_attr = parts[-1]
+                    # Resolve the parent module (e.g. "ttnn" or "ttnn.experimental")
+                    parent = ttnn_mod
+                    for part in parts[1:-1]:
+                        parent = getattr(parent, part, None)
+                        if parent is None:
+                            break
+                    if parent is not None:
+                        try:
+                            delattr(parent, leaf_attr)
+                        except (AttributeError, TypeError):
+                            pass
+
+        # --- Path 1: delete C++ submodule dict attrs --------------------------
+        _ttnn_mod = sys.modules.get("ttnn._ttnn")
+        if _ttnn_mod is not None:
+            ops_mod = getattr(_ttnn_mod, "operations", None)
+            if ops_mod is not None:
+                for submod_name in dir(ops_mod):
+                    submod = getattr(ops_mod, submod_name, None)
+                    if submod is None:
+                        continue
+                    for attr_name in list(dir(submod)):
+                        obj = getattr(submod, attr_name, None)
+                        if obj is not None and hasattr(obj, "__ttnn_operation__"):
+                            try:
+                                delattr(submod, attr_name)
+                            except (AttributeError, TypeError):
+                                pass
+
+        # --- Path 3: clear the registration set (already existed) -------------
         REGISTERED_OPERATIONS.operations.clear()
     except Exception as e:
         # Best-effort cleanup: ignore errors during interpreter shutdown but log for diagnosis.
-        logger.debug("Failed to clear ttnn REGISTERED_OPERATIONS during atexit cleanup: {}", e)
+        logger.debug("Failed to clear ttnn operation references during atexit cleanup: {}", e)
 
 
 _atexit.register(_ttnn_cleanup)
