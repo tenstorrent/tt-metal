@@ -5,7 +5,10 @@
 #include <gmock/gmock.h>
 
 #include <functional>
+#include <memory>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/memory_pin.hpp>
 
@@ -50,6 +53,21 @@ TEST(MemoryPinTest, FromSharedPtr) {
     }
 
     EXPECT_EQ(ptr.use_count(), 2);
+}
+
+TEST(MemoryPinTest, FinalReleaseCallbackRunsBeforeLastDecrement) {
+    std::vector<std::string> events;
+    {
+        MemoryPin pin([]() {}, [&events]() { events.push_back("decrement"); });
+        pin.add_final_release_callback([&events]() { events.push_back("final_release"); });
+
+        {
+            MemoryPin pin_copy(pin);
+        }
+        EXPECT_THAT(events, ::testing::ElementsAre("decrement"));
+    }
+
+    EXPECT_THAT(events, ::testing::ElementsAre("decrement", "final_release", "decrement"));
 }
 
 TEST(MemoryPinTest, CopyConstruction) {

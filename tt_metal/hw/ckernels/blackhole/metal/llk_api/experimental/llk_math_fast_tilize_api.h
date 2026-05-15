@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "llk_math_unary_datacopy_api.h"
+#include "llk_math_common_api.h"
 #include "experimental/llk_math_fast_tilize.h"
 
 /*************************************************************************

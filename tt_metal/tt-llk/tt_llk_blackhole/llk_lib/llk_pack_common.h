@@ -10,9 +10,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
 #include "cpack_common.h"
-#include "llk_assert.h"
 #include "llk_defs.h"
-#include "llk_memory_checks.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
@@ -84,16 +82,6 @@ inline void _llk_pack_dest_init_()
 inline void set_dst_write_addr(const std::uint32_t tile_index)
 {
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);
-}
-
-inline void _llk_pack_debug_dump_(std::uint8_t *data, std::uint32_t byte_size)
-{
-    debug_dump(data, byte_size);
-}
-
-inline void _llk_pack_debug_dump_seek_(std::uint8_t offset)
-{
-    debug_dump_seek(offset);
 }
 
 TT_ALWAYS_INLINE void _llk_pack_relu_config_(const std::uint32_t config)
