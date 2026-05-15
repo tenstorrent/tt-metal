@@ -490,7 +490,8 @@ class LTXAttention(Module):
             # Reference: out = to_v(context) when all_perturbed=True.
             spatial_BHNE = v_BHNE
         elif prompt_1BLP is None:
-            if self.parallel_config.sequence_parallel.factor > 1 and attn_mask is None:
+            sp_factor = self.parallel_config.sequence_parallel.factor
+            if sp_factor > 1 and attn_mask is None and is_blackhole():
                 spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                     q_BHNE,
                     k_BHNE,
@@ -515,16 +516,15 @@ class LTXAttention(Module):
                     num_links=self.ccl_manager.num_links,
                     cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
                     mesh_device=self.mesh_device,
-                    topology=ttnn.Topology.Linear,
+                    topology=self.ccl_manager.topology,
                     subdevice_id=self.ccl_manager.ccl_sub_device_id,
                     ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
                     use_column_major_ccl=True,
                 )
-            elif self.parallel_config.sequence_parallel.factor > 1 and attn_mask is not None:
-                # Ring attention does not support attn_mask. Gather K/V across SP
-                # devices and use standard SDPA with the mask instead.
-                # attn_mask shape is (1, 1, N_local, N_full) — already covers the
-                # full K sequence, so no mask gathering is needed.
+            elif sp_factor > 1:
+                # On WH, ring_joint SDPA no longer fits the TENSIX kernel config buffer
+                # (program > 70656 B after recent tt-metal ring_joint_sdpa changes).
+                # Gather K/V across SP and run standard SDPA instead (same as masked path).
                 sp_axis = self.parallel_config.sequence_parallel.mesh_axis
                 k_full = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=sp_axis)
                 v_full = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=sp_axis)

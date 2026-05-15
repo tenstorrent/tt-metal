@@ -498,7 +498,7 @@ If the conditional and unconditional outputs are nearly identical, CFG produces 
 Run the official reference pipeline on CPU with the exact same prompt and checkpoint to confirm that the reference produces a cat (not a human). If the reference also produces a human, the issue is in the checkpoint or prompt format, not in the TTNN port.
 
 ```bash
-python ltx_reference_cpu.py --prompt "A cat playing piano in a cozy room" --output ref_cat.mp4 --steps 30 --seed 42
+python models/tt_dit/tests/models/ltx/reference_cpu_pipeline.py --prompt "A cat playing piano in a cozy room" --output ref_cat.mp4 --steps 30 --seed 42
 ```
 
 **What to expect:** If the reference produces a cat, the bug is in TTNN's text conditioning path. If the reference also produces a human, the bug is upstream (checkpoint, prompt format, or model behavior).

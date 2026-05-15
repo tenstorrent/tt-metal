@@ -1,0 +1,127 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""LTX-2.3 Pro audio-video pipeline (one-stage, full guidance)."""
+
+from __future__ import annotations
+
+import gc
+import time
+from typing import TYPE_CHECKING
+
+import torch
+from loguru import logger
+
+import ttnn
+
+from .pipeline_ltx import LTXPipeline
+
+if TYPE_CHECKING:
+    pass
+
+
+class LTXAVPipeline(LTXPipeline):
+    """LTX-2.3 Pro AV pipeline: Gemma encode → DiT denoise → VAE decode → MP4 export."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        kwargs.setdefault("mode", "av")
+        super().__init__(*args, **kwargs)
+
+    @staticmethod
+    def create_pipeline(mesh_device: ttnn.MeshDevice, **kwargs) -> "LTXAVPipeline":
+        kwargs.setdefault("mode", "av")
+        kwargs["pipeline_class"] = LTXAVPipeline
+        return LTXPipeline.create_pipeline(mesh_device, **kwargs)
+
+    def generate(
+        self,
+        prompt: str,
+        *,
+        output_path: str,
+        checkpoint_path: str,
+        gemma_path: str,
+        negative_prompt: str | None = None,
+        num_frames: int = 121,
+        height: int = 512,
+        width: int = 768,
+        num_inference_steps: int = 30,
+        video_cfg_scale: float = 3.0,
+        audio_cfg_scale: float = 7.0,
+        video_stg_scale: float = 1.0,
+        audio_stg_scale: float = 1.0,
+        video_modality_scale: float = 3.0,
+        audio_modality_scale: float = 3.0,
+        rescale_scale: float = 0.7,
+        stg_block: int = 28,
+        seed: int = 10,
+        ge_gamma: float = 0.0,
+        fps: int = 24,
+    ) -> str:
+        """Run the full LTX-2.3 Pro AV generation pipeline and write an MP4."""
+        import sys
+
+        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+        sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
+        torch.cuda.synchronize = lambda *a, **kw: None  # noqa: ARG005
+        from ltx_pipelines.utils.constants import DEFAULT_NEGATIVE_PROMPT
+
+        neg = negative_prompt if negative_prompt is not None else DEFAULT_NEGATIVE_PROMPT
+        total_t0 = time.time()
+
+        t0 = time.time()
+        results = self.encode_prompts_reference([prompt, neg], checkpoint_path, gemma_path)
+        logger.info(f"Encoding: {time.time() - t0:.1f}s")
+
+        v_embeds = results[0].video_encoding.float()
+        a_embeds = results[0].audio_encoding.float()
+        neg_v = results[1].video_encoding.float()
+        neg_a = results[1].audio_encoding.float()
+
+        self.load_transformer_from_checkpoint(checkpoint_path)
+        gc.collect()
+
+        t0 = time.time()
+        video_latent, audio_latent = self.call_av(
+            video_prompt_embeds=v_embeds,
+            audio_prompt_embeds=a_embeds,
+            neg_video_prompt_embeds=neg_v,
+            neg_audio_prompt_embeds=neg_a,
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            num_inference_steps=num_inference_steps,
+            video_cfg_scale=video_cfg_scale,
+            audio_cfg_scale=audio_cfg_scale,
+            video_stg_scale=video_stg_scale,
+            audio_stg_scale=audio_stg_scale,
+            video_modality_scale=video_modality_scale,
+            audio_modality_scale=audio_modality_scale,
+            rescale_scale=rescale_scale,
+            stg_block=stg_block,
+            seed=seed,
+            ge_gamma=ge_gamma,
+        )
+        denoise_time = time.time() - t0
+        logger.info(f"Denoising: {denoise_time:.1f}s ({denoise_time / num_inference_steps:.1f}s/step)")
+
+        self.transformer = None
+        gc.collect()
+
+        t0 = time.time()
+        self.load_vae_from_checkpoint()
+        logger.info(f"VAE loaded in {time.time() - t0:.0f}s")
+
+        latent_frames = (num_frames - 1) // 8 + 1
+        latent_h, latent_w = height // 32, width // 32
+
+        t0 = time.time()
+        video_pixels = self.decode_latents(video_latent, latent_frames, latent_h, latent_w)
+        logger.info(f"VAE decode: {time.time() - t0:.1f}s — {video_pixels.shape}")
+
+        audio_obj = self.decode_audio_reference(audio_latent, checkpoint_path, num_frames, fps=fps)
+        self.export_video(video_pixels, output_path, fps=fps, audio=audio_obj)
+
+        total_time = time.time() - total_t0
+        logger.info(f"Total: {total_time:.1f}s | Output: {output_path}")
+        return output_path

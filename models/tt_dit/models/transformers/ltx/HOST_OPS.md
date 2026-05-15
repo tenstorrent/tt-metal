@@ -1,6 +1,6 @@
 # LTX-2 Host-Side Operations
 
-Operations that remain on host (CPU) and cannot currently be moved to device.
+Operations that remain on host (CPU) and cannot currently be moved to device. See [`BRINGUP.md`](BRINGUP.md) for bringup history and the performance optimization backlog.
 
 ## Split RoPE Fallback (`attention_ltx.py:_apply_split_rope_host`)
 
@@ -25,3 +25,11 @@ Operations that remain on host (CPU) and cannot currently be moved to device.
 **What it does:** `(sample.float() + velocity * dt).to(sample.dtype)` — float32 computation then cast back.
 
 **Permanent fix:** Move to device using `ttnn.add` + `ttnn.multiply` with fp32 accumulation. Requires keeping latents on device.
+
+## Per-Head Gate (`attention_ltx.py:_compute_gate`)
+
+**Why on host:** bf16 device matmul over K=4096 with near-zero gate weights accumulates error; compounds over 48 layers × N denoise steps (latent PCC dropped to 0.92). Host `F.linear` in fp32 gives PCC 0.997+.
+
+**What it does:** Reads hidden states from device, computes `2 * sigmoid(F.linear(x))` on host, pushes bf16 gate tensor back for on-device multiply in BHNE space before `to_out`.
+
+**Permanent fix:** On-device gate with fp32 accumulation, or batched async readback to hide latency.
