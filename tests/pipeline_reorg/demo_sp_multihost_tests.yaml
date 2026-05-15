@@ -17,11 +17,16 @@
 
 - name: "Stress Test (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
   cmd: |
-    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
-
+    PIPELINE_DIR=/ci/pipeline-${GITHUB_RUN_ID}
+    mkdir -p $PIPELINE_DIR
     python3 /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
+      --mpi-user user \
+      --hostfile /ci/ttrun/hostfile \
+      --worker-tt-metal-home /home/user/tt-metal \
+      --output-dir $PIPELINE_DIR \
       /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
 
+    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
     # todo)) add proper stress test that can run for 2 hours -- repeat batches?
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \
       --tcp-interface ens5f0np0 \
