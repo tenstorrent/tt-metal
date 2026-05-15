@@ -106,7 +106,17 @@ public:
     /**
      * Get the device the allocated device memory is on.
      */
-    distributed::MeshDevice& device() const;
+    const distributed::MeshDevice& device() const;
+
+    /**
+     * Get the mutable device the allocated device memory is on.
+     *
+     * This function is meant to be compatible with existing code and may be removed in the future,
+     * please consider this an internal function and use device() whenever possible.
+     *
+     * pre-condition: The device tensor must not be in a default constructed state.
+     */
+    distributed::MeshDevice& device_mut() const;
 
     // Getters:
 
