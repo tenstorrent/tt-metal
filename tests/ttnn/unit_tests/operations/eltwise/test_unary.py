@@ -259,7 +259,7 @@ def test_log(device, h, w, layout):
 
 def test_log_edge_cases(device):
     in_data = torch.tensor(
-        [-10.0, 0.0, -float("inf"), +float("inf"), +float("nan"), -float("nan")], dtype=torch.float32
+        [-10.0, -0.0, 0.0, -float("inf"), +float("inf"), +float("nan"), -float("nan")], dtype=torch.float32
     )
     input_tensor = ttnn.from_torch(in_data, layout=ttnn.TILE_LAYOUT, device=device)
 
