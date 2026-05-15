@@ -68,6 +68,18 @@ def _set_default_fabric_config(num_devices: int) -> None:
     )
 
 
+def _dispatch_core_config() -> ttnn.DispatchCoreConfig:
+    """Pick dispatch cores for the detected cluster/arch.
+
+    ETH dispatch is only valid on Wormhole N300/T3K-style clusters. Blackhole
+    (e.g. QuietBox) must use WORKER dispatch; forcing ETH fails at open_mesh_device
+    with 'No core coordinate found at location: (0, 12, ETH, LOGICAL)'.
+    """
+    if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY:
+        return ttnn.DispatchCoreConfig(axis=ttnn.DispatchCoreAxis.ROW)
+    return ttnn.DispatchCoreConfig(ttnn.device.get_default_dispatch_core_type())
+
+
 def _parse_tt_dtype(raw: str) -> ttnn.DataType:
     raw = (raw or "").strip().lower()
     if raw in {"bf16", "bfloat16"}:
@@ -275,11 +287,7 @@ def main() -> int:
 
     # Open a mesh device for consistency with vLLM (even if mesh-cols=1).
     _set_default_fabric_config(n_devices)
-    is_galaxy = ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
-    if is_galaxy:
-        dispatch_cfg = ttnn.DispatchCoreConfig(axis=ttnn.DispatchCoreAxis.ROW)
-    else:
-        dispatch_cfg = ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH)
+    dispatch_cfg = _dispatch_core_config()
     open_kwargs = {
         "mesh_shape": ttnn.MeshShape(mesh_rows, mesh_cols),
         "dispatch_core_config": dispatch_cfg,
