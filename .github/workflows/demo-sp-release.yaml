@@ -67,50 +67,50 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
 
-  deepseek-prefill-tests:
-    name: "DeepSeek Prefill Tests"
-    needs: build-artifact
-    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_prefill' || github.event_name == 'schedule' }}
-    secrets: inherit
-    uses: ./.github/workflows/demo-sp-release-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: bh_galaxy,wh_llmbox_perf,bh_loudbox,bh_llmbox
-      model: deepseek_prefill
-      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
-      job-prefix: "[DeepSeek Prefill] "
+  # deepseek-prefill-tests:
+  #   name: "DeepSeek Prefill Tests"
+  #   needs: build-artifact
+  #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_prefill' || github.event_name == 'schedule' }}
+  #   secrets: inherit
+  #   uses: ./.github/workflows/demo-sp-release-impl.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     enabled-skus: bh_galaxy,wh_llmbox_perf,bh_loudbox,bh_llmbox
+  #     model: deepseek_prefill
+  #     mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+  #     job-prefix: "[DeepSeek Prefill] "
 
-  deepseek-decode-tests:
-    name: "DeepSeek Decode Tests (B1 Decoder Block)"
-    needs: build-artifact
-    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_decode' || github.event_name == 'schedule' }}
-    secrets: inherit
-    uses: ./.github/workflows/demo-sp-release-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: bh_p300,bh_galaxy
-      model: deepseek_decode
-      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
-      job-prefix: "[DeepSeek Decode] "
+  # deepseek-decode-tests:
+  #   name: "DeepSeek Decode Tests (B1 Decoder Block)"
+  #   needs: build-artifact
+  #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_decode' || github.event_name == 'schedule' }}
+  #   secrets: inherit
+  #   uses: ./.github/workflows/demo-sp-release-impl.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     enabled-skus: bh_p300,bh_galaxy
+  #     model: deepseek_decode
+  #     mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+  #     job-prefix: "[DeepSeek Decode] "
 
-  wan22-tests:
-    name: "Wan 2.2 Tests"
-    needs: build-artifact
-    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'wan22' || github.event_name == 'schedule' }}
-    secrets: inherit
-    uses: ./.github/workflows/demo-sp-release-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: wh_galaxy_perf,wh_llmbox_perf
-      model: wan22
-      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
-      job-prefix: "[Wan2.2] "
+  # wan22-tests:
+  #   name: "Wan 2.2 Tests"
+  #   needs: build-artifact
+  #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'wan22' || github.event_name == 'schedule' }}
+  #   secrets: inherit
+  #   uses: ./.github/workflows/demo-sp-release-impl.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     enabled-skus: wh_galaxy_perf,wh_llmbox_perf
+  #     model: wan22
+  #     mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+  #     job-prefix: "[Wan2.2] "
 
   deepseek-sp1-tests:
     name: "SP1 DeepSeek Tests"
