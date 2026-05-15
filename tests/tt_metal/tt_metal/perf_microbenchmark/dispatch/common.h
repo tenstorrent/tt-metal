@@ -1245,6 +1245,8 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"FABRIC_HEADER_RB_BASE", "0"},
         {"FABRIC_HEADER_RB_ENTRIES", "0"},
         {"MY_FABRIC_SYNC_STATUS_ADDR", "0"},
+        {"REALTIME_PROFILER_MSG_ADDR",
+         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG))},
         {"FABRIC_MUX_X", "0"},
         {"FABRIC_MUX_Y", "0"},
         {"FABRIC_MUX_NUM_BUFFERS_PER_CHANNEL", "0"},
