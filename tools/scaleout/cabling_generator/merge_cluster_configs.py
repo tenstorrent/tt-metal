@@ -118,10 +118,7 @@ def is_glue_textproto(name: str) -> bool:
 
 
 def immediate_subdirs(d: Path) -> List[Path]:
-    return sorted(
-        p for p in d.iterdir()
-        if p.is_dir() and not p.is_symlink() and p.name != AGGREGATED_DIR
-    )
+    return sorted(p for p in d.iterdir() if p.is_dir() and not p.is_symlink() and p.name != AGGREGATED_DIR)
 
 
 def glue_files(d: Path) -> List[Path]:
@@ -161,9 +158,12 @@ def run_cabling_generator(
     """Invoke run_cabling_generator and copy its outputs into target_aggregated_dir."""
     cmd = [
         str(cabling_gen),
-        "--cabling", str(cabling_dir),
-        "--deployment", str(deployment_path),
-        "--output", suffix,
+        "--cabling",
+        str(cabling_dir),
+        "--deployment",
+        str(deployment_path),
+        "--output",
+        suffix,
     ]
     if verbose:
         print(f"  $ {' '.join(cmd)}", flush=True)
@@ -260,8 +260,7 @@ def aggregate_tree(
 
     rel_str = str(rel) if str(rel) != "." else source_dir.name
     print(
-        f"composite: {rel_str} -> "
-        f"{target_aggregated_dir}  ({len(children)} children, {len(glue)} glue files)",
+        f"composite: {rel_str} -> " f"{target_aggregated_dir}  ({len(children)} children, {len(glue)} glue files)",
         flush=True,
     )
     if args.verbose:
@@ -347,7 +346,8 @@ def main() -> None:
     )
     parser.add_argument("source", help="Source tree root (walked recursively)")
     parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         default=None,
         help="Output tree root. Defaults to source (in-place aggregation).",
     )
