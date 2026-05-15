@@ -165,6 +165,7 @@ Depth Map (B, 1, 518, 518)
 > **Hardware Validated** on Koyeb N300 (Wormhole B0, KMD 2.6.0, FW 19.4.2).
 > - Grid: 8×7 (56 Tensix cores), 2 chips
 > - Deterministic input: `torch.manual_seed(42); torch.randn(1, 3, 518, 518)`
+> - **FPS target**: ≥5 FPS for ViT-L (paper reports 213ms = 4.7 FPS on V100)
 
 ### Key Precision Decisions
 
@@ -178,9 +179,15 @@ Depth Map (B, 1, 518, 518)
 
 ### Future Optimizations
 
-- **TT-native bilinear interpolation**: Replace CPU round-trips with a ttnn kernel when available.
+- **TT-native bilinear interpolation**: Replace the remaining 2 CPU round-trips with a ttnn kernel when available.
 - **L1 sharding in neck/head**: Currently encoder is L1-sharded but neck/head use DRAM.
-- **Trace + 2CQ execution**: Dual command queue with trace capture for pipelined inference.
+
+### Memory Optimizations (Implemented)
+
+- **Intermediate deallocation**: All temporary tensors (`ttnn.deallocate`) freed immediately after use — encoder features freed after reassembly, reassembled features freed after fusion, fusion output freed after head.
+- **Cached attention mask**: Padding mask created once and reused across forward passes (eliminates per-call `torch.zeros` + `ttnn.from_torch`).
+- **Single-call permute**: `ttnn.permute(x, (0,2,3,1))` replaces double `ttnn.transpose` for NCHW↔NHWC conversions.
+- **CPU round-trip deallocation**: Device tensors deallocated *before* CPU bilinear interpolation to maximize free L1/DRAM during the round-trip.
 
 ### How to Run Profiling
 

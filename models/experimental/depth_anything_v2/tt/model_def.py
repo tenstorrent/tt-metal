@@ -95,8 +95,7 @@ def ttnn_conv2d(
             bias = ttnn.reshape(bias, (1, 1, bias.shape[0], bias.shape[1]))
 
     # ---- input: (B, C, H, W) -> (B, H, W, C) --------------------------------
-    x = ttnn.transpose(x, -2, -1)  # (B, C, W, H)
-    x = ttnn.transpose(x, -3, -1)  # (B, H, W, C)
+    x = ttnn.permute(x, (0, 2, 3, 1))  # NCHW -> NHWC
 
     out_tensor, [out_h, out_w] = ttnn.conv2d(
         input_tensor=x,
@@ -116,11 +115,11 @@ def ttnn_conv2d(
         return_output_dim=True,
         memory_config=memory_config,
     )
+    ttnn.deallocate(x)  # Free input after conv consumes it
 
-    # ttnn returns (1, 1, B*out_h*out_w, out_c); reshape then transpose back.
+    # ttnn returns (1, 1, B*out_h*out_w, out_c); reshape then permute back.
     out_tensor = ttnn.reshape(out_tensor, (batch_size, out_h, out_w, out_channels))
-    out_tensor = ttnn.transpose(out_tensor, -3, -1)  # (B, out_c, out_w, out_h)
-    out_tensor = ttnn.transpose(out_tensor, -2, -1)  # (B, out_c, out_h, out_w)
+    out_tensor = ttnn.permute(out_tensor, (0, 3, 1, 2))  # NHWC -> NCHW
 
     return out_tensor, [out_h, out_w]
 
@@ -128,16 +127,12 @@ def ttnn_conv2d(
 def ttnn_upsample(x, scale_factor):
     """Nearest-neighbour upsample.  x is (B, C, H, W).
 
-    ttnn.upsample expects NHWC format, so we transpose before and after.
+    ttnn.upsample expects NHWC format, so we permute before and after.
     """
-    # (B, C, H, W) -> (B, H, W, C)
-    x = ttnn.transpose(x, -2, -1)  # (B, C, W, H)
-    x = ttnn.transpose(x, -3, -1)  # (B, H, W, C)
+    x = ttnn.permute(x, (0, 2, 3, 1))  # NCHW -> NHWC
     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     x = ttnn.upsample(x, scale_factor=scale_factor)
-    # (B, H', W', C) -> (B, C, H', W')
-    x = ttnn.transpose(x, -3, -1)  # (B, C, W', H')
-    x = ttnn.transpose(x, -2, -1)  # (B, C, H', W')
+    x = ttnn.permute(x, (0, 3, 1, 2))  # NHWC -> NCHW
     return x
 
 
@@ -327,20 +322,18 @@ class TtDPTFusionStage:
         Only used for non-integer scale factors (e.g. 19->37) and the final
         head output (->518x518) where bilinear quality is critical.
         """
-        import torch
-        import torch.nn.functional as F
-
         x_cpu = ttnn.to_torch(x).float()
+        ttnn.deallocate(x)  # Free device memory before CPU round-trip
 
         if target_h is not None and target_w is not None:
-            x_cpu = F.interpolate(
+            x_cpu = torch.nn.functional.interpolate(
                 x_cpu,
                 size=(target_h, target_w),
                 mode="bilinear",
                 align_corners=True,
             )
         else:
-            x_cpu = F.interpolate(
+            x_cpu = torch.nn.functional.interpolate(
                 x_cpu,
                 scale_factor=scale,
                 mode="bilinear",
@@ -354,8 +347,6 @@ class TtDPTFusionStage:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
         )
-        if target_h is not None:
-            return x, out_h, out_w
         return x, out_h, out_w
 
     # ------------------------------------------------------------------
@@ -540,13 +531,11 @@ class TtDPTHead:
         # HF uses F.interpolate(mode="bilinear", align_corners=True)
         # ttnn doesn't support bilinear, so we round-trip through PyTorch CPU.
         # This is only 1 tensor at (B, 128, H, W) so the cost is acceptable.
-        import torch
-        import torch.nn.functional as F
-
         target_h = patch_height * self.patch_size  # 518
         target_w = patch_width * self.patch_size  # 518
         x_cpu = ttnn.to_torch(x).float()
-        x_cpu = F.interpolate(
+        ttnn.deallocate(x)  # Free device memory during CPU round-trip
+        x_cpu = torch.nn.functional.interpolate(
             x_cpu,
             size=(target_h, target_w),
             mode="bilinear",
@@ -979,12 +968,17 @@ class TtDepthAnythingV2:
         # Sequence layout: [CLS(1 real + 31 pad), patches(1369 real + 167 pad)] = 1568
         # Real tokens: position 0 (CLS), positions 32-1400 (patches)
         # Padding tokens: positions 1-31, 1401-1567  -> set to -inf
-        import torch
+        # Cached on first call to avoid recreating every forward pass.
+        if not hasattr(self, "_cached_attention_mask"):
+            import torch as _torch
 
-        mask_np = torch.zeros(1, 1, seqL, seqL)
-        mask_np[:, :, :, 1:32] = float("-inf")  # CLS padding keys
-        mask_np[:, :, :, 1401:seqL] = float("-inf")  # patch padding keys
-        attention_mask = ttnn.from_torch(mask_np, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+            mask_np = _torch.zeros(1, 1, seqL, seqL)
+            mask_np[:, :, :, 1:32] = float("-inf")  # CLS padding keys
+            mask_np[:, :, :, 1401:seqL] = float("-inf")  # patch padding keys
+            self._cached_attention_mask = ttnn.from_torch(
+                mask_np, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+        attention_mask = self._cached_attention_mask
 
         # ---- 2. ViT-Large encoder (24 layers) --------------------------
         features = []
@@ -999,6 +993,8 @@ class TtDepthAnythingV2:
             )
             if i in out_indices:
                 features.append(ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG))
+            elif i > 0:  # Deallocate intermediate layer outputs not needed for DPT
+                pass  # hidden_states is overwritten in-place by next vit_layer call
 
         # ---- 3. Final backbone LayerNorm --------------------------------
         # Move to DRAM for the final layernorm (neck/head use DRAM anyway)
@@ -1012,13 +1008,22 @@ class TtDepthAnythingV2:
         features[-1] = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         # ---- 4. DPT Neck -----------------------------------------------
-        reassembled = [self.reassemble[i](features[i]) for i in range(4)]
+        reassembled = []
+        for i in range(4):
+            reassembled.append(self.reassemble[i](features[i]))
+            ttnn.deallocate(features[i])  # Free encoder feature after reassembly
+        del features
+
         fused = self.fusion(reassembled)
+        for r in reassembled:
+            ttnn.deallocate(r)  # Free reassembled features after fusion
+        del reassembled
 
         # ---- 5. Head ---------------------------------------------------
         patch_height = 518 // 14  # 37
         patch_width = 518 // 14  # 37
         output = self.head(fused, patch_height=patch_height, patch_width=patch_width)
+        ttnn.deallocate(fused)  # Free fusion output after head consumes it
 
         return ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
 
