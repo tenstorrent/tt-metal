@@ -9,8 +9,8 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
 #include "ckernel_sfpu_load_config.h"
+#include "llk_defs.h"
 #include "lltt.h"
-#include "sfpi.h"
 
 namespace ckernel::sfpu
 {
