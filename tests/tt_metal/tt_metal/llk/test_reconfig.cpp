@@ -360,7 +360,7 @@ bool single_core_reconfig(
 bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // TWO ops in a single acquire window with reconfig_data_format between them.
     // Three-op variant is currently broken on Quasar (third add_tiles in one acquire
-    // window produces zero output); see TODO in reconfig_quasar.cpp kernel.
+    // window produces zero output).
     constexpr uint32_t kNumOps = 2;
     const uint32_t f16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t f32_tile_size = tt::tile_size(tt::DataFormat::Float32);
@@ -454,9 +454,6 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         tt_metal::experimental::quasar::QuasarComputeConfig{
             .num_threads_per_cluster = 1,
             .math_fidelity = MathFidelity::HiFi4,
-            // fp32_dest_acc_en intentionally OFF: bisecting whether the OP[2] all-zeros
-            // failure (three add_tiles in one acquire window with reconfig between them) is
-            // specific to fp32 dest mode (DST_ACCUM_MODE=true).
             .fp32_dest_acc_en = false,
             .compile_args = compute_cta});
 

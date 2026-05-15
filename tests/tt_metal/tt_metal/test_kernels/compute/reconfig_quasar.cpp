@@ -32,13 +32,6 @@ void kernel_main() {
     // Two real ops with reconfig_data_format between them:
     //   OP[0]: add_tiles(d0, d1) -> dst[0]
     //   OP[1]: add_tiles(d2, d3) -> dst[1]
-    // followed by a dummy trailing add_tiles to dst[2] whose result is never packed.
-    //
-    // Why the dummy: on Quasar the public Compute API has a math->pack drain race — the
-    // LAST pack_tile in a tile_regs_acquire/commit/wait/release section reads zero because
-    // the preceding math op hasn't finished writing dest by the time tile_regs_commit
-    // signals math-done to pack. The trailing add_tiles gives OP[1] time to drain its MOP
-    // before the math-pack handoff. TODO: remove once the LLK math->pack handshake is fixed.
     tile_regs_acquire();
 
     add_tiles(d0.get_id(), d1.get_id(), 0, 0, 0);
@@ -47,7 +40,9 @@ void kernel_main() {
     binary_tiles_init<true, EltwiseBinaryType::ELWADD>(d2.get_id(), d3.get_id());
     add_tiles(d2.get_id(), d3.get_id(), 0, 0, 1);
 
-    // Drain dummy: not packed, only here to absorb the lost-last-pack race.
+    // Workaround: on Quasar, the last add_tiles in a single tile_regs_acquire window
+    // races maybe with the math->pack handshake and pack_tile reads zeros for that slot.
+    // This dummy add_tiles takes the hit so OP[1] above survives.
     add_tiles(d2.get_id(), d3.get_id(), 0, 0, 2);
 
     tile_regs_commit();
