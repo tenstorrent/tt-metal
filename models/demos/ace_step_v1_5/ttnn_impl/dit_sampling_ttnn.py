@@ -16,6 +16,8 @@ import numpy as np
 
 import ttnn
 
+from .math_perf_env import ace_step_reshape_kwargs
+
 
 class TtnnMomentumBufferApg:
     __slots__ = ("momentum", "running_tt")
@@ -231,6 +233,8 @@ def adg_guidance_velocity_ttnn(
     ttnn.deallocate(vpc_bf16_rm)
     ttnn.deallocate(vpu_bf16_rm)
 
+    _sr = ace_step_reshape_kwargs(ttnn)
+
     b_, t__, c__ = int(xt_f32_tt.shape[0]), int(xt_f32_tt.shape[1]), int(xt_f32_tt.shape[2])
     sigma_tt = _const_tile_bc((b_, t__, c__), float(sigma_scalar), device=device, dram=dram)
 
@@ -244,8 +248,8 @@ def adg_guidance_velocity_ttnn(
     ttnn.deallocate(vpu)
     ttnn.deallocate(sigma_tt)
 
-    lh_t_flat = ttnn.reshape(lh_t, (b_ * t__, c__))
-    lh_u_flat = ttnn.reshape(lh_u, (b_ * t__, c__))
+    lh_t_flat = ttnn.reshape(lh_t, (b_ * t__, c__), **_sr)
+    lh_u_flat = ttnn.reshape(lh_u, (b_ * t__, c__), **_sr)
     nt = _normalize_l2_dim(lh_t_flat, dim=1, eps=1e-6, dram=dram)
     nu = _normalize_l2_dim(lh_u_flat, dim=1, eps=1e-6, dram=dram)
     dotted_flat = _dot_keepdim_along_dim(nt, nu, dim=1, dram=dram)
@@ -255,7 +259,7 @@ def adg_guidance_velocity_ttnn(
     ttnn.deallocate(dotted_flat)
     theta_flat = ttnn.acos(cos_theta)
     ttnn.deallocate(cos_theta)
-    latent_theta = ttnn.reshape(theta_flat, (b_, t__, 1))
+    latent_theta = ttnn.reshape(theta_flat, (b_, t__, 1), **_sr)
     ttnn.deallocate(theta_flat)
 
     w = float(guidance_scale) - 1.0
@@ -267,7 +271,7 @@ def adg_guidance_velocity_ttnn(
     )
 
     ld = ttnn.subtract(lh_t, lh_u, memory_config=dram)
-    latent_diff_flat = ttnn.reshape(ld, (b_ * t__, c__))
+    latent_diff_flat = ttnn.reshape(ld, (b_ * t__, c__), **_sr)
     lh_u_proj = lh_u_flat
     dotted_pv = _dot_keepdim_along_dim(latent_diff_flat, lh_u_proj, dim=1, dram=dram)
     sq_u = _sum_keepdim(ttnn.multiply(lh_u_proj, lh_u_proj, memory_config=dram), dim=1, dram=dram)
@@ -291,7 +295,7 @@ def adg_guidance_velocity_ttnn(
     denom_s = ttnn.add(sin_theta, 1e-20, memory_config=dram)
     ratio = ttnn.div(sin_nn, denom_s)
 
-    perp_btc = ttnn.reshape(perp_flat, (b_, t__, c__))
+    perp_btc = ttnn.reshape(perp_flat, (b_, t__, c__), **_sr)
     # ratio / sin_theta are [B, T, 1] (see apg_guidance.adg_forward); broadcast to C like PyTorch.
     ratio_btc = ttnn.repeat_interleave(ratio, int(c__), dim=2)
     prim = ttnn.multiply(perp_btc, ratio_btc, memory_config=dram)

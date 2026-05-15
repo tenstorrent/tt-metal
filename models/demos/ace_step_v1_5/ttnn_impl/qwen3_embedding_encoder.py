@@ -20,6 +20,8 @@ import numpy as np
 
 import ttnn
 
+from .math_perf_env import ace_step_permute_kwargs, ace_step_reshape_kwargs
+
 
 def _sdpa_head_dim_tile_padding(d_head: int) -> int:
     align = 32
@@ -278,19 +280,21 @@ class _TtQwen3EncoderLayer:
         lin_kw = {}
         if self._linear_ck is not None:
             lin_kw["compute_kernel_config"] = self._linear_ck
+        _sr = ace_step_reshape_kwargs(ttnn)
+        _pk = ace_step_permute_kwargs(ttnn)
         q = ttnn.linear(x, self.wq, bias=None, transpose_b=True, **lin_kw)
         k = ttnn.linear(x, self.wk, bias=None, transpose_b=True, **lin_kw)
         v = ttnn.linear(x, self.wv, bias=None, transpose_b=True, **lin_kw)
 
-        q = ttnn.reshape(q, (b, 1, s, H, Dh))
-        q = ttnn.permute(q, (0, 3, 2, 4, 1))
-        q = ttnn.reshape(q, (b, H, s, Dh))
-        k = ttnn.reshape(k, (b, 1, s, kv_h, Dh))
-        k = ttnn.permute(k, (0, 3, 2, 4, 1))
-        k = ttnn.reshape(k, (b, kv_h, s, Dh))
-        v = ttnn.reshape(v, (b, 1, s, kv_h, Dh))
-        v = ttnn.permute(v, (0, 3, 2, 4, 1))
-        v = ttnn.reshape(v, (b, kv_h, s, Dh))
+        q = ttnn.reshape(q, (b, 1, s, H, Dh), **_sr)
+        q = ttnn.permute(q, (0, 3, 2, 4, 1), **_pk)
+        q = ttnn.reshape(q, (b, H, s, Dh), **_sr)
+        k = ttnn.reshape(k, (b, 1, s, kv_h, Dh), **_sr)
+        k = ttnn.permute(k, (0, 3, 2, 4, 1), **_pk)
+        k = ttnn.reshape(k, (b, kv_h, s, Dh), **_sr)
+        v = ttnn.reshape(v, (b, 1, s, kv_h, Dh), **_sr)
+        v = ttnn.permute(v, (0, 3, 2, 4, 1), **_pk)
+        v = ttnn.reshape(v, (b, kv_h, s, Dh), **_sr)
 
         q = ttnn.rms_norm(q, weight=self.q_norm_w, epsilon=self.eps, memory_config=self.mem)
         k = ttnn.rms_norm(k, weight=self.k_norm_w, epsilon=self.eps, memory_config=self.mem)
@@ -324,8 +328,8 @@ class _TtQwen3EncoderLayer:
         if sdpa_d > self.dh:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (b, H, s, self.dh))
 
-        ctx = ttnn.permute(ctx, (0, 2, 1, 3))
-        ctx = ttnn.reshape(ctx, (b, 1, s, H * Dh))
+        ctx = ttnn.permute(ctx, (0, 2, 1, 3), **_pk)
+        ctx = ttnn.reshape(ctx, (b, 1, s, H * Dh), **_sr)
         attn_out = ttnn.linear(ctx, self.wo, bias=None, transpose_b=True, **lin_kw)
         ttnn.deallocate(ctx)
 
@@ -471,8 +475,9 @@ class TtQwen3EmbeddingEncoder:
             raise ValueError(f"seq_len must be {cfg.max_seq_len}, got {s}")
 
         mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        _sr = ace_step_reshape_kwargs(ttnn)
         h = self.embed_tokens(ids)
-        h = ttnn.reshape(h, (b, 1, s, cfg.hidden_size))
+        h = ttnn.reshape(h, (b, 1, s, cfg.hidden_size), **_sr)
 
         attn_bias_tt = None
         m = attention_mask

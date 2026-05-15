@@ -73,6 +73,7 @@ def _ace_step_log_ttnn_tensor(tag: str, t, *, ttnn) -> None:
 
 
 from ._ttnn import get_ttnn
+from .math_perf_env import ace_step_permute_kwargs, ace_step_reshape_kwargs
 
 
 def _require_ttnn():
@@ -223,9 +224,10 @@ class TtTimestepEmbedding:
         h = ttnn.silu(temb) if hasattr(ttnn, "silu") else ttnn.gelu(temb)
         tp = ttnn.linear(h, self.wt, bias=self.bt, transpose_b=True)
         d = self.time_embed_dim
-        tp = ttnn.reshape(tp, (1, 6, 1, d))
-        tp = ttnn.reshape(tp, (1, 6, d))
-        temb = ttnn.reshape(temb, (1, d))
+        _sr = ace_step_reshape_kwargs(ttnn)
+        tp = ttnn.reshape(tp, (1, 6, 1, d), **_sr)
+        tp = ttnn.reshape(tp, (1, 6, d), **_sr)
+        temb = ttnn.reshape(temb, (1, d), **_sr)
         return temb, tp
 
     def from_timestep_value(self, timestep: float):
@@ -258,9 +260,10 @@ class TtTimestepEmbedding:
         h = ttnn.silu(temb) if hasattr(ttnn, "silu") else ttnn.gelu(temb)
         tp = ttnn.linear(h, self.wt, bias=self.bt, transpose_b=True)
         d = self.time_embed_dim
-        tp = ttnn.reshape(tp, (1, 6, 1, d))
-        tp = ttnn.reshape(tp, (1, 6, d))
-        temb = ttnn.reshape(temb, (1, d))
+        _sr = ace_step_reshape_kwargs(ttnn)
+        tp = ttnn.reshape(tp, (1, 6, 1, d), **_sr)
+        tp = ttnn.reshape(tp, (1, 6, d), **_sr)
+        temb = ttnn.reshape(temb, (1, d), **_sr)
         # Keep t_freq allocated only for the duration of this call.
         if hasattr(ttnn, "deallocate"):
             try:
@@ -422,21 +425,23 @@ def _ace_step_cross_attention_decomposed(
     mem_kw = dict(memory_config=mem) if mem is not None else {}
     fp32 = getattr(ttnn, "float32", None)
     use_fp32 = fp32 is not None
+    sr = ace_step_reshape_kwargs(ttnn)
+    pk = ace_step_permute_kwargs(ttnn)
 
-    qf = ttnn.reshape(q, (bh, s_q, dh))
-    kf = ttnn.reshape(k, (bh, s_k, dh))
-    vf = ttnn.reshape(v, (bh, s_k, dh))
+    qf = ttnn.reshape(q, (bh, s_q, dh), **sr)
+    kf = ttnn.reshape(k, (bh, s_k, dh), **sr)
+    vf = ttnn.reshape(v, (bh, s_k, dh), **sr)
     if use_fp32:
         qf = ttnn.typecast(qf, dtype=fp32)
         kf = ttnn.typecast(kf, dtype=fp32)
         vf = ttnn.typecast(vf, dtype=fp32)
 
-    kt = ttnn.permute(kf, (0, 2, 1))
+    kt = ttnn.permute(kf, (0, 2, 1), **pk)
     scores = ttnn.matmul(qf, kt, **mem_kw)
     scores = ttnn.multiply(scores, float(scale))
     if additive_mask_b1qk is not None:
         m = ttnn.repeat(additive_mask_b1qk, (1, int(h), 1, 1))
-        m = ttnn.reshape(m, (bh, s_q, s_k))
+        m = ttnn.reshape(m, (bh, s_q, s_k), **sr)
         if use_fp32:
             m = ttnn.typecast(m, dtype=fp32)
         scores = ttnn.add(scores, m, **mem_kw)
@@ -444,7 +449,7 @@ def _ace_step_cross_attention_decomposed(
     ctx = ttnn.matmul(attn, vf, **mem_kw)
     if use_fp32 and activations_dtype is not None:
         ctx = ttnn.typecast(ctx, dtype=activations_dtype)
-    return ttnn.reshape(ctx, (b, h, s_q, dh))
+    return ttnn.reshape(ctx, (b, h, s_q, dh), **sr)
 
 
 class TtAceStepAttentionSDPA:
@@ -584,6 +589,8 @@ class TtAceStepAttentionSDPA:
         debug_prefix: str = "",
     ):
         ttnn = self.ttnn
+        _sr = ace_step_reshape_kwargs(ttnn)
+        _pk = ace_step_permute_kwargs(ttnn)
         _trace = _ace_step_attn_trace_print(debug_prefix)
         x = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)  # [B,1,S,D]
         q = ttnn.linear(x, self.wq, bias=self.bq, transpose_b=True)
@@ -646,7 +653,7 @@ class TtAceStepAttentionSDPA:
             x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             x_rm = ttnn.pad(x_rm, padding=((0, 0), (0, 0), (0, pad), (0, 0)), value=0.0)
             # `pad` may only update storage padding. Reshape makes the new sequence length logical too.
-            x_rm = ttnn.reshape(x_rm, (int(x.shape[0]), int(x.shape[1]), target_s, int(x.shape[3])))
+            x_rm = ttnn.reshape(x_rm, (int(x.shape[0]), int(x.shape[1]), target_s, int(x.shape[3])), **_sr)
             return ttnn.to_layout(x_rm, ttnn.TILE_LAYOUT)
 
         def _pad_seq_dim2_bh_sd(x, target_s: int):
@@ -659,7 +666,7 @@ class TtAceStepAttentionSDPA:
             pad = target_s - s0
             x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             x_rm = ttnn.pad(x_rm, padding=((0, 0), (0, 0), (0, pad), (0, 0)), value=0.0)
-            x_rm = ttnn.reshape(x_rm, (b0, h0, target_s, d0))
+            x_rm = ttnn.reshape(x_rm, (b0, h0, target_s, d0), **_sr)
             return ttnn.to_layout(x_rm, ttnn.TILE_LAYOUT)
 
         is_self_attn = encoder_hidden_states is None
@@ -675,9 +682,9 @@ class TtAceStepAttentionSDPA:
             v = _pad_seq_to_rank4(v, target)
 
         # Q: [B,1,S,H*Dh] -> [B,H,S,Dh]
-        q = ttnn.reshape(q, (B, 1, S, H, Dh))
-        q = ttnn.permute(q, (0, 3, 2, 4, 1))
-        q = ttnn.reshape(q, (B, H, S, Dh))
+        q = ttnn.reshape(q, (B, 1, S, H, Dh), **_sr)
+        q = ttnn.permute(q, (0, 3, 2, 4, 1), **_pk)
+        q = ttnn.reshape(q, (B, H, S, Dh), **_sr)
         if _trace:
             _ace_step_log_ttnn_tensor(f"{debug_prefix}q_after_reshape_BHSD", q, ttnn=ttnn)
 
@@ -687,12 +694,12 @@ class TtAceStepAttentionSDPA:
         # K/V use num_key_value_heads; we expand to num_attention_heads by repeat if needed.
         S_k = int(k.shape[2])
         kv_h = self.n_kv
-        k = ttnn.reshape(k, (B, 1, S_k, kv_h, Dh))
-        v = ttnn.reshape(v, (B, 1, S_k, kv_h, Dh))
-        k = ttnn.permute(k, (0, 3, 2, 4, 1))
-        v = ttnn.permute(v, (0, 3, 2, 4, 1))
-        k = ttnn.reshape(k, (B, kv_h, S_k, Dh))
-        v = ttnn.reshape(v, (B, kv_h, S_k, Dh))
+        k = ttnn.reshape(k, (B, 1, S_k, kv_h, Dh), **_sr)
+        v = ttnn.reshape(v, (B, 1, S_k, kv_h, Dh), **_sr)
+        k = ttnn.permute(k, (0, 3, 2, 4, 1), **_pk)
+        v = ttnn.permute(v, (0, 3, 2, 4, 1), **_pk)
+        k = ttnn.reshape(k, (B, kv_h, S_k, Dh), **_sr)
+        v = ttnn.reshape(v, (B, kv_h, S_k, Dh), **_sr)
         if debug is not None and debug.get("enabled", False):
             debug[f"{debug_prefix}k_lin"] = k
             debug[f"{debug_prefix}v_lin"] = v
@@ -891,8 +898,8 @@ class TtAceStepAttentionSDPA:
                 f"S_ctx={S_ctx} S_q_expected={S} slice_back={S_ctx != S}",
                 flush=True,
             )
-        ctx = ttnn.permute(ctx, (0, 2, 1, 3))
-        ctx = ttnn.reshape(ctx, (B, 1, S_ctx, H * Dh))
+        ctx = ttnn.permute(ctx, (0, 2, 1, 3), **_pk)
+        ctx = ttnn.reshape(ctx, (B, 1, S_ctx, H * Dh), **_sr)
         if S_ctx != S:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (B, 1, S, H * Dh))
         out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True)
@@ -1078,6 +1085,7 @@ class TtAceStepDiTLayer:
         ttnn = self.ttnn
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         b = int(hidden_states.shape[0])
+        _sr = ace_step_reshape_kwargs(ttnn)
 
         temb = timestep_proj_b6d
         if tuple(temb.shape) != (b, 6, int(hidden_states.shape[-1])):
@@ -1090,7 +1098,7 @@ class TtAceStepDiTLayer:
         def chunk(i: int):
             # Slice [B, 1, D] then view as [B,1,1,D] for broadcast.
             c = ttnn.slice(sst, (0, i, 0), (b, i + 1, d))
-            return ttnn.reshape(c, (b, 1, 1, d))
+            return ttnn.reshape(c, (b, 1, 1, d), **_sr)
 
         shift_msa = chunk(0)
         scale_msa = chunk(1)

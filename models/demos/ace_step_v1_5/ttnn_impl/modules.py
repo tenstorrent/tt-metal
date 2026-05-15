@@ -4,6 +4,7 @@ import math
 
 from ._ttnn import get_ttnn
 from .config import AceConfigTTNN
+from .math_perf_env import ace_step_permute_kwargs, ace_step_reshape_kwargs
 
 # TTNN SDPA requires TILE tensors whose logical head_dim equals the padded head_dim
 # (see sdpa_device_operation.cpp: logical_shape[3] == legacy_shape[3]). Sub-tile
@@ -201,6 +202,8 @@ class MultiHeadSelfAttentionTTNN:
 
     def __call__(self, x):
         ttnn = self.ttnn
+        _sr = ace_step_reshape_kwargs(ttnn)
+        _pk = ace_step_permute_kwargs(ttnn)
         # x: [B,1,S,D]
         q = ttnn.linear(x, self.wq, bias=self.bq, transpose_b=True)
         k = ttnn.linear(x, self.wk, bias=self.bk, transpose_b=True)
@@ -212,15 +215,15 @@ class MultiHeadSelfAttentionTTNN:
         Dh = self.d_head
 
         # [B,1,S,H*Dh] -> [B,H,S,Dh]
-        q = ttnn.reshape(q, (B, 1, S, H, Dh))
-        k = ttnn.reshape(k, (B, 1, S, H, Dh))
-        v = ttnn.reshape(v, (B, 1, S, H, Dh))
-        q = ttnn.permute(q, (0, 3, 2, 4, 1))
-        k = ttnn.permute(k, (0, 3, 2, 4, 1))
-        v = ttnn.permute(v, (0, 3, 2, 4, 1))
-        q = ttnn.reshape(q, (B, H, S, Dh))
-        k = ttnn.reshape(k, (B, H, S, Dh))
-        v = ttnn.reshape(v, (B, H, S, Dh))
+        q = ttnn.reshape(q, (B, 1, S, H, Dh), **_sr)
+        k = ttnn.reshape(k, (B, 1, S, H, Dh), **_sr)
+        v = ttnn.reshape(v, (B, 1, S, H, Dh), **_sr)
+        q = ttnn.permute(q, (0, 3, 2, 4, 1), **_pk)
+        k = ttnn.permute(k, (0, 3, 2, 4, 1), **_pk)
+        v = ttnn.permute(v, (0, 3, 2, 4, 1), **_pk)
+        q = ttnn.reshape(q, (B, H, S, Dh), **_sr)
+        k = ttnn.reshape(k, (B, H, S, Dh), **_sr)
+        v = ttnn.reshape(v, (B, H, S, Dh), **_sr)
 
         kt = ttnn.transpose(k, -2, -1)
         ttnn.deallocate(k)
@@ -235,7 +238,7 @@ class MultiHeadSelfAttentionTTNN:
             raise RuntimeError("TTNN build missing ttnn.tril; cannot build causal mask without host ops.")
         keep = ttnn.tril(ttnn.ones((S, S), device=self.mesh_device, dtype=self.dtype, layout=ttnn.ROW_MAJOR_LAYOUT))
         keep = ttnn.to_layout(keep, ttnn.TILE_LAYOUT)
-        keep = ttnn.reshape(keep, (1, 1, S, S))
+        keep = ttnn.reshape(keep, (1, 1, S, S), **_sr)
         one = ttnn.full((1, 1, 1, 1), 1.0, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
         inv = ttnn.subtract(one, keep)
         ttnn.deallocate(one)
@@ -253,9 +256,9 @@ class MultiHeadSelfAttentionTTNN:
 
         # [B,H,S,Dh] -> [B,S,H,Dh] -> [B,1,S,H*Dh]
         # Keep all ops rank-4 (TTNN permute requires dims.size() == input_rank).
-        ctx = ttnn.reshape(ctx, (B, H, S, Dh))
-        ctx = ttnn.permute(ctx, (0, 2, 1, 3))  # [B,S,H,Dh]
-        ctx = ttnn.reshape(ctx, (B, 1, S, H * Dh))
+        ctx = ttnn.reshape(ctx, (B, H, S, Dh), **_sr)
+        ctx = ttnn.permute(ctx, (0, 2, 1, 3), **_pk)  # [B,S,H,Dh]
+        ctx = ttnn.reshape(ctx, (B, 1, S, H * Dh), **_sr)
         out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True)
         ttnn.deallocate(ctx)
         return out
@@ -315,6 +318,8 @@ class MultiHeadSelfAttentionSDPATTNN:
 
     def __call__(self, x):
         ttnn = self.ttnn
+        _sr = ace_step_reshape_kwargs(ttnn)
+        _pk = ace_step_permute_kwargs(ttnn)
         q = ttnn.linear(x, self.wq, bias=self.bq, transpose_b=True)
         k = ttnn.linear(x, self.wk, bias=self.bk, transpose_b=True)
         v = ttnn.linear(x, self.wv, bias=self.bv, transpose_b=True)
@@ -324,15 +329,15 @@ class MultiHeadSelfAttentionSDPATTNN:
         H = self.n_heads
         Dh = self.d_head
 
-        q = ttnn.reshape(q, (B, 1, S, H, Dh))
-        k = ttnn.reshape(k, (B, 1, S, H, Dh))
-        v = ttnn.reshape(v, (B, 1, S, H, Dh))
-        q = ttnn.permute(q, (0, 3, 2, 4, 1))
-        k = ttnn.permute(k, (0, 3, 2, 4, 1))
-        v = ttnn.permute(v, (0, 3, 2, 4, 1))
-        q = ttnn.reshape(q, (B, H, S, Dh))
-        k = ttnn.reshape(k, (B, H, S, Dh))
-        v = ttnn.reshape(v, (B, H, S, Dh))
+        q = ttnn.reshape(q, (B, 1, S, H, Dh), **_sr)
+        k = ttnn.reshape(k, (B, 1, S, H, Dh), **_sr)
+        v = ttnn.reshape(v, (B, 1, S, H, Dh), **_sr)
+        q = ttnn.permute(q, (0, 3, 2, 4, 1), **_pk)
+        k = ttnn.permute(k, (0, 3, 2, 4, 1), **_pk)
+        v = ttnn.permute(v, (0, 3, 2, 4, 1), **_pk)
+        q = ttnn.reshape(q, (B, H, S, Dh), **_sr)
+        k = ttnn.reshape(k, (B, H, S, Dh), **_sr)
+        v = ttnn.reshape(v, (B, H, S, Dh), **_sr)
 
         sdpa_d = _sdpa_head_dim_tile_padding(Dh)
         if sdpa_d > Dh:
@@ -351,8 +356,8 @@ class MultiHeadSelfAttentionSDPATTNN:
 
         if sdpa_d > Dh:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (B, H, S, Dh))
-        ctx = ttnn.permute(ctx, (0, 2, 1, 3))
-        ctx = ttnn.reshape(ctx, (B, 1, S, H * Dh))
+        ctx = ttnn.permute(ctx, (0, 2, 1, 3), **_pk)
+        ctx = ttnn.reshape(ctx, (B, 1, S, H * Dh), **_sr)
         out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True)
         ttnn.deallocate(ctx)
         return out

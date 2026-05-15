@@ -23,6 +23,7 @@ import numpy as np
 
 import ttnn
 
+from .math_perf_env import ace_step_reshape_kwargs
 from .qwen3_embedding_encoder import Qwen3EmbeddingEncoderConfig, _TtQwen3EncoderLayer
 from .text_projector import TtAceStepTextProjector, load_text_projector_weight_numpy
 
@@ -188,6 +189,7 @@ class _TtAceStepTinyEncoder:
             if attention_mask_01 is None
             else np.asarray(attention_mask_01, dtype=np.float32).reshape(b, s)
         )
+        _sr = ace_step_reshape_kwargs(ttnn)
         x = ttnn.as_tensor(
             x_np,
             device=self.device,
@@ -195,7 +197,7 @@ class _TtAceStepTinyEncoder:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=self.mem,
         )
-        x = ttnn.reshape(x, (b, 1, s, self.input_dim))
+        x = ttnn.reshape(x, (b, 1, s, self.input_dim), **_sr)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         h = ttnn.linear(x, self.embed_w, bias=self.embed_b, transpose_b=True)
         cos_tt = ttnn.slice(self.cos_tt, (0, 0, 0, 0), (1, 1, s, int(self.cos_tt.shape[-1])))
@@ -223,8 +225,8 @@ class _TtAceStepTinyEncoder:
         h = ttnn.rms_norm(h, weight=self.norm_w, epsilon=float(1e-6), memory_config=self.mem)
         if output_first_token:
             h = ttnn.slice(h, (0, 0, 0, 0), (b, 1, 1, self.hidden_size))
-            return ttnn.reshape(h, (b, 1, self.hidden_size))
-        return ttnn.reshape(h, (b, s, self.hidden_size))
+            return ttnn.reshape(h, (b, 1, self.hidden_size), **_sr)
+        return ttnn.reshape(h, (b, s, self.hidden_size), **_sr)
 
 
 class TtAceStepInstrumentalConditionEncoder:

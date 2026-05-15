@@ -60,6 +60,7 @@ from .dit_sampling_ttnn import (
     typecast_bf16_any_to_fp32_tile,
 )
 from .full_pipeline import AceStepV15TTNNPipeline
+from .math_perf_env import ace_step_reshape_kwargs
 from .oobleck_vae_decoder import TtOobleckVaeDecoder
 from .qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
 
@@ -654,9 +655,10 @@ class AceStepE2EModel:
         if do_cfg:
             d_enc = int(enc_hs_tt_one.shape[-1])
             s_enc = int(enc_hs_tt_one.shape[1])
-            null_4d = ttnn.reshape(null_emb_tt, (1, 1, 1, d_enc))
+            _sr = ace_step_reshape_kwargs(ttnn)
+            null_4d = ttnn.reshape(null_emb_tt, (1, 1, 1, d_enc), **_sr)
             null_rep_4d = ttnn.repeat(null_4d, (1, 1, s_enc, 1))
-            null_rep = ttnn.reshape(null_rep_4d, (1, s_enc, d_enc))
+            null_rep = ttnn.reshape(null_rep_4d, (1, s_enc, d_enc), **_sr)
             enc_tt_pipe = ttnn.concat([enc_hs_tt_one, null_rep], dim=0)
             ctx_tt_pipe = concat_duplicate_batch(ctx_tt_one)
             try:

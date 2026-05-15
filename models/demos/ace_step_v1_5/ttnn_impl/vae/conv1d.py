@@ -22,6 +22,7 @@ from __future__ import annotations
 import numpy as np
 
 from .._ttnn import get_ttnn
+from ..math_perf_env import ace_step_reshape_kwargs
 
 
 def _require_ttnn():
@@ -179,6 +180,7 @@ class TtConv1d:
         Returns a ``[B, T_out, out_channels]`` row-major tensor.
         """
         ttnn = self.ttnn
+        _sr = ace_step_reshape_kwargs(ttnn)
         if len(x.shape) != 3:
             raise ValueError(f"TtConv1d expects rank-3 [B,T,C], got {x.shape}")
         b = int(x.shape[0])
@@ -211,7 +213,7 @@ class TtConv1d:
         )
         out, out_length = ret
         out = ttnn.squeeze(out, 0)
-        out = ttnn.reshape(out, (b, out_length, self.out_channels))
+        out = ttnn.reshape(out, (b, out_length, self.out_channels), **_sr)
         # L1 conv returns TILE; normalize to ROW_MAJOR so time/channel dims match PyTorch semantics
         # and residual / slice logic sees the true logical length.
         return ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)

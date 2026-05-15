@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import ttnn
+from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_reshape_kwargs
 from models.demos.ace_step_v1_5.ttnn_impl.patchify import (
     PatchifyMetadata,
     TtAceStepDePatchify1D,
@@ -142,6 +143,7 @@ class TtAceStepDiTOutputHead:
             raise ValueError(f"Expected temb shape ({b}, {self.hidden_size}), got {tuple(temb.shape)}")
 
         x_tile = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+        _sr = ace_step_reshape_kwargs(ttnn)
         normed = ttnn.rms_norm(
             x_tile,
             weight=self.norm_weight,
@@ -149,7 +151,7 @@ class TtAceStepDiTOutputHead:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        temb_u = ttnn.reshape(temb, (b, 1, self.hidden_size))
+        temb_u = ttnn.reshape(temb, (b, 1, self.hidden_size), **_sr)
         temb_u = ttnn.to_layout(temb_u, ttnn.ROW_MAJOR_LAYOUT)
 
         shift = ttnn.add(self.shift_table, temb_u)
