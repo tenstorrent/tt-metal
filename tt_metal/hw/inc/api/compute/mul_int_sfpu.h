@@ -7,6 +7,7 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_binary_sfpu_mul_int.h"
+#include "llk_math_eltwise_binary_sfpu_mul_replay.h"
 #endif
 
 namespace ckernel {
@@ -44,6 +45,35 @@ ALWI void mul_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 template <DataFormat data_format>
 ALWI void mul_int_tile_init() {
     MATH((llk_math_eltwise_binary_sfpu_mul_int_init<APPROX, data_format>()));
+}
+
+// clang-format off
+/**
+ *  One-shot replay-buffer programming helpers. Must be called once per kernel,
+ *  after `mul_int_tile_init<data_format>()`, on the MATH thread. Records into
+ *  replay slot 0 with `lltt::NoExec` the same per-iteration SFPU sequence as
+ *  `mul_int_tile` / `mul_int32` for the target chip (see architecture-specific
+ *  `ckernel_sfpu_mul_replay.h`; Blackhole Int32 matches `ckernel_sfpu_mul_int32.h`).
+ *
+ *  UInt16 uses the discrete body in `ckernel_sfpu_mul_replay.h`. Int32 / UInt32
+ *  share the Int32 recording; UINT32 aliases INT32 at the low 32 bits.
+ */
+// clang-format on
+template <DataFormat data_format>
+ALWI void init_replay_binary_sfpu_mul_integer() {
+    MATH((llk_init_replay_binary_sfpu_mul_integer<data_format>()));
+}
+// clang-format off
+/*
+ * Drop-in replacement for `mul_int_tile<data_format>(idst0, idst1, odst)`.
+ * The format-specific body is baked into the replay buffer by the matching
+ * `init_replay_binary_sfpu_mul_integer<data_format>()`. Requires `idst1 == idst0 + 1`
+ * and `odst == idst0`, matching the kernel's `(i*2, i*2 + 1, i*2)` pairing.
+*/
+// clang-format on
+template <DataFormat data_format>
+ALWI void replay_binary_sfpu_mul_integer(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    MATH((llk_replay_binary_sfpu_mul_integer<data_format>(idst0, idst1, odst)));
 }
 
 }  // namespace ckernel

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,13 +7,12 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/mul_int_sfpu.h"
-#include "eltwise_utils_common.hpp"
-#include "eltwise_utils.hpp"
+#include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
+#include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
-
-    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
+    uint32_t num_tiles_per_batch = get_arg_val<uint32_t>(1);
 
     constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
     constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
@@ -31,46 +30,42 @@ void kernel_main() {
     binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
 
-    // Inline helper to process n tiles
-    auto process_tiles = [&](uint32_t n) {
-        PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, n);
-        cb_wait_front(cb_post_lhs, n);
+    uint32_t remaining = num_tiles;
+    while (remaining > 0) {
+        uint32_t n_tiles_proc;
+        if (remaining >= num_tiles_per_batch) {
+            n_tiles_proc = num_tiles_per_batch;
+        } else {
+            n_tiles_proc = remaining;
+        }
 
-        PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, n);
-        cb_wait_front(cb_post_rhs, n);
+        PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, n_tiles_proc);
+        cb_wait_front(cb_post_lhs, n_tiles_proc);
 
-        cb_reserve_back(cb_out, n);
+        PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, n_tiles_proc);
+        cb_wait_front(cb_post_rhs, n_tiles_proc);
+
+        cb_reserve_back(cb_out, n_tiles_proc);
 
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
         tile_regs_acquire();
-        for (uint32_t i = 0; i < n; ++i) {
+        for (uint32_t i = 0; i < n_tiles_proc; ++i) {
             BINARY_OP(cb_post_lhs, cb_post_rhs, i, i, i);
             PROCESS_POST_ACTIVATIONS(i);
         }
         tile_regs_commit();
 
         tile_regs_wait();
-        for (uint32_t i = 0; i < n; ++i) {
+        for (uint32_t i = 0; i < n_tiles_proc; ++i) {
             pack_tile(i, cb_out);
         }
         tile_regs_release();
 
-        cb_push_back(cb_out, n);
-        cb_pop_front(cb_post_lhs, n);
-        cb_pop_front(cb_post_rhs, n);
-    };
-
-    // Process full chunks
-    uint32_t num_full_chunks = num_tiles / num_tiles_per_cycle;
-    for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
-        process_tiles(num_tiles_per_cycle);
-    }
-
-    // Process remainder
-    uint32_t remainder = num_tiles % num_tiles_per_cycle;
-    if (remainder > 0) {
-        process_tiles(remainder);
+        cb_push_back(cb_out, n_tiles_proc);
+        cb_pop_front(cb_post_lhs, n_tiles_proc);
+        cb_pop_front(cb_post_rhs, n_tiles_proc);
+        remaining -= n_tiles_proc;
     }
 }

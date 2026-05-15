@@ -14,6 +14,7 @@
 #include "cmath_common.h"
 #include "llk_math_common.h"
 #include "llk_sfpu_types.h"
+#include "lltt.h"
 
 using namespace ckernel;
 
@@ -77,4 +78,26 @@ inline void _llk_math_eltwise_binary_sfpu_init_()
 inline void _llk_math_eltwise_binary_sfpu_uninit_()
 {
     // No state to restore - all states are transient or default
+}
+
+// Shared per-tile replay loop for binary SFPU operations whose one-iteration
+// body has been recorded into replay slot 0.
+template <std::uint32_t REPLAY_LEN>
+ALWI void _llk_replay_binary_sfpu_eltwise_(std::uint32_t idst0)
+{
+    _llk_math_eltwise_binary_sfpu_start_(idst0);
+
+#pragma GCC unroll 0
+    for (int face = 0; face < 4; face++)
+    {
+#pragma GCC unroll 0
+        for (int d = 0; d < 8; d++)
+        {
+            lltt::replay(0, REPLAY_LEN);
+        }
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+    }
+
+    _llk_math_eltwise_binary_sfpu_done_();
 }

@@ -134,4 +134,8 @@ DispatchQueryManager::DispatchQueryManager(
     this->reset(dispatch_core_config, num_hw_cqs);
 }
 
+const std::vector<CoreCoord>& get_logical_dispatch_cores_on_user_chips() {
+    return MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
+}
+
 }  // namespace tt::tt_metal
