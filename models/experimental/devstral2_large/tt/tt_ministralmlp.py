@@ -19,7 +19,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.devstral2_large.tt.device_dram_mitigation import (
+from models.experimental.devstral2_large.tt.model_utils import (
     devstral2_large_multi_device_dram_mitigation,
 )
 from models.tt_transformers.tt.ccl import tt_all_reduce
@@ -125,17 +125,21 @@ class TtDevstral2LargeMLP(LightweightModule):
         return devstral2_large_multi_device_dram_mitigation(self.mesh_device, self.args)
 
     def _ff1_3_out_mem(self, mode: Mode):
-        if self._dram_intermediates():
+        # Decode uses ``dram_matmul_config`` (``get_mlp_ff1_3_prg_config``): output mem must be
+        # **sharded**; interleaved ``DRAM_MEMORY_CONFIG`` fails validation (``output_mem_config.is_sharded()``).
+        # DRAM mitigation still applies to **prefill** and weight placement; decode FFN matmul I/O
+        # must match the DRAM-sharded matmul contract.
+        if self._dram_intermediates() and mode != Mode.DECODE:
             return ttnn.DRAM_MEMORY_CONFIG
         return self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher)
 
     def _ff2_out_mem(self, mode: Mode):
-        if self._dram_intermediates():
+        if self._dram_intermediates() and mode != Mode.DECODE:
             return ttnn.DRAM_MEMORY_CONFIG
         return self.args.get_mlp_ff2_mem_config(mode, self.prefetcher)
 
     def _ff2_ar_out_mem(self, mode: Mode, w2_out: ttnn.Tensor):
-        if self._dram_intermediates():
+        if self._dram_intermediates() and mode != Mode.DECODE:
             return ttnn.DRAM_MEMORY_CONFIG
         return self.args.get_mlp_ff2_all_reduce_mem_config(mode, w2_out)
 
@@ -149,7 +153,7 @@ class TtDevstral2LargeMLP(LightweightModule):
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
-        seq_len = x.shape[-2]
+        seq_len = int(x.shape[-2])
         TG = self.args.is_galaxy
         layer_num = max(self.layer_num, 0)
         activation_dtype = self.decoders_optimizations.get_tensor_dtype(
@@ -157,6 +161,19 @@ class TtDevstral2LargeMLP(LightweightModule):
         )
         li_ff1_3_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
+        )
+
+        # ``get_mlp_ff1_3_prg_config(DECODE)`` uses ``dram_matmul_config``, which requires **sharded**
+        # activations. Post-attention RMSNorm on BH wide models returns **interleaved** L1 (see
+        # ``tt_ministralrmsnorm._forward_bh_wide_local_rmsnorm``), so re-shard before w1/w3.
+        if mode == Mode.DECODE and not TG and self.prefetcher is None and not x.is_sharded():
+            x = ttnn.to_memory_config(x, self.args.get_mlp_input_mem_config(mode, self.prefetcher))
+
+        # Interleaved DRAM ``w1``/``w3`` are incompatible with ``dram_matmul_config`` (requires
+        # width-sharded in1). Use ``ttnn.linear`` **without** that program config for gate/up only.
+        # Decode ``w2`` uses the same generic-linear path (``pc_2`` requires width-sharded DRAM ``w2``).
+        use_dram_decode_linear_gate_up = (
+            mode == Mode.DECODE and not TG and self.prefetcher is None and self._dram_intermediates()
         )
 
         if mode == Mode.PREFILL and seq_len >= self.args.prefill_len_cutoff:
@@ -168,32 +185,49 @@ class TtDevstral2LargeMLP(LightweightModule):
 
         ff1_3_mem = self._ff1_3_out_mem(mode)
 
-        w1_out = ttnn.linear(
-            x,
-            self.w1,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-            core_grid=None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_1,
-            memory_config=ff1_3_mem,
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == Mode.DECODE
-            else None,
-        )
-        w3_out = ttnn.linear(
-            x,
-            self.w3,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-            core_grid=None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_3,
-            memory_config=ff1_3_mem,
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == Mode.DECODE
-            else None,
-        )
+        if use_dram_decode_linear_gate_up:
+            dram_act = ttnn.DRAM_MEMORY_CONFIG
+            w1_out = ttnn.linear(
+                x,
+                self.w1,
+                dtype=activation_dtype or ttnn.bfloat16,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                memory_config=dram_act,
+            )
+            w3_out = ttnn.linear(
+                x,
+                self.w3,
+                dtype=activation_dtype or ttnn.bfloat16,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                memory_config=dram_act,
+            )
+        else:
+            w1_out = ttnn.linear(
+                x,
+                self.w1,
+                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+                core_grid=None,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                program_config=pc_1,
+                memory_config=ff1_3_mem,
+                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
+                sub_device_id=self.prefetcher.worker_sub_device_id
+                if self.prefetcher is not None and mode == Mode.DECODE
+                else None,
+            )
+            w3_out = ttnn.linear(
+                x,
+                self.w3,
+                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+                core_grid=None,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                program_config=pc_3,
+                memory_config=ff1_3_mem,
+                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
+                sub_device_id=self.prefetcher.worker_sub_device_id
+                if self.prefetcher is not None and mode == Mode.DECODE
+                else None,
+            )
         ttnn.deallocate(x)
 
         if TG:
@@ -254,12 +288,16 @@ class TtDevstral2LargeMLP(LightweightModule):
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
                 )
 
-        mul_out_mem = ttnn.L1_MEMORY_CONFIG if self._dram_intermediates() else w1_out.memory_config()
+        mul_out_mem = (
+            ttnn.DRAM_MEMORY_CONFIG
+            if use_dram_decode_linear_gate_up
+            else (ttnn.L1_MEMORY_CONFIG if self._dram_intermediates() else w1_out.memory_config())
+        )
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
             input_tensor_a_activations=[self.activation_type],
-            dtype=activation_dtype or ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16 if use_dram_decode_linear_gate_up else (activation_dtype or ttnn.bfloat8_b),
             memory_config=mul_out_mem,
         )
 
@@ -301,6 +339,9 @@ class TtDevstral2LargeMLP(LightweightModule):
         # branch already switches to ``minimal_matmul`` + ``MinimalMatmulConfig``; use that same path
         # whenever we take the DRAM mitigations for wide FFN. This is not a host deallocation
         # issue—buffers are fixed at kernel compile time from ``program_config``.
+        # ``dram_matmul_config`` decode FF2 (``pc_2`` + interleaved DRAM ``w2``) requires width-sharded
+        # weights; decode still uses ``pc_2`` until FF2 weights can be DRAM-sharded without static CB
+        # overflow at load, or matmul supports interleaved DRAM ``B``.
         use_minimal_matmul_w2 = mode != Mode.DECODE and (seq_len > 128 or self._dram_intermediates())
         if use_minimal_matmul_w2:
             grid = self.args.mlp2_grid(seq_len)
@@ -315,6 +356,14 @@ class TtDevstral2LargeMLP(LightweightModule):
                 self.w2,
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
                 config=pc_2_minimal,
+            )
+        elif use_dram_decode_linear_gate_up:
+            w2_out = ttnn.linear(
+                w2_in,
+                self.w2,
+                dtype=activation_dtype or ttnn.bfloat16,
+                compute_kernel_config=li_ff2_compute_kernel_cfg,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
             w2_out = ttnn.linear(

@@ -5,14 +5,20 @@
 """PCC: Hugging Face ``Ministral3Model`` vs ``TtMinistral3Model`` (Devstral-2 large stack, real Hub weights).
 
 Loads **partial** tensors from the Hub (``model.embed_tokens``, ``model.norm``, ``model.layers.0`` only),
-converts them to meta keys, and compares **prefill** last hidden states to a HF reference built from the
-same tensors. ``ModelArgs`` is configured for **one decoder layer** (``num_hidden_layers=1``) so the test
-never loads the full 123B checkpoint into host RAM; ``dummy_weights=True`` keeps :class:`ModelArgs` from
-calling ``from_pretrained`` on the whole model.
+converts them to meta keys, and compares last hidden states to a HF reference built from the same tensors.
+
+- **Prefill test:** full-sequence ``Mode.PREFILL`` PCC; attention prefill needs ``seq_len % 128 == 0``
+  (``tt_transformers`` fused prefill), same as ``test_ministral3_decoder_layer``.
+- **Decode test:** ``Mode.PREFILL`` on 128 tokens to fill each layer's KV cache, then ``Mode.DECODE`` on the
+  next token with ``rope_start_pos=128``, ``current_pos`` / ``position_ids`` at index 128; HF reference is
+  the last position of a single forward over 129 tokens (equivalent hidden state under causal attention).
+
+``ModelArgs`` is configured for **one decoder layer** (``num_hidden_layers=1``) so the tests never load the
+full 123B checkpoint into host RAM; ``dummy_weights=True`` keeps :class:`ModelArgs` from calling
+``from_pretrained`` on the whole model.
 
 ``TtMinistral3Model`` all-gathers embedding activations to full hidden width before the first RMSNorm when
-the mesh shards width. Prefill attention requires **``seq_len % 128 == 0``** (``tt_transformers`` fused
-prefill), so this test uses ``128`` tokens like ``test_ministral3_decoder_layer``.
+the mesh shards width.
 """
 
 from __future__ import annotations
@@ -194,6 +200,70 @@ def _force_replicated_rmsnorm(model_args: ModelArgs) -> None:
     model_args.is_distributed_norm = lambda mode: False  # type: ignore[method-assign]
 
 
+def _setup_devstral_ministral3_partial_one_layer(mesh_device, monkeypatch, batch_size: int):
+    """Shared Hub weights, HF model, meta state dict, and ``ModelArgs`` for one-layer Devstral PCC tests."""
+    monkeypatch.setenv("HF_MODEL", DEVSTRAL2_LARGE_REPO_ID)
+    monkeypatch.setenv("MAX_PREFILL_CHUNK_SIZE", "128")
+
+    dtype = ttnn.bfloat16
+    model_args = ModelArgs(
+        mesh_device,
+        max_batch_size=batch_size,
+        max_seq_len=512,
+        dummy_weights=True,
+        use_hf_rope=True,
+        cache_hf=False,
+    )
+
+    text_cfg = _text_cfg_from_hf_cfg(model_args.hf_config)
+    assert text_cfg.num_hidden_layers == 1, "fixture must trim to one layer for partial Hub weights"
+
+    hub_keys = _ministral3_single_layer_hub_keys(0)
+    try:
+        hf_partial = _load_hf_tensors_for_keys(DEVSTRAL2_LARGE_REPO_ID, hub_keys)
+    except Exception as exc:
+        pytest.skip(f"Could not download model shard(s) from Hub: {exc}")
+
+    for k in hub_keys:
+        hf_partial[k] = _to_bf16_host_if_fp8(hf_partial[k])
+
+    try:
+        meta_sd = _build_meta_state_dict(hf_partial, text_cfg)
+    except Exception as exc:
+        pytest.skip(f"HF→meta conversion failed: {exc}")
+
+    hf_sd: dict[str, torch.Tensor] = {}
+    for k, v in hf_partial.items():
+        short = k[len("model.") :] if k.startswith("model.") else k
+        hf_sd[short] = v
+
+    text_cfg._attn_implementation = "eager"
+    hf_model = Ministral3Model(text_cfg).eval().to(torch.bfloat16)
+    hf_model.load_state_dict(hf_sd, strict=True)
+
+    _layer0_opt = model_args.decoders_optimizations.decoder_optimizations[0]
+    _layer0_opt.tensor_dtype_settings[TensorGroup.WQKV] = PrecisionSetting.BF16
+    _layer0_opt.tensor_dtype_settings[TensorGroup.WO] = PrecisionSetting.BF16
+    _layer0_opt.tensor_dtype_settings[TensorGroup.ACTIVATION] = PrecisionSetting.BF16
+    _layer0_opt.tensor_dtype_settings[TensorGroup.KV_CACHE] = PrecisionSetting.BF16
+    _force_mlp_weight_dtypes_bf16(model_args)
+    _force_replicated_rmsnorm(model_args)
+
+    return model_args, text_cfg, hf_model, meta_sd, dtype
+
+
+def _tt_hidden_to_torch_ref_shape(tt_out, mesh_device, model_args_dim: int, ref_shape: torch.Size):
+    out_last = int(tt_out.shape[-1])
+    if out_last == model_args_dim:
+        tt_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+    else:
+        tt_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    # Decode outputs are tile-padded on the batch/sequence axis (e.g. 32 rows for batch=1);
+    # slice down to the reference's S dim before reshaping.
+    tt_torch = tt_torch[..., : ref_shape[-2], :]
+    return tt_torch.reshape(ref_shape)
+
+
 @pytest.fixture
 def trust_remote_ministral(monkeypatch):
     from models.tt_transformers.tt import model_config as mc
@@ -267,52 +337,9 @@ def test_ministral3_model_pcc_devstral2_large_partial_weights_one_layer(
     devstral2_123b_dummy_config_path,
     devstral_one_text_layer_hf_params,
 ):
-    monkeypatch.setenv("HF_MODEL", DEVSTRAL2_LARGE_REPO_ID)
-    monkeypatch.setenv("MAX_PREFILL_CHUNK_SIZE", "128")
-
-    dtype = ttnn.bfloat16
-    model_args = ModelArgs(
-        mesh_device,
-        max_batch_size=batch_size,
-        max_seq_len=max(512, seq_len),
-        dummy_weights=True,
-        use_hf_rope=True,
-        cache_hf=False,
+    model_args, text_cfg, hf_model, meta_sd, dtype = _setup_devstral_ministral3_partial_one_layer(
+        mesh_device, monkeypatch, batch_size
     )
-
-    text_cfg = _text_cfg_from_hf_cfg(model_args.hf_config)
-    assert text_cfg.num_hidden_layers == 1, "fixture must trim to one layer for partial Hub weights"
-
-    hub_keys = _ministral3_single_layer_hub_keys(0)
-    try:
-        hf_partial = _load_hf_tensors_for_keys(DEVSTRAL2_LARGE_REPO_ID, hub_keys)
-    except Exception as exc:
-        pytest.skip(f"Could not download model shard(s) from Hub: {exc}")
-
-    for k in hub_keys:
-        hf_partial[k] = _to_bf16_host_if_fp8(hf_partial[k])
-
-    try:
-        meta_sd = _build_meta_state_dict(hf_partial, text_cfg)
-    except Exception as exc:
-        pytest.skip(f"HF→meta conversion failed: {exc}")
-
-    hf_sd: dict[str, torch.Tensor] = {}
-    for k, v in hf_partial.items():
-        short = k[len("model.") :] if k.startswith("model.") else k
-        hf_sd[short] = v
-
-    text_cfg._attn_implementation = "eager"
-    hf_model = Ministral3Model(text_cfg).eval().to(torch.bfloat16)
-    hf_model.load_state_dict(hf_sd, strict=True)
-
-    _layer0_opt = model_args.decoders_optimizations.decoder_optimizations[0]
-    _layer0_opt.tensor_dtype_settings[TensorGroup.WQKV] = PrecisionSetting.BF16
-    _layer0_opt.tensor_dtype_settings[TensorGroup.WO] = PrecisionSetting.BF16
-    _layer0_opt.tensor_dtype_settings[TensorGroup.ACTIVATION] = PrecisionSetting.BF16
-    _layer0_opt.tensor_dtype_settings[TensorGroup.KV_CACHE] = PrecisionSetting.BF16
-    _force_mlp_weight_dtypes_bf16(model_args)
-    _force_replicated_rmsnorm(model_args)
 
     torch.manual_seed(42)
     gen = torch.Generator(device="cpu").manual_seed(42)
@@ -362,15 +389,143 @@ def test_ministral3_model_pcc_devstral2_large_partial_weights_one_layer(
         batch_size=batch_size,
     ).last_hidden_state
 
-    out_last = int(tt_out.shape[-1])
-    if out_last == model_args.dim:
-        tt_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
-    else:
-        tt_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
-    tt_torch = tt_torch.reshape(ref_out.shape)
+    tt_torch = _tt_hidden_to_torch_ref_shape(tt_out, mesh_device, model_args.dim, ref_out.shape)
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(ref_out, tt_torch, pcc_required)
     logger.info(comp_allclose(ref_out, tt_torch))
-    logger.info(f"PCC (Ministral3Model partial Hub weights): {pcc_message}")
+    logger.info(f"PCC (Ministral3Model partial Hub weights, prefill): {pcc_message}")
+    assert passing, f"PCC below {pcc_required}: {pcc_message}"
+
+
+@torch.no_grad()
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "P150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("batch_size", (1,))
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 30000000,
+            "num_command_queues": 1,
+            "l1_small_size": DEVSTRAL2_LARGE_L1_SMALL_SIZE,
+        }
+    ],
+    indirect=True,
+)
+def test_ministral3_model_pcc_devstral2_large_partial_weights_one_layer_decode(
+    mesh_device,
+    batch_size,
+    monkeypatch,
+    trust_remote_ministral,
+    devstral2_123b_dummy_config_path,
+    devstral_one_text_layer_hf_params,
+):
+    """Prefill 128 tokens (KV fill), then one ``Mode.DECODE`` step vs HF last position over 129 tokens."""
+    prefill_seq_len = 128
+    decode_pos = prefill_seq_len
+
+    model_args, text_cfg, hf_model, meta_sd, dtype = _setup_devstral_ministral3_partial_one_layer(
+        mesh_device, monkeypatch, batch_size
+    )
+
+    torch.manual_seed(42)
+    gen = torch.Generator(device="cpu").manual_seed(42)
+    total_len = prefill_seq_len + 1
+    input_ids_full = torch.randint(0, text_cfg.vocab_size, (batch_size, total_len), dtype=torch.long, generator=gen)
+    input_ids_prefill = input_ids_full[:, :prefill_seq_len]
+    input_ids_decode = input_ids_full[:, prefill_seq_len : prefill_seq_len + 1]
+
+    position_ids_full = torch.arange(total_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+    inputs_embeds_full = hf_model.embed_tokens(input_ids_full)
+    causal_mask_full = create_causal_mask(
+        config=text_cfg,
+        inputs_embeds=inputs_embeds_full,
+        attention_mask=None,
+        past_key_values=None,
+        position_ids=position_ids_full,
+    )
+    ref_decode = hf_model(
+        input_ids=input_ids_full,
+        attention_mask=causal_mask_full,
+        position_ids=position_ids_full,
+        use_cache=False,
+    ).last_hidden_state[:, -1:, :]
+
+    tt_ccl = TT_CCL(mesh_device)
+    transformation_mats = {"decode": None, "prefill": None}
+    tt_model = TtMinistral3Model(
+        model_args,
+        mesh_device,
+        tt_ccl,
+        dtype,
+        meta_sd,
+        weight_cache_path=model_args.weight_cache_path(dtype),
+        transformation_mats=transformation_mats,
+    )
+
+    prefill_tt = ttnn.from_torch(
+        input_ids_prefill.reshape(1, 1, 1, -1).to(torch.int32),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_model(
+        input_ids=prefill_tt,
+        mode=Mode.PREFILL,
+        batch_size=batch_size,
+    )
+
+    decode_tt = ttnn.from_torch(
+        input_ids_decode.reshape(1, 1, 1, -1).to(torch.int32),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    position_ids_decode_tt = ttnn.from_torch(
+        torch.tensor([[decode_pos]], dtype=torch.int32),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    current_pos_tt = ttnn.from_torch(
+        torch.tensor([decode_pos], dtype=torch.int32),
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    tt_dec = tt_model(
+        input_ids=decode_tt,
+        mode=Mode.DECODE,
+        batch_size=batch_size,
+        current_pos=current_pos_tt,
+        rope_start_pos=decode_pos,
+        position_ids=position_ids_decode_tt,
+    ).last_hidden_state
+
+    tt_torch = _tt_hidden_to_torch_ref_shape(tt_dec, mesh_device, model_args.dim, ref_decode.shape)
+
+    pcc_required = 0.99
+    passing, pcc_message = comp_pcc(ref_decode, tt_torch, pcc_required)
+    logger.info(comp_allclose(ref_decode, tt_torch))
+    logger.info(f"PCC (Ministral3Model partial Hub weights, decode): {pcc_message}")
     assert passing, f"PCC below {pcc_required}: {pcc_message}"

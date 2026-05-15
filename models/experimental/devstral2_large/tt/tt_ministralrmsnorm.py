@@ -242,19 +242,36 @@ class TtDevstral2LargeRMSNorm(RMSNorm):
                 t_work = ttnn.pad(t, padding=[(0, 0), (0, 0), (0, sl_pad - sl), (0, 0)], value=0.0)
             else:
                 t_work = t
-            grid = _resolve_norm_core_grid(self.device, self._hidden_dim)
-            num_cores = grid.x * grid.y
-            shard_w_el = self._hidden_dim // num_cores
-            input_shard_cfg = ttnn.create_sharded_memory_config(
-                shape=[bsz * sl_pad, shard_w_el],
-                core_grid=grid,
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            xs = ttnn.interleaved_to_sharded(t_work, input_shard_cfg)
-            if sl_pad > sl:
-                t_work.deallocate(True)
+            padded = sl_pad > sl
+
+            # Decode residual for wide TP+mesh paths can already be WIDTH_SHARDED (see
+            # ``ModelArgs.get_residual_mem_config`` for Devstral-2-123B). ``interleaved_to_sharded``
+            # requires an interleaved tensor — reuse the sharded activations and only ensure TILE.
+            xs_aliases_caller = False
+            if ttnn.is_sharded(t_work):
+                if t_work.layout != ttnn.TILE_LAYOUT:
+                    xs = ttnn.to_layout(t_work, ttnn.TILE_LAYOUT)
+                    if padded:
+                        t_work.deallocate(True)
+                else:
+                    # xs aliases t_work which (when not padded) aliases the caller's input.
+                    # Skip the downstream xs.deallocate to avoid destroying the caller's tensor.
+                    xs = t_work
+                    xs_aliases_caller = not padded
+            else:
+                grid = _resolve_norm_core_grid(self.device, self._hidden_dim)
+                num_cores = grid.x * grid.y
+                shard_w_el = self._hidden_dim // num_cores
+                input_shard_cfg = ttnn.create_sharded_memory_config(
+                    shape=[bsz * sl_pad, shard_w_el],
+                    core_grid=grid,
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                xs = ttnn.interleaved_to_sharded(t_work, input_shard_cfg)
+                if padded:
+                    t_work.deallocate(True)
             activation_grid = xs.memory_config().shard_spec.grid.bounding_box().grid_size()
             shard_height, shard_width = xs.memory_config().shard_spec.shape
             program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -273,7 +290,8 @@ class TtDevstral2LargeRMSNorm(RMSNorm):
                 memory_config=out_mem,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
             )
-            xs.deallocate(True)
+            if not xs_aliases_caller:
+                xs.deallocate(True)
             y = ttnn.sharded_to_interleaved(out)
             out.deallocate(True)
             if sl_pad > sl:

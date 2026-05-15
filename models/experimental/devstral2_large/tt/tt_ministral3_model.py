@@ -21,6 +21,8 @@ Mirrors ``transformers.models.ministral3.modeling_ministral3.Ministral3Model`` a
 but ignored (TT attention is causal on device). ``use_cache`` / ``past_key_values`` are not implemented yet.
 
 Forward uses **ttnn only** for position indices and RoPE slicing (no PyTorch in the hot path).
+Decode applies the same height-sharding to cos/sin as :class:`~models.tt_transformers.tt.rope.HfRotarySetup`
+so ``rotary_embedding_hf`` decode validation is satisfied.
 """
 
 from __future__ import annotations
@@ -31,6 +33,9 @@ from typing import Any, Optional
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.devstral2_large.tt.model_utils import (
+    get_decode_mem_config_after_hidden_dim_concat,
+)
 from models.experimental.devstral2_large.tt.tt_ministral3_decoder_layer import (
     TtMinistral3DecoderLayer,
     _all_gather_concat_hidden_dim,
@@ -247,7 +252,14 @@ class TtMinistral3Model(LightweightModule):
                 topology=self.args.ccl_topology(),
                 dtype=self.args.ccl_dtype,
             )
-            hidden_states = ttnn.to_memory_config(hidden_states, skip_mem_cfg)
+            # Full ``dim`` on dim 3: decode needs MLP-style full-width shard (see
+            # ``get_decode_mem_config_after_hidden_dim_concat`` in ``tt_ministral3_decode_mem_config``).
+            post_hidden_concat = (
+                get_decode_mem_config_after_hidden_dim_concat(self.args, mode, self.prefetcher)
+                if self.prefetcher is None and not self.args.is_galaxy
+                else skip_mem_cfg
+            )
+            hidden_states = ttnn.to_memory_config(hidden_states, post_hidden_concat)
 
         b = int(hidden_states.shape[0])
         s = int(hidden_states.shape[2])
@@ -265,6 +277,12 @@ class TtMinistral3Model(LightweightModule):
             pos_tt = self._ensure_position_ids_bs_row_major_uint32(pid, b, s)
 
         rot_mats_global = self._prepare_rot_mats_prefill(rot_mats_global, rope_start_pos, b, s)
+        if mode == Mode.DECODE:
+            cg, cs = rot_mats_global
+            rot_mats_global = self.rotary_emb.shard_decode_rot_mats_hf(cg, cs)
+            if rot_mats_local is not None:
+                cl, sl = rot_mats_local
+                rot_mats_local = self.rotary_emb.shard_decode_rot_mats_hf(cl, sl)
 
         for layer in self.layers:
             hidden_states = layer(

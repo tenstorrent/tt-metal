@@ -218,6 +218,46 @@ class TtMinistral3RotaryEmbedding(HfRotarySetup):
 
         self._ministral3_config = config
 
+        # Same as :class:`~models.tt_transformers.tt.rope.HfRotarySetup` (``get_rot_mats`` tail):
+        # ``rotary_embedding_hf`` decode requires HEIGHT_SHARDED cos/sin.
+        self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
+        self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
+        if self.num_devices == 32:
+            self.batch_size_per_device_group = max(self.batch_size // list(device.shape)[shard_batch_to_mesh_dim], 1)
+        else:
+            self.batch_size_per_device_group = self.batch_size
+        self.core_grid = (
+            device.compute_with_storage_grid_size() if ttnn.get_arch_name() == "blackhole" else ttnn.CoreCoord(8, 8)
+        )
+
+    def shard_decode_rot_mats_hf(self, cos: ttnn.Tensor, sin: ttnn.Tensor) -> list:
+        """Height-shard interleaved cos/sin for ``ttnn.experimental.rotary_embedding_hf`` decode.
+
+        Prefill passes interleaved slices from :meth:`slice_rot_mats_prefill`; the HF decode kernel
+        requires sharded caches (see ``HfRotarySetup.get_rot_mats`` in ``rope.py``).
+        """
+        if cos.is_sharded() and sin.is_sharded():
+            return [cos, sin]
+
+        batch_decode = self.batch_size_per_device_group
+        num_cores = min(batch_decode, self.core_grid.x * self.core_grid.y)
+        batch_grid = ttnn.num_cores_to_corerangeset(num_cores, self.core_grid, row_wise=True)
+        mem_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=batch_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        cos_out, sin_out = cos, sin
+        if batch_decode % ttnn.TILE_SIZE != 0:
+            cos_out = cos_out[:, :batch_decode, :, :]
+            sin_out = sin_out[:, :batch_decode, :, :]
+        return [
+            ttnn.interleaved_to_sharded(cos_out, mem_config),
+            ttnn.interleaved_to_sharded(sin_out, mem_config),
+        ]
+
     def slice_rot_mats_prefill(self, start_pos: int, seq_len: int) -> list:
         """
         Cos/sin slices ``[1, 1, seq_len, head_dim]`` on device for full prefill starting at ``start_pos``.
