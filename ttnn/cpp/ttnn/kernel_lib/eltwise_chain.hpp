@@ -124,10 +124,11 @@
  *   );
  *
  *   // Streaming binary — A + B → out
- *   //   (3rd template arg is CbOut)
+ *   //   BinaryFpu writes to DEST; the output CB lives on the PackTile element.
  *   eltwise_chain(num_tiles,
- *       BinaryFpu<cb_a, cb_b, cb_out, BinaryFpuOp::Add>{},
- *       PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{}
+ *       BinaryFpu<cb_a, cb_b, BinaryFpuOp::Add>{},
+ *       PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
+ *                PackTileIndexMode::FirstTile, PackTileReconfig::Output>{}
  *   );
  *
  *   // Single-stage with deduced wrapper — U4
@@ -156,14 +157,14 @@
  *
  *   // Asymmetric bcast walk — A streams the tile range, B pinned at tile 0
  *   //   (softmax-style: out[t] = exp(in[t] - max), max pinned at tile 0)
- *   //   BinaryFpu's 9th template arg is AIndex; 12th (trailing) is BIndex (defaults to AIndex).
+ *   //   BinaryFpu's 8th template arg is AIndex; 10th (trailing) is BIndex (defaults to AIndex).
  *   eltwise_chain(num_tiles,
- *       BinaryFpu<cb_in, cb_max, cb_tmp, BinaryFpuOp::Sub, BroadcastDim::COL,
+ *       BinaryFpu<cb_in, cb_max, BinaryFpuOp::Sub, BroadcastDim::COL,
  *                 BinaryDataFormatReconfig::None,
  *                 CopyTilePolicy::WaitUpfrontPopAtEnd,   // A: wait N upfront, pop at end
  *                 CopyTilePolicy::WaitNoPop,             // B: wait 1, never pop
  *                 CbIndexMode::BlockIter,                // AIndex — A walks 0..num_tiles-1
- *                 Dst::D0, false,
+ *                 Dst::D0,
  *                 CbIndexMode::FirstTile>{},             // BIndex — B pinned at tile 0
  *       Exp<>{},
  *       PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{}
@@ -183,9 +184,8 @@
  *  - CopyTileReconfig::Input         → fold emits `reconfig_data_format_srca(curr)` (compile-time-elided when prev ==
  * curr).
  *  - BinaryDataFormatReconfig::Input → fold emits `reconfig_data_format_srca / _srcb` per side (compile-time-elided per
- * side).
- *  - BinaryDataFormatReconfig::Output → fold emits `pack_reconfig_data_format(CbOut)` (compile-time-elided when
- * prev_pack == CbOut).
+ * side). Pack-side reconfig is owned by the downstream `PackTile` (`PackTileReconfig::Output`); BinaryFpu writes to
+ * DEST, never to a CB.
  *  - DestReuseReconfig::Input        → fold emits per-side reconfig (srca OR srcb depending on ReuseType).
  *  - PackTileReconfig::Output        → fold emits `pack_reconfig_data_format(new_cb)`.
  *  - PackTileReconfig::OutputConditional → currently emits same as ::Output; future extension may
@@ -364,12 +364,12 @@ enum class CopyTileReconfig : uint8_t {
 /// FPU binary op selector.
 enum class BinaryFpuOp : uint8_t { Add, Sub, Mul };
 
-/// FPU binary dtype-reconfig.
+/// FPU binary dtype-reconfig. Input-side only — pack-side reconfig is owned by
+/// the downstream `PackTile` element (`PackTileReconfig::Output`). BinaryFpu writes
+/// to DEST, never to a CB, so it has no pack-side responsibility.
 enum class BinaryDataFormatReconfig : uint8_t {
     None,
-    Input,           // srca and/or srcb on entry
-    Output,          // pack reconfig on entry
-    InputAndOutput,  // both — default (safest, no skip)
+    Input,  // srca and/or srcb on entry (default — safest, no skip)
 };
 
 /// FPU broadcast dimension. Caller MUST pass explicitly — no inference.
@@ -606,10 +606,9 @@ struct CopyTile;
 template <
     uint32_t CbA,
     uint32_t CbB,
-    uint32_t CbOut = 0,
     BinaryFpuOp Op = BinaryFpuOp::Add,
     BroadcastDim Bcast = BroadcastDim::None,
-    BinaryDataFormatReconfig DfReconfig = BinaryDataFormatReconfig::InputAndOutput,
+    BinaryDataFormatReconfig DfReconfig = BinaryDataFormatReconfig::Input,
     CopyTilePolicy APolicy = CopyTilePolicy::WaitAndPop,
     CopyTilePolicy BPolicy = CopyTilePolicy::WaitAndPop,
     CbIndexMode AIndex = CbIndexMode::FirstTile,

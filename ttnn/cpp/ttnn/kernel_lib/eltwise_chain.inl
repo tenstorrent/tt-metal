@@ -409,7 +409,6 @@ struct PackTileBlock : PackTileTag {
 
 template <uint32_t CbA,
           uint32_t CbB,
-          uint32_t CbOut,
           BinaryFpuOp Op,
           BroadcastDim Bcast,
           BinaryDataFormatReconfig DfReconfig,
@@ -445,19 +444,14 @@ struct BinaryFpu : BinaryFpuTag {
     static constexpr bool          clashes_with_fpu = true;
     static constexpr bool          same_cb    = (CbA == CbB);
 
-    // Prev-CB fold (D2): BinaryFpu touches both srca (CbA), srcb (CbB), and pack (CbOut)
-    // when the corresponding reconfig is opted in. F-PERF-3 strips the per-element pack
-    // reconfig from init(); the chain's compile-time-elided fold drives both input-side
-    // and output-side reconfig before this element runs.
+    // Prev-CB fold (D2): BinaryFpu touches srca (CbA) and srcb (CbB) only. Pack-side
+    // reconfig is owned by the downstream PackTile element (`PackTileReconfig::Output`)
+    // — BinaryFpu writes to DEST, not to a CB, so it has no pack-side responsibility.
     static constexpr uint32_t      reconfig_srca_cb =
-        (DfReconfig == BinaryDataFormatReconfig::Input || DfReconfig == BinaryDataFormatReconfig::InputAndOutput)
-            ? CbA : NO_PREV_CB;
+        (DfReconfig == BinaryDataFormatReconfig::Input) ? CbA : NO_PREV_CB;
     static constexpr uint32_t      reconfig_srcb_cb =
-        (DfReconfig == BinaryDataFormatReconfig::Input || DfReconfig == BinaryDataFormatReconfig::InputAndOutput)
-            ? CbB : NO_PREV_CB;
-    static constexpr uint32_t      reconfig_pack_cb =
-        ((DfReconfig == BinaryDataFormatReconfig::Output || DfReconfig == BinaryDataFormatReconfig::InputAndOutput)
-         && CbOut != 0) ? CbOut : NO_PREV_CB;
+        (DfReconfig == BinaryDataFormatReconfig::Input) ? CbB : NO_PREV_CB;
+    static constexpr uint32_t      reconfig_pack_cb = NO_PREV_CB;
 
     constexpr BinaryFpu() noexcept = default;
     constexpr BinaryFpu(uint32_t a_tile_idx, uint32_t b_tile_idx) noexcept
@@ -1036,11 +1030,29 @@ ALWI void emit_pre_element_transitions() {
 
 // Pack-phase init (Pack* only — F-PERF-4: hoisted to boot, not per-tile).
 // Note: post-commit-2 the pack reconfig is fold-driven via `emit_pre_element_transitions`,
-// so this is effectively a no-op for PackTile / PackTileBlock. Retained for symmetry
+// so the init body is effectively a no-op for PackTile / PackTileBlock. Retained for symmetry
 // in case a pack element gains per-op LLK programming in a future commit.
-template <class E>
+//
+// For FPU-clash chains (non-hoist-safe), `hoisted_init_for_each` is NOT called, so
+// pack-side `reconfig_data_format` from PackTile would never fire on the per-tile path
+// (apply_compute_phase + apply_pack_phase intentionally skip PackTile transitions —
+// init for cb-reader elements re-fires per tile to recover from FPU clash, and pack
+// reconfig has no business firing on every iteration). Emit the pack-side fold once
+// here at chain boot so `PackTileReconfig::Output` programs the pack engine before the
+// first iteration on FPU-clash chains as well.
+template <std::size_t I, class E, class... Es>
 ALWI void elem_pack_init() {
-    if constexpr (is_pack_tile_op_v<E>) E::init();
+    if constexpr (is_pack_tile_op_v<E>) {
+        emit_pre_element_transitions<E, I, Es...>();
+        E::init();
+    }
+}
+
+// Hoisted pack-init dispatcher — visits each chain element by compile-time index
+// and forwards (Is, Es, Es...) into the per-element pack init.
+template <class... Es, std::size_t... Is>
+ALWI void pack_init_for_each(std::index_sequence<Is...>) {
+    (elem_pack_init<Is, Es, Es...>(), ...);
 }
 
 // =============================================================================
@@ -1236,7 +1248,9 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
 
     // ---- F-PERF-4: hoist pack init out of per-tile loop ----
-    (detail::elem_pack_init<Es>(), ...);
+    // Pack-side init also drives the pack-format reconfig fold for FPU-clash chains
+    // (where `hoisted_init_for_each` is skipped).
+    detail::pack_init_for_each<Es...>(IdxSeq{});
 
     if constexpr (!emit_init_per_tile) {
         detail::hoisted_init_for_each(IdxSeq{}, elts...);

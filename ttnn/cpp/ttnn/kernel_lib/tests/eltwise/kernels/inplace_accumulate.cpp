@@ -36,7 +36,6 @@ void kernel_main() {
     using AccumElt = BinaryFpu<
         cb_in,
         cb_acc,
-        cb_acc,
         BinaryFpuOp::Add,
         BroadcastDim::None,
         BinaryDataFormatReconfig::None,
