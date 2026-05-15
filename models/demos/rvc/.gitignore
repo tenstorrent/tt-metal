@@ -1,0 +1,6 @@
+# Downloaded model weights and assets (use assets-download.sh to fetch)
+data/
+
+# Temporary clone directories from assets-download.sh
+rvc-nano/
+rmvpe/
