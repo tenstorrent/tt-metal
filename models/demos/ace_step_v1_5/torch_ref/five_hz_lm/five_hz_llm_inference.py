@@ -4,6 +4,11 @@
 """
 5Hz LM (Language Model) Handler
 Handles all LM-related operations including initialization and generation
+
+**Torch reference package** (``models.demos.ace_step_v1_5.torch_ref.five_hz_lm``): this tree is a
+self-contained copy for **PyTorch-only** parity / PCC tests against the TTNN-assisted handler under
+``five_hz_lm``. ``set_ttnn_logits_device`` is a no-op and the experimental TTNN causal LM load path
+is disabled so ``AutoModelForCausalLM`` is always used.
 """
 import gc
 import os
@@ -112,19 +117,14 @@ class LocalFiveHzLMHandler:
         self._ttnn_sample_counter = 0
 
     def set_ttnn_logits_device(self, device) -> None:
-        """Attach the open TTNN device; LM CFG logit combine (narrow or full-vocab) uses TTNN when set."""
-        self._ttnn_logits_device = device
+        """Torch-ref package: no-op. Reference LM stays PyTorch-only (ignore TTNN device)."""
+        self._ttnn_logits_device = None
         self._ttnn_sample_counter = 0
         proc = getattr(self, "constrained_processor", None)
         if proc is not None:
-            proc._ttnn_logits_device = device
+            proc._ttnn_logits_device = None
         if device is not None:
-            print(
-                f"[LocalFiveHzLM] _ttnn_logits_device is SET ({type(device).__name__})",
-                flush=True,
-            )
-        else:
-            print("[LocalFiveHzLM] _ttnn_logits_device is NOT set", flush=True)
+            logger.debug("torch_ref.five_hz_lm: ignoring set_ttnn_logits_device (PyTorch reference handler).")
 
     def _clear_accelerator_cache(self) -> None:
         """Release freed accelerator memory back to the driver.
@@ -534,32 +534,15 @@ class LocalFiveHzLMHandler:
     def _load_pytorch_model(self, model_path: str, device: str) -> Tuple[bool, str]:
         """Load PyTorch model from path and return (success, status_message)"""
         try:
+            # Torch-ref package: always HuggingFace PyTorch (no experimental TTNN causal LM).
             if (
                 getattr(self, "_experimental_ttnn_causal_lm", False)
                 and getattr(self, "_ttnn_causal_device", None) is not None
             ):
-                from models.demos.ace_step_v1_5.ttnn_impl.five_hz_causal_lm_experimental import (
-                    AceStepFiveHzExperimentalTtnnCausalLM,
+                logger.warning(
+                    "torch_ref.five_hz_lm: experimental TTNN causal LM flags are ignored; "
+                    "loading AutoModelForCausalLM for PCC / torch reference."
                 )
-
-                self.llm = AceStepFiveHzExperimentalTtnnCausalLM(
-                    model_path,
-                    self._ttnn_causal_device,
-                    max_seq_len=int(getattr(self, "_ttnn_causal_max_seq_len", 16384)),
-                )
-                self.llm.eval()
-                self.llm_backend = "pt"
-                self.llm_initialized = True
-                self._experimental_ttnn_lm_active = True
-                logger.info(
-                    "5Hz LM initialized using experimental TTNN causal stack (ace_step_ds_r1_qwen); "
-                    "batch>1 / LM CFG batched paths are unsupported."
-                )
-                status_msg = (
-                    f"✅ 5Hz LM initialized (experimental TTNN causal)\nModel: {model_path}\n"
-                    f"Host tensors: {device}\nTTNN device: attached"
-                )
-                return True, status_msg
 
             self._experimental_ttnn_lm_active = False
             self.llm = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True)
