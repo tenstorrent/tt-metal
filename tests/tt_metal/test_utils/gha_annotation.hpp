@@ -40,13 +40,13 @@ enum class annotation_level {
 // The caller must ensure the referenced strings outlive the annotation object.
 struct annotation {
     annotation_level level{annotation_level::notice};
-    std::string_view message;
-    std::string_view file;
+    std::string_view message = {};
+    std::string_view file = {};
     std::optional<std::uint_least32_t> line;
     std::optional<std::uint_least32_t> end_line;
     std::optional<std::uint_least32_t> column;
     std::optional<std::uint_least32_t> end_column;
-    std::string_view title;
+    std::string_view title = {};
 };
 
 [[nodiscard]] constexpr std::string_view to_string(annotation_level level) noexcept {
