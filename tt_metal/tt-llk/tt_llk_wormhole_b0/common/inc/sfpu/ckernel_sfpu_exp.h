@@ -340,6 +340,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor)
     //   + is_fp32_dest_acc_en ? 0 : 1       (SFP_STOCH_RND fp32→bf16)
     //   + CLAMP_NEGATIVE ? 2 : 0            (SFPSWAP + SFPNOP)
     constexpr unsigned BODY_LEN = 17 + (SCALE_EN ? 2 : 0) + (is_fp32_dest_acc_en ? 0 : 1) + (CLAMP_NEGATIVE ? 2 : 0);
+    // constexpr int BODY_LEN = 17;
 
     // Record the loop body into replay buffer slot 0 the first time
     // through. Subsequent iterations replay the recorded sequence, which
@@ -423,18 +424,23 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor)
         TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
     }
 
-        // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
-        TTI_SFPSTORE(p_sfpu::LREG0, input_type, ADDR_MOD_3, 0);
-        TTI_INCRWC(0, 2, 0, 0);
+    // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
+    TTI_SFPSTORE(p_sfpu::LREG0, input_type, ADDR_MOD_3, 0);
+    TTI_INCRWC(0, 2, 0, 0);
+
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
 
 #pragma GCC unroll 8
-        for (std::uint32_t i = 0; i < ITERATIONS; i++)
-        {
-            // Replay the recorded body for the remaining ITERATIONS - 1 elements.
-            // Each replay is one REPLAY-equivalent issue; the body executes as
-            // if it had been issued inline, dst_reg advancing via ADDR_MOD_6.
-            TTI_REPLAY(0, BODY_LEN, 0, 1);
-        }
+    for (std::uint32_t i = 1; i < ITERATIONS; i++)
+    {
+        // Replay the recorded body for the remaining ITERATIONS - 1 elements.
+        // Each replay is one REPLAY-equivalent issue; the body executes as
+        // if it had been issued inline, dst_reg advancing via ADDR_MOD_6.
+        TTI_REPLAY(0, BODY_LEN, 1, 0);
+    }
 }
 
 template <bool is_fp32_dest_acc_en>
