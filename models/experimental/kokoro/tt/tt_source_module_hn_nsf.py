@@ -174,7 +174,7 @@ class TTSourceModuleHnNSF:
         if out_noise_raw is None:
             out_noise_raw_local = ttnn.zeros(
                 [B, p.time_len, 1],
-                dtype=ttnn.bfloat16,
+                dtype=p.sinegen.activation_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 memory_config=memory_config,

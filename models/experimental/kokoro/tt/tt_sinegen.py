@@ -78,6 +78,7 @@ class TTSineGenParams:
     dim: int
     upsample_scale: int
     sampling_rate: float
+    activation_dtype: ttnn.DataType = ttnn.bfloat16  # dtype for intermediate zeros / typecasts
 
 
 def _linear_interp_matrix(input_size: int, output_size: int) -> np.ndarray:
@@ -193,6 +194,7 @@ def preprocess_tt_sinegen(
         dim=int(dim),
         upsample_scale=int(upsample_scale),
         sampling_rate=float(sampling_rate),
+        activation_dtype=weights_dtype,
     )
 
 
@@ -212,7 +214,7 @@ class TTSineGen:
     def _zero_btd(self, B: int) -> ttnn.Tensor:
         return ttnn.zeros(
             [B, self.params.time_len, self.params.dim],
-            dtype=ttnn.bfloat16,
+            dtype=self.params.activation_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -221,7 +223,7 @@ class TTSineGen:
     def _zero_b1d(self, B: int) -> ttnn.Tensor:
         return ttnn.zeros(
             [B, 1, self.params.dim],
-            dtype=ttnn.bfloat16,
+            dtype=self.params.activation_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -254,7 +256,7 @@ class TTSineGen:
 
         # ``uv = (f0 > voiced_threshold).float()`` → [B, T, 1]
         uv_bool = ttnn.gt(f0_btd, p.voiced_threshold, memory_config=memory_config)
-        uv = ttnn.typecast(uv_bool, ttnn.bfloat16, memory_config=memory_config)
+        uv = ttnn.typecast(uv_bool, p.activation_dtype, memory_config=memory_config)
         ttnn.deallocate(uv_bool)
 
         # ``fn = f0 * harmonics`` → [B, T, dim]

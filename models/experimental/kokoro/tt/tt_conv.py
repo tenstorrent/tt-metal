@@ -57,10 +57,16 @@ def tt_conv1d_nlc(
     compute_config=None,
     out_dtype=ttnn.bfloat16,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    preserve_input_dtype: bool = False,
 ) -> ttnn.Tensor:
     """
     Conv1d on activations ``[B, L, C]`` (NLC). Returns ``[B, out_L, out_C]`` (NLC).
+
+    With ``preserve_input_dtype=True`` the output dtype is forced to match ``x_nlc.dtype`` (useful
+    for fp32 paths where the default bf16 output would clamp precision below WH's accumulator).
     """
+    if preserve_input_dtype:
+        out_dtype = x_nlc.dtype
     if conv_config is None:
         conv_config = ttnn.Conv1dConfig(weights_dtype=params.weight.dtype)
         conv_config.config_tensors_in_dram = True
