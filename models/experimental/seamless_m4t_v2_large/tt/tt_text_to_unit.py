@@ -23,7 +23,8 @@ encoder 4D additive mask with the same helpers used for the text encoder PCC tes
 from __future__ import annotations
 
 import math
-from typing import Any, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import torch
 import ttnn
@@ -142,8 +143,131 @@ def _expand_4d_padding_additive_b1(
     return out
 
 
+@dataclass
+class T2UTraceHardUpsampleCumsums:
+    """Device tensors for T2U when ``hard_upsample_cums`` is used (built **outside** trace capture).
+
+    The four ``*_inc`` / ``*_prev`` TILE float32 rows feed ``_hard_upsample_nlc`` (no Python-list
+    uploads). When the optional ``char_frame_idx_f32`` … fields are all set, the forward also skips
+    ``ttnn.arange`` / ``ttnn.pad`` / mask builders during capture — those allocate device buffers and
+    can enqueue writes while ``begin_trace_capture`` is active (Metal forbids that).
+    """
+
+    char_inc: ttnn.Tensor
+    char_prev: ttnn.Tensor
+    unit_inc: ttnn.Tensor
+    unit_prev: ttnn.Tensor
+    char_frame_idx_f32: Optional[ttnn.Tensor] = None
+    unit_frame_idx_f32: Optional[ttnn.Tensor] = None
+    char_pos_ids: Optional[ttnn.Tensor] = None
+    unit_pos_ids: Optional[ttnn.Tensor] = None
+    char_pad_bf16_tile: Optional[ttnn.Tensor] = None
+    pad_unit_bf16_tile: Optional[ttnn.Tensor] = None
+    attn_4d_bf16_tile: Optional[ttnn.Tensor] = None
+    pad_unit_3d_tt: Optional[ttnn.Tensor] = None
+    unit_hidden_pad_tail_bf16: Optional[ttnn.Tensor] = None
+
+
+def make_t2u_trace_prealloc_tensors(
+    device: ttnn.Device,
+    *,
+    pad_token_id: int,
+    hidden_size: int,
+    char_w: int,
+    cc_list: Sequence[int],
+    ref_durs: Sequence[int],
+    char_inc: ttnn.Tensor,
+    char_prev: ttnn.Tensor,
+    unit_inc: ttnn.Tensor,
+    unit_prev: ttnn.Tensor,
+) -> T2UTraceHardUpsampleCumsums:
+    """Pre-build T2U tensors that must not be allocated during trace capture (run before ``compile``)."""
+    char_len = int(sum(int(x) for x in cc_list))
+    unit_seq = int(sum(int(x) for x in ref_durs))
+    padded_unit_seq = ((unit_seq + 31) // 32) * 32
+    dur_sum = unit_seq
+
+    char_frame = ttnn.arange(0, char_len, step=1, dtype=ttnn.float32, device=device)
+    unit_frame = ttnn.arange(0, unit_seq, step=1, dtype=ttnn.float32, device=device)
+
+    char_seq_total = char_len
+    char_pad = _mask_row_valid_prefix(device, char_w, char_seq_total)
+    if char_seq_total < char_w:
+        char_pad = ttnn.slice(char_pad, [0, 0], [1, char_seq_total], [1, 1])
+    if char_len < char_w:
+        char_pad = ttnn.slice(char_pad, [0, 0], [1, char_len], [1, 1])
+
+    char_pos = ttnn.reshape(
+        ttnn.arange(
+            pad_token_id + 1,
+            pad_token_id + 1 + char_len,
+            step=1,
+            dtype=ttnn.uint32,
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        ),
+        (1, char_len),
+    )
+    unit_pos = ttnn.reshape(
+        ttnn.arange(
+            pad_token_id + 1,
+            pad_token_id + 1 + unit_seq,
+            step=1,
+            dtype=ttnn.uint32,
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        ),
+        (1, unit_seq),
+    )
+
+    pad_unit = _mask_row_valid_prefix(device, padded_unit_seq, dur_sum)
+    attn_4d = _expand_4d_padding_additive_b1(device, pad_unit, padded_unit_seq, padded_unit_seq)
+    pad_unit_3d = ttnn.reshape(pad_unit, (1, padded_unit_seq, 1))
+
+    tail: Optional[ttnn.Tensor] = None
+    if padded_unit_seq > unit_seq:
+        tail = ttnn.zeros(
+            (1, padded_unit_seq - unit_seq, hidden_size),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    return T2UTraceHardUpsampleCumsums(
+        char_inc=char_inc,
+        char_prev=char_prev,
+        unit_inc=unit_inc,
+        unit_prev=unit_prev,
+        char_frame_idx_f32=char_frame,
+        unit_frame_idx_f32=unit_frame,
+        char_pos_ids=char_pos,
+        unit_pos_ids=unit_pos,
+        char_pad_bf16_tile=char_pad,
+        pad_unit_bf16_tile=pad_unit,
+        attn_4d_bf16_tile=attn_4d,
+        pad_unit_3d_tt=pad_unit_3d,
+        unit_hidden_pad_tail_bf16=tail,
+    )
+
+
+def _conv1d_prep_tensor_id(t: ttnn.Tensor) -> int:
+    if t.is_allocated() and t.storage_type() == ttnn.StorageType.DEVICE:
+        return int(t.buffer_address())
+    return id(t)
+
+
 def _hard_upsample_nlc(
-    enc: ttnn.Tensor, repeats: Sequence[int], *, device: ttnn.Device, hidden_size: int
+    enc: ttnn.Tensor,
+    repeats: Sequence[int],
+    *,
+    device: ttnn.Device,
+    hidden_size: int,
+    cumsum_inc_tile: Optional[ttnn.Tensor] = None,
+    cumsum_prev_tile: Optional[ttnn.Tensor] = None,
+    frame_idx_f32: Optional[ttnn.Tensor] = None,
 ) -> ttnn.Tensor:
     """HF ``_hard_upsample`` for batch 1: ``enc`` is ``[1, T, H]`` tile; ``repeats`` length ``T``.
 
@@ -174,44 +298,58 @@ def _hard_upsample_nlc(
     if any(r < 0 for r in repeats_int):
         raise ValueError(f"_hard_upsample_nlc: negative repeat in {repeats_int!r}")
 
-    cumsum_inc_list: list[int] = []
-    acc = 0
-    for r in repeats_int:
-        acc += r
-        cumsum_inc_list.append(acc)
-    sum_r = acc
+    owns_cum_boundary_tensors = not (cumsum_inc_tile is not None and cumsum_prev_tile is not None)
+    if cumsum_inc_tile is not None and cumsum_prev_tile is not None:
+        cumsum_inc = cumsum_inc_tile
+        cumsum_prev = cumsum_prev_tile
+    else:
+        cumsum_inc_list: list[int] = []
+        acc = 0
+        for r in repeats_int:
+            acc += r
+            cumsum_inc_list.append(acc)
+        sum_r = acc
+        if sum_r <= 0:
+            raise ValueError("_hard_upsample_nlc: empty output (all repeat counts zero).")
+        cumsum_prev_list = [0] + cumsum_inc_list[:-1]
+
+        # Upload boundary vectors via the ``ttnn.Tensor`` constructor (Python-list
+        # path -- no torch); ROW_MAJOR first, then tilize for broadcast ops.
+        cumsum_inc_rm = ttnn.Tensor(
+            [float(x) for x in cumsum_inc_list],
+            [1, enc_seq],
+            ttnn.float32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            device,
+        )
+        cumsum_prev_rm = ttnn.Tensor(
+            [float(x) for x in cumsum_prev_list],
+            [1, enc_seq],
+            ttnn.float32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            device,
+        )
+        cumsum_inc = ttnn.to_layout(cumsum_inc_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        cumsum_prev = ttnn.to_layout(cumsum_prev_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(cumsum_inc_rm)
+        ttnn.deallocate(cumsum_prev_rm)
+
+    sum_r = int(sum(repeats_int))
     if sum_r <= 0:
         raise ValueError("_hard_upsample_nlc: empty output (all repeat counts zero).")
-    cumsum_prev_list = [0] + cumsum_inc_list[:-1]
 
-    # Upload boundary vectors via the ``ttnn.Tensor`` constructor (Python-list
-    # path -- no torch); ROW_MAJOR first, then tilize for broadcast ops.
-    cumsum_inc_rm = ttnn.Tensor(
-        [float(x) for x in cumsum_inc_list],
-        [1, enc_seq],
-        ttnn.float32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        device,
-    )
-    cumsum_prev_rm = ttnn.Tensor(
-        [float(x) for x in cumsum_prev_list],
-        [1, enc_seq],
-        ttnn.float32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        device,
-    )
-    cumsum_inc = ttnn.to_layout(cumsum_inc_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    cumsum_prev = ttnn.to_layout(cumsum_prev_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(cumsum_inc_rm)
-    ttnn.deallocate(cumsum_prev_rm)
-
-    frame_idx = ttnn.arange(
-        start=0,
-        end=sum_r,
-        step=1,
-        dtype=ttnn.float32,
-        device=device,
-    )
+    if frame_idx_f32 is not None:
+        frame_idx = frame_idx_f32
+        owns_frame_idx = False
+    else:
+        frame_idx = ttnn.arange(
+            start=0,
+            end=sum_r,
+            step=1,
+            dtype=ttnn.float32,
+            device=device,
+        )
+        owns_frame_idx = True
 
     # Broadcast layout: cumsum_* -> [1, 1, T]; frame_idx -> [1, sum_r, 1].
     # ge/lt broadcast to [1, sum_r, T]; the resulting H[f, t] is 1 iff the
@@ -219,13 +357,18 @@ def _hard_upsample_nlc(
     c_b = ttnn.reshape(cumsum_inc, (1, 1, enc_seq))
     cp_b = ttnn.reshape(cumsum_prev, (1, 1, enc_seq))
     f_b = ttnn.reshape(frame_idx, (1, sum_r, 1))
-    ttnn.deallocate(frame_idx)
+    if owns_frame_idx:
+        ttnn.deallocate(frame_idx)
 
     lower = ttnn.ge(f_b, cp_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     upper = ttnn.lt(f_b, c_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(c_b)
-    ttnn.deallocate(cp_b)
-    ttnn.deallocate(f_b)
+    # ``reshape`` may alias the TILE cum vectors; do not free views of caller-owned
+    # ``hard_upsample_cums.*`` (trace pack tensors must survive across forwards).
+    if owns_cum_boundary_tensors:
+        ttnn.deallocate(c_b)
+        ttnn.deallocate(cp_b)
+    if owns_frame_idx:
+        ttnn.deallocate(f_b)
 
     H_mask = ttnn.logical_and(lower, upper, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(lower)
@@ -283,6 +426,7 @@ def _conv1d_same(
     padding: int,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig,
     activation: Optional[str] = None,
+    prep_cache: Optional[Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]] = None,
 ) -> ttnn.Tensor:
     """Same-padding Conv1d stride 1 via ``ttnn.conv1d`` (activations ``[B,S,C]`` NLC).
 
@@ -347,24 +491,99 @@ def _conv1d_same(
     if seq > 64 or in_channels >= 512:
         conv_kwargs["act_block_h_override"] = 32
     conv_config = ttnn.Conv1dConfig(**conv_kwargs)
-    out_tt, _out_len = ttnn.conv1d(
-        input_tensor=x_rm,
-        weight_tensor=weight_rm,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        device=device,
-        bias_tensor=bias_rm,
-        kernel_size=kernel_size,
-        stride=1,
-        padding=padding,
-        batch_size=batch,
-        input_length=seq,
-        conv_config=conv_config,
-        compute_config=compute_kernel_config,
-        groups=1,
-        dtype=ttnn.bfloat16,
-        return_output_dim=True,
+    # Prepared conv weights depend on the *weight* tensor and conv geometry, not the activation's
+    # DRAM/L1 memory_config. Including activation layout in the key caused cache misses when the
+    # standalone T2U probe ran before the full E2E graph (or between compile vs trace replay), which
+    # forced ``return_weights_and_bias=True`` and ``write_shard_to_device`` — illegal during trace capture.
+    cache_key = (
+        _conv1d_prep_tensor_id(weight_rm),
+        _conv1d_prep_tensor_id(bias_rm) if bias_rm is not None else 0,
+        batch,
+        seq,
+        in_channels,
+        out_channels,
+        kernel_size,
+        padding,
+        activation or "",
+        int(conv_kwargs.get("act_block_h_override", 0)),
     )
+    if prep_cache is not None:
+        cached = prep_cache.get(cache_key)
+        if cached is not None:
+            prep_w, prep_b = cached
+            out_tt, _out_len = ttnn.conv1d(
+                input_tensor=x_rm,
+                weight_tensor=prep_w,
+                in_channels=in_channels,
+                out_channels=out_channels,
+                device=device,
+                bias_tensor=prep_b,
+                kernel_size=kernel_size,
+                stride=1,
+                padding=padding,
+                batch_size=batch,
+                input_length=seq,
+                conv_config=conv_config,
+                compute_config=compute_kernel_config,
+                groups=1,
+                dtype=ttnn.bfloat16,
+                return_output_dim=True,
+                return_weights_and_bias=False,
+            )
+        else:
+            packed = ttnn.conv1d(
+                input_tensor=x_rm,
+                weight_tensor=weight_rm,
+                in_channels=in_channels,
+                out_channels=out_channels,
+                device=device,
+                bias_tensor=bias_rm,
+                kernel_size=kernel_size,
+                stride=1,
+                padding=padding,
+                batch_size=batch,
+                input_length=seq,
+                conv_config=conv_config,
+                compute_config=compute_kernel_config,
+                groups=1,
+                dtype=ttnn.bfloat16,
+                return_output_dim=True,
+                return_weights_and_bias=True,
+            )
+            out_tt, _out_len, wb = packed
+            if isinstance(wb, (list, tuple)) and len(wb) >= 1:
+                pw = wb[0]
+                pb = wb[1] if len(wb) > 1 else None
+            else:
+                pw, pb = wb, None
+            # ``conv1d`` may return prepared weights tied to internal buffers. After the compile
+            # forward frees the output graph, those handles can become invalid while ``prep_cache``
+            # still references them; the trace replay then hits ``cache hit`` but
+            # ``is_valid_device_conv_weights`` fails and conv2d re-prepares (``write_shard_to_device``),
+            # which is illegal during trace capture. Own copies in DRAM for the cache.
+            prep_cache[cache_key] = (
+                ttnn.clone(pw, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                ttnn.clone(pb, memory_config=ttnn.DRAM_MEMORY_CONFIG) if pb is not None else None,
+            )
+    else:
+        out_tt, _out_len = ttnn.conv1d(
+            input_tensor=x_rm,
+            weight_tensor=weight_rm,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            device=device,
+            bias_tensor=bias_rm,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=padding,
+            batch_size=batch,
+            input_length=seq,
+            conv_config=conv_config,
+            compute_config=compute_kernel_config,
+            groups=1,
+            dtype=ttnn.bfloat16,
+            return_output_dim=True,
+        )
     if out_tt.get_layout() != ttnn.TILE_LAYOUT:
         out_tile = ttnn.to_layout(out_tt, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_tt)
@@ -654,6 +873,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             if getattr(p_dp.proj, "bias", None) is not None
             else None
         )
+        self._conv1d_prepared_cache: Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]] = {}
 
     def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
         m = max(seq_q, seq_k)
@@ -789,6 +1009,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             padding=pad,
             compute_kernel_config=self._conv_compute_cfg,
             activation="relu",
+            prep_cache=self._conv1d_prepared_cache,
         )
         h = self._layer_norm(h, weight=p.ln1.weight, bias=p.ln1.bias)
         h = ttnn.multiply(h, mask_bc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -805,6 +1026,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             padding=pad,
             compute_kernel_config=self._conv_compute_cfg,
             activation="relu",
+            prep_cache=self._conv1d_prepared_cache,
         )
         h = self._layer_norm(h, weight=p.ln2.weight, bias=p.ln2.bias)
 
@@ -877,6 +1099,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             padding=3,
             compute_kernel_config=self._conv_compute_cfg,
             activation="relu",
+            prep_cache=self._conv1d_prepared_cache,
         )
         hidden = ttnn.multiply(hidden, mask_bc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         hidden = _conv1d_same(
@@ -890,6 +1113,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             kernel_size=7,
             padding=3,
             compute_kernel_config=self._conv_compute_cfg,
+            prep_cache=self._conv1d_prepared_cache,
         )
         hidden = ttnn.add(residual, hidden, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         hidden = self._layer_norm(
@@ -907,6 +1131,8 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         char_count_per_id: Sequence[int],
         *,
         reference_discrete_durations: Optional[Sequence[int]] = None,
+        hard_upsample_cums: Optional[T2UTraceHardUpsampleCumsums] = None,
+        trace_no_profiler: bool = False,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Args:
@@ -917,6 +1143,11 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             reference_discrete_durations: optional per-character integer durations (length ``char_len``),
                 e.g. from [`hf_discrete_duration_counts_batch1`], to match HF unit length in PCC tests while
                 the TTNN duration predictor is converged. When ``None``, durations come from the TT predictor.
+            hard_upsample_cums: optional pre-tilized cumsum rows for both hard upsamples (trace capture).
+                For **full** trace capture (no device writes during ``begin_trace_capture``), build the pack
+                with ``make_t2u_trace_prealloc_tensors`` so ``char_frame_idx_f32`` … ``pad_unit_3d_tt``
+                are populated; cumsum-only packs still use dynamic ``arange`` / masks (not trace-safe).
+            trace_no_profiler: when True, skip ``ReadDeviceProfiler`` (not allowed during trace capture).
 
         Returns:
             ``(lm_logits, padding_mask)`` both tile bf16 on device (``padding_mask`` is ``1`` = valid),
@@ -932,15 +1163,43 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         if len(cc_list) != enc_seq:
             raise ValueError(f"char_count_per_id length {len(cc_list)} must equal enc_seq {enc_seq}.")
 
+        tb = hard_upsample_cums
+        full_trace_prebuf = (
+            tb is not None
+            and tb.char_pad_bf16_tile is not None
+            and tb.char_frame_idx_f32 is not None
+            and tb.char_pos_ids is not None
+            and tb.unit_frame_idx_f32 is not None
+            and tb.unit_pos_ids is not None
+            and tb.pad_unit_bf16_tile is not None
+            and tb.attn_4d_bf16_tile is not None
+            and tb.pad_unit_3d_tt is not None
+        )
+
         enc_out = self.encoder.forward(inputs_embeds, encoder_attention_mask_4d)
 
         char_w = int(char_input_ids.shape[1])
         char_seq_total = int(sum(cc_list))
-        char_pad = _mask_row_valid_prefix(self.device, char_w, char_seq_total)
-        if char_seq_total < char_w:
-            char_pad = ttnn.slice(char_pad, [0, 0], [1, char_seq_total], [1, 1])
+        if full_trace_prebuf:
+            char_pad = tb.char_pad_bf16_tile
+        else:
+            char_pad = _mask_row_valid_prefix(self.device, char_w, char_seq_total)
+            if char_seq_total < char_w:
+                char_pad = ttnn.slice(char_pad, [0, 0], [1, char_seq_total], [1, 1])
 
-        up1 = _hard_upsample_nlc(enc_out, cc_list, device=self.device, hidden_size=self.hidden_size)
+        char_frame_f32 = tb.char_frame_idx_f32 if full_trace_prebuf else None
+        if hard_upsample_cums is not None:
+            up1 = _hard_upsample_nlc(
+                enc_out,
+                cc_list,
+                device=self.device,
+                hidden_size=self.hidden_size,
+                cumsum_inc_tile=hard_upsample_cums.char_inc,
+                cumsum_prev_tile=hard_upsample_cums.char_prev,
+                frame_idx_f32=char_frame_f32,
+            )
+        else:
+            up1 = _hard_upsample_nlc(enc_out, cc_list, device=self.device, hidden_size=self.hidden_size)
         # Upsampled character length equals ``sum(char_count_per_id)`` (batch 1); do not rely on
         # ``up1.shape[1]`` alone — tile layout can report incorrect logical widths to Python.
         char_len = char_seq_total
@@ -948,7 +1207,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             raise RuntimeError(
                 f"char upsample width mismatch: up1.shape[1]={int(up1.shape[1])} vs sum(char_count)={char_len}."
             )
-        if char_len < char_w:
+        if not full_trace_prebuf and char_len < char_w:
             char_pad = ttnn.slice(char_pad, [0, 0], [1, char_len], [1, 1])
         elif char_len > char_w:
             raise ValueError(f"Upsampled char length {char_len} exceeds char_input_ids width {char_w}; pad HF inputs.")
@@ -958,24 +1217,28 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         # views may share storage with ``char_pad_tt``.
         char_pad_valid_host = [1.0] * char_len
 
-        pos_ids = ttnn.reshape(
-            ttnn.arange(
-                self.pad_token_id + 1,
-                self.pad_token_id + 1 + char_len,
-                step=1,
-                dtype=ttnn.uint32,
-                device=self.device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ),
-            (1, char_len),
-        )
+        if full_trace_prebuf:
+            pos_ids = tb.char_pos_ids
+        else:
+            pos_ids = ttnn.reshape(
+                ttnn.arange(
+                    self.pad_token_id + 1,
+                    self.pad_token_id + 1 + char_len,
+                    step=1,
+                    dtype=ttnn.uint32,
+                    device=self.device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                (1, char_len),
+            )
         pos_emb_tt = ttnn.embedding(
             pos_ids,
             weight=dec.embed_char_positions.weight,
             layout=ttnn.TILE_LAYOUT,
         )
-        ttnn.deallocate(pos_ids)
+        if not full_trace_prebuf:
+            ttnn.deallocate(pos_ids)
 
         char_ids_slice = char_input_ids
         if char_w > char_len:
@@ -1006,16 +1269,30 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         for j in range(char_len):
             if j < len(char_pad_valid_host) and char_pad_valid_host[j] < 0.5:
                 dur_list[j] = 0
-        ttnn.deallocate(char_pad)
+        if not full_trace_prebuf:
+            ttnn.deallocate(char_pad)
 
         # Drain the device profiler buffer at the natural encoder/decoder boundary.  The
         # duration readback above already syncs host<->device, so this adds no extra wait
         # in profiler builds and compiles to a no-op in normal builds.  Without it, the
         # 12000-marker on-device buffer overflows on a full forward (~1300 ops) and
         # ``python -m tracy`` fails post-run with "Op N not present in cpp_device_perf_report".
-        ttnn.ReadDeviceProfiler(self.device)
+        if not trace_no_profiler:
+            ttnn.ReadDeviceProfiler(self.device)
 
-        up2 = _hard_upsample_nlc(char_h, dur_list, device=self.device, hidden_size=self.hidden_size)
+        unit_frame_f32 = tb.unit_frame_idx_f32 if full_trace_prebuf else None
+        if hard_upsample_cums is not None:
+            up2 = _hard_upsample_nlc(
+                char_h,
+                dur_list,
+                device=self.device,
+                hidden_size=self.hidden_size,
+                cumsum_inc_tile=hard_upsample_cums.unit_inc,
+                cumsum_prev_tile=hard_upsample_cums.unit_prev,
+                frame_idx_f32=unit_frame_f32,
+            )
+        else:
+            up2 = _hard_upsample_nlc(char_h, dur_list, device=self.device, hidden_size=self.hidden_size)
         ttnn.deallocate(char_h)
         unit_seq = int(sum(dur_list))
         if int(up2.shape[1]) != unit_seq:
@@ -1023,24 +1300,28 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
                 f"unit upsample width mismatch: up2.shape[1]={int(up2.shape[1])} vs sum(dur_list)={unit_seq}."
             )
 
-        pos_ids2 = ttnn.reshape(
-            ttnn.arange(
-                self.pad_token_id + 1,
-                self.pad_token_id + 1 + unit_seq,
-                step=1,
-                dtype=ttnn.uint32,
-                device=self.device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ),
-            (1, unit_seq),
-        )
+        if full_trace_prebuf:
+            pos_ids2 = tb.unit_pos_ids
+        else:
+            pos_ids2 = ttnn.reshape(
+                ttnn.arange(
+                    self.pad_token_id + 1,
+                    self.pad_token_id + 1 + unit_seq,
+                    step=1,
+                    dtype=ttnn.uint32,
+                    device=self.device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                (1, unit_seq),
+            )
         pos2_tt = ttnn.embedding(
             pos_ids2,
             weight=dec.embed_positions.weight,
             layout=ttnn.TILE_LAYOUT,
         )
-        ttnn.deallocate(pos_ids2)
+        if not full_trace_prebuf:
+            ttnn.deallocate(pos_ids2)
 
         hidden = ttnn.add(
             up2,
@@ -1057,10 +1338,23 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         assert dur_sum == unit_seq
         padded_unit_seq = ((unit_seq + 31) // 32) * 32
         if padded_unit_seq > unit_seq:
-            hidden = ttnn.pad(hidden, [(0, 0), (0, padded_unit_seq - unit_seq), (0, 0)], value=0.0)
-        pad_unit = _mask_row_valid_prefix(self.device, padded_unit_seq, dur_sum)
-        attn_4d_tt = _expand_4d_padding_additive_b1(self.device, pad_unit, padded_unit_seq, padded_unit_seq)
-        pad_unit_tt = ttnn.reshape(pad_unit, (1, padded_unit_seq, 1))
+            if full_trace_prebuf:
+                tail_tt = tb.unit_hidden_pad_tail_bf16
+                if tail_tt is None:
+                    raise RuntimeError(
+                        "T2U trace prebuf: padded_unit_seq > unit_seq but unit_hidden_pad_tail_bf16 is None."
+                    )
+                hidden = ttnn.concat([hidden, tail_tt], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                hidden = ttnn.pad(hidden, [(0, 0), (0, padded_unit_seq - unit_seq), (0, 0)], value=0.0)
+        if full_trace_prebuf:
+            pad_unit = tb.pad_unit_bf16_tile
+            attn_4d_tt = tb.attn_4d_bf16_tile
+            pad_unit_tt = tb.pad_unit_3d_tt
+        else:
+            pad_unit = _mask_row_valid_prefix(self.device, padded_unit_seq, dur_sum)
+            attn_4d_tt = _expand_4d_padding_additive_b1(self.device, pad_unit, padded_unit_seq, padded_unit_seq)
+            pad_unit_tt = ttnn.reshape(pad_unit, (1, padded_unit_seq, 1))
 
         num_heads = self.decoder_attention_heads
         head_dim = self.hidden_size // num_heads
@@ -1094,8 +1388,9 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             compute_kernel_config=self._linear_ln_compute_cfg,
         )
         ttnn.deallocate(hidden)
-        ttnn.deallocate(attn_4d_tt)
-        ttnn.deallocate(pad_unit_tt)
+        if not full_trace_prebuf:
+            ttnn.deallocate(attn_4d_tt)
+            ttnn.deallocate(pad_unit_tt)
         # Slice back to the logical unit-seq so callers see ``[..., unit_seq, vocab]``. ``ttnn.slice``
         # requires the begins/ends/strides to match the input rank, which can be 3D or 4D depending
         # on the linear output layout.
