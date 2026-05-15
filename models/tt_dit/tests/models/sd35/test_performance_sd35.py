@@ -11,7 +11,12 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
-from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import StableDiffusion3Pipeline
+from ....parallel.config import DiTParallelConfig
+from ....pipelines.events import profiler_event_callback
+from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
+    StableDiffusion3Pipeline,
+    StableDiffusion3PipelineConfig,
+)
 
 
 def get_expected_metrics(mesh_device):
@@ -100,18 +105,18 @@ def test_sd35_new_pipeline_performance(
     logger.info(f"  Guidance scale: {guidance_scale}")
     logger.info(f"  Inference steps: {num_inference_steps}")
 
-    pipeline = StableDiffusion3Pipeline.create_pipeline(
-        mesh_device=mesh_device,
-        batch_size=1,
-        image_w=image_w,
-        image_h=image_h,
-        guidance_scale=guidance_scale,
-        cfg_config=cfg,
-        sp_config=sp,
-        tp_config=tp,
-        num_links=num_links,
-        checkpoint_name=model_location_generator(
-            f"stabilityai/stable-diffusion-3.5-{model_name}", model_subdir="StableDiffusion_35_Large"
+    pipeline = StableDiffusion3Pipeline(
+        device=mesh_device,
+        config=StableDiffusion3PipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            dit_parallel_config=DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp),
+            topology=topology,
+            num_links=num_links,
+            width=image_w,
+            height=image_h,
+            checkpoint_name=model_location_generator(
+                f"stabilityai/stable-diffusion-3.5-{model_name}", model_subdir="StableDiffusion_35_Large"
+            ),
         ),
     )
 
@@ -130,14 +135,9 @@ def test_sd35_new_pipeline_performance(
 
     with benchmark_profiler("run", iteration=0):
         images = pipeline(
-            prompt_1=[prompts[0]],
-            prompt_2=[prompts[0]],
-            prompt_3=[prompts[0]],
-            negative_prompt_1=[negative_prompt],
-            negative_prompt_2=[negative_prompt],
-            negative_prompt_3=[negative_prompt],
+            prompts=[prompts[0]],
+            negative_prompts=[negative_prompt],
             num_inference_steps=num_inference_steps,
-            seed=0,
             traced=True,
         )
     images[0].save(f"sd35_new_{image_w}_{image_h}_warmup.png")
@@ -167,17 +167,11 @@ def test_sd35_new_pipeline_performance(
             prompt_idx = (i + 1) % len(prompts)
             with benchmark_profiler("run", iteration=i):
                 images = pipeline(
-                    prompt_1=[prompts[prompt_idx]],
-                    prompt_2=[prompts[prompt_idx]],
-                    prompt_3=[prompts[prompt_idx]],
-                    negative_prompt_1=[negative_prompt],
-                    negative_prompt_2=[negative_prompt],
-                    negative_prompt_3=[negative_prompt],
+                    prompts=[prompts[prompt_idx]],
+                    negative_prompts=[negative_prompt],
                     num_inference_steps=num_inference_steps,
-                    seed=0,  # Different seed for each run
                     traced=True,
-                    profiler=benchmark_profiler,
-                    profiler_iteration=i,
+                    on_event=profiler_event_callback(benchmark_profiler, i),
                 )
             images[0].save(f"sd35_new_{image_w}_{image_h}_perf_run{i}.png")
 

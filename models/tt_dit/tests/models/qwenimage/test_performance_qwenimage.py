@@ -11,7 +11,9 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
-from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
+from ....parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
+from ....pipelines.events import profiler_event_callback
+from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
 
 
 @pytest.mark.parametrize(
@@ -64,19 +66,20 @@ def test_qwenimage_pipeline_performance(
     logger.info(f"  Image size: {image_w}x{image_h}")
     logger.info(f"  Inference steps: {num_inference_steps}")
 
-    pipeline = QwenImagePipeline.create_pipeline(
-        mesh_device=mesh_device,
-        dit_cfg=cfg,
-        dit_sp=sp,
-        dit_tp=tp,
-        encoder_tp=encoder_tp,
-        vae_tp=vae_tp,
-        use_torch_text_encoder=False,
-        use_torch_vae_decoder=False,
-        num_links=num_links,
-        topology=topology,
-        width=image_w,
-        height=image_h,
+    pipeline = QwenImagePipeline(
+        device=mesh_device,
+        config=QwenImagePipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            dit_parallel_config=DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp),
+            encoder_parallel_config=EncoderParallelConfig.from_tuple(encoder_tp),
+            vae_parallel_config=VAEParallelConfig.from_tuple(vae_tp),
+            use_torch_text_encoder=False,
+            use_torch_vae_decoder=False,
+            num_links=num_links,
+            topology=topology,
+            width=image_w,
+            height=image_h,
+        ),
     )
 
     prompts = [
@@ -93,10 +96,7 @@ def test_qwenimage_pipeline_performance(
     with benchmark_profiler("run", iteration=0):
         images = pipeline(
             prompts=[prompts[0]],
-            negative_prompts=[None],
             num_inference_steps=num_inference_steps,
-            cfg_scale=4.0,
-            seed=0,
             traced=True,
         )
     images[0].save(f"qwenimage_{image_w}_{image_h}_warmup.png")
@@ -127,13 +127,9 @@ def test_qwenimage_pipeline_performance(
             with benchmark_profiler("run", iteration=i):
                 images = pipeline(
                     prompts=[prompts[prompt_idx]],
-                    negative_prompts=[None],
                     num_inference_steps=num_inference_steps,
-                    cfg_scale=4.0,
-                    seed=0,
                     traced=True,
-                    profiler=benchmark_profiler,
-                    profiler_iteration=i,
+                    on_event=profiler_event_callback(benchmark_profiler, i),
                 )
 
             logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")

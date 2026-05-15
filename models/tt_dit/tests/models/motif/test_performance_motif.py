@@ -10,8 +10,9 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-
-from ....pipelines.motif.pipeline_motif import MotifPipeline
+from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
+from models.tt_dit.pipelines.events import profiler_event_callback
+from models.tt_dit.pipelines.motif.pipeline_motif import MotifPipeline, MotifPipelineConfig
 
 
 # TODO: Factor out commonalities with motif pipeline
@@ -80,16 +81,18 @@ def test_motif_pipeline_performance(
     logger.info(f"  Guidance scale: {guidance_scale}")
     logger.info(f"  Inference steps: {num_inference_steps}")
 
-    pipeline = MotifPipeline.create_pipeline(
-        mesh_device=mesh_device,
-        dit_cfg=cfg,
-        dit_sp=sp,
-        dit_tp=tp,
-        encoder_tp=encoder_tp,
-        vae_tp=vae_tp,
-        topology=topology,
-        num_links=num_links,
-        checkpoint_name=model_location_generator("Motif-Technologies/Motif-Image-6B-Preview"),
+    pipeline = MotifPipeline(
+        device=mesh_device,
+        config=MotifPipelineConfig.default(
+            dit_parallel_config=DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp),
+            encoder_parallel_config=EncoderParallelConfig.from_tuple(encoder_tp),
+            vae_parallel_config=VAEParallelConfig.from_tuple(vae_tp),
+            num_links=num_links,
+            topology=topology,
+            width=image_w,
+            height=image_h,
+            checkpoint_name=model_location_generator("Motif-Technologies/Motif-Image-6B-Preview"),
+        ),
     )
 
     # Test prompts - diverse set for comprehensive performance testing
@@ -105,7 +108,7 @@ def test_motif_pipeline_performance(
     logger.info("Running warmup iteration...")
 
     with benchmark_profiler("run", iteration=0):
-        images = pipeline.run_single_prompt(prompt=prompts[0], num_inference_steps=num_inference_steps, seed=0)
+        images = pipeline.run_single_prompt(prompt=prompts[0], num_inference_steps=num_inference_steps)
     images[0].save(f"motif_{image_w}_{image_h}_warmup.png")
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
@@ -135,9 +138,7 @@ def test_motif_pipeline_performance(
                 images = pipeline.run_single_prompt(
                     prompt=prompts[prompt_idx],
                     num_inference_steps=num_inference_steps,
-                    seed=0,
-                    profiler=benchmark_profiler,
-                    profiler_iteration=i,
+                    on_event=profiler_event_callback(benchmark_profiler, i),
                 )
             images[0].save(f"motif_{image_w}_{image_h}_perf_run{i}.png")
 
