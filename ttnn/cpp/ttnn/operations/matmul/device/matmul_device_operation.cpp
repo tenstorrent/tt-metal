@@ -62,74 +62,12 @@ void validate_matmul_matrix_dimensions(
         Kt_b);
 }
 
-bool program_config_fuses_batch_dim_for_m(const operations::matmul::MatmulProgramConfig& program_config) {
-    return std::visit(
-        [](const auto& cfg) -> bool {
-            using T = std::decay_t<decltype(cfg)>;
-            if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                return cfg.fuse_batch;
-            }
-            if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                return cfg.fuse_batch;
-            }
-            if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
-                return true;
-            }
-            if constexpr (std::
-                              is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                return true;
-            }
-            if constexpr (std::is_same_v<
-                              T,
-                              operations::matmul::MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
-                return true;
-            }
-            return false;
-        },
-        program_config);
-}
-
-void validate_matmul_tile_configuration_and_alignment(
+void validate_matmul_tile_constraints(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const ttnn::Shape& a_shape_padded,
-    const ttnn::Shape& b_shape_padded,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
     const operations::matmul::MatmulProgramConfig& chosen_program_config) {
-    TT_FATAL(
-        a_shape_padded[-1] % in0_tile.get_width() == 0,
-        "Input A padded width (K) {} must be divisible by in0 tile width {}",
-        a_shape_padded[-1],
-        in0_tile.get_width());
-    TT_FATAL(
-        b_shape_padded[-2] % in1_tile.get_height() == 0,
-        "Input B padded height (K) {} must be divisible by in1 tile height {}",
-        b_shape_padded[-2],
-        in1_tile.get_height());
-    TT_FATAL(
-        b_shape_padded[-1] % in1_tile.get_width() == 0,
-        "Input B padded width (N) {} must be divisible by in1 tile width {}",
-        b_shape_padded[-1],
-        in1_tile.get_width());
-
-    const bool fuse_batch_for_m = program_config_fuses_batch_dim_for_m(chosen_program_config);
-    if (fuse_batch_for_m) {
-        TT_FATAL(a_shape_padded[-1] != 0, "Invalid padded K dimension (zero) on input A");
-        const uint64_t m_extent_elems = a_shape_padded.volume() / a_shape_padded[-1];
-        TT_FATAL(
-            m_extent_elems % in0_tile.get_height() == 0,
-            "Fused-batch matmul: combined M extent ({}) must be divisible by in0 tile height {}",
-            m_extent_elems,
-            in0_tile.get_height());
-    } else if (a_shape_padded.rank() >= 2) {
-        TT_FATAL(
-            a_shape_padded[-2] % in0_tile.get_height() == 0,
-            "Input A padded height (M) {} must be divisible by in0 tile height {}",
-            a_shape_padded[-2],
-            in0_tile.get_height());
-    }
-
     constexpr uint32_t bfloat4_min_outer_tile_extent = 4;
     if (input_tensor_a.dtype() == DataType::BFLOAT4_B) {
         TT_FATAL(
@@ -674,8 +612,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         bias_single_tile_size,
         attributes);
 
-    validate_matmul_tile_configuration_and_alignment(
-        input_tensor_a, input_tensor_b, a_shape_padded, b_shape_padded, in0_tile, in1_tile, chosen_program_config);
+    validate_matmul_tile_constraints(input_tensor_a, input_tensor_b, in0_tile, in1_tile, chosen_program_config);
     validate_matmul_block_and_subblock_configuration(attributes, chosen_program_config);
 
     validate_matmul_compute_grid_and_per_core_dims(input_tensor_a, chosen_program_config);
