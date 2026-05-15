@@ -557,9 +557,14 @@ def test_moe_compute_single_card_deepseek_with_bias(mesh_device, mesh_shape):
 #      branch with the cb_c2c_ones_tile + bias-row matmul).
 #   4. SWIGLU activation, which PR #43932 was the first to actually exercise (commit 3918012f6e1).
 #
-# Setting TT_MOE_BH_N=12 in the environment forces the kernel to run at N=12 to hit gap (1);
-# leaving it unset uses the default (16), which still exercises gaps (2)-(4) plus a different
-# bank-run partition than DS-v3. Both configurations should pass.
+# Required environment on BH: TT_MOE_BH_N=12.
+# Why: hidden_size=2880 → output_width_shard_dim = auto_output_width_shard_dim(2880) = 3
+# (Ht=90 has no divisor ≤4 except 3). The op validates matmul_num_cores % num_data_parallel_cores
+# == 0 (moe_compute_device_operation.cpp:128-133). On BH the matmul ring is bh_ring_size cores:
+#   N=8:  8 % 3 ≠ 0 → validate REJECTS (correctly — 8-core ring can't split into 3 cols)
+#   N=12: 12 % 3 == 0 → passes validate, then the kernel actually exercises gap (1)
+#   N=16: 16 % 3 ≠ 0 → validate REJECTS (correctly — same reason)
+# On WH the ring is always 12 cores (12 DRAM banks, 1:1), so 12%3==0 and the test passes there too.
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -572,7 +577,26 @@ def test_moe_compute_single_card_deepseek_with_bias(mesh_device, mesh_shape):
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape):
-    """compute_only=True on a 1x1 WH mesh, GPT-OSS-shaped workload (hidden=N=2880, SWIGLU+bias)."""
+    """compute_only=True on a 1x1 WH mesh, GPT-OSS-shaped workload (hidden=N=2880, SWIGLU+bias).
+
+    Conditionally xfails on BH when TT_MOE_BH_N != 12: GPT-OSS forces
+    output_width_shard_dim=3, and the op validates matmul_num_cores % 3 == 0. Only N=12
+    satisfies that on BH. The validate's failure is the correct behavior, not a regression,
+    so xfail keeps CI honest while still surfacing the unsupported (arch, N) combo.
+    """
+    # Decide xfail before _run_moe_compute_single_card_test sets up tensors/goldens —
+    # bail out cheaply rather than burning CPU on a setup whose op call we know rejects.
+    if mesh_device.arch() == ttnn.device.Arch.BLACKHOLE:
+        # Fallback "12" mirrors the BH default in _get_bh_ring_size() / resolve_bh_ring_size().
+        bh_n = int(os.environ.get("TT_MOE_BH_N", "12"))
+        if bh_n != 12:
+            pytest.xfail(
+                f"GPT-OSS on BH requires TT_MOE_BH_N=12 (current={bh_n}). hidden_size=2880 "
+                f"forces output_width_shard_dim=3 (auto_output_width_shard_dim) and the op "
+                f"validates matmul_num_cores % 3 == 0 (moe_compute_device_operation.cpp:128-133). "
+                f"On BH the matmul ring is bh_ring_size cores: 8%3≠0 and 16%3≠0; only 12%3==0. "
+                f"The BH default is 12; this xfail only fires when an explicit override picks 8 or 16."
+            )
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
