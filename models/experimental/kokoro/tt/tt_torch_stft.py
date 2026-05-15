@@ -60,6 +60,10 @@ class TTTorchSTFTParams:
     output_length: int  # round-trip output length
     K: int  # n_fft // 2 + 1
     F: int  # number of frames
+    # Conv2d STFT projection kernels (old TT path, used for transform only).
+    conv_stft_real: ttnn.Tensor  # [K, 1, n_fft, 1], ROW_MAJOR
+    conv_stft_imag: ttnn.Tensor  # [K, 1, n_fft, 1], ROW_MAJOR
+    conv_pad_len: int
 
 
 def _hann_window(win_length: int) -> np.ndarray:
@@ -161,6 +165,148 @@ def _upload(arr: np.ndarray, device, *, dtype: ttnn.DataType) -> ttnn.Tensor:
     )
 
 
+def _upload_rm(arr: np.ndarray, *, dtype: ttnn.DataType) -> ttnn.Tensor:
+    return ttnn.from_torch(
+        torch.from_numpy(arr.astype(np.float32)),
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _build_conv_stft_kernels(n_fft: int, win_length: int) -> tuple[np.ndarray, np.ndarray]:
+    """Build conv2d-compatible forward STFT kernels ``[K, 1, n_fft, 1]``."""
+    window = torch.hann_window(win_length, periodic=True, dtype=torch.float32)
+    if win_length < n_fft:
+        window = torch.nn.functional.pad(window, (0, n_fft - win_length))
+    elif win_length > n_fft:
+        window = window[:n_fft]
+    w = window.numpy()
+
+    k = np.arange(n_fft // 2 + 1)
+    n = np.arange(n_fft)
+    angle = 2.0 * np.pi * np.outer(k, n) / n_fft
+    real = (np.cos(angle) * w)[:, None, :, None].astype(np.float32)
+    imag = ((-np.sin(angle)) * w)[:, None, :, None].astype(np.float32)
+    return real, imag
+
+
+def _time_slice_n1tc(x: ttnn.Tensor, t0: int, t1: int, *, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
+    b = int(x.shape[0])
+    c = int(x.shape[3])
+    return ttnn.slice(x, [0, 0, t0, 0], [b, 1, t1, c], [1, 1, 1, 1], memory_config=memory_config)
+
+
+def _reflect_pad_1d_dim2(x_n1tc: ttnn.Tensor, time_len: int, pad: int) -> ttnn.Tensor:
+    """Reflect pad along dim=2 for shape ``[B, 1, T, 1]``."""
+    if pad <= 0:
+        return x_n1tc
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    left_parts = []
+    for i in range(pad):
+        # left reflect: x[pad-i]
+        left_parts.append(_time_slice_n1tc(x_n1tc, pad - i, pad - i + 1, memory_config=mc))
+    right_parts = []
+    for i in range(pad):
+        # right reflect: x[T-2-i]
+        idx = time_len - 2 - i
+        right_parts.append(_time_slice_n1tc(x_n1tc, idx, idx + 1, memory_config=mc))
+    out = ttnn.concat([*left_parts, x_n1tc, *right_parts], dim=2, memory_config=mc)
+    for t in left_parts:
+        ttnn.deallocate(t)
+    for t in right_parts:
+        ttnn.deallocate(t)
+    return out
+
+
+class _StridedStftConv:
+    """Strided conv2d projection for STFT real/imag branches."""
+
+    def __init__(self, device: ttnn.Device, weight_rm: ttnn.Tensor, hop_length: int):
+        self.device = device
+        self.weight_rm = weight_rm
+        self.weight_prepared = weight_rm
+        self._prep_key: tuple[int, int] | None = None
+        self.hop_length = int(hop_length)
+        self.out_channels = int(weight_rm.shape[0])
+        self.in_channels = int(weight_rm.shape[1])
+        self.kernel_size = int(weight_rm.shape[2])
+        self.conv_config = ttnn.Conv2dConfig(
+            weights_dtype=ttnn.float32,
+            output_layout=ttnn.TILE_LAYOUT,
+            deallocate_activation=False,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=False,
+            config_tensors_in_dram=True,
+            reshard_if_not_optimal=False,
+            enable_kernel_stride_folding=False,
+            force_split_reader=False,
+            transpose_shards=False,
+            enable_activation_reuse=False,
+            full_inner_dim=False,
+        )
+        self.compute_cfg = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        self.slice_cfg = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=8)
+
+    def __call__(self, x_n1tc: ttnn.Tensor, batch_size: int, input_height: int) -> ttnn.Tensor:
+        x_rm = ttnn.to_layout(x_n1tc, ttnn.ROW_MAJOR_LAYOUT)
+        key = (batch_size, input_height)
+        if self._prep_key != key:
+            self.weight_prepared = ttnn.prepare_conv_weights(
+                weight_tensor=self.weight_rm,
+                input_memory_config=x_rm.memory_config(),
+                input_layout=x_rm.layout,
+                weights_format="OIHW",
+                in_channels=self.in_channels,
+                out_channels=self.out_channels,
+                batch_size=batch_size,
+                input_height=input_height,
+                input_width=1,
+                kernel_size=(self.kernel_size, 1),
+                stride=(self.hop_length, 1),
+                padding=(0, 0),
+                dilation=(1, 1),
+                has_bias=False,
+                groups=1,
+                device=self.device,
+                input_dtype=x_rm.dtype,
+                conv_config=self.conv_config,
+                compute_config=self.compute_cfg,
+                slice_config=self.slice_cfg,
+            )
+            self._prep_key = key
+        result, [oh, _ow], wpair = ttnn.conv2d(
+            input_tensor=x_rm,
+            weight_tensor=self.weight_prepared,
+            device=self.device,
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=1,
+            kernel_size=(self.kernel_size, 1),
+            stride=(self.hop_length, 1),
+            padding=(0, 0),
+            bias_tensor=None,
+            conv_config=self.conv_config,
+            compute_config=self.compute_cfg,
+            slice_config=self.slice_cfg,
+            return_weights_and_bias=True,
+            return_output_dim=True,
+        )
+        self.weight_prepared = wpair[0]
+        out = ttnn.reshape(result, [batch_size, int(oh), self.out_channels], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.permute(out, (0, 2, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return out
+
+
 def preprocess_tt_torch_stft(
     *,
     filter_length: int,
@@ -182,6 +328,7 @@ def preprocess_tt_torch_stft(
     window = _hann_window(win_length)
     A_real, A_imag, F = _build_stft_matrices(input_length, filter_length, hop_length, window)
     B_real, B_imag, output_length = _build_istft_matrices(input_length, filter_length, hop_length, window)
+    conv_real, conv_imag = _build_conv_stft_kernels(filter_length, win_length)
     K = filter_length // 2 + 1
 
     return TTTorchSTFTParams(
@@ -196,6 +343,9 @@ def preprocess_tt_torch_stft(
         output_length=output_length,
         K=K,
         F=F,
+        conv_stft_real=_upload_rm(conv_real, dtype=ttnn.float32),
+        conv_stft_imag=_upload_rm(conv_imag, dtype=ttnn.float32),
+        conv_pad_len=filter_length // 2,
     )
 
 
@@ -205,11 +355,19 @@ class TTTorchSTFT:
     def __init__(self, device: ttnn.Device, params: TTTorchSTFTParams) -> None:
         self.device = device
         self.params = params
+        self.eps = 1e-11
+        self._conv_real = _StridedStftConv(device, params.conv_stft_real, params.hop_length)
+        self._conv_imag = _StridedStftConv(device, params.conv_stft_imag, params.hop_length)
+        # HiFi4 + fp32_dest_acc_en empirically beats HiFi3 on WH for STFT-of-small-signals:
+        # cos(phase) PCC 0.78 vs 0.77 and near-zero sign match 0.701 vs 0.686 (the WH runtime
+        # warns about HiFi4+fp32 but the warning concerns a different op pattern). Mag PCC is
+        # 1.0 in both modes.
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         )
 
     def _matmul_to_bkf(self, x_bL: ttnn.Tensor, weight: ttnn.Tensor) -> ttnn.Tensor:
@@ -220,6 +378,7 @@ class TTTorchSTFT:
             weight,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
+            dtype=x_bL.dtype,
         )
         B = int(x_bL.shape[0])
         return ttnn.reshape(y, [B, p.K, p.F], memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -235,18 +394,33 @@ class TTTorchSTFT:
         L_in = int(x_bL.shape[-1])
         if L_in != self.params.input_length:
             raise ValueError(f"input length mismatch: got {L_in}, expected {self.params.input_length}")
-
+        if x_bL.dtype != ttnn.float32:
+            x_bL = ttnn.typecast(x_bL, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         X_real = self._matmul_to_bkf(x_bL, self.params.stft_real)
         X_imag = self._matmul_to_bkf(x_bL, self.params.stft_imag)
 
+        # Match tt_old stabilization: sqrt(real^2 + imag^2 + eps).
         mag_sq = ttnn.add(
             ttnn.multiply(X_real, X_real, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             ttnn.multiply(X_imag, X_imag, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        eps_t = ttnn.full_like(X_real, self.eps, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        mag_sq = ttnn.add(mag_sq, eps_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(eps_t)
         magnitude = ttnn.sqrt(mag_sq, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(mag_sq)
         phase = ttnn.atan2(X_imag, X_real, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Match old STFT edge-case behavior for branch cut at negative real axis.
+        corr_mask = ttnn.logical_and(
+            ttnn.eq(X_imag, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.lt(X_real, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        pi_fill = ttnn.full_like(phase, np.pi, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        phase = ttnn.where(corr_mask, pi_fill, phase, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(corr_mask)
+        ttnn.deallocate(pi_fill)
 
         ttnn.deallocate(X_real)
         ttnn.deallocate(X_imag)
@@ -262,6 +436,10 @@ class TTTorchSTFT:
             ``[B, 1, output_length]`` (matches ``TorchSTFT.inverse``'s trailing ``unsqueeze(-2)``).
         """
         p = self.params
+        if magnitude.dtype != ttnn.float32:
+            magnitude = ttnn.typecast(magnitude, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if phase.dtype != ttnn.float32:
+            phase = ttnn.typecast(phase, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         cos_phase = ttnn.cos(phase, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         sin_phase = ttnn.sin(phase, memory_config=ttnn.DRAM_MEMORY_CONFIG)

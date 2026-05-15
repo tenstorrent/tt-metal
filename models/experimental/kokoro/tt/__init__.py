@@ -59,6 +59,12 @@ from .tt_prosody_predictor import (
     TTProsodyPredictorParams,
     preprocess_tt_prosody_predictor,
 )
+from .tt_generator import (
+    TTGenerator,
+    TTGeneratorParams,
+    TTGeneratorUpsampleStageParams,
+    preprocess_tt_generator,
+)
 from .tt_sinegen import (
     TTSineGen,
     TTSineGenParams,
@@ -107,6 +113,9 @@ __all__ = [
     "TTLinearNormParams",
     "TTProsodyPredictor",
     "TTProsodyPredictorParams",
+    "TTGenerator",
+    "TTGeneratorParams",
+    "TTGeneratorUpsampleStageParams",
     "TTSineGen",
     "TTSineGenParams",
     "TTSourceModuleHnNSF",
@@ -129,6 +138,7 @@ __all__ = [
     "preprocess_tt_linear_norm",
     "preprocess_tt_lstm_1layer",
     "preprocess_tt_prosody_predictor",
+    "preprocess_tt_generator",
     "preprocess_tt_sinegen",
     "preprocess_tt_source_module_hn_nsf",
     "preprocess_tt_text_encoder",
