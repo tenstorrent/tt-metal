@@ -264,11 +264,42 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         return min(user_id // self.batch_per_dp, self.dp - 1)
 
     def _unwrap(self, val, idx=0):
-        """Unwrap up to two layers of list nesting, optionally indexing instead of [0]."""
+        """Unwrap list nesting, concatenating tensors for multi-image requests.
+
+        For DP=1 / batch=1 (galaxy_t3k path): outer list is per-image — concat
+        all tensors along dim=0 so multi-image pixel_values/pooling are combined.
+        For DP>1 / batched: outer list is per-user; pick val[idx] then concat
+        sub-list (idx's user with multiple images).
+        """
+        import torch
+
+        if val is None:
+            return None
         if isinstance(val, list):
-            val = val[idx] if idx < len(val) else (val[0] if val else None)
-        if isinstance(val, list):
-            val = val[0] if val else None
+            if not val:
+                return None
+            # If batch routing is requested (idx != 0 explicitly used), pick that user
+            # and let the next-level concat handle multi-image for that user.
+            if idx != 0 and idx < len(val):
+                val = val[idx]
+                if isinstance(val, list):
+                    flat = val
+                else:
+                    return val
+            else:
+                # Flatten one extra level of nesting and concatenate all
+                flat = []
+                for item in val:
+                    if isinstance(item, list):
+                        flat.extend(item)
+                    else:
+                        flat.append(item)
+            if len(flat) == 1:
+                return flat[0]
+            try:
+                return torch.cat(flat, dim=0)
+            except Exception:
+                return flat[0]
         return val
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, enable_trace=False, **kwargs):
