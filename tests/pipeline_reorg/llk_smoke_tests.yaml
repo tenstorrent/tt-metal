@@ -8,7 +8,16 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    source ./llk_smoke_pytest_env.sh
+    case "${LLK_PYTEST_LOG_MODE:-verbose}" in
+      ci-quiet)
+        PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+        PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+        ;;
+      verbose|*)
+        PYTEST_COMPILE_EXTRA=""
+        PYTEST_RUN_EXTRA='--override-ini=addopts=-v'
+        ;;
+    esac
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 2 --group 1 --timeout=60 \
@@ -31,7 +40,16 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    source ./llk_smoke_pytest_env.sh
+    case "${LLK_PYTEST_LOG_MODE:-verbose}" in
+      ci-quiet)
+        PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+        PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+        ;;
+      verbose|*)
+        PYTEST_COMPILE_EXTRA=""
+        PYTEST_RUN_EXTRA='--override-ini=addopts=-v'
+        ;;
+    esac
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 2 --group 2 --timeout=60 \
@@ -54,7 +72,16 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    source ./llk_smoke_pytest_env.sh
+    case "${LLK_PYTEST_LOG_MODE:-verbose}" in
+      ci-quiet)
+        PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+        PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+        ;;
+      verbose|*)
+        PYTEST_COMPILE_EXTRA=""
+        PYTEST_RUN_EXTRA='--override-ini=addopts=-v'
+        ;;
+    esac
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 2 --group 1 --timeout=60 \
@@ -77,7 +104,16 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    source ./llk_smoke_pytest_env.sh
+    case "${LLK_PYTEST_LOG_MODE:-verbose}" in
+      ci-quiet)
+        PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+        PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+        ;;
+      verbose|*)
+        PYTEST_COMPILE_EXTRA=""
+        PYTEST_RUN_EXTRA='--override-ini=addopts=-v'
+        ;;
+    esac
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 2 --group 2 --timeout=60 \
