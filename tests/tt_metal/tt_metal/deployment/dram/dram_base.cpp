@@ -24,7 +24,8 @@ extern std::atomic<bool> g_watchdog_requested;
 using namespace std;
 using namespace tt;
 
-[[maybe_unused]] static std::vector<DramBankWorkerAssignment> get_optimal_dram_bank_worker_assignments(
+[[maybe_unused]]
+static std::vector<DramBankWorkerAssignment> get_optimal_dram_bank_worker_assignments(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, tt_metal::NOC noc) {
     auto* const device = mesh_device->get_devices()[0];
 
@@ -41,7 +42,7 @@ using namespace tt;
     std::vector<DramBankWorkerAssignment> assignments;
     assignments.reserve(num_dram_channels);
 
-    for (uint32_t bank_id = 0; bank_id < num_dram_channels; ++bank_id) {
+    for (uint32_t bank_id = 0; bank_id < num_dram_channels; bank_id++) {
         assignments.push_back(DramBankWorkerAssignment{
             .bank_id = bank_id,
             .worker_core = optimal_workers[bank_id],
@@ -80,30 +81,28 @@ static void log_dram_failure(IDevice* device, const CoreCoord& core, const DramB
 static inline void accumulate_result_into_summary(DramRunSummary& summary, const DramBaseResult* result) {
     summary.pass &= (result->failures == 0u);
     summary.bank_id = result->bank_id;
-    summary.checked_bytes += static_cast<uint64_t>(result->words_checked) * sizeof(uint32_t);
+    summary.checked_bytes += result->words_checked * sizeof(uint32_t);
 
-    summary.suspected_write_error_bytes += static_cast<uint64_t>(result->suspected_write_failures) * sizeof(uint32_t);
+    summary.suspected_write_error_bytes += result->suspected_write_failures * sizeof(uint32_t);
 
-    summary.suspected_read_error_bytes += static_cast<uint64_t>(result->suspected_read_failures) * sizeof(uint32_t);
+    summary.suspected_read_error_bytes += result->suspected_read_failures * sizeof(uint32_t);
 }
 
 static inline double dram_result_write_error_pct(const DramBaseResult* result) {
     if (result->words_checked == 0u) {
         return 0.0;
     }
-    return 100.0 * static_cast<double>(result->suspected_write_failures) / static_cast<double>(result->words_checked);
+    return 100.0 * result->suspected_write_failures / result->words_checked;
 }
 
 static inline double dram_result_read_error_pct(const DramBaseResult* result) {
     if (result->words_checked == 0u) {
         return 0.0;
     }
-    return 100.0 * static_cast<double>(result->suspected_read_failures) / static_cast<double>(result->words_checked);
+    return 100.0 * result->suspected_read_failures / result->words_checked;
 }
 
-static inline uint64_t read_arc_global_tick(tt::tt_metal::IDevice* device) {
-    return static_cast<uint64_t>(device->get_arc_timer_heartbeat());
-}
+static inline uint64_t read_arc_global_tick(tt::tt_metal::IDevice* device) { return device->get_arc_timer_heartbeat(); }
 
 static inline const char* dram_watchdog_reason_name(uint32_t reason) {
     switch (reason) {
@@ -113,18 +112,664 @@ static inline const char* dram_watchdog_reason_name(uint32_t reason) {
     }
 }
 
+DramRunSummary run_dram_base_test(
+    MeshDispatchFixture* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const CoreCoord& core,
+    const DramDeploymentConfig& cfg,
+    uint32_t seed,
+    uint32_t pass_index,
+    uint32_t repeat_index,
+    DataMovementProcessor processor) {
+    /* ======================== */
+    auto* const device = mesh_device->get_devices()[0];
+
+    TT_FATAL(cfg.bank_id < 8, "bank_id must not exceed the total number of controllers");
+    TT_FATAL(cfg.total_bytes <= DRAM_TEST_MAX_BANK_BYTES, "total_bytes must be under (4GB-16MB)");
+    TT_FATAL(cfg.chunk_bytes % sizeof(uint32_t) == 0, "chunk_bytes must be word aligned");
+    TT_FATAL(cfg.total_bytes % sizeof(uint32_t) == 0, "total_bytes must be word aligned");
+
+    struct l1_allocator alloc = new_tensix_allocator();
+
+    const uint32_t result_l1_address = l1_alloc(&alloc, sizeof(DramBaseResult));
+    const uint32_t expect_l1_address = l1_alloc(&alloc, cfg.chunk_bytes, DRAM_TEST_NOC_WORD_BYTES);
+    const uint32_t observe_l1_address = l1_alloc(&alloc, cfg.chunk_bytes, DRAM_TEST_NOC_WORD_BYTES);
+
+    std::vector<uint32_t> zero_result(sizeof(DramBaseResult) / sizeof(uint32_t), 0u);
+    MetalContext::instance().get_cluster().write_core(
+        device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
+
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+    distributed::MeshWorkload workload;
+    tt_metal::Program program = tt_metal::Program();
+
+    auto kernel_config = tt_metal::DataMovementConfig{
+        .processor = processor,
+        .noc = tt_metal::NOC::NOC_0,
+    };
+
+    auto kernel = tt_metal::CreateKernel(
+        program, "tests/tt_metal/tt_metal/deployment/kernels/dram_base_kernel.cpp", core, kernel_config);
+
+    DramTestParameters params{
+        .bank_id = cfg.bank_id,
+        .bank_offset_lo = cfg.bank_offset,
+        .bank_offset_hi = (cfg.bank_offset >> 32),
+        .total_bytes = cfg.total_bytes,
+        .chunk_bytes = cfg.chunk_bytes,
+        .pattern_id = cfg.pattern_id,
+        .seed = seed,
+        .pass_index = pass_index,
+        .repeat_index = repeat_index,
+        .result_l1_addr = result_l1_address,
+        .expect_l1_addr = expect_l1_address,
+        .observe_l1_addr = observe_l1_address,
+        .write_noc = cfg.write_noc,
+        .read_noc = cfg.read_noc,
+        .max_burst_len = cfg.max_burst_len,
+        .transfer_len_mode = cfg.transfer_len_mode,
+        .skip_writes = cfg.skip_writes,
+        .skip_reads = cfg.skip_reads,
+    };
+
+    //    uint32_t insert_write_errors = get_env_flag("DRAM_TEST_INSERT_WRITE_ERRORS") ? 1u : 0u;
+    //    uint32_t insert_read_errors  = get_env_flag("DRAM_TEST_INSERT_READ_ERRORS")  ? 1u : 0u;
+
+    tt_metal::SetRuntimeArgs(
+        program,
+        kernel,
+        core,
+        {
+            params.bank_id,
+            params.bank_offset_lo,
+            params.bank_offset_hi,
+            params.total_bytes,
+            params.chunk_bytes,
+            params.pattern_id,
+            params.seed,
+            params.pass_index,
+            params.repeat_index,
+            params.result_l1_addr,
+            params.expect_l1_addr,
+            params.observe_l1_addr,
+            params.write_noc,
+            params.read_noc,
+            params.max_burst_len,
+            params.transfer_len_mode,
+            params.skip_writes,
+            params.skip_reads,
+            //            params.insert_write_errors,
+            //            params.insert_read_errors,
+        });
+
+    workload.add_program(device_range, std::move(program));
+
+    fixture->RunProgram(mesh_device, workload, true);
+    fixture->FinishCommands(mesh_device);
+
+    auto raw_result = MetalContext::instance().get_cluster().read_core(
+        device->id(), device->worker_core_from_logical_core(core), result_l1_address, sizeof(DramBaseResult));
+
+    const DramBaseResult* result = (const DramBaseResult*)raw_result.data();
+
+    DramRunSummary summary{};
+    summary.pass = true;
+    summary.bank_id = result->bank_id;
+    summary.checked_bytes = 0;
+    summary.suspected_write_error_bytes = 0;
+    summary.suspected_read_error_bytes = 0;
+
+    accumulate_result_into_summary(summary, result);
+
+    if (result->failures > 0u) {
+        log_dram_failure(device, core, result);
+    }
+
+    return summary;
+}
+
+DramRunSummary run_dram_multi_core_single_controller_test(
+    tt::tt_metal::MeshDispatchFixture* fixture,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    const std::vector<CoreCoord>& cores,
+    const DramDeploymentConfig& cfg,
+    uint32_t seed,
+    uint32_t pass_index,
+    uint32_t repeat_index,
+    DataMovementProcessor processor) {
+    /* ======================== */
+    auto* const device = mesh_device->get_devices()[0];
+
+    TT_FATAL(!cores.empty(), "No cores provided");
+    TT_FATAL(cfg.bank_id < 8, "bank_id must not exceed the total number of controllers");
+    TT_FATAL(cfg.total_bytes <= DRAM_TEST_MAX_BANK_BYTES, "total_bytes must be under (4GB-16MB)");
+    TT_FATAL(cfg.chunk_bytes % sizeof(uint32_t) == 0, "chunk_bytes must be word aligned");
+    TT_FATAL(cfg.total_bytes % 4096u == 0, "total_bytes must be 4KB aligned for multi-core controller mode");
+
+    const uint64_t total_bytes = cfg.total_bytes;
+    const uint64_t bytes_per_core_base = (total_bytes / cores.size()) & ~0xFFFULL;
+
+    TT_FATAL(bytes_per_core_base >= cfg.chunk_bytes, "bytes_per_core_base too small");
+    TT_FATAL(bytes_per_core_base <= std::numeric_limits<uint32_t>::max(), "bytes_per_core_base must fit into uint32_t");
+
+    const uint64_t covered_bytes = bytes_per_core_base * cores.size();
+    const uint64_t remainder_bytes = total_bytes - covered_bytes;
+
+    TT_FATAL((remainder_bytes & 0xFFFULL) == 0ULL, "remainder_bytes must stay 4KB aligned");
+
+    struct l1_allocator alloc = new_tensix_allocator();
+
+    const uint32_t result_l1_address = l1_alloc(&alloc, sizeof(DramBaseResult));
+    const uint32_t expect_l1_address = l1_alloc(&alloc, cfg.chunk_bytes, DRAM_TEST_NOC_WORD_BYTES);
+    const uint32_t observe_l1_address = l1_alloc(&alloc, cfg.chunk_bytes, DRAM_TEST_NOC_WORD_BYTES);
+
+    std::vector<uint32_t> zero_result(sizeof(DramBaseResult) / sizeof(uint32_t), 0u);
+    for (const auto& core : cores) {
+        MetalContext::instance().get_cluster().write_core(
+            device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
+    }
+
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+    distributed::MeshWorkload workload;
+    tt_metal::Program program = tt_metal::Program();
+
+    auto kernel_config = tt_metal::DataMovementConfig{
+        .processor = processor,
+        .noc = tt_metal::NOC::NOC_0,
+    };
+
+    for (size_t i = 0; i < cores.size(); i++) {
+        const CoreCoord core = cores[i];
+        const uint64_t bank_offset = cfg.bank_offset + i * bytes_per_core_base;
+
+        uint64_t bytes_this_core = bytes_per_core_base;
+        if (i == (cores.size() - 1)) {
+            bytes_this_core += remainder_bytes;
+        }
+
+        TT_FATAL(bytes_this_core >= cfg.chunk_bytes, "bytes_this_core too small");
+        TT_FATAL(bytes_this_core <= std::numeric_limits<uint32_t>::max(), "bytes_this_core must fit into uint32_t");
+
+        auto kernel = tt_metal::CreateKernel(
+            program, "tests/tt_metal/tt_metal/deployment/kernels/dram_base_kernel.cpp", core, kernel_config);
+
+        tt_metal::SetRuntimeArgs(
+            program,
+            kernel,
+            core,
+            {
+                cfg.bank_id,
+                (uint32_t)(bank_offset & 0xFFFFFFFFull),
+                (uint32_t)((bank_offset >> 32) & 0xFFFFFFFFull),
+                (uint32_t)bytes_this_core,
+                cfg.chunk_bytes,
+                cfg.pattern_id,
+                seed,
+                pass_index,
+                repeat_index,
+                result_l1_address,
+                expect_l1_address,
+                observe_l1_address,
+                cfg.write_noc,
+                cfg.read_noc,
+                cfg.max_burst_len,
+                cfg.transfer_len_mode,
+                cfg.skip_writes,
+                cfg.skip_reads,
+                //                params.insert_write_errors,
+                //                params.insert_read_errors,
+            });
+    }
+
+    workload.add_program(device_range, std::move(program));
+
+    fixture->RunProgram(mesh_device, workload, true);
+    fixture->FinishCommands(mesh_device);
+
+    DramRunSummary summary{};
+    summary.pass = true;
+    summary.bank_id = cfg.bank_id;
+    summary.checked_bytes = 0;
+    summary.suspected_write_error_bytes = 0;
+    summary.suspected_read_error_bytes = 0;
+
+    for (const auto& core : cores) {
+        auto raw_result = MetalContext::instance().get_cluster().read_core(
+            device->id(), device->worker_core_from_logical_core(core), result_l1_address, sizeof(DramBaseResult));
+
+        const DramBaseResult* result = (const DramBaseResult*)raw_result.data();
+
+        accumulate_result_into_summary(summary, result);
+
+        if (result->failures > 0u) {
+            log_dram_failure(device, core, result);
+        }
+    }
+
+    return summary;
+}
+
+DramRunSummary run_dram_multi_core_all_controllers_test(
+    tt::tt_metal::MeshDispatchFixture* fixture,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    const std::vector<CoreCoord>& cores,
+    uint32_t total_bytes_per_controller,
+    uint32_t chunk_bytes,
+    uint32_t pattern_id,
+    uint32_t write_noc,
+    uint32_t read_noc,
+    uint32_t transfer_len_mode,
+    uint32_t max_burst_len,
+    uint32_t skip_writes,
+    uint32_t skip_reads,
+    uint32_t seed,
+    uint32_t pass_index,
+    uint32_t repeat_index,
+    DataMovementProcessor processor) {
+    /* ======================== */
+    auto* const device = mesh_device->get_devices()[0];
+
+    constexpr uint32_t num_controllers = 8u;
+
+    TT_FATAL(!cores.empty(), "No cores provided");
+    TT_FATAL(
+        total_bytes_per_controller <= DRAM_TEST_MAX_BANK_BYTES, "total_bytes_per_controller must be under (4GB-16MB)");
+    TT_FATAL(chunk_bytes % sizeof(uint32_t) == 0, "chunk_bytes must be word aligned");
+    TT_FATAL(total_bytes_per_controller % 4096u == 0, "total_bytes_per_controller must be 4KB aligned");
+
+    struct l1_allocator alloc = new_tensix_allocator();
+
+    const uint32_t result_l1_address = l1_alloc(&alloc, sizeof(DramBaseResult));
+    const uint32_t expect_l1_address = l1_alloc(&alloc, chunk_bytes, DRAM_TEST_NOC_WORD_BYTES);
+    const uint32_t observe_l1_address = l1_alloc(&alloc, chunk_bytes, DRAM_TEST_NOC_WORD_BYTES);
+
+    std::vector<uint32_t> zero_result(sizeof(DramBaseResult) / sizeof(uint32_t), 0u);
+    for (const auto& core : cores) {
+        MetalContext::instance().get_cluster().write_core(
+            device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
+    }
+
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+    distributed::MeshWorkload workload;
+    tt_metal::Program program = tt_metal::Program();
+
+    auto kernel_config = tt_metal::DataMovementConfig{
+        .processor = processor,
+        .noc = tt_metal::NOC::NOC_0,
+    };
+
+    const size_t total_cores = cores.size();
+    const size_t base_cores_per_controller = total_cores / num_controllers;
+    const size_t remainder_cores = total_cores % num_controllers;
+
+    size_t core_begin = 0;
+
+    for (uint32_t bank_id = 0; bank_id < num_controllers; bank_id++) {
+        const size_t cores_in_this_controller = base_cores_per_controller + (bank_id < remainder_cores ? 1 : 0);
+
+        if (cores_in_this_controller == 0) {
+            continue;
+        }
+
+        const uint64_t bytes_per_core_base = (total_bytes_per_controller / cores_in_this_controller) & ~0xFFFULL;
+
+        TT_FATAL(bytes_per_core_base >= chunk_bytes, "bytes_per_core_base too small");
+        TT_FATAL(
+            bytes_per_core_base <= std::numeric_limits<uint32_t>::max(), "bytes_per_core_base must fit into uint32_t");
+
+        const uint64_t covered_bytes = bytes_per_core_base * cores_in_this_controller;
+        const uint64_t remainder_bytes = total_bytes_per_controller - covered_bytes;
+
+        TT_FATAL((remainder_bytes & 0xFFFULL) == 0ULL, "remainder_bytes must stay 4KB aligned");
+
+        for (size_t local_idx = 0; local_idx < cores_in_this_controller; local_idx++) {
+            const size_t global_idx = core_begin + local_idx;
+            const CoreCoord core = cores[global_idx];
+            const uint64_t bank_offset = local_idx * bytes_per_core_base;
+
+            uint64_t bytes_this_core = bytes_per_core_base;
+            if (local_idx == (cores_in_this_controller - 1)) {
+                bytes_this_core += remainder_bytes;
+            }
+
+            TT_FATAL(bytes_this_core >= chunk_bytes, "bytes_this_core too small");
+            TT_FATAL(bytes_this_core <= std::numeric_limits<uint32_t>::max(), "bytes_this_core must fit into uint32_t");
+
+            auto kernel = tt_metal::CreateKernel(
+                program, "tests/tt_metal/tt_metal/deployment/kernels/dram_base_kernel.cpp", core, kernel_config);
+
+            tt_metal::SetRuntimeArgs(
+                program,
+                kernel,
+                core,
+                {
+                    bank_id,
+                    (uint32_t)(bank_offset & 0xFFFFFFFFull),
+                    (uint32_t)((bank_offset >> 32) & 0xFFFFFFFFull),
+                    (uint32_t)bytes_this_core,
+                    chunk_bytes,
+                    pattern_id,
+                    seed,
+                    pass_index,
+                    repeat_index,
+                    result_l1_address,
+                    expect_l1_address,
+                    observe_l1_address,
+                    write_noc,
+                    read_noc,
+                    max_burst_len,
+                    transfer_len_mode,
+                    skip_writes,
+                    skip_reads,
+                    //                    params.insert_write_errors,
+                    //                    params.insert_read_errors,
+                });
+        }
+
+        core_begin += cores_in_this_controller;
+    }
+
+    workload.add_program(device_range, std::move(program));
+
+    fixture->RunProgram(mesh_device, workload, true);
+    fixture->FinishCommands(mesh_device);
+
+    DramRunSummary summary{};
+    summary.pass = true;
+    summary.bank_id = 0;
+    summary.checked_bytes = 0;
+    summary.suspected_write_error_bytes = 0;
+    summary.suspected_read_error_bytes = 0;
+
+    for (const auto& core : cores) {
+        auto raw_result = MetalContext::instance().get_cluster().read_core(
+            device->id(), device->worker_core_from_logical_core(core), result_l1_address, sizeof(DramBaseResult));
+
+        const DramBaseResult* result = (const DramBaseResult*)raw_result.data();
+
+        accumulate_result_into_summary(summary, result);
+
+        if (result->failures > 0u) {
+            log_dram_failure(device, core, result);
+        }
+    }
+
+    return summary;
+}
+
+DramRunSummary run_dram_eight_single_core_single_controller_test(
+    tt::tt_metal::MeshDispatchFixture* fixture,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    const std::vector<CoreCoord>& cores,
+    uint64_t bank_offset,
+    uint32_t total_bytes_per_controller,
+    uint32_t chunk_bytes,
+    uint32_t pattern_id,
+    uint32_t write_noc,
+    uint32_t read_noc,
+    uint32_t transfer_len_mode,
+    uint32_t max_burst_len,
+    uint32_t skip_writes,
+    uint32_t skip_reads,
+    uint32_t seed,
+    uint32_t pass_index,
+    uint32_t repeat_index,
+    DataMovementProcessor processor) {
+    /* ======================== */
+    auto* const device = mesh_device->get_devices()[0];
+
+    constexpr uint32_t num_controllers = 8u;
+
+    TT_FATAL(!cores.empty(), "No cores provided");
+    TT_FATAL(
+        cores.size() <= num_controllers,
+        "This helper supports at most {} cores, got {}",
+        num_controllers,
+        cores.size());
+    TT_FATAL(
+        total_bytes_per_controller <= DRAM_TEST_MAX_BANK_BYTES, "total_bytes_per_controller must be under (4GB-16MB)");
+    TT_FATAL(chunk_bytes % sizeof(uint32_t) == 0, "chunk_bytes must be word aligned");
+    TT_FATAL(total_bytes_per_controller % 4096u == 0, "total_bytes_per_controller must be 4KB aligned");
+    TT_FATAL((bank_offset & 0xFFFULL) == 0ULL, "bank_offset must be 4KB aligned");
+    TT_FATAL(
+        bank_offset + total_bytes_per_controller <= DRAM_TEST_MAX_BANK_BYTES,
+        "bank_offset + total_bytes_per_controller exceeds DRAM_TEST_MAX_BANK_BYTES");
+    TT_FATAL(bank_offset <= std::numeric_limits<uint64_t>::max(), "bank_offset out of range");
+
+    struct l1_allocator alloc = new_tensix_allocator();
+
+    const uint32_t result_l1_address = l1_alloc(&alloc, sizeof(DramBaseResult));
+    const uint32_t expect_l1_address = l1_alloc(&alloc, chunk_bytes, DRAM_TEST_NOC_WORD_BYTES);
+    const uint32_t observe_l1_address = l1_alloc(&alloc, chunk_bytes, DRAM_TEST_NOC_WORD_BYTES);
+
+    std::vector<uint32_t> zero_result(sizeof(DramBaseResult) / sizeof(uint32_t), 0u);
+    for (const auto& core : cores) {
+        MetalContext::instance().get_cluster().write_core(
+            device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
+    }
+
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+    distributed::MeshWorkload workload;
+    tt_metal::Program program = tt_metal::Program();
+
+    auto kernel_config = tt_metal::DataMovementConfig{
+        .processor = processor,
+        .noc = tt_metal::NOC::NOC_0,
+    };
+
+    for (size_t inst_idx = 0; inst_idx < cores.size(); inst_idx++) {
+        const CoreCoord core = cores[inst_idx];
+        const uint32_t bank_id = inst_idx;
+
+        auto kernel = tt_metal::CreateKernel(
+            program, "tests/tt_metal/tt_metal/deployment/kernels/dram_base_kernel.cpp", core, kernel_config);
+
+        tt_metal::SetRuntimeArgs(
+            program,
+            kernel,
+            core,
+            {
+                bank_id,
+                (uint32_t)(bank_offset & 0xFFFFFFFFull),
+                (uint32_t)((bank_offset >> 32) & 0xFFFFFFFFull),
+                total_bytes_per_controller,
+                chunk_bytes,
+                pattern_id,
+                seed,
+                pass_index,
+                repeat_index,
+                result_l1_address,
+                expect_l1_address,
+                observe_l1_address,
+                write_noc,
+                read_noc,
+                max_burst_len,
+                transfer_len_mode,
+                skip_writes,
+                skip_reads,
+            });
+    }
+
+    workload.add_program(device_range, std::move(program));
+
+    fixture->RunProgram(mesh_device, workload, true);
+    fixture->FinishCommands(mesh_device);
+
+    DramRunSummary summary{};
+    summary.pass = true;
+    summary.bank_id = 0;
+    summary.checked_bytes = 0;
+    summary.suspected_write_error_bytes = 0;
+    summary.suspected_read_error_bytes = 0;
+
+    for (const auto& core : cores) {
+        auto raw_result = MetalContext::instance().get_cluster().read_core(
+            device->id(), device->worker_core_from_logical_core(core), result_l1_address, sizeof(DramBaseResult));
+
+        const DramBaseResult* result = (const DramBaseResult*)raw_result.data();
+
+        accumulate_result_into_summary(summary, result);
+
+        if (result->failures > 0u) {
+            log_dram_failure(device, core, result);
+        }
+    }
+
+    return summary;
+}
+
+[[maybe_unused]]
+DramMultiInstanceSummary run_dram_eight_single_core_single_controller_test_verbose(
+    tt::tt_metal::MeshDispatchFixture* fixture,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    const std::vector<CoreCoord>& cores,
+    uint64_t bank_offset,
+    uint32_t total_bytes_per_controller,
+    uint32_t chunk_bytes,
+    uint32_t pattern_id,
+    uint32_t write_noc,
+    uint32_t read_noc,
+    uint32_t transfer_len_mode,
+    uint32_t max_burst_len,
+    uint32_t skip_writes,
+    uint32_t skip_reads,
+    uint32_t seed,
+    uint32_t pass_index,
+    uint32_t repeat_index,
+    DataMovementProcessor processor) {
+    /* ======================== */
+    auto* const device = mesh_device->get_devices()[0];
+
+    constexpr uint32_t num_controllers = 8u;
+
+    TT_FATAL(!cores.empty(), "No cores provided");
+    TT_FATAL(
+        cores.size() <= num_controllers,
+        "This helper supports at most {} cores, got {}",
+        num_controllers,
+        cores.size());
+    TT_FATAL(
+        total_bytes_per_controller <= DRAM_TEST_MAX_BANK_BYTES, "total_bytes_per_controller must be under (4GB-16MB)");
+    TT_FATAL(chunk_bytes % sizeof(uint32_t) == 0, "chunk_bytes must be word aligned");
+    TT_FATAL(total_bytes_per_controller % 4096u == 0, "total_bytes_per_controller must be 4KB aligned");
+    TT_FATAL((bank_offset & 0xFFFULL) == 0ULL, "bank_offset must be 4KB aligned");
+    TT_FATAL(
+        bank_offset + total_bytes_per_controller <= DRAM_TEST_MAX_BANK_BYTES,
+        "bank_offset + total_bytes_per_controller exceeds DRAM_TEST_MAX_BANK_BYTES");
+
+    struct l1_allocator alloc = new_tensix_allocator();
+
+    const uint32_t result_l1_address = l1_alloc(&alloc, sizeof(DramBaseResult));
+    const uint32_t expect_l1_address = l1_alloc(&alloc, chunk_bytes, DRAM_TEST_NOC_WORD_BYTES);
+    const uint32_t observe_l1_address = l1_alloc(&alloc, chunk_bytes, DRAM_TEST_NOC_WORD_BYTES);
+
+    std::vector<uint32_t> zero_result(sizeof(DramBaseResult) / sizeof(uint32_t), 0u);
+    for (const auto& core : cores) {
+        MetalContext::instance().get_cluster().write_core(
+            device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
+    }
+
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+    distributed::MeshWorkload workload;
+    tt_metal::Program program = tt_metal::Program();
+
+    auto kernel_config = tt_metal::DataMovementConfig{
+        .processor = processor,
+        .noc = tt_metal::NOC::NOC_0,
+    };
+
+    for (size_t inst_idx = 0; inst_idx < cores.size(); inst_idx++) {
+        const CoreCoord core = cores[inst_idx];
+        const uint32_t bank_id = inst_idx;
+
+        auto kernel = tt_metal::CreateKernel(
+            program, "tests/tt_metal/tt_metal/deployment/kernels/dram_base_kernel.cpp", core, kernel_config);
+
+        tt_metal::SetRuntimeArgs(
+            program,
+            kernel,
+            core,
+            {
+                bank_id,
+                (uint32_t)(bank_offset & 0xFFFFFFFFull),
+                (uint32_t)((bank_offset >> 32) & 0xFFFFFFFFull),
+                total_bytes_per_controller,
+                chunk_bytes,
+                pattern_id,
+                seed,
+                pass_index,
+                repeat_index,
+                result_l1_address,
+                expect_l1_address,
+                observe_l1_address,
+                write_noc,
+                read_noc,
+                max_burst_len,
+                transfer_len_mode,
+                skip_writes,
+                skip_reads,
+            });
+    }
+
+    workload.add_program(device_range, std::move(program));
+
+    fixture->RunProgram(mesh_device, workload, true);
+    fixture->FinishCommands(mesh_device);
+
+    DramMultiInstanceSummary out{};
+    out.summary.pass = true;
+    out.summary.bank_id = 0;
+    out.summary.checked_bytes = 0;
+    out.summary.suspected_write_error_bytes = 0;
+    out.summary.suspected_read_error_bytes = 0;
+
+    out.per_core_results.reserve(cores.size());
+
+    for (const auto& core : cores) {
+        auto raw_result = MetalContext::instance().get_cluster().read_core(
+            device->id(), device->worker_core_from_logical_core(core), result_l1_address, sizeof(DramBaseResult));
+
+        const DramBaseResult* result = (const DramBaseResult*)raw_result.data();
+
+        accumulate_result_into_summary(out.summary, result);
+
+        DramPerCoreResult per_core{};
+        per_core.core = core;
+        per_core.result = *result;
+        out.per_core_results.push_back(per_core);
+
+        if (result->failures > 0u) {
+            log_dram_failure(device, core, result);
+        }
+    }
+
+    return out;
+}
+
 static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32_t l1_addr, uint32_t value) {
     MetalContext::instance().get_cluster().write_core(
         device->id(), device->worker_core_from_logical_core(core), std::vector<uint32_t>{value}, l1_addr);
 }
 
-[[maybe_unused]] DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
+[[maybe_unused]]
+DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
     tt::tt_metal::MeshDispatchFixture* fixture,
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const std::vector<CoreCoord>& worker_cores,
     const std::vector<std::vector<DramWorkItem>>& jobs_per_core,
     uint32_t chunk_bytes,
     DataMovementProcessor processor) {
+    /* ======================== */
     auto* const device = mesh_device->get_devices()[0];
 
     TT_FATAL(!worker_cores.empty(), "No worker cores provided");
@@ -144,7 +789,7 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
 
     uint32_t queue_capacity = 0;
     for (const auto& core_jobs : jobs_per_core) {
-        queue_capacity = std::max<uint32_t>(queue_capacity, static_cast<uint32_t>(core_jobs.size()));
+        queue_capacity = std::max<uint32_t>(queue_capacity, core_jobs.size());
     }
 
     TT_FATAL(queue_capacity > 0, "queue_capacity must be non-zero");
@@ -238,9 +883,7 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
         MetalContext::instance().get_cluster().write_core(
             device->id(),
             device->worker_core_from_logical_core(core),
-            std::vector<uint32_t>(
-                reinterpret_cast<uint32_t*>(&ctrl),
-                reinterpret_cast<uint32_t*>(&ctrl) + (sizeof(DramJobQueueCtrl) / sizeof(uint32_t))),
+            std::vector<uint32_t>((uint32_t*)&ctrl, (uint32_t*)&ctrl + sizeof(DramJobQueueCtrl) / sizeof(uint32_t)),
             r.queue_ctrl_l1_addr);
 
         CoreProgressStatus status{};
@@ -250,8 +893,7 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
             device->id(),
             device->worker_core_from_logical_core(core),
             std::vector<uint32_t>(
-                reinterpret_cast<uint32_t*>(&status),
-                reinterpret_cast<uint32_t*>(&status) + (sizeof(CoreProgressStatus) / sizeof(uint32_t))),
+                (uint32_t*)&status, (uint32_t*)&status + sizeof(CoreProgressStatus) / sizeof(uint32_t)),
             r.status_l1_addr);
 
         std::vector<uint32_t> zero_mailbox(kDramSyncMailboxWords, 0u);
@@ -319,13 +961,13 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
         MetalContext::instance().get_cluster().write_core(
             device->id(), device->worker_core_from_logical_core(core), zero_results, r.result_ring_l1_addr);
 
-        for (uint32_t i = 0; i < queue_capacity; ++i) {
+        for (uint32_t i = 0; i < queue_capacity; i++) {
             uint32_t offset = i * sizeof(DramBaseResult) + offsetof(DramBaseResult, job_id);
             write_core_u32(device, core, r.result_ring_l1_addr + offset, 0xFFFFFFFFu);
         }
 
         MetalContext::instance().get_cluster().write_core(
-            device->id(), device->worker_core_from_logical_core(core), std::vector<uint32_t>{0u}, r.wake_flag_l1_addr);
+            device->id(), device->worker_core_from_logical_core(core), std::vector<uint32_t>{0}, r.wake_flag_l1_addr);
 
         const auto now = std::chrono::steady_clock::now();
         r.last_monitor_print_time = now;
@@ -378,25 +1020,23 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
 
     workload.add_program(device_range, std::move(program));
 
-    for (size_t core_idx = 0; core_idx < per_core.size(); ++core_idx) {
+    for (size_t core_idx = 0; core_idx < per_core.size(); core_idx++) {
         auto& r = per_core[core_idx];
         const auto& core_jobs = jobs_per_core[core_idx];
 
-        const uint32_t preload =
-            std::min<uint32_t>(max_in_flight_jobs_per_core, static_cast<uint32_t>(core_jobs.size()));
+        const uint32_t preload = std::min<uint32_t>(max_in_flight_jobs_per_core, core_jobs.size());
 
-        if (preload == 0) {
+        if (!preload) {
             continue;
         }
 
         std::vector<uint32_t> job_words;
-        job_words.reserve((sizeof(DramWorkItem) / sizeof(uint32_t)) * preload);
+        job_words.reserve(sizeof(DramWorkItem) / sizeof(uint32_t) * preload);
 
-        for (uint32_t j = 0; j < preload; ++j) {
-            const DramWorkItem& job = core_jobs[j];
-            const uint32_t* p = reinterpret_cast<const uint32_t*>(&job);
+        for (uint32_t j = 0; j < preload; j++) {
+            const uint32_t* p = (const uint32_t*)&core_jobs[j];
 
-            job_words.insert(job_words.end(), p, p + (sizeof(DramWorkItem) / sizeof(uint32_t)));
+            job_words.insert(job_words.end(), p, p + sizeof(DramWorkItem) / sizeof(uint32_t));
         }
 
         MetalContext::instance().get_cluster().write_core(
@@ -412,9 +1052,7 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
         MetalContext::instance().get_cluster().write_core(
             device->id(),
             device->worker_core_from_logical_core(r.core),
-            std::vector<uint32_t>(
-                reinterpret_cast<uint32_t*>(&ctrl),
-                reinterpret_cast<uint32_t*>(&ctrl) + (sizeof(DramJobQueueCtrl) / sizeof(uint32_t))),
+            std::vector<uint32_t>((uint32_t*)&ctrl, (uint32_t*)&ctrl + sizeof(DramJobQueueCtrl) / sizeof(uint32_t)),
             r.queue_ctrl_l1_addr);
 
         MetalContext::instance().get_cluster().write_core(
@@ -430,7 +1068,7 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
     out.summary.checked_bytes = 0;
     out.summary.suspected_write_error_bytes = 0;
     out.summary.suspected_read_error_bytes = 0;
-    out.per_core_results.reserve(static_cast<size_t>(total_jobs));
+    out.per_core_results.reserve(total_jobs);
 
     constexpr auto kMonitorPrintInterval = std::chrono::seconds(2);
     constexpr auto kStallWatchdogTimeout = std::chrono::seconds(10);
@@ -458,20 +1096,16 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
     auto get_completed_jobs_total = [&]() -> uint64_t {
         uint64_t completed = 0;
 
-        for (size_t i = 0; i < per_core.size(); ++i) {
-            auto& rr = per_core[i];
-            const auto& rr_jobs = jobs_per_core[i];
-
+        for (size_t i = 0; i < per_core.size(); i++) {
             auto raw_status = MetalContext::instance().get_cluster().read_core(
                 device->id(),
-                device->worker_core_from_logical_core(rr.core),
-                rr.status_l1_addr,
+                device->worker_core_from_logical_core(per_core[i].core),
+                per_core[i].status_l1_addr,
                 sizeof(CoreProgressStatus));
 
-            const CoreProgressStatus* status = reinterpret_cast<const CoreProgressStatus*>(raw_status.data());
+            const CoreProgressStatus* status = (const CoreProgressStatus*)raw_status.data();
 
-            completed += std::min<uint64_t>(
-                static_cast<uint64_t>(status->jobs_completed), static_cast<uint64_t>(rr_jobs.size()));
+            completed += std::min<uint64_t>(status->jobs_completed, jobs_per_core[i].size());
         }
 
         return completed;
@@ -507,10 +1141,9 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
                         rr.status_l1_addr,
                         sizeof(CoreProgressStatus));
 
-                    const CoreProgressStatus* status = reinterpret_cast<const CoreProgressStatus*>(raw_status.data());
+                    const CoreProgressStatus* status = (const CoreProgressStatus*)raw_status.data();
 
-                    completed_jobs_total += std::min<uint64_t>(
-                        static_cast<uint64_t>(status->jobs_completed), static_cast<uint64_t>(rr_jobs.size()));
+                    completed_jobs_total += std::min<uint64_t>(status->jobs_completed, rr_jobs.size());
 
                     const bool core_done = status->jobs_completed >= rr_jobs.size();
 
@@ -526,10 +1159,10 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
 
                 if (global_monitor_initialized) {
                     const uint64_t arc_delta = arc_tick - global_prev_arc_tick;
-
                     log_info(
                         tt::LogTest,
-                        "monitor: arc={} delta={} {} jobs={}/{}",
+                        "device_id={} monitor: arc={} delta={} {} jobs={}/{}",
+                        device->id(),
                         arc_tick,
                         arc_delta,
                         (all_cores_progressing || all_cores_done) ? "all cores progressing"
@@ -539,7 +1172,8 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
                 } else {
                     log_info(
                         tt::LogTest,
-                        "monitor: arc={} {} jobs={}/{}",
+                        "device_id={} monitor: arc={} {} jobs={}/{}",
+                        device->id(),
                         arc_tick,
                         (all_cores_progressing || all_cores_done) ? "all cores progressing"
                                                                   : "some cores not progressing",
@@ -553,7 +1187,7 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
                 global_last_monitor_print_time = monitor_now;
             }
 
-            for (size_t core_idx = 0; core_idx < per_core.size(); ++core_idx) {
+            for (size_t core_idx = 0; core_idx < per_core.size(); core_idx++) {
                 auto& r = per_core[core_idx];
                 const auto& core_jobs = jobs_per_core[core_idx];
 
@@ -563,7 +1197,7 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
                     r.status_l1_addr,
                     sizeof(CoreProgressStatus));
 
-                const CoreProgressStatus* status = reinterpret_cast<const CoreProgressStatus*>(raw_status.data());
+                const CoreProgressStatus* status = (const CoreProgressStatus*)raw_status.data();
 
                 const auto now = std::chrono::steady_clock::now();
 
@@ -634,7 +1268,7 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
                                     core_jobs.size());
 
                             } else if ((now - r.stall_watchdog_start_time) >= kStallWatchdogTimeout) {
-                                log_info(
+                                log_critical(
                                     tt::LogTest,
                                     "watchdog timeout: core=({}, {}) reason={} stuck_for={}s jobs={}/{} hb={} arc={} "
                                     "stage={} job_id={}; requesting graceful stop. If the test does not exit, "
@@ -659,7 +1293,7 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
                                 std::thread([core = r.core, delay = kWatchdogGraceExitDelay]() {
                                     std::this_thread::sleep_for(delay);
 
-                                    log_info(
+                                    log_critical(
                                         tt::LogTest,
                                         "watchdog hard-exit: core=({}, {}) exiting process after grace period",
                                         core.x,
@@ -710,7 +1344,8 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
 
                                 log_info(
                                     tt::LogTest,
-                                    "monitor: arc={} delta={} all cores progressing jobs={}/{}",
+                                    "device_id={} monitor: arc={} delta={} all cores progressing jobs={}/{}",
+                                    device->id(),
                                     arc_tick,
                                     arc_delta,
                                     completed_jobs_total,
@@ -718,7 +1353,8 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
                             } else {
                                 log_info(
                                     tt::LogTest,
-                                    "monitor: arc={} all cores progressing jobs={}/{}",
+                                    "device_id={} monitor: arc={} all cores progressing jobs={}/{}",
+                                    device->id(),
                                     arc_tick,
                                     completed_jobs_total,
                                     total_jobs);
@@ -736,7 +1372,7 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
                             r.result_ring_l1_addr + done_slot * sizeof(DramBaseResult),
                             sizeof(DramBaseResult));
 
-                        result_copy = *reinterpret_cast<const DramBaseResult*>(raw_result.data());
+                        result_copy = *(const DramBaseResult*)raw_result.data();
 
                         if (result_copy.job_id == expected_job.job_id &&
                             result_copy.pattern_id == expected_job.pattern_id &&
@@ -753,8 +1389,7 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
                             r.status_l1_addr,
                             sizeof(CoreProgressStatus));
 
-                        const CoreProgressStatus* status_poll =
-                            reinterpret_cast<const CoreProgressStatus*>(raw_status_poll.data());
+                        const CoreProgressStatus* status_poll = (const CoreProgressStatus*)raw_status_poll.data();
 
                         if (status_poll->heartbeat_tick != last_heartbeat) {
                             last_heartbeat = status_poll->heartbeat_tick;
@@ -937,9 +1572,8 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
                             device->id(),
                             device->worker_core_from_logical_core(r.core),
                             std::vector<uint32_t>(
-                                reinterpret_cast<const uint32_t*>(&next_job),
-                                reinterpret_cast<const uint32_t*>(&next_job) +
-                                    (sizeof(DramWorkItem) / sizeof(uint32_t))),
+                                (const uint32_t*)&next_job,
+                                (const uint32_t*)&next_job + sizeof(DramWorkItem) / sizeof(uint32_t)),
                             r.queue_jobs_l1_addr + slot * sizeof(DramWorkItem));
 
                         tail = next_tail;
@@ -988,7 +1622,12 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
     auto start_time = std::chrono::steady_clock::now();
 
     if (print_persistent_run_start_finish) {
-        log_info(tt::LogTest, "Starting persistent DRAM test: workers={}, total_jobs={}", per_core.size(), total_jobs);
+        log_info(
+            tt::LogTest,
+            "device_id={} Starting persistent DRAM test: workers={}, total_jobs={}",
+            device->id(),
+            worker_cores.size(),
+            total_jobs);
     }
 
     fixture->RunProgram(mesh_device, workload, false);
@@ -998,8 +1637,9 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
 
     log_info(
         tt::LogTest,
-        "Persistent DRAM test finished: workers={}, total_jobs={}, duration={}",
-        per_core.size(),
+        "device_id={} Persistent DRAM test finished: workers={}, total_jobs={}, duration={}",
+        device->id(),
+        worker_cores.size(),
         total_jobs,
         format_duration_seconds(duration_sec));
 

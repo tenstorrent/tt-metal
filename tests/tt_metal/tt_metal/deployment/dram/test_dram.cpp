@@ -29,6 +29,19 @@ std::atomic<bool> g_stop_requested{false};
 std::atomic<bool> g_watchdog_requested{false};
 static std::atomic<bool> g_stop_message_printed{false};
 
+struct DramBankSummary {
+    bool pass = true;
+    uint64_t checked_bytes = 0;
+    uint64_t suspected_write_error_bytes = 0;
+    uint64_t suspected_read_error_bytes = 0;
+};
+
+struct DramChipSummary {
+    uint32_t device_id = 0;
+    bool pass = true;
+    std::vector<DramBankSummary> banks;
+};
+
 struct DramGalaxySummary {
     uint32_t chips_tested = 0;
     uint64_t jobs = 0;
@@ -36,6 +49,8 @@ struct DramGalaxySummary {
     uint64_t suspected_write_error_bytes = 0;
     uint64_t suspected_read_error_bytes = 0;
     bool pass = true;
+
+    std::vector<DramChipSummary> chips;
 };
 
 static void handle_sigint(int) {
@@ -47,7 +62,10 @@ static void handle_sigint(int) {
     }
 }
 
-[[maybe_unused]] static uint64_t bytes_to_mb_floor(uint64_t bytes) { return bytes / (1024ull * 1024ull); }
+[[maybe_unused]]
+static uint64_t bytes_to_mb_floor(uint64_t bytes) {
+    return bytes / (1024ull * 1024ull);
+}
 
 static std::string format_bytes(uint64_t bytes) {
     std::ostringstream oss;
@@ -66,6 +84,178 @@ static std::string format_bytes(uint64_t bytes) {
     return oss.str();
 }
 
+static std::string format_error_pct(double pct) {
+    if (pct == 0.0) {
+        return "0%";
+    }
+
+    if (pct < 0.001) {
+        return "<0.001%";
+    }
+
+    std::string out = fmt::format("{:.3f}", pct);
+
+    while (!out.empty() && out.back() == '0') {
+        out.pop_back();
+    }
+
+    if (!out.empty() && out.back() == '.') {
+        out.pop_back();
+    }
+
+    return out + "%";
+}
+
+static void accumulate_bank_summary(DramBankSummary& dst, const DramBaseResult& result) {
+    dst.pass &= (result.failures == 0u);
+
+    dst.checked_bytes += static_cast<uint64_t>(result.words_checked) * sizeof(uint32_t);
+
+    dst.suspected_write_error_bytes += static_cast<uint64_t>(result.suspected_write_failures) * sizeof(uint32_t);
+
+    dst.suspected_read_error_bytes += static_cast<uint64_t>(result.suspected_read_failures) * sizeof(uint32_t);
+}
+
+static std::string format_bank_status(const DramBankSummary& s) {
+    if (s.pass) {
+        return "OK";
+    }
+
+    double write_pct = 0.0;
+    double read_pct = 0.0;
+
+    if (s.checked_bytes > 0) {
+        write_pct = 100.0 * s.suspected_write_error_bytes / s.checked_bytes;
+        read_pct = 100.0 * s.suspected_read_error_bytes / s.checked_bytes;
+    }
+
+    if (s.suspected_write_error_bytes > 0) {
+        return fmt::format("FAIL{}", format_error_pct(write_pct));
+    }
+
+    if (s.suspected_read_error_bytes > 0) {
+        return fmt::format("FAIL{}", format_error_pct(read_pct));
+    }
+
+    return "FAIL";
+}
+
+static std::string make_left_cell(const std::string& text, size_t width) {
+    if (text.size() >= width) {
+        return " " + text + " ";
+    }
+
+    return " " + text + std::string(width - text.size(), ' ') + " ";
+}
+
+static std::string make_center_cell(const std::string& text, size_t width) {
+    if (text.size() >= width) {
+        return " " + text + " ";
+    }
+
+    const size_t padding = width - text.size();
+    const size_t left = padding / 2;
+    const size_t right = padding - left;
+
+    return " " + std::string(left, ' ') + text + std::string(right, ' ') + " ";
+}
+
+static DramChipSummary make_chip_bank_summary(
+    IDevice* device, uint32_t num_dram_channels, const DramMultiInstanceSummary& run) {
+    DramChipSummary chip{};
+
+    chip.device_id = device->id();
+    chip.pass = run.summary.pass;
+    chip.banks.resize(num_dram_channels);
+
+    for (const auto& per_core : run.per_core_results) {
+        const uint32_t bank_id = per_core.result.bank_id;
+
+        if (bank_id < chip.banks.size()) {
+            accumulate_bank_summary(chip.banks[bank_id], per_core.result);
+        }
+    }
+
+    return chip;
+}
+
+static void log_dram_bank_result_table(const DramGalaxySummary& galaxy) {
+    if (galaxy.chips.empty()) {
+        log_info(tt::LogTest, "No DRAM bank result table available.");
+        return;
+    }
+
+    uint32_t max_banks = 0;
+
+    for (const auto& chip : galaxy.chips) {
+        max_banks = std::max<uint32_t>(max_banks, static_cast<uint32_t>(chip.banks.size()));
+    }
+
+    if (max_banks == 0) {
+        log_info(tt::LogTest, "No DRAM bank result table available.");
+        return;
+    }
+
+    std::vector<size_t> bank_widths(max_banks, 0);
+
+    for (uint32_t bank_id = 0; bank_id < max_banks; bank_id++) {
+        bank_widths[bank_id] = fmt::format("D{}", bank_id).size();
+    }
+
+    for (const auto& chip : galaxy.chips) {
+        for (size_t bank_id = 0; bank_id < chip.banks.size(); bank_id++) {
+            bank_widths[bank_id] = std::max(bank_widths[bank_id], format_bank_status(chip.banks[bank_id]).size());
+        }
+    }
+
+    const size_t device_col_width = std::string("Device ID").size();
+
+    auto make_separator = [&]() {
+        std::string sep = "+";
+        sep += std::string(device_col_width + 2, '-') + "+";
+
+        for (uint32_t bank_id = 0; bank_id < max_banks; bank_id++) {
+            sep += std::string(bank_widths[bank_id] + 2, '-') + "+";
+        }
+
+        return sep;
+    };
+
+    const std::string sep = make_separator();
+
+    std::string header = "|";
+    header += make_left_cell("Device ID", device_col_width) + "|";
+
+    for (uint32_t bank_id = 0; bank_id < max_banks; bank_id++) {
+        header += make_center_cell(fmt::format("D{}", bank_id), bank_widths[bank_id]) + "|";
+    }
+
+    log_info(tt::LogTest, "=== DRAM Bank Result Table ===");
+    log_info(tt::LogTest, "{}", sep);
+    log_info(tt::LogTest, "{}", header);
+    log_info(tt::LogTest, "{}", sep);
+
+    for (const auto& chip : galaxy.chips) {
+        std::string row = "|";
+
+        row += make_left_cell(fmt::format("{}", chip.device_id), device_col_width) + "|";
+
+        for (uint32_t bank_id = 0; bank_id < max_banks; bank_id++) {
+            std::string status = "N/A";
+
+            if (bank_id < chip.banks.size()) {
+                status = format_bank_status(chip.banks[bank_id]);
+            }
+
+            row += make_center_cell(status, bank_widths[bank_id]) + "|";
+        }
+
+        log_info(tt::LogTest, "{}", row);
+    }
+
+    log_info(tt::LogTest, "{}", sep);
+}
+
 static void print_subtest_status(
     uint32_t test_index,
     uint32_t total_tests,
@@ -77,27 +267,39 @@ static void print_subtest_status(
     uint32_t pattern_id,
     double elapsed_ms,
     const DramRunSummary* summary = nullptr) {
-    std::ostringstream oss;
-    oss << "test " << test_index << "/" << total_tests << " subtest " << subtest_index << "/" << total_subtests
-        << " mesh(" << mesh_x << "," << mesh_y << ")"
-        << " bank:" << bank_id << " pattern:" << pattern_name(pattern_id) << " time:" << std::fixed
-        << std::setprecision(2) << elapsed_ms << "ms";
+    std::string out = fmt::format(
+        "test {}/{} subtest {}/{} mesh({},{}) bank:{} pattern:{} time:{:.2f}ms",
+        test_index,
+        total_tests,
+        subtest_index,
+        total_subtests,
+        mesh_x,
+        mesh_y,
+        bank_id,
+        pattern_name(pattern_id),
+        elapsed_ms);
 
     if (summary != nullptr && !summary->pass) {
-        oss << " " << format_bytes(summary->suspected_write_error_bytes) << "/" << format_bytes(summary->checked_bytes)
-            << " suspected write errors " << format_bytes(summary->suspected_read_error_bytes) << "/"
-            << format_bytes(summary->checked_bytes) << " suspected read errors";
+        out = fmt::format(
+            "{} {}/{} suspected write errors {}/{} suspected read errors",
+            out,
+            format_bytes(summary->suspected_write_error_bytes),
+            format_bytes(summary->checked_bytes),
+            format_bytes(summary->suspected_read_error_bytes),
+            format_bytes(summary->checked_bytes));
     }
 
-    log_info(tt::LogTest, "{}", oss.str());
+    log_info(tt::LogTest, "{}", out);
 }
 
 template <size_t N>
 static uint64_t count_subtests_for_patterns(const uint32_t (&patterns)[N], uint32_t repeats) {
     uint64_t total = 0;
+
     for (uint32_t pattern_id : patterns) {
-        total += static_cast<uint64_t>(repeats) * num_passes_for_pattern(pattern_id);
+        total += (uint64_t)repeats * num_passes_for_pattern(pattern_id);
     }
+
     return total;
 }
 
@@ -138,8 +340,8 @@ static std::vector<CoreCoord> get_worker_cores_for_deployment(IDevice* device) {
     std::vector<CoreCoord> cores;
 
     const auto grid = device->compute_with_storage_grid_size();
-    for (uint32_t y = 0; y < grid.y; ++y) {
-        for (uint32_t x = 0; x < grid.x; ++x) {
+    for (uint32_t y = 0; y < grid.y; y++) {
+        for (uint32_t x = 0; x < grid.x; x++) {
             cores.emplace_back(x, y);
         }
     }
@@ -147,7 +349,8 @@ static std::vector<CoreCoord> get_worker_cores_for_deployment(IDevice* device) {
     return cores;
 }
 
-[[maybe_unused]] static uint32_t get_dram_test_bytes_from_env(uint32_t default_bytes) {
+[[maybe_unused]]
+static uint32_t get_dram_test_bytes_from_env(uint32_t default_bytes) {
     const char* env = std::getenv("DRAM_TEST_MBYTES");
 
     uint64_t bytes = default_bytes;
@@ -164,12 +367,13 @@ static std::vector<CoreCoord> get_worker_cores_for_deployment(IDevice* device) {
 
     TT_FATAL(bytes <= DRAM_TEST_MAX_BANK_BYTES, "DRAM_TEST_BYTES too large: {} > {}", bytes, DRAM_TEST_MAX_BANK_BYTES);
 
-    return static_cast<uint32_t>(bytes);
+    return bytes;
 }
 
 enum class [[maybe_unused]] DramNocMode { FIXED_0, FIXED_1, ALTERNATE };
 
-[[maybe_unused]] static DramNocMode get_dram_noc_mode_from_env() {
+[[maybe_unused]]
+static DramNocMode get_dram_noc_mode_from_env() {
     const char* env = std::getenv("DRAM_TEST_NOC_MODE");
 
     if (!env) {
@@ -191,7 +395,8 @@ enum class [[maybe_unused]] DramNocMode { FIXED_0, FIXED_1, ALTERNATE };
     TT_FATAL(false, "Invalid DRAM_TEST_NOC_MODE: {} (expected 0, 1, alternate)", val);
 }
 
-[[maybe_unused]] static uint32_t resolve_noc(DramNocMode mode, uint64_t pattern_index) {
+[[maybe_unused]]
+static uint32_t resolve_noc(DramNocMode mode, uint64_t pattern_index) {
     switch (mode) {
         case DramNocMode::FIXED_0: return 0;
 
@@ -203,7 +408,8 @@ enum class [[maybe_unused]] DramNocMode { FIXED_0, FIXED_1, ALTERNATE };
     return 0;
 }
 
-[[maybe_unused]] static bool get_env_flag(const char* name, bool default_val = false) {
+[[maybe_unused]]
+static bool get_env_flag(const char* name, bool default_val = false) {
     const char* val = std::getenv(name);
     if (!val) {
         return default_val;
@@ -220,14 +426,16 @@ enum class [[maybe_unused]] DramNocMode { FIXED_0, FIXED_1, ALTERNATE };
     return default_val;
 }
 
-[[maybe_unused]] static std::vector<CoreCoord> get_first_n_worker_cores(IDevice* device, size_t n) {
+[[maybe_unused]]
+static std::vector<CoreCoord> get_first_n_worker_cores(IDevice* device, size_t n) {
     const auto all_cores = get_worker_cores_for_deployment(device);
     TT_FATAL(all_cores.size() >= n, "Need at least {} worker cores, found {}", n, all_cores.size());
 
     return std::vector<CoreCoord>(all_cores.begin(), all_cores.begin() + n);
 }
 
-[[maybe_unused]] static uint32_t get_bank_id_for_core_in_all_controllers_test(size_t core_index, size_t total_cores) {
+[[maybe_unused]]
+static uint32_t get_bank_id_for_core_in_all_controllers_test(size_t core_index, size_t total_cores) {
     constexpr size_t num_controllers = 8u;
 
     const size_t base_cores_per_controller = total_cores / num_controllers;
@@ -235,7 +443,7 @@ enum class [[maybe_unused]] DramNocMode { FIXED_0, FIXED_1, ALTERNATE };
 
     size_t core_begin = 0;
 
-    for (uint32_t bank_id = 0; bank_id < num_controllers; ++bank_id) {
+    for (uint32_t bank_id = 0; bank_id < num_controllers; bank_id++) {
         const size_t cores_in_this_controller = base_cores_per_controller + (bank_id < remainder_cores ? 1u : 0u);
 
         const size_t core_end = core_begin + cores_in_this_controller;
@@ -250,22 +458,24 @@ enum class [[maybe_unused]] DramNocMode { FIXED_0, FIXED_1, ALTERNATE };
     TT_FATAL(false, "Invalid core_index={} for total_cores={}", core_index, total_cores);
 }
 
-[[maybe_unused]] const bool verbose = get_env_flag("DRAM_TEST_VERBOSE", false);
+[[maybe_unused]]
+const bool verbose = get_env_flag("DRAM_TEST_VERBOSE", false);
 
-[[maybe_unused]] static void print_subtest_status_per_instance(
+[[maybe_unused]]
+static void print_subtest_status_per_instance(
     uint32_t test_index,
     uint32_t total_tests,
     uint64_t subtest_index,
     uint64_t total_subtests,
     const DramPerCoreResult& per_core,
     double elapsed_ms) {
+    /* ======================== */
     DramRunSummary tmp{};
     tmp.pass = (per_core.result.failures == 0u);
     tmp.bank_id = per_core.result.bank_id;
-    tmp.checked_bytes = static_cast<uint64_t>(per_core.result.words_checked) * sizeof(uint32_t);
-    tmp.suspected_write_error_bytes =
-        static_cast<uint64_t>(per_core.result.suspected_write_failures) * sizeof(uint32_t);
-    tmp.suspected_read_error_bytes = static_cast<uint64_t>(per_core.result.suspected_read_failures) * sizeof(uint32_t);
+    tmp.checked_bytes = per_core.result.words_checked * sizeof(uint32_t);
+    tmp.suspected_write_error_bytes = per_core.result.suspected_write_failures * sizeof(uint32_t);
+    tmp.suspected_read_error_bytes = per_core.result.suspected_read_failures * sizeof(uint32_t);
 
     print_subtest_status(
         test_index,
@@ -280,7 +490,8 @@ enum class [[maybe_unused]] DramNocMode { FIXED_0, FIXED_1, ALTERNATE };
         tmp.pass ? nullptr : &tmp);
 }
 
-[[maybe_unused]] static uint32_t get_dram_chunk_bytes_from_env(uint32_t default_bytes) {
+[[maybe_unused]]
+static uint32_t get_dram_chunk_bytes_from_env(uint32_t default_bytes) {
     const char* env = std::getenv("DRAM_TEST_CHUNK_BYTES");
 
     uint64_t bytes = default_bytes;
@@ -297,7 +508,23 @@ enum class [[maybe_unused]] DramNocMode { FIXED_0, FIXED_1, ALTERNATE };
     // opciono: enforce neki max ako želiš
     TT_FATAL(bytes <= (1u << 20), "Chunk too large (>1MB)");  // možeš promeniti limit
 
-    return static_cast<uint32_t>(bytes);
+    return bytes;
+}
+
+[[maybe_unused]]
+static uint32_t get_dram_max_chips_from_env(uint32_t available_chips) {
+    const char* env = std::getenv("DRAM_TEST_MAX_CHIPS");
+
+    if (env == nullptr) {
+        return available_chips;
+    }
+
+    const uint64_t value = std::strtoull(env, nullptr, 0);
+
+    TT_FATAL(value > 0, "DRAM_TEST_MAX_CHIPS must be > 0");
+    TT_FATAL(value <= available_chips, "DRAM_TEST_MAX_CHIPS={} exceeds available chips={}", value, available_chips);
+
+    return static_cast<uint32_t>(value);
 }
 
 static void accumulate_galaxy_summary(DramGalaxySummary& dst, const DramMultiInstanceSummary& run, uint64_t jobs) {
@@ -313,24 +540,63 @@ static void log_galaxy_summary(const char* name, const DramGalaxySummary& s, std
     double read_pct = 0.0;
 
     if (s.checked_bytes > 0) {
-        write_pct = 100.0 * static_cast<double>(s.suspected_write_error_bytes) / static_cast<double>(s.checked_bytes);
-
-        read_pct = 100.0 * static_cast<double>(s.suspected_read_error_bytes) / static_cast<double>(s.checked_bytes);
+        write_pct = 100.0 * s.suspected_write_error_bytes / s.checked_bytes;
+        read_pct = 100.0 * s.suspected_read_error_bytes / s.checked_bytes;
     }
 
     log_info(tt::LogTest, "=== {} Galaxy/SOC Summary ===", name);
-    log_info(
-        tt::LogTest,
+
+    std::string message = fmt::format(
         "chips={} jobs={} duration={} checked_bytes={} ({:.2f} MB) pass={}",
         s.chips_tested,
         s.jobs,
         format_duration_seconds(duration.count()),
         s.checked_bytes,
-        static_cast<double>(s.checked_bytes) / (1024.0 * 1024.0),
+        s.checked_bytes / (1024.0 * 1024.0),
         s.pass ? "YES" : "NO");
 
+    if (s.pass) {
+        log_info(tt::LogTest, "{}", message);
+    } else {
+        log_critical(tt::LogTest, "{}", message);
+    }
+
     if (!s.pass) {
-        log_info(tt::LogTest, "write_err={:.6f}% read_err={:.6f}%", write_pct, read_pct);
+        log_info(tt::LogTest, "write_err={} read_err={}", format_error_pct(write_pct), format_error_pct(read_pct));
+    }
+
+    log_dram_bank_result_table(s);
+}
+
+static void merge_galaxy_summary(DramGalaxySummary& dst, const DramGalaxySummary& src) {
+    dst.chips_tested += src.chips_tested;
+    dst.jobs += src.jobs;
+    dst.checked_bytes += src.checked_bytes;
+    dst.suspected_write_error_bytes += src.suspected_write_error_bytes;
+    dst.suspected_read_error_bytes += src.suspected_read_error_bytes;
+    dst.pass &= src.pass;
+    dst.chips.insert(dst.chips.end(), src.chips.begin(), src.chips.end());
+}
+
+template <typename RunOneChipFn>
+static void run_chips_in_parallel(uint32_t chips_to_test, RunOneChipFn run_one_chip) {
+    std::vector<std::thread> threads;
+    threads.reserve(chips_to_test);
+
+    for (uint32_t chip_index = 0; chip_index < chips_to_test; chip_index++) {
+        threads.emplace_back([&, chip_index]() {
+            if (g_stop_requested.load()) {
+                return;
+            }
+
+            run_one_chip(chip_index);
+        });
+    }
+
+    for (auto& thread : threads) {
+        if (thread.joinable()) {
+            thread.join();
+        }
     }
 }
 
@@ -374,16 +640,32 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
 
     log_info(tt::LogTest, "Persistent optimal-worker DRAM deployment running on {} chip(s)", devices_.size());
 
-    for (size_t chip_index = 0; chip_index < devices_.size(); ++chip_index) {
+    const uint32_t chips_to_test = get_dram_max_chips_from_env(devices_.size());
+    const bool parallel_chips = true;
+
+    log_info(
+        tt::LogTest,
+        "Testing {} of {} available chip(s), parallel execution={}",
+        chips_to_test,
+        devices_.size(),
+        parallel_chips ? "YES" : "NO");
+
+    std::mutex summary_mutex;
+
+    auto run_one_chip = [&](size_t chip_index) {
         if (g_stop_requested.load()) {
-            break;
+            return;
         }
+
+        DramGalaxySummary chip_summary{};
+        bool chip_pass = true;
 
         const auto& mesh_device = devices_[chip_index];
         auto* const device = mesh_device->get_devices()[0];
-        galaxy.chips_tested++;
 
-        log_info(tt::LogTest, "Starting chip {}/{} device_id={}", chip_index + 1, devices_.size(), device->id());
+        chip_summary.chips_tested = 1;
+
+        log_info(tt::LogTest, "Starting chip {}/{} device_id={}", chip_index + 1, chips_to_test, device->id());
 
         const auto assignments = get_optimal_dram_bank_worker_assignments(mesh_device, tt_metal::NOC::NOC_0);
 
@@ -394,14 +676,16 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
             device->num_dram_channels(),
             assignments.size());
 
-        for (const auto& a : assignments) {
-            log_info(
-                tt::LogTest,
-                "device_id={} DRAM bank {} assigned to logical worker core ({}, {})",
-                device->id(),
-                a.bank_id,
-                a.worker_core.x,
-                a.worker_core.y);
+        if (verbose) {
+            for (const auto& a : assignments) {
+                log_info(
+                    tt::LogTest,
+                    "device_id={} DRAM bank {} assigned to logical worker core ({}, {})",
+                    device->id(),
+                    a.bank_id,
+                    a.worker_core.x,
+                    a.worker_core.y);
+            }
         }
 
         std::vector<DramWorkItem> jobs;
@@ -409,7 +693,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
         uint32_t seed = initial_seed;
         uint64_t pattern_toggle_index = 0;
 
-        for (uint32_t repeat_index = 0; repeat_index < repeats; ++repeat_index) {
+        for (uint32_t repeat_index = 0; repeat_index < repeats; repeat_index++) {
             for (uint32_t pattern_id : kDeploymentPatterns) {
                 if (g_stop_requested.load()) {
                     break;
@@ -421,7 +705,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
 
                 const uint32_t num_passes = num_passes_for_pattern(pattern_id);
 
-                for (uint32_t pass_index = 0; pass_index < num_passes; ++pass_index) {
+                for (uint32_t pass_index = 0; pass_index < num_passes; pass_index++) {
                     for (const auto& assignment : assignments) {
                         DramWorkItem job{};
 
@@ -446,7 +730,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
                     }
                 }
 
-                ++pattern_toggle_index;
+                pattern_toggle_index++;
             }
 
             seed += advance_seed;
@@ -485,38 +769,63 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
 
         const double elapsed_ms = std::chrono::duration<double, std::milli>(subtest_end - subtest_start).count();
 
-        accumulate_galaxy_summary(galaxy, run, jobs.size());
+        accumulate_galaxy_summary(chip_summary, run, jobs.size());
+
+        chip_summary.chips.push_back(make_chip_bank_summary(device, static_cast<uint32_t>(assignments.size()), run));
 
         const auto& s = run.summary;
 
-        log_info(tt::LogTest, "=== Persistent Optimal DRAM Deployment Chip Summary ===");
-
-        if (g_watchdog_requested.load()) {
-            log_info(tt::LogTest, "device_id={} status=ABORTED reason=stall_watchdog", device->id());
-        }
-
-        log_info(
-            tt::LogTest,
-            "device_id={} dram_channels={} workers={} jobs={} time={:.2f} ms checked_bytes={} pass={}",
-            device->id(),
-            assignments.size(),
-            worker_cores.size(),
-            jobs.size(),
-            elapsed_ms,
-            s.checked_bytes,
-            s.pass ? "YES" : "NO");
-
-        if (s.pass) {
-            log_info(tt::LogTest, "device_id={} all jobs passed with no errors", device->id());
-        }
-
         if (!s.pass) {
-            all_pass = false;
+            chip_pass = false;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(summary_mutex);
+
+            log_info(tt::LogTest, "=== Persistent Optimal DRAM Deployment Chip Summary device_id={} ===", device->id());
+
+            if (g_watchdog_requested.load()) {
+                log_info(tt::LogTest, "device_id={} status=ABORTED reason=stall_watchdog", device->id());
+            }
+
+            string message = fmt::format(
+                "device_id={} dram_channels={} workers={} jobs={} time={:.2f} ms checked_bytes={} pass={}",
+                device->id(),
+                assignments.size(),
+                worker_cores.size(),
+                jobs.size(),
+                elapsed_ms,
+                s.checked_bytes,
+                s.pass ? "YES" : "NO");
+
+            if (s.pass) {
+                log_info(tt::LogTest, "{}", message);
+            } else {
+                log_critical(tt::LogTest, "{}", message);
+            }
+
+            if (s.pass) {
+                log_info(tt::LogTest, "device_id={} all jobs passed with no errors", device->id());
+            }
+
+            merge_galaxy_summary(galaxy, chip_summary);
+            all_pass &= chip_pass;
         }
 
         if (g_watchdog_requested.load()) {
-            all_pass = false;
-            break;
+            chip_pass = false;
+            g_stop_requested.store(true);
+        }
+    };
+
+    if (parallel_chips) {
+        run_chips_in_parallel(chips_to_test, run_one_chip);
+    } else {
+        for (size_t chip_index = 0; chip_index < chips_to_test; chip_index++) {
+            if (g_stop_requested.load()) {
+                break;
+            }
+            run_one_chip(chip_index);
         }
     }
 
@@ -543,6 +852,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
     if (g_stop_requested.load()) {
         GTEST_SKIP() << "Test interrupted by user.";
     }
+
     g_stop_message_printed.store(false);
     g_watchdog_requested.store(false);
 
@@ -580,21 +890,40 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
 
     log_info(tt::LogTest, "Persistent all-workers single-DRAM sequential sweep running on {} chip(s)", devices_.size());
 
-    for (size_t chip_index = 0; chip_index < devices_.size(); ++chip_index) {
+    const uint32_t chips_to_test = get_dram_max_chips_from_env(static_cast<uint32_t>(devices_.size()));
+
+    const bool parallel_chips = true;
+
+    log_info(
+        tt::LogTest,
+        "Testing {} of {} available chip(s), parallel execution={}",
+        chips_to_test,
+        devices_.size(),
+        parallel_chips ? "YES" : "NO");
+
+    std::mutex summary_mutex;
+
+    auto run_one_chip = [&](size_t chip_index) {
         if (g_stop_requested.load()) {
-            break;
+            return;
         }
+
+        DramGalaxySummary chip_summary{};
+        bool chip_pass = true;
 
         const auto& mesh_device = devices_[chip_index];
         auto* const device = mesh_device->get_devices()[0];
-        galaxy.chips_tested++;
 
-        bool chip_pass = true;
+        chip_summary.chips_tested = 1;
 
-        log_info(tt::LogTest, "Starting chip {}/{} device_id={}", chip_index + 1, devices_.size(), device->id());
+        log_info(tt::LogTest, "Starting chip {}/{} device_id={}", chip_index + 1, chips_to_test, device->id());
 
         const uint32_t num_dram_channels = device->num_dram_channels();
         const auto worker_cores = get_worker_cores_for_deployment(device);
+        DramChipSummary chip_bank_summary{};
+        chip_bank_summary.device_id = device->id();
+        chip_bank_summary.pass = true;
+        chip_bank_summary.banks.resize(num_dram_channels);
 
         TT_FATAL(!worker_cores.empty(), "No worker cores found");
         TT_FATAL(num_dram_channels > 0, "No DRAM channels found");
@@ -621,14 +950,13 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
         TT_FATAL(bytes_per_core_base <= std::numeric_limits<uint32_t>::max(), "bytes_per_core_base must fit uint32_t");
 
         const uint64_t covered_bytes = bytes_per_core_base * worker_cores.size();
-
         const uint64_t remainder_bytes = static_cast<uint64_t>(total_bytes_per_controller) - covered_bytes;
 
         TT_FATAL((remainder_bytes & 0xFFFULL) == 0ULL, "remainder_bytes must stay 4KB aligned");
 
         const auto full_start = std::chrono::steady_clock::now();
 
-        for (uint32_t bank_id = 0; bank_id < num_dram_channels; ++bank_id) {
+        for (uint32_t bank_id = 0; bank_id < num_dram_channels; bank_id++) {
             if (g_stop_requested.load()) {
                 break;
             }
@@ -639,20 +967,19 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
             uint32_t seed = initial_seed;
             uint64_t pattern_toggle_index = 0;
 
-            for (uint32_t repeat_index = 0; repeat_index < repeats; ++repeat_index) {
+            for (uint32_t repeat_index = 0; repeat_index < repeats; repeat_index++) {
                 for (uint32_t pattern_id : kDeploymentPatterns) {
                     if (g_stop_requested.load()) {
                         break;
                     }
 
                     const uint32_t write_noc = resolve_noc(noc_mode, pattern_toggle_index);
-
                     const uint32_t read_noc = resolve_noc(noc_mode, pattern_toggle_index + 1);
 
                     const uint32_t num_passes = num_passes_for_pattern(pattern_id);
 
-                    for (uint32_t pass_index = 0; pass_index < num_passes; ++pass_index) {
-                        for (size_t worker_idx = 0; worker_idx < worker_cores.size(); ++worker_idx) {
+                    for (uint32_t pass_index = 0; pass_index < num_passes; pass_index++) {
+                        for (size_t worker_idx = 0; worker_idx < worker_cores.size(); worker_idx++) {
                             const uint64_t bank_offset = controller_bank_offset + worker_idx * bytes_per_core_base;
 
                             uint64_t bytes_this_core = bytes_per_core_base;
@@ -694,7 +1021,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
                         }
                     }
 
-                    ++pattern_toggle_index;
+                    pattern_toggle_index++;
                 }
 
                 seed += advance_seed;
@@ -717,28 +1044,44 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
             const auto bank_duration_sec =
                 std::chrono::duration_cast<std::chrono::seconds>(bank_end - bank_start).count();
 
-            accumulate_galaxy_summary(galaxy, run, bank_jobs);
+            accumulate_galaxy_summary(chip_summary, run, bank_jobs);
 
-            log_info(
-                tt::LogTest,
-                "device_id={} completed DRAM bank {}/{} workers={} jobs={} duration={} checked_bytes={} pass={}",
-                device->id(),
-                bank_id + 1,
-                num_dram_channels,
-                worker_cores.size(),
-                bank_jobs,
-                format_duration_seconds(bank_duration_sec),
-                run.summary.checked_bytes,
-                run.summary.pass ? "YES" : "NO");
+            chip_bank_summary.pass &= run.summary.pass;
 
-            if (!run.summary.pass) {
+            for (const auto& per_core : run.per_core_results) {
+                accumulate_bank_summary(chip_bank_summary.banks[bank_id], per_core.result);
+            }
+
+            const auto& s = run.summary;
+
+            {
+                std::lock_guard<std::mutex> lock(summary_mutex);
+
+                std::string message = fmt::format(
+                    "device_id={} completed DRAM bank {}/{} workers={} jobs={} duration={} checked_bytes={} pass={}",
+                    device->id(),
+                    bank_id + 1,
+                    num_dram_channels,
+                    worker_cores.size(),
+                    bank_jobs,
+                    format_duration_seconds(bank_duration_sec),
+                    s.checked_bytes,
+                    s.pass ? "YES" : "NO");
+
+                if (s.pass) {
+                    log_info(tt::LogTest, "{}", message);
+                } else {
+                    log_critical(tt::LogTest, "{}", message);
+                }
+            }
+
+            if (!s.pass) {
                 chip_pass = false;
-                all_pass = false;
             }
 
             if (g_watchdog_requested.load()) {
                 chip_pass = false;
-                all_pass = false;
+                g_stop_requested.store(true);
                 break;
             }
         }
@@ -747,27 +1090,61 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
 
         const auto full_duration_sec = std::chrono::duration_cast<std::chrono::seconds>(full_end - full_start).count();
 
-        log_info(tt::LogTest, "=== Persistent All-Workers Single-DRAM Sequential Sweep Chip Summary ===");
-
         if (g_watchdog_requested.load()) {
-            log_info(tt::LogTest, "device_id={} status=ABORTED reason=stall_watchdog", device->id());
+            chip_pass = false;
+            g_stop_requested.store(true);
         }
 
-        log_info(
-            tt::LogTest,
-            "device_id={} workers={} dram_channels={} duration={} pass={}",
-            device->id(),
-            worker_cores.size(),
-            num_dram_channels,
-            format_duration_seconds(full_duration_sec),
-            chip_pass ? "YES" : "NO");
+        {
+            std::lock_guard<std::mutex> lock(summary_mutex);
 
-        if (g_watchdog_requested.load()) {
-            break;
+            log_info(
+                tt::LogTest,
+                "=== Persistent All-Workers Single-DRAM Sequential Sweep Chip Summary device_id={} ===",
+                device->id());
+
+            if (g_watchdog_requested.load()) {
+                log_info(tt::LogTest, "device_id={} status=ABORTED reason=stall_watchdog", device->id());
+            }
+
+            std::string message = fmt::format(
+                "device_id={} workers={} dram_channels={} duration={} pass={}",
+                device->id(),
+                worker_cores.size(),
+                num_dram_channels,
+                format_duration_seconds(full_duration_sec),
+                chip_pass ? "YES" : "NO");
+
+            if (chip_pass) {
+                log_info(tt::LogTest, "{}", message);
+            } else {
+                log_critical(tt::LogTest, "{}", message);
+            }
+
+            if (chip_pass) {
+                log_info(tt::LogTest, "device_id={} all banks passed with no errors", device->id());
+            }
+
+            chip_summary.chips.push_back(chip_bank_summary);
+            merge_galaxy_summary(galaxy, chip_summary);
+            all_pass &= chip_pass;
+        }
+    };
+
+    if (parallel_chips) {
+        run_chips_in_parallel(chips_to_test, run_one_chip);
+    } else {
+        for (size_t chip_index = 0; chip_index < chips_to_test; chip_index++) {
+            if (g_stop_requested.load()) {
+                break;
+            }
+
+            run_one_chip(chip_index);
         }
     }
 
     const auto galaxy_end = std::chrono::steady_clock::now();
+
     log_galaxy_summary(
         "Persistent All-Workers Single-DRAM Sequential Sweep",
         galaxy,
@@ -790,6 +1167,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
     if (g_stop_requested.load()) {
         GTEST_SKIP() << "Test interrupted by user.";
     }
+
     g_stop_message_printed.store(false);
     g_watchdog_requested.store(false);
 
@@ -827,16 +1205,33 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
 
     log_info(tt::LogTest, "Persistent partitioned-workers all-DRAM test running on {} chip(s)", devices_.size());
 
-    for (size_t chip_index = 0; chip_index < devices_.size(); ++chip_index) {
+    const uint32_t chips_to_test = get_dram_max_chips_from_env(static_cast<uint32_t>(devices_.size()));
+
+    const bool parallel_chips = true;
+
+    log_info(
+        tt::LogTest,
+        "Testing {} of {} available chip(s), parallel execution={}",
+        chips_to_test,
+        devices_.size(),
+        parallel_chips ? "YES" : "NO");
+
+    std::mutex summary_mutex;
+
+    auto run_one_chip = [&](size_t chip_index) {
         if (g_stop_requested.load()) {
-            break;
+            return;
         }
+
+        DramGalaxySummary chip_summary{};
+        bool chip_pass = true;
 
         const auto& mesh_device = devices_[chip_index];
         auto* const device = mesh_device->get_devices()[0];
-        galaxy.chips_tested++;
 
-        log_info(tt::LogTest, "Starting chip {}/{} device_id={}", chip_index + 1, devices_.size(), device->id());
+        chip_summary.chips_tested = 1;
+
+        log_info(tt::LogTest, "Starting chip {}/{} device_id={}", chip_index + 1, chips_to_test, device->id());
 
         const uint32_t num_dram_channels = device->num_dram_channels();
         const auto worker_cores = get_worker_cores_for_deployment(device);
@@ -851,8 +1246,8 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
 
         log_info(
             tt::LogTest,
-            "device_id={} persistent partitioned-workers all-DRAM test: workers={} dram_channels={} bytes_per_dram={} "
-            "chunk_bytes={}",
+            "device_id={} persistent partitioned-workers all-DRAM test: workers={} dram_channels={} "
+            "bytes_per_dram={} chunk_bytes={}",
             device->id(),
             worker_cores.size(),
             num_dram_channels,
@@ -861,19 +1256,20 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
 
         std::vector<std::vector<size_t>> workers_for_bank(num_dram_channels);
 
-        for (size_t worker_idx = 0; worker_idx < worker_cores.size(); ++worker_idx) {
+        for (size_t worker_idx = 0; worker_idx < worker_cores.size(); worker_idx++) {
             const uint32_t bank_id = static_cast<uint32_t>(worker_idx % num_dram_channels);
-
             workers_for_bank[bank_id].push_back(worker_idx);
         }
 
-        for (uint32_t bank_id = 0; bank_id < num_dram_channels; ++bank_id) {
-            log_info(
-                tt::LogTest,
-                "device_id={} DRAM bank {} assigned {} worker cores",
-                device->id(),
-                bank_id,
-                workers_for_bank[bank_id].size());
+        if (verbose) {
+            for (uint32_t bank_id = 0; bank_id < num_dram_channels; bank_id++) {
+                log_info(
+                    tt::LogTest,
+                    "device_id={} DRAM bank {} assigned {} worker cores",
+                    device->id(),
+                    bank_id,
+                    workers_for_bank[bank_id].size());
+            }
         }
 
         std::vector<std::vector<DramWorkItem>> jobs_per_core(worker_cores.size());
@@ -882,20 +1278,19 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
         uint32_t seed = initial_seed;
         uint64_t pattern_toggle_index = 0;
 
-        for (uint32_t repeat_index = 0; repeat_index < repeats; ++repeat_index) {
+        for (uint32_t repeat_index = 0; repeat_index < repeats; repeat_index++) {
             for (uint32_t pattern_id : kDeploymentPatterns) {
                 if (g_stop_requested.load()) {
                     break;
                 }
 
                 const uint32_t write_noc = resolve_noc(noc_mode, pattern_toggle_index);
-
                 const uint32_t read_noc = resolve_noc(noc_mode, pattern_toggle_index + 1);
 
                 const uint32_t num_passes = num_passes_for_pattern(pattern_id);
 
-                for (uint32_t pass_index = 0; pass_index < num_passes; ++pass_index) {
-                    for (uint32_t bank_id = 0; bank_id < num_dram_channels; ++bank_id) {
+                for (uint32_t pass_index = 0; pass_index < num_passes; pass_index++) {
+                    for (uint32_t bank_id = 0; bank_id < num_dram_channels; bank_id++) {
                         const auto& bank_workers = workers_for_bank[bank_id];
 
                         TT_FATAL(!bank_workers.empty(), "No workers assigned to DRAM bank {}", bank_id);
@@ -914,13 +1309,12 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
                             "bytes_per_core_base must fit uint32_t");
 
                         const uint64_t covered_bytes = bytes_per_core_base * bank_workers.size();
-
                         const uint64_t remainder_bytes =
                             static_cast<uint64_t>(total_bytes_per_controller) - covered_bytes;
 
                         TT_FATAL((remainder_bytes & 0xFFFULL) == 0ULL, "remainder_bytes must stay 4KB aligned");
 
-                        for (size_t local_idx = 0; local_idx < bank_workers.size(); ++local_idx) {
+                        for (size_t local_idx = 0; local_idx < bank_workers.size(); local_idx++) {
                             const size_t worker_idx = bank_workers[local_idx];
 
                             const uint64_t bank_offset = controller_bank_offset + local_idx * bytes_per_core_base;
@@ -965,7 +1359,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
                     }
                 }
 
-                ++pattern_toggle_index;
+                pattern_toggle_index++;
             }
 
             seed += advance_seed;
@@ -987,42 +1381,70 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
 
         const auto duration_sec = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
 
-        accumulate_galaxy_summary(galaxy, run, total_jobs_for_chip);
+        accumulate_galaxy_summary(chip_summary, run, total_jobs_for_chip);
+
+        chip_summary.chips.push_back(make_chip_bank_summary(device, num_dram_channels, run));
 
         const auto& s = run.summary;
 
-        log_info(tt::LogTest, "=== Persistent Partitioned Workers All-DRAM Chip Summary ===");
-
-        if (g_watchdog_requested.load()) {
-            log_info(tt::LogTest, "device_id={} status=ABORTED reason=stall_watchdog", device->id());
-        }
-
-        log_info(
-            tt::LogTest,
-            "device_id={} workers={} dram_channels={} jobs={} duration={} checked_bytes={} pass={}",
-            device->id(),
-            worker_cores.size(),
-            num_dram_channels,
-            total_jobs_for_chip,
-            format_duration_seconds(duration_sec),
-            s.checked_bytes,
-            s.pass ? "YES" : "NO");
-
-        if (s.pass) {
-            log_info(tt::LogTest, "device_id={} all jobs passed with no errors", device->id());
-        }
-
         if (!s.pass) {
-            all_pass = false;
+            chip_pass = false;
         }
 
         if (g_watchdog_requested.load()) {
-            all_pass = false;
-            break;
+            chip_pass = false;
+            g_stop_requested.store(true);
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(summary_mutex);
+
+            log_info(
+                tt::LogTest, "=== Persistent Partitioned Workers All-DRAM Chip Summary device_id={} ===", device->id());
+
+            if (g_watchdog_requested.load()) {
+                log_info(tt::LogTest, "device_id={} status=ABORTED reason=stall_watchdog", device->id());
+            }
+
+            std::string message = fmt::format(
+                "device_id={} workers={} dram_channels={} jobs={} duration={} checked_bytes={} pass={}",
+                device->id(),
+                worker_cores.size(),
+                num_dram_channels,
+                total_jobs_for_chip,
+                format_duration_seconds(duration_sec),
+                s.checked_bytes,
+                s.pass ? "YES" : "NO");
+
+            if (s.pass) {
+                log_info(tt::LogTest, "{}", message);
+            } else {
+                log_critical(tt::LogTest, "{}", message);
+            }
+
+            if (s.pass) {
+                log_info(tt::LogTest, "device_id={} all jobs passed with no errors", device->id());
+            }
+
+            merge_galaxy_summary(galaxy, chip_summary);
+            all_pass &= chip_pass;
+        }
+    };
+
+    if (parallel_chips) {
+        run_chips_in_parallel(chips_to_test, run_one_chip);
+    } else {
+        for (size_t chip_index = 0; chip_index < chips_to_test; chip_index++) {
+            if (g_stop_requested.load()) {
+                break;
+            }
+
+            run_one_chip(chip_index);
         }
     }
 
     const auto galaxy_end = std::chrono::steady_clock::now();
+
     log_galaxy_summary(
         "Persistent Partitioned Workers All-DRAM",
         galaxy,
