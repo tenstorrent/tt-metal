@@ -34,7 +34,49 @@ struct SharedDevices {
 
 // A dispatch-agnostic test fixture
 class MeshDispatchFixture : public ::testing::Test {
-private:
+public:
+    // A function to run a program, according to which dispatch mode is set.
+    void RunProgram(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+        distributed::MeshWorkload& workload,
+        const bool skip_finish = false) {
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        if (!skip_finish) {
+            distributed::Finish(mesh_device->mesh_command_queue());
+        }
+    }
+    void FinishCommands(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        distributed::Finish(mesh_device->mesh_command_queue());
+    }
+    void WriteBuffer(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+        const std::shared_ptr<distributed::MeshBuffer>& in_buffer,
+        std::vector<uint32_t>& src_vec) {
+        distributed::WriteShard(
+            mesh_device->mesh_command_queue(), in_buffer, src_vec, distributed::MeshCoordinate(0, 0));
+    }
+    void ReadBuffer(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+        const std::shared_ptr<distributed::MeshBuffer>& out_buffer,
+        std::vector<uint32_t>& dst_vec) {
+        distributed::ReadShard(
+            mesh_device->mesh_command_queue(), dst_vec, out_buffer, distributed::MeshCoordinate(0, 0));
+    }
+    int NumDevices() { return this->devices_.size(); }
+    bool IsSlowDispatch() const { return this->slow_dispatch_; }
+
+protected:
+    tt::ARCH arch_{tt::ARCH::Invalid};
+    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
+    bool slow_dispatch_{};
+    const size_t l1_small_size_{DEFAULT_L1_SMALL_SIZE};
+    const size_t trace_region_size_{DEFAULT_TRACE_REGION_SIZE};
+    uint32_t max_cbs_{};
+
+    MeshDispatchFixture(
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
+        l1_small_size_{l1_small_size}, trace_region_size_{trace_region_size} {};
+
     static SharedDevices& get_shared_devices() {
         static SharedDevices devices;
         return devices;
@@ -80,49 +122,6 @@ private:
         shared.initialized = false;
         shared.needs_recovery = false;
     }
-
-public:
-    // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(
-        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-        distributed::MeshWorkload& workload,
-        const bool skip_finish = false) {
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        if (!skip_finish) {
-            distributed::Finish(mesh_device->mesh_command_queue());
-        }
-    }
-    void FinishCommands(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-        distributed::Finish(mesh_device->mesh_command_queue());
-    }
-    void WriteBuffer(
-        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-        const std::shared_ptr<distributed::MeshBuffer>& in_buffer,
-        std::vector<uint32_t>& src_vec) {
-        distributed::WriteShard(
-            mesh_device->mesh_command_queue(), in_buffer, src_vec, distributed::MeshCoordinate(0, 0));
-    }
-    void ReadBuffer(
-        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-        const std::shared_ptr<distributed::MeshBuffer>& out_buffer,
-        std::vector<uint32_t>& dst_vec) {
-        distributed::ReadShard(
-            mesh_device->mesh_command_queue(), dst_vec, out_buffer, distributed::MeshCoordinate(0, 0));
-    }
-    int NumDevices() { return this->devices_.size(); }
-    bool IsSlowDispatch() const { return this->slow_dispatch_; }
-
-protected:
-    tt::ARCH arch_{tt::ARCH::Invalid};
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
-    bool slow_dispatch_{};
-    const size_t l1_small_size_{DEFAULT_L1_SMALL_SIZE};
-    const size_t trace_region_size_{DEFAULT_TRACE_REGION_SIZE};
-    uint32_t max_cbs_{};
-
-    MeshDispatchFixture(
-        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
-        l1_small_size_{l1_small_size}, trace_region_size_{trace_region_size} {};
 
     // Derived fixtures should override SetUpTestSuite/TearDownTestSuite and SetUp/TearDown if
     // different device instantiation is needed
