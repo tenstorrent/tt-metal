@@ -63,6 +63,7 @@ class JobStatus(str, Enum):
 
 class TtSmiReset(BaseModel):
     github_job_id: int
+    workflow_attempt: Optional[int] = None
     attempt: int
     final_status: Optional[str] = None
     total_reset_time_sec: Optional[float] = None
@@ -85,6 +86,10 @@ class Job(BaseModel):
     github_job_link: Optional[str] = Field(
         None,
         description="Link to the Github Actions CI job, for pipelines orchestrated and " "executed by Github.",
+    )
+    workflow_attempt: Optional[int] = Field(
+        None,
+        description="GitHub workflow rerun attempt number.",
     )
     name: str = Field(description="Name of the job.")
     job_submission_ts: datetime = Field(description="Timestamp with timezone when the job was submitted.")

@@ -46,6 +46,7 @@ def create_cicd_json_for_data_analysis(
 
     github_pipeline_id = raw_pipeline["github_pipeline_id"]
     github_pipeline_start_ts = raw_pipeline["pipeline_start_ts"]
+    workflow_attempt = github_pipeline_json["run_attempt"]
 
     github_job_id_to_annotations = get_github_job_id_to_annotations(workflow_outputs_dir, github_pipeline_id)
 
@@ -60,7 +61,7 @@ def create_cicd_json_for_data_analysis(
         workflow_outputs_dir, github_pipeline_id, github_job_ids
     )
 
-    github_job_id_to_smi_versions, github_job_id_to_smi_resets = get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, github_pipeline_id)
+    github_job_id_to_smi_versions, github_job_id_to_smi_resets = get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, github_pipeline_id, workflow_attempt)
     print("CHECK:", 72824250364 in github_job_id_to_smi_resets)
     print("AVAILABLE KEYS:", list(github_job_id_to_smi_resets.keys())[:10])
     jobs = []
@@ -102,6 +103,7 @@ def create_cicd_json_for_data_analysis(
         if reset_data:
             for attempt in reset_data:
                 attempt["github_job_id"] = github_job_id
+
                 tt_smi_resets.append(TtSmiReset(**attempt))
 
         if github_job_id in [72824250364, 72824250365, 72824250368]:

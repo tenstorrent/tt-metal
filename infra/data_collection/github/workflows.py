@@ -171,7 +171,7 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
 
     return attempt_results
 
-def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int):
+def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int, workflow_attempt: int):
     logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
 
     assert logs_dir.exists(), f"Logs dir does not exist: {logs_dir}"
@@ -193,6 +193,8 @@ def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id:
             github_job_ids_to_tt_smi_versions[github_job_id] = tt_smi_version
 
         tt_smi_reset = search_for_tt_smi_reset_in_log_file_(log_file)
+        for reset in tt_smi_reset:
+            reset["workflow_attempt"] = workflow_attempt
         assert tt_smi_reset is not None, f"Parser returned None for {log_file}"
 
         github_job_ids_to_tt_smi_resets[github_job_id] = tt_smi_reset

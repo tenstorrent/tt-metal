@@ -345,6 +345,7 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
         "failure_signature": failure_signature,
         "failure_description": failure_description,
         "job_label": ",".join(labels),
+        "workflow_attempt": github_job.get("run_attempt"),
         "steps": github_job.get("steps", []),
     }
 
