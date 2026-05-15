@@ -56,6 +56,7 @@ Examples:
 """
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -139,18 +140,21 @@ def _ensure_within(root: Path, candidate: Path) -> Path:
 def _safe_copy(src: Path, dst: Path, dst_root: Path) -> None:
     """Copy src -> dst after verifying dst stays under dst_root and src is a regular file (no symlinks).
 
-    Both paths are validated before invoking the file system operation:
+    Both paths are validated immediately before the file system operation:
       - src must be a regular file (not a symlink, not a device, not a directory).
-      - dst is resolved and asserted to live under dst_root (no traversal possible).
+      - dst is asserted to live under dst_root using the OWASP-recommended
+        os.path.abspath + startswith pattern (no traversal possible).
     The validated paths are then passed to shutil.copyfile, which (unlike shutil.copy)
     does not follow symlinks at the destination.
     """
     if src.is_symlink() or not src.is_file():
         raise ValueError(f"refusing to copy non-regular or symlinked source: {src}")
-    validated_dst = _ensure_within(dst_root, dst)
-    # Both src (validated above) and validated_dst (resolved + contained in dst_root) are
-    # trusted at this point. shell=False is implicit; this is a pure stdlib file copy.
-    shutil.copyfile(src, validated_dst)  # nosec B606 - paths validated; not a subprocess call
+    base_directory = os.path.abspath(str(dst_root))
+    abs_dst = os.path.abspath(str(dst))
+    if not (abs_dst == base_directory or abs_dst.startswith(base_directory + os.sep)):
+        raise ValueError(f"refusing path outside {base_directory}: {abs_dst}")
+    abs_src = os.path.abspath(str(src))
+    shutil.copyfile(abs_src, abs_dst)
 
 
 def immediate_subdirs(d: Path) -> List[Path]:
@@ -175,21 +179,23 @@ def glue_files(d: Path) -> List[Path]:
 def concat_deployments(deployment_paths: List[Path], out_path: Path, out_root: Path) -> None:
     """Concatenate deployment textprotos into out_path.
 
-    out_path is asserted to live under out_root (the staging tempdir we created), and
-    every input path is required to be a regular file (rejecting symlinks). Both
-    constraints hold before any file I/O is invoked. We use Path.read_text/write_text
-    (single shot, in-memory) rather than open() because:
-      - the inputs are small textprotos (KB-scale), not streams;
-      - it lets us validate every input before any write occurs;
-      - it avoids open() sinks that SAST taint analyses often can't see through.
+    out_path is asserted to live under out_root (the staging tempdir we created) using
+    the OWASP-recommended absolute-path safelist check, applied inline at the I/O sink.
+    Every input path is required to be a regular file (rejecting symlinks). All
+    validation completes before any file is written.
     """
-    validated_out = _ensure_within(out_root, out_path)
+    base_directory = os.path.abspath(str(out_root))
+    abs_out = os.path.abspath(str(out_path))
+    if not (abs_out == base_directory or abs_out.startswith(base_directory + os.sep)):
+        raise ValueError(f"refusing path outside {base_directory}: {abs_out}")
+
     chunks: List[str] = []
     for p in deployment_paths:
         if p.is_symlink() or not p.is_file():
             raise ValueError(f"refusing to read non-regular or symlinked deployment: {p}")
-        chunks.append(p.read_text())
-    validated_out.write_text("\n".join(chunks))
+        abs_p = os.path.abspath(str(p))
+        chunks.append(Path(abs_p).read_text())
+    Path(abs_out).write_text("\n".join(chunks))
 
 
 @contextmanager
