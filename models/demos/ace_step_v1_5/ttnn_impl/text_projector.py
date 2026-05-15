@@ -107,5 +107,5 @@ class TtAceStepTextProjector:
         x = ttnn.reshape(x, (b, s, self.d_text))
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         out = ttnn.linear(x, self.weight_tt, bias=None, transpose_b=True)
-        # ``[B,S,D_dec]`` ROW_MAJOR — matches prior host staging for ``AceStepV15TTNNPipeline``.
+        # Keep TILE: ``condition_encoder`` and ``ttnn.concat`` require TILE on all operands.
         return out
