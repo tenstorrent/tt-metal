@@ -146,6 +146,8 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
           private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
+      - name: 🔧 Configure git safe.directory
+        run: git config --global --add safe.directory /work
       - name: ⬇️  Setup Job
         uses: ./.github/actions/setup-job
         timeout-minutes: 10
