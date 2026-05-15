@@ -307,28 +307,6 @@ inline void _calculate_zero_comp_int_()
 template <SfpuType COMP_MODE>
 inline void apply_unary_int_comp(sfpi::vInt& v, int scalar, sfpi::vInt& out_val);
 
-// a[i] != scalar
-template <>
-inline void apply_unary_int_comp<SfpuType::unary_ne>(sfpi::vInt& v, int scalar, sfpi::vInt& out_val)
-{
-    v_if (v != scalar)
-    {
-        out_val = ONE;
-    }
-    v_endif;
-}
-
-// a[i] == scalar
-template <>
-inline void apply_unary_int_comp<SfpuType::unary_eq>(sfpi::vInt& v, int scalar, sfpi::vInt& out_val)
-{
-    v_if (v == scalar)
-    {
-        out_val = ONE;
-    }
-    v_endif;
-}
-
 // a[i] > scalar
 template <>
 inline void apply_unary_int_comp<SfpuType::unary_gt>(sfpi::vInt& v, int scalar, sfpi::vInt& out_val)
@@ -409,6 +387,28 @@ inline void apply_unary_int_comp<SfpuType::unary_le>(sfpi::vInt& v, int scalar, 
     v_else
     {
         out_val = ZERO;
+    }
+    v_endif;
+}
+
+// a[i] == scalar
+template <>
+inline void apply_unary_int_comp<SfpuType::unary_eq>(sfpi::vInt& v, int scalar, sfpi::vInt& out_val)
+{
+    v_if (v == scalar)
+    {
+        out_val = ONE;
+    }
+    v_endif;
+}
+
+// a[i] != scalar
+template <>
+inline void apply_unary_int_comp<SfpuType::unary_ne>(sfpi::vInt& v, int scalar, sfpi::vInt& out_val)
+{
+    v_if (v != scalar)
+    {
+        out_val = ONE;
     }
     v_endif;
 }

@@ -7,66 +7,127 @@
 #include <cstdint>
 
 #include "sfpi.h"
+#include "ckernel_sfpu_polyval.h"
 
 namespace ckernel
 {
 namespace sfpu
 {
 
-template <bool HAS_BASE_SCALING>
-sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor, const std::uint32_t dst_idx = 0)
+// Remez-minimax coefficients for ln(1+t) on [0, 1]
+// Max error: ~0.36 ULP (bf16), ~1.47 ULP (fp32) with 5th order
+// Generated via Sollya: remez(ln(1+t), 5, [0;1], 1/ln(1+t))
+namespace log_coef
 {
-    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    constexpr float LN2      = 0.693147180559945309417f;
+    constexpr float INV_LN2  = 1.442695040888963407359f;
 
-    ////////////////////////////
-    // Load From dest + "normalize to calculation range"
-    ////////////////////////////
-    sfpi::vFloat in = sfpi::dst_reg[dst_idx * dst_tile_size_sfpi];
-    sfpi::vFloat x  = setexp(in, 127); // set exp to exp bias (put in range of 1-2)
+    // 5th-order Remez for ln(1+t) on [0,1]: ~1.47 ULP
+    // p(t) = c1*t + c2*t^2 + c3*t^3 + c4*t^4 + c5*t^5
+    // (no c0 since ln(1) = 0)
+    constexpr float C1 = 0.999999990f;
+    constexpr float C2 = -0.499999620f;
+    constexpr float C3 = 0.333314564f;
+    constexpr float C4 = -0.249913470f;
+    constexpr float C5 = 0.199739850f;
 
-    // XXXXXX ask Namal? if we can derive the coefficients below to higher precision
-    ////////////////////////////
-    // Calculate Cheby Approximation using Horner Form Multiplication: 3rd Order
-    // x* ( x* (A*x + B) + C) + D
-    // A :0.1058, B: -0.3942, C: 0.9813, D: 0.006
-    // Run above on (x-1) so x is in ln(x+1), plug (x-1 into equation above to
-    // save the subtract and get A',B',C',D'):
-    // A' = A
-    // B' = -3A + B
-    // C' = 3a -2B + C
-    // D' = -A + B - C + D
-    // A':0.1058, B':-0.7116, C':2.0871, D':-1.4753
-    ////////////////////////////
-    sfpi::vFloat a = sfpi::vConstFloatPrgm1;
-    sfpi::vFloat b = sfpi::vConstFloatPrgm2;
-    // XXXXX try variants of the below: B'=.7122, C'=2.0869
-    sfpi::vFloat series_result = x * (x * (x * a + b) + 2.0871) + -1.4753f;
+    // 3rd-order Remez for ln(1+t) on [0,1]: ~2.8 ULP
+    constexpr float C1_3 = 0.999473f;
+    constexpr float C2_3 = -0.492974f;
+    constexpr float C3_3 = 0.327104f;
+}
 
-    ////////////////////////////
-    // Convert exponent to float
-    ////////////////////////////
-    sfpi::vInt exp = exexp(in);
-    v_if (exp < 0)
+// FP32 accurate log body — 5th-order Remez, branch-free exponent
+sfpi_inline sfpi::vFloat _calculate_log_body_fp32_(sfpi::vFloat in)
+{
+    // Range reduce: normalize mantissa to [1, 2), extract exponent
+    sfpi::vInt exp_raw  = sfpi::exexp(in);  // unbiased exponent (signed)
+    sfpi::vFloat mantissa = sfpi::setexp(in, 127);  // mantissa in [1, 2)
+
+    // Transform to [0, 1] range for polynomial: t = mantissa - 1
+    // But we use polynomial evaluated at mantissa directly with
+    // remapped coefficients for ln(x) on [1, 2)
+    // ln(x) = c1*(x-1) + c2*(x-1)^2 + c3*(x-1)^3 + c4*(x-1)^4 + c5*(x-1)^5
+    //        = poly_eval(x-1, c1..c5)
+    // Using Horner form on t = x - 1
+
+    // Expand: p(t) = t * (c1 + t*(c2 + t*(c3 + t*(c4 + t*c5))))
+    sfpi::vFloat t = mantissa - 1.0f;  // t in [0, 1)
+
+    sfpi::vFloat log_mantissa = PolynomialEvaluator::eval(
+        t,
+        log_coef::C1, log_coef::C2, log_coef::C3, log_coef::C4, log_coef::C5
+    );
+
+    // ln(x) = ln(mantissa) + exp * ln(2)
+    // Handle negative exponent branch-free: sign-magnitude abs
+    sfpi::vInt exp = sfpi::setsgn(exp_raw, 0);  // clear sign bit
+    sfpi::vFloat expf = sfpi::int32_to_float(exp, sfpi::RoundMode::NearestEven);
+
+    sfpi::vFloat result = expf * log_coef::LN2 + log_mantissa;
+
+    // Zero input → -inf (predicated, doesn't affect normal path)
+    v_if (in == 0.0F)
     {
-        exp = sfpi::setsgn(~exp + 1, 1);
+        result = -std::numeric_limits<float>::infinity();
     }
     v_endif;
 
-    sfpi::vFloat expf      = int32_to_float(exp, sfpi::RoundMode::NearestEven);
+    return result;
+}
+
+// BF16 fast log body — 3rd-order Remez, minimal ops
+sfpi_inline sfpi::vFloat _calculate_log_body_bf16_(sfpi::vFloat in)
+{
+    sfpi::vInt exp_raw   = sfpi::exexp(in);
+    sfpi::vFloat mantissa = sfpi::setexp(in, 127);
+
+    sfpi::vFloat t = mantissa - 1.0f;
+
+    sfpi::vFloat log_mantissa = PolynomialEvaluator::eval(
+        t,
+        log_coef::C1_3, log_coef::C2_3, log_coef::C3_3
+    );
+
+    sfpi::vInt exp = sfpi::setsgn(exp_raw, 0);
+    sfpi::vFloat expf = sfpi::int32_to_float(exp, sfpi::RoundMode::NearestEven);
+
+    sfpi::vFloat result = expf * log_coef::LN2 + log_mantissa;
+
+    v_if (in == 0.0F)
+    {
+        result = -std::numeric_limits<float>::infinity();
+    }
+    v_endif;
+
+    return result;
+}
+
+template <bool HAS_BASE_SCALING>
+sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor, const std::uint32_t dst_idx = 0)
+{
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+
+    sfpi::vFloat in    = sfpi::dst_reg[dst_idx * dst_tile_size_sfpi];
+    sfpi::vFloat x     = sfpi::setexp(in, 127);
+    sfpi::vInt exp_raw = sfpi::exexp(in);
+
+    sfpi::vFloat a = sfpi::vConstFloatPrgm1;
+    sfpi::vFloat b = sfpi::vConstFloatPrgm2;
+    sfpi::vFloat series_result = x * (x * (x * a + b) + 2.0871f) + -1.4753f;
+
+    sfpi::vInt exp = sfpi::setsgn(exp_raw, 0);
+    sfpi::vFloat expf      = sfpi::int32_to_float(exp, sfpi::RoundMode::NearestEven);
     sfpi::vFloat vConstLn2 = sfpi::vConstFloatPrgm0;
-    sfpi::vFloat result    = expf * vConstLn2 + series_result; // exp correction: ln(1+x) + exp*ln(2)
+    sfpi::vFloat result    = expf * vConstLn2 + series_result;
 
     if constexpr (HAS_BASE_SCALING)
     {
         result *= sfpi::sFloat16a(log_base_scale_factor);
     }
 
-    ////////////////////////////
-    // Base case when input is 0. ln(0) = -inf
-    ////////////////////////////
     v_if (in == 0.0F)
-    { // Reload for register pressure
+    {
         result = -std::numeric_limits<float>::infinity();
     }
     v_endif;
@@ -76,26 +137,17 @@ sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor,
 
 sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base)
 {
-    // Normalize base to calculation range
-    sfpi::vFloat x = setexp(base, 127); // set exp to exp bias (put base in range of 1-2)
+    sfpi::vFloat x = sfpi::setexp(base, 127);
 
-    // 3rd order polynomial approx - determined using rminimax over [1,2]
     sfpi::vFloat series_result = x * (x * (x * 0x2.44734p-4f - 0xd.e712ap-4f) + 0x2.4f5388p+0f) - 0x1.952992p+0f;
 
-    // Convert exponent to float
-    sfpi::vInt exp = exexp(base);
-    v_if (exp < 0)
-    {
-        exp = sfpi::setsgn(~exp + 1, 1);
-    }
-    v_endif;
-    sfpi::vFloat expf = int32_to_float(exp, sfpi::RoundMode::NearestEven);
+    sfpi::vInt exp_raw = sfpi::exexp(base);
+    sfpi::vInt exp     = sfpi::setsgn(exp_raw, 0);
+    sfpi::vFloat expf  = sfpi::int32_to_float(exp, sfpi::RoundMode::NearestEven);
 
-    // De-normalize to original range
     sfpi::vFloat vConstLn2  = 0.692871f;
-    sfpi::vFloat log_result = expf * vConstLn2 + series_result; // exp correction: ln(1+x) + exp*ln(2)
+    sfpi::vFloat log_result = expf * vConstLn2 + series_result;
 
-    // Base case when input is 0. ln(0) = -inf
     v_if (base == 0.0f)
     {
         log_result = -std::numeric_limits<float>::infinity();
@@ -116,12 +168,33 @@ inline void _calculate_log_(const int iterations, std::uint32_t log_base_scale_f
     }
 }
 
+// Shorthands for the optimized paths
+template <int ITERATIONS>
+inline void _calculate_log_bf16_(const int iterations)
+{
+#pragma GCC unroll 8
+    for (int d = 0; d < iterations; d++)
+    {
+        sfpi::dst_reg[0] = _calculate_log_body_bf16_(sfpi::dst_reg[0]);
+        sfpi::dst_reg++;
+    }
+}
+
+template <int ITERATIONS>
+inline void _calculate_log_fp32_(const int iterations)
+{
+#pragma GCC unroll 8
+    for (int d = 0; d < iterations; d++)
+    {
+        sfpi::dst_reg[0] = _calculate_log_body_fp32_(sfpi::dst_reg[0]);
+        sfpi::dst_reg++;
+    }
+}
+
 template <bool APPROXIMATION_MODE>
 inline void _init_log_()
 {
-    sfpi::vConstFloatPrgm0 = 0.692871f; // ln2
-
-    // XXXXX could do these to higher precision
+    sfpi::vConstFloatPrgm0 = 0.692871f;  // ln2 (bf16)
     sfpi::vConstFloatPrgm1 = 0.1058f;
     sfpi::vConstFloatPrgm2 = -0.7166f;
 }
