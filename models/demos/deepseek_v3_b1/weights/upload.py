@@ -239,6 +239,8 @@ def split_core_ranges(
 
 def _upload_tensors(device: ttnn.MeshDevice, host_tensors: list[ttnn.Tensor]) -> list[ttnn.Tensor]:
     """Upload host tensors by writing FD shards first, then SD-only shards."""
+    if not host_tensors:
+        return []
     fd_grid = get_fd_grid(device)
     full_fd_jobs: list[tuple[ttnn.Tensor, ttnn.Tensor]] = []
     fd_partial_jobs: list[tuple[ttnn.Tensor, ttnn.Tensor, ttnn.CoreRangeSet]] = []

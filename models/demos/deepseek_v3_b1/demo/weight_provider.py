@@ -286,12 +286,18 @@ class CacheWeightProvider:
         )
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+        # Iteration 1 (correctness baseline): inline upload (move_to_device=True).
+        # Two-phase upload for routed-DRAM CTs is currently disabled here while
+        # we restore correctness; iteration 2 will re-enable it via deferred
+        # ``ttnn.from_torch(... device=mesh, mesh_mapper=...)`` inside the lockstep
+        # multi-device path (avoids the cache-rewrite Hazards A/B and the
+        # ``allocate + copy_host_to_device_tensor`` byte-equivalence risk).
         host_weights = prepare_moe_layer_weights(
             device,
             self._state_dict,
             layer_id,
             num_routed_experts=NUM_ROUTED_EXPERTS,
-            move_to_device=False,
+            move_to_device=True,
             cache_config=self._cache_config(device),
             sram_hot_experts=self._sram_hot_experts,
             sram_core_grids=self._sram_core_grids,
@@ -305,11 +311,12 @@ class CacheWeightProvider:
         return self._upload_prepared_weights(device, host_weights)
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+        # See load_moe_layer for iteration-1 rationale.
         host_weights = prepare_dense_layer_weights(
             device,
             self._state_dict,
             layer_id,
-            move_to_device=False,
+            move_to_device=True,
             cache_config=self._cache_config(device),
         )
         return self._upload_prepared_weights(device, host_weights)
