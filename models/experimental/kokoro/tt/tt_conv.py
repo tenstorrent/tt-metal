@@ -45,6 +45,7 @@ class TTConv1dParams:
     stride: int
     padding: int
     groups: int = 1
+    dilation: int = 1
 
 
 def tt_conv1d_nlc(
@@ -84,6 +85,7 @@ def tt_conv1d_nlc(
         kernel_size=params.kernel_size,
         stride=params.stride,
         padding=params.padding,
+        dilation=params.dilation,
         batch_size=x_nlc.shape[0],
         input_length=x_nlc.shape[1],
         conv_config=conv_config,
