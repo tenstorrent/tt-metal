@@ -61,10 +61,10 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_first_token: 120
+              prefill_time_to_first_token: 182.9
               prefill_tolerance: 1.15
-              decode_t/s/u: 21.0
-              decode_t/s: 672.0
+              decode_t/s/u: 8.85
+              decode_t/s: 283.2
               decode_tolerance: 1.15
             accuracy: {}
           - batch_size: 1
