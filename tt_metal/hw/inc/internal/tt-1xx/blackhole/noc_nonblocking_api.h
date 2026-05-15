@@ -68,6 +68,7 @@ constexpr uint32_t BRISC_WR_CMD_BUF = 0;      // for large writes
 constexpr uint32_t BRISC_RD_CMD_BUF = 1;      // for all reads
 constexpr uint32_t BRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
 constexpr uint32_t BRISC_AT_CMD_BUF = 3;      // for atomics
+constexpr uint32_t NUM_NOC_CMD_BUFS = 4;
 
 // BH has 64 bit address space but pipegen was not updated to support this so WH scheme of encoding addresses is used
 // (36 bits of address followed by coordinates) This means that lo and mid registers need to have the address portion
@@ -237,6 +238,26 @@ inline __attribute__((always_inline)) void noc_cmd_buf_save_state(
 // Clears NOC_PACKET_TAG register for the specified cmd_buf.
 inline __attribute__((always_inline)) void noc_clear_packet_tag(uint32_t noc, uint32_t cmd_buf) {
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, 0);
+}
+
+inline __attribute__((always_inline)) void noc_clear_packet_tags(uint32_t noc) {
+    for (uint32_t cmd_buf = 0; cmd_buf < NUM_NOC_CMD_BUFS; cmd_buf++) {
+        noc_clear_packet_tag(noc, cmd_buf);
+    }
+}
+
+inline __attribute__((always_inline)) void noc_clear_all_packet_tags() {
+    for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
+        noc_clear_packet_tags(noc);
+    }
+}
+
+// Kernels that do not explicitly set transaction IDs should naturally use transaction ID 0 for multicast writes after
+// kernel handoff. Only write/atomic-capable command buffers matter for this assert.
+inline __attribute__((always_inline)) bool ncrisc_noc_packet_tags_cleared(uint32_t noc) {
+    return NOC_CMD_BUF_READ_REG(noc, NCRISC_WR_CMD_BUF, NOC_PACKET_TAG) == 0 &&
+           NOC_CMD_BUF_READ_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_PACKET_TAG) == 0 &&
+           NOC_CMD_BUF_READ_REG(noc, NCRISC_AT_CMD_BUF, NOC_PACKET_TAG) == 0;
 }
 
 // Restores cmd_buf from state; waits for cmd_buf ready before writing.
