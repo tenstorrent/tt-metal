@@ -26,6 +26,8 @@
 #define DEVICE_PRINT_STRINGS_SECTION_NAME ".device_print_strings"
 #define DEVICE_PRINT_STRINGS_INFO_SECTION_NAME ".device_print_strings_info"
 
+#include "llk_assert.h"
+
 // Start of the .device_print_strings_info section, which represents list of DevicePrintStringInfo structures.
 extern char __device_print_strings_info_start[];
 
@@ -1581,6 +1583,9 @@ begin_message_write(structures::DevicePrintHeader header, std::uintptr_t string_
     string_info_address -= string_info_start_address;
     std::uintptr_t string_info_index = string_info_address / sizeof(structures::DevicePrintStringInfo);
     using DevicePrintHeaderType = structures::DevicePrintHeader;
+
+    LLK_ASSERT(string_info_index <= DevicePrintHeaderType::max_info_id_value, "Pusi kurac strahinja :)");
+
     if (string_info_index > DevicePrintHeaderType::max_info_id_value) {
         header.info_id = DevicePrintHeaderType::max_info_id_value;
     } else {
