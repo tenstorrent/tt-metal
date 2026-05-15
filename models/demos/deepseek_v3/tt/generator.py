@@ -42,6 +42,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     make_deepseek_sampling_args,
 )
 from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
+from models.demos.deepseek_v3.utils.model_op_determinism import register_model_op_determinism_hook
 from models.demos.deepseek_v3.utils.run_config import create_run_config, deallocate_weight_config_tensors
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -2459,48 +2460,49 @@ class DeepseekGenerator(WarmupForwardMixin):
                 tokens = torch.cat((tokens, pad_tokens), dim=-1)
                 seq_len = padded_seq_len
 
-        # Prepare TT inputs for prefill - reshape to [1, 1, actual_seq_len]
-        tt_tokens = ttnn.from_torch(
-            tokens,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            dtype=ttnn.uint32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-
-        rot_mats = self.rope_setup.get_rot_mats_table(seq_len)
-        rope_tensors = {
-            "cos_matrix": rot_mats["cos_matrix"],
-            "sin_matrix": rot_mats["sin_matrix"],
-            "trans_matrix": rot_mats["trans_matrix"],
-        }
-
-        if page_table is not None:
-            page_tables_to_use = self._convert_vllm_page_table_for_user(page_table, user_id, local_user_id)
-        else:
-            page_tables_to_use = self._get_page_tables()
-
-        # RowBatchedModel forward prefill
-        last_hidden = None
-        if self.enable_mtp:
-            logits_tt, hidden_tt = RowBatchedModel.forward_prefill(
-                x=tt_tokens,
-                user_id=user_id,
-                cfg=self.model_run_config_prefill,
-                rope_tensors=rope_tensors,
-                page_tables=page_tables_to_use,
-                return_hidden=True,
+        with register_model_op_determinism_hook(self.mesh_device):
+            # Prepare TT inputs for prefill - reshape to [1, 1, actual_seq_len]
+            tt_tokens = ttnn.from_torch(
+                tokens,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
             )
-        else:
-            logits_tt = RowBatchedModel.forward_prefill(
-                x=tt_tokens,
-                user_id=user_id,
-                cfg=self.model_run_config_prefill,
-                rope_tensors=rope_tensors,
-                page_tables=page_tables_to_use,
-            )
-            hidden_tt = None
+
+            rot_mats = self.rope_setup.get_rot_mats_table(seq_len)
+            rope_tensors = {
+                "cos_matrix": rot_mats["cos_matrix"],
+                "sin_matrix": rot_mats["sin_matrix"],
+                "trans_matrix": rot_mats["trans_matrix"],
+            }
+
+            if page_table is not None:
+                page_tables_to_use = self._convert_vllm_page_table_for_user(page_table, user_id, local_user_id)
+            else:
+                page_tables_to_use = self._get_page_tables()
+
+            # RowBatchedModel forward prefill
+            last_hidden = None
+            if self.enable_mtp:
+                logits_tt, hidden_tt = RowBatchedModel.forward_prefill(
+                    x=tt_tokens,
+                    user_id=user_id,
+                    cfg=self.model_run_config_prefill,
+                    rope_tensors=rope_tensors,
+                    page_tables=page_tables_to_use,
+                    return_hidden=True,
+                )
+            else:
+                logits_tt = RowBatchedModel.forward_prefill(
+                    x=tt_tokens,
+                    user_id=user_id,
+                    cfg=self.model_run_config_prefill,
+                    rope_tensors=rope_tensors,
+                    page_tables=page_tables_to_use,
+                )
+                hidden_tt = None
 
         if sample_on_device and return_last_hidden:
             raise ValueError("sample_on_device=True and return_last_hidden=True is not supported.")

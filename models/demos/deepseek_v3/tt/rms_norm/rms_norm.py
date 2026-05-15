@@ -15,6 +15,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     get_state_dicts,
     shard_and_save,
 )
+from models.demos.deepseek_v3.utils.moe_prefill_determinism import maybe_log_tensor
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -85,4 +86,8 @@ class RMSNorm(RMSNormBase):
         Returns:
             Output tensor after embedding lookup
         """
-        return ttnn.rms_norm(x, program_config=cls._get_pc(x.memory_config()), **cfg)
+        out = ttnn.rms_norm(x, program_config=cls._get_pc(x.memory_config()), **cfg)
+        mesh_device = x.device() if hasattr(x, "device") else None
+        if mesh_device is not None and hasattr(mesh_device, "shape"):
+            maybe_log_tensor({"mesh_device": mesh_device}, "rms_norm_output", out)
+        return out

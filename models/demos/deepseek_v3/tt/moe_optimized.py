@@ -27,6 +27,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     RepeatConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, is_ring_fabric
+from models.demos.deepseek_v3.utils.moe_prefill_determinism import maybe_log_tensor
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -389,6 +390,10 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
 
         # MoE Gate
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
+        if mode == "prefill":
+            maybe_log_tensor(cfg, "prefill_moe_after_gate_x", x)
+            maybe_log_tensor(cfg, "prefill_moe_after_gate_topk_weights", topk_experts_weights)
+            maybe_log_tensor(cfg, "prefill_moe_after_gate_topk_indices", topk_experts_indices)
 
         # MOE
         if mode == "decode":
@@ -456,6 +461,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             x_rm,
             topk_experts_indices_rm,
             topk_experts_weights_rm,
+            prefill_determinism_log=False,
         )
 
         return post_combine_output_tensor
@@ -499,6 +505,10 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             topk_experts_weights_rm, (2, 0, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
 
+        maybe_log_tensor(cfg, "prefill_moe_full_x_rm", x_rm)
+        maybe_log_tensor(cfg, "prefill_moe_full_topk_indices_rm_dram_perm", topk_experts_indices_rm)
+        maybe_log_tensor(cfg, "prefill_moe_full_topk_weights_rm_dram_perm", topk_experts_weights_rm)
+
         for batch_start in range(0, batch_size_per_device, chunk_size):
             batch_end = min(batch_start + chunk_size, batch_size_per_device)
             batch_chunk = batch_end - batch_start
@@ -537,16 +547,39 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
                 value=0.0,
             )
 
+            maybe_log_tensor(
+                cfg,
+                f"prefill_moe_chunk_{batch_start}_{batch_end}_x_rm_chunk_padded",
+                x_rm_chunk,
+            )
+            maybe_log_tensor(
+                cfg,
+                f"prefill_moe_chunk_{batch_start}_{batch_end}_topk_indices_chunk_padded",
+                topk_experts_indices_rm_chunk,
+            )
+            maybe_log_tensor(
+                cfg,
+                f"prefill_moe_chunk_{batch_start}_{batch_end}_topk_weights_chunk_padded",
+                topk_experts_weights_rm_chunk,
+            )
+
             post_combine_output_tensor = cls._forward_moe_optimized_ring_impl(
                 cfg,
                 x_rm_chunk,
                 topk_experts_indices_rm_chunk,
                 topk_experts_weights_rm_chunk,
+                prefill_determinism_log=True,
             )
             post_combine_output_tensor = ttnn.slice(
                 post_combine_output_tensor,
                 [0, 0, 0, 0],
                 [cfg["num_experts_per_tok"], 1, batch_chunk, cfg["hidden_size"]],
+            )
+
+            maybe_log_tensor(
+                cfg,
+                f"prefill_moe_chunk_{batch_start}_{batch_end}_post_ring_slice",
+                post_combine_output_tensor,
             )
 
             output_chunks.append(post_combine_output_tensor)
@@ -561,6 +594,8 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             for chunk in output_chunks:
                 ttnn.deallocate(chunk)
 
+        maybe_log_tensor(cfg, "prefill_moe_fwd_prefill_moe_output", post_combine_output_tensor)
+
         ttnn.deallocate(x_rm)
         return post_combine_output_tensor
 
@@ -571,8 +606,12 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         x_rm: ttnn.Tensor,
         topk_experts_indices_rm: ttnn.Tensor,
         topk_experts_weights_rm: ttnn.Tensor,
-    ):
-        ccl = cfg["ccl"]
+        *,
+        prefill_determinism_log: bool = False,
+    ) -> ttnn.Tensor:
+        def _dlog(tag: str, tensor: ttnn.Tensor | None) -> None:
+            if prefill_determinism_log:
+                maybe_log_tensor(cfg, tag, tensor)
 
         topk_experts_indices_rm_sharded = ttnn.to_memory_config(
             topk_experts_indices_rm,
@@ -582,6 +621,8 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             topk_experts_weights_rm,
             memory_config=cfg["quad_ring_all_to_all_dispatch_metadata_sharded_memory_config"],
         )
+        _dlog("prefill_moe_ring_after_to_memory_config_topk_indices_sharded", topk_experts_indices_rm_sharded)
+        _dlog("prefill_moe_ring_after_to_memory_config_topk_weights_sharded", topk_experts_weights_rm_sharded)
 
         # NOTE: L1 sharded topk_experts_weights need to be deallocated before moe_compute,
         # configure weights for post combine scaling prior to that deallocation, and store in DRAM
@@ -591,12 +632,14 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         topk_experts_weights_for_scaling = ttnn.to_layout(
             topk_experts_weights_for_scaling, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
+        _dlog("prefill_moe_ring_topk_weights_for_scaling_tile_dram", topk_experts_weights_for_scaling)
 
         ttnn.deallocate(topk_experts_indices_rm)
         ttnn.deallocate(topk_experts_weights_rm)
 
         # NOTE: needs to run prior to all_to_all_dispatch_metadata
         preallocated_combine_output = ttnn.moreh_full(**cfg["quad_ring_moreh_full"])
+        _dlog("prefill_moe_ring_after_moreh_full_prealloc", preallocated_combine_output)
 
         # TODO: #41009
         (
@@ -611,6 +654,9 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             output_tensors=None,
             **cfg["quad_ring_all_to_all_dispatch_metadata"],
         )
+        _dlog("prefill_moe_ring_after_all_to_all_dispatch_sparse_buffer", dispatch_output_sparse_buffer)
+        _dlog("prefill_moe_ring_after_all_to_all_dispatch_expert_indices", dispatch_output_expert_indices)
+        _dlog("prefill_moe_ring_after_all_to_all_dispatch_expert_scores", dispatch_output_expert_scores)
 
         # deallocation required in order to free up L1 space for moe_compute
         ttnn.deallocate(x_rm)
@@ -636,10 +682,13 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             layer_id=0,  # each layer is composed of distinct tensors, as apposed to all layers fused together
             **cfg["quad_ring_moe_compute"],
         )
+        _dlog("prefill_moe_ring_after_moe_compute_compute_output", compute_output)
+        _dlog("prefill_moe_ring_after_moe_compute_combine_output", combine_output)
 
         ttnn.deallocate(compute_output)
 
         combine_output = ttnn.unsqueeze(combine_output, dim=1)
+        _dlog("prefill_moe_ring_after_unsqueeze_combine", combine_output)
 
         if combine_output.shape[2] == ttnn.TILE_SIZE:
             combine_output = ttnn.experimental.deepseek_moe_post_combine_tilize(
@@ -658,10 +707,12 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
                 pad_value=0.0,
                 memory_config=cfg["quad_ring_deepseek_moe_post_combine_tilize_config"]["output_memory_config"],
             )
+        _dlog("prefill_moe_ring_after_tilize_combine", combine_output)
 
         post_combine_output_tensor = ttnn.mul(
             combine_output, topk_experts_weights_for_scaling, **cfg["mul_experts_output_with_weights"]
         )
+        _dlog("prefill_moe_ring_after_mul_post_combine", post_combine_output_tensor)
 
         ttnn.deallocate(combine_output)
         return post_combine_output_tensor

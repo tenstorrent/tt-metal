@@ -25,6 +25,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     get_state_dicts,
     shard_and_save,
 )
+from models.demos.deepseek_v3.utils.moe_prefill_determinism import maybe_log_tensor
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -233,14 +234,17 @@ class DistributedRMSNorm(RMSNormBase):
         program_config = cls._get_pc(x.memory_config())
         # Run distributed rmsnorm part 1
         tt_stats = cls._fwd_rms_norm_pre_all_gather(x, cfg, program_config=program_config)
+        maybe_log_tensor(cfg, "distributed_rms_norm_after_pre_all_gather", tt_stats)
 
         # AllGather stats
         ccl = cfg["ccl"]
         tt_gathered_stats = cls._fwd_all_gather_stats(tt_stats, cfg, ccl)
+        maybe_log_tensor(cfg, "distributed_rms_norm_after_all_gather", tt_gathered_stats)
         ttnn.deallocate(tt_stats)
 
         # Run distributed rmsnorm part 2
         tt_out = cls._fwd_rms_norm_post_all_gather(x, tt_gathered_stats, cfg, program_config=program_config)
+        maybe_log_tensor(cfg, "distributed_rms_norm_output", tt_out)
         ttnn.deallocate(tt_gathered_stats)
 
         return tt_out

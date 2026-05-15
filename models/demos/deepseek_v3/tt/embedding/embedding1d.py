@@ -17,6 +17,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     TypecastConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import even_int_div, get_dequantized_tensor, shard_and_save
+from models.demos.deepseek_v3.utils.moe_prefill_determinism import maybe_log_tensor
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -212,25 +213,31 @@ class Embedding1D(AbstractModule):
         # Add padding so that the batch dimension is divisible by TILE_SIZE
         _, _, original_seq_len = x.shape
         embeddings = cls._fwd_embedding(x, cfg, original_seq_len)
+        maybe_log_tensor(cfg, "embedding_after_lookup", embeddings)
 
         embeddings = ttnn.unsqueeze(embeddings, 0)
+        maybe_log_tensor(cfg, "embedding_after_unsqueeze", embeddings)
 
         embeddings_tc = ttnn.typecast(embeddings, **cfg["typecast"])
+        maybe_log_tensor(cfg, "embedding_after_typecast", embeddings_tc)
         ttnn.deallocate(embeddings)
 
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
         embeddings_ag = cls._fwd_all_gather_embedding(embeddings_tc, cfg, ccl)
+        maybe_log_tensor(cfg, "embedding_after_all_gather", embeddings_ag)
         ttnn.deallocate(embeddings_tc)
 
         assert len(embeddings_ag.shape) == 4
         if embeddings_ag.shape[-2] == original_seq_len:
+            maybe_log_tensor(cfg, "embedding_output", embeddings_ag)
             return embeddings_ag
 
         assert embeddings_ag.shape[-2] > original_seq_len
 
         embeddings_ag_slice = embeddings_ag[:, :, :original_seq_len, :]
         ttnn.deallocate(embeddings_ag)
+        maybe_log_tensor(cfg, "embedding_output", embeddings_ag_slice)
 
         return embeddings_ag_slice

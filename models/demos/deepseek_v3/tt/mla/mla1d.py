@@ -39,6 +39,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     shard_and_save,
     sub_state_dicts,
 )
+from models.demos.deepseek_v3.utils.moe_prefill_determinism import maybe_log_tensor
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -1485,10 +1486,15 @@ class MLA1D(AbstractModule):
             kv_lora_rank,
             qk_rope_head_dim,
         )
+        maybe_log_tensor(cfg, "mla_decode_after_wq_kv_a_q", tt_q)
+        maybe_log_tensor(cfg, "mla_decode_after_wq_kv_a_kv_nope", tt_kv_nope)
+        maybe_log_tensor(cfg, "mla_decode_after_wq_kv_a_kv_rope", tt_kv_rope)
 
         # Norm and Rope
 
         tt_q, tt_kvpe = cls._fwd_decode_norm_and_rope(tt_q, tt_kv_nope, tt_kv_rope, cfg, rope_tensors)
+        maybe_log_tensor(cfg, "mla_decode_after_norm_and_rope_q", tt_q)
+        maybe_log_tensor(cfg, "mla_decode_after_norm_and_rope_kvpe", tt_kvpe)
 
         # Paged Update Cache
 
@@ -1505,6 +1511,7 @@ class MLA1D(AbstractModule):
             qk_head_dim,
             qk_nope_head_dim,
         )
+        maybe_log_tensor(cfg, "mla_decode_after_q_rope_nope", tt_q)
 
         # All To All before FlashMLA
 
@@ -1513,18 +1520,22 @@ class MLA1D(AbstractModule):
         # Flash MLA
 
         attn_out = cls._fwd_decode_flash_mla(tt_q, kvpe_cache, page_table, position_idxs, cfg)
+        maybe_log_tensor(cfg, "mla_decode_after_flash_mla", attn_out)
 
         # Wkv_b2
 
         v_out = cls._fwd_decode_wkv_b2(attn_out, cfg)
+        maybe_log_tensor(cfg, "mla_decode_after_wkv_b2", v_out)
 
         # AG + Reshape
 
         v_out = cls._fwd_decode_ag_reshape(v_out, cfg, ccl, bsz, num_heads, v_head_dim)
+        maybe_log_tensor(cfg, "mla_decode_after_ag_reshape", v_out)
 
         # WO
 
         out = cls._fwd_decode_wo(v_out, cfg)
+        maybe_log_tensor(cfg, "mla_decode_output", out)
 
         return out
 
@@ -1640,6 +1651,7 @@ class MLA1D(AbstractModule):
     ) -> ttnn.Tensor:
         # Q path: norm + wq_b (interleaved in0 + DRAM WIDTH sharded in1)
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
+        maybe_log_tensor(cfg, "mla_prefill_inner_after_q_norm", tt_q)
         wq_b_program_config = build_prefill_matmul_program_config(
             seq_len,
             k=q_lora_rank,
@@ -1647,6 +1659,7 @@ class MLA1D(AbstractModule):
             mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
         )
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"], program_config=wq_b_program_config)
+        maybe_log_tensor(cfg, "mla_prefill_inner_after_wq_b", tt_q)
 
         tt_q = ttnn.reshape(tt_q, (1, seq_len, num_heads_local, qk_head_dim))
         tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))
@@ -1682,6 +1695,7 @@ class MLA1D(AbstractModule):
             tt_kvpe_fp16,
             **cfg["flash_mla"],
         )  # [1, num_heads_local, seq_len, kv_lora_rank]
+        maybe_log_tensor(cfg, "mla_prefill_inner_after_flash_mla", attn_out)
         ttnn.deallocate(tt_q)
         ttnn.deallocate(tt_kvpe_fp16)
 
@@ -1814,6 +1828,7 @@ class MLA1D(AbstractModule):
             out = ttnn.linear(v_out, **cfg["wo"], program_config=wo_program_config)
             ttnn.deallocate(v_out)
 
+        maybe_log_tensor(cfg, "mla_prefill_inner_output", out)
         return out
 
     @classmethod
@@ -1858,6 +1873,7 @@ class MLA1D(AbstractModule):
         seq_len = x.shape[2]
         batch_size = x.shape[1]
         row_batched_prefill = batch_size > 1
+        maybe_log_tensor(cfg, "mla_prefill_input", x)
         if row_batched_prefill:
             expected_batch_size = cfg["batch_size_per_row"]
             assert (
@@ -1876,9 +1892,13 @@ class MLA1D(AbstractModule):
             kv_lora_rank,
             qk_rope_head_dim,
         )
+        maybe_log_tensor(cfg, "mla_prefill_after_wq_kv_a_q", tt_q)
+        maybe_log_tensor(cfg, "mla_prefill_after_wq_kv_a_kv_nope", tt_kv_nope)
+        maybe_log_tensor(cfg, "mla_prefill_after_wq_kv_a_kv_rope", tt_kv_rope)
 
         # KV Norm
         tt_kv_nope = RMSNorm.forward_prefill(tt_kv_nope, cfg["kv_norm"])
+        maybe_log_tensor(cfg, "mla_prefill_after_kv_norm", tt_kv_nope)
 
         # KV RoPE
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
@@ -1888,14 +1908,17 @@ class MLA1D(AbstractModule):
             rope_tensors["trans_matrix"],
             is_decode_mode=False,
         )
+        maybe_log_tensor(cfg, "mla_prefill_after_kv_rope", tt_kv_rope)
 
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
+        maybe_log_tensor(cfg, "mla_prefill_after_kv_concat", tt_kvpe)
 
         ttnn.deallocate(tt_kv_nope)
         ttnn.deallocate(tt_kv_rope)
 
         tt_kvpe_fp16 = tt_kvpe
         tt_kvpe = ttnn.typecast(tt_kvpe_fp16, dtype=kvpe_cache.dtype)
+        maybe_log_tensor(cfg, "mla_prefill_after_kv_typecast", tt_kvpe)
 
         # Update KVPE Cache
         batch_size_per_dp_shard = even_int_div(cfg["batch_size_per_row"], sdpa_dp_factor)
@@ -1977,14 +2000,16 @@ class MLA1D(AbstractModule):
             ttnn.deallocate(tt_kvpe_fp16)
 
             if len(out_chunks) == 1:
+                maybe_log_tensor(cfg, "mla_prefill_output", out_chunks[0])
                 return out_chunks[0]
 
             out = ttnn.concat(out_chunks, dim=1)
             for out_chunk in out_chunks:
                 ttnn.deallocate(out_chunk)
+            maybe_log_tensor(cfg, "mla_prefill_output", out)
             return out
 
-        return cls._fwd_prefill_output_from_q_and_kvpe(
+        out = cls._fwd_prefill_output_from_q_and_kvpe(
             tt_q,
             tt_kvpe_fp16,
             cfg,
@@ -2001,6 +2026,8 @@ class MLA1D(AbstractModule):
             qk_head_dim,
             v_head_dim,
         )
+        maybe_log_tensor(cfg, "mla_prefill_output", out)
+        return out
 
     @classmethod
     def _fwd_decode_wq_kv_a(

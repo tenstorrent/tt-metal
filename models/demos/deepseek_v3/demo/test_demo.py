@@ -64,6 +64,32 @@ def _timestamped_artifact_stem(artifact_name: str) -> str:
     return f"{artifact_name}_{timestamp}"
 
 
+def _optional_bool_env(name: str) -> bool | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Invalid boolean env {name}={raw!r}")
+
+
+def _optional_int_env(name: str) -> int | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    return int(raw.strip(), 10)
+
+
+def _optional_float_env(name: str) -> float | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    return float(raw.strip())
+
+
 def _demo_case(
     *,
     max_prompts: int,
@@ -306,6 +332,31 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
         force_recalculate=force_recalculate_weight_config,
         signpost=True,
     )
+
+    override_enable_trace = _optional_bool_env("DEEPSEEK_TEST_DEMO_ENABLE_TRACE")
+    if override_enable_trace is not None:
+        run_kwargs["enable_trace"] = override_enable_trace
+
+    override_sample_on_device = _optional_bool_env("DEEPSEEK_TEST_DEMO_SAMPLE_ON_DEVICE")
+    if override_sample_on_device is not None:
+        run_kwargs["sample_on_device"] = override_sample_on_device
+
+    override_sampling_temperature = _optional_float_env("DEEPSEEK_TEST_DEMO_SAMPLING_TEMPERATURE")
+    if override_sampling_temperature is not None:
+        run_kwargs["sampling_temperature"] = override_sampling_temperature
+
+    override_sampling_top_k = _optional_int_env("DEEPSEEK_TEST_DEMO_SAMPLING_TOP_K")
+    if override_sampling_top_k is not None:
+        run_kwargs["sampling_top_k"] = override_sampling_top_k
+
+    override_sampling_top_p = _optional_float_env("DEEPSEEK_TEST_DEMO_SAMPLING_TOP_P")
+    if override_sampling_top_p is not None:
+        run_kwargs["sampling_top_p"] = override_sampling_top_p
+
+    override_sampling_seed = _optional_int_env("DEEPSEEK_TEST_DEMO_SAMPLING_SEED")
+    if override_sampling_seed is not None:
+        run_kwargs["sampling_seed"] = override_sampling_seed
+
     if case["override_num_layers"] is not None:
         run_kwargs["override_num_layers"] = case["override_num_layers"]
     if case["stop_at_eos"] is not None:

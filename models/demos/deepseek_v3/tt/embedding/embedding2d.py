@@ -8,6 +8,7 @@ import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.embedding.embedding1d import Embedding1D
 from models.demos.deepseek_v3.utils.config_dataclass import ReduceScatterAsyncMinimalConfig
+from models.demos.deepseek_v3.utils.moe_prefill_determinism import maybe_log_tensor
 from models.demos.deepseek_v3.utils.run_config import MESH_DEVICE_STATE_DICT_KEY, ModelDecodeConfig, ModelPrefillConfig
 
 
@@ -71,11 +72,14 @@ class Embedding2D(Embedding1D):
     def _forward(cls, x, cfg):
         scale = cfg["reduce_scatter_scale"]
         x = super()._forward(x, cfg)
+        maybe_log_tensor(cfg, "embedding2d_after_embedding1d", x)
 
         ccl = cfg["ccl"]
 
         x = ttnn.experimental.reduce_scatter_minimal_async(
             x, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter"])
         )
+        maybe_log_tensor(cfg, "embedding2d_after_reduce_scatter", x)
         x = x * scale
+        maybe_log_tensor(cfg, "embedding2d_output", x)
         return x

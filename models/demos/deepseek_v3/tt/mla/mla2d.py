@@ -17,6 +17,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MeshDeviceStub,
     ReduceScatterAsyncMinimalConfig,
 )
+from models.demos.deepseek_v3.utils.moe_prefill_determinism import maybe_log_tensor
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -188,6 +189,7 @@ class MLA2D(MLA1D):
         ccl = cfg["ccl"]
 
         x_next = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["seq_ag_prefill"]))
+        maybe_log_tensor(cfg["mla1d"], "mla2d_prefill_after_seq_all_gather", x_next)
         batch_size_per_row = cfg["mla1d"]["batch_size_per_row"]
         x_out = super().forward_prefill(
             x_next,
@@ -205,4 +207,5 @@ class MLA2D(MLA1D):
             )
             * scale
         )
+        maybe_log_tensor(cfg["mla1d"], "mla2d_prefill_output", x_rs)
         return x_rs

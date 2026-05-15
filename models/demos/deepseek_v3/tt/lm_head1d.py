@@ -24,6 +24,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     get_dequantized_tensor,
     shard_and_save,
 )
+from models.demos.deepseek_v3.utils.moe_prefill_determinism import maybe_log_tensor
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -225,6 +226,7 @@ class LMHead1D(AbstractModule):
             x = ttnn.reshape(x, [1, even_int_div(seq_len, SEQ_LEN_CHUNK_SIZE), SEQ_LEN_CHUNK_SIZE, -1])
 
         output = ttnn.linear(x, **cfg["linear"])
+        maybe_log_tensor(cfg, "lm_head_prefill_after_linear", output)
 
         if deallocate_inputs:
             ttnn.deallocate(x)
@@ -235,6 +237,7 @@ class LMHead1D(AbstractModule):
             if pad_rows > 0:
                 output = ttnn.slice(output, [0, 0, 0, 0], [1, 1, original_seq_len, output_dim])
 
+        maybe_log_tensor(cfg, "lm_head_prefill_output", output)
         return output
 
     @classmethod
@@ -242,6 +245,7 @@ class LMHead1D(AbstractModule):
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
         output = cls._fwd_linear(x, cfg)
+        maybe_log_tensor(cfg, "lm_head_decode_output", output)
 
         ttnn.deallocate(x)
 
