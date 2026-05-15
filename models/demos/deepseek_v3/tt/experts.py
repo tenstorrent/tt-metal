@@ -305,6 +305,19 @@ class Experts(AbstractModule):
                 f"{expected_tile_width} in the last dim, got {prepared_w0_w1.shape[-1]} and {prepared_w2.shape[-1]}"
             )
 
+    @staticmethod
+    def _with_throttle_level(
+        compute_kernel_config: ttnn.WormholeComputeKernelConfig, throttle_level: ttnn.ThrottleLevel
+    ) -> ttnn.WormholeComputeKernelConfig:
+        return ttnn.WormholeComputeKernelConfig(
+            math_fidelity=compute_kernel_config.math_fidelity,
+            math_approx_mode=compute_kernel_config.math_approx_mode,
+            fp32_dest_acc_en=compute_kernel_config.fp32_dest_acc_en,
+            packer_l1_acc=compute_kernel_config.packer_l1_acc,
+            dst_full_sync_en=compute_kernel_config.dst_full_sync_en,
+            throttle_level=throttle_level,
+        )
+
     @classmethod
     def is_device_supported(cls, mesh_device: ttnn.Device) -> bool:
         """
@@ -358,11 +371,17 @@ class Experts(AbstractModule):
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             )
+            # See tt-metal#44280: prefill W2 is sensitive to matmul di/dt on the quad 8upr legacy path.
+            w2_compute_kernel_config = (
+                cls._with_throttle_level(COMPUTE_KERNEL_CONFIG_HIFI2, ttnn.ThrottleLevel.LEVEL_5)
+                if mode == "prefill"
+                else COMPUTE_KERNEL_CONFIG_HIFI2
+            )
             config["w2_experts"] = LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 transpose_b=True,
                 memory_config=output_memory_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
+                compute_kernel_config=w2_compute_kernel_config,
             )
             config["w3_experts"] = LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
