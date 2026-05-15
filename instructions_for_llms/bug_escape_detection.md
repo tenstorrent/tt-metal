@@ -193,7 +193,7 @@ If verdict is not PROCEED_TO_BISECT → write escape ID to `seen-escapes.json` w
 
 ---
 
-### Step 4: Find the Fix Commit
+### Step 4: Find and Confirm the Fix Commit
 
 **WARNING: Do NOT use `bisect-dispatch.yaml` for this step.**
 That workflow finds *breaking* commits (good=old passing, bad=new failing). We want the *fix*
@@ -214,7 +214,7 @@ ORDER BY p.PIPELINE_START_TS ASC;
 ```
 
 If intermediate runs exist, the last FAIL → first PASS transition identifies the fix commit.
-No hardware needed. Proceed directly to Step 5 with that commit.
+No hardware needed — go directly to **Final Confirmation** at the end of this step.
 
 **Step 4b — Hardware search when Snowflake has no intermediate data:**
 
@@ -226,79 +226,10 @@ Choose between Method A (binary search) and Method B (hypothesis testing):
 
 ---
 
-#### Method A — Binary Search
+**Pruning — mandatory before every hardware dispatch in this step:**
 
-Binary search dispatches O(log₂ N) single-commit runs to narrow the range until the fix commit
-is identified. Each dispatch is a **single branch at a midpoint** — NOT a BEFORE/AFTER pair.
-Do NOT create BEFORE/AFTER branches during binary search; that is only done in Step 5.
-
-**Algorithm:**
-
-1. Get commit list: `GET /repos/tenstorrent/tt-metal/compare/{last_failing}...{first_passing}` → N commits (chronological order).
-2. If N ≤ 1: that commit is the fix. Save to `campaign-state.json` and proceed to Step 5.
-3. Pick midpoint M = commit at index N//2.
-4. Create a branch at M. Before dispatching, **prune the test matrix** to the single failing test (see Step 5 pruning instructions — this is mandatory for every dispatch regardless of hardware type). Save run ID to `campaign-state.json`.
-5. Wait for completion:
-   - **PASS** → fix is in the earlier half. New range = commits 0…N//2 (inclusive of M).
-   - **FAIL** → fix is in the later half. New range = commits N//2…N-1.
-   - **TIMEOUT** → write `inconclusive_timeout` to `campaign-state.json`. Stop for tonight. Resume from saved state next night.
-6. If new range has 1 commit remaining: that is the fix commit F. Proceed to Step 5.
-7. Otherwise go to step 3 with the narrowed range.
-
-Save the identified fix commit SHA and full bisect history to `campaign-state.json`.
-
----
-
-#### Method B — Hypothesis Testing
-
-Use when Opus has a strong candidate or the range is small (≤ 4 cross-layer commits).
-
-**Algorithm:**
-
-Build a hypothesis list: all cross-layer commits in `[last_failing...first_passing]` that touch
-a layer lower than the test layer. Order them with Opus's top candidate first.
-
-For each hypothesis H in order:
-1. Create `brain/escape-before-{escape_id}` at `H^` (parent of H).
-2. Create `brain/escape-after-{escape_id}` at `H`.
-3. Dispatch **pruned** runs on both branches in parallel (see Step 5 pruning instructions). Save run IDs.
-4. Wait for both to complete. Evaluate:
-   - **BEFORE=FAIL + AFTER=PASS** → H is the fix commit. **Confirmed. Proceed to Step 6** (skip Step 5).
-   - **BEFORE=FAIL + AFTER=FAIL** → H is not the fix. Delete branches. Continue to next H.
-   - **BEFORE=PASS + AFTER=anything** → The test was already passing before H; the fix boundary is earlier than the assumed window. Do NOT refute yet — re-examine the Snowflake data to find an earlier `last_failing_sha`, then restart Method B with the corrected range.
-   - **Either TIMEOUT** → write `inconclusive_timeout` to `campaign-state.json`. Stop for tonight. Resume next night.
-
-**End condition — refute:** When ALL commits in the hypothesis list have been tested (BEFORE=FAIL,
-AFTER=FAIL for each) and no BEFORE=PASS occurred, the escape cannot be attributed to any
-cross-layer change in this window. Write `status: "refuted_hypothesis_exhausted"` to
-`seen-escapes.json`.
-
-**Do NOT refute after a single failing hypothesis** unless it was the only cross-layer commit
-in the range. Test every plausible candidate before concluding nothing fixed it.
-
----
-
-### Step 5: Final Confirmation (Method A only) / Pruning Instructions (all dispatches)
-
-**If you used Method A (binary search),** you now have a single identified fix commit F.
-Run the two-branch confirmation:
-
-1. Create `brain/escape-before-{escape_id}` at `F^` (parent of F).
-2. Create `brain/escape-after-{escape_id}` at `F`.
-3. Dispatch both in parallel with pruning (see below). Save run IDs.
-4. Wait for completion. Verdict:
-   - **BEFORE=FAIL + AFTER=PASS** → **confirmed escape** ✅ Proceed to Step 6.
-   - **BEFORE=FAIL + AFTER=FAIL** → Binary search identified the wrong commit. Delete branches. Restart binary search excluding F. If this happens twice, log as `inconclusive_bisect_error` and escalate to human.
-   - **BEFORE=PASS + AFTER=anything** → Unexpected: the test was already fixed before F. Do NOT auto-refute. Check `campaign-state.json` for bisect history and re-examine the starting range. Escalate to human if range was correct.
-   - **Either TIMEOUT** → `inconclusive_timeout`. Retry next night.
-
-**If you used Method B (hypothesis testing),** confirmation is built in — there is no separate Step 5. Skip directly to Step 6 on confirmation.
-
----
-
-**Pruning instructions (mandatory for ALL dispatches in Steps 4b and 5):**
-
-Before dispatching any verification run:
+This applies to binary search midpoints, hypothesis tests, and BEFORE/AFTER confirmation
+pairs — every single dispatch, regardless of hardware type (T3K, LoudBox, Galaxy, all of them).
 
 1. Look up the correct workflow. Do NOT guess from memory. Query Snowflake:
 ```sql
@@ -315,13 +246,75 @@ Cross-reference with `GET /repos/tenstorrent/tt-metal/actions/workflows` to get 
 2. Edit the `TESTS_YAML_PATH` file on the branch to contain only the failing test group,
 narrowed to the specific test function. Commit and push. Then dispatch.
 
-Dispatching without pruning wastes hardware time on unrelated tests and is prohibited.
+Dispatching without pruning is prohibited.
+
+---
+
+#### Method A — Binary Search
+
+Binary search dispatches O(log₂ N) single-commit runs to narrow the range. Each dispatch is a
+**single branch at a midpoint** — NOT a BEFORE/AFTER pair. Prune every dispatch as above.
+
+**Algorithm:**
+
+1. Get commit list: `GET /repos/tenstorrent/tt-metal/compare/{last_failing}...{first_passing}` → N commits (chronological order).
+2. If N ≤ 1: that commit is the fix. Save to `campaign-state.json` and go to **Final Confirmation**.
+3. Pick midpoint M = commit at index N//2.
+4. Create a branch at M. Prune, commit, push, dispatch. Save run ID to `campaign-state.json`.
+5. Wait for completion:
+   - **PASS** → fix is in the earlier half. New range = commits 0…N//2 (inclusive of M).
+   - **FAIL** → fix is in the later half. New range = commits N//2…N-1.
+   - **TIMEOUT** → write `inconclusive_timeout` to `campaign-state.json`. Stop for tonight. Resume from saved state next night.
+6. If new range has 1 commit remaining: that is the fix commit F. Go to **Final Confirmation**.
+7. Otherwise go to step 3 with the narrowed range.
+
+---
+
+#### Method B — Hypothesis Testing
+
+Use when Opus has a strong candidate or the range is small (≤ 4 cross-layer commits).
+
+Build a hypothesis list: all cross-layer commits in `[last_failing...first_passing]` that touch
+a layer lower than the test layer. Order them with Opus's top candidate first.
+
+For each hypothesis H in order:
+1. Create `brain/escape-before-{escape_id}` at `H^` (parent of H).
+2. Create `brain/escape-after-{escape_id}` at `H`.
+3. Prune both branches, commit, push. Dispatch both in parallel. Save run IDs.
+4. Wait for both to complete. Evaluate:
+   - **BEFORE=FAIL + AFTER=PASS** → H is the fix commit. **Confirmed. Proceed to Step 5.**
+   - **BEFORE=FAIL + AFTER=FAIL** → H is not the fix. Delete branches. Continue to next H.
+   - **BEFORE=PASS + AFTER=anything** → The test was already passing before H; the fix boundary is earlier than the assumed window. Do NOT refute yet — re-examine the Snowflake data to find an earlier `last_failing_sha`, then restart with the corrected range.
+   - **Either TIMEOUT** → write `inconclusive_timeout` to `campaign-state.json`. Stop for tonight. Resume next night.
+
+**End condition — refute:** When ALL commits in the hypothesis list have been tested (BEFORE=FAIL,
+AFTER=FAIL for each) and no BEFORE=PASS occurred, write `status: "refuted_hypothesis_exhausted"`
+to `seen-escapes.json`.
+
+**Do NOT refute after a single failing hypothesis** unless it was the only cross-layer commit
+in the range. Test every plausible candidate before concluding nothing fixed it.
+
+---
+
+#### Final Confirmation
+
+Applies when: (a) Step 4a identified the fix commit via Snowflake, or (b) Method A narrowed the
+range to a single commit. (Method B already confirms inline — skip this.)
+
+1. Create `brain/escape-before-{escape_id}` at `F^` (parent of fix commit F).
+2. Create `brain/escape-after-{escape_id}` at `F`.
+3. Prune both branches, commit, push. Dispatch both in parallel. Save run IDs.
+4. Wait for completion. Verdict:
+   - **BEFORE=FAIL + AFTER=PASS** → **confirmed escape** ✅ Proceed to Step 5.
+   - **BEFORE=FAIL + AFTER=FAIL** → Wrong commit. Delete branches. Restart binary search excluding F. If this happens twice, log `inconclusive_bisect_error` and escalate to human.
+   - **BEFORE=PASS + AFTER=anything** → Range was wrong. Check `campaign-state.json` bisect history and re-examine the starting range. Escalate to human if range was correct.
+   - **Either TIMEOUT** → `inconclusive_timeout`. Retry next night.
 
 Write verdict + all run IDs to `campaign-state.json`.
 
 ---
 
-### Step 6: Record Confirmed Escape
+### Step 5: Record Confirmed Escape
 
 Append to `confirmed-escapes.json`:
 ```json
@@ -349,7 +342,7 @@ Delete BEFORE/AFTER branches from GitHub.
 
 ---
 
-### Step 7: Confluence Updates (happens at MULTIPLE points, not just at the end)
+### Step 6: Confluence Updates (happens at MULTIPLE points, not just at the end)
 
 Page ID: 2424012846
 URL: https://tenstorrent.atlassian.net/wiki/spaces/MI6/pages/2424012846/bug+escapes
@@ -401,11 +394,9 @@ Always fetch the current page content before updating so you don't clobber concu
 ```
 00:15Z  Step 1 (Snowflake, last 1 day)
 00:20Z  Steps 2-3 (layer filter + Opus pre-classification, parallelized)
-00:30Z  Step 4 (bisect dispatch for survivors)
-03:30Z  Step 4 poll / parse bisect results
-04:00Z  Step 5 (verification dispatch)
-06:30Z  Step 5 poll / parse verification results
-07:00Z  Steps 6-7 (record + Confluence update)
+00:30Z  Step 4 (hardware search + confirmation dispatches)
+06:30Z  Step 4 poll / parse results
+07:00Z  Steps 5-6 (record + Confluence update)
 07:05Z  Post summary to Slack #ai-sw-infra
 ```
 
@@ -490,7 +481,7 @@ Different tests run in different workflows — guessing leads to dispatching a w
 doesn't contain the test at all.
 
 **Fix**: Always query `CICD_JOB.NAME` from Snowflake for a recent run of the test, then
-find the corresponding workflow file via the GitHub workflows API. See Step 5.
+find the corresponding workflow file via the GitHub workflows API. See pruning instructions in Step 4.
 
 ### 3. Skipping test matrix pruning before any dispatch
 
