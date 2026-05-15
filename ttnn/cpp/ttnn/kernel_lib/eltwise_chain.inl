@@ -1113,6 +1113,16 @@ ALWI void elem_apply_pack(
     uint32_t chain_lane_width,
     uint32_t n_tiles) {
     if constexpr (is_pack_tile_op_v<ElemT>) {
+        // Emit pack-side pre-element transitions (pack_reconfig_data_format)
+        // declared via PackTileReconfig::Output / OutputConditional. With
+        // chain_is_hoist_safe_v forced false, hoisted_init_for_each is skipped,
+        // and the compute-phase pack-element branch is intentionally empty,
+        // so this is the only path that emits the pack reconfig. Gated on
+        // i_outer == 0 because the pack target CB is fixed at the element
+        // type level — re-emitting per iter would be wasted MMIO.
+        if (i_outer == 0) {
+            emit_pre_element_transitions<ElemT, I, Es...>();
+        }
         elem.reserve_per_tile(i_outer);
         elem.reserve_upfront(n_tiles);
         for (uint32_t j = 0; j < inner_count; ++j) {
