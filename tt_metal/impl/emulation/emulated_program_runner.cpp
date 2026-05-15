@@ -150,6 +150,25 @@ thread_local uint32_t __emule_dram_unreserved_base = 0;
 thread_local const uint64_t* __emule_dram_tensor_ranges = nullptr;
 thread_local uint32_t __emule_dram_tensor_ranges_count = 0;
 
+// Per-kernel-thread CB-boundary sanitizer state. Two windows per CB:
+//   __emule_cb_reserved_pages[i] — active write reservation: page count
+//       starting at cb.write_idx (mod num_pages). Bumped on cb_reserve_back,
+//       drained on cb_push_back. Catches NoC reads/writes into CB pages that
+//       have not yet been cb_reserve_back'd.
+//   __emule_cb_waited_pages[i]   — active read window: page count starting
+//       at cb.read_idx (mod num_pages). Bumped on cb_wait_front, drained on
+//       cb_pop_front. Catches NoC reads/writes that source from CB pages the
+//       consumer has not yet waited on (producer may still be writing).
+// Both windows are checked together: the access is OOB only if it falls
+// outside BOTH. Producer threads only populate reserved; consumer threads
+// only populate waited — the unused window is zero on each side, so the
+// combined check Just Works without distinguishing reads from writes.
+// The strict flag gates both — off by default since legacy kernels that
+// NoC into unreserved CB pages would false-positive until audited.
+thread_local uint32_t __emule_cb_reserved_pages[32] = {};
+thread_local uint32_t __emule_cb_waited_pages[32] = {};
+thread_local bool __emule_cb_boundary_strict = false;
+
 // Core map for cross-core NOC address resolution (shared across all threads).
 thread_local std::unordered_map<uint64_t, tt_emule::Core*>* __emule_core_map = nullptr;
 
@@ -254,6 +273,21 @@ static bool emule_strict_noc_enabled() {
 static bool emule_strict_tensor_enabled() {
     static const bool enabled = []() {
         const char* v = std::getenv("TT_EMULE_STRICT_TENSOR");
+        return v != nullptr && v[0] != '\0' && v[0] != '0';
+    }();
+    return enabled;
+}
+
+// TT_EMULE_STRICT_CB_BOUNDARY: when set, populate __emule_cb_boundary_strict
+// before each kernel launch so __emule_local_l1_to_ptr aborts on accesses
+// that land inside a CB byte range but outside the currently-reserved
+// sub-range. Off by default for the same reason as STRICT_TENSOR: existing
+// kernels may legitimately touch CB pages outside an active reservation
+// (e.g. consumer-side speculative reads, cross-CB scratch use) and would
+// false-positive until those sites are audited.
+static bool emule_strict_cb_boundary_enabled() {
+    static const bool enabled = []() {
+        const char* v = std::getenv("TT_EMULE_STRICT_CB_BOUNDARY");
         return v != nullptr && v[0] != '\0' && v[0] != '0';
     }();
     return enabled;
@@ -1564,6 +1598,7 @@ struct EmuleOobTensorState {
     uint32_t dram_unreserved_base = 0;
     const uint64_t* dram_tensor_ranges = nullptr;
     uint32_t dram_tensor_ranges_count = 0;
+    bool cb_boundary_strict = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -1656,6 +1691,11 @@ static void launch_cores(
                             __emule_dram_unreserved_base = oob_state.dram_unreserved_base;
                             __emule_dram_tensor_ranges = oob_state.dram_tensor_ranges;
                             __emule_dram_tensor_ranges_count = oob_state.dram_tensor_ranges_count;
+                            for (uint32_t i = 0; i < EMULE_NUM_CBS; ++i) {
+                                __emule_cb_reserved_pages[i] = 0;
+                                __emule_cb_waited_pages[i] = 0;
+                            }
+                            __emule_cb_boundary_strict = oob_state.cb_boundary_strict;
 
                             __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
                             __emule_trisc_id = 0;
@@ -1722,6 +1762,11 @@ static void launch_cores(
                             __emule_dram_unreserved_base = 0;
                             __emule_dram_tensor_ranges = nullptr;
                             __emule_dram_tensor_ranges_count = 0;
+                            for (uint32_t i = 0; i < EMULE_NUM_CBS; ++i) {
+                                __emule_cb_reserved_pages[i] = 0;
+                                __emule_cb_waited_pages[i] = 0;
+                            }
+                            __emule_cb_boundary_strict = false;
                         });
                     }
 
@@ -1871,6 +1916,7 @@ void execute_program_emulated(IDevice* device, Program& program) {
             : dram_live_ranges_snapshot.data();
         oob_state.dram_tensor_ranges_count = static_cast<uint32_t>(dram_live_ranges_snapshot.size());
     }
+    oob_state.cb_boundary_strict = emule_strict_cb_boundary_enabled();
 
     launch_cores(core_setups, dram_data, core_map_ptr, oob_state);
 
