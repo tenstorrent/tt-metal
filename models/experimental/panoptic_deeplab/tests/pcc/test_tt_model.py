@@ -56,7 +56,7 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
         (
             DEEPLAB_V3_PLUS,
             {
-                "semantic": {"pcc": 0.983, "abs_err": 1.7, "rel_err": 0.4},
+                "semantic": {"pcc": 0.985, "abs_err": 1.7, "rel_err": 0.4},
             },
             skip_if_not_blackhole_110_cores,
         ),
