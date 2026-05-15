@@ -4,7 +4,6 @@
 
 #pragma once
 #include "ckernel.h"
-#include "ckernel_globals.h"
 #include "llk_outputs.h"
 #include "llk_pack_common.h"
 #include "api/dataflow/dataflow_buffer.h"
