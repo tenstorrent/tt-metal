@@ -10,6 +10,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from diffusers.schedulers import UniPCMultistepScheduler
+from diffusers.schedulers.scheduling_utils import SchedulerMixin
 
 import ttnn
 
@@ -37,16 +38,27 @@ class UniPCVariant(Enum):
 
 
 class UniPCSolver(Solver):
-    def __init__(self, scheduler: UniPCMultistepScheduler | None = None) -> None:
-        """Wrap a diffusers scheduler for on-device UniPC stepping."""
+    def __init__(self, scheduler: SchedulerMixin | None = None) -> None:
+        """Wrap a diffusers (or WAN FlowUniPC) scheduler for on-device UniPC stepping."""
         if scheduler is None:
             scheduler = UniPCMultistepScheduler(use_flow_sigmas=True, prediction_type="flow_prediction")
 
-        if not isinstance(scheduler, UniPCMultistepScheduler):
-            msg = f"scheduler must be a UniPCMultistepScheduler, got {type(scheduler).__name__}"
+        is_diffusers_unipc = isinstance(scheduler, UniPCMultistepScheduler)
+        # WAN's ``FlowUniPCMultistepScheduler`` (wan/utils/fm_solvers_unipc.py)
+        # uses the same UniPC math but doesn't subclass UniPCMultistepScheduler.
+        # Accept it (and any subclass) by walking the MRO; ``use_flow_sigmas``
+        # is implicit (always-on).
+        is_wan_flow_unipc = (
+            not is_diffusers_unipc
+            and isinstance(scheduler, SchedulerMixin)
+            and any(cls.__name__ == "FlowUniPCMultistepScheduler" for cls in type(scheduler).__mro__)
+            and getattr(scheduler.config, "prediction_type", None) == "flow_prediction"
+        )
+        if not (is_diffusers_unipc or is_wan_flow_unipc):
+            msg = f"scheduler must be UniPCMultistepScheduler or FlowUniPCMultistepScheduler, got {type(scheduler).__name__}"
             raise ValueError(msg)
 
-        if not scheduler.config.use_flow_sigmas:
+        if is_diffusers_unipc and not scheduler.config.use_flow_sigmas:
             msg = "Only UniPCMultistepScheduler configured with use_flow_sigmas=True is supported"
             raise ValueError(msg)
 

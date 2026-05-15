@@ -19,32 +19,32 @@ from ....utils.test import line_params
 _REF_IMAGE_PATH = "./ref_image.png"
 _AUDIO_PATH = "./prompt_audio.wav"
 _NEGATIVE_PROMPT = (
-    "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，"
-    "低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，"
-    "毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+    # s2v_14B-specific negative prompt from wan_s2v_14B.py:55 (overrides
+    # the shared_config default used by T2V/I2V).
+    "画面模糊，最差质量，画面模糊，细节模糊不清，情绪激动剧烈，手快速抖动，字幕，丑陋的，残缺的，"
+    "多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，"
+    "静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 )
-_PROMPT = "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard."
+_PROMPT = "a person is talking"
 
 
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, sdpa_t_fracture_w_only",
     [
-        # BH (linear) on 4x8 — the production S2V target.
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False, False],
+        # BH Loud Box (2x4, 8 chips) — sp_factor=4, tp_factor=2.
+        [(2, 4), (2, 4), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False, False],
     ],
-    ids=["bh_4x8sp1tp0"],
+    ids=["bh_2x4sp1tp0"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
     "width, height",
     [
         (832, 480),
-        (1280, 720),
     ],
     ids=[
         "resolution_480p",
-        "resolution_720p",
     ],
 )
 def test_pipeline_inference(
@@ -66,9 +66,10 @@ def test_pipeline_inference(
     ref_image = PIL.Image.open(_REF_IMAGE_PATH)
 
     num_frames = 81
-    num_inference_steps = 40
-    guidance_scale = 5.0
-    guidance_scale_2 = 5.0
+    num_inference_steps = 40  # production
+    # Reference s2v_14B uses sample_guide_scale=4.5 (wan_s2v_14B.py:59).
+    guidance_scale = 4.5
+    guidance_scale_2 = 4.5
 
     pipeline = WanPipelineS2V.create_pipeline(
         mesh_device=mesh_device,

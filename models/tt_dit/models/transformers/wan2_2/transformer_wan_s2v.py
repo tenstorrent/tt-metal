@@ -27,6 +27,8 @@ The production config uses ``enable_framepack=True`` and
 
 from __future__ import annotations
 
+import time
+
 import torch
 
 import ttnn
@@ -157,6 +159,12 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         self.merged_audio_emb_flat: ttnn.Tensor | None = None
         self.num_frames: int = 0
         self.original_seq_len: int = 0
+        # Cumulative seconds spent inside the audio cross-attn injection
+        # (``after_transformer_block``) during the current clip's denoising
+        # loop. The pipeline-side perf test reads this after inference for a
+        # per-stage breakdown without needing nested profiler hooks. Reset by
+        # :meth:`prepare_audio_emb`.
+        self._audio_inject_sec_accum: float = 0.0
         # Per-clip caches populated by ``prepare_cond_emb``: pose embedding to
         # add to the noisy patches, concatenated ref+motion constant tokens
         # (already mask-augmented), and the broadcast noisy-mask token.
@@ -243,6 +251,8 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         B, T_video, num_tok_p1, dim = local_torch.shape
         self.num_frames = T_video
         self.num_audio_tokens_per_frame = num_tok_p1
+        # Reset the audio-inject accumulator for this clip's denoising loop.
+        self._audio_inject_sec_accum = 0.0
         # Flatten ``[B, T, N+1, dim] -> [1, B, T*(N+1), dim]`` for cross-attn
         # K/V. The audio is small enough that we keep it replicated across SP.
         flat_torch = local_torch.reshape(B, T_video * num_tok_p1, dim).unsqueeze(0).contiguous()
@@ -332,20 +342,28 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
                 ..., t * hw_per_frame : (t + 1) * hw_per_frame, t * K_per_frame : (t + 1) * K_per_frame
             ] = 0.0
 
-        def _upload(t_BCsk: torch.Tensor) -> ttnn.Tensor:
+        def _upload(t_BCsk: torch.Tensor, pad_value: float) -> ttnn.Tensor:
             return from_torch(
                 t_BCsk.contiguous(),
                 device=self.mesh_device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_axes=[None, None, sp_axis, None],
+                pad_value=pad_value,
             )
 
+        # TILE_LAYOUT pads Sk → next TILE multiple. The noisy mask must pad
+        # with -inf so SDPA softmax does not attend to the zero-filled padded
+        # K positions (which would dilute the attention output by ~20% on
+        # typical configs). The const mask is all-zero; pad with 0.0.
         if padded_const > 0:
             const_mask_torch = torch.zeros(1, 1, padded_const, Sk, dtype=torch.float32)
-            mask_tt = ttnn.concat([_upload(noisy_mask_torch), _upload(const_mask_torch)], dim=-2)
+            mask_tt = ttnn.concat(
+                [_upload(noisy_mask_torch, pad_value=float("-inf")), _upload(const_mask_torch, pad_value=0.0)],
+                dim=-2,
+            )
         else:
-            mask_tt = _upload(noisy_mask_torch)
+            mask_tt = _upload(noisy_mask_torch, pad_value=float("-inf"))
 
         self._frame_attn_mask_cache[cache_key] = mask_tt
         return mask_tt
@@ -434,6 +452,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         # Allocate a placeholder of the right size; rope_precompute only reads
         # shape from it (specifically ``x.size(1)`` for the seq_len total).
         N_total = self._cached_total_seq_len
+        N_const = N_total - N_noisy  # ref + motion tokens
         placeholder = torch.zeros(1, N_total, num_heads, head_dim, dtype=torch.float32)
 
         freqs_complex = rope_precompute(placeholder, grid_sizes, freqs_ref, start=None)
@@ -446,11 +465,45 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         # is head_dim (matches Diffusers' ``repeat_interleave_real=True`` layout).
         cos_global = cos_half.repeat_interleave(2, dim=-1).permute(0, 2, 1, 3)  # [1, 1, N_total, head_dim]
         sin_global = sin_half.repeat_interleave(2, dim=-1).permute(0, 2, 1, 3)
-        cos_global = pad_vision_seq_parallel(cos_global, num_devices=sp_factor)
-        sin_global = pad_vision_seq_parallel(sin_global, num_devices=sp_factor)
 
-        cos_tt = from_torch(cos_global, device=self.mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None])
-        sin_tt = from_torch(sin_global, device=self.mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None])
+        # The transformer's spatial sequence is built per-segment via
+        # ``ttnn.concat([spatial_noisy, _cached_const_tokens], dim=-2)`` AFTER
+        # both segments are independently SP-sharded. Per-device layout is
+        # ``[noisy_local | const_local]``. A naive global pad+SP-shard of the
+        # full [noisy, ref, motion] rope sequence does NOT align with this
+        # layout: dev d would receive logical positions
+        # ``[d * N_total_padded/sp, (d+1) * N_total_padded/sp)``, but its
+        # actual tokens span ``noisy[d*pn/sp..(d+1)*pn/sp) + const[d*pc/sp..(d+1)*pc/sp)``.
+        # Build rope per-segment, SP-shard each, then concat on device so per-
+        # device positions match the spatial layout exactly.
+        cos_noisy = cos_global[:, :, :N_noisy, :]
+        cos_const = cos_global[:, :, N_noisy:N_total, :]
+        sin_noisy = sin_global[:, :, :N_noisy, :]
+        sin_const = sin_global[:, :, N_noisy:N_total, :]
+        cos_noisy = pad_vision_seq_parallel(cos_noisy, num_devices=sp_factor)
+        sin_noisy = pad_vision_seq_parallel(sin_noisy, num_devices=sp_factor)
+        if N_const > 0:
+            cos_const = pad_vision_seq_parallel(cos_const, num_devices=sp_factor)
+            sin_const = pad_vision_seq_parallel(sin_const, num_devices=sp_factor)
+
+        def _upload_rope_seg(t: torch.Tensor) -> ttnn.Tensor:
+            return from_torch(
+                t.contiguous(),
+                device=self.mesh_device,
+                dtype=ttnn.float32,
+                mesh_axes=[..., sp_axis, None],
+            )
+
+        cos_n_tt = _upload_rope_seg(cos_noisy)
+        sin_n_tt = _upload_rope_seg(sin_noisy)
+        if N_const > 0:
+            cos_c_tt = _upload_rope_seg(cos_const)
+            sin_c_tt = _upload_rope_seg(sin_const)
+            cos_tt = ttnn.concat([cos_n_tt, cos_c_tt], dim=-2)
+            sin_tt = ttnn.concat([sin_n_tt, sin_c_tt], dim=-2)
+        else:
+            cos_tt = cos_n_tt
+            sin_tt = sin_n_tt
         trans_mat = _bf16_tensor(get_rot_transformation_mat(), device=self.mesh_device)
         return cos_tt, sin_tt, trans_mat
 
@@ -549,6 +602,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         if self.merged_audio_emb_flat is None:
             raise RuntimeError("prepare_audio_emb() must be called before forward().")
 
+        _inject_t0 = time.perf_counter()
         audio_attn_id = self.audio_injector.injected_block_id[block_idx]
 
         # Recover the unsharded Sq. The parent passes N; if not supplied, fall
@@ -589,7 +643,9 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         # use to keep softmax finite over const rows.
         if self._cached_mask_noisy is not None:
             residual = ttnn.multiply(residual, self._cached_mask_noisy)
-        return ttnn.add(spatial_1BND, residual)
+        out = ttnn.add(spatial_1BND, residual)
+        self._audio_inject_sec_accum += time.perf_counter() - _inject_t0
+        return out
 
     # ----------------------------------------------------------------------
     # Conditioning prep. Called once per clip by the pipeline before the

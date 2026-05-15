@@ -64,15 +64,15 @@ def _ref_to_tt_audio_encoder_state(ref_state: dict[str, torch.Tensor]) -> dict[s
     ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
         pytest.param(
-            (4, 8),
-            (4, 8),
+            (2, 4),
+            (2, 4),
             1,
             0,
             2,
             line_params,
             ttnn.Topology.Linear,
             False,
-            id="bh_4x8sp1tp0",
+            id="bh_2x4sp1tp0",
         ),
     ],
     indirect=["mesh_device", "device_params"],

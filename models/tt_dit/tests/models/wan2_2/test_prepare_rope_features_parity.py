@@ -111,15 +111,15 @@ def _build_ref_grid_sizes(
     ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
         pytest.param(
-            (4, 8),
-            (4, 8),
+            (2, 4),
+            (2, 4),
             1,
             0,
             2,
             line_params,
             ttnn.Topology.Linear,
             False,
-            id="bh_4x8sp1tp0",
+            id="bh_2x4sp1tp0",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -199,17 +199,19 @@ def test_prepare_rope_features_parity(
 
     # ---- Our path ----
     cos_tt, sin_tt, _trans_mat = model.prepare_rope_features(hidden_states)
-    # Gather across SP to compare the full sequence. cos/sin are shape
-    # [1, 1, padded_N_total/sp, head_dim] sharded on dim 2.
+    # Production now builds rope per-segment and ttnn.concat([noisy, const])
+    # on device, matching the spatial sequence's per-device layout. After
+    # SP-gather the result is per-device-interleaved (noisy_0|const_0|noisy_1|
+    # const_1|...), NOT the global [noisy|const] order the reference produces.
     sp_factor = parallel_config.sequence_parallel.factor
     if sp_factor > 1:
         cos_gathered = ccl_manager.all_gather_persistent_buffer(cos_tt, dim=2, mesh_axis=sp_axis)
         sin_gathered = ccl_manager.all_gather_persistent_buffer(sin_tt, dim=2, mesh_axis=sp_axis)
     else:
         cos_gathered, sin_gathered = cos_tt, sin_tt
-    cos_full = local_device_to_torch(cos_gathered)[..., :N_total, :].float()
-    sin_full = local_device_to_torch(sin_gathered)[..., :N_total, :].float()
-    logger.info(f"TT rope: cos {tuple(cos_full.shape)} sin {tuple(sin_full.shape)}")
+    cos_tt_torch = local_device_to_torch(cos_gathered).float()  # [1, 1, padded_N_noisy + padded_const, head_dim]
+    sin_tt_torch = local_device_to_torch(sin_gathered).float()
+    logger.info(f"TT rope (per-device-interleaved): cos {tuple(cos_tt_torch.shape)} sin {tuple(sin_tt_torch.shape)}")
 
     # ---- Reference grid construction + rope_precompute ----
     freqs_ref = model.frame_packer.freqs
@@ -228,10 +230,54 @@ def test_prepare_rope_features_parity(
     # the production code uses.
     cos_ref = freqs_complex_ref.real[:, :, 0:1, :].float().repeat_interleave(2, dim=-1).permute(0, 2, 1, 3)
     sin_ref = freqs_complex_ref.imag[:, :, 0:1, :].float().repeat_interleave(2, dim=-1).permute(0, 2, 1, 3)
-    logger.info(f"Ref rope: cos {tuple(cos_ref.shape)} sin {tuple(sin_ref.shape)}")
+    logger.info(f"Ref rope (global): cos {tuple(cos_ref.shape)} sin {tuple(sin_ref.shape)}")
+
+    # ---- Build the expected per-device-interleaved layout from the reference ----
+    # Mirrors the production: split into noisy / const, pad each, then
+    # interleave by SP device:
+    #   expected[d_n_chunk:(d+1)_n_chunk] = cos_noisy_padded[d*pn_per_dev:(d+1)*pn_per_dev]
+    #   expected[(N_noisy_padded_total + d_c_chunk):...] = cos_const_padded[d*pc_per_dev:(d+1)*pc_per_dev]
+    # Simpler: cat per-device [noisy_chunk, const_chunk] in device order.
+    from torch.nn.functional import pad as _pad
+
+    def _build_expected(rope_global: torch.Tensor) -> torch.Tensor:
+        cos_noisy = rope_global[:, :, :N_noisy, :]
+        cos_const = rope_global[:, :, N_noisy:N_total, :] if N_total > N_noisy else None
+        # Pad each segment to sp_factor*TILE multiple (mirrors production).
+        padded_pn = ((cos_noisy.shape[2] + 32 * sp_factor - 1) // (32 * sp_factor)) * (32 * sp_factor)
+        pn_pad = padded_pn - cos_noisy.shape[2]
+        if pn_pad > 0:
+            cos_noisy = _pad(cos_noisy, (0, 0, 0, pn_pad))
+        pn_per_dev = padded_pn // sp_factor
+
+        if cos_const is not None and cos_const.shape[2] > 0:
+            padded_pc = ((cos_const.shape[2] + 32 * sp_factor - 1) // (32 * sp_factor)) * (32 * sp_factor)
+            pc_pad = padded_pc - cos_const.shape[2]
+            if pc_pad > 0:
+                cos_const = _pad(cos_const, (0, 0, 0, pc_pad))
+            pc_per_dev = padded_pc // sp_factor
+        else:
+            cos_const = None
+            pc_per_dev = 0
+
+        # Build per-device-interleaved layout.
+        chunks = []
+        for d in range(sp_factor):
+            chunks.append(cos_noisy[:, :, d * pn_per_dev : (d + 1) * pn_per_dev, :])
+            if cos_const is not None:
+                chunks.append(cos_const[:, :, d * pc_per_dev : (d + 1) * pc_per_dev, :])
+        return torch.cat(chunks, dim=2)
+
+    cos_expected = _build_expected(cos_ref)
+    sin_expected = _build_expected(sin_ref)
+    logger.info(f"Expected per-device-interleaved: cos {tuple(cos_expected.shape)} sin {tuple(sin_expected.shape)}")
 
     # ---- Compare ----
-    assert cos_full.shape == cos_ref.shape, f"cos shape mismatch: tt={cos_full.shape} ref={cos_ref.shape}"
-    assert sin_full.shape == sin_ref.shape, f"sin shape mismatch: tt={sin_full.shape} ref={sin_ref.shape}"
-    assert_quality(cos_full, cos_ref, pcc=0.99)
-    assert_quality(sin_full, sin_ref, pcc=0.99)
+    assert (
+        cos_tt_torch.shape == cos_expected.shape
+    ), f"cos shape mismatch: tt={cos_tt_torch.shape} expected={cos_expected.shape}"
+    assert (
+        sin_tt_torch.shape == sin_expected.shape
+    ), f"sin shape mismatch: tt={sin_tt_torch.shape} expected={sin_expected.shape}"
+    assert_quality(cos_tt_torch, cos_expected, pcc=0.99)
+    assert_quality(sin_tt_torch, sin_expected, pcc=0.99)

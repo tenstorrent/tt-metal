@@ -87,6 +87,7 @@ from ...solvers import UniPCSolver
 from ...utils import cache
 from ...utils.conv3d import conv3d_blocking_hash, conv_pad_height, conv_pad_in_channels
 from ...utils.tensor import bf16_tensor_2dshard, fast_device_to_host
+from .fm_solvers_unipc import FlowUniPCMultistepScheduler
 from .pipeline_wan import TransformerState, WanPipeline
 from .wan_s2v_loader import find_s2v_snapshot, load_s2v_config, load_s2v_state_dict
 from .wan_s2v_weight_map import translate_s2v_state_dict
@@ -330,15 +331,37 @@ class WanPipelineS2V(WanPipeline):
         # ------------------------------------------------------------------
         # 7. Scheduler — built manually since the S2V repo has no scheduler/.
         # ------------------------------------------------------------------
-        # WAN T2V defaults: flow_shift=5.0 for 720p, 3.0 for 480p. We pick by
-        # the requested height; the caller can override by passing scheduler=.
+        # Reference uses the WAN-custom ``FlowUniPCMultistepScheduler``
+        # (wan/utils/fm_solvers_unipc.py) constructed with ``shift=1`` then
+        # ``set_timesteps(shift=sample_shift)``. For s2v_14B
+        # ``sample_shift=3`` (wan_s2v_14B.py:57). Diffusers'
+        # ``UniPCMultistepScheduler`` with ``use_flow_sigmas=True`` has
+        # different timestep math (causes "5 steps == 40 steps" output).
+        # Subclass FlowUniPC so the existing ``Solver.set_schedule(steps)``
+        # call (which forwards to ``set_timesteps`` without shift) still picks
+        # up the WAN ``sample_shift`` value.
         if scheduler is None:
-            flow_shift = 5.0 if height >= 720 else 3.0
-            scheduler = UniPCMultistepScheduler(
+
+            class _S2VFlowUniPC(FlowUniPCMultistepScheduler):
+                """FlowUniPC with WAN s2v_14B ``sample_shift=3`` baked in."""
+
+                _S2V_SHIFT = 3
+
+                def set_timesteps(self, num_inference_steps=None, device=None, sigmas=None, mu=None, shift=None):
+                    if shift is None:
+                        shift = self._S2V_SHIFT
+                    return super().set_timesteps(
+                        num_inference_steps,
+                        device=device,
+                        sigmas=sigmas,
+                        mu=mu,
+                        shift=shift,
+                    )
+
+            scheduler = _S2VFlowUniPC(
                 num_train_timesteps=1000,
-                flow_shift=flow_shift,
-                prediction_type="flow_prediction",
-                use_flow_sigmas=True,
+                shift=1,  # base; set_timesteps applies _S2V_SHIFT=3
+                use_dynamic_shifting=False,
             )
         self._solver = UniPCSolver(scheduler=scheduler)
 
@@ -349,9 +372,10 @@ class WanPipelineS2V(WanPipeline):
         #    a no-op. (boundary_ratio=None makes the loop always pick index 0.)
         # ------------------------------------------------------------------
         self.transformer_2 = self.transformer  # alias — single-stage S2V
+        # Reference s2v_14B sample_guide_scale=4.5 (wan_s2v_14B.py:59).
         self.transformer_states = [
-            TransformerState(self.transformer, "transformer", torch_model=None, guidance_scale=5.0),
-            TransformerState(self.transformer_2, "transformer", torch_model=None, guidance_scale=5.0),
+            TransformerState(self.transformer, "transformer", torch_model=None, guidance_scale=4.5),
+            TransformerState(self.transformer_2, "transformer", torch_model=None, guidance_scale=4.5),
         ]
         # The denoise loop in the parent picks transformer index 0 whenever
         # ``t >= boundary_ratio * num_train_timesteps``. We want index 0 every
@@ -426,6 +450,16 @@ class WanPipelineS2V(WanPipeline):
         device_configs = {}
         if ttnn.device.is_blackhole():
             device_configs[(4, 8)] = {
+                "sp_axis": 1,
+                "tp_axis": 0,
+                "num_links": 2,
+                "dynamic_load": True,
+                "topology": ttnn.Topology.Linear,
+                "is_fsdp": False,
+                "vae_t_chunk_size": 1,
+            }
+            # BH Loud Box (2x4, 8 chips): mirror the 4x8 config; sp_factor=4 / tp_factor=2.
+            device_configs[(2, 4)] = {
                 "sp_axis": 1,
                 "tp_axis": 0,
                 "num_links": 2,
@@ -612,14 +646,22 @@ class WanPipelineS2V(WanPipeline):
         :meth:`prepare_latents` via a private instance attribute because the
         parent ``WanPipeline.__call__`` predates the audio-prompt arg and
         does not propagate extra kwargs through to ``prepare_latents``.
+
+        We also stash the ``profiler`` and ``profiler_iteration`` kwargs (when
+        passed) so ``prepare_latents`` can record fine-grained timings for the
+        S2V-specific sub-stages: VAE encode of ref / motion, wav2vec2 forward,
+        ``prepare_audio_emb``, ``prepare_cond_emb``.
         """
         if audio_prompt is None:
             raise ValueError("audio_prompt (path to a .wav/.mp3 file) is required for S2V")
         self._audio_prompt = audio_prompt
+        self._s2v_profiler = kwargs.get("profiler", None)
+        self._s2v_profiler_iteration = kwargs.get("profiler_iteration", 0)
         try:
             return super().__call__(*args, **kwargs)
         finally:
             self._audio_prompt = None
+            self._s2v_profiler = None
 
     def prepare_latents(
         self,
@@ -646,6 +688,19 @@ class WanPipelineS2V(WanPipeline):
         if image_prompt is None or not isinstance(image_prompt, Image.Image):
             raise ValueError("image_prompt (PIL.Image) is required for S2V (reference image)")
 
+        # ---- Profiler hooks for S2V sub-stages of prepare_latents.
+        # ``_s2v_profiler`` is stashed by ``__call__`` when the caller passes
+        # ``profiler=`` to the pipeline. Each sub-stage wraps its work with
+        # ``profiler("s2v_<stage>")`` so the perf test can attribute time per
+        # piece (wav2vec2, audio prep, VAE encode of ref / motion, cond emb).
+        from contextlib import nullcontext as _nullctx
+
+        _prof = getattr(self, "_s2v_profiler", None)
+        _prof_it = getattr(self, "_s2v_profiler_iteration", 0)
+
+        def _stage(name: str):
+            return _prof(name, _prof_it) if _prof is not None else _nullctx()
+
         # 1. Random noisy latents from the base path.
         latents, _ = WanPipeline.prepare_latents(
             self,
@@ -660,11 +715,12 @@ class WanPipelineS2V(WanPipeline):
         )
 
         # 2. Reference image → VAE encode + normalize.
-        ref_tensor = self.video_processor.preprocess(image_prompt, height=height, width=width).to(
-            device, dtype=torch.float32
-        )
-        ref_video = ref_tensor.unsqueeze(2)  # [B, C, T=1, H, W]
-        ref_latent_torch = self._encode_normalized(ref_video)
+        with _stage("s2v_vae_encode_ref"):
+            ref_tensor = self.video_processor.preprocess(image_prompt, height=height, width=width).to(
+                device, dtype=torch.float32
+            )
+            ref_video = ref_tensor.unsqueeze(2)  # [B, C, T=1, H, W]
+            ref_latent_torch = self._encode_normalized(ref_video)
 
         # 3. Audio: load wav, run wav2vec2, resample to video_rate, bucket to video FPS.
         # Matches the reference flow in `wan/speech2video.py:encode_audio`:
@@ -673,38 +729,50 @@ class WanPipelineS2V(WanPipeline):
         # for the clip at 16 fps. Skipping the resample or zero-padding short
         # clips (the prior behavior) misaligns the audio and the model
         # produces silent / incoherent output.
-        input_values = load_audio_to_input_values(audio_prompt, self.audio_processor)
-        all_hidden = self.tt_audio_encoder(input_values, output_hidden_states=True)
-        # ``fast_device_to_host`` expects exactly two concat_dims for a 2D mesh.
-        hidden_torch = torch.stack(
-            [
-                fast_device_to_host(h, self.mesh_device, [None, None], ccl_manager=self.encoder_ccl_manager).float()
-                for h in all_hidden
-            ],
-            dim=1,
-        )  # [B=1, num_layers, T_50Hz, audio_dim]
-        bucketed_per_layer = []
-        for layer_idx in range(hidden_torch.shape[1]):
-            feat_30Hz = linear_interpolation(
-                hidden_torch[0, layer_idx], input_fps=WAV2VEC2_HZ, output_fps=S2V_VIDEO_RATE
-            )
-            aligned, _ = get_audio_embed_bucket_fps(
-                feat_30Hz, fps=16, batch_frames=num_frames, video_rate=S2V_VIDEO_RATE
-            )
-            bucketed_per_layer.append(aligned)
-        audio_BLNF = torch.stack(bucketed_per_layer, dim=0).unsqueeze(0).permute(0, 1, 3, 2)
+        with _stage("s2v_wav2vec2"):
+            input_values = load_audio_to_input_values(audio_prompt, self.audio_processor)
+            all_hidden = self.tt_audio_encoder(input_values, output_hidden_states=True)
+            # ``fast_device_to_host`` expects exactly two concat_dims for a 2D mesh.
+            hidden_torch = torch.stack(
+                [
+                    fast_device_to_host(h, self.mesh_device, [None, None], ccl_manager=self.encoder_ccl_manager).float()
+                    for h in all_hidden
+                ],
+                dim=1,
+            )  # [B=1, num_layers, T_50Hz, audio_dim]
+            bucketed_per_layer = []
+            for layer_idx in range(hidden_torch.shape[1]):
+                feat_30Hz = linear_interpolation(
+                    hidden_torch[0, layer_idx], input_fps=WAV2VEC2_HZ, output_fps=S2V_VIDEO_RATE
+                )
+                aligned, _ = get_audio_embed_bucket_fps(
+                    feat_30Hz, fps=16, batch_frames=num_frames, video_rate=S2V_VIDEO_RATE
+                )
+                bucketed_per_layer.append(aligned)
+            audio_BLNF = torch.stack(bucketed_per_layer, dim=0).unsqueeze(0).permute(0, 1, 3, 2)
+        # Reference s2v_14B (configs/wan_s2v_14B.py:51) uses
+        # ``motion_frames = 73`` pixel frames; the corresponding latent count is
+        # ``(73 + 3) // 4 = 19`` (speech2video.py:491). These control where in
+        # the wav2vec2 timeline the audio for "video frame 0" starts. The
+        # previous hard-coded ``(17, 5)`` default shifted the audio ~14 latent
+        # frames (≈ 875 ms) ahead of the correct alignment, breaking lip sync.
+        MOTION_FRAMES_PIXEL = 73  # reference config: s2v_14B motion_frames
+        LAT_MOTION_FRAMES = (MOTION_FRAMES_PIXEL + 3) // 4  # 19
         # Snap the audio T to the spatial latent frame count so the per-frame
-        # block-diagonal cross-attn mask has an integer hw_per_frame. Without
-        # this, motion_frames=[17,5] with num_frames=81 produces 20 audio
-        # frames vs 21 latent frames.
+        # block-diagonal cross-attn mask has an integer hw_per_frame.
         num_latent_frames = latents.shape[2]
-        self.transformer.prepare_audio_emb(audio_BLNF, target_num_frames=num_latent_frames)
+        with _stage("s2v_prepare_audio_emb"):
+            self.transformer.prepare_audio_emb(
+                audio_BLNF,
+                motion_frames=(MOTION_FRAMES_PIXEL, LAT_MOTION_FRAMES),
+                target_num_frames=num_latent_frames,
+            )
 
         # 4. Motion latents — VAE-encoded zero pixels, NOT literal latent zeros.
         # (See module docstring for the latent-space rationale.)
-        MOTION_FRAMES_PIXEL = 17  # reference config: s2v_14B motion_frames
-        motion_pixels = torch.zeros(1, 3, MOTION_FRAMES_PIXEL, height, width, dtype=torch.float32)
-        motion_latents_torch = self._encode_normalized(motion_pixels)
+        with _stage("s2v_vae_encode_motion"):
+            motion_pixels = torch.zeros(1, 3, MOTION_FRAMES_PIXEL, height, width, dtype=torch.float32)
+            motion_latents_torch = self._encode_normalized(motion_pixels)
 
         # 5. Pose conditioning (cond_states): zero pose; matches the reference's
         # ``COND[0] * 0`` shortcut when ``pose_video`` is not provided.
@@ -721,17 +789,18 @@ class WanPipelineS2V(WanPipeline):
         # Build the on-device caches for pose / ref / motion / mask. After
         # this call the transformer's ``inner_step`` consumes ``_cached_*``
         # attributes.
-        # NOTE: ``drop_first_motion=False`` is intentionally non-reference.
-        # The reference sets this to True for the first clip, but an A/B run
-        # on our pipeline showed the motion-dropped output is worse —
-        # tracked separately while we hunt the upstream cause.
-        self.transformer.prepare_cond_emb(
-            noisy_latents_torch=latents,
-            ref_latent_torch=ref_latent_torch,
-            motion_latents_torch=motion_latents_torch,
-            cond_states_torch=cond_states_torch,
-            drop_first_motion=False,
-        )
+        # ``drop_first_motion=True`` matches reference (wan_s2v_14B.py:56).
+        # An earlier HANDOFF A/B argued for False, but that was pre rope/
+        # motion_frames fixes — motion latent is now 19 frames (was 5), and
+        # the reference drops it for the first clip.
+        with _stage("s2v_prepare_cond_emb"):
+            self.transformer.prepare_cond_emb(
+                noisy_latents_torch=latents,
+                ref_latent_torch=ref_latent_torch,
+                motion_latents_torch=motion_latents_torch,
+                cond_states_torch=cond_states_torch,
+                drop_first_motion=True,
+            )
         return latents, None
 
     def get_model_input(self, latents, cond_latents):

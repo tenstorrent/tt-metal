@@ -50,15 +50,15 @@ W_LATENT = 16  # → ppw=8
     ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
         pytest.param(
-            (4, 8),
-            (4, 8),
+            (2, 4),
+            (2, 4),
             1,
             0,
             2,
             line_params,
             ttnn.Topology.Linear,
             False,
-            id="bh_4x8sp1tp0",
+            id="bh_2x4sp1tp0",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -118,6 +118,68 @@ def test_prepare_cond_emb_parity(
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+    )
+
+    # --- Load synthetic weights into just the leaves prepare_cond_emb touches.
+    # Loading at the model level cascades through every block's
+    # _prepare_torch_state, several of which raise on missing keys
+    # (WanAttention._prepare_torch_state on `to_q/to_k/to_v`, etc.). Per-leaf
+    # loading sidesteps all of that. Forward path: cond_encoder + patch_embedding
+    # + frame_packer.proj{,_2x,_4x} (keep_motion only) + timestep-conditioning
+    # chain (condition_embedder.time_embedder.linear_{1,2} + time_proj).
+    TIME_FREQ_DIM = 64  # condition_embedder.time_freq_dim (production: freq_dim)
+    TIME_PROJ_DIM = DIM * 6  # condition_embedder.time_proj_dim (production)
+    from ....utils.tensor import bf16_tensor as _bf16_tensor_load
+
+    model.cond_encoder.load_torch_state_dict(
+        {
+            "weight": torch.randn(DIM, COND_DIM, pT, pH, pW, dtype=torch.float32),
+            "bias": torch.randn(DIM, dtype=torch.float32),
+        },
+        strict=False,
+    )
+    model.patch_embedding.load_torch_state_dict(
+        {
+            "weight": torch.randn(DIM, 16, pT, pH, pW, dtype=torch.float32),
+            "bias": torch.randn(DIM, dtype=torch.float32),
+        },
+        strict=False,
+    )
+    model.trainable_cond_mask.data = _bf16_tensor_load(
+        torch.randn(3, DIM, dtype=torch.float32),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    model.frame_packer.proj.load_torch_state_dict(
+        {"weight": torch.randn(DIM, 16, 1, 2, 2, dtype=torch.float32), "bias": torch.randn(DIM, dtype=torch.float32)},
+        strict=False,
+    )
+    model.frame_packer.proj_2x.load_torch_state_dict(
+        {"weight": torch.randn(DIM, 16, 2, 4, 4, dtype=torch.float32), "bias": torch.randn(DIM, dtype=torch.float32)},
+        strict=False,
+    )
+    model.frame_packer.proj_4x.load_torch_state_dict(
+        {"weight": torch.randn(DIM, 16, 4, 8, 8, dtype=torch.float32), "bias": torch.randn(DIM, dtype=torch.float32)},
+        strict=False,
+    )
+    model.condition_embedder.time_embedder.linear_1.load_torch_state_dict(
+        {"weight": torch.randn(DIM, TIME_FREQ_DIM, dtype=torch.float32), "bias": torch.randn(DIM, dtype=torch.float32)},
+        strict=False,
+    )
+    model.condition_embedder.time_embedder.linear_2.load_torch_state_dict(
+        {"weight": torch.randn(DIM, DIM, dtype=torch.float32), "bias": torch.randn(DIM, dtype=torch.float32)},
+        strict=False,
+    )
+    model.condition_embedder.time_proj.load_torch_state_dict(
+        {
+            "weight": torch.randn(TIME_PROJ_DIM, DIM, dtype=torch.float32),
+            "bias": torch.randn(TIME_PROJ_DIM, dtype=torch.float32),
+        },
+        strict=False,
+    )
+    logger.info(
+        "Loaded synthetic weights into cond_encoder, patch_embedding, trainable_cond_mask, "
+        "frame_packer.proj{,_2x,_4x}, condition_embedder.time_embedder.linear_{1,2}, time_proj"
     )
 
     # --- Inputs (CPU; same for both paths). ---
