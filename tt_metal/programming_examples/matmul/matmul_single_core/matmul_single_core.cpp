@@ -35,13 +35,13 @@ void golden_matmul(
     uint32_t K) {
     std::vector<bfloat16> c_bf(M * N, 0);
 
-    for (int i = 0; i < M; i++) {
-        for (int j = 0; j < N; j++) {
+    for (uint32_t i = 0; i < M; i++) {
+        for (uint32_t j = 0; j < N; j++) {
             std::uint32_t idx_c = j + (i * N);
             std::uint32_t idx_a = i * K;
             std::uint32_t idx_b = j;
             float c_f = 0;
-            for (int k_m = 0; k_m < K; k_m++) {
+            for (uint32_t k_m = 0; k_m < K; k_m++) {
                 c_f += static_cast<float>(a[idx_a]) * static_cast<float>(b[idx_b]);
                 idx_a += 1;
                 idx_b += N;
