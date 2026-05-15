@@ -18,16 +18,19 @@ instead of calling :meth:`get_or_create` directly.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.weights.cache.types import (
     CompressedTensorBuildInputs,
     CompressedTensorTarget,
     Fingerprint,
+    SramCompressedTensorTarget,
 )
 
 if TYPE_CHECKING:
@@ -167,6 +170,14 @@ def get_or_create_bspm_expert_tp8(
             the 2D-stored weight back to 4D.
     """
     from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
+    from models.demos.deepseek_v3_b1.weights.cache.cache import (
+        AbsentCacheEntry,
+        CorruptCacheEntry,
+        PresentCacheEntry,
+        TensorCache,
+    )
+    from models.demos.deepseek_v3_b1.weights.cache.fingerprint import compute_artifact_id
+    from models.demos.deepseek_v3_b1.weights.cache.sram_compressed_cache import to_canonical_mesh_mapper
     from models.demos.deepseek_v3_b1.weights.transforms.moe import moe_routed_expert_bspm_tp8_torch_for_cache
 
     target = fingerprint.target
@@ -188,7 +199,93 @@ def get_or_create_bspm_expert_tp8(
             f"target.N_padded={target.N_padded} must equal N_padded_per_device={N_padded_per_device} for TP8"
         )
     num_banks = target.num_banks
+    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)])
+    mem_config_for_device = expert_dram_memory_config(device, K_per_device, N_padded_per_device, num_banks)
 
+    # ---------------------------------------------------------------------
+    # Packed-artifacts disk cache (warm fast path)
+    # ---------------------------------------------------------------------
+    # Caches the per-device post-pack BFP shard bytes + per-device assignment
+    # arrays, so warm hits skip the (~270 ms / expert / projection) Python BFP
+    # repack pipeline that ``from_bspm`` runs inside ``_reconstruct`` below.
+    # Hydration goes through :meth:`CompressedTensor.from_packed_artifacts`,
+    # which preserves the *real* per-device BSPM mixed-precision assignment
+    # and per-MeshCoordinate shard data — none of the Hazards A/B from
+    # bliu/bspm-weights-debug's ``from_dumped_data`` shortcut.
+    #
+    # The on-disk format is the same one the SRAM hot-expert disk cache uses
+    # (single ``shards.bin`` blob + ``metadata.json`` sidecar), so we reuse
+    # ``TensorCache._lookup_sram_compressed`` / ``_store_sram_compressed`` /
+    # ``_load_sram_compressed`` verbatim.  ``per_core_allocation=False`` in
+    # the ``SramCompressedTensorTarget`` is what flags the artifact as
+    # lockstep-DRAM (the SRAM hot-expert use case sets it ``True``); the
+    # different ``name`` prefix + ``per_core_allocation`` bit guarantees a
+    # disjoint artifact_id namespace from SRAM artifacts.
+    is_disk_cache = isinstance(cache, TensorCache)
+    packed_target: SramCompressedTensorTarget | None = None
+    packed_fp: Fingerprint | None = None
+    packed_artifact_id: str | None = None
+    if is_disk_cache:
+        packed_target = SramCompressedTensorTarget(
+            name=f"bspm_dram_tp8_{target.name}",
+            tensor_shape=(mesh_rows, mesh_cols, K_per_device, N_padded_per_device),
+            tile_hw=32,
+            memory_config=mem_config_for_device,
+            per_core_allocation=False,
+            mesh_mapper_config=to_canonical_mesh_mapper(mesh_mapper_config),
+            assigner_fingerprint="",
+            assignment_hash=target.assignment_hash,
+            transform_version=target.transform_version,
+        )
+        packed_fp = Fingerprint(
+            schema_version=fingerprint.schema_version,
+            source=fingerprint.source,
+            hf_model_id=fingerprint.hf_model_id,
+            hf_revision=fingerprint.hf_revision,
+            mesh_shape=fingerprint.mesh_shape,
+            target=packed_target,
+        )
+        packed_artifact_id = compute_artifact_id(packed_fp)
+
+        entry = cache._lookup_sram_compressed(packed_artifact_id)
+        if isinstance(entry, PresentCacheEntry):
+            t0 = time.perf_counter()
+            artifacts = cache._load_sram_compressed(entry.paths.object_dir)
+            ct = CompressedTensor.from_packed_artifacts(
+                shape=artifacts["shape"],
+                assignment_flat=artifacts["assignment_flat"],
+                per_device_shard_data={c: dev["shard_bytes"] for c, dev in artifacts["per_device"].items()},
+                per_device_assignment_flat={c: dev["assignment_flat"] for c, dev in artifacts["per_device"].items()},
+                per_device_shape=artifacts["per_device_shape"],
+                device=device,
+                memory_config=mem_config_for_device,
+                per_core_allocation=False,
+                mesh_mapper_config=mesh_mapper_config,
+                tile_hw=int(artifacts["tile_hw"]),
+                move_to_device=move_to_device,
+            )
+            logger.debug(
+                "BSPM-DRAM packed cache hit for {} ({}) — hydrated in {:.3f}s",
+                target.name,
+                packed_artifact_id[:12],
+                time.perf_counter() - t0,
+            )
+            return ct
+        if isinstance(entry, CorruptCacheEntry):
+            logger.warning(
+                "Corrupt BSPM-DRAM packed cache entry for {} ({}); rebuilding from cold pack",
+                target.name,
+                packed_artifact_id[:12],
+            )
+            import shutil
+
+            shutil.rmtree(entry.paths.object_dir, ignore_errors=True)
+        else:
+            assert isinstance(entry, AbsentCacheEntry)
+
+    # ---------------------------------------------------------------------
+    # Cold path: source-weight cache + from_bspm + (optional) packed persist
+    # ---------------------------------------------------------------------
     def _preprocess_and_slice(tensors: dict) -> dict:
         inputs = preprocess(tensors)
         # inputs.w: (K, N) logical pre-slice float32 numpy.
@@ -219,19 +316,32 @@ def get_or_create_bspm_expert_tp8(
         stacked = w_flat.reshape(mesh_rows, mesh_cols, K_per_device, N_padded_per_device).contiguous()
         mem_config = expert_dram_memory_config(dev, K_per_device, N_padded_per_device, num_banks)
         device_for_ct = dev if move_to_device else None
-        mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)])
         return CompressedTensor.from_bspm(
             stacked,
             inputs.assignment,
             device=device_for_ct,
             memory_config=mem_config,
             mesh_mapper_config=mesh_mapper_config,
+            keep_packed_data=is_disk_cache,
         )
 
-    return cache.get_or_create(
+    t0 = time.perf_counter()
+    ct = cache.get_or_create(
         fingerprint,
         device,
         preprocess=_preprocess_and_slice,
         raw_tensors=raw_tensors,
         reconstruct=_reconstruct,
     )
+    cold_elapsed = time.perf_counter() - t0
+
+    if is_disk_cache and packed_artifact_id is not None and packed_fp is not None:
+        artifacts = ct.extract_packed_artifacts(drop=True)
+        cache._store_sram_compressed(packed_artifact_id, packed_fp, artifacts)
+        logger.info(
+            "BSPM-DRAM packed cache miss for {} ({}) — built+persisted in {:.3f}s",
+            target.name,
+            packed_artifact_id[:12],
+            cold_elapsed,
+        )
+    return ct
