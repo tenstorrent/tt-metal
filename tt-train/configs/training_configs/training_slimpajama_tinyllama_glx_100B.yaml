@@ -2,7 +2,7 @@ training_config:
   project_name: "tt_train_tinyllama_slimpajama-100B"
   seed: 5489
   # model_save_interval: 1000
-  model_save_interval: 10
+  model_save_interval: 5000
   # Global batch per optimizer step. The data path follows train_nanogpt.py:
   # ``batch_size`` is the GLOBAL count of sequences pulled from the host per
   # microstep, and the dp axis_mapper inside ``collate_packed`` shards it
@@ -10,29 +10,39 @@ training_config:
   # = 160 / 32 = 5 sequences (the per-chip micro batch). At per-chip = 5,
   # SwiGLU activation [5, 2048, 5632] bf16 ~= 115 MiB which fits comfortably;
   # higher per-chip values hit DRAM OOM at this seq_len.
+  # batch_size: 160
   batch_size: 160
   gradient_accumulation_steps: 1
   num_epochs: 1
-  # ~1 epoch through SlimPajama-6B-tokenized train split (6,405,226,567 tokens
-  # per train/meta.json). Tokens / opt step = batch_size * seq_len = 160 * 2048
-  # = 327,680. 6.41B / 327,680 ~= 19,547 opt steps; rounded to 19,550.
-  # max_steps: 19550
-  max_steps: 20
+  # 1 epoch (exact) through the SlimPajama-627B-tokenized train split:
+  #   train/meta.json -> 4015 shards x 33,570,816 tokens/shard
+  #     = 134,786,826,240 tokens total.
+  #   Each shard yields shard_tokens // (seq_len + 1) = 33,570,816 / 2049
+  #     = 16,384 non-overlapping (block_size+1)-token blocks (exact, no
+  #     remainder). The +1 per block forms the shifted target in
+  #     collate_packed.
+  #   Total blocks = 4015 * 16,384 = 65,781,760.
+  #   Tokens consumed per opt step = batch_size * (seq_len + 1) = 160 * 2049
+  #     = 327,840 (NOT 160 * 2048; the +1 target-shift token is real data
+  #     read from disk, just not fed as input).
+  #   max_steps = total_blocks / batch_size = 65,781,760 / 160 = 411,136
+  #     (exact; zero blocks dropped, zero tokens re-read against wrap=True).
+  max_steps: 411136
   # TinyLlama paper schedule (arxiv 2401.02385): linear warmup over
   # `lr_warmup_steps` optimizer steps, then cosine annealing from peak
   # `optimizer.lr` down to `lr_min`. Unset `lr_decay_steps` (or set <= 0) to
   # auto-fill the post-warmup steps so cosine lands exactly at `lr_min` at
   # `max_steps`.
   scheduler_type: cosine_with_warmup
-  # lr_warmup_steps: 2000
-  lr_warmup_steps: 3
+  lr_warmup_steps: 2000
+  # lr_warmup_steps: 3
   lr_min: 4.0e-5
   # lr_decay_steps: 17550   # default: max_steps - lr_warmup_steps
   use_clip_grad_norm: true
   clip_grad_norm_max_norm: 1.0
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama_bpe.yaml"
 
-  # Pre-tokenized SlimPajama-6B (uint16 .bin shards produced by
+  # Pre-tokenized SlimPajama-627B (uint16 .bin shards produced by
   # tt-train/sources/examples/nano_gpt/pretraining/dataset_preprocessing.py).
   # Activates the TinyLlama / lit_gpt PackedDataset-style data path.
   tokenized_data_dir: "/data/awliu/datasets/SlimPajama-627B-tokenized"
@@ -41,8 +51,8 @@ training_config:
   n_chunks: 8
 
   # Periodic validation loss eval (matches TinyLlama paper:
-  # eval_step_interval=5000 / eval_iters=100). Scaled to this 3000-step run.
-  eval_interval: 500
+  # eval_step_interval=5000 / eval_iters=100).
+  eval_interval: 5000
   eval_iters: 100
 
   # Optimizer hyperparameters lifted from the TinyLlama paper (arxiv 2401.02385,
@@ -55,7 +65,7 @@ training_config:
     epsilon: 1.0e-8
     weight_decay: 0.1
     amsgrad: false
-    stochastic_rounding: false
+    stochastic_rounding: true
 
 device_config:
   enable_ddp: true

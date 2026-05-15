@@ -462,19 +462,37 @@ def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
     return ttml.Mesh(shape, tuple(axis_names))
 
 
+# Bisect-A (host memory leak attribution): cache the dp mapper so we don't
+# allocate a fresh ttnn::TensorToMesh per microstep. Other trainers in this
+# repo (grpo_trainer.py, qwen3/train.py, llama_completer.py) all build the
+# DP mapper exactly once at setup time; this script was reallocating it on
+# every collate_packed/collate_fn call, which is the only DDP-only Python
+# allocation that fires twice per microstep. Keyed by id(mesh) so we re-build
+# on the (currently impossible) event of a new mesh being opened mid-run.
+_DP_MAPPER_CACHE: dict[int, Optional["ttnn.CppTensorToMesh"]] = {}
+
+
 def _dp_mapper() -> Optional["ttnn.CppTensorToMesh"]:
     """Return an axis mapper that shards along the batch dim across the ``dp`` axis.
 
     Returns ``None`` when no mesh has been opened, the mesh lacks a ``dp`` axis,
     or the ``dp`` axis size is 1. In those cases the tensor is replicated by
     the framework, which is the right behavior for single-device / no-DDP runs.
+
+    The returned mapper is cached per-mesh; callers must not mutate it.
     """
     mesh = ttml.maybe_mesh()
     if mesh is None:
         return None
+    cache_key = id(mesh)
+    if cache_key in _DP_MAPPER_CACHE:
+        return _DP_MAPPER_CACHE[cache_key]
     if not mesh.has_axis("dp") or mesh.axis_size("dp") <= 1:
+        _DP_MAPPER_CACHE[cache_key] = None
         return None
-    return mesh.axis_mapper("dp", tdim=0)
+    mapper = mesh.axis_mapper("dp", tdim=0)
+    _DP_MAPPER_CACHE[cache_key] = mapper
+    return mapper
 
 
 def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
