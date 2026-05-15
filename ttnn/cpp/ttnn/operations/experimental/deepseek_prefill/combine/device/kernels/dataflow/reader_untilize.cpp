@@ -15,10 +15,12 @@
 // cores in the group.  Core i (local 0-based) processes batches i, i+k_s, i+2*k_s, …
 //
 // For each assigned batch:
-//   1. Signal compute to start untilizing this batch (via cb_signal_id).
+//   1. Read this batch's metadata pages from DRAM into cb_metadata_batch_id (consumed by
+//      zero_init_writer).
 //   2. Read dispatched_buffer tiles into cb_dispatched_buffer_id for compute to consume.
-// The actual send of untilized data to the sender (former steps 3-7) now runs on the
-// zero_init_writer kernel on the same core, driven by compute via cb_stop_signal_id.
+// Compute (untilize_combine) and zero_init_writer on this same core independently walk the
+// same expert/batch loop using the multicasted counter in c_1, so no per-batch signal CB
+// is needed — producer-consumer ordering on c_0 / c_2 / c_9 keeps everyone in lock-step.
 //
 
 #include <cstdint>
@@ -34,9 +36,6 @@
     DebugPrinter()
 #endif
 
-// Signal last element to compute to break out of loop
-constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
-
 void kernel_main() {
     // ===== Compile-time args =====
     //   0: cb_experts_tok_counter_id             - CB that receives the multicasted expert token counts
@@ -47,22 +46,21 @@ void kernel_main() {
     //   5: cb_untilize_id                        - CB for untilized output produced by the paired compute kernel
     //   6: hidden_size                           - hidden dimension (e.g. 7168)
     //   7: read_batch_size                       - number of rows per untilize batch (e.g. 32)
-    //   8: cb_signal_id                          - CB for reader->compute signalling (one page per batch)
-    //   9: aligned_dispatched_buffer_page_size   - aligned page size of dispatched_buffer tensor
-    //  10: tile_height                           - tile height in rows (e.g. 32)
-    //  11: tile_width                            - tile width in columns (e.g. 32)
-    //  12: max_dispatch_buffer_token_size        - total per-chip dispatch buffer capacity (overflow guard)
-    //  13: core_id                               - local index within the owning sender's idle group (0-based)
-    //  14: num_idle_cores                        - size of the owning sender's idle group (k_s)
-    //  15: aligned_output_page_size              - aligned page size of output tensor (bytes per untilized row)
-    //  16: aligned_experts_tok_counter_page_size - aligned page size of expert_token_counts tensor
-    //  17: cb_metadata_batch_id                  - CB this kernel pushes per-batch metadata pages into
+    //   8: aligned_dispatched_buffer_page_size   - aligned page size of dispatched_buffer tensor
+    //   9: tile_height                           - tile height in rows (e.g. 32)
+    //  10: tile_width                            - tile width in columns (e.g. 32)
+    //  11: max_dispatch_buffer_token_size        - total per-chip dispatch buffer capacity (overflow guard)
+    //  12: core_id                               - local index within the owning sender's idle group (0-based)
+    //  13: num_idle_cores                        - size of the owning sender's idle group (k_s)
+    //  14: aligned_output_page_size              - aligned page size of output tensor (bytes per untilized row)
+    //  15: aligned_experts_tok_counter_page_size - aligned page size of expert_token_counts tensor
+    //  16: cb_metadata_batch_id                  - CB this kernel pushes per-batch metadata pages into
     //                                              (consumed by zero_init_writer on the same core)
-    //  18: aligned_dispatched_metadata_page_size - aligned page size of dispatched_metadata tensor
-    //  19: block_ct_dim                          - tiles per chunk pushed to cb_dispatched_buffer_id;
+    //  17: aligned_dispatched_metadata_page_size - aligned page size of dispatched_metadata tensor
+    //  18: block_ct_dim                          - tiles per chunk pushed to cb_dispatched_buffer_id;
     //                                              matches the compute kernel's per-block consumption
     //                                              size so producer/consumer line up 1:1
-    //  20+: TensorAccessorArgs for dispatched_buffer, then TensorAccessorArgs for dispatched_metadata
+    //  19+: TensorAccessorArgs for dispatched_buffer, then TensorAccessorArgs for dispatched_metadata
     constexpr uint32_t cb_experts_tok_counter_id = get_compile_time_arg_val(0);
     constexpr uint32_t experts_tok_counter_pages = get_compile_time_arg_val(1);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(2);
@@ -71,19 +69,18 @@ void kernel_main() {
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(5);
     constexpr uint32_t hidden_size = get_compile_time_arg_val(6);
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(7);
-    constexpr uint32_t cb_signal_id = get_compile_time_arg_val(8);
-    constexpr uint32_t aligned_dispatched_buffer_page_size = get_compile_time_arg_val(9);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(10);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(11);
-    constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(12);
-    constexpr uint32_t core_id = get_compile_time_arg_val(13);
-    constexpr uint32_t num_idle_cores = get_compile_time_arg_val(14);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(15);
-    constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(16);
-    constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(17);
-    constexpr uint32_t aligned_dispatched_metadata_page_size = get_compile_time_arg_val(18);
-    constexpr uint32_t block_ct_dim = get_compile_time_arg_val(19);
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<20>();
+    constexpr uint32_t aligned_dispatched_buffer_page_size = get_compile_time_arg_val(8);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(9);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(10);
+    constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(11);
+    constexpr uint32_t core_id = get_compile_time_arg_val(12);
+    constexpr uint32_t num_idle_cores = get_compile_time_arg_val(13);
+    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(14);
+    constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(16);
+    constexpr uint32_t aligned_dispatched_metadata_page_size = get_compile_time_arg_val(17);
+    constexpr uint32_t block_ct_dim = get_compile_time_arg_val(18);
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<19>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
 
@@ -180,63 +177,57 @@ void kernel_main() {
                                        ? read_batch_size
                                        : (expert_tokens - batch_token_start);
 
-            // 1. Signal compute to start untilizing this batch and tell zero_init_writer the
-            //    batch_count.  Compute forwards `val` from cb_signal_id into cb_stop_signal_id,
-            //    so the same uint32 reaches zero_init_writer on the same core.
-            cb_reserve_back(cb_signal_id, 1);
-            volatile tt_l1_ptr uint32_t* signal_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_signal_id));
-            signal_ptr[0] = batch_count;
-            cb_push_back(cb_signal_id, 1);
-
-            // 2. Read this batch's metadata pages from DRAM into the local metadata batch CB.
-            //    zero_init_writer pops the same `batch_count` pages and decides the per-batch
-            //    path (all-local vs non-local) locally — sender no longer writes to c_9.
+            // Compute and zero_init_writer independently walk this same expert/batch loop
+            // (reading the multicasted counter from c_1) — no per-batch signal needed.
+            //
+            // 1. Read this batch's metadata pages from DRAM into the local metadata batch CB.
+            //    zero_init_writer pops `batch_count` pages and decides the per-batch path
+            //    (all-local vs non-local) locally — sender no longer writes to c_9.
             //    Per-expert metadata stride is tile-aligned, hence reusing start_token.
-            uint32_t metadata_batch_start = start_token + batch_token_start;
-            cb_reserve_back(cb_metadata_batch_id, batch_count);
-            uint32_t metadata_base = get_write_ptr(cb_metadata_batch_id);
-            for (uint32_t t = 0; t < batch_count; t++) {
-                noc_async_read_page(
-                    metadata_batch_start + t,
-                    dispatched_metadata_addr_gen,
-                    metadata_base + t * aligned_dispatched_metadata_page_size);
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_metadata_batch_id, batch_count);
 
-            // 3. Read tiles for this batch in block_ct_dim-sized chunks so each push matches one
+            {
+                DeviceZoneScopedN("combine-metadata-read");
+                uint32_t metadata_batch_start = start_token + batch_token_start;
+                cb_reserve_back(cb_metadata_batch_id, batch_count);
+                uint32_t metadata_base = get_write_ptr(cb_metadata_batch_id);
+                for (uint32_t t = 0; t < batch_count; t++) {
+                    noc_async_read_page(
+                        metadata_batch_start + t,
+                        dispatched_metadata_addr_gen,
+                        metadata_base + t * aligned_dispatched_metadata_page_size);
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_metadata_batch_id, batch_count);
+            }
+
+            // 2. Read tiles for this batch in block_ct_dim-sized chunks so each push matches one
             //    compute-side pack_untilize_block consumption of block_ct_dim tiles.  The CB
             //    write pointer advances with every push, so re-fetch it after each
             //    `cb_reserve_back` — capturing it once before the loop lands every chunk in
             //    the same slot and leaves the other slot uninitialized.
-            constexpr uint32_t num_blocks = tiles_per_batch / block_ct_dim;
-            for (uint32_t cnt = 0; cnt < num_blocks; cnt++) {
-                uint32_t batch_tile = batch_tile_start + cnt * block_ct_dim;
-                cb_reserve_back(cb_dispatched_buffer_id, block_ct_dim);
-                uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
-                for (uint32_t t = 0; t < block_ct_dim; t++) {
-                    noc_async_read_page(
-                        batch_tile + t,
-                        dispatched_buffer_addr_gen,
-                        buffer_base + t * aligned_dispatched_buffer_page_size);
+            {
+                DeviceZoneScopedN("combine-dispatched-buffer-read");
+                constexpr uint32_t num_blocks = tiles_per_batch / block_ct_dim;
+                for (uint32_t cnt = 0; cnt < num_blocks; cnt++) {
+                    uint32_t batch_tile = batch_tile_start + cnt * block_ct_dim;
+                    cb_reserve_back(cb_dispatched_buffer_id, block_ct_dim);
+                    uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
+                    for (uint32_t t = 0; t < block_ct_dim; t++) {
+                        noc_async_read_page(
+                            batch_tile + t,
+                            dispatched_buffer_addr_gen,
+                            buffer_base + t * aligned_dispatched_buffer_page_size);
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_dispatched_buffer_id, block_ct_dim);
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_dispatched_buffer_id, block_ct_dim);
+                // Steps 3-7 (wait for untilize, wait for sender's send signal, NOC-write to
+                // sender, signal sender, pop untilize CB) now run on zero_init_writer.
             }
-            // Steps 3-7 (wait for untilize, wait for sender's send signal, NOC-write to
-            // sender, signal sender, pop untilize CB) now run on zero_init_writer.
         }
         // Advance to the next expert's region.  Buffer and metadata both use the same
         // tile-aligned per-expert stride, so start_page_tiled (and start_token derived from
         // it) tracks both for the next iteration.
         start_page_tiled += ((expert_tokens + tile_height - 1) / tile_height) * tiles_per_batch;
     }
-
-    // Send sentinel to compute to break out of its loop
-    cb_reserve_back(cb_signal_id, 1);
-    volatile tt_l1_ptr uint32_t* signal_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_signal_id));
-    signal_ptr[0] = ROUTE_INFO_SENTINEL;
-    cb_push_back(cb_signal_id, 1);
 }
