@@ -94,7 +94,7 @@ inline void _llk_math_eltwise_binary_sfpu_uninit_()
 template <std::uint32_t REPLAY_LEN>
 ALWI void _llk_replay_binary_sfpu_eltwise_(std::uint32_t idst0)
 {
-    _llk_math_eltwise_binary_sfpu_start_<DST_SYNC_MODE>(idst0);
+    _llk_math_eltwise_binary_sfpu_start_(idst0);
 
 #pragma GCC unroll 0
     for (int face = 0; face < 4; face++)
