@@ -380,8 +380,6 @@ ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, 
     const Tensor& v = tensors.v.value_or(tensors.k);
 
     const std::optional<Tensor> page_table_for_hash = flexible_chunked ? std::nullopt : tensors.page_table;
-    // Legacy chunked prefill bakes chunk_start_idx-derived Sk/padding into compile-time
-    // program geometry, so different offsets must not alias in the program cache.
     const std::optional<int64_t> chunk_start_idx_for_hash = flexible_chunked ? std::nullopt : attrs.chunk_start_idx;
     operation::Hash hash = operation::hash_operation<SDPAOperation>(
         attrs.head_dim_v,

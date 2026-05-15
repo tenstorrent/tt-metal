@@ -338,7 +338,6 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 signpost(header="first_moe_layer")
 
         else:
-            i = 0
             # Normal mode: run all layers
             for (block_cfg, BlockClass), page_table in zip(
                 itertools.chain(
@@ -412,7 +411,6 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 else:
                     skip_lm_head = True
 
-            logger.info(f"prefill chunk {start}-{end} out of {x.shape[2]}")
             logits_chunk, *hidden_for_mtp_chunk = cls._forward_prefill(
                 x_chunk,
                 user_id,
@@ -425,8 +423,6 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 skip_lm_head=skip_lm_head,
             )
             ttnn.deallocate(x_chunk)
-            # for pt_chunk in page_tables_chunk:
-            #     ttnn.deallocate(pt_chunk)
             if logits_chunk is not None:
                 logits.append(logits_chunk)
             hidden_for_mtp.extend(hidden_for_mtp_chunk)
@@ -546,7 +542,6 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
 
         x = Embedding2D.forward_prefill(x, cfg["embedding"])
 
-        i = 0
         for (block_cfg, BlockClass), page_table in zip(
             itertools.chain(
                 zip(cfg["mlp_decoder_block"], itertools.repeat(DecoderBlock2D)),
