@@ -245,15 +245,13 @@ void validate_matmul_compute_grid_and_per_core_dims(
                     program_config.in0_block_w, program_config.per_core_M, program_config.per_core_N);
                 return;
             }
-            if constexpr (std::is_same_v<
-                              ProgramConfigType,
-                              operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                validate_matmul_nonzero_block_dims(
-                    program_config.in0_block_w, program_config.per_core_M, program_config.per_core_N);
-            } else if constexpr (std::is_same_v<
-                                     ProgramConfigType,
-                                     operations::matmul::
-                                         MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
+            if constexpr (
+                std::is_same_v<
+                    ProgramConfigType,
+                    operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig> ||
+                std::is_same_v<
+                    ProgramConfigType,
+                    operations::matmul::MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
                 validate_matmul_nonzero_block_dims(
                     program_config.in0_block_w, program_config.per_core_M, program_config.per_core_N);
             }
