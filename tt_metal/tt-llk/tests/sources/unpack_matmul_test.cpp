@@ -111,7 +111,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src,
         formats.pack_dst,
         params.TILE_SIZE_PACK,
@@ -119,14 +119,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         TILE_C_DIM,
         params.num_faces,
         params.PARTIAL_FACE_PACK);
-    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */, false /* tilize */>(
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
         formats.pack_dst, params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, params.num_faces);
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_packer_wait_for_math_done_();
     for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
     {
         LLK_ASSERT((i < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "i exceeds max dest tiles");
-        _llk_pack_<dest_sync, is_fp32_dest_acc_en, false>(params.DST_INDEX + i, L1_ADDRESS(params.buffer_Res[i]));
+        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(params.DST_INDEX + i, L1_ADDRESS(params.buffer_Res[i]));
     }
     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }

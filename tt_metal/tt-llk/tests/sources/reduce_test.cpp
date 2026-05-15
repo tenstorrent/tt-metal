@@ -127,15 +127,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const bool narrow_tile = tensor_shape.num_faces_c_dim == 1;
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
-    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
         formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
-    _llk_pack_reduce_mask_config_<false, REDUCE_DIM>();
+    _llk_pack_reduce_mask_config_<REDUCE_DIM>();
 
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, false /* untilize */>(tensor_shape.face_r_dim, narrow_tile);
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
 
     int remaining_tiles = params.OUTPUT_TILE_CNT;
     while (remaining_tiles != 0)
@@ -144,7 +144,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_packer_wait_for_math_done_();
         for (int i = 0; i < tiles_from_dest; ++i)
         {
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false /* untilize */>(
+            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                 i, L1_ADDRESS(params.buffer_Res[params.OUTPUT_TILE_CNT - remaining_tiles + i]));
         }
         _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
