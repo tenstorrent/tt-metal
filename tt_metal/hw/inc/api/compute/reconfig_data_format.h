@@ -6,6 +6,11 @@
 
 #include "common_globals.h"
 
+#ifdef TRISC_PACK
+#include "llk_pack_common_api.h"
+#include "llk_pack_tile_api.h"
+#endif
+
 namespace ckernel {
 
 /**
