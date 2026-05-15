@@ -259,7 +259,9 @@ def run_cabling_generator(
         try:
             transient.unlink()
         except FileNotFoundError:
-            pass
+            # Some generator artifacts (e.g. CSV) may be absent depending on flags;
+            # cleanup is best-effort and a missing file is not an error.
+            continue
 
     return final
 
