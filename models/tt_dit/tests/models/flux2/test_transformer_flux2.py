@@ -9,18 +9,23 @@ import diffusers.models.transformers.transformer_flux2
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 
-from ....models.transformers.transformer_flux2 import (
-    Flux2Modulation,
-    Flux2Transformer,
-)
+from ....models.transformers.transformer_flux2 import Flux2Modulation, Flux2Transformer
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import cache, tensor
 from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
+from .test_pipeline_flux2 import line_params_8k_flux2, line_params_flux2, ring_params_8k_flux2
+
+_TRACE_REGION_SIZE = 31_000_000
+# Trace capture + Flux2 VAE-style L1_SMALL; align fabric with topology per case.
+line_params_flux2_transformer = {**line_params_flux2, "trace_region_size": _TRACE_REGION_SIZE}
+line_params_8k_flux2_transformer = {**line_params_8k_flux2, "trace_region_size": _TRACE_REGION_SIZE}
+ring_params_8k_flux2_transformer = {**ring_params_8k_flux2, "trace_region_size": _TRACE_REGION_SIZE}
 
 
 class ModelLocationGenerator(Protocol):
@@ -33,13 +38,16 @@ class ModelLocationGenerator(Protocol):
         ci_v2_timeout_in_s: int = 300,
         endpoint_prefix: str = "",
         download_dir_suffix: str = "",
-    ) -> str: ...
+    ) -> str:
+        ...
 
 
+# TODO: Fix shape compatibility
 @pytest.mark.parametrize(
     "mesh_device",
     [
         pytest.param((1, 8), id="1x8"),
+        pytest.param((4, 8), id="4x8"),
     ],
     indirect=True,
 )
@@ -76,12 +84,37 @@ def test_modulation(mesh_device: ttnn.MeshDevice) -> None:
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "sp_axis", "tp_axis", "num_links", "skip_layers", "skip_single_layers"),
+    ("mesh_device", "sp_axis", "tp_axis", "topology", "num_links", "device_params"),
     [
-        pytest.param((1, 8), 0, 1, 1, 0, 0, id="1x8sp0tp1"),
-        pytest.param((2, 4), 0, 1, 1, 4, 24, id="2x4sp0tp1"),
+        pytest.param(
+            (1, 8),
+            0,
+            1,
+            ttnn.Topology.Linear,
+            1,
+            line_params_flux2_transformer,
+            id="1x8_linear",
+        ),
+        pytest.param(
+            (2, 4),
+            0,
+            1,
+            ttnn.Topology.Linear,
+            1,
+            line_params_flux2_transformer,
+            id="wh_2x4_linear",
+        ),
+        pytest.param(
+            (4, 8),
+            0,
+            1,
+            ttnn.Topology.Ring,
+            2,
+            ring_params_8k_flux2_transformer,
+            id="bh_4x8_ring",
+        ),
     ],
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
     ("batch_size", "height", "width", "prompt_seq_len"),
@@ -90,14 +123,16 @@ def test_modulation(mesh_device: ttnn.MeshDevice) -> None:
     ],
 )
 @pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 31000000}],
-    indirect=True,
+    ("skip_layers", "skip_single_layers"),
+    [
+        pytest.param(7, 47, id="single_blocks"),
+    ],
 )
 def test_transformer(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
     tp_axis: int,
+    topology: ttnn.Topology,
     num_links: int,
     batch_size: int,
     height: int,
@@ -110,10 +145,18 @@ def test_transformer(
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
+    logger.info(
+        f"test_transformer: mesh={tuple(mesh_device.shape)}, sp={sp_factor}, tp={tp_factor}, "
+        f"topology={topology}, num_links={num_links}"
+    )
+
     model_name = model_location_generator("black-forest-labs/FLUX.2-dev", model_subdir="transformer")
     torch_model = diffusers.Flux2Transformer2DModel.from_pretrained(model_name, subfolder="transformer")
     assert isinstance(torch_model, diffusers.Flux2Transformer2DModel)
     torch_model.eval()
+
+    assert 0 <= skip_layers < len(torch_model.transformer_blocks)
+    assert 0 <= skip_single_layers < len(torch_model.single_transformer_blocks)
 
     del torch_model.transformer_blocks[len(torch_model.transformer_blocks) - skip_layers :]
     del torch_model.single_transformer_blocks[len(torch_model.single_transformer_blocks) - skip_single_layers :]
@@ -126,7 +169,7 @@ def test_transformer(
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
         num_links=num_links,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
     )
 
     parallel_config = DiTParallelConfig(
@@ -199,6 +242,8 @@ def test_transformer(
         ).sample
 
     logger.info("running TT model...")
+
+    signpost("t_start")
     tt_output = tt_model.forward(
         spatial=tt_spatial,
         prompt=tt_prompt,
@@ -209,7 +254,7 @@ def test_transformer(
         spatial_sequence_length=spatial_seq_len,
         prompt_sequence_length=prompt_seq_len,
     )
-
+    signpost("t_end")
     tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[None, sp_axis, None])
     assert_quality(torch_output, tt_output_torch, pcc=0.996, relative_rmse=0.09)
 

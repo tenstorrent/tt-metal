@@ -447,7 +447,6 @@ class Attention(Module):
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
 
         is_ring = self.ccl_manager.topology == ttnn.Topology.Ring
-        qkv_parallel_config = self.parallel_config if is_ring else None
 
         def _split_heads(x: ttnn.Tensor) -> ttnn.Tensor:
             # V only — Q/K head-split is fused inside DistributedRMSNorm.
@@ -460,9 +459,7 @@ class Attention(Module):
         spatial_sin = spatial_rope[1].reshape([1, 1, *spatial_rope[1].shape]) if spatial_rope is not None else None
         trans_mat = self.trans_mat if spatial_rope is not None else None
 
-        q_flat, k_flat, v_flat = self.to_qkv(
-            spatial, compute_kernel_config=self.mm_compute_kernel_config, parallel_config=qkv_parallel_config
-        )
+        q_flat, k_flat, v_flat = self.to_qkv(spatial, compute_kernel_config=self.mm_compute_kernel_config)
         q = self.norm_q(
             ttnn.unsqueeze(q_flat, 0),
             num_heads_per_device=self.n_local_heads,
@@ -487,7 +484,7 @@ class Attention(Module):
             prompt_trans_mat = self.trans_mat if prompt_rope is not None else None
 
             add_q_flat, add_k_flat, add_v_flat = self.add_qkv_proj(
-                prompt, compute_kernel_config=self.mm_compute_kernel_config, parallel_config=qkv_parallel_config
+                prompt, compute_kernel_config=self.mm_compute_kernel_config
             )
             add_q = self.norm_added_q(
                 ttnn.unsqueeze(add_q_flat, 0),
