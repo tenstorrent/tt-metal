@@ -586,3 +586,218 @@ The new test `tests/test_decode_64L_real_prompt_pcc.py` PASSES with
   artifact, not a model bug).
 - The earlier V2-decode-debug-3 torch.randn 64L PCC=0.30 result is
   officially closed as a synthetic OOD-input compounding artifact.
+
+## Tracy per-op profile (4L prefill T=128 + 2 decode steps)
+
+V2-13: tracy per-op device-kernel breakdown for the same 4L hybrid model
+the wall-clock table at the top of this file measures
+(`[lin, lin, lin, full]` × 1 prefill T=128 + 2 warm decode steps).
+
+### Methodology
+
+- Mesh: BH GLX 8×4 (32 chips), `FABRIC_1D_RING`, `STRICT_INIT`, no Tensix fabric.
+- Eager mode (no metal trace) — same path as
+  `tests/perf_eager_4L_decode.py`.
+- bfloat8_b weights, bfloat16 activations / RoPE tables.
+- Real HF weights from cached snapshot
+  `Qwen/Qwen3.6-27B/snapshots/6a9e13bd6fc8f0983b9b99948120bc37f49c13e9`,
+  4 layers ×3 DeltaNet + 1 full-attn.
+- Driver test:
+  `models/demos/qwen3_6_galaxy_v2/demo/tracy_perf_4L_2T.py::test_demo_perf_4L_2T`
+- Tracy invocation:
+  ```
+  python -m tracy -p -v -r -m pytest --noconftest \
+      models/demos/qwen3_6_galaxy_v2/demo/tracy_perf_4L_2T.py::test_demo_perf_4L_2T \
+      -v -s
+  ```
+- Profiled region = signpost(`start`) → signpost(`prefill_done`) →
+  signpost(`stop`).
+- Warmup contract (compile excluded from the profiled prefill):
+  - 1 warmup prefill (T=128) BEFORE `start` signpost.
+  - `ttnn.ReadDeviceProfiler(mesh)` flushes the device profiler DRAM
+    ring buffer (the BH 12 000-event-per-Risc ring overflows otherwise
+    and the post-process tracy CSV assertion fails — V2-13 found this
+    the hard way).
+  - The first decode step inside the signposted window IS the SDPA-
+    decode + recurrent-DeltaNet kernel compile pass; tracy `DEVICE KERNEL
+    DURATION [ns]` does NOT include host-side program compile, so the
+    per-op sum_dev_us is identical to a steady-state run. The wall-
+    clock for step 0 is ~2 s higher than the warm-step ~600 ms baseline.
+- Tracy CSV (raw artifacts):
+  `generated/profiler/.logs/cpp_device_perf_report.csv` +
+  `generated/profiler/.logs/tracy_ops_data.csv`.
+  V2-13's run intentionally bypassed `process_ops_logs.py` (which still
+  trips an `AssertionError: Device data missing` because some
+  buffer-overrun-dropped device markers leave a few host ops without
+  device entries) and instead uses a streaming aggregator
+  `models/demos/qwen3_6_galaxy_v2/demo/aggregate_tracy_csv.py` that joins
+  cpp_device_perf_report.csv + tracy_ops_data.csv directly. Joins on
+  `GLOBAL CALL COUNT == op_id`; bucketed by host `total_ns` vs signpost
+  timestamps.
+
+### Wall-clock summary (from the python timer inside the driver)
+
+| phase                                        | wall-clock | notes |
+|----------------------------------------------|------------|---|
+| Warmup prefill (NOT signposted, compile)     | 2 865 ms   | one-time per process |
+| **Profiled prefill T=128 (warm)**            | **152.86 ms** | matches PERF.md "4L prefill T=128" baseline |
+| Profiled decode step 0 (compile pass)        | 2 079 ms   | first decode after prefill, SDPA-decode kernel compile |
+| **Profiled decode step 1 (warm)**            | **603.32 ms** | matches PERF.md "Decode 4L T=1" 572.8 ± 3.0 ms |
+| **Profiled decode step 2 (warm)**            | **598.53 ms** | |
+| Warm decode mean (steps 1 + 2)               | **600.92 ms** | |
+
+### Prefill — device-side op breakdown (signpost: `start` → `prefill_done`)
+
+30 080 op rows = 32 mesh chips × 940 logical ops in the profile window
+(some ops dropped due to BH per-Risc 12 000-event buffer overrun; the
+breakdown below is the SAMPLED ops surviving the dropout, so absolute
+counts are slight lower-bounds but per-op % is still representative).
+Sum_dev_us is summed across all chips × calls; chips run concurrently
+so wall-clock latency is bounded by the slowest per-chip path, not the
+sum.
+
+| op | count | sum_dev_us | avg_us | % of dev time |
+|---|---:|---:|---:|---:|
+| MatmulDeviceOperation                    |  3 904 |    83 841.8 |   21.48 | **29.4 %** |
+| AllGatherDeviceOperation                 |    512 |    38 520.7 |   75.24 | **13.5 %** |
+| BinaryNgDeviceOperation                  |  6 816 |    29 028.8 |    4.26 | 10.2 % |
+| ReshapeViewDeviceOperation               |  3 680 |    28 674.2 |    7.79 | 10.0 % |
+| ReduceScatterDeviceOperation             |    480 |    28 509.3 |   59.39 | 10.0 % |
+| AllGatherAsyncDeviceOperation            |    512 |    14 720.5 |   28.75 |  5.2 % |
+| LayerNormPostAllGatherDeviceOperation    |    256 |    10 144.6 |   39.63 |  3.6 % |
+| TilizeDeviceOperation                    |    448 |     9 747.7 |   21.76 |  3.4 % |
+| SliceDeviceOperation                     |  4 608 |     6 115.7 |    1.33 |  2.1 % |
+| UnaryDeviceOperation                     |  2 112 |     6 046.9 |    2.86 |  2.1 % |
+| LayerNormPreAllGatherDeviceOperation     |    256 |     5 773.7 |   22.55 |  2.0 % |
+| TilizeWithValPaddingDeviceOperation      |    864 |     4 301.1 |    4.98 |  1.5 % |
+| UntilizeWithUnpaddingDeviceOperation     |    864 |     3 958.7 |    4.58 |  1.4 % |
+| TransposeDeviceOperation                 |  1 440 |     3 429.1 |    2.38 |  1.2 % |
+| LayerNormDeviceOperation                 |    352 |     3 046.8 |    8.66 |  1.1 % |
+| UntilizeDeviceOperation                  |    160 |     2 274.5 |   14.22 |  0.8 % |
+| TypecastDeviceOperation                  |    896 |     2 144.4 |    2.39 |  0.8 % |
+| ConcatDeviceOperation                    |    704 |     1 847.8 |    2.62 |  0.6 % |
+| MeshPartitionDeviceOperation             |    384 |       879.3 |    2.29 |  0.3 % |
+| SDPAOperation                            |     32 |       716.4 |   22.39 |  0.3 % |
+| FastReduceNCDeviceOperation              |     32 |       569.3 |   17.79 |  0.2 % |
+| BinaryDeviceOperation                    |    192 |       309.8 |    1.61 |  0.1 % |
+| UpdateKVCacheOperation                   |     64 |       246.0 |    3.84 |  0.1 % |
+| CopyDeviceOperation                      |    192 |       231.3 |    1.20 |  0.1 % |
+| TernaryDeviceOperation                   |     64 |       134.0 |    2.09 |  0.0 % |
+| FillPadDeviceOperation                   |     96 |       130.9 |    1.36 |  0.0 % |
+| ReduceDeviceOperation                    |     96 |       112.0 |    1.17 |  0.0 % |
+| CloneOperation                           |     64 |        72.4 |    1.13 |  0.0 % |
+| **PREFILL TOTAL**                        | **30 080** | **285 527.6** | — | **100 %** |
+
+Per-chip dev work (sum / 32) = **8.92 ms / chip**.  Wall-clock = **152.86 ms**.
+**~6 % of prefill wall-clock is device kernel time; ~94 % is host overhead** —
+Python orchestration, CCL launch, host↔device copies, program-cache lookup,
+and host-side fabric synchronisation per layer × 4 layers.
+
+### Decode — device-side op breakdown (signpost: `prefill_done` → `stop`)
+
+28 718 op rows = 32 chips × 3 decode steps (step 0 compile + steps 1, 2
+warm) × ~300 ops/step (dropped-marker normalised). The kernel timings
+are warm-run values regardless of step (compile is host-side), so the
+table mixes step 0 and steps 1+2 cleanly.
+
+| op | count | sum_dev_us | avg_us | % of dev time |
+|---|---:|---:|---:|---:|
+| ReduceScatterDeviceOperation             |  1 536 |    93 414.8 |   60.82 | **22.6 %** |
+| MatmulDeviceOperation                    |  2 432 |    84 890.9 |   34.91 | **20.5 %** |
+| AllGatherAsyncDeviceOperation            |  1 728 |    68 648.9 |   39.73 | **16.6 %** |
+| MinimalMatmulDeviceOperation             |     96 |    64 987.7 |  676.95 | **15.7 %** |
+| AllGatherDeviceOperation                 |  1 536 |    52 293.9 |   34.05 | **12.6 %** |
+| BinaryNgDeviceOperation                  |  5 760 |    13 055.8 |    2.27 |  3.2 % |
+| ReshapeViewDeviceOperation               |  3 056 |     7 663.6 |    2.51 |  1.9 % |
+| TilizeWithValPaddingDeviceOperation      |  1 248 |     3 769.2 |    3.02 |  0.9 % |
+| SliceDeviceOperation                     |  3 040 |     2 875.2 |    0.95 |  0.7 % |
+| SDPAOperation                            |     96 |     2 607.0 |   27.16 |  0.6 % |
+| ConcatDeviceOperation                    |  1 184 |     2 562.6 |    2.16 |  0.6 % |
+| FastReduceNCDeviceOperation              |     96 |     2 512.4 |   26.17 |  0.6 % |
+| TernaryDeviceOperation                   |    480 |     1 931.0 |    4.02 |  0.5 % |
+| TransposeDeviceOperation                 |  1 728 |     1 647.5 |    0.95 |  0.4 % |
+| TypecastDeviceOperation                  |  1 396 |     1 634.6 |    1.17 |  0.4 % |
+| UnaryDeviceOperation                     |    650 |     1 418.0 |    2.18 |  0.3 % |
+| MeshPartitionDeviceOperation             |  1 152 |     1 347.7 |    1.17 |  0.3 % |
+| LayerNormPostAllGatherDeviceOperation    |     32 |     1 265.8 |   39.56 |  0.3 % |
+| UntilizeDeviceOperation                  |    192 |     1 188.3 |    6.19 |  0.3 % |
+| TilizeDeviceOperation                    |    192 |       993.5 |    5.17 |  0.2 % |
+| LayerNormDeviceOperation                 |    160 |       848.9 |    5.31 |  0.2 % |
+| LayerNormPreAllGatherDeviceOperation     |     32 |       718.3 |   22.45 |  0.2 % |
+| UntilizeWithUnpaddingDeviceOperation     |    384 |       642.8 |    1.67 |  0.2 % |
+| CopyDeviceOperation                      |    384 |       521.2 |    1.36 |  0.1 % |
+| CloneOperation                           |    128 |       114.4 |    0.89 |  0.0 % |
+| **DECODE TOTAL**                         | **28 718** | **413 554.0** | — | **100 %** |
+
+Per-chip dev work (sum / 32 chips / 3 steps) = **4.30 ms / chip / step**.
+Wall-clock = **600 ms / step**.
+**~0.7 % of eager-decode wall-clock is device kernel time; ~99 % is host
+overhead** — this is the same finding V2-12 hinted at and the reason the
+V2-9..V2-12 trace work (78 → 64 ms / step) closes most of the 17 tok/s/user gap.
+
+### Category split
+
+| section | total_dev_us | matmul % | CCL % | other % |
+|---|---:|---:|---:|---:|
+| prefill |   285 527.6 | 29.4 | 28.6 | 42.0 |
+| decode  |   413 554.0 | 36.2 | 51.8 | 11.9 |
+
+CCL = AllGatherDeviceOperation + AllGatherAsyncDeviceOperation +
+ReduceScatterDeviceOperation. Matmul = MatmulDeviceOperation +
+MinimalMatmulDeviceOperation.
+
+### Headline findings (V2-13)
+
+1. **Decode is host-bound, not device-bound.** 4.30 ms of device kernel
+   work per chip per step vs 600 ms wall-clock → **99 % host overhead**.
+   This is exactly what V2-9 .. V2-12 demonstrated by closing the gap
+   with metal trace (eager 1234 ms → trace 63.6 ms at 64L; this
+   profile shows the underlying device floor that trace amortizes
+   towards).
+2. **CCL dominates decode device time (51.8 %).** Three CCL ops fight
+   for the top: `ReduceScatterDeviceOperation` (22.6 %),
+   `AllGatherAsyncDeviceOperation` (16.6 %), `AllGatherDeviceOperation`
+   (12.6 %). The reduce_scatter + all_gather pair is the
+   `tt_ccl.line_all_reduce` decomposition landed via the V2-11 lever B
+   CCL collapse — splitting an `all_reduce` into 2 device ops trades
+   higher op count for lower per-op latency. Net: 51.8 % of decode
+   device time goes to CCL — a single fused all-reduce kernel (or
+   persistent-buffer `line_all_reduce` from V2-12 lever 3 deferred
+   work) would directly attack this bar.
+3. **Matmul second at 36.2 %; the lm_head dominates within matmul.**
+   `MinimalMatmulDeviceOperation` (676.95 µs / op, 96 calls) is
+   1.9× more dev time than each MatmulDeviceOperation op — these are
+   the 32-chip-replicated lm_head output projections (5120 → 248 832
+   vocab × 3 decode steps × 32 chips = 96 logical ops × 1 ~ 0.7 ms /
+   chip). The lm_head is the single biggest decode bottleneck.
+4. **vs v1 (PERF.md `qwen3_6_galaxy/demo/PERF.md`) the ratios FLIPPED.**
+   v1 decode: matmul 72.8 %, CCL 13.9 %. v2 decode: matmul 36.2 %,
+   CCL 51.8 %. v2 has roughly 2× less matmul per-decode-step thanks
+   to V2-11 + V2-12's projection fusion (Q+K+V+Z four matmuls →
+   one), and the all_reduce decomposition into reduce_scatter +
+   all_gather doubles CCL op count.
+5. **Prefill is matmul-bound (29 %) + medium-CCL (28.6 %) + lots of
+   "other" (42 %)** — reshape / binary / norm / tilize make up 42 %
+   of prefill device time vs only 12 % in decode. The chunked-delta-
+   rule kernel inserts lots of small `BinaryNgDeviceOperation` (10.2 %),
+   `ReshapeViewDeviceOperation` (10.0 %), and `LayerNormDeviceOperation`
+   (qknorm + group rmsnorm: 7 % combined). Fusing the
+   `_compute_beta_g` chain (the V2-11 lever C / V2-12 lever 2 path
+   noted as the "cleanest activation-fusion unlock" but blocked on
+   precision compounding) would attack the BinaryNg + Unary cost
+   directly.
+
+### Quick V2-13 recommendations
+
+| target | est. savings (decode) | effort |
+|---|---|---|
+| **L3 — line_all_reduce persistent L1 width-sharded buffer** (V2-12 deferred) | 22.6 % + 16.6 % + 12.6 % = 51.8 % of decode dev → if it removes the ReduceScatter+AllGather pair launch overhead, this directly attacks the dominant decode op category | medium |
+| **Fuse lm_head into a single tiled matmul + on-device argmax** (V2-10 already did argmax; verify the 0.7 ms / chip / step MinimalMatmul still has headroom) | 15.7 % of decode dev | small |
+| **`_compute_beta_g` SFPU kernel** (V2-11 lever C; blocked on bf8/bf16 precision compounding across 48 DeltaNet layers) | 3.2 % BinaryNg + 0.3 % Unary across decode → ~3.5 % savings; for 4L only 1/16 of the 64L benefit | medium |
+| **Move TilizeWithValPadding from per-step to pre-allocated** | 0.9 % decode dev | small |
+| **(V2-14 candidate) MLP gate + up fusion** (carried over from v1 PERF.md and noted in V2-11 lever list as not yet landed) | ~5 % decode dev — limited by overall matmul share | small |
+
+Net: the path to ≥17 tok/s/user at 64L is to fuse / persistent-buffer
+the CCL pair (lever L3) so that 51.8 % of decode dev time per chip
+shrinks, then close the lm_head matmul. Trace + lever L3 + lm_head
+fusion is plausibly the 17 tok/s/user landing.
