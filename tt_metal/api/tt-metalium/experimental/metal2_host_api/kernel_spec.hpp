@@ -63,7 +63,7 @@ struct ComputeConfiguration {
     // failing to do so will trigger an error. Otherwise, supplying an entry is optional
     // and only Default is accepted.
     using UnpackToDestModeEntry = std::pair<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
-    std::vector<UnpackToDestModeEntry> unpack_to_dest_mode;
+    std::vector<UnpackToDestModeEntry> unpack_to_dest_mode = {};
 };
 
 struct DataMovementConfiguration {
