@@ -10,8 +10,8 @@ import torch
 
 import ttnn
 
-from ...blocks.attention import Attention
-from ...blocks.transformer_block import TransformerBlock
+from ...blocks.attention_opt import Attention
+from ...blocks.transformer_block_opt import TransformerBlock
 from ...layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear, prepare_chunked_linear_output
 from ...layers.module import Module, ModuleList
@@ -87,6 +87,7 @@ class Flux2SingleTransformerBlock(Module):
             parallel_config=parallel_config,
             padding_config=padding_config,
             use_spatial_weights_for_prompt=True,
+            per_head_norm=True,
             is_fsdp=is_fsdp,
         )
 
@@ -128,6 +129,7 @@ class Flux2SingleTransformerBlock(Module):
         self._tp_axis = tp_axis
         self._tp_factor = parallel_config.tensor_parallel.factor
         self._ccl_manager = ccl_manager
+        self._parallel_config = parallel_config
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         qkv_mlp_weight = state.pop("attn.to_qkv_mlp_proj.weight", None)
@@ -165,12 +167,10 @@ class Flux2SingleTransformerBlock(Module):
         if not skip_time_embed_activation_fn:
             time_embed = ttnn.silu(time_embed)
 
-        x = ttnn.squeeze(self.norm(ttnn.unsqueeze(spatial, 0)), 0)
-        c = ttnn.squeeze(self.norm(ttnn.unsqueeze(prompt, 0)), 0)
-
         shift_msa, scale_msa, gate_msa = temb_mod_params
-        x = x * scale_msa + shift_msa
-        c = c * scale_msa + shift_msa
+
+        x = ttnn.squeeze(self.norm(ttnn.unsqueeze(spatial, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
+        c = ttnn.squeeze(self.norm(ttnn.unsqueeze(prompt, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
 
         x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
         c = self._ccl_manager.all_gather_persistent_buffer(c, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
@@ -190,10 +190,16 @@ class Flux2SingleTransformerBlock(Module):
         c = ttnn.concat([c, c_mlp], dim=-1)
         del x_mlp, c_mlp
 
-        x = gate_msa * self.proj_out(x)
-        c = gate_msa * self.proj_out(c)
+        if self._ccl_manager.topology == ttnn.Topology.Ring:
+            # Ring: fuse RS + addcmul at the final write step.
+            # Computes: spatial/prompt + proj_out(x/c) * gate_msa
+            spatial = self.proj_out.forward_fused_addcmul(x, spatial, gate_msa, scalar=1.0)
+            prompt = self.proj_out.forward_fused_addcmul(c, prompt, gate_msa, scalar=1.0)
+        else:
+            spatial = ttnn.addcmul(spatial, self.proj_out(x), gate_msa)
+            prompt = ttnn.addcmul(prompt, self.proj_out(c), gate_msa)
 
-        return spatial + x, prompt + c
+        return spatial, prompt
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
@@ -270,7 +276,9 @@ class Flux2Transformer(Module):
             for i in range(num_single_layers)
         )
 
-        self.time_embed_out = Linear(inner_dim, 2 * inner_dim, bias=False, mesh_device=device)
+        self.time_embed_out = ColParallelLinear(
+            inner_dim, 2 * inner_dim, bias=False, mesh_device=device, mesh_axis=tp_axis
+        )
 
         self.norm_out = DistributedLayerNorm(
             inner_dim,
@@ -290,10 +298,12 @@ class Flux2Transformer(Module):
         self.device = device
         self._ccl_manager = ccl_manager
         self._tp_axis = tp_axis
+        self._tp_factor = parallel_config.tensor_parallel.factor
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "norm_out.linear", "time_embed_out")
         rename_substate(state, "norm_out.norm", "norm_out")
+        prepare_chunked_linear_output(state, prefix="time_embed_out", device_count=self._tp_factor, chunks=2)
 
         for i in range(len(self.transformer_blocks)):
             prefix = f"transformer_blocks.{i}."
@@ -340,7 +350,29 @@ class Flux2Transformer(Module):
         time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
 
         double_stream_mod_img = self.double_stream_modulation_img(time_embed, skip_act_fn=True)
+        # Pre-cast gate params to BF16 so blocks avoid fp32 × bf16 addcmul broadcasts.
+        # Layout: (shift_attn, scale_attn, gate_attn, shift_ff, scale_ff, gate_ff)
+        shift_attn_i, scale_attn_i, gate_attn_i, shift_ff_i, scale_ff_i, gate_ff_i = double_stream_mod_img
+        double_stream_mod_img = (
+            shift_attn_i,
+            scale_attn_i,
+            ttnn.typecast(gate_attn_i, ttnn.bfloat16),
+            shift_ff_i,
+            scale_ff_i,
+            ttnn.typecast(gate_ff_i, ttnn.bfloat16),
+        )
+
         double_stream_mod_txt = self.double_stream_modulation_txt(time_embed, skip_act_fn=True)
+        shift_attn_t, scale_attn_t, gate_attn_t, shift_ff_t, scale_ff_t, gate_ff_t = double_stream_mod_txt
+        double_stream_mod_txt = (
+            shift_attn_t,
+            scale_attn_t,
+            ttnn.typecast(gate_attn_t, ttnn.bfloat16),
+            shift_ff_t,
+            scale_ff_t,
+            ttnn.typecast(gate_ff_t, ttnn.bfloat16),
+        )
+
         single_stream_mod = self.single_stream_modulation(time_embed, skip_act_fn=True)
         # Pre-add 1 to scale and typecast all params to BF16 so the single-stream block
         # avoids expensive BF16 × FP32 broadcast multiplies on the full spatial tensor.
@@ -387,18 +419,16 @@ class Flux2Transformer(Module):
             if i % 6 == 0:
                 ttnn.ReadDeviceProfiler(spatial.device())
 
-        spatial = ttnn.squeeze(self.norm_out(ttnn.unsqueeze(spatial, 0)), 0)
-
         spatial_time = self.time_embed_out(time_embed)
         [scale, shift] = ttnn.chunk(spatial_time, 2, dim=-1)
         scale = ttnn.typecast(scale + 1, ttnn.bfloat16)
         shift = ttnn.typecast(shift, ttnn.bfloat16)
 
+        spatial = ttnn.squeeze(self.norm_out(ttnn.unsqueeze(spatial, 0), dynamic_weight=scale, dynamic_bias=shift), 0)
+
         spatial = self._ccl_manager.all_gather_persistent_buffer(
             spatial, dim=2, mesh_axis=self._tp_axis, use_hyperparams=True
         )
-
-        spatial = spatial * scale + shift
 
         return self.proj_out(spatial)
 
