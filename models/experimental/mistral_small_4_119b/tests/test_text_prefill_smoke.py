@@ -34,6 +34,7 @@ def _log_mem(tag: str) -> None:
 
 
 import ttnn
+from tracy import signpost
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.experimental.mistral_small_4_119b.constants import (
     EXPECTED_VOCAB_SIZE,
@@ -120,10 +121,17 @@ def test_mistral_small_4_prefill_smoke(reset_seeds, mesh_device):
     cos_full, sin_full = rotary(hidden0, position_ids)
     model.cache_rope_tables(cos_full, sin_full)
 
-    logger.info(f"Running TTNN prefill (seq_len={seq_len})...")
-    _log_mem("before prefill")
+    logger.info(f"Running TTNN prefill warmup (seq_len={seq_len})...")
+    _log_mem("before prefill warmup")
+    _ = model.prefill(input_ids)
+    ttnn.synchronize_device(mesh_device)
+    _log_mem("after prefill warmup")
+
+    signpost("Performance pass")
+    logger.info(f"Running TTNN prefill measured pass (seq_len={seq_len})...")
     logits = model.prefill(input_ids)
-    _log_mem("after prefill")
+    ttnn.synchronize_device(mesh_device)
+    _log_mem("after prefill measured")
 
     assert logits.shape == (
         1,
