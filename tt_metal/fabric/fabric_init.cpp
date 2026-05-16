@@ -409,6 +409,7 @@ FabricCoresHealth configure_fabric_cores(
     static constexpr uint32_t kEthLinkErrStatusAddr = 0x1440;  // tt::umd::wormhole::ETH_LINK_ERR_STATUS_ADDR
     static constexpr uint32_t kEthLinkErrCodeNotConnected = 11;  // tt::umd::wormhole::ETH_LINK_UNUSED_ERROR_CODE_RANGE_START
     if (device->is_mmio_capable()) {
+        const auto chip_id = device->id();  // FIX CG: chip_id scope for Strategy 11 log statements
         for (const auto& [router_chan, _] : router_chans_and_direction) {
             if (dead_channels.count(router_chan)) {
                 continue;  // Already dead — no point checking link status.
