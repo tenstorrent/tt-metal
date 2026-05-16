@@ -99,7 +99,7 @@ jobs:
       llk-ci-tag: ${{ steps.llk-images.outputs.llk-ci-tag }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
@@ -226,7 +226,7 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
@@ -321,7 +321,7 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
@@ -350,7 +350,7 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
@@ -377,7 +377,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions/push-latest-image-to-ghcr
           sparse-checkout-cone-mode: false

@@ -513,7 +513,18 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         if not isinstance(prompt_lens, list):
             prompt_lens = prompt_lens.tolist()
 
-        prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
+        # Pad by uncached suffix length: only (seq_len - num_cached) tokens reach the kernel.
+        # int() normalizes numpy.int64 from vLLM callers (bit_length() requires a Python int).
+        num_cached_per_user = [int(n) for n in start_pos] if start_pos is not None else [0] * len(prompt_lens)
+        assert len(num_cached_per_user) == len(
+            prompt_lens
+        ), f"start_pos length {len(num_cached_per_user)} != prompt_lens length {len(prompt_lens)}"
+        for i, (seq_len, num_cached) in enumerate(zip(prompt_lens, num_cached_per_user)):
+            assert 0 <= num_cached < seq_len, f"user {i}: num_cached={num_cached} must be < seq_len={seq_len}"
+        prefill_seq_lens = [
+            get_padded_prefill_len(seq_len - num_cached)
+            for seq_len, num_cached in zip(prompt_lens, num_cached_per_user)
+        ]
         # Row-sharded batched prefill: process 1 user per row per iteration.
         # Only used when device sampling is active (sampling_params is not None)
         # and the prompt uses the harmony chat template (first token is <|start|>=200006).
@@ -546,6 +557,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             and len(set(prefill_seq_lens)) == 1
             and self.data_parallel == 1
             and not getattr(self.model_args[0], "disable_batched_prefill", False)
+            and all(
+                n == 0 for n in num_cached_per_user
+            )  # batched path feeds full tokens; incompatible with cached prefixes
         )
 
         if use_batched_prefill and sampling_on_device_requested:
