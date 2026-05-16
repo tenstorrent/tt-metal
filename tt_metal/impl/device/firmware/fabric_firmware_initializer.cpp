@@ -840,6 +840,64 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 // risc_firmware_initializer.cpp and the clean path in teardown_fabric_config).
                 // This restarts the ERISC into base UMD relay firmware with all RISCs running,
                 // preserving the ETH PHY link for the next session's probe reads.
+                //
+                // FIX DK-2 (#42429): Before force-resetting a channel that is stuck at
+                // REMOTE_HANDSHAKE_COMPLETE (0xa1b1c1d1), attempt a graceful termination by
+                // writing IMMEDIATELY_TERMINATE to the termination signal address and polling
+                // for EDMStatus::TERMINATED for up to ~500ms.  If the firmware acknowledges
+                // and exits cleanly we avoid the assert+deassert entirely, which prevents
+                // gateway ETH cores from being left mid-handshake with dead firmware after
+                // teardown — a state that caused FIX AA to spuriously skip AllGather tests
+                // on the next run.  Only fall through to force-reset on timeout.
+                if (status_buf[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE)) {
+                    bool graceful_exit = false;
+                    try {
+                        const auto virtual_eth_coord_dk2 = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                            ch.dev->id(), ch.eth_logical_core, CoreType::ETH);
+                        std::vector<uint32_t> imm_term_signal(
+                            1, static_cast<uint32_t>(tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE));
+                        cluster_.write_core_immediate(
+                            ch.dev->id(), virtual_eth_coord_dk2, imm_term_signal, termination_signal_address);
+                        // Poll for TERMINATED for up to ~500ms (50 × 10ms intervals).
+                        constexpr uint32_t kDK2PollIntervalMs = 10;
+                        constexpr uint32_t kDK2PollTimeoutMs = 500;
+                        for (uint32_t elapsed = 0; elapsed < kDK2PollTimeoutMs; elapsed += kDK2PollIntervalMs) {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(kDK2PollIntervalMs));
+                            std::vector<uint32_t> poll_buf(1, 0);
+                            try {
+                                detail::ReadFromDeviceL1(
+                                    ch.dev, ch.eth_logical_core, router_sync_address, 4, poll_buf, CoreType::ETH);
+                            } catch (...) {
+                                break;  // unresponsive — fall through to force-reset
+                            }
+                            if (poll_buf[0] == terminated_val) {
+                                graceful_exit = true;
+                                cleanly_terminated.push_back(ch);
+                                log_info(
+                                    tt::LogMetal,
+                                    "FIX DK-2 (#42429): Device {} chan={} exited gracefully via "
+                                    "IMMEDIATELY_TERMINATE after {}ms — force-reset skipped.",
+                                    ch.dev->id(),
+                                    ch.eth_chan_id,
+                                    elapsed + kDK2PollIntervalMs);
+                                break;
+                            }
+                        }
+                    } catch (...) {
+                        // Best-effort: if write/read threw (e.g. dead relay on non-MMIO),
+                        // fall through to force-reset as before.
+                    }
+                    if (graceful_exit) {
+                        continue;  // skip assert+deassert for this channel
+                    }
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX DK-2 (#42429): Device {} chan={} stuck at REMOTE_HANDSHAKE_COMPLETE "
+                        "did not respond to IMMEDIATELY_TERMINATE within 500ms — proceeding with "
+                        "force-reset.",
+                        ch.dev->id(),
+                        ch.eth_chan_id);
+                }
                 try {
                     const auto virtual_eth_coord = cluster_.get_virtual_coordinate_from_logical_coordinates(
                         ch.dev->id(), ch.eth_logical_core, CoreType::ETH);

@@ -3481,6 +3481,26 @@ void Device::wait_for_fabric_workers_ready() {
                     this->id());
                 fabric_channels_not_ready_for_traffic_ = false;
             }
+            // FIX DK-1 (#42429): Post-quiesce re-check.
+            // FIX M sets fabric_stale_base_umd_channels_ when a channel already had
+            // base-UMD relay firmware and was re-launched via launch_msg instead of soft
+            // reset.  FIX RZ2 (in configure()) clears it after ring-sync + health check,
+            // but only on the configure path.  After quiesce_devices() Phase 3 re-initializes
+            // channels via launch_msg, Phase 4+5 (here) independently confirms all channels
+            // are at READY_FOR_TRAFFIC.  If Phase 5b just passed — meaning every active ETH
+            // channel is confirmed healthy — the stale flag is no longer accurate and can be
+            // cleared here.  Without this clear, FIX QW skips all AllGather tests for the
+            // remainder of the session even though the channels are actually ready, producing
+            // spurious GTEST_SKIP outcomes that mask real failures.
+            if (fabric_stale_base_umd_channels_.load()) {
+                log_info(
+                    tt::LogMetal,
+                    "wait_for_fabric_workers_ready: Device {} FIX DK-1 — all channels confirmed "
+                    "READY_FOR_TRAFFIC after Phase 4+5 post-quiesce; clearing stale "
+                    "fabric_stale_base_umd_channels_ (was set by FIX M). (#42429)",
+                    this->id());
+                fabric_stale_base_umd_channels_ = false;
+            }
         }  // end else (!phase5_relay_read_threw && !fabric_relay_path_broken_)
     }
 
