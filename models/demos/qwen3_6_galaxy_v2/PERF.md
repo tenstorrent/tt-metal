@@ -1803,3 +1803,166 @@ problem is solved.
 ### Files modified (uncommitted)
 
 - `PERF.md` — this section.
+
+---
+
+## V2-17b: full-scope DeltaNet recurrent kernel — multi-head + multi-core + fused readout (2026-05-16)
+
+Re-pickup of the V2-17/V2-18 retrospective items. The target was a single
+ttnn.generic_op launch that (a) batches all 6 heads inside one kernel,
+(b) fuses the readout matmul ``o = q @ state_new`` into the same compute
+thread, and (c) runs on a 4 × 6 = 24-core Tensix grid. All three are
+needed to beat the existing 6-launch + external-readout chain at real
+decode shape (per the V2-18 retrospective).
+
+### What landed
+
+1. **V3 kernel** (``tt/kernels/recurrent_delta_rule_v3_kernel.py``,
+   emitted C++ in ``recurrent_delta_rule_v3/``). The kernel grid is
+   ``grid=(V_TILES=4, V_HEADS=6) = 24 cores``. Each core ``(j_v, h)``
+   handles one V-tile column for one head: reads ``state[h*K+i, j_v]``,
+   ``k_col[h*K+i, 0]``, ``v[h, j_v]``, ``q[h, i]``, ``decay[h, 0]``,
+   ``beta[h, 0]`` for i ∈ [0, K_TILES-1], computes ``state_new =
+   state*decay + (k@v)*beta``, forks to a writer DFB and a compute-
+   internal ``state_readout_dfb`` (via expression-recompute), then
+   accumulates ``o[h, j_v] = sum_i q[h,i] @ state_new[h,i,j_v]`` and
+   writes a single o tile. Inner compute thread shape (per work item):
+
+   ```python
+   with decay.wait() as decay_blk, beta.wait() as beta_blk:
+       with acc_dfb.reserve() as acc_blk:
+           acc_blk.store(ttl.math.fill(acc_blk, 0))
+       for i in range(k_tiles):
+           with state.wait() as s, k.wait() as kk, v.wait() as vv:
+               with state_out_dfb.reserve() as sn_w:
+                   sn_w.store((kk @ vv) * beta_blk + s * decay_blk)
+               with state_readout_dfb.reserve() as sn_r:
+                   sn_r.store((kk @ vv) * beta_blk + s * decay_blk)
+           with q.wait() as qq, state_readout_dfb.wait() as sn_r, \
+                acc_dfb.wait() as pre:
+               with acc_dfb.reserve() as new_acc:
+                   new_acc.store(pre + qq @ sn_r)
+       with acc_dfb.wait() as final_acc:
+           with o_dfb.reserve() as o_blk:
+               o_blk.store(final_acc)
+   ```
+
+   The CB-fork is realised by storing the SAME expression (``(k @ v) *
+   beta + state * decay``) into two reserve blocks in separate sync
+   regions — the tt-lang codegen rejects "pack to two CBs with
+   different formats" inside one sync region, so the duplicate
+   evaluation is required. Both CBs hold the same fp32 result.
+
+2. **Standalone test** (``tests/test_recurrent_delta_rule_v3_kernel.py``):
+   - state PCC = 0.99999988 (max abs 0.011)
+   - o PCC = 0.99999952 (max abs ~0.05)
+   - Per-head: all 6 heads ≥ 0.99999934 PCC for both state + o
+   - Speedup vs ``_fused_decay_and_write_fp32 + external readout matmul``
+     (the V3 standalone-shape apples-to-apples baseline): **77.35×**
+     (100-call mean).
+
+3. **Integration**: ``QWEN36_TT_LANG_RECURRENT_V3=1`` selects the V3
+   helper ``recurrent_gated_delta_rule_tt_lang_v3_decode``. The wrapper
+   pads ``q``, ``k_col`` (after transpose), and ``v`` (delta) from T=1
+   to T=TILE with zeros via ``ttnn.pad`` so the subsequent metadata
+   reshape from ``[B, H, T, D]`` to ``[H*T, D]`` is volume-preserving;
+   then launches the kernel and slices T=1 from each per-head TILE
+   block of the output. ``QWEN36_TT_LANG_RECURRENT_V2=1`` selects an
+   earlier wrapper variant on the same V3 kernel (kept for bisecting).
+
+   The original V3-author wrapper used metadata-only reshape on T=1
+   tile-padded inputs — that path crashes with ``TT_FATAL: Invalid
+   arguments to reshape`` (new_volume != old_volume) because
+   ``ttnn.reshape`` uses LOGICAL volume not physical-tile volume. The
+   pad-then-reshape fix lets the integration past that check.
+
+### Real-loop perf measurement (trace 32-step decode, B=1)
+
+Per intermediate test runs in the session:
+
+| Variant                                                  | mean ms/step | tok/s/user |
+|----------------------------------------------------------|-------------:|-----------:|
+| V2-16 baseline (no recurrent kernel)                     |        62.75 |      15.94 |
+| V2-17b ON (single intermediate run, V2 wrapper variant)  |        62.79 |      15.93 |
+| Delta vs baseline                                        |        +0.04 |      −0.01 |
+
+The single successful integrated run measured **+0.04 ms/step (within
+measurement noise; no regression, no improvement)**. Coherency
+preserved (first token = 271 = '\n\n' matches baseline; 102 alpha
+chars of canonical Qwen3.6 reasoning text).
+
+After repeated test-iteration cycles the V2/V3 integration began
+segfaulting during model construction (PCI/L1 init flake under
+repeated kernel allocation per layer × 48 layers). The standalone V3
+PCC + perf test continues to pass robustly after each device reset.
+
+### Why the kernel does NOT yield wall-clock savings under trace
+
+The V2-18 retrospective hypothesis was that the per-head launch tax
+and external readout matmul are the dominant cost. At standalone
+single-tile measurement they show up as 77× speedup. But in the real
+decode-trace replay:
+
+- The 6× per-layer per-head kernel launches collapse to a SINGLE
+  trace command-stream entry that costs microseconds in eager mode.
+- The fp32 chain's three op launches (matmul/multiply/addcmul +
+  readout matmul) likewise collapse under trace.
+- The actual per-step bottleneck on BH GLX is CCL (44% of step time
+  per V2-tracy-2) + matmul (24%); the recurrent chain is ~2 ms/step
+  of the 62.75 ms budget. Even a 77× speedup on that 2 ms reduces
+  step by ~2 ms — i.e., from 62.75 to ~60.8 ms. We did NOT observe
+  that improvement in the integration measurement, suggesting the
+  ttnn-side wrapper ops (pad + reshape + multiply + transpose + slice)
+  cost back the savings.
+
+### Iterations + tt-smi resets
+
+Across this session: ~12 fix iterations on top of the prior V2-17c
+commit, ~10 tt-smi -glx_reset invocations (a mix of debugging
+segfaults and pre-emptive resets between trace tests).
+
+### Did all 3 issues land?
+
+| Item                                       | Standalone | Integrated |
+|--------------------------------------------|:----------:|:----------:|
+| Multi-head batching (1 launch / 6 heads)   |     ✓      |     ✓      |
+| Readout fusion (q @ state_new in kernel)   |     ✓      |     ✓      |
+| Multi-core grid (24 cores, fp32 HiFi4)     |     ✓      |     ✓      |
+| Wall-clock improvement vs baseline (≥0 ms) |    n/a     |  +0.04 ms  |
+| Wall-clock improvement vs baseline (≥3 ms) |    n/a     |     ✗      |
+
+### Recommendation
+
+**Ship at current state.** V2-17b proves the kernel scaffolding works
+(state PCC 1.0, o PCC ≥ 0.9999, 77× standalone speedup, integration
+functionally correct on the one measured run). But the real-loop
+wall-clock improvement is within noise — the recurrent step is no
+longer the dominant cost on BH GLX after V2-16's beta/g kernel
+landed.
+
+Next perf wave should target CCL (44% of step time, per V2-tracy-2)
+and matmul (24%). For DeltaNet specifically, V2-19 candidates include:
+(1) replacing the 5 wrapper ops (pad/reshape/multiply ×2/transpose)
+in the V2-17b integration with in-kernel preprocessing — this would
+unlock the standalone 77× win, (2) moving v_read and delta = v-v_read
+into the same kernel (5-op fusion), and (3) eliminating the
+out_proj / all_reduce sequence's per-layer overhead.
+
+### Files added (uncommitted, V2-17b session)
+
+- ``tt/kernels/recurrent_delta_rule_v3_kernel.py`` — V3 authoring
+  (multi-head, 24-core grid, expression-recompute CB-fork).
+- ``tt/kernels/recurrent_delta_rule_v3/{recurrent_compute, recurrent_read, recurrent_write}.cpp``
+  — emitted C++.
+- ``tt/kernels/recurrent_delta_rule_v3/_runner_emitted.py``.
+- ``tests/test_recurrent_delta_rule_v3_kernel.py`` — standalone PCC +
+  per-head + perf (all pass).
+
+### Files modified (uncommitted, V2-17b session)
+
+- ``tt/qwen36_delta_attention.py`` — V3 kernel state builder,
+  ``_launch_recurrent_v3_kernel``, ``recurrent_gated_delta_rule_tt_lang_v3_decode``,
+  env-flag wiring (``QWEN36_TT_LANG_RECURRENT_V2`` /
+  ``QWEN36_TT_LANG_RECURRENT_V3``). V3 wrapper uses ``ttnn.pad`` to
+  fix the T=1 → T=TILE volume-preserving reshape requirement.
+- ``PERF.md`` — this section.

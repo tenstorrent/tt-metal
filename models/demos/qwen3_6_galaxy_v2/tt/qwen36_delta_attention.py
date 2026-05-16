@@ -173,6 +173,8 @@ class TtQwen36DeltaAttention(LightweightModule):
         dtype=ttnn.bfloat16,
         use_tt_lang_beta_g: bool = False,
         use_tt_lang_recurrent: bool = False,
+        use_tt_lang_recurrent_v2: bool = False,
+        use_tt_lang_recurrent_v3: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -186,6 +188,21 @@ class TtQwen36DeltaAttention(LightweightModule):
         # update only, readout matmul remains external).
         env_flag_rec = os.environ.get("QWEN36_TT_LANG_RECURRENT", "").strip()
         self.use_tt_lang_recurrent = use_tt_lang_recurrent or (env_flag_rec == "1")
+        # V2-17b: full multi-head + multi-core + fused-readout V3 kernel
+        # (recurrent_delta_rule_v3). One ttnn.generic_op launch handles all 6
+        # heads on 24 cores. Mutually exclusive with V2-18 path.
+        env_flag_rec_v2 = os.environ.get("QWEN36_TT_LANG_RECURRENT_V2", "").strip()
+        self.use_tt_lang_recurrent_v2 = use_tt_lang_recurrent_v2 or (env_flag_rec_v2 == "1")
+        if self.use_tt_lang_recurrent_v2:
+            self.use_tt_lang_recurrent = False
+        # V2-17d: full multi-head batched + readout-fused + in-place state
+        # kernel (recurrent_delta_rule_v3). ONE ttnn.generic_op launch handles
+        # all 6 heads on 24 cores. Mutually exclusive with V2-17/V2-17c paths.
+        env_flag_rec_v3 = os.environ.get("QWEN36_TT_LANG_RECURRENT_V3", "").strip()
+        self.use_tt_lang_recurrent_v3 = use_tt_lang_recurrent_v3 or (env_flag_rec_v3 == "1")
+        if self.use_tt_lang_recurrent_v3:
+            self.use_tt_lang_recurrent = False
+            self.use_tt_lang_recurrent_v2 = False
 
         self.mesh_device = mesh_device
         self.args = args
@@ -268,6 +285,18 @@ class TtQwen36DeltaAttention(LightweightModule):
         self._recurrent_kernel_state = None
         if self.use_tt_lang_recurrent:
             self._recurrent_kernel_state = self._build_recurrent_kernel_state()
+
+        # V2-17b: multi-head V3 kernel state (24-core, fused readout).
+        self._recurrent_v2_kernel_state = None
+        if self.use_tt_lang_recurrent_v2:
+            self._recurrent_v2_kernel_state = self._build_recurrent_v2_kernel_state()
+
+        # V2-17d: V3 multi-head batched kernel state. Persistent per-head
+        # broadcast tiles (ones_per_head [1, H=6, 32, 32]) live in DRAM so
+        # they don't compete for L1 with the dn_state_buffer.
+        self._recurrent_v3_kernel_state = None
+        if self.use_tt_lang_recurrent_v3:
+            self._recurrent_v3_kernel_state = self._build_recurrent_v3_kernel_state()
 
     # ------------------------------------------------------------------
     # Weight construction helpers (ported from v1 _build_weights)
@@ -1388,6 +1417,671 @@ class TtQwen36DeltaAttention(LightweightModule):
 
         return o_bf16, h_new
 
+    # ------------------------------------------------------------------
+    # V2-17b: multi-head batched + multi-core + fused-readout V3 kernel
+    # ------------------------------------------------------------------
+    _REC_V3_KERNELS_DIR = Path(__file__).resolve().parent / "kernels" / "recurrent_delta_rule_v3"
+    _REC_V3_NUM_TENSORS = 8
+    _REC_V3_NUM_CBS = 10
+    _REC_V3_GRID_COLS = 4
+    _REC_V3_GRID_ROWS = 6
+    _REC_V3_TILE = 32
+    _REC_V3_K_DIM = 128
+    _REC_V3_V_DIM = 128
+    _REC_V3_KERNEL_TENSOR_INDICES = [
+        [],  # compute
+        [5, 4, 2, 1, 0, 3],  # noc reader: beta, decay, k, q, state, v
+        [7, 6],  # noc writer: o, state_out
+    ]
+    _REC_V3_CB_CONFIGS = [
+        (2, 4096, 8192),  # 0 state
+        (2, 4096, 8192),  # 1 q
+        (2, 4096, 8192),  # 2 k
+        (2, 4096, 8192),  # 3 v
+        (2, 4096, 8192),  # 4 decay
+        (2, 4096, 8192),  # 5 beta
+        (2, 4096, 8192),  # 6 state_out
+        (2, 4096, 8192),  # 7 o
+        (2, 4096, 8192),  # 8 state_readout (internal CB-fork)
+        (2, 4096, 8192),  # 9 o_acc (internal accumulator)
+    ]
+
+    def _build_recurrent_v2_kernel_state(self):
+        kdir = self._REC_V3_KERNELS_DIR
+        compute_path = str(kdir / "recurrent_compute.cpp")
+        read_path = str(kdir / "recurrent_read.cpp")
+        write_path = str(kdir / "recurrent_write.cpp")
+        for p in (compute_path, read_path, write_path):
+            assert Path(p).is_file(), (
+                f"missing emitted V3 kernel: {p}. Run "
+                f"models/demos/qwen3_6_galaxy_v2/tt/kernels/recurrent_delta_rule_v3_kernel.py "
+                f"in the 3.12 venv to regenerate."
+            )
+
+        # 4 x 6 = 24-core block at interior worker coords (cols 2-5, rows 0-5).
+        core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(5, 5))])
+
+        ones_torch = torch.ones((self._REC_V3_TILE, self._REC_V3_TILE), dtype=torch.float32)
+        ones_tile = ttnn.from_torch(
+            ones_torch,
+            device=self.mesh_device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        H = self._REC_V3_GRID_ROWS
+        TILE = self._REC_V3_TILE
+        V = self._REC_V3_V_DIM
+        o_template = ttnn.from_torch(
+            torch.zeros((H * TILE, V), dtype=torch.float32),
+            device=self.mesh_device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        return {
+            "compute_path": compute_path,
+            "read_path": read_path,
+            "write_path": write_path,
+            "core_ranges": core_ranges,
+            "ones_tile": ones_tile,
+            "o_spec": o_template.spec,
+        }
+
+    def _launch_recurrent_v2_kernel(self, state, q, k, v, decay, beta, state_out, o):
+        """Dispatch the V3 multi-head kernel via ttnn.generic_op."""
+        st = self._recurrent_v2_kernel_state
+        tensors = [state, q, k, v, decay, beta, state_out, o]
+        assert len(tensors) == self._REC_V3_NUM_TENSORS
+
+        tensor_accessor_args = []
+        for t in tensors:
+            tensor_accessor_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+
+        cb_descriptors = []
+        for i, (_, page_size, total_size) in enumerate(self._REC_V3_CB_CONFIGS):
+            cb_format = ttnn.CBFormatDescriptor(
+                buffer_index=i,
+                data_format=ttnn.float32,
+                page_size=page_size,
+            )
+            cb_descriptors.append(
+                ttnn.CBDescriptor(
+                    total_size=total_size,
+                    core_ranges=st["core_ranges"],
+                    format_descriptors=[cb_format],
+                )
+            )
+
+        cb_indices = list(range(len(self._REC_V3_CB_CONFIGS)))
+        kernel_descriptors = []
+        paths = [
+            (st["compute_path"], "compute"),
+            (st["read_path"], "noc"),
+            (st["write_path"], "noc"),
+        ]
+        noc_idx = 0
+        for kernel_idx, (kernel_path, thread_type) in enumerate(paths):
+            tensor_indices = self._REC_V3_KERNEL_TENSOR_INDICES[kernel_idx]
+            common_runtime_args = [tensors[idx].buffer_address() for idx in tensor_indices]
+            if thread_type == "compute":
+                compile_time_args = cb_indices
+                cfg = ttnn.ComputeConfigDescriptor()
+                cfg.fp32_dest_acc_en = True
+                cfg.math_fidelity = ttnn.MathFidelity.HiFi4
+                cfg.math_approx_mode = False
+                config = cfg
+            else:
+                compile_time_args = cb_indices + tensor_accessor_args
+                if noc_idx == 0:
+                    config = ttnn.ReaderConfigDescriptor()
+                else:
+                    config = ttnn.WriterConfigDescriptor()
+                noc_idx += 1
+            kernel_descriptors.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=kernel_path,
+                    core_ranges=st["core_ranges"],
+                    compile_time_args=compile_time_args,
+                    common_runtime_args=common_runtime_args,
+                    config=config,
+                )
+            )
+
+        program = ttnn.ProgramDescriptor(
+            kernels=kernel_descriptors,
+            cbs=cb_descriptors,
+            semaphores=[],
+        )
+        ttnn.generic_op(list(tensors), program)
+
+    def recurrent_gated_delta_rule_tt_lang_decode_v2(
+        self,
+        q,
+        k,
+        v,
+        beta,
+        g,
+        scale=None,
+        initial_state=None,
+    ):
+        """V2-17b: full decode-step recurrent gated delta rule using the
+        multi-head + multi-core + fused-readout V3 kernel.
+        """
+        mem = ttnn.L1_MEMORY_CONFIG
+        kmem = ttnn.DRAM_MEMORY_CONFIG
+        cfg = _fp32_compute_cfg_hifi4()
+        st_v2 = self._recurrent_v2_kernel_state
+
+        q = l2_norm_ttnn(q, dim=-1)
+        k = l2_norm_ttnn(k, dim=-1)
+
+        B = q.shape[0]
+        T = q.shape[1]
+        H = q.shape[2]
+        K = q.shape[3]
+        V = v.shape[3]
+        TILE = self._REC_V3_TILE
+        assert T == 1
+        assert B == 1 and H == self._REC_V3_GRID_ROWS
+        assert K == self._REC_V3_K_DIM and V == self._REC_V3_V_DIM
+
+        if scale is None:
+            scale = K**-0.5
+
+        q_scaled = ttnn.multiply(q, scale, memory_config=mem)
+        q.deallocate(True)
+        q = q_scaled
+
+        q_t = ttnn.transpose(q, 1, 2, memory_config=mem)
+        q.deallocate(True)
+        k_t = ttnn.transpose(k, 1, 2, memory_config=mem)
+        k.deallocate(True)
+        v_t = ttnn.transpose(v, 1, 2, memory_config=mem)
+        beta_t = ttnn.transpose(beta, 1, 2, memory_config=mem)
+        g_t = ttnn.transpose(g, 1, 2, memory_config=mem)
+
+        def _to_fp32(x):
+            if x.dtype == ttnn.float32:
+                return x
+            x_new = ttnn.typecast(x, ttnn.float32, memory_config=mem)
+            if x_new is not x:
+                x.deallocate(True)
+            return x_new
+
+        q_t = _to_fp32(q_t)
+        k_t = _to_fp32(k_t)
+        v_t = _to_fp32(v_t)
+        beta_t = _to_fp32(beta_t)
+        g_t = _to_fp32(g_t)
+        g_exp = ttnn.exp(g_t, memory_config=mem)
+        g_t.deallocate(True)
+
+        if initial_state.dtype != ttnn.float32:
+            h = ttnn.typecast(initial_state, ttnn.float32, memory_config=mem)
+        else:
+            h = ttnn.to_memory_config(initial_state, mem)
+        if h.layout != ttnn.TILE_LAYOUT:
+            h_tile = ttnn.to_layout(h, ttnn.TILE_LAYOUT, memory_config=mem)
+            h.deallocate(True)
+            h = h_tile
+
+        read_query_prog_cfg = None
+        try:
+            read_query_prog_cfg = _recurrent_read_query_program_config(self.mesh_device, K, V)
+        except Exception:
+            pass
+        v_read_4d = ttnn.matmul(
+            k_t,
+            h,
+            memory_config=mem,
+            program_config=read_query_prog_cfg,
+            compute_kernel_config=cfg,
+        )
+        delta_4d = ttnn.subtract(v_t, v_read_4d, memory_config=mem)
+        v_read_4d.deallocate(True)
+
+        # ----- Stage 2-D kernel inputs (DRAM, away from kernel CBs) -----
+        h_dram = ttnn.to_memory_config(h, kmem)
+        state_2d = ttnn.reshape(h_dram, [H * K, V], memory_config=kmem)
+
+        q_t_padded = ttnn.pad(q_t, [(0, 0), (0, 0), (0, TILE - 1), (0, 0)], value=0.0)
+        q_2d = ttnn.reshape(q_t_padded, [H * TILE, K], memory_config=kmem)
+
+        delta_padded = ttnn.pad(delta_4d, [(0, 0), (0, 0), (0, TILE - 1), (0, 0)], value=0.0)
+        v_2d = ttnn.reshape(delta_padded, [H * TILE, V], memory_config=kmem)
+
+        k_col_4d = ttnn.transpose(k_t, -2, -1, memory_config=mem)
+        k_col_padded = ttnn.pad(
+            k_col_4d,
+            [(0, 0), (0, 0), (0, 0), (0, TILE - 1)],
+            value=0.0,
+        )
+        k_col_4d.deallocate(True)
+        k_2d = ttnn.reshape(k_col_padded, [H * K, TILE], memory_config=kmem)
+
+        ones_tile_4d = ttnn.reshape(
+            st_v2["ones_tile"],
+            [1, 1, TILE, TILE],
+            memory_config=mem,
+        )
+        decay_4d_b = ttnn.reshape(g_exp, [B, H, 1, 1], memory_config=mem)
+        beta_4d_b = ttnn.reshape(beta_t, [B, H, 1, 1], memory_config=mem)
+        decay_full = ttnn.multiply(ones_tile_4d, decay_4d_b, memory_config=kmem)
+        beta_full = ttnn.multiply(ones_tile_4d, beta_4d_b, memory_config=kmem)
+        decay_4d_b.deallocate(True)
+        beta_4d_b.deallocate(True)
+        decay_2d = ttnn.reshape(decay_full, [H * TILE, TILE], memory_config=kmem)
+        beta_2d = ttnn.reshape(beta_full, [H * TILE, TILE], memory_config=kmem)
+
+        state_out_2d = ttnn.allocate_tensor_on_device(state_2d.spec, self.mesh_device)
+        o_2d = ttnn.allocate_tensor_on_device(st_v2["o_spec"], self.mesh_device)
+
+        self._launch_recurrent_v2_kernel(
+            state=state_2d,
+            q=q_2d,
+            k=k_2d,
+            v=v_2d,
+            decay=decay_2d,
+            beta=beta_2d,
+            state_out=state_out_2d,
+            o=o_2d,
+        )
+
+        decay_full.deallocate(True)
+        beta_full.deallocate(True)
+        k_col_padded.deallocate(True)
+        delta_padded.deallocate(True)
+        q_t_padded.deallocate(True)
+        h_dram.deallocate(True)
+        delta_4d.deallocate(True)
+
+        h_new_4d = ttnn.reshape(state_out_2d, [B, H, K, V], memory_config=mem)
+        o_4d_padded = ttnn.reshape(o_2d, [B, H, TILE, V], memory_config=mem)
+        o_4d = ttnn.slice(o_4d_padded, [0, 0, 0, 0], [B, H, 1, V], memory_config=mem)
+        o_4d_padded.deallocate(True)
+        o_step = ttnn.transpose(o_4d, 1, 2, memory_config=mem)
+        o_4d.deallocate(True)
+
+        o_bf16 = ttnn.typecast(o_step, ttnn.bfloat16, memory_config=mem)
+        if o_bf16 is not o_step:
+            o_step.deallocate(True)
+
+        return o_bf16, h_new_4d
+
+    # ------------------------------------------------------------------
+    # V2-17d: V3 multi-head batched + readout-fused + in-place kernel
+    # ------------------------------------------------------------------
+    # The kernel at tt/kernels/recurrent_delta_rule_v3/ runs grid=(4, 6) = 24
+    # cores. Each (j_v, h) core handles one (V-tile-column, V-head) tile and
+    # iterates over the 4 K-tiles internally. Per-head readout (q @ state_new)
+    # is fused on the same core (V2-17c expression-recompute fork pattern).
+    # The persistent state buffer is passed as BOTH state input AND state_out:
+    # safe because read[h,i,j] happens before write[h,i,j] within the compute
+    # thread, and tiles don't alias across cores.
+    #
+    # Wrapper-op cost (vs V2-17c per-head loop):
+    #   - 1 ttnn.generic_op launch / layer  (vs 6)
+    #   - 1 transpose of k     (vs 6)
+    #   - 2 multiplies to build per-head broadcast tiles (vs 12)
+    #   - 0 slice / concat over heads (vs ~24)
+
+    _REC3_KERNELS_DIR = Path(__file__).resolve().parent / "kernels" / "recurrent_delta_rule_v3"
+    _REC3_TILE = 32
+    _REC3_HEAD_DIM = 128
+    _REC3_K_TILES = 4
+    _REC3_V_TILES = 4
+    _REC3_V_HEADS = 6
+    _REC3_NUM_TENSORS = 8
+    _REC3_KERNEL_TENSOR_INDICES = [
+        [],
+        [5, 4, 2, 1, 0, 3],  # noc reader: beta, decay, k_col, q, state, v
+        [7, 6],  # noc writer: o, state_out
+    ]
+    _REC3_NUM_CBS = 10
+    _REC3_CB_PAGE = 4096
+    _REC3_CB_TOTAL = 8192
+
+    def _build_recurrent_v3_kernel_state(self):
+        kdir = self._REC3_KERNELS_DIR
+        compute_path = str(kdir / "recurrent_compute.cpp")
+        read_path = str(kdir / "recurrent_read.cpp")
+        write_path = str(kdir / "recurrent_write.cpp")
+        for p in (compute_path, read_path, write_path):
+            assert Path(p).is_file(), (
+                f"missing emitted V3 recurrent kernel: {p}. Run "
+                f"python_env_312/bin/python "
+                f"models/demos/qwen3_6_galaxy_v2/tt/kernels/recurrent_delta_rule_v3_kernel.py "
+                f"to regenerate."
+            )
+
+        # grid=(V_TILES=4, V_HEADS=6) — 24 cores. Use cores (2..5, 0..5):
+        # the worker grid documented in `sub_core_grids` (cols 1-6 x rows 0-9)
+        # has spare cores in cols 2-5; this keeps clear of dispatch
+        # reservations on col 0.
+        core_ranges = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(2, 0),
+                    ttnn.CoreCoord(2 + self._REC3_V_TILES - 1, self._REC3_V_HEADS - 1),
+                )
+            ]
+        )
+
+        # Persistent per-head ones tile [1, H=6, 32, 32] fp32 in DRAM. Used
+        # once per step to broadcast the scalar decay[h] / beta[h] across
+        # each head's 32x32 tile (2 multiplies/layer instead of 12).
+        ones_torch = torch.ones((1, self._REC3_V_HEADS, self._REC3_TILE, self._REC3_TILE), dtype=torch.float32)
+        ones_per_head = ttnn.from_torch(
+            ones_torch,
+            device=self.mesh_device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        return {
+            "compute_path": compute_path,
+            "read_path": read_path,
+            "write_path": write_path,
+            "core_ranges": core_ranges,
+            "ones_per_head": ones_per_head,
+        }
+
+    def _launch_recurrent_v3_kernel(self, state, q, k_col, v, decay, beta, o):
+        """Dispatch the V3 multi-head kernel. ``state`` is BOTH input AND
+        output (in-place writeback)."""
+        st = self._recurrent_v3_kernel_state
+        # state is passed as BOTH index 0 (input) and index 6 (output). The
+        # kernel reads then writes each tile on the same core — safe.
+        tensors = [state, q, k_col, v, decay, beta, state, o]
+        assert len(tensors) == self._REC3_NUM_TENSORS
+
+        tensor_accessor_args = []
+        for t in tensors:
+            tensor_accessor_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+
+        cb_descriptors = []
+        for i in range(self._REC3_NUM_CBS):
+            cb_format = ttnn.CBFormatDescriptor(
+                buffer_index=i,
+                data_format=ttnn.float32,
+                page_size=self._REC3_CB_PAGE,
+            )
+            cb_descriptors.append(
+                ttnn.CBDescriptor(
+                    total_size=self._REC3_CB_TOTAL,
+                    core_ranges=st["core_ranges"],
+                    format_descriptors=[cb_format],
+                )
+            )
+
+        cb_indices = list(range(self._REC3_NUM_CBS))
+        kernel_descriptors = []
+        paths = [
+            (st["compute_path"], "compute"),
+            (st["read_path"], "noc"),
+            (st["write_path"], "noc"),
+        ]
+        noc_idx = 0
+        for kernel_idx, (kernel_path, thread_type) in enumerate(paths):
+            tensor_indices = self._REC3_KERNEL_TENSOR_INDICES[kernel_idx]
+            common_runtime_args = [tensors[idx].buffer_address() for idx in tensor_indices]
+            if thread_type == "compute":
+                compile_time_args = cb_indices
+                cfg = ttnn.ComputeConfigDescriptor()
+                cfg.fp32_dest_acc_en = True
+                cfg.math_fidelity = ttnn.MathFidelity.HiFi4
+                cfg.math_approx_mode = False
+                config = cfg
+            else:
+                compile_time_args = cb_indices + tensor_accessor_args
+                if noc_idx == 0:
+                    config = ttnn.ReaderConfigDescriptor()
+                else:
+                    config = ttnn.WriterConfigDescriptor()
+                noc_idx += 1
+            kernel_descriptors.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=kernel_path,
+                    core_ranges=st["core_ranges"],
+                    compile_time_args=compile_time_args,
+                    common_runtime_args=common_runtime_args,
+                    config=config,
+                )
+            )
+
+        program = ttnn.ProgramDescriptor(
+            kernels=kernel_descriptors,
+            cbs=cb_descriptors,
+            semaphores=[],
+        )
+        ttnn.generic_op(list(tensors), program)
+
+    def recurrent_gated_delta_rule_tt_lang_v3_decode(
+        self,
+        q,
+        k,
+        v,
+        beta,
+        g,
+        scale=None,
+        initial_state=None,
+    ):
+        """V2-17d: full decode-step recurrent gated delta rule using V3.
+
+        I/O contract identical to recurrent_gated_delta_rule_ttnn_fp32:
+            q, k: [B=1, T=1, H=6, K=128]
+            v:    [B=1, T=1, H=6, V=128]
+            beta: [B=1, T=1, H=6]
+            g:    [B=1, T=1, H=6]
+            initial_state: [B, H, K, V] fp32 (the persistent dn_state_buffer)
+
+        Returns:
+            o:     [B=1, T=1, H=6, V=128] bfloat16
+            h_new: alias of initial_state (state was written in place by the
+                   kernel — h_new is identically the persistent buffer).
+        """
+        mem = ttnn.L1_MEMORY_CONFIG
+        cfg = _fp32_compute_cfg_hifi4()
+        st = self._recurrent_v3_kernel_state
+
+        # ----- preprocessing (same as recurrent_gated_delta_rule_ttnn_fp32) -----
+        q = l2_norm_ttnn(q, dim=-1)
+        k = l2_norm_ttnn(k, dim=-1)
+
+        B = q.shape[0]
+        T = q.shape[1]
+        H = q.shape[2]
+        K = q.shape[3]
+        V = v.shape[3]
+        assert B == 1, f"V3 decode helper assumes B=1; got {B}"
+        assert T == 1, f"V3 decode helper expects T=1, got T={T}"
+        assert H == self._REC3_V_HEADS, f"V3 H={H} != n_v_per_row={self._REC3_V_HEADS}"
+        assert K == self._REC3_HEAD_DIM and V == self._REC3_HEAD_DIM, f"V3 emitted at K=V=128; got K={K}, V={V}"
+
+        if scale is None:
+            scale = K**-0.5
+
+        q_scaled = ttnn.multiply(q, scale, memory_config=mem)
+        q.deallocate(True)
+        q = q_scaled
+
+        # Transpose [B, T, H, D] → [B, H, T, D]; beta/g go [B, T, H] → [B, H, T].
+        q_t = ttnn.transpose(q, 1, 2, memory_config=mem)
+        q.deallocate(True)
+        k_t = ttnn.transpose(k, 1, 2, memory_config=mem)
+        k.deallocate(True)
+        v_t = ttnn.transpose(v, 1, 2, memory_config=mem)
+        beta_t = ttnn.transpose(beta, 1, 2, memory_config=mem)
+        g_t = ttnn.transpose(g, 1, 2, memory_config=mem)
+
+        # fp32 promote.
+        def _to_fp32(x):
+            if x.dtype == ttnn.float32:
+                return x
+            x_new = ttnn.typecast(x, ttnn.float32, memory_config=mem)
+            if x_new is not x:
+                x.deallocate(True)
+            return x_new
+
+        q_t = _to_fp32(q_t)
+        k_t = _to_fp32(k_t)
+        v_t = _to_fp32(v_t)
+        beta_t = _to_fp32(beta_t)
+        g_t = _to_fp32(g_t)
+        g_exp = ttnn.exp(g_t, memory_config=mem)
+        g_t.deallocate(True)
+
+        # Initial state alias (persistent buffer). Cast to fp32 if needed.
+        if initial_state.dtype != ttnn.float32:
+            h = ttnn.typecast(initial_state, ttnn.float32, memory_config=mem)
+        else:
+            h = initial_state
+
+        # ----- pre-update readout: v_read = k_row @ h, delta = v_t - v_read -----
+        read_query_prog_cfg = None
+        try:
+            read_query_prog_cfg = _recurrent_read_query_program_config(self.mesh_device, K, V)
+        except Exception:
+            pass
+        v_read_4d = ttnn.matmul(
+            k_t,
+            h,
+            memory_config=mem,
+            program_config=read_query_prog_cfg,
+            compute_kernel_config=cfg,
+        )
+        delta_4d = ttnn.subtract(v_t, v_read_4d, memory_config=mem)
+        v_read_4d.deallocate(True)
+        v_t.deallocate(True)
+
+        # ----- build V3 kernel inputs (DRAM-staged to avoid L1 collision with CBs) -----
+        # The kernel was emitted at 2D shapes; the 4D inputs need T padded
+        # 1→TILE so the logical reshape to 2D is volume-preserving.
+        TILE = self._REC3_TILE
+        kmem = ttnn.DRAM_MEMORY_CONFIG
+
+        # 1. k_col: transpose [B, H, 1, K] → [B, H, K, 1], pad last dim 1→TILE.
+        k_col_raw = ttnn.transpose(k_t, -2, -1, memory_config=mem)
+        k_t.deallocate(True)
+        k_col_padded = ttnn.pad(
+            k_col_raw,
+            [(0, 0), (0, 0), (0, 0), (0, TILE - 1)],
+            value=0.0,
+        )
+        if k_col_padded is not k_col_raw:
+            k_col_raw.deallocate(True)
+
+        # 2 & 3. Per-head decay/beta broadcast tiles [1, H, 32, 32].
+        decay_4d = ttnn.reshape(g_exp, [B, H, 1, 1], memory_config=mem)
+        beta_4d = ttnn.reshape(beta_t, [B, H, 1, 1], memory_config=mem)
+        decay_bcast = ttnn.multiply(st["ones_per_head"], decay_4d, memory_config=kmem)
+        beta_bcast = ttnn.multiply(st["ones_per_head"], beta_4d, memory_config=kmem)
+        g_exp.deallocate(True)
+        beta_t.deallocate(True)
+
+        # 4. v_in: pad T 1→TILE so reshape to [H*TILE, V] is volume-preserving.
+        v_in_padded = ttnn.pad(
+            delta_4d,
+            [(0, 0), (0, 0), (0, TILE - 1), (0, 0)],
+            value=0.0,
+        )
+        if v_in_padded is not delta_4d:
+            delta_4d.deallocate(True)
+
+        # 5. q_padded: pad T 1→TILE.
+        q_padded = ttnn.pad(
+            q_t,
+            [(0, 0), (0, 0), (0, TILE - 1), (0, 0)],
+            value=0.0,
+        )
+        if q_padded is not q_t:
+            q_t.deallocate(True)
+
+        # 6. state to DRAM (kernel input/output). The reads then writes
+        #    happen inside the kernel via NoC DMA; bringing it to DRAM keeps
+        #    the kernel CBs from colliding with the model's L1 state tiles
+        #    on cores 2-5 / rows 0-5.
+        h_dram = ttnn.to_memory_config(h, kmem)
+
+        # 7. o output [H*TILE, V] in DRAM via v_in_padded's reshape spec.
+        # Build by reshaping a zero-initialized tensor with the same spec.
+        # The simplest path: use ttnn.allocate_tensor_on_device on the
+        # reshape's resulting spec via the 2D form.
+        v_2d_spec_tensor = ttnn.reshape(
+            v_in_padded,
+            [self._REC3_V_HEADS * TILE, self._REC3_HEAD_DIM],
+            memory_config=kmem,
+        )
+
+        # Allocate o using v_2d_spec_tensor's spec (same shape).
+        o_2d = ttnn.allocate_tensor_on_device(v_2d_spec_tensor.spec, self.mesh_device)
+
+        # Metadata reshape to 2D logical layouts (tile counts identical).
+        state_2d = ttnn.reshape(
+            h_dram, [self._REC3_V_HEADS * self._REC3_HEAD_DIM, self._REC3_HEAD_DIM], memory_config=kmem
+        )
+        q_2d = ttnn.reshape(q_padded, [self._REC3_V_HEADS * TILE, self._REC3_HEAD_DIM], memory_config=kmem)
+        k_col_2d = ttnn.reshape(
+            k_col_padded,
+            [self._REC3_V_HEADS * self._REC3_HEAD_DIM, TILE],
+            memory_config=kmem,
+        )
+        v_2d = v_2d_spec_tensor  # already reshaped above
+        decay_2d = ttnn.reshape(
+            decay_bcast,
+            [self._REC3_V_HEADS * TILE, TILE],
+            memory_config=kmem,
+        )
+        beta_2d = ttnn.reshape(
+            beta_bcast,
+            [self._REC3_V_HEADS * TILE, TILE],
+            memory_config=kmem,
+        )
+
+        self._launch_recurrent_v3_kernel(
+            state=state_2d,
+            q=q_2d,
+            k_col=k_col_2d,
+            v=v_2d,
+            decay=decay_2d,
+            beta=beta_2d,
+            o=o_2d,
+        )
+
+        # state_2d aliases h_dram which is a SEPARATE DRAM staging copy of
+        # the persistent L1 buffer. The kernel updated state_2d in place;
+        # copy back into h (the persistent buffer).
+        ttnn.copy(state_2d, h)
+        h_dram.deallocate(True)
+        q_padded.deallocate(True)
+        k_col_padded.deallocate(True)
+        v_in_padded.deallocate(True)
+        decay_bcast.deallocate(True)
+        beta_bcast.deallocate(True)
+        # o_2d holds the kernel output.
+
+        # Reshape o back to 4D [B, H, TILE, V], slice T=1, transpose to [B, T=1, H, V].
+        o_4d_padded = ttnn.reshape(o_2d, [B, H, TILE, V], memory_config=mem)
+        o_first_row = ttnn.slice(o_4d_padded, [0, 0, 0, 0], [B, H, 1, V], memory_config=mem)
+        o_4d_padded.deallocate(True)
+        o_2d.deallocate(True)
+        o_out = ttnn.transpose(o_first_row, 1, 2, memory_config=mem)
+        # o_first_row may alias o_out — don't deallocate.
+
+        # Downstream norm/out_proj expects bf16.
+        o_bf16 = ttnn.typecast(o_out, ttnn.bfloat16, memory_config=mem)
+        if o_bf16 is not o_out:
+            o_out.deallocate(True)
+
+        return o_bf16, h
+
     def _gqa_expand_q_k(self, q, k, B, T):
         ratio = self.n_v_per_row // self.n_k_per_row
         mem = ttnn.DRAM_MEMORY_CONFIG
@@ -1665,7 +2359,30 @@ class TtQwen36DeltaAttention(LightweightModule):
         # that was compounding to 64L PCC 0.30 — see ttnn_delta_rule_ops_fp32).
         # V2-18: optional partial tt-lang recurrent kernel (per-head loop with
         # external readout matmul) — controlled by QWEN36_TT_LANG_RECURRENT=1.
-        if self.use_tt_lang_recurrent and self._recurrent_kernel_state is not None:
+        if self.use_tt_lang_recurrent_v3 and self._recurrent_v3_kernel_state is not None:
+            # V2-17d: multi-head batched + readout-fused + in-place V3 kernel.
+            # State is written in place to dn_state_buffer; new_state aliases
+            # the persistent buffer (the post-forward ttnn.copy is a self-copy
+            # which is short-circuited below).
+            core_out, new_state = self.recurrent_gated_delta_rule_tt_lang_v3_decode(
+                q=q_exp,
+                k=k_exp,
+                v=v_h,
+                beta=beta,
+                g=g,
+                initial_state=self.dn_state_buffer,
+            )
+        elif self.use_tt_lang_recurrent_v2 and self._recurrent_v2_kernel_state is not None:
+            # V2-17b: full multi-head + multi-core + fused-readout V3 kernel.
+            core_out, new_state = self.recurrent_gated_delta_rule_tt_lang_decode_v2(
+                q=q_exp,
+                k=k_exp,
+                v=v_h,
+                beta=beta,
+                g=g,
+                initial_state=self.dn_state_buffer,
+            )
+        elif self.use_tt_lang_recurrent and self._recurrent_kernel_state is not None:
             core_out, new_state = self.recurrent_gated_delta_rule_tt_lang_decode(
                 q=q_exp,
                 k=k_exp,
@@ -1704,9 +2421,13 @@ class TtQwen36DeltaAttention(LightweightModule):
         out.deallocate(True)
 
         # 9. In-place write of new state into persistent buffers (trace-safe).
-        ttnn.copy(new_state, self.dn_state_buffer)
+        # V2-17d: when V3 is active, new_state IS dn_state_buffer (kernel
+        # wrote in place). Skip the self-copy to save one ttnn.copy per layer
+        # per step.
+        if not (self.use_tt_lang_recurrent_v3 and self._recurrent_v3_kernel_state is not None):
+            ttnn.copy(new_state, self.dn_state_buffer)
+            new_state.deallocate(True)
         ttnn.copy(new_conv_state, self.conv_state_buffer)
-        new_state.deallocate(True)
         new_conv_state.deallocate(True)
 
         return output
