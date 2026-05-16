@@ -1284,6 +1284,11 @@ FIX_GS3B_FIRES=$(grep -cE 'FIX GS-3b.*warm-up failed.*fatal FW init|FIX GS-3b.*h
 # proceeding with Phase 3.  Without FIX XZ: Phase 3 firmware launch races with ERISC restart.
 # Log: "FIX XZ: heartbeat poll" or "FIX XZ: MMIO ETH heartbeat"
 FIX_XZ_FIRES=$(grep -cE 'FIX XZ.*heartbeat|heartbeat.*FIX XZ' "$CLEAN" 2>/dev/null; :)
+# FIX BH (#42429): ERISC ROM boot timeout after FIX RR PCIe soft-reset.
+# Log: "FIX BH — ERISC did not exit ROM phase within Nms"
+FIX_BH_FIRES=$(grep -cE 'FIX BH.*ERISC did not exit ROM phase' "$CLEAN" 2>/dev/null; :)
+# FIX DR (#42429): Final edm_status read on FIX BH timeout (logged alongside FIX BH).
+FIX_DR_FIRES=$(grep -cE 'FIX DR' "$CLEAN" 2>/dev/null; :)
 # FIX BY (#42429): quiesce probe in Python conftest/test — calls quiesce_devices() once as a
 # pre-flight check before AllGather.  If relay path is dead, quiesce throws/sets degraded flag.
 # Log: "FIX BY (#42429): fabric degraded after quiesce probe"
@@ -2013,6 +2018,7 @@ echo "  TELEMETRY_UNHEALTHY_CHANS: ${TELEMETRY_UNHEALTHY:-0}  (channels with rou
 echo "  TELEMETRY_READ_ERRORS:     ${TELEMETRY_THREW:-0}  (telemetry reads that threw exceptions)"
 echo "  BASELINE_DEGRADED_CHANS:   ${BASELINE_DEGRADED:-0}  (channels degraded between SetUp and TearDown)"
 echo "  BASELINE_HB_STALLED:       ${BASELINE_HB_STALLED:-0}  (degraded channels with stalled heartbeats)"
+echo "  FIX_BH_FIRES:              ${FIX_BH_FIRES:-0}  (ERISC ROM boot timeout after FIX RR soft-reset)"
 echo "  FIX_XZ_FIRES:              ${FIX_XZ_FIRES:-0}  (heartbeat poll after teardown force-reset — ERISC restart wait)"
 echo "  FIX_BY_FIRES:              ${FIX_BY_FIRES:-0}  (quiesce probe detected degraded fabric — test skipped)"
 echo "  FIX_XX_FIRES:              ${FIX_XX_FIRES:-0}  (deassert guard — prevented deassert on non-asserted channel)"
@@ -2185,6 +2191,13 @@ if [ "${FIX_XZ_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX XZ] ERISC heartbeat poll after teardown force-reset (${FIX_XZ_FIRES} occurrence(s))."
     echo "     Waits for ERISC to restart after assert_risc_reset before proceeding with firmware launch."
     echo "     Without FIX XZ: Phase 3 firmware launch races with ERISC restart → stale L1 state."
+fi
+if [ "${FIX_BH_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX BH] ERISC ROM boot timeout after FIX RR soft-reset: ${FIX_BH_FIRES} channel(s)."
+    echo "     After FIX RR PCIe soft-reset, FIX BH polls edm_status_address for up to 5000ms waiting"
+    echo "     for ERISC to boot past ROM postcode 0x49705180. Channels that fail are marked newly_dead."
+    echo "     High FIX BH counts (>10) indicate simultaneous ROM boot contention — all channels reset"
+    echo "     at once and compete for link training bandwidth."
 fi
 if [ "${FIX_BY_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX BY] Quiesce probe detected degraded fabric (${FIX_BY_FIRES} occurrence(s))."

@@ -213,7 +213,7 @@ FabricCoresHealth configure_fabric_cores(
                     //
                     // We poll edm_status_address via PCIe-direct cluster.read_core until the
                     // value transitions away from the ROM postcode (kRomPostcode = 0x49705180).
-                    // If it transitions within kFIX_BH_BootWaitMs (500ms) we declare recovery.
+                    // If it transitions within kFIX_BH_BootWaitMs (5000ms) we declare recovery.
                     // If it does not, the channel is irrecoverable this session and is moved to
                     // newly_dead_channels to prevent a downstream launch-message race.
                     {
@@ -222,8 +222,11 @@ FabricCoresHealth configure_fabric_cores(
                         // ERISC BRISC needs time to execute ROM before starting the application.
                         // 500ms was insufficient — all channels still at ROM postcode 0x49705180
                         // after 500ms → marked as newly_dead_channels → 24 channels dead → init
-                        // failure.  3000ms gives a safe margin for simultaneous ROM boot.
-                        constexpr uint32_t kFIX_BH_BootWaitMs = 3000;
+                        // failure.  3000ms was also insufficient when 24+ channels boot
+                        // simultaneously (run 25964368272: ALL 24 MMIO channels still at
+                        // 0x49705180 after 3s).  5000ms matches the FIX RP PARALLEL batch
+                        // deadline and gives sufficient margin for WH ETH link training.
+                        constexpr uint32_t kFIX_BH_BootWaitMs = 5000;
                         constexpr uint32_t kFIX_BH_PollIntervalMs = 5;
                         const uint64_t edm_addr =
                             static_cast<uint64_t>(router_config.edm_status_address);
@@ -261,19 +264,28 @@ FabricCoresHealth configure_fabric_cores(
                                 chip_id,
                                 router_chan);
                         } else {
-                            // ROM boot did not complete within 500ms — channel irrecoverable.
+                            // ROM boot did not complete within timeout — channel irrecoverable.
                             // Leave dead_channels intact so the L1 write loop below skips it
                             // (preventing a hang on the non-functional relay path).
+                            // FIX DR (#42429): Read the actual value at timeout to distinguish
+                            // "completely stuck at ROM postcode" from "partially booted".
+                            uint32_t final_val = kRomPostcode_BH;
+                            try {
+                                std::vector<uint32_t> final_buf(1, 0);
+                                cluster.read_core(final_buf, sizeof(uint32_t), core_loc, edm_addr);
+                                final_val = final_buf[0];
+                            } catch (...) {}
                             newly_dead_channels.insert(router_chan);
                             log_warning(
                                 tt::LogMetal,
                                 "configure_fabric_cores: device {} channel {} FIX BH — "
                                 "ERISC did not exit ROM phase within {}ms "
-                                "(still at 0x49705180 after FIX RR deassert). "
+                                "(edm_status=0x{:08x} after FIX RR deassert). "
                                 "Channel remains dead; skipping L1 init.",
                                 chip_id,
                                 router_chan,
-                                kFIX_BH_BootWaitMs);
+                                kFIX_BH_BootWaitMs,
+                                final_val);
                         }
                     }
                 } catch (const std::exception& e) {
