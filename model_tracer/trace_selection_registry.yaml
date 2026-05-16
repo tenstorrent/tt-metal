@@ -492,3 +492,16 @@ registry:
     tt_kmd: "TT-KMD 2.5.0"
     tt_smi: "4.0.0"
     tt_firmware: "19.7.1.0"
+  - trace_id: 51
+    status: draft
+    models: [multimodal]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 9d959fcc-f8cf-4ce1-9483-64ed8f6a5148
+    tt_metal_sha: 94d61aeda1211750896d521762aa1da72e447b9d
+    config_count: 299
+    loaded_at: '2026-05-16'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.5.0"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
