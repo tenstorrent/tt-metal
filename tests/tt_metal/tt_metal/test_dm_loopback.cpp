@@ -68,8 +68,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
                 experimental::metal2_host_api::KernelSpec::SourceFilePath{
                     OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp"},
             .num_threads = 1,
-            .semaphore_bindings = {{.semaphore_spec_name = "sem", .accessor_name = "sem"}},
             .dfb_bindings = {},
+            .semaphore_bindings = {{.semaphore_spec_name = "sem", .accessor_name = "sem"}},
+            .tensor_bindings = {},
+            .compile_time_arg_bindings = {},
             .runtime_arguments_schema =
                 {
                     .named_runtime_args = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
@@ -89,8 +91,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
                 experimental::metal2_host_api::KernelSpec::SourceFilePath{
                     OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp"},
             .num_threads = 1,
-            .semaphore_bindings = {{.semaphore_spec_name = "sem", .accessor_name = "sem"}},
             .dfb_bindings = {},
+            .semaphore_bindings = {{.semaphore_spec_name = "sem", .accessor_name = "sem"}},
+            .tensor_bindings = {},
+            .compile_time_arg_bindings = {},
             .runtime_arguments_schema =
                 {
                     .named_runtime_args = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
@@ -124,7 +128,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
              make_l1_to_dram_spec(L1_TO_DRAM_1),
              make_l1_to_dram_spec(L1_TO_DRAM_2)},
         .dataflow_buffers = {},
+        .remote_dataflow_buffers = {},
         .semaphores = {sem},
+        .tensor_parameters = {},
         .work_units = {main_wu},
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
@@ -145,7 +151,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
                       {"dram_buffer_size", 4u},
                       {"dram_bank_id", 0u},
                       {"signal_value", signal_value}}}},
-             .named_common_runtime_args = {}});
+             .named_common_runtime_args = {},
+             .runtime_varargs = {},
+             .common_runtime_varargs = {}});
         dram_address += 1024;
         signal_value++;
 
@@ -159,7 +167,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
                       {"dram_buffer_size", 4u},
                       {"dram_bank_id", 0u},
                       {"signal_value", signal_value}}}},
-             .named_common_runtime_args = {}});
+             .named_common_runtime_args = {},
+             .runtime_varargs = {},
+             .common_runtime_varargs = {}});
         l1_address += sizeof(uint32_t);
         signal_value++;
     }

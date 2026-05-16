@@ -55,6 +55,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
                     "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp"},
             .num_threads = num_threads,
             .dfb_bindings = {},
+            .semaphore_bindings = {},
+            .tensor_bindings = {},
             .compile_time_arg_bindings = {{"l1_address", l1_addr}},
             .runtime_arguments_schema =
                 {
@@ -88,6 +90,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         .program_id = "multi_dm_add_two_ints",
         .kernels = {k0, k1, k2, k3},
         .dataflow_buffers = {},
+        .remote_dataflow_buffers = {},
+        .semaphores = {},
+        .tensor_parameters = {},
         .work_units = {wu_core0, wu_core1},
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
@@ -98,20 +103,28 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
          .named_runtime_args =
              {{.node = experimental::metal2_host_api::NodeCoord{0, 0}, .args = {{"a", 1}, {"b", 2}}},
               {.node = experimental::metal2_host_api::NodeCoord{1, 0}, .args = {{"a", 1}, {"b", 2}}}},
-         .named_common_runtime_args = {}},
+         .named_common_runtime_args = {},
+         .runtime_varargs = {},
+         .common_runtime_varargs = {}},
         {.kernel_spec_name = KERNEL_1,
          .named_runtime_args =
              {{.node = experimental::metal2_host_api::NodeCoord{0, 0}, .args = {{"a", 3}, {"b", 4}}},
               {.node = experimental::metal2_host_api::NodeCoord{1, 0}, .args = {{"a", 3}, {"b", 4}}}},
-         .named_common_runtime_args = {}},
+         .named_common_runtime_args = {},
+         .runtime_varargs = {},
+         .common_runtime_varargs = {}},
         {.kernel_spec_name = KERNEL_2,
          .named_runtime_args =
              {{.node = experimental::metal2_host_api::NodeCoord{0, 0}, .args = {{"a", 5}, {"b", 6}}}},
-         .named_common_runtime_args = {}},
+         .named_common_runtime_args = {},
+         .runtime_varargs = {},
+         .common_runtime_varargs = {}},
         {.kernel_spec_name = KERNEL_3,
          .named_runtime_args =
              {{.node = experimental::metal2_host_api::NodeCoord{1, 0}, .args = {{"a", 7}, {"b", 8}}}},
-         .named_common_runtime_args = {}},
+         .named_common_runtime_args = {},
+         .runtime_varargs = {},
+         .common_runtime_varargs = {}},
     };
     experimental::metal2_host_api::SetProgramRunParameters(program, params);
 

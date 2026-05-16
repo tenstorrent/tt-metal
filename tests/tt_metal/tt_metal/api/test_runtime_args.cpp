@@ -198,9 +198,13 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
             .num_threads = static_cast<uint8_t>(dm_processors_per_kernel),
             .compiler_options = {.include_paths = {}, .defines = defines_vec},
             .dfb_bindings = {},
+            .semaphore_bindings = {},
+            .tensor_bindings = {},
+            .compile_time_arg_bindings = {},
             .runtime_arguments_schema =
                 {
                     .named_runtime_args = {},
+                    .named_common_runtime_args = {},
                     .num_runtime_varargs = num_runtime_args,
                     .num_common_runtime_varargs = common_rtas ? num_runtime_args : 0,
                 },
@@ -222,6 +226,9 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
         .program_id = "quasar_crta_test",
         .kernels = kernel_specs,
         .dataflow_buffers = {},
+        .remote_dataflow_buffers = {},
+        .semaphores = {},
+        .tensor_parameters = {},
         .work_units = {main_wu},
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
@@ -823,7 +830,7 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
             eth_core_range,
-            tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0, .compile_args = {}});
+            tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0, .compile_args = {}, .defines = {}, .named_compile_args = {}});
 
         workload.add_program(device_range, std::move(program));
         auto& program_ref = workload.get_programs().at(device_range);
@@ -845,7 +852,7 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
             program_common_test,
             "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
             eth_core_range,
-            tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0, .compile_args = {}});
+            tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0, .compile_args = {}, .defines = {}, .named_compile_args = {}});
 
         auto device_range_common_test = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload_common_test;
@@ -863,7 +870,7 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
             program2,
             "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
             eth_core_range,
-            tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0, .compile_args = {}});
+            tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0, .compile_args = {}, .defines = {}, .named_compile_args = {}});
 
         auto device_range2 = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload2;
@@ -904,7 +911,7 @@ TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
             eth_core_range,
-            tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .compile_args = {}});
+            tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .compile_args = {}, .defines = {}, .named_compile_args = {}});
 
         workload.add_program(device_range, std::move(program));
         auto& program_ref = workload.get_programs().at(device_range);
@@ -926,7 +933,7 @@ TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
             program_common_test,
             "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
             eth_core_range,
-            tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .compile_args = {}});
+            tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .compile_args = {}, .defines = {}, .named_compile_args = {}});
 
         auto device_range_common_test = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload_common_test;
@@ -944,7 +951,7 @@ TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
             program2,
             "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
             eth_core_range,
-            tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .compile_args = {}});
+            tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .compile_args = {}, .defines = {}, .named_compile_args = {}});
 
         auto device_range2 = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload2;
@@ -986,6 +993,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
     experimental::metal2_host_api::ProgramRunParams params;
     params.kernel_run_params = {{
         .kernel_spec_name = kernel_names[0],
+        .named_runtime_args = {},
+        .named_common_runtime_args = {},
         .runtime_varargs = {{core, std::vector<uint32_t>(common_rtas.size(), 0)}},
         .common_runtime_varargs = common_rtas,
     }};
@@ -1025,6 +1034,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
         all_crtas[i] = kernel_crtas;
         params.kernel_run_params.push_back({
             .kernel_spec_name = kernel_names[i],
+            .named_runtime_args = {},
+            .named_common_runtime_args = {},
             .runtime_varargs = {{core, std::vector<uint32_t>(base_crtas.size(), 0)}},
             .common_runtime_varargs = kernel_crtas,
         });

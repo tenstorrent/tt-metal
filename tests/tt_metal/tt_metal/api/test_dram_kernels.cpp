@@ -91,6 +91,7 @@ TEST_F(DramKernelFixture, DramKernelWriteToL1) {
             .noc = NOC::NOC_0,
             .compile_args = {drisc_l1_base_, kMagicValue},
             .defines = {},
+            .named_compile_args = {},
         });
     run_workload(std::move(program));
 
@@ -126,6 +127,7 @@ TEST_F(DramKernelFixture, DramKernelOnMultipleCores) {
                     .noc = NOC::NOC_0,
                     .compile_args = {drisc_l1_base_, expected_value},
                     .defines = {},
+                    .named_compile_args = {},
                 });
             run_workload(std::move(program));
 
@@ -202,7 +204,7 @@ TEST_F(DramKernelFixture, DramKernelDRISCReadFromTensixL1) {
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/drisc_l1_transfer.cpp",
         logical_core_drisc,
-        DramConfig{.noc = NOC::NOC_0, .compile_args = {drisc_l1_base_, tensix_virtual.x, tensix_virtual.y}, .defines = {}});
+        DramConfig{.noc = NOC::NOC_0, .compile_args = {drisc_l1_base_, tensix_virtual.x, tensix_virtual.y}, .defines = {}, .named_compile_args = {}});
     SetRuntimeArgs(program, kid, logical_core_drisc, {tensix_l1_base_});
     run_workload(std::move(program));
 
@@ -264,7 +266,7 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCWriteToDRAM) {
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/drisc_l1_dram_dma.cpp",
                 logical_core,
-                DramConfig{.noc = NOC::NOC_0, .compile_args = {}, .defines = {{"L1_TO_GDDR_WRITE_TEST", "1"}}});
+                DramConfig{.noc = NOC::NOC_0, .compile_args = {}, .defines = {{"L1_TO_GDDR_WRITE_TEST", "1"}}, .named_compile_args = {}});
             // Partition DRAM gddr dst addr by endpoint row
             const uint32_t dram_dst_gddr_addr = dram_addr + row * total_bytes_per_core;
             SetRuntimeArgs(program, k_id, logical_core, {dram_dst_gddr_addr, drisc_l1_base_, bytes_per_iter, iters});
@@ -367,7 +369,7 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCReadFromDRAM) {
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/drisc_l1_dram_dma.cpp",
                 logical_core,
-                DramConfig{.noc = NOC::NOC_0, .compile_args = {}});
+                DramConfig{.noc = NOC::NOC_0, .compile_args = {}, .defines = {}, .named_compile_args = {}});
             // Partition DRAM gddr src addr by endpoint row
             const uint32_t dram_src_gddr_addr = dram_addr + row * bytes_per_iter;
             SetRuntimeArgs(program, k_id, logical_core, {dram_src_gddr_addr, drisc_l1_base_, bytes_per_iter, iters});
@@ -455,7 +457,7 @@ TEST_F(DramKernelFixture, DramKernelDRISCReadFromDRAMMcastToTensix) {
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/drisc_mcast_writes_tensix.cpp",
         logical_core,
-        DramConfig{.noc = NOC::NOC_0, .compile_args = {}, .defines = {{"MULTICAST", "1"}}});
+        DramConfig{.noc = NOC::NOC_0, .compile_args = {}, .defines = {{"MULTICAST", "1"}}, .named_compile_args = {}});
     SetRuntimeArgs(
         program,
         mcast_k_id,
@@ -537,7 +539,7 @@ TEST_F(DramKernelFixture, DramKernelDRISCRTensixParallelDRAMReads) {
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/drisc_l1_dram_dma.cpp",
         drisc_endpoint_range,
-        DramConfig{.noc = NOC::NOC_0, .compile_args = {}});
+        DramConfig{.noc = NOC::NOC_0, .compile_args = {}, .defines = {}, .named_compile_args = {}});
     SetRuntimeArgs(program, drisc_k_id, drisc_endpoint_range, {dram_addr, drisc_l1_base_, total_bytes, 1});
 
     // Tensix Kernel
@@ -617,7 +619,7 @@ TEST_P(DramKernelDRISCGDDRBWSweepFixture, DRISCDMAUcastToTensix) {
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/drisc_mcast_writes_tensix.cpp",
         logical_core,
-        DramConfig{.noc = NOC::NOC_0, .compile_args = {}});
+        DramConfig{.noc = NOC::NOC_0, .compile_args = {}, .defines = {}, .named_compile_args = {}});
     SetRuntimeArgs(
         program,
         drisc_ucast_k_id,

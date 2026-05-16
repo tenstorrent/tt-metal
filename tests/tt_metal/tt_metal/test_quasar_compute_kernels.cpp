@@ -55,9 +55,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp"},
         .num_threads = 4,
+        .dfb_bindings = {},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
         .runtime_arguments_schema =
             {
                 .named_runtime_args = {"l1_address"},
+                .named_common_runtime_args = {},
             },
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
@@ -71,6 +76,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     experimental::metal2_host_api::ProgramSpec spec{
         .program_id = "compute_kernel_multiple_threads",
         .kernels = {compute_kernel_spec},
+        .dataflow_buffers = {},
+        .remote_dataflow_buffers = {},
+        .semaphores = {},
+        .tensor_parameters = {},
         .work_units = {main_wu},
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
@@ -79,6 +88,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     params.kernel_run_params = {{
         .kernel_spec_name = COMPUTE_KERNEL,
         .named_runtime_args = {{.node = node, .args = {{"l1_address", l1_address}}}},
+        .named_common_runtime_args = {},
+        .runtime_varargs = {},
+        .common_runtime_varargs = {},
     }};
     experimental::metal2_host_api::SetProgramRunParameters(program, params);
 
@@ -131,9 +143,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp"},
         .num_threads = 1,
+        .dfb_bindings = {},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
         .runtime_arguments_schema =
             {
                 .named_runtime_args = {"l1_address"},
+                .named_common_runtime_args = {},
             },
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
@@ -147,6 +164,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     experimental::metal2_host_api::ProgramSpec spec{
         .program_id = "compute_kernel_single_thread",
         .kernels = {compute_kernel_spec},
+        .dataflow_buffers = {},
+        .remote_dataflow_buffers = {},
+        .semaphores = {},
+        .tensor_parameters = {},
         .work_units = {main_wu},
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
@@ -155,6 +176,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     params.kernel_run_params = {{
         .kernel_spec_name = COMPUTE_KERNEL,
         .named_runtime_args = {{.node = node, .args = {{"l1_address", l1_address}}}},
+        .named_common_runtime_args = {},
+        .runtime_varargs = {},
+        .common_runtime_varargs = {},
     }};
     experimental::metal2_host_api::SetProgramRunParameters(program, params);
 

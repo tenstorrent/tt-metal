@@ -68,7 +68,7 @@ TEST_F(MeshDeviceSingleCardFixture, StreamScratchRegisterEriscCores) {
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/test_stream_scratch_register.cpp",
         eth_core_ranges,
-        EthernetConfig{.noc = NOC::NOC_0, .compile_args = {}});
+        EthernetConfig{.noc = NOC::NOC_0, .compile_args = {}, .defines = {}, .named_compile_args = {}});
 
     // Execute the program
     this->RunProgram(mesh_device, workload);

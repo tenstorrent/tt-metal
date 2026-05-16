@@ -129,8 +129,8 @@ bool dram_to_l1_multicast(
     fixture->RunProgram(mesh_device, workload);
     log_debug(LogTest, "Kernels done");
 
-    for (int i = 0; i < grid_size.y; i++) {
-        for (int j = 0; j < grid_size.x; j++) {
+    for (size_t i = 0; i < grid_size.y; i++) {
+        for (size_t j = 0; j < grid_size.x; j++) {
             // don't compare on skipped cores
             if (((cfg.exclude_direction.x == 0 && j <= cfg.exclude_start.x) ||
                  (cfg.exclude_direction.x == 1 && j >= cfg.exclude_start.x)) &&

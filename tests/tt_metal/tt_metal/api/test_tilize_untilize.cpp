@@ -197,37 +197,37 @@ std::vector<T> convert_to_flat_layout(
     auto num_faces_col = tile_W / face_W;
     auto num_faces_row = tile_H / face_H;
     TT_FATAL(data.size() % tile_HW == 0, "data size must be divisible by tile_HW");
-    int num_tiles = data.size() / tile_HW;
-    for (int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
-        int tile_start = tile_idx * tile_HW;
+    auto num_tiles = data.size() / tile_HW;
+    for (auto tile_idx = decltype(num_tiles){0}; tile_idx < num_tiles; tile_idx++) {
+        auto tile_start = tile_idx * tile_HW;
 
         if (transpose_face) {
             if (num_faces_row >= 1 && num_faces_col <= 1) {  // 32x16
-                for (int face_y = 0; face_y < num_faces_row; face_y++) {
-                    int start = tile_start + (face_y * (face_H * tile_W));
-                    for (int col = 0; col < face_W; col++) {
-                        for (int row = 0; row < face_H; row++) {
+                for (auto face_y = decltype(num_faces_row){0}; face_y < num_faces_row; face_y++) {
+                    auto start = tile_start + (face_y * (face_H * tile_W));
+                    for (auto col = decltype(face_W){0}; col < face_W; col++) {
+                        for (auto row = decltype(face_H){0}; row < face_H; row++) {
                             result.push_back(data[start + col + (row * face_W)]);
                         }
                     }
                 }
             } else if (num_faces_row <= 1 && num_faces_col >= 1) {  // 16x32
-                for (int col = 0; col < face_W; col++) {
-                    int start = tile_start + col;
-                    for (int face_x = 0; face_x < num_faces_col; face_x++) {
-                        int offset = face_x * face_HW;
-                        for (int row = 0; row < face_H; row++) {
+                for (auto col = decltype(face_W){0}; col < face_W; col++) {
+                    auto start = tile_start + col;
+                    for (auto face_x = decltype(num_faces_col){0}; face_x < num_faces_col; face_x++) {
+                        auto offset = face_x * face_HW;
+                        for (auto row = decltype(face_H){0}; row < face_H; row++) {
                             result.push_back(data[start + offset + (row * face_W)]);
                         }
                     }
                 }
             } else {
-                for (int face_x = 0; face_x < num_faces_col; face_x++) {
-                    for (int col = 0; col < face_W; col++) {
-                        int start = tile_start + (face_x * face_HW) + col;
-                        for (int face_y = 0; face_y < num_faces_row; face_y++) {
-                            int offset = face_y * (face_H * tile_W);
-                            for (int row = 0; row < face_H; row++) {
+                for (auto face_x = decltype(num_faces_col){0}; face_x < num_faces_col; face_x++) {
+                    for (auto col = decltype(face_W){0}; col < face_W; col++) {
+                        auto start = tile_start + (face_x * face_HW) + col;
+                        for (auto face_y = decltype(num_faces_row){0}; face_y < num_faces_row; face_y++) {
+                            auto offset = face_y * (face_H * tile_W);
+                            for (auto row = decltype(face_H){0}; row < face_H; row++) {
                                 result.push_back(data[start + offset + (row * face_W)]);
                             }
                         }
@@ -235,12 +235,12 @@ std::vector<T> convert_to_flat_layout(
                 }
             }
         } else {
-            for (int face_y = 0; face_y < num_faces_row; face_y++) {
-                for (int row = 0; row < face_H; row++) {
-                    int start = tile_start + (face_y * (face_H * tile_W)) + (row * face_W);
-                    for (int face_x = 0; face_x < num_faces_col; face_x++) {
-                        int offset = face_x * face_HW;
-                        for (int col = offset; col < offset + face_W; col++) {
+            for (auto face_y = decltype(num_faces_row){0}; face_y < num_faces_row; face_y++) {
+                for (auto row = decltype(face_H){0}; row < face_H; row++) {
+                    auto start = tile_start + (face_y * (face_H * tile_W)) + (row * face_W);
+                    for (auto face_x = decltype(num_faces_col){0}; face_x < num_faces_col; face_x++) {
+                        auto offset = face_x * face_HW;
+                        for (auto col = offset; col < offset + face_W; col++) {
                             result.push_back(data[start + col]);
                         }
                     }

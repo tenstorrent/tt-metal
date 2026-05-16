@@ -599,6 +599,8 @@ void run_local_noc_stream_reg_inc(
         auto config = tt_metal::DramConfig{
             .noc = tt_metal::NOC::NOC_0,
             .compile_args = {},
+            .defines = {},
+            .named_compile_args = {},
         };
         stream_reg_kernel = CreateKernel(
             program_,
@@ -609,7 +611,7 @@ void run_local_noc_stream_reg_inc(
         core_type = CoreType::ETH;
         unreserved_base_addr =
             MetalContext::instance().hal().get_dev_addr(hal_programmable_core_type, HalL1MemAddrType::UNRESERVED);
-        tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0, .compile_args = {}};
+        tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0, .compile_args = {}, .defines = {}, .named_compile_args = {}};
         if (hal_programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             config.eth_mode = Eth::SENDER;
         } else if (hal_programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
@@ -776,7 +778,7 @@ TEST_F(BlackholeSingleCardFixture, DramKernelDriscWritesTensixStreamReg) {
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/streams/stream_reg_read_write.cpp",
         logical_core_drisc,
-        DramConfig{.noc = NOC::NOC_0, .compile_args = {}});
+        DramConfig{.noc = NOC::NOC_0, .compile_args = {}, .defines = {}, .named_compile_args = {}});
     SetRuntimeArgs(
         program,
         kid,

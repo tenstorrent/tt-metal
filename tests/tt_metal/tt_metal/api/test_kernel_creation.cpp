@@ -85,13 +85,15 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
                                  DataMovementConfig{
                                      .processor = tt_metal::DataMovementProcessor::RISCV_0,
                                      .noc = tt_metal::NOC::RISCV_0_default,
-                                     .compile_args = {}}););
+                                     .compile_args = {},
+                                     .defines = {},
+                                     .named_compile_args = {}}););
         } else if (dispatch_core_type == CoreType::ETH) {
             EXPECT_ANY_THROW(tt_metal::CreateKernel(
                                  program_,
                                  "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp",
                                  CoreRangeSet(dispatch_core_range_set),
-                                 EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0}););
+                                 EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .compile_args = {}, .defines = {}, .named_compile_args = {}}););
         }
     }
 }

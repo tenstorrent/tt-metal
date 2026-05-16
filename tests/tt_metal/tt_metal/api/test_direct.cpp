@@ -403,6 +403,7 @@ static bool reader_datacopy_writer_quasar(
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .semaphore_bindings = {},
+        .tensor_bindings = {},
         .compile_time_arg_bindings = {{"use_dfbs", 1u}},
         .runtime_arguments_schema =
             {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"},
@@ -426,6 +427,7 @@ static bool reader_datacopy_writer_quasar(
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .semaphore_bindings = {},
+        .tensor_bindings = {},
         .compile_time_arg_bindings = {{"use_dfbs", 1u}},
         .runtime_arguments_schema =
             {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"},
@@ -456,7 +458,9 @@ static bool reader_datacopy_writer_quasar(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .semaphore_bindings = {},
+        .tensor_bindings = {},
         .compile_time_arg_bindings = {{"per_core_tile_cnt", per_core_tile_cnt}, {"use_dfbs", 1u}},
+        .runtime_arguments_schema = {.named_runtime_args = {}, .named_common_runtime_args = {}},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
 
@@ -471,6 +475,8 @@ static bool reader_datacopy_writer_quasar(
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
         .remote_dataflow_buffers = {},
+        .semaphores = {},
+        .tensor_parameters = {},
         .work_units = {wu},
     };
 
@@ -490,6 +496,8 @@ static bool reader_datacopy_writer_quasar(
                        {"num_tiles", num_tiles_per_thread},
                        {"dram_page_stride", ctx.per_tile_stride}}}},
             .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
@@ -501,11 +509,15 @@ static bool reader_datacopy_writer_quasar(
                        {"num_tiles", num_tiles_per_thread},
                        {"dram_page_stride", ctx.per_tile_stride}}}},
             .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,
             .named_runtime_args = {},
             .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
         },
     };
     experimental::metal2_host_api::SetProgramRunParameters(program, params);
