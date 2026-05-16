@@ -1,0 +1,224 @@
+STRATEGY INVESTIGATION REPORT
+Date: 2026-05-16 20:00 UTC
+Branch: nsexton/0-racecondition-hunt
+Agent: Task 3 Strategy Investigation
+CI Run Analyzed: 25970786992 (job 76342933527, runner tt-metal-ci-vm-t3k-08)
+
+========================================================================
+## EXECUTIVE SUMMARY
+========================================================================
+
+FIX S9 (soft-reset MMIO base-UMD channels) is broken. It resets the
+channels but does NOT wait for base firmware heartbeat to re-establish
+before loading fabric firmware. Result: fabric firmware gets loaded while
+ROM is still running → ERISC crashes → ring sync token never written
+(0x00000000 after 120s at 0x00018070) → full cascade failure.
+
+This is a regression introduced by FIX S9. Every prior failure we were
+chasing (REMOTE_HANDSHAKE_COMPLETE stalls, Phase 5b timeouts, FIX BH
+boot wait increases) was a symptom of the dirty-L1 transition problem.
+FIX S9 was the right fix idea but has a missing wait.
+
+========================================================================
+## FAILURE ANALYSIS — Run 25970786992
+========================================================================
+
+TIMELINE:
+  19:39:43 FIX TV: 24 MMIO ETH heartbeat confirmed in 0ms
+           [Session 1 (1x1,1CQ) runs cleanly]
+  19:39:46 terminate_stale_erisc_routers: devices 0-3 chan=8 = base-UMD
+  19:39:46 configure_fabric_cores: FIX S9 soft-resets dev0,1,2,3 chan=8
+  19:40:08 FIX TH3: base-UMD detected, extending ring sync to 120s
+  19:40:08 Device 4 ring sync: relay broken (FIX NZ skip)
+  19:42:08 Device 0 ring sync TIMEOUT after 120s:
+           master chan=8, sync addr=0x00018070, got 0x00000000
+  19:42:08 Devices 6,1,7,2,5,3: fast-skipped (ring_sync_already_timed_out_)
+  19:42:08 verify_all_fabric_channels_healthy: all 8 devices
+           "channels stuck at REMOTE_HANDSHAKE_COMPLETE"
+  19:42:21 Teardown: devices 0-3 chan=8 → status=0x00000000 (5s timeout)
+           devices 4-7 chan=0,7 → status=0xdeaddead (5s timeout)
+  19:42:29 FIX XZ: 4/4 MMIO channels not at heartbeat after 8007ms
+
+CRITICAL OBSERVATION:
+  Device 0 chan=8 = FIX S9 soft-reset channel = ring sync master.
+  Ring sync token = 0x00000000 after 120s.
+  This means fabric firmware on device 0 chan=8 NEVER WROTE anything.
+  Not STARTED (0xa0b0c0d0), not even the canary (0x0A0A0A0A).
+  The ERISC is completely silent — either firmware was never loaded,
+  or it crashed before its first instruction.
+
+SECONDARY OBSERVATION:
+  All other MMIO channels (devs 0-3, non-chan-8) ARE at
+  REMOTE_HANDSHAKE_COMPLETE. This means:
+  - Their ETH handshakes completed (peer-to-peer DMA worked)
+  - They're stuck at the local multi-ERISC barrier
+  - They're waiting for chan=8 to check in at the local barrier
+  - chan=8 never checks in → all other channels on dev 0 stall
+  - The ring sync can never proceed → 120s timeout
+
+ROOT CAUSE OF FIX S9 FAILURE:
+  FIX S9 in configure_fabric_cores does:
+    assert_risc_reset(channel)
+    deassert_risc_reset(channel)
+    // load fabric firmware immediately
+
+  Missing step: WAIT FOR BASE FIRMWARE HEARTBEAT after deassert.
+  
+  Without this wait, configure_fabric_cores loads fabric firmware
+  binary into L1 while ROM is still executing. ROM subsequently
+  overwrites parts of L1, corrupting the just-loaded firmware.
+  The ERISC then crashes at startup — before writing any edm_status,
+  before writing the ring sync token, before anything.
+
+  The fix (FIX AR2, FIX DS) exists for OTHER places in the code where
+  we assert+deassert and then read L1: always wait 50-100ms first.
+  FIX S9 missed adding this wait.
+
+COMPARISON WITH PRIOR FAILURES (before FIX S9):
+  - WITHOUT FIX S9 (launch_msg transition):
+    Channels stuck at REMOTE_HANDSHAKE_COMPLETE or STARTED
+    Root cause: dirty L1 / TXQ state from relay era
+    
+  - WITH FIX S9 (soft-reset, but missing heartbeat wait):
+    Ring master channel stuck at 0x00000000 — worse
+    Root cause: firmware loaded mid-ROM-boot, crashes immediately
+
+========================================================================
+## FIX PROPOSAL: FIX DT (FIX S9 heartbeat wait)
+========================================================================
+
+In configure_fabric_cores, after FIX S9 does assert+deassert:
+
+BEFORE:
+  assert_risc_reset(channel);
+  deassert_risc_reset(channel);
+  // [immediately loads fabric firmware]
+
+AFTER:
+  assert_risc_reset(channel);
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));  // FIX DS-style
+  deassert_risc_reset(channel);
+  // Wait for ROM to complete boot and base firmware to establish heartbeat
+  // before loading fabric firmware (same pattern as FIX AR2 in
+  // risc_firmware_initializer.cpp)
+  wait_for_base_firmware_heartbeat(device, channel, 5000ms);
+  // [then load fabric firmware]
+
+Alternatively, if wait_for_base_firmware_heartbeat doesn't exist as a
+standalone function, poll the heartbeat address directly:
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    uint32_t hb = read_reg(device, channel, ETH_HEARTBEAT_ADDR);
+    if (is_valid_base_umd_heartbeat(hb)) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+EXISTING PRECEDENT:
+  - FIX AR2 (risc_firmware_initializer.cpp): 100ms sleep after deassert
+  - FIX DS (fabric_firmware_initializer.cpp): 50ms sleep before poll
+  - FIX TV: the heartbeat poll mechanism already exists; just call it
+
+NOTE: FIX DT was already used for an earlier fix per the journal.
+Use FIX DU for this fix.
+
+========================================================================
+## SECOND FINDING: FIX XZ 8009ms = kDiagBudgetMs = 8s
+========================================================================
+
+FIX XZ times out at exactly 8007ms and 8009ms (two sessions).
+kFIX_BH_BootWaitMs = 8000ms (set by FIX DV).
+FIX XZ uses kDiagBudgetMs = kHealthCheckTimeoutMs + 6000 (for phase 5b).
+
+Wait — FIX XZ uses a DIFFERENT timeout. Looking at the log:
+"teardown MMIO ETH heartbeat poll timed out after 8007ms (8057ms since deassert)"
+
+8007ms ≈ 8000ms. This is kFIX_BH_BootWaitMs or a similar constant.
+The 8009ms in session 3 confirms: FIX XZ's timeout is 8s, not the 120s
+ring sync timeout. This means FIX XZ is a teardown poll that gives up
+at 8s regardless of whether the ring sync timeout completed.
+
+If FIX S9's missing heartbeat wait is fixed (FIX DU), then:
+- FIX S9 reset channels will boot properly
+- Ring sync will complete (device 0 chan=8 will write 0xa2b2c2d2)
+- Teardown will succeed without FIX XZ timeouts
+
+========================================================================
+## SESSION 3 ANALYSIS (after session 2 failure)
+========================================================================
+
+Session 3 (2x4 mesh = MultiCQFabricMeshDevice2x4Fixture):
+  ALL 24 MMIO router channels now classified as base-UMD (contaminated
+  by session 2 force-reset debris).
+  
+  FIX S9 soft-resets ALL 24 channels simultaneously.
+  → Same bug, now affecting 24 channels instead of 4
+  → Same 0x00000000 ring sync outcome
+  → 1 test FAILED: AsyncExecutionWorksCQ0 (57048ms)
+
+The 57s test time suggests the test fixture's SetUp ran (perhaps
+because fabric init succeeded partially) but test execution eventually
+timed out doing async operations on a degraded fabric.
+
+========================================================================
+## STRATEGY RECOMMENDATIONS
+========================================================================
+
+PRIORITY 1 — FIX DU: Add heartbeat wait in FIX S9 (immediate)
+  File: fabric_init.cpp (where FIX S9 does soft-reset)
+  Add: wait for base firmware heartbeat after deassert_risc_reset
+  Risk: Low — identical pattern to FIX AR2/FIX TV
+  Expected outcome: device 0 chan=8 firmware starts cleanly,
+                    ring sync token written, cascade failure eliminated
+
+PRIORITY 2 — Verify no other reset paths skip heartbeat wait
+  Search for ALL assert_risc_reset + deassert_risc_reset call sites
+  that don't have a subsequent heartbeat poll.
+  Files: fabric_init.cpp, fabric_firmware_initializer.cpp,
+         risc_firmware_initializer.cpp, device.cpp
+
+PRIORITY 3 — FIX DV consuming code (per audit gap 1b)
+  The quiesce_relay_transitioned_ flag was committed but Phase 5b
+  doesn't use it yet. This is a separate (lower priority) gap.
+
+PRIORITIES NOT NEEDED (given FIX S9 fix):
+  - More handshake timeout increases: these were masking FIX S9 bug
+  - Further FIX BH/FIX XZ timeout increases: also masking effects
+  - Strategy 9 (already implemented as FIX S9, just needs the wait)
+  - Strategy 11 ETH link diagnostics: useful but secondary to the fix
+
+========================================================================
+## WHAT CHANGED ACROSS RECENT CYCLES (regression map)
+========================================================================
+
+Cycle 19: FIX DS — fixed stale heartbeat false-positive in teardown ✅
+Cycle 20: FIX DU — skipped reset for already-at-UMD channels ✅  
+Cycle 21: FIX DV — extended FIX BH to 8s ✅
+Cycle 22: FIX CG — fixed chip_id scope ✅
+Cycle 23: FIX S9 — soft-reset MMIO base-UMD channels ❌ REGRESSION
+           Missing heartbeat wait causes firmware crash at startup
+
+The regression was introduced in FIX S9/Strategy 11 commit:
+  58feaf8e6a6 fabric: FIX S9 + Strategy 11 — soft-reset MMIO base-UMD,
+              ETH link diagnostics (#42429)
+
+========================================================================
+## NEXT CI RUN PREDICTION (after FIX DU)
+========================================================================
+
+With FIX DU (heartbeat wait in FIX S9):
+- Device 0,1,2,3 chan=8 (base-UMD soft-reset channels) will boot cleanly
+- ROM completes, base firmware heartbeat established, THEN fabric FW loads
+- edm_status will show 0xa0b0c0d0 (STARTED) not 0x00000000
+- Ring sync token 0xa2b2c2d2 will be written within the 120s timeout
+- Expected: 84 PASSED, 0 FAILED
+
+If failures persist after FIX DU, the NEXT failure mode to investigate
+is: non-MMIO device 4's relay is "already known broken" (FIX NZ skip).
+This causes ring sync to be skipped for device 4 even before any 120s
+timeout. This may prevent the 8-device sessions from ever completing
+ring sync. But this is pre-existing and was not the cause of session 2
+failure in this run.
+
+========================================================================
+END OF REPORT
+========================================================================
