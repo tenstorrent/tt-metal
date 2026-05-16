@@ -977,6 +977,11 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         }
     }
 
+    // Capture timestamp after all force-resets complete — used by FIX XZ to report
+    // elapsed time since deassert, distinguishing "genuinely fast" (non-MMIO processing
+    // provided ample boot time) from "suspiciously fast" (just the FIX DS 50ms delay).
+    const auto deassert_end = std::chrono::steady_clock::now();
+
     // FIX XZ (#42429): Wait for MMIO ERISC channels to finish rebooting after force-reset.
     //
     // Root cause: the force-reset loop above (FIX AI) does assert+deassert on channels that
@@ -1101,12 +1106,18 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                             mmio_reset_chans.begin(), mmio_reset_chans.end(), [](const MmioResetChannel& mc) {
                                 return !mc.ready;
                             }));
+                        const auto timeout_since_deassert_ms =
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - deassert_end)
+                                .count();
                         log_warning(
                             tt::LogAlways,
-                            "FIX XZ (#42429): teardown MMIO ETH heartbeat poll timed out after {}ms; "
+                            "FIX XZ (#42429): teardown MMIO ETH heartbeat poll timed out after {}ms "
+                            "({}ms since deassert); "
                             "{}/{} channel(s) not yet reporting base firmware. "
                             "Next session may see probe_dead on these channels.",
                             elapsed_ms,
+                            timeout_since_deassert_ms,
                             not_ready,
                             static_cast<int>(mmio_reset_chans.size()));
                         break;
@@ -1121,13 +1132,18 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                     std::count_if(mmio_reset_chans.begin(), mmio_reset_chans.end(), [](const MmioResetChannel& mc) {
                         return mc.ready;
                     }));
+                const auto since_deassert_ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - deassert_end)
+                        .count();
                 if (ready_count == static_cast<int>(mmio_reset_chans.size())) {
                     log_info(
                         tt::LogAlways,
                         "FIX XZ (#42429): all {} force-reset MMIO ETH channel(s) confirmed "
-                        "base firmware heartbeat in {}ms — clean state for next session.",
+                        "base firmware heartbeat in {}ms ({}ms since deassert) — clean state for next session.",
                         mmio_reset_chans.size(),
-                        total_ms);
+                        total_ms,
+                        since_deassert_ms);
                 }
             }
         }

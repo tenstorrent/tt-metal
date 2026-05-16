@@ -1289,6 +1289,20 @@ FIX_XZ_FIRES=$(grep -cE 'FIX XZ.*heartbeat|heartbeat.*FIX XZ' "$CLEAN" 2>/dev/nu
 FIX_BH_FIRES=$(grep -cE 'FIX BH.*ERISC did not exit ROM phase' "$CLEAN" 2>/dev/null; :)
 # FIX DR (#42429): Final edm_status read on FIX BH timeout (logged alongside FIX BH).
 FIX_DR_FIRES=$(grep -cE 'FIX DR' "$CLEAN" 2>/dev/null; :)
+# FIX DS (#42429): 50ms pre-poll delay in FIX XZ to avoid stale heartbeat false-positive.
+# Log: "FIX DS (#42429)" (appears in FIX XZ context — count via sleep_for proximity).
+# Actually logged indirectly — count the FIX XZ entries that show 0ms (potential stale-read survivors).
+FIX_DS_ZERO_MS=$(grep -cE 'FIX XZ.*confirmed.*heartbeat in 0ms' "$CLEAN" 2>/dev/null; :)
+# Also capture since-deassert timing for 0ms entries (new format: "in 0ms (NNNms since deassert)")
+FIX_DS_DEASSERT_TIMES=$(grep -oE 'FIX XZ.*confirmed.*heartbeat in 0ms \([0-9]+ms since deassert\)' "$CLEAN" 2>/dev/null | grep -oE '[0-9]+ms since deassert' || true)
+# FIX DU (#42429): skip FIX AC reset for MMIO ETH channels already at UMD firmware (hb=0xABCDxxxx).
+# Log: "FIX DU (#42429) — MMIO ETH core .* already at UMD firmware"
+FIX_DU_FIRES=$(grep -cE 'FIX DU.*already at UMD firmware' "$CLEAN" 2>/dev/null; :)
+FIX_DU_SUMMARY=$(grep -cE 'FIX DU.*MMIO ETH channel.*will NOT be reset' "$CLEAN" 2>/dev/null; :)
+# TT-SMI RESET: runner script resets hardware between test binaries when rc=1.
+# Log: "resetting hardware via tt-smi" or "Re-initializing boards after reset"
+TT_SMI_RESETS=$(grep -cE 'resetting hardware via tt-smi' "$CLEAN" 2>/dev/null; :)
+TT_SMI_REINIT=$(grep -cE 'Re-initializing boards after reset' "$CLEAN" 2>/dev/null; :)
 # FIX BY (#42429): quiesce probe in Python conftest/test — calls quiesce_devices() once as a
 # pre-flight check before AllGather.  If relay path is dead, quiesce throws/sets degraded flag.
 # Log: "FIX BY (#42429): fabric degraded after quiesce probe"
@@ -2198,6 +2212,27 @@ if [ "${FIX_BH_FIRES:-0}" -gt 0 ]; then
     echo "     for ERISC to boot past ROM postcode 0x49705180. Channels that fail are marked newly_dead."
     echo "     High FIX BH counts (>10) indicate simultaneous ROM boot contention — all channels reset"
     echo "     at once and compete for link training bandwidth."
+fi
+if [ "${FIX_DS_ZERO_MS:-0}" -gt 0 ]; then
+    echo "  => [FIX DS] FIX XZ heartbeat poll reported 0ms despite 50ms pre-delay (${FIX_DS_ZERO_MS} occurrence(s))."
+    echo "     0ms means channels were already at 0xABCDxxxx when the poll loop started."
+    echo "     This is NORMAL when force-reset happened >1s before FIX XZ poll (non-MMIO processing delay)."
+    echo "     Only suspicious if the 0ms appears immediately after deassert with no intervening delay."
+    if [ -n "${FIX_DS_DEASSERT_TIMES:-}" ]; then
+        echo "     Since-deassert timing: ${FIX_DS_DEASSERT_TIMES}"
+    fi
+fi
+if [ "${FIX_DU_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX DU] Skipped FIX AC reset for ${FIX_DU_FIRES} MMIO ETH channel(s) already at UMD firmware."
+    echo "     Pre-scan detected hb=0xABCDxxxx — channel relay is healthy, resetting would break ETH links."
+    echo "     Summary lines: ${FIX_DU_SUMMARY:-0}."
+fi
+if [ "${TT_SMI_RESETS:-0}" -gt 0 ]; then
+    echo "  => [TT-SMI RESET] Runner script reset hardware ${TT_SMI_RESETS} time(s) between test binaries."
+    echo "     Re-initialization events: ${TT_SMI_REINIT:-0}."
+    echo "     tt-smi -r puts ALL ERISCs back into ROM — undoes all careful teardown work."
+    echo "     Next session sees all MMIO channels at ROM postcode 0x49705180 → FIX BT → FIX RR → FIX BH timeout."
+    echo "     [WARNING] If FIX BH fires > 10 after tt-smi reset: simultaneous ROM boot contention is likely."
 fi
 if [ "${FIX_BY_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX BY] Quiesce probe detected degraded fabric (${FIX_BY_FIRES} occurrence(s))."
