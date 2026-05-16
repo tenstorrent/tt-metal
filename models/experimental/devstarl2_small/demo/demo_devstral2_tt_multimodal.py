@@ -34,20 +34,12 @@ Usage (from repo root)::
     # Optional: pure HF ``generate()`` baseline (not TT)
     python models/experimental/devstarl2_small/demo/demo_devstral2_tt_multimodal.py --hf-generate --seed 0
 
-    # Long TT context: override default (BH uses 256K when omitted).
-    python models/experimental/devstarl2_small/demo/demo_devstral2_tt_multimodal.py \\
-        --max-seq-len 8192 --mesh-width …
-
 Embeddings are padded so sequence length is **128**-divisible, **KV-shard tile**-aligned, and (when
 ``L > 1024``) a multiple of **1024** for the attention ``wo`` chunk reshape; hidden states are sliced
 back to the real length for PCC. Logits use **TT** ``LMHead`` on the last-token 32-row block.
 
 If the LM head hits Wormhole L1 circular-buffer limits, use ``--lm-head-cpu`` (chunked torch matmul),
 lower shards via ``--lm-head-max-device-cols``, or env ``DEVSTRAL2_LM_HEAD_MAX_COLUMNS_PER_DEVICE``.
-
-**Context length:** with no ``--max-seq-len``, **Blackhole** uses ``max_seq_len`` ≥ **256000** (via
-``default_devstral_demo_max_seq_len``); **Wormhole** uses a prompt-sized default to avoid DRAM OOM from
-full KV preallocation at 256K.
 """
 
 from __future__ import annotations
@@ -68,13 +60,10 @@ from models.common.sampling import SamplingGenerator, SamplingParams, format_sam
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstarl2_small.devstral_utils import (
     DEFAULT_MODEL_ID,
-    DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN,
     apply_devstral_hf_trust_patches,
     apply_fp8_dequantize_compat,
     cpu_lm_head_logits_last_token,
-    default_devstral_demo_max_seq_len,
     demo_lm_head_max_columns_per_device,
-    devstral_tt_kv_cache_max_seq_len,
     devstral_supports_on_device_sampling,
     eos_token_ids,
     host_input_ids_to_tt_replicated,
@@ -186,15 +175,6 @@ def main():
         action="store_true",
         help="Force PyTorch softmax/argmax on host from TT logits (disables on-device SamplingGenerator).",
     )
-    parser.add_argument(
-        "--max-seq-len",
-        type=int,
-        default=None,
-        metavar="S",
-        help="TT rope/KV allocation cap. Default: Blackhole max(256000, need), Wormhole max(4096, need) "
-        f"where need=prompt_len+max_new_tokens+2048 (see devstral_utils.default_devstral_demo_max_seq_len). "
-        "Override down (e.g. 8192) on Blackhole to save DRAM, or up if you have headroom.",
-    )
     args = parser.parse_args()
     prefer_stochastic_sampling = (not args.greedy) and ref_do_sample
 
@@ -243,24 +223,10 @@ def main():
         input_ids = tokenized["input_ids"]
         prompt_len = int(input_ids.shape[1])
         extra_tokens = max(0, args.max_new_tokens)
-        need = prompt_len + extra_tokens + 2048
-        if args.max_seq_len is None:
-            max_seq = default_devstral_demo_max_seq_len(mesh_device, need)
-            _bh = ttnn.device.is_blackhole(mesh_device)
-            logger.info(
-                f"TT max_seq_len={max_seq} (device default; blackhole={_bh}"
-                + (f", floor={DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN}" if _bh else "")
-                + f"; need={need})."
-            )
-        else:
-            if args.max_seq_len < need:
-                logger.warning(
-                    f"--max-seq-len {args.max_seq_len} is below prompt + max_new_tokens + margin ({need}); using {need}."
-                )
-                max_seq = need
-            else:
-                max_seq = args.max_seq_len
-            logger.info(f"TT max_seq_len={max_seq} (explicit --max-seq-len; need={need}).")
+        # Upper bound padded prefill length: 128-step fixes for KV shard tile height + generation growth.
+        # Round up to a multiple of 512 so SDPA decode k_chunk_size is always >= 512 (a multiple of 32).
+        max_seq = max(4096, prompt_len + extra_tokens + 2048)
+        max_seq = ((max_seq + 511) // 512) * 512
 
         model_args = ModelArgs(
             mesh_device,
@@ -269,10 +235,6 @@ def main():
             dummy_weights=False,
             use_hf_rope=True,
             cache_hf=True,
-        )
-        model_args.max_kv_cache_seq_len = devstral_tt_kv_cache_max_seq_len(model_args, need)
-        logger.info(
-            f"KV cache tensor seq dim={model_args.max_kv_cache_seq_len} (RoPE TT max_seq_len={max_seq}; run need≈{need})."
         )
         model_args.is_distributed_norm = types.MethodType(lambda self, mode: False, model_args)
 

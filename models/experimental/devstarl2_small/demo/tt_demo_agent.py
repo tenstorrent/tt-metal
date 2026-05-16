@@ -64,14 +64,11 @@ from models.experimental.devstarl2_small.demo.demo_agent import (
 )
 from models.experimental.devstarl2_small.devstral_utils import (
     DEFAULT_MODEL_ID,
-    DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN,
     apply_devstral_hf_trust_patches,
     apply_fp8_dequantize_compat,
     cpu_lm_head_logits_last_token,
     demo_lm_head_max_columns_per_device,
     devstral_supports_on_device_sampling,
-    devstral_tt_kv_cache_max_seq_len,
-    default_devstral_demo_max_seq_len,
     eos_token_ids,
     host_input_ids_to_tt_replicated,
     open_devstral_demo_mesh,
@@ -280,13 +277,8 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
     try:
         dtype_tt = ttnn.bfloat16
         if config.max_seq_len is None:
-            max_seq = default_devstral_demo_max_seq_len(mesh_device, need)
-            _bh = ttnn.device.is_blackhole(mesh_device)
-            print(
-                f"TT max_seq_len={max_seq} (device default; blackhole={_bh}"
-                + (f", floor={DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN}" if _bh else "")
-                + f"; need={need})."
-            )
+            max_seq = max(4096, need)
+            print(f"TT max_seq_len={max_seq} (default cap; need={need}).")
         else:
             if config.max_seq_len < need:
                 print(f"Warning: --max-seq-len {config.max_seq_len} < need {need}; using {need} for ModelArgs.")
@@ -294,6 +286,8 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
             else:
                 max_seq = config.max_seq_len
             print(f"TT max_seq_len={max_seq} (explicit --max-seq-len; need={need}).")
+        # Round up to a multiple of 512 so SDPA decode k_chunk_size is always >= 512 (a multiple of 32).
+        max_seq = ((max_seq + 511) // 512) * 512
 
         model_args = ModelArgs(
             mesh_device,
@@ -302,11 +296,6 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
             dummy_weights=False,
             use_hf_rope=True,
             cache_hf=True,
-        )
-        model_args.max_kv_cache_seq_len = devstral_tt_kv_cache_max_seq_len(model_args, need)
-        print(
-            f"KV cache tensor seq dim={model_args.max_kv_cache_seq_len} "
-            f"(RoPE max_seq_len={max_seq}; budget need≈{need})."
         )
         model_args.is_distributed_norm = types.MethodType(lambda self, mode: False, model_args)
 
@@ -478,10 +467,9 @@ def generate_assistant_text_tt(rt: TtAgentRuntime, messages: List[Dict[str, str]
             "Use /clear or increase --max-context-tokens (and reload with matching TT budget)."
         )
     need_step = prompt_len + int(config.max_new_tokens) + 2048
-    if need_step > int(rt.model_args.max_kv_cache_seq_len) or need_step > int(rt.model_args.max_seq_len):
+    if need_step > int(rt.model_args.max_seq_len):
         raise RuntimeError(
-            f"This prompt needs budget ≈{need_step} but ModelArgs caps are "
-            f"max_kv_cache_seq_len={rt.model_args.max_kv_cache_seq_len}, max_seq_len={rt.model_args.max_seq_len}. "
+            f"This prompt needs budget ≈{need_step} but ModelArgs max_seq_len={rt.model_args.max_seq_len}. "
             "Use /clear, lower --max-new-tokens, or restart with higher --max-context-tokens / --max-seq-len."
         )
 

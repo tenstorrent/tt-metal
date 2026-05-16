@@ -123,5 +123,60 @@ class TtMinistral3DecoderLayer(LightweightModule):
         ff_out = ttnn.to_memory_config(ff_out, residual_mlp.memory_config())
         return ttnn.add(residual_mlp, ff_out, memory_config=residual_mlp.memory_config())
 
+    def forward_decode(
+        self,
+        x: ttnn.Tensor,
+        current_pos,
+        rot_mats,
+        user_id: int = 0,
+        page_table=None,
+    ) -> ttnn.Tensor:
+        """Single-token decode step using the KV cache populated by ``forward_prefill``.
+
+        ``x``: L1 width-sharded tensor in residual memory config (see ``get_residual_mem_config``).
+        ``current_pos``: device ``ttnn.Tensor`` ``[1, batch]`` with the absolute token position.
+        ``rot_mats``: ``[cos, sin]`` sliced for ``current_pos`` from ``TtMinistral3RotaryEmbedding.get_rot_mats``.
+        """
+        args = self.self_attn.args
+        residual_mem_cfg = args.get_residual_mem_config(Mode.DECODE, None)
+        attn_input_mem_cfg = args.get_attn_input_mem_config(Mode.DECODE, None)
+        mlp_input_mem_cfg = args.get_mlp_input_mem_config(Mode.DECODE, None)
+
+        # x must be in residual mem config (L1 width-sharded) for decode ops.
+        x = ttnn.to_memory_config(x, residual_mem_cfg)
+
+        # Attention sub-block: norm on DRAM (plain RMSNorm), then shard for the DRAM-sharded QKV matmul.
+        x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        h_normed = self.input_layernorm(x_dram, Mode.DECODE)
+        ttnn.deallocate(x_dram)
+        h = ttnn.to_memory_config(h_normed, attn_input_mem_cfg)
+        ttnn.deallocate(h_normed)
+
+        attn_out = self.self_attn.forward(
+            h,
+            current_pos,
+            rot_mats,
+            user_id=user_id,
+            mode=Mode.DECODE,
+            page_table=page_table,
+        )
+        attn_out = ttnn.to_memory_config(attn_out, residual_mem_cfg)
+        skip1 = ttnn.add(x, attn_out, memory_config=residual_mem_cfg)
+        ttnn.deallocate(attn_out)
+
+        # MLP sub-block: norm on DRAM, then shard for the DRAM-sharded FF matmuls.
+        skip1_dram = ttnn.to_memory_config(skip1, ttnn.DRAM_MEMORY_CONFIG)
+        h2_normed = self.post_attention_layernorm(skip1_dram, Mode.DECODE)
+        ttnn.deallocate(skip1_dram)
+        h2 = ttnn.to_memory_config(h2_normed, mlp_input_mem_cfg)
+        ttnn.deallocate(h2_normed)
+
+        ff_out = self.mlp(h2, Mode.DECODE)  # mlp deallocates h2 internally
+        ff_out = ttnn.to_memory_config(ff_out, residual_mem_cfg)
+        result = ttnn.add(skip1, ff_out, memory_config=residual_mem_cfg)
+        ttnn.deallocate(ff_out)
+        ttnn.deallocate(skip1)
+        return result
+
 
 __all__ = ["TtMinistral3DecoderLayer"]
