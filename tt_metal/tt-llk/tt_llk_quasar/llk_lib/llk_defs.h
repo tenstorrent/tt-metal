@@ -102,7 +102,7 @@ enum class SfpuType : std::uint32_t
     gt_int,
     le_int,
     ge_int,
-    mul_int32,
+    mul_int,
 };
 
 enum class BinaryOp : std::uint8_t

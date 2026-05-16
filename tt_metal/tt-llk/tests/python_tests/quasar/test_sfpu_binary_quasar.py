@@ -59,6 +59,7 @@ def _run_sfpu_binary_quasar(
         stimuli_format_A=data_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=data_format,
+        negative_values=True,
         input_dimensions_B=input_dimensions,
         sfpu=False,
         full_2sc_int_range=True,
@@ -66,6 +67,7 @@ def _run_sfpu_binary_quasar(
 
     if clamp_inputs is not None:
         src_A = torch.clamp(src_A, -clamp_inputs, clamp_inputs)
+        src_B = torch.clamp(src_B, -clamp_inputs, clamp_inputs)
 
     num_faces = 4
 

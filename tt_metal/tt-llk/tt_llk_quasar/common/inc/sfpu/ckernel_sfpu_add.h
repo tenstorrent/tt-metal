@@ -17,7 +17,7 @@ namespace sfpu
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, int INSTRUCTION_MODE = 0, bool SIGN_MAGNITUDE_FORMAT = false>
 inline void _add_int_(const DataFormat fmt, const int iterations, const int in0_offset_idx, const int in1_offset_idx, const int out_offset_idx)
 {
-    LLK_ASSERT(fmt == DataFormat::Int32 || fmt == DataFormat::Float16_b, "Only Int32 and Float16_b are currently supported for SFPU add on Quasar");
+    LLK_ASSERT(fmt == DataFormat::Int32, "Only Int32 currently supported for SFPU integer add on Quasar");
 
     const bool is_int    = (fmt == DataFormat::Int32);
     const auto instr_mod = is_int ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::DEFAULT; // There is a quasar bug with implied fmts + upk to dest, so we need use

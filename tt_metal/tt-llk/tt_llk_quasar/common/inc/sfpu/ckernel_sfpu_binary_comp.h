@@ -34,7 +34,7 @@ inline void calculate_binary_comp_int32(
 
     if constexpr (invert_result)
     {
-        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, 0x01);
+        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0x01);
     }
 
     const std::uint32_t idx_x = swap_operands ? dst_index_in1 : dst_index_in0;
