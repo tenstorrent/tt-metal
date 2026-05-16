@@ -186,17 +186,19 @@ void kernel_main() {
             //    Per-expert metadata stride is tile-aligned, hence reusing start_token.
 
             {
-                DeviceZoneScopedN("combine-metadata-read");
                 uint32_t metadata_batch_start = start_token + batch_token_start;
                 cb_reserve_back(cb_metadata_batch_id, batch_count);
                 uint32_t metadata_base = get_write_ptr(cb_metadata_batch_id);
-                for (uint32_t t = 0; t < batch_count; t++) {
-                    noc_async_read_page(
-                        metadata_batch_start + t,
-                        dispatched_metadata_addr_gen,
-                        metadata_base + t * aligned_dispatched_metadata_page_size);
+                {
+                    DeviceZoneScopedN("combine-metadata-read");
+                    for (uint32_t t = 0; t < batch_count; t++) {
+                        noc_async_read_page(
+                            metadata_batch_start + t,
+                            dispatched_metadata_addr_gen,
+                            metadata_base + t * aligned_dispatched_metadata_page_size);
+                    }
+                    noc_async_read_barrier();
                 }
-                noc_async_read_barrier();
                 cb_push_back(cb_metadata_batch_id, batch_count);
             }
 
@@ -206,19 +208,21 @@ void kernel_main() {
             //    `cb_reserve_back` — capturing it once before the loop lands every chunk in
             //    the same slot and leaves the other slot uninitialized.
             {
-                DeviceZoneScopedN("combine-dispatched-buffer-read");
                 constexpr uint32_t num_blocks = tiles_per_batch / block_ct_dim;
                 for (uint32_t cnt = 0; cnt < num_blocks; cnt++) {
                     uint32_t batch_tile = batch_tile_start + cnt * block_ct_dim;
                     cb_reserve_back(cb_dispatched_buffer_id, block_ct_dim);
                     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
-                    for (uint32_t t = 0; t < block_ct_dim; t++) {
-                        noc_async_read_page(
-                            batch_tile + t,
-                            dispatched_buffer_addr_gen,
-                            buffer_base + t * aligned_dispatched_buffer_page_size);
+                    {
+                        DeviceZoneScopedN("combine-dispatched-buffer-read");
+                        for (uint32_t t = 0; t < block_ct_dim; t++) {
+                            noc_async_read_page(
+                                batch_tile + t,
+                                dispatched_buffer_addr_gen,
+                                buffer_base + t * aligned_dispatched_buffer_page_size);
+                        }
+                        noc_async_read_barrier();
                     }
-                    noc_async_read_barrier();
                     cb_push_back(cb_dispatched_buffer_id, block_ct_dim);
                 }
                 // Steps 3-7 (wait for untilize, wait for sender's send signal, NOC-write to
