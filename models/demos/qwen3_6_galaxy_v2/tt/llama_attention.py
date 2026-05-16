@@ -1899,8 +1899,23 @@ class TtLlamaAttention(LightweightModule):
             _os_v214.environ.get("QWEN36_FULLATTN_LAR", "0") == "1"
             or _os_v214.environ.get("QWEN36_FULLATTN_WO_TUNED", "0") == "1"
         ) and getattr(self.tt_ccl, "qwen36_residual_buffers", [None, None])[1] is not None
+        # V2-CCL-followup (2026-05-16): test the hypothesis that the FA WO
+        # ReduceScatter per-call latency (181 µs, 3.8× DeltaNet's 48 µs) is
+        # caused by the WO matmul writing DRAM-interleaved.  Switch the
+        # matmul output to L1 width-sharded matching the residual-stream
+        # persistent buffer's per-shard memcfg; the downstream
+        # ``ttnn.all_reduce`` (NOT the persistent-buffer LAR — that's the
+        # already-tested ``QWEN36_FULLATTN_WO_TUNED`` path) consumes the
+        # sharded input.  Different in-place behavior in the all_reduce
+        # internals (sharded_to_interleaved early conversion vs no
+        # conversion) may or may not change the dispatch.
+        _use_sharded_wo = (
+            _os_v214.environ.get("QWEN36_FULLATTN_WO_SHARDED", "0") == "1"
+            and not _use_pbuf_fa
+            and getattr(self.tt_ccl, "qwen36_residual_output_memcfgs", [None, None])[1] is not None
+        )
 
-        if not _use_pbuf_fa:
+        if not _use_pbuf_fa and not _use_sharded_wo:
             # WO projection + all-reduce across cols (original path).
             dense_partial = ttnn.linear(
                 gated,
@@ -1921,6 +1936,32 @@ class TtLlamaAttention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             dense_partial.deallocate(True)
+        elif _use_sharded_wo:
+            # V2-CCL-followup WO sharded experiment: write matmul output to
+            # L1 width-sharded memcfg, then call standard ttnn.all_reduce
+            # (not the persistent-buffer LAR).  The all_reduce kernel will
+            # internally ``sharded_to_interleaved`` if needed (see
+            # all_reduce_async.cpp:188-195), so this is functionally
+            # equivalent in math but the dispatch / internal layout may
+            # differ from a pure-DRAM input.
+            sharded_memcfg = self.tt_ccl.qwen36_residual_output_memcfgs[1]
+            dense_partial = ttnn.linear(
+                gated,
+                self.wo,
+                dtype=ttnn.bfloat16,
+                memory_config=sharded_memcfg,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+            )
+            gated.deallocate(True)
+            dense_out_sharded = ttnn.all_reduce(
+                dense_partial,
+                cluster_axis=1,
+                num_links=_wo_num_links,
+                memory_config=sharded_memcfg,
+            )
+            dense_partial.deallocate(True)
+            dense_out_full = ttnn.to_memory_config(dense_out_sharded, ttnn.DRAM_MEMORY_CONFIG)
+            dense_out_sharded.deallocate(True)
         else:
             sharded_memcfg = self.tt_ccl.qwen36_residual_output_memcfgs[1]
             _LIN_MODE = _os_v214.environ.get("QWEN36_FULLATTN_LAR_LIN_MODE", "sharded")

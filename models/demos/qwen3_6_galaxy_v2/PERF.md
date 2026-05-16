@@ -2800,3 +2800,157 @@ model code and was not pursued.
   (falls back to `QWEN36_CCL_NUM_LINKS`) into both the baseline and LAR
   paths.
 - `PERF.md` (this section).
+
+## V2-CCL-followup — full-attn WO ReduceScatter hypothesis test (2026-05-16)
+
+V2-tracy-4 measured the FA `_forward_decode_qwen36` WO
+`ReduceScatterDeviceOperation` at 181 µs/call — **3.8× DeltaNet's 48 µs/call**.
+V2-CCL-followup tests the hypothesis from the original brief: "full-attn
+WO writes its output to DRAM-interleaved (or wider L1 layout) before RS,
+so each ring step transfers more tiles per shard."
+
+### Task 1 — exact memcfg evidence (read-only)
+
+| call site | matmul output memcfg | post-matmul RS/AR | cluster_axis | ring size |
+|---|---|---|---:|---:|
+| FA WO (`tt/llama_attention.py:1905-1923`) | `ttnn.DRAM_MEMORY_CONFIG` | `ttnn.all_reduce` | **1** | **4** |
+| DeltaNet output_proj (`tt/qwen36_delta_attention.py:2154-2170`) | `ttnn.DRAM_MEMORY_CONFIG` | `ttnn.all_reduce` | **0** | **8** |
+| llama70b WO (`llama_attention.py:560-577`) | `SHARDED_WO_OUT_RING_MEMCFG` (L1 width-sharded, shard `(32, 9216/4/RING)` × `pf_mm_out_core_range_set`) | `line_all_reduce(use_optimal_ccl_for_llama=True)` to `DECODE_RESIDUAL_MEMCFG` | **0** | **8** |
+| llama70b MLP w2 (`llama_mlp.py:208-225`) | `FF2_OUT_RING_MEMCFG` (L1 width-sharded, shard `(32, 9216/4/RING)`) | `line_all_reduce` → `DECODE_RESIDUAL_MEMCFG` | **0** | **8** |
+
+**Both v2 baselines write DRAM-interleaved** with the same dtype (bf16),
+same output shape (`[1, 1, 5120]` tile-padded to `[1, 32, 5120]`), and
+both call `ttnn.all_reduce`. The only structural difference is
+`cluster_axis`: FA uses `cluster_axis=1` (4-way axis, K-dim split across
+cols by head); DeltaNet uses `cluster_axis=0` (8-way axis, K-dim split
+across rows). FA cannot easily switch to cluster_axis=0 without a major
+parallelization refactor (its WO `K=6144` is sharded on cols by Q-head
+group, with weights already loaded as `ShardTensor2dMesh(dims=(None, 2))`).
+
+llama70b reduces on `cluster_axis=0` (8-way) for both WO and w2,
+matching its mesh-parallelism plan where K is split across rows.
+
+### Task 2 — hypothesis test edit
+
+`tt/llama_attention.py:1898-1969` adds `QWEN36_FULLATTN_WO_SHARDED=1`
+(default off). When set, the WO `ttnn.linear` writes its output to L1
+width-sharded `qwen36_residual_output_memcfgs[1]` (the same shard spec
+that the V2-14 / `QWEN36_FULLATTN_WO_TUNED` path uses for its
+persistent-buffer LAR), then calls **standard `ttnn.all_reduce`** with
+sharded input — NOT the persistent-buffer `line_all_reduce`. The output
+is converted back to DRAM-interleaved to keep downstream slice
+compatibility.
+
+`tt/llama_ccl.py:518-538` extends the `_build_qwen36_residual_buffers`
+auto-on guard to include the new flag so the memcfg is available.
+
+### Task 3 — per-flag table
+
+Test harness same as V2-CCL: `tests/test_decode_perf_intrace.py` (64L,
+32 traced decode steps) + `tests/test_decode_64L_real_prompt_pcc.py`.
+`QWEN36_TT_LANG_BETA_G=1` set in all runs (V2-16 baseline).
+
+| flag combination                                              | ms/step | tok/s/u | coherency | Paris | step-0 |
+|---------------------------------------------------------------|--------:|--------:|----------:|:-----:|:------:|
+| baseline (all unset)                                          |   62.12 |   16.10 |        82 |  OK   |  OK    |
+| `QWEN36_FULLATTN_WO_SHARDED=1`                                |   62.10 |   16.10 |        82 |  OK   |  OK    |
+| `QWEN36_FULLATTN_WO_SHARDED=1 + QWEN36_CCL_NUM_LINKS_DELTA=2` | **61.70** | **16.21** |  91 |  OK   |  OK    |
+
+Wall-clock delta (WO_SHARDED alone vs baseline): **+0.02 ms/step**
+(–0.00 tok/s/u) — noise. Step-0 token match preserved; coherency
+identical (82 alpha chars, identical token sequence).
+
+Wall-clock for the combined config matches the existing V2-CCL best
+(`QWEN36_CCL_NUM_LINKS_DELTA=2` alone: 61.69 ms/step, 16.21 tok/s/u) to
+within 0.01 ms — WO_SHARDED contributes **no additional perf** when
+stacked with DELTA_LINKS=2.
+
+### Findings — hypothesis refuted
+
+The hypothesis is **refuted**. Sharding the WO matmul output to L1
+width-sharded does not change the FA `ReduceScatter` per-call latency.
+Root cause for the 3.8× gap is **not** the matmul output memcfg. The
+actual root cause is the **cluster_axis difference (4-way ring on axis
+1 vs 8-way ring on axis 0)**:
+
+- `ttnn.all_reduce` internally `sharded_to_interleaved`s any sharded
+  input before dispatch (see
+  `ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.cpp:188-195`).
+  So a DRAM-interleaved input vs an L1-width-sharded input produce the
+  same internal CCL plan — only an extra cheap interleaved-to-shard
+  step at the start when sharded. The downstream RS/AG kernel sees
+  identical layouts in both cases.
+- The 3.8× per-call latency gap is dominated by the **4-way axis-1
+  ring**: scatter shard width is `5120/4 = 1280` (vs `5120/8 = 640`
+  for axis-0), so each chip writes-out a 2× larger scatter shard along
+  fewer ring hops with less pipelining capacity per fabric link.
+  Combined with axis-1's smaller ring giving less overlap headroom for
+  the BH FABRIC_1D_RING worker scheduling, the per-call latency
+  inflates ~4×.
+- Confirmation: `QWEN36_FULLATTN_WO_TUNED=1` (V2-CCL) — the
+  persistent-buffer `line_all_reduce` path with L1-sharded matmul
+  output — was also perf-neutral. Both the "sharded matmul + standard
+  AR" (this section) and the "sharded matmul + persistent-buffer LAR"
+  (V2-CCL) experiments leave per-call RS latency unchanged.
+
+The only meaningful FA WO RS lever explored is `num_links=2`
+(`QWEN36_CCL_NUM_LINKS_FA=2`, V2-CCL section above), which gives ~0.1
+ms/step — within noise.
+
+### Final tok/s/user
+
+- Baseline: 16.10 tok/s/u (62.12 ms/step)
+- `QWEN36_FULLATTN_WO_SHARDED=1` alone: 16.10 tok/s/u (62.10 ms/step) —
+  **+0.00 tok/s/u**.
+- Combined with `QWEN36_CCL_NUM_LINKS_DELTA=2`: 16.21 tok/s/u
+  (61.70 ms/step) — **+0.11 tok/s/u, matching V2-CCL best**.
+
+### Iteration count + tt-smi resets
+
+- 4 device runs: baseline perf, WO_SHARDED perf, WO_SHARDED PCC,
+  WO_SHARDED + DELTA_LINKS=2 perf + PCC.
+- **0** `tt-smi -glx_reset` invocations (no hangs).
+- Sequential device runs only.
+- Iterations consumed: 4 / 15.
+
+### Recommendation
+
+**Do not ship `QWEN36_FULLATTN_WO_SHARDED=1`.** It is perf-neutral
+(per-call RS latency unchanged) and adds an extra `to_memory_config`
+conversion at the trace boundary that increases L1 reservation. Keep
+the flag default-off; the code is in place for future experiments that
+combine sharded-input with a custom RS topology (e.g., a hypothetical
+4-way persistent-buffer RS with axis-1-aware scheduling).
+
+The V2-CCL best-known config remains the recommendation:
+
+```bash
+export QWEN36_TT_LANG_BETA_G=1
+export QWEN36_CCL_NUM_LINKS_DELTA=2
+```
+
+→ 16.21 tok/s/u (61.70 ms/step).
+
+A productive **V2-CCL-followup-2** would require either:
+
+1. **Fabric-level tuning** to expose more bandwidth on the 4-way
+   `cluster_axis=1` ring (e.g., `num_workers_per_link>1` or a custom
+   RS persistent-buffer that pipelines the K-dim partial sums more
+   aggressively). Out of scope for model code.
+2. **Re-parallelize FA WO to cluster_axis=0** — would require lifting
+   the Q-head group from cols to rows, which is the same change as
+   reshaping FA's entire QKV/WO plan. The 70B reference (which has
+   `n_heads=64`) parallelizes K across rows; qwen3.6's `n_heads=24`
+   forces a different head-group plan that aligns with cols. This is a
+   large refactor.
+
+### Files modified (all under `models/demos/qwen3_6_galaxy_v2/`)
+
+- `tt/llama_attention.py:1898-1969` — adds `QWEN36_FULLATTN_WO_SHARDED`
+  guard and the new sharded-output + standard-AR path.
+- `tt/llama_ccl.py:518-538` — auto-enables
+  `_build_qwen36_residual_buffers` when the new flag is set so the
+  required memcfg is available; also adds the existing
+  `QWEN36_FULLATTN_WO_TUNED` / `QWEN36_DELTA_OP_TUNED` aliases that
+  were previously only auto-on via their underlying LAR names.
+- `PERF.md` (this section).

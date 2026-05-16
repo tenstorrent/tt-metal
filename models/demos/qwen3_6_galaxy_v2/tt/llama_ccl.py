@@ -524,6 +524,11 @@ class TT_CCL:
             os.environ.get("QWEN36_RESIDUAL_BUF_ON", "0") == "1"
             or os.environ.get("QWEN36_DELTA_LAR", "0") == "1"
             or os.environ.get("QWEN36_FULLATTN_LAR", "0") == "1"
+            or os.environ.get("QWEN36_FULLATTN_WO_TUNED", "0") == "1"
+            or os.environ.get("QWEN36_DELTA_OP_TUNED", "0") == "1"
+            # V2-CCL-followup: needs the residual_output_memcfg even though
+            # it does not use the persistent buffer.
+            or os.environ.get("QWEN36_FULLATTN_WO_SHARDED", "0") == "1"
         )
         if not _auto_on:
             return
