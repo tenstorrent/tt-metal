@@ -1,19 +1,22 @@
 name: "(triage) Generate GitHub→Slack UID map"
 
-# Iterates all Tenstorrent GitHub org members, resolves each to a Slack UID
-# via the SAML identity chain, and uploads the result as an artifact.
+# Iterates all Tenstorrent GitHub org members, resolves each to a Slack UID,
+# and uploads the result as an artifact BrAIn can download and use directly.
 #
-# Resolution chain (no string manipulation):
-#   1. GitHub GraphQL SAML identity → Entra ID email (nameId)
-#   2. Slack users.lookupByEmail → UID
-#   3. GitHub public profile email → Slack users.lookupByEmail (fallback)
+# Resolution chain (no string manipulation, all deterministic):
+#   1. Bulk dump all Slack workspace users → name→UID and email→UID maps
+#   2. For each GitHub org member:
+#      a. SAML GraphQL → corporate email → look up in Slack email map
+#      b. GitHub public profile email → look up in Slack email map
+#      c. GitHub display name → exact match against Slack real_name map
+#   3. Handle left unresolved if all three fail
 #
 # Artifact: gh-to-slack-uid.json
 #   { "github-handle": "U01SLACKUID", ... }
 #
 # Requires:
 #   EVAN_PAT        — PAT with read:org scope (SAML GraphQL + org member list)
-#   SLACK_BOT_TOKEN — bot with users:read.email scope
+#   SLACK_BOT_TOKEN — bot with users:read and users:read.email scopes
 
 on:
   workflow_dispatch:
@@ -55,13 +58,10 @@ jobs:
                   print(f"  [graphql] {e}", file=sys.stderr)
                   return None
 
-          def gh_rest(path, token, page=None):
-              url = f"https://api.github.com/{path}"
-              if page:
-                  url += f"?per_page=100&page={page}"
+          def gh_rest(path, token):
               req = urllib.request.Request(
-                  url,
-                  headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+                  f"https://api.github.com/{path}",
+                  headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
               )
               try:
                   with urllib.request.urlopen(req, timeout=20) as r:
@@ -70,28 +70,62 @@ jobs:
                   print(f"  [gh rest] {path}: {e}", file=sys.stderr)
                   return None
 
-          def slack_lookup_by_email(email):
-              url = "https://slack.com/api/users.lookupByEmail?" + urllib.parse.urlencode({"email": email})
-              req = urllib.request.Request(url, headers={"Authorization": f"Bearer {SLACK_TOKEN}"})
-              try:
-                  with urllib.request.urlopen(req, timeout=10) as r:
-                      resp = json.loads(r.read())
-                  if resp.get("ok"):
-                      return resp["user"]["id"]
-                  err = resp.get("error", "")
-                  if err not in ("users_not_found", "missing_scope"):
-                      print(f"  [slack] lookupByEmail({email}): {err}", file=sys.stderr)
-              except Exception as e:
-                  print(f"  [slack] lookupByEmail({email}): {e}", file=sys.stderr)
-              return None
+          def slack_get_all_users():
+              """Paginate through the full Slack workspace user list."""
+              members = []
+              cursor = None
+              while True:
+                  params = {"limit": 200}
+                  if cursor:
+                      params["cursor"] = cursor
+                  url = "https://slack.com/api/users.list?" + urllib.parse.urlencode(params)
+                  req = urllib.request.Request(url, headers={"Authorization": f"Bearer {SLACK_TOKEN}"})
+                  try:
+                      with urllib.request.urlopen(req, timeout=30) as r:
+                          resp = json.loads(r.read())
+                  except Exception as e:
+                      print(f"  [slack] users.list error: {e}", file=sys.stderr)
+                      break
+                  if not resp.get("ok"):
+                      print(f"  [slack] users.list error: {resp.get('error')}", file=sys.stderr)
+                      break
+                  members.extend(resp.get("members", []))
+                  cursor = resp.get("response_metadata", {}).get("next_cursor")
+                  if not cursor:
+                      break
+                  time.sleep(0.5)
+              return members
 
-          # ── get all org members ───────────────────────────────────────────────
+          # ── step 1: build Slack lookup maps ──────────────────────────────────
 
-          print(f"Fetching org members for {GH_ORG}...")
+          print("Loading all Slack workspace users...")
+          slack_members = slack_get_all_users()
+          print(f"  {len(slack_members)} total Slack members")
+
+          name_to_uid  = {}  # real_name lower → uid
+          email_to_uid = {}  # email lower → uid
+
+          for u in slack_members:
+              if u.get("deleted") or u.get("is_bot"):
+                  continue
+              uid     = u["id"]
+              rname   = (u.get("real_name") or "").strip()
+              profile = u.get("profile", {})
+              email   = (profile.get("email") or "").strip().lower()
+              if rname:
+                  name_to_uid[rname.lower()] = uid
+              if email:
+                  email_to_uid[email] = uid
+
+          print(f"  {len(name_to_uid)} name entries, {len(email_to_uid)} email entries in Slack map")
+
+          # ── step 2: get all GitHub org members ───────────────────────────────
+
+          print(f"\nFetching GitHub org members for {GH_ORG}...")
           members = []
           page = 1
           while True:
-              batch = gh_rest(f"orgs/{GH_ORG}/members", ORG_READ_TOKEN, page=page)
+              batch = gh_rest(f"orgs/{GH_ORG}/members?per_page=100&page={page}", ORG_READ_TOKEN)
               if not batch:
                   break
               members.extend(m["login"] for m in batch)
@@ -100,30 +134,29 @@ jobs:
               page += 1
               time.sleep(0.2)
 
-          print(f"Found {len(members)} org members.")
+          print(f"  {len(members)} GitHub org members")
 
-          # ── resolve each handle ───────────────────────────────────────────────
+          # ── step 3: resolve each handle ──────────────────────────────────────
 
-          mapping = {}
+          mapping    = {}
           unresolved = []
+          method_counts = {"saml_email": 0, "public_email": 0, "name": 0}
 
           for i, handle in enumerate(members):
-              # 1. SAML identity → corporate email → Slack UID
+              uid = None
+
+              # 3a. SAML identity → corporate email → Slack email map
               saml_query = """
               {
                 organization(login: "%s") {
                   samlIdentityProvider {
                     externalIdentities(first: 1, login: "%s") {
-                      nodes {
-                        samlIdentity { nameId }
-                      }
+                      nodes { samlIdentity { nameId } }
                     }
                   }
                 }
               }
               """ % (GH_ORG, handle)
-
-              uid = None
               data = gh_graphql(saml_query, ORG_READ_TOKEN)
               if data:
                   try:
@@ -131,20 +164,34 @@ jobs:
                       if nodes:
                           name_id = nodes[0]["samlIdentity"]["nameId"]
                           if name_id and "@" in name_id:
-                              uid = slack_lookup_by_email(name_id)
+                              uid = email_to_uid.get(name_id.lower())
                               if uid:
+                                  method_counts["saml_email"] += 1
                                   print(f"  [{i+1}/{len(members)}] {handle} → {uid}  (SAML: {name_id})")
                   except (KeyError, TypeError, IndexError):
                       pass
 
-              # 2. GitHub public profile email → Slack UID (fallback)
+              # 3b. GitHub public profile email → Slack email map
               if not uid:
                   user = gh_rest(f"users/{handle}", ORG_READ_TOKEN)
-                  if user and user.get("email"):
-                      email = user["email"]
-                      uid = slack_lookup_by_email(email)
+                  gh_email = (user.get("email") or "").strip().lower() if user else ""
+                  gh_name  = (user.get("name")  or "").strip()        if user else ""
+
+                  if gh_email:
+                      uid = email_to_uid.get(gh_email)
                       if uid:
-                          print(f"  [{i+1}/{len(members)}] {handle} → {uid}  (public email: {email})")
+                          method_counts["public_email"] += 1
+                          print(f"  [{i+1}/{len(members)}] {handle} → {uid}  (public email: {gh_email})")
+
+                  # 3c. GitHub display name → exact Slack real_name match
+                  if not uid and gh_name:
+                      uid = name_to_uid.get(gh_name.lower())
+                      if uid:
+                          method_counts["name"] += 1
+                          print(f"  [{i+1}/{len(members)}] {handle} → {uid}  (name: {gh_name})")
+              else:
+                  # Fetch user for name even if already resolved (skip for speed)
+                  user = None
 
               if uid:
                   mapping[handle] = uid
@@ -152,9 +199,9 @@ jobs:
                   unresolved.append(handle)
                   print(f"  [{i+1}/{len(members)}] {handle} → unresolved")
 
-              time.sleep(0.5)
+              time.sleep(0.3)
 
-          # ── write output ──────────────────────────────────────────────────────
+          # ── step 4: write output ──────────────────────────────────────────────
 
           output = {
               "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -162,6 +209,7 @@ jobs:
               "total_members": len(members),
               "resolved": len(mapping),
               "unresolved_count": len(unresolved),
+              "method_counts": method_counts,
               "mapping": mapping,
               "unresolved": unresolved,
           }
@@ -169,7 +217,9 @@ jobs:
           with open("gh-to-slack-uid.json", "w") as f:
               json.dump(output, f, indent=2)
 
-          print(f"\nDone. {len(mapping)} resolved, {len(unresolved)} unresolved.")
+          print(f"\nDone. {len(mapping)}/{len(members)} resolved.")
+          print(f"Methods: {method_counts}")
+          print(f"Unresolved ({len(unresolved)}): {unresolved[:20]}{'...' if len(unresolved)>20 else ''}")
           PYEOF
 
       - name: Upload artifact
