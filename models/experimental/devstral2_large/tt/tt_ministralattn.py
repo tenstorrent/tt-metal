@@ -78,24 +78,41 @@ def _tighten_wo_prefill_prog_cfg(cfg):
     ``out_subblock_w=1`` (``out_block_w=1`` forbids ``out_subblock_w=2`` per
     ``out_block_w % out_subblock_w == 0``), which the perf report flags as under-powered.
 
-    When ``per_core_N`` is even, use ``out_block_w=2`` and ``out_subblock_w=2`` (still far smaller than
-    defaults). When ``per_core_N`` is odd (some decode shardings), fall back to ``1×1`` subblocks.
+    Output subblock product is capped at 4 (DST tile budget); when ``per_core_M == 1`` we can spend
+    that budget entirely on ``out_subblock_w`` (1×4) instead of 1×2. When ``per_core_N`` is even, use
+    ``out_block_w/out_subblock_w`` that match the largest divisor of ``per_core_N`` ≤ 4 (so out subblocks
+    pack the full DST budget). When ``per_core_N`` is odd (some decode shardings), fall back to ``1×1``.
     """
     if cfg is None:
         return cfg
     mc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
     if not isinstance(cfg, mc):
         return cfg
-    if cfg.per_core_N % 2 == 0:
-        out_block_w, out_subblock_w = 2, 2
+    per_core_N = int(cfg.per_core_N)
+    per_core_M = int(cfg.per_core_M)
+    # DST tile budget: subblock_h * subblock_w ≤ 4 for HiFi.
+    max_sub_h = min(per_core_M, 4)
+    out_subblock_h = 1
+    if max_sub_h >= 2 and per_core_M % 2 == 0:
+        out_subblock_h = 2
+    if per_core_N % 2 == 0:
+        # Choose largest legal ``out_subblock_w`` so subblock product (DST tiles) is maximized.
+        cap_w = max(1, 4 // out_subblock_h)
+        out_subblock_w = 1
+        for cand in (4, 2):
+            if cand <= cap_w and per_core_N % cand == 0:
+                out_subblock_w = cand
+                break
+        out_block_w = max(2, out_subblock_w)
     else:
-        out_block_w, out_subblock_w = 1, 1
+        out_subblock_w = 1
+        out_block_w = 1
     return mc(
         compute_with_storage_grid_size=cfg.compute_with_storage_grid_size,
         in0_block_w=cfg.in0_block_w,
-        out_subblock_h=1,
+        out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
-        out_block_h=1,
+        out_block_h=max(1, out_subblock_h),
         out_block_w=out_block_w,
         per_core_M=cfg.per_core_M,
         per_core_N=cfg.per_core_N,
@@ -147,14 +164,24 @@ def _decode_wo_interleaved_multicast_prog_cfg(args):
 
     # ``per_core_N = ceil(n / (TILE * cols))`` uses only **cols** (``grid_size[0]``). When
     # ``req_cols`` is e.g. 11, ``ceil(384/11)=35`` is odd and :func:`_tighten_wo_prefill_prog_cfg`
-    # falls back to 1×1 subblocks (perf report: decode WO under-powered). Prefer the smallest
-    # ``cols >= req_cols`` with even ``per_core_N`` so 2×2 blocks stay valid when still on-grid.
+    # falls back to 1×1 subblocks (perf report: decode WO under-powered, ~482μs / 16% FLOPs on BH).
+    # Activation is L1 interleaved here (caller's ``to_memory_config(L1_INTERLEAVED)`` before the
+    # matmul) so the matmul grid is decoupled from ``nlp_concat_heads_decode`` shard placement; pick
+    # the largest ``cols`` ≤ ``gw`` whose ``per_core_N`` admits a 1×4 (or 1×2) output subblock, then
+    # fall back to ``req_cols`` if no choice gives an even ``per_core_N``. Larger ``out_subblock_w``
+    # increases compute per inner-loop iteration far more than extra output cores; matching QKV/FF1
+    # decode's compute density beats spreading work across odd ``cols`` with 1×1 fallback.
     n_n_tiles = (n_dim + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
     cols = min(max(req_cols, 1), gw)
-    for c in range(req_cols, gw + 1):
-        if math.ceil(n_n_tiles / c) % 2 == 0:
+    best_pcn_density = 0
+    for c in range(1, gw + 1):
+        pcn = math.ceil(n_n_tiles / c)
+        if pcn % 2 != 0:
+            continue
+        density = 4 if pcn % 4 == 0 else 2
+        if density > best_pcn_density or (density == best_pcn_density and c > cols):
+            best_pcn_density = density
             cols = c
-            break
 
     row_candidates = [r for r in range(req_rows, gh + 1) if k_tiles % r == 0]
     if not row_candidates:
