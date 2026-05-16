@@ -4,3 +4,7 @@ data/
 # Temporary clone directories from assets-download.sh
 rvc-nano/
 rmvpe/
+
+# Python cache
+__pycache__/
+*.pyc
