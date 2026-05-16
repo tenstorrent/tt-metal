@@ -22,10 +22,6 @@ except ImportError:  # minimal fallback if tests package not on PYTHONPATH
 
 DEFAULT_MODEL_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 
-# HF / model-card style 256K-token context (Devstral long context). Default TT allocation on Blackhole only;
-# Wormhole single-chip DRAM typically cannot hold full preallocated KV at this length.
-DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN = 256_000
-
 
 def text_model_root(multimodal_inner: Mistral3Model):
     lm = multimodal_inner.language_model
@@ -58,6 +54,9 @@ def apply_devstral_hf_trust_patches():
     mc.ModelArgs.get_hf_model_cls = _get_hf_model_cls_devstral_safe  # type: ignore[method-assign]
 
 
+_tt_prefill_target_seqlen_cache: dict = {}
+
+
 def tt_prefill_target_seqlen(seq_len: int, n_kv_heads: int, mesh_cluster_cols: int) -> int:
     """
     Prefill constraints (see ``models/tt_transformers/tt/attention.py`` ``forward_prefill``):
@@ -68,6 +67,9 @@ def tt_prefill_target_seqlen(seq_len: int, n_kv_heads: int, mesh_cluster_cols: i
     - When ``L > 1024``, ``wo`` reuses ``[1, L // 1024, 1024, H]``; **L must be a multiple of 1024** or
       the reshape is invalid and the next ``ttnn.linear`` sees the wrong inner dim (e.g. 5120 vs 4096).
     """
+    cache_key = (seq_len, n_kv_heads, mesh_cluster_cols)
+    if cache_key in _tt_prefill_target_seqlen_cache:
+        return _tt_prefill_target_seqlen_cache[cache_key]
     k = n_kv_heads // mesh_cluster_cols
     assert k > 0
     target = seq_len if seq_len % 128 == 0 else seq_len + (128 - (seq_len % 128)) % 128
@@ -75,6 +77,7 @@ def tt_prefill_target_seqlen(seq_len: int, n_kv_heads: int, mesh_cluster_cols: i
         kv_ok = (k * target // 64) % 32 == 0
         wo_ok = target <= 1024 or (target % 1024 == 0)
         if kv_ok and wo_ok:
+            _tt_prefill_target_seqlen_cache[cache_key] = target
             return target
         target += 128
     raise RuntimeError("Could not find L satisfying TT prefill KV + WO chunking constraints.")
@@ -106,31 +109,6 @@ def open_devstral_demo_mesh(mesh_width: int):
     }
     mesh_shape = ttnn.MeshShape(1, mesh_width)
     return ttnn.open_mesh_device(mesh_shape=mesh_shape, **get_updated_device_params(device_params))
-
-
-def default_devstral_demo_max_seq_len(mesh_device: ttnn.MeshDevice, prompt_need_tokens: int) -> int:
-    """
-    Default ``ModelArgs.max_seq_len`` when demos omit an explicit cap.
-
-    Uses ``max(256000, prompt_need)`` on **Blackhole** (``ttnn.device.is_blackhole``) for 256K-window support.
-    Uses ``max(4096, prompt_need)`` on Wormhole (and other arches) to reduce single-chip DRAM OOM risk.
-    """
-    need = int(prompt_need_tokens)
-    if ttnn.device.is_blackhole(mesh_device):
-        return max(DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN, need)
-    return max(4096, need)
-
-
-def devstral_tt_kv_cache_max_seq_len(model_args: ModelArgs, run_need_tokens: int) -> int:
-    """
-    Third dimension allocated for KV cache tensors (:class:`~models.tt_transformers.tt.attention.Attention`).
-    Matches TT prefill padding rules (KV tile / ``wo`` chunk) and clamps to ``model_args.max_seq_len``.
-    ``ModelArgs.max_seq_len`` can stay at 262144 for HF RoPE while KV uses this tighter bound so DRAM fits.
-    """
-    need = int(run_need_tokens)
-    cols = int(model_args.cluster_shape[1])
-    capped = tt_prefill_target_seqlen(need, int(model_args.n_kv_heads), cols)
-    return min(int(capped), int(model_args.max_seq_len))
 
 
 def squeeze_tt_hidden_to_bsh(tt_lm_out: ttnn.Tensor, mesh_device, seq_len_keep: int) -> torch.Tensor:
