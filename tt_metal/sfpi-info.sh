@@ -250,8 +250,8 @@ WARN
     return ${#missing[@]}
 }
 
-check_missing_deps
-deps_missing=$?
+deps_missing=0
+check_missing_deps || deps_missing=$?
 
 if ! [[ -d .git ]]; then
     if [[ -t 0 && $deps_missing -gt 0 ]]; then
