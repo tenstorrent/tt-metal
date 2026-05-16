@@ -53,7 +53,6 @@ class TTSineGenParams:
 
     # Time-axis linear maps for downsample and cumsum (matmul along last axis of ``[B, dim, *]``).
     interp_down: ttnn.Tensor  # [T, T_down]
-    cumsum: ttnn.Tensor  # [T_down, T_down]
 
     # Elementwise lerp weights for the upsample step (replaces the interp_up matmul).
     # ``lerp_alpha[k] = (k + 0.5) / upsample_scale`` for k=0..upsample_scale-1.
@@ -104,12 +103,6 @@ def _linear_interp_matrix(input_size: int, output_size: int) -> np.ndarray:
     return M
 
 
-def _cumsum_matrix(n: int) -> np.ndarray:
-    """``M[i, j] = 1 if i <= j else 0`` such that ``x @ M = cumsum(x, axis=-1)``."""
-    M = np.triu(np.ones((n, n), dtype=np.float64), k=0)
-    return M
-
-
 def _upload_matrix(arr: np.ndarray, device, *, dtype: ttnn.DataType, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
     return ttnn.from_torch(
         torch.from_numpy(arr.astype(np.float32)),
@@ -155,11 +148,9 @@ def preprocess_tt_sinegen(
     time_len_down = time_len // upsample_scale
 
     M_down = _linear_interp_matrix(time_len, time_len_down)  # [T_down, T]
-    M_cum = _cumsum_matrix(time_len_down)
 
     # Store as the transpose so we can ``y @ M`` directly (matmul along last axis of activation).
     interp_down_tt = _upload_matrix(M_down.T, device, dtype=weights_dtype)  # [T, T_down]
-    cumsum_tt = _upload_matrix(M_cum, device, dtype=weights_dtype)  # [T_down, T_down]
 
     # Elementwise lerp weights for upsample — avoids the K=T_down matmul whose BF16 accumulation
     # introduces ~5e-4 fractional-unit error (×2π×300 ≈ 1 radian in phase_up, destroying sines).
@@ -206,7 +197,6 @@ def preprocess_tt_sinegen(
 
     return TTSineGenParams(
         interp_down=interp_down_tt,
-        cumsum=cumsum_tt,
         lerp_alpha=lerp_alpha_tt,
         lerp_one_minus_alpha=lerp_one_minus_alpha_tt,
         lerp_clamp_ones=lerp_clamp_ones_tt,
@@ -230,16 +220,82 @@ def preprocess_tt_sinegen(
 
 
 class TTSineGen:
-    """Kokoro :class:`SineGen` on TT (``flag_for_pulse=False``)."""
+    """Kokoro :class:`SineGen` on TT (``flag_for_pulse=False``).
 
-    def __init__(self, device: ttnn.Device, params: TTSineGenParams) -> None:
+    **Precision note** — ``use_torch_phase_fallback``
+    The lerp upsample step computes small cumsum values (< 0.05 cycles) and then multiplies by
+    ``2π × upsample_scale``.  On BH hardware all MAC ops round float32 inputs to BF16 before the
+    multiply unit; the absolute BF16 error on a 0.04-cycle value is ~3.3×10⁻⁵ cycles, which
+    after ×(2π × 300) = ×1885 becomes ~0.06–0.25 radians — comparable to ``sine_amp = 0.1``.
+    At Kokoro's scale (``upsample_scale=300``) this destroys phase PCC.
+
+    When ``use_torch_phase_fallback=True`` the entire phase chain — downsample → cumsum → lerp
+    upsample → sin — runs in CPU float32.  Only ``uv``, noise scaling, and the
+    ``sine_waves * uv + noise`` mix stay on-device.  This is the minimal fallback needed to
+    restore PCC > 0.99 at Kokoro scale.  At small upsample scales (≤ 10) the BF16 error is
+    negligible and the fallback is not needed.
+    """
+
+    def __init__(self, device: ttnn.Device, params: TTSineGenParams, *, use_torch_phase_fallback: bool = False) -> None:
         self.device = device
         self.params = params
+        self.use_torch_phase_fallback = use_torch_phase_fallback
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
+        )
+
+    def _torch_phase_fallback(
+        self,
+        f0_btd: ttnn.Tensor,
+        rand_ini: "Optional[ttnn.Tensor]",
+    ) -> ttnn.Tensor:
+        """CPU float32 phase chain: rad → downsample → cumsum → lerp upsample → sin.
+
+        Only the phase/sine computation runs on CPU.  ``uv``, noise, and the output mix
+        remain in the caller's TTNN path.  Returns ``sine_waves`` as a device tensor.
+        """
+        import torch.nn.functional as F_torch
+
+        p = self.params
+        B = int(f0_btd.shape[0])
+        f0_cpu = ttnn.to_torch(f0_btd).float().reshape(B, p.time_len, 1)
+        harmonics_cpu = ttnn.to_torch(p.harmonics).float().reshape(p.dim)
+
+        fn = f0_cpu * harmonics_cpu  # [B, T, dim]
+        rad = (fn / p.sampling_rate) % 1.0  # [B, T, dim]
+
+        if rand_ini is not None:
+            rand_ini_cpu = ttnn.to_torch(rand_ini).float().reshape(B, 1, p.dim)
+            rand_ini_cpu[..., 0] = 0.0  # zero fundamental
+            rad[:, 0:1, :] = rad[:, 0:1, :] + rand_ini_cpu
+
+        rad_t = rad.transpose(1, 2)  # [B, dim, T]
+        rad_down_t = F_torch.interpolate(
+            rad_t, scale_factor=1.0 / p.upsample_scale, mode="linear", align_corners=False
+        )  # [B, dim, T_down]
+        rad_down = rad_down_t.transpose(1, 2)  # [B, T_down, dim]
+
+        phase = torch.cumsum(rad_down, dim=1) * (2.0 * math.pi)  # [B, T_down, dim]
+
+        phase_up_t = F_torch.interpolate(
+            phase.transpose(1, 2) * p.upsample_scale,
+            scale_factor=float(p.upsample_scale),
+            mode="linear",
+            align_corners=False,
+        )  # [B, dim, T]
+        phase_up = phase_up_t.transpose(1, 2)  # [B, T, dim]
+
+        sine_amp_float = float(ttnn.to_torch(p.sine_amp).flatten()[0].item())
+        sines = torch.sin(phase_up) * sine_amp_float
+        return ttnn.from_torch(
+            sines.contiguous(),
+            dtype=p.activation_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def _zero_btd(self, B: int) -> ttnn.Tensor:
@@ -319,74 +375,91 @@ class TTSineGen:
             if rand_pad is not rand_masked:
                 ttnn.deallocate(rand_masked)
 
-        # Permute to ``[B, dim, T]`` so the time-axis maps are last-axis matmuls.
-        rad_bdt = ttnn.permute(rad, (0, 2, 1), memory_config=memory_config)
-        ttnn.deallocate(rad)
+        if self.use_torch_phase_fallback:
+            # CPU float32 phase chain: BF16 MAC error on small cumsum values (< 0.05 cycles)
+            # is amplified by 2π × upsample_scale (= 1885 for Kokoro) → ~0.06–0.25 rad error
+            # vs sine_amp=0.1, destroying PCC.  Only the phase chain falls back; uv/noise stay TT.
+            ttnn.deallocate(rad)
+            sine_waves_unmasked = self._torch_phase_fallback(f0_btd, rand_ini)
+        else:
+            # Permute to ``[B, dim, T]`` so the time-axis maps are last-axis matmuls.
+            rad_bdt = ttnn.permute(rad, (0, 2, 1), memory_config=memory_config)
+            ttnn.deallocate(rad)
 
-        # Downsample along T: ``[B, dim, T] @ [T, T_down]`` → ``[B, dim, T_down]``
-        rad_down = ttnn.matmul(
-            rad_bdt,
-            p.interp_down,
-            memory_config=memory_config,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-        ttnn.deallocate(rad_bdt)
+            # Downsample along T: ``[B, dim, T] @ [T, T_down]`` → ``[B, dim, T_down]``
+            rad_down = ttnn.matmul(
+                rad_bdt,
+                p.interp_down,
+                memory_config=memory_config,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            ttnn.deallocate(rad_bdt)
 
-        # Cumsum along T_down: ``[B, dim, T_down] @ [T_down, T_down]``
-        phase = ttnn.matmul(
-            rad_down,
-            p.cumsum,
-            memory_config=memory_config,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-        ttnn.deallocate(rad_down)
+            # Cumsum along T_down via sequential prefix adds — avoids K=T_down matmul whose BF16
+            # per-tile multiply gives ~2e-3 relative error that amplifies to ~2 radians in phase_up.
+            # Each r_t = rad_down[:, :, t:t+1] is [B, dim, 1]; prefix[t] = r_0 + ... + r_t.
+            r_slices = [
+                ttnn.slice(rad_down, [0, 0, t], [B, p.dim, t + 1], [1, 1, 1], memory_config=memory_config)
+                for t in range(p.time_len_down)
+            ]
+            ttnn.deallocate(rad_down)
+            prefix = [r_slices[0]]
+            for t in range(1, p.time_len_down):
+                prefix.append(ttnn.add(prefix[-1], r_slices[t], memory_config=memory_config))
+            for t in range(1, p.time_len_down):
+                ttnn.deallocate(r_slices[t])
+            phase = ttnn.concat(prefix, dim=2, memory_config=memory_config)
+            for t in range(p.time_len_down):
+                ttnn.deallocate(prefix[t])
 
-        # Upsample via elementwise linear interpolation (avoids K=T_down matmul whose BF16
-        # accumulation causes ~1 radian phase_up error, destroying sines PCC).
-        # Layout: permute phase [B, dim, T_down] → [B, T_down, dim] for dim=1 slicing.
-        phase_btd = ttnn.permute(phase, (0, 2, 1), memory_config=memory_config)
-        ttnn.deallocate(phase)
+            # Upsample via elementwise linear interpolation (avoids K=T_down matmul whose BF16
+            # accumulation causes ~1 radian phase_up error, destroying sines PCC).
+            # Layout: permute phase [B, dim, T_down] → [B, T_down, dim] for dim=1 slicing.
+            phase_btd = ttnn.permute(phase, (0, 2, 1), memory_config=memory_config)
+            ttnn.deallocate(phase)
 
-        # Clamped start: repeat phase[t=0] for clamp_len output steps.
-        p0 = ttnn.slice(phase_btd, [0, 0, 0], [B, 1, p.dim], [1, 1, 1], memory_config=memory_config)
-        start_seg = ttnn.multiply(p0, p.lerp_clamp_ones, memory_config=memory_config)  # [B, clamp_len, dim]
-        ttnn.deallocate(p0)
+            # Clamped start: repeat phase[t=0] for clamp_len output steps.
+            p0 = ttnn.slice(phase_btd, [0, 0, 0], [B, 1, p.dim], [1, 1, 1], memory_config=memory_config)
+            start_seg = ttnn.multiply(p0, p.lerp_clamp_ones, memory_config=memory_config)
+            ttnn.deallocate(p0)
 
-        # Interior lerp segments: one upsample_scale-length segment per adjacent pair.
-        lerp_segs = [start_seg]
-        for s in range(p.time_len_down - 1):
-            p_s = ttnn.slice(phase_btd, [0, s, 0], [B, s + 1, p.dim], [1, 1, 1], memory_config=memory_config)
-            p_s1 = ttnn.slice(phase_btd, [0, s + 1, 0], [B, s + 2, p.dim], [1, 1, 1], memory_config=memory_config)
-            seg = ttnn.add(
-                ttnn.multiply(p_s, p.lerp_one_minus_alpha, memory_config=memory_config),
-                ttnn.multiply(p_s1, p.lerp_alpha, memory_config=memory_config),
+            # Interior lerp segments: one upsample_scale-length segment per adjacent pair.
+            lerp_segs = [start_seg]
+            for s in range(p.time_len_down - 1):
+                p_s = ttnn.slice(phase_btd, [0, s, 0], [B, s + 1, p.dim], [1, 1, 1], memory_config=memory_config)
+                p_s1 = ttnn.slice(phase_btd, [0, s + 1, 0], [B, s + 2, p.dim], [1, 1, 1], memory_config=memory_config)
+                seg = ttnn.add(
+                    ttnn.multiply(p_s, p.lerp_one_minus_alpha, memory_config=memory_config),
+                    ttnn.multiply(p_s1, p.lerp_alpha, memory_config=memory_config),
+                    memory_config=memory_config,
+                )
+                ttnn.deallocate(p_s)
+                ttnn.deallocate(p_s1)
+                lerp_segs.append(seg)
+
+            # Clamped end: repeat phase[t=T_down-1] for clamp_len output steps.
+            p_last = ttnn.slice(
+                phase_btd,
+                [0, p.time_len_down - 1, 0],
+                [B, p.time_len_down, p.dim],
+                [1, 1, 1],
                 memory_config=memory_config,
             )
-            ttnn.deallocate(p_s)
-            ttnn.deallocate(p_s1)
-            lerp_segs.append(seg)
+            end_seg = ttnn.multiply(p_last, p.lerp_clamp_ones, memory_config=memory_config)
+            ttnn.deallocate(p_last)
+            ttnn.deallocate(phase_btd)
+            lerp_segs.append(end_seg)
 
-        # Clamped end: repeat phase[t=T_down-1] for clamp_len output steps.
-        p_last = ttnn.slice(
-            phase_btd, [0, p.time_len_down - 1, 0], [B, p.time_len_down, p.dim], [1, 1, 1], memory_config=memory_config
-        )
-        end_seg = ttnn.multiply(p_last, p.lerp_clamp_ones, memory_config=memory_config)  # [B, clamp_len, dim]
-        ttnn.deallocate(p_last)
-        ttnn.deallocate(phase_btd)
-        lerp_segs.append(end_seg)
+            phase_up = ttnn.concat(lerp_segs, dim=1, memory_config=memory_config)
+            for seg in lerp_segs:
+                ttnn.deallocate(seg)
 
-        # [B, clamp_len + (T_down-1)*upsample_scale + clamp_len, dim] = [B, T, dim]
-        phase_up = ttnn.concat(lerp_segs, dim=1, memory_config=memory_config)
-        for seg in lerp_segs:
-            ttnn.deallocate(seg)
+            phase_up = ttnn.multiply(phase_up, p.two_pi_times_scale, memory_config=memory_config)
+            sines = ttnn.sin(phase_up, memory_config=memory_config)
+            ttnn.deallocate(phase_up)
 
-        # Scale to radians and compute sin — result is already [B, T, dim].
-        phase_up = ttnn.multiply(phase_up, p.two_pi_times_scale, memory_config=memory_config)
-        sines = ttnn.sin(phase_up, memory_config=memory_config)
-        ttnn.deallocate(phase_up)
-
-        sine_waves_unmasked = ttnn.multiply(sines, p.sine_amp, memory_config=memory_config)
-        ttnn.deallocate(sines)
+            sine_waves_unmasked = ttnn.multiply(sines, p.sine_amp, memory_config=memory_config)
+            ttnn.deallocate(sines)
 
         # ``noise_amp = uv * noise_std + (1 - uv) * sine_amp/3`` → [B, T, 1]
         one_minus_uv = ttnn.subtract(p.one, uv, memory_config=memory_config)
