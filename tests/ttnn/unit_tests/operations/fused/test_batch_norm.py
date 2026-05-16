@@ -244,6 +244,8 @@ def test_batch_norm_fp32(
         bias=bias_tensor,
     )
     tt_output = ttnn.to_torch(tt_output_tensor_on_device)
+    # PyTorch 2.11+ requires eps > 0; substitute a negligible positive value for the reference call.
+    ref_eps = eps if eps > 0 else 1e-12
     torch_result = torch.nn.functional.batch_norm(
         input=in_data,
         running_mean=mean_data,
@@ -251,7 +253,7 @@ def test_batch_norm_fp32(
         weight=weight_data,
         bias=bias_data,
         training=training,
-        eps=eps,
+        eps=ref_eps,
     )
     assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=1e-3, atol=1e-6, frobenius_threshold=0.05)
 
