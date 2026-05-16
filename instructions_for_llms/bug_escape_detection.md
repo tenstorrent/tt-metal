@@ -323,6 +323,13 @@ Respond with JSON only:
 If verdict is not PROCEED_TO_BISECT → write escape ID to `seen-escapes.json` with
 `status: "skipped_prefilter"` and stop.
 
+**MANDATORY layer check after Opus:** Before dispatching any hardware run, confirm that
+`most_likely_fix_sha`'s layer is STRICTLY LOWER than the test layer (fix\_layer < test\_layer).
+- Same layer (L3 test, L3 fix) → horizontal bug, NOT a vertical escape. Discard.
+- Higher layer (L3 test, L4 fix) → inverse, NOT a vertical escape. Discard.
+- Only fix\_layer < test\_layer qualifies. If Opus's suspected fix fails this check,
+  mark `status: "skipped_not_vertical"` in `seen-escapes.json` and stop.
+
 ---
 
 ### Step 4: Manual Binary Search (find the fix commit)
