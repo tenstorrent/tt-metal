@@ -81,6 +81,10 @@ Thresholds:
 - **Backfill**: `consecutive_fail_count >= 5`, `consecutive_pass_count >= 3`, lookback 60 days
 - **Incremental**: `consecutive_fail_count >= 3`, `consecutive_pass_count >= 3`, lookback 1 day
 
+**Signature requirement**: All failures in the streak must share the **exact same normalized error signature**
+(addresses and timestamps stripped). A test that fails 5 times with 5 different errors is flaky noise,
+not a regression. The SQL enforces this via `distinct_sig_count = 1`.
+
 ```sql
 WITH runs AS (
   SELECT
@@ -123,6 +127,7 @@ island_summary AS (
     SUCCESS,
     island_key,
     COUNT(*)                              AS streak_length,
+    COUNT(DISTINCT norm_signature)        AS distinct_sig_count,  -- must be 1 for fail streaks
     MIN(PIPELINE_START_TS)                AS streak_start_ts,
     MAX(PIPELINE_START_TS)                AS streak_end_ts,
     MIN_BY(commit_sha, PIPELINE_START_TS) AS streak_first_sha,
@@ -141,7 +146,8 @@ fail_streaks AS (
     norm_signature
   FROM island_summary
   WHERE SUCCESS = FALSE
-    AND streak_length >= 5  -- P0: require 5+ consecutive failures (3 for incremental mode)
+    AND streak_length >= 5         -- require 5+ consecutive failures (3 for incremental mode)
+    AND distinct_sig_count = 1     -- all failures must share the same normalized error signature
 ),
 pass_streaks AS (
   SELECT
@@ -408,6 +414,12 @@ Append to `confirmed-escapes.json`:
 ```
 
 Write escape ID to `seen-escapes.json` with `status: "confirmed"`.
+
+**Update Confluence confirmed escapes page** (ID 2428895268):
+https://tenstorrent.atlassian.net/wiki/spaces/MI6/pages/2428895268/confirmed+bug+escapes
+
+Add a new row to the table on that page using the same column format as the existing entries.
+Fetch the current page content first to avoid clobbering concurrent writes.
 
 Delete BEFORE/AFTER branches from GitHub.
 
