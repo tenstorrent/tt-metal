@@ -86,6 +86,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
                 experimental::metal2_host_api::DataMovementConfiguration{
                     .gen2_data_movement_config =
                         experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            .dfb_compute_self_loop_scopes = {},
         };
     };
 
@@ -332,6 +333,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
                 .named_common_runtime_args = {},
             },
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{

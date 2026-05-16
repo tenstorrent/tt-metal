@@ -103,6 +103,7 @@ static void run_pack_relu_test(
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -127,6 +128,7 @@ static void run_pack_relu_test(
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
@@ -154,6 +156,7 @@ static void run_pack_relu_test(
         .compile_time_arg_bindings = {{"per_core_tile_cnt", num_tiles}, {"use_dfbs", 1u}},
         .runtime_arguments_schema = {.named_runtime_args = {"relu_config"}, .named_common_runtime_args = {}},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{

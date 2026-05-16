@@ -80,6 +80,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec dm_transform_spec{
@@ -107,6 +108,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec dm_writer_spec{
@@ -128,6 +130,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{
@@ -267,6 +270,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec dm_writer_0_spec{
@@ -294,6 +298,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec dm_reader_1_spec{
@@ -320,6 +325,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec dm_transform_1_spec{
@@ -347,6 +353,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec dm_writer_1_spec{
@@ -368,6 +375,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu_core_0{

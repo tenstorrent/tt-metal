@@ -116,9 +116,9 @@ TEST_F(MeshDeviceSingleCardFixture, DISABLED_StressNocMcast) {
         // Not particularly random since all cores are getting the same data
         // N_RANDS in bytes
         CoreCoord grid_size = dev->logical_grid_size();
-        for (int i = 0; i < N_RANDS / sizeof(uint32_t); i++) {
+        for (size_t i = 0; i < N_RANDS / sizeof(uint32_t); i++) {
             uint32_t rnd = 0;
-            for (int j = 0; j < sizeof(uint32_t); j++) {
+            for (size_t j = 0; j < sizeof(uint32_t); j++) {
                 uint32_t x = rand() % grid_size.x;
                 uint32_t y = rand() % grid_size.y;
                 if (!virtualization_enabled) {

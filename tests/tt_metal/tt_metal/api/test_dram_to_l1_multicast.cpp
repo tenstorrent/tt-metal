@@ -160,6 +160,8 @@ TEST_F(MeshDispatchFixture, TensixDRAMtoL1Multicast) {
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 1,
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast.cpp",
+        .exclude_start = {0, 0},
+        .exclude_direction = {0, 0},
     };
 
     for (const auto& mesh_device : devices_) {
@@ -172,6 +174,8 @@ TEST_F(MeshDispatchFixture, TensixDRAMtoL1MulticastLoopbackSrc) {
         .dest_buffer_addr = 500 * 1024,
         .target_grid_offset = 0,
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_include_src.cpp",
+        .exclude_start = {0, 0},
+        .exclude_direction = {0, 0},
     };
 
     for (const auto& mesh_device : devices_) {

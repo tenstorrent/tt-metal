@@ -212,6 +212,7 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
                 experimental::metal2_host_api::DataMovementConfiguration{
                     .gen2_data_movement_config =
                         experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            .dfb_compute_self_loop_scopes = {},
         });
         wu_kernel_names.push_back(kernel_names[k]);
     }

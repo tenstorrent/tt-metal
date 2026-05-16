@@ -89,10 +89,12 @@ protected:
                 .unique_id = DM_KERNEL,
                 .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
                 .num_threads = static_cast<uint8_t>(num_dms_),
-                .compiler_options = {.defines = defines_vec},
+                .compiler_options = {.include_paths = {}, .defines = defines_vec},
+                .dfb_bindings = {},
                 .runtime_arguments_schema =
                     {
                         .named_runtime_args = {"l1_counter_addr", "increment_times"},
+                        .named_common_runtime_args = {},
                     },
                 .config_spec =
                     experimental::metal2_host_api::DataMovementConfiguration{
@@ -109,6 +111,7 @@ protected:
             experimental::metal2_host_api::ProgramSpec spec{
                 .program_id = "riscv_atomics",
                 .kernels = {dm_kernel_spec},
+                .dataflow_buffers = {},
                 .work_units = {main_wu},
             };
             program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device_, spec);
@@ -119,6 +122,7 @@ protected:
                 .named_runtime_args =
                     {{.node = core,
                       .args = {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
+                .named_common_runtime_args = {},
             }};
             experimental::metal2_host_api::SetProgramRunParameters(program, params);
         } else {

@@ -110,18 +110,19 @@ BmmKernelHandles create_bmm_quasar_kernels(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
             cores,
-            QuasarDataMovementConfig{.num_threads_per_cluster = p.num_threads, .compile_args = reader_cta, .defines = {}, .named_compile_args = {}}),
+            QuasarDataMovementConfig{.num_threads_per_cluster = p.num_threads, .compile_args = reader_cta, .defines = {}, .named_compile_args = {}, .compiler_include_paths = {}}),
         CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
             cores,
-            QuasarDataMovementConfig{.num_threads_per_cluster = p.num_threads, .compile_args = writer_cta, .defines = {}, .named_compile_args = {}}),
+            QuasarDataMovementConfig{.num_threads_per_cluster = p.num_threads, .compile_args = writer_cta, .defines = {}, .named_compile_args = {}, .compiler_include_paths = {}}),
         CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
             cores,
             QuasarComputeConfig{
                 .num_threads_per_cluster = p.num_threads,
+                .unpack_to_dest_mode = {},
                 .compile_args = {p.B_per_core, p.Mt, p.Kt, p.Nt},
                 .defines = {},
                 .named_compile_args = {}}),
