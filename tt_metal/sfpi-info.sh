@@ -200,7 +200,8 @@ check_missing_deps () {
 		esac
 	    }
 	    local pkgs=(sys-devel/gcc autoconf automake bison dejagnu dev-tcltk/expect
-		flex gawk patchutils dev-lang/python expat gmp mpc mpfr texinfo)
+		flex gawk patchutils dev-lang/python expat gmp dev-libs/mpc mpfr
+		sys-apps/texinfo)
 	    for pkg in "${pkgs[@]}"; do
 		gentoo_has_pkg "$pkg" || missing+=("$pkg")
 	    done
