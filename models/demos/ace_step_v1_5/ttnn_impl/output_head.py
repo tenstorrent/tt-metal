@@ -157,8 +157,10 @@ class TtAceStepDiTOutputHead:
 
         shift_t = ttnn.to_layout(shift, ttnn.TILE_LAYOUT)
         scale_t = ttnn.to_layout(scale, ttnn.TILE_LAYOUT)
-        ones = ttnn.ones_like(scale_t)
-        one_plus_scale = ttnn.add(scale_t, ones)
+        # Scalar 1.0 add avoids a per-call `ttnn.ones_like` allocation that goes through
+        # host on some TTNN builds (`EnqueueWriteBuffer`/`EnqueueReadBuffer`), which trips
+        # "Writes/Reads are not supported during trace capture" when the DiT body is traced.
+        one_plus_scale = ttnn.add(scale_t, 1.0)
 
         modulated = ttnn.add(ttnn.multiply(normed, one_plus_scale), shift_t)
         modulated_rm = ttnn.to_layout(modulated, ttnn.ROW_MAJOR_LAYOUT)

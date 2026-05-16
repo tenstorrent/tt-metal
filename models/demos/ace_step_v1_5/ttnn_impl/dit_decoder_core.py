@@ -37,6 +37,24 @@ def _ace_step_logical_seq_len_dim2(t) -> int:
     return int(t.shape[2])
 
 
+def _ace_step_flush_device_profiler(ttnn, device) -> None:
+    """Drain the per-RISC device-profiler ring buffer when Tracy / device profiling is enabled.
+
+    The AceStep DiT core has ~24 layers; a single denoise step can emit > 12000 markers per RISC
+    (the on-device profiler ring-buffer cap), causing kernels to silently drop markers and
+    ``tools/tracy/process_ops_logs.py`` to abort with ``Device data missing``. Flushing after
+    every Nth layer keeps the buffer within capacity. No-op when neither
+    ``TT_METAL_DEVICE_PROFILER`` nor ``TTNN_OP_PROFILER`` is set, so production runs incur zero cost.
+    """
+    if os.environ.get("TTNN_OP_PROFILER") != "1" and os.environ.get("TT_METAL_DEVICE_PROFILER") != "1":
+        return
+    try:
+        ttnn.synchronize_device(device)
+        ttnn.ReadDeviceProfiler(device)
+    except Exception:
+        pass
+
+
 def _ace_step_attn_trace_print(prefix: Optional[str]) -> bool:
     """
     When ACE_STEP_DEBUG_ATTN_TRACE=1, print per-stage tensor stats from attention.
@@ -208,6 +226,12 @@ class TtTimestepEmbedding:
             mesh_mapper=mapper,
         )
 
+        # `from_timestep_value` rebuilds sin/cos on host and uploads a [1,1,1,256] tensor every call.
+        # In the Euler denoise loop `time_embed_r` is invoked with `delta_tr=0.0` every step (no
+        # `timestep_r_index` passed by `e2e_model_tt.run_ttnn_denoise_loop`). Cache the (temb,tp) result
+        # per scalar value so subsequent calls are pure device lookups and the trace stays stable.
+        self._value_cache: dict[float, tuple["ttnn.Tensor", "ttnn.Tensor"]] = {}
+
     def __call__(self, timestep_index: int):
         ttnn = self.ttnn
         if not (0 <= int(timestep_index) < self.num_steps):
@@ -234,8 +258,16 @@ class TtTimestepEmbedding:
 
         This matches HF's `TimestepEmbedding` contract of generating sin/cos at runtime, but
         it uploads a tiny `[1,1,1,256]` tensor each call (host -> device).
+
+        Results are cached per scalar so repeated calls (e.g. `delta_tr=0.0` every denoise step)
+        return the same device tensors and do not re-upload sin/cos.
         """
         ttnn = self.ttnn
+        key = float(timestep)
+        cached = self._value_cache.get(key)
+        if cached is not None:
+            return cached
+
         try:
             import torch
         except ImportError as e:  # pragma: no cover
@@ -267,6 +299,7 @@ class TtTimestepEmbedding:
                 ttnn.deallocate(t_freq)
             except Exception:
                 pass
+        self._value_cache[key] = (temb, tp)
         return temb, tp
 
 
@@ -572,6 +605,63 @@ class TtAceStepAttentionSDPA:
         )
         self.eps = float(cfg.rms_norm_eps)
 
+        # Per-call mask uploads (additive tail/pad masks) used to rebuild the same NumPy zeros tensor
+        # and call ttnn.as_tensor on every forward, every layer, every step. Cache them by shape so
+        # they stay device-resident across denoise steps and become trace+2CQ friendly.
+        # Keys:
+        #   - self-attn pad mask:  (B, target_sdpa)             value broadcasts over S_q==S_k==target_sdpa
+        #   - cross-attn tail mask:(B, S_q0, W, s_enc_log)      pads keys past s_enc_log up to W
+        self._self_pad_mask_cache: dict[tuple[int, int], "ttnn.Tensor"] = {}
+        self._cross_tail_mask_cache: dict[tuple[int, int, int, int], "ttnn.Tensor"] = {}
+
+    def _get_self_pad_mask(self, *, batch: int, target_sdpa: int, s_rope: int) -> "ttnn.Tensor":
+        """Return a cached additive self-attn pad mask ``[B,1,target_sdpa,target_sdpa]``.
+
+        Columns ``[s_rope, target_sdpa)`` get ``-1e9`` so SDPA's softmax ignores tile-pad keys
+        while matching the unpadded PyTorch/HF result over the logical sequence.
+        """
+        ttnn = self.ttnn
+        key = (int(batch), int(target_sdpa))
+        cached = self._self_pad_mask_cache.get(key)
+        if cached is not None:
+            return cached
+        pad_np = np.zeros((int(batch), 1, int(target_sdpa), int(target_sdpa)), dtype=np.float32)
+        pad_np[:, :, :, int(s_rope) :] = np.float32(-1e9)
+        mem_m = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        mapper_m = ttnn.ReplicateTensorToMesh(self.mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        pad_m = ttnn.as_tensor(
+            pad_np,
+            device=self.mesh_device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem_m,
+            mesh_mapper=mapper_m,
+        )
+        self._self_pad_mask_cache[key] = pad_m
+        return pad_m
+
+    def _get_cross_tail_mask(self, *, batch: int, s_q0: int, w: int, s_enc_log: int) -> "ttnn.Tensor":
+        """Return a cached additive cross-attn tail mask ``[B,1,S_q0,W]`` masking ``[s_enc_log, W)``."""
+        ttnn = self.ttnn
+        key = (int(batch), int(s_q0), int(w), int(s_enc_log))
+        cached = self._cross_tail_mask_cache.get(key)
+        if cached is not None:
+            return cached
+        pad_np = np.zeros((int(batch), 1, int(s_q0), int(w)), dtype=np.float32)
+        pad_np[:, :, :, int(s_enc_log) : int(w)] = np.float32(-1e9)
+        mem_m = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        mapper_m = ttnn.ReplicateTensorToMesh(self.mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        pad_m = ttnn.as_tensor(
+            pad_np,
+            device=self.mesh_device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem_m,
+            mesh_mapper=mapper_m,
+        )
+        self._cross_tail_mask_cache[key] = pad_m
+        return pad_m
+
     def __call__(
         self,
         hidden_states,
@@ -809,20 +899,7 @@ class TtAceStepAttentionSDPA:
                 v = _pad_seq_dim2_bh_sd(v, tgt_k)
                 W = tgt_k
             if W > s_enc_log:
-                pad_np = np.zeros((B, 1, S_q0, W), dtype=np.float32)
-                pad_np[:, :, :, s_enc_log:W] = -1e9
-                mem_m = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-                mapper_m = (
-                    ttnn.ReplicateTensorToMesh(self.mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
-                )
-                pad_m = ttnn.as_tensor(
-                    pad_np,
-                    device=self.mesh_device,
-                    dtype=self.dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=mem_m,
-                    mesh_mapper=mapper_m,
-                )
+                pad_m = self._get_cross_tail_mask(batch=B, s_q0=S_q0, w=W, s_enc_log=s_enc_log)
                 sdpa_attn_mask = pad_m if sdpa_attn_mask is None else ttnn.add(sdpa_attn_mask, pad_m)
 
         # Self-attn: pad Q/K/V together to a tile multiple for SDPA, and mask padded key columns so
@@ -839,21 +916,8 @@ class TtAceStepAttentionSDPA:
                 k = _pad_seq_dim2_bh_sd(k, target_sdpa)
                 v = _pad_seq_dim2_bh_sd(v, target_sdpa)
                 # Additive mask (0 keep, -1e9 on invalid keys); SDPA adds this to QK (see ttnn sdpa.cpp).
-                pad_np = np.zeros((B, 1, target_sdpa, target_sdpa), dtype=np.float32)
-                pad_np[:, :, :, S_rope:] = -1e9
-                mem_m = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-                mapper_m = (
-                    ttnn.ReplicateTensorToMesh(self.mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
-                )
                 # Match Q/K/V dtype so SDPA uniform-dataformat paths accept the mask tensor.
-                pad_m = ttnn.as_tensor(
-                    pad_np,
-                    device=self.mesh_device,
-                    dtype=self.dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=mem_m,
-                    mesh_mapper=mapper_m,
-                )
+                pad_m = self._get_self_pad_mask(batch=B, target_sdpa=target_sdpa, s_rope=S_rope)
                 if sdpa_attn_mask is None:
                     sdpa_attn_mask = pad_m
                 else:
@@ -1110,8 +1174,11 @@ class TtAceStepDiTLayer:
             epsilon=self.eps,
             memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
         )
-        ones = ttnn.ones_like(scale_msa)
-        one_plus = ttnn.add(scale_msa, ones)
+        # Scalar 1.0 add avoids `ttnn.ones_like(scale_msa)`, which materializes a host-side
+        # ones tensor on each call. Inside `ttnn.begin_trace_capture`, that path triggers
+        # `EnqueueWriteBuffer` / `EnqueueReadBuffer` and hits
+        # "Writes/Reads are not supported during trace capture" TT_FATALs.
+        one_plus = ttnn.add(scale_msa, 1.0)
         h = ttnn.add(ttnn.multiply(x_norm, one_plus), shift_msa)
         if debug is not None and debug.get("enabled", False):
             debug[f"{core_pfx}adaln_self_in"] = h
@@ -1163,8 +1230,8 @@ class TtAceStepDiTLayer:
         )
         if debug is not None and debug.get("enabled", False):
             debug[f"{core_pfx}mlp_norm_out"] = x3
-        ones2 = ttnn.ones_like(c_scale)
-        one_plus2 = ttnn.add(c_scale, ones2)
+        # Same scalar-add trick as the self-attn modulation above (avoids ones_like).
+        one_plus2 = ttnn.add(c_scale, 1.0)
         h3 = ttnn.add(ttnn.multiply(x3, one_plus2), c_shift)
         if debug is not None and debug.get("enabled", False):
             debug[f"{core_pfx}mlp_in"] = h3
@@ -1271,7 +1338,15 @@ class TtAceStepDiTCore:
         x = ttnn.unsqueeze(x, 1)  # [B,1,S,D]
         if debug is not None and debug.get("enabled", False):
             debug["core.x_patches_in"] = x
-        for layer in self.layers:
+        # Periodic device-profiler drain (no-op without TT_METAL_DEVICE_PROFILER / TTNN_OP_PROFILER).
+        # Default flushes every layer to keep the 12000-marker per-RISC ring buffer from overflowing.
+        try:
+            _layer_flush_every = int(os.environ.get("ACE_STEP_PROFILER_FLUSH_EVERY_LAYER", "1"))
+        except ValueError:
+            _layer_flush_every = 1
+        if _layer_flush_every < 0:
+            _layer_flush_every = 0
+        for _layer_idx, layer in enumerate(self.layers):
             x = layer(
                 x,
                 timestep_proj_b6d,
@@ -1280,6 +1355,8 @@ class TtAceStepDiTCore:
                 self_attention_mask_b1qq=self_attention_mask_b1qq,
                 debug=debug,
             )
+            if _layer_flush_every and ((_layer_idx + 1) % _layer_flush_every) == 0:
+                _ace_step_flush_device_profiler(ttnn, self.mesh_device)
         x = ttnn.squeeze(x, 1)  # [B,S,D]
         if debug is not None and debug.get("enabled", False):
             debug["core.out"] = x

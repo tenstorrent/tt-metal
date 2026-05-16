@@ -356,33 +356,80 @@ class AceStepV15TTNNPipeline:
             memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
         )
 
-    def forward(
+    def compute_temb_tp(
+        self,
+        timestep_index: int,
+        *,
+        timestep_r_index: int | None = None,
+        target_batch: int = 1,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Precompute the per-step timestep embeddings used by :meth:`forward_with_temb_tp`.
+
+        Args:
+            timestep_index: index into ``self.timesteps_host`` (Euler step number).
+            timestep_r_index: optional HF ``time_embed_r`` index. ``None`` uses ``delta_tr=0.0``,
+                which hits the cached path in :meth:`TtTimestepEmbedding.from_timestep_value` —
+                no host upload after the first call.
+            target_batch: if > 1, replicate along dim 0 (the CFG-merged ``[cond, uncond]`` case).
+
+        Returns:
+            ``(temb_bd, timestep_proj_b6d)`` device tensors. ``temb_bd`` stays in TILE layout
+            (output_head accepts both); ``timestep_proj_b6d`` is converted to ROW_MAJOR because
+            the DiT core's ``scale_shift_table`` broadcast requires it.
+
+        Calling this once per Euler step at the start of the denoise loop avoids re-running the
+        ~10 op time-embed MLP per ``forward_with_temb_tp`` call.
+        """
+        # ``AceStepV15TTNNPipeline`` uses the module-level ``import ttnn`` (no ``self.ttnn``
+        # attribute like the per-layer classes do).
+        temb_t, tp_t = self.time_embed(int(timestep_index))
+        if timestep_r_index is None:
+            delta_tr = 0.0
+        else:
+            delta_tr = float(self.timesteps_host[int(timestep_index)]) - float(
+                self.timesteps_host[int(timestep_r_index)]
+            )
+        temb_r, tp_r = self.time_embed_r.from_timestep_value(delta_tr)
+        temb = ttnn.add(temb_t, temb_r)  # [1, D]
+        timestep_proj = ttnn.add(tp_t, tp_r)  # [1, 6, D]
+
+        b = int(target_batch)
+        if b != 1:
+            if int(temb.shape[0]) != 1 or int(timestep_proj.shape[0]) != 1:
+                raise ValueError(
+                    f"compute_temb_tp expected B=1 outputs from time_embed before replication, got "
+                    f"temb={tuple(temb.shape)} timestep_proj={tuple(timestep_proj.shape)}"
+                )
+            concat = getattr(ttnn, "concat", None) or getattr(ttnn, "concatenate", None)
+            if concat is None:
+                raise RuntimeError("TTNN build missing concat / concatenate")
+            temb = concat([temb] * b, dim=0)  # [B, D]
+            timestep_proj = concat([timestep_proj] * b, dim=0)  # [B, 6, D]
+
+        timestep_proj = ttnn.to_layout(timestep_proj, ttnn.ROW_MAJOR_LAYOUT)
+        return temb, timestep_proj
+
+    def forward_with_temb_tp(
         self,
         *,
-        # HF semantics: model input is concat(context_latents, xt) before proj_in.
-        # Prefer passing `xt_bt64` + `context_latents_bt128`; `hidden_states_btC` is a legacy escape hatch.
         xt_bt64: ttnn.Tensor | None = None,
         context_latents_bt128: ttnn.Tensor | None = None,
         hidden_states_btC: ttnn.Tensor | None = None,
-        timestep_index: int,
-        timestep_r_index: int | None = None,
         encoder_hidden_states_btd: ttnn.Tensor,
+        temb_bd: ttnn.Tensor,
+        timestep_proj_b6d: ttnn.Tensor,
         attention_mask_1d_bt=None,
         encoder_attention_mask_1d_bk=None,
         encoder_attention_mask_b1qk: ttnn.Tensor | None = None,
         debug_intermediates: dict | None = None,
     ) -> ttnn.Tensor:
-        """
-        Args:
-            xt_bt64: [B, T, 64] noisy latents (device tensor, ROW_MAJOR preferred).
-            context_latents_bt128: [B, T, 128] (src_latents + chunk_masks) from HF `prepare_condition`.
-            hidden_states_btC: [B, T, in_channels] legacy path (already concatenated).
-            attention_mask_1d_bt: Optional [B, T] keep mask (bool or 1/0) at **frame** length.
-                If provided, it is patchified to [B, T_p] and used for self-attention padding parity.
-            encoder_attention_mask_1d_bk: Optional [B, S_enc] keep mask (bool or 1/0) for cross-attention keys.
-            temb_bD: [B, hidden_size] device tensor.
-        Returns:
-            acoustic features [B, T, audio_acoustic_hidden_dim] on device.
+        """Trace-safe DiT body forward.
+
+        Same semantics as :meth:`forward` but expects ``temb_bd`` / ``timestep_proj_b6d`` to be
+        precomputed (e.g. via :meth:`compute_temb_tp`). No host transfers in the steady-state
+        path (the lazy ``encoder_attention_mask_1d_bk`` / ``attention_mask_1d_bt`` mask builds
+        are still per-call host work — pass ``encoder_attention_mask_b1qk`` and a None for
+        ``attention_mask_1d_bt`` from the caller to make this fully trace-safe).
         """
         debug = bool(os.environ.get("ACE_STEP_DEBUG_PIPELINE"))
         debug_stats = bool(os.environ.get("ACE_STEP_DEBUG_PIPELINE_STATS"))
@@ -404,7 +451,7 @@ class AceStepV15TTNNPipeline:
                     "[ace_step_v1_5][pipe] "
                     f"in_hidden_states shape={tuple(hidden_states_btC.shape)} "
                     f"enc_shape={tuple(encoder_hidden_states_btd.shape)} "
-                    f"timestep_index={int(timestep_index)}",
+                    f"temb shape={tuple(temb_bd.shape)} timestep_proj shape={tuple(timestep_proj_b6d.shape)}",
                     flush=True,
                 )
             except Exception:
@@ -414,6 +461,10 @@ class AceStepV15TTNNPipeline:
         if debug_intermediates is not None and debug_intermediates.get("enabled", False):
             debug_intermediates["patchify_out"] = patches
             debug_intermediates["pipe.patches"] = patches
+            debug_intermediates["temb"] = temb_bd
+            debug_intermediates["timestep_proj_b6d"] = timestep_proj_b6d
+            debug_intermediates["pipe.temb"] = temb_bd
+            debug_intermediates["pipe.timestep_proj_b6d"] = timestep_proj_b6d
         if debug:
             try:
                 print(
@@ -480,61 +531,17 @@ class AceStepV15TTNNPipeline:
                     memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
                 )
 
-        # timestep embeddings
-        temb_t, tp_t = self.time_embed(int(timestep_index))
-        # Upstream/HF semantics: `time_embed_r(timestep - timestep_r)`.
-        # Our `TtTimestepEmbedding` supports computing an embedding for an arbitrary timestep value
-        # via `from_timestep_value`, which avoids incorrectly indexing the 0-slot for nonzero (t - r).
-        if timestep_r_index is None:
-            delta_tr = 0.0
-        else:
-            delta_tr = float(self.timesteps_host[int(timestep_index)]) - float(
-                self.timesteps_host[int(timestep_r_index)]
-            )
-        temb_r, tp_r = self.time_embed_r.from_timestep_value(delta_tr)
-        temb = ttnn.add(temb_t, temb_r)  # [1,D]
-        timestep_proj = ttnn.add(tp_t, tp_r)  # [1,6,D]
-        if debug_intermediates is not None and debug_intermediates.get("enabled", False):
-            debug_intermediates["temb"] = temb
-            debug_intermediates["timestep_proj_b6d"] = timestep_proj
-            debug_intermediates["pipe.temb"] = temb
-            debug_intermediates["pipe.timestep_proj_b6d"] = timestep_proj
-        if debug:
-            try:
-                print(
-                    "[ace_step_v1_5][pipe] "
-                    f"temb shape={tuple(temb.shape)} timestep_proj shape={tuple(timestep_proj.shape)}",
-                    flush=True,
-                )
-            except Exception:
-                pass
-
-        # Expand to batch (needed for CFG where we run B=2 with [cond, uncond]).
+        # Sanity: temb/tp batch must match the hidden_states batch (caller's responsibility).
         B = int(hidden_states_btC.shape[0])
-        if B != 1:
-            if int(temb.shape[0]) != 1 or int(timestep_proj.shape[0]) != 1:
-                raise ValueError(
-                    f"Expected temb/timestep_proj to have batch==1 before replication, got "
-                    f"temb={tuple(temb.shape)} timestep_proj={tuple(timestep_proj.shape)}"
-                )
-
-            def _replicate_batch(x, batch: int):
-                if int(x.shape[0]) == batch:
-                    return x
-                xs = [x] * int(batch)
-                if hasattr(ttnn, "concat"):
-                    return ttnn.concat(xs, dim=0)
-                return ttnn.concatenate(xs, dim=0)
-
-            temb = _replicate_batch(temb, B)  # [B,D]
-            timestep_proj = _replicate_batch(timestep_proj, B)  # [B,6,D]
-
-        # Core expects timestep projection in row-major for stable broadcast with scale_shift_table.
-        timestep_proj = ttnn.to_layout(timestep_proj, ttnn.ROW_MAJOR_LAYOUT)
+        if int(temb_bd.shape[0]) != B or int(timestep_proj_b6d.shape[0]) != B:
+            raise ValueError(
+                f"temb/timestep_proj batch must match xt batch={B}, got "
+                f"temb={tuple(temb_bd.shape)} timestep_proj={tuple(timestep_proj_b6d.shape)}"
+            )
 
         patches_out = self.core(
             patches,
-            timestep_proj,
+            timestep_proj_b6d,
             encoder_hidden_states_btd,
             encoder_attention_mask_b1qk,
             self_attention_mask_b1qq,
@@ -549,7 +556,7 @@ class AceStepV15TTNNPipeline:
             except Exception:
                 pass
 
-        acoustic = self.output_head.forward(patches_out, temb, meta, debug=debug_intermediates)
+        acoustic = self.output_head.forward(patches_out, temb_bd, meta, debug=debug_intermediates)
         if debug_intermediates is not None and debug_intermediates.get("enabled", False):
             debug_intermediates["acoustic_out"] = acoustic
         if debug:
@@ -575,6 +582,67 @@ class AceStepV15TTNNPipeline:
             except Exception:
                 pass
         return acoustic
+
+    def forward(
+        self,
+        *,
+        # HF semantics: model input is concat(context_latents, xt) before proj_in.
+        # Prefer passing `xt_bt64` + `context_latents_bt128`; `hidden_states_btC` is a legacy escape hatch.
+        xt_bt64: ttnn.Tensor | None = None,
+        context_latents_bt128: ttnn.Tensor | None = None,
+        hidden_states_btC: ttnn.Tensor | None = None,
+        timestep_index: int,
+        timestep_r_index: int | None = None,
+        encoder_hidden_states_btd: ttnn.Tensor,
+        attention_mask_1d_bt=None,
+        encoder_attention_mask_1d_bk=None,
+        encoder_attention_mask_b1qk: ttnn.Tensor | None = None,
+        debug_intermediates: dict | None = None,
+    ) -> ttnn.Tensor:
+        """
+        Args:
+            xt_bt64: [B, T, 64] noisy latents (device tensor, ROW_MAJOR preferred).
+            context_latents_bt128: [B, T, 128] (src_latents + chunk_masks) from HF `prepare_condition`.
+            hidden_states_btC: [B, T, in_channels] legacy path (already concatenated).
+            attention_mask_1d_bt: Optional [B, T] keep mask (bool or 1/0) at **frame** length.
+                If provided, it is patchified to [B, T_p] and used for self-attention padding parity.
+            encoder_attention_mask_1d_bk: Optional [B, S_enc] keep mask (bool or 1/0) for cross-attention keys.
+
+        Returns:
+            acoustic features [B, T, audio_acoustic_hidden_dim] on device.
+
+        Internally delegates to :meth:`compute_temb_tp` + :meth:`forward_with_temb_tp`.
+        Callers that loop over many Euler steps with a fixed batch should pre-compute
+        ``(temb, timestep_proj)`` once per step and call :meth:`forward_with_temb_tp` directly to
+        avoid re-running the time-embed MLP every call (saves N × ~10 ops per ``generate``).
+        """
+        # Determine target batch from whichever input was passed.
+        if hidden_states_btC is not None:
+            B = int(hidden_states_btC.shape[0])
+        elif xt_bt64 is not None:
+            B = int(xt_bt64.shape[0])
+        else:
+            raise ValueError(
+                "Pass either `hidden_states_btC` (already concat'd) OR both `xt_bt64` and `context_latents_bt128`."
+            )
+
+        temb_bd, timestep_proj_b6d = self.compute_temb_tp(
+            int(timestep_index),
+            timestep_r_index=timestep_r_index,
+            target_batch=B,
+        )
+        return self.forward_with_temb_tp(
+            xt_bt64=xt_bt64,
+            context_latents_bt128=context_latents_bt128,
+            hidden_states_btC=hidden_states_btC,
+            encoder_hidden_states_btd=encoder_hidden_states_btd,
+            temb_bd=temb_bd,
+            timestep_proj_b6d=timestep_proj_b6d,
+            attention_mask_1d_bt=attention_mask_1d_bt,
+            encoder_attention_mask_1d_bk=encoder_attention_mask_1d_bk,
+            encoder_attention_mask_b1qk=encoder_attention_mask_b1qk,
+            debug_intermediates=debug_intermediates,
+        )
 
 
 def _find_model_safetensors(snapshot_root: Path) -> Path:

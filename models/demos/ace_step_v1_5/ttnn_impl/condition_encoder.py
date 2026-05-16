@@ -323,30 +323,70 @@ class TtAceStepInstrumentalConditionEncoder:
             mesh_mapper=mapper,
         )
 
-    def forward(
-        self, text_hidden_b1sd: ttnn.Tensor, attention_mask_01: np.ndarray
-    ) -> tuple[ttnn.Tensor, np.ndarray, ttnn.Tensor]:
+        # The fast-preprocess path (e2e_model_tt + run_prompt_to_wav --ttnn-condition-embedding)
+        # always invokes lyric_encoder() and timbre_encoder() with no args. Both encoders take
+        # zero-filled dummy inputs (see _TtAceStepTinyEncoder.__call__) and produce a deterministic
+        # constant output — 8 + 4 transformer layers' worth of compute that is identical on every
+        # call. Pre-compute these once and reuse the device tensors in forward(), which:
+        #   - eliminates ~12 layers of per-call work in the e2e pipeline (~5–10ms saved per prompt)
+        #   - makes forward() trace-safe (no per-call ttnn.as_tensor of dummy x_np / bias_np)
+        # `_lyric_const_tt` and `_timbre_const_tt` are persistent for the lifetime of this encoder
+        # instance and intentionally never deallocated in forward().
+        self._lyric_const_tt = ttnn.to_layout(self.lyric_encoder(), ttnn.TILE_LAYOUT)
+        self._timbre_const_tt = ttnn.to_layout(self.timbre_encoder(), ttnn.TILE_LAYOUT)
+
+    def forward_device(self, text_hidden_b1sd: ttnn.Tensor, valid: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Trace-safe forward.
+
+        ``text_hidden_b1sd``: ``[B, 1, S, D_text]`` device tensor (e.g. Qwen3 hidden states).
+        ``valid``: number of valid (unpadded) text tokens; precomputed by the caller from the host
+            attention mask via ``int(attn.sum())``.
+
+        Returns ``(enc, null_condition_emb)`` — both device tensors. The host-side ``enc_mask``
+        produced by the legacy :meth:`forward` is omitted here because it does not depend on any
+        device computation (caller can build it from ``valid`` and the prompt seq length).
+
+        All ops are device-only; safe to call inside ``begin_trace_capture``.
+        """
         text_proj = self.text_projector.forward_from_hidden(text_hidden_b1sd, activation_dtype=self.dtype)
         b, s, d = int(text_proj.shape[0]), int(text_proj.shape[1]), int(text_proj.shape[2])
         if b != 1:
             raise ValueError("TtAceStepInstrumentalConditionEncoder currently supports B=1 only.")
+        v = int(valid)
+        if v < 0 or v > s:
+            raise ValueError(f"valid must be in [0, {s}], got {v}")
+
+        parts: list[ttnn.Tensor] = [self._lyric_const_tt, self._timbre_const_tt]
+        text_valid = ttnn.slice(text_proj, (0, 0, 0), (1, v, d)) if v > 0 else None
+        if text_valid is not None:
+            parts.append(text_valid)
+        text_pad = ttnn.slice(text_proj, (0, v, 0), (1, s, d)) if v < s else None
+        if text_pad is not None:
+            parts.append(text_pad)
+        enc = ttnn.concat([ttnn.to_layout(p, ttnn.TILE_LAYOUT) for p in parts], dim=1)
+        for t in (text_proj, text_valid, text_pad):
+            if t is not None:
+                try:
+                    ttnn.deallocate(t)
+                except Exception:
+                    pass
+        return enc, self.null_condition_emb
+
+    def forward(
+        self, text_hidden_b1sd: ttnn.Tensor, attention_mask_01: np.ndarray
+    ) -> tuple[ttnn.Tensor, np.ndarray, ttnn.Tensor]:
+        """Legacy host-input wrapper around :meth:`forward_device`.
+
+        Computes ``valid`` from the host attention mask, calls :meth:`forward_device`, and assembles
+        the host ``enc_mask`` numpy array expected by ``e2e_model_tt`` / ``run_prompt_to_wav``.
+        """
+        s = int(text_hidden_b1sd.shape[2])
         attn = np.asarray(attention_mask_01, dtype=np.float32).reshape(1, -1)
         if int(attn.shape[1]) != s:
             raise ValueError(f"attention_mask length {attn.shape[1]} != text sequence length {s}")
         valid = int(attn.sum())
 
-        lyric = self.lyric_encoder()
-        timbre = self.timbre_encoder()
-        text_valid = ttnn.slice(text_proj, (0, 0, 0), (1, valid, d)) if valid > 0 else None
-        parts = [lyric, timbre]
-        if text_valid is not None:
-            parts.append(text_valid)
-        if valid < s:
-            text_pad = ttnn.slice(text_proj, (0, valid, 0), (1, s, d))
-            parts.append(text_pad)
-        else:
-            text_pad = None
-        enc = ttnn.concat([ttnn.to_layout(p, ttnn.TILE_LAYOUT) for p in parts], dim=1)
+        enc, null_emb = self.forward_device(text_hidden_b1sd, valid)
         enc_mask = np.concatenate(
             [
                 np.ones((1, 2 + valid), dtype=np.float32),
@@ -354,13 +394,7 @@ class TtAceStepInstrumentalConditionEncoder:
             ],
             axis=1,
         )
-        for t in (text_proj, text_valid, text_pad):
-            if t is not None:
-                try:
-                    ttnn.deallocate(t)
-                except Exception:
-                    pass
-        return enc, enc_mask, self.null_condition_emb
+        return enc, enc_mask, null_emb
 
     def forward_payload(self, payload: dict) -> tuple[ttnn.Tensor, np.ndarray, ttnn.Tensor, ttnn.Tensor]:
         """TTNN equivalent of ACE ``prepare_condition`` for the official handler payload.
