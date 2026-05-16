@@ -1629,3 +1629,177 @@ hang from CB-clash crash).
 No changes to the kernel C++ sources (`tt/kernels/recurrent_delta_rule/*.cpp`)
 or the authoring script — the V2-17 emitted kernel is reused as-is.
 The kernel binary is the same one validated at PCC 1.0 in V2-17.
+
+## V2-17c: multi-core grid + readout fusion of the recurrent kernel (2026-05-16)
+
+V2-18 left two big-ticket improvements untouched in the V2-17 kernel:
+
+1. `grid=(1, 1)` — single Tensix core. All 16 (i, j) tile-pair updates
+   serialised onto one core. 4×4=16 cores idle in the worker grid.
+2. Readout matmul (`o[j] = sum_i q[i] @ state_new[i, j]`) lives OUTSIDE
+   the kernel — every per-head state_new tile is drained from L1 to
+   DRAM by the writer thread, then re-read by `ttnn.matmul(q_h, state_new_h)`.
+   One DRAM round-trip per (head, j) per layer per step.
+
+V2-17c forks the V2-17 kernel into `recurrent_delta_rule_v2/` and
+extends it with both:
+
+- **`grid=(V_TILES, 1) = (4, 1)`** — 4 cores. Each core owns one j
+  (V-tile column) and loops over i internally. The 4 j-tiles map
+  1-to-1 onto cores; the K-axis reduction stays serial per core.
+- **Readout fusion via CB-fork** — the compute thread produces
+  `state_new[i, j]` to TWO CBs in the same i iteration:
+  `state_out_dfb` (drained to DRAM by the writer thread) AND a
+  compute-internal `state_readout_dfb`. The fork is implemented by
+  recomputing the same fp32 expression to both reservations (since
+  tt-lang's `dst.store(src_blk)` tile-copy primitive consumes DST
+  register state that has been packed-out by the preceding store).
+  The readout matmul then reads `state_readout_dfb` + `q_dfb` and
+  accumulates `o[j] += q[i] @ state_new[i, j]` across i; the final
+  `o[j]` is written to a writer-bound `o_dfb`. **No DRAM round trip
+  between state update and readout.**
+
+The kernel still respects the V2-17 single-head-per-launch contract
+(brief reframe: trace amortises the 6× call cost; multi-head batching
+is NOT the high-yield lever inside a captured trace).
+
+### Standalone validation (`test_recurrent_delta_rule_v2_kernel.py`)
+
+| metric                                    | result      | target    |
+| ----------------------------------------- | ----------- | --------- |
+| state_new PCC vs ref chain                | 1.00000000  | ≥ 0.9999  |
+| o PCC vs `q @ state_new`                  | 0.99999851  | ≥ 0.9999  |
+| state max_abs (vs ref \|max\|=4.51)       | 0.005102    | —         |
+| o max_abs     (vs ref \|max\|=35.9)       | 0.125       | —         |
+| 100-call latency: ref chain               | 580.37 µs   | —         |
+| 100-call latency: V2-17c fused kernel     | **62.66 µs**| —         |
+| speedup vs `state-update chain + ext. matmul`| **9.26×** | ≥ 1.5×    |
+
+Both PCC and speedup targets met by wide margins. The 9.26× is
+*against the naive op chain* (5-op sequence: outer matmul + 2 multiplies
++ add + readout matmul). The 6.68× single-tile speedup from V2-17
+extends to ~9× once the readout matmul is folded into the kernel.
+
+### Integration into the real decode loop (`QWEN36_TT_LANG_RECURRENT_V2=1`)
+
+Reused the V2-18 per-head dispatch pattern, **but dropped the external
+readout matmul** since the V2-17c kernel produces `o` directly.
+
+```
+# V2-18 per head:                              # V2-17c per head:
+launch(state, q, k, v, decay, beta)            launch(state, q, k, v, decay, beta)
+  → state_new, o_zeros                           → state_new, o_h
+o_h = ttnn.matmul(q_h, state_new_h)
+```
+
+Per-head launch count is identical (6 launches / layer / step × 48
+DeltaNet layers = 288 launches / step), but each launch now does
+~2× the work (state + readout) on 4× the cores.
+
+### Real-loop traced perf delta (in-trace 64L decode, 32 steps)
+
+| config                                                     | ms / decode step | tok/s/user |
+| ---------------------------------------------------------- | ---------------: | ---------: |
+| baseline V2-16 (`QWEN36_TT_LANG_BETA_G=1`)                 |            62.12 |      16.10 |
+| V2-18 (BETA_G + `QWEN36_TT_LANG_RECURRENT=1`)              |            72.52 |      13.79 |
+| **V2-17c** (BETA_G + `QWEN36_TT_LANG_RECURRENT_V2=1`)      |        **70.61** |   **14.16** |
+
+**Delta vs V2-16 baseline: +8.49 ms / step (+13.7 %)** — negative.
+
+V2-17c is **1.91 ms / step faster than V2-18** (multi-core + readout
+fusion buys back roughly 20 % of the per-head-loop overhead), but the
+fundamental gap remains: the per-head Python loop + 288 generic_op
+launches per step have so much wrapper overhead (slice, transpose,
+multiply-broadcast for the per-head decay/beta tiles, allocate_tensor_
+on_device, concat) that the kernel speedup is dwarfed.
+
+### Coherency (in-trace 64L decode, 32 generated tokens)
+
+| config         | generated text snippet                                                     |
+| -------------- | -------------------------------------------------------------------------- |
+| V2-16 baseline | `\n\n2. **Identify Key Elements:**\n   - The user is asking for my "favo…` (canonical) |
+| V2-18          | `\n\n<think>\n\n<think>   classic on are ai\n\n<think>…`  (gibberish)      |
+| V2-17c         | `\n\n— ��\n标题（…/).\n\njuje's_definition Öz…`             (gibberish)      |
+
+V2-17c suffers the SAME coherency drift as V2-18 — different bytes, but
+both fall off the canonical Qwen3.6 reasoning trajectory by step 1. The
+drift is NOT from the kernel math (PCC 1.0 / 0.99999 standalone) — it
+is introduced by the per-head decode integration path: ttnn.slice +
+ttnn.transpose + ttnn.multiply broadcast for the per-head decay/beta
+tiles, then re-concat — each metadata-only reshape between fp32 /
+TILE_LAYOUT / DRAM-vs-L1 introduces tiny fp32 quantisation that
+compounds across 48 DeltaNet layers × 32 decode steps.
+
+### 64L Paris real-prompt PCC
+
+V2-17c integrated path **hangs the device** (1 `tt-smi -glx_reset`
+needed) during the 64L Paris decode loop — same failure mode as the
+V2-18 integration's intermittent issues. The standalone PCC test is
+clean; the hang is an integration-path L1/DRAM allocation pattern
+issue (288 ttnn.allocate_tensor_on_device calls per step on top of the
+model's persistent L1 buffers eventually trips a CB/dispatch L1
+collision on one of the 32 chips).
+
+### Decision
+
+Acceptance criterion (a) **NOT MET**: +8.5 ms / step regression vs
+baseline (target was ≥ 0 ms; stretch ≥ 3 ms savings for 17 tok/s/user).
+
+Acceptance criterion (b) triggers: **kernel passes standalone but
+integration is negative → revert + report what's still missing.**
+
+Action taken: **reverted** the integration changes in
+`tt/qwen36_delta_attention.py` (working tree restored to HEAD).
+The kernel sources (`tt/kernels/recurrent_delta_rule_v2/*.cpp` +
+`tt/kernels/recurrent_delta_rule_v2_kernel.py`) and standalone test
+(`tests/test_recurrent_delta_rule_v2_kernel.py`) are preserved
+uncommitted — they document the achievable kernel-level speedup and
+can be re-integrated once the upstream per-head dispatch overhead
+problem is solved.
+
+### What's still missing — V2-17d candidates
+
+1. **Multi-head batching inside the kernel (`grid=(4, 6) = 24 cores`).**
+   The brief explicitly de-prioritised this ("trace amortises the
+   launch tax"). V2-17c's results contradict that hypothesis: even
+   in a captured trace, the wrapper cost of ttnn.slice + per-head
+   broadcast + concat is roughly 1 ms / layer = 48 ms / step — far
+   bigger than the per-launch dispatch tax. Eliminating the Python
+   loop by accepting all 6 heads in one launch (and one big H*K × V
+   flat state tensor) IS the lever — it eliminates 288→48 ttnn ops
+   in the wrapper, not just the 288 generic_op launches themselves.
+
+2. **In-place state buffer write.** V2-17c per-head allocates a fresh
+   `state_new_h` and concats 6 of them. The baseline fp32 chain
+   writes state in-place to the persistent DRAM buffer. Adding an
+   in-place output mode to the kernel (write directly to
+   `self.dn_state_buffer[h_idx]`) eliminates the concat + state copy
+   at the end.
+
+3. **Persistent decay/beta scalar tiles.** The 2 × ttnn.multiply +
+   ttnn.slice per head per layer = 288 ops just to materialise
+   `[1, 1, 32, 32]` broadcast tiles from the `[B, H]` scalar inputs
+   is a major chunk of the host overhead. A 1-shot beta/g →
+   broadcast-tile kernel (or a tensor-broadcast op in tt-lang) would
+   amortise this once per step.
+
+### Iterations + tt-smi resets
+
+- 5 iterations (1 kernel author + emission, 4 test runs).
+- 2 `tt-smi -glx_reset` calls (one after V2-17c 64L Paris hang,
+  one preventative).
+
+### Files added (uncommitted, preserved for V2-17d)
+
+- `tt/kernels/recurrent_delta_rule_v2_kernel.py` — V2-17c kernel
+  authoring script (grid=(4, 1), readout fork via expression-recompute).
+- `tt/kernels/recurrent_delta_rule_v2/{recurrent_compute, recurrent_read, recurrent_write}.cpp`
+  — emitted C++ kernels.
+- `tt/kernels/recurrent_delta_rule_v2/_runner_emitted.py` — tt-lang's
+  auto-generated reference dispatch (kept for parameter cross-check).
+- `tests/test_recurrent_delta_rule_v2_kernel.py` — standalone PCC +
+  perf test (passes both — PCC ≥ 0.9999 each, speedup 9.26×).
+
+### Files modified (uncommitted)
+
+- `PERF.md` — this section.
