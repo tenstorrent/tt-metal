@@ -22,7 +22,7 @@
 #   --test     FILE   Test file name, e.g. test_sfpu_square_quasar.py
 #
 # Optional:
-#   --maxfail  N      Stop after N failures (simulate/run; omit for verification)
+#   --maxfail  N      Stop after N failures (simulate/run; omit for verification) (default: 10)
 #   --k        EXPR   pytest -k filter expression
 #   --test-id  ID     Full parametrize ID for a single variant run
 #                     (single-quotes, brackets, commas are safe — no escaping needed)
@@ -102,7 +102,7 @@ shift 2>/dev/null || true
 WORKTREE=""
 ARCH=""
 TEST_FILE=""
-MAXFAIL=""
+MAXFAIL="10"
 K_FILTER=""
 TEST_ID=""
 PORT="5556"
@@ -454,7 +454,7 @@ _do_compile() {
       # shellcheck disable=SC1091
       source "${VENV}/bin/activate"
       cd "${TEST_DIR}"
-      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${pytest_args[@]}"
+      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" -x "${pytest_args[@]}"
     ) > >(tee -a "${LOG_DIR}/compile.log") 2> >(tee -a "${LOG_DIR}/compile.log" >&2) &
     compile_pid=$!
   else
@@ -462,7 +462,7 @@ _do_compile() {
       # shellcheck disable=SC1091
       source "${VENV}/bin/activate"
       cd "${TEST_DIR}"
-      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${pytest_args[@]}"
+      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" -x "${pytest_args[@]}"
     ) &
     compile_pid=$!
   fi
