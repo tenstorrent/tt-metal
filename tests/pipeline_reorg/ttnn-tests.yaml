@@ -240,17 +240,21 @@
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   merge_gate: true
 
-# Dedicated job for known-flaky tests.
-# These tests are deselected from all regular test group runs (see flaky-tests.yaml)
-# and run here in isolation so failures are visible but non-blocking for regular sanity.
+# Dedicated job for HW-only tests: union of known-flaky tests + ttsim-skipped tests.
+# Flaky tests are deselected from regular test group runs (see flaky-tests.yaml).
+# TTSim-skipped tests can't be validated by the simulator (numeric mismatches, timeouts, OOM)
+# so they must run on real hardware to maintain coverage.
+# Both lists are merged (deduplicated) and run here in a single job.
 # Tracking issues: #44353, #44354, #44355, #44356, #44357
-- name: "ttnn flaky tests"
+- name: "ttnn HW-only tests (flaky + ttsim-skipped)"
   cmd: >-
-    yq -r '.wormhole_b0[]?' tests/pipeline_reorg/flaky-tests.yaml |
+    { yq -r '.wormhole_b0[]?' tests/pipeline_reorg/flaky-tests.yaml;
+      yq -r '.wormhole_b0[]?' tests/pipeline_reorg/ttsim-skip-list.yaml; } |
+    sort -u |
     xargs pytest --timeout 300 -v
   skus:
     wh_n300_civ2:
-      timeout: 40
+      timeout: 60
   team: ttnn
   owner_id: U05ACKAJTHS # Naif Tarafdar (TMs & CCLs lead — rotate ownership as needed)
   merge_gate: false
