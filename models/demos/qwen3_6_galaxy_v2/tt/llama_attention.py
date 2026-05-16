@@ -1874,12 +1874,31 @@ class TtLlamaAttention(LightweightModule):
         # V2-14: optional persistent-buffer ``line_all_reduce`` swap for the
         # full-attn WO reduction (cluster_axis=1, 16 layers × 64L decode).
         # Gated by env var QWEN36_FULLATTN_LAR=1.
+        #
+        # V2-CCL (2026-05-16): mirror llama3_70b_galaxy `llama_attention.py:571`
+        # WO decode → `line_all_reduce(use_optimal_ccl_for_llama=True,
+        # num_links=GALAXY_NUM_LINKS)` pattern. The "tuned" lever flag
+        # QWEN36_FULLATTN_WO_TUNED enables the same persistent-buffer path
+        # under a cleaner name for A/B; num_links can be overridden by
+        # QWEN36_CCL_NUM_LINKS (default keeps the baseline value).
         import os as _os_v214
 
+        # WO reduction num_links: env override (default 1 — matches baseline
+        # which mirrors BH FABRIC_1D `GALAXY_NUM_LINKS=1`).  Per-site override
+        # via QWEN36_CCL_NUM_LINKS_FA, falling back to global QWEN36_CCL_NUM_LINKS.
+        try:
+            _wo_num_links = int(
+                _os_v214.environ.get(
+                    "QWEN36_CCL_NUM_LINKS_FA",
+                    _os_v214.environ.get("QWEN36_CCL_NUM_LINKS", "1"),
+                )
+            )
+        except ValueError:
+            _wo_num_links = 1
         _use_pbuf_fa = (
             _os_v214.environ.get("QWEN36_FULLATTN_LAR", "0") == "1"
-            and getattr(self.tt_ccl, "qwen36_residual_buffers", [None, None])[1] is not None
-        )
+            or _os_v214.environ.get("QWEN36_FULLATTN_WO_TUNED", "0") == "1"
+        ) and getattr(self.tt_ccl, "qwen36_residual_buffers", [None, None])[1] is not None
 
         if not _use_pbuf_fa:
             # WO projection + all-reduce across cols (original path).
@@ -1898,7 +1917,7 @@ class TtLlamaAttention(LightweightModule):
             dense_out_full = ttnn.all_reduce(
                 dense_partial,
                 cluster_axis=1,
-                num_links=1,
+                num_links=_wo_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             dense_partial.deallocate(True)
@@ -1928,7 +1947,7 @@ class TtLlamaAttention(LightweightModule):
             dense_out_sharded = self.tt_ccl.line_all_reduce(
                 dense_partial,
                 cluster_axis=1,
-                num_links=1,
+                num_links=_wo_num_links,
                 memory_config=sharded_memcfg,
                 use_optimal_ccl_for_llama=True,
                 use_qwen36_residual_buffer=True,

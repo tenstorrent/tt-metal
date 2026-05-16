@@ -2612,3 +2612,191 @@ post-processor on these 1L captures because the per-step op count is
   * `generated/profiler/reports/v2_tracy_4_fullattn/tracy_ops_data.csv`
 * No model files modified.  PERF.md (this section) + 2 new demo
   drivers only.
+
+## V2-CCL — llama70b CCL pattern mirroring follow-up (2026-05-16)
+
+V2-tracy-4 identified the full-attention `ReduceScatter` (28.2% of FA
+decode, 181 µs per call) and the DeltaNet `AllGatherAsync` (20.2% of
+DeltaNet decode) as the dominant CCL costs. V2-CCL audits llama3_70b_galaxy's
+analogous paths to see which differences can be safely mirrored on
+BH GLX 8×4.
+
+### Task 1 — llama70b reference (file:line evidence)
+
+a. **Full-attn WO decode** — `models/demos/llama3_70b_galaxy/tt/llama_attention.py:560-577`:
+
+   - Matmul output is **width-sharded** in L1 (`SHARDED_WO_OUT_RING_MEMCFG`)
+     via `WO_DECODE_RING_PROGCFG`, sub-device-scoped to the prefetcher's
+     worker grid.
+   - Reduction is a single `line_all_reduce(cluster_axis=0,
+     num_links=GALAXY_NUM_LINKS, use_optimal_ccl_for_llama=True)` writing
+     to `DECODE_RESIDUAL_MEMCFG`. No separate RS/AG ops in decode.
+   - Persistent residual buffer for the all-reduce is allocated in
+     `get_persistent_buffers()` (`llama_ccl.py:329-388`); cluster_axis=0
+     buffer is width-sharded across 60 cores at `(32 × N_per_shard)` tiles.
+   - `GALAXY_NUM_LINKS = {"6U": 4, "4U": 3}` (`model_config.py:622`).
+
+b. **MLP w2 decode** — `models/demos/llama3_70b_galaxy/tt/llama_mlp.py:208-225`:
+
+   - Matmul output width-sharded (`FF2_OUT_RING_MEMCFG`).
+   - Reduction is the same `line_all_reduce(cluster_axis=0,
+     num_links=GALAXY_NUM_LINKS, use_optimal_ccl_for_llama=True)` to
+     `DECODE_RESIDUAL_MEMCFG`. This is the closest analogue to v2's
+     `_output_proj_and_reduce` (both reduce across cluster_axis=0 after
+     a matmul producing a per-shard sub-row of the residual stream).
+
+c. **`line_all_reduce` / `line_reduce_scatter` defs** —
+   `models/demos/llama3_70b_galaxy/tt/llama_ccl.py:697-776` / `956-1025`:
+
+   - All call sites pass `num_links=model_config["GALAXY_NUM_LINKS"]`.
+   - `GALAXY_NUM_LINKS=1` on BH (`is_blackhole()` branch in v2's
+     `qwen36_model_config.py:255` and `qwen_model_config.py:309`).
+   - On WH 4U/6U it is 3 or 4. The "tune num_links higher" lever is
+     therefore a WH-only optimization in llama70b; the v2 codebase
+     already inherits `num_links=1` defaults on BH, matching baseline
+     behaviour (V2-13 audit).
+
+d. **What v2 already matches vs differs** (vs llama70b):
+   - **Match**: `TT_CCL` class structure, `line_all_reduce` body, persistent
+     buffer allocation, `use_optimal_ccl_for_llama` plumbing.
+   - **Differ**: v2's `_forward_decode_qwen36` WO writes the matmul output
+     to **DRAM** (not L1-width-sharded) by default. The persistent-buffer
+     LAR path (`QWEN36_FULLATTN_LAR=1`) writes to L1, but in V2-14 this
+     was perf-neutral.
+   - **Differ**: v2's DeltaNet `_output_proj_and_reduce` baseline calls
+     `ttnn.all_reduce` (not `line_all_reduce`); LAR equivalent gated by
+     `QWEN36_DELTA_LAR=1`.
+
+### Task 2 — v2 deltas applied (env-gated, default-off)
+
+Three flags added, each independently selectable:
+
+1. `QWEN36_FULLATTN_WO_TUNED=1` — alias for the existing
+   `QWEN36_FULLATTN_LAR` (persistent-buffer `line_all_reduce` + sharded
+   linear) at `tt/llama_attention.py:1894` (search `QWEN36_FULLATTN_WO_TUNED`).
+   Same code path as V2-14b, exposed under the task-named flag.
+
+2. `QWEN36_DELTA_OP_TUNED=1` — alias for the existing
+   `QWEN36_DELTA_LAR` at `tt/qwen36_delta_attention.py:2137`. Routes the
+   DeltaNet output projection through the persistent-buffer LAR path.
+
+3. `QWEN36_CCL_NUM_LINKS=N` (default 1) — overrides `num_links` for both
+   the full-attn WO reduction (`tt/llama_attention.py:1893-1894` and
+   `1943`) and the DeltaNet output reduction
+   (`tt/qwen36_delta_attention.py:2142-2150`, `2192`). Per-site overrides
+   are also available:
+     - `QWEN36_CCL_NUM_LINKS_FA` (full-attn WO only)
+     - `QWEN36_CCL_NUM_LINKS_DELTA` (DeltaNet only)
+
+All edits preserve the baseline path bit-identically when the flags are
+unset (default `num_links=1` literal preserved, default LAR-off
+preserved).
+
+### Task 3 — per-flag perf + correctness table
+
+Test harness: `tests/test_decode_perf_intrace.py` (64L, 32 traced
+decode steps, mean ms/step over the timing pass) for wall-clock +
+coherency; `tests/test_decode_64L_real_prompt_pcc.py` ("The capital of
+France is" → ` Paris`, 8 lock-step decode steps) for Paris match +
+decode step-0 argmax match. `QWEN36_TT_LANG_BETA_G=1` is set in all runs
+(matches the V2-16 baseline).
+
+| flag combination                                | ms/step | tok/s/u | coherency (alpha chars) | Paris  | step-0 match |
+|-------------------------------------------------|--------:|--------:|:-----------------------:|:------:|:------------:|
+| baseline (all unset)                            |   62.12 |   16.10 |                  82     |   OK   |     OK       |
+| `QWEN36_FULLATTN_WO_TUNED=1`                    |   62.11 |   16.10 |                  82     |   OK   |     OK       |
+| `QWEN36_DELTA_OP_TUNED=1`                       |   62.12 |   16.10 |                  82     |   OK   |     OK       |
+| `QWEN36_CCL_NUM_LINKS=2`  (both sites)          |   61.60 |   16.23 |                 126     |   OK   |   **FAIL**   |
+| `QWEN36_CCL_NUM_LINKS_FA=2`  (FA only)          |   62.02 |   16.12 |                  82     |   OK   |     OK       |
+| `QWEN36_CCL_NUM_LINKS_DELTA=2` (Delta only)     | **61.69** | **16.21** |                  91     |   OK   |     OK       |
+| FULLATTN_WO_TUNED=1 + DELTA_OP_TUNED=1          |   62.12 |   16.10 |                  82     |   OK   |     OK       |
+| all 3 (FULLATTN_WO_TUNED + DELTA_OP_TUNED + CCL_NUM_LINKS=2) |   61.61 |   16.23 |                 126     |   OK   |   **FAIL**   |
+| **Best safe**: FULLATTN_WO_TUNED=1 + DELTA_OP_TUNED=1 + CCL_NUM_LINKS_DELTA=2 | **61.71** | **16.20** |                  91     |   OK   |     OK       |
+
+### Findings
+
+1. **LAR swaps (`QWEN36_FULLATTN_WO_TUNED` / `QWEN36_DELTA_OP_TUNED`)
+   are perf-neutral.** V2-14 already established this (V2-13/V2-14
+   sections above): the BH `ttnn.all_reduce` 2nd overload already takes
+   the kernel-fused minimal path on `num_links=1`; the 3rd overload's
+   persistent-buffer path matches it byte-for-byte at this scale. PCC
+   preserved.
+
+2. **`QWEN36_CCL_NUM_LINKS=2` at BOTH sites breaks PCC.** Prefill argmax
+   stays ` Paris`, but decode step-0 flips from `\n\n` (271) to
+   `<|im_end|>` (248046). Prefill hidden PCC drops from 0.986 → 0.971,
+   logits PCC from 0.972 → 0.971 — within noise — but step-0 logits PCC
+   collapses from 0.349 to 0.436 (different relative ordering of the
+   top-1 token). On BH GLX with `FABRIC_1D_RING` and 1 physical link per
+   chip-to-chip hop, `num_links=2` apparently degenerates to a 1-link
+   schedule that uses a different reduction order, producing bf8
+   round-off that compounds across 16 full-attn + 48 DeltaNet layers.
+   Wall-clock improves by 0.5 ms/step (+0.13 tok/s/u) but the PCC gate
+   fails — NOT acceptable.
+
+3. **`QWEN36_CCL_NUM_LINKS_DELTA=2` alone DOES land cleanly.** DeltaNet
+   has 48 layers each calling the all_reduce once per step (vs FA's 16
+   calls). Bumping only Delta's num_links→2 captures most of the 0.5
+   ms/step gain (+0.43 ms/step → 16.21 tok/s/u) and preserves the
+   step-0 token match (the FA path's 16 calls/step are still doing
+   num_links=1, so the residual stream's fp accumulation order at the
+   full-attn boundary stays identical to baseline).
+
+4. **`QWEN36_CCL_NUM_LINKS_FA=2` alone is a noise-level win** (+0.10
+   ms/step). FA only has 16 calls/step; the per-call saving is the same
+   as Delta but the call count is 3× smaller.
+
+5. **Best PCC-preserving combination**: FULLATTN_WO_TUNED=1 +
+   DELTA_OP_TUNED=1 + CCL_NUM_LINKS_DELTA=2 → 61.71 ms/step,
+   **16.20 tok/s/u** (+0.10 over baseline). Effectively, num_links=2 on
+   the DeltaNet output reduction is the only meaningful lever.
+
+### Final tok/s/user
+
+- Baseline: **16.10 tok/s/u** (62.12 ms/step)
+- Best (`QWEN36_CCL_NUM_LINKS_DELTA=2` alone or with the LAR tunings):
+  **16.21 tok/s/u** (61.69 ms/step) — **+0.11 tok/s/u, –0.43 ms/step**.
+- All flags default OFF; baseline behavior preserved when unset.
+
+### Iterations + tt-smi resets
+
+- ~14 perf/PCC iterations (2 baselines + 4 single-flag perf + 4
+  single-flag PCC + 4 combined runs).
+- **0** `tt-smi -glx_reset` invocations (no hangs).
+- Sequential device runs only; `--noconftest` per task spec.
+
+### Recommendation
+
+**Ship at the best-result combination** for inference:
+
+```bash
+export QWEN36_TT_LANG_BETA_G=1            # V2-16
+export QWEN36_CCL_NUM_LINKS_DELTA=2       # V2-CCL: only PCC-safe lever
+# Optional (perf-neutral but consolidates llama70b CCL pattern):
+# export QWEN36_FULLATTN_WO_TUNED=1
+# export QWEN36_DELTA_OP_TUNED=1
+```
+
+The +0.11 tok/s/u gain (1.6 ms / 32-step decode) is modest. To clear
+17 tok/s/u (≤ 58.8 ms / step) v2 needs the V2-17/V2-18 DeltaNet kernel
+work to actually outperform the batched chain, OR a different attack
+on the dominant decode device-time consumers (lm_head MinimalMatmul
+26-32% of decode; AllGather/AllGatherAsync 16-20%).
+
+A **V2-CCL-followup** could investigate whether BH GLX's
+`FABRIC_1D_RING` can be safely driven at num_links=2 for FA as well by
+adding `num_workers_per_link>1` to compensate for the per-link
+bandwidth halving; that requires fabric-side tuning beyond the v2
+model code and was not pursued.
+
+### Files modified (all under `models/demos/qwen3_6_galaxy_v2/`)
+
+- `tt/llama_attention.py:1874-1907` — adds `QWEN36_FULLATTN_WO_TUNED`
+  alias for `QWEN36_FULLATTN_LAR` and plumbs `QWEN36_CCL_NUM_LINKS_FA`
+  (falls back to `QWEN36_CCL_NUM_LINKS`) into both the baseline
+  `ttnn.all_reduce` and the LAR `line_all_reduce` calls.
+- `tt/qwen36_delta_attention.py:2128-2200` — adds `QWEN36_DELTA_OP_TUNED`
+  alias for `QWEN36_DELTA_LAR` and plumbs `QWEN36_CCL_NUM_LINKS_DELTA`
+  (falls back to `QWEN36_CCL_NUM_LINKS`) into both the baseline and LAR
+  paths.
+- `PERF.md` (this section).

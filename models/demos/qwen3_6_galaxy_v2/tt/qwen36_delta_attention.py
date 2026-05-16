@@ -2125,10 +2125,25 @@ class TtQwen36DeltaAttention(LightweightModule):
         # V2-14: optionally swap the post-linear ``ttnn.all_reduce`` to the
         # persistent-buffer ``line_all_reduce`` (3rd overload).  Gated by env
         # var so we can toggle for bisecting precision issues.
+        #
+        # V2-CCL (2026-05-16): mirror llama3_70b_galaxy `llama_mlp.py:219`
+        # w2 epilogue → `line_all_reduce(cluster_axis=0,
+        # num_links=GALAXY_NUM_LINKS, use_optimal_ccl_for_llama=True)`. The
+        # task-named lever flag QWEN36_DELTA_OP_TUNED enables the
+        # persistent-buffer LAR path; num_links is overridable via
+        # QWEN36_CCL_NUM_LINKS (default 1, matching BH GLX FABRIC_1D).
         _use_pbuf = (
-            _os.environ.get("QWEN36_DELTA_LAR", "0") == "1"
-            and getattr(self.tt_ccl, "qwen36_residual_buffers", [None, None])[0] is not None
-        )
+            _os.environ.get("QWEN36_DELTA_LAR", "0") == "1" or _os.environ.get("QWEN36_DELTA_OP_TUNED", "0") == "1"
+        ) and getattr(self.tt_ccl, "qwen36_residual_buffers", [None, None])[0] is not None
+        try:
+            _do_num_links = int(
+                _os.environ.get(
+                    "QWEN36_CCL_NUM_LINKS_DELTA",
+                    _os.environ.get("QWEN36_CCL_NUM_LINKS", "1"),
+                )
+            )
+        except ValueError:
+            _do_num_links = 1
 
         if not _use_pbuf:
             # qwen3.6 residual-stream dtype lock (olmo session-11 lesson):
@@ -2148,7 +2163,7 @@ class TtQwen36DeltaAttention(LightweightModule):
             reduced = ttnn.all_reduce(
                 partial,
                 cluster_axis=0,
-                num_links=1,
+                num_links=_do_num_links,
                 memory_config=mem,
             )
             partial.deallocate(True)
@@ -2181,7 +2196,7 @@ class TtQwen36DeltaAttention(LightweightModule):
         reduced_sharded = self.tt_ccl.line_all_reduce(
             partial,
             cluster_axis=0,
-            num_links=1,
+            num_links=_do_num_links,
             memory_config=sharded_memcfg,
             use_optimal_ccl_for_llama=True,
             use_qwen36_residual_buffer=True,
