@@ -709,10 +709,22 @@ def test_batch_norm_mixed_precision(
     var_ref = var_data.float() if var_data is not None else None
     weight_ref = weight_data.float() if weight_data is not None else None
     bias_ref = bias_data.float() if bias_data is not None else None
+    # PyTorch 2.11+ requires running_mean and running_var to both be None or both not-None.
+    # Supply a neutral dummy for the missing stat; assertions still only check the stats actually
+    # generated.
+    channels_ref = input_shapes[1]
+    if mean_ref is None and var_ref is not None:
+        mean_ref_call = torch.zeros(channels_ref, dtype=torch.float32)
+    else:
+        mean_ref_call = mean_ref
+    if var_ref is None and mean_ref is not None:
+        var_ref_call = torch.ones(channels_ref, dtype=torch.float32)
+    else:
+        var_ref_call = var_ref
     torch_result = torch.nn.functional.batch_norm(
         input=in_ref,
-        running_mean=mean_ref,
-        running_var=var_ref,
+        running_mean=mean_ref_call,
+        running_var=var_ref_call,
         weight=weight_ref,
         bias=bias_ref,
         training=training,
