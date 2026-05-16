@@ -324,12 +324,9 @@ class _StridedStftConv:
 class TTTorchSTFT:
     """TT port of :class:`TorchSTFT` (STFT/iSTFT via precomputed dense matrices).
 
-    Set ``use_torch_stft_fallback=True`` to run the entire ``transform`` on CPU via
-    ``torch.stft`` (float32), bypassing the BH BF16 precision ceiling.  BH rounds float32→BF16
-    before ALL compute ops, including the SFPU used for ``atan2`` — so moving only the conv2d
-    to CPU is insufficient.  The full-transform fallback raises PCC from ~0.58 to > 0.99
-    (when combined with ``use_torch_phase_fallback`` in :class:`TTSineGen`).
-    ``inverse`` always stays on-device.
+    ``use_torch_stft_fallback=True`` applies **only** to :meth:`transform` (CPU ``torch.stft``).
+    iSTFT stays on-device by default and can be toggled independently with
+    ``use_torch_istft_fallback=True`` when needed for diagnostics.
     """
 
     def __init__(
@@ -338,11 +335,13 @@ class TTTorchSTFT:
         params: TTTorchSTFTParams,
         *,
         use_torch_stft_fallback: bool = False,
+        use_torch_istft_fallback: bool = False,
     ) -> None:
         self.device = device
         self.params = params
         self.eps = 1e-11
         self._use_torch_stft_fallback = use_torch_stft_fallback
+        self._use_torch_istft_fallback = use_torch_istft_fallback
         # _StridedStftConv is used only when use_torch_stft_fallback=False.
         self._conv_real = _StridedStftConv(device, params.conv_stft_real, params.hop_length)
         self._conv_imag = _StridedStftConv(device, params.conv_stft_imag, params.hop_length)
@@ -389,6 +388,24 @@ class TTTorchSTFT:
             phase, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=mc
         )
         return mag_tt, phase_tt
+
+    def _inverse_torch_fallback(self, magnitude: ttnn.Tensor, phase: ttnn.Tensor) -> ttnn.Tensor:
+        """Optional CPU float32 iSTFT via ``torch.istft`` for diagnostics."""
+        p = self.params
+        mag_cpu = ttnn.to_torch(magnitude).float()  # [B, K, F]
+        phase_cpu = ttnn.to_torch(phase).float()  # [B, K, F]
+        z = mag_cpu * torch.exp(phase_cpu * 1j)  # complex [B, K, F]
+        window = torch.hann_window(p.win_length, periodic=True, dtype=torch.float32)
+        with torch.no_grad():
+            y = torch.istft(z, p.filter_length, p.hop_length, p.win_length, window=window)  # [B, out_len]
+        out = y.unsqueeze(-2).contiguous()  # [B, 1, out_len]
+        return ttnn.from_torch(
+            out,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def transform(self, x_bL: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
@@ -461,7 +478,12 @@ class TTTorchSTFT:
 
         Returns:
             ``[B, 1, output_length]`` (matches ``TorchSTFT.inverse``'s trailing ``unsqueeze(-2)``).
+
+        When ``use_torch_istft_fallback=True`` delegates to :meth:`_inverse_torch_fallback`.
         """
+        if self._use_torch_istft_fallback:
+            return self._inverse_torch_fallback(magnitude, phase)
+
         p = self.params
         if magnitude.dtype != ttnn.float32:
             magnitude = ttnn.typecast(magnitude, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
