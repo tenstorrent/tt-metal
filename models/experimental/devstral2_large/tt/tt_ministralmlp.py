@@ -15,6 +15,7 @@ same L1 pressure appears on WH multi-chip as on BH multi-chip.
 
 from __future__ import annotations
 
+import math
 import os
 
 import torch
@@ -367,17 +368,38 @@ class TtDevstral2LargeMLP(LightweightModule):
         # overflow at load, or matmul supports interleaved DRAM ``B``.
         if use_minimal_matmul_w2:
             grid = self.args.mlp2_grid(seq_len)
-            m_blk = int(os.environ.get("DEVSTRAL2_MINIMAL_MM_M_BLOCK", "8"))
-            if m_blk not in (4, 8, 16):
-                m_blk = 16
-            # Explicit 2×2 subblocks (default ctor used 1×1 here). Device perf report recommended
-            # a larger output subblock product for this matmul shape; larger M blocks when divisible.
+            # MinimalMatmul pads M to grid_y (in0_parallel_axis). For seq_len <= grid_y*TILE_SIZE,
+            # M_tiles_per_core collapses to 1 → M_block_size=8 wastes ~7× output / in0 CB allocation
+            # per core, and ``subblock_h=2`` straddles padding. Adapt the block shape and subblocks
+            # to the actual per-core M; for the prefill PCC test (seq=128, BH grid_y=8) this yields
+            # M_block=1 + subblock 1×4 (4-tile DST subblock) and frees enough L1 to grow N_block.
+            m_tiles_total = max(1, math.ceil(seq_len / ttnn.TILE_SIZE))
+            grid_y = int(grid[1])
+            m_tiles_per_core = max(1, math.ceil(m_tiles_total / grid_y))
+            m_blk_env = os.environ.get("DEVSTRAL2_MINIMAL_MM_M_BLOCK")
+            if m_blk_env is not None:
+                try:
+                    m_blk = int(m_blk_env)
+                except ValueError:
+                    m_blk = m_tiles_per_core
+                if m_blk not in (1, 2, 4, 8, 16):
+                    m_blk = m_tiles_per_core
+            else:
+                m_blk = 1
+                while m_blk < m_tiles_per_core and m_blk < 8:
+                    m_blk *= 2
+            if m_blk == 1:
+                subblock_h, subblock_w = 1, 4
+                n_blk = 16
+            else:
+                subblock_h, subblock_w = 2, 2
+                n_blk = 8
             pc_2_minimal = ttnn.MinimalMatmulConfig(
                 M_block_size=m_blk,
                 K_block_size=8,
-                N_block_size=8,
-                subblock_h=2,
-                subblock_w=2,
+                N_block_size=n_blk,
+                subblock_h=subblock_h,
+                subblock_w=subblock_w,
                 compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
             )
             w2_out = ttnn.experimental.minimal_matmul(
