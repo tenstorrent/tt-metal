@@ -103,10 +103,9 @@ void kernel_main() {
         for (uint32_t batch_idx = core_id; batch_idx < actual_batches; batch_idx += num_idle_cores) {
             cb_reserve_back(cb_untilize_id, read_batch_size);
             for (uint32_t block = 0; block < num_blocks; block++) {
-                DeviceZoneScopedN("combine-untilization");
                 cb_wait_front(cb_in_id, block_ct_dim);
                 {
-                    // DeviceZoneScopedN("combine-packing");
+                    DeviceZoneScopedN("combine-packing");
                     pack_untilize_block<block_ct_dim, full_ct_dim>(cb_in_id, 1, cb_untilize_id, block);
                 }
                 cb_pop_front(cb_in_id, block_ct_dim);
