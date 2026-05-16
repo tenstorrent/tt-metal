@@ -2209,12 +2209,31 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         }
     }
     // Pass 2: MMIO devices (PCIe-direct — safe to configure after non-MMIO relay ops complete)
-    for (auto* dev : compiled_devices) {
-        if (dev && cluster_.get_associated_mmio_device(dev->id()) == dev->id()) {
-            dev->configure_fabric(
-                probe_dead_channels_map[dev->id()], base_umd_channels_map[dev->id()], get_external(dev->id()));
-            configured_count++;
+    // FIX DJ (#42429): Parallelize MMIO configure_fabric() across all MMIO devices.
+    // Sequential cost: N_mmio × (kFIX_BH_BootWaitMs + kFIX_DI_RetryWaitMs) = 4 × 6s = 24s.
+    // Parallel cost: max(device_times) ≈ 6s regardless of MMIO device count.
+    {
+        std::vector<std::shared_future<void>> mmio_futs;
+        for (auto* dev : compiled_devices) {
+            if (dev && cluster_.get_associated_mmio_device(dev->id()) == dev->id()) {
+                auto probe_dead = probe_dead_channels_map[dev->id()];
+                auto base_umd  = base_umd_channels_map[dev->id()];
+                auto ext       = get_external(dev->id());
+                mmio_futs.emplace_back(detail::async([dev, probe_dead, base_umd, ext]() mutable {
+                    dev->configure_fabric(probe_dead, base_umd, ext);
+                }));
+                configured_count++;
+            }
         }
+        std::exception_ptr first_ex;
+        for (auto& fut : mmio_futs) {
+            try {
+                fut.get();
+            } catch (...) {
+                if (!first_ex) first_ex = std::current_exception();
+            }
+        }
+        if (first_ex) std::rethrow_exception(first_ex);
     }
     log_info(tt::LogMetal, "Fabric initialized on {} devices", configured_count);
 
