@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
+
+#include <string_view>
+
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
@@ -55,6 +58,31 @@ bool get_broadcast_batch(
         broadcast_batch &= batch_size_a > 1;
     }
     return broadcast_batch;
+}
+
+// Enforces the contract that any caller of MatmulDeviceOperation's static API has already
+// populated allowed_worker_cores on program_config variants that support the field.
+// ttnn::prim::matmul() normalizes its attributes before launch, but direct callers
+// (e.g. CCL fused ops in ttnn/operations/experimental/ccl) must invoke
+// ttnn::operations::matmul::normalize_program_config() themselves.
+void require_allowed_worker_cores_populated(
+    const std::optional<operations::matmul::MatmulProgramConfig>& program_config, std::string_view entry_point) {
+    if (!program_config.has_value()) {
+        return;
+    }
+    std::visit(
+        [&](const auto& pc) {
+            if constexpr (requires { pc.allowed_worker_cores; }) {
+                TT_FATAL(
+                    pc.allowed_worker_cores.has_value(),
+                    "{}: program_config.allowed_worker_cores must be populated for "
+                    "MatmulProgramConfig variants that support the field. Callers that bypass "
+                    "ttnn::prim::matmul() must invoke ttnn::operations::matmul::normalize_program_config() "
+                    "on the program config first.",
+                    entry_point);
+            }
+        },
+        program_config.value());
 }
 
 }  // namespace
@@ -307,6 +335,11 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 "Got sub-device worker cores: {} (bounding box: {})",
                 sub_device_cores,
                 bbox);
+            TT_FATAL(
+                program_config_1d.allowed_worker_cores.has_value(),
+                "MatmulMultiCoreReuseMultiCast1DProgramConfig::allowed_worker_cores must be populated before "
+                "MatmulDeviceOperation::validate_on_program_cache_miss. Callers that bypass ttnn::prim::matmul() "
+                "must invoke ttnn::operations::matmul::normalize_program_config() first.");
             auto grid_size_1d = program_config_1d.allowed_worker_cores.value().bounding_box().grid_size();
             TT_FATAL(
                 bbox.start_coord.x + grid_size_1d.x - 1 <= bbox.end_coord.x &&
@@ -520,6 +553,11 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
                     TT_FATAL(!optional_bias.has_value(), "Bias is not supported when using gather_in0.");
                 } else {
+                    TT_FATAL(
+                        program_config.allowed_worker_cores.has_value(),
+                        "MatmulMultiCoreReuseMultiCast1DProgramConfig::allowed_worker_cores must be populated before "
+                        "MatmulDeviceOperation::validate_on_program_cache_miss. Callers that bypass "
+                        "ttnn::prim::matmul() must invoke ttnn::operations::matmul::normalize_program_config() first.");
                     auto grid_1d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
                     check_tensor_in_grid(input_tensor_a, grid_1d);
                     check_tensor_in_grid(input_tensor_b, grid_1d);
@@ -786,6 +824,11 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
+                TT_FATAL(
+                    program_config.allowed_worker_cores.has_value(),
+                    "MatmulMultiCoreReuseMultiCastProgramConfig::allowed_worker_cores must be populated before "
+                    "MatmulDeviceOperation::validate_on_program_cache_miss. Callers that bypass ttnn::prim::matmul() "
+                    "must invoke ttnn::operations::matmul::normalize_program_config() first.");
                 auto grid_2d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
                 check_tensor_in_grid(input_tensor_a, grid_2d);
                 check_tensor_in_grid(input_tensor_b, grid_2d);
@@ -1160,6 +1203,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
     const operation_attributes_t& attributes, const tensor_args_t& args) {
     using namespace tt::tt_metal;
     using namespace tt::constants;
+    require_allowed_worker_cores_populated(attributes.program_config, "MatmulDeviceOperation::compute_output_specs");
     const auto& optional_output_tensors = args.optional_output_tensors;
     const auto& input_tensors = args.input_tensors;
     const auto& optional_input_tensors = args.optional_input_tensors;
@@ -1251,6 +1295,12 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                             uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                             uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                             uint32_t num_cores = num_blocks_x * num_blocks_y;
+                            TT_FATAL(
+                                program_config.allowed_worker_cores.has_value(),
+                                "MatmulMultiCoreReuseMultiCast1DProgramConfig::allowed_worker_cores must be populated "
+                                "before MatmulDeviceOperation::compute_output_specs. Callers that bypass "
+                                "ttnn::prim::matmul() must invoke "
+                                "ttnn::operations::matmul::normalize_program_config() first.");
                             auto cwsg_1d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
                             CoreRangeSet all_cores = num_cores_to_corerangeset(num_cores, cwsg_1d, true);
                             tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
@@ -1385,6 +1435,11 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         shard_orientation = input_tensor_b.shard_spec().value().orientation;
                     }
 
+                    TT_FATAL(
+                        program_config.allowed_worker_cores.has_value(),
+                        "MatmulMultiCoreReuseProgramConfig::allowed_worker_cores must be populated before "
+                        "MatmulDeviceOperation::compute_output_specs. Callers that bypass ttnn::prim::matmul() "
+                        "must invoke ttnn::operations::matmul::normalize_program_config() first.");
                     auto cwsg_2d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
                     CoreRangeSet all_cores =
                         num_cores_to_corerangeset(num_cores, cwsg_2d, shard_orientation == ShardOrientation::ROW_MAJOR);
@@ -1430,6 +1485,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
 
 MatmulDeviceOperation::tensor_return_value_t MatmulDeviceOperation::create_output_tensors(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
+    require_allowed_worker_cores_populated(attributes.program_config, "MatmulDeviceOperation::create_output_tensors");
     const auto& optional_output_tensors = args.optional_output_tensors;
     const auto& input_tensors = args.input_tensors;
     tensor_return_value_t output_tensors;

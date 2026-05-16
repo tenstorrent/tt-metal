@@ -157,6 +157,13 @@ ttnn::operations::experimental::ccl::Matmul_RS::tensor_return_value_t llama_rs_m
          output_tile,
          global_cb},
         {});
+    // MatmulDeviceOperation's static API and the matmul program-factory helpers TT_FATAL on
+    // unset allowed_worker_cores, so we must run the normalize step that ttnn::prim::matmul()
+    // would have run before launch.
+    if (matmul_struct.program_config.has_value()) {
+        ttnn::operations::matmul::normalize_program_config(
+            matmul_struct.program_config.value(), input_tensor.device()->compute_with_storage_grid_size());
+    }
 
     std::vector<Tensor> matmul_output_tensors;
     std::optional<const ttnn::Tensor> second_weight_tensor_arg = second_weight_tensor;

@@ -64,7 +64,13 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     TT_FATAL(
         operation_attributes.program_config.has_value(),
         "program_config must be provided for MatmulMultiCoreProgramFactory");
-    auto pc = std::get<operations::matmul::MatmulMultiCoreProgramConfig>(operation_attributes.program_config.value());
+    const auto& pc =
+        std::get<operations::matmul::MatmulMultiCoreProgramConfig>(operation_attributes.program_config.value());
+    TT_FATAL(
+        pc.allowed_worker_cores.has_value(),
+        "MatmulMultiCoreProgramConfig::allowed_worker_cores must be populated before reaching "
+        "MatmulMultiCoreProgramFactory. Callers that bypass ttnn::prim::matmul() must invoke "
+        "ttnn::operations::matmul::normalize_program_config() on the program config first.");
     auto compute_with_storage_grid_size = pc.allowed_worker_cores.value().bounding_box().grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t c_batch_size = get_batch_size(cshape);

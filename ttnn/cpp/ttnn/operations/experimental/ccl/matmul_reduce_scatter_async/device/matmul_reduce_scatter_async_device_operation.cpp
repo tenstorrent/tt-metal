@@ -171,6 +171,13 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
             /*output_tile=*/std::nullopt,
             /*global_cb=*/std::nullopt},
         {});
+    // MatmulDeviceOperation's static API and the matmul program-factory helpers TT_FATAL on
+    // unset allowed_worker_cores, so we must run the normalize step that ttnn::prim::matmul()
+    // would have run before launch.
+    if (matmul_struct.program_config.has_value()) {
+        operations::matmul::normalize_program_config(
+            matmul_struct.program_config.value(), input_tensor.device()->compute_with_storage_grid_size());
+    }
 
     // Not using persistent buffers not currently supported by the RSMM API
     bool using_persistent_buffers = true;

@@ -3075,16 +3075,14 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
     bool transpose_a = operation_attributes.transpose_a;
     bool transpose_b = operation_attributes.transpose_b;
 
-    auto program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
+    const auto& program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
         operation_attributes.program_config.value());
 
-    if (!program_config.allowed_worker_cores.has_value()) {
-        program_config.allowed_worker_cores = CoreRangeSet(CoreRange(
-            CoreCoord(0, 0),
-            CoreCoord(
-                program_config.compute_with_storage_grid_size.x - 1,
-                program_config.compute_with_storage_grid_size.y - 1)));
-    }
+    TT_FATAL(
+        program_config.allowed_worker_cores.has_value(),
+        "MatmulMultiCoreReuseMultiCastProgramConfig::allowed_worker_cores must be populated before reaching "
+        "matmul_multi_core_reuse_mcast_2d_optimized_helper. Callers that bypass ttnn::prim::matmul() (e.g. CCL "
+        "fused ops) must invoke ttnn::operations::matmul::normalize_program_config() on the program config first.");
 
     auto fuse_batch = program_config.fuse_batch;
     auto in0_block_w = program_config.in0_block_w;

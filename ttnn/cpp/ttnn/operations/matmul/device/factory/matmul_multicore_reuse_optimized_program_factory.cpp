@@ -188,6 +188,11 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         num_blocks_per_core_group_1 *= batch_scale_factor;
         num_blocks_per_core_group_2 *= batch_scale_factor;
     } else {
+        TT_FATAL(
+            program_config.allowed_worker_cores.has_value(),
+            "MatmulMultiCoreReuseProgramConfig::allowed_worker_cores must be populated before reaching "
+            "MatmulMultiCoreReuseOptimizedProgramFactory. Callers that bypass ttnn::prim::matmul() must invoke "
+            "ttnn::operations::matmul::normalize_program_config() on the program config first.");
         CoreCoord grid = program_config.allowed_worker_cores.value().bounding_box().grid_size();
         std::tie(
             num_cores,
