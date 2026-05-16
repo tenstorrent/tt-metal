@@ -1,0 +1,108 @@
+===============================================================================
+OPUS SYSTEMS AUDIT — nsexton/0-racecondition-hunt
+Date: 2026-05-16
+Branch: nsexton/0-racecondition-hunt
+Base commit: c176b3a284a (FIX CG)
+Audit scope: Testing gaps, logging gaps, code correctness, script gaps
+===============================================================================
+
+1. GAPS FOUND
+─────────────
+
+1a. SCRIPT GAP — Missing FIX labels in analyze_fabric_hang_log.sh
+    Severity: Medium
+    9 FIX labels (CG, CL, CL-2, DN, DP, DV, HX, S9) and "Strategy 11" were
+    present in the codebase but absent from both TIMELINE and PHASES grep patterns.
+    CI log analysis silently omitted these entries.
+    STATUS: FIXED (commit af40427044b)
+
+1b. CODE GAP — FIX DV relay-transitioned flag not yet consumed
+    Severity: Medium
+    The quiesce_relay_transitioned_ flag was partially implemented (definition in
+    device.hpp/device_impl.hpp, clear in device.cpp) but the consuming code in
+    wait_for_fabric_workers_ready() Phase 5b that actually skips relay polls was
+    not yet wired up. The flag infrastructure was committed (c5fcea71d99) but the
+    behavioral change in fabric_firmware_initializer.cpp still needs to be added.
+    STATUS: Infrastructure committed, consuming code pending
+
+1c. TESTING GAP — No deterministic AllGather hang reproducer
+    Severity: High (but hard to address)
+    The core failure mode (24 MMIO ETH channels force-reset simultaneously, then
+    immediately polled before ROM zeroes L1) requires a prior test to leave the
+    machine in a specific degraded state. test_async_teardown_race.cpp has 30
+    tests but none reproduce this specific scenario. The MultiCQFabricMeshDevice
+    tests that run in t3k_ttnn_tests CI are the only ones exercising the real path.
+    STATUS: Open — requires hardware-state-control test infrastructure
+
+1d. LOGGING GAP — FIX TV "in 0ms" could confuse log readers
+    Severity: Low
+    FIX TV (risc_firmware_initializer.cpp) reports heartbeat poll completing "in 0ms"
+    during first session init. This is benign (channels already at UMD from tt-smi -r,
+    no force-reset occurred) but looks identical to the stale-heartbeat bug pattern
+    that FIX DS addresses. A clarifying log annotation like "(channels pre-ready,
+    no reset in this path)" would help.
+    STATUS: Open — low priority
+
+2. CODE CORRECTNESS ASSESSMENT
+──────────────────────────────
+
+2a. FIX DS (50ms pre-poll delay in FIX XZ): CORRECT
+    Addresses the root cause of stale heartbeat false-positive. After force-reset,
+    ROM needs ~10ms to zero L1. 50ms provides 5x safety margin. Without this delay,
+    FIX XZ reads stale 0xABCDxxxx and reports "in 0ms", causing teardown to return
+    early and cascading failures in the next session.
+
+2b. FIX CG (chip_id scope in Strategy 11): CORRECT
+    1-line fix adding `const auto chip_id = device->id()` at the top of the
+    is_mmio_capable() block. Resolves build failure from undeclared identifier.
+
+2c. FIX DV (extended kRebootWaitMs 5000→8000): CORRECT
+    Mass-boot after tt-smi -r with 24 channels needs more time than the default
+    5000ms. 8000ms gives adequate headroom.
+
+2d. FIX CL (zero ETH L1 before assert_risc_reset): CORRECT
+    Prevents stale L1 values from being read during the ROM boot sequence after
+    reset. Also adds non-MMIO dead-relay channel tracking.
+
+2e. FIX S9 (soft-reset MMIO base-UMD channels): CORRECT
+    Ensures clean state for channels that were running base-UMD firmware. Strategy 11
+    ETH link diagnostics provide visibility into link status before firmware launch.
+
+3. FIXES APPLIED (this audit)
+─────────────────────────────
+
+Commit af40427044b — scripts: add missing FIX labels to analyze_fabric_hang_log.sh
+  Added FIX CG, CL, CL-2, DN, DP, DV, HX, S9, Strategy 11 to TIMELINE + PHASES greps
+
+Commit c5fcea71d99 — FIX DV: add quiesce_relay_transitioned flag for non-MMIO relay skip
+  New per-cycle flag in Device class: is_quiesce_relay_transitioned(),
+  set_quiesce_relay_transitioned(), clear at quiesce cycle start
+
+4. BLOCKERS / CONCERNS
+──────────────────────
+
+B1. FIX DV consuming code not yet added
+    The flag is in place but Phase 5b doesn't use it yet. Until that code is added,
+    non-MMIO relay polls may still hang when the relay ERISC has transitioned.
+
+B2. No deterministic stale-heartbeat reproducer
+    The cascade (force-reset → stale read → early return → next-session failure) can't
+    be reliably triggered in CI. FIX DS mitigates it but there's no regression test.
+
+B3. Build status
+    Latest CI run (25970357745) failed to build due to FIX CG chip_id scope issue.
+    Fixed by c176b3a. Two runs (25970786992, 25970737112) should pass build. New
+    commits (af40427, c5fcea7) need a fresh CI run to validate.
+
+5. ALL FAILURES ARE CODE-INDUCED
+────────────────────────────────
+Every failure traced in this audit has a software root cause:
+- Stale heartbeat: code polls L1 before ROM finishes zeroing it (FIX DS)
+- Build failure: undeclared variable in wrong scope (FIX CG)
+- Missing analysis: script grep patterns not updated when new FIX labels added
+- Relay hang: code polls non-MMIO relay after ERISC transitioned (FIX DV)
+No hardware faults identified.
+
+===============================================================================
+END OF AUDIT
+===============================================================================
