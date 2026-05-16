@@ -366,6 +366,69 @@ FabricCoresHealth configure_fabric_cores(
                 // The window where ERISC0 is halted is limited to the PCIe write round-trip.
                 cluster.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
 
+                // FIX DU (#42429): Wait for ERISC to exit ROM phase before the L1 clear loop.
+                // FIX S9 above does assert+deassert to clean dirty L1/TXQ/MAC state, but without
+                // waiting for ROM to complete, the subsequent L1 clear (addresses_to_clear loop
+                // below) races with ROM execution.  ROM writes to L1 including ring_sync_address
+                // (0x00018070) during its init sequence; if the L1 clear zeroes that address
+                // WHILE ROM is running, the fabric firmware later sees 0x00000000 at ring sync
+                // and the 120-second ring sync timeout fires (run 25970786992: device 0 chan=8
+                // stuck at 0x00000000 → all MMIO channels fail → entire fabric down).
+                //
+                // Fix: poll edm_status_address until value != ROM postcode (0x49705180),
+                // identical to the FIX BH pattern used in the dead-channel recovery path above.
+                // Only MMIO base-UMD channels reach this point (FIX S9); non-MMIO already
+                // `continue`d.  PCIe-direct cluster.read_core is safe here.
+                {
+                    constexpr uint32_t kRomPostcode_DU = 0x49705180u;
+                    constexpr uint32_t kFIX_DU_BootWaitMs = 5000;
+                    constexpr uint32_t kFIX_DU_PollIntervalMs = 5;
+                    const uint64_t edm_addr =
+                        static_cast<uint64_t>(router_config.edm_status_address);
+                    uint32_t elapsed_du_ms = 0;
+                    bool fix_du_ok = false;
+                    while (elapsed_du_ms < kFIX_DU_BootWaitMs) {
+                        std::vector<uint32_t> status_buf(1, 0);
+                        cluster.read_core(status_buf, sizeof(uint32_t), core_loc, edm_addr);
+                        if (status_buf[0] != kRomPostcode_DU) {
+                            fix_du_ok = true;
+                            log_info(
+                                tt::LogMetal,
+                                "configure_fabric_cores: device {} channel {} FIX DU — "
+                                "ERISC exited ROM to 0x{:08x} after {}ms (safe to L1 clear).",
+                                chip_id,
+                                router_chan,
+                                status_buf[0],
+                                elapsed_du_ms);
+                            break;
+                        }
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(kFIX_DU_PollIntervalMs));
+                        elapsed_du_ms += kFIX_DU_PollIntervalMs;
+                    }
+                    if (!fix_du_ok) {
+                        // ROM did not complete within timeout — channel is irrecoverable this
+                        // session.  Add to dead_channels to skip L1 clear and firmware launch.
+                        uint32_t final_val = kRomPostcode_DU;
+                        try {
+                            std::vector<uint32_t> final_buf(1, 0);
+                            cluster.read_core(final_buf, sizeof(uint32_t), core_loc, edm_addr);
+                            final_val = final_buf[0];
+                        } catch (...) {}
+                        dead_channels.insert(router_chan);
+                        newly_dead_channels.insert(router_chan);
+                        log_warning(
+                            tt::LogMetal,
+                            "configure_fabric_cores: device {} channel {} FIX DU — "
+                            "ERISC did not exit ROM within {}ms after FIX S9 deassert "
+                            "(edm_status=0x{:08x}). Marking dead to prevent L1 race.",
+                            chip_id,
+                            router_chan,
+                            kFIX_DU_BootWaitMs,
+                            final_val);
+                    }
+                }
+
                 log_debug(
                     tt::LogMetal,
                     "configure_fabric_cores: ERISC0 soft reset bounce on device {} channel {} "
