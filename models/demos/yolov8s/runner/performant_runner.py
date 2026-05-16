@@ -119,7 +119,9 @@ class YOLOv8sPerformantRunner:
 
         return self.runner_infra.output_tensor
 
-    def run(self, torch_input_tensor):
+    def run(self, torch_input_tensor=None):
+        if torch_input_tensor is None:
+            return self._execute_yolov8s_trace_2cqs_inference()
         tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
         return self._execute_yolov8s_trace_2cqs_inference(tt_inputs_host)
 

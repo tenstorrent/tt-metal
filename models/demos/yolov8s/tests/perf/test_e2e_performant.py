@@ -5,11 +5,9 @@
 import time
 
 import pytest
-import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov8s.common import YOLOV8S_L1_SMALL_SIZE
 from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
@@ -40,15 +38,20 @@ def run_yolov8s(
         model_location_generator=model_location_generator,
     )
 
-    input_shape = (batch_size, 3, 640, 640)
-    torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
+    # Match yolov11s perf-loop pattern: pre-converted self.tt_inputs_host (built
+    # in the runner's __init__) is reused, so the timed loop measures only
+    # device throughput. Re-sharding per iteration hides the parallel device
+    # exec behind host-side shard prep and breaks DP scaling.
+    for _ in range(10):
+        _ = performant_runner.run()
+    ttnn.synchronize_device(device)
 
     if use_signpost:
         signpost(header="start")
 
     t0 = time.time()
-    for _ in range(10):
-        _ = performant_runner.run(torch_input_tensor)
+    for _ in range(100):
+        _ = performant_runner.run()
     ttnn.synchronize_device(device)
     t1 = time.time()
 
@@ -56,7 +59,7 @@ def run_yolov8s(
         signpost(header="stop")
 
     performant_runner.release()
-    inference_time_avg = round((t1 - t0) / 10, 6)
+    inference_time_avg = round((t1 - t0) / 100, 6)
     logger.info(
         f"Model: ttnn_yolov8s - batch_size: {batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round((batch_size) / inference_time_avg)}"
     )
@@ -83,7 +86,6 @@ def test_run_yolov8s_trace_2cqs_inference(
     )
 
 
-@run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
@@ -94,6 +96,12 @@ def test_run_yolov8s_trace_2cqs_inference(
 @pytest.mark.parametrize(
     "batch_size_per_device",
     ((1),),
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(1, 8)],
+    indirect=True,
+    ids=["1x8"],
 )
 def test_run_yolov8s_trace_2cqs_dp_inference(
     mesh_device,

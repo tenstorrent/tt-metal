@@ -308,11 +308,14 @@ class YOLOv8lPerformantRunner:
     # Original synchronous API (unchanged)
     # ------------------------------------------------------------------
 
-    def run(self, torch_input_tensor):
+    def run(self, torch_input_tensor=None):
         t0 = time.perf_counter()
-        tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(
-            self.device, torch_input_tensor, uint8_input=self.uint8_input
-        )
+        if torch_input_tensor is None:
+            tt_inputs_host = None
+        else:
+            tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(
+                self.device, torch_input_tensor, uint8_input=self.uint8_input
+            )
         t1 = time.perf_counter()
         result = self._execute_yolov8l_trace_2cqs_inference(tt_inputs_host)
         t2 = time.perf_counter()

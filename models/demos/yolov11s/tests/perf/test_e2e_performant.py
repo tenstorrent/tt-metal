@@ -202,11 +202,16 @@ def test_e2e_performant_trace_matches_torch(
 )
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV11S_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
     indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 1), (1, 8)],
+    indirect=True,
+    ids=["4x1", "1x8"],
 )
 def test_e2e_performant_dp(
     mesh_device,
