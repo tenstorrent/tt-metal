@@ -48,6 +48,17 @@ After any verdict (confirmed, refuted, unverifiable), write the ID to `seen-esca
 
 ---
 
+## MANDATORY DISPATCH RULES (Evan's explicit requirements)
+
+After **every** `workflow_dispatch` API call — no exceptions, no delays:
+
+1. **Update Confluence page 2424012846 IMMEDIATELY** — record the run ID, URL, and set status to ⏳. Do this before any other action.
+2. **DM @ebanerjeeTT** — send a Slack message mentioning @ebanerjeeTT with the run URL and a one-line description of what it is.
+
+These two actions must happen before proceeding to any next pipeline step.
+
+---
+
 ## Two Modes
 
 ### Mode A — Backfill
@@ -66,64 +77,128 @@ Skip Opus pre-classification if layer pre-filter already rules it out.
 
 Run the following SQL. Adjust `DATEADD` for backfill (60 days) vs incremental (1 day).
 
+Thresholds:
+- **Backfill**: `consecutive_fail_count >= 5`, `consecutive_pass_count >= 3`, lookback 60 days
+- **Incremental**: `consecutive_fail_count >= 3`, `consecutive_pass_count >= 3`, lookback 1 day
+
 ```sql
-WITH ranked AS (
+WITH runs AS (
   SELECT
     tc.CICD_TEST_CASE_ID,
-    tc.TEST_CASE_NAME  AS test_name,
-    tc.FILEPATH        AS test_filepath,
-    p.GIT_COMMIT_HASH  AS commit_sha,
+    tc.TEST_CASE_NAME AS test_name,
+    tc.FILEPATH AS test_filepath,
+    p.GIT_COMMIT_HASH AS commit_sha,
     p.PIPELINE_START_TS,
-    t.SUCCESS          AS test_success,
-    -- Normalize failure signature: strip timestamps, addresses, runner paths
+    t.SUCCESS,
     REGEXP_REPLACE(
       REGEXP_REPLACE(t.ERROR_MESSAGE, '0x[0-9a-fA-F]+', 'ADDR'),
       '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:Z.]+', 'TS'
     ) AS norm_signature,
+    -- rn_asc: 1 = oldest run; rn_by_success: for islands technique
     ROW_NUMBER() OVER (
       PARTITION BY tc.CICD_TEST_CASE_ID
-      ORDER BY p.PIPELINE_START_TS DESC
-    ) AS rn
+      ORDER BY p.PIPELINE_START_TS ASC
+    ) AS rn_asc,
+    ROW_NUMBER() OVER (
+      PARTITION BY tc.CICD_TEST_CASE_ID, t.SUCCESS
+      ORDER BY p.PIPELINE_START_TS ASC
+    ) AS rn_by_success
   FROM TTDATASF.SW_TEST.CICD_TEST t
   JOIN TTDATASF.SW_TEST.CICD_TEST_CASE tc ON t.TEST_CASE_ID = tc.CICD_TEST_CASE_ID
   JOIN TTDATASF.SW_TEST.CICD_JOB j ON t.CICD_JOB_ID = j.CICD_JOB_ID
   JOIN TTDATASF.SW_TEST.CICD_PIPELINE p ON j.CICD_PIPELINE_ID = p.CICD_PIPELINE_ID
   WHERE p.PROJECT = 'tt-metal'
     AND p.GIT_BRANCH_NAME = 'main'
-    AND p.PIPELINE_START_TS >= DATEADD('day', -1, CURRENT_TIMESTAMP())  -- adjust for mode
+    AND p.PIPELINE_START_TS >= DATEADD('day', -14, CURRENT_TIMESTAMP())  -- adjust for mode
     AND j.FAILURE_SIGNATURE NOT LIKE 'InfraErrorV1%'
 ),
--- Find transitions: last N failures followed by M passes
-transitions AS (
+-- Islands technique: (rn_asc - rn_by_success) is constant within a consecutive streak
+islands AS (
+  SELECT *, (rn_asc - rn_by_success) AS island_key
+  FROM runs
+),
+island_summary AS (
   SELECT
     CICD_TEST_CASE_ID,
-    test_name,
-    test_filepath,
-    norm_signature,
-    -- Collect consecutive pass/fail blocks
-    MAX(CASE WHEN test_success = FALSE THEN commit_sha END)
-      OVER (PARTITION BY CICD_TEST_CASE_ID ORDER BY rn
-            ROWS BETWEEN CURRENT ROW AND 4 FOLLOWING) AS last_failing_sha,
-    MIN(CASE WHEN test_success = TRUE THEN commit_sha END)
-      OVER (PARTITION BY CICD_TEST_CASE_ID ORDER BY rn
-            ROWS BETWEEN CURRENT ROW AND 4 FOLLOWING) AS first_passing_sha
-  FROM ranked
+    SUCCESS,
+    island_key,
+    COUNT(*)                              AS streak_length,
+    MIN(PIPELINE_START_TS)                AS streak_start_ts,
+    MAX(PIPELINE_START_TS)                AS streak_end_ts,
+    MIN_BY(commit_sha, PIPELINE_START_TS) AS streak_first_sha,
+    MAX_BY(commit_sha, PIPELINE_START_TS) AS streak_last_sha,
+    MAX_BY(norm_signature, PIPELINE_START_TS) AS norm_signature
+  FROM islands
+  GROUP BY 1, 2, 3
+),
+fail_streaks AS (
+  SELECT
+    CICD_TEST_CASE_ID,
+    island_key,
+    streak_length AS consecutive_fail_count,
+    streak_end_ts AS last_fail_ts,
+    streak_last_sha AS last_failing_sha,
+    norm_signature
+  FROM island_summary
+  WHERE SUCCESS = FALSE
+    AND streak_length >= 5  -- P0: require 5+ consecutive failures (3 for incremental mode)
+),
+pass_streaks AS (
+  SELECT
+    CICD_TEST_CASE_ID,
+    island_key,
+    streak_length AS consecutive_pass_count,
+    streak_start_ts AS first_pass_ts,
+    streak_first_sha AS first_passing_sha
+  FROM island_summary
+  WHERE SUCCESS = TRUE
+    AND streak_length >= 3  -- P1: require 3+ consecutive passes after fix
+),
+transitions AS (
+  SELECT
+    fs.CICD_TEST_CASE_ID,
+    fs.last_failing_sha,
+    ps.first_passing_sha,
+    fs.consecutive_fail_count,
+    ps.consecutive_pass_count,
+    fs.norm_signature,
+    fs.last_fail_ts,
+    ps.first_pass_ts
+  FROM fail_streaks fs
+  JOIN pass_streaks ps
+    ON fs.CICD_TEST_CASE_ID = ps.CICD_TEST_CASE_ID
+    AND ps.first_pass_ts > fs.last_fail_ts
+    -- Adjacent islands only: no runs exist between the two streaks
+    AND NOT EXISTS (
+      SELECT 1 FROM island_summary x
+      WHERE x.CICD_TEST_CASE_ID = fs.CICD_TEST_CASE_ID
+        AND x.streak_start_ts > fs.last_fail_ts
+        AND x.streak_start_ts < ps.first_pass_ts
+    )
+),
+-- Most recent transition per test, joined back to get test metadata
+result AS (
+  SELECT
+    t.CICD_TEST_CASE_ID,
+    r.test_name,
+    r.test_filepath,
+    t.last_failing_sha,
+    t.first_passing_sha,
+    t.consecutive_fail_count,
+    t.consecutive_pass_count,
+    t.last_fail_ts,
+    t.first_pass_ts,
+    t.norm_signature
+  FROM transitions t
+  JOIN (SELECT DISTINCT CICD_TEST_CASE_ID, test_name, test_filepath FROM runs) r
+    ON t.CICD_TEST_CASE_ID = r.CICD_TEST_CASE_ID
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY t.CICD_TEST_CASE_ID ORDER BY t.last_fail_ts DESC) = 1
 )
-SELECT DISTINCT
-  CICD_TEST_CASE_ID,
-  test_name,
-  test_filepath,
-  last_failing_sha,
-  first_passing_sha,
-  norm_signature
-FROM transitions
-WHERE last_failing_sha IS NOT NULL
-  AND first_passing_sha IS NOT NULL
+SELECT *
+FROM result
+ORDER BY last_fail_ts DESC
 LIMIT 50;
 ```
-
-NOTE: This SQL is a starting sketch. The consecutive-run counting logic may need refinement
-after seeing real data. Adjust the window size and consecutive count as needed.
 
 For each row:
 - Compute escape ID: `{CICD_TEST_CASE_ID}__{last_failing_sha[:8]}`
@@ -156,36 +231,87 @@ If any commit does → proceed to Step 3.
 
 ### Step 3: Opus Pre-classification
 
-Fetch the raw GHA job log for the `last_failing_sha` run:
+#### 3a: Noise blocklist (before calling Opus)
+
+Before spending tokens on Opus, check the failure log for known infra noise patterns.
+If ANY of the following match, mark `status: "skipped_prefilter"` in `seen-escapes.json` and stop:
+
+- `TracyAlloc|TracyFree|FrameMarkNamed|FrameMarkStart` — Tracy profiler symbols leaking into logs
+- `tenstorrent_pcie_ioctl|ioctl.*pcie.*fail` — PCIe driver errors, not test code
+- `FileNotFoundError.*No such file or directory.*libtt_` — stale shared library path, deploy issue
+- Error log contains zero pytest/gtest test identifiers (no `FAILED`, `PASSED`, `::test_`) and no
+  `TT_FATAL`/`TT_THROW` — pure infra noise with no test output at all
+
+#### 3b: Fetch failure log
+
 ```
 GET /repos/tenstorrent/tt-metal/actions/jobs/{job_id}/logs
 ```
 (Get `job_id` from the pipeline data in Snowflake or via the runs API for the relevant commit.)
+Use first 200 lines of the relevant test step.
+
+#### 3c: Opus prompt
 
 Provide Opus with:
-1. The raw failure log (or first 200 lines of the relevant step)
-2. The list of cross-layer commits from Step 2 (commit SHA, message, files changed)
-3. The test filepath and name
+1. The raw failure log excerpt
+2. The cross-layer commits from Step 2 (SHA, message, files changed, diff if available)
+3. The test filepath, name, and streak stats from Step 1
 
-Ask Opus to answer:
 ```
 You are analyzing a potential vertical bug escape in tenstorrent/tt-metal CI.
 
-A test at layer {test_layer} ({test_filepath}) failed consistently then started passing.
-The commits between last failure and first pass include these cross-layer changes:
+Test: {test_name}
+File: {test_filepath} (layer {test_layer})
+Streak: {consecutive_fail_count} consecutive failures → {consecutive_pass_count} consecutive passes after fix
+Failure window: {last_fail_ts} to {first_pass_ts}
+
+Cross-layer commits between last failure and first pass:
 {commit_list_with_diffs}
 
 Raw failure log:
 {failure_log}
 
-Answer these questions:
-1. Is the failure signature consistent with a genuine code regression (not infra flake,
-   not resource exhaustion, not a known intermittent issue)?
-2. Is there a plausible causal connection between any of the cross-layer commits and
-   this specific test failure? Explain which commit and why.
-3. Verdict: PROCEED_TO_BISECT / SKIP_LIKELY_NOISE / SKIP_UNRELATED
+Work through these 5 checks in order:
 
-If PROCEED_TO_BISECT, name the most likely fix commit SHA.
+CHECK 1 — Error classification:
+  Is the error from TEST CODE (assertion, TT_FATAL/TT_THROW, wrong output, OOM in test, test timeout)?
+  Or INFRASTRUCTURE (runner disconnect, docker pull fail, network timeout, SSH drop, "Lost communication")?
+  → If infrastructure: verdict SKIP_LIKELY_NOISE. Stop.
+
+CHECK 2 — Determinism:
+  Does the SAME test fail with the SAME error signature consistently?
+  A flaky test alternates pass/fail; a real regression fails steadily.
+  Note: {consecutive_fail_count} consecutive failures is a strong determinism signal.
+  → If no consistent test name or error signature across runs: verdict SKIP_LIKELY_NOISE. Stop.
+
+CHECK 3 — Causal analysis:
+  Is there a plausible causal link between one of the cross-layer commits and this specific failure?
+  Look for: the commit touches code in the call path of the failing test, or changes an API/ABI
+  that the test exercises. "Plausible" means you can name the mechanism.
+  Red flags: hardware-specific errors (temp sensor, PCI link), timing-dependent races,
+  external service failures (network, registry).
+  → If no plausible causal link: verdict SKIP_UNRELATED. Stop.
+
+CHECK 4 — Range size sanity:
+  How many commits are in the bisect range? If > 50, the range is likely too wide to bisect
+  efficiently unless Opus's causal candidate is very specific (single commit).
+  → If range > 50 AND no single obvious fix commit: lower confidence to "low".
+
+CHECK 5 — Cross-test scope:
+  Is exactly ONE specific test failing, or many unrelated tests?
+  Many unrelated tests failing → likely infra outage, not a code regression.
+  → If many unrelated tests: lower confidence, note in reasoning.
+
+Respond with JSON only:
+{
+  "verdict": "PROCEED_TO_BISECT" | "SKIP_LIKELY_NOISE" | "SKIP_UNRELATED",
+  "most_likely_fix_sha": "<commit SHA, or null>",
+  "confidence": "high" | "medium" | "low",
+  "check1_error_type": "test_code" | "infrastructure",
+  "check2_determinism": "deterministic" | "likely_flaky" | "unknown",
+  "check3_causal_mechanism": "<one sentence explaining the link, or null>",
+  "reasoning": "<2-3 sentences: what the error is, which commit is likely the fix and why>"
+}
 ```
 
 If verdict is not PROCEED_TO_BISECT → write escape ID to `seen-escapes.json` with
@@ -193,102 +319,73 @@ If verdict is not PROCEED_TO_BISECT → write escape ID to `seen-escapes.json` w
 
 ---
 
-### Step 4: Find the Fix Commit
+### Step 4: Manual Binary Search (find the fix commit)
 
-This step dispatches hardware workflow runs to identify which commit in the range
-`[last_failing...first_passing]` fixed the test.
+**⚠️ DO NOT use `bisect-dispatch.yaml`** — that workflow finds *breaking* commits (regressions),
+not *fixing* commits. For bug escapes we want the first commit where the test started PASSING.
 
-**WARNING: Do NOT use `bisect-dispatch.yaml`.** That workflow finds *breaking* commits. We need
-the *fix* commit — the opposite direction. It will either error or find the wrong one.
+Use `test-dispatch.yaml` (workflow ID 103409066) to run the test at individual commits.
 
----
+**Algorithm:**
+1. Get the commit list between `last_failing_sha` (exclusive) and `first_passing_sha` (inclusive):
+   ```
+   GET /repos/tenstorrent/tt-metal/compare/{last_failing_sha}...{first_passing_sha}
+   ```
+   → `commits` array, index 0 = oldest (first after last_failing), last = first_passing
+2. Pick midpoint index `mid = len(commits) // 2`
+3. Dispatch test-dispatch.yaml at `commits[mid].sha`:
+   ```
+   POST /repos/tenstorrent/tt-metal/actions/workflows/test-dispatch.yaml/dispatches
+   {
+     "ref": "main",
+     "inputs": {
+       "arch":         "{wormhole_b0 or blackhole}",
+       "runner-label": "{e.g. [\"BH-LoudBox\"] or [\"config-t3000\"]}",
+       "command":      "{pytest command -x}",
+       "commit":       "{commits[mid].sha}",
+       "description":  "BrAIn bisect {escape_id} mid@{commits[mid].sha[:8]}"
+     }
+   }
+   ```
+4. After MANDATORY post-dispatch actions (Confluence + DM Evan), wait for result.
+5. If **PASS** → fix is in the lower half: set `high = mid - 1`
+6. If **FAIL** → fix is in the upper half: set `low = mid + 1`
+7. Repeat from step 2 with `commits[low..high]`
+8. When `low == high` (or range is empty), the fix commit is `commits[low]`
+   - Special case: if ALL midpoints PASS → fix commit is `commits[0]` (first after last_failing)
 
-**Before any dispatch — prune the workflow (mandatory, every run, all hardware types):**
+Save each midpoint run ID to `campaign-state.json`.
 
-1. Look up the correct workflow. Do NOT guess. Query Snowflake:
-```sql
-SELECT DISTINCT j.NAME, j.GITHUB_JOB_LINK
-FROM TTDATASF.SW_TEST.CICD_TEST t
-JOIN TTDATASF.SW_TEST.CICD_JOB j ON t.CICD_JOB_ID = j.CICD_JOB_ID
-WHERE t.TEST_CASE_ID = {test_case_id}
-  AND j.JOB_START_TS >= DATEADD('day', -30, CURRENT_TIMESTAMP())
-LIMIT 3;
-```
-`j.NAME` gives the workflow and SKU (e.g. `models-unit-tests / Qwen3-32B unit tests (Galaxy) [wh_galaxy_perf]`).
-Cross-reference with `GET /repos/tenstorrent/tt-metal/actions/workflows` to get the workflow file and ID.
+**Arch determination:**
+- BH-LoudBox / topology-6u → `blackhole`
+- N150, N300, P150, P300, config-t3000 → `wormhole_b0`
 
-2. Edit the `TESTS_YAML_PATH` file on the branch to contain only the failing test group,
-narrowed to the specific test function. Commit and push. Then dispatch.
-
-Dispatching without pruning is prohibited — it wastes hardware time on unrelated tests across
-all runner types (T3K, LoudBox, Galaxy, everything).
-
----
-
-**Choose a method.** Both methods dispatch workflow runs and are complete when they find the fix:
-
-- **Method A (binary search)** — reliable, O(log₂ N) dispatches, no prior knowledge needed.
-  Use when Opus confidence is LOW/MEDIUM, or as fallback if Method B fails.
-- **Method B (hypothesis testing)** — fewer dispatches when Opus has a strong specific candidate,
-  or when the range is small (≤ 4 cross-layer commits).
-
----
-
-#### Method A — Binary Search
-
-Each dispatch is a **single branch at a midpoint commit** to determine which half of the range
-contains the fix. Prune every branch before dispatching.
-
-1. Get the commit list: `GET /repos/tenstorrent/tt-metal/compare/{last_failing}...{first_passing}`
-   → N commits in chronological order.
-2. Pick midpoint M = commit at index N//2.
-3. Create a branch at M. Prune, commit, push, dispatch. Save run ID to `campaign-state.json`.
-4. Wait for completion:
-   - **PASS** → fix is in the earlier half. New range = commits 0…N//2.
-   - **FAIL** → fix is in the later half. New range = commits N//2…N-1.
-   - **TIMEOUT** → write `inconclusive_timeout` to `campaign-state.json`. Stop for tonight.
-     Resume from saved state next night using the narrowed range.
-5. If new range has exactly 1 commit: that commit is the fix. Write it to `campaign-state.json`
-   as `fix_commit_sha`. **This escape is confirmed.** Proceed to Step 5.
-6. Otherwise go to step 2 with the narrowed range.
-
-When the search ends, you know the fix commit because:
-- All commits before it in the final range failed the test.
-- This commit passed.
+If timed out → write `status: "inconclusive_bisect_timeout"` to `seen-escapes.json`, stop.
 
 ---
 
-#### Method B — Hypothesis Testing
+### Step 5: Verification
 
-Test each plausible cross-layer commit as a BEFORE/AFTER pair. Each pair either confirms or
-eliminates a hypothesis. Prune both branches before dispatching.
+Create two branches in the worktree:
+- `brain/escape-before-{escape_id}` at `git checkout {bisect_result}^` (parent)
+- `brain/escape-after-{escape_id}` at `git checkout {bisect_result}` (fix commit)
 
-Build the hypothesis list: all cross-layer commits in `[last_failing...first_passing]` that touch
-a layer lower than the test layer. Order with Opus's top candidate first.
+Dispatch the appropriate test workflow (blackhole-e2e-tests.yaml or blackhole-demo-tests.yaml)
+for each branch. Run them in parallel.
 
-For each hypothesis H in order:
-1. Create `brain/escape-before-{escape_id}` at `H^` (parent of H).
-2. Create `brain/escape-after-{escape_id}` at `H`.
-3. Prune both branches, commit, push. Dispatch both in parallel. Save run IDs.
-4. Wait for both to complete:
-   - **BEFORE=FAIL + AFTER=PASS** → H is the fix commit. **Escape confirmed.** Write
-     `fix_commit_sha` to `campaign-state.json`. Delete branches. Proceed to Step 5.
-   - **BEFORE=FAIL + AFTER=FAIL** → H is not the fix. Delete branches. Try next H.
-   - **BEFORE=PASS + AFTER=anything** → The window is wrong — the test was already fixed
-     before H. Do NOT refute. Re-query Snowflake to find an earlier `last_failing_sha`
-     and restart with the corrected range.
-   - **Either TIMEOUT** → write `inconclusive_timeout` to `campaign-state.json`. Stop for
-     tonight. Resume next night.
+Wait for both to complete.
 
-**End condition — refute:** All commits in the hypothesis list tested, all returned
-BEFORE=FAIL+AFTER=FAIL, no BEFORE=PASS. This escape cannot be attributed to any cross-layer
-change in the window. Write `status: "refuted_hypothesis_exhausted"` to `seen-escapes.json`.
+Verdict logic:
+- BEFORE=FAIL + AFTER=PASS → **confirmed escape** ✅
+- BEFORE=FAIL + AFTER=FAIL → **refuted** (fix didn't address this test)
+- BEFORE=PASS + AFTER=anything → **refuted** (test wasn't failing at that commit)
+- Either times out → **inconclusive_timeout** (retry next night)
 
-**Do NOT refute after testing only one hypothesis.** Test every plausible candidate first.
+Write verdict + all run IDs to `campaign-state.json`.
 
 ---
 
-### Step 5: Record Confirmed Escape
+### Step 6: Record Confirmed Escape
 
 Append to `confirmed-escapes.json`:
 ```json
@@ -316,48 +413,51 @@ Delete BEFORE/AFTER branches from GitHub.
 
 ---
 
-### Step 6: Confluence Updates (happens at MULTIPLE points, not just at the end)
+### Step 7: Confluence Updates (happens at MULTIPLE points, not just at the end)
 
 Page ID: 2424012846
 URL: https://tenstorrent.atlassian.net/wiki/spaces/MI6/pages/2424012846/bug+escapes
 
-**This page is the single source of truth for campaign status and run links.**
-Every GHA run URL dispatched during this campaign must be recorded on this page immediately
-after dispatch — not just at the end. If someone asks "where are we?", the answer is always
-"check Confluence" — not a Slack status report.
+The page has four sections. Move each escape between sections as its status changes.
+Never delete an entry — only move it and update its status field.
 
-**Page format: one flat table** containing ONLY candidates that reached hardware.
-A candidate appears in this table if and only if Opus returned `PROCEED_TO_BISECT`.
-Do NOT include layer-filtered candidates — they were eliminated before any hardware ran.
-Do NOT include Opus-dismissed candidates (`SKIP_LIKELY_NOISE`, `SKIP_UNRELATED`).
-Never use separate sections per status.
+**After Step 3 (Opus pre-classification passes) → add to "🔍 Under Investigation":**
+```
+### Candidate: {test_name[:60]}
 
-**Use the native Confluence storage format table** with `data-layout="full-width"` and
-`data-table-display-mode="default"`. Set explicit column widths in `<colgroup>` (130–240px each)
-to prevent columns from being squished. Do NOT use the HTML macro — it is not enabled.
+- *Test*: {test_name}
+- *Test layer*: {test_layer}
+- *Fix layer (suspected)*: {suspected_fix_layer}
+- *Last failure*: [Run {last_failure_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{last_failure_run_id})
+- *First success*: [Run {first_success_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{first_success_run_id})
+- *Opus reasoning*: {opus_reasoning}
+- *Status*: Under Investigation — bisect dispatched {date}
+```
 
-**Table columns (required, in this order):**
+**After Step 4 (bisect completes) → update the entry, still in "Under Investigation":**
+Add fix commit and bisect proof link. Update status to "Under Investigation — verification dispatched {date}".
 
-| Escape ID | Test File | Job | HW | Last Fail | Last Fail Commit | First Pass | First Pass Commit | Fail Rate | Runs Dispatched | Opus Verdict | Opus Reasoning | Status |
+**After Step 5 (verification complete):**
+- CONFIRMED → move entry to "✅ Confirmed Escapes", update status, add before/after run links
+- REFUTED → move entry to "❌ Refuted", update status, add explanation of why it was refuted
+- INCONCLUSIVE_TIMEOUT → move entry to "⏳ Inconclusive", update status, note retry scheduled
 
-Column notes:
-- `Escape ID`: `{test_case_id}__{last_failing_sha[:8]}`
-- `Test File`: basename + layer number, e.g. `test_foo.py (layer 4)`
-- `Job`: full GHA job name from Snowflake `CICD_JOB.NAME`
-- `HW`: runner type, e.g. `Galaxy (WH)`, `LLMBox (WH)`, `LoudBox (BH)`, `T3000 (WH)`
-- `Last Fail` / `First Pass`: date only (YYYY-MM-DD), linked commit SHA
-- `Runs Dispatched`: all GHA run links with result, e.g. `BEFORE [12345](url) → PASS; AFTER [12346](url) → FAIL`
-- `Opus Verdict`: `PROCEED_TO_BISECT` / `N/A` (layer filtered — Opus was not run)
-- `Opus Reasoning`: 1–2 sentence summary (empty/`—` for layer-filtered rows)
-- `Status`: one of `⏳ Pending`, `🔍 Under Investigation`, `✅ Confirmed`, `❌ Refuted`, `⏸ Inconclusive`
+**Entry format once confirmed:**
+```
+### Escape #{N}: {fix_commit_message[:60]}
 
-**Update the table after EVERY state transition:**
-- Candidate detected → add row immediately (even before Opus, with status TBD)
-- After layer filter → update Status to `❌ Layer filter`, fill Opus columns as N/A
-- After Opus → update Opus Verdict/Reasoning and Status
-- After any dispatch → add run link to Runs Dispatched column immediately AND DM the run URL to Evan in Slack
-- After run completes → append result (PASS/FAIL) to that run link inline
-- After final verdict → update Status
+- *Test*: {test_name}
+- *Test layer*: {test_layer}
+- *Fix layer*: {fix_layer}
+- *Type*: {fix_layer} → {test_layer} escape
+- *Last failure*: [Run {last_failure_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{last_failure_run_id})
+- *First success*: [Run {first_success_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{first_success_run_id})
+- *Fix commit*: [{fix_commit_sha[:8]}](https://github.com/tenstorrent/tt-metal/commit/{fix_commit_sha})
+- *Bisect proof*: [Run {bisect_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{bisect_run_id})
+- *Verification*: BEFORE [Run {before_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{before_run_id}) | AFTER [Run {after_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{after_run_id})
+- *Reasoning*: {reasoning}
+- *Status*: Confirmed {date}
+```
 
 Always fetch the current page content before updating so you don't clobber concurrent writes.
 
@@ -368,14 +468,16 @@ Always fetch the current page content before updating so you don't clobber concu
 ```
 00:15Z  Step 1 (Snowflake, last 1 day)
 00:20Z  Steps 2-3 (layer filter + Opus pre-classification, parallelized)
-00:30Z  Step 4 (hardware search + confirmation dispatches)
-06:30Z  Step 4 poll / parse results
-07:00Z  Steps 5-6 (record + Confluence update)
+00:30Z  Step 4 (bisect dispatch for survivors)
+03:30Z  Step 4 poll / parse bisect results
+04:00Z  Step 5 (verification dispatch)
+06:30Z  Step 5 poll / parse verification results
+07:00Z  Steps 6-7 (record + Confluence update)
 07:05Z  Post summary to Slack #ai-sw-infra
 ```
 
-**Nightly window: 11:00 PM – 6:00 AM EST (04:00 – 11:00 UTC).** All dispatches happen in this
-window when P300-viommu, LoudBox, and LLMBox runners are online. The watchdog task at 07:00Z checks for stalled campaigns (no progress in 3+ hours)
+All dispatches happen in the nightly window when P300-viommu, LoudBox, and LLMBox runners
+are online. The watchdog task at 07:00Z checks for stalled campaigns (no progress in 3+ hours)
 and posts an alert.
 
 ---
@@ -386,6 +488,29 @@ Run at 07:00Z. Check `campaign-state.json`:
 - Any candidate stuck in `step: "bisect"` with `dispatch_time` > 4 hours ago → log as `inconclusive_timeout`
 - Any candidate stuck in `step: "verification"` with `dispatch_time` > 3 hours ago → log as `inconclusive_timeout`
 - Post campaign summary to Slack regardless
+
+---
+
+## Continuous Campaign Rule (MANDATORY)
+
+**When a campaign ends with no bisects_in_progress and no pending candidates, immediately start a new one.** Do not wait for the next scheduled cron. Query Snowflake for fresh candidates right away. Spending cron cycles posting "all done" without starting new campaigns is wasted time.
+
+**If a status update contains only "campaign is done" with no new runs dispatched or candidates found, that update is a failure.** Always end each work session with either (a) active runs in flight or (b) a fresh Snowflake scan producing new candidates, or (c) an explicit explanation of why neither is possible.
+
+---
+
+## Hardware-Specific Dispatch Rules
+
+### Single-card jobs (N150, N300, P150, P300)
+- Method B (verification): BEFORE and AFTER can be dispatched **in parallel**, as long as no more than one set of verification per machine type is running at a time.
+- Method A (binary search): always one run at a time (inherent to binary search).
+
+### Multi-card jobs (T3K, Galaxy)
+- **Only 1 run at a time per machine type** — never dispatch two runs simultaneously on T3K or Galaxy.
+- Method B (verification): dispatch BEFORE first, **wait for it to complete**, then dispatch AFTER. Strictly sequential.
+- Method A (binary search): unchanged — already sequential by nature (one run per midpoint).
+- During **weekends**: T3K and Galaxy runs **may run during the day** (not just nightly windows). Still observe the 1-at-a-time-per-machine rule.
+- During **weekends**: T3K and Galaxy runs **may run during the day** (not just nightly windows). Still observe the 1-at-a-time-per-machine rule.
 
 ---
 
@@ -405,9 +530,7 @@ Subagents may only: read data (Snowflake, GitHub API, logs), analyze, and return
 
 ## What NOT to Do
 
-- Do NOT dispatch two bisects simultaneously for the same hardware type (contends for runners).
-  Single-card types (N150, N300, P150, P150b, P300, P100): no per-night cap, but still one active
-  bisect per hardware type at a time. T3K: max 5 bisects per night. Galaxy: max 3 bisects per night.
+- Do NOT dispatch two bisects simultaneously for the same hardware type (contends for runners)
 - Do NOT start verification without a completed bisect result
 - Do NOT skip writing to `seen-escapes.json` even for fast refutals — prevents re-analysis
 - Do NOT delete branches until verification is complete
@@ -422,52 +545,9 @@ For the initial 60-day scan:
 2. Layer pre-filter eliminates ~50%. Run in one pass (no hardware needed).
 3. Opus pre-classification: batch process, 8 candidates at a time max (rate limit).
 4. Bisect: queue candidates by hardware type, dispatch in nightly windows over multiple nights.
-   - Single-card (N150, N300, P150, P150b, P300, P100): no per-night cap. Only constraint: no
-     two concurrent bisects on the same hardware type.
-   - T3K: max 5 bisects per night.
-   - Galaxy: max 3 bisects per night.
+   - Stagger: 3 bisects per night max to avoid runner contention.
    - Multi-night campaign: 5-10 nights to process all survivors.
 5. Verification: same nightly cadence.
 6. Confluence page seeded with all confirmed escapes from the backfill.
 
 After backfill, switch to incremental mode. The `seen-escapes.json` file prevents re-analysis.
-
----
-
-## Known Pitfalls
-
-### 1. Using the bisect workflow to find fix commits
-
-**Error**: `bisect-dispatch.yaml` finds breaking commits (good=old, bad=new). The campaign
-needs fix commits, which are in the opposite direction. The workflow will error or find the
-wrong commit if used for fix commit search.
-
-**Fix**: Use Method A (binary search) or Method B (hypothesis testing) from Step 4. Both
-dispatch actual GHA workflow runs — there is no Snowflake shortcut for finding the fix commit.
-
-### 4. Refuting a bug escape after testing only one hypothesis
-
-**Error**: Agent tests Opus's top candidate commit, gets BEFORE=FAIL+AFTER=FAIL, and marks the
-escape as `refuted`. The other cross-layer commits in the range were never tested.
-
-**Fix**: Method B has a defined end condition — refute ONLY after ALL plausible cross-layer
-commits have been tested. A single failing hypothesis does not refute the escape.
-
-### 2. Guessing the verification workflow from memory
-
-**Error**: Assuming which GitHub Actions workflow runs a given test without checking.
-Different tests run in different workflows — guessing leads to dispatching a workflow that
-doesn't contain the test at all.
-
-**Fix**: Always query `CICD_JOB.NAME` from Snowflake for a recent run of the test, then
-find the corresponding workflow file via the GitHub workflows API. See pruning instructions in Step 4.
-
-### 3. Skipping test matrix pruning before any dispatch
-
-**Error**: Dispatching the full workflow instead of narrowing to the one failing test.
-This wastes hardware time on every runner type — T3K, LoudBox, Galaxy, all of them —
-on dozens of unrelated tests and makes results harder to interpret.
-
-**Fix**: Always edit the `TESTS_YAML_PATH` file on the branch to contain only the failing
-test group before dispatching. This is mandatory for EVERY dispatch: binary search midpoints,
-hypothesis tests, and final BEFORE/AFTER verification. No exceptions.
