@@ -318,7 +318,7 @@ def _reflection_pad_left_1_nlc(x_nlc: ttnn.Tensor, *, memory_config: ttnn.Memory
 
     Reflection pad of 1 on the left maps ``out[0] = x[1]`` then concatenates the rest of ``x``.
     """
-    B, T, C = (int(d) for d in x_nlc.shape)
+    B, _T, C = (int(d) for d in x_nlc.shape)
     head = ttnn.slice(x_nlc, [0, 1, 0], [B, 2, C], [1, 1, 1], memory_config=memory_config)
     out = ttnn.concat([head, x_nlc], dim=1, memory_config=memory_config)
     ttnn.deallocate(head)
@@ -338,9 +338,22 @@ def _upsample_nearest_axis1(x_nlc: ttnn.Tensor, *, scale: int, memory_config: tt
 
 
 class TTGenerator:
-    """TTNN port of ``Generator`` (``TorchSTFT`` only)."""
+    """TTNN port of ``Generator`` (``TorchSTFT`` only).
 
-    def __init__(self, device: ttnn.Device, params: TTGeneratorParams) -> None:
+    ``use_torch_stft_fallback=True`` routes the STFT ``transform`` call through CPU
+    ``torch.stft``, bypassing the BH BF16 MAC ceiling in the harmonic-source STFT and raising
+    the full-forward PCC from ~0.58 to > 0.99.  Everything else (iSTFT, decoder) stays on-device.
+    """
+
+    def __init__(
+        self,
+        device: ttnn.Device,
+        params: TTGeneratorParams,
+        *,
+        use_torch_stft_fallback: bool = False,
+        use_torch_phase_fallback: bool = False,
+        use_torch_linear_fallback: bool = False,
+    ) -> None:
         self.device = device
         self.params = params
         # HiFi4 (with fp32_dest_acc_en) measured better than HiFi3 for the STFT precision
@@ -353,8 +366,13 @@ class TTGenerator:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        self._m_source = TTSourceModuleHnNSF(device, params.m_source)
-        self._stft = TTTorchSTFT(device, params.stft)
+        self._m_source = TTSourceModuleHnNSF(
+            device,
+            params.m_source,
+            use_torch_phase_fallback=use_torch_phase_fallback,
+            use_torch_linear_fallback=use_torch_linear_fallback,
+        )
+        self._stft = TTTorchSTFT(device, params.stft, use_torch_stft_fallback=use_torch_stft_fallback)
         # Keep the full harmonic-source path (SineGen + Source linear + STFT) on the same
         # precision profile as the rest of the generator to avoid mixed-fidelity phase drift.
         self._m_source.compute_kernel_config = self.compute_kernel_config
