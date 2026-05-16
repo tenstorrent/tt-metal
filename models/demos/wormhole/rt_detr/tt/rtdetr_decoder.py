@@ -47,8 +47,10 @@ def _self_attention(x, pos, p, device, num_heads=8):
 
 
 def decoder_layer(query_tt, query_pos_tt, torch_layer, tt_params,
-                  memory, ref_points, spatial_shapes, device, num_heads=8):
+                  memory, ref_points, spatial_shapes, device, num_heads=8,
+                  valid_mask=None):
     """Single decoder layer: self-attn (TT) + cross-attn (torch) + FFN (TT). """
+    
     # 1. Self-attention on TT device
     residual = query_tt
     sa_out = _self_attention(query_tt, query_pos_tt, tt_params.self_attn, device, num_heads)
@@ -58,22 +60,39 @@ def decoder_layer(query_tt, query_pos_tt, torch_layer, tt_params,
     )
 
     # 2. Cross-attention on CPU (MSDeformableAttention)
-    query_torch = ttnn.to_torch(query_tt).squeeze(1).float()  
-    memory_torch = ttnn.to_torch(memory).squeeze(1).float() # FIX: Convert memory to PyTorch
+    # Pull both the query AND the positional embedding back to PyTorch
+    query_torch = ttnn.to_torch(
+        query_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)
+    )[0:1].view(1, 300, 256).float()  
+    
+    query_pos_torch = ttnn.to_torch(
+        query_pos_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)
+    )[0:1].view(1, 300, 256).float()
+    
+    memory_torch = ttnn.to_torch(
+        memory, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)
+    )[0:1].squeeze(1).float()
+
+    if valid_mask is not None:
+        memory_torch = valid_mask.to(memory_torch.dtype) * memory_torch
+
+    # CRITICAL FIX: Add positional embedding before cross-attention
+    q_with_pos = query_torch + query_pos_torch
 
     with torch.no_grad():
         ca_out = torch_layer.cross_attn(
-            query=query_torch, 
+            query=q_with_pos,               # <- Fixed!
             reference_points=ref_points, 
             value=memory_torch,
-            value_spatial_shapes=spatial_shapes, # FIX: Pass spatial shapes
+            value_spatial_shapes=spatial_shapes, 
             value_mask=None
         )
         
     ca_out_tt = ttnn.from_torch(
-        ca_out.unsqueeze(1).to(torch.bfloat16),
+        ca_out.reshape(1, 1, 300, 256).to(torch.bfloat16),
         dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
         device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
 
     residual = query_tt
@@ -97,14 +116,60 @@ def decoder_layer(query_tt, query_pos_tt, torch_layer, tt_params,
 
 
 def run_decoder(query_tt, query_pos_tt, torch_decoder, tt_layer_params,
-                memory, ref_points, spatial_shapes, device, num_heads=8):
-    """Run all 6 decoder layers. """
-    for torch_layer, tt_params in zip(torch_decoder.layers, tt_layer_params):
+                memory, ref_points, spatial_shapes, device, num_heads=8,
+                valid_mask=None):
+    from src.zoo.rtdetr.utils import inverse_sigmoid
+    
+    # We need the parent torch_decoder to access the bbox_head and query_pos_head
+    actual_decoder = torch_decoder.decoder if hasattr(torch_decoder, 'decoder') else torch_decoder
+    
+    # Guard: Ensure we start with the base [1, 300, 4] tensor.
+    # If the hook accidentally caught the scaled [1, 300, 3, 4] tensor, strip the level dimension.
+    if ref_points.dim() == 4:
+        ref_points_detach = ref_points[:, :, 0, :].clone()
+    else:
+        ref_points_detach = ref_points.clone()
+
+    n_levels = spatial_shapes.shape[0]  # This is 3
+
+    for i, (torch_layer, tt_params) in enumerate(zip(actual_decoder.layers, tt_layer_params)):
+        
+        # 1. Update query_pos dynamically based on the current layer's ref_points
+        with torch.no_grad():
+            query_pos = torch_decoder.query_pos_head(ref_points_detach)
+            
+        query_pos_tt = ttnn.from_torch(
+            query_pos.reshape(1, 1, 300, 256).to(torch.bfloat16),
+            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+            device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+        
+        # 2. Expand reference points for all 3 feature levels -> [1, 300, 3, 4]
+        ref_points_input = ref_points_detach.unsqueeze(2).expand(-1, -1, n_levels, -1)
+
+        # 3. Run the decoder layer (feeding the correctly expanded ref_points)
         query_tt = decoder_layer(
             query_tt, query_pos_tt, torch_layer, tt_params,
-            memory, ref_points, spatial_shapes, device, num_heads,
+            memory, ref_points_input, spatial_shapes, device, num_heads,
+            valid_mask=valid_mask
         )
-    return query_tt
+        
+        # 4. Predict new reference points for the NEXT layer
+        query_torch_out = ttnn.to_torch(
+            query_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)
+        )[0:1].view(1, 300, 256).float()
+        
+        with torch.no_grad():
+            inter_ref_bbox = torch.sigmoid(
+                torch_decoder.dec_bbox_head[i](query_torch_out) +
+                inverse_sigmoid(ref_points_detach)
+            )
+        ref_points_detach = inter_ref_bbox
+
+    # Return BOTH the final query and the final reference points
+    return query_tt, ref_points_detach
+    
 def _print_shape(name, tensor):
     """Helper to safely print shapes of either TTNN or PyTorch tensors."""
     if tensor is None:

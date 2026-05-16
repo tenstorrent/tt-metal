@@ -25,8 +25,8 @@ def conv_block(x, params, device, kernel_size, stride, padding,
     # math_fidelity 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
+        math_fidelity=ttnn.MathFidelity.HiFi2, 
+        math_approx_mode=False,                
     )
 
     out = ttnn.conv2d(

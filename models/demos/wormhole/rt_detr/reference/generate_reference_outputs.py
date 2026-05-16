@@ -39,10 +39,6 @@ def main():
     # res_layers[1] -> s3 (stride 8,  80x80)
     # res_layers[2] -> s4 (stride 16, 40x40)
     # res_layers[3] -> s5 (stride 32, 20x20)
-    print("\nReference output stats:")
-    for k in ["backbone_s3", "backbone_s4", "backbone_s5"]:
-        t = saved[k]
-        print(f"  {k}: shape={tuple(t.shape)} min={t.min():.3f} max={t.max():.3f} mean={t.mean():.3f}")
     for stage_idx, key in [(1, "backbone_s3"), (2, "backbone_s4"), (3, "backbone_s5")]:
         def _make_hook(k):
             def _fn(m, inp, out):
@@ -154,6 +150,11 @@ def main():
     print("Running forward pass...")
     with torch.no_grad():
         out = model(img_tensor)
+
+    print("\nReference output stats:")
+    for k in ["backbone_s3", "backbone_s4", "backbone_s5"]:
+        t = saved[k]
+        print(f"  {k}: shape={tuple(t.shape)} min={t.min():.3f} max={t.max():.3f} mean={t.mean():.3f}")
 
     # save collected decoder layer hidden states 
     # eval mode only runs to eval_idx so _layer_outputs may have fewer than 6 entries

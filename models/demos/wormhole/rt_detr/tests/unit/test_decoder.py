@@ -17,7 +17,7 @@ from src.zoo.rtdetr.rtdetr_decoder import RTDETRTransformer
 from tt.rtdetr_decoder import run_decoder, decoder_layer
 from models.common.utility_functions import comp_pcc
 
-REF = Path(__file__).parent.parent / "reference_outputs.pt"
+REF = Path(__file__).parent.parent.parent / "reference/reference_outputs.pt"
 PCC_THRESHOLD = 0.97
 
 @pytest.fixture(scope="module")

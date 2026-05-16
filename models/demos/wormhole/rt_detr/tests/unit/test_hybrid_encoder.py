@@ -123,8 +123,6 @@ class TestHybridEncoder:
 
         assert p3.shape != p4.shape, "p3 and p4 have the same shape - CCFM spatial dim bug"
         assert p4.shape != p5.shape, "p4 and p5 have the same shape - CCFM spatial dim bug"
-    
-
 
 if __name__ == "__main__":
 
