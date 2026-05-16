@@ -17,8 +17,6 @@
 // UMD: re-exports CoreType (used in SemaphoreDescriptor::core_type member).
 #include <umd/device/types/core_coordinates.hpp>
 
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
-
 #include <bitset>
 #include <filesystem>
 #include <optional>
@@ -60,7 +58,7 @@ struct TileDescriptor {
 
 struct CBFormatDescriptor {
     uint8_t buffer_index = 0;
-    std::variant<tt::DataFormat, tt::tt_metal::DataType> data_format = tt::DataFormat::Float32;
+    tt::DataFormat data_format = tt::DataFormat::Float32;
     uint32_t page_size = 0;
     std::optional<TileDescriptor> tile;
 };

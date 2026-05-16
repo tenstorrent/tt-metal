@@ -333,7 +333,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbTensor_ResolvesToT
         .core_ranges = CoreRangeSet{CoreRange{{0, 0}}},
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = 0,
-            .data_format = DataType::BFLOAT16,
+            .data_format = tt::DataFormat::Float16_b,
             .page_size = 2048,
         }}},
         .tensor = &tensor,

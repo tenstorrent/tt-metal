@@ -104,7 +104,6 @@ public:
         static Builder RemoteBuilder(CircularBufferConfig& parent, uint8_t buffer_index);
 
         const Builder& set_data_format(tt::DataFormat data_format) const;
-        const Builder& set_data_type(tt::tt_metal::DataType data_type) const;
 
         const Builder& set_total_size(uint32_t total_size) const;
 

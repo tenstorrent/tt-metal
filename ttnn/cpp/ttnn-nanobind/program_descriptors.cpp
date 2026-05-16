@@ -31,7 +31,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
-#include <ttnn/tensor/types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -318,32 +317,6 @@ void py_module_types(nb::module_& mod) {
                     page_size: Size of a page in bytes
                     tile: Optional tile descriptor for custom tile dimensions (defaults to None)
             )pbdoc")
-        .def(
-            "__init__",
-            [](tt::tt_metal::CBFormatDescriptor* t,
-               uint8_t buffer_index,
-               ttnn::DataType data_type,
-               uint32_t page_size,
-               std::optional<tt::tt_metal::TileDescriptor> tile) {
-                // DataType to DataFormat conversion
-                tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(data_type);
-                new (t) tt::tt_metal::CBFormatDescriptor(buffer_index, data_format, page_size, tile);
-            },
-            nb::arg("buffer_index"),
-            nb::arg("data_format"),
-            nb::arg("page_size"),
-            nb::arg("tile") = nb::none(),
-            R"pbdoc(
-                Initialize a CBFormatDescriptor with buffer index, TTNN data type, page size, and optional tile descriptor.
-
-                This constructor automatically converts TTNN DataType to TT-Metal DataFormat.
-
-                Args:
-                    buffer_index: Index of the buffer within the command buffer
-                    data_format: TTNN data type to be converted to TT-Metal data format
-                    page_size: Size of a page in bytes
-                    tile: Optional tile descriptor for custom tile dimensions (defaults to None)
-            )pbdoc")
         .def_rw(
             "buffer_index",
             &tt::tt_metal::CBFormatDescriptor::buffer_index,
@@ -357,14 +330,7 @@ void py_module_types(nb::module_& mod) {
                 // existing .data_format getter throws TypeError in Python.
                 // dataformat_to_datatype_converter() only handles 8 of ~20
                 // variants, so we expose the raw value for reliable comparison.
-                return static_cast<uint8_t>(std::visit(
-                    ttsl::overloaded{
-                        [](tt::DataFormat data_format) { return data_format; },
-                        [](tt::tt_metal::DataType data_type) {
-                            return tt::tt_metal::datatype_to_dataformat_converter(data_type);
-                        },
-                    },
-                    self.data_format));
+                return static_cast<uint8_t>(self.data_format);
             },
             "Raw tt::DataFormat enum value as uint8 (reliable getter for all formats)")
         .def_rw("page_size", &tt::tt_metal::CBFormatDescriptor::page_size, "Size of a page in bytes")

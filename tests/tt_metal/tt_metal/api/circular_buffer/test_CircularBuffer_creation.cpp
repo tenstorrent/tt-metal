@@ -167,21 +167,6 @@ TEST_F(MeshDeviceFixture, TestCircularBufferConfigConstructorWithDataTypeMatches
     EXPECT_EQ(config_via_data_format.data_formats(), config_via_data_type.data_formats());
 }
 
-TEST_F(MeshDeviceFixture, TestCircularBufferConfigBuilderSetDataTypeMatchesSetDataFormat) {
-    CBConfig cb_config;
-
-    CircularBufferConfig config_via_data_format(cb_config.page_size);
-    config_via_data_format.index(0).set_page_size(cb_config.page_size).set_data_format(tt::DataFormat::Float16_b);
-    config_via_data_format.index(2).set_page_size(cb_config.page_size).set_data_format(tt::DataFormat::Float32);
-
-    CircularBufferConfig config_via_data_type(cb_config.page_size);
-    config_via_data_type.index(0).set_page_size(cb_config.page_size).set_data_type(DataType::BFLOAT16);
-    config_via_data_type.index(2).set_page_size(cb_config.page_size).set_data_type(DataType::FLOAT32);
-
-    EXPECT_EQ(config_via_data_format, config_via_data_type);
-    EXPECT_EQ(config_via_data_format.data_formats(), config_via_data_type.data_formats());
-}
-
 TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtOverlappingIndex) {
     Program program;
     CBConfig cb_config;

@@ -13,7 +13,6 @@
 #include "math.hpp"
 #include "tt_backend_api_types.hpp"
 #include <tt_stl/reflection.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
 namespace tt::tt_metal {
 
@@ -103,10 +102,6 @@ uint32_t Tile::get_tile_size(const DataFormat& format) const {
         case DataFormat::Invalid: throw std::invalid_argument("Invalid data format");
         default: throw std::invalid_argument("Unknown format");
     }
-}
-
-uint32_t Tile::get_tile_size(const DataType& format) const {
-    return get_tile_size(datatype_to_dataformat_converter(format));
 }
 
 bool Tile::operator==(const Tile& other) const {
