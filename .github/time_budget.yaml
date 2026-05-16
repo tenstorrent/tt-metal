@@ -68,7 +68,7 @@ metal_infra:
 # No official decision has been made yet for division of budgets per team.
 ttnn:
   sanity:
-    wh_n300_civ2: 545
+    wh_n300_civ2: 610  # +60 min for HW-only job (flaky + ttsim-skipped, WH-only)
     bh_p100: 545
     bh_p150b_civ2: 545
   unit:
