@@ -753,14 +753,102 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                         tt::LogAlways,
                         "teardown: FIX AQ — edm_status_address sentinel poll complete (Step 2 path).");
                 } catch (const tt::tt_fabric::FabricContextNullException&) {
-                    // FIX BQ (#42429): Typed catch replaces FIX BP's fragile e.what() string match.
-                    // fabric_context_ is already null (teardown/atexit path) — nothing to poll.
-                    // The previous code would sleep 10s here on every test teardown when
-                    // fabric_context_ was null: 20+ GTest teardowns × 10s = 13+ minutes of hang.
-                    log_debug(
-                        tt::LogMetal,
-                        "teardown: FIX AQ — fabric_context already torn down (FIX BQ typed catch), "
-                        "skipping 10s fallback wait. ROM-postcode channels left for next init. (#42429)");
+                    // FIX DN (#42429): fabric_context_ is torn down, but we can still poll
+                    // edm_status_address using the known WH architecture constant (0x18070) and
+                    // MMIO ETH core enumeration from ControlPlane (which doesn't touch fabric_context).
+                    //
+                    // Root cause of Cycle 14 failure (run 25962948409):
+                    //   FIX AQ silently skipped the edm_status_address poll here (logged only at
+                    //   log_debug — invisible in CI).  After FIX AC PCIe-reset, MMIO ETH channels
+                    //   reboot into ROM (writing 0x49705180 to 0x18070).  The skipped FIX AQ poll
+                    //   left them at 0x49705180 when the process exited.  The next session's FIX BT
+                    //   promoted all 24 MMIO ETH channels to probe_dead, then FIX RR+BH fired on
+                    //   all 24 simultaneously — the 500ms window was insufficient for concurrent
+                    //   recovery, causing AllGather + ReduceScatter to fail.
+                    //
+                    // Fix: use the WH architecture-constant edm_status_address (0x18070) when
+                    // fabric_context is unavailable.  ControlPlane::get_active_ethernet_cores()
+                    // does not require fabric_context, so we can still enumerate MMIO ETH channels.
+                    // Poll is bounded by 10s (matching kEdmStatusPollMs in the try path).
+                    constexpr uint32_t kEdmStatusAddrDN = 0x18070u;  // WH edm_status_address (FIX DN)
+                    constexpr uint32_t kRomPostcodeDN = 0x49705180u;
+                    constexpr int kEdmStatusPollMsDN = 10000;
+                    constexpr auto kEdmStatusPollIntervalDN = std::chrono::milliseconds(5);
+                    struct EdmPollStateDN {
+                        tt_cxy_pair target;
+                        bool ready = false;
+                    };
+                    std::vector<EdmPollStateDN> edm_states_dn;
+                    try {
+                        for (const tt::ChipId dn_mmio_id : mmio_ids_set) {
+                            for (const auto& dn_logical_core :
+                                 this->get_control_plane_().get_active_ethernet_cores(dn_mmio_id)) {
+                                CoreCoord dn_virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                                    dn_mmio_id, dn_logical_core, CoreType::ETH);
+                                edm_states_dn.push_back({tt_cxy_pair(dn_mmio_id, dn_virt), false});
+                            }
+                        }
+                    } catch (...) {
+                        edm_states_dn.clear();  // enumeration failed — skip poll
+                    }
+                    if (!edm_states_dn.empty()) {
+                        log_info(
+                            tt::LogAlways,
+                            "teardown: FIX DN (#42429) — fabric_context torn down; polling {} MMIO ETH "
+                            "channel(s) at edm_status_address 0x{:05x} (WH constant fallback).",
+                            edm_states_dn.size(),
+                            kEdmStatusAddrDN);
+                        const auto dn_start = std::chrono::steady_clock::now();
+                        while (true) {
+                            bool all_clear_dn = true;
+                            for (auto& es_dn : edm_states_dn) {
+                                if (es_dn.ready) continue;
+                                uint32_t dn_val = 0;
+                                try {
+                                    cluster_.read_reg(&dn_val, es_dn.target, kEdmStatusAddrDN);
+                                } catch (...) {
+                                    es_dn.ready = true;  // read failed — treat as clear
+                                    continue;
+                                }
+                                if (dn_val != kRomPostcodeDN) {
+                                    es_dn.ready = true;
+                                } else {
+                                    all_clear_dn = false;
+                                }
+                            }
+                            if (all_clear_dn) break;
+                            const auto dn_elapsed_ms =
+                                std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - dn_start)
+                                    .count();
+                            if (dn_elapsed_ms >= kEdmStatusPollMsDN) break;
+                            std::this_thread::sleep_for(kEdmStatusPollIntervalDN);
+                        }
+                        for (const auto& es_dn : edm_states_dn) {
+                            if (!es_dn.ready) {
+                                uint32_t final_dn_val = 0;
+                                try {
+                                    cluster_.read_reg(&final_dn_val, es_dn.target, kEdmStatusAddrDN);
+                                } catch (...) {}
+                                log_warning(
+                                    tt::LogAlways,
+                                    "teardown: FIX DN — ETH core {} edm_status_address still 0x{:08x} "
+                                    "(ROM postcode) after {}ms fallback poll. (#42429)",
+                                    es_dn.target.str(),
+                                    final_dn_val,
+                                    kEdmStatusPollMsDN);
+                            }
+                        }
+                        log_info(
+                            tt::LogAlways,
+                            "teardown: FIX DN — fallback edm_status_address poll complete.");
+                    } else {
+                        log_warning(
+                            tt::LogAlways,
+                            "teardown: FIX DN — could not enumerate MMIO ETH cores "
+                            "(fabric_context null, ControlPlane unavailable); "
+                            "ROM-postcode channels may persist to next session. (#42429)");
+                    }
                 } catch (const std::exception& e) {
                     // FIX AQ-fallback (#42429): fabric_context_ exists but poll failed
                     // for another reason.  Fall back to a time-based wait long enough for
