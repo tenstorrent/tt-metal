@@ -5721,6 +5721,7 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     {
         TopologyMappingEnumerationSession<int, int> probe;
         std::vector<std::map<int, int>> ex;
+        ex.reserve(kRounds);
         for (size_t i = 0; i < kRounds; ++i) {
             const auto r = probe.next(
                 target,
@@ -5739,6 +5740,7 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
 
     TopologyMappingEnumerationSession<int, int> check_calls;
     std::vector<std::map<int, int>> ex_acc;
+    ex_acc.reserve(kRounds);
     std::set<std::map<int, int>> session_maps;
     for (size_t i = 0; i < kRounds; ++i) {
         const size_t excluded_at_call = ex_acc.size();
@@ -5791,6 +5793,7 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     {
         TopologyMappingEnumerationSession<int, int> warmup;
         std::vector<std::map<int, int>> ex;
+        ex.reserve(kRounds);
         for (size_t i = 0; i < kRounds; ++i) {
             const auto r = warmup.next(
                 target,
@@ -5811,6 +5814,7 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     for (size_t i = 0; i < kRounds; ++i) {
         TopologyMappingEnumerationSession<int, int> fresh;
         std::vector<std::map<int, int>> ex;
+        ex.reserve(i);
         for (size_t j = 0; j < i; ++j) {
             ex.push_back(expected_prefix[j]);
         }
@@ -5834,6 +5838,7 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     TopologyMappingEnumerationSession<int, int> reuse_session;
     {
         std::vector<std::map<int, int>> ex;
+        ex.reserve(kRounds);
         for (size_t i = 0; i < kRounds; ++i) {
             const auto r = reuse_session.next(
                 target,
