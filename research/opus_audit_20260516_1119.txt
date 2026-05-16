@@ -1,0 +1,99 @@
+========================================================================
+  OPUS AUDIT REPORT — nsexton/0-racecondition-hunt
+  2026-05-16 11:19 UTC
+========================================================================
+
+BRANCH STATE
+============
+- Base commit: 734d63fc656 (FIX DI — Retry stuck MMIO ETH channels)
+- Branch: nsexton/0-racecondition-hunt
+- 222 files changed, 57729 insertions vs main
+- Latest CI run: 25959676742 (FAILED — degraded mode cascade after tt-smi -r)
+- The branch is actively chasing AllGather hangs and fabric teardown races
+- ~50 FIX labels (AA through DI) tracking individual race condition fixes
+
+
+CODE CORRECTNESS ISSUES
+=======================
+
+1. [FIXED] FIX DI-B — Missing PCIe read-barrier in FIX DI retry path
+   - File: tt_metal/fabric/fabric_init.cpp (lines 442-454)
+   - Issue: FIX DI writes fw_launch_addr_value via write_core_immediate (posted
+     PCIe TLP) then immediately calls deassert_risc_reset_at_core (also posted).
+     No read-barrier between them — same race condition that FIX DG addresses
+     in the main FIX AC path.
+   - Impact: Deassert can arrive before fw_launch_addr write. ERISC ROM reads
+     fw_launch_addr=0, enters link-training at 0x49705180, channel stays stuck.
+   - Fix: Added read_reg barrier matching FIX DG pattern. Logs warning on mismatch.
+   - Risk: LOW — this is MMIO-direct PCIe where read_reg is always available.
+   - Note: FIX RR-NM step 2 (fabric_firmware_initializer.cpp) uses write_only
+     variants for non-MMIO relay where read_reg is impossible — no fix needed.
+
+
+SCRIPT GAPS
+===========
+
+1. [FIXED] analyze_fabric_hang_log.sh missing FIX DG/DH/DI/DI-B patterns
+   - FIX DG (PCIe readback mismatch), FIX DH (Step2 indirect relay), FIX DI
+     (stuck channel retry), and FIX DI-B (retry readback mismatch) were
+     completely absent from:
+     a. The grep filter lines (46, 115) — log events not captured
+     b. Counter variable sections — no counters defined
+     c. Output sections — no reporting even if captured
+   - Fix: Added all four labels to filter, counters, and output blocks.
+
+
+TESTING GAPS
+============
+
+1. [NOT ADDRESSED — acceptable] No deterministic test for FIX DI retry path
+   - The FIX DI retry logic (fresh assert+write+deassert after FIX BH timeout)
+     is only exercised by the CI racecondition-hunt job on real hardware.
+   - A unit test would require mocking cluster.read_core to return 0x49705180
+     for the first BH poll then a valid value on DI retry.
+   - Assessment: Low priority. The code path structure is simple (retry loop +
+     poll) and doesn't have complex branching. The real-hardware CI exercises it.
+
+2. [NOT ADDRESSED — acceptable] 40+ test files exist covering AllGather hang,
+   teardown races, relay broken cascades, channel lifecycle, etc. Coverage is
+   comprehensive for the failure modes being chased.
+
+
+LOGGING GAPS
+============
+
+None found. All critical paths have descriptive log messages at appropriate
+severity levels. FIX DI-B adds a new warning-level log for readback mismatches
+consistent with FIX DG.
+
+
+COMMITS MADE
+============
+
+1. ae1d456f4f6 — "audit: FIX DI-B PCIe read-barrier + analyze_fabric_hang_log.sh FIX DG/DH/DI patterns"
+   - tt_metal/fabric/fabric_init.cpp: FIX DI-B read-barrier
+   - scripts/analyze_fabric_hang_log.sh: FIX DG/DH/DI/DI-B counters + output
+   - AI-JOURNAL.md: Audit findings section
+
+
+RECOMMENDATIONS FOR NEXT STEPS
+===============================
+
+1. WATCH NEXT CI RUN for FIX DI-B behavior:
+   - If "[FIX DI-B] fw_launch_addr readback mismatch" appears in logs, the race
+     was real and the barrier is catching it.
+   - If FIX DI retries now succeed where they previously failed, the barrier
+     is helping.
+
+2. ROOT CAUSE of latest failure (run 25959676742):
+   - tt-smi -r hard reset left all 24 MMIO channels at ROM postcode 0x49705180
+   - FIX BH 3000ms timeout was insufficient (chan=15 on all 4 MMIO devices)
+   - FIX DH fixed the Step2 deadlock (use any working MMIO channel, not direct peer)
+   - FIX DI added retry for stuck channels
+   - If the next run still fails on chan=15, consider:
+     a. Increasing kFIX_DI_RetryWaitMs beyond 3000ms
+     b. Adding a third retry attempt
+     c. Investigating why chan=15 specifically resists recovery (hardware issue?)
+
+3. The .gitignore has an uncommitted `build-*` addition that was not part of
+   this audit. Neil should decide whether to commit it.

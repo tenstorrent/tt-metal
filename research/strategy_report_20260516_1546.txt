@@ -1,0 +1,290 @@
+=== STRATEGY INVESTIGATION REPORT ===
+Date: 2026-05-16 15:46 UTC
+Branch: nsexton/0-racecondition-hunt
+
+## CURRENT IMPLEMENTATION CRITIQUE
+
+The branch has accumulated 324 FIX-labeled commits spanning labels from FIX A through
+FIX DR (and beyond), touching at minimum: fabric_firmware_initializer.cpp (~223 FIX
+references), fabric_init.cpp (~31 FIX references), edm_handshake.hpp (2 FIX references),
+and dozens of other files.  This is a classic symptom of treating a structural problem
+with incremental patches.
+
+### Core structural problems:
+
+1. **The init_handshake_info TXQ flush is in the wrong place and creates a new race.**
+
+   `init_handshake_info()` in edm_handshake.hpp (line 58-88) does THREE things atomically
+   that should NOT be atomic:
+   - Flushes a stale ETH TXQ (FIX AH, lines 72-76)
+   - Resets local_value to 0 (line 79)
+   - Writes scratch with MAGIC_HANDSHAKE_VALUE (line 80)
+
+   The problem: `sender_side_handshake()` calls `init_handshake_info()` and IMMEDIATELY
+   starts calling `eth_send_packet()` in a loop (line 108).  If both sides enter
+   sender_side_handshake() concurrently (the "simultaneous-sender" scenario documented in
+   FIX HS1 lines 112-131):
+   - Side A's sends arrive at B
+   - B's init_handshake_info() zeroes B.local_value, erasing A's sends
+   - A exits the loop thinking handshake is done
+   - B is stuck forever
+
+   FIX HS1/HS2 added a "final send after loop exit" to paper over this.  But this only
+   works if the final send arrives AFTER the remote's init_handshake_info() — which is a
+   timing assumption, not a guarantee.  On a loaded system or with asymmetric UMD relay
+   latency (documented as ~200x difference), the race window can widen.
+
+2. **The recovery machinery is fighting the initialization machinery.**
+
+   The branch has built two parallel codepaths:
+   - terminate_stale_erisc_routers() (1600+ lines) — reads L1, classifies state,
+     attempts recovery
+   - configure_fabric_cores() (~500 lines) — does soft resets, L1 clears, firmware load
+
+   These interact through 5+ channel classification sets (probe_dead_channels,
+   base_umd_channels, external_umd_channels, skip_soft_reset_channels,
+   pre_known_dead_channels) and 4+ device-level flags (dead_relay_devices_,
+   mmio_dead_master_chan_devices_, fabric_stale_base_umd_channels_,
+   fabric_relay_path_broken_).
+
+   Every new CI failure adds another classification or flag, creating a combinatorial
+   explosion.  The FIX I transitive-dependency problem (AI-JOURNAL lines 291-311) is a
+   direct consequence: the classification system can't express "MMIO device whose peer's
+   peer is dead."
+
+3. **The handshake protocol assumes symmetric startup timing.**
+
+   Both sender_side_handshake() and receiver_side_handshake() call init_handshake_info()
+   first, then enter their respective loops.  But ERISC firmware boot time varies wildly:
+   - MMIO devices: PCIe-direct launch, firmware starts in microseconds
+   - Non-MMIO devices: UMD relay path, firmware starts 6-200ms later
+   - Base-UMD transition: write_launch_msg_to_core, timing depends on relay health
+
+   The handshake assumes both sides are ready within the context-switch timeout
+   (1 billion iterations).  But if one side's ERISC hasn't even STARTED yet (ROM postcode
+   0x49705180 for up to 5 seconds per FIX BH), the other side burns cycles sending
+   packets into a void.
+
+4. **Teardown leaves L1 in states that poison the next session.**
+
+   The fundamental #42429 race: when a process crashes or teardown is incomplete, ERISC
+   L1 retains mid-handshake state (0x49706550 = base-UMD sentinel, 0x49705180 = ROM
+   postcode, 0xA0A0A0A0 = crash sentinel).  The branch has patches for EACH of these
+   sentinel values (FIX M, FIX RP, crash detection).  But the root cause — that L1
+   survives soft reset — is never addressed.
+
+
+## STRATEGY EVALUATIONS
+
+### Strategy 1: Flip the pre-ping direction (non-MMIO -> MMIO becomes MMIO -> non-MMIO)
+
+**Summary**: Currently in the handshake, non-MMIO sends to MMIO.  The proposal is to
+have MMIO send the pre-ping to non-MMIO instead, because MMIO has no init_handshake_info
+flush hazard.
+
+**Assessment**: PARTIALLY FLAWED.
+
+- The handshake direction is determined by compile-time template parameters
+  (`is_handshake_sender`) in fabric_erisc_router.cpp (line 3573).  Flipping it requires
+  changes to the FabricBuilder that assigns sender/receiver roles.
+- The init_handshake_info TXQ flush (FIX AH) is called by BOTH sides — sender and
+  receiver.  Flipping the pre-ping direction does NOT eliminate the flush hazard because
+  both sides still call init_handshake_info().
+- The real issue is that init_handshake_info resets local_value=0 AFTER the remote may
+  have already written to it.  This race exists regardless of direction.
+- Risk: Requires understanding the fabric topology assignment (is_handshake_sender is
+  determined by whether a chip's ETH channel ID < its peer's — see FabricBuilder).
+  Flipping could break the assignment invariant.
+
+**Verdict**: Does not eliminate the race.  The problem is not which side sends first —
+it's that both sides reset their local_value during init.
+
+### Strategy 2: Replace ETH DMA with host-mediated signal
+
+**Summary**: Instead of eth_send_packet, have non-MMIO ERISC write a flag to MMIO L1
+via the ETH relay path.  Host reads it and writes a reciprocal signal.
+
+**Assessment**: IMPRACTICAL.
+
+- The ERISC firmware runs on the Tensix RISC-V cores with no direct host communication
+  channel during the handshake phase.  The only host communication is through L1 memory
+  that the host polls.
+- The ETH relay path IS the eth_send_packet mechanism.  "Via the ETH relay path" is
+  literally what eth_send_packet does.
+- A host-mediated approach would require:
+  a. ERISC writes a flag to a known L1 address
+  b. Host polls that address (adds PCIe latency + polling overhead)
+  c. Host writes to the remote ERISC's L1
+  d. Remote ERISC polls its L1
+  This adds 2 PCIe round-trips per handshake (microseconds each), and requires a host
+  thread actively polling during firmware init.  Current Metal architecture does not have
+  a host polling loop during this phase.
+- For non-MMIO devices, the host cannot directly access L1 — it must go through the UMD
+  relay (which uses the MMIO ERISC's ETH command queue), creating a circular dependency.
+
+**Verdict**: Not implementable without major architectural changes.  Circular dependency
+for non-MMIO devices makes this a non-starter.
+
+### Strategy 3: Eliminate pre-ping, fix deadlock via edm_status staggering
+
+**Summary**: Non-MMIO waits until MMIO's edm_status == HANDSHAKE_READY before entering
+the handshake loop.  No pre-ping needed.
+
+**Assessment**: MOST PROMISING — but needs refinement.
+
+- The current firmware writes edm_status through a defined sequence:
+  INITIALIZATION_STARTED -> TXQ_INITIALIZED -> STREAM_REG_INITIALIZED -> STARTED ->
+  DOWNSTREAM_EDM_SETUP_STARTED -> ... -> REMOTE_HANDSHAKE_COMPLETE -> LOCAL_HANDSHAKE_COMPLETE
+  -> READY_FOR_TRAFFIC
+- If the non-MMIO side could read the MMIO side's edm_status (via eth_send_packet to poll
+  a known L1 address), it could wait until STARTED or TXQ_INITIALIZED before entering its
+  own handshake.
+- Problem: non-MMIO ERISCs cannot read MMIO ERISC's L1 until after the ETH handshake
+  completes.  This is a chicken-and-egg: you need the handshake to read edm_status, but
+  you need edm_status to gate the handshake.
+- HOWEVER: the HOST can read MMIO edm_status via PCIe, then write a "go" signal to the
+  non-MMIO device via the UMD relay.  This is essentially the
+  `wait_for_fabric_router_sync()` pattern that already exists — but moved earlier.
+- The staggering idea is sound in principle.  What's needed is:
+  a. MMIO firmware starts, reaches STARTED, host detects STARTED via PCIe poll
+  b. Host writes "peer ready" flag to non-MMIO device via relay
+  c. Non-MMIO firmware polls this flag before calling init_handshake_info()
+- Risk: adds ~5-10ms latency per device pair for host round-trip, but eliminates the
+  simultaneous-sender race entirely because only one side ever enters sender mode while
+  the other is guaranteed to be in receiver mode.
+
+**Verdict**: Sound approach but requires host involvement during firmware boot.
+Implementation is medium complexity — needs a new "pre-handshake ready" flag in L1 and
+host-side polling in compile_and_configure_fabric().
+
+### Strategy 4: Move init_handshake_info's TXQ flush to before pre-ping send
+
+**Summary**: Flush TXQ explicitly before writing nonce and sending.  Ordering:
+flush -> write nonce -> send -> enter handshake.
+
+**Assessment**: MISIDENTIFIES THE PROBLEM.
+
+- FIX AH already moved the TXQ flush to the beginning of init_handshake_info() (lines
+  72-76 of edm_handshake.hpp).  The flush IS before the nonce write (line 80) and before
+  the send (line 108 in sender_side_handshake).
+- The actual ordering is already: flush (if busy) -> local_value=0 -> scratch=MAGIC ->
+  enter loop -> eth_send_packet.
+- The race is NOT about TXQ flush ordering.  The race is about local_value=0 (line 79)
+  erasing a remote's already-sent MAGIC value.
+- Moving the flush would not change anything because the flush only aborts stale DMA from
+  a PRIOR firmware session.  The current session's sends via eth_send_packet use the
+  NOW-clean TXQ.
+
+**Verdict**: Already implemented.  Does not address the actual race condition.
+
+### Strategy 5: Use memory barrier + polling instead of ETH DMA
+
+**Summary**: Write nonce to preping_addr in MMIO L1 directly via host (no DMA, no TXQ).
+MMIO side reads its own L1.
+
+**Assessment**: VIABLE for MMIO-to-MMIO but not for non-MMIO.
+
+- For MMIO devices, the host CAN write to L1 via PCIe.  This would bypass ETH DMA
+  entirely for the "nonce delivery" step.
+- The current handshake uses eth_send_packet to write MAGIC_HANDSHAKE_VALUE to the
+  peer's L1.  If instead the host wrote this value via PCIe (for MMIO peers), the TXQ
+  race is eliminated.
+- For non-MMIO peers, the host must use UMD relay (which goes through MMIO ERISC ETH
+  command queue), which IS a form of ETH DMA — same race conditions apply.
+- Implementation: in compile_and_configure_fabric(), after launching firmware on MMIO
+  devices, host writes MAGIC_HANDSHAKE_VALUE to each MMIO channel's handshake
+  local_value address.  MMIO firmware sees it immediately and completes handshake.
+- This ONLY helps MMIO-to-MMIO links.  MMIO-to-non-MMIO links still need the firmware-
+  level ETH handshake because the host cannot write to non-MMIO L1 without going through
+  the relay.
+
+**Verdict**: Partial solution — helps MMIO devices but does not eliminate the non-MMIO
+handshake race.  Could be combined with Strategy 3 for a complete solution.
+
+
+## NEW STRATEGIES PROPOSED
+
+### Strategy 6: Epoch-based handshake with monotonic nonce (eliminates reset-erase race)
+
+The fundamental flaw in the current handshake is that init_handshake_info() writes
+local_value=0 (a "reset to known state" operation) WHILE the peer may be actively writing
+to that same address.  This creates a TOCTOU race.
+
+Fix: replace the fixed MAGIC_HANDSHAKE_VALUE (0xAA) with a monotonically increasing
+epoch counter.  Both sides read a shared epoch from L1 (set by the host at firmware
+launch time).  The handshake succeeds when local_value == expected_epoch.
+
+- init_handshake_info() writes local_value = expected_epoch - 1 (instead of 0)
+- sender writes expected_epoch to peer's local_value
+- If peer's init_handshake_info() runs AFTER the send, it writes expected_epoch - 1,
+  NOT 0, so the sender knows the peer reset and re-sends
+- The sender's loop condition becomes: local_value == expected_epoch (not ==
+  MAGIC_HANDSHAKE_VALUE)
+
+This eliminates the simultaneous-sender race because the reset value (epoch-1) is
+DISTINCT from the handshake-complete value (epoch).  Even if both sides call
+init_handshake_info() concurrently, neither can accidentally "complete" the handshake
+by writing a stale value.
+
+Implementation: 1 new CT arg per ERISC (epoch counter, set by host), 2 line changes
+in init_handshake_info(), 2 line changes in sender/receiver loops.  FIX HS1/HS2 "final
+send" patches become unnecessary.
+
+Risk: LOW.  The epoch is just a uint32_t — no new hardware dependencies.  The host
+increments a counter per MeshDevice::create() call.
+
+### Strategy 7: Split init_handshake_info into "prepare" and "arm" phases
+
+Current init_handshake_info does:
+1. Flush TXQ (if busy)
+2. local_value = 0
+3. scratch = MAGIC
+
+Step 2 is the race.  Split into:
+- prepare(): flush TXQ, set scratch = MAGIC
+- arm(): local_value = 0
+
+Call prepare() early (during channel setup, before the multi-ERISC barrier at line 3570).
+Call arm() AFTER the barrier, immediately before the handshake loop.
+
+This narrows the race window from "the entire init sequence" to "the barrier-to-loop
+transition."  Combined with the post-exit final send (FIX HS1/HS2), the window becomes
+negligible.
+
+Implementation: 3 lines of refactoring in edm_handshake.hpp.  No new CT args, no host
+changes.
+
+Risk: LOW.  Purely firmware-side change.  Does not eliminate the race entirely but
+reduces it to a timing window measured in RISC-V cycles rather than milliseconds.
+
+
+## RECOMMENDATION
+
+**Strategy 6 (epoch-based handshake)** is the most promising because it eliminates the
+root cause: the ambiguity between "peer reset local_value" and "peer never wrote."
+
+Implementation plan:
+1. Add `handshake_epoch` as a CT arg in fabric_erisc_router.cpp (alongside existing
+   handshake_addr, my_mesh_id, my_device_id)
+2. Host increments a per-session epoch counter in FabricFirmwareInitializer
+3. Modify init_handshake_info() to take epoch parameter:
+   - local_value = epoch - 1 (instead of 0)
+   - scratch[0] = epoch (instead of MAGIC_HANDSHAKE_VALUE)
+4. Modify sender/receiver loops: exit when local_value == epoch
+5. Remove FIX HS1/HS2 "final send" workarounds
+
+This is a ~20-line change across 3 files, with zero host-side polling overhead and zero
+new timing assumptions.  It converts a probabilistic fix (send one more packet and hope
+it arrives after init) into a deterministic one (epoch values are distinct by
+construction).
+
+However: this ONLY fixes the ETH-level handshake race.  The larger problem — stale L1
+surviving across sessions (the #42429 root cause) — requires a separate fix at the
+teardown/quiesce level.  Strategy 6 makes the handshake TOLERANT of stale state but does
+not prevent it.
+
+For the stale-L1 problem, the best approach remains ensuring that
+RiscFirmwareInitializer::teardown (FIX AC) performs a FULL ERISC reset (not just
+BRISC) and that the ETH MAC/TXQ state is hardware-flushed.  The current branch has
+~30+ patches for various failure modes of stale L1 — a proper full-ERISC reset at
+teardown would eliminate most of them.

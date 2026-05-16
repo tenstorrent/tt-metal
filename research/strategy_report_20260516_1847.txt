@@ -1,0 +1,340 @@
+STRATEGY INVESTIGATION REPORT
+Date: 2026-05-16 18:47 UTC
+Branch: nsexton/0-racecondition-hunt
+Agent: Opus Strategy Critic (adversarial analysis)
+
+========================================================================
+## Current Implementation Assessment
+========================================================================
+
+WHAT'S THERE:
+The branch has accumulated 19+ cycles of fixes (FIX A through FIX DS)
+totaling ~2500 lines of defensive code across:
+  - risc_firmware_initializer.cpp (teardown, reset, heartbeat polling)
+  - fabric_firmware_initializer.cpp (init phases 1-5b, stale detection)
+  - edm_handshake.hpp (FIX AH: TXQ flush, FIX HX: preserve handshake,
+    FIX HS1/HS2: post-loop final send)
+  - fabric_router_eth_handshake.hpp (FIX HS2: same for fabric variant)
+  - device.cpp (quiesce phases, dead-relay propagation)
+  - remote_communication_legacy_firmware.cpp (FIX AF: read_non_mmio timeout)
+
+WHAT IT'S DOING:
+The initialization path (fabric_firmware_initializer.cpp) follows this
+sequence:
+  1. Pre-init L1 scan: detect stale/corrupt channels
+  2. terminate_stale_erisc_routers: classify channels as stale_running,
+     canary, base-UMD, corrupt, probe_dead
+  3. configure_fabric_cores: per-device, per-channel:
+     - base-UMD channels (0x49706550): skip soft reset, use launch_msg
+       to transition from relay FW to fabric FW (FIX M)
+     - Healthy channels: soft reset, load FW normally
+     - Dead channels: mark, skip
+  4. Wait for fabric_router_sync (ring sync token 0xa2b2c2d2)
+     - FIX TH3: extends timeout 10s->120s when base-UMD channels exist
+  5. Phase 5b (wait_for_fabric_workers_ready): poll all channels for
+     READY_FOR_TRAFFIC (0xa3b3c3d3), 30s deadline
+
+THE HANDSHAKE (edm_handshake.hpp):
+  - init_handshake_info(): flushes stale TXQ (FIX AH), preserves
+    already-received MAGIC_HANDSHAKE_VALUE (FIX HX), sets scratch[0]=0xAA
+  - sender_side_handshake(): loops eth_send_packet(scratch->remote local_value)
+    until local_value == 0xAA, then sends one final packet (FIX HS1)
+  - receiver_side_handshake(): polls local_value until 0xAA, then sends
+    scratch to remote's local_value
+  - Handshake master/slave decided by tie-breaking: lower chip_id is sender
+  - After ETH handshake: local multi-ERISC barrier (wait_for_notification
+    with num_local_edms), then host writes READY_FOR_TRAFFIC
+
+LATEST CI FAILURE (run 25967409004, runner tt-metal-ci-vm-t3k-10):
+Session 1 (1x1, 1CQ): succeeds. Base-UMD channels detected, healthy.
+Session 2 (1x4, 2CQ): fails at Phase 5b (30001ms deadline).
+  - 8 non-MMIO base-UMD channels transitioned via launch_msg (FIX M)
+  - 4 MMIO devices each with 1 base-UMD skip-soft-reset channel
+  - Stuck channels: 40x REMOTE_HANDSHAKE_COMPLETE (0xa1b1c1d1),
+    16x STARTED (0xa0b0c0d0), 24x READY_FOR_TRAFFIC (working), etc.
+Session 2 teardown: 5s global deadline expires, force-reset ERISCs.
+Session 3 (8-device): 28 channels stuck at ROM postcode (0x49705180)
+  after force-reset; 4 tests fail with FIX BH timeouts.
+
+========================================================================
+## Root Cause Analysis
+========================================================================
+
+CRITICAL FINDING: FIX HX (Strategy 6) IS ALREADY IMPLEMENTED BUT
+THE FAILURES PERSIST. The prior strategy reports all converged on
+"don't erase local_value in init_handshake_info" as the fix. This
+was implemented as FIX HX. Yet the latest CI still shows:
+
+  40 channels stuck at REMOTE_HANDSHAKE_COMPLETE (0xa1b1c1d1)
+  16 channels stuck at STARTED (0xa0b0c0d0)
+
+This means the handshake local_value erasure was NOT the primary root
+cause, or there are ADDITIONAL failure modes.
+
+ROOT CAUSE ANALYSIS — THREE DISTINCT FAILURE MODES:
+
+FAILURE MODE 1: Channels stuck at STARTED (0xa0b0c0d0)
+  These ERISCs completed their pre-handshake initialization but the
+  ETH-level handshake never completed. This means either:
+  a) The peer ERISC never started (dead, still booting, or crashed), OR
+  b) The ETH link is down (PHY not trained after a prior reset), OR
+  c) eth_send_packet() is blocked because ETH_TXQ_CMD is stuck (FIX AH
+     should handle this, but may race with the conditional check)
+
+  LIKELY CAUSE: (b) — after teardown force-reset (assert_risc_reset ALL),
+  the ETH PHY link was broken. Deassert restored the ERISC but the PHY
+  may need link retraining time. The 100ms post-deassert delay (FIX AR2)
+  may be insufficient for all 24 channels to complete link training
+  simultaneously.
+
+FAILURE MODE 2: Channels stuck at REMOTE_HANDSHAKE_COMPLETE (0xa1b1c1d1)
+  These completed the ETH-level handshake (edm_status = REMOTE_HANDSHAKE_COMPLETE)
+  but got stuck at the LOCAL handshake barrier. The local handshake
+  (lines 3604-3616 of fabric_erisc_router.cpp) uses:
+    - is_local_handshake_master: wait for (num_local_edms - 1) notifications
+    - subordinates: notify master, then wait for num_local_edms notifications
+
+  If ANY ERISC on the same chip is stuck at STARTED (failure mode 1) or
+  crashed, it will NEVER send its notification to the local master. The
+  local master then blocks forever, causing ALL other ERISCs on that chip
+  to also block at REMOTE_HANDSHAKE_COMPLETE.
+
+  THIS IS THE CASCADE: one dead ERISC per chip kills ALL ERISCs on that
+  chip at the local barrier.
+
+FAILURE MODE 3: 0xA0A0A0A0 canary (32 occurrences in Session 3)
+  This is the firmware INITIALIZATION_STARTED canary. It means fabric
+  firmware was loaded and started executing but crashed before reaching
+  the STARTED status write. This is secondary (Session 3 after force-reset
+  contamination) but indicates ERISC code execution begins but hits an
+  early abort — possibly due to corrupt L1 left by the prior session's
+  force-reset.
+
+THE ACTUAL BUG:
+The real problem is NOT the handshake protocol itself. It's the
+TRANSITION FROM BASE-UMD TO FABRIC FIRMWARE on channels that were
+previously running relay firmware.
+
+When base-UMD channels are "transitioned via launch_msg" (FIX M):
+  1. The relay ERISC receives a launch_msg and jumps to fabric FW
+  2. The fabric FW starts from a DIRTY L1 state (relay FW's data is
+     still in L1 — buffer pointers, queue state, MAC registers)
+  3. init_handshake_info() flushes TXQ if busy (FIX AH), but does NOT
+     clean up any other relay-era state
+  4. The ETH MAC may have in-flight DMA from the relay era that
+     interferes with the handshake DMA
+
+The "normal" path (soft reset + fresh FW load) avoids this because
+assert_risc_reset zeros the ERISC and fresh firmware starts clean.
+The base-UMD transition path skips this reset entirely.
+
+========================================================================
+## Strategy Evaluations
+========================================================================
+
+STRATEGY 1: Flip pre-ping direction (non-MMIO -> MMIO becomes MMIO -> non-MMIO)
+VERDICT: FLAWED — based on a misunderstanding
+
+There is no "pre-ping" in the codebase. The handshake direction is
+determined by a tie-breaking function (lower chip_id = sender). Both
+sides simultaneously call either fabric_sender_side_handshake or
+fabric_receiver_side_handshake. The "direction" is not MMIO vs non-MMIO;
+it's lower-chip-id vs higher-chip-id. Flipping would require changing
+the tie-break, which doesn't address the timing asymmetry.
+
+Even if you forced MMIO to always be sender: MMIO starts LATER than
+non-MMIO (configure_fabric processes non-MMIO first). So forcing MMIO
+as sender means the sender starts late, and the receiver (non-MMIO) has
+been running for seconds before the sender begins. FIX HX already
+handles this case — the receiver's init_handshake_info preserves early
+writes. The problem is upstream of the handshake.
+
+
+STRATEGY 2: Replace ETH DMA with host-mediated signal
+VERDICT: RISKY — chicken-and-egg problem
+
+The host can write to MMIO ERISC L1 via PCIe but CANNOT write to
+non-MMIO ERISC L1 if the relay is dead. And the relay ERISC was just
+transitioned to fabric firmware — the relay path is gone.
+
+The host could write BEFORE the transition (pre-plant a flag), but then
+the flag must survive the transition. Since base-UMD channels skip soft
+reset, L1 is preserved — so a pre-planted flag WOULD survive. But this
+requires:
+  1. Host writes "wait for go" flag to non-MMIO L1 via relay (before relay dies)
+  2. Host writes "wait for go" flag to MMIO L1 via PCIe
+  3. Host transitions non-MMIO ERISCs (kills relay)
+  4. Host launches MMIO ERISCs
+  5. Host polls all ERISCs for STARTED
+  6. Host writes "go" to all ERISCs
+
+Step 5 is the problem: host can poll MMIO ERISCs via PCIe, but CANNOT
+poll non-MMIO ERISCs (relay is dead). So the host has no way to know
+if non-MMIO ERISCs are ready.
+
+PARTIAL WORKAROUND: Trust that non-MMIO ERISCs reach STARTED faster
+(they start first) and only wait for MMIO ERISCs. But this is a timing
+assumption, not a guarantee.
+
+
+STRATEGY 3: Eliminate pre-ping, use edm_status polling
+VERDICT: RISKY — ETH is half-duplex for DMA writes
+
+edm_status is in local L1. Each ERISC can only write to its OWN
+edm_status and to the PEER's L1 via eth_send_packet. Neither side can
+READ the peer's L1 — the ETH link is write-only (DMA push model).
+
+For non-MMIO to know MMIO's edm_status, MMIO would need to
+eth_send_packet its edm_status to non-MMIO. But MMIO may not be ready
+to send yet (that's the whole problem). This creates a circular
+dependency.
+
+The host CAN read MMIO's edm_status (PCIe read), but can't communicate
+that to non-MMIO (relay is dead). So edm_status polling only works
+for MMIO-accessible channels — which are not the ones that are stuck.
+
+
+STRATEGY 4: Move TXQ flush before nonce write+send
+VERDICT: FLAWED — already implemented (FIX AH)
+
+FIX AH placed the TXQ flush at the very top of init_handshake_info(),
+which is called before any handshake sends. Moving it "earlier" is
+impossible — it's already the first thing that runs.
+
+The flush itself has a subtle bug risk: the conditional check
+`if (eth_txq_is_busy())` races with hardware. If ETH_TXQ_CMD transitions
+from non-zero to zero between the check and the flush write, the flush
+is skipped (fine). But if it transitions from zero to non-zero (a new
+DMA completing just as we check), the flush is also skipped (wrong, but
+vanishingly unlikely since no firmware is sending at this point).
+
+The TXQ flush is NOT the root cause of the failures we're seeing.
+
+
+STRATEGY 5: Host writes nonce via host path (no DMA)
+VERDICT: FLAWED — bypasses the synchronization guarantee
+
+Pre-writing MAGIC_HANDSHAKE_VALUE to L1 makes the ERISC think its peer
+is ready when it may not be. This violates the handshake invariant.
+More critically:
+  - scratch[1] carries mesh_id/device_id for neighbor discovery
+  - Pre-writing local_value without scratch data leaves telemetry corrupt
+  - The handshake ALSO serves as an ETH link liveness test — if you
+    bypass it, you don't know if the link is actually up
+
+This would mask link-down failures as successful handshakes.
+
+
+========================================================================
+## Recommended Path Forward
+========================================================================
+
+DIAGNOSIS FIRST: The branch needs DIAGNOSTIC DATA, not more fixes.
+
+The key unknown is: WHY do channels stick at STARTED after the base-UMD
+transition? The handshake code is probably fine (FIX HX + FIX HS1/HS2
+handle the known races). The problem is upstream.
+
+PROPOSED DIAGNOSTIC: Add firmware-side telemetry to fabric_erisc_router.cpp
+that records (to a dedicated L1 address readable by the host):
+  1. Was TXQ busy when init_handshake_info() ran? (FIX AH path taken?)
+  2. Value of local_value when init_handshake_info() ran (FIX HX path?)
+  3. Number of eth_send_packet calls in the handshake loop before exit
+  4. Value of ETH_TXQ_CMD after each eth_send_packet attempt
+  5. Whether the ETH link is trained (ETH_STATUS register)
+
+This would tell us whether:
+  - The TXQ is stuck (FIX AH flush not working)
+  - The link is down (PHY issue after force-reset)
+  - eth_send_packet is silently dropping (MAC issue)
+  - The handshake loop ran to completion but peer never received data
+
+CONCRETE NEXT STEP:
+  1. Add a small diagnostic struct in L1 (8 uint32_t fields)
+  2. Populate it at key points in the handshake path
+  3. Have the host read it when Phase 5b times out
+  4. Log the diagnostic data alongside the existing status logging
+
+If the diagnostic shows ETH link not trained, then Strategy 8 (full
+ERISC reset before every session) is the correct fix — the base-UMD
+transition path leaves the PHY in an indeterminate state.
+
+If the diagnostic shows TXQ stuck, then FIX AH's conditional flush
+has a race and needs to be unconditional (always flush, even if TXQ
+appears idle).
+
+If the diagnostic shows link trained + TXQ idle + sends happening but
+peer not receiving, then the ETH MAC has a deeper bug and we need
+hardware team engagement.
+
+
+========================================================================
+## New Strategies (beyond the 5 proposed)
+========================================================================
+
+STRATEGY 9: SOFT-RESET BASE-UMD CHANNELS BEFORE TRANSITION
+  Instead of transitioning base-UMD relay ERISCs via launch_msg
+  (which preserves dirty L1), do: assert_risc_reset → deassert →
+  wait for base FW → THEN send launch_msg. This cleans the L1/TXQ/MAC
+  state while keeping the relay alive for other channels.
+
+  RISK: The 100ms+ reset time blocks the init path.
+  REWARD: Eliminates the dirty-L1 transition that causes all the grief.
+  IMPLEMENTABLE: Yes — the soft-reset primitives exist. Need to add a
+  "selective channel reset" in configure_fabric_cores for base-UMD channels.
+
+STRATEGY 10: UNCONDITIONAL TXQ FLUSH (REMOVE THE GUARD)
+  FIX AH guards the flush: `if (eth_txq_is_busy()) { flush; }`.
+  What if ETH_TXQ_CMD is non-zero but eth_txq_is_busy() returns false
+  due to a timing quirk? The guard would skip the flush.
+
+  Proposed: Always flush unconditionally. Yes, the comment says "Writing
+  ETH_TXQ_CMD_FLUSH=0x8 to an already-idle queue may NOT auto-clear."
+  But we can work around this:
+    eth_txq_reg_write(0, ETH_TXQ_CMD, ETH_TXQ_CMD_FLUSH);
+    // IMMEDIATELY write 0 to ETH_TXQ_CMD to clear it
+    eth_txq_reg_write(0, ETH_TXQ_CMD, 0);
+  This avoids the "flush on idle doesn't self-clear" issue.
+
+  RISK: Minimal — worst case a harmless write to an idle register.
+  IMPLEMENTABLE: 3-line change in edm_handshake.hpp.
+
+STRATEGY 11: HOST-SIDE ETH LINK STATUS CHECK BEFORE HANDSHAKE
+  Before launching fabric firmware on any channel, have the host verify
+  that the ETH link is trained by reading the ETH_STATUS register.
+  If the link is not trained, do a targeted PHY reset on that channel.
+
+  This catches the case where a prior force-reset disrupted the PHY
+  and the 100ms delay was insufficient for link retraining.
+
+  RISK: Requires UMD access to ETH_STATUS registers (may already exist).
+  IMPLEMENTABLE: Likely — the host already reads ETH registers via PCIe.
+
+
+========================================================================
+## CRITICAL DISAGREEMENT WITH PRIOR REPORTS
+========================================================================
+
+All 8 prior strategy reports (0708 through 1759) converge on the
+same thesis: "init_handshake_info() erasing local_value is THE root
+cause." This is wrong — or at best incomplete.
+
+Evidence:
+  1. FIX HX implements the exact fix (line 92 of edm_handshake.hpp)
+  2. FIX HS1/HS2 implement the post-loop final send
+  3. Yet the latest CI (run 25967409004) STILL has 40 channels stuck
+     at REMOTE_HANDSHAKE_COMPLETE and 16 at STARTED
+
+The handshake erasure race WAS a real bug. But fixing it did NOT fix
+the overall failure. The real culprit is the DIRTY STATE from base-UMD
+relay transition. The handshake fixes may have reduced the failure rate
+but did not eliminate it.
+
+The recommendation to keep adding handshake fixes (Strategy 6/7) is
+treating a solved symptom. The next step MUST be diagnostic data
+collection on WHY channels don't complete the handshake even with
+FIX HX/HS1/HS2 in place.
+
+========================================================================
+END OF REPORT
+========================================================================

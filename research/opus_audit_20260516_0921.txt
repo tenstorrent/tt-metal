@@ -1,0 +1,150 @@
+Opus Code Audit — nsexton/0-racecondition-hunt
+Date: 2026-05-16 09:21 UTC
+Branch: nsexton/0-racecondition-hunt
+Latest CI run: 25956970498 (exit code 124 — timeout, ZERO tests ran)
+Commit at audit start: 3654c5915c6
+Commit after fixes: f76ec0a8047
+
+========================================================================
+1. FILES REVIEWED
+========================================================================
+
+- AI-JOURNAL.md (lines 1-500) — full fix chain history
+- tt_metal/impl/device/firmware/risc_firmware_initializer.cpp (lines 380-1480)
+  — teardown logic, FIX BA/TK/CO/CA/CD/CC/CB/CP/AC/BR/AR2/AQ/AY/AY-C
+- tt_metal/impl/device/firmware/dispatch_kernel_initializer.cpp (lines 268-590)
+  — FIX DE, wait_for_dispatch_cores, rescue_stuck_dispatch_cores
+- tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp (lines 2860-2940)
+  — FIX CS collective assert/deassert, FIX DF kRRNM_BootWaitMs
+- tt_metal/fabric/fabric_init.cpp (line 353) — FIX DF kFIX_BH_BootWaitMs
+- scripts/analyze_fabric_hang_log.sh (full review: headers, grep patterns, counters, summary)
+- ci_logs/task1_run_25956970498_analysis.txt (318 lines — full analysis)
+- tests/tt_metal/distributed/test_gap* (surveyed 80+ test files)
+
+========================================================================
+2. CI FAILURE ANALYSIS (Run 25956970498)
+========================================================================
+
+Exit code 124 (timeout). ZERO tests ran. Failure chain:
+
+  Session 1 warm-up:
+    - FIX DE fires on all 4 MMIO devices (rescue_stuck_dispatch_cores ~1s each = ~4s)
+    - Fabric teardown: FIX CA/CB/AC fire, FIX AQ/XZ timeout
+    - All 24 MMIO ETH channels fail to reach base-UMD
+
+  Session 2:
+    - FIX BT promotes channels to probe_dead
+    - FIX CS Phase D: all 24 MMIO channels stuck at 0x49705180 (link-training wait)
+    - FIX CT: all 4 MMIO relay devices "no working channels" — cannot relay-deassert non-MMIO
+    - FIX BH: all 24 dead channels fail to exit ROM within 500ms (pre-FIX-DF value)
+    - FIX RR-NM step 2: all non-MMIO "no channels recovered" — degraded mode
+    - FIX DE fires again on all 4 MMIO devices
+    - Total accumulated time exceeds CI 60s job timeout
+
+  Key observations:
+    - "confirmed base firmware heartbeat in 0ms" — potential stale heartbeat (FIX TV)
+    - Device 0 has 6 pre_known_dead channels in second session
+    - rescue_stuck_dispatch_cores takes exactly ~1.0s per device (timestamps confirm)
+
+========================================================================
+3. SCRIPT GAPS (FIXED)
+========================================================================
+
+FIXED — analyze_fabric_hang_log.sh missing FIX DE and FIX DF:
+
+  Problem:
+    - FIX DE and FIX DF completely absent from TIMELINE grep (line 46)
+    - FIX DE and FIX DF completely absent from PHASES grep (line 115)
+    - No FIX_DE_FIRES counter variable
+    - No FIX DE summary output block
+    - FIX DF has no runtime log (constant change only), but should be documented
+
+  Fix applied (commit f76ec0a8047):
+    - Added |FIX DE|FIX DF| to both grep patterns
+    - Added FIX_DE_FIRES counter with appropriate grep pattern
+    - Added FIX DF comment documenting indirect detection via Phase D / FIX BH timing
+    - Added FIX DE summary block with device count and rescue timeout caveat
+
+========================================================================
+4. TESTING GAPS (OBSERVATION)
+========================================================================
+
+  a. No test for FIX DE (dispatch ERISC rescue skip for dead-relay peers)
+     - Closest: test_gap49_fixpb_fw_launch_addr_rescue.cpp (rescue internals)
+     - FIX DE is a timing optimization; hard to unit-test meaningfully
+     - Effective test: CI-level t3k_ttnn_tests integration loop
+
+  b. No test for FIX DF (boot wait timeout increase)
+     - Purely a constant change (2000->5000ms, 500->3000ms)
+     - Testing would require simulating slow boot, which is hardware-dependent
+
+  c. No test for the FIX TV stale-heartbeat-in-0ms pattern
+     - FIX CG already handles stale heartbeat in general; TV is a specific case
+
+  Assessment: These are infrastructure-level timing fixes tested by CI integration
+  rather than unit tests. The test_gap* suite (80+ files) covers many earlier
+  race conditions. New gap tests for DE/DF would have low value-to-effort ratio.
+
+========================================================================
+5. CODE CORRECTNESS REVIEW
+========================================================================
+
+  FIX DE (dispatch_kernel_initializer.cpp lines 300-341):
+    CORRECT. Logic iterates tunnel[1..] peers (skipping tunnel[0] which is MMIO self).
+    Checks is_fabric_relay_path_broken() on each peer. Guard condition
+    `!tunnels.empty() && !any_working_peer` correctly avoids false positive
+    when device has no tunnels. No device-number hardcoding.
+
+  FIX DF (fabric_firmware_initializer.cpp line 2882, fabric_init.cpp line 353):
+    CORRECT. Constants are generous margins. Previous values (2000ms, 500ms) were
+    provably insufficient in CI logs (all 24 channels failing Phase D / FIX BH).
+
+  rescue_stuck_dispatch_cores (dispatch_kernel_initializer.cpp lines 403-590):
+    OBSERVATION: Even with FIX DE bypassing the outer 1000ms wait, rescue internally
+    calls wait_until_cores_done with 1000ms timeout at line 502. This means each
+    MMIO device costs ~1s regardless. With 4 MMIO devices x 2 teardown events
+    (warm-up + real test) = ~8s of unavoidable rescue time. This is budget, not
+    a bug, but it contributes to the 60s CI timeout pressure.
+
+  FIX TV (risc_firmware_initializer.cpp):
+    OBSERVATION: "confirmed base firmware heartbeat in 0ms" in session 1 suggests
+    stale heartbeat from previous run. FIX CG should handle this in later sessions.
+    No code change needed, but worth monitoring.
+
+========================================================================
+6. LOGGING GAPS
+========================================================================
+
+  FIX DF has NO runtime log — it is a constant-only change. This is acceptable
+  since the effect is observable through Phase D and FIX BH timing changes.
+  Adding a startup log like "kRRNM_BootWaitMs=5000 (FIX DF)" could help, but
+  the log volume on this branch is already high.
+
+  FIX DE logging is adequate — log_warning fires on every skip with device ID.
+
+  rescue_stuck_dispatch_cores logging could be improved: it does not log the
+  total time spent in rescue per device. Adding a timing log would help track
+  the ~1s-per-device overhead identified in this audit.
+
+========================================================================
+7. RECOMMENDATIONS
+========================================================================
+
+  HIGH PRIORITY:
+    None — the script gap was the only actionable fix and has been applied.
+
+  MEDIUM PRIORITY:
+    - Consider adding a timing log to rescue_stuck_dispatch_cores to track
+      per-device rescue duration (currently only deducible from timestamps)
+    - Watch for FIX DF effectiveness in next CI runs (Phase D should no longer
+      fail with 5000ms wait instead of 2000ms)
+
+  LOW PRIORITY:
+    - Consider reducing rescue_stuck_dispatch_cores internal timeout when
+      FIX DE has already determined all peers are dead-relay (currently 1000ms
+      at line 502; could be reduced to e.g. 200ms since hard-reset follows anyway)
+    - Add test_gap for FIX DE if the skip logic changes in the future
+
+========================================================================
+END OF AUDIT
+========================================================================

@@ -1,0 +1,184 @@
+OPUS AUDIT — nsexton/0-racecondition-hunt
+Date: 2026-05-16 15:16 UTC
+Latest CI run analyzed: 25964368272 (runner: tt-metal-ci-vm-t3k-09)
+HEAD commit: d798425741e (FIX DQ)
+
+========================================================================
+1. TESTING GAPS
+========================================================================
+
+a) TARGETED TESTS EXIST BUT DON'T REPRODUCE DETERMINISTICALLY
+   - tests/nightly/t3000/ccl/test_gap21_rapid_allgather_quiesce_stress.py
+   - tests/nightly/t3000/ccl/test_gap79_fixxy2_relay_broken_cleared_allgather.py
+   - tests/nightly/t3000/ccl/test_gap37_fixba_started_state_nonmmio_cleanup.py
+   - tests/nightly/t3000/ccl/test_gap39_fixns_single_topology_discovery.py
+   - tests/nightly/t3000/ccl/test_gap40_fixae_flush_timeout_catch.py
+   - tests/nightly/t3000/ccl/test_gap81_fixup3_dispatch_erisc_loop_warmup_skip_allgather.py
+   - tests/nightly/t3000/ccl/test_phase4_mux_timeout_recovery.py
+   These tests exercise various failure paths but rely on hardware state
+   contamination from prior tests, not deterministic injection.
+
+b) NO TEST FOR THE DOMINANT FAILURE (FIX BH 3s timeout)
+   The latest run's failure is 24 MMIO ETH channels stuck at ROM postcode
+   0x49705180 after FIX RR soft-reset. This happens in the SECOND test
+   fixture's SetUp when the first fixture's teardown left channels in a
+   degraded state. There is no test that specifically validates FIX BH
+   recovery under high-contention (20+ simultaneous ROM boots).
+
+c) NO TEST FOR "No core type found for system TRANSLATED" COORDINATE ERROR
+   Device 1 chans 14/15 and Device 3 chans 14/15 fail fabric_eth_health
+   reads with "No core type found for system TRANSLATED at location: (0, 14)"
+   and "(0, 15)". These are harvested ETH channels not present in the
+   coordinate manager's TRANSLATED table. The fabric_eth_health diagnostic
+   iterates all logical channel indices (0-15) but doesn't filter by
+   active_ethernet_cores(). This produces spurious "read FAILED" entries
+   that pollute the analysis. This is a LOG NOISE issue, not a correctness
+   issue, but it complicates triage.
+
+d) ALLGATHER TEST FAILURES ARE 5s TIMEOUTS IN SetUp()
+   The 4 failing tests (AllGatherPersistentOutput, ReduceScatter, AllReduce,
+   AllGatherEthTxqTeardownRace) all take exactly 5006ms and fail in SetUp
+   with "thrown in SetUp()". The FIRST test (AsyncExecutionWorksCQ0) was
+   SKIPPED after 174589ms (2.9 min). The cascade:
+     Test 1 (FABRIC_1D, 1x4): passes init, runs quiesce, teardown fires
+       FIX DK-2 (chan stuck at REMOTE_HANDSHAKE_COMPLETE), then
+       FIX AC/AY relay recovery.
+     Test 2 (FABRIC_2D, 1x4): sees 6 corrupt + 4 corrupt pre-init channels,
+       FIX BH fires on 24 channels (all fail 3s timeout),
+       all marked newly_dead -> degraded fabric -> tests fail at 5s.
+
+========================================================================
+2. LOGGING GAPS
+========================================================================
+
+a) FIX BH DOES NOT LOG ACTUAL edm_status VALUE ON TIMEOUT
+   When FIX BH times out after 3000ms, it logs:
+     "still at 0x49705180 after FIX RR deassert"
+   But it hardcodes the message — it does NOT read the ACTUAL value at
+   timeout. If the channel has partially booted (e.g. moved to 0x49706500
+   or some intermediate value), this would be invisible. A final read
+   on timeout would clarify whether the ERISC is progressing slowly or
+   completely stuck.
+
+b) MISSING AGGREGATE SUMMARY FOR FIX BH EVENTS
+   When 24 channels all fail FIX BH, the log has 24 identical warnings.
+   There's no summary line like:
+     "configure_fabric_cores: FIX BH — N/M channels failed ROM boot
+      across K devices within 3000ms. All marked newly_dead."
+   This would be invaluable for quick CI triage.
+
+c) fabric_eth_health DIAGNOSTIC ITERATES INACTIVE CHANNELS
+   Channels 14/15 on Devices 1/3 aren't in active_ethernet_cores() (they
+   are harvested). The health check attempts a read, gets a coordinate
+   exception, and logs "read FAILED". This is expected but creates noise
+   that can be confused with real failures.
+
+d) MISSING LOG FOR SECOND-FIXTURE RELAY STATE
+   When Test 2's fixture SetUp begins, it runs topology discovery fresh.
+   There's no log indicating what the relay state is BEFORE the new
+   terminate_stale_erisc_routers() call. The pre-init L1 scan reports
+   "6 corrupt ETH channel(s)" on Device 0, but doesn't indicate
+   whether these channels have ROM postcode or some other corrupt value.
+   Adding the actual corrupt values would help distinguish ROM-postcode
+   (recoverable via FIX RR) from truly-corrupt (not recoverable).
+
+========================================================================
+3. CODE CORRECTNESS ISSUES
+========================================================================
+
+a) FIX BH 3000ms TIMEOUT IS INSUFFICIENT FOR 24 SIMULTANEOUS ROM BOOTS
+   This is the ROOT CAUSE of the latest 4 test failures. FIX DP (commit
+   dee55440141) increased the timeout from 500ms to 3000ms, but the latest
+   run shows ALL 24 MMIO channels still at 0x49705180 after 3000ms.
+
+   WH ERISC ROM boot (including ETH link training) can take 1-5s per
+   channel under normal conditions. With 24 channels simultaneously
+   booting, PCIe bandwidth for monitoring is shared and the parallel
+   load on the chip may extend boot time.
+
+   FIX DP's comment says "3000ms gives a safe margin for simultaneous
+   ROM boot" — but the CI evidence proves this insufficient.
+
+   RECOMMENDATION: Increase kFIX_BH_BootWaitMs to 5000ms (matching the
+   FIX RP PARALLEL batch deadline that was already set to 5s for the
+   same class of ROM-postcode channels). This aligns both recovery
+   paths to the same timeout budget.
+
+b) NO RACE IN THE NEW CODE — FIX labels are defense-in-depth correct
+   The synchronization approach (scan flags under mutex, sequential
+   PCIe operations, polling loops with bounded timeouts) is sound.
+   No memory ordering issues found — all cross-thread state is behind
+   mutexes or atomic flags.
+
+c) FIX DN HARDCODES WH edm_status_address (0x18070)
+   This is correct for WH but would be wrong for BH/QA. The code
+   comments note this explicitly. Not a bug today (branch only runs
+   on T3K WH) but will need revisiting for other architectures.
+
+========================================================================
+4. SCRIPT GAPS (analyze_fabric_hang_log.sh)
+========================================================================
+
+a) FIX BH NOT TRACKED IN ANALYSIS SCRIPT
+   The analysis script (156KB, updated May 16) tracks many FIX labels
+   (BU, XZ, DK-2, XY-2, etc.) but does NOT have a dedicated counter
+   for FIX BH events. The 24 FIX BH events in the latest run appear
+   only in the "NEWLY DEAD CHANNELS" section (because they result in
+   newly_dead_channels entries), not in a dedicated diagnostic section.
+
+   Missing: A section like:
+     "=== FIX BH ROM BOOT TIMEOUTS ==="
+     "  24 channels stuck at ROM postcode 0x49705180 after FIX RR soft-reset"
+
+b) "No core type found" ERRORS NOT FILTERED
+   The fabric_eth_health diagnostic errors about channels 14/15 appear
+   in the raw timeline but are not flagged as known-harmless harvesting
+   artifacts. They should be recognized and annotated in the analysis
+   output.
+
+c) SCRIPT CORRECTLY TRACKS FIX DN (added in commit 5b30536fc63)
+   The recent sync commit added the FIX DN counter. Confirmed present.
+
+========================================================================
+5. DOMINANT ISSUE CHAIN (latest run 25964368272)
+========================================================================
+
+Root cause chain for the 4 FAILED tests:
+
+1. Test 1 (AsyncExecutionWorksCQ0, FABRIC_1D 1x4 mesh) initializes OK
+   (2 base-UMD channels per non-MMIO device, FIX M transition succeeds).
+
+2. During Test 1's quiesce:
+   - Device 1 chan=6 gets stuck at REMOTE_HANDSHAKE_COMPLETE (0xa1b1c1d1)
+   - FIX DK-2 fires: 500ms IMMEDIATELY_TERMINATE wait, then force-reset
+   - Phase 5b deadline exceeded for 3 devices (30001ms each)
+   - Global teardown deadline expires with 20 channels still pending
+
+3. Teardown:
+   - FIX AC fires (2 non-MMIO devices relay-broken)
+   - PCIe hard-reset of MMIO ETH channels
+   - FIX AR2 100ms post-deassert delay
+   - FIX AQ edm_status_address poll
+   - Relay marked broken for devices 4-7
+
+4. Test 2 (MeshDevice1x4Fixture, FABRIC_2D) starts fresh:
+   - New topology discovery
+   - pre-init L1 scan: Device 0 has 6 corrupt, Device 4 has 4 corrupt
+   - FIX BT promotes ROM-postcode channels to probe_dead immediately
+   - Device 4 all 4 channels dead -> marked as dead-relay device
+
+5. configure_fabric_cores runs FIX RR (PCIe soft-reset) on 24 MMIO
+   channels. FIX BH polls for 3000ms. ALL 24 channels still at
+   0x49705180 (ROM postcode) after 3000ms. All marked newly_dead.
+
+6. With 24+ dead MMIO channels, fabric is completely degraded.
+   AllGather/ReduceScatter/AllReduce/EthTxqTeardownRace all fail at
+   5s timeout in SetUp because MeshDevice::create() can't establish
+   a healthy fabric mesh.
+
+FIX: Increase kFIX_BH_BootWaitMs from 3000 to 5000 to give the 24
+simultaneous ROM boots enough time to complete.
+
+========================================================================
+END OF AUDIT
+========================================================================

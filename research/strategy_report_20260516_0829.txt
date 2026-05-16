@@ -1,0 +1,264 @@
+STRATEGY INVESTIGATION REPORT
+Date: 2026-05-16 08:29 UTC
+Branch: nsexton/0-racecondition-hunt
+
+=== CURRENT STATE (from AI-JOURNAL.md) ===
+
+The branch has accumulated 60+ labeled fixes (FIX A through FIX DE) addressing a cascade
+of race conditions, deadlocks, and recovery failures in the T3K ETH ERISC fabric
+initialization and teardown paths.
+
+The CURRENT handshake flow (after FIX CZ Strategy 2, FIX CY, FIX CU, FIX DA):
+1. Both MMIO and non-MMIO ERISCs boot, initialize TXQ, write HANDSHAKE_READY to edm_status.
+2. MMIO ERISC zeros its own preping_addr, writes HANDSHAKE_READY, then spins on preping_addr
+   waiting for host to write preping_gate_val.
+3. Non-MMIO ERISC writes preping_gate_val to its OWN preping_addr as a marker, writes
+   HANDSHAKE_READY.
+4. Host (Pass B) polls all non-MMIO ERISCs for HANDSHAKE_READY, then writes preping_gate_val
+   and HOST_GATE_OPEN to each MMIO ERISC via PCIe (open_erisc_handshake_gate).
+5. MMIO ERISC unblocks from PPWT, then HGWT, enters ETH handshake (sender_side).
+6. Non-MMIO ERISC enters ETH handshake (receiver_side) — no gate needed, already ready.
+7. ETH handshake: sender repeatedly eth_send_packet(scratch -> remote.local_value) until
+   remote writes nonce back. init_handshake_info() flushes TXQ if busy, zeros local_value,
+   writes nonce to scratch.
+
+The original pre-ping DMA race (FIX DA) was: non-MMIO sent eth_send_packet to MMIO's
+preping_addr, then immediately entered init_handshake_info which flushed TXQ — aborting
+the in-flight DMA. FIX CZ Strategy 2 eliminated this by replacing the ETH DMA pre-ping
+with a host-mediated PCIe write.
+
+The remaining active problem is the simultaneous-handshake deadlock (FIX BC/BI/BJ): both
+sides enter sender_side_handshake concurrently, each calls init_handshake_info which zeros
+local_value, erasing the peer's in-flight nonce write. FIX HS1/HS2 added a post-loop
+final send to address this, but the deadlock still fires on every run for Device 4
+channels 0/1. FIX CJ routes these to immediate force-reset instead of the 5s timeout.
+
+Additionally, cascade failures from dead channels (probe_dead, relay_broken) in prior
+sessions lead to multi-session degradation requiring FIX CS (collective assert/deassert),
+FIX CT (relay-deassert of non-MMIO), FIX DC (parallel polling), FIX DE (skip dispatch
+ERISC teardown wait).
+
+=== CODE ANALYSIS ===
+
+Key files and functions:
+
+1. edm_handshake.hpp:61 — init_handshake_info()
+   - Lines 78-81: TXQ flush guard. If eth_txq_is_busy(), writes ETH_TXQ_CMD_FLUSH, waits.
+   - Line 85: Zeros local_value (erases any in-flight nonce from peer).
+   - Line 86: Writes session_nonce to scratch[0].
+   - CRITICAL: This is called by BOTH fabric_sender_side_handshake AND fabric_receiver_side_handshake.
+   - The zero of local_value is the ROOT CAUSE of the simultaneous-handshake deadlock.
+
+2. fabric_router_eth_handshake.hpp:24-78 — fabric_sender_side_handshake()
+   - Calls init_handshake_info() first (zeros local_value, may flush TXQ).
+   - Loop: repeatedly eth_send_packet(scratch -> remote.local_value) until local_value == nonce.
+   - Post-loop: FIX HS2 sends one final packet.
+   - The sender BOTH sends AND waits to receive — it is a symmetric protocol despite the name.
+
+3. fabric_router_eth_handshake.hpp:83-131 — fabric_receiver_side_handshake()
+   - Calls init_handshake_info() (zeros local_value, may flush TXQ).
+   - Loop: waits until local_value == nonce. Does NOT send during wait.
+   - Post-loop: sends one ack packet.
+   - ASYMMETRY: receiver only sends ONE packet at the end, vs sender which sends continuously.
+
+4. fabric_erisc_router.cpp:3660-3735 — Pre-handshake gating
+   - MMIO (is_handshake_sender): zeros preping_addr, writes HANDSHAKE_READY, spins on
+     preping_addr for host gate, then spins on edm_status for HOST_GATE_OPEN.
+   - Non-MMIO (!is_handshake_sender): writes HANDSHAKE_READY, stores preping_gate_val locally.
+   - Two serial gates for MMIO: PPWT (preping) then HGWT (host gate). Redundant?
+
+5. device.cpp:2934-2992 — open_erisc_handshake_gate()
+   - Writes preping_gate_val then HOST_GATE_OPEN to all MMIO ETH cores via PCIe.
+   - Does NOT filter dead/probe_dead channels (harmless but wasteful).
+
+6. handshake_info_t (edm_handshake.hpp:49-56):
+   - 32 bytes total. local_value at offset 0, scratch at offset 16.
+   - preping_addr = handshake_addr + 32 (immediately after handshake_info_t).
+   - edm_status_address is at a separate, non-overlapping address.
+
+=== STRATEGY EVALUATIONS ===
+
+Strategy 1: Flip pre-ping direction (MMIO sends to non-MMIO)
+Verdict: OBSOLETE
+Analysis: This strategy was relevant to the ORIGINAL pre-ping design where non-MMIO
+sent an ETH DMA pre-ping to MMIO. That design was already replaced by FIX CZ Strategy 2,
+which eliminated ETH DMA entirely and uses host-mediated PCIe writes instead. The current
+code has NO ETH DMA pre-ping in either direction. Flipping direction would mean
+re-introducing ETH DMA on the MMIO side — pointless since the host gate (FIX CY) already
+solves the ordering problem without DMA. Additionally, MMIO's init_handshake_info has the
+same TXQ flush issue — flipping direction would just move the TXQ-abort bug to the other
+side.
+Implementation risk: N/A (already superseded)
+
+Strategy 2: Replace ETH DMA with host-mediated signal
+Verdict: ALREADY IMPLEMENTED (FIX CZ Strategy 2)
+Analysis: This IS the current implementation. Non-MMIO ERISC writes preping_gate_val to
+its OWN L1 (no ETH DMA). Host polls non-MMIO for HANDSHAKE_READY (Pass B), then writes
+preping_gate_val + HOST_GATE_OPEN to MMIO ERISC via PCIe. The latency cost is ~24 PCIe
+round-trips per device (~240-480us), negligible vs 5s timeout budgets. There is no new
+host-side race because Pass B is a blocking sequential poll. The remaining race is NOT in
+the pre-ping — it is in init_handshake_info's local_value zero during the ETH handshake
+itself.
+Implementation risk: N/A (done)
+
+Strategy 3: Eliminate pre-ping, stagger entry via edm_status polling
+Verdict: RISKY
+Analysis: edm_status is an L1 word on each ERISC's local memory. Cross-device visibility
+requires either (a) ETH DMA read (not available as an API — only send exists), (b) host
+PCIe read (MMIO only — host cannot read non-MMIO L1 without relay). Non-MMIO has NO
+direct visibility into MMIO's edm_status. The only path is host-mediated polling, which
+is essentially what FIX CY already does. The real problem is not pre-ping ordering — it
+is that init_handshake_info zeros local_value AFTER the peer may have already written to
+it. edm_status polling cannot solve this because the zero happens inside the handshake
+function, not before it. A circular wait IS possible: if non-MMIO waits for MMIO's
+HANDSHAKE_READY via some mechanism, but MMIO is also gated on non-MMIO's HANDSHAKE_READY
+(which it already is via FIX CY Pass B). This is the current architecture and the
+simultaneous-handshake deadlock still occurs.
+Implementation risk: HIGH (re-inventing what already exists, doesn't address root cause)
+
+Strategy 4: Move TXQ flush earlier (before pre-ping send)
+Verdict: OBSOLETE
+Analysis: This was relevant to the original pre-ping ETH DMA design. In the current code,
+no ETH DMA occurs before init_handshake_info. The TXQ flush in init_handshake_info is
+now always a no-op in the happy path (TXQ idle after kernel_main's initial
+eth_txq_reg_write setup). The TXQ flush only matters if a prior session left a stale
+transfer in-flight after soft-reset. Moving it earlier is meaningless when there is no
+DMA to protect. No TXQ "flush-and-hold" API exists — the flush is a one-shot abort, and
+new enqueues can happen immediately after.
+Implementation risk: N/A (already superseded)
+
+Strategy 5: Host writes nonce directly (no DMA, no TXQ)
+Verdict: WRONG — misunderstands the problem
+Analysis: preping_addr is in MMIO ERISC L1, addressable via PCIe. The host CAN write
+there (and already does — this is FIX CZ Strategy 2). But the nonce (session_nonce) is a
+compile-time arg baked into the firmware binary. The host writes preping_gate_val (a
+different value) to unblock the pre-handshake gate. The actual ETH handshake nonce
+exchange happens AFTER both gates open, using eth_send_packet between the two ERISCs.
+The host cannot substitute for the ETH handshake because: (a) the host cannot write to
+non-MMIO ERISC L1 without relay (relay IS the ERISC itself — circular), (b) cache
+coherency between host PCIe write and ERISC L1 read is handled by volatile + cache
+invalidation in the firmware, but (c) the fundamental issue is that init_handshake_info
+zeros local_value, and the nonce arrives via ETH DMA from the peer — no host involvement
+in that path. Writing the nonce directly would require bypassing the entire ETH handshake
+protocol, which also exchanges mesh_id/device_id identity information.
+Implementation risk: HIGH (breaks handshake identity exchange)
+
+=== NEW STRATEGIES ===
+
+Strategy 6: Eliminate the zero in init_handshake_info (STRUCTURAL FIX)
+The ROOT CAUSE of the simultaneous-handshake deadlock is line 85 of edm_handshake.hpp:
+    handshake_info->local_value = 0;
+This unconditional zero erases any nonce the peer may have already DMA'd. The zero exists
+because the handshake protocol needs a known-clear state to detect the peer's write. But
+this creates a TOCTOU race: peer writes nonce, then we zero it, peer never re-sends.
+
+FIX HS1/HS2 attempted to address this with a post-loop final send, but this is band-aid:
+it assumes the peer's init_handshake_info has already run by the time the final send
+arrives. If both sides are in the narrow window between init_handshake_info's zero and the
+first loop iteration, the final send from the early exiter can ALSO be erased.
+
+Alternative: use a session-unique nonce (already exists as session_nonce) and DON'T zero
+local_value. Instead, check local_value != session_nonce as the loop condition (already
+the case). If a stale nonce from a prior session matches the new session_nonce, that's a
+1-in-2^32 collision — acceptable. The only risk is if local_value already contains the
+current session_nonce from a fast peer — but that means the handshake is already done,
+which is the correct exit condition.
+
+HOWEVER: there is a subtlety. The scratch[0] write (line 86) must happen before any
+eth_send_packet in the loop. If local_value is not zeroed and already contains the nonce
+(from prior session), the sender exits immediately without ever sending to the receiver.
+The receiver then never gets unblocked. So the zero is needed to prevent false-positive
+exit. The real fix is: use a monotonically increasing nonce that is NEVER the same as a
+prior session. The current preping_gate_val is session-unique (FIX CZ Option 5) — extend
+this to the handshake nonce itself.
+
+Strategy 7: Two-phase commit handshake (both write "ready", both read "ready")
+Replace the current asymmetric send/poll handshake with:
+Phase 1: Both ERISCs write their identity info to their OWN L1 scratch area and signal
+READY via a flag in their own L1 (visible to peer via ETH).
+Phase 2: Both ERISCs read the peer's L1 (via ETH read if available, or via the existing
+eth_send_packet mechanism to copy peer's scratch to local).
+
+The key insight: the current handshake has the sender continuously sending, which means
+the sender may send BEFORE the receiver has zeroed local_value. A two-phase approach where
+both sides first prepare locally, then exchange, eliminates the zero-while-sending race.
+
+But eth_send_packet is the only cross-ETH-link transfer mechanism — there is no ETH read.
+So both sides must SEND to each other. This is exactly the simultaneous-sender case that
+FIX HS1/HS2 try to handle. A cleaner approach: have NEITHER side zero local_value, and
+instead use a NEW L1 word as the handshake flag, distinct from local_value. Both sides
+write their nonce to scratch, then send scratch -> peer's NEW_FLAG. Neither side ever
+erases the other's write because the destination word is different from the preparation
+word.
+
+This requires adding a new field to handshake_info_t (e.g., remote_nonce at offset 32,
+which is currently preping_addr). In the current code, preping_addr IS scratch[0] + 16
+= handshake_addr + 32. If the handshake were redesigned to use separate send and receive
+slots, the zero would be unnecessary.
+
+Strategy 8: Asymmetric handshake with FIX CY gate guarantees
+The current code already has FIX CY (host gate) ensuring MMIO ERISCs don't enter the
+handshake until all non-MMIO ERISCs are at HANDSHAKE_READY. This means when MMIO enters
+fabric_sender_side_handshake, the non-MMIO is ALREADY past HANDSHAKE_READY and about to
+enter (or has entered) fabric_receiver_side_handshake.
+
+Given this ordering guarantee, the simultaneous-sender race should NOT happen: MMIO is
+always the sender, non-MMIO is always the receiver. The receiver does NOT send until it
+receives the nonce. So the flow should be:
+1. Non-MMIO enters receiver_side: init_handshake_info zeros local_value, waits.
+2. MMIO enters sender_side: init_handshake_info zeros local_value, starts sending.
+3. MMIO's sends arrive at non-MMIO's local_value. Non-MMIO sees nonce, sends ack.
+4. MMIO sees ack. Done.
+
+The bug is: step 1 and step 2 can happen in the WRONG ORDER. If MMIO enters
+init_handshake_info and starts sending BEFORE non-MMIO has zeroed its local_value, the
+first sends land on a non-zero local_value (stale). Non-MMIO then zeros it and waits.
+MMIO keeps sending, but now non-MMIO's local_value keeps getting the nonce — so non-MMIO
+should see it... unless MMIO exits early because it saw a stale nonce in its own
+local_value.
+
+Wait — this is only possible if the stale value happens to equal session_nonce. With
+FIX CT's session_nonce, this should be extremely unlikely (session-unique random value).
+The fact that the simultaneous-handshake deadlock still occurs on every run suggests
+either: (a) session_nonce is not being used on all paths, or (b) both sides ARE calling
+sender_side_handshake (not sender + receiver).
+
+CRITICAL CHECK: In fabric_erisc_router.cpp:3739-3755, is_handshake_sender is a constexpr
+template parameter. It must be set at compile time based on whether this is the MMIO or
+non-MMIO ERISC. If BOTH sides are compiled with is_handshake_sender=true (e.g., because
+the compile-time parameter is wrong), both enter fabric_sender_side_handshake, and the
+simultaneous-sender race is guaranteed.
+
+This needs verification: are the compile-time args correctly assigning sender vs receiver
+roles based on MMIO vs non-MMIO?
+
+=== RECOMMENDATION ===
+
+1. IMMEDIATE: Verify that is_handshake_sender is correctly false for non-MMIO ERISCs.
+   If both sides compile as sender, THAT is the root cause — not the pre-ping or TXQ.
+   Check erisc_datamover_builder.cpp for how this compile-time arg is set.
+
+2. If is_handshake_sender IS correct: the next fix is Strategy 6 variant — ensure
+   session_nonce is truly session-unique and never matches stale L1 values. Verify that
+   the nonce propagation path from host to both firmware binaries is correct.
+
+3. If the simultaneous-handshake deadlock persists even with correct sender/receiver
+   roles and unique nonces, the structural fix is Strategy 7: separate the send and
+   receive slots in handshake_info_t to eliminate the zero-and-overwrite race entirely.
+
+=== KEY INSIGHT ===
+
+The 60+ fixes on this branch are treating symptoms of a SINGLE structural problem: the
+ETH handshake protocol (init_handshake_info) unconditionally zeros the same L1 word that
+the peer writes to. Every fix (host gating, pre-ping, TXQ flush, session nonces,
+post-loop final sends) is a band-aid around this fundamental design flaw. The protocol
+needs the zero to detect the peer's write, but the zero also erases the peer's write.
+This is an inherent contradiction that cannot be resolved by timing — only by separating
+the preparation state from the receive state into different memory locations.
+
+Furthermore, the sheer accumulation of fixes (FIX A through FIX DE) suggests the
+investigation may have outgrown the original architecture. Each fix addresses one
+failure mode but often introduces new edge cases that require additional fixes. A
+ground-up redesign of the handshake protocol — using separate send/receive L1 slots and
+eliminating the zero — would likely be simpler and more robust than the current tower of
+conditional fixes.

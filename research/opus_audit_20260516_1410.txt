@@ -1,0 +1,97 @@
+OPUS AUDIT REPORT - nsexton/0-racecondition-hunt
+Timestamp: 2026-05-16 ~14:10 UTC
+Branch HEAD: 5b30536fc637b2d946e8c2ea69a91f17569a50f8
+
+## Summary
+Comprehensive audit of the racecondition-hunt branch covering 110+ FIX labels across
+tt_metal/impl/device/ and tt_metal/fabric/. Found and fixed a critical gap in the
+analysis script (39 missing FIX labels). Evaluated testing, logging, code correctness,
+and script coverage. The latest CI run (25962948409, FIX DM) is in-progress on t3k-05.
+
+## Testing Gaps
+
+1. NO DETERMINISTIC ALLGATHER HANG REPRODUCER — The core target failure (AllGather hang
+   in t3k_ttnn_tests) has no targeted test. All CI runs rely on stochastic hardware state
+   left by prior processes. The test_async_teardown_race.cpp Scenarios (A-Z) test individual
+   code paths but not the end-to-end failure chain.
+
+2. FIX PC NEVER VERIFIED — Per AI-JOURNAL (2026-04-29), run 25098712741 showed "success"
+   but ALL t3000 tests were SKIPPED because determine-tests set run-unit=false in manual
+   pipeline mode. FIX PC has never been exercised by actual CI test execution.
+
+3. RECENT FIXES LACK TARGETED TESTS — FIX DK (post-quiesce stale-flag clear), FIX DJ
+   (parallelize MMIO configure_fabric), FIX HS1/HS2 (handshake final send), FIX RZ4
+   (defer flag clear until Phase 5b) were pushed in the last cycle without corresponding
+   regression test verification.
+
+4. SCENARIO TESTS NOT IN CI RUNNER — test_async_teardown_race.cpp tests are not in the
+   run_t3000_ttnn_tests script, so they don't run in the racecondition-hunt CI flow.
+
+## Logging Gaps
+
+1. FIX DM (LATEST) — No logging when UMD's internal topology discovery result differs
+   from the pre-discovery. If UMD discovers a different chip set after open_driver(),
+   the mismatch is completely silent. Recommend adding a post-open_driver() chip set
+   comparison log.
+
+2. FIX HS1/HS2 — The post-exit final send in sender_side_handshake lacks a timeout log.
+   If the send blocks indefinitely, there's no diagnostic output.
+
+3. GENERAL — The codebase has extensive logging for the 110+ FIX paths. No critical
+   logging gaps found in the core teardown/init paths (risc_firmware_initializer.cpp,
+   fabric_firmware_initializer.cpp).
+
+## Code Correctness Issues
+
+1. NO NEW RACE CONDITIONS — The latest 5 commits (DK, DJ, HS1, HS2, RZ4, DL, DM) are
+   structurally sound. DK correctly scopes stale-flag clear to REMOTE_HANDSHAKE_COMPLETE
+   channels. DJ's parallelization is safe (MMIO devices independent). RZ4 correctly
+   defers flag clear until Phase 5b confirmation.
+
+2. FIX TK INTERACTION — The FIX TK guard in teardown Step 1 (line 459-489 of
+   risc_firmware_initializer.cpp) correctly prevents FIX BA from triggering when
+   channels_not_ready is due to ring sync timeout (FIX TI path). However, if BOTH
+   FIX AM (STARTED early-exit) and FIX TI (ring sync timeout) fire on the same device,
+   the FIX TK guard wins and skips FIX BA. This is correct behavior (ring sync timeout
+   is the more specific diagnosis) but worth monitoring.
+
+3. MAIN REMAINING RACE — The fundamental race condition (ERISC firmware state surviving
+   across test boundaries) remains. The branch has built extensive defensive guards but
+   the root cause (deterministic ERISC cleanup between tests) is not yet solved.
+
+## Script Gaps
+
+1. FIXED: 39 FIX labels missing from analyze_fabric_hang_log.sh TIMELINE and PHASES
+   grep patterns. These were labels present in the codebase but not tracked by the
+   analysis script, causing their log lines to be silently dropped during analysis.
+   Full list in commit message.
+
+2. SCRIPT LENGTH — At 2227 lines, the script is becoming unwieldy. Consider splitting
+   into modular sections (timeline.sh, phases.sh, edm_status.sh) if it grows further.
+
+3. DEDUP ACCURACY — The Python dedup logic in the TIMELINE section normalizes device/chan
+   numbers but doesn't normalize hex values in FIX label messages, so some FIX lines
+   with different hex values may be collapsed when they shouldn't be.
+
+## Commits Made
+
+5b30536fc63 — scripts: sync analyze_fabric_hang_log.sh FIX labels with codebase (#42429)
+
+## Recommendations for Next Cycle
+
+1. WAIT for run 25962948409 (FIX DM) to complete. Verify actual test execution (not SKIPPED).
+
+2. IF TESTS PASS BUILD: Focus on whether UMD's internal topology discovery produces the
+   same chip set as our pre-discovery. Watch for chip ID mismatches or missing non-MMIO
+   devices in the log.
+
+3. IF TESTS FAIL: Check whether the failure is a new mode or a known pattern. The FIX DM
+   change (dropping cluster_descriptor from ClusterOptions) could expose new UMD behavior
+   if internal topology discovery diverges.
+
+4. CONSOLIDATION OPPORTUNITY: Many FIX labels are closely related (AK+AK-2, AU+AU-2,
+   AX+AX-2, SB+SB2, etc.). Consider documenting which fixes supersede or depend on each
+   other to reduce cognitive load.
+
+5. TEST COVERAGE: Add test_async_teardown_race.cpp to the racecondition-hunt CI gtest_filter
+   so Scenarios A-Z actually run.

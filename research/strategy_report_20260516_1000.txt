@@ -1,0 +1,324 @@
+STRATEGY INVESTIGATION REPORT
+Generated: 2026-05-16 10:00 UTC
+Branch: nsexton/0-racecondition-hunt
+Analyst: BrAIn (Strategy Agent — adversarial/contrarian role)
+
+================================================================================
+CURRENT STATE SUMMARY
+================================================================================
+
+The branch has accumulated ~50+ FIX labels (AH through DG) over 7+ cycles of
+CI iteration. The core problem is issue #42429: ERISC initialization race
+conditions and handshake deadlocks on T3K (8-device, 4 MMIO + 4 non-MMIO).
+
+Current mechanism (FIX CZ Option 5 + FIX CY + FIX CV):
+  1. Both MMIO and non-MMIO ERISCs boot, do channel/object setup, write
+     HANDSHAKE_READY to edm_status.
+  2. MMIO ERISC zeros preping_addr BEFORE writing HANDSHAKE_READY (FIX CZ).
+  3. Non-MMIO ERISC writes preping_gate_val to its OWN preping_addr as a
+     local scratchpad marker (pure L1 store, no ETH DMA).
+  4. Host runs Pass A (poll MMIO for HANDSHAKE_READY), then Pass B (poll
+     non-MMIO for HANDSHAKE_READY).
+  5. Host calls open_erisc_handshake_gate: writes preping_gate_val +
+     HOST_GATE_OPEN to each MMIO ERISC via PCIe.
+  6. MMIO ERISCs unblock from PPWT spin, then HGWT spin, enter ETH handshake.
+  7. Non-MMIO ERISCs (already past HANDSHAKE_READY) are already in ETH
+     handshake loop, waiting for MMIO peers.
+  8. Both sides exchange session_nonce via eth_send_packet.
+  9. init_handshake_info() flushes stale TXQ (FIX AH) before handshake sends.
+
+Latest CI results (cycle 9, run 25957839155): STILL FAILING.
+  - Session 1: base-UMD channels transition via launch_msg (FIX M), works.
+  - Session 2: ALL MMIO dead channels stuck at 0x49705180 (ROM ETH link
+    training). FIX CS Phase D fails across all 4 MMIO devices. FIX BH parallel
+    poll (3000ms deadline) fails for 24 channels. Dead relay cascade.
+  - Root: ERISC L1 corruption from session 1 teardown poisons session 2 startup.
+
+================================================================================
+CRITICAL ANALYSIS — WHY THE CURRENT APPROACH IS FUNDAMENTALLY WRONG
+================================================================================
+
+1. THE PRE-PING/GATE MECHANISM SOLVED THE WRONG PROBLEM
+
+   FIX CZ Option 5 was designed to prevent the "simultaneous-handshake
+   deadlock" where both MMIO and non-MMIO ERISCs enter the handshake loop
+   before either is ready to receive. The fix gates MMIO ERISCs behind a
+   host-written token.
+
+   BUT: The actual failure mode in CI is not simultaneous-handshake at all.
+   It is ERISC L1 CORRUPTION surviving across sessions. The edm_status values
+   seen are 0x49706550 (base-UMD sentinel), 0x49705180 (ROM ETH link training
+   postcode), and 0xA0A0A0A0 (canary = firmware crashed before INIT_STARTED).
+
+   The pre-ping gate cannot fix:
+   - ROM ETH link training deadlocks (0x49705180) caused by asymmetric
+     reset timing between MMIO and non-MMIO peers
+   - Stale L1 state from crashed/terminated firmware
+   - TXQ hardware state that persists across soft reset
+
+   The pre-ping mechanism is a LAYER 7 FIX for a LAYER 1 PROBLEM. The race
+   is not in the handshake protocol — it is in the reset/boot sequencing.
+
+2. THE FIX ACCUMULATION IS A RED FLAG
+
+   50+ FIX labels in a single branch means each fix exposed the next failure
+   mode without addressing the root cause. This is classic symptom-chasing:
+   - FIX AH: TXQ flush in init_handshake_info
+   - FIX CZ: Pre-ping to gate handshake entry
+   - FIX DA: TXQ completion wait after pre-ping send
+   - FIX CZ Strategy 2: Remove ETH DMA, use host-mediated signal
+   - FIX CY: Host gate for MMIO ERISCs
+   - FIX CV: Pass A/B staging
+   - FIX CS: Collective assert-all/deassert-all
+   - FIX CT: Relay-deassert non-MMIO dead channels
+   - FIX DG: PCIe write ordering for fw_launch_addr
+
+   Each fix addresses a specific race window but the number of windows keeps
+   growing because the fundamental sequencing model is wrong.
+
+3. THE REAL ROOT CAUSE: ASYMMETRIC RESET TIMING
+
+   The core issue is that MMIO and non-MMIO ERISCs exit reset at different
+   times because:
+   a) Non-MMIO devices are reset ~50ms earlier (FIX CA+CB delay)
+   b) MMIO ERISC ROM does ETH link training immediately after reset
+   c) Non-MMIO ERISC ROM also does ETH link training
+   d) If partners are not in the same state, link training deadlocks
+   e) After link training, firmware boot timing varies by ~6ms
+
+   No amount of handshake-layer gating can fix a problem where the ERISCs
+   cannot even GET to the handshake stage because they are stuck in ROM.
+
+4. THE TEARDOWN PROBLEM IS SEPARATE AND WORSE
+
+   Even if init is fixed perfectly, teardown leaves L1 in corrupt state:
+   - TERMINATE signals to spinning ERISCs are not ACKed
+   - Global 5s deadline fires, force-resets ERISCs mid-operation
+   - Next session sees garbage edm_status values
+   - FIX CS tries to fix this with collective assert/deassert but still
+     hits ROM link training deadlocks
+
+   The teardown and init problems are coupled: bad teardown causes bad init.
+   Fixing only init (which is what most FIXes target) is half the problem.
+
+================================================================================
+STRATEGY EVALUATION
+================================================================================
+
+--- STRATEGY 1: Flip the pre-ping direction (MMIO → non-MMIO) ---
+
+Concept: Currently non-MMIO sends pre-ping to MMIO. Instead, have MMIO send
+to non-MMIO. MMIO has no init_handshake_info flush hazard because it is
+waiting at PPWT.
+
+Assessment: OBSOLETE. FIX CZ Option 5 already eliminated ETH DMA from the
+pre-ping entirely. The non-MMIO ERISC does a pure L1 store to its own
+preping_addr, and the host writes preping_gate_val to MMIO preping_addr via
+PCIe. There is NO eth_send_packet in the pre-ping path anymore.
+
+The original motivation (init_handshake_info TXQ flush aborting the in-flight
+DMA) was already solved by FIX DA + FIX CZ Strategy 2. Flipping direction
+would reintroduce ETH DMA into the pre-ping path — a regression.
+
+Verdict: NOT RECOMMENDED. The problem this solves no longer exists.
+Risk: Reintroduces TXQ-related races.
+Implementable: Yes, but pointless.
+
+--- STRATEGY 2: Replace ETH DMA with host-mediated signal ---
+
+Concept: Instead of eth_send_packet, have non-MMIO ERISC write a flag to
+MMIO L1 via the ETH relay path. Host reads it and writes a reciprocal signal.
+
+Assessment: THIS IS ALREADY IMPLEMENTED. FIX CZ Option 5 is exactly this:
+  - Non-MMIO writes preping_gate_val to its own L1 (local store)
+  - Host reads non-MMIO edm_status via relay (Pass B polling)
+  - Host writes preping_gate_val to MMIO L1 via PCIe (open_erisc_handshake_gate)
+
+The current implementation IS Strategy 2. It works for the handshake entry
+gating. But the CI failures are NOT in the handshake entry — they are in
+ROM-level boot and teardown corruption.
+
+Verdict: ALREADY DONE. Not a new strategy.
+Risk: N/A
+Implementable: Already implemented.
+
+--- STRATEGY 3: Eliminate pre-ping, fix deadlock via edm_status staging ---
+
+Concept: Non-MMIO waits until MMIO's edm_status == HANDSHAKE_READY before
+entering the handshake loop.
+
+Assessment: THIS IS PARTIALLY WHAT FIX CY DOES, but in reverse. FIX CY gates
+MMIO on HOST_GATE_OPEN (written after Pass B confirms non-MMIO at HANDSHAKE_READY).
+Strategy 3 would gate non-MMIO on MMIO's status instead.
+
+Problem: Non-MMIO cannot read MMIO's L1 directly (no PCIe). It would need to
+read via ETH — but ETH is not yet set up (that is what the handshake IS FOR).
+This is a chicken-and-egg: you need ETH to check MMIO status, but you need
+status synchronization before using ETH.
+
+The current approach (host-mediated) is actually the only viable variant of
+this strategy, and it is already implemented.
+
+However, the pre-ping gate (PPWT) could potentially be eliminated because
+FIX CY's HOST_GATE_OPEN already provides the same guarantee: MMIO ERISCs
+cannot enter handshake until the host says so. The PPWT spin is redundant
+with the HGWT spin that immediately follows it. Both are gated by the same
+event (host writing to MMIO L1 after Pass B).
+
+Verdict: PARTIALLY VALID — the pre-ping gate (PPWT) is likely redundant with
+the host gate (HGWT). Removing PPWT would simplify the code without losing
+safety. But this does not fix the actual CI failures.
+Risk: Low (HGWT is the authoritative gate).
+Implementable: Yes, simple removal.
+
+--- STRATEGY 4: Move init_handshake_info TXQ flush before pre-ping send ---
+
+Concept: Flush TXQ explicitly before writing nonce and sending. Non-MMIO
+enters with clean TXQ state.
+
+Assessment: OBSOLETE. Same as Strategy 1 — the pre-ping no longer uses ETH
+DMA. FIX CZ Option 5 removed eth_send_packet from the non-MMIO pre-ping path.
+init_handshake_info's TXQ flush is now always a no-op because no DMA is
+in-flight when the non-MMIO ERISC enters the handshake.
+
+Furthermore, FIX AH already added a conditional TXQ flush (only when busy)
+to init_handshake_info. The ordering issue (flush killing in-flight DMA) was
+the original FIX DA bug, which is now moot.
+
+Verdict: NOT RECOMMENDED. Problem no longer exists.
+Risk: Would be a no-op change.
+Implementable: Trivially, but no effect.
+
+--- STRATEGY 5: Use memory barrier + polling instead of ETH DMA ---
+
+Concept: Write nonce to preping_addr in MMIO L1 directly via host (no DMA,
+no TXQ). MMIO side reads its own L1.
+
+Assessment: THIS IS EXACTLY FIX CZ OPTION 5. The host writes preping_gate_val
+to MMIO's preping_addr via PCIe WriteToDeviceL1. MMIO reads its own L1 in
+the PPWT spin loop. No ETH DMA involved.
+
+Verdict: ALREADY DONE. This is the current implementation.
+Risk: N/A
+Implementable: Already implemented.
+
+================================================================================
+NEW STRATEGY: ADDRESS THE ACTUAL ROOT CAUSE
+================================================================================
+
+All 5 proposed strategies address the handshake entry race, which is already
+solved by FIX CZ Option 5 + FIX CY. The actual CI failure is elsewhere.
+
+--- STRATEGY 6: Atomic device-pair reset with hardware-level synchronization ---
+
+Problem: MMIO and non-MMIO ERISCs on connected ETH links must exit reset
+simultaneously for ROM ETH link training to succeed. Currently, non-MMIO
+exits ~50ms before MMIO (FIX CA+CB delay), causing ROM link training deadlock.
+
+Approach:
+  a) Do NOT deassert MMIO and non-MMIO ERISCs at different times.
+  b) Assert reset on BOTH sides of every ETH link.
+  c) Write fw_launch_addr to BOTH sides.
+  d) Deassert BOTH sides as close to simultaneously as possible.
+     For MMIO: direct PCIe write to deassert.
+     For non-MMIO: relay-deassert via the MMIO ETH channel that connects them.
+  e) With both sides exiting reset at nearly the same time, ROM ETH link
+     training succeeds, both reach base-UMD, then fabric firmware boot.
+
+This is what FIX CS + FIX CT attempted, but they do it AFTER the damage is
+done (session 2 recovery). Strategy 6 would make this the DEFAULT init path,
+not just the recovery path.
+
+Risk: Relay-deassert of non-MMIO requires at least one working MMIO channel.
+If ALL MMIO channels are dead, non-MMIO cannot be deasserted (the same
+limitation FIX CT hits). But this is a cold-start problem that should not
+occur on healthy hardware with clean process exit.
+
+Implementable: Yes. FIX CT already has the relay-deassert code. The change
+is to use it as the primary path rather than fallback.
+
+--- STRATEGY 7: Clean teardown with two-phase ERISC shutdown ---
+
+Problem: Teardown leaves L1 in corrupt state because TERMINATE signals are
+not ACKed by spinning ERISCs, and force-reset happens mid-operation.
+
+Approach:
+  a) Phase 1: Host writes IMMEDIATELY_TERMINATE to termination_signal_ptr
+     for ALL ERISCs (both MMIO and non-MMIO) simultaneously.
+  b) Phase 2: Poll for TERMINATED status (bounded, say 500ms).
+  c) Phase 3: For any ERISC that did not reach TERMINATED, write a known-
+     good sentinel value to edm_status BEFORE asserting reset. This ensures
+     the next session sees a clean initial state, not garbage.
+  d) Phase 4: Assert reset.
+
+The key insight is Phase 3: even if the ERISC firmware is hung, the HOST can
+overwrite edm_status via PCIe (MMIO) or relay (non-MMIO) BEFORE resetting
+the core. The next session's terminate_stale_erisc_routers would see a clean
+sentinel and not enter the elaborate recovery paths.
+
+Risk: Relay writes to non-MMIO during teardown may also hang if ETH is dead.
+Mitigation: Only write to MMIO L1 (PCIe-direct), skip non-MMIO. Non-MMIO
+cleanup happens at next init via FIX CS-style collective reset.
+
+Implementable: Yes, straightforward. The host already does PCIe L1 writes
+in open_erisc_handshake_gate. Same mechanism during teardown.
+
+--- STRATEGY 8: Eliminate the "second session" entirely ---
+
+Problem: Most failures occur in session 2, which inherits corrupt state from
+session 1's teardown. The CI script runs two sessions (warm-up + real test).
+
+Approach: Make the test runner skip the warm-up session entirely. Run a
+single session with the actual test. If the warm-up is needed for state
+setup, fold it into a process-level reset (tt-smi -r) at the start of each
+CI job instead.
+
+Risk: Some tests may genuinely need warm-up state. But the racecondition-hunt
+loop is specifically designed to stress the init/teardown cycle, so this
+might not be applicable to the actual fix.
+
+Implementable: Script-level change only. But this does not fix the underlying
+race — it avoids triggering it.
+
+================================================================================
+RECOMMENDATION
+================================================================================
+
+HIGHEST PRIORITY: Strategy 7 (Clean teardown with host-side L1 cleanup)
+
+Rationale:
+  - The CI failures are caused by stale L1 state surviving across sessions.
+  - Strategies 1-5 are either already implemented or obsolete.
+  - Strategy 6 (simultaneous reset) addresses init but not teardown.
+  - Strategy 7 breaks the cycle by ensuring each session starts clean.
+
+Concrete next steps:
+  1. In FabricFirmwareInitializer::teardown(), after the TERMINATE signal
+     and timeout, but BEFORE assert_risc_reset_at_core:
+     - For each MMIO ERISC that did not ACK TERMINATED:
+       Write a known sentinel (e.g., 0xDEADB07E) to edm_status_address via
+       PCIe WriteToDeviceL1.
+     - This 3-line change ensures the next session's
+       terminate_stale_erisc_routers sees a clean state.
+  2. For non-MMIO ERISCs: accept that relay may be broken during teardown.
+     The next session's FIX CS collective reset handles non-MMIO cleanup.
+  3. Consider additionally writing 0 to handshake_info->local_value and
+     preping_addr to prevent stale handshake false-completions.
+
+SECONDARY: Strategy 3 simplification — remove PPWT gate.
+
+The PPWT spin loop (lines 3690-3714 of fabric_erisc_router.cpp) is redundant
+with the HGWT spin loop (lines 3724-3735). Both block MMIO ERISCs until the
+host writes after Pass B. PPWT adds complexity and a potential failure mode
+(if preping_gate_val mismatches). Removing it simplifies the init path and
+eliminates one spin loop without losing safety.
+
+TERTIARY: Strategy 6 — make simultaneous reset the default init path.
+
+FIX CS + FIX CT already implement this for the recovery case. Promoting it
+to the primary path would eliminate the asymmetric reset timing that causes
+ROM ETH link training deadlocks in the first place.
+
+================================================================================
+END OF REPORT
+================================================================================

@@ -1,0 +1,452 @@
+STRATEGY EVALUATION REPORT — ERISC Handshake Race Condition (#42429)
+====================================================================
+Date: 2026-05-16
+Reviewer: BrAIn (contrarian review)
+Branch: nsexton/0-racecondition-hunt
+
+==========================================================================
+PART 1: WHAT THE CODE ACTUALLY DOES (current state)
+==========================================================================
+
+The current approach (FIX CZ Option 5 + FIX CY + FIX CV) implements a
+THREE-GATE staging mechanism for the ETH handshake during fabric init:
+
+  FIRMWARE SIDE (fabric_erisc_router.cpp, lines 3660-3755):
+  -------------------------------------------------------
+  1. wait_for_other_local_erisc()          — local multi-ERISC barrier
+  2. [MMIO only] Zero preping_addr         — line 3666
+  3. Write HANDSHAKE_READY to edm_status   — line 3672
+  4. [non-MMIO only] Write preping_gate_val to own preping_addr (local L1 store, no DMA) — line 3683
+  5. [MMIO only] PPWT spin: wait for preping_gate_val at preping_addr — lines 3696-3713
+  6. [MMIO only, if host_gate_enabled] HGWT spin: wait for HOST_GATE_OPEN at edm_status — lines 3726-3734
+  7. Enter ETH handshake (fabric_sender/receiver_side_handshake) — lines 3740-3754
+
+  HOST SIDE (fabric_firmware_initializer.cpp, lines 3626-3670):
+  -----------------------------------------------------------
+  Pass A: Poll MMIO devices for HANDSHAKE_READY   — line 3641-3647
+  Pass B: Poll non-MMIO devices for HANDSHAKE_READY — line 3648-3654
+  Phase C: For each MMIO device, call open_erisc_handshake_gate() — line 3665-3670
+
+  open_erisc_handshake_gate() (device.cpp, lines 2940-2992):
+  ---------------------------------------------------------
+  For each ETH core on the MMIO device:
+    1. Write preping_gate_val to preping_addr (unblocks PPWT)
+    2. Write HOST_GATE_OPEN to erisc_sync_addr (unblocks HGWT)
+
+  HANDSHAKE itself (edm_handshake.hpp, lines 61-93 / fabric_router_eth_handshake.hpp):
+  ------------------------------------------------------------------------------------
+  init_handshake_info():
+    - If TXQ busy: flush with ETH_TXQ_CMD_FLUSH (FIX AH)
+    - Zero handshake_info->local_value
+    - Set scratch[0] = session_nonce
+    - Set scratch[1] = mesh_id | device_id
+
+  Sender loop: eth_send_packet(0, scratch_addr, local_val_addr, 1) until local_value == session_nonce
+  Receiver loop: wait until local_value == session_nonce, then send ack
+
+==========================================================================
+PART 2: STRUCTURAL CRITIQUE — WHY THIS APPROACH IS FRAGILE
+==========================================================================
+
+The current approach has evolved through 50+ fix cycles (FIX A through FIX DI)
+into a layered defense mechanism. Here are the fundamental problems:
+
+CRITIQUE 1: THREE GATES IS TWO TOO MANY
+  The MMIO ERISC must pass through: (a) PPWT gate, (b) HGWT gate, (c) the
+  actual ETH handshake. The PPWT gate (preping_gate_val) and the HGWT gate
+  (HOST_GATE_OPEN) are REDUNDANT — they both serve the same purpose: prevent
+  MMIO ERISC from entering the handshake before non-MMIO is ready.
+
+  PPWT was added (FIX CZ) to give MMIO ERISCs a signal that non-MMIO ERISCs
+  have reached startup. HGWT was added (FIX CY) to let the host explicitly
+  gate entry. Both are written in the SAME host function (open_erisc_handshake_gate)
+  in the SAME PCIe write burst. They provide zero additional ordering guarantees
+  over a single gate.
+
+  The only argument for two gates would be if they fire at DIFFERENT times, but
+  they don't — both are written back-to-back in device.cpp lines 2972-2973.
+
+CRITIQUE 2: THE "PRE-PING" IS NOT A PRE-PING
+  Despite the name, preping_addr is NOT an ETH DMA pre-ping. It was RENAMED
+  in FIX CZ Option 5 from an actual ETH-DMA-based pre-ping to a pure L1
+  scratchpad marker. The non-MMIO ERISC writes to its OWN L1 (line 3683).
+  The MMIO ERISC reads from its OWN L1 — the value is written there by the HOST
+  via PCIe (device.cpp line 2972). There is NO ETH DMA involved in the "pre-ping"
+  at all. The name is misleading.
+
+  What we actually have: a host-mediated PCIe gate. The question "should we flip
+  the pre-ping direction" is meaningless — there IS no ETH DMA pre-ping.
+
+CRITIQUE 3: THE REAL RACE IS IN init_handshake_info(), NOT THE GATE
+  The actual dangerous operation is init_handshake_info() at line 32/91 of
+  fabric_router_eth_handshake.hpp. This function:
+    a) Flushes TXQ if busy (line 78-81 of edm_handshake.hpp)
+    b) Zeros local_value (line 85)
+    c) Writes session_nonce to scratch[0] (line 86)
+
+  The race: if MMIO calls init_handshake_info() while non-MMIO is already in its
+  send loop, MMIO's zero of local_value (step b) erases any nonce non-MMIO already
+  sent. This IS handled by FIX HS1/HS2 (post-loop final send), but only if the
+  sender loop actually terminates. If both sides are SENDERS (which happens — see
+  line 3739 is_handshake_sender), the FIX HS1/HS2 fix is critical and the gates
+  are just belt-and-suspenders.
+
+CRITIQUE 4: THE TXQ FLUSH IN init_handshake_info() CAN HANG
+  edm_handshake.hpp line 78-81:
+    if (eth_txq_is_busy()) {
+        eth_txq_reg_write(0, ETH_TXQ_CMD, ETH_TXQ_CMD_FLUSH);
+        eth_txq_reg_read(0, ETH_TXQ_CMD);
+        while (eth_txq_is_busy()) {}  // <-- UNBOUNDED SPIN
+    }
+
+  On Wormhole specifically, if the ETH MAC hardware wedges (e.g., peer is in reset
+  and the link layer retransmits forever), ETH_TXQ_CMD_FLUSH may never complete.
+  The comment on lines 72-77 acknowledges the idle-queue case but does NOT address
+  the stuck-flush case. This is a potential root cause for hangs that the gate
+  mechanism cannot prevent — it happens INSIDE the handshake, AFTER the gates open.
+
+CRITIQUE 5: 100M-ITERATION WATCHDOG IS NOT A TIMEOUT
+  PPWT watchdog (line 3694): kPrepingWatchdogIter = 100'000'000
+  Handshake watchdog: kWatchdogIter = 100'000'000
+
+  These are iteration counters, NOT time-based. On ERISC running at ~1GHz with
+  ~10 cycles per loop iteration, 100M iterations = ~1 second. But this is just a
+  WAYPOINT marker — the loop does NOT exit. It logs "PPST" and resets the counter.
+  The only exits are: (a) value match, (b) termination signal. On WH, the
+  termination signal check is compiled out for HGWT (line 3728 uses volatile read
+  not got_immediate_termination_signal), which is correct for WH but means the
+  ONLY way out of a stuck HGWT loop is if the host writes HOST_GATE_OPEN. If the
+  host-side Pass A/B poll hangs (e.g., a non-MMIO device never reaches
+  HANDSHAKE_READY), the MMIO ERISCs spin in PPWT/HGWT forever.
+
+==========================================================================
+PART 3: STRATEGY EVALUATIONS
+==========================================================================
+
+STRATEGY 1: FLIP THE PRE-PING DIRECTION
+  (Currently: non-MMIO -> MMIO via ETH DMA. Proposed: MMIO -> non-MMIO)
+
+  VERDICT: WRONG / MOOT
+
+  Reasoning: There IS no ETH DMA pre-ping in the current code. FIX CZ Option 5
+  replaced it with a pure L1 scratchpad + host PCIe write. The "non-MMIO writes
+  to its own L1" at line 3683 is a local store marker, not an ETH DMA send.
+  The "MMIO waits at PPWT" is waiting for the HOST to write via PCIe, not for
+  an ETH packet from the non-MMIO peer.
+
+  If this strategy means reverting to an actual ETH DMA pre-ping but reversing
+  direction: MMIO would need to eth_send_packet() to non-MMIO's L1 before the
+  handshake. But the handshake gates (PPWT, HGWT) currently prevent MMIO from
+  even reaching init_handshake_info() until the host releases it. You'd have to
+  restructure the entire gate sequence to allow MMIO to send before HGWT, which
+  defeats the purpose of the gate.
+
+  Risk: Reintroduces TXQ contention that FIX CZ Option 5 specifically eliminated.
+  Does it fix the race: No. The race is in init_handshake_info's local_value zero,
+  not in any DMA direction.
+
+---
+
+STRATEGY 2: HOST-MEDIATED SIGNAL (no ETH DMA, host reads flag, writes reciprocal)
+
+  VERDICT: GOOD (but this is already what the code does)
+
+  Reasoning: This is EXACTLY what FIX CZ Option 5 + FIX CY already implements:
+  - Non-MMIO ERISC writes preping_gate_val to its own L1 (line 3683) -- flag
+  - Host polls non-MMIO for HANDSHAKE_READY via Pass B (lines 3648-3654) -- reads
+  - Host writes preping_gate_val to MMIO's preping_addr (device.cpp:2972) -- reciprocal
+  - Host writes HOST_GATE_OPEN to MMIO (device.cpp:2973) -- gate release
+
+  The non-MMIO "flag" is edm_status=HANDSHAKE_READY (not the preping_gate_val,
+  which is redundant — the host polls edm_status, not preping_addr on non-MMIO).
+
+  This strategy is already implemented. It works correctly in the happy path.
+  The question is whether it handles the UNHAPPY path (stale L1, TXQ wedge,
+  non-MMIO never reaching HANDSHAKE_READY).
+
+  Risk: Already deployed; no additional risk.
+  Does it fix the race: Yes for the handshake entry race. No for the TXQ flush
+  hang inside init_handshake_info().
+
+---
+
+STRATEGY 3: ELIMINATE PRE-PING, FIX DEADLOCK VIA edm_status POLLING
+  (Non-MMIO waits until MMIO's edm_status == HANDSHAKE_READY before handshake loop)
+
+  VERDICT: RISKY
+
+  Reasoning: This inverts the gate direction. Currently, MMIO waits for non-MMIO
+  (via host relay). This strategy would have non-MMIO wait for MMIO. The problem:
+  non-MMIO ERISCs CANNOT read MMIO's edm_status. They can only read their own L1.
+  The only way for non-MMIO to know MMIO's state is:
+    a) ETH DMA read (not available — you'd need MMIO to send something first)
+    b) Host writes the information to non-MMIO L1 via relay
+
+  Option (b) reintroduces the relay dependency. The host CAN write to non-MMIO
+  L1 via the UMD relay path (through an MMIO ERISC), but ONLY if the relay
+  ERISC is alive and processing commands. During fabric init, the relay path
+  uses base-UMD firmware. If that ERISC has already been soft-reset to fabric
+  firmware, the relay path is dead — can't write to non-MMIO.
+
+  There's a timing window: the relay is only available BEFORE the fabric
+  firmware is launched on the MMIO ERISC. After launch, the MMIO ERISC is
+  running EDM firmware, not UMD relay firmware. So the host would need to
+  write the "MMIO is ready" signal to non-MMIO BEFORE launching MMIO.
+
+  But MMIO hasn't been launched yet at that point, so how would the host know
+  MMIO is at HANDSHAKE_READY? It wouldn't — MMIO needs to run fabric firmware
+  to reach HANDSHAKE_READY.
+
+  Chicken-and-egg. Non-MMIO needs to know MMIO is ready. MMIO becomes ready
+  only after launch. Launch kills the relay. Non-MMIO can only learn MMIO's
+  state via relay.
+
+  Risk: Deadlock in the relay-unavailable window.
+  Does it fix the race: Partially — staggered entry helps, but the relay
+  dependency is fatal.
+
+---
+
+STRATEGY 4: MOVE init_handshake_info's TXQ FLUSH TO BEFORE PRE-PING SEND
+  (Flush -> write nonce -> send -> enter handshake)
+
+  VERDICT: WRONG / MOOT
+
+  Reasoning: There is no pre-ping "send" in the current code. FIX CZ Option 5
+  replaced it with a local L1 store. The TXQ flush already happens inside
+  init_handshake_info() (edm_handshake.hpp line 78) which is called at the START
+  of fabric_sender/receiver_side_handshake (fabric_router_eth_handshake.hpp lines
+  32 and 91). This is AFTER the PPWT and HGWT gates release.
+
+  The ordering is already: gates release -> init_handshake_info (flush + zero +
+  nonce) -> send loop. Moving the flush earlier (before the gates) would flush
+  the TXQ while the ERISC is still in the PPWT spin, which changes nothing —
+  the TXQ should be idle at that point anyway (no sends have happened yet).
+
+  The only scenario where the TXQ is busy at init_handshake_info time is if
+  stale DMA from a PREVIOUS session is still in-flight. FIX AH already handles
+  this with the conditional flush. Moving it earlier doesn't help.
+
+  Risk: No benefit; might mask a different bug by changing timing.
+  Does it fix the race: No.
+
+---
+
+STRATEGY 5: USE MEMORY BARRIER + POLLING INSTEAD OF ETH DMA
+  (Write nonce to MMIO L1 directly via host — no DMA, no TXQ)
+
+  VERDICT: GOOD (already partially implemented)
+
+  Reasoning: This is what FIX CZ Option 5 does for the gate — the host writes
+  preping_gate_val to MMIO's preping_addr via PCIe (device.cpp:2972). No ETH DMA
+  is involved in the gate mechanism.
+
+  For the HANDSHAKE ITSELF, both sides still use eth_send_packet() (ETH DMA).
+  This strategy would replace the handshake's eth_send_packet with host-mediated
+  writes. But the host cannot continuously proxy ETH handshake packets — it would
+  need to poll both sides and relay nonces, which is orders of magnitude slower
+  than the firmware ETH DMA loop (~100ns per iteration vs ~1ms per host round-trip).
+
+  A partial version: have the host pre-write the session_nonce to both sides'
+  handshake_info->local_value, skipping the ETH handshake entirely. This would
+  work IFF the nonce is fresh (which FIX CT guarantees) and IFF the handshake
+  is ONLY used for readiness signaling (no data exchange). But the handshake
+  also exchanges neighbor_mesh_id and neighbor_device_id via scratch[1] — the
+  host would need to supply these too.
+
+  Implementable but complex. Essentially removes the peer-to-peer ETH handshake
+  and replaces it with host orchestration.
+
+  Risk: Major restructuring; may break the neighbor_mesh_id/device_id exchange.
+  Does it fix the race: Yes, completely — no ETH DMA = no TXQ contention = no
+  init_handshake_info race.
+
+==========================================================================
+PART 4: NEW STRATEGIES
+==========================================================================
+
+NEW STRATEGY A: HOST-ORCHESTRATED HANDSHAKE BYPASS
+  The host ALREADY knows both sides' mesh_id and device_id (from control plane).
+  The host ALREADY knows the session_nonce (it's a compile-time arg).
+  Instead of letting ERISCs handshake over ETH DMA:
+
+  1. Both ERISCs write HANDSHAKE_READY (existing gate mechanism)
+  2. Host confirms both peers are at HANDSHAKE_READY
+  3. Host writes session_nonce to MMIO's handshake_info->local_value via PCIe
+  4. Host writes neighbor info to MMIO's handshake_info->{neighbor_mesh_id, neighbor_device_id}
+  5. Host does the same for non-MMIO (via relay or deferred until relay available)
+  6. Both ERISCs skip the ETH DMA loop entirely — local_value already == session_nonce
+
+  For MMIO: host writes directly via PCIe (fast, reliable).
+  For non-MMIO: host writes via relay path (already used in Pass B polling).
+
+  The only tricky part is step 5 — relay may be dead if MMIO ERISCs have already
+  been switched to fabric firmware. Solution: do step 5 BEFORE launching MMIO
+  fabric firmware. Non-MMIO ERISCs are launched first (existing FIX CV ordering),
+  so they're already running when the host writes to them.
+
+  Wait — the host polls non-MMIO for HANDSHAKE_READY in Pass B. At that point,
+  non-MMIO is running fabric firmware and the MMIO relay is still alive (MMIO
+  hasn't been launched yet — Pass A polls MMIO, Pass B polls non-MMIO, Phase C
+  releases MMIO). So the relay path IS available during Pass B. The host can
+  write the handshake completion values to non-MMIO during Pass B, before Phase C.
+
+  VERDICT: GOOD — eliminates the ETH DMA handshake entirely, uses only PCIe +
+  relay writes that already work in the current staging sequence. The relay path
+  is provably available during Pass B because MMIO ERISCs are at HANDSHAKE_READY
+  (Pass A confirmed), meaning they're still in the PPWT/HGWT spin — they haven't
+  entered the handshake loop yet, so the base-UMD relay on other MMIO cores is
+  still functional.
+
+  WAIT — correction. ALL MMIO ETH cores are running fabric firmware at this point
+  (they were launched before Pass A). They're at HANDSHAKE_READY, spinning in PPWT.
+  The base-UMD relay ERISC has already been replaced by fabric firmware. So the
+  relay path IS dead for host->non-MMIO writes during Pass B.
+
+  This means the host CANNOT write to non-MMIO L1 during Pass B in the current
+  architecture. The relay path through MMIO ERISC is gone once fabric firmware
+  launches.
+
+  Revised approach: split MMIO ETH cores into two groups:
+    - Relay cores: keep running base-UMD until non-MMIO handshake is complete
+    - Data cores: launch fabric firmware normally
+  This is a major restructuring and probably not worth the complexity.
+
+  REVISED VERDICT: RISKY — relay path unavailable at the right time. Would
+  require restructuring which MMIO ERISCs get launched when.
+
+---
+
+NEW STRATEGY B: ELIMINATE THE HANDSHAKE LOOP, USE edm_status RENDEZVOUS
+  Instead of the ETH DMA handshake loop, use the existing edm_status progression
+  as the synchronization mechanism:
+
+  1. Both sides write HANDSHAKE_READY (existing)
+  2. Host confirms both sides HANDSHAKE_READY (existing Pass A/B)
+  3. Host writes HOST_GATE_OPEN to MMIO (existing Phase C)
+  4. MMIO ERISC, instead of entering ETH handshake, writes REMOTE_HANDSHAKE_COMPLETE
+  5. Non-MMIO ERISC sees MMIO's eth_send_packet with REMOTE_HANDSHAKE_COMPLETE
+
+  Wait, this doesn't work either — non-MMIO can't READ MMIO's edm_status.
+
+  The fundamental constraint: non-MMIO ERISCs can only observe MMIO state via
+  ETH DMA (peer writes to their L1). The handshake loop IS the mechanism for
+  this observation. You can't replace it without some form of peer-to-peer
+  communication.
+
+  VERDICT: WRONG — can't eliminate ETH DMA without an alternative peer
+  communication channel.
+
+---
+
+NEW STRATEGY C: ADD A TIMEOUT TO init_handshake_info's TXQ FLUSH
+  The unbounded while(eth_txq_is_busy()){} at edm_handshake.hpp line 81 is the
+  most dangerous line in the entire handshake sequence. If the ETH MAC hardware
+  is wedged (peer in reset, link retransmit storm), this spins forever.
+
+  Fix: Add a bounded retry count (e.g., 1M iterations = ~1ms). If TXQ flush
+  doesn't complete, log a WAYPOINT and proceed anyway — the stale TXQ state will
+  either clear naturally when the link comes up, or the handshake will fail and
+  the existing deadlock detection (FIX BC) will catch it.
+
+  This is a DEFENSE-IN-DEPTH fix that doesn't eliminate the race but prevents
+  the WORST outcome (permanent hang in a place with no watchdog, no WAYPOINT,
+  and no termination check).
+
+  VERDICT: GOOD — simple, low-risk, addresses a real unbounded-spin hazard.
+  Implementation: ~5 lines of code change in edm_handshake.hpp.
+
+---
+
+NEW STRATEGY D: SIMPLIFY TO SINGLE HOST GATE (REMOVE PPWT)
+  PPWT and HGWT are both written by the host in the same function call
+  (open_erisc_handshake_gate, device.cpp lines 2972-2973). PPWT uses a
+  session-unique value; HGWT uses a fixed enum value. Both serve the same
+  purpose: hold MMIO ERISCs until non-MMIO peers are ready.
+
+  Remove PPWT entirely. Keep only HGWT (HOST_GATE_OPEN).
+
+  Benefits:
+  - One fewer L1 address to manage (preping_addr)
+  - One fewer compile-time arg (preping_gate_val)
+  - Simpler firmware code path
+  - No session-unique value needed for the gate (edm_status enum is sufficient)
+
+  The session-unique value (preping_gate_val) was added to prevent stale-L1
+  false unblocking. But HOST_GATE_OPEN (0xA0B0C0D2) overwrites edm_status, which
+  was set to HANDSHAKE_READY (0xA0B0C0D1) — these are distinct values, so stale
+  L1 from a previous session showing HANDSHAKE_READY won't false-trigger HGWT.
+  The concern is if a previous session left HOST_GATE_OPEN in edm_status — but
+  the ERISC writes HANDSHAKE_READY to edm_status at line 3672 BEFORE entering
+  the HGWT spin, so any stale HOST_GATE_OPEN is overwritten.
+
+  VERDICT: GOOD — simplification with no functional regression. Reduces attack
+  surface for bugs.
+
+==========================================================================
+PART 5: TOP RECOMMENDATION
+==========================================================================
+
+RECOMMENDED APPROACH: Strategy C + Strategy D (combined)
+
+1. (Strategy D) Remove the PPWT gate (preping_addr/preping_gate_val) entirely.
+   Keep only the HOST_GATE_OPEN gate. This simplifies the firmware startup path
+   from three gates to two (local ERISC barrier + HOST_GATE_OPEN). The preping
+   mechanism is redundant with HGWT and adds complexity without additional safety.
+
+2. (Strategy C) Add a bounded timeout to the TXQ flush inside init_handshake_info()
+   (edm_handshake.hpp line 81). This is the most dangerous unbounded spin in the
+   entire handshake path. A 1M-iteration (~1ms) timeout with WAYPOINT logging
+   prevents permanent hangs when ETH MAC hardware is wedged.
+
+3. (Observation) The current three-gate mechanism (PPWT + HGWT + handshake)
+   works correctly for the handshake-entry race. The remaining failure modes are:
+   a) TXQ flush hang (addressed by Strategy C)
+   b) Non-MMIO never reaching HANDSHAKE_READY (addressed by existing Pass B
+      timeout + dead-relay fallback)
+   c) Stale L1 from prior session (addressed by session_nonce in FIX CT)
+
+   None of these require the PPWT gate. The HGWT gate is sufficient.
+
+IMPLEMENTATION SKETCH (Strategy C):
+  In edm_handshake.hpp, replace lines 78-81:
+    if (eth_txq_is_busy()) {
+        eth_txq_reg_write(0, ETH_TXQ_CMD, ETH_TXQ_CMD_FLUSH);
+        eth_txq_reg_read(0, ETH_TXQ_CMD);
+        constexpr uint32_t kFlushTimeout = 1'000'000;
+        uint32_t flush_iters = 0;
+        while (eth_txq_is_busy()) {
+            if (++flush_iters >= kFlushTimeout) {
+                WAYPOINT("TXFL");  // TXQ Flush timeout — proceeding anyway
+                break;
+            }
+        }
+    }
+
+IMPLEMENTATION SKETCH (Strategy D):
+  1. Remove preping_addr zero at line 3666
+  2. Remove preping_gate_val local store at lines 3680-3684
+  3. Remove entire PPWT spin loop at lines 3690-3715
+  4. Remove preping_addr/preping_gate_val writes from open_erisc_handshake_gate()
+  5. Remove preping_addr/preping_gate_val from erisc_datamover_builder
+  6. Remove PRE_PING_ADDR and PREPING_GATE_VAL compile-time args
+
+==========================================================================
+PART 6: KEY INSIGHT
+==========================================================================
+
+The fundamental insight from this review:
+
+THE PRE-PING IS NOT A PRE-PING. It's a misnomer. FIX CZ Option 5 replaced
+the original ETH-DMA-based pre-ping with a host-PCIe-written L1 scratchpad
+value. What remains is just a second host gate (PPWT) stacked on top of the
+first host gate (HGWT), both written in the same PCIe burst by the same
+function. The two-gate stack provides no additional ordering guarantees and
+adds complexity that makes the code harder to reason about.
+
+The REAL remaining risk is not the handshake entry race (which the HGWT gate
+solves) but the UNBOUNDED TXQ flush spin inside init_handshake_info(), which
+has no timeout, no WAYPOINT, and no termination check. If the ETH MAC is
+wedged (peer in reset, link not trained), this spin is the most likely cause
+of a permanent hang — and no amount of pre-handshake gating can prevent it
+because it happens INSIDE the handshake after all gates have opened.

@@ -1,0 +1,15 @@
+Opus Audit Summary: nsexton/0-racecondition-hunt (2026-04-25)
+
+- CODE CORRECTNESS (A-): Two-pass quiesce architecture is sound. No race conditions, off-by-one errors, or new hang paths found. Known limitation: first-occurrence relay read hang (no UMD non-blocking probe) is documented but unmitigated.
+
+- TEST COVERAGE (B+): 20 test cases in test_async_teardown_race.cpp + 3 in test_fabric_teardown_escape.cpp. Missing: relay-ordering race test (FM3), double-quiesce cascade negative test, Phase 4 MUX timeout test, and teardown-timeout stale-state recovery test.
+
+- LOG QUALITY (A): Best-in-class. Device/channel context everywhere, phase labels, intermediate polling logs, SUMMARY lines, edm_status_str() human-readable names, and documented sentinel values (0xDEAD5B5B, 0xDEADECE7). Minor: Phase 2.5 timeout log should include actual elapsed time; Phase 1 diagnostic read has no try/catch.
+
+- 0x49706550 FIX: Canary write (0xA0A0A0A0 in kernel_main) and terminate_stale_erisc_routers classification are IMPLEMENTED. Relay ordering (two-pass quiesce) is IMPLEMENTED. Force-reset on teardown timeout (Fix 1) is NOT implemented — most impactful remaining gap. A 1-line change in metal_env.cpp (remove the terminated_cleanly guard) would eliminate Failure Mode 2 entirely.
+
+- ANALYZE SCRIPT: Missing patterns for Phase 4 MUX READY_FOR_TRAFFIC timeout (log doesn't contain "Phase 4"), double-quiesce cascade detection (count ENTRY snapshots per device), rescue_stuck_dispatch_cores timeout accumulation, and explicit 0xA0A0A0A0 canary hex grep.
+
+- HIGHEST PRIORITY NEXT ACTION: Implement force-reset on teardown timeout in metal_env.cpp (1-line change) to stop 0x49706550 state poisoning between sessions.
+
+Full report: /workspace/group/research/opus_audit_20260425_1002.md

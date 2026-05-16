@@ -1,0 +1,94 @@
+<!--
+SUMMARY: Opus audit of nsexton/0-racecondition-hunt branch — run 25967409004 root cause + logging/script fixes
+KEYWORDS: racecondition-hunt, allgather-hang, tt-smi-reset, FIX-DS, FIX-DU, FIX-XZ, FIX-BH, audit
+SOURCE: CI run 25967409004, branch code review, AI-JOURNAL.md
+SCOPE: 4-dimension audit (testing, logging, correctness, scripts) of AllGather hang investigation
+USE WHEN: Reviewing racecondition-hunt branch changes, debugging post-tt-smi-reset ERISC boot failures
+-->
+
+# Opus Audit Report — 2026-05-16 18:30 UTC
+
+## Branch: nsexton/0-racecondition-hunt
+## Run analyzed: 25967409004 (SHA 4d9c82c98b5a -> committed fix at 42361f4b9ef)
+## Runner: tt-metal-ci-vm-t3k-10
+
+---
+
+## Results
+- 80 PASSED, 4 FAILED
+- Failed tests: AllGatherPersistentOutput (5604ms), ReduceScatter (5005ms), AllReduce (5006ms), AllGatherEthTxqTeardownRace (5006ms)
+- All failures: 5s timeout in SetUp() — FIX BH ROM boot timeout on 24 MMIO channels
+
+---
+
+## Root Cause Analysis
+
+### Failure chain (Session 2 -> tt-smi -> Session 3)
+
+1. Session 2 (1x4 mesh, 2CQ): wait_for_fabric_workers_ready timed out
+   - FIX AI global deadline forced reset of 20 channels
+   - FIX DK-2 processed MMIO channels serially (500ms each, 17:01:11-17:01:14)
+   - FIX XZ confirmed all 12 MMIO channels rebooted in "0ms" — GENUINE (>10s elapsed since deassert due to non-MMIO processing)
+
+2. RiscFirmwareInitializer::teardown(): FIX DU correctly skipped all 25 MMIO channels (already at UMD firmware). Zero FIX AC resets. Clean teardown.
+
+3. Runner script at 17:01:35: Detects "T3K topology may have degraded mid-run", runs tt-smi -r. This puts ALL ERISCs back into ROM boot.
+
+4. Session 3 (MeshDevice1x4Fixture) at 17:01:52:
+   - All MMIO channels at ROM postcode 0x49705180
+   - FIX BT promotes all to probe_dead
+   - FIX RR soft-resets all 24 simultaneously
+   - FIX BH polls 5000ms -> ALL 24 fail
+   - Cause: simultaneous boot contention + ETH link training with ROM-state non-MMIO peers
+
+### Key insight
+The tt-smi reset between test binaries (triggered by runner script for any rc=1) undoes ALL careful teardown work. ERISCs are put back into ROM. 24 simultaneous soft-resets compete for ETH link training bandwidth — deadlock.
+
+---
+
+## Dimension 1: Testing Gaps
+No gap identified. Tests correctly detect 5s timeout. The issue is runner infrastructure (tt-smi reset), not missing test coverage.
+
+## Dimension 2: Logging Gaps (FIXED)
+
+### Gap 2a: FIX XZ timing ambiguity
+- Problem: Success message reported total_ms from poll_start (after FIX DS 50ms sleep). Impossible to distinguish "genuinely fast" (>1s boot time from non-MMIO delays) from "stale read" (only 50ms delay).
+- Fix: Added deassert_end timestamp before FIX XZ block. Both success and timeout messages now report since_deassert_ms. New format: "in 0ms (13542ms since deassert)".
+- File: tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp
+
+### Gap 2b: Missing script counters
+- Problem: analyze_fabric_hang_log.sh had no counters for FIX DS, FIX DU, or tt-smi resets.
+- Fix: Added FIX_DS_ZERO_MS, FIX_DU_FIRES, FIX_DU_SUMMARY, TT_SMI_RESETS, TT_SMI_REINIT with summary output blocks.
+- File: scripts/analyze_fabric_hang_log.sh
+
+## Dimension 3: Code Correctness
+
+FIX DS (50ms delay)       CORRECT    Prevents stale heartbeat false-positive. In this run, "0ms" was genuine.
+FIX DU (skip-UMD reset)   CORRECT    Skipped all 25 MMIO channels already at UMD. Zero unnecessary resets.
+FIX XZ (heartbeat poll)   CORRECT    Poll loop and timeout logic are sound.
+FIX BH (5000ms timeout)   CAUTION    When ALL 24 MMIO channels boot simultaneously after tt-smi, 5000ms may not suffice.
+
+## Dimension 4: Script Gaps (FIXED)
+- Added FIX_DS_ZERO_MS counter with since-deassert timing extraction
+- Added FIX_DU_FIRES and FIX_DU_SUMMARY counters
+- Added TT_SMI_RESETS and TT_SMI_REINIT counters with warning block
+
+---
+
+## Recommendations
+
+1. PRIMARY: The tt-smi reset between test binaries is the proximate cause of Session 3 failure. The runner script's "topology may have degraded" detection is too aggressive — it triggers tt-smi for any rc=1, even when teardown was clean. Consider: skip tt-smi if the last session's teardown completed without relay_path_broken flag.
+
+2. SECONDARY: FIX BH 5000ms timeout may be too short for 24 simultaneous channel boots post-tt-smi. Options:
+   - Increase to 8000-10000ms
+   - Implement staggered reset (batches of 4-6 channels)
+   - Add post-tt-smi awareness: if run_launch_phase detects tt-smi occurred, use a longer timeout budget
+
+3. OBSERVATION: FIX DS and FIX DU both worked correctly in this run. The fixes are validated — the failures are caused by external infrastructure (tt-smi), not by these fixes.
+
+---
+
+## Changes committed
+- Commit: 42361f4b9ef
+- Files: scripts/analyze_fabric_hang_log.sh, tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp
+- Message: [audit] Add FIX_DS/FIX_DU/tt-smi counters to analysis script; add since-deassert timing to FIX XZ
