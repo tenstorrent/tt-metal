@@ -218,7 +218,12 @@ FabricCoresHealth configure_fabric_cores(
                     // newly_dead_channels to prevent a downstream launch-message race.
                     {
                         constexpr uint32_t kRomPostcode_BH = 0x49705180u;
-                        constexpr uint32_t kFIX_BH_BootWaitMs = 500;
+                        // FIX DP (#42429): After PCIe hard-reset of 20+ channels simultaneously,
+                        // ERISC BRISC needs time to execute ROM before starting the application.
+                        // 500ms was insufficient — all channels still at ROM postcode 0x49705180
+                        // after 500ms → marked as newly_dead_channels → 24 channels dead → init
+                        // failure.  3000ms gives a safe margin for simultaneous ROM boot.
+                        constexpr uint32_t kFIX_BH_BootWaitMs = 3000;
                         constexpr uint32_t kFIX_BH_PollIntervalMs = 5;
                         const uint64_t edm_addr =
                             static_cast<uint64_t>(router_config.edm_status_address);

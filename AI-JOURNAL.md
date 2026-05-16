@@ -1419,3 +1419,19 @@ Three defensive fixes addressing the stale go_msg=0x02 root cause and ERISC tear
 **Fix**: After the force-reset loop, poll MMIO channels that were force-reset for heartbeat confirmation (same pattern as FIX TV in run_launch_phase). Uses PCIe direct reads (no relay needed). Waits up to 3s for heartbeat to become non-zero or show the 0xABCDxxxx UMD static marker. This ensures the next session always sees fully-booted base-UMD ERISC channels.
 
 FIX TV in run_launch_phase provides the same defense on the next session's init side, but FIX XZ eliminates the race at the source — in teardown itself.
+
+
+---
+
+## Cycle 15 — FIX DO + FIX DP (run 25963762318, FAILURE)
+
+### Failure chain
+- Session 2: FIX M skipped soft-reset on 6 base-UMD relay channels per MMIO device, called write_launch_msg_to_core → UMD relay died on all 6 channels simultaneously
+- Phase 5b reads via dead relay each hung 1-5s; kHealthCheckTimeoutMs=2000ms exhausted before checking all channels
+- Phase 5b deadline exceeded on Devices 0/2/4/5 → dispatch teardown timeout → 20 channels TERMINATE pending → PCIe force-reset (FIX AC)
+- After force-reset: 20 channels at ROM postcode 0x49705180
+- Session 3: FIX BH polls 500ms → all 24 channels still at ROM postcode → marked dead → init failure
+
+### Fixes applied
+- **FIX DO**: Extended kHealthCheckTimeoutMs in device.cpp phase5b_erisc_health_check from 2000ms to 30000ms
+- **FIX DP**: Extended kFIX_BH_BootWaitMs in fabric_init.cpp from 500ms to 3000ms

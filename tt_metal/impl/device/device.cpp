@@ -2483,7 +2483,13 @@ bool Device::phase5b_erisc_health_check(
     const metal_SocDescriptor& soc_desc_p5,
     uint32_t router_sync_addr,
     uint32_t expected_ready) {
-    constexpr uint32_t kHealthCheckTimeoutMs = 2000;
+    // FIX DO (#42429): When FIX M skipped soft-reset on base-UMD relay channels and called
+    // write_launch_msg_to_core, all relay channels die simultaneously.  Each subsequent L1 read
+    // via a dead relay hangs 1-5s.  With 6 channels and 2000ms budget the deadline is exhausted
+    // before all channels are checked → Phase 5b deadline exceeded → dispatch teardown failure.
+    // Extend to 30000ms (30s) so even 6 hanging reads at 5s each are covered.  The per-read
+    // deadline guard at line 2554 still prevents accumulating unlimited time per remaining channel.
+    constexpr uint32_t kHealthCheckTimeoutMs = 30000;
     // Log unhealthy channels every 200ms for observability.
     constexpr uint32_t kHCIntermediateLogMs = 200;
     constexpr uint32_t kSpinLimit = 64U;
