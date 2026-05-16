@@ -206,6 +206,12 @@ private:
     // Key: (device_id, eth_chan_id).
     mutable std::mutex force_reset_channels_mutex_;
     std::set<std::pair<ChipId, uint32_t>> force_reset_channels_;
+    // FIX CL-2 (#42429): Non-MMIO relay-dead channels that skipped assert_risc_reset (FIX BU)
+    // during the last teardown.  Direct L1 writes to these channels are impossible (relay dead),
+    // so the critical state cannot be zeroed.  Injected into probe_dead_channels_map at the start
+    // of the next compile_and_configure_fabric() so configure_fabric_cores() skips soft-reset on
+    // them (avoids 5s relay timeout per channel).  Protected by force_reset_channels_mutex_.
+    std::set<std::pair<ChipId, uint32_t>> pending_pre_dead_non_mmio_;
 
     // Thread-local compile seam (see set_compile_fn_for_testing / clear_compile_fn_for_testing).
     // Default-constructed (empty std::function) — not set in production builds.

@@ -823,6 +823,14 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                     "RiscFirmwareInitializer::teardown (FIX AC) will PCIe-reset via MMIO relay channels.",
                     ch.dev->id(),
                     ch.eth_chan_id);
+                // FIX CL-2 (#42429): L1 cannot be zeroed on this channel (relay dead — no direct
+                // PCIe path to non-MMIO ETH cores).  Track it so compile_and_configure_fabric()
+                // injects it into probe_dead_channels_map for the next session, preventing
+                // configure_fabric_cores() from attempting a 5s-timeout soft-reset.
+                {
+                    std::lock_guard<std::mutex> lk(force_reset_channels_mutex_);
+                    pending_pre_dead_non_mmio_.emplace(ch.dev->id(), ch.eth_chan_id);
+                }
             } else {
                 // FIX AI (#42429): assert + deassert to restart the ERISC into base UMD firmware.
                 //
@@ -897,6 +905,51 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                         "force-reset.",
                         ch.dev->id(),
                         ch.eth_chan_id);
+                }
+                // FIX CL (#42429): Zero critical L1 regions before assert_risc_reset to prevent
+                // ROM hang (0x49705180).  After reset, the ERISC ROM writes postcode 0x49705180
+                // to edm_status_address during boot.  If L1 still holds stale fabric data
+                // (routing table, launch config) from the prior session, the ROM init can hang
+                // at that postcode instead of completing and jumping to base UMD firmware.
+                // PCIe-direct write — only safe/meaningful for MMIO channels.
+                // Non-MMIO channels with dead relay are handled via FIX CL-2 / pending_pre_dead.
+                {
+                    const bool is_mmio_chan_cl =
+                        cluster_.get_associated_mmio_device(ch.dev->id()) == ch.dev->id();
+                    if (is_mmio_chan_cl) {
+                        try {
+                            const uint32_t rt_addr = static_cast<uint32_t>(hal_.get_dev_addr(
+                                HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ROUTING_TABLE));
+                            const uint32_t rt_size = hal_.get_dev_size(
+                                HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ROUTING_TABLE);
+                            const uint32_t launch_addr = static_cast<uint32_t>(hal_.get_dev_addr(
+                                HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH));
+                            const uint32_t launch_size = hal_.get_dev_size(
+                                HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH);
+                            std::vector<uint32_t> zero_rt(rt_size / sizeof(uint32_t), 0);
+                            std::vector<uint32_t> zero_launch(launch_size / sizeof(uint32_t), 0);
+                            std::vector<uint32_t> zero_status(1, 0);
+                            detail::WriteToDeviceL1(
+                                ch.dev, ch.eth_logical_core, router_sync_address, zero_status, CoreType::ETH);
+                            detail::WriteToDeviceL1(
+                                ch.dev, ch.eth_logical_core, rt_addr, zero_rt, CoreType::ETH);
+                            detail::WriteToDeviceL1(
+                                ch.dev, ch.eth_logical_core, launch_addr, zero_launch, CoreType::ETH);
+                            log_info(
+                                tt::LogMetal,
+                                "FIX CL (#42429): Device {} chan={} zeroed EDM status (0x{:x}), "
+                                "routing table (0x{:x}+{}B), launch config (0x{:x}+{}B) before "
+                                "assert_risc_reset — prevents 0x49705180 ROM hang.",
+                                ch.dev->id(), ch.eth_chan_id,
+                                router_sync_address, rt_addr, rt_size, launch_addr, launch_size);
+                        } catch (...) {
+                            log_warning(
+                                tt::LogMetal,
+                                "FIX CL (#42429): Device {} chan={} L1 zero-before-reset threw "
+                                "— proceeding with assert_risc_reset anyway.",
+                                ch.dev->id(), ch.eth_chan_id);
+                        }
+                    }
                 }
                 try {
                     const auto virtual_eth_coord = cluster_.get_virtual_coordinate_from_logical_coordinates(
@@ -2281,6 +2334,27 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
             for (const uint32_t chan : to_force_reset) {
                 base_umd_chans.erase(chan);
             }
+        }
+    }
+
+    // FIX CL-2 (#42429): Inject non-MMIO relay-dead channels from the last teardown's FIX BU path.
+    // These channels skipped assert_risc_reset_at_core during teardown (relay was dead — saves 5s
+    // per channel), so their L1 was not zeroed.  configure_fabric_cores() must skip soft-reset on
+    // them (same as probe_dead_channels) to avoid the 5s relay timeout on the dead relay path.
+    {
+        std::lock_guard<std::mutex> lk(force_reset_channels_mutex_);
+        if (!pending_pre_dead_non_mmio_.empty()) {
+            for (const auto& [dev_id, chan_id] : pending_pre_dead_non_mmio_) {
+                probe_dead_channels_map[dev_id].insert(chan_id);
+                log_info(
+                    tt::LogMetal,
+                    "compile_and_configure_fabric: FIX CL-2 (#42429) — Device {} chan={} "
+                    "injected into probe_dead_channels (skipped assert_risc_reset in last "
+                    "teardown's FIX BU path — relay was dead).",
+                    dev_id,
+                    chan_id);
+            }
+            pending_pre_dead_non_mmio_.clear();
         }
     }
 
