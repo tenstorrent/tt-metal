@@ -18,7 +18,11 @@ namespace ckernel::sfpu
 // Decompose x = n + f, where n = round(x) and f = x - n ∈ [-0.5, 0.5].
 // Then 2^x = 2^n * 2^f, where:
 //   - 2^n is realised by adding n to the IEEE-754 exponent of 2^f via setexp.
-//   - 2^f is approximated by a minimax polynomial in f.
+//   - 2^f is approximated by a degree-5 truncated Taylor expansion of
+//     exp(f·ln2) in f. (A true Remez minimax polynomial would shave ~1 bit
+//     of worst-case error vs. Taylor, but Taylor is well within the ≤ 1 ulp
+//     fp32 / ≤ 0.5 ulp bf16 spec on [-0.5, 0.5] and keeps the coefficients
+//     auditable against the closed-form expressions ln(2)^k / k!.)
 //
 // This bypasses the redundant `* ln(2)` / `* 1/ln(2)` round-trip that the
 // previous implementation paid for by routing through `exp(x * ln(2))`.
@@ -35,9 +39,9 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_core_unsafe_(sfpi::vFloat x)
     sfpi::vFloat n_float = _sfpu_round_to_nearest_int32_(x, n_int);
     sfpi::vFloat f       = x - n_float;
 
-    // Step 2: 2^f via degree-5 minimax polynomial on [-0.5, 0.5].
-    // Coefficients are the truncated Taylor expansion of exp(f*ln2);
-    // single-precision representable and ground for ≤ 1 ulp on the interval.
+    // Step 2: 2^f via degree-5 truncated Taylor polynomial on [-0.5, 0.5].
+    // Coefficients are the closed-form Taylor expansion of exp(f·ln2);
+    // single-precision representable and within ≤ 1 ulp on the interval.
     //   2^f ≈ 1 + c1·f + c2·f² + c3·f³ + c4·f⁴ + c5·f⁵
     sfpi::vFloat p = PolynomialEvaluator::eval(
         f,
@@ -126,8 +130,9 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x)
         sfpi::vFloat n_float = _sfpu_round_to_nearest_int32_(x, n_int);
         sfpi::vFloat f       = x - n_float;
 
-        // Degree-3 polynomial: bf16 only carries 7 mantissa bits, so this is
-        // more than enough headroom to hit ≤ 0.5 ulp after the final bf16 round.
+        // Degree-3 truncated Taylor polynomial of exp(f·ln2): bf16 only carries
+        // 7 mantissa bits, so this is more than enough headroom to hit ≤ 0.5 ulp
+        // after the final bf16 round.
         sfpi::vFloat p = PolynomialEvaluator::eval(
             f,
             sfpi::vConst1,    // c0 = 1

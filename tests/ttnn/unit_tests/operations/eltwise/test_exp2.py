@@ -118,24 +118,22 @@ def test_exp2_special_values(device):
     # Tile must be 32x32; pack edge-case scalars then pad the rest of the tile
     # with a value (0.0) whose result is known and stable.
     special_inputs = [
-        0.0,                            # exp2(0)    = 1.0
-        1.0,                            # exp2(1)    = 2.0
-        -1.0,                           # exp2(-1)   = 0.5
-        10.0,                           # exp2(10)   = 1024.0
-        -10.0,                          # exp2(-10)  ≈ 0.0009766
-        127.0,                          # near-max finite output
-        -126.0,                         # near-min normal output
-        float("inf"),                   # exp2(+inf) = +inf
-        float("-inf"),                  # exp2(-inf) = 0.0
-        float("nan"),                   # exp2(NaN)  = NaN
-        128.0,                          # exact overflow boundary
-        -127.0,                         # exact underflow boundary
+        0.0,  # exp2(0)    = 1.0
+        1.0,  # exp2(1)    = 2.0
+        -1.0,  # exp2(-1)   = 0.5
+        10.0,  # exp2(10)   = 1024.0
+        -10.0,  # exp2(-10)  ≈ 0.0009766
+        127.0,  # near-max finite output
+        -126.0,  # near-min normal output
+        float("inf"),  # exp2(+inf) = +inf
+        float("-inf"),  # exp2(-inf) = 0.0
+        float("nan"),  # exp2(NaN)  = NaN
+        128.0,  # exact overflow boundary
+        -127.0,  # exact underflow boundary
     ]
 
     pad_count = 32 * 32 - len(special_inputs)
-    torch_input = torch.tensor(
-        special_inputs + [0.0] * pad_count, dtype=torch.bfloat16
-    ).reshape(1, 1, 32, 32)
+    torch_input = torch.tensor(special_inputs + [0.0] * pad_count, dtype=torch.bfloat16).reshape(1, 1, 32, 32)
 
     golden_function = ttnn.get_golden_function(ttnn.exp2)
     golden = golden_function(torch_input, device=device)
@@ -153,6 +151,12 @@ def test_exp2_special_values(device):
 
     golden_flat = golden.reshape(-1)
 
+    # Walk each special input twice:
+    #   1. Bit-exact checks for NaN / ±inf (ULP is undefined here).
+    #   2. Collect finite (input, golden, result) triples and check them with
+    #      assert_with_ulp at the end — a principled bound regardless of
+    #      magnitude (handles exp2(127) ≈ 1.7e38 the same as exp2(-10)).
+    finite_indices = []
     for i, x in enumerate(special_inputs):
         g = golden_flat[i].item()
         r = result[i].item()
@@ -160,11 +164,10 @@ def test_exp2_special_values(device):
         if np.isnan(g):
             assert np.isnan(r), f"exp2({x}): expected NaN, got {r}"
         elif np.isinf(g):
-            assert np.isinf(r) and (np.sign(r) == np.sign(g)), (
-                f"exp2({x}): expected {g}, got {r}"
-            )
+            assert np.isinf(r) and (np.sign(r) == np.sign(g)), f"exp2({x}): expected {g}, got {r}"
         else:
-            # Tight tolerance — these are exactly-representable or near-exact bf16 values.
-            assert abs(r - g) <= max(1e-3, abs(g) * 1e-2), (
-                f"exp2({x}): expected {g}, got {r}"
-            )
+            finite_indices.append(i)
+
+    if finite_indices:
+        idx = torch.tensor(finite_indices)
+        assert_with_ulp(golden_flat[idx], result[idx], 1)
