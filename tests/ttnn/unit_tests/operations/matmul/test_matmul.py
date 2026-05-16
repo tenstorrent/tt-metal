@@ -3708,11 +3708,22 @@ def test_from_torch_col_tilize_batched(weight_dtype, shape):
 # Originally tracked the "bad optional access" crash from #44529. After the fix, the same code
 # path now produces a clear TT_FATAL when the contract is violated.
 def _make_matmul_inputs(device, grid_size, with_allowed_worker_cores, output_memory_layout, config_kind):
-    m, k, n = 32, 8192, 1024
     num_cores = grid_size[0] * grid_size[1]
-    in0_block_w = k // num_cores // 32
-    per_core_M = m // 32
-    per_core_N = n // num_cores // 32
+    if config_kind == "mcast_1d":
+        # 1D mcast: width-sharded output, single row of cores, N is split across all cores.
+        m, k, n = 32, 8192, 1024
+        in0_block_w = k // num_cores // 32
+        per_core_M = m // 32
+        per_core_N = n // num_cores // 32
+    else:
+        # 2D reuse: block-sharded output. compute_output_specs derives num_blocks_y from
+        # M/per_core_M and num_blocks_x from N/per_core_N, and the shard layout must fit
+        # the allowed_worker_cores grid in COL_MAJOR orientation
+        # (num_blocks_y <= grid.x, num_blocks_x <= grid.y).
+        m, k, n = 32 * grid_size[0], 8192, 32 * grid_size[1]
+        in0_block_w = k // num_cores // 32
+        per_core_M = m // 32 // grid_size[0]
+        per_core_N = n // 32 // grid_size[1]
     out_subblock_h, out_subblock_w, _ = find_max_subblock(per_core_M, per_core_N)
 
     in0 = torch.randn(1, 1, m, k).bfloat16().float()
