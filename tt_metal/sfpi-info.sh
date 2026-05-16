@@ -186,24 +186,40 @@ check_missing_deps () {
     local missing=()
     case $sfpi_dist in
 	gentoo)
-	    # Use full cat/pkg atom only where the bare name is ambiguous
-	    # (gcc: cross-*/gcc exists; python: many slots/impls).
-	    # For everything else, match by name in /var/db/pkg so category
-	    # migrations (e.g. sys-devel -> dev-build) don't break the check.
-	    gentoo_has_pkg() {
-		case $1 in
-		    */*)
-			portageq has_version / "$1" 2>/dev/null ;;
-		    *)
-			find /var/db/pkg -maxdepth 2 -name "$1-*" -quit 2>/dev/null \
-			    | grep -q . ;;
-		esac
+	    # Check one or more atoms; succeed if any is installed.
+	    # Used for packages that may sit in different categories across
+	    # Gentoo versions (e.g. sys-devel -> dev-build migrations).
+	    gentoo_has_any() {
+		local atom
+		for atom in "$@"; do
+		    portageq has_version / "$atom" 2>/dev/null && return 0
+		done
+		return 1
 	    }
-	    local pkgs=(sys-devel/gcc autoconf automake bison dejagnu dev-tcltk/expect
-		flex gawk patchutils dev-lang/python expat gmp dev-libs/mpc mpfr
-		sys-apps/texinfo)
-	    for pkg in "${pkgs[@]}"; do
-		gentoo_has_pkg "$pkg" || missing+=("$pkg")
+	    # List of (install-hint . atoms...) pairs encoded as parallel arrays.
+	    local hints=()
+	    local checks=()
+	    # hint is the atom shown in the error message; checks are what we probe.
+	    add_check() { hints+=("$1"); shift; checks+=("$*"); }
+	    add_check sys-devel/gcc       sys-devel/gcc
+	    add_check dev-build/autoconf  dev-build/autoconf sys-devel/autoconf
+	    add_check dev-build/automake  dev-build/automake sys-devel/automake
+	    add_check sys-devel/bison     sys-devel/bison
+	    add_check dev-util/dejagnu    dev-util/dejagnu
+	    add_check dev-tcltk/expect    dev-tcltk/expect
+	    add_check sys-devel/flex      sys-devel/flex
+	    add_check sys-apps/gawk       sys-apps/gawk
+	    add_check dev-util/patchutils dev-util/patchutils
+	    add_check dev-lang/python     dev-lang/python
+	    add_check dev-libs/expat      dev-libs/expat
+	    add_check dev-libs/gmp        dev-libs/gmp
+	    add_check dev-libs/mpc        dev-libs/mpc
+	    add_check dev-libs/mpfr       dev-libs/mpfr
+	    add_check sys-apps/texinfo    sys-apps/texinfo
+	    local i
+	    for i in "${!hints[@]}"; do
+		# shellcheck disable=SC2086
+		gentoo_has_any ${checks[$i]} || missing+=("${hints[$i]}")
 	    done
 	    if [[ ${#missing[@]} -gt 0 ]]; then
 		echo "Missing Gentoo packages; install with: emerge ${missing[*]}" >&2
