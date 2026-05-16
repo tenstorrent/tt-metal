@@ -98,8 +98,15 @@ def test_batch_norm_tests(
     # dummy for the missing stat in the reference call. Assertions still only cover the stats
     # that were actually generated.
     channels = input_shapes[1]
-    ref_mean_data = mean_data if mean_data is not None else (torch.zeros(channels) if var_data is not None else None)
-    ref_var_data = var_data if var_data is not None else (torch.ones(channels) if mean_data is not None else None)
+    ref_dtype = in_data.dtype
+    ref_mean_data = (
+        mean_data
+        if mean_data is not None
+        else (torch.zeros(channels, dtype=ref_dtype) if var_data is not None else None)
+    )
+    ref_var_data = (
+        var_data if var_data is not None else (torch.ones(channels, dtype=ref_dtype) if mean_data is not None else None)
+    )
 
     torch_result = torch.nn.functional.batch_norm(
         input=in_data,
@@ -312,8 +319,15 @@ def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias,
     # dummy for the missing stat in the reference call. Assertions still only cover the stats
     # that were actually generated.
     channels = input_shapes[1]
-    ref_mean_data = mean_data if mean_data is not None else (torch.zeros(channels) if var_data is not None else None)
-    ref_var_data = var_data if var_data is not None else (torch.ones(channels) if mean_data is not None else None)
+    ref_dtype = in_data.dtype
+    ref_mean_data = (
+        mean_data
+        if mean_data is not None
+        else (torch.zeros(channels, dtype=ref_dtype) if var_data is not None else None)
+    )
+    ref_var_data = (
+        var_data if var_data is not None else (torch.ones(channels, dtype=ref_dtype) if mean_data is not None else None)
+    )
 
     torch_result = torch.nn.functional.batch_norm(
         input=in_data,
