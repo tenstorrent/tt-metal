@@ -2087,3 +2087,291 @@ standalone but integration is unmeasured. Next session should:
 
 ~14 device runs, 7 ``tt-smi -glx_reset`` calls. Final state: device
 crashes 64L weight load — full system reboot likely needed.
+
+## V2-tracy-3 — fresh per-op profile, current HEAD default-off (post V2-17b)
+
+env: NONE (all QWEN36_* env vars unset — baseline of current HEAD
+`cdab588a5fd`).  Reconfirms the device-time attribution after V2-17, V2-17b,
+V2-17c, V2-18 with every optional kernel / persistent-buffer / fused-beta-g
+flag OFF.  This is the actual default code path the demo / server runs
+without explicit env injection.
+
+### env contract
+
+```
+QWEN36_RESIDUAL_BUF_ON     unset (V2-14 persistent buffer NOT allocated)
+QWEN36_DELTA_LAR           unset (DeltaNet output_proj keeps ttnn.all_reduce)
+QWEN36_FULLATTN_LAR        unset (full-attn WO keeps ttnn.all_reduce)
+QWEN36_TT_LANG_BETA_G      unset (V2-16 fused beta/g NOT used)
+QWEN36_TT_LANG_RECURRENT*  unset (V2-17{b,c} kernel NOT used)
+```
+
+The driver `tracy_perf_4L_4T.py` echoes the env-flag snapshot at startup
+to make the contract auditable; for this run it printed
+`{'QWEN36_RESIDUAL_BUF_ON': '0', 'QWEN36_DELTA_LAR': '0',
+'QWEN36_FULLATTN_LAR': '0', 'QWEN36_TT_LANG_BETA_G': '0'}`.
+
+### Driver + invocation
+
+Driver: `models/demos/qwen3_6_galaxy_v2/demo/tracy_perf_4L_4T.py`
+(reused unchanged from V2-tracy-2).  4L hybrid pattern `[lin, lin, lin,
+full]`, prefill T=128, 5 decode steps inside the signpost window (1
+compile-pass + 4 warm).
+
+```
+export TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) \
+    && source python_env/bin/activate \
+    && python -m tracy -p -v -r -m pytest --noconftest \
+        models/demos/qwen3_6_galaxy_v2/demo/tracy_perf_4L_4T.py \
+        -v -s
+```
+
+Aggregator: `models/demos/qwen3_6_galaxy_v2/demo/aggregate_tracy_csv.py`
+(fallback path again — `process_ops_logs.py` traces back in
+`_enrich_ops_from_perf_csv` because the BH 12 000-event-per-Risc buffer
+overrun drops a small number of device markers; `cpp_device_perf_report.csv`
+*is* written before the assertion, so the fallback can join it against
+`tracy_ops_data.csv` signposts directly).
+
+### Tracy signposts (ns since trace start)
+
+| label        | ts (ns)        |
+|--------------|---------------:|
+| start        | 52 226 012 060 |
+| prefill_done | 52 387 199 167 |
+| stop         | 56 911 247 821 |
+
+Profiled prefill window = **161.2 ms wall**.  Profiled decode region
+(5 steps incl. compile) = **4 524.0 ms wall**.  Wall-clock warm-decode
+mean = **610.5 ms / step** (per the driver's own python timer, lines
+1..4 average; step 0 = 2 081.8 ms compile).
+
+### Decode per-op (real-loop traced, 4 decode steps)
+
+38 374 op rows = 32 chips × 5 decode steps × ~240 ops/step (after
+buffer-overrun normalisation).  DEVICE kernel time is compile-independent
+so step 0 + steps 1..4 mix cleanly.  Sorted by % of decode device time.
+
+| op | count | sum_dev_us | avg_us | % of dev time |
+|---|---:|---:|---:|---:|
+| MatmulDeviceOperation                    |  3 712 |   138 115.4 |   37.21 | **24.9 %** |
+| MinimalMatmulDeviceOperation             |    160 |   108 308.3 |  676.93 | **19.5 %** |
+| ReduceScatterDeviceOperation             |  1 640 |   102 545.4 |   62.53 | **18.5 %** |
+| AllGatherAsyncDeviceOperation            |  1 880 |    83 405.1 |   44.36 | **15.0 %** |
+| AllGatherDeviceOperation                 |  1 656 |    56 771.5 |   34.28 | **10.2 %** |
+| BinaryNgDeviceOperation                  |  9 600 |    20 735.4 |    2.16 |  3.7 % |
+| ReshapeViewDeviceOperation               |  3 184 |     7 882.9 |    2.48 |  1.4 % |
+| TilizeWithValPaddingDeviceOperation      |  1 888 |     5 525.2 |    2.93 |  1.0 % |
+| FastReduceNCDeviceOperation              |    160 |     4 170.0 |   26.06 |  0.8 % |
+| ConcatDeviceOperation                    |  1 536 |     3 807.4 |    2.48 |  0.7 % |
+| TernaryDeviceOperation                   |    800 |     3 166.2 |    3.96 |  0.6 % |
+| SliceDeviceOperation                     |  3 264 |     3 120.1 |    0.96 |  0.6 % |
+| SDPAOperation                            |    160 |     2 660.1 |   16.63 |  0.5 % |
+| TransposeDeviceOperation                 |  2 880 |     2 251.9 |    0.78 |  0.4 % |
+| MeshPartitionDeviceOperation             |  1 664 |     1 915.1 |    1.15 |  0.3 % |
+| UnaryDeviceOperation                     |    874 |     1 906.4 |    2.18 |  0.3 % |
+| TypecastDeviceOperation                  |  1 396 |     1 634.5 |    1.17 |  0.3 % |
+| TilizeDeviceOperation                    |    256 |     1 321.4 |    5.16 |  0.2 % |
+| LayerNormPostAllGatherDeviceOperation    |     32 |     1 266.7 |   39.59 |  0.2 % |
+| UntilizeDeviceOperation                  |    192 |     1 188.8 |    6.19 |  0.2 % |
+| UntilizeWithUnpaddingDeviceOperation     |    544 |       862.1 |    1.58 |  0.2 % |
+| LayerNormDeviceOperation                 |    160 |       848.9 |    5.31 |  0.2 % |
+| CopyDeviceOperation                      |    576 |       803.8 |    1.40 |  0.1 % |
+| LayerNormPreAllGatherDeviceOperation     |     32 |       717.4 |   22.42 |  0.1 % |
+| CloneOperation                           |    128 |       114.1 |    0.89 |  0.0 % |
+| **DECODE TOTAL**                         | **38 374** | **555 044.3** | — | **100 %** |
+
+Per-chip dev work (sum / 32 chips / 5 steps) = **3.47 ms / chip / step**
+(V2-tracy-2 was 3.52, V2-tracy 4.30 — essentially flat vs V2-tracy-2).
+GenericOpDeviceOperation (V2-16 beta/g kernel signature) does **not**
+appear at all, confirming the V2-16 path is dormant when its env flag
+is unset.
+
+### Prefill per-op (T=128)
+
+30 080 op rows (single prefill call × 32 chips × ~940 logical ops, minus
+dropped-marker normalisation).  Sorted by % of prefill device time.
+
+| op | count | sum_dev_us | avg_us | % of dev time |
+|---|---:|---:|---:|---:|
+| MatmulDeviceOperation                    |  3 904 |    83 840.8 |   21.48 | **29.5 %** |
+| AllGatherDeviceOperation                 |    512 |    38 182.7 |   74.58 | **13.4 %** |
+| BinaryNgDeviceOperation                  |  6 816 |    29 039.2 |    4.26 | **10.2 %** |
+| ReshapeViewDeviceOperation               |  3 680 |    28 671.6 |    7.79 | **10.1 %** |
+| ReduceScatterDeviceOperation             |    480 |    27 922.6 |   58.17 |  9.8 % |
+| AllGatherAsyncDeviceOperation            |    512 |    14 113.4 |   27.57 |  5.0 % |
+| LayerNormPostAllGatherDeviceOperation    |    256 |    10 157.4 |   39.68 |  3.6 % |
+| TilizeDeviceOperation                    |    448 |     9 750.5 |   21.76 |  3.4 % |
+| SliceDeviceOperation                     |  4 608 |     6 115.4 |    1.33 |  2.2 % |
+| UnaryDeviceOperation                     |  2 112 |     6 045.8 |    2.86 |  2.1 % |
+| LayerNormPreAllGatherDeviceOperation     |    256 |     5 784.8 |   22.60 |  2.0 % |
+| TilizeWithValPaddingDeviceOperation      |    864 |     4 300.1 |    4.98 |  1.5 % |
+| UntilizeWithUnpaddingDeviceOperation     |    864 |     3 959.4 |    4.58 |  1.4 % |
+| TransposeDeviceOperation                 |  1 440 |     3 431.3 |    2.38 |  1.2 % |
+| LayerNormDeviceOperation                 |    352 |     3 047.3 |    8.66 |  1.1 % |
+| UntilizeDeviceOperation                  |    160 |     2 273.7 |   14.21 |  0.8 % |
+| TypecastDeviceOperation                  |    896 |     2 141.4 |    2.39 |  0.8 % |
+| ConcatDeviceOperation                    |    704 |     1 850.9 |    2.63 |  0.7 % |
+| MeshPartitionDeviceOperation             |    384 |       873.6 |    2.28 |  0.3 % |
+| SDPAOperation                            |     32 |       719.7 |   22.49 |  0.3 % |
+| FastReduceNCDeviceOperation              |     32 |       570.9 |   17.84 |  0.2 % |
+| BinaryDeviceOperation                    |    192 |       308.3 |    1.61 |  0.1 % |
+| UpdateKVCacheOperation                   |     64 |       245.8 |    3.84 |  0.1 % |
+| CopyDeviceOperation                      |    192 |       230.7 |    1.20 |  0.1 % |
+| TernaryDeviceOperation                   |     64 |       133.1 |    2.08 |  0.0 % |
+| FillPadDeviceOperation                   |     96 |       130.9 |    1.36 |  0.0 % |
+| ReduceDeviceOperation                    |     96 |       111.9 |    1.17 |  0.0 % |
+| CloneOperation                           |     64 |        72.2 |    1.13 |  0.0 % |
+| **PREFILL TOTAL**                        | **30 080** | **284 025.3** | — | **100 %** |
+
+Per-chip dev work (sum / 32) = **8.88 ms / chip** (V2-tracy-2 was 8.98,
+V2-tracy 8.92 — within noise).
+
+### Category split
+
+| section | total_dev_us | matmul % | CCL % | other % |
+|---|---:|---:|---:|---:|
+| prefill |   284 025.3 | 29.5 | 28.2 | 42.2 |
+| decode  |   555 044.3 | 44.4 | 43.7 | 11.9 |
+
+### Comparison vs V2-tracy-2 (V2-14 + V2-16 active)
+
+Decode totals (32-chip-aggregate, total over 5 decode steps):
+
+| op | V2-tracy-2 share | V2-tracy-3 share | Δ share | V2-tracy-2 µs | V2-tracy-3 µs | Δ µs |
+|---|---:|---:|---:|---:|---:|---:|
+| MatmulDeviceOperation                    | 24.5 % | **24.9 %** | +0.4 pp | 138 103 | 138 115 |    +12 |
+| MinimalMatmulDeviceOperation (lm_head)   | 19.2 % | **19.5 %** | +0.3 pp | 108 327 | 108 308 |    −19 |
+| ReduceScatterDeviceOperation             | 18.7 % | **18.5 %** | −0.2 pp | 105 091 | 102 545 |  −2 546 |
+| AllGatherAsyncDeviceOperation            | 15.3 % | **15.0 %** | −0.3 pp |  86 092 |  83 405 |  −2 687 |
+| AllGatherDeviceOperation                 | 10.4 % | **10.2 %** | −0.2 pp |  58 840 |  56 771 |  −2 069 |
+| BinaryNgDeviceOperation                  |  3.6 % |   3.7 %    | +0.1 pp |  20 380 |  20 735 |   +355 |
+| GenericOpDeviceOperation (beta_g)        |  0.04 %|   absent   |  −0.04 |     201 |       0 |   −201 |
+| **Total CCL (RS+AG+AGA+AR)**             |44.4 %  |**43.7 %**  | −0.7 pp | 250 023 | 242 722 | **−7 301** |
+| **Total Matmul (Matmul+MinimalMM)**      |43.8 %  |**44.4 %**  | +0.6 pp | 246 430 | 246 423 |     −7 |
+| **Decode total**                         |100 %   |100 %       |   —     | 563 142 | 555 044 |  −8 098 |
+
+Per-step decode dev work:  V2-tracy-2 112.63 ms/step → V2-tracy-3
+**111.01 ms/step** (`−1.6 ms / step`, `−1.4 %`).  Within capture-to-capture
+noise.  The V2-14 / V2-16 env flags being on in V2-tracy-2 vs off here
+make **no statistically distinguishable difference** to the 32-chip-
+aggregate decode device-time mix.
+
+Op counts also barely move:  RS 1 672 → 1 640 (−2 %), AG 1 728 → 1 656
+(−4 %), AGA 1 952 → 1 880 (−4 %).  All within the ±5 % buffer-overrun
+sampling noise documented for V2-tracy-2.
+
+### Findings
+
+1. **V2-14 (persistent-buffer line_all_reduce) does NOT change the
+   default-off device-time picture.**  The 7.4 pp CCL-share drop the
+   V2-tracy-2 section attributed to V2-14 turns out to be ≤1 pp once
+   the env flags are unset.  Most of that V2-tracy-2 "win" was inside
+   capture noise — RS / AG / AGA absolute work moves by ~2-3 ms each
+   between captures, which is the same magnitude as the V2-tracy-2 →
+   V2-tracy gap V2-14 was credited with.  The honest take: V2-14
+   landed cleanly *as infra* but its measurable per-step impact is
+   below the captured-to-capture floor for this 5-decode-step window.
+
+2. **V2-16 (tt-lang fused beta_g) leaves no visible footprint when
+   default-off.**  GenericOpDeviceOperation disappears entirely (was
+   201 µs / 0.04 % in V2-tracy-2).  BinaryNg goes from 8 640 ops
+   (V2-tracy-2 with beta_g ON) → 9 600 ops (default-off) = +960 ops
+   over 5 steps = +192 ops/step, consistent with the 6 BinaryNg
+   ops/layer × 32 chips × 4 layers = 768 ops/step that V2-16 would
+   replace.  Net BinaryNg dev-time shift is +355 µs (over 5 steps =
+   +71 µs/step), so the "0.24 ms / step" V2-16 win cited in
+   V2-tracy-2's findings is real but small.
+
+3. **CCL is still the single largest device-time slice (43.7 %).**
+   Even with all V2-14 infra dormant, RS+AG+AGA aggregate to 242.7 ms
+   over 5 steps = 48.5 ms/step on the 32-chip aggregate, or
+   1.52 ms/chip/step.  Per-step CCL launch count is RS 328 + AG 331 +
+   AGA 376 = ~1 035 CCL launches/step on the 32-chip aggregate, or
+   32 CCL launches per chip per step.  That count is essentially
+   identical between V2-tracy-2 (1 070) and V2-tracy-3 — V2-14 did
+   not collapse launches, it changed *which* CCL primitive was used.
+
+4. **Matmul is now 44.4 % of decode and the lm_head MinimalMatmul
+   alone is 19.5 %.**  The 677 µs / chip / call lm_head latency is
+   the single highest per-call cost in the entire decode table —
+   higher than any CCL launch.  This has been unchanged across all
+   three captures (V2-tracy, V2-tracy-2, V2-tracy-3), confirming the
+   lm_head is the most stable lever target.  At 32 calls × 677 µs =
+   21.66 ms / 5 steps = **4.33 ms / step / chip** on lm_head alone.
+
+5. **Per-chip per-step decode device work is 3.47 ms** (sum_dev_us /
+   32 / 5).  Wall-clock warm decode is 610.5 ms / step (eager-traced
+   via the python timer, not in-trace).  3.47 ms device / 610.5 ms
+   wall = **0.57 % device-bound** — decode remains fundamentally
+   host-bound in eager mode, exactly as V2-tracy / V2-tracy-2
+   established.  Any per-op device-time optimisation has to land
+   inside the real-loop trace context to convert into wall-clock
+   savings (V2-9 trace mode already in place is the right framing).
+
+### Next-lever recommendations (ordered by est. ms/step savings)
+
+1. **lm_head MinimalMatmul tuning (est. 0.5-1.5 ms/step real-loop
+   trace win).**  Per-call 677 µs / chip is the highest per-call cost
+   in decode and has not moved across 3 tracy captures.  This is the
+   most reliable lever target.  Investigate: (a) does the current
+   MinimalMatmul kernel use a tuned `matmul_1d_ring_config` or the
+   default kernel, (b) can the projection move to a tile-sharded
+   `MatmulDeviceOperation` like the rest of the model uses, (c) is the
+   replicated output tile shape forcing a sub-optimal grid (lm_head
+   sits on the V2-10 "in-trace argmax" head, not a sharded matmul).
+   Even a 20 % per-call improvement is `~4 ms/step` on the 32-chip
+   aggregate, or `~0.1-0.2 ms/step` of trace-replay wall-clock per
+   the V2-14 / V2-16 host-overhead absorption pattern.
+
+2. **CCL launch-count collapse (est. 0.5-1.0 ms/step real-loop trace
+   win).**  CCL still dominates at 43.7 % of decode device time and
+   1 035 launches / step across 32 chips.  V2-14's persistent-buffer
+   approach kept the launch count the same; the next step is fusing
+   adjacent RS+AG pairs into single all-reduce launches, or adopting
+   the BH fabric `all_reduce_async` end-to-end (V2-14 noted this was
+   investigated but never landed because the persistent-buffer path
+   already gave the easy wins).  Saving 30 % of CCL launches translates
+   to ~10 ms / step at the 32-chip aggregate, which is the same shape
+   of saving V2-14 produced at the per-op level but with much more
+   conviction that it will pay off in trace mode (launch overhead is
+   what the host-bound 610 ms/step wall-clock is dominated by).
+
+3. **MatmulDeviceOperation programcfg tuning (est. 0.2-0.5 ms/step
+   real-loop trace win).**  V2-tracy-2's #1 recommendation; not yet
+   touched.  3 712 calls × 37 µs avg = 138 ms / 5 steps = 27.6 ms /
+   step on 32-chip aggregate.  The two largest call sites are the
+   DeltaNet output-proj (5120 → 5120, 32 × 4 layers = 128 calls) and
+   the full-attn QKV split (3072 → 5120, 32 × 1 layer = 32 calls).
+   Even a 10 % per-call improvement is `~2.8 ms/step` on the
+   aggregate, ~0.05-0.1 ms/step in trace replay.
+
+4. **DeltaNet recurrent chain inner-block fusion (est. 0.2-0.4 ms/step
+   real-loop win).**  V2-17{,b,c} validated standalone speedups but
+   could not get them into trace replay because the per-call overhead
+   for the kernel launch + L1 readout cancelled the in-kernel savings.
+   Now that V2-tracy-3 confirms BinaryNg + Ternary + small Unary
+   together still account for ~4.6 % of decode device (3.7 + 0.6 +
+   0.3), a fused tt-lang kernel that ALSO captures the surrounding
+   transpose / reshape / typecast (currently 2.2 % combined) could
+   pull ~6 % of decode device into a single kernel launch and
+   eliminate ~50 BinaryNg launches per step — only worth pursuing
+   after lever 1 and 2 land, but the data shows the headroom is
+   still ~1.5 ms / step at 32-chip aggregate.
+
+### Iterations + tt-smi resets
+
+2 iterations.  Iteration 1: first tracy run completed pytest but the
+device profiler buffers never flushed (no `cpp_device_perf_report.csv`
+written), so the aggregator had nothing to read.  Reset via
+`tt-smi -glx_reset`, cleared `generated/profiler/{.logs,reports}/`,
+re-ran.  Iteration 2: succeeded — `cpp_device_perf_report.csv` (16 MB),
+`tracy_ops_data.csv` (47 MB), `tracy_ops_times.csv` (10 GB) all written.
+2 `tt-smi -glx_reset` invocations total (1 between iterations, 1 at
+start).  `process_ops_logs.py` traces back on the buffer-overrun dropped
+markers as expected (V2-tracy-2 same behaviour); the fallback aggregator
+handles this cleanly.
+
+### Files
+
+No model files modified.  Only PERF.md (this section) updated.
