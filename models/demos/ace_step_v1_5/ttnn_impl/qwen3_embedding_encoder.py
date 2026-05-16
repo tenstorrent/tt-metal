@@ -446,7 +446,12 @@ class TtQwen3EmbeddingEncoder:
         )
 
     def embed_tokens(self, input_ids: np.ndarray) -> ttnn.Tensor:
-        """Token IDs ``[B,S]`` -> embedding hidden states ``[B,S,H]`` on device."""
+        """Token IDs ``[B,S]`` -> embedding hidden states ``[B,S,H]`` on device.
+
+        Legacy host-input wrapper: uploads ``input_ids`` to device, calls the device-only path,
+        then deallocates the uploaded tensor. For trace+2CQ use ``embed_tokens_device`` directly
+        with a persistent device input.
+        """
         cfg = self.cfg
         ids = np.asarray(input_ids, dtype=np.uint32)
         b, s = int(ids.shape[0]), int(ids.shape[1])
@@ -459,11 +464,47 @@ class TtQwen3EmbeddingEncoder:
             memory_config=self.mem,
             mesh_mapper=mapper,
         )
-        h = ttnn.embedding(ids_tt, weight=self.embed_weight, dtype=self.dtype)
+        h = self.embed_tokens_device(ids_tt)
         ttnn.deallocate(ids_tt)
         return h
 
+    def embed_tokens_device(self, ids_tt: ttnn.Tensor) -> ttnn.Tensor:
+        """Trace-safe embedding lookup.
+
+        ``ids_tt`` must already be a device tensor (``uint32``, ``ROW_MAJOR``, shape ``[B,S]``).
+        Caller owns the input lifetime — the output is a freshly allocated device tensor.
+        """
+        return ttnn.embedding(ids_tt, weight=self.embed_weight, dtype=self.dtype)
+
+    def forward_device(self, ids_tt: ttnn.Tensor, attn_bias_tt: ttnn.Tensor) -> ttnn.Tensor:
+        """Trace-safe forward.
+
+        ``ids_tt``: ``[B,S]`` uint32 ROW_MAJOR device tensor (the encoder's persistent input buffer).
+        ``attn_bias_tt``: ``[B,1,S,S]`` device tensor matching ``self.dtype`` in ``TILE`` layout — the
+        precomputed additive causal+padding mask from :func:`causal_padding_attn_bias_np` uploaded
+        to device by the caller.
+
+        All ops are device-only; no host transfers. Safe to call inside ``begin_trace_capture``.
+        """
+        cfg = self.cfg
+        b, s = int(ids_tt.shape[0]), int(ids_tt.shape[1])
+        if s != cfg.max_seq_len:
+            raise ValueError(f"seq_len must be {cfg.max_seq_len}, got {s}")
+
+        h = self.embed_tokens_device(ids_tt)
+        h = ttnn.reshape(h, (b, 1, s, cfg.hidden_size))
+        for layer in self.layers:
+            h = layer(h, self.cos_tt, self.sin_tt, attn_bias_tt)
+        h = ttnn.to_layout(h, ttnn.TILE_LAYOUT)
+        h = ttnn.rms_norm(h, weight=self.final_norm_w, epsilon=float(cfg.rms_norm_eps), memory_config=self.mem)
+        return h
+
     def forward(self, input_ids: np.ndarray, attention_mask: Optional[np.ndarray] = None) -> ttnn.Tensor:
+        """Legacy host-input wrapper around :meth:`forward_device`.
+
+        Builds the additive causal+padding bias on host, uploads ``ids`` + ``bias`` to device,
+        runs :meth:`forward_device`, and deallocates the temporary input tensors.
+        """
         cfg = self.cfg
         ids = np.asarray(input_ids, dtype=np.uint32)
         b, s = int(ids.shape[0]), int(ids.shape[1])
@@ -471,14 +512,18 @@ class TtQwen3EmbeddingEncoder:
             raise ValueError(f"seq_len must be {cfg.max_seq_len}, got {s}")
 
         mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
-        h = self.embed_tokens(ids)
-        h = ttnn.reshape(h, (b, 1, s, cfg.hidden_size))
 
-        attn_bias_tt = None
-        m = attention_mask
-        if m is None:
-            m = np.ones((b, s), dtype=np.float32)
+        m = attention_mask if attention_mask is not None else np.ones((b, s), dtype=np.float32)
         bias_np = causal_padding_attn_bias_np(np.asarray(m), cfg.max_seq_len)
+
+        ids_tt = ttnn.as_tensor(
+            ids,
+            device=self.device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=self.mem,
+            mesh_mapper=mapper,
+        )
         attn_bias_tt = ttnn.as_tensor(
             bias_np,
             device=self.device,
@@ -488,12 +533,14 @@ class TtQwen3EmbeddingEncoder:
             mesh_mapper=mapper,
         )
 
-        for layer in self.layers:
-            h = layer(h, self.cos_tt, self.sin_tt, attn_bias_tt)
+        out = self.forward_device(ids_tt, attn_bias_tt)
 
-        h = ttnn.to_layout(h, ttnn.TILE_LAYOUT)
-        h = ttnn.rms_norm(h, weight=self.final_norm_w, epsilon=float(cfg.rms_norm_eps), memory_config=self.mem)
-        return h
+        for t in (ids_tt, attn_bias_tt):
+            try:
+                ttnn.deallocate(t)
+            except Exception:
+                pass
+        return out
 
 
 __all__ = [

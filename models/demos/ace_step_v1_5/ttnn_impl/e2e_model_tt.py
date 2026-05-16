@@ -280,6 +280,33 @@ def run_ttnn_denoise_loop(
 
     momentum_ttnn = TtnnMomentumBufferApg() if do_cfg and not use_adg else None
     _trace_each_step = os.environ.get("ACE_STEP_TRACY_EACH_DENOISE_STEP", "").lower() in ("1", "true", "yes")
+    # Flush the device-profiler marker buffer every N denoise steps to avoid the per-RISC 12000-entry
+    # ring buffer filling up across the loop (which silently drops markers, then trips
+    # ``Device data missing`` asserts in ``tools/tracy/process_ops_logs.py``). No-op when neither
+    # ``TT_METAL_DEVICE_PROFILER`` nor ``TTNN_OP_PROFILER`` is set, so production runs are unaffected.
+    try:
+        _flush_every = int(os.environ.get("ACE_STEP_PROFILER_FLUSH_EVERY", "1"))
+    except ValueError:
+        _flush_every = 1
+    if _flush_every < 0:
+        _flush_every = 0
+
+    # Precompute per-step (temb, timestep_proj) once at loop start.
+    #
+    # ``pipe.compute_temb_tp`` runs the time-embed MLP (~10 ops per step) on the host-control side
+    # and returns persistent device tensors. The denoise body below calls
+    # ``pipe.forward_with_temb_tp(... temb=temb_per_step[i], tp=tp_per_step[i] ...)`` so the
+    # per-step time-embed compute is paid once at start of ``generate`` instead of every Euler step.
+    # This is also the precondition for wrapping the DiT body in a TTNN trace: a single capture can
+    # serve all N steps when the only per-step difference is the (temb, tp) device-tensor identities,
+    # which the orchestrator can stream onto persistent buffers via CQ 1 before each ``execute_trace``.
+    pipe_batch = 2 if do_cfg else 1
+    temb_per_step: list[ttnn.Tensor] = []
+    tp_per_step: list[ttnn.Tensor] = []
+    for _idx in range(num_steps):
+        _temb, _tp = pipe.compute_temb_tp(int(_idx), target_batch=pipe_batch)
+        temb_per_step.append(_temb)
+        tp_per_step.append(_tp)
 
     def _diffusion_iterate(*, step_idx: int, t_curr_f: float, euler_dt: float) -> None:
         nonlocal xt_tt
@@ -293,11 +320,12 @@ def run_ttnn_denoise_loop(
         else:
             xt_pipe_in = xt_row
 
-        acoustic = pipe.forward(
+        acoustic = pipe.forward_with_temb_tp(
             xt_bt64=xt_pipe_in,
             context_latents_bt128=ctx_tt_pipe,
-            timestep_index=int(step_idx),
             encoder_hidden_states_btd=enc_tt_pipe,
+            temb_bd=temb_per_step[int(step_idx)],
+            timestep_proj_b6d=tp_per_step[int(step_idx)],
             attention_mask_1d_bt=None,
             encoder_attention_mask_1d_bk=None if encoder_attention_mask_b1qk is not None else encoder_attn_1d_bk_np,
             encoder_attention_mask_b1qk=encoder_attention_mask_b1qk,
@@ -366,6 +394,8 @@ def run_ttnn_denoise_loop(
         t_next_f = float(t_schedule[step_idx + 1])
         dt = t_curr_f - t_next_f
         _diffusion_iterate(step_idx=step_idx, t_curr_f=t_curr_f, euler_dt=dt)
+        if _flush_every and ((step_idx + 1) % _flush_every) == 0:
+            _ace_step_flush_device_profiler(device)
 
     if _trace_each_step:
         _ace_step_prof_signpost("Denoise Step", f"step {num_steps - 1}/{num_steps}")
@@ -382,6 +412,18 @@ def run_ttnn_denoise_loop(
             ttnn.deallocate(encoder_attention_mask_b1qk)
     except Exception:
         pass
+    # Free the precomputed per-step time embeddings; otherwise they'd accumulate across generate()
+    # calls (N tensors per step × 2 for temb+tp).
+    for _t in temb_per_step:
+        try:
+            ttnn.deallocate(_t)
+        except Exception:
+            pass
+    for _t in tp_per_step:
+        try:
+            ttnn.deallocate(_t)
+        except Exception:
+            pass
     if momentum_ttnn is not None:
         momentum_ttnn.reset()
 
@@ -447,6 +489,12 @@ class AceStepE2EModel:
         self._init_qwen_encoder()
         self._init_ttnn_vae()
         self._ctx_bt128_cached = self._ctx_latents_ttnn()
+        # Drain any device-profiler markers accumulated by weight uploads / conv-weight prep / JIT
+        # during init. Without this, the 12000-marker per-RISC ring buffer is already full before the
+        # first ``generate()`` call gets a chance to flush — markers from the first few DiT layers
+        # then get silently dropped, and ``cpp_device_perf_report.csv`` ends up missing op rows that
+        # ``tools/tracy/process_ops_logs.py`` later asserts on. No-op when device profiling is off.
+        _ace_step_flush_device_profiler(self.device)
 
     def _init_qwen_encoder(self) -> None:
         qwen_st = self.config.qwen_safetensors_path
@@ -637,11 +685,17 @@ class AceStepE2EModel:
             raise RuntimeError("Cached context latents were not initialized.")
         do_cfg = self.config.guidance_scale > 1.0 + 1e-6
 
+        # Start each generate() with an empty device-profiler ring so the per-layer flush downstream
+        # has full 12000-marker headroom; no-op when device profiling is off.
+        _ace_step_flush_device_profiler(self.device)
+
         _ace_step_prof_signpost("ACE-Step E2E", "Start text encoding")
         text_hs_tt, attn_mask_np = self.encode_text(prompt)
+        _ace_step_flush_device_profiler(self.device)
 
         _ace_step_prof_signpost("ACE-Step E2E", "Start condition encoding")
         enc_hs_tt_one, enc_mask_np, null_emb_tt = self._condition_encoder.forward(text_hs_tt, attn_mask_np)
+        _ace_step_flush_device_profiler(self.device)
         try:
             ttnn.deallocate(text_hs_tt)
         except Exception:
@@ -654,16 +708,25 @@ class AceStepE2EModel:
         if do_cfg:
             d_enc = int(enc_hs_tt_one.shape[-1])
             s_enc = int(enc_hs_tt_one.shape[1])
-            null_4d = ttnn.reshape(null_emb_tt, (1, 1, 1, d_enc))
+            # ``null_emb_tt`` is the persistent ``self._condition_encoder.null_condition_emb``
+            # initialized once at construction. ``ttnn.reshape`` returns a view in this build, so
+            # deallocating ``null_4d`` previously freed the cached buffer and broke subsequent
+            # ``generate`` calls with "Tensor is not allocated". Clone first so we own a temp buffer
+            # and can free it safely.
+            null_owned = (
+                ttnn.clone(null_emb_tt) if hasattr(ttnn, "clone") else ttnn.to_memory_config(null_emb_tt, self.mem)
+            )
+            null_4d = ttnn.reshape(null_owned, (1, 1, 1, d_enc))
             null_rep_4d = ttnn.repeat(null_4d, (1, 1, s_enc, 1))
             null_rep = ttnn.reshape(null_rep_4d, (1, s_enc, d_enc))
             enc_tt_pipe = ttnn.concat([enc_hs_tt_one, null_rep], dim=0)
             ctx_tt_pipe = concat_duplicate_batch(ctx_tt_one)
             try:
                 ttnn.deallocate(enc_hs_tt_one)
-                ttnn.deallocate(null_4d)
+                # ``null_4d`` is a view of ``null_owned`` and ``null_rep`` is a view of ``null_rep_4d``;
+                # deallocating the owners is sufficient (and avoids double-free on the views).
                 ttnn.deallocate(null_rep_4d)
-                ttnn.deallocate(null_rep)
+                ttnn.deallocate(null_owned)
             except Exception:
                 pass
         else:
