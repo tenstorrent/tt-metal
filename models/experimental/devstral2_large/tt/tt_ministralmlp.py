@@ -15,6 +15,8 @@ same L1 pressure appears on WH multi-chip as on BH multi-chip.
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -185,6 +187,25 @@ class TtDevstral2LargeMLP(LightweightModule):
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
 
+        use_minimal_matmul_w2 = mode != Mode.DECODE and (seq_len > 128 or self._dram_intermediates())
+        if (
+            mode == Mode.DECODE
+            and not use_minimal_matmul_w2
+            and not use_dram_decode_linear_gate_up
+            and self._dram_intermediates()
+        ):
+            nc = int(os.environ.get("DEVSTRAL2_DECODE_FFN_DRAM_CORES", "16"))
+            nc = max(1, min(nc, int(self.args.mlp2_core_grid.num_cores)))
+            try:
+                pc_2 = self.args.dram_matmul_config(
+                    self.args.tile_padded_batch_rows,
+                    self.args.hidden_dim // self.args.cluster_shape[1],
+                    self.args.dim,
+                    num_cores=nc,
+                )
+            except AssertionError:
+                pass
+
         ff1_3_mem = self._ff1_3_out_mem(mode)
 
         if use_dram_decode_linear_gate_up:
@@ -344,13 +365,15 @@ class TtDevstral2LargeMLP(LightweightModule):
         # ``dram_matmul_config`` decode FF2 (``pc_2`` + interleaved DRAM ``w2``) requires width-sharded
         # weights; decode still uses ``pc_2`` until FF2 weights can be DRAM-sharded without static CB
         # overflow at load, or matmul supports interleaved DRAM ``B``.
-        use_minimal_matmul_w2 = mode != Mode.DECODE and (seq_len > 128 or self._dram_intermediates())
         if use_minimal_matmul_w2:
             grid = self.args.mlp2_grid(seq_len)
+            m_blk = int(os.environ.get("DEVSTRAL2_MINIMAL_MM_M_BLOCK", "8"))
+            if m_blk not in (4, 8, 16):
+                m_blk = 16
             # Explicit 2×2 subblocks (default ctor used 1×1 here). Device perf report recommended
-            # a larger output subblock product for this matmul shape; 8×8 blocks stay divisible by 2.
+            # a larger output subblock product for this matmul shape; larger M blocks when divisible.
             pc_2_minimal = ttnn.MinimalMatmulConfig(
-                M_block_size=8,
+                M_block_size=m_blk,
                 K_block_size=8,
                 N_block_size=8,
                 subblock_h=2,

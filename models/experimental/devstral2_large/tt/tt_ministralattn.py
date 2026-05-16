@@ -71,25 +71,32 @@ from models.tt_transformers.tt.common import Mode
 
 
 def _tighten_wo_prefill_prog_cfg(cfg):
-    """Force minimal output block sizes for WO prefill matmul on wide multi-device paths.
+    """Tighten WO matmul output blocks on wide multi-device paths (prefill + decode interleaved WO).
 
-    If ``out_block_h`` / ``out_block_w`` are not passed to ``MatmulMultiCoreReuseMultiCastProgramConfig``,
-    TTNN sets them to ``per_core_M`` / ``per_core_N``. For ~12k-wide WO, ``out_block_w`` then matches
-    ``per_core_N`` (~48 tiles) and static CBs overlap reserved L1 — **not** fixed by sequence chunking
-    alone. Supply explicit 1×1 output blocks and minimal subblock width.
+    Default TTNN behavior sets ``out_block_w`` to ``per_core_N`` (~48 tiles), which overflows static
+    L1 CBs for ~12k-wide WO. Pinning to **tiny** blocks fixes that; pinning to **1×1** only left
+    ``out_subblock_w=1`` (``out_block_w=1`` forbids ``out_subblock_w=2`` per
+    ``out_block_w % out_subblock_w == 0``), which the perf report flags as under-powered.
+
+    When ``per_core_N`` is even, use ``out_block_w=2`` and ``out_subblock_w=2`` (still far smaller than
+    defaults). When ``per_core_N`` is odd (some decode shardings), fall back to ``1×1`` subblocks.
     """
     if cfg is None:
         return cfg
     mc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
     if not isinstance(cfg, mc):
         return cfg
+    if cfg.per_core_N % 2 == 0:
+        out_block_w, out_subblock_w = 2, 2
+    else:
+        out_block_w, out_subblock_w = 1, 1
     return mc(
         compute_with_storage_grid_size=cfg.compute_with_storage_grid_size,
         in0_block_w=cfg.in0_block_w,
-        out_subblock_h=cfg.out_subblock_h,
-        out_subblock_w=1,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
         out_block_h=1,
-        out_block_w=1,
+        out_block_w=out_block_w,
         per_core_M=cfg.per_core_M,
         per_core_N=cfg.per_core_N,
         transpose_mcast=cfg.transpose_mcast,
@@ -119,6 +126,11 @@ def _decode_wo_interleaved_multicast_prog_cfg(args):
     the concat footprint: ``min(n_local_heads, grid_w)`` cores in the first row when
     ``n_local_heads <= grid_w``, else full row width ``grid_w`` (see
     ``num_cores_to_corerangeset`` with ``row_wise`` in ``work_split.cpp``).
+
+    When ``grid_w`` leaves room, **cols** may be widened past ``min(n_local_heads, grid_w)`` so
+    ``ceil(dim/TILE/cols)`` is even, keeping legal 2×2 output subblocks in
+    :func:`_tighten_wo_prefill_prog_cfg`. If ``grid_w == req_cols`` and that value is odd, no
+    widening is possible.
     """
     k_dim = (args.n_heads * args.head_dim) // args.num_devices
     n_dim = args.dim
@@ -133,12 +145,22 @@ def _decode_wo_interleaved_multicast_prog_cfg(args):
     req_cols = num_x
     req_rows = min(max(num_y, 1), gh)
 
+    # ``per_core_N = ceil(n / (TILE * cols))`` uses only **cols** (``grid_size[0]``). When
+    # ``req_cols`` is e.g. 11, ``ceil(384/11)=35`` is odd and :func:`_tighten_wo_prefill_prog_cfg`
+    # falls back to 1×1 subblocks (perf report: decode WO under-powered). Prefer the smallest
+    # ``cols >= req_cols`` with even ``per_core_N`` so 2×2 blocks stay valid when still on-grid.
+    n_n_tiles = (n_dim + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
     cols = min(max(req_cols, 1), gw)
+    for c in range(req_cols, gw + 1):
+        if math.ceil(n_n_tiles / c) % 2 == 0:
+            cols = c
+            break
 
     row_candidates = [r for r in range(req_rows, gh + 1) if k_tiles % r == 0]
     if not row_candidates:
         row_candidates = [r for r in range(1, gh + 1) if k_tiles % r == 0]
-    rows = min(row_candidates) if row_candidates else 1
+    # Prefer the largest Y grid divisor so WO decode uses more cores (``min`` was 1 row → 11 cores on BH).
+    rows = max(row_candidates) if row_candidates else 1
 
     # (x, y) for compute_with_storage_grid_size — see docstring; NOT find_prefill (rows, cols) order.
     grid_size = (cols, rows)
@@ -166,11 +188,20 @@ def _widen_qkv_prefill_in0_block_w(cfg, in0_block_w: int = 4):
     mc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
     if not isinstance(cfg, mc):
         return cfg
+    # TTNN requires ``out_block_w % out_subblock_w == 0``. Default ``out_block_w`` is ``per_core_N``
+    # when omitted at construction; only widen subblock width when that width is even.
+    obw = cfg.out_block_w
+    # Perf: avoid ``out_block_w=1`` with ``out_subblock_w=2`` (invalid). Lift block width when even.
+    if obw == 1 and cfg.per_core_N % 2 == 0:
+        obw = 2
+    out_w = 2 if cfg.per_core_N % 2 == 0 and cfg.out_subblock_w == 1 and obw % 2 == 0 else cfg.out_subblock_w
     return mc(
         compute_with_storage_grid_size=cfg.compute_with_storage_grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=cfg.out_subblock_h,
-        out_subblock_w=cfg.out_subblock_w,
+        out_subblock_w=out_w,
+        out_block_h=cfg.out_block_h,
+        out_block_w=obw,
         per_core_M=cfg.per_core_M,
         per_core_N=cfg.per_core_N,
         transpose_mcast=cfg.transpose_mcast,
