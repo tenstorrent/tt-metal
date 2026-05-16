@@ -76,19 +76,37 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x)
 
     sfpi::vInt exp_bits = sfpi::exexp(x);
 
-    v_if (x >= OVERFLOW_THRESHOLD)
+    // NaN/±inf check FIRST (integer compare, immune to -ffinite-math-only).
+    // Float compares against ±inf / NaN are undefined behaviour under fast-math,
+    // which is enabled in the kernel build (see -ffast-math in build.cpp). Doing
+    // the IEEE-special-class dispatch on the integer exponent bits sidesteps this
+    // entirely, and is also one cheaper compare in the common (finite) case.
+    v_if (exp_bits == 255)
+    {
+        // exponent==255 is either ±inf (mantissa==0) or NaN (mantissa!=0).
+        // For exp2: exp2(+inf) = +inf, exp2(-inf) = 0, exp2(NaN) = NaN.
+        // We can collapse +inf and NaN into a single branch that just returns x:
+        //   * +inf → x is +inf → result is +inf (correct).
+        //   * NaN  → x is NaN  → result is NaN  (correct, NaN propagates).
+        // -inf is the only sub-case that needs a different result; it's caught
+        // by the sign of x below.
+        v_if (x < 0.0f)
+        {
+            result = sfpi::vConst0;  // exp2(-inf) = 0
+        }
+        v_else
+        {
+            result = x;              // exp2(+inf) = +inf, exp2(NaN) = NaN
+        }
+        v_endif;
+    }
+    v_elseif (x >= OVERFLOW_THRESHOLD)
     {
         result = std::numeric_limits<float>::infinity();
     }
     v_elseif (x <= UNDERFLOW_THRESHOLD)
     {
         result = sfpi::vConst0;
-    }
-    v_elseif (exp_bits == 255)
-    {
-        // ±inf are already handled by the threshold branches above; the only way
-        // exponent==255 survives to here is NaN (mantissa != 0).
-        result = std::numeric_limits<float>::quiet_NaN();
     }
     v_else
     {
@@ -111,17 +129,26 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x)
 
     sfpi::vInt exp_bits = sfpi::exexp(x);
 
-    v_if (x >= OVERFLOW_THRESHOLD)
+    // See _sfpu_exp2_fp32_accurate_ for why the special-class check goes first.
+    v_if (exp_bits == 255)
+    {
+        v_if (x < 0.0f)
+        {
+            result = sfpi::vConst0;  // exp2(-inf) = 0
+        }
+        v_else
+        {
+            result = x;              // exp2(+inf) = +inf, exp2(NaN) = NaN
+        }
+        v_endif;
+    }
+    v_elseif (x >= OVERFLOW_THRESHOLD)
     {
         result = std::numeric_limits<float>::infinity();
     }
     v_elseif (x <= UNDERFLOW_THRESHOLD)
     {
         result = sfpi::vConst0;
-    }
-    v_elseif (exp_bits == 255)
-    {
-        result = std::numeric_limits<float>::quiet_NaN();
     }
     v_else
     {
