@@ -19,6 +19,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "llk_sfpu/ckernel_sfpu_celu.h"
 #include "llk_sfpu/ckernel_sfpu_elu.h"
+#include "llk_sfpu/ckernel_sfpu_binary_comp.h"
 #include "llk_sfpu/ckernel_sfpu_log1p.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "sfpu/ckernel_sfpu_abs.h"
@@ -447,6 +448,11 @@ void call_binary_sfpu_operation_init()
     {
         SFPU_BINARY_INIT(left_shift);
     }
+    else if constexpr (
+        BINOP == BinaryOp::LT || BINOP == BinaryOp::GT || BINOP == BinaryOp::LE || BINOP == BinaryOp::GE || BINOP == BinaryOp::EQ || BINOP == BinaryOp::NE)
+    {
+        SFPU_BINARY_INIT(lt);
+    }
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
@@ -553,6 +559,138 @@ void call_binary_sfpu_operation(
             dst_index_in1,
             dst_index_out,
             ckernel::VectorMode::RC_custom);
+    }
+    else if constexpr (BINOP == BinaryOp::LT)
+    {
+        if constexpr (MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_binary_comp_int32,
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SfpuType::lt),
+                dst_index_in0,
+                dst_index_in1,
+                dst_index_out,
+                vector_mode);
+        }
+        else
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_binary_comp_fp32,
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SfpuType::lt),
+                dst_index_in0,
+                dst_index_in1,
+                dst_index_out,
+                vector_mode);
+        }
+    }
+    else if constexpr (BINOP == BinaryOp::GT)
+    {
+        if constexpr (MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_binary_comp_int32,
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SfpuType::gt),
+                dst_index_in0,
+                dst_index_in1,
+                dst_index_out,
+                vector_mode);
+        }
+        else
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_binary_comp_fp32,
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SfpuType::gt),
+                dst_index_in0,
+                dst_index_in1,
+                dst_index_out,
+                vector_mode);
+        }
+    }
+    else if constexpr (BINOP == BinaryOp::LE)
+    {
+        if constexpr (MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_binary_comp_int32,
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SfpuType::le),
+                dst_index_in0,
+                dst_index_in1,
+                dst_index_out,
+                vector_mode);
+        }
+        else
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_binary_comp_fp32,
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SfpuType::le),
+                dst_index_in0,
+                dst_index_in1,
+                dst_index_out,
+                vector_mode);
+        }
+    }
+    else if constexpr (BINOP == BinaryOp::GE)
+    {
+        if constexpr (MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_binary_comp_int32,
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SfpuType::ge),
+                dst_index_in0,
+                dst_index_in1,
+                dst_index_out,
+                vector_mode);
+        }
+        else
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_binary_comp_fp32,
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SfpuType::ge),
+                dst_index_in0,
+                dst_index_in1,
+                dst_index_out,
+                vector_mode);
+        }
+    }
+    else if constexpr (BINOP == BinaryOp::EQ)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binary_comp_fp32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SfpuType::eq),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::NE)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binary_comp_fp32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SfpuType::ne),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
     }
     else
     {
