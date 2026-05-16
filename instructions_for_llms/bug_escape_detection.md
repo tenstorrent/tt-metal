@@ -433,17 +433,22 @@ URL: https://tenstorrent.atlassian.net/wiki/spaces/MI6/pages/2424012846/bug+esca
 The page has four sections. Move each escape between sections as its status changes.
 Never delete an entry — only move it and update its status field.
 
-**After Step 3 (Opus pre-classification passes) → add to "🔍 Under Investigation":**
-```
-### Candidate: {test_name[:60]}
+**After Step 3 (Opus pre-classification passes) → add a row to the "Candidate Table" on page 2424012846:**
 
-- *Test*: {test_name}
-- *Test layer*: {test_layer}
-- *Fix layer (suspected)*: {suspected_fix_layer}
-- *Last failure*: [Run {last_failure_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{last_failure_run_id})
-- *First success*: [Run {first_success_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{first_success_run_id})
-- *Opus reasoning*: {opus_reasoning}
-- *Status*: Under Investigation — bisect dispatched {date}
+Table header (do not change):
+```
+| Escape ID | Test File | Job | HW | Last Fail Commit | First Pass Commit | Layers | Runs Dispatched | Opus Verdict | Opus Reasoning | Status |
+```
+
+**Layers column format:**
+- Under Investigation: `Test L{X} → Suspected Fix L{Y}`
+  - X = test layer number (from test filepath); Y = lowest layer touched by the suspected fix commit.
+  - Example: "Test L4 → Suspected Fix L3" = failing test in models/ (L4), suspected fix in ttnn/ (L3).
+- Leave blank (empty cell) for: abandoned, refuted, or skipped candidates.
+
+Example row:
+```
+| 892871__a249d854 | test_wan_decoder.py (layer 4) | T3K WAN tests | T3K (WH) | [a249d854](...) | [b3e8eb62](...) | Test L4 → Suspected Fix L3 | mid1@b2670a20 [run_id] ⏳ | PROCEED_TO_BISECT (MEDIUM) | Commit c53fc338 fixes nlp_create_qkv_heads precision. | 🔍 Under Investigation — mid1 dispatched {date} |
 ```
 
 **After Step 4 (bisect completes) → update the entry, still in "Under Investigation":**
@@ -454,14 +459,25 @@ Add fix commit and bisect proof link. Update status to "Under Investigation — 
 - REFUTED → move entry to "❌ Refuted", update status, add explanation of why it was refuted
 - INCONCLUSIVE_TIMEOUT → move entry to "⏳ Inconclusive", update status, note retry scheduled
 
-**Entry format once confirmed:**
+**Confirmed escapes table** (page 2428895268) uses this header:
+```
+| Escape ID | Test File | Job | HW | Last Fail | Last Fail Commit | First Pass | First Pass Commit | Fail Rate | Layers | Runs Dispatched | Opus Verdict | Opus Reasoning | Status |
+```
+
+Layers column value for confirmed escapes: `Test L{X} → Verified Fix L{Y}`
+
+**Entry format once confirmed** (add row to 2428895268; update row in 2424012846):
+- Layers: `Test L{test_layer} → Verified Fix L{fix_layer}`
+- Status: `✅ Confirmed — Fix: [PR #{pr_number}](...) {fix_commit_message}. Confirmed {date}`
+
+Extended bullet-point format (for notes outside the table):
 ```
 ### Escape #{N}: {fix_commit_message[:60]}
 
 - *Test*: {test_name}
 - *Test layer*: {test_layer}
 - *Fix layer*: {fix_layer}
-- *Type*: {fix_layer} → {test_layer} escape
+- *Layers*: Test L{test_layer} → Verified Fix L{fix_layer}
 - *Last failure*: [Run {last_failure_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{last_failure_run_id})
 - *First success*: [Run {first_success_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{first_success_run_id})
 - *Fix commit*: [{fix_commit_sha[:8]}](https://github.com/tenstorrent/tt-metal/commit/{fix_commit_sha})
