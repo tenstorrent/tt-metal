@@ -6,12 +6,17 @@
 #include <gmock/gmock.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <set>
 #include <vector>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.hpp"
@@ -581,7 +586,13 @@ protected:
     MeshDevice2x2Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 2}}) {}
 };
 
+class MeshDevice1x1Fixture : public MeshDeviceFixtureBase {
+protected:
+    MeshDevice1x1Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 1}}) {}
+};
+
 using MeshTensorDataMovementTest = MeshDevice2x2Fixture;
+using MeshTensorPinnedMemoryBudgetTest = MeshDevice1x1Fixture;
 
 using tt::tt_metal::DistributedHostBuffer;
 using tt::tt_metal::HostBuffer;
@@ -594,6 +605,22 @@ constexpr int kPinnedMemoryTestAlignment = 64;
 constexpr size_t kPinnedWriteThresholdBytesForTest = 32 * 1024 * 1024;
 
 using AlignedUInt32Vector = std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, kPinnedMemoryTestAlignment>>;
+
+class ScopedPinnedMemoryCacheLimit {
+public:
+    explicit ScopedPinnedMemoryCacheLimit(size_t limit_bytes) :
+        previous_limit_bytes_(
+            tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes()) {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_pinned_memory_cache_limit_bytes(limit_bytes);
+    }
+
+    ~ScopedPinnedMemoryCacheLimit() {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_pinned_memory_cache_limit_bytes(previous_limit_bytes_);
+    }
+
+private:
+    size_t previous_limit_bytes_;
+};
 
 HostBuffer make_aligned_host_buffer(size_t num_words, uint32_t fill) {
     auto data = std::make_shared<AlignedUInt32Vector>(num_words, fill);
@@ -778,6 +805,75 @@ TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_CopyToHost_Roundtrip) {
     enqueue_read_tensor(cq, device_tensor, result);
 
     expect_host_tensors_eq(host_tensor, result);
+}
+
+TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeHostWriteOverHardwarePinBudgetFallsBackAndKeepsDeviceUsable) {
+    const auto pinning_params = tt::tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_);
+    if (pinning_params.max_pins == 0 || !pinning_params.can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+    if (pinning_params.max_total_pin_size == std::numeric_limits<uint64_t>::max()) {
+        GTEST_SKIP() << "Hardware does not advertise a finite pinned-memory budget";
+        return;
+    }
+
+    // The runtime cache limit can be larger than the hardware NOC-mappable pin budget. This write is intentionally
+    // larger than that hardware budget, so it must fall back to the regular host-to-device path instead of trying to
+    // create an oversized NOC mapping.
+    const ttnn::Shape large_shape{1, 1, 160, 5210112};
+    const ttnn::Shape large_shard_shape{1, 1, 32, 131072};
+    const size_t oversized_buffer_size = static_cast<size_t>(large_shape.volume()) * sizeof(uint32_t);
+    if (oversized_buffer_size <= pinning_params.max_total_pin_size) {
+        GTEST_SKIP() << "Test tensor is not larger than the hardware pinned-memory budget";
+        return;
+    }
+    ScopedPinnedMemoryCacheLimit cache_limit(oversized_buffer_size);
+
+    void* mapping = mmap(
+        nullptr, oversized_buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    ASSERT_NE(mapping, MAP_FAILED) << "mmap failed: " << std::strerror(errno);
+
+    auto mapping_owner = std::shared_ptr<std::byte>(
+        static_cast<std::byte*>(mapping),
+        [oversized_buffer_size](std::byte* ptr) { munmap(static_cast<void*>(ptr), oversized_buffer_size); });
+
+    const size_t num_words = oversized_buffer_size / sizeof(uint32_t);
+    ASSERT_EQ(oversized_buffer_size % sizeof(uint32_t), 0u);
+    ASSERT_EQ(num_words, large_shape.volume());
+
+    auto dram_grid_size = mesh_device_->dram_grid_size();
+    if (dram_grid_size.x == 0 || dram_grid_size.y == 0) {
+        GTEST_SKIP() << "Device does not expose a DRAM grid";
+        return;
+    }
+    // Only use the first DRAM row; higher y values can be replicas of the same DRAM cores.
+    CoreRangeSet dram_cores(CoreRange(CoreCoord{0, 0}, CoreCoord{dram_grid_size.x - 1, 0}));
+    MemoryConfig large_mem_cfg(
+        BufferType::DRAM, NdShardSpec{large_shard_shape, dram_cores, ShardOrientation::ROW_MAJOR});
+    auto large_spec = TensorSpec(large_shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, large_mem_cfg));
+
+    auto large_dhb = DistributedHostBuffer::create(mesh_device_->shape());
+    const auto first_coord = *distributed::MeshCoordinateRange(mesh_device_->shape()).begin();
+    large_dhb.emplace_shard(first_coord, [&]() {
+        return HostBuffer(
+            tt::stl::Span<uint32_t>(reinterpret_cast<uint32_t*>(mapping_owner.get()), num_words),
+            tt::tt_metal::MemoryPin(std::static_pointer_cast<void>(mapping_owner)));
+    });
+    HostTensor large_host_tensor(
+        std::move(large_dhb), large_spec, TensorTopology::create_sharded_tensor_topology(mesh_device_->shape()));
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    MeshTensor large_device_tensor = enqueue_write_tensor(cq, large_host_tensor, *mesh_device_);
+    cq.finish();
+    EXPECT_EQ(large_device_tensor.tensor_spec().logical_shape(), large_shape);
+
+    const ttnn::Shape small_shape{1, 1, 32, 32};
+    auto small_host_tensor = make_full_coverage_host_tensor(small_shape, mesh_device_->shape(), {0x5Au});
+    MeshTensor small_device_tensor = enqueue_write_tensor(cq, small_host_tensor, *mesh_device_);
+    HostTensor small_result = enqueue_read_tensor(cq, small_device_tensor);
+
+    expect_host_tensors_eq(small_host_tensor, small_result);
 }
 
 TEST_F(MeshTensorTest, UniformCopyToDevice_ReusesPinnedMemoryCacheEntries) {
