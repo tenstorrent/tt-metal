@@ -60,8 +60,10 @@
     echo "PIPELINE_HOSTS: $PIPELINE_HOSTS"
 
     echo "============= SP4 superpod: running generate_blitz_decode_pipeline_configs ============="
-    python3 /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
-      /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod_ci.yaml
+    # python3 /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
+    #   /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod_ci.yaml
+    cp /data/gwang/rev_c_rank_binding_superpod.yaml .
+    cp /data/gwang/rev_c_rank_file_superpod .
 
     echo "============= SP4 superpod: running tt-run ============="
     # NOTE: check where the python3 is coming from
@@ -71,8 +73,8 @@
 
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 -m ttnn.distributed.ttrun \
       --tcp-interface ens5f0np0 \
-      --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output --wdir /home/user/tt-metal" \
-      --rank-binding blitz_decode_pipeline_rank_binding_superpod_ci.yaml \
+      --mpi-args "--map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output --wdir /home/user/tt-metal" \
+      --rank-binding rev_c_rank_binding_superpod.yaml \
       python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
