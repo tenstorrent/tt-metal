@@ -23,6 +23,11 @@ We therefore split the PCC validation into two layers:
 2. ``test_tt_generator_full_forward_smoke`` — runs the full TT Generator forward and only checks
    shape + finite output. The PCC vs PyTorch is documented as a known limitation of WH bf16
    matmul precision — it will not reach 0.99 without CPU fallback or new hardware features.
+
+3. ``test_tt_generator_trained_harmonic_har_pcc_xfail_until_stft_phase_tight`` — isolates the
+   harmonic branch ``har`` (``m_source`` + ``stft.transform``) vs PyTorch on the same ``f0`` and
+   checkpoint. Marked ``xfail``: PCC is expected to stay below 0.99 until TT STFT phase matches
+   reference more closely; the printed mag / cos(phase) lines show where the gap lives.
 """
 
 from __future__ import annotations
@@ -210,6 +215,121 @@ def test_tt_generator_pipeline_pcc(device):
     assert pcc > 0.99, f"PCC too low: {pcc}"
 
 
+def test_tt_generator_full_forward_torch_stft_fallback_pcc(device):
+    """Full TT forward with both torch fallbacks enabled — PCC must be > 0.99.
+
+    Two independent BH BF16 precision bottlenecks are addressed:
+
+    1. **STFT transform** (``use_torch_stft_fallback=True``): the entire ``TTTorchSTFT.transform``
+       runs on CPU via ``torch.stft`` (float32).  BH rounds float32→BF16 before ALL compute ops —
+       including the SFPU for ``atan2``.  Moving only the conv2d to CPU is insufficient: near-zero
+       DFT bins (~1e-5) still get BF16-rounded inputs to ``atan2``, giving sign-random phase.
+       The full transform fallback fixes both conv and atan2.
+
+    2. **SineGen phase chain** (``use_torch_phase_fallback=True``): BF16 MACs on small cumsum
+       values (~3.3e-5 cycles) are amplified by 2π × upsample_scale=300 ≈ 1885× → ~0.25 rad
+       phase error, comparable to sine_amp=0.1.  CPU float32 cumsum eliminates this.
+
+    All other ops — uv/noise mix, l_linear+tanh, all decoder layers, iSTFT — stay on-device.
+    Both fallbacks together are necessary and sufficient to achieve PCC > 0.99.
+    """
+    ckpt_path = _find_checkpoint()
+    if ckpt_path is None:
+        pytest.skip("Kokoro checkpoint not found locally.")
+
+    ref = _build_kokoro_generator()
+    _load_trained_weights(ref, ckpt_path)
+    T_x = 5
+    x, s, f0 = _setup_test_inputs(T_x)
+
+    with torch.no_grad(), _torch_random_zeros():
+        y_ref = ref(x, s, f0)
+
+    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
+    # Both fallbacks needed: full STFT transform (atan2 BF16 on BH degrades even precise X_real/X_imag)
+    # + SineGen phase chain (BF16 cumsum × 2π×300 → ~0.25 rad error).
+    tt_mod = TTGenerator(device, params, use_torch_stft_fallback=True, use_torch_phase_fallback=True)
+
+    x_nlc = x.transpose(1, 2).contiguous()
+    x_tt = ttnn.from_torch(x_nlc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    s_tt = ttnn.from_torch(s, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    f0_tt = ttnn.from_torch(f0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = tt_mod(x_tt, s_tt, f0_tt)
+
+    y_h = ttnn.to_torch(y_tt).float()
+    while y_h.dim() > y_ref.dim():
+        y_h.squeeze_(0)
+
+    assert y_h.shape == y_ref.shape, (y_h.shape, y_ref.shape)
+    assert torch.isfinite(y_h).all(), "TTGenerator (fallbacks) produced NaN/Inf"
+    _, pcc = comp_pcc(y_ref, y_h, pcc=0.0)
+    print(f"TTGenerator full-forward (phase + STFT conv fallback) PCC: {pcc:.6f}")
+    assert pcc > 0.99, f"PCC too low with phase + STFT conv fallbacks: {pcc}"
+
+
+@pytest.mark.xfail(
+    reason=(
+        "SineGen 1.2% BF16 phase noise at upsample_scale=300 cascades into near-zero STFT bins; "
+        "use_torch_phase_fallback is also required to reach PCC > 0.99."
+    ),
+    strict=False,
+)
+def test_tt_generator_stft_linear_fallback_no_sinegen_pcc(device):
+    """STFT transform + l_linear on CPU; SineGen phase chain stays pure TTNN.
+
+    Isolates whether SineGen's BF16 phase error at upsample_scale=300 (PCC=0.988 in isolation)
+    is sufficient to prevent full-forward PCC > 0.99, or whether fixing only STFT+l_linear is
+    enough.
+
+    - ``use_torch_stft_fallback=True``: torch.stft on CPU (fixes atan2 BF16 degradation)
+    - ``use_torch_linear_fallback=True``: l_linear+tanh on CPU (fixes ~2% BF16 dot-product error)
+    - ``use_torch_phase_fallback=False``: SineGen phase chain stays on TTNN (has 1.2% BF16 noise)
+
+    If this test passes > 0.99, the SineGen fallback is not strictly required — the 1.2% sinegen
+    noise does not cascade into the audio output.  If it fails, the SineGen fallback is needed
+    to clean up the input to l_linear and STFT.
+    """
+    ckpt_path = _find_checkpoint()
+    if ckpt_path is None:
+        pytest.skip("Kokoro checkpoint not found locally.")
+
+    ref = _build_kokoro_generator()
+    _load_trained_weights(ref, ckpt_path)
+    T_x = 5
+    x, s, f0 = _setup_test_inputs(T_x)
+
+    with torch.no_grad(), _torch_random_zeros():
+        y_ref = ref(x, s, f0)
+
+    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
+    tt_mod = TTGenerator(
+        device,
+        params,
+        use_torch_stft_fallback=True,
+        use_torch_linear_fallback=True,
+        use_torch_phase_fallback=False,  # SineGen stays on TTNN — this is what we're testing
+    )
+
+    x_nlc = x.transpose(1, 2).contiguous()
+    x_tt = ttnn.from_torch(x_nlc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    s_tt = ttnn.from_torch(s, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    f0_tt = ttnn.from_torch(f0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = tt_mod(x_tt, s_tt, f0_tt)
+
+    y_h = ttnn.to_torch(y_tt).float()
+    while y_h.dim() > y_ref.dim():
+        y_h.squeeze_(0)
+
+    assert y_h.shape == y_ref.shape, (y_h.shape, y_ref.shape)
+    assert torch.isfinite(y_h).all(), "TTGenerator produced NaN/Inf"
+    _, pcc = comp_pcc(y_ref, y_h, pcc=0.0)
+    print(f"TTGenerator (STFT+linear fallback, TTNN sinegen) PCC: {pcc:.6f}")
+    assert pcc > 0.99, (
+        f"PCC {pcc:.6f} < 0.99: SineGen 1.2% BF16 noise cascades into near-zero STFT bins "
+        f"even with precise l_linear and torch.stft — use_torch_phase_fallback is also needed."
+    )
+
+
 def test_tt_generator_full_forward_smoke(device):
     """End-to-end TT forward — verifies shape + finite output + non-trivial correlation.
 
@@ -247,3 +367,67 @@ def test_tt_generator_full_forward_smoke(device):
     assert y_h.abs().max().item() > 1e-3, "TTGenerator full forward produced ~zero output"
     _, pcc = comp_pcc(y_ref, y_h, pcc=0.0)
     print(f"TTGenerator full-forward smoke PCC: {pcc:.6f} (informational; WH bf16 limit applies)")
+
+
+@pytest.mark.xfail(
+    reason=(
+        "TT trained harmonic har PCC < 0.99: TT m_source + TTTorchSTFT.transform vs torch "
+        "(phase / cos-phase dominates; see module docstring)."
+    ),
+    strict=False,
+)
+def test_tt_generator_trained_harmonic_har_pcc_xfail_until_stft_phase_tight(device):
+    """Harmonic ``har`` only: TT ``_harmonic_source_path`` vs reference ``har`` (BCT).
+
+    This is the slice that blocks ``test_tt_generator_full_forward_smoke`` from reaching high PCC
+    while ``test_tt_generator_pipeline_pcc`` (reference ``har`` injected) still passes > 0.99.
+    """
+    ckpt_path = _find_checkpoint()
+    if ckpt_path is None:
+        pytest.skip("Kokoro checkpoint not found locally.")
+
+    ref = _build_kokoro_generator()
+    _load_trained_weights(ref, ckpt_path)
+    T_x = 5
+    x, s, f0 = _setup_test_inputs(T_x)
+    har_ref, _y_ref = _ref_har_and_audio(ref, x, s, f0)
+
+    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
+    tt_mod = TTGenerator(device, params)
+    mc = ttnn.DRAM_MEMORY_CONFIG
+
+    f0_tt = ttnn.from_torch(f0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    har_nlc = tt_mod._harmonic_source_path(
+        f0_tt,
+        sinegen_rand_ini=None,
+        sinegen_noise_raw=None,
+        source_noise_raw=None,
+        memory_config=mc,
+    )
+    har_bct = ttnn.permute(har_nlc, (0, 2, 1), memory_config=mc)
+    har_tt = ttnn.to_torch(har_bct).float()
+    ttnn.deallocate(har_nlc)
+    ttnn.deallocate(har_bct)
+    ttnn.deallocate(f0_tt)
+
+    while har_tt.dim() > har_ref.dim():
+        har_tt.squeeze_(0)
+
+    assert har_tt.shape == har_ref.shape, (har_tt.shape, har_ref.shape)
+    K = har_ref.shape[1] // 2
+    _, pcc_har = comp_pcc(har_ref, har_tt, pcc=0.0)
+    _, pcc_mag = comp_pcc(har_ref[:, :K, :], har_tt[:, :K, :], pcc=0.0)
+    _, pcc_cos_phase = comp_pcc(
+        torch.cos(har_ref[:, K:, :]),
+        torch.cos(har_tt[:, K:, :]),
+        pcc=0.0,
+    )
+    print(
+        "TTGenerator trained harmonic har PCC diagnostic: "
+        f"har={pcc_har:.6f}, mag={pcc_mag:.6f}, cos(phase)={pcc_cos_phase:.6f}, "
+        f"shape={tuple(har_ref.shape)}"
+    )
+    assert pcc_har > 0.99, (
+        f"Expected har PCC > 0.99 once harmonic STFT path matches reference; got har={pcc_har:.6f}, "
+        f"mag={pcc_mag:.6f}, cos(phase)={pcc_cos_phase:.6f}"
+    )

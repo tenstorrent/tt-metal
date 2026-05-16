@@ -166,7 +166,7 @@ def test_tt_sinegen_noise_path(device):
     torch.rand = lambda *size, **kwargs: torch.zeros(*size, **kwargs)
     try:
         with torch.no_grad():
-            sine_ref, uv_ref, noise_ref = ref(f0)
+            sine_ref, _, noise_ref = ref(f0)
     finally:
         torch.randn_like = real_randn_like
         torch.rand = real_rand
@@ -202,4 +202,93 @@ def test_tt_sinegen_noise_path(device):
     _, pcc_sine = comp_pcc(sine_ref, sine_h, pcc=0.0)
     print(f"TTSineGen (noise path) sine PCC: {pcc_sine:.6f}, noise PCC: {pcc_noise:.6f}")
     assert pcc_noise > 0.99, f"noise PCC too low: {pcc_noise}"
+    assert pcc_sine > 0.99, f"sine PCC too low: {pcc_sine}"
+
+
+def _build_sinegen_kokoro_scale(device, *, use_torch_phase_fallback: bool = False):
+    """Build ref + tt module at Kokoro's actual upsample_scale=300, time_len=1500.
+
+    Returns ``(f0, sine_ref, uv_ref, sine_h, uv_h)`` after deallocating device tensors.
+    """
+    torch.manual_seed(4)
+    sampling_rate = 24000.0
+    upsample_scale = 300
+    time_len = 1500  # 5 × 300
+    harmonic_num = 0
+    B = 1
+
+    ref = SineGen(
+        samp_rate=sampling_rate,
+        upsample_scale=upsample_scale,
+        harmonic_num=harmonic_num,
+        sine_amp=0.1,
+        noise_std=0.003,
+        voiced_threshold=0.0,
+    ).eval()
+    f0 = torch.relu(torch.randn(B, time_len, 1) * 200.0)
+
+    with torch.no_grad(), _deterministic_torch_random():
+        sine_ref, uv_ref, _ = ref(f0)
+
+    params = preprocess_tt_sinegen(
+        device=device,
+        sampling_rate=sampling_rate,
+        upsample_scale=upsample_scale,
+        harmonic_num=harmonic_num,
+        sine_amp=0.1,
+        noise_std=0.003,
+        voiced_threshold=0.0,
+        time_len=time_len,
+    )
+    tt_mod = TTSineGen(device, params, use_torch_phase_fallback=use_torch_phase_fallback)
+    f0_tt = ttnn.from_torch(f0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    sine_tt, uv_tt, noise_tt = tt_mod(f0_tt)
+
+    sine_h = ttnn.to_torch(sine_tt).float()
+    uv_h = ttnn.to_torch(uv_tt).float()
+    while sine_h.dim() > sine_ref.dim():
+        sine_h.squeeze_(0)
+    while uv_h.dim() > uv_ref.dim():
+        uv_h.squeeze_(0)
+    ttnn.deallocate(sine_tt)
+    ttnn.deallocate(uv_tt)
+    ttnn.deallocate(noise_tt)
+    ttnn.deallocate(f0_tt)
+
+    return sine_ref, uv_ref, sine_h, uv_h
+
+
+def test_tt_sinegen_kokoro_scale_pure_ttnn(device):
+    """Kokoro's actual upsample_scale=300 — pure TTNN, informational PCC only.
+
+    BH BF16 MAC error on small cumsum values (~3.3e-5 cycles) is amplified by
+    2π × 300 ≈ 1885 → ~0.06–0.25 rad phase error, comparable to sine_amp=0.1.
+    This test documents the precision gap; use_torch_phase_fallback is the fix.
+    """
+    sine_ref, uv_ref, sine_h, uv_h = _build_sinegen_kokoro_scale(device, use_torch_phase_fallback=False)
+    _, pcc_uv = comp_pcc(uv_ref, uv_h, pcc=0.0)
+    _, pcc_sine = comp_pcc(sine_ref, sine_h, pcc=0.0)
+    print(
+        f"TTSineGen kokoro scale (up=300, T=1500) pure TTNN — "
+        f"sine PCC: {pcc_sine:.6f}, uv PCC: {pcc_uv:.6f} (informational; BH BF16 limit applies)"
+    )
+    assert pcc_uv > 0.99, f"uv PCC too low: {pcc_uv}"
+    # sine PCC is not asserted here — BH BF16 phase amplification at upsample_scale=300 is fundamental
+
+
+def test_tt_sinegen_kokoro_scale_torch_phase_fallback(device):
+    """Kokoro's actual upsample_scale=300 with use_torch_phase_fallback=True.
+
+    CPU float32 phase chain (downsample → cumsum → lerp → sin) eliminates BF16 MAC
+    amplification error.  Only the phase/sine computation falls back; uv, noise, and
+    the output mix remain on-device.  PCC must be > 0.99.
+    """
+    sine_ref, uv_ref, sine_h, uv_h = _build_sinegen_kokoro_scale(device, use_torch_phase_fallback=True)
+    _, pcc_uv = comp_pcc(uv_ref, uv_h, pcc=0.0)
+    _, pcc_sine = comp_pcc(sine_ref, sine_h, pcc=0.0)
+    print(
+        f"TTSineGen kokoro scale (up=300, T=1500) torch-phase fallback — "
+        f"sine PCC: {pcc_sine:.6f}, uv PCC: {pcc_uv:.6f}"
+    )
+    assert pcc_uv > 0.99, f"uv PCC too low: {pcc_uv}"
     assert pcc_sine > 0.99, f"sine PCC too low: {pcc_sine}"
