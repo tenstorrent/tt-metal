@@ -1068,3 +1068,130 @@ def test_optional_chain_element(device, num_tiles, fp32_dest_acc, optional_cond,
         fp32_dest_acc=fp32_dest_acc,
     )
     _check_pcc(out, golden, 0.99, f"optional_chain_element COND={optional_cond} n={num_tiles}")
+
+
+# =============================================================================
+# 2D `eltwise_chain` — per-element broadcast index modes (RowBcast / ColBcast /
+# FirstTile-as-scalar). Verifies the (Ht, Wt) tile-grid walk drives the right
+# CB-reader index per element.
+# =============================================================================
+
+BCAST_2D_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/binary_fpu_2d_bcast.cpp"
+BCAST_2D_READER = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/reader_2d_bcast.cpp"
+
+# CbIndexMode enum values (must match eltwise_chain.hpp)
+_CB_FIRST_TILE = 0
+_CB_ROW_BCAST = 4
+_CB_COL_BCAST = 5
+
+
+def _run_2d_bcast_sub(device, Ht, Wt, b_index_mode, fp32_dest_acc=False):
+    """Compute A[ht, wt] - B[bcast_idx] over a (Ht, Wt) tile grid via the 2D chain.
+
+    b_index_mode selects the B-side CbIndexMode:
+      * _CB_COL_BCAST  → B has Ht tiles (one per row of the tile grid)
+      * _CB_ROW_BCAST  → B has Wt tiles (one per col of the tile grid)
+      * _CB_FIRST_TILE → B has 1 tile (scalar broadcast across the whole grid)
+    """
+    n_a_tiles = Ht * Wt
+    if b_index_mode == _CB_COL_BCAST:
+        n_b_tiles = Ht
+    elif b_index_mode == _CB_ROW_BCAST:
+        n_b_tiles = Wt
+    else:
+        n_b_tiles = 1
+
+    shape_a = [1, 1, n_a_tiles * 32, 32]
+    shape_b = [1, 1, n_b_tiles * 32, 32]
+    data_a = (torch.rand(shape_a) * 4 - 2).to(torch.bfloat16)
+    data_b = (torch.rand(shape_b) * 4 - 2).to(torch.bfloat16)
+    dram = ttnn.DRAM_MEMORY_CONFIG
+
+    a = ttnn.from_torch(data_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
+    b = ttnn.from_torch(data_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
+    out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape_a), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
+
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    cb_a = _make_cb(0, core_grid, n_pages=max(n_a_tiles, 2))
+    cb_b = _make_cb(1, core_grid, n_pages=max(n_b_tiles, 2))
+    cb_out = _make_cb(16, core_grid, n_pages=2)
+
+    reader_compile_args = (
+        ttnn.TensorAccessorArgs(a).get_compile_time_args() + ttnn.TensorAccessorArgs(b).get_compile_time_args()
+    )
+    writer_compile_args = [16] + ttnn.TensorAccessorArgs(out).get_compile_time_args()
+
+    rd_rt = ttnn.RuntimeArgs()
+    wr_rt = ttnn.RuntimeArgs()
+    rd_rt[0][0] = [a.buffer_address(), b.buffer_address(), n_a_tiles, n_b_tiles]
+    wr_rt[0][0] = [out.buffer_address(), n_a_tiles, 0]
+
+    reader_kd = ttnn.KernelDescriptor(
+        kernel_source=BCAST_2D_READER,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_grid,
+        compile_time_args=reader_compile_args,
+        runtime_args=rd_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    writer_kd = ttnn.KernelDescriptor(
+        kernel_source=WRITER_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_grid,
+        compile_time_args=writer_compile_args,
+        runtime_args=wr_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    defines = {
+        "TEST_HT": str(Ht),
+        "TEST_WT": str(Wt),
+        "TEST_B_INDEX_MODE": str(b_index_mode),
+    }
+    compute_kd = ttnn.KernelDescriptor(
+        kernel_source=BCAST_2D_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_grid,
+        compile_time_args=[],
+        defines=list(defines.items()),
+        config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest_acc),
+    )
+    pd = ttnn.ProgramDescriptor(kernels=[reader_kd, writer_kd, compute_kd], semaphores=[], cbs=[cb_a, cb_b, cb_out])
+
+    out_tensor = ttnn.generic_op([a, b, out], pd)
+    out_torch = ttnn.to_torch(out_tensor).to(torch.float32)
+
+    # Golden: subtract B from A per the bcast mode. Reshape A from (1,1, n_a*32, 32)
+    # into per-tile blocks (Ht, Wt, 32, 32) and B accordingly.
+    a_tiles = data_a.to(torch.float32).reshape(Ht, Wt, 32, 32)
+    if b_index_mode == _CB_COL_BCAST:
+        b_tiles = data_b.to(torch.float32).reshape(Ht, 1, 32, 32)
+    elif b_index_mode == _CB_ROW_BCAST:
+        b_tiles = data_b.to(torch.float32).reshape(1, Wt, 32, 32)
+    else:
+        b_tiles = data_b.to(torch.float32).reshape(1, 1, 32, 32)
+    golden_tiles = a_tiles - b_tiles
+    golden = golden_tiles.reshape(1, 1, n_a_tiles * 32, 32)
+    label = f"2D Sub Ht={Ht} Wt={Wt} bmode={b_index_mode}"
+    _check_pcc(out_torch, golden, 0.9999, label)
+
+
+@pytest.mark.parametrize(
+    "b_index_mode",
+    [
+        pytest.param(_CB_COL_BCAST, id="bmode=ColBcast"),
+        pytest.param(_CB_ROW_BCAST, id="bmode=RowBcast"),
+        pytest.param(_CB_FIRST_TILE, id="bmode=Scalar"),
+    ],
+)
+@pytest.mark.parametrize(
+    "Ht,Wt",
+    [
+        (1, 1),
+        (2, 4),
+        (4, 8),
+    ],
+)
+@pytest.mark.parametrize("fp32_dest_acc", [False, True])
+def test_2d_chain_bcast_sub(device, Ht, Wt, b_index_mode, fp32_dest_acc):
+    """2D chain: A (Ht*Wt tiles) - B (Ht/Wt/1 tiles depending on bcast mode)."""
+    _run_2d_bcast_sub(device, Ht, Wt, b_index_mode, fp32_dest_acc)

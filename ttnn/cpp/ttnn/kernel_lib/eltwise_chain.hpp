@@ -285,6 +285,29 @@ template <class T>
 inline constexpr bool is_rand_tile_op_v = std::is_base_of_v<RandTileTag, T>;
 
 // =============================================================================
+// 1b. 2D shape — (Ht, Wt) tile grid for the 2D chain overload
+// =============================================================================
+
+/// Tile grid for the 2D `eltwise_chain` overload. Rows × cols, both in tiles.
+/// 1D code paths keep the legacy `eltwise_chain(n_tiles, ...)` overload — pass
+/// `EltwiseShape::of(Ht, Wt)` here when you need row/col/scalar broadcast indexing
+/// inside the chain (normalization-style kernels: subtract per-row mean, multiply
+/// by per-channel gamma, …).
+///
+/// Factory aliases mirror `binary_op_helpers`' `BinaryInputBlockShape` (which is
+/// preferred where the kernel already uses the binary helper alone). Both structs
+/// are layout-compatible and used interchangeably for the 2D walk.
+struct EltwiseShape {
+    uint32_t Ht;
+    uint32_t Wt;
+
+    static constexpr EltwiseShape of(uint32_t r, uint32_t c) { return {r, c}; }
+    static constexpr EltwiseShape row(uint32_t c) { return {1, c}; }
+    static constexpr EltwiseShape col(uint32_t r) { return {r, 1}; }
+    static constexpr EltwiseShape single() { return {1, 1}; }
+};
+
+// =============================================================================
 // 2. DEST slot enum — capped at compile-time DEST capacity
 // =============================================================================
 
@@ -348,11 +371,31 @@ enum class CopyTilePolicy : uint8_t {
 };
 
 /// CB-input tile indexing.
+///
+/// 2D-mode semantics (only meaningful in the `EltwiseShape{Ht, Wt}` chain overload —
+/// in the 1D `n_tiles` overload, RowBcast/ColBcast are static_assert-rejected since
+/// there is no Ht axis):
+///
+///   | Mode      | Tile index in 2D walk    | Upfront window |
+///   |-----------|--------------------------|----------------|
+///   | FirstTile | 0                        | 1              |
+///   | BlockIter | ht * Wt + wt   (flat)    | Ht * Wt        |
+///   | RowBcast  | wt                       | Wt             |
+///   | ColBcast  | ht                       | Ht             |
+///   | Pinned    | runtime k                | 1              |
+///   | Absolute  | runtime k                | Ht * Wt        |
+///
+/// RowBcast / ColBcast require non-streaming CB policy (WaitUpfrontPopAtEnd,
+/// WaitNoPop, NoWaitPop, NoWaitNoPop, CumulativeWaitPopAtEnd) — caller stages all
+/// broadcast operand tiles before the chain starts. Same constraint as
+/// `binary_op_helpers`' ROW/COL static_assert.
 enum class CbIndexMode : uint8_t {
     FirstTile,  // always tile 0 of the CB
-    BlockIter,  // tile i (loop var). Requires WaitUpfrontPopAtEnd or NoWaitNoPop.
+    BlockIter,  // 2D: tile (ht*Wt + wt) ; 1D: tile i. Requires non-streaming policy.
     Pinned,     // fixed runtime k. Under single-tile-window policies, k must be 0.
-    Absolute,   // runtime idx ∈ caller's window. Requires WaitUpfrontPopAtEnd or NoWaitNoPop.
+    Absolute,   // runtime idx ∈ caller's window. Requires non-streaming policy.
+    RowBcast,   // 2D only: tile wt (B replicated across rows). Requires non-streaming.
+    ColBcast,   // 2D only: tile ht (B replicated across cols). Requires non-streaming.
 };
 
 /// CopyTile dtype-reconfig.
@@ -756,6 +799,33 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts);
 /// with stage-1 CBs and stage 2's PACK would target the wrong CB.
 template <uint32_t BlockSize = 1, class... Es>
 ALWI void eltwise_chain_with_init(uint32_t n_tiles, Es... elts);
+
+/// 2D variant — runs the chain over an (Ht, Wt) tile grid.
+///
+/// Inner loop blocks W (BlockSize tiles per inner iter). Each CB-reader element
+/// uses its `CbIndexMode` to derive the per-iter CB tile index from `(ht, wt)`:
+///
+///   - `BlockIter`/`Absolute` → `ht * Wt + wt`     (window = Ht*Wt)
+///   - `RowBcast`            → `wt`                (window = Wt)
+///   - `ColBcast`            → `ht`                (window = Ht)
+///   - `FirstTile`/`Pinned`  → 0 / runtime k       (window = 1)
+///
+/// **Constraint**: `RowBcast`/`ColBcast` require non-streaming CB policy (Upfront,
+/// Cumulative, NoWait* / WaitNoPop / NoWaitPop) — caller stages broadcast operand
+/// tiles before the chain starts. Same rule `binary_op_helpers` enforces for ROW /
+/// SCALAR. The static_assert fires per-element at the chain call site.
+///
+/// **Equivalence with 1D**: `eltwise_chain(EltwiseShape::of(1, n), …)` is
+/// semantically equivalent to `eltwise_chain(n, …)` for chains that use only
+/// `FirstTile` / `BlockIter` / `Pinned` / `Absolute`. The 1D overload skips the
+/// outer `ht` loop so it avoids the `ht * Wt` multiplication in the per-tile path;
+/// prefer 1D when no broadcast axis is in play.
+template <uint32_t BlockSize = 1, class... Es>
+ALWI void eltwise_chain(EltwiseShape shape, Es... elts);
+
+/// 2D variant of the deduced wrapper. Same single-stage caveat as the 1D version.
+template <uint32_t BlockSize = 1, class... Es>
+ALWI void eltwise_chain_with_init(EltwiseShape shape, Es... elts);
 
 }  // namespace compute_kernel_lib
 
