@@ -19,7 +19,7 @@ N_MELS = 128
 MEL_FMIN = 30
 MEL_FMAX = SAMPLE_RATE // 2
 WINDOW_LENGTH = 1024
-DEFAULT_MODEL_URL = "https://huggingface.co/mert-kurttutan/rmvpe/resolve/main/rmvpe.safetensors"
+DEFAULT_MODEL_URL = "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/rmvpe.pt"
 
 
 def get_model_path() -> str:
@@ -104,16 +104,14 @@ class ConvBlockRes(nn.Module):
             nn.ReLU(),
         )
         if in_channels != out_channels:
-            self.shortcut = nn.Linear(in_channels, out_channels)
+            self.shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=(1, 1), bias=True)
             self.is_shortcut = True
         else:
             self.is_shortcut = False
 
     def forward(self, x):
         if self.is_shortcut:
-            b, c, h, w = x.shape
-            x_reshaped = x.view(b, c, -1).transpose(1, 2)
-            residual = self.shortcut(x_reshaped).transpose(1, 2).view(b, -1, h, w)
+            residual = self.shortcut(x)
         else:
             residual = x
         out = self.conv(x)
