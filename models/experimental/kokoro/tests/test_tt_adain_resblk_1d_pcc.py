@@ -111,3 +111,70 @@ def test_tt_adain_resblk_1d_with_upsample(device):
 
     print(f"TTAdainResBlk1d (upsample+pool) PCC: {pcc:.6f}")
     assert pcc > 0.99, f"PCC too low: {pcc}"
+
+
+def test_tt_adain_resblk_1d_decoder_encode_config(device):
+    """``Decoder.encode`` configuration: ``AdainResBlk1d(514, 1024, 128)``.
+
+    Matches the exact ``dim_in=512+2``, ``dim_out=1024``, ``style_dim=128`` used by
+    :class:`~models.experimental.kokoro.reference.istftnet.Decoder` to encode the
+    concatenated ``[asr, F0, N]`` feature before the decode chain.
+    """
+    torch.manual_seed(3)
+    # Exact Decoder.encode dimensions: dim_in = hidden_dim + 2 = 514, dim_out = 1024
+    dim_in, dim_out, style_dim = 514, 1024, 128
+    b, l = 1, 5
+    ref = AdainResBlk1d(dim_in, dim_out, style_dim=style_dim, upsample="none")
+    ref.eval()
+    params = preprocess_tt_adain_resblk_1d(ref, device, weights_dtype=ttnn.float32, conv_weights_dtype=ttnn.float32)
+    tt_blk = TTAdainResBlk1d(device, params)
+
+    x_bcl = torch.randn(b, dim_in, l)
+    s = torch.randn(b, style_dim)
+    with torch.no_grad():
+        y_ref = ref(x_bcl, s)
+
+    x_nlc = x_bcl.transpose(1, 2).contiguous()
+    x_tt = ttnn.from_torch(x_nlc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    s_tt = ttnn.from_torch(s, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = tt_blk(x_tt, s_tt)
+    pcc = _pcc_nlc(y_ref, y_tt)
+    ttnn.deallocate(y_tt)
+    ttnn.deallocate(x_tt)
+    ttnn.deallocate(s_tt)
+
+    print(f"TTAdainResBlk1d (Decoder.encode: 514→1024, style=128) PCC: {pcc:.6f}")
+    assert pcc > 0.99, f"PCC too low: {pcc}"
+
+
+def test_tt_adain_resblk_1d_decoder_decode_block_config(device):
+    """Decode block configuration: ``AdainResBlk1d(1090, 1024, 128)``.
+
+    Matches blocks 0-2 in :class:`~models.experimental.kokoro.reference.istftnet.Decoder`
+    which receive the concatenated ``[x, asr_res, F0, N]`` feature (1024+64+1+1 = 1090 ch).
+    """
+    torch.manual_seed(4)
+    # Decoder.decode blocks 0-2: dim_in = 1024 + 64 + 1 + 1 = 1090, dim_out = 1024
+    dim_in, dim_out, style_dim = 1090, 1024, 128
+    b, l = 1, 5
+    ref = AdainResBlk1d(dim_in, dim_out, style_dim=style_dim, upsample="none")
+    ref.eval()
+    params = preprocess_tt_adain_resblk_1d(ref, device, weights_dtype=ttnn.float32, conv_weights_dtype=ttnn.float32)
+    tt_blk = TTAdainResBlk1d(device, params)
+
+    x_bcl = torch.randn(b, dim_in, l)
+    s = torch.randn(b, style_dim)
+    with torch.no_grad():
+        y_ref = ref(x_bcl, s)
+
+    x_nlc = x_bcl.transpose(1, 2).contiguous()
+    x_tt = ttnn.from_torch(x_nlc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    s_tt = ttnn.from_torch(s, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = tt_blk(x_tt, s_tt)
+    pcc = _pcc_nlc(y_ref, y_tt)
+    ttnn.deallocate(y_tt)
+    ttnn.deallocate(x_tt)
+    ttnn.deallocate(s_tt)
+
+    print(f"TTAdainResBlk1d (Decoder.decode block: 1090→1024, style=128) PCC: {pcc:.6f}")
+    assert pcc > 0.99, f"PCC too low: {pcc}"
