@@ -143,7 +143,7 @@ void kernel_main() {
         uint32_t zero_buf = get_write_ptr(zi_cb_id);
 
         {
-            // DeviceZoneScopedN("combine-zero-init-writing");
+            DeviceZoneScopedN("combine-zero-init-SENDER-writing");
             fill_zero_buffer(zi_cb_id);
             zero_pages(zero_buf, page_start, page_end, aligned_output_page_size, output_addr_gen);
         }
@@ -352,15 +352,14 @@ void kernel_main() {
                     route_info[2] = output_page_idx;
                     route_info[3] = 0;
                     cb_push_back(cb_route_info_id, 1);
-
+                    cb_reserve_back(cb_output_for_writer_id, 1);
                     {
-                        // DeviceZoneScopedN("combine-reader-sending-data-writer-CB");
-                        cb_reserve_back(cb_output_for_writer_id, 1);
+                        DeviceZoneScopedN("combine-reader-sending-data-writer-CB");
                         uint32_t output_dst = get_write_ptr(cb_output_for_writer_id);
                         noc_async_read(get_noc_addr(buffer_scratch_addr), output_dst, aligned_output_page_size);
                         noc_async_read_barrier();
-                        cb_push_back(cb_output_for_writer_id, 1);
                     }
+                    cb_push_back(cb_output_for_writer_id, 1);
                 }
                 noc_semaphore_inc(idle_credits_noc_addrs[c], 1);
                 noc_async_atomic_barrier();
