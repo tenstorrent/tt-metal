@@ -46,6 +46,10 @@ static constexpr uint32_t MAGIC_HANDSHAKE_VALUE = 0xAA;
 // Data-Structure used for EDM to EDM Handshaking.
 // The scratch buffer is sent to the peer and overwrites the first 16 bytes of their struct,
 // populating neighbor_mesh_id and neighbor_device_id with the sender's identity.
+//
+// Bytes 32-63: Diagnostic fields (NOT transmitted). Written by firmware during handshake
+// for host-side readback when Phase 5b times out. Host reads at:
+//   handshake_register_address + offsetof(handshake_info_t, diag_txq_busy_at_init)
 struct handshake_info_t {
     uint32_t local_value;        // Bytes 0-3: Updated by remote with MAGIC_HANDSHAKE_VALUE
     uint16_t neighbor_mesh_id;   // Bytes 4-5: Peer's mesh_id (populated via scratch[1])
@@ -53,6 +57,13 @@ struct handshake_info_t {
     uint8_t padding0;            // Byte 7: Explicit padding for alignment
     uint32_t padding[2];         // Bytes 8-15: Ensures 16B alignment for scratch register
     uint32_t scratch[4];         // Bytes 16-31: TODO: Can be removed if we use a stream register for handshaking.
+    // --- Diagnostic fields (bytes 32-63): NOT part of the handshake protocol. ---
+    // Written by firmware for host readback when Phase 5b hangs. Strategy 11 (#42429).
+    uint32_t diag_txq_busy_at_init;   // Byte 32: 1 if ETH_TXQ_CMD != 0 when init ran (FIX AH taken?)
+    uint32_t diag_local_val_at_init;  // Byte 36: local_value before FIX HX guard (was MAGIC already written?)
+    uint32_t diag_send_count;         // Byte 40: eth_send_packet call count in handshake loop (sender only)
+    uint32_t diag_eth_link_reg;       // Byte 44: ETH_LINK_ERR_STATUS_ADDR (0x1440) value at init time
+    uint32_t diag_reserved[4];        // Bytes 48-63: Reserved for future diagnostics
 };
 
 FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
@@ -69,7 +80,8 @@ FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
     // while(eth_txq_is_busy()){} would then spin forever — observed as both local ERISC
     // and peer ERISC hanging at STARTED. Guard the flush to skip it when the queue is
     // already idle (ETH_TXQ_CMD==0): nothing to abort, no hang risk.
-    if (eth_txq_is_busy()) {
+    const bool txq_was_busy = eth_txq_is_busy();
+    if (txq_was_busy) {
         eth_txq_reg_write(0, ETH_TXQ_CMD, ETH_TXQ_CMD_FLUSH);
         eth_txq_reg_read(0, ETH_TXQ_CMD);  // dummy read (matches eth_txq_is_busy pattern)
         while (eth_txq_is_busy()) {}        // wait for flush to complete
@@ -89,9 +101,18 @@ FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
     // state before the RTR transition. We apply the same principle here: if local_value
     // already holds MAGIC_HANDSHAKE_VALUE, a peer has already performed its write — do
     // not erase it. Only zero if stale (from a previous session or uninitialised).
+    const uint32_t local_val_before_guard = handshake_info->local_value;
     if (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
         handshake_info->local_value = 0;
     }
+    // Strategy 11 (#42429): Populate diagnostic fields for host-side readback.
+    // Host reads these at handshake_register_address + 32 when Phase 5b times out.
+    handshake_info->diag_txq_busy_at_init = txq_was_busy ? 1u : 0u;
+    handshake_info->diag_local_val_at_init = local_val_before_guard;
+    handshake_info->diag_send_count = 0;  // Updated by sender_side_handshake()
+    // ETH_LINK_ERR_STATUS is written by base-UMD firmware to L1[0x1440], not by fabric router.
+    // Zero here — the host reads ETH link status directly via PCIe (Strategy 11 pre-check).
+    handshake_info->diag_eth_link_reg = 0;
     handshake_info->scratch[0] = MAGIC_HANDSHAKE_VALUE;
     // Sender exposes itself as the neighbor to its peer. On little-endian:
     // - my_mesh_id in lower 16 bits maps to bytes 4-5 (neighbor_mesh_id)
@@ -121,6 +142,7 @@ FORCE_INLINE void sender_side_handshake(
         } else {
             count++;
             internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
+            handshake_info->diag_send_count++;  // Strategy 11: track send attempts for diagnostics
         }
         invalidate_l1_cache();
     }

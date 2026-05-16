@@ -309,21 +309,37 @@ FabricCoresHealth configure_fabric_cores(
                 continue;
             }
 
-            // FIX M (#42429): Skip soft reset for channels with base-UMD relay firmware.
-            // Their BRISC is running and serves as the ETH relay endpoint for non-MMIO reads.
-            // assert_risc_reset halts the BRISC → deassert_risc_reset (relay read) times out
-            // → all subsequent reads from MMIO→non-MMIO fail → cascade hang.
+            // FIX M (#42429): Skip soft reset for base-UMD relay channels on NON-MMIO devices.
+            // Their BRISC serves as the ETH relay endpoint for all host→non-MMIO reads.
+            // Halting it (assert_risc_reset) kills the relay → subsequent reads hang forever.
             // write_launch_msg_to_core transitions this firmware to fabric firmware without a reset.
-            // NOTE: the L1 clear loop below is ALSO skipped for these channels — see FIX TG.
+            // NOTE: the L1 clear loop below is ALSO skipped for non-MMIO base-UMD — see FIX TG.
+            //
+            // FIX S9 (#42429): On MMIO devices, base-UMD channels CAN be safely soft-reset.
+            // PCIe-direct access means no ETH relay dependency for host→device reads.
+            // The skip-soft-reset path (FIX M) leaves dirty L1/TXQ/MAC state from the prior
+            // session, which is the root cause of channels sticking at STARTED (0xa0b0c0d0)
+            // and REMOTE_HANDSHAKE_COMPLETE (0xa1b1c1d1) after the base-UMD transition.
+            // Performing assert→deassert on MMIO base-UMD channels gives a clean slate before
+            // the fabric firmware launch_msg.
             if (skip_soft_reset_channels.count(router_chan)) {
+                if (!device->is_mmio_capable()) {
+                    log_info(
+                        tt::LogMetal,
+                        "configure_fabric_cores: device {} channel {} base-UMD relay firmware "
+                        "(0x49706550) — skipping soft reset on non-MMIO (ETH relay needed) [FIX M #42429]",
+                        chip_id,
+                        router_chan);
+                    continue;
+                }
+                // MMIO base-UMD: fall through to assert/deassert for clean state [FIX S9 #42429].
                 log_info(
                     tt::LogMetal,
                     "configure_fabric_cores: device {} channel {} base-UMD relay firmware "
-                    "(0x49706550) — skipping soft reset (launch_msg handles transition, "
-                    "halting BRISC would kill the ETH relay) [FIX M #42429]",
+                    "(0x49706550) MMIO — performing soft reset to clear dirty L1/TXQ/MAC state "
+                    "[FIX S9 #42429]",
                     chip_id,
                     router_chan);
-                continue;
             }
 
             try {
@@ -382,6 +398,56 @@ FabricCoresHealth configure_fabric_cores(
         }
     }
 
+    // STRATEGY 11 (#42429): ETH link status check before firmware launch.
+    // For MMIO devices, read the ETH link error status register (Wormhole 0x1440) for each
+    // channel.  A non-zero value signals that the PHY link is not trained — fabric firmware
+    // handshakes will never complete on that channel (eth_send_packet silently drops).
+    // This can happen when a prior force-reset disrupted the PHY and the 100ms post-deassert
+    // delay was insufficient for link retraining.
+    // Non-MMIO devices: skip — reads would route through the ETH relay we just killed.
+    // Wormhole ETH_LINK_ERR_STATUS_ADDR = 0x1440; error codes >= 11 mean "not connected".
+    static constexpr uint32_t kEthLinkErrStatusAddr = 0x1440;  // tt::umd::wormhole::ETH_LINK_ERR_STATUS_ADDR
+    static constexpr uint32_t kEthLinkErrCodeNotConnected = 11;  // tt::umd::wormhole::ETH_LINK_UNUSED_ERROR_CODE_RANGE_START
+    if (device->is_mmio_capable()) {
+        for (const auto& [router_chan, _] : router_chans_and_direction) {
+            if (dead_channels.count(router_chan)) {
+                continue;  // Already dead — no point checking link status.
+            }
+            auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
+            std::vector<uint32_t> eth_link_buf(1, 0);
+            try {
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device, router_logical_core, kEthLinkErrStatusAddr, 4, eth_link_buf, CoreType::ETH);
+                if (eth_link_buf[0] != 0) {
+                    const bool not_connected = eth_link_buf[0] >= kEthLinkErrCodeNotConnected;
+                    log_warning(
+                        tt::LogMetal,
+                        "configure_fabric_cores: device {} channel {} ETH link error status=0x{:08x} "
+                        "({}) before firmware launch. Handshake will likely fail. [Strategy 11 #42429]",
+                        chip_id,
+                        router_chan,
+                        eth_link_buf[0],
+                        not_connected ? "link not connected/trained" : "link config error");
+                } else {
+                    log_debug(
+                        tt::LogMetal,
+                        "configure_fabric_cores: device {} channel {} ETH link status OK (0x0) "
+                        "[Strategy 11 #42429]",
+                        chip_id,
+                        router_chan);
+                }
+            } catch (const std::exception& e) {
+                log_debug(
+                    tt::LogMetal,
+                    "configure_fabric_cores: device {} channel {} ETH link status read failed: {} "
+                    "[Strategy 11 #42429]",
+                    chip_id,
+                    router_chan,
+                    e.what());
+            }
+        }
+    }
+
     for (const auto& [router_chan, _] : router_chans_and_direction) {
         if (dead_channels.count(router_chan)) {
             // Skip L1 clear for dead channels — WriteToDeviceL1 on non-MMIO chips routes
@@ -396,12 +462,12 @@ FabricCoresHealth configure_fabric_cores(
             // where corrupt status persisted across container restarts on bare metal.
             continue;
         }
-        // FIX TG (#42429): For base-UMD relay channels, preserve edm_status_address (0x49706550)
-        // so the next session's terminate_stale_erisc_routers() can identify base-UMD state
-        // and fire FIX M (launch_msg transition).
+        // FIX TG (#42429): For NON-MMIO base-UMD relay channels, preserve edm_status_address
+        // (0x49706550) so the next session's terminate_stale_erisc_routers() can identify
+        // base-UMD state and fire FIX M (launch_msg transition).
         //
-        // FIX TG2 (#42429): PARTIAL L1 clear — zero all sync-critical addresses EXCEPT
-        // edm_status_address.  Original FIX TG skipped ALL clears, but that left stale
+        // FIX TG2 (#42429): PARTIAL L1 clear for non-MMIO — zero all sync-critical addresses
+        // EXCEPT edm_status_address.  Original FIX TG skipped ALL clears, but that left stale
         // edm_local_sync_address / edm_local_tensix_sync_address / termination_signal_address
         // from a previous failed ring-sync session (stuck at REMOTE_HANDSHAKE_COMPLETE
         // 0xa1b1c1d1).  After tt-smi -r the ERISC restarts into base-UMD (writes 0x49706550
@@ -411,31 +477,46 @@ FabricCoresHealth configure_fabric_cores(
         // timeout across multiple smi-reset cycles (FIX UP2 INFRA_ERROR pattern observed
         // on runs 25293661493 + 25294660215 on t3k-08/t3k-05 respectively).
         //
-        // Fix: clear edm_local_sync_address, edm_local_tensix_sync_address, and
-        // termination_signal_address for base-UMD channels.  Skip ONLY edm_status_address.
+        // FIX S9 (#42429): For MMIO base-UMD channels, we already performed a full soft-reset
+        // above (assert→deassert).  That gives a clean slate — do a FULL L1 clear (including
+        // edm_status_address) to ensure no stale state survives into the fabric FW launch.
+        // edm_status_address will be 0x49706550 briefly (base-UMD writes it back after
+        // deassert), but the fabric firmware launch_msg transitions it to fabric state before
+        // the next session reads it.
         if (skip_soft_reset_channels.count(router_chan)) {
             auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
-            for (const auto& address : addresses_to_clear) {
-                if (address == router_config.edm_status_address) {
+            if (!device->is_mmio_capable()) {
+                // Non-MMIO: partial clear (preserve 0x49706550 for base-UMD detection).
+                for (const auto& address : addresses_to_clear) {
+                    if (address == router_config.edm_status_address) {
+                        log_debug(
+                            tt::LogMetal,
+                            "configure_fabric_cores: device {} channel {} base-UMD non-MMIO — "
+                            "preserving edm_status_address (0x49706550 sentinel) [FIX TG #42429]",
+                            device->id(),
+                            router_chan);
+                        continue;  // Preserve 0x49706550 sentinel for next-session base-UMD detection
+                    }
                     log_debug(
                         tt::LogMetal,
-                        "configure_fabric_cores: device {} channel {} base-UMD relay — preserving "
-                        "edm_status_address (0x49706550 sentinel) [FIX TG #42429]",
+                        "configure_fabric_cores: device {} channel {} base-UMD non-MMIO — "
+                        "clearing sync address 0x{:08x} [FIX TG2 #42429]",
                         device->id(),
-                        router_chan);
-                    continue;  // Preserve 0x49706550 sentinel for next-session base-UMD detection
+                        router_chan,
+                        address);
+                    tt::tt_metal::detail::WriteToDeviceL1(
+                        device, router_logical_core, address, router_zero_buf, CoreType::ETH);
                 }
-                log_debug(
-                    tt::LogMetal,
-                    "configure_fabric_cores: device {} channel {} base-UMD relay — clearing sync "
-                    "address 0x{:08x} to prevent stale handshake state [FIX TG2 #42429]",
-                    device->id(),
-                    router_chan,
-                    address);
-                tt::tt_metal::detail::WriteToDeviceL1(
-                    device, router_logical_core, address, router_zero_buf, CoreType::ETH);
+                continue;
             }
-            continue;
+            // MMIO base-UMD (FIX S9): soft-reset already performed above — full L1 clear.
+            log_debug(
+                tt::LogMetal,
+                "configure_fabric_cores: device {} channel {} base-UMD MMIO — full L1 clear "
+                "after soft reset [FIX S9 #42429]",
+                device->id(),
+                router_chan);
+            // Fall through to the full L1 clear below.
         }
         auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
         for (const auto& address : addresses_to_clear) {

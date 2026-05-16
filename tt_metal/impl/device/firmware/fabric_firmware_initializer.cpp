@@ -3065,17 +3065,54 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
             initializing_count++;
         }
 
+        // Strategy 11 (#42429): ETH link status post-failure diagnostic.
+        // For MMIO devices (PCIe-direct readable), read the ETH link error status register
+        // (Wormhole 0x1440) to diagnose if the PHY link is not trained, which would explain
+        // channels stuck at STARTED (0xa0b0c0d0).
+        // Wormhole ETH_LINK_ERR_STATUS_ADDR = 0x1440; codes >= 11 = not connected.
+        std::string eth_link_diag;
+        {
+            const ChannelInfo* ch_info = nullptr;
+            for (const auto& ch : channels_to_check) {
+                if (ch.dev->id() == fc.device_id && ch.eth_chan_id == fc.eth_chan_id) {
+                    ch_info = &ch;
+                    break;
+                }
+            }
+            if (ch_info != nullptr && ch_info->dev->is_mmio_capable()) {
+                constexpr uint32_t kEthLinkErrStatusAddr = 0x1440;
+                std::vector<uint32_t> eth_link_buf(1, 0xBEEF);
+                try {
+                    detail::ReadFromDeviceL1(
+                        ch_info->dev, ch_info->eth_logical_core, kEthLinkErrStatusAddr, 4,
+                        eth_link_buf, CoreType::ETH);
+                    if (eth_link_buf[0] == 0) {
+                        eth_link_diag = " ETH_link_status=0(OK)";
+                    } else if (eth_link_buf[0] >= 11) {
+                        eth_link_diag = fmt::format(
+                            " ETH_link_status={}(NOT_CONNECTED — link untrained!)", eth_link_buf[0]);
+                    } else {
+                        eth_link_diag = fmt::format(" ETH_link_status={}(config_error)", eth_link_buf[0]);
+                    }
+                } catch (...) {
+                    eth_link_diag = " ETH_link_status=<read_failed>";
+                }
+            }
+        }
+
         log_error(
             tt::LogMetal,
-            "verify_all_fabric_channels_healthy: Device {} chan={} actual=0x{:08x} expected=0x{:08x} — {}",
+            "verify_all_fabric_channels_healthy: Device {} chan={} actual=0x{:08x} expected=0x{:08x} — {}{}",
             fc.device_id,
             fc.eth_chan_id,
             fc.actual_status,
             expected_status,
-            classification);
+            classification,
+            eth_link_diag);
 
         failure_details += fmt::format(
-            "  dev={} chan={} status=0x{:08x} ({})\n", fc.device_id, fc.eth_chan_id, fc.actual_status, classification);
+            "  dev={} chan={} status=0x{:08x} ({}){}\n",
+            fc.device_id, fc.eth_chan_id, fc.actual_status, classification, eth_link_diag);
     }
 
     TT_THROW(
