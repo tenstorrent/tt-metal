@@ -3251,6 +3251,18 @@ void kernel_main() {
     *edm_status_ptr = tt::tt_fabric::EDMStatus::STARTED;
     asm volatile("nop");
 
+    // FIX AD (#42429): Prepare handshake state EARLY — during Object Setup, NOT inside the
+    // handshake loop. This eliminates the race where init_handshake_info() erases an
+    // already-delivered MAGIC_HANDSHAKE_VALUE from the peer. By zeroing local_value and
+    // prepping scratch here (hundreds of microseconds before the handshake loop), no
+    // destructive init can erase a peer's message during the actual handshake.
+    if constexpr (enable_ethernet_handshake) {
+        erisc::datamover::handshake::prepare_handshake_state(
+            handshake_addr,
+            routing_table_l1->my_mesh_id,
+            routing_table_l1->my_device_id);
+    }
+
     //////////////////////////////
     //////////////////////////////
     //        Object Setup
@@ -3570,18 +3582,13 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
     if constexpr (enable_ethernet_handshake) {
-        if constexpr (is_handshake_sender) {
-            erisc::datamover::handshake::fabric_sender_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
+        // FIX AD (#42429): Single symmetric handshake — both sides send AND poll.
+        // prepare_handshake_state() was already called during Object Setup (above),
+        // so local_value is zeroed and scratch contains MAGIC. No sender/receiver
+        // distinction needed — both sides enter the same function.
+        {
+            erisc::datamover::handshake::fabric_symmetric_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
                 handshake_addr,
-                routing_table_l1->my_mesh_id,
-                routing_table_l1->my_device_id,
-                termination_signal_ptr,
-                DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
-        } else {
-            erisc::datamover::handshake::fabric_receiver_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
-                handshake_addr,
-                routing_table_l1->my_mesh_id,
-                routing_table_l1->my_device_id,
                 termination_signal_ptr,
                 DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         }

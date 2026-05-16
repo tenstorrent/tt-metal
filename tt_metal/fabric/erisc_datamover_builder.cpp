@@ -1131,7 +1131,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR"] = this->fuse_receiver_flush_and_completion_ptr;
     named_args["ENABLE_DEADLOCK_AVOIDANCE"] = fabric_context.need_deadlock_avoidance_support(this->direction_);
     named_args["IS_INTERMESH_ROUTER"] = this->is_inter_mesh;
-    named_args["IS_HANDSHAKE_SENDER"] = is_handshake_master;
+    // FIX AD (#42429): IS_HANDSHAKE_SENDER is no longer used — symmetric handshake means
+    // both sides run the same code path. Set to 0 to avoid dead-code confusion.
+    // The is_handshake_master variable is retained for IS_LOCAL_HANDSHAKE_MASTER (local sync).
+    named_args["IS_HANDSHAKE_SENDER"] = 0;
     named_args["HANDSHAKE_ADDR"] = static_cast<uint32_t>(this->handshake_address);
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
     named_args["FABRIC_TENSIX_EXTENSION_MUX_MODE"] = this->has_tensix_extension;

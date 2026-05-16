@@ -66,7 +66,14 @@ struct handshake_info_t {
     uint32_t diag_reserved[4];        // Bytes 48-63: Reserved for future diagnostics
 };
 
-FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
+// FIX AD (#42429): prepare_handshake_state — called during Object Setup (before edm_status = STARTED)
+// to separate destructive init from the handshake loop. This eliminates the race where
+// init_handshake_info() erases an already-delivered MAGIC_HANDSHAKE_VALUE from the peer.
+//
+// TCP parallel: TCP's LISTEN state does not modify receive buffers. RDMA QP init pins
+// receive state before RTR. We apply the same principle: zero local_value and prep scratch
+// BEFORE entering the handshake, so no incoming MAGIC can be erased during the handshake.
+FORCE_INLINE volatile tt_l1_ptr handshake_info_t* prepare_handshake_state(
     uint32_t handshake_register_address, uint16_t my_mesh_id, uint8_t my_device_id) {
     // FIX AH: Flush stale ETH TX queue state, but only when the queue is actually busy.
     // ERISC soft-reset halts the RISCV core but does NOT reset ETH MAC/DMA hardware.
@@ -88,33 +95,23 @@ FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
     }
     volatile tt_l1_ptr handshake_info_t* handshake_info =
         reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_register_address);
-    // FIX HX (#42429): Preserve already-received handshake value.
-    // Root cause of the symmetric deadlock: non-MMIO ERISCs start before MMIO ERISCs
-    // (host launches them first via tt-smi / configure_fabric ordering). The non-MMIO
-    // side completes init_handshake_info, enters sender_side_handshake, and writes
-    // MAGIC_HANDSHAKE_VALUE to MMIO's local_value via ETH DMA — before MMIO's ERISC
-    // firmware has even started. When MMIO finally enters init_handshake_info, this
-    // unconditional zero erases the already-delivered MAGIC, causing both sides to
-    // spin forever waiting for MAGIC that will never come again.
-    //
-    // TCP never overwrites its receive buffer during accept(). RDMA QP init pins receive
-    // state before the RTR transition. We apply the same principle here: if local_value
-    // already holds MAGIC_HANDSHAKE_VALUE, a peer has already performed its write — do
-    // not erase it. Only zero if stale (from a previous session or uninitialised).
-    const uint32_t local_val_before_guard = handshake_info->local_value;
-    if (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
-        handshake_info->local_value = 0;
-    }
+    // FIX AD: Unconditionally zero local_value. This runs during Object Setup, hundreds of
+    // microseconds before the handshake loop. No peer can have sent MAGIC this early because
+    // edm_status hasn't reached STARTED yet. The old FIX HX guard (check for MAGIC before
+    // zeroing) is no longer needed — by moving the zero to Object Setup, we eliminate the
+    // window entirely rather than trying to detect-and-skip it.
+    const uint32_t local_val_before = handshake_info->local_value;
+    handshake_info->local_value = 0;
     // Strategy 11 (#42429): Populate diagnostic fields for host-side readback.
     // Host reads these at handshake_register_address + 32 when Phase 5b times out.
     handshake_info->diag_txq_busy_at_init = txq_was_busy ? 1u : 0u;
-    handshake_info->diag_local_val_at_init = local_val_before_guard;
-    handshake_info->diag_send_count = 0;  // Updated by sender_side_handshake()
+    handshake_info->diag_local_val_at_init = local_val_before;
+    handshake_info->diag_send_count = 0;  // Updated by symmetric_handshake()
     // ETH_LINK_ERR_STATUS is written by base-UMD firmware to L1[0x1440], not by fabric router.
     // Zero here — the host reads ETH link status directly via PCIe (Strategy 11 pre-check).
     handshake_info->diag_eth_link_reg = 0;
     handshake_info->scratch[0] = MAGIC_HANDSHAKE_VALUE;
-    // Sender exposes itself as the neighbor to its peer. On little-endian:
+    // Each side exposes itself as the neighbor to its peer. On little-endian:
     // - my_mesh_id in lower 16 bits maps to bytes 4-5 (neighbor_mesh_id)
     // - my_device_id shifted by 16 maps to byte 6 (neighbor_device_id)
     handshake_info->scratch[1] = static_cast<uint32_t>(my_mesh_id) | (static_cast<uint32_t>(my_device_id) << 16);
@@ -123,13 +120,27 @@ FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
     return handshake_info;
 }
 
-FORCE_INLINE void sender_side_handshake(
+// FIX AD: Legacy init_handshake_info — kept for backward compat with deprecated split-handshake
+// callers. New code should use prepare_handshake_state() + symmetric_handshake().
+FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
+    uint32_t handshake_register_address, uint16_t my_mesh_id, uint8_t my_device_id) {
+    return prepare_handshake_state(handshake_register_address, my_mesh_id, my_device_id);
+}
+
+// FIX AD (#42429): LLDP-style symmetric handshake — both sides send AND poll.
+// Replaces the old sender_side_handshake/receiver_side_handshake split.
+// IMPORTANT: prepare_handshake_state() MUST have been called during Object Setup
+// (before edm_status = STARTED) so that local_value is zeroed and scratch contains MAGIC.
+//
+// Protocol: Both sides enter the same loop. Each iteration sends MAGIC to the remote's
+// local_value and checks whether the remote has written MAGIC to ours. After the loop,
+// one final send (defense-in-depth from FIX HS1/HS2) ensures the peer is unblocked even
+// if it was slightly behind.
+FORCE_INLINE void symmetric_handshake(
     uint32_t handshake_register_address,
-    uint16_t my_mesh_id,
-    uint8_t my_device_id,
     size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     volatile tt_l1_ptr handshake_info_t* handshake_info =
-        init_handshake_info(handshake_register_address, my_mesh_id, my_device_id);
+        reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_register_address);
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;
@@ -146,49 +157,32 @@ FORCE_INLINE void sender_side_handshake(
         }
         invalidate_l1_cache();
     }
-    // FIX HS1 (#42429): Send one final packet after exiting to handle the simultaneous-sender
-    // race condition where both sides call sender_side_handshake() concurrently:
-    //
-    //   1. Side A sends MAGIC_HANDSHAKE_VALUE → B.local_value.
-    //   2. Side B's init_handshake_info() resets B.local_value = 0 (erasing A's write).
-    //      This is possible because one device's UMD relay is ~200x faster, so B starts
-    //      ~6ms after A — within A's send loop but before A exits.
-    //   3. Side B (also in sender mode) sends MAGIC_HANDSHAKE_VALUE → A.local_value.
-    //   4. Side A sees A.local_value == MAGIC_HANDSHAKE_VALUE and exits the loop.
-    //   5. Side A stops sending — B.local_value is still 0, nobody will write to it.
-    //   6. Side B is stuck forever: B.local_value never becomes MAGIC_HANDSHAKE_VALUE.
-    //
-    // Fix: after the loop exits, send one unconditional final packet. It arrives at the
-    // remote AFTER the remote has completed init_handshake_info() (and its reset), so
-    // even if all earlier sends were erased by the remote's reset, this packet unblocks it.
-    // In the normal (non-collision) case this is harmless: remote is receiver_side_handshake()
-    // which has already exited after sending its ack — the extra write to its local_value
-    // is ignored.
+    // FIX HS1/HS2 (#42429): Post-loop final send (defense-in-depth).
+    // With Fix A (early init), the erase race is eliminated. But we keep this final send
+    // as belt-and-suspenders: if one side exits the loop slightly before the other side
+    // has entered it, this packet ensures the late-arriving peer sees MAGIC immediately.
     internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
 }
 
+// Legacy sender_side_handshake — DEPRECATED, use prepare_handshake_state() + symmetric_handshake().
+// Kept for backward compat with non-fabric callers (deprecated split-handshake API).
+FORCE_INLINE void sender_side_handshake(
+    uint32_t handshake_register_address,
+    uint16_t my_mesh_id,
+    uint8_t my_device_id,
+    size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
+    init_handshake_info(handshake_register_address, my_mesh_id, my_device_id);
+    symmetric_handshake(handshake_register_address, HS_CONTEXT_SWITCH_TIMEOUT);
+}
+
+// Legacy receiver_side_handshake — DEPRECATED, use prepare_handshake_state() + symmetric_handshake().
 FORCE_INLINE void receiver_side_handshake(
     uint32_t handshake_register_address,
     uint16_t my_mesh_id,
     uint8_t my_device_id,
     size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
-    volatile tt_l1_ptr handshake_info_t* handshake_info =
-        init_handshake_info(handshake_register_address, my_mesh_id, my_device_id);
-    uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
-    uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
-    uint32_t count = 0;
-    while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
-        if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
-            count = 0;
-#if defined(ARCH_WORMHOLE) || (defined(PHYSICAL_AERISC_ID) && PHYSICAL_AERISC_ID == 0)
-            run_routing();
-#endif
-        } else {
-            count++;
-        }
-        invalidate_l1_cache();
-    }
-    internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
+    init_handshake_info(handshake_register_address, my_mesh_id, my_device_id);
+    symmetric_handshake(handshake_register_address, HS_CONTEXT_SWITCH_TIMEOUT);
 }
 
 namespace deprecated {
