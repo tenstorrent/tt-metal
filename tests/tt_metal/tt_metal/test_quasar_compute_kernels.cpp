@@ -214,6 +214,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp"},
         .num_threads = 1,
         .dfb_bindings = {},
+        .semaphore_bindings = {},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
 
@@ -224,6 +225,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp"},
         .num_threads = 2,
         .dfb_bindings = {},
+        .semaphore_bindings = {},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
 
@@ -237,6 +239,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
         .program_id = "multiple_compute_kernels",
         .kernels = {compute_kernel_spec_1, compute_kernel_spec_2},
         .dataflow_buffers = {},
+        .remote_dataflow_buffers = {},
         .work_units = {main_wu},
     };
 

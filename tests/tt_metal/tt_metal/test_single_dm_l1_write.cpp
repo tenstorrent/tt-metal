@@ -57,6 +57,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp"},
         .num_threads = 2,
         .dfb_bindings = {},
+        .semaphore_bindings = {},
         .runtime_arguments_schema =
             {
                 .named_runtime_args = {"address"},
@@ -78,6 +79,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
         .program_id = "single_dm_l1_write",
         .kernels = {dm_kernel_spec},
         .dataflow_buffers = {},
+        .remote_dataflow_buffers = {},
         .work_units = {main_wu},
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
@@ -88,6 +90,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
         .named_runtime_args = {{.node = node, .args = {{"address", address}}}},
         .named_common_runtime_args = {{"value", value}},
         .runtime_varargs = {},
+        .common_runtime_varargs = {},
     }};
     experimental::metal2_host_api::SetProgramRunParameters(program, params);
     std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication."

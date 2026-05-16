@@ -314,7 +314,8 @@ TEST_F(MeshDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
                     .eth_mode = Eth::RECEIVER,
                     .noc = static_cast<tt_metal::NOC>(erisc_idx),
                     .processor = static_cast<DataMovementProcessor>(erisc_idx),
-                    .compile_args = {}};
+                    .compile_args = {},
+                    .defines = {}};
                 ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config));
             }
         }
@@ -352,7 +353,8 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
                     .eth_mode = Eth::IDLE,
                     .noc = static_cast<tt_metal::NOC>(erisc_idx),
                     .processor = static_cast<DataMovementProcessor>(erisc_idx),
-                    .compile_args = {}};
+                    .compile_args = {},
+                    .defines = {}};
                 ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config));
             }
         }

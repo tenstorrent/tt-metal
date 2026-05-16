@@ -91,6 +91,7 @@ protected:
                 .num_threads = static_cast<uint8_t>(num_dms_),
                 .compiler_options = {.include_paths = {}, .defines = defines_vec},
                 .dfb_bindings = {},
+                .semaphore_bindings = {},
                 .runtime_arguments_schema =
                     {
                         .named_runtime_args = {"l1_counter_addr", "increment_times"},
@@ -112,6 +113,7 @@ protected:
                 .program_id = "riscv_atomics",
                 .kernels = {dm_kernel_spec},
                 .dataflow_buffers = {},
+                .remote_dataflow_buffers = {},
                 .work_units = {main_wu},
             };
             program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device_, spec);
@@ -123,6 +125,7 @@ protected:
                     {{.node = core,
                       .args = {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
                 .named_common_runtime_args = {},
+                .runtime_varargs = {},
             }};
             experimental::metal2_host_api::SetProgramRunParameters(program, params);
         } else {

@@ -125,7 +125,8 @@ BmmKernelHandles create_bmm_quasar_kernels(
                 .unpack_to_dest_mode = {},
                 .compile_args = {p.B_per_core, p.Mt, p.Kt, p.Nt},
                 .defines = {},
-                .named_compile_args = {}}),
+                .named_compile_args = {},
+                .compiler_include_paths = {}}),
     };
 }
 

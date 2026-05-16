@@ -1794,6 +1794,7 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
         .unique_id = "my_dm_kernel",
         .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .num_threads = 2,
+        .dfb_bindings = {},
         .config_spec =
             DataMovementConfiguration{
                 .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
@@ -1810,13 +1811,16 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
         .num_threads = 4,
         .compiler_options =
             KernelSpec::CompilerOptions{
+                .include_paths = {},
                 .defines = {{"MY_DEFINE", "42"}},
                 .opt_level = tt::tt_metal::KernelBuildOptLevel::O3,
             },
+        .dfb_bindings = {},
         .config_spec =
             ComputeConfiguration{
                 .math_fidelity = MathFidelity::LoFi,
                 .fp32_dest_acc_en = true,
+                .unpack_to_dest_mode = {},
             },
     };
 
@@ -1831,6 +1835,7 @@ TEST(AggregateSpecTypes, DataflowBufferSpecDesignatedInitializers) {
         .entry_size = 2048,
         .num_entries = 4,
         .data_format_metadata = tt::DataFormat::Float16_b,
+        .alias_with = {},
     };
 
     EXPECT_EQ(dfb.unique_id, "my_dfb");
@@ -1843,6 +1848,7 @@ TEST(AggregateSpecTypes, DataflowBufferSpecDesignatedInitializers) {
         .entry_size = 1024,
         .num_entries = 8,
         .uses_borrowed_memory = true,
+        .alias_with = {},
         .disable_implicit_sync = true,
     };
 
@@ -1882,6 +1888,7 @@ TEST(AggregateSpecTypes, RuntimeArgSchemaPerNodeOverrideDesignatedInitializers) 
     // Per-node override path (advanced): ensure designated-init through std::optional works.
     using NumVarargsPerNode = KernelSpec::RuntimeArgSchema::NumVarargsPerNode;
     KernelSpec::RuntimeArgSchema schema{
+        .named_runtime_args = {},
         .num_runtime_varargs_per_node = NumVarargsPerNode{{NodeCoord{0, 0}, 4}, {NodeCoord{1, 0}, 7}},
     };
 
@@ -1894,9 +1901,11 @@ TEST(AggregateSpecTypes, KernelSpecNamedRuntimeArgsDesignatedInitializers) {
     KernelSpec k{
         .unique_id = "k",
         .source = KernelSpec::SourceCode{"void kernel_main() {}"},
+        .dfb_bindings = {},
         .runtime_arguments_schema =
             KernelSpec::RuntimeArgSchema{
                 .named_runtime_args = {"input_ptr"},
+                .named_common_runtime_args = {},
             },
         .config_spec =
             DataMovementConfiguration{
@@ -1936,6 +1945,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                                 .access_pattern = DFBAccessPattern::STRIDED,
                             },
                         },
+                    .semaphore_bindings = {},
                     .config_spec =
                         DataMovementConfiguration{
                             .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
@@ -1953,6 +1963,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                                 .access_pattern = DFBAccessPattern::STRIDED,
                             },
                         },
+                    .semaphore_bindings = {},
                     .config_spec = ComputeConfiguration{},
                 },
             },
@@ -1963,8 +1974,10 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                     .entry_size = 1024,
                     .num_entries = 2,
                     .data_format_metadata = tt::DataFormat::Float16_b,
+                    .alias_with = {},
                 },
             },
+        .remote_dataflow_buffers = {},
         .work_units =
             {
                 WorkUnitSpec{
@@ -2017,6 +2030,7 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
                 .unique_id = "remote_dfb",
                 .entry_size = 1024,
                 .num_entries = 2,
+                .alias_with = {},
             },
         .producer_consumer_map = {{NodeCoord{0, 0}, NodeCoord{1, 0}}},
     };

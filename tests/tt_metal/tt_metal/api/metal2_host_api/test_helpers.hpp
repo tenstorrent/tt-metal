@@ -80,6 +80,7 @@ inline KernelSpec MakeMinimalDMKernel(const std::string& name, uint8_t num_threa
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
+        .dfb_bindings = {},
         .config_spec =
             DataMovementConfiguration{
                 .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
@@ -95,6 +96,7 @@ inline KernelSpec MakeMinimalGen1DMKernel(
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
+        .dfb_bindings = {},
         .config_spec =
             DataMovementConfiguration{
                 .gen1_data_movement_config =
@@ -111,6 +113,7 @@ inline KernelSpec MakeMinimalComputeKernel(const std::string& name, uint8_t num_
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
+        .dfb_bindings = {},
         .config_spec = ComputeConfiguration{},
     };
 }
@@ -122,6 +125,7 @@ inline DataflowBufferSpec MakeMinimalDFB(
         .unique_id = name,
         .entry_size = entry_size,
         .num_entries = num_entries,
+        .alias_with = {},
     };
 }
 
