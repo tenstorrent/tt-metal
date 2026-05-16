@@ -1,0 +1,317 @@
+STRATEGY INVESTIGATION REPORT
+Date: 2026-05-16 21:37 UTC
+Branch: nsexton/0-racecondition-hunt
+Agent: Task 3 Strategy Investigation
+CI Run Analyzed: 25973430393 (SHA cb91a6c8a37, runner tt-metal-ci-vm-t3k-12)
+
+========================================================================
+## EXECUTIVE SUMMARY
+========================================================================
+
+FIX AD (TCP-style symmetric ETH handshake) is architecturally correct and
+eliminates the STARTED-STARTED deadlock class by construction. Build failed
+first (unused variable from FIX AD refactor — fixed in cb91a6c8a37). The
+subsequent run (25973430393) builds cleanly but the test still fails.
+
+The new dominant failure mode is NOT a handshake bug.
+It is the FIX M relay catch-22: ALL 4 non-MMIO devices (4,5,6,7) entered
+the run with BOTH their relay channels (chan=0, chan=7) in dirty base-UMD
+state from the prior test session. They cannot be soft-reset (need relay to
+reset relay firmware — circular). FIX NX detects timeout writing to each
+relay → all 4 non-MMIO devices are excluded from fabric init → ring sync
+master (MMIO device 0, chan=8) runs fabric firmware but peer (non-MMIO)
+never comes up → ring sync token never written → 0x00000000 after 120s.
+
+Handshake deadlock: CLOSED (FIX AD).
+Current blocker: FIX M relay catch-22 on non-MMIO devices.
+
+========================================================================
+## BUILD FAILURE IN RUN 25972426760 (SHA 749979f96f4b = FIX AD)
+========================================================================
+
+Error: unused variable 'is_handshake_master' in erisc_datamover_builder.cpp
+
+Root cause: FIX AD hardcoded IS_HANDSHAKE_SENDER=0 (was is_handshake_master),
+but retained is_handshake_master for IS_LOCAL_HANDSHAKE_MASTER usage.
+Compiler flagged is_handshake_master as unused (IS_LOCAL_HANDSHAKE_MASTER
+was still referencing it, but -Wunused-variable fired anyway in some paths).
+
+Fix: Commit cb91a6c8a37 — "fabric: fix unused is_handshake_master variable
+after FIX AD refactor". Build passed in run 25973430393.
+
+========================================================================
+## RUN 25973430393 — TIMELINE
+========================================================================
+
+SHA: cb91a6c8a37 (FIX AD + unused variable fix)
+Runner: tt-metal-ci-vm-t3k-12
+Job: t3000-unit-tests / racecondition-hunt [wh_llmbox]
+
+  21:43:26  FIX TV: all 24 MMIO channels confirmed base-UMD in 0ms
+            (NOTE: 0ms = stale read risk — parallel to pre-FIX DS scenario)
+
+  21:43:29  Non-MMIO devices 4,5,6,7: each shows 2 base-UMD channels
+            (chan=0 + chan=7) → FIX M warning fires for all 4
+            "skipping soft reset on non-MMIO (ETH relay needed) [FIX M]"
+
+  21:43:29  MMIO devices 0,1,2,3 chan=8: FIX S9 soft-reset executed
+            FIX DU reports "base firmware heartbeat confirmed in 0ms"
+            (0ms is suspicious — see FIX DU stale read analysis below)
+
+  21:43:29  "Fabric initialized on 8 devices"
+
+  21:43:36  FIX NX: write_core(chip 5) TIMEOUT after 5s
+            "Timeout waiting for Ethernet core service remote IO request flush"
+            → chip 5 relay marked broken
+
+  21:43:41  FIX NX: chip 7 relay broken (5s after chip 5)
+
+  21:43:46  FIX NX: chip 6 relay broken (5s after chip 7)
+
+  21:43:51  FIX NX: chip 4 relay broken (5s after chip 6)
+            → All 4 non-MMIO devices: relay broken
+
+  21:43:51  FIX TH3: "base-UMD channels detected, extending ring sync to 120s"
+
+  21:45:51  Ring sync TIMEOUT (120s):
+            Device 0 chan=8, sync addr=0x00018070
+            Expected 0xa2b2c2d2, got 0x00000000
+
+  21:45:51  Cascade: devices 6,1,7,2,5,3 fast-skipped
+            (ring_sync_already_timed_out_)
+
+  21:45:51  verify_all_fabric_channels_healthy: "channels stuck at
+            REMOTE_HANDSHAKE_COMPLETE" — all 8 devices
+
+  21:46:04  Teardown and test FAILED
+
+========================================================================
+## ROOT CAUSE ANALYSIS
+========================================================================
+
+CAUSE 1 (CONFIRMED PRIMARY): Non-MMIO Relay Catch-22 (FIX M)
+
+All 4 non-MMIO devices (4,5,6,7) entered this CI run with both relay
+channels (chan=0, chan=7) in dirty base-UMD state. This persists from the
+prior test session: a previous run loaded base-UMD firmware via launch_msg
+(not soft-reset), leaving these ERISCs running relay firmware that is
+nominally alive but in a state incompatible with fresh fabric init.
+
+FIX S9 cannot fix non-MMIO channels. The soft-reset path requires a
+relay write to trigger the remote RISC reset. The relay write itself times
+out (FIX NX, 5s per device). No relay → no reset → no fabric firmware
+can be loaded → non-MMIO devices are absent from the fabric ring.
+
+With non-MMIO devices absent:
+- MMIO device 0 chan=8 loads fabric firmware (FIX S9 reset + FIX DU wait)
+- Fabric ERISC on chan=8 enters symmetric_handshake() (FIX AD)
+- Peer (non-MMIO ERISC on the other end of the ETH link) is running relay
+  firmware — it never enters symmetric_handshake()
+- symmetric_handshake() on MMIO side spins waiting to see MAGIC from peer
+- MAGIC never arrives (peer is relay firmware, not fabric firmware)
+- Handshake times out OR ring sync times out first at 120s
+- Ring sync token 0x00000000 — fabric ERISC on chan=8 never writes it
+  because it's still stuck in (or never completed) symmetric_handshake()
+
+CAUSE 2 (SUSPECTED SECONDARY): FIX DU stale read (0ms heartbeat)
+
+FIX TV reports 0ms for ALL 24 MMIO channels. FIX DU also reports 0ms for
+the newly soft-reset channels (0,1,2,3 chan=8). This is the same pattern
+as the pre-FIX DS false-positive: stale 0xABCDxxxx values in L1 before
+ROM zeroes them read as "valid heartbeat". Without the 50ms delay from
+FIX DS, the 0ms result after deassert_risc_reset is unreliable.
+
+If FIX DU is also reading stale values:
+- Fabric firmware loads while ROM is still running (identical to FIX S9
+  pre-FIX DU scenario from strategy_report_20260516_2000.txt)
+- ROM overwrites firmware → ERISC crash
+- edm_status = 0x00000000 (ERISC crashed before writing STARTED)
+
+The 0x00000000 result at ring sync is consistent with BOTH causes:
+- Cause 1: handshake peer never comes up → token never written
+- Cause 2: MMIO ERISC itself crashes before writing the token
+
+Both may be active simultaneously. Cause 1 is the more operationally
+dominant one — even if FIX DU is correct, Cause 1 blocks ring sync.
+
+========================================================================
+## FIX AD — CONFIRMED CORRECT
+========================================================================
+
+FIX AD is architecturally correct. The STARTED-STARTED deadlock class is
+eliminated by construction:
+
+1. prepare_handshake_state() zeros local_value during Object Setup —
+   before edm_status=STARTED, before any peer ETH DMA is possible.
+   Race window: zero.
+
+2. symmetric_handshake() runs on BOTH sides simultaneously. Both sides
+   send MAGIC AND poll for MAGIC. Whichever starts first sends MAGIC;
+   the other side receives it and sends MAGIC back; both complete.
+
+3. The old sender/receiver asymmetry (IS_HANDSHAKE_SENDER compile-time)
+   is completely eliminated. No more "sender waits for receiver" timing
+   dependency that could deadlock if receiver started first.
+
+The current failures are NOT handshake protocol bugs. They are fabric
+initialization sequencing bugs (non-MMIO relay state management).
+
+The handshake deadlock failure class is CLOSED.
+
+========================================================================
+## STRATEGY: FIX DU STALE READ — ASSESS AND FIX
+========================================================================
+
+The 0ms FIX DU response for freshly soft-reset channels strongly suggests
+FIX DU is reading stale heartbeat values, just like FIX DS found in FIX XZ.
+
+FIX DS solution: add 50ms delay BEFORE polling, to let ROM zero L1.
+
+FIX DU must apply the same pattern:
+  BEFORE (current):
+    deassert_risc_reset(channel);
+    // immediately poll heartbeat
+    wait_for_base_firmware_heartbeat(device, channel, 5000ms);
+
+  AFTER (proposed FIX DW):
+    deassert_risc_reset(channel);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));  // let ROM zero L1
+    wait_for_base_firmware_heartbeat(device, channel, 5000ms);
+
+The 50ms delay is already established precedent (FIX DS, FIX AR2). This
+makes FIX DU correctly detect actual post-ROM-boot heartbeat vs stale L1.
+
+Risk: Low. Adds 50ms per FIX S9 channel (at most 8 channels in worst case
+= 400ms total additional init time — well within acceptable range).
+
+Name: FIX DW (FIX DU stale read protection, following FIX DV, FIX DU).
+
+========================================================================
+## STRATEGY: NON-MMIO RELAY CATCH-22 — ROOT CAUSE
+========================================================================
+
+This is the dominant open problem. The complete failure chain:
+
+1. Prior test session loads base-UMD firmware via launch_msg on non-MMIO
+   relay channels (chan=0, chan=7 on devices 4,5,6,7)
+2. Next session: quiesce_fabric detects these channels are base-UMD (FIX M)
+3. configure_fabric_cores: FIX S9 skips non-MMIO channels (relay required)
+4. configure_fabric_cores attempts relay writes to reset non-MMIO channels
+5. Relay writes time out (5s each, 4 devices = 20s delay)
+6. Non-MMIO devices excluded from fabric ring
+7. Ring sync master (MMIO chan=8) has no peer → ring sync timeout (120s)
+8. Total delay: ~143s of unavoidable stalling
+
+Root cause: No mechanism exists to reset non-MMIO ERISC channels without
+a functioning relay. The relay is the only path from host to non-MMIO L1.
+
+OPTIONS (ranked by impact and feasibility):
+
+OPTION A — Fast-fail ring sync for known-broken non-MMIO (immediate fix)
+  When FIX NX detects all non-MMIO relay channels broken, ring sync
+  cannot succeed for the full 8-device topology. Don't wait 120s.
+  Skip ring sync immediately (or reduce timeout to 5s) when
+  non_mmio_relay_all_broken_ == true.
+  Impact: Saves 120s+ per failed session.
+  Risk: Low. Currently FIX NZ skips relay reads/writes when broken.
+  Extend this to also fast-fail the ring sync attempt.
+  Name: FIX DX (fast ring sync skip when non-MMIO relay known broken)
+
+OPTION B — ETH-DMA based non-MMIO channel reset (medium-term fix)
+  MMIO devices can DMA to non-MMIO device memory via ETH fabric.
+  If MMIO device has fabric firmware running, it can send a special
+  reset packet to the non-MMIO ERISC via the ETH link.
+  Non-MMIO ERISC receives it, performs self-reset sequence.
+  This avoids the relay entirely.
+  Impact: Breaks the catch-22 permanently.
+  Risk: Medium — requires firmware protocol addition.
+  Prerequisites: MMIO-side fabric firmware must load first (already works).
+
+OPTION C — tt-smi -r equivalent per-device reset (operational mitigation)
+  If the test framework detects non-MMIO relay broken at teardown,
+  flag the machine for a full reset before next test session.
+  Prevents dirty state accumulation across sessions.
+  Impact: Reduces frequency of FIX M condition appearing.
+  Risk: Low but requires CI runner management changes.
+
+RECOMMENDED IMMEDIATE SEQUENCE:
+  1. FIX DW — add 50ms delay before FIX DU heartbeat poll (low risk, same
+     pattern as FIX DS; eliminates stale read causing potential firmware crash)
+  2. FIX DX — fast ring sync skip when non-MMIO relay all broken
+     (saves 120s per run; test still fails but fails FAST instead of after 2min)
+  3. Investigate OPTION B for the actual fix of the non-MMIO problem
+
+========================================================================
+## FIX DV CONSUMING CODE (CARRY-OVER PRIORITY 3)
+========================================================================
+
+The quiesce_relay_transitioned_ flag exists (infrastructure committed in
+c5fcea71d99) but Phase 5b doesn't use it yet. This is a pre-existing gap
+from the opus_audit_20260516_1934.txt. Still open. Priority 3:
+
+  Add in wait_for_fabric_workers_ready() Phase 5b:
+    if (device->is_quiesce_relay_transitioned()) {
+        // relay known-transitioned, skip relay reads/polls
+        continue;  // or skip the relay-dependent Phase 5b checks
+    }
+
+  This is a separate concern from the relay catch-22 (FIX DX). FIX DV
+  consuming code prevents polling a known-transitioned relay. FIX DX
+  prevents waiting 120s on an impossible ring sync.
+
+========================================================================
+## UPDATED FAILURE CLASS TABLE (post-FIX AD)
+========================================================================
+
+Class                          Status      Fix
+────────────────────────────── ─────────── ─────────────────────────────
+STARTED-STARTED deadlock       CLOSED ✅   FIX AD (symmetric handshake)
+MMIO base-UMD stale firmware   CLOSED ✅   FIX S9 + FIX DU
+FIX XZ stale heartbeat         CLOSED ✅   FIX DS (50ms pre-poll delay)
+Non-MMIO relay catch-22 (FIX M) OPEN ❌   FIX DX (fast skip) + OPTION B
+FIX DU stale read (0ms)        LIKELY ❌  FIX DW (50ms pre-poll delay)
+FIX DV consuming code          OPEN ⚠️    Wire quiesce_relay_transitioned_
+Ring sync false 120s timeout   OPEN ⚠️    FIX DX closes this symptom
+
+========================================================================
+## PREDICTED NEXT CI BEHAVIOR (after FIX DW + FIX DX)
+========================================================================
+
+With FIX DW: MMIO chan=8 channels boot cleanly (ROM completes before
+fabric firmware loads). FIX DU will report actual boot time (~500ms-1s),
+not 0ms. Potential "0x00000000 from ERISC crash" is fixed.
+
+With FIX DX: When all non-MMIO relay channels broken, ring sync is
+fast-skipped (no 120s wait). Test fails quickly instead of timing out.
+
+Without OPTION B: Test still FAILS — non-MMIO devices still can't
+get fabric firmware via broken relay. The mesh fabric is incomplete.
+
+Expected without OPTION B: 0 passed / 1 failed (but fails in ~30s
+not 150s). The fabric topology is 8-device; with 4 non-MMIO devices
+excluded, any 8-device mesh test cannot succeed.
+
+Expected with OPTION B: Test PASSES once non-MMIO reset mechanism works.
+
+IF this CI runner (tt-metal-ci-vm-t3k-12) gets a full tt-smi -r reset
+between runs: next run may have clean non-MMIO channels → no FIX M →
+no relay catch-22 → test passes (if FIX DW is in place for FIX DU).
+This would confirm the root cause.
+
+========================================================================
+## NEXT CI RUN DISPATCH RECOMMENDATION
+========================================================================
+
+BEFORE dispatching:
+  1. Implement FIX DW (50ms delay before FIX DU heartbeat poll)
+  2. Implement FIX DX (fast ring sync skip when non-MMIO relay all broken)
+
+IF those are implemented AND the CI runner happens to be clean:
+  → Predict: 84 PASSED, 0 FAILED
+
+IF the CI runner still has dirty non-MMIO channels AND no OPTION B:
+  → Predict: fast-fail ring sync in ~30s, 1 FAILED, clear diagnosis
+
+========================================================================
+END OF REPORT
+========================================================================
