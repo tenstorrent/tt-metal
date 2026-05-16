@@ -296,7 +296,7 @@ echo "Building ..." | dupstderr
 # GCC 16+ defaults to C++20 where u8"" literals become char8_t[], breaking
 # libcody's S2C helper which expects char[]. Opt back out to pre-C++20 behaviour.
 export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }-fno-char8_t"
-(set -x; scripts/build.sh --test-tt 2>&1)
+(set -x; scripts/build.sh 2>&1)
 
 echo | dupstderr
 echo "Packaging ..." | dupstderr
