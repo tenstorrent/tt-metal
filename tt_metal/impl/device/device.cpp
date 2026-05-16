@@ -1063,6 +1063,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
     // (inline) or launch_eth_cores_for_quiesce() (deferred) to deassert those RISCs after
     // writing the launch message.
     pending_phase25_force_reset_chans_.clear();
+    quiesce_relay_transitioned_ = false;  // FIX DV: clear per-cycle relay-transitioned flag
 
     if (fabric_relay_path_broken_ && !this->is_mmio_capable()) {
         log_warning(

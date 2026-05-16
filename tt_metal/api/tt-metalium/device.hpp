@@ -252,6 +252,13 @@ public:
     // leaving the machine with only 4/8 chips visible.
     virtual bool is_fabric_ring_sync_timed_out() const { return false; }
     virtual void set_fabric_ring_sync_timed_out() {}
+    // FIX DV (#42429): Per-cycle flag indicating that Pass 1c (non-MMIO ETH launch) has
+    // completed, meaning the non-MMIO device's UMD relay ERISC has transitioned to fabric
+    // firmware.  The relay path is no longer usable for host reads.  Phase 5b in
+    // wait_for_fabric_workers_ready() must skip relay polls for non-MMIO devices when this
+    // flag is set — the ETH handshake self-resolves autonomously via the ETH link.
+    virtual bool is_quiesce_relay_transitioned() const { return false; }
+    virtual void set_quiesce_relay_transitioned() {}
     // FIX ST (#42429): Returns the effective (post-FIX-RR) set of pre-dead ETH channels for
     // this device.  Unlike the probe_dead_channels_map used at init time, this set is updated
     // after configure_fabric_cores() runs — channels recovered by FIX RR are removed.

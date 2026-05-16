@@ -232,6 +232,10 @@ public:
     }
     bool is_fabric_ring_sync_timed_out() const override { return fabric_ring_sync_timed_out_.load(); }
     void set_fabric_ring_sync_timed_out() override { fabric_ring_sync_timed_out_.store(true); }
+    // FIX DV (#42429): Per-cycle relay-transitioned flag — overrides.
+    bool is_quiesce_relay_transitioned() const override { return quiesce_relay_transitioned_; }
+    void set_quiesce_relay_transitioned() override { quiesce_relay_transitioned_ = true; }
+    void clear_quiesce_relay_transitioned() { quiesce_relay_transitioned_ = false; }
     // FIX ST (#42429): Returns the effective (post-FIX-RR) pre-dead ETH channel set.
     // See device.hpp comment.
     const std::unordered_set<uint32_t>& get_fabric_pre_dead_channels() const override {
@@ -449,6 +453,12 @@ private:
     // FIX AI-2 (#42429): ETH channels that Phase 2.5 force-halted with assert_risc_reset(ALL).
     // Phase 3 / launch_eth_cores_for_quiesce() must deassert these after write_launch_msg.
     std::unordered_set<uint32_t> pending_phase25_force_reset_chans_;
+    // FIX DV (#42429): Set by quiesce_internal after Pass 1c completes for non-MMIO devices.
+    // Indicates that the UMD relay ERISC on this device has transitioned to fabric firmware —
+    // relay reads will hang.  wait_for_fabric_workers_ready() Phase 5b skips relay polls when
+    // this flag is set for non-MMIO devices (ETH handshake self-resolves autonomously).
+    // Cleared at the start of each quiesce_and_restart_fabric_workers() call.
+    bool quiesce_relay_transitioned_ = false;
 
     // FIX AB extension: Set when teardown_fabric_config() times out waiting for TERMINATED
     // on any ETH channel belonging to this device.  Unlike fabric_relay_path_broken_ (which
