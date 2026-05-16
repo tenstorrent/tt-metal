@@ -11,7 +11,7 @@
 ## What Changed
 
 ### 1. `edm_handshake.hpp`
-- **`init_handshake_info()`** renamed to **`prepare_handshake_state()`** with key change: unconditionally zeros `local_value` (no FIX HX guard needed — runs during Object Setup, long before any peer can send).
+- **`init_handshake_info()`** renamed to **`prepare_handshake_state()`** with key change: unconditionally zeros `local_value` (no FIX HX guard needed — runs during Object Setup, Object Setup takes ~300 lines; no peer can reach symmetric_handshake before we complete this call).
 - `init_handshake_info()` kept as a thin wrapper around `prepare_handshake_state()` for backward compat.
 - **New `symmetric_handshake()`**: Both sides send MAGIC AND poll. Takes only `handshake_register_address` and timeout — no mesh/device args (those were only needed for init, which is done earlier).
 - Old `sender_side_handshake()` and `receiver_side_handshake()` kept but now delegate to `init_handshake_info()` + `symmetric_handshake()`. Marked DEPRECATED.
@@ -33,7 +33,7 @@
 
 ## Why This Is Correct
 
-1. **Fix A eliminates the root cause**: `local_value = 0` happens during Object Setup, hundreds of microseconds before the handshake loop. No peer can have sent MAGIC yet (they haven't reached STARTED). The FIX HX guard (check for MAGIC before zeroing) is no longer needed.
+1. **Fix A eliminates the root cause**: `local_value = 0` happens during Object Setup, hundreds of microseconds before the handshake loop. No peer can have sent MAGIC yet — the peer cannot reach symmetric_handshake until after its own ~300-line Object Setup completes, which takes far longer than our prepare call. The FIX HX guard (check for MAGIC before zeroing) is no longer needed.
 
 2. **Fix D eliminates the timing dependency**: Both sides send and poll, so even if they start at different times, whichever starts first will keep sending MAGIC until the other arrives and sees it. No sender/receiver asymmetry to get wrong.
 
