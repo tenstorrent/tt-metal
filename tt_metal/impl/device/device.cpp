@@ -2639,7 +2639,7 @@ bool Device::phase5b_erisc_health_check(
                 const auto diag_elapsed =
                     std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - hc_start)
                         .count();
-                constexpr int64_t kDiagBudgetMs = kHealthCheckTimeoutMs + 6000;
+                const int64_t kDiagBudgetMs = kHealthCheckTimeoutMs + 6000;
                 if (diag_elapsed > kDiagBudgetMs) {
                     log_warning(
                         tt::LogMetal,
