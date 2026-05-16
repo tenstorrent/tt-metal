@@ -305,7 +305,11 @@ class TtDevstral2LargeAttention(Attention):
             self.args.get_attn_qkv_mm_mem_config = _get_attn_qkv_mm_interleaved_decode  # type: ignore[method-assign]
 
     def _llama4_scaling_enabled(self) -> bool:
-        return self.llama_4_scaling_beta is not None and self.original_max_position_embeddings is not None
+        # beta == 0.0 makes the scale a constant 1.0 (1 + 0 * log1p(...)); skip the FP32 chain.
+        # Devstral-2-123B's HF config sets beta=0, so this path runs every decode/prefill for no effect.
+        if self.llama_4_scaling_beta is None or self.original_max_position_embeddings is None:
+            return False
+        return float(self.llama_4_scaling_beta) != 0.0
 
     def _llama4_scale_factor_from_positions_ttnn(self, pos_tt: ttnn.Tensor) -> ttnn.Tensor:
         """
