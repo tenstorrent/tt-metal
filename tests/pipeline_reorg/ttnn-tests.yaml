@@ -239,3 +239,36 @@
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   merge_gate: false
+
+# Dedicated job for known-flaky tests.
+# These tests are deselected from all regular test group runs (see flaky-tests.yaml)
+# and run here in isolation so failures are visible but non-blocking for regular sanity.
+# Tracking issues: #44353, #44354, #44355, #44356, #44357
+- name: "ttnn flaky tests"
+  cmd: >-
+    pytest --timeout 300 -v
+    tests/ttnn/unit_tests/operations/eltwise/test_math.py
+    tests/ttnn/unit_tests/operations/eltwise/test_activation.py::test_gelu_accurate_allclose
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py::test_binary_add_uint16_bcast
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py::test_binary_sharded_bcast_w_block
+    tests/ttnn/unit_tests/operations/eltwise/test_remainder.py::test_remainder_scalar
+    tests/ttnn/unit_tests/operations/eltwise/test_relational.py::test_binary_relational_scalar_ttnn
+    tests/ttnn/unit_tests/operations/fused/test_group_norm.py::test_group_norm_with_block_sharded_v2_8x4_grid
+    tests/ttnn/unit_tests/operations/fused/test_group_norm.py::test_group_norm_with_block_sharded_v2_8x8_grid
+    tests/ttnn/unit_tests/operations/fused/test_batch_norm.py::test_batch_norm_tests
+    tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_with_transpose_a_or_b
+    tests/ttnn/unit_tests/operations/matmul/test_addmm.py::test_addmm_square_matrices
+    tests/ttnn/unit_tests/operations/reduce/test_cumprod.py::test_cumprod_normal
+    tests/ttnn/unit_tests/operations/conv/data_movement/test_convert_to_chw.py::test_convert_to_chw
+    tests/ttnn/unit_tests/operations/pool/test_adaptive_pool2d.py::test_adaptive_pool2d
+    tests/ttnn/unit_tests/operations/pool/test_adaptive_pool2d.py::test_adaptive_dram_pool2d
+    tests/ttnn/unit_tests/operations/data_movement/test_repeat.py::test_pc_with_different_shapes_in_sequence
+    tests/ttnn/unit_tests/base_functionality/test_copy.py::test_copy_tilized_interleaved_to_nd_sharded_dtype_conversion
+    tests/ttnn/unit_tests/base_functionality/test_to_layout.py::test_to_layout_wide_tensor
+    models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_conv2d_block_sharded_sdxl_performance
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U05ACKAJTHS # Naif Tarafdar (TMs & CCLs lead — rotate ownership as needed)
+  merge_gate: false
