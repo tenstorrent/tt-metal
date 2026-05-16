@@ -1,5 +1,71 @@
 
 ---
+## 2026-05-16 — Cycle 19: FIX DS (FIX XZ stale heartbeat false-positive)
+
+### CI Run: 25965745372 — 4 FAILED tests (runner tt-metal-ci-vm-t3k-05)
+
+**Root Cause:** FIX XZ (teardown MMIO ETH heartbeat poll) immediately declares all 12 force-reset MMIO channels "ready" (reports "in 0ms") because it reads the PRE-RESET stale 0xABCDxxxx heartbeat value that is still in L1 before ROM has had a chance to zero it. As a result teardown returns claiming channels are healthy. The next session (Session 4, 8-device) starts immediately and reads those same channels at 0x49705180 (ROM postcode, mid-reboot), FIX BT promotes them to probe_dead, FIX RR asserts+deasserts them again, and FIX BH polls 5000ms — all 20 MMIO router channels (6,7,8,9,14,15 across all 4 MMIO devices) never exit ROM within 5000ms.
+
+**Root cause chain:**
+1. Session 2 (1x4 mesh, 2CQ): `wait_for_fabric_workers_ready` timed out on 4 channels
+2. Session 2 teardown: 20 channels hit global deadline → assert+deassert force-reset (FIX AI)
+3. FIX XZ poll starts immediately, reads stale 0xABCDxxxx (pre-reset L1 value), reports "confirmed in 0ms" — FALSE POSITIVE
+4. Session 3 (8-device) starts immediately; router channels on all 4 MMIO devices still at 0x49705180 (ROM mid-boot)
+5. FIX BT promotes them to probe_dead; FIX RR re-resets + FIX BH polls 5000ms; all fail → 20 dead channels → 4 tests fail with 5s timeouts
+
+**Key diagnostic log:** `FIX XZ (#42429): all 12 force-reset MMIO ETH channel(s) confirmed base firmware heartbeat in 0ms` — the "in 0ms" is the smoking gun. Genuine reboot takes 100ms+. 0ms means stale read.
+
+**Fix (FIX DS):** Added 50ms `std::this_thread::sleep_for` immediately before `const auto poll_start` in FIX XZ's poll block (`fabric_firmware_initializer.cpp`). This ensures ROM has zeroed L1 (including the heartbeat address) before the first poll read, eliminating the stale-value false positive. Parallel to FIX AR2's 100ms guard in `risc_firmware_initializer.cpp` for the same class of problem.
+
+**File:** `tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp` (1-line sleep + comment block)
+
+**Next label:** FIX DT (already used by earlier fix — check journal). Use FIX DU next.
+
+**Watch in next run:** FIX XZ should report "confirmed in Xms" where X > 50. No more 0ms reports. FIX BH failures on channels 6,7,8,9,14,15 should disappear.
+
+---
+## 2026-05-16 — Cycle 18: FIX DR (constexpr compile error)
+
+### CI Run: 25965317039 — BUILD FAILURE (racecondition-hunt SKIPPED)
+
+**Root Cause:** FIX DQ introduced `const uint32_t kHealthCheckTimeoutMs = this->is_fabric_stale_base_umd_channels() ? 120000 : 30000;` (a runtime value), but a downstream usage at device.cpp:2642 was left as `constexpr int64_t kDiagBudgetMs = kHealthCheckTimeoutMs + 6000;`. This is illegal — a `constexpr` variable cannot be initialized from a non-constexpr expression. Clang-20 correctly rejects it.
+
+**Fix:** Changed `constexpr int64_t kDiagBudgetMs` → `const int64_t kDiagBudgetMs`. Semantics identical — still computed once per diagnostic iteration.
+
+**Commit:** dd11948f5ad5 — "FIX DR: fix constexpr-vs-runtime kDiagBudgetMs compile error"
+
+**New CI Run:** 25965745372 — https://github.com/tenstorrent/tt-metal/actions/runs/25965745372
+
+**Next:** Build should pass. Watch for Phase 5b deadline exceeded messages in the test run.
+
+---
+## 2026-05-16 — Opus Audit: FIX DR + FIX DP-2 (kFIX_BH_BootWaitMs 3s→5s)
+
+### CI Run Analyzed: 25964368272 (runner tt-metal-ci-vm-t3k-09)
+
+**Outcome**: 4 FAILED tests (AllGatherPersistentOutput, ReduceScatter, AllReduce, AllGatherEthTxqTeardownRace), 1 SKIPPED, 80 PASSED.
+
+**Root cause**: After Test 1's teardown (FIX AC PCIe hard-reset of MMIO ETH), Test 2's init runs FIX RR soft-reset on 24 MMIO channels simultaneously. FIX BH polls for 3000ms but ALL 24 channels remain at ROM postcode 0x49705180. All marked newly_dead → fabric completely degraded → 4 tests fail at 5s SetUp timeout.
+
+**Why 3s was insufficient**: WH ERISC ROM boot includes ETH link training (1-5s per channel). With 24 channels booting simultaneously, PCIe bandwidth is shared and the parallel load extends boot time beyond 3s.
+
+### Fixes Applied
+
+1. **FIX DP-2** (`fabric_init.cpp`): Increased `kFIX_BH_BootWaitMs` from 3000 to 5000. Matches the FIX RP PARALLEL batch deadline already set to 5s for the same class of ROM-postcode recovery.
+
+2. **FIX DR** (`fabric_init.cpp`): Added final edm_status read on FIX BH timeout. Previously the log hardcoded "still at 0x49705180" — now reads the actual value to distinguish completely-stuck from partially-booted ERISCs.
+
+3. **analyze_fabric_hang_log.sh**: Added FIX_BH_FIRES counter and interpretation section.
+
+### Additional Findings (no code changes)
+
+- **fabric_eth_health iterates harvested channels**: Devices 1/3 chans 14/15 are harvested, not in active_ethernet_cores(). Health check logs "No core type found for system TRANSLATED" — noise, not a real failure. Would need a guard in the diagnostic loop but is low priority.
+
+- **No test deterministically reproduces FIX BH contention**: The 24-channel simultaneous boot scenario only occurs when a prior test leaves the machine in a specific degraded state.
+
+### Audit report: /workspace/group/research/opus_audit_20260516_1516.txt
+
+---
 ## CANONICAL BRANCHES (2026-05-09)
 
 - **tt-metal**: `nsexton/0-racecondition-hunt`
@@ -1435,3 +1501,47 @@ FIX TV in run_launch_phase provides the same defense on the next session's init 
 ### Fixes applied
 - **FIX DO**: Extended kHealthCheckTimeoutMs in device.cpp phase5b_erisc_health_check from 2000ms to 30000ms
 - **FIX DP**: Extended kFIX_BH_BootWaitMs in fabric_init.cpp from 500ms to 3000ms
+
+---
+
+## Cycle 16 — 2026-05-16 — FAILURE → FIX DQ
+
+**Run**: 25964368272 | Runner: tt-metal-ci-vm-t3k-09 | SHA: dee554401417 (FIX DO+FIX DP)
+
+### Failure chain
+1. Session 2 (1×4 mesh, devices 0-3): many base-UMD channels on all devices
+2. Phase 5b `kHealthCheckTimeoutMs = 30000` expires at 30001ms on devices 1/9, 5/6, 3/15
+3. Global teardown fires → force-resets 20 pending channels
+4. FIX XZ polls MMIO channels for heartbeat (3000ms) — both MMIO and non-MMIO peers stuck at ROM postcode, ETH link-up impossible → FIX XZ times out
+5. Session 3: all 24 MMIO channels (devices 0-3, chans 0,1,6,7,8,9,14,15) at ROM postcode
+6. FIX RR + FIX BH (3000ms) times out for all 24 → session fails
+
+### Root cause
+`phase5b_erisc_health_check()` has hardcoded `constexpr kHealthCheckTimeoutMs = 30000`.
+FIX BO already extends Phase 5 ring-sync to 120s when `fabric_stale_base_umd_channels_` is true,
+but Phase 5b had no equivalent extension. base-UMD→active transition can take >30s.
+
+### FIX DQ (SHA: d798425741e5)
+In `device.cpp` `phase5b_erisc_health_check()`:
+```cpp
+// Before:
+constexpr uint32_t kHealthCheckTimeoutMs = 30000;
+// After:
+const uint32_t kHealthCheckTimeoutMs = this->is_fabric_stale_base_umd_channels() ? 120000 : 30000;
+```
+Same 12× pattern as FIX BO / FIX TH3. Prevents global teardown cascade.
+
+**Cycle 17 run**: 25965317039 (queued 15:10 UTC)
+
+---
+## Cycle 20 — FIX DU
+
+**Run**: (pending dispatch)
+**Root cause from Cycle 19**: FIX AC in `RiscFirmwareInitializer::teardown()` unconditionally resets ALL MMIO ETH channels. Fires only 11ms after FIX XZ (in `FabricFirmwareInitializer::teardown()`) confirms 12 channels already at UMD firmware. This re-resets channels that FIX DK-2/XZ already recovered, causing ETH link training deadlock with dead non-MMIO NCRISC peers.
+
+**FIX DU**: Pre-scan all MMIO ETH channels BEFORE the FIX AC reset loop. For each channel already at UMD base firmware (`heartbeat >> 16 == 0xABCDu`), skip assert+deassert. Record skipped channels in `ac_du_skip_channels`. In FIX AR's heartbeat poll, mark skipped channels as `ready=true` from the start.
+
+**Files changed**:
+- `tt_metal/impl/device/firmware/risc_firmware_initializer.cpp`: FIX DU pre-scan (lines 516-570), skip check in reset loop (lines 577-581), pre-confirmed channels in FIX AR poll (lines 670-676)
+
+**Expected outcome**: When FIX DK-2/XZ brings up 12 MMIO channels to UMD firmware during Session 2 teardown, those channels will not be re-reset by FIX AC 11ms later. Only channels NOT at UMD firmware will be reset. ETH link training deadlock avoided.

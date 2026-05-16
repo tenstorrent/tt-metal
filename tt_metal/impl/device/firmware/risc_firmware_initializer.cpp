@@ -512,11 +512,74 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                 "Hard-resetting MMIO ETH channels via PCIe BEFORE assert_cores loop "
                 "to restore UMD relay firmware and avoid 5s-per-device relay timeouts.",
                 relay_broken_non_mmio.size());
+
+            // FIX DU (#42429): Pre-scan MMIO ETH channels before resetting — skip channels
+            // already at UMD base firmware (heartbeat >> 16 == 0xABCDu).
+            //
+            // Root cause of Cycle 19 failure: FabricFirmwareInitializer::teardown() contains
+            // FIX DK-2 which force-resets MMIO ETH channels stuck at REMOTE_HANDSHAKE_COMPLETE.
+            // After ~10-12s those channels reboot and reach UMD firmware.  FIX XZ confirms
+            // them ready at e.g. 16:22:56.542.  Then FIX AC fires 11ms later at 16:22:56.553,
+            // unconditionally resetting ALL MMIO ETH channels — including the ones FIX DK-2/XZ
+            // already brought up to UMD firmware.
+            //
+            // After FIX AC re-resets those channels, MMIO ERISCs enter ROM and try to train
+            // ETH link with non-MMIO peers.  But the non-MMIO NCRISC is dead from the teardown
+            // cascade (FIX BU skipped deassert for relay-dead non-MMIO channels).  ETH link
+            // training cannot complete → MMIO ERISCs stuck in ROM indefinitely.  FIX AR then
+            // times out at 5000ms, FIX AQ times out at 10000ms, and the next session finds
+            // ALL 24 MMIO channels at ROM postcode 0x49705180 → tests hang and fail.
+            //
+            // Fix: read each MMIO ETH channel's heartbeat before resetting it.  If already
+            // 0xABCDxxxx (UMD base firmware running), skip assert+deassert for that channel.
+            // The relay is already healthy; resetting it would only cause ETH link deadlock.
+            // Record skipped channels so FIX AR marks them pre-confirmed-ready (no poll needed).
+            const uint32_t ac_du_hb_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
+            std::vector<tt_cxy_pair> ac_du_skip_channels;
+            if (ac_du_hb_addr != 0u) {
+                for (const tt::ChipId du_mmio_id : mmio_ids_set) {
+                    for (const auto& du_logical_core :
+                         this->get_control_plane_().get_active_ethernet_cores(du_mmio_id)) {
+                        CoreCoord du_virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                            du_mmio_id, du_logical_core, CoreType::ETH);
+                        tt_cxy_pair du_target(du_mmio_id, du_virt);
+                        uint32_t du_hb = 0;
+                        try {
+                            cluster_.read_reg(&du_hb, du_target, ac_du_hb_addr);
+                        } catch (...) {
+                            continue;  // unreadable — will be reset as normal
+                        }
+                        if ((du_hb >> 16) == 0xABCDu) {
+                            ac_du_skip_channels.push_back(du_target);
+                            log_info(
+                                tt::LogAlways,
+                                "teardown: FIX DU (#42429) — MMIO ETH core {} already at UMD "
+                                "firmware (hb=0x{:08x}); skipping reset to preserve ETH link",
+                                du_target.str(),
+                                du_hb);
+                        }
+                    }
+                }
+                if (!ac_du_skip_channels.empty()) {
+                    log_info(
+                        tt::LogAlways,
+                        "teardown: FIX DU (#42429) — {} MMIO ETH channel(s) already at UMD "
+                        "firmware; these will NOT be reset by FIX AC",
+                        ac_du_skip_channels.size());
+                }
+            }
+
             for (const tt::ChipId mmio_id : mmio_ids_set) {
                 for (const auto& logical_core :
                      this->get_control_plane_().get_active_ethernet_cores(mmio_id)) {
                     CoreCoord virtual_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
                         mmio_id, logical_core, CoreType::ETH);
+                    // FIX DU (#42429): skip channels already at UMD firmware.
+                    tt_cxy_pair reset_tgt(mmio_id, virtual_core);
+                    if (std::find(ac_du_skip_channels.begin(), ac_du_skip_channels.end(), reset_tgt) !=
+                        ac_du_skip_channels.end()) {
+                        continue;
+                    }
                     try {
                         // PCIe-direct for MMIO — safe even with broken relay.
                         cluster_.assert_risc_reset_at_core(
@@ -583,7 +646,8 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             // Declared outside the heartbeat block so it is visible at the FIX AY gate below.
             bool ac_heartbeat_any_ready = false;
             {
-                const uint32_t hb_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
+                // FIX DU (#42429): reuse the heartbeat address already fetched in the pre-scan.
+                const uint32_t hb_addr = ac_du_hb_addr;
                 if (hb_addr == 0u) {
                     log_warning(
                         tt::LogAlways,
@@ -603,7 +667,13 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                              this->get_control_plane_().get_active_ethernet_cores(poll_mmio_id)) {
                             CoreCoord poll_virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
                                 poll_mmio_id, poll_logical_core, CoreType::ETH);
-                            poll_states.push_back({tt_cxy_pair(poll_mmio_id, poll_virt), 0, false, false});
+                            tt_cxy_pair poll_tgt(poll_mmio_id, poll_virt);
+                            // FIX DU (#42429): channels that skipped reset are already at UMD
+                            // firmware — mark them pre-confirmed so the poll loop skips them.
+                            const bool du_pre_ready =
+                                std::find(ac_du_skip_channels.begin(), ac_du_skip_channels.end(), poll_tgt) !=
+                                ac_du_skip_channels.end();
+                            poll_states.push_back({poll_tgt, 0, du_pre_ready, du_pre_ready});
                         }
                     }
                     constexpr int kBulkPollMs = 5000;
