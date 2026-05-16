@@ -294,6 +294,29 @@ resolve_deepseekv3_model() {
     echo "Using DeepSeek V3 model: ${DEEPSEEK_V3_HF_MODEL}"
 }
 
+maybe_use_quad_ring_prepared_model() {
+    local ds_quad_torus="${DS_QUAD_USE_TORUS_MODE:-1}"
+    ds_quad_torus="${ds_quad_torus,,}"
+    case "${ds_quad_torus}" in
+        ""|1|true|yes|on) ;;
+        *) return 0 ;;
+    esac
+
+    local model_path="${DEEPSEEK_V3_HF_MODEL:-}"
+    if [[ -z "${model_path}" ]]; then
+        return 0
+    fi
+    if [[ "${model_path}" == *-quad-ring ]]; then
+        return 0
+    fi
+
+    local quad_ring_candidate="${model_path}-quad-ring"
+    if [[ -d "${quad_ring_candidate}" ]]; then
+        export DEEPSEEK_V3_HF_MODEL="${quad_ring_candidate}"
+        echo "Using quad-ring prepared DeepSeek model: ${DEEPSEEK_V3_HF_MODEL}"
+    fi
+}
+
 setup_dual_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
     export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
@@ -368,6 +391,8 @@ setup_quad_galaxy_env() {
             exit 1
             ;;
     esac
+
+    maybe_use_quad_ring_prepared_model
 }
 
 # Compute pytest --timeout value.
@@ -597,6 +622,24 @@ run_quad_teacher_forced_test() {
     fi
 }
 
+run_quad_test_model_long_prefill_single_galaxy_test() {
+    fail=0
+    setup_quad_galaxy_env
+    local timeout=$(_demo_timeout 1250)
+    local selector="mode_prefill"
+    local junit_path="$(_test_run_summary_junit_path test_model_long_prefill_single_galaxy_quad)"
+    local junit_flag="--junitxml=${junit_path}"
+
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=32768 pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/tests/test_model.py -k '$selector' 2>&1 | tee generated/artifacts/quad_test_model_long_prefill_single_galaxy_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    fail+=$((fail + ec))
+    _test_run_summary_append_junit_rows "test_model_long_prefill_single_galaxy_quad" "${junit_path}" "${ec}"
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
 ###############################################################################
 # Demo tests (full)
 ###############################################################################
@@ -703,6 +746,7 @@ run_all_needed_local_tests() {
     run_dual_demo_test
     run_dual_demo_stress_test
     run_quad_teacher_forced_test
+    run_quad_test_model_long_prefill_single_galaxy_test
     run_quad_demo_test
     run_quad_demo_stress_test
 
@@ -901,6 +945,9 @@ main() {
         "quad_demo_stress")
             run_quad_demo_stress_test
             ;;
+        "quad_test_model_long_prefill")
+            run_quad_test_model_long_prefill_single_galaxy_test
+            ;;
         "dual_deepseekv3_integration_tests")
             run_dual_deepseekv3_integration_tests
             ;;
@@ -915,7 +962,7 @@ main() {
             ;;
         *)
             echo "Unknown test function: $test_function" 1>&2
-            echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, dual_demo_mtp, quad_demo, quad_demo_mtp, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all_needed_local_tests, all" 1>&2
+            echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, dual_demo_mtp, quad_demo, quad_demo_mtp, dual_demo_stress, quad_demo_stress, quad_test_model_long_prefill, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all_needed_local_tests, all" 1>&2
             echo "Optional second argument: UPR mode (all|32|8)" 1>&2
             echo "Optional flags: --no-torus  --model-path <path>  --cache-path <path>" 1>&2
             echo "Example: $0 quad_demo 32 --no-torus --model-path /data/deepseek/DeepSeek-R1-0528-dequantized-stacked --cache-path /data/deepseek/DeepSeek-R1-0528-Cache/CI" 1>&2
