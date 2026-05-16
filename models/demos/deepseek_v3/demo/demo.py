@@ -6,10 +6,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import subprocess
 from glob import glob
 from pathlib import Path
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -116,6 +118,17 @@ def _is_primary_artifact_writer() -> bool:
         except ValueError:
             return False
     return True
+
+
+def _apply_global_seed(seed: int) -> None:
+    # Keep hash randomization consistent for child processes launched from this run.
+    os.environ.setdefault("PYTHONHASHSEED", str(seed))
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.use_deterministic_algorithms(True)
+    # Avoid expensive deterministic debug fills on large reference tensors.
+    torch.utils.deterministic.fill_uninitialized_memory = False
 
 
 def _print_performance_metrics(results: dict) -> None:
@@ -243,6 +256,12 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Optional fixed seed for host/on-device sampling.",
+    )
+    p.add_argument(
+        "--global-seed",
+        type=int,
+        default=None,
+        help="Optional fixed global seed for host RNGs (python, numpy, torch).",
     )
     p.add_argument(
         "--cache-dir",
@@ -498,6 +517,7 @@ def run_demo(
     sampling_top_k: int = DEFAULT_SAMPLING_TOP_K,
     sampling_top_p: float = DEFAULT_SAMPLING_TOP_P,
     sampling_seed: int | None = None,
+    global_seed: int | None = None,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -530,6 +550,12 @@ def run_demo(
         )
     if sampling_seed is not None and sampling_seed < 0:
         raise SystemExit("--sampling-seed must be >= 0.")
+    if global_seed is not None and global_seed < 0:
+        raise SystemExit("--global-seed must be >= 0.")
+
+    if global_seed is not None:
+        logger.info(f"Applying global seed for host RNGs: {global_seed}")
+        _apply_global_seed(global_seed)
 
     # Validate model directory per mode
     validate_model_path(
@@ -648,6 +674,7 @@ def run_demo(
                     enable_mtp=enable_mtp,
                     batch_size_per_row=max_users_per_row,
                     sampling_params=sampling_params,
+                    global_seed=global_seed,
                 )
             except (FileNotFoundError, ValueError) as e:
                 if use_weight_cache:
@@ -899,6 +926,7 @@ def main() -> None:
         sampling_top_k=args.sampling_top_k,
         sampling_top_p=args.sampling_top_p,
         sampling_seed=args.sampling_seed,
+        global_seed=args.global_seed,
         stop_at_eos=bool(args.stop_at_eos),
         checkpoint_jsonl=args.checkpoint_jsonl,
         enable_mtp=(args.mtp == "on"),

@@ -179,6 +179,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         sample_on_device: bool = False,
         enable_mtp: bool = False,
         sampling_params: SamplingParams | None = None,
+        global_seed: int | None = None,
         vllm_context: bool = False,
     ) -> None:
         self.vllm_context = vllm_context  # track if Generator is initialized in vLLM context
@@ -186,6 +187,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.model_path = str(model_path)
         self.cache_dir = cache_dir
         self.use_weight_cache = bool(use_weight_cache)
+        self.global_seed = int(global_seed) if global_seed is not None else None
+        if self.global_seed is not None:
+            logger.info(f"DeepseekGenerator using global_seed={self.global_seed}")
 
         # Load HF config + tokenizer
         self.hf_config = (
@@ -358,6 +362,11 @@ class DeepseekGenerator(WarmupForwardMixin):
             self._sample_tokens_device(decode_logits, enable_trace=enable_trace)
         else:
             self._sample_on_host(decode_logits)
+
+    def _rng_for_global_seed(self, offset: int) -> torch.Generator | None:
+        if self.global_seed is None:
+            return None
+        return torch.Generator(device="cpu").manual_seed(self.global_seed + int(offset))
 
     def _get_default_prefill_warmup_mode(self) -> str:
         return DEFAULT_PREFILL_WARMUP_MODE_VLLM if self.vllm_context else DEFAULT_PREFILL_WARMUP_MODE_DEMO
@@ -2368,6 +2377,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             "sample_on_device": self.sample_on_device,
             "num_hidden_layers": self.hf_config.num_hidden_layers,
             "random_weights": self.random_weights,
+            "global_seed": self.global_seed,
             "sampling": {
                 "temperature": self.sampling_params.temperature,
                 "top_k": self.sampling_params.top_k,
@@ -3078,11 +3088,21 @@ class DeepseekGenerator(WarmupForwardMixin):
             sample_on_device_list = [False, True] if can_sample_on_device else [False]
         else:
             sample_on_device_list = [sample_on_device]
+        warmup_generator = self._rng_for_global_seed(offset=101)
 
         for sample_on_device in sample_on_device_list:
             for token_len in self._get_prefill_warmup_token_lens(min_token_len, max_token_len):
                 vocab = int(getattr(self.hf_config, "vocab_size", 129280))
-                warmup_token_ids = [torch.randint(vocab, (token_len,), dtype=torch.int32).tolist()]
+                if warmup_generator is None:
+                    warmup_tokens = torch.randint(vocab, (token_len,), dtype=torch.int32)
+                else:
+                    warmup_tokens = torch.randint(
+                        vocab,
+                        (token_len,),
+                        dtype=torch.int32,
+                        generator=warmup_generator,
+                    )
+                warmup_token_ids = [warmup_tokens.tolist()]
                 tokens, _ = self._pad_batch(warmup_token_ids, 1)
                 # TODO: MTP path warmup needed?
                 prefill_logits = self._prefill(

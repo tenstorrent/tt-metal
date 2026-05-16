@@ -357,6 +357,10 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
     if override_sampling_seed is not None:
         run_kwargs["sampling_seed"] = override_sampling_seed
 
+    override_global_seed = _optional_int_env("DEEPSEEK_TEST_DEMO_GLOBAL_SEED")
+    if override_global_seed is not None:
+        run_kwargs["global_seed"] = override_global_seed
+
     if case["override_num_layers"] is not None:
         run_kwargs["override_num_layers"] = case["override_num_layers"]
     if case["stop_at_eos"] is not None:
