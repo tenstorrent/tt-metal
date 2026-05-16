@@ -1031,6 +1031,27 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             if (!mmio_reset_chans.empty()) {
                 constexpr int kRebootWaitMs = 3000;
                 constexpr auto kPollInterval = std::chrono::milliseconds(10);
+                // FIX DS (#42429): Add a 50ms delay before starting the heartbeat poll.
+                //
+                // Root cause: after assert+deassert (force-reset), the ERISC begins rebooting
+                // through ROM.  L1 is zeroed by ROM early in that sequence — but until the zero
+                // write reaches the heartbeat address, the pre-reset 0xABCDxxxx value is still
+                // visible via PCIe.  The poll loop's first read therefore sees the STALE
+                // 0xABCDxxxx immediately, sets mc.ready = true, and reports "confirmed in 0ms"
+                // without waiting for an actual reboot.
+                //
+                // The downstream consequence: teardown returns claiming channels are ready.
+                // The next session starts, reads those channels at the ROM postcode 0x49705180
+                // (ROM is still executing), FIX BT promotes them to probe_dead, FIX RR
+                // re-resets them, and FIX BH polls for 5000ms — often failing because the
+                // reboot time budget is shared with the previous teardown's ROM boot.
+                //
+                // 50ms is sufficient: WH ERISC ROM zeroes L1 within ~10ms of deassert (same
+                // reasoning as FIX AR2's 100ms guard in risc_firmware_initializer.cpp).  Using
+                // 50ms gives 5× margin so we enter the loop only after the stale pre-reset
+                // value is gone, and the poll then correctly waits for the fresh 0xABCDxxxx
+                // written by UMD base firmware after ROM boot completes.
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 const auto poll_start = std::chrono::steady_clock::now();
 
                 while (true) {
