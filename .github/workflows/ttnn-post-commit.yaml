@@ -91,12 +91,9 @@ jobs:
           merge_gate="${{ inputs.merge-gate-call }}"
           matrix='${{ steps.build-matrix.outputs.matrix }}'
           if [ "$merge_gate" = "true" ]; then
-            # Merge gate: run only groups explicitly flagged merge_gate: true
             filtered=$(echo "$matrix" | jq -c 'map(select(.merge_gate == true))')
           else
-            # Sanity: run all groups (superset of merge gate); dedicated
-            # flaky-tests job (merge_gate: false) is included here only
-            filtered=$(echo "$matrix" | jq -c '.')
+            filtered=$(echo "$matrix" | jq -c 'map(select(.merge_gate == false))')
           fi
           len=$(echo "$filtered" | jq 'length')
           if [ "$len" -eq 0 ]; then
