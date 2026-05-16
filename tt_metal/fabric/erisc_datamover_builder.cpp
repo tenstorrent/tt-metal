@@ -878,17 +878,6 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     uint32_t risc_id) const {
     TT_ASSERT(this->local_fabric_node_id != this->peer_fabric_node_id);
 
-    // Tie break policy for selecting the handshake master:
-    // 1. If both nodes are on the same mesh, compare chip_ids
-    // 2. If nodes are on different meshes, compare mesh_ids (since chip_ids can alias across meshes)
-    auto peer_tie_break_id = (local_fabric_node_id.mesh_id == peer_fabric_node_id.mesh_id)
-                                 ? peer_fabric_node_id.chip_id
-                                 : *(peer_fabric_node_id.mesh_id);
-    auto local_tie_break_id = (local_fabric_node_id.mesh_id == peer_fabric_node_id.mesh_id)
-                                  ? local_fabric_node_id.chip_id
-                                  : *(local_fabric_node_id.mesh_id);
-    bool is_handshake_master = local_tie_break_id < peer_tie_break_id;
-
     // TODO print allocations
 
     // TODO: promote to user-configurable parameter (user could be just control plane based on arch in this case)
@@ -1133,7 +1122,6 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["IS_INTERMESH_ROUTER"] = this->is_inter_mesh;
     // FIX AD (#42429): IS_HANDSHAKE_SENDER is no longer used — symmetric handshake means
     // both sides run the same code path. Set to 0 to avoid dead-code confusion.
-    // The is_handshake_master variable is retained for IS_LOCAL_HANDSHAKE_MASTER (local sync).
     named_args["IS_HANDSHAKE_SENDER"] = 0;
     named_args["HANDSHAKE_ADDR"] = static_cast<uint32_t>(this->handshake_address);
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
