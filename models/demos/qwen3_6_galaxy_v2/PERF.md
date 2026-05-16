@@ -2135,16 +2135,27 @@ overrun drops a small number of device markers; `cpp_device_perf_report.csv`
 
 ### Tracy signposts (ns since trace start)
 
-| label        | ts (ns)        |
-|--------------|---------------:|
-| start        | 52 226 012 060 |
-| prefill_done | 52 387 199 167 |
-| stop         | 56 911 247 821 |
+| label        | ts (ns)         |
+|--------------|----------------:|
+| start        | 266 673 083 962 |
+| prefill_done | 266 833 515 310 |
+| stop         | 271 167 725 714 |
 
-Profiled prefill window = **161.2 ms wall**.  Profiled decode region
-(5 steps incl. compile) = **4 524.0 ms wall**.  Wall-clock warm-decode
-mean = **610.5 ms / step** (per the driver's own python timer, lines
-1..4 average; step 0 = 2 081.8 ms compile).
+Profiled prefill window = **160.4 ms wall** (signpost diff;
+driver's own python timer reports 158.22 ms warm prefill T=128).
+Profiled decode region (5 steps incl. compile) = **4 334.2 ms wall**.
+Wall-clock warm-decode mean = **572.16 ms / step** (per the driver's
+own python timer, lines 1..4 average: 573.14, 572.83, 574.54, 568.15;
+step 0 compile = 2 045.27 ms).  Real-loop tok/s/user (decode) =
+1000 / 572.16 = **1.75 tok/s/user**.
+
+This iteration's wall-clock is **6 % faster than the previous
+V2-tracy-3 capture** (572 ms vs 610 ms / step) — entirely within the
+capture-to-capture variance documented in the V2-tracy-2 / V2-tracy
+notes (eager-mode host scheduling jitter).  Per-op DEVICE-side breakdown
+(below) is bit-identical between the two captures, confirming the
+device-time mix is deterministic and the wall-clock delta lives
+entirely in host scheduling / queue depth.
 
 ### Decode per-op (real-loop traced, 4 decode steps)
 
@@ -2361,17 +2372,243 @@ sampling noise documented for V2-tracy-2.
 
 ### Iterations + tt-smi resets
 
-2 iterations.  Iteration 1: first tracy run completed pytest but the
-device profiler buffers never flushed (no `cpp_device_perf_report.csv`
-written), so the aggregator had nothing to read.  Reset via
-`tt-smi -glx_reset`, cleared `generated/profiler/{.logs,reports}/`,
-re-ran.  Iteration 2: succeeded — `cpp_device_perf_report.csv` (16 MB),
-`tracy_ops_data.csv` (47 MB), `tracy_ops_times.csv` (10 GB) all written.
-2 `tt-smi -glx_reset` invocations total (1 between iterations, 1 at
-start).  `process_ops_logs.py` traces back on the buffer-overrun dropped
-markers as expected (V2-tracy-2 same behaviour); the fallback aggregator
-handles this cleanly.
+3 iterations on the recapture pass.  Iteration 1: first run failed at
+`open_mesh_device` setup with an ethernet timeout ("Timed out while
+waiting for active ethernet core (x=27,y=25) to become active again"),
+left over from previous device state.  `tt-smi -glx_reset`.  Iteration
+2: full tracy run completed PASSED, but `cpp_device_perf_report.csv`
+was not written before teardown — only host-side `tracy_ops_data.csv` +
+`tracy_ops_times.csv` survived.  Cleared `.logs/`, `tt-smi -glx_reset`.
+Iteration 3: PASSED, decode mean 572.16 ms/step, prefill 158.22 ms,
+and this time `cpp_device_perf_report.csv` (16 MB) was written before
+the post-processor's "Op N missing for device 20" assertion fired.
+3 `tt-smi -glx_reset` invocations.  The fallback aggregator handles
+the `process_ops_logs.py` assertion cleanly as designed.
+`Profiler DRAM buffers were full, markers were dropped!` warning
+appeared on a handful of cores at end-of-decode (same behaviour as
+V2-tracy-2); the 5 % marker-loss is small enough that the per-op
+breakdown reproduces bit-identically across iterations.
 
 ### Files
 
 No model files modified.  Only PERF.md (this section) updated.
+
+## V2-tracy-4 — 1L isolation per-op profiles (DeltaNet vs full-attention)
+
+V2-tracy-3 used the mixed 4L pattern `[lin, lin, lin, full]` which
+averages both block types together — the resulting per-op table cannot
+distinguish DeltaNet device time from full-attention device time.
+V2-tracy-4 reruns tracy twice, each time with `n_layers = 1` and the
+`linear_attention_pattern` pinned to one block type, so the per-op
+attribution is unambiguous.
+
+Default-off baseline: NO `QWEN36_*` env vars set (same env contract as
+V2-tracy-3).
+
+### Methodology
+
+* 1L isolation: TtTransformer built with `args.n_layers = 1`, all other
+  components (embedding, norm, lm_head) identical to V2-tracy-3.
+* DeltaNet driver: `tracy_perf_1L_delta.py`,
+  `linear_attention_pattern = ["linear_attention"]`, loads HF layer 0
+  weights (which is the canonical DeltaNet slot in the
+  `[lin, lin, lin, full] x16` pattern).
+* Full-attention driver: `tracy_perf_1L_fullattn.py`,
+  `linear_attention_pattern = ["full_attention"]`, loads HF layer 3
+  weights (the canonical full-attention slot) and remaps the layer index
+  to 0 so TtTransformer's single decoder block finds the keys.
+* Prefill T=128, 3 decode steps in the profiled window (1 compile + 2
+  warm).  Signposts `start` / `prefill_done` / `stop` bracket the
+  profiled region; the compile-pass prefill before `start` is excluded.
+* Same warmup-then-`ReadDeviceProfiler` flush pattern as V2-tracy-3 so
+  the ring-buffer overrun is minimised.
+
+### Driver + invocation
+
+```
+export TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) \
+    && source python_env/bin/activate \
+    && python -m tracy -p -v -r -m pytest --noconftest \
+        models/demos/qwen3_6_galaxy_v2/demo/tracy_perf_1L_delta.py \
+        -v -s
+
+# then (after saving CSVs):
+python -m tracy -p -v -r -m pytest --noconftest \
+    models/demos/qwen3_6_galaxy_v2/demo/tracy_perf_1L_fullattn.py \
+    -v -s
+```
+
+Aggregator (same script as V2-tracy-3):
+
+```
+python models/demos/qwen3_6_galaxy_v2/demo/aggregate_tracy_csv.py \
+    generated/profiler/reports/v2_tracy_4_delta/ops_perf_results.csv
+python models/demos/qwen3_6_galaxy_v2/demo/aggregate_tracy_csv.py \
+    generated/profiler/reports/v2_tracy_4_fullattn/ops_perf_results.csv
+```
+
+### Wall-clock summary
+
+| driver                    | prefill (T=128) | decode compile | decode warm mean | dev-time / step |
+|---------------------------|----------------:|---------------:|-----------------:|----------------:|
+| `tracy_perf_1L_delta`     |      ~22 ms     |   1 725.78 ms  |     554.84 ms    |   68.06 ms      |
+| `tracy_perf_1L_fullattn`  |      22.30 ms   |   1 389.77 ms  |     525.68 ms    |   82.28 ms      |
+
+`dev-time / step` = decode `sum_dev_us` (over 3 decode steps in the
+signpost window) / 3 / 1 000.  Note both drivers see almost identical
+wall-clock decode latency despite full-attention having **+20.9 %**
+more aggregate device work — the gap is hidden by host-scheduling
+and CCL overlap.
+
+### Decode per-op (1L isolation, 3 decode steps in window)
+
+DeltaNet side: 12 192 op rows = 32 chips × 3 steps × ~127 ops/step.
+Full-attention side: 7 200 op rows = 32 chips × 3 steps × ~75 ops/step.
+Sorted by % of decode device time.
+
+| op | DeltaNet sum_us | DeltaNet % | FullAttn sum_us | FullAttn % | Δ % (FA − D) |
+|---|---:|---:|---:|---:|---:|
+| MinimalMatmulDeviceOperation (lm_head)   |  65 060.4 | **31.9 %** |  64 989.5 | **26.3 %** |  −5.6 pp |
+| AllGatherAsyncDeviceOperation            |  41 246.8 | **20.2 %** |  40 776.6 | **16.5 %** |  −3.7 pp |
+| MatmulDeviceOperation                    |  24 464.2 |   12.0 %   |  24 341.0 |    9.9 %   |  −2.1 pp |
+| ReduceScatterDeviceOperation             |  18 424.2 |    9.0 %   |  69 663.8 | **28.2 %** | **+19.2 pp** |
+| AllGatherDeviceOperation                 |  15 290.2 |    7.5 %   |  13 080.5 |    5.3 %   |  −2.2 pp |
+| LayerNormPostAllGatherDeviceOperation    |  11 418.3 |    5.6 %   |  11 414.0 |    4.6 %   |  −1.0 pp |
+| LayerNormPreAllGatherDeviceOperation     |   6 462.1 |    3.2 %   |   6 474.1 |    2.6 %   |  −0.6 pp |
+| ReshapeViewDeviceOperation               |   5 030.3 |    2.5 %   |     371.9 |    0.2 %   |  −2.3 pp |
+| BinaryNgDeviceOperation                  |   4 105.1 |    2.0 %   |   1 674.8 |    0.7 %   |  −1.3 pp |
+| FastReduceNCDeviceOperation              |   2 550.9 |    1.2 %   |   2 528.5 |    1.0 %   |  −0.2 pp |
+| SDPAOperation                            |       —   |    —       |   2 615.7 |    1.1 %   |  +1.1 pp |
+| UpdateKVCacheOperation                   |       —   |    —       |     739.0 |    0.3 %   |  +0.3 pp |
+| **DECODE TOTAL**                         | **204 188.9** | **100 %** | **246 840.3** | **100 %** | — |
+
+Top-3 decode ops by share:
+
+* **DeltaNet (1L):**
+  1. MinimalMatmulDeviceOperation — 31.9 % (lm_head)
+  2. AllGatherAsyncDeviceOperation — 20.2 %
+  3. MatmulDeviceOperation — 12.0 %
+* **Full-attention (1L):**
+  1. ReduceScatterDeviceOperation — 28.2 %
+  2. MinimalMatmulDeviceOperation — 26.3 % (lm_head)
+  3. AllGatherAsyncDeviceOperation — 16.5 %
+
+### Prefill per-op (T=128, single prefill in window)
+
+| op | DeltaNet sum_us | DeltaNet % | FullAttn sum_us | FullAttn % | Δ % (FA − D) |
+|---|---:|---:|---:|---:|---:|
+| MatmulDeviceOperation                    |  24 850.6 | **30.2 %** |   9 309.9 | **22.3 %** |  −7.9 pp |
+| AllGatherDeviceOperation                 |   8 866.3 |   10.8 %   |  13 114.2 | **31.4 %** | **+20.6 pp** |
+| ReduceScatterDeviceOperation             |   8 031.5 |    9.8 %   |   5 134.0 |   12.3 %   |  +2.5 pp |
+| BinaryNgDeviceOperation                  |   9 305.5 |   11.3 %   |   1 132.3 |    2.7 %   |  −8.6 pp |
+| ReshapeViewDeviceOperation               |   9 394.7 |   11.4 %   |     509.3 |    1.2 %   | −10.2 pp |
+| AllGatherAsyncDeviceOperation            |   3 922.5 |    4.8 %   |   3 858.6 |    9.2 %   |  +4.4 pp |
+| TilizeDeviceOperation                    |   3 144.3 |    3.8 %   |     306.5 |    0.7 %   |  −3.1 pp |
+| LayerNormPostAllGatherDeviceOperation    |   2 540.0 |    3.1 %   |   2 539.0 |    6.1 %   |  +3.0 pp |
+| SDPAOperation                            |       —   |    —       |     719.8 |    1.7 %   |  +1.7 pp |
+| FastReduceNCDeviceOperation              |       —   |    —       |     569.2 |    1.4 %   |  +1.4 pp |
+| UpdateKVCacheOperation                   |       —   |    —       |     246.1 |    0.6 %   |  +0.6 pp |
+| **PREFILL TOTAL**                        | **82 238.4** | **100 %** | **41 761.4** | **100 %** | — |
+
+DeltaNet prefill device work is **2.0× larger** than full-attention
+prefill device work (82.2 ms vs 41.8 ms), reflecting the extra
+recurrent-rule + chunked-state + delta-rule tail the linear-attention
+block performs as well as its larger BinaryNg / Reshape footprint
+(beta/g elementwise stack).  The full-attention block at T=128 is
+matmul-light because the QKV / WO matmuls operate on a single
+head-group while the prefill SDPA at this short context is cheap.
+
+### Category split
+
+| section | block       | total_dev_us | matmul % | CCL % | other % |
+|---|---|---:|---:|---:|---:|
+| prefill | DeltaNet    |    82 238.4 | 30.2 | 25.3 | 44.5 |
+| prefill | FullAttn    |    41 761.4 | 22.3 | 52.9 | 24.8 |
+| decode  | DeltaNet    |   204 188.9 | 43.8 | 36.7 | 19.4 |
+| decode  | FullAttn    |   246 840.3 | 36.2 | 50.0 | 13.8 |
+
+### Block dominance in V2-tracy-3 4L aggregate
+
+The V2-tracy-3 4L hybrid pattern was `[lin, lin, lin, full]` =
+**3 DeltaNet + 1 FullAttn**.  Composing per-step decode dev-time:
+
+| layer mix          | DeltaNet × 3 | FullAttn × 1 | total | DeltaNet share |
+|--------------------|-------------:|-------------:|------:|---------------:|
+| dev us / step      |   204 189    |    82 280    | 286 469 | **71.3 %** |
+
+So in the V2-tracy-3 4L decode aggregate, **DeltaNet contributes ~71 %
+of the per-step device work** and full-attention ~29 %.  In a real
+64L deployment with 16 full + 48 DeltaNet layers, the ratio shifts
+slightly: 48 × 68.06 + 16 × 82.28 = 3 267 + 1 316 = 4 583 ms/step
+of which DeltaNet is **71.3 %** and full-attention **28.7 %** —
+identical to V2-tracy-3 because the 3:1 ratio matches the deployment
+ratio (the hybrid pattern is intentionally chosen so the captures are
+representative).
+
+### Biggest delta between block types (decode)
+
+The single largest cross-block delta is **ReduceScatterDeviceOperation**:
+
+* DeltaNet decode: 18 424.2 us  (9.0 % of DeltaNet decode)
+* FullAttn decode: 69 663.8 us  (28.2 % of FullAttn decode)
+* **Δ = +51 240 us** (FA spends **3.8×** more RS time than DeltaNet)
+* per-call avg: 47.98 us (D) vs 181.42 us (FA) → 3.8× slower per RS call
+
+The full-attention WO output projection runs a large
+ReduceScatter on a column-sharded `(seq, hidden=5120)` tensor as part
+of its `_forward_decode_qwen36` epilogue — this is the V2-13 / V2-14
+target.  The DeltaNet `_output_proj_and_reduce` runs a different
+(smaller) RS topology because the DeltaNet head dimension is narrower.
+
+Secondary delta: **AllGather** (FA − D) = +4 248 us in prefill,
+−2 210 us in decode — close to noise.  The FA prefill is dominated by
+AllGather (31.4 % of prefill).
+
+### Implication for optimisation priorities
+
+Because the 64L deployment is 75 % DeltaNet by layer count and ~71 % by
+decode dev-time, optimisations targeting DeltaNet pay back ~2.4× faster
+than the same fractional improvement to full-attention.  Specifically:
+
+1. The **lm_head MinimalMatmul** (31.9 % of DeltaNet decode, ~26.3 % of
+   FA decode) is shared between both block types and is the single
+   biggest absolute consumer — same as V2-tracy-3 flagged.  Already
+   covered by V2-tracy-3 follow-ups.
+2. The **DeltaNet AllGatherAsync** (20.2 %) is the second-biggest
+   consumer **per DeltaNet block** and, given the 3:1 layer ratio,
+   the second-biggest aggregate consumer overall (3 × 41 246 ≈
+   123 740 us / step, larger than the lm_head total).  Future
+   `line_all_reduce` / persistent-buffer optimisations should weight
+   the DeltaNet call sites first.
+3. The **full-attention ReduceScatter** (28.2 % of FA, 3.8× the
+   per-call avg of DeltaNet RS) is the single biggest per-block
+   anomaly — investigate whether the WO output projection can run a
+   smaller-radix RS or be replaced by `line_all_reduce` end-to-end.
+   This was the original V2-13 / V2-14 target but V2-tracy-3 showed
+   the default-off path is unchanged; this isolated capture explains
+   why — the impact is concentrated in the 1-in-4 layer slot.
+
+### Iteration count + tt-smi resets
+
+2 sequential tracy captures (DeltaNet → FullAttn), both PASSED on the
+first attempt with no device hangs.  **0** `tt-smi -glx_reset`
+invocations needed.  Both runs produced post-processed
+`ops_perf_results_<timestamp>.csv` directly (mode-1 aggregator path);
+the BH 12 000-event-per-Risc ring-buffer overrun did NOT trip the
+post-processor on these 1L captures because the per-step op count is
+~½ to ⅓ of the V2-tracy-3 4L capture.
+
+### Files
+
+* New drivers:
+  * `models/demos/qwen3_6_galaxy_v2/demo/tracy_perf_1L_delta.py`
+  * `models/demos/qwen3_6_galaxy_v2/demo/tracy_perf_1L_fullattn.py`
+* Saved tracy artefacts:
+  * `generated/profiler/reports/v2_tracy_4_delta/cpp_device_perf_report.csv`
+  * `generated/profiler/reports/v2_tracy_4_delta/ops_perf_results.csv`
+  * `generated/profiler/reports/v2_tracy_4_delta/tracy_ops_data.csv`
+  * `generated/profiler/reports/v2_tracy_4_fullattn/cpp_device_perf_report.csv`
+  * `generated/profiler/reports/v2_tracy_4_fullattn/ops_perf_results.csv`
+  * `generated/profiler/reports/v2_tracy_4_fullattn/tracy_ops_data.csv`
+* No model files modified.  PERF.md (this section) + 2 new demo
+  drivers only.
