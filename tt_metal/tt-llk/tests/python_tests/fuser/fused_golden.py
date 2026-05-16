@@ -84,6 +84,16 @@ class FusedGolden:
 
     @staticmethod
     def _accumulate_tolerance(operation: FusedOperation) -> None:
+        """Propagate tolerances through the pipeline stage by stage.
+
+        Each operation builds on the error from its inputs: errors grow
+        as they pass through more stages. We take the worst case tolerance
+        across all inputs (max atol/rtol, min pcc) and combine it with the
+        base tolerance for the output data format.
+
+        Two different math nodes can share the same input tensor, so we
+        deduplicate by identity to avoid counting its tolerance twice.
+        """
         sources = []
         seen = set()
         for node in operation.math.operations:
@@ -104,8 +114,19 @@ class FusedGolden:
             operation.output.data_format, DEFAULT_BASE_PCC
         )
 
+        # Relative errors multiply together because the new operation
+        # introduces its own error on top of the error from previous stages.
+        # e.g. input with 5% error through an op with 3% error gives
+        # (1.05)*(1.03)-1 = 0.0815, not 8%.
         operation.output.acc_rtol = (1 + max_input_rtol) * (1 + base_rtol) - 1
+
+        # The input already carries some absolute error. The new operation can
+        # scale that error (by 1 + base_rtol), then adds its own absolute error.
+        # e.g. input atol=0.02 through an op with rtol=0.03, atol=0.01 gives
+        # 0.02*(1.03) + 0.01 = 0.0306.
         operation.output.acc_atol = max_input_atol * (1 + base_rtol) + base_atol
+
+        # Correlation degrades multiplicatively through each stage.
         operation.output.acc_pcc = min_input_pcc * base_pcc
 
     def check_pipeline(self, config: FuserConfig) -> bool:
