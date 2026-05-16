@@ -182,4 +182,5 @@ def _default_program_config(
         out_subblock_w=out_subblock_w,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
+        allowed_worker_cores=core_range_set,
     )
