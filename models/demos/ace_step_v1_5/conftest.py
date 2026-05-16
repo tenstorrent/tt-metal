@@ -38,6 +38,31 @@ for _p in (_TT_METAL_ROOT, _TTNN_ROOT):
 # Default aligns with TTNN conv1d unit tests needing non-trivial L1 small space (Blackhole / Wormhole).
 _DEFAULT_L1_SMALL = int(os.environ.get("ACE_STEP_L1_SMALL_SIZE", "98304"))
 
+# All ACE-Step session devices open with 2 CQs by default. The trace+2CQ perf tests
+# (``tests/test_*_trace_2cq.py`` and ``perf/conftest.py``) need CQ 1 for host->device
+# copies; if any device in the same pytest session opens with a different CQ count,
+# TT's dispatch state becomes inconsistent and ``close_device``'s implicit
+# ``synchronize_device`` trips ``Could not find the dispatch core for 1``. Keep the
+# count uniform across the whole session to avoid that cross-fixture failure.
+# Override with ``ACE_STEP_NUM_CQS=1`` to restore the legacy single-CQ behaviour.
+_DEFAULT_NUM_CQS = int(os.environ.get("ACE_STEP_NUM_CQS", "2"))
+
+
+def _open_kwargs(*, include_num_cqs: bool = True) -> dict:
+    """Common kwargs for ``ttnn.open_device`` / ``ttnn.open_mesh_device``.
+
+    Centralised so ``device`` and ``mesh_device`` always agree on ``num_command_queues``
+    and ``trace_region_size``.
+    """
+    kw = dict(
+        device_id=int(os.environ.get("TT_DEVICE_ID", "0")),
+        l1_small_size=_DEFAULT_L1_SMALL,
+        trace_region_size=128 << 20,
+    )
+    if include_num_cqs and _DEFAULT_NUM_CQS > 1:
+        kw["num_command_queues"] = _DEFAULT_NUM_CQS
+    return kw
+
 
 @pytest.fixture
 def torch_seed():
@@ -49,11 +74,7 @@ def torch_seed():
 @pytest.fixture(scope="session")
 def device():
     ttnn = require_ttnn()
-    dev = ttnn.open_device(
-        device_id=int(os.environ.get("TT_DEVICE_ID", "0")),
-        l1_small_size=_DEFAULT_L1_SMALL,
-        trace_region_size=128 << 20,
-    )
+    dev = ttnn.open_device(**_open_kwargs())
     if hasattr(dev, "enable_program_cache"):
         dev.enable_program_cache()
     yield dev
@@ -78,10 +99,11 @@ def mesh_device():
     ttnn = require_ttnn()
     # Prefer a mesh device when supported.
     if hasattr(ttnn, "open_mesh_device") and hasattr(ttnn, "MeshShape") and os.environ.get("MESH_DEVICE"):
+        # open_mesh_device does not accept device_id; strip it from the common kwargs.
+        mesh_kw = {k: v for k, v in _open_kwargs().items() if k != "device_id"}
         mesh = ttnn.open_mesh_device(
             ttnn.MeshShape(1, 1),
-            l1_small_size=_DEFAULT_L1_SMALL,
-            trace_region_size=128 << 20,
+            **mesh_kw,
         )
         if hasattr(mesh, "enable_program_cache"):
             mesh.enable_program_cache()
@@ -93,11 +115,7 @@ def mesh_device():
 
     # Fallback: some TTNN builds only expose single-device APIs.
     if hasattr(ttnn, "open_device"):
-        dev = ttnn.open_device(
-            device_id=int(os.environ.get("TT_DEVICE_ID", "0")),
-            l1_small_size=_DEFAULT_L1_SMALL,
-            trace_region_size=128 << 20,
-        )
+        dev = ttnn.open_device(**_open_kwargs())
         if hasattr(dev, "enable_program_cache"):
             dev.enable_program_cache()
         try:
@@ -107,3 +125,8 @@ def mesh_device():
         return
 
     pytest.skip("No TT device API available (missing open_mesh_device/open_device).")
+
+
+# Note: the ``trace_device`` fixture lives in ``perf/conftest.py`` now (it overrides this scope
+# so module-trace tests under ``perf/module_trace/`` share the perf-level session ``device``
+# instead of opening a second handle on the same physical hardware). Don't add a sibling here.
