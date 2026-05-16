@@ -58,6 +58,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
         .num_threads = 2,
         .dfb_bindings = {},
         .semaphore_bindings = {},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
         .runtime_arguments_schema =
             {
                 .named_runtime_args = {"address"},
@@ -67,6 +69,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{
@@ -80,6 +83,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
         .kernels = {dm_kernel_spec},
         .dataflow_buffers = {},
         .remote_dataflow_buffers = {},
+        .semaphores = {},
+        .tensor_parameters = {},
         .work_units = {main_wu},
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);

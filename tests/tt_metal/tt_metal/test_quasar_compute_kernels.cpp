@@ -215,7 +215,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
         .num_threads = 1,
         .dfb_bindings = {},
         .semaphore_bindings = {},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec compute_kernel_spec_2{
@@ -226,7 +229,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
         .num_threads = 2,
         .dfb_bindings = {},
         .semaphore_bindings = {},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::WorkUnitSpec main_wu{
@@ -240,6 +246,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
         .kernels = {compute_kernel_spec_1, compute_kernel_spec_2},
         .dataflow_buffers = {},
         .remote_dataflow_buffers = {},
+        .semaphores = {},
+        .tensor_parameters = {},
         .work_units = {main_wu},
     };
 

@@ -134,6 +134,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "producer",
             .named_runtime_args = {},
+            .named_common_runtime_args = {},
             .runtime_varargs =
                 {{node,
                   {
@@ -141,10 +142,12 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
                       0u,  // bank_id (single-page buffer → bank 0)
                       num_transfers,
                   }}},
+            .common_runtime_varargs = {},
         },
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "consumer",
             .named_runtime_args = {},
+            .named_common_runtime_args = {},
             .runtime_varargs =
                 {{node,
                   {
@@ -152,6 +155,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
                       0u,  // bank_id
                       num_transfers,
                   }}},
+            .common_runtime_varargs = {},
         },
     };
     SetProgramRunParameters(program, params);
@@ -408,7 +412,10 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
         },
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "consumer",
+            .named_runtime_args = {},
+            .named_common_runtime_args = {},
             .runtime_varargs = {{node, {output_buffer->address(), 0u, num_transfers}}},
+            .common_runtime_varargs = {},
         },
     };
     SetProgramRunParameters(program, params);
@@ -468,7 +475,10 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             KernelSpec::SourceFilePath{
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_producer.cpp"},
         .num_threads = 1,
+        .dfb_bindings = {},
         .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "signal"}},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
         .config_spec =
             DataMovementConfiguration{
                 .gen1_data_movement_config =
@@ -476,6 +486,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
                         .processor = DataMovementProcessor::RISCV_0,
                     },
             },
+        .dfb_compute_self_loop_scopes = {},
     };
     KernelSpec consumer{
         .unique_id = "consumer",
@@ -483,7 +494,10 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             KernelSpec::SourceFilePath{
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_consumer.cpp"},
         .num_threads = 1,
+        .dfb_bindings = {},
         .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "waiter"}},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
         .config_spec =
             DataMovementConfiguration{
                 .gen1_data_movement_config =
@@ -491,6 +505,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
                         .processor = DataMovementProcessor::RISCV_1,
                     },
             },
+        .dfb_compute_self_loop_scopes = {},
     };
 
     // A WorkUnitSpec describes the kernels that run on a shared set of nodes.
@@ -504,7 +519,10 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
     ProgramSpec spec{
         .program_id = "semaphore_accessor_loopback",
         .kernels = {producer, consumer},
+        .dataflow_buffers = {},
+        .remote_dataflow_buffers = {},
         .semaphores = {sem},
+        .tensor_parameters = {},
         .work_units = std::vector<WorkUnitSpec>{work_unit},
     };
 
@@ -606,11 +624,17 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     params.kernel_run_params = {
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "producer",
+            .named_runtime_args = {},
+            .named_common_runtime_args = {},
             .runtime_varargs = {{node, {num_pages}}},
+            .common_runtime_varargs = {},
         },
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "consumer",
+            .named_runtime_args = {},
+            .named_common_runtime_args = {},
             .runtime_varargs = {{node, {num_pages}}},
+            .common_runtime_varargs = {},
         },
     };
     params.tensor_args = {

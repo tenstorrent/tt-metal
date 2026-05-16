@@ -81,10 +81,14 @@ inline KernelSpec MakeMinimalDMKernel(const std::string& name, uint8_t num_threa
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
         .dfb_bindings = {},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
         .config_spec =
             DataMovementConfiguration{
                 .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
             },
+        .dfb_compute_self_loop_scopes = {},
     };
 }
 
@@ -97,6 +101,9 @@ inline KernelSpec MakeMinimalGen1DMKernel(
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
         .dfb_bindings = {},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
         .config_spec =
             DataMovementConfiguration{
                 .gen1_data_movement_config =
@@ -104,6 +111,7 @@ inline KernelSpec MakeMinimalGen1DMKernel(
                         .processor = processor,
                     },
             },
+        .dfb_compute_self_loop_scopes = {},
     };
 }
 
@@ -114,7 +122,11 @@ inline KernelSpec MakeMinimalComputeKernel(const std::string& name, uint8_t num_
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
         .dfb_bindings = {},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
         .config_spec = ComputeConfiguration{},
+        .dfb_compute_self_loop_scopes = {},
     };
 }
 

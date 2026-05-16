@@ -1795,10 +1795,14 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
         .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .num_threads = 2,
         .dfb_bindings = {},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
         .config_spec =
             DataMovementConfiguration{
                 .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
             },
+        .dfb_compute_self_loop_scopes = {},
     };
 
     EXPECT_EQ(dm_kernel.unique_id, "my_dm_kernel");
@@ -1816,12 +1820,16 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
                 .opt_level = tt::tt_metal::KernelBuildOptLevel::O3,
             },
         .dfb_bindings = {},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
         .config_spec =
             ComputeConfiguration{
                 .math_fidelity = MathFidelity::LoFi,
                 .fp32_dest_acc_en = true,
                 .unpack_to_dest_mode = {},
             },
+        .dfb_compute_self_loop_scopes = {},
     };
 
     EXPECT_EQ(compute_kernel.unique_id, "my_compute_kernel");
@@ -1889,6 +1897,7 @@ TEST(AggregateSpecTypes, RuntimeArgSchemaPerNodeOverrideDesignatedInitializers) 
     using NumVarargsPerNode = KernelSpec::RuntimeArgSchema::NumVarargsPerNode;
     KernelSpec::RuntimeArgSchema schema{
         .named_runtime_args = {},
+        .named_common_runtime_args = {},
         .num_runtime_varargs_per_node = NumVarargsPerNode{{NodeCoord{0, 0}, 4}, {NodeCoord{1, 0}, 7}},
     };
 
@@ -1902,6 +1911,9 @@ TEST(AggregateSpecTypes, KernelSpecNamedRuntimeArgsDesignatedInitializers) {
         .unique_id = "k",
         .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .dfb_bindings = {},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
         .runtime_arguments_schema =
             KernelSpec::RuntimeArgSchema{
                 .named_runtime_args = {"input_ptr"},
@@ -1911,6 +1923,7 @@ TEST(AggregateSpecTypes, KernelSpecNamedRuntimeArgsDesignatedInitializers) {
             DataMovementConfiguration{
                 .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
             },
+        .dfb_compute_self_loop_scopes = {},
     };
     EXPECT_EQ(k.runtime_arguments_schema.named_runtime_args.size(), 1u);
 }
@@ -1946,10 +1959,13 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                             },
                         },
                     .semaphore_bindings = {},
+                    .tensor_bindings = {},
+                    .compile_time_arg_bindings = {},
                     .config_spec =
                         DataMovementConfiguration{
                             .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
                         },
+                    .dfb_compute_self_loop_scopes = {},
                 },
                 KernelSpec{
                     .unique_id = "consumer",
@@ -1964,7 +1980,10 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                             },
                         },
                     .semaphore_bindings = {},
+                    .tensor_bindings = {},
+                    .compile_time_arg_bindings = {},
                     .config_spec = ComputeConfiguration{},
+                    .dfb_compute_self_loop_scopes = {},
                 },
             },
         .dataflow_buffers =
@@ -1978,6 +1997,8 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                 },
             },
         .remote_dataflow_buffers = {},
+        .semaphores = {},
+        .tensor_parameters = {},
         .work_units =
             {
                 WorkUnitSpec{

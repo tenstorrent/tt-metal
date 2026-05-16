@@ -315,7 +315,8 @@ TEST_F(MeshDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
                     .noc = static_cast<tt_metal::NOC>(erisc_idx),
                     .processor = static_cast<DataMovementProcessor>(erisc_idx),
                     .compile_args = {},
-                    .defines = {}};
+                    .defines = {},
+                    .named_compile_args = {}};
                 ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config));
             }
         }
@@ -354,7 +355,8 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
                     .noc = static_cast<tt_metal::NOC>(erisc_idx),
                     .processor = static_cast<DataMovementProcessor>(erisc_idx),
                     .compile_args = {},
-                    .defines = {}};
+                    .defines = {},
+                    .named_compile_args = {}};
                 ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config));
             }
         }

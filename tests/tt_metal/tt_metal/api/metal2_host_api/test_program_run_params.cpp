@@ -138,6 +138,8 @@ inline ProgramRunParams::KernelRunParams MakeKernelRunParams(
     const std::vector<uint32_t>& common_args) {
     return ProgramRunParams::KernelRunParams{
         .kernel_spec_name = kernel_name,
+        .named_runtime_args = {},
+        .named_common_runtime_args = {},
         .runtime_varargs = {{node, per_node_args}},
         .common_runtime_varargs = common_args,
     };

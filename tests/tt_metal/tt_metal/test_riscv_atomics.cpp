@@ -92,6 +92,8 @@ protected:
                 .compiler_options = {.include_paths = {}, .defines = defines_vec},
                 .dfb_bindings = {},
                 .semaphore_bindings = {},
+                .tensor_bindings = {},
+                .compile_time_arg_bindings = {},
                 .runtime_arguments_schema =
                     {
                         .named_runtime_args = {"l1_counter_addr", "increment_times"},
@@ -101,6 +103,7 @@ protected:
                     experimental::metal2_host_api::DataMovementConfiguration{
                         .gen2_data_movement_config =
                             experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                .dfb_compute_self_loop_scopes = {},
             };
 
             experimental::metal2_host_api::WorkUnitSpec main_wu{
@@ -114,6 +117,8 @@ protected:
                 .kernels = {dm_kernel_spec},
                 .dataflow_buffers = {},
                 .remote_dataflow_buffers = {},
+                .semaphores = {},
+                .tensor_parameters = {},
                 .work_units = {main_wu},
             };
             program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device_, spec);
@@ -126,6 +131,7 @@ protected:
                       .args = {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
                 .named_common_runtime_args = {},
                 .runtime_varargs = {},
+                .common_runtime_varargs = {},
             }};
             experimental::metal2_host_api::SetProgramRunParameters(program, params);
         } else {
