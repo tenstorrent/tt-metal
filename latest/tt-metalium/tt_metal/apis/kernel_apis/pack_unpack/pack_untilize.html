@@ -130,7 +130,7 @@
 <li><p>full-sync mode (32-bit mode): 8 tiles</p></li>
 </ul>
 
-<p>NOTE: This function allows the user to specify <code class="docutils literal notranslate"><span class="pre">face_r_dim</span></code> and <code class="docutils literal notranslate"><span class="pre">num_faces</span></code> through function parameters. Setting these parameters results in an expensive MMIO write and cannot be avoided currently. This should be addressed more systematically within the issue tt-metal#22820, since these two values can be inferred from the circular buffer description, the same way as it is done in <code class="docutils literal notranslate"><span class="pre">llk_pack_hw_configure</span></code>. This would remove the need for <code class="docutils literal notranslate"><span class="pre">llk_pack_untilize_hw_configure_disaggregated</span></code> altogether and we would pay the price of the MMIO write only once, in <code class="docutils literal notranslate"><span class="pre">compute_kernel_hw_startup</span></code>.</p>
+<p>NOTE: This function allows the user to specify <code class="docutils literal notranslate"><span class="pre">face_r_dim</span></code> and <code class="docutils literal notranslate"><span class="pre">num_faces</span></code> through function parameters. PACK reconfiguration must use these explicit values, since they can differ from the output circular buffer metadata for non-default untilize blocks.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">
@@ -229,7 +229,7 @@
 <li><p>full-sync mode (32-bit mode): 8 tiles</p></li>
 </ul>
 
-<p>NOTE: This function uses default <code class="docutils literal notranslate"><span class="pre">face_r_dim</span></code> and <code class="docutils literal notranslate"><span class="pre">num_faces</span></code> values (16 and 4, respectively). Setting these parameters results in an expensive MMIO write and cannot be avoided currently. This should be addressed more systematically within the issue tt-metal#22820, since these two values can be inferred from the circular buffer description, the same way as it is done in <code class="docutils literal notranslate"><span class="pre">llk_pack_hw_configure</span></code>. This would remove the need for <code class="docutils literal notranslate"><span class="pre">llk_pack_untilize_hw_configure_disaggregated</span></code> altogether and we would pay the price of the MMIO write only once, in <code class="docutils literal notranslate"><span class="pre">compute_kernel_hw_startup</span></code>.</p>
+<p>NOTE: This function uses default <code class="docutils literal notranslate"><span class="pre">face_r_dim</span></code> and <code class="docutils literal notranslate"><span class="pre">num_faces</span></code> values (16 and 4, respectively).</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">

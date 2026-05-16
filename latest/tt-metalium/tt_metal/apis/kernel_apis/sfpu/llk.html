@@ -239,14 +239,20 @@ namespace.</p>
 <blockquote>
 <div>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">vFloat</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vInt</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vUInt</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vFloat</span></code>, <code class="docutils literal notranslate"><span class="pre">vFloat16a</span></code>, <code class="docutils literal notranslate"><span class="pre">vFloat16b</span></code> - floating point</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vInt</span></code> - 2’s complement integer</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vUInt</span></code>, <code class="docutils literal notranslate"><span class="pre">vUInt16</span></code>- unsigned integer</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vSMag</span></code>, <code class="docutils literal notranslate"><span class="pre">vSMag16</span></code>- sign-magnitude integer</p></li>
 <li><p>enum <code class="docutils literal notranslate"><span class="pre">LRegs</span></code></p></li>
 </ul>
 </div>
 </blockquote>
-<p>Each of the <code class="docutils literal notranslate"><span class="pre">v</span></code> types is a strongly typed wrapper around the weakly typed compiler data type <code class="docutils literal notranslate"><span class="pre">__rvtt_vec_t</span></code>. The width of this type depends on the target architecture. On Wormhole and Blackhole this is a vector of 32 32-bit values. Users should be aware that vector length may change with future architectures</p>
+<p>Each of the <code class="docutils literal notranslate"><span class="pre">v</span></code> types is a strongly typed wrapper around the weakly
+typed compiler data type <code class="docutils literal notranslate"><span class="pre">__rvtt_vec_t</span></code>. All types have the same element
+format, but possibly with a restricted range. The width of this type
+depends on the target architecture. On Wormhole, Blackhole &amp; Quasar this is
+a vector of 32 32-bit values. Users should be aware that vector length
+may change with future architectures.</p>
 <p>LRegs are the SFPU’s general purpose vector registers.  <code class="docutils literal notranslate"><span class="pre">LRegs</span></code> enumerates these registers.</p>
 <section id="user-visible-constants">
 <h4>User Visible Constants<a class="headerlink" href="#user-visible-constants" title="Permalink to this heading"></a>
@@ -500,20 +506,17 @@ namespace.</p>
 </div>
 <p>Returns the count of leading (left-most) zeros of ‘’v’’ ignoring the sign bit.</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="n">int32_to_float</span><span class="p">(</span><span class="n">vInt</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">round_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
-<span class="n">vUInt</span><span class="w"> </span><span class="n">float_to_fp16a</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">round_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
-<span class="n">vUInt</span><span class="w"> </span><span class="n">float_to_fp16b</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">round_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
-<span class="n">vUInt</span><span class="w"> </span><span class="n">float_to_uint8</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">round_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
-<span class="n">vUInt</span><span class="w"> </span><span class="n">float_to_int8</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">round_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
-<span class="n">vUInt</span><span class="w"> </span><span class="n">int32_to_uint8</span><span class="p">(</span><span class="n">vInt</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">descale</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">round_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
-<span class="n">vUInt</span><span class="w"> </span><span class="n">int32_to_uint8</span><span class="p">(</span><span class="n">vInt</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">descale</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">round_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
-<span class="n">vUInt</span><span class="w"> </span><span class="n">int32_to_int8</span><span class="p">(</span><span class="n">vInt</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">descale</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">round_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
-<span class="n">vUInt</span><span class="w"> </span><span class="n">int32_to_int8</span><span class="p">(</span><span class="n">vInt</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">descale</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">round_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
-<span class="n">vUInt</span><span class="w"> </span><span class="n">float_to_uint16</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">round_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
-<span class="n">vUInt</span><span class="w"> </span><span class="n">float_to_int16</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">round_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="k">template</span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">ToType</span><span class="p">,</span><span class="w"> </span><span class="k">typename</span><span class="w"> </span><span class="nc">FromType</span><span class="o">&gt;</span>
+<span class="n">ToType</span><span class="w"> </span><span class="n">convert</span><span class="w"> </span><span class="p">(</span><span class="n">FromType</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="n">RoundMode</span><span class="w"> </span><span class="n">rounding</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">RoundMode</span><span class="o">::</span><span class="n">Stochastic</span><span class="p">)</span>
+<span class="k">template</span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">ToType</span><span class="p">,</span><span class="w"> </span><span class="k">typename</span><span class="w"> </span><span class="nc">FromType</span><span class="o">&gt;</span>
+<span class="n">ToType</span><span class="w"> </span><span class="n">convert</span><span class="w"> </span><span class="p">(</span><span class="n">FromType</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="n">descale</span><span class="p">,</span><span class="w"> </span><span class="n">RoundMode</span><span class="w"> </span><span class="n">rounding</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">RoundMode</span><span class="o">::</span><span class="n">Stochastic</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>Returns the rounded value performing round-to-even when ‘’round_mode’’ is 0 and stochastic rounding when ‘’round_mode’’ is 1.</p>
+<p>Returns the rounded value performing round-to-even when ‘’rounding’’
+is ‘’RoundMode::NearestEven’’, stochastic rounding when ‘’rounding’’ is
+‘’RoundMode::Stochastic’’, and round-to-zero when it is
+‘’RoundMode::Zero’’ (not available on WormHole).  Not all
+conversions are supported, and a compilation error will occur if not available.</p>
 </section>
 <section id="immediate-floating-point-values">
 <h3>Immediate Floating Point Values<a class="headerlink" href="#immediate-floating-point-values" title="Permalink to this heading"></a>
