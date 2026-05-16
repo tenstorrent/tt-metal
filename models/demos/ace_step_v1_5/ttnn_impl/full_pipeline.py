@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -9,6 +10,11 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 
 import ttnn
+
+# Bounded LRU cap for the per-prompt cross-attn additive mask cache. Each entry is
+# [B,1,S_q,S_k_pad] bf16 (~100–300 KB for ACE-Step shapes), so the default cap keeps the
+# cache at a few MB even with many prompts. Override via ACE_STEP_DIT_ENC_MASK_CACHE_MAX.
+_DIT_ENC_MASK_CACHE_MAX = max(1, int(os.environ.get("ACE_STEP_DIT_ENC_MASK_CACHE_MAX", "32")))
 
 from .dit_decoder_core import AceStepDecoderConfigTTNN, TtAceStepDiTCore, TtTimestepEmbedding
 from .output_head import TtAceStepDiTOutputHead
@@ -208,6 +214,15 @@ class AceStepV15TTNNPipeline:
         # Keyed by (kind, B, S_q, S_k) for the common all-ones mask cases.
         self._mask_cache: dict[tuple[str, int, int, int], ttnn.Tensor] = {}
 
+        # Per-prompt LRU cache of the cross-attention additive SDPA mask built by
+        # :meth:`build_encoder_attention_mask_b1qk_optional`. Key is ``(b, s_q, s_k_pad)``
+        # plus the bytes of the host-side ``keep_k`` mask (content-addressable). Identical
+        # prompts skip the NumPy build AND the host->device DMA on subsequent generates.
+        # Cached tensors are OWNED by this pipeline; ``run_ttnn_denoise_loop`` must NOT
+        # deallocate them on cleanup — see ``deallocate_encoder_mask`` kwarg.
+        self._enc_mask_cache: "OrderedDict[tuple, ttnn.Tensor]" = OrderedDict()
+        self._enc_mask_cache_max = _DIT_ENC_MASK_CACHE_MAX
+
     def _to_1d_keep_numpy(self, mask_1d, *, expected_batch: int | None = None) -> np.ndarray:
         """
         Normalize a 1D mask to a NumPy bool array shaped [B, S] where True means keep.
@@ -321,8 +336,10 @@ class AceStepV15TTNNPipeline:
         """Build cross-attention additive mask ``[B,1,S_q,S_k_pad]`` once (same math as :meth:`forward`).
 
         Call with the **same** ``xt_bt64`` / ``context_latents_bt128`` / ``encoder_hidden_states_btd`` shapes
-        and dtypes used during denoising so patchify yields the same ``S_q``. Upload happens once per
-        mask instead of on every ``forward`` when only ``encoder_attention_mask_1d_bk`` is passed.
+        and dtypes used during denoising so patchify yields the same ``S_q``. The returned device
+        tensor is **owned by ``self._enc_mask_cache``** — callers must NOT call
+        ``ttnn.deallocate`` on it. ``run_ttnn_denoise_loop`` accepts a
+        ``deallocate_encoder_mask=False`` kwarg to honor this contract.
 
         Returns:
             ``None`` when every encoder key is valid (no mask tensor needed).
@@ -347,14 +364,31 @@ class AceStepV15TTNNPipeline:
         keep_k = keep_k_logical
         if s_k_pad != s_k:
             keep_k = np.pad(keep_k, ((0, 0), (0, int(s_k_pad - s_k))), constant_values=False)
+
+        # Per-prompt cache lookup: identical (shape + mask-pattern) reuses the device tensor.
+        # `keep_k` is already shaped (b, s_k_pad); its bytes uniquely identify the mask.
+        cache_key = (int(b), int(s_q), int(s_k_pad), bytes(np.ascontiguousarray(keep_k)))
+        cached = self._enc_mask_cache.get(cache_key)
+        if cached is not None:
+            self._enc_mask_cache.move_to_end(cache_key)
+            return cached
+
         m_np = self._build_sdpa_mask_b1qk(keep_q=None, keep_k=keep_k, b=b, s_q=s_q, s_k=s_k_pad)
-        return ttnn.as_tensor(
+        mask_tt = ttnn.as_tensor(
             m_np,
             device=self.device,
             dtype=self.activation_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
         )
+        if len(self._enc_mask_cache) >= self._enc_mask_cache_max:
+            _, evicted = self._enc_mask_cache.popitem(last=False)
+            try:
+                ttnn.deallocate(evicted)
+            except Exception:
+                pass
+        self._enc_mask_cache[cache_key] = mask_tt
+        return mask_tt
 
     def compute_temb_tp(
         self,
