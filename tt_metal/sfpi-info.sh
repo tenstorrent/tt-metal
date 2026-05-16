@@ -277,7 +277,14 @@ echo "Fetching sfpi $sfpi_version ..." | dupstderr
 echo | dupstderr
 echo "Building ..." | dupstderr
 (set -x; rm -rf build)
+<<<<<<< HEAD
 (set -x; scripts/build.sh --checking=release --test-tt 2>&1)
+=======
+# GCC 16+ defaults to C++20 where u8"" literals become char8_t[], breaking
+# libcody's S2C helper which expects char[]. Opt back out to pre-C++20 behaviour.
+export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }-fno-char8_t"
+(set -x; scripts/build.sh --test-tt 2>&1)
+>>>>>>> 8a56cb6f795 (sfpi-info: work around libcody char8_t breakage on GCC 16+)
 
 echo | dupstderr
 echo "Packaging ..." | dupstderr
