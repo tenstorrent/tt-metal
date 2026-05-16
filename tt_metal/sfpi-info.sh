@@ -186,12 +186,23 @@ check_missing_deps () {
     local missing=()
     case $sfpi_dist in
 	gentoo)
-	    local pkgs=(sys-devel/gcc sys-devel/autoconf sys-devel/automake sys-devel/bison
-		dev-util/dejagnu sys-apps/expect sys-devel/flex sys-apps/gawk
-		dev-util/patchutils dev-lang/python dev-libs/expat dev-libs/gmp
-		dev-libs/libmpc dev-libs/mpfr)
+	    # Use full cat/pkg atom only where the bare name is ambiguous
+	    # (gcc: cross-*/gcc exists; python: many slots/impls).
+	    # For everything else, match by name in /var/db/pkg so category
+	    # migrations (e.g. sys-devel -> dev-build) don't break the check.
+	    gentoo_has_pkg() {
+		case $1 in
+		    */*)
+			portageq has_version / "$1" 2>/dev/null ;;
+		    *)
+			find /var/db/pkg -maxdepth 2 -name "$1-*" -quit 2>/dev/null \
+			    | grep -q . ;;
+		esac
+	    }
+	    local pkgs=(sys-devel/gcc autoconf automake bison dejagnu dev-tcltk/expect
+		flex gawk patchutils dev-lang/python expat gmp mpc mpfr texinfo)
 	    for pkg in "${pkgs[@]}"; do
-		portageq has_version / "$pkg" 2>/dev/null || missing+=("$pkg")
+		gentoo_has_pkg "$pkg" || missing+=("$pkg")
 	    done
 	    if [[ ${#missing[@]} -gt 0 ]]; then
 		echo "Missing Gentoo packages; install with: emerge ${missing[*]}" >&2
@@ -224,7 +235,7 @@ Install (or otherwise provide) the following components:
 Common names: autoconf automake bison expect flex gawk patchutils python3 texinfo
 Debian names: gcc g++ libexpat1-dev libgmp-dev libmpc-dev libmpfr-dev
 Fedora names: gcc gcc-c++ expat-devel gmp-devel libmpc-devel mpfr-devel
-Gentoo names: sys-devel/gcc sys-devel/autoconf sys-devel/automake sys-devel/bison dev-util/dejagnu sys-apps/expect sys-devel/flex sys-apps/gawk dev-util/patchutils dev-lang/python dev-libs/expat dev-libs/gmp dev-libs/libmpc dev-libs/mpfr
+Gentoo names: sys-devel/gcc dev-build/autoconf dev-build/automake sys-devel/bison dev-util/dejagnu dev-tcltk/expect sys-devel/flex sys-apps/gawk dev-util/patchutils dev-lang/python dev-libs/expat dev-libs/gmp dev-libs/mpc dev-libs/mpfr sys-apps/texinfo
 
 This script cannot install them as it knows neither your system's
 packaging system, nor how it might have named them. You will have to
