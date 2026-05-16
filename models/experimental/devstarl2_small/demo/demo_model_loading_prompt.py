@@ -11,11 +11,6 @@ Demo / smoke test using the **same user prompt** as ``reference/model_loading.py
 ``--vision-square-pixels S`` resizes to ``S×S`` (LANCZOS) before ``processor`` and overrides
 ``--vision-max-edge`` (e.g. ``1540`` for square HF-style sizing).
 
-TT ``max_seq_len`` follows ``devstral_utils.default_devstral_demo_max_seq_len``: **Blackhole** defaults to
-at least **256000** tokens for RoPE/warmups; **Wormhole** uses a prompt-sized cap.
-Dense KV uses ``max_kv_cache_seq_len`` via ``devstral_tt_kv_cache_max_seq_len`` (same as
-``demo_devstral2_tt_multimodal.py``)—run-sized DRAM, not full 256K per layer unless needed.
-
 **HF path** (``--backend hf``, default): ``AutoProcessor`` + ``AutoModelForImageTextToText``; same
 ``--vision-max-edge`` / ``--vision-square-pixels`` as TT before ``processor`` (default max-edge ``0`` =
 no PIL resize; use ``--vision-square-pixels`` e.g. ``1540`` for square HF-style sizing).
@@ -35,16 +30,13 @@ Usage (repo root)::
 
     python models/experimental/devstarl2_small/demo/demo_model_loading_prompt.py --backend tt \\
         --image path/to.jpg --text-layers 1 --max-new-tokens 16 --lm-head-cpu
-
-    # Cap TT RoPE ``max_seq_len`` / override KV budgeting (same flags as text multimodal demo)
-    python models/experimental/devstarl2_small/demo/demo_model_loading_prompt.py --backend tt \\
-        --max-seq-len 8192
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import time
 import types
 from pathlib import Path
 
@@ -60,9 +52,6 @@ import ttnn
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
 from models.experimental.devstarl2_small.demo import demo_devstral2_tt_multimodal as _tt_demo
 from models.experimental.devstarl2_small.devstral_utils import (
-    DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN,
-    default_devstral_demo_max_seq_len,
-    devstral_tt_kv_cache_max_seq_len,
     devstral_supports_on_device_sampling,
     pad_input_ids_and_positions_for_tt_prefill,
     tt_lm_head_logits_block,
@@ -306,7 +295,6 @@ def run_tt(
     vision_max_edge: int,
     vision_square_pixels: int | None,
     cpu_sampling: bool,
-    max_seq_len_override: int | None,
 ) -> None:
     if not image_path.is_file():
         raise FileNotFoundError(f"TT multimodal path requires an image file; missing {image_path}.")
@@ -351,28 +339,14 @@ def run_tt(
     prompt_len = int(input_ids.shape[1])
     extra_tokens = max(0, max_new_tokens)
     need = prompt_len + extra_tokens + 2048
+    max_seq = max(4096, need)
+    # SDPA decode requires k_chunk_size = get_chunk_size(max_seq_len) to be a multiple of 32.
+    # get_chunk_size returns the largest power-of-2 divisor of s, capped at 512.
+    # Rounding up to the nearest multiple of 512 guarantees k_chunk_size >= 512.
+    max_seq = ((max_seq + 511) // 512) * 512
 
     mesh_device = _tt_demo.open_devstral_demo_mesh(max(1, min(mesh_width, ttnn.get_num_devices())))
     try:
-        if max_seq_len_override is None:
-            max_seq = default_devstral_demo_max_seq_len(mesh_device, need)
-            _bh = ttnn.device.is_blackhole(mesh_device)
-            logger.info(
-                f"TT max_seq_len={max_seq} (device default; blackhole={_bh}"
-                + (f", floor={DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN}" if _bh else "")
-                + f"; need={need})."
-            )
-        else:
-            if max_seq_len_override < need:
-                logger.warning(
-                    f"--max-seq-len {max_seq_len_override} is below prompt + max_new_tokens + margin ({need}); "
-                    f"using {need}."
-                )
-                max_seq = need
-            else:
-                max_seq = max_seq_len_override
-            logger.info(f"TT max_seq_len={max_seq} (explicit --max-seq-len; need={need}).")
-
         dtype_tt = ttnn.bfloat16
 
         logger.info("Loading checkpoint via ModelArgs.load_state_dict() …")
@@ -383,11 +357,6 @@ def run_tt(
             dummy_weights=False,
             use_hf_rope=True,
             cache_hf=True,
-        )
-        model_args.max_kv_cache_seq_len = devstral_tt_kv_cache_max_seq_len(model_args, need)
-        logger.info(
-            f"KV cache tensor seq dim={model_args.max_kv_cache_seq_len} "
-            f"(RoPE TT max_seq_len={max_seq}; run need≈{need})."
         )
         model_args.is_distributed_norm = types.MethodType(lambda self, mode: False, model_args)
         meta_state_dict = model_args.load_state_dict()
@@ -547,58 +516,138 @@ def run_tt(
 
         tt_lm = tt_devstral.language_model
 
-        for _step in range(max_new_tokens):
-            sl = int(current_ids.shape[1])
-            merged = _merge_image_into_text_embeds(hf_inner, current_ids, img_rows, image_token_id)
-            merged_bf = merged.to(torch.bfloat16)
-            tt_out = _tt_prefill_from_merged_embeds(
-                current_ids,
-                merged_bf,
-                pad_row,
-                pad_token_id,
-                mesh_device,
-                tt_lm,
-                model_args,
-                sl,
-            )
+        gen_t0 = time.perf_counter()
+        merge_s = 0.0
+        prefill_s = 0.0
+        lmhead_s = 0.0
+        sample_post_s = 0.0
+        steps = 0
 
+        def _sample_from_tt_out(tt_out, seq_last_idx):
+            """Sample next token from prefill hidden states at seq_last_idx. Returns (next_id, lmhead_s_inc, sample_s_inc)."""
+            nonlocal lmhead_s, sample_post_s
             if sampling is not None:
                 assert tt_lm_head is not None
-                tok_slot = (sl - 1) % 32
+                tok_slot = seq_last_idx % 32
                 sampling.seed_manager.get_new_values()
-                logits_tt = tt_lm_head_logits_block(tt_out, sl - 1, model_args, tt_lm_head)
+                t0 = time.perf_counter()
+                logits_tt = tt_lm_head_logits_block(tt_out, seq_last_idx, model_args, tt_lm_head)
+                lmhead_s += time.perf_counter() - t0
+                t0 = time.perf_counter()
                 sample_result = sampling.sample(logits_tt, enable_trace=False)
                 tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
                 next_scalar = tt_sampling_output_token_id(tt_next, tok_slot)
                 ttnn.deallocate(logits_tt)
                 ttnn.deallocate(tt_out)
-                next_id = torch.tensor([[next_scalar]], device=id_device, dtype=torch.long)
+                nid = torch.tensor([[next_scalar]], device=id_device, dtype=torch.long)
+                sample_post_s += time.perf_counter() - t0
             else:
+                t0 = time.perf_counter()
                 if lm_head_cpu:
                     assert lm_head_weight_cpu is not None
                     logits_row = _tt_demo.cpu_lm_head_logits_last_token(
-                        tt_out, sl - 1, mesh_device, lm_head_weight_cpu, int(model_args.vocab_size)
+                        tt_out, seq_last_idx, mesh_device, lm_head_weight_cpu, int(model_args.vocab_size)
                     )
                 else:
                     assert tt_lm_head is not None
                     logits_row = _tt_demo.tt_lm_head_logits_last_token(
-                        tt_out, sl - 1, mesh_device, model_args, tt_lm_head
+                        tt_out, seq_last_idx, mesh_device, model_args, tt_lm_head
                     )
+                lmhead_s += time.perf_counter() - t0
+                t0 = time.perf_counter()
                 ttnn.deallocate(tt_out)
                 if do_sample:
                     probs = torch.softmax(logits_row.float().squeeze(0) / max(gen_temperature, 1e-6), dim=-1)
-                    next_id = torch.multinomial(probs, num_samples=1).view(1, 1)
+                    nid = torch.multinomial(probs, num_samples=1).view(1, 1)
                 else:
-                    next_id = logits_row.argmax(dim=-1, keepdim=True)
-                next_id = next_id.to(id_device)
+                    nid = logits_row.argmax(dim=-1, keepdim=True)
+                nid = nid.to(id_device)
+                sample_post_s += time.perf_counter() - t0
+            return nid
 
+        # ── Step 0: single prefill of the full prompt (fills KV cache) ──────────
+        sl = int(current_ids.shape[1])
+        t0 = time.perf_counter()
+        merged = _merge_image_into_text_embeds(hf_inner, current_ids, img_rows, image_token_id)
+        merged_bf = merged.to(torch.bfloat16)
+        merge_s += time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        tt_out = _tt_prefill_from_merged_embeds(
+            current_ids, merged_bf, pad_row, pad_token_id, mesh_device, tt_lm, model_args, sl
+        )
+        prefill_s += time.perf_counter() - t0
+
+        next_id = _sample_from_tt_out(tt_out, sl - 1)
+        steps += 1
+        if eos_ids and int(next_id.item()) in eos_ids:
+            pass  # will break after loop via final_seq_len check
+        else:
+            current_ids = torch.cat([current_ids, next_id], dim=1)
+
+        # ── Decode loop: 1 token per step using cached KV ────────────────────────
+        for _step in range(1, max_new_tokens):
+            if eos_ids and int(next_id.item()) in eos_ids:
+                break
+
+            decode_pos = int(current_ids.shape[1]) - 1  # position of token we just appended
+            t0 = time.perf_counter()
+            new_id_tt = ttnn.from_torch(
+                next_id.to(torch.int32),
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            tt_out = tt_lm.forward_decode(new_id_tt, decode_pos)
+            ttnn.deallocate(new_id_tt)
+            prefill_s += time.perf_counter() - t0
+
+            # decode output is [1,1,1,H]; last_token_index=0 for the single-token block
+            next_id = _sample_from_tt_out(tt_out, 0)
+            steps += 1
             if eos_ids and int(next_id.item()) in eos_ids:
                 break
             current_ids = torch.cat([current_ids, next_id], dim=1)
 
+        wall_s = time.perf_counter() - gen_t0
+        final_seq_len = int(current_ids.shape[1])
+        new_token_count = final_seq_len - prompt_len
+
+        def _pct(part: float) -> float:
+            return 100.0 * part / wall_s if wall_s > 0 else 0.0
+
+        def _avg_ms(part: float) -> float:
+            return 1000.0 * part / steps if steps > 0 else 0.0
+
+        def _avg_s(part: float) -> float:
+            return part / steps if steps > 0 else 0.0
+
+        thr = new_token_count / wall_s if wall_s > 0 else 0.0
+
+        print("──────────────────────────────────────────────────────────────")
+        print(f"  Generation timing  ({steps} step(s), wall {wall_s:.2f} s)")
+        print("──────────────────────────────────────────────────────────────")
+        print(f"  {'Phase':<18} {'avg/step':>14}     %")
+        print(f"  {'merge (host)':<18} {_avg_ms(merge_s):>10.2f} ms  {_pct(merge_s):>5.1f}%")
+        print(f"  {'prefill + decode':<18} {_avg_s(prefill_s):>10.2f} s  {_pct(prefill_s):>5.1f}%")
+        print(f"  {'LM head':<18} {_avg_ms(lmhead_s):>10.2f} ms  {_pct(lmhead_s):>5.1f}%")
+        print(f"  {'sample / post':<18} {_avg_s(sample_post_s):>10.2f} s  {_pct(sample_post_s):>5.1f}%")
+        print("──────────────────────────────────────────────────────────────")
+        print(f"  Throughput             {thr:.3f} tok/s")
+        print("──────────────────────────────────────────────────────────────")
+        print("  TT · generation done")
+        print("──────────────────────────────────────────────────────────────")
+        print(f"  Final sequence  {final_seq_len:,} tokens")
+        print(f"  New tokens      {new_token_count}")
+        print("──────────────────────────────────────────────────────────────")
+        print(f"  TT · output  ({new_token_count} new tokens)")
+        print("──────────────────────────────────────────────────────────────")
+
         answer_ids = current_ids[0, prompt_len:]
         answer_text = tokenizer.decode(answer_ids.tolist(), skip_special_tokens=False)
-        logger.info(f"TT generated ({answer_ids.numel()} tokens):\n{answer_text}")
+        print(answer_text)
     finally:
         ttnn.close_mesh_device(mesh_device)
 
@@ -632,15 +681,6 @@ def main() -> None:
         "--cpu-sampling",
         action="store_true",
         help="Use PyTorch softmax/multinomial/argmax on host logits instead of on-device SamplingGenerator.",
-    )
-    parser.add_argument(
-        "--max-seq-len",
-        type=int,
-        default=None,
-        metavar="S",
-        help="TT rope/grid max_seq_len cap when set. Default: Blackhole max(256000, need), "
-        "Wormhole max(4096, need), need=prompt_len+max_new_tokens+2048 "
-        "(see devstral_utils.default_devstral_demo_max_seq_len). KV allocation stays run-sized.",
     )
     parser.add_argument(
         "--vision-max-edge",
@@ -687,7 +727,6 @@ def main() -> None:
             vision_max_edge=args.vision_max_edge,
             vision_square_pixels=args.vision_square_pixels,
             cpu_sampling=args.cpu_sampling,
-            max_seq_len_override=args.max_seq_len,
         )
 
 
