@@ -30,7 +30,7 @@ struct ProgramRunParams {
     ////////////////////////////////////////////////////////////////////////
     struct KernelRunParams {
         // Kernel identifier
-        KernelSpecName kernel_spec_name;
+        KernelSpecName kernel_spec_name = {};
 
         // Named Runtime Argument settings
         // Every argument in this kernel's RuntimeArgSchema::named_runtime_args must be set,
@@ -40,30 +40,30 @@ struct ProgramRunParams {
         // NOTE: If a kernel runtime argument always has the same value for all nodes, passing
         // a common runtime argument would provide better dispatch efficiency.
         struct NodeNamedRTAs {
-            NodeCoord node;
-            std::unordered_map<std::string, uint32_t> args;
+            NodeCoord node = {};
+            std::unordered_map<std::string, uint32_t> args = {};
         };
-        std::vector<NodeNamedRTAs> named_runtime_args;
+        std::vector<NodeNamedRTAs> named_runtime_args = {};
 
         // Named Common Runtime Argument settings
         // Every arg in this kernel's RuntimeArgSchema::named_common_runtime_args must be set.
-        std::unordered_map<std::string, uint32_t> named_common_runtime_args;
+        std::unordered_map<std::string, uint32_t> named_common_runtime_args = {};
 
         // Unnamed runtime argument "varargs"
         // (these are specified per-node; length can vary per-node)
         struct NodeVarargs {
-            NodeCoord node;
-            std::vector<uint32_t> args;
+            NodeCoord node = {};
+            std::vector<uint32_t> args = {};
         };
-        std::vector<NodeVarargs> runtime_varargs;
+        std::vector<NodeVarargs> runtime_varargs = {};
 
         // Unnamed common runtime argument "varargs"
         // (common to all nodes on which the kernel runs)
         using CommonVarargs = std::vector<uint32_t>;
-        CommonVarargs common_runtime_varargs;
+        CommonVarargs common_runtime_varargs = {};
     };
     // KernelRunParams must be specified for ALL kernels in the ProgramSpec.
-    std::vector<KernelRunParams> kernel_run_params;
+    std::vector<KernelRunParams> kernel_run_params = {};
 
     ////////////////////////////////////////////////////////////////////////
     // Tensor arguments
@@ -78,14 +78,14 @@ struct ProgramRunParams {
     };
     // A TensorArg must be specified for EVERY TensorParameter declared in the ProgramSpec.
     // The argument's TensorSpec must match the TensorParameter's TensorSpec (shape, layout, data type).
-    std::vector<TensorArg> tensor_args;
+    std::vector<TensorArg> tensor_args = {};
 
     ////////////////////////////////////////////////////////////////////////
     // DFB parameters (optional, advanced use cases)
     ////////////////////////////////////////////////////////////////////////
     struct DFBRunParams {
         // DFB identifier
-        DFBSpecName dfb_spec_name;
+        DFBSpecName dfb_spec_name = {};
 
         // DFB size overrides
         // DFB sizes specified in the ProgramSpec may be overridden per Program execution.
@@ -100,7 +100,7 @@ struct ProgramRunParams {
     };
     // DFBRunParams must be specified for those DFBs built on borrowed memory.
     // It is optional for regular DFBs.
-    std::vector<DFBRunParams> dfb_run_params;
+    std::vector<DFBRunParams> dfb_run_params = {};
 };
 
 //------------------------------------------------

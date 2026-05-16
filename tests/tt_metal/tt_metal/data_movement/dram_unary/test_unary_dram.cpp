@@ -293,9 +293,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMChannels) {
 
     CoreCoord core_coord = {0, 0};
 
-    for (unsigned int dram_channel = 0; dram_channel < device->num_dram_channels(); dram_channel++) {
+    for (int dram_channel = 0; dram_channel < device->num_dram_channels(); dram_channel++) {
         for (unsigned int vc = 0; vc < 4; vc++) {
-            unit_tests::dm::dram::directed_ideal_test(mesh_device, test_case_id, core_coord, dram_channel, vc);
+            unit_tests::dm::dram::directed_ideal_test(
+                mesh_device, test_case_id, core_coord, static_cast<uint32_t>(dram_channel), vc);
         }
     }
 }

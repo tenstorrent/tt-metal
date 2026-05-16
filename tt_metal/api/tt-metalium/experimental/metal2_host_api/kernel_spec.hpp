@@ -34,7 +34,7 @@ struct ComputeConfiguration {
     // "Unpack to dest" mode must be specified on a per-DFB basis
     // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
     using UnpackToDestModeEntry = std::pair<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
-    std::vector<UnpackToDestModeEntry> unpack_to_dest_mode;
+    std::vector<UnpackToDestModeEntry> unpack_to_dest_mode = {};
 };
 
 struct DataMovementConfiguration {
@@ -87,17 +87,17 @@ struct KernelSpec {
     ///////////////////////////////////////////////////////////////////
 
     // Kernel identifier: used to reference this kernel within the ProgramSpec
-    KernelSpecName unique_id;
+    KernelSpecName unique_id = {};
 
     // Kernel source: either a path to a source file, or the source code itself.
     // (Force callers to choose explicitly between path and inline code.)
     struct SourceFilePath {
-        std::filesystem::path path;
+        std::filesystem::path path = {};
     };
     struct SourceCode {
-        std::string code;
+        std::string code = {};
     };
-    std::variant<SourceFilePath, SourceCode> source;
+    std::variant<SourceFilePath, SourceCode> source = SourceFilePath{};
 
     // NOTE: The kernel's target node set is a DERIVED property, based on the
     //       WorkUnitSpec(s) that include this kernel.
@@ -127,8 +127,8 @@ struct KernelSpec {
         using Defines = std::vector<std::pair<std::string, std::string>>;
         using OptLevel = tt::tt_metal::KernelBuildOptLevel;
 
-        IncludePaths include_paths;         // -I <path>
-        Defines defines;                    // -D <name>=<value>
+        IncludePaths include_paths = {};     // -I <path>
+        Defines defines = {};               // -D <name>=<value>
         OptLevel opt_level = OptLevel::O2;  // -O<level>
         // Can add more options here as needed
     };
@@ -143,30 +143,30 @@ struct KernelSpec {
     // The kernel constructs the accessor via DataflowBufferAccessor(dfb::<local_accessor_name>)
     enum class DFBEndpointType { PRODUCER, CONSUMER, RELAY };
     struct DFBBinding {
-        DFBSpecName dfb_spec_name;        // identify the DFB within the ProgramSpec
-        std::string local_accessor_name;  // DFB accessor name (used in the kernel source code)
-        DFBEndpointType endpoint_type;    // producer, consumer, or relay
+        DFBSpecName dfb_spec_name = {};        // identify the DFB within the ProgramSpec
+        std::string local_accessor_name = {};  // DFB accessor name (used in the kernel source code)
+        DFBEndpointType endpoint_type = DFBEndpointType::PRODUCER;  // producer, consumer, or relay
         DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED;  // strided, all, or blocked
     };
-    std::vector<DFBBinding> dfb_bindings;
+    std::vector<DFBBinding> dfb_bindings = {};
 
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
     // The kernel constructs the accessor via SemaphoreAccessor(sem::<local_accessor_name>)
     struct SemaphoreBinding {
-        SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
-        std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
+        SemaphoreSpecName semaphore_spec_name = {};  // identify the semaphore within the ProgramSpec
+        std::string accessor_name = {};              // semaphore accessor name (used in the kernel source code)
     };
-    std::vector<SemaphoreBinding> semaphore_bindings;
+    std::vector<SemaphoreBinding> semaphore_bindings = {};
 
     // Tensor bindings
     // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
     // The kernel constructs the accessor via TensorAccessor(ta::<accessor_name>)
     struct TensorBinding {
-        TensorParameterName tensor_parameter_name;  // identify the TensorBinding within the ProgramSpec
-        std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
+        TensorParameterName tensor_parameter_name = {};  // identify the TensorBinding within the ProgramSpec
+        std::string accessor_name = {};                  // tensor accessor name (used in the kernel source code)
     };
-    std::vector<TensorBinding> tensor_bindings;
+    std::vector<TensorBinding> tensor_bindings = {};
 
     // TODO -- GlobalSemaphore bindings
     // TODO -- GlobalDataflowBuffer bindings
@@ -179,7 +179,7 @@ struct KernelSpec {
     // Compile time argument bindings
     // (Bound argument values cannot be changed between Program executions)
     using CompileTimeArgBindings = std::vector<std::pair<std::string, uint32_t>>;
-    CompileTimeArgBindings compile_time_arg_bindings;
+    CompileTimeArgBindings compile_time_arg_bindings = {};
     // TODO -- extend to support arbitrary POD types, including user-defined structs.
 
     //----------------------------------------------------------------------------
@@ -196,10 +196,10 @@ struct KernelSpec {
     //     Vararg indices are stable across schema changes (e.g., moving a named arg from RTA→CRTA).
     struct RuntimeArgSchema {
         // Named RTAs: names in declaration order. Must be unique valid C++ identifiers.
-        std::vector<std::string> named_runtime_args;
+        std::vector<std::string> named_runtime_args = {};
 
         // Named CRTAs: names in declaration order. Must be unique valid C++ identifiers.
-        std::vector<std::string> named_common_runtime_args;
+        std::vector<std::string> named_common_runtime_args = {};
 
         //----------------------
         // Advanced options
@@ -233,7 +233,7 @@ struct KernelSpec {
     // Kernel-controlled hardware resource configuration
     //////////////////////////////////////////////////////////////////////////////
     using ConfigSpec = std::variant<DataMovementConfiguration, ComputeConfiguration>;
-    ConfigSpec config_spec;
+    ConfigSpec config_spec = DataMovementConfiguration{};
 
     //////////////////////////////////////////////////////////////////////////////
     // Advanced options / niche use cases
@@ -255,13 +255,13 @@ struct KernelSpec {
     // is present in the API for completeness, to surface any use cases that may arise.
     //
     struct DFBComputeSelfLoopScope {
-        DFBSpecName dfb_spec_name;
+        DFBSpecName dfb_spec_name = {};
         enum class Scope { INTRA, INTER };
         Scope scope = Scope::INTRA;
         // If the INTER case were enabled, we would need an additional field to describe
         // the inter-thread communication pattern here.
     };
-    std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
+    std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes = {};
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

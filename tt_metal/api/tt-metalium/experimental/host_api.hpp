@@ -35,9 +35,9 @@ struct QuasarDataMovementConfig {
     // Number of data movement cores per cluster to use
     uint32_t num_threads_per_cluster = QUASAR_NUM_DM_CORES_PER_CLUSTER;
 
-    std::vector<uint32_t> compile_args;
+    std::vector<uint32_t> compile_args = {};
 
-    std::map<std::string, std::string> defines;
+    std::map<std::string, std::string> defines = {};
 
     // Both compile_args and named_compile_args contain compile time arguments
     // The former is accessed by index, the latter by name
@@ -46,7 +46,7 @@ struct QuasarDataMovementConfig {
     //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
     //     CreateKernel(program, "kernel.cpp", core, QuasarDataMovementConfig{.compile_args = compile_args,
     //     .named_compile_args = named_compile_args})
-    std::unordered_map<std::string, uint32_t> named_compile_args;
+    std::unordered_map<std::string, uint32_t> named_compile_args = {};
 
     // Flag to enable rapid porting of kernels from WH/BH to Quasar.
     // If set to true, global variables will be accessed as local variables
@@ -60,7 +60,7 @@ struct QuasarDataMovementConfig {
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
 
     // Provide include paths for the kernel compiler (-I)
-    std::vector<std::filesystem::path> compiler_include_paths;
+    std::vector<std::filesystem::path> compiler_include_paths = {};
 };
 
 struct QuasarComputeConfig {
@@ -70,13 +70,13 @@ struct QuasarComputeConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
     bool dst_full_sync_en = false;
-    std::vector<UnpackToDestMode> unpack_to_dest_mode;
+    std::vector<UnpackToDestMode> unpack_to_dest_mode = {};
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
 
-    std::vector<uint32_t> compile_args;
+    std::vector<uint32_t> compile_args = {};
 
-    std::map<std::string, std::string> defines;
+    std::map<std::string, std::string> defines = {};
 
     // Both compile_args and named_compile_args contain compile time arguments
     // The former is accessed by index, the latter by name
@@ -85,12 +85,12 @@ struct QuasarComputeConfig {
     //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
     //     CreateKernel(program, "kernel.cpp", core, QuasarComputeConfig{.compile_args = compile_args,
     //     .named_compile_args = named_compile_args})
-    std::unordered_map<std::string, uint32_t> named_compile_args;
+    std::unordered_map<std::string, uint32_t> named_compile_args = {};
 
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
     // Provide include paths for the kernel compiler (-I)
-    std::vector<std::filesystem::path> compiler_include_paths;
+    std::vector<std::filesystem::path> compiler_include_paths = {};
 };
 
 /**

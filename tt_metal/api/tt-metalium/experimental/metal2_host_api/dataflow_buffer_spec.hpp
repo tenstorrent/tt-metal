@@ -56,7 +56,7 @@ enum class DFBAccessPattern { STRIDED, ALL, BLOCKED };
 //
 struct DataflowBufferSpec {
     // DFB identifier: used to reference this DFB within the ProgramSpec
-    DFBSpecName unique_id;
+    DFBSpecName unique_id = {};
 
     // Backing memory
     uint32_t entry_size = 0;  // in bytes
@@ -90,7 +90,7 @@ struct DataflowBufferSpec {
     // and must mutually declare each other as aliases.
     // (Aliased DFBs offer NO guarantees against data clobbering; the kernel author must ensure safety.)
     using DFBIdentifiers = std::vector<DFBSpecName>;
-    DFBIdentifiers alias_with;  // empty vector means no aliasing
+    DFBIdentifiers alias_with = {};  // empty vector means no aliasing
 
     // Disable implicit sync
     // Implicit sync is handled via ISR (available on Gen2 only)
@@ -133,7 +133,7 @@ struct RemoteDataflowBufferSpec {
     // Producer-consumer node mapping: each entry pairs a producer node with the
     // consumer node it feeds.
     using ProducerConsumerMap = std::vector<std::pair<NodeCoord, NodeCoord>>;
-    ProducerConsumerMap producer_consumer_map;
+    ProducerConsumerMap producer_consumer_map = {};
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

@@ -21,8 +21,8 @@ constexpr uint32_t MATMUL_2D_TEST_ID_OFFSET = 200;
 
 struct MatmulTestConfig {
     uint32_t test_id = 0;
-    CoreCoord start_logical_core;
-    CoreCoord end_logical_core;
+    CoreCoord start_logical_core = {0, 0};
+    CoreCoord end_logical_core = {0, 0};
     uint32_t num_subblocks_r_dim = 2;
     uint32_t num_subblocks_c_dim = 2;
     uint32_t num_subblocks_k_dim = 1;
