@@ -399,11 +399,13 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
         for (const auto& [mmio_device_id, chips] : grouped_chips) {
             max_chips_per_mmio = std::max(max_chips_per_mmio, static_cast<uint32_t>(chips.size()));
         }
+        // [FIX DM] UMD now throws if cluster_descriptor or target_devices are passed for
+        // ChipType::SILICON — it performs its own topology discovery internally (cluster.cpp:323).
+        // We still call create_cluster_descriptor() above to compute max_chips_per_mmio,
+        // but do not forward the descriptor to UMD.
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, max_chips_per_mmio),
             .sdesc_path = {},
-            .target_devices = discovered_cluster_desc->get_all_chips(),
-            .cluster_descriptor = discovered_cluster_desc.get(),
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
