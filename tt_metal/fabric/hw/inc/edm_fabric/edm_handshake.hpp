@@ -76,7 +76,22 @@ FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
     }
     volatile tt_l1_ptr handshake_info_t* handshake_info =
         reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_register_address);
-    handshake_info->local_value = 0;
+    // FIX HX (#42429): Preserve already-received handshake value.
+    // Root cause of the symmetric deadlock: non-MMIO ERISCs start before MMIO ERISCs
+    // (host launches them first via tt-smi / configure_fabric ordering). The non-MMIO
+    // side completes init_handshake_info, enters sender_side_handshake, and writes
+    // MAGIC_HANDSHAKE_VALUE to MMIO's local_value via ETH DMA — before MMIO's ERISC
+    // firmware has even started. When MMIO finally enters init_handshake_info, this
+    // unconditional zero erases the already-delivered MAGIC, causing both sides to
+    // spin forever waiting for MAGIC that will never come again.
+    //
+    // TCP never overwrites its receive buffer during accept(). RDMA QP init pins receive
+    // state before the RTR transition. We apply the same principle here: if local_value
+    // already holds MAGIC_HANDSHAKE_VALUE, a peer has already performed its write — do
+    // not erase it. Only zero if stale (from a previous session or uninitialised).
+    if (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
+        handshake_info->local_value = 0;
+    }
     handshake_info->scratch[0] = MAGIC_HANDSHAKE_VALUE;
     // Sender exposes itself as the neighbor to its peer. On little-endian:
     // - my_mesh_id in lower 16 bits maps to bytes 4-5 (neighbor_mesh_id)
