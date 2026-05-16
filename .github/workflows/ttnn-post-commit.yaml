@@ -41,6 +41,11 @@ on:
         type: number
         default: 0
         description: "If > 0, skip time budget verification and use this as job timeout (e.g. 240 for APC watcher, 120 for BHPC watcher)."
+      skip-flaky-tests:
+        required: false
+        type: boolean
+        default: false
+        description: "When true, deselect known-flaky tests (from flaky-tests.yaml) so they cannot eject the run. Enable for merge gate calls."
 
 jobs:
   load-test-matrix:
@@ -153,6 +158,7 @@ jobs:
 
       - name: Build flaky-test deselect args
         id: flaky-list
+        if: ${{ inputs.skip-flaky-tests }}
         run: |
           SKU="${{ matrix.test-group.sku }}"
           case "$SKU" in
