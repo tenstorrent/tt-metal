@@ -354,3 +354,16 @@ registry:
     tt_kmd: "TT-KMD 2.5.0"
     tt_smi: "4.0.0"
     tt_firmware: "19.7.1.0"
+  - trace_id: 50
+    status: draft
+    models: [llama-3.2-3b-instruct]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 1c3a29f9-2c77-4b19-b22d-089dc491b16f
+    tt_metal_sha: 94d61aeda1211750896d521762aa1da72e447b9d
+    config_count: 458
+    loaded_at: '2026-05-16'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.5.0"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
