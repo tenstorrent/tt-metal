@@ -91,6 +91,21 @@ def create_parser() -> argparse.ArgumentParser:
         help="Force all MoE stages to use this layer id (e.g. 3); default: use stage-dependent layer ids",
     )
     parser.add_argument(
+        "--bspm-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Model-specific BitSculpt BSPM directory, e.g. results/deepseek-r1-0528. "
+            "MoE layers look up layer_<id>/precision_eval/precision_map_<variant>_<budget>.bspm under this path."
+        ),
+    )
+    parser.add_argument(
+        "--bspm-budget",
+        type=float,
+        default=3.5,
+        help="BitSculpt bit budget per expert used in the BSPM filename (default: 3.5)",
+    )
+    parser.add_argument(
         "--num-slots",
         type=int,
         default=64,
@@ -186,6 +201,8 @@ def run_demo(
     enable_speculative_decode: bool = True,
     enable_sram_hot_experts: bool = False,
     sram_hot_experts_ceiling: int = 64,
+    bspm_dir: Path | None = None,
+    bspm_budget: float = 3.5,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     configure_runtime_env(enable_sram_hot_experts=enable_sram_hot_experts)
@@ -215,6 +232,8 @@ def run_demo(
             enable_speculative_decode=enable_speculative_decode,
             enable_sram_hot_experts=enable_sram_hot_experts,
             sram_hot_experts_ceiling=sram_hot_experts_ceiling,
+            bspm_dir=bspm_dir,
+            bspm_budget=bspm_budget,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
@@ -312,6 +331,8 @@ def main(argv: list[str] | None = None) -> int:
         enable_speculative_decode=args.enable_speculative_decode,
         enable_sram_hot_experts=args.enable_sram_hot_experts,
         sram_hot_experts_ceiling=args.sram_hot_experts_ceiling,
+        bspm_dir=args.bspm_dir,
+        bspm_budget=args.bspm_budget,
     )
     print(end="", file=sys.stdout, flush=True)
     return 0
