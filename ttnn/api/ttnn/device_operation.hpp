@@ -114,18 +114,6 @@ static auto create_mesh_workload_from_workload_factory(
     }
 }
 
-struct CheckDeviceBufferIsAllocated {
-    std::size_t index = 0;
-
-    void operator()(const Tensor& tensor) {
-        if (not tensor.is_allocated()) {
-            // TODO(#40550): This should be a TT_FATAL
-            log_warning(tt::LogOp, "Tensor at index {} is not allocated", index);
-        }
-        index++;
-    }
-};
-
 template <typename device_operation_t>
 auto get_operation_name(const typename device_operation_t::operation_attributes_t& operation_attributes) {
     if constexpr (is_mesh_device_operation_adapter_v<device_operation_t>) {
@@ -399,7 +387,12 @@ void launch_operation_with_adapter(
     log_operation<mesh_device_operation_t>(
         mesh_device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
 
-    ttsl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
+    ttsl::reflection::visit_object_of_type<Tensor>(
+        [index = std::size_t{0}](const Tensor& tensor) mutable {
+            TT_FATAL(tensor.is_allocated(), "Tensor at index {} is not allocated", index);
+            index++;
+        },
+        tensor_args);
 
     if (program_cache_hit) {
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
