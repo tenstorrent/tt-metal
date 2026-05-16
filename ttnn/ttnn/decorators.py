@@ -380,7 +380,7 @@ class FastOperation:
         return self.python_fully_qualified_name
 
     def __gt__(self, other):
-        return self.python_fully_qualified_name < other.python_fully_qualified_name
+        return self.python_fully_qualified_name > other.python_fully_qualified_name
 
     def __hash__(self):
         return hash(self.python_fully_qualified_name)
@@ -518,12 +518,12 @@ class Operation:
     is_cpp_operation: bool
     is_experimental: bool
 
-    @property
+   @property
     def __name__(self):
         return self.python_fully_qualified_name
 
     def __gt__(self, other):
-        return self.python_fully_qualified_name < other.python_fully_qualified_name
+        return self.python_fully_qualified_name > other.python_fully_qualified_name
 
     def __hash__(self):
         return hash(self.python_fully_qualified_name)
