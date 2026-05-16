@@ -56,6 +56,14 @@ template <typename T>
 concept ProgramDescriptorFactoryConcept =
     requires { &T::create_descriptor; } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
 
+// Metal 2.0 factory concept: factories that return MeshArtifacts (a ProgramSpec +
+// ProgramRunParams per mesh coordinate range) from create_mesh_spec. The adapter
+// builds Programs from the specs on cache miss and patches TensorArgs via
+// metal2_host_api::UpdateTensorArgs on cache hit.
+template <typename T>
+concept Metal2MeshSpecFactoryConcept = requires { &T::create_mesh_spec; } && !ProgramFactoryConcept<T> &&
+                                       !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
+
 // Detect operations that put create_descriptor directly on the operation struct
 // (no program_factory_t wrapper needed for single-descriptor operations).
 template <typename T>
@@ -92,14 +100,16 @@ concept HasSelectProgramFactory = requires(
 };
 
 // Validate that all variant alternatives in a program_factory_t satisfy exactly one of
-// ProgramFactoryConcept, MeshWorkloadFactoryConcept, or ProgramDescriptorFactoryConcept.
+// ProgramFactoryConcept, MeshWorkloadFactoryConcept, ProgramDescriptorFactoryConcept,
+// or Metal2MeshSpecFactoryConcept.
 namespace detail {
 template <typename Variant, std::size_t... Is>
 consteval bool all_factories_valid(std::index_sequence<Is...>) {
     return (
         ((ProgramFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>> +
-          ProgramDescriptorFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
+          ProgramDescriptorFactoryConcept<std::variant_alternative_t<Is, Variant>> +
+          Metal2MeshSpecFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
         ...);
 }
 }  // namespace detail

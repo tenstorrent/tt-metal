@@ -246,6 +246,11 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                     mesh_device_operation_t::template DescriptorMeshWorkloadFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
+            [&]<Metal2MeshSpecFactoryConcept T>(const T&) {
+                using AdaptedMeshWorkloadFactory =
+                    mesh_device_operation_t::template Metal2MeshWorkloadFactoryAdapter<T>;
+                fn.template operator()<AdaptedMeshWorkloadFactory>();
+            },
             [&]<MeshWorkloadFactoryConcept WorkloadFactory>(const WorkloadFactory&) {
                 fn.template operator()<WorkloadFactory>();
             }},
