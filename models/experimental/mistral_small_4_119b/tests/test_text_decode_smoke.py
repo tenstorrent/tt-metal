@@ -12,7 +12,7 @@ Run manually::
     export MISTRAL4_DECODE_SMOKE=1
     export MISTRAL4_DECODE_N_LAYERS=2        # optional; default 2
     export MISTRAL4_DECODE_PREFILL_LEN=4     # optional; default 4
-    export MISTRAL4_DECODE_N_STEPS=3         # optional; default 3
+    export MISTRAL4_DECODE_N_STEPS=5         # optional; default 5
     export MESH_DEVICE=P150x4                # optional
     pytest models/experimental/mistral_small_4_119b/tests/test_text_decode_smoke.py -v -s --timeout=0
 """
@@ -26,6 +26,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from tracy import signpost
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.experimental.mistral_small_4_119b.constants import (
     EXPECTED_VOCAB_SIZE,
@@ -42,7 +43,7 @@ pytest.importorskip("transformers.models.mistral4.modeling_mistral4", reason="Mi
 
 _N_LAYERS = int(os.environ.get("MISTRAL4_DECODE_N_LAYERS", "2"))
 _PREFILL_LEN = int(os.environ.get("MISTRAL4_DECODE_PREFILL_LEN", "4"))
-_N_STEPS = int(os.environ.get("MISTRAL4_DECODE_N_STEPS", "3"))
+_N_STEPS = int(os.environ.get("MISTRAL4_DECODE_N_STEPS", "5"))
 _MAX_SEQ_LEN = _PREFILL_LEN + _N_STEPS + 64  # small cache for smoke
 
 
@@ -133,6 +134,9 @@ def test_mistral_small_4_text_decode_smoke(reset_seeds, mesh_device):
     logger.info(f"First decode token (greedy from prefill): {next_token}")
 
     for step in range(_N_STEPS):
+        if step == 1:
+            ttnn.synchronize_device(mesh_device)
+            signpost("Performance pass")
         current_pos = _PREFILL_LEN + step
         tok_tensor = torch.tensor([[next_token]], dtype=torch.long)
 
