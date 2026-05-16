@@ -99,6 +99,7 @@ if [[ -r /etc/os-release ]]; then
     case $sfpi_dist in
 	debian) sfpi_pkg=deb;;
 	fedora) sfpi_pkg=rpm;;
+	gentoo) sfpi_pkg=gentoo;;
     esac
 fi
 sfpi_arch=$(uname -m)
@@ -179,11 +180,51 @@ dupstderr () {
 dupstderr <<EOF
 Building SFPI $sfpi_version
 Working Directory: $src
+EOF
+
+check_missing_deps () {
+    local missing=()
+    case $sfpi_dist in
+	gentoo)
+	    local pkgs=(sys-devel/gcc sys-devel/autoconf sys-devel/automake sys-devel/bison
+		dev-util/dejagnu sys-apps/expect sys-devel/flex sys-apps/gawk
+		dev-util/patchutils dev-lang/python dev-libs/expat dev-libs/gmp
+		dev-libs/libmpc dev-libs/mpfr)
+	    for pkg in "${pkgs[@]}"; do
+		portageq has_version / "$pkg" 2>/dev/null || missing+=("$pkg")
+	    done
+	    if [[ ${#missing[@]} -gt 0 ]]; then
+		echo "Missing Gentoo packages; install with: emerge ${missing[*]}" >&2
+	    fi
+	    ;;
+	debian)
+	    local pkgs=(gcc g++ libexpat1-dev libgmp-dev libmpc-dev libmpfr-dev
+		autoconf automake bison expect flex gawk patchutils python3 texinfo)
+	    for pkg in "${pkgs[@]}"; do
+		dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' || missing+=("$pkg")
+	    done
+	    if [[ ${#missing[@]} -gt 0 ]]; then
+		echo "Missing Debian packages; install with: apt-get install ${missing[*]}" >&2
+	    fi
+	    ;;
+	fedora)
+	    local pkgs=(gcc gcc-c++ expat-devel gmp-devel libmpc-devel mpfr-devel
+		autoconf automake bison expect flex gawk patchutils python3 texinfo)
+	    for pkg in "${pkgs[@]}"; do
+		rpm -q "$pkg" &>/dev/null || missing+=("$pkg")
+	    done
+	    if [[ ${#missing[@]} -gt 0 ]]; then
+		echo "Missing Fedora packages; install with: dnf install ${missing[*]}" >&2
+	    fi
+	    ;;
+	*)
+	    cat >&2 <<WARN
 
 Install (or otherwise provide) the following components:
 Common names: autoconf automake bison expect flex gawk patchutils python3 texinfo
 Debian names: gcc g++ libexpat1-dev libgmp-dev libmpc-dev libmpfr-dev
 Fedora names: gcc gcc-c++ expat-devel gmp-devel libmpc-devel mpfr-devel
+Gentoo names: sys-devel/gcc sys-devel/autoconf sys-devel/automake sys-devel/bison dev-util/dejagnu sys-apps/expect sys-devel/flex sys-apps/gawk dev-util/patchutils dev-lang/python dev-libs/expat dev-libs/gmp dev-libs/libmpc dev-libs/mpfr
 
 This script cannot install them as it knows neither your system's
 packaging system, nor how it might have named them. You will have to
@@ -191,10 +232,17 @@ research that from the above clues. If required components are missing
 the build will fail, sometimes with a clueful message. Please report
 any additional packages or issues you encounter by filing an issue at
 https://github.com/tenstorrent/tt-metal/issues
-EOF
+WARN
+	    ;;
+    esac
+    return ${#missing[@]}
+}
+
+check_missing_deps
+deps_missing=$?
 
 if ! [[ -d .git ]]; then
-    if [[ -t 0 ]]; then
+    if [[ -t 0 && $deps_missing -gt 0 ]]; then
 	echo >&2
 	read -p "Confirm you have read and understood the above:" yes
 	if ! [[ $yes =~ ^[Yy] ]]; then
