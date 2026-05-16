@@ -1966,3 +1966,124 @@ out_proj / all_reduce sequence's per-layer overhead.
   ``QWEN36_TT_LANG_RECURRENT_V3``). V3 wrapper uses ``ttnn.pad`` to
   fix the T=1 → T=TILE volume-preserving reshape requirement.
 - ``PERF.md`` — this section.
+
+## V2-17d: V3 multi-head batched kernel — task summary (2026-05-16, late session)
+
+### Goal
+
+Land the kernel rewrite AND model integration in one session, eliminating
+the V2-17c integration regression (-8.5 ms, gibberish, 64L hang). Targets:
+
+1. Multi-head batching: one launch / layer (vs V2-17c's 6 launches).
+2. Readout fused (already in V2-17c).
+3. In-place state writeback (no post-kernel concat).
+4. Persistent decay/beta broadcast (no per-head broadcast).
+
+### Standalone results (PASS)
+
+Test ``test_recurrent_delta_rule_v3_kernel.py`` at the real decode shape
+(all 6 heads in one kernel call):
+
+```
+state PCC     = 0.99999988
+o     PCC     = 0.99999952
+state max_abs = 0.010919
+o     max_abs = 0.149216
+  head 0: state PCC = 0.99999982, o PCC = 0.99999928
+  head 1: state PCC = 0.99999976, o PCC = 0.99999976
+  head 2: state PCC = 0.99999970, o PCC = 0.99999958
+  head 3: state PCC = 0.99999934, o PCC = 0.99999970
+  head 4: state PCC = 1.00000000, o PCC = 0.99999988
+  head 5: state PCC = 0.99999964, o PCC = 0.99999958
+
+chain (6 launches): 4927.63 us/call
+kernel (1 launch) : 61.88 us/call
+speedup           : 79.63x
+```
+
+Kernel layout: grid=(V_TILES=4, V_HEADS=6) = 24 cores. Each (j_v, h)
+core handles one (V-tile-column, head) tile-pair, iterates 4 K-tiles
+internally with the V2-17c expression-recompute CB-fork pattern for the
+state + readout. 10 fp32 CBs (block_count=2), HiFi4 + fp32_dest_acc_en.
+
+### Integration (default OFF)
+
+`use_tt_lang_recurrent_v3` flag + `QWEN36_TT_LANG_RECURRENT_V3=1` env
+var, mutually exclusive with V2-17/V2-17c paths. The wrapper:
+
+1. Transpose k for column form (1 op).
+2. Reshape g_exp/beta_t to [B,H,1,1] + multiply ones_per_head (2 ops).
+3. Pad k_col, v, q on the T-axis (1→TILE) via ttnn.pad — required for
+   the volume-preserving reshape to 2D-stacked logical shape.
+4. Stage state to DRAM (1 ttnn.to_memory_config) to keep L1 CB-clear.
+5. Reshape 6 inputs to 2D logical shape.
+6. Single ttnn.generic_op launch.
+7. Reshape o back to 4D + slice + transpose + typecast (4 ops).
+8. ttnn.copy state_2d → h (persistent buffer).
+
+Wrapper-op count per layer: ~12 (vs V2-17c's ~60).
+
+### Real-loop verification (BLOCKED — system instability)
+
+`test_decode_perf_intrace.py` (64L trace decode) crashed silently during
+WEIGHT LOADING at layer ~35-45 of 64 on this device. **Re-running with
+V3 disabled hit the same failure** — confirming this is a device/driver
+issue independent of V3 (Hugepage NOC address mismatch warnings appeared
+across multiple ``tt-smi -glx_reset`` cycles). Other ERROR modes during
+session: TLB allocation -12 (ENOMEM, 2MB pool), "Query mappings failed
+on device 0", "Timed out waiting for active ethernet core (x=27,y=25)".
+
+The integration cannot be measured end-to-end until the device
+stabilizes. The standalone kernel is verified correct (PCC ≥ 0.9999
+on all 6 heads).
+
+### Comparison vs V2-17 / V2-18 / V2-17c
+
+| Variant | Standalone | Integration | Result |
+|---|---|---|---|
+| V2-17  (single-head, grid=(1,1)) | 6.68× | -10.4 ms | regression |
+| V2-18  (V2-17 wired per-head)    | -      | -10.4 ms | regression |
+| V2-17c (single-head, grid=(4,1), readout fused) | 9.26× | -8.5 ms | regression + gibberish + 64L hang |
+| V2-17d (V3, multi-head 24-core, readout fused)  | **79.63×** | **untested (device unstable)** | standalone OK |
+
+V2-17d collapses the per-head wrapper op count from ~60 → ~12 — the
+lever the V2-17c retrospective identified as dominant. Standalone shows
+the kernel itself is much faster than the per-head ttnn chain (1 launch
+vs 6 with state slice/concat). Whether this translates to a real-loop
+improvement depends on integration overhead — could not measure due to
+device unavailability.
+
+### Recommendation
+
+**Hold V2-17d default-off; do not commit.** The kernel is verified
+standalone but integration is unmeasured. Next session should:
+
+1. Resolve device instability (likely needs full system / IPMI reboot;
+   ``tt-smi -glx_reset`` is insufficient for the current state).
+2. Run `test_decode_perf_intrace.py` with `QWEN36_TT_LANG_RECURRENT_V3=1`
+   and the baseline (same test, no env var) — compare wall-clock.
+3. If perf neutral / positive AND 4L coherency is canonical AND 64L
+   Paris+step-0 green: flip default-on.
+4. If integration is negative even at -2ms: investigate the host-side
+   wrapper ops (ttnn.pad + ttnn.copy state stage) and consider folding
+   them into the kernel (V2-17e candidate).
+
+### Files added (V2-17d session)
+
+- ``tt/kernels/recurrent_delta_rule_v3_kernel.py`` — V3 authoring (24-core grid).
+- ``tt/kernels/recurrent_delta_rule_v3/{recurrent_compute,recurrent_read,recurrent_write}.cpp``.
+- ``tt/kernels/recurrent_delta_rule_v3/_runner_emitted.py``.
+- ``tests/test_recurrent_delta_rule_v3_kernel.py`` — standalone (state + o PCC ≥ 0.9999, 79.63× speedup).
+
+### Files modified (V2-17d session)
+
+- ``tt/qwen36_delta_attention.py``:
+  - ``use_tt_lang_recurrent_v3`` flag + env var ``QWEN36_TT_LANG_RECURRENT_V3``.
+  - ``_build_recurrent_v3_kernel_state``, ``_launch_recurrent_v3_kernel``,
+    ``recurrent_gated_delta_rule_tt_lang_v3_decode``.
+  - forward_decode V3 dispatch (default off).
+
+### Iterations + resets this session
+
+~14 device runs, 7 ``tt-smi -glx_reset`` calls. Final state: device
+crashes 64L weight load — full system reboot likely needed.
