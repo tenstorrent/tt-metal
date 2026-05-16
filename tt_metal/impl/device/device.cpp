@@ -2489,7 +2489,14 @@ bool Device::phase5b_erisc_health_check(
     // before all channels are checked → Phase 5b deadline exceeded → dispatch teardown failure.
     // Extend to 30000ms (30s) so even 6 hanging reads at 5s each are covered.  The per-read
     // deadline guard at line 2554 still prevents accumulating unlimited time per remaining channel.
-    constexpr uint32_t kHealthCheckTimeoutMs = 30000;
+    //
+    // FIX DQ (#42429): When stale base-UMD channels are present (fabric_stale_base_umd_channels_
+    // is true), FIX BO already extends the Phase 5 ring-sync deadline from 10000ms to 120000ms.
+    // Phase 5b needs the same treatment: base-UMD channel transition via launch_msg can take >30s
+    // (confirmed in cycle 16: Phase 5b deadline exceeded at 30001ms on devices 1/9, 5/6, 3/15),
+    // triggering global teardown → FIX BH cascade → all 24 MMIO channels dead.
+    // Extend to 120000ms when stale base-UMD channels present (matching the 12× FIX BO pattern).
+    const uint32_t kHealthCheckTimeoutMs = this->is_fabric_stale_base_umd_channels() ? 120000 : 30000;
     // Log unhealthy channels every 200ms for observability.
     constexpr uint32_t kHCIntermediateLogMs = 200;
     constexpr uint32_t kSpinLimit = 64U;
