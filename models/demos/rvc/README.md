@@ -1,7 +1,7 @@
 # RVC (Retrieval-based Voice Conversion) — TTNN Implementation
 
 Voice conversion pipeline on Tenstorrent N300 (Wormhole B0) using TTNN APIs.
-Converts source speech to a target speaker's voice while preserving content.
+Converts source speech into a target speaker voice while preserving linguistic content.
 
 ## Architecture
 
@@ -164,9 +164,9 @@ The RTF gap is caused by **host↔device dispatch overhead**, not insufficient
 device compute. This is a well-understood framework-level bottleneck:
 
 - Generator executes ~79 `ttnn.conv1d` dispatches per chunk
-- Each dispatch: ~45ms total, of which only ~5ms is device kernel time
+- Each dispatch: ~45ms total. Profiling suggests device kernel execution is a relatively small fraction of total per-dispatch runtime.
 - The remaining ~40ms is host-side tensor conversion and command dispatch
-- For 10 chunks: 790 round-trips × ~40ms overhead ≈ 31.6s of host overhead
+- For 10 chunks, repeated host↔device round-trips dominate Generator runtime.
 - Chunking itself is not the bottleneck — it adds < 1% overhead
 
 This pattern is documented in the tt-metal
@@ -193,7 +193,6 @@ models/demos/rvc/
 ├── demo.py                  # End-to-end inference with timing
 ├── evaluate.py              # PCC, speaker similarity, WER evaluation
 ├── profile.py               # Detailed per-component runtime profiling
-├── run_torch_inference.py   # Standalone torch reference pipeline
 ├── README.md
 ├── assets-download.sh       # Model weight download helper
 ├── .gitignore
@@ -202,6 +201,7 @@ models/demos/rvc/
 │   └── output/              # Generated WAV files
 │
 ├── torch_impl/              # PyTorch reference implementations
+│   ├── reference.py         # Torch flow/generator for PCC comparison
 │   ├── rmvpe.py             # RMVPE pitch extraction model
 │   ├── crepe.py             # CREPE pitch extraction (alternative)
 │   └── vc/
@@ -212,22 +212,14 @@ models/demos/rvc/
 ├── ttnn/                    # TTNN implementations
 │   ├── runtime.py           # Persistent modules: TTNNFlowDecoder, TTNNGeneratorNSF
 │   ├── utils.py             # Device transfer and weight preprocessing
-│   ├── ops/
-│   │   ├── conv_transpose1d.py  # ConvTranspose1d via conv_transpose2d
-│   │   ├── conv1d.py            # Conv1d wrapper (used by tests)
-│   │   ├── linear.py            # Linear wrapper (used by tests)
-│   │   └── layer_norm.py        # LayerNorm wrapper (used by tests)
-│   └── modules/             # Early module implementations (reference only)
-│       ├── flow.py           # Flow decoder functional implementation
-│       ├── wavenet.py        # WaveNet functional implementation
-│       ├── hubert_encoder.py # Encoder layer (not used in production)
-│       └── hubert_ffn.py     # FFN block (not used in production)
+│   └── ops/
+│       └── conv_transpose1d.py  # ConvTranspose1d via conv_transpose2d
 │
 ├── tests/
 │   ├── conftest.py          # Device fixture
 │   ├── pcc_utils.py         # PCC assertion utilities
 │   ├── test_runtime.py      # Runtime lifecycle + correctness (5 tests)
-│   └── test_ttnn_ops.py     # Per-operator PCC validation (10 tests)
+│   └── test_ttnn_ops.py     # Per-operator PCC validation (39 tests)
 │
 └── utils/
     ├── audio.py             # Audio loading/resampling

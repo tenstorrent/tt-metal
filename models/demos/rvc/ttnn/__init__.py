@@ -2,14 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-RVC TTNN operator wrappers and modules.
+RVC TTNN implementation.
 
 Structure:
-    ttnn/utils.py      — Centralized tensor conversion, weight preprocessing
-    ttnn/ops/          — Low-level operator wrappers (Conv1d, ConvTranspose1d, Linear, LayerNorm)
-    ttnn/modules/      — Higher-level modules (FFN, Encoder, WaveNet, Flow)
-
-Stage 1 bring-up: correctness-first, interleaved DRAM memory, bfloat16.
+    ttnn/runtime.py    — Persistent TTNN modules (TTNNFlowDecoder, TTNNGeneratorNSF)
+    ttnn/utils.py      — Tensor conversion and weight preprocessing
+    ttnn/ops/          — ConvTranspose1d wrapper
 """
 
 from models.demos.rvc.ttnn.utils import (
