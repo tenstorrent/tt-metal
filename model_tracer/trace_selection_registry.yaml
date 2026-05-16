@@ -54,6 +54,18 @@ targets:
         - whisper_2
         - whisper_3
       trace: [25, 17, 18, 19, 20, 28]
+    - model:
+        - llama-3.2-1b_2
+        - llama-3.1-8b
+        - phi-3-mini-4k-instruct
+        - mistral-7b-instruct-v0.3
+        - gemma4
+        - falcon7b
+        - whisper
+        - unet-shallow
+        - llama-3.2-3b-instruct
+        - multimodal
+      trace: [41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
 
 registry:
   - trace_id: 1
