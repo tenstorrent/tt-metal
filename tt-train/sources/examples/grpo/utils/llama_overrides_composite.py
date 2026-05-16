@@ -103,6 +103,7 @@ class GroupedQueryAttentionCompositeKV(GroupedQueryAttention):
             v_cache_to_process = ttml.autograd.create_tensor(v_cache_slice)
 
         with py_zone("[Attn] SDPA"):
+            print(f"SDPA call, {q_heads.shape()=}, {k_cache_to_process.shape()=}, {v_cache_to_process.shape()=}")
             attention = ttml.ops.attention.scaled_dot_product_attention_composite(
                 q_heads, k_cache_to_process, v_cache_to_process, mask
             )

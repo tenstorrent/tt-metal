@@ -17,11 +17,12 @@ import ttml
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.common.utils import no_grad
 from ttml.models import RunnerType, WeightTyingType
-from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
+from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
 from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 
 from ttml.trainers.grpo_trainer import GRPOCompleter
+from .llama_overrides_composite import LlamaCompositeKV
 
 
 TILE_SIZE = 32
@@ -107,7 +108,10 @@ def py_zone(name: str, color: int = 0):
     """Open a Tracy host zone for the duration of the with-block.
 
     Pure host-side: no device dispatch, nests under whatever Tracy zone is
-    currently open.
+    currently open. Duplicated here (rather than imported from
+    ``llama_completer``) because ``llama_completer`` imports
+    ``LlamaCompositeKV`` from this module -- importing ``py_zone`` back
+    would form a circular import at module-load time.
     """
     ttnn.start_tracy_zone(__file__, name, 0, color)
     try:
@@ -207,7 +211,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
             rope_scaling=rope_scaling,
         )
 
-        tt_model = Llama(llama_cfg)
+        tt_model = LlamaCompositeKV(llama_cfg)
 
         if dev_config.enable_ddp:
             autograd_ctx.initialize_parallelism_context(
@@ -356,7 +360,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         """Run a full forward pass (no KV cache) and return logits."""
         T = input_ids_np.shape[1]
         x_tt = self._tokens_to_tensor(input_ids_np, B)
-        mask_tt = self._create_causal_mask(prompt_len=0, query_len=T)
+        mask_tt = self._create_causal_mask(prompt_len=0, query_len=T, pad_lengths=pad_lengths, B=B)
         return self._model(x_tt, mask_tt)
 
     # ------------------------------------------------------------------
@@ -371,18 +375,26 @@ class LlamaGRPOCompleter(GRPOCompleter):
             padded.reshape(B, 1, 1, padded_len), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._dp_mapper
         )
 
-    def _create_causal_mask(self, prompt_len: int, query_len: int) -> ttml.autograd.Tensor:
-        # Fused SDPA only accepts a (1, 1, S, S) mask, so per-row prompt
-        # left-padding cannot be encoded here. Rows whose prompts are shorter
-        # than the batch max will attend to pad tokens, biasing their logits.
+    def _create_causal_mask(
+        self, prompt_len: int, query_len: int, pad_lengths: List[int], B: int
+    ) -> ttml.autograd.Tensor:
+        assert len(pad_lengths) == B
+
         whole_len = prompt_len + query_len
         padded_q = _round_up(query_len)
         padded_w = _round_up(whole_len)
 
-        mask = np.zeros((1, 1, padded_q, padded_w), dtype=np.float32)
-        mask[0, 0, :query_len, :padded_w] = np.tri(query_len, padded_w, k=prompt_len, dtype=np.float32)
+        mask_one_token = np.zeros((padded_q, padded_w), dtype=np.float32)
+        mask_one_token[:query_len, :padded_w] = np.tri(query_len, padded_w, k=prompt_len, dtype=np.float32)
 
-        return ttml.autograd.Tensor.from_numpy(mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
+        mask_3d = np.tile(mask_one_token, (B, 1, 1))
+        for i in range(B):
+            mask_3d[i, :, 0 : pad_lengths[i]] = 0
+
+        mask_4d = mask_3d[:, np.newaxis, :, :]
+        assert mask_4d.shape == (B, 1, padded_q, padded_w)
+
+        return ttml.autograd.Tensor.from_numpy(mask_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, self._dp_mapper)
 
     def _build_logits_mask(self, vocab_size: int, padded_vocab_size: int) -> ttml.autograd.Tensor:
         logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
@@ -477,7 +489,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
                     token_tensor = ttml.autograd.Tensor(token_tensor, False)
 
             with py_zone("[C] mask"):
-                mask = self._create_causal_mask(processed, new_tokens)
+                mask = self._create_causal_mask(processed, new_tokens, pad_lengths, B)
 
             with py_zone("[C] _model"):
                 logits = self._model(token_tensor, mask, kv_cache=kv_cache, new_tokens=new_tokens)
