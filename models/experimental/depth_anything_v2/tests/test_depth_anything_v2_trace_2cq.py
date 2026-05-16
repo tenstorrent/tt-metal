@@ -55,6 +55,7 @@ def run_trace_2cq(device, tt_model, num_warmup, num_measure):
     output = tt_model(model_input)
     output_dram = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
     ttnn.record_event(device, 0)
+    ttnn.deallocate(output_dram)  # Free JIT-pass output (not consumed)
 
     # ── Capture trace ───────────────────────────────────────────────────
     ttnn.wait_for_event(1, first_op_event)

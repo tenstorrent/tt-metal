@@ -45,14 +45,14 @@ def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=No
         return
 
     # 2. Initialize Tenstorrent Device
-    device = None
     try:
         device_id = 0
         device = ttnn.open_device(device_id=device_id, l1_small_size=32768)
         print(f"Device {device_id} opened.")
     except Exception as e:
-        print(f"Warning: Failed to open Tenstorrent device (HW not present?): {e}")
-        print("Proceeding to verify model weight conversion on host...")
+        print(f"ERROR: Failed to open Tenstorrent device: {e}")
+        print("A Tenstorrent Wormhole device is required to run this demo.")
+        return
 
     # 3. Convert Weights & Initialize TT Model
     print("Converting weights...")
@@ -82,39 +82,35 @@ def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=No
     # 5. Run Inference
     print("Running inference on Tenstorrent device...")
     try:
-        if device is not None:
-            predicted_depth = tt_model(tt_pixel_values)
-            print("Inference completed successfully!")
+        predicted_depth = tt_model(tt_pixel_values)
+        print("Inference completed successfully!")
 
-            # Post-processing to save image
-            predicted_depth = ttnn.to_torch(predicted_depth)
+        # Post-processing to save image
+        predicted_depth = ttnn.to_torch(predicted_depth)
 
-            prediction = torch.nn.functional.interpolate(
-                predicted_depth.unsqueeze(1),
-                size=image.size[::-1],
-                mode="bicubic",
-                align_corners=False,
-            ).squeeze()
+        prediction = torch.nn.functional.interpolate(
+            predicted_depth.unsqueeze(1),
+            size=image.size[::-1],
+            mode="bicubic",
+            align_corners=False,
+        ).squeeze()
 
-            output = prediction.detach().cpu().numpy()
-            formatted = (output - output.min()) / (output.max() - output.min()) * 255.0
-            formatted = formatted.astype("uint8")
+        output = prediction.detach().cpu().numpy()
+        formatted = (output - output.min()) / (output.max() - output.min()) * 255.0
+        formatted = formatted.astype("uint8")
 
-            depth_image = Image.fromarray(formatted)
-            output_path = "depth_map_output.png"
-            depth_image.save(output_path)
-            print(f"Depth map saved to {output_path}")
+        depth_image = Image.fromarray(formatted)
+        output_path = "depth_map_output.png"
+        depth_image.save(output_path)
+        print(f"Depth map saved to {output_path}")
 
-        else:
-            print("Skipping inference because device is not available.")
     except Exception as e:
         print(f"Inference failed: {e}")
         traceback.print_exc()
 
     # 6. Cleanup
-    if device is not None:
-        ttnn.close_device(device)
-        print("Device closed.")
+    ttnn.close_device(device)
+    print("Device closed.")
 
 
 if __name__ == "__main__":

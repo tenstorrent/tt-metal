@@ -36,8 +36,13 @@ echo "  ARCH_NAME=$ARCH_NAME"
 
 # 2. Install Python dependencies
 echo ""
-echo "[2/6] Installing Python dependencies..."
-pip install --quiet torch transformers pillow 2>&1 | tail -3
+echo "[2/6] Checking Python dependencies..."
+if python3 -c "import torch, transformers, PIL" >/dev/null 2>&1; then
+    echo "  Required Python packages already available; skipping install."
+else
+    echo "  Missing Python packages detected; installing dependencies..."
+    pip install --quiet torch transformers pillow 2>&1 | tail -3
+fi
 
 # 3. Clone the branch if not already present
 echo ""
