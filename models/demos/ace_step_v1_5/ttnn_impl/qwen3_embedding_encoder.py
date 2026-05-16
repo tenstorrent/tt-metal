@@ -12,6 +12,13 @@ Forward path is TTNN-only (no PyTorch tensors after ``input_ids`` numpy staging)
 from __future__ import annotations
 
 import math
+
+# Bounded LRU cap for the per-prompt causal+padding attention bias cache. Each entry is
+# [B,1,S,S] bf16 (~128 KB at S=256), so the default cap of 32 entries keeps the cache at
+# ≤ ~4 MB device DRAM. Increase via ACE_STEP_QWEN_BIAS_CACHE_MAX if you batch over many
+# distinct prompts.
+import os as _os
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
@@ -19,6 +26,8 @@ from typing import Dict, Optional
 import numpy as np
 
 import ttnn
+
+_QWEN_BIAS_CACHE_MAX = max(1, int(_os.environ.get("ACE_STEP_QWEN_BIAS_CACHE_MAX", "32")))
 
 
 def _sdpa_head_dim_tile_padding(d_head: int) -> int:
@@ -445,6 +454,13 @@ class TtQwen3EmbeddingEncoder:
             mesh_mapper=mapper,
         )
 
+        # Per-prompt LRU cache of the causal+padding attention-bias tensors. Key is the bytes
+        # of the host-side ``bias_np`` (content-addressable, so identical masks reuse the
+        # device tensor). Cached tensors are owned by this encoder instance and must NOT be
+        # deallocated by callers — that's what makes the cache work across `forward()` calls.
+        self._bias_cache: "OrderedDict[bytes, ttnn.Tensor]" = OrderedDict()
+        self._bias_cache_max = _QWEN_BIAS_CACHE_MAX
+
     def embed_tokens(self, input_ids: np.ndarray) -> ttnn.Tensor:
         """Token IDs ``[B,S]`` -> embedding hidden states ``[B,S,H]`` on device.
 
@@ -499,11 +515,46 @@ class TtQwen3EmbeddingEncoder:
         h = ttnn.rms_norm(h, weight=self.final_norm_w, epsilon=float(cfg.rms_norm_eps), memory_config=self.mem)
         return h
 
+    def _get_or_upload_attn_bias(self, bias_np: np.ndarray) -> "ttnn.Tensor":
+        """Return a device tensor for the causal+padding bias, reusing a cached upload when possible.
+
+        Cache key is the byte-pattern of ``bias_np`` (content-addressable). On miss, the bias
+        is uploaded once and stored; subsequent calls with an identical mask skip the
+        ``ttnn.as_tensor`` DMA. Cache is bounded LRU at ``_bias_cache_max`` entries.
+
+        The returned tensor is **owned by this cache** — callers must NOT call
+        ``ttnn.deallocate`` on it.
+        """
+        key = bias_np.tobytes()
+        cached = self._bias_cache.get(key)
+        if cached is not None:
+            self._bias_cache.move_to_end(key)
+            return cached
+        mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        attn_bias_tt = ttnn.as_tensor(
+            bias_np,
+            device=self.device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.mem,
+            mesh_mapper=mapper,
+        )
+        if len(self._bias_cache) >= self._bias_cache_max:
+            _, evicted = self._bias_cache.popitem(last=False)
+            try:
+                ttnn.deallocate(evicted)
+            except Exception:
+                pass
+        self._bias_cache[key] = attn_bias_tt
+        return attn_bias_tt
+
     def forward(self, input_ids: np.ndarray, attention_mask: Optional[np.ndarray] = None) -> ttnn.Tensor:
         """Legacy host-input wrapper around :meth:`forward_device`.
 
-        Builds the additive causal+padding bias on host, uploads ``ids`` + ``bias`` to device,
-        runs :meth:`forward_device`, and deallocates the temporary input tensors.
+        Builds the additive causal+padding bias on host, uploads ``ids`` to device, fetches the
+        bias tensor from the per-prompt LRU cache (or uploads on miss), runs
+        :meth:`forward_device`, and deallocates only the (always-fresh) ``ids_tt``. The bias
+        tensor is owned by ``self._bias_cache`` and stays device-resident across calls.
         """
         cfg = self.cfg
         ids = np.asarray(input_ids, dtype=np.uint32)
@@ -515,6 +566,7 @@ class TtQwen3EmbeddingEncoder:
 
         m = attention_mask if attention_mask is not None else np.ones((b, s), dtype=np.float32)
         bias_np = causal_padding_attn_bias_np(np.asarray(m), cfg.max_seq_len)
+        attn_bias_tt = self._get_or_upload_attn_bias(bias_np)
 
         ids_tt = ttnn.as_tensor(
             ids,
@@ -524,22 +576,14 @@ class TtQwen3EmbeddingEncoder:
             memory_config=self.mem,
             mesh_mapper=mapper,
         )
-        attn_bias_tt = ttnn.as_tensor(
-            bias_np,
-            device=self.device,
-            dtype=self.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.mem,
-            mesh_mapper=mapper,
-        )
 
         out = self.forward_device(ids_tt, attn_bias_tt)
 
-        for t in (ids_tt, attn_bias_tt):
-            try:
-                ttnn.deallocate(t)
-            except Exception:
-                pass
+        # Deallocate only ids_tt; attn_bias_tt is owned by self._bias_cache.
+        try:
+            ttnn.deallocate(ids_tt)
+        except Exception:
+            pass
         return out
 
 

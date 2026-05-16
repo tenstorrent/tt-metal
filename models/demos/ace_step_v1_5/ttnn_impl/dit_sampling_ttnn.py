@@ -198,19 +198,6 @@ def apg_guidance_velocity_ttnn(
     return guided
 
 
-def _const_tile_bc(shape: tuple[int, int, int], value: float, *, device: Any, dram: Any) -> ttnn.Tensor:
-    b_, t_, c_ = shape
-    arr = np.full((b_, t_, c_), float(value), dtype=np.float32)
-    rm = ttnn.as_tensor(
-        arr,
-        device=device,
-        dtype=ttnn.float32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=dram,
-    )
-    return ttnn.to_layout(rm, layout=ttnn.TILE_LAYOUT)
-
-
 def adg_guidance_velocity_ttnn(
     xt_f32_tt: ttnn.Tensor,
     vpc_bf16_rm: ttnn.Tensor,
@@ -232,17 +219,22 @@ def adg_guidance_velocity_ttnn(
     ttnn.deallocate(vpu_bf16_rm)
 
     b_, t__, c__ = int(xt_f32_tt.shape[0]), int(xt_f32_tt.shape[1]), int(xt_f32_tt.shape[2])
-    sigma_tt = _const_tile_bc((b_, t__, c__), float(sigma_scalar), device=device, dram=dram)
 
-    lhs_c = ttnn.multiply(vpc, sigma_tt, memory_config=dram)
-    lhs_u = ttnn.multiply(vpu, sigma_tt, memory_config=dram)
+    # Scalar-broadcast multiply: ``ttnn.multiply(tensor, python_float, ...)`` is a pure device op
+    # (same kernel as tensor*tensor multiply, just with the scalar baked into the kernel args).
+    # Previously this path built a [B,T,C] NumPy tensor filled with ``sigma_scalar`` and uploaded
+    # it via ``ttnn.as_tensor`` every Euler step — a host->device transfer in the hot loop that
+    # the perf probe (``ACE_STEP_PROBE_FALLBACKS=1``) caught as 27 unexpected uploads / 3-generate
+    # run. Switching to scalar form eliminates the per-step DMA and the host NumPy allocation, and
+    # is also a precondition for wrapping the denoise loop in a TTNN trace.
+    lhs_c = ttnn.multiply(vpc, float(sigma_scalar), memory_config=dram)
+    lhs_u = ttnn.multiply(vpu, float(sigma_scalar), memory_config=dram)
     lh_t = ttnn.subtract(xt_f32_tt, lhs_c, memory_config=dram)
     lh_u = ttnn.subtract(xt_f32_tt, lhs_u, memory_config=dram)
     ttnn.deallocate(lhs_c)
     ttnn.deallocate(lhs_u)
     ttnn.deallocate(vpc)
     ttnn.deallocate(vpu)
-    ttnn.deallocate(sigma_tt)
 
     lh_t_flat = ttnn.reshape(lh_t, (b_ * t__, c__))
     lh_u_flat = ttnn.reshape(lh_u, (b_ * t__, c__))

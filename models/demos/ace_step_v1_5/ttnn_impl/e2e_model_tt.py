@@ -160,6 +160,7 @@ def run_ttnn_denoise_loop(
     return_device_latents: bool = False,
     encoder_attention_mask_b1qk: Optional[ttnn.Tensor] = None,
     deallocate_ctx_latents: bool = True,
+    deallocate_encoder_mask: bool = True,
 ) -> Union[torch.Tensor, ttnn.Tensor]:
     """Run the TTNN DiT denoising loop (latents stay on device; Euler + APG/ADG).
 
@@ -200,6 +201,10 @@ def run_ttnn_denoise_loop(
             When set, ``pipe.forward`` does not take *encoder_attention_mask_1d_bk*.
         deallocate_ctx_latents: If False, skip ``ttnn.deallocate(ctx_tt_pipe)`` at the end (for a
             shared cached context tensor on non-CFG runs).
+        deallocate_encoder_mask: If False, skip ``ttnn.deallocate(encoder_attention_mask_b1qk)``
+            at the end. Set to False when the mask came from
+            :meth:`AceStepV15TTNNPipeline.build_encoder_attention_mask_b1qk_optional`, which
+            now caches the mask per-prompt in ``self._enc_mask_cache`` and owns the tensor.
 
     Returns:
         Denoised latents ``[B, frames, 64]``: CPU float32 :class:`torch.Tensor`, or an on-device
@@ -408,7 +413,7 @@ def run_ttnn_denoise_loop(
         ttnn.deallocate(enc_tt_pipe)
         if deallocate_ctx_latents:
             ttnn.deallocate(ctx_tt_pipe)
-        if encoder_attention_mask_b1qk is not None:
+        if encoder_attention_mask_b1qk is not None and deallocate_encoder_mask:
             ttnn.deallocate(encoder_attention_mask_b1qk)
     except Exception:
         pass
@@ -780,6 +785,10 @@ class AceStepE2EModel:
             return_device_latents=True,
             encoder_attention_mask_b1qk=mask_tt,
             deallocate_ctx_latents=do_cfg,
+            # `mask_tt` comes from `pipe.build_encoder_attention_mask_b1qk_optional`, which now
+            # caches the per-prompt mask in `self.pipe._enc_mask_cache`. Don't let the denoise
+            # loop deallocate it on cleanup — the cache owns the device tensor across generates.
+            deallocate_encoder_mask=False,
         )
         if mask_tt is None:
             loop_kw["enc_mask"] = enc_mask_np
