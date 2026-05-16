@@ -35,11 +35,11 @@ models/demos/attention_denseunet/
 Profiling results on **N300 (Wormhole B0, 64 cores)**, input **256×256, batch 1**, `OptimizationLevel.STAGE2` (L1 height-sharded).
 Numbers from Tracy profiler CSV (`generated/profiler/reports/attention_denseunet/2026_04_27_12_27_38/ops_perf_results_*.csv`).
 
-| Metric | DRAM Interleaved | L1 Sharded | Vision SDPA 
+| Metric | DRAM Interleaved | L1 Sharded | Vision SDPA
 |--------|-----------------:|-----------:|--------------
-| **Device time** | 20.40 ms | **17.57 ms** | 17.57 ms 
-| **Matmul time** | 2.50 ms | **2.15 ms** | 2.15 ms 
-| **Attn time** | 0.71 ms | **0.66 ms** | 0.66 ms 
+| **Device time** | 20.40 ms | **17.57 ms** | 17.57 ms
+| **Matmul time** | 2.50 ms | **2.15 ms** | 2.15 ms
+| **Attn time** | 0.71 ms | **0.66 ms** | 0.66 ms
 
 
 ### Regenerate profiler CSV
