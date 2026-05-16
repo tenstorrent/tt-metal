@@ -1034,7 +1034,12 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             }
 
             if (!mmio_reset_chans.empty()) {
-                constexpr int kRebootWaitMs = 3000;
+                // FIX DV (#42429): extended to 8000ms for mass-boot after tt-smi reset.
+                // When tt-smi resets all 24 MMIO channels simultaneously between test binaries,
+                // all channels boot concurrently and compete for ETH link training bandwidth with
+                // potentially ROM-state non-MMIO peers.  3000ms was insufficient (all 24 failed
+                // FIX BH in run 25967409004); 8000ms gives >2× margin for simultaneous boot.
+                constexpr int kRebootWaitMs = 8000;
                 constexpr auto kPollInterval = std::chrono::milliseconds(10);
                 // FIX DS (#42429): Add a 50ms delay before starting the heartbeat poll.
                 //
