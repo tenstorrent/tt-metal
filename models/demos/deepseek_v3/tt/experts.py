@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
 import os
+from contextlib import contextmanager
 from pathlib import Path
 
 import torch
@@ -21,6 +23,7 @@ from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, LinearConfig, MeshDeviceStub, MulConfig
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
+    COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
     COMPUTE_KERNEL_CONFIG_LOFI,
     even_int_div,
     get_dequantized_tensor,
@@ -307,14 +310,17 @@ class Experts(AbstractModule):
 
     @staticmethod
     def _with_throttle_level(
-        compute_kernel_config: ttnn.WormholeComputeKernelConfig, throttle_level: ttnn.ThrottleLevel
+        compute_kernel_config: ttnn.WormholeComputeKernelConfig,
+        throttle_level: ttnn.ThrottleLevel,
+        packer_l1_acc: bool | None = None,
+        dst_full_sync_en: bool | None = None,
     ) -> ttnn.WormholeComputeKernelConfig:
         return ttnn.WormholeComputeKernelConfig(
             math_fidelity=compute_kernel_config.math_fidelity,
             math_approx_mode=compute_kernel_config.math_approx_mode,
             fp32_dest_acc_en=compute_kernel_config.fp32_dest_acc_en,
-            packer_l1_acc=compute_kernel_config.packer_l1_acc,
-            dst_full_sync_en=compute_kernel_config.dst_full_sync_en,
+            packer_l1_acc=compute_kernel_config.packer_l1_acc if packer_l1_acc is None else packer_l1_acc,
+            dst_full_sync_en=compute_kernel_config.dst_full_sync_en if dst_full_sync_en is None else dst_full_sync_en,
             throttle_level=throttle_level,
         )
 
@@ -365,15 +371,34 @@ class Experts(AbstractModule):
                 "input_tensor_b": FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
             }
         else:
+            # See tt-metal#44280: quad 8upr prefill can hang in the legacy MoE expert matmuls.
+            # Throttle the prefill up/gate projections as well as W2; decode keeps the existing configs.
+            w1_w3_compute_kernel_config = (
+                cls._with_throttle_level(
+                    COMPUTE_KERNEL_CONFIG_LOFI,
+                    ttnn.ThrottleLevel.LEVEL_5,
+                    packer_l1_acc=False,
+                    dst_full_sync_en=True,
+                )
+                if mode == "prefill"
+                else COMPUTE_KERNEL_CONFIG_LOFI
+            )
             config["w1_experts"] = LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 transpose_b=True,
                 memory_config=output_memory_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+                compute_kernel_config=w1_w3_compute_kernel_config,
             )
             # See tt-metal#44280: prefill W2 is sensitive to matmul di/dt on the quad 8upr legacy path.
+            # Use FP16 destination accumulation plus throttle/sync knobs to reduce W2 pressure without changing
+            # tensor shapes.
             w2_compute_kernel_config = (
-                cls._with_throttle_level(COMPUTE_KERNEL_CONFIG_HIFI2, ttnn.ThrottleLevel.LEVEL_5)
+                cls._with_throttle_level(
+                    COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
+                    ttnn.ThrottleLevel.LEVEL_5,
+                    packer_l1_acc=False,
+                    dst_full_sync_en=True,
+                )
                 if mode == "prefill"
                 else COMPUTE_KERNEL_CONFIG_HIFI2
             )
@@ -387,7 +412,7 @@ class Experts(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 transpose_b=True,
                 memory_config=output_memory_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+                compute_kernel_config=w1_w3_compute_kernel_config,
             )
             config["mul_experts"] = MulConfig(
                 memory_config=output_memory_config,
@@ -395,6 +420,58 @@ class Experts(AbstractModule):
             )
 
         return config
+
+    @classmethod
+    def _get_prefill_w2_program_config(
+        cls, x: ttnn.Tensor, cfg: RunPrefillConfig
+    ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+        grid_size = cfg["mesh_device"].compute_with_storage_grid_size()
+        # tt-metal#44280: keep the W2 prefill matmul on a small core grid with
+        # one K tile per block. FP16 destination accumulation keeps this 2x7
+        # layout within L1 while reducing simultaneous matmul pressure.
+        target_grid_x = min(grid_size.x, 2)
+        target_grid_y = min(grid_size.y, 7)
+        num_cores = target_grid_x * target_grid_y
+        _, _, num_tokens, _ = x.shape
+        hidden_size = cfg["w2_experts"].input_tensor_b.shape[-2]
+
+        per_core_M = math.ceil(num_tokens / ttnn.TILE_SIZE)
+        per_core_N = math.ceil(math.ceil(hidden_size / num_cores) / ttnn.TILE_SIZE)
+
+        in0_block_w = 1
+        out_subblock_w = 1
+        out_subblock_h = 1
+
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(target_grid_x, target_grid_y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            out_block_h=per_core_M,
+            out_block_w=per_core_N,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+    @staticmethod
+    @contextmanager
+    def _prefill_w2_stagger_env():
+        # See tt-metal#44280: add a small odd-row stagger only while compiling
+        # prefill W2, further reducing simultaneous matmul pressure.
+        overrides = {"TT_MM_STAGGER_TYPE": "2", "TT_MM_STAGGER_VALUE": "10000"}
+        previous = {key: os.environ.get(key) for key in overrides}
+        os.environ.update(overrides)
+        try:
+            yield
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     @classmethod
     def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelDecodeConfig:
@@ -471,7 +548,15 @@ class Experts(AbstractModule):
         _log_expert_stats("activated", activated)
 
         # Down projection
-        output = ttnn.linear(activated, **cfg["w2_experts"])
+        if cfg["input_memory_config"] == ttnn.DRAM_MEMORY_CONFIG:
+            with cls._prefill_w2_stagger_env():
+                output = ttnn.linear(
+                    activated,
+                    program_config=cls._get_prefill_w2_program_config(activated, cfg),
+                    **cfg["w2_experts"],
+                )
+        else:
+            output = ttnn.linear(activated, **cfg["w2_experts"])
         ttnn.deallocate(activated)
         _log_expert_stats("w2_out", output)
 
