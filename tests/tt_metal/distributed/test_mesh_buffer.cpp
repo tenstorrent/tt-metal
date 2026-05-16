@@ -17,6 +17,7 @@
 #include <random>
 #include <set>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <unordered_map>
@@ -62,7 +63,13 @@ static_assert(std::is_move_constructible_v<MeshBuffer>, "MeshBuffer should be mo
 static_assert(std::is_move_assignable_v<MeshBuffer>, "MeshBuffer should be move assignable");
 
 using MeshBufferTest2x4 = MeshDevice2x4Fixture;
+using MeshBufferTest1x2 = MeshDevice1x2Fixture;
 using MeshBufferTestSuite = GenericMeshDeviceFixture;
+
+class MeshBufferTest1x2MultiCQ : public MeshDeviceFixtureBase {
+protected:
+    MeshBufferTest1x2MultiCQ() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 2}, .num_cqs = 2}) {}
+};
 
 class ScopedPinnedMemoryCacheLimit {
 public:
@@ -1235,6 +1242,113 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeLargePage
         EXPECT_EQ(*src, dst);
         // Pinned memory should have been used, so locking may block.
         EXPECT_TRUE(pinned_shared->lock_may_block());
+    }
+}
+
+// Regression test for remote pinned H2D relays. The extra CQ1 write adds remote traffic while CQ0 relays a large
+// 16-byte-shifted pinned source, making prefetch_h crediting of partially written downstream pages observable.
+TEST_F(MeshBufferTest1x2MultiCQ, EnqueueWriteShardsWithRemotePinnedMemoryAndAlignmentPrefix) {
+    if (!tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+
+    constexpr uint32_t page_size_bytes = 4096;
+    constexpr uint32_t pages_per_device = 128256;
+    constexpr uint32_t bytes_per_device = pages_per_device * page_size_bytes;
+    constexpr size_t aligned_byte_shift = 16;
+
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = page_size_bytes, .buffer_type = BufferType::DRAM, .bottom_up = true};
+    ReplicatedBufferConfig global_buffer_config{.size = bytes_per_device};
+    auto mesh_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+    auto traffic_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    constexpr int device_read_align{64};
+    ASSERT_TRUE(device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0)
+        << "Source vector alignment must be a multiple of PCIE read alignment: "
+        << hal.get_read_alignment(HalMemType::HOST);
+    ASSERT_EQ(aligned_byte_shift % hal.get_alignment(HalMemType::L1), 0u)
+        << "Alignment prefix must preserve L1 alignment for pinned relay";
+
+    using AlignedByteVector = std::vector<uint8_t, tt::stl::aligned_allocator<uint8_t, device_read_align>>;
+    const MeshCoordinate remote_coord(0, 1);
+    std::vector<std::shared_ptr<AlignedByteVector>> source_storage;
+    std::vector<HostBuffer> source_host_buffers;
+    std::vector<std::shared_ptr<tt_metal::experimental::PinnedMemory>> pinned_sources;
+    std::vector<distributed::ShardDataTransfer> write_transfers;
+    std::optional<size_t> remote_source_index;
+    const MeshCoordinateRange coord_range(mesh_device_->shape());
+    const std::vector<MeshCoordinate> coords(coord_range.begin(), coord_range.end());
+    source_storage.reserve(coords.size());
+    source_host_buffers.reserve(coords.size());
+    pinned_sources.reserve(coords.size());
+    write_transfers.reserve(coords.size());
+
+    for (size_t coord_idx = 0; coord_idx < coords.size(); ++coord_idx) {
+        const auto& coord = coords[coord_idx];
+        auto src = std::make_shared<AlignedByteVector>(bytes_per_device + aligned_byte_shift, 0);
+        uint8_t* src_shifted = src->data() + aligned_byte_shift;
+        for (uint32_t i = 0; i < bytes_per_device; ++i) {
+            src_shifted[i] = static_cast<uint8_t>((i * 131 + (i / page_size_bytes) + 17 * coord_idx + 0x5a) & 0xff);
+        }
+
+        source_storage.push_back(src);
+        source_host_buffers.emplace_back(tt::stl::Span<uint8_t>(src_shifted, bytes_per_device), MemoryPin(src));
+        pinned_sources.push_back(tt_metal::experimental::PinnedMemory::Create(
+            *mesh_device_,
+            MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord)),
+            source_host_buffers.back(),
+            /*map_to_noc=*/true));
+        ASSERT_TRUE(pinned_sources.back());
+
+        if (coord == remote_coord) {
+            const auto target_device_id = mesh_buffer->get_device_buffer(remote_coord)->device()->id();
+            auto noc_addr = pinned_sources.back()->get_noc_addr(target_device_id);
+            ASSERT_TRUE(noc_addr.has_value());
+            if (noc_addr->device_id == target_device_id) {
+                GTEST_SKIP() << "Pinned source is local to target device; remote relay path is not exercised";
+                return;
+            }
+            remote_source_index = coord_idx;
+        }
+
+        auto write_transfer = distributed::ShardDataTransfer{coord}
+                                  .host_data(static_cast<void*>(src_shifted))
+                                  .region(BufferRegion(0, bytes_per_device));
+        tt_metal::experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_sources.back());
+        write_transfers.push_back(std::move(write_transfer));
+    }
+    ASSERT_TRUE(remote_source_index.has_value());
+
+    auto traffic_src = std::make_shared<AlignedByteVector>(bytes_per_device, 0);
+    for (uint32_t i = 0; i < bytes_per_device; ++i) {
+        (*traffic_src)[i] = static_cast<uint8_t>((i * 29 + (i / page_size_bytes) + 0xa5) & 0xff);
+    }
+    auto traffic_write = distributed::ShardDataTransfer{remote_coord}
+                             .host_data(static_cast<void*>(traffic_src->data()))
+                             .region(BufferRegion(0, bytes_per_device));
+    auto& traffic_cq = mesh_device_->mesh_command_queue(1);
+    traffic_cq.enqueue_write_shards(traffic_buffer, {traffic_write}, /*blocking=*/false);
+
+    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, write_transfers, /*blocking=*/false);
+    EXPECT_TRUE(pinned_sources.at(remote_source_index.value())->lock_may_block());
+
+    AlignedByteVector dst(bytes_per_device, 0);
+    auto read_transfer = distributed::ShardDataTransfer{remote_coord}
+                             .host_data(static_cast<void*>(dst.data()))
+                             .region(BufferRegion(0, bytes_per_device));
+    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+    traffic_cq.finish();
+
+    const uint8_t* src_shifted = source_storage.at(remote_source_index.value())->data() + aligned_byte_shift;
+    auto mismatch = std::mismatch(src_shifted, src_shifted + bytes_per_device, dst.data());
+    if (mismatch.first != src_shifted + bytes_per_device) {
+        const size_t offset = static_cast<size_t>(mismatch.first - src_shifted);
+        FAIL() << "Remote pinned H2D readback mismatch at byte offset " << offset
+               << " expected=" << static_cast<uint32_t>(*mismatch.first)
+               << " actual=" << static_cast<uint32_t>(*mismatch.second);
     }
 }
 
