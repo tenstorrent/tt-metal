@@ -177,6 +177,42 @@ class TTConvTranspose1dParams:
     spatial_style: str = "width"  # "width" | "height"
 
 
+def _conv_transpose1d_broken_range_cpu(
+    x_nlc: ttnn.Tensor,
+    params: "TTConvTranspose1dParams",
+    device,
+    out_dtype: ttnn.DataType,
+    memory_config: ttnn.MemoryConfig,
+) -> ttnn.Tensor:
+    """CPU float32 fallback for ``tt_conv_transpose1d_nlc`` when the output length is in the
+    TTNN broken range (96, 194).  Uses ``F.conv_transpose1d`` which matches PyTorch exactly.
+    """
+    import torch.nn.functional as F_torch
+
+    x_cpu = ttnn.to_torch(x_nlc).float()  # [B, L, C]
+    x_bcl = x_cpu.permute(0, 2, 1).contiguous()  # [B, C, L]
+    w_cpu = ttnn.to_torch(params.weight).float().squeeze(-1)  # [in_ch, out_ch/g, k, 1] → [in_ch, out_ch/g, k]
+    b_cpu = ttnn.to_torch(params.bias).float().flatten() if params.bias is not None else None
+    with torch.no_grad():
+        out_bcl = F_torch.conv_transpose1d(
+            x_bcl,
+            w_cpu,
+            b_cpu,
+            stride=params.stride,
+            padding=params.padding,
+            output_padding=params.output_padding,
+            groups=params.groups,
+        )  # [B, out_ch, out_L]
+    out_nlc = out_bcl.permute(0, 2, 1).contiguous()
+    return ttnn.from_torch(
+        out_nlc,
+        dtype=out_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+
+
 def tt_conv_transpose1d_nlc(
     *,
     x_nlc: ttnn.Tensor,
@@ -187,7 +223,23 @@ def tt_conv_transpose1d_nlc(
     out_dtype=ttnn.bfloat16,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
-    """1D transpose conv via ``conv_transpose2d`` (NHWC ``[N,H,W,C]`` staging inside the op)."""
+    """1D transpose conv via ``conv_transpose2d`` (NHWC ``[N,H,W,C]`` staging inside the op).
+
+    When the expected output length falls in TTNN's broken range (96, 194) the operation runs
+    on CPU float32 via ``F.conv_transpose1d`` to avoid incorrect on-device results.
+    """
+    bsz = int(x_nlc.shape[0])
+    seq = int(x_nlc.shape[1])
+
+    # Broken-range check: ttnn.conv_transpose2d produces wrong results when the spatial output
+    # dimension lands in (96, 194).  Fall back to CPU float32 for those sizes.
+    _TRANSPOSE_BROKEN_MAX = 96
+    _TRANSPOSE_BROKEN_MIN = 194
+    if params.spatial_style == "height":
+        out_H = (seq - 1) * params.stride + params.kernel_size - 2 * params.padding + params.output_padding
+        if _TRANSPOSE_BROKEN_MAX < out_H < _TRANSPOSE_BROKEN_MIN:
+            return _conv_transpose1d_broken_range_cpu(x_nlc, params, device, out_dtype, memory_config)
+
     if x_nlc.layout != ttnn.ROW_MAJOR_LAYOUT:
         x_nlc = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT)
     x = ttnn.reshape(x_nlc, (x_nlc.shape[0], 1, x_nlc.shape[1], x_nlc.shape[2]), memory_config=memory_config)
@@ -198,8 +250,6 @@ def tt_conv_transpose1d_nlc(
             device.arch(), math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True
         )
 
-    bsz = int(x_nlc.shape[0])
-    seq = int(x_nlc.shape[1])
     if params.spatial_style == "height":
         # Matches ``ttnn_adain_resblk_encode._TtDepthwiseConvTransposePool`` (Kokoro istftnet pool).
         y, out_hw = ttnn.conv_transpose2d(
