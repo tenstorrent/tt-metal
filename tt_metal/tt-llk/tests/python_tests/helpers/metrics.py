@@ -111,8 +111,10 @@ def _compute_single(df: pd.DataFrame) -> dict:
     pack_cycles = _avg_cycles(df, "TDMA_PACK")
 
     # ── Compute Utilization (FPU bank) ──
-    fpu_instruction = _avg_count(df, "FPU", "FPU_INSTRUCTION")
-    fpu_or_sfpu = _avg_count(df, "FPU", "FPU_OR_SFPU_INSTRN")
+    # Counter names match tt-metal PerfCounterType enum
+    # (see tt_metal/tools/profiler/perf_counters.hpp).
+    fpu_instruction = _avg_count(df, "FPU", "FPU_COUNTER")
+    fpu_or_sfpu = _avg_count(df, "FPU", "MATH_COUNTER")
     fpu_utilization = _safe_div(fpu_instruction, fpu_cycles)
     compute_utilization = _safe_div(fpu_or_sfpu, fpu_cycles)
 
@@ -131,8 +133,8 @@ def _compute_single(df: pd.DataFrame) -> dict:
     pack_sem_wait = _safe_div(sem_wait_2, instrn_cycles)
 
     # ── Unpacker Write Efficiency (TDMA_UNPACK bank) ──
-    srca_write = _avg_count(df, "TDMA_UNPACK", "SRCA_WRITE")
-    srcb_write = _avg_count(df, "TDMA_UNPACK", "SRCB_WRITE")
+    srca_write = _avg_count(df, "TDMA_UNPACK", "SRCA_WRITE_ACTUAL")
+    srcb_write = _avg_count(df, "TDMA_UNPACK", "SRCB_WRITE_ACTUAL")
     unpack0_busy = _avg_count(df, "TDMA_UNPACK", "UNPACK0_BUSY_THREAD0")
     unpack1_busy = _avg_count(df, "TDMA_UNPACK", "UNPACK1_BUSY_THREAD0")
     unpack0_eff = _safe_div(srca_write, unpack0_busy)
@@ -147,18 +149,18 @@ def _compute_single(df: pd.DataFrame) -> dict:
     flow_avg = _avg_pair(flow0, flow1)
 
     # ── Packer Metrics (TDMA_PACK bank) ──
+    # PACKER_DEST_READ_AVAILABLE (id 11) and PACKER_BUSY (id 18) exist on both
+    # WH (per-engine 0..3 also exposed) and BH (single packer). Using the
+    # aggregate IDs keeps metrics arch-agnostic.
     packer_busy = _avg_count(df, "TDMA_PACK", "PACKER_BUSY")
     pack_utilization = _safe_div(packer_busy, pack_cycles)
-    # Pack dest efficiency: use per-engine matching pair (DEST_READ_AVAILABLE_0 / PACKER_BUSY_0)
-    # to avoid cross-engine mismatch that causes >100%
-    dest_read_0 = _avg_count(df, "TDMA_PACK", "PACKER_DEST_READ_AVAILABLE_0")
-    packer_busy_0 = _avg_count(df, "TDMA_PACK", "PACKER_BUSY_0")
-    pack_dest_eff = _safe_div(dest_read_0, packer_busy_0)
+    dest_read = _avg_count(df, "TDMA_PACK", "PACKER_DEST_READ_AVAILABLE")
+    pack_dest_eff = _safe_div(dest_read, packer_busy)
 
     # ── Math Pipeline Stalls (TDMA_UNPACK bank only — same bank, reliable) ──
     math_available = _avg_count(df, "TDMA_UNPACK", "MATH_INSTRN_AVAILABLE")
-    fidelity_stalls = _avg_count(df, "TDMA_UNPACK", "FIDELITY_PHASE_STALLS")
-    math_not_blocked = _avg_count(df, "TDMA_UNPACK", "MATH_NOT_BLOCKED_BY_SRC")
+    fidelity_stalls = _avg_count(df, "TDMA_UNPACK", "MATH_FIDELITY_STALL")
+    math_not_blocked = _avg_count(df, "TDMA_UNPACK", "MATH_SRC_DATA_READY")
 
     fidelity_stall_rate = _safe_div(fidelity_stalls, math_available)
     # Math src data stall: fraction of math-available cycles where src data was NOT ready
@@ -354,7 +356,9 @@ def export_counters(
             if has_runs:
                 per_run_cyc = zone_df.loc[mask].groupby("run_index")["cycles"].mean()
                 if len(per_run_cyc) >= 2:
-                    row[f"{run_type_name}_mean({col_cycles})"] = float(per_run_cyc.mean())
+                    row[f"{run_type_name}_mean({col_cycles})"] = float(
+                        per_run_cyc.mean()
+                    )
                     row[f"{run_type_name}_std({col_cycles})"] = float(per_run_cyc.std())
                 elif len(per_run_cyc) == 1:
                     row[f"{run_type_name}_{col_cycles}"] = float(per_run_cyc.iloc[0])
@@ -446,9 +450,7 @@ def _print_stability(zone_metrics: list[dict]) -> None:
             mean_val = float(values.mean())
             std_val = float(values.std())
             label = col.replace("_pct", "").replace("_", " ")
-            lines.append(
-                f"  {label:<40} {mean_val:>11.2f}% {std_val:>11.2f}%"
-            )
+            lines.append(f"  {label:<40} {mean_val:>11.2f}% {std_val:>11.2f}%")
 
     logger.info("\n".join(lines))
 

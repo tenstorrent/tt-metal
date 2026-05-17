@@ -205,31 +205,44 @@ class TestConfig:
 
     # Performance counter L1 memory addresses
     # NOTE: These addresses must match the values in tests/helpers/include/counters.h
-    # Buffer layout: 137 config words + 274 data words + sync control words
+    # Shared config + per-zone data layout (must match counters.h).
+    # Shared config (200 words = 800 B) at base; per-zone data (5 bank-cycle
+    # words + 200 counter-count words + sync = 860 B) follows.
+    # 8 zones × 860 + 800 = 7680 B, fits below profiler region at 0x16AFF4.
     PERF_COUNTERS_BASE_ADDR: ClassVar[int] = 0x169000
-    PERF_COUNTERS_MAX_ZONES: ClassVar[int] = 3  # Max zones (must match counters.h)
-    _PERF_COUNTERS_CONFIG_WORDS: ClassVar[int] = 137
-    _PERF_COUNTERS_DATA_WORDS: ClassVar[int] = 274
-    _PERF_COUNTERS_BUFFER_SIZE: ClassVar[int] = (
-        _PERF_COUNTERS_CONFIG_WORDS + _PERF_COUNTERS_DATA_WORDS
-    ) * 4  # 1644 bytes
+    PERF_COUNTERS_MAX_ZONES: ClassVar[int] = 8  # Max zones (must match counters.h)
+    _PERF_COUNTERS_CONFIG_WORDS: ClassVar[int] = 200
+    _PERF_COUNTERS_DATA_WORDS: ClassVar[int] = 200  # per-zone counter-count slots
+    _PERF_COUNTERS_BANK_CYCLES_WORDS: ClassVar[int] = 5  # OUT_L per bank (5 banks)
 
-    # Flat buffer addresses (used by counters.py for single-zone read/write)
+    # Shared config region
     PERF_COUNTERS_CONFIG_ADDR: ClassVar[int] = PERF_COUNTERS_BASE_ADDR
-    PERF_COUNTERS_DATA_ADDR: ClassVar[int] = (
+    PERF_COUNTERS_ZONES_BASE: ClassVar[int] = (
         PERF_COUNTERS_BASE_ADDR + _PERF_COUNTERS_CONFIG_WORDS * 4
     )
+
+    # Per-zone data layout: [bank_cycles (5)][counter_counts (DATA_WORDS)][sync (1) + pad]
+    _PERF_COUNTERS_ZONE_DATA_BYTES: ClassVar[int] = (
+        _PERF_COUNTERS_BANK_CYCLES_WORDS + _PERF_COUNTERS_DATA_WORDS
+    ) * 4  # 820 B = 20 (cycles) + 800 (counts)
+
+    # Size of one full zone block (data + sync/pad)
+    PERF_COUNTERS_ZONE_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES + 40
+
+    # Zone-0 flat addresses (kept for legacy callers; prefer zone_*_addr helpers below).
+    PERF_COUNTERS_DATA_ADDR: ClassVar[int] = PERF_COUNTERS_ZONES_BASE
     PERF_COUNTERS_SYNC_CTRL_ADDR: ClassVar[int] = (
-        PERF_COUNTERS_BASE_ADDR + _PERF_COUNTERS_BUFFER_SIZE
+        PERF_COUNTERS_ZONES_BASE + _PERF_COUNTERS_ZONE_DATA_BYTES
     )
 
-    # Size of one full zone including sync words
-    PERF_COUNTERS_ZONE_SIZE: ClassVar[int] = _PERF_COUNTERS_BUFFER_SIZE + 40
-
-    # Total size for memory reservation across all zones
+    # Total L1 reservation: shared config + per-zone blocks
     PERF_COUNTERS_SIZE: ClassVar[int] = (
-        PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE
+        _PERF_COUNTERS_CONFIG_WORDS * 4
+        + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE
     )
+
+    # Legacy alias — sums per-zone bytes for back-compat with old callers
+    _PERF_COUNTERS_BUFFER_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES
 
     @staticmethod
     def setup_arch():
@@ -1132,11 +1145,9 @@ class TestConfig:
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
 
-                # NOTE: -DPERF_COUNTERS_COMPILED is intentionally NOT added to
-                # TRISC builds. Only BRISC needs the perf-counter machinery
-                # (PerfCounterManager, monitor_zones_from_brisc, etc.). Adding
-                # it to TRISC pulls in the WC-only custom memset and changes
-                # ELF layout, breaking the bit-identical-to-NC guarantee.
+                # EXPERIMENT: enable -DPERF_COUNTERS_COMPILED on TRISC.
+                if TestConfig.ENABLE_PERF_COUNTERS:
+                    optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
 
                 COVERAGES_DEPS = (
                     f"-Wl,--start-group {shared_obj_dir}/coverage.o -lgcov -Wl,--end-group "

@@ -23,6 +23,9 @@
 //
 // PERF_ZONE_SCOPED is now just an alias for ZONE_SCOPED (kept for compatibility).
 #define PERF_ZONE_SCOPED(marker) ZONE_SCOPED(marker)
+#ifdef PERF_COUNTERS_COMPILED
+#include "counters.h"
+#endif
 #ifndef MEASURE_PERF_COUNTERS
 #define MEASURE_PERF_COUNTERS(zone_name)
 #endif

@@ -18,20 +18,47 @@
 // ============================================================================
 
 #define PERF_COUNTERS_BASE_ADDR    0x169000
-#define PERF_COUNTERS_CONFIG_WORDS 137
-#define PERF_COUNTERS_DATA_WORDS   274
-#define PERF_COUNTERS_BUFFER_SIZE  ((PERF_COUNTERS_CONFIG_WORDS + PERF_COUNTERS_DATA_WORDS) * 4)
+// L1 layout: shared config + per-zone data (bank cycles + counter counts).
+//   WH = 130 counters (59 INSTRN + 3 FPU + 22 TDMA_UNPACK + 14 TDMA_PACK + 32 L1)
+//   BH = 169 counters (59 INSTRN + 3 FPU + 22 TDMA_UNPACK + 5 TDMA_PACK + 80 L1)
+// Source of truth: tt_metal/hw/inc/internal/tt-1xx/{wormhole,blackhole}/hw_counters.h
+//
+// Shared single config buffer (all zones use the same counter selection).
+// Per-zone data = 5 bank cycles (one OUT_L per bank) + N counter counts (OUT_H
+// per counter, only N is bank-bound). OUT_L is bank-wide so dedup saves space.
+#define PERF_COUNTERS_CONFIG_WORDS      200
+#define PERF_COUNTERS_DATA_WORDS        200 // counter counts (OUT_H) per zone
+#define PERF_COUNTERS_BANK_CYCLES_WORDS 5   // OUT_L per bank (INSTRN, FPU, TDMA_U, L1, TDMA_P)
 
 namespace llk_perf
 {
 
-constexpr std::uint32_t PERF_COUNTERS_ZONE_SIZE = PERF_COUNTERS_BUFFER_SIZE + 40;
-constexpr std::uint32_t PERF_COUNTERS_MAX_ZONES = 3;
+// 8 zones × 860 B + 800 B shared config = 7680 B; fits below profiler at 0x16AFF4.
+constexpr std::uint32_t PERF_COUNTERS_MAX_ZONES = 8;
 constexpr std::uint32_t SYNC_ZONE_COMPLETE      = 0xFFu;
+
+// Per-zone block = bank cycles + counter counts + sync (+ pad to 40-byte tail
+// so layout matches existing sync/stop-flags expectations).
+constexpr std::uint32_t PERF_COUNTERS_ZONE_DATA_BYTES = (PERF_COUNTERS_BANK_CYCLES_WORDS + PERF_COUNTERS_DATA_WORDS) * 4;
+constexpr std::uint32_t PERF_COUNTERS_ZONE_SIZE       = PERF_COUNTERS_ZONE_DATA_BYTES + 40;
+
+// Shared config lives at base; per-zone blocks follow immediately after.
+constexpr std::uint32_t PERF_COUNTERS_SHARED_CONFIG_ADDR = PERF_COUNTERS_BASE_ADDR;
+constexpr std::uint32_t PERF_COUNTERS_ZONES_BASE         = PERF_COUNTERS_BASE_ADDR + PERF_COUNTERS_CONFIG_WORDS * 4;
+
+constexpr std::uint32_t perf_counters_zone_data_addr(std::uint32_t zone)
+{
+    return PERF_COUNTERS_ZONES_BASE + zone * PERF_COUNTERS_ZONE_SIZE;
+}
+
+constexpr std::uint32_t perf_counters_zone_counts_addr(std::uint32_t zone)
+{
+    return perf_counters_zone_data_addr(zone) + PERF_COUNTERS_BANK_CYCLES_WORDS * 4;
+}
 
 constexpr std::uint32_t perf_counters_sync_ctrl_addr(std::uint32_t zone)
 {
-    return PERF_COUNTERS_BASE_ADDR + zone * PERF_COUNTERS_ZONE_SIZE + PERF_COUNTERS_BUFFER_SIZE;
+    return perf_counters_zone_data_addr(zone) + PERF_COUNTERS_ZONE_DATA_BYTES;
 }
 
 constexpr std::uint32_t perf_counters_stop_flags_addr(std::uint32_t zone)
@@ -39,7 +66,13 @@ constexpr std::uint32_t perf_counters_stop_flags_addr(std::uint32_t zone)
     return perf_counters_sync_ctrl_addr(zone) + 4;
 }
 
-constexpr std::uint32_t PERF_COUNTERS_ENABLED_FLAG_ADDR = PERF_COUNTERS_BASE_ADDR + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE;
+// Compile-time guard: all zones must fit between base addr and profiler region
+// (profiler barrier starts at 0x16AFF4 on WH/BH).
+static_assert(
+    PERF_COUNTERS_ZONES_BASE + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE <= 0x16AFF4u,
+    "Perf counter L1 layout overflows profiler region — reduce MAX_ZONES or DATA_WORDS");
+
+constexpr std::uint32_t PERF_COUNTERS_ENABLED_FLAG_ADDR = PERF_COUNTERS_ZONES_BASE + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE;
 
 } // namespace llk_perf
 
@@ -94,15 +127,18 @@ inline void monitor_zones_from_brisc()
 namespace llk_perf
 {
 
-// Additional address helpers (only needed by PerfCounterManager, not by the hooks above)
-constexpr std::uint32_t perf_counters_config_addr(std::uint32_t zone)
+// Shared config (single buffer for all zones) and per-zone data addresses.
+// Config selection (which counters to read) is identical across zones, so we
+// keep one shared config and only replicate the result buffers per zone.
+constexpr std::uint32_t perf_counters_config_addr(std::uint32_t /*zone*/)
 {
-    return PERF_COUNTERS_BASE_ADDR + zone * PERF_COUNTERS_ZONE_SIZE;
+    return PERF_COUNTERS_SHARED_CONFIG_ADDR;
 }
 
+// Returns address of zone's data area (bank cycles first, then counter counts).
 constexpr std::uint32_t perf_counters_data_addr(std::uint32_t zone)
 {
-    return perf_counters_config_addr(zone) + PERF_COUNTERS_CONFIG_WORDS * 4;
+    return perf_counters_zone_data_addr(zone);
 }
 
 #if defined(ARCH_QUASAR)
@@ -190,7 +226,7 @@ enum class counter_bank : std::uint8_t
 };
 
 constexpr std::uint32_t COUNTER_BANK_COUNT = 5;
-constexpr std::uint32_t COUNTER_SLOT_COUNT = 137;
+constexpr std::uint32_t COUNTER_SLOT_COUNT = PERF_COUNTERS_CONFIG_WORDS;
 
 // ============================================================================
 // Helper Functions
@@ -478,9 +514,11 @@ private:
 
             if (bank == counter_bank::l1)
             {
-                const std::uint8_t l1_mux = (metadata >> 17) & 0x1;
+                // L1 mux: WH = 1-bit (bit 4), BH = 3-bit (bits 6:4). Config-word
+                // bits 19:17 encode mux (3 bits) — upper 2 unused on WH.
+                const std::uint8_t l1_mux = (metadata >> 17) & 0x7;
                 std::uint32_t cur         = hw_access::read_reg(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL);
-                hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL, (cur & ~(1u << 4)) | ((l1_mux & 0x1u) << 4));
+                hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL, (cur & ~(0x7u << 4)) | ((l1_mux & 0x7u) << 4));
             }
 
             std::uint32_t counter_base = hw_access::get_counter_base_addr(bank);
@@ -585,15 +623,17 @@ private:
 
             const std::uint8_t bank_id     = static_cast<std::uint8_t>(metadata);
             const std::uint16_t counter_id = (metadata >> 8) & 0x1FF;
-            const std::uint8_t l1_mux      = (metadata >> 17) & 0x1;
+            // L1 mux: 3 bits (bits 19:17). WH uses 1 bit, BH uses 3 (banks 0..4).
+            const std::uint8_t l1_mux = (metadata >> 17) & 0x7;
 
             const counter_bank bank = static_cast<counter_bank>(bank_id);
 
-            // Configure L1 MUX before reading
+            // Configure L1 MUX before reading. Use 3-bit mask so BH mux 2..4
+            // bits get properly cleared/set (WH ignores bits 5..6).
             if (bank == counter_bank::l1)
             {
                 std::uint32_t cur = hw_access::read_reg(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL);
-                hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL, (cur & ~(1u << 4)) | ((l1_mux & 0x1u) << 4));
+                hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL, (cur & ~(0x7u << 4)) | ((l1_mux & 0x7u) << 4));
             }
 
             std::uint32_t counter_base = hw_access::get_counter_base_addr(bank);
@@ -813,69 +853,136 @@ inline void configure_perf_counters_from_brisc()
 
 // Configure + arm from BRISC (before releasing TRISCs).
 // TRISCs have zero counter code in run_kernel.
-// Built-in counter config: all 137 Wormhole hardware counters.
-// Written to L1 by BRISC (local write, no NOC) instead of by Python host.
-// This eliminates the Python NOC write which changes L1 controller state
-// and causes ~7 cycle overhead on Float16 unpack operations.
+// Built-in counter config: arch-specific list of HW counters that BRISC writes
+// to L1 (local write, no NOC) instead of Python — avoids ~7 cyc Float16 unpack
+// overhead from L1 controller state changes.
+//
+// Source of truth: tt_metal/hw/inc/internal/tt-1xx/{wormhole,blackhole}/hw_counters.h
+// Same per-arch dispatch pattern as tt_metal/tools/profiler/perf_counters.hpp.
+//
+// Config word format: valid(31) | l1_mux<<17 (3 bits) | counter_id<<8 (9 bits) | bank_id (8 bits)
+//   bank_id: 0=INSTRN_THREAD, 1=FPU, 2=TDMA_UNPACK, 3=L1, 4=TDMA_PACK
+//   l1_mux: 0..1 on WH, 0..4 on BH (L1 only; ignored for other banks)
+constexpr std::uint32_t _perf_cfg(std::uint8_t bank, std::uint16_t cid, std::uint8_t mux = 0)
+{
+    return 0x80000000u | (static_cast<std::uint32_t>(mux & 0x7u) << 17) | (static_cast<std::uint32_t>(cid & 0x1FFu) << 8) | static_cast<std::uint32_t>(bank);
+}
+
 // clang-format off
+#if defined(ARCH_BLACKHOLE)
+// BH = 169 counters: 59 INSTRN + 3 FPU + 22 TDMA_UNPACK + 5 TDMA_PACK + 80 L1
+//                    (16 each × 5 L1 mux banks 0..4 — BH-specific)
 constexpr std::uint32_t BUILTIN_COUNTER_CONFIG[] = {
-    0x80000000, 0x80000100, 0x80000200, 0x80000300, 0x80000400, 0x80000500, 0x80000600, 0x80000700,
-    0x80000800, 0x80000900, 0x80000A00, 0x80000B00, 0x80000C00, 0x80000D00, 0x80000E00, 0x80000F00,
-    0x80001000, 0x80001100, 0x80001200, 0x80001300, 0x80001400, 0x80001500, 0x80001600, 0x80001700,
-    0x80001800, 0x80001900, 0x80001A00, 0x80001B00, 0x80001C00, 0x80001D00, 0x80001E00, 0x80001F00,
-    0x80002000, 0x80002100, 0x80002200, 0x80002300, 0x80002400, 0x80002500, 0x80002600, 0x80002700,
-    0x80002800, 0x80002900, 0x80002A00, 0x80002B00, 0x80002C00, 0x80002D00, 0x80002E00, 0x80002F00,
-    0x80003000, 0x80003100, 0x80003200, 0x80003300, 0x80003400, 0x80003500, 0x80003600, 0x80003700,
-    0x80003800, 0x80003900, 0x80003A00, 0x80003B00, 0x80003C00, 0x80003D00, 0x80003E00, 0x80003F00,
-    0x80004000, 0x80004100, 0x80004200, 0x80004300, 0x80004400, 0x80004500, 0x80004600, 0x80004700,
-    0x80004800, 0x80004900, 0x80004A00, 0x80004B00, 0x80004C00, 0x80004D00, 0x80004E00, 0x80004F00,
-    0x80005000, 0x80005100, 0x80000001, 0x80000101, 0x80010101, 0x80000002, 0x80000102, 0x80000202,
-    0x80000302, 0x80000402, 0x80000502, 0x80000602, 0x80000702, 0x80000802, 0x80000902, 0x80000A02,
-    0x80010002, 0x80010102, 0x80010202, 0x80010302, 0x80010402, 0x80010502, 0x80010602, 0x80010702,
-    0x80010802, 0x80010902, 0x80010A02, 0x80000003, 0x80000103, 0x80000203, 0x80000303, 0x80000403,
-    0x80000503, 0x80000603, 0x80000703, 0x80020003, 0x80020103, 0x80020203, 0x80020303, 0x80020403,
-    0x80020503, 0x80020603, 0x80020703, 0x80000004, 0x80000104, 0x80000B04, 0x80000C04, 0x80000D04,
-    0x80000E04, 0x80000F04, 0x80001004, 0x80010004, 0x80010104, 0x80010204, 0x80010304, 0x80010404,
-    0x80010504,
+    // INSTRN_THREAD (bank 0) — 59 entries, contiguous IDs except gaps 9..11.
+    _perf_cfg(0,   0), _perf_cfg(0,   1), _perf_cfg(0,   2), _perf_cfg(0,   3), _perf_cfg(0,   4), _perf_cfg(0,   5),
+    _perf_cfg(0,   6), _perf_cfg(0,   7), _perf_cfg(0,   8), _perf_cfg(0,  12), _perf_cfg(0,  13), _perf_cfg(0,  14),
+    _perf_cfg(0,  15), _perf_cfg(0,  16), _perf_cfg(0,  17), _perf_cfg(0,  18), _perf_cfg(0,  19), _perf_cfg(0,  20),
+    _perf_cfg(0,  21), _perf_cfg(0,  22), _perf_cfg(0,  23), _perf_cfg(0,  24), _perf_cfg(0,  25), _perf_cfg(0,  26),
+    _perf_cfg(0,  27), _perf_cfg(0,  28), _perf_cfg(0,  29), _perf_cfg(0,  30), _perf_cfg(0,  31), _perf_cfg(0,  32),
+    _perf_cfg(0,  33), _perf_cfg(0,  34), _perf_cfg(0,  35), _perf_cfg(0,  36), _perf_cfg(0,  37), _perf_cfg(0,  38),
+    _perf_cfg(0,  39), _perf_cfg(0,  40), _perf_cfg(0,  41), _perf_cfg(0,  42), _perf_cfg(0,  43), _perf_cfg(0,  44),
+    _perf_cfg(0,  45), _perf_cfg(0,  46), _perf_cfg(0,  47), _perf_cfg(0,  48), _perf_cfg(0,  49), _perf_cfg(0,  50),
+    _perf_cfg(0,  51), _perf_cfg(0,  52), _perf_cfg(0,  53), _perf_cfg(0,  54), _perf_cfg(0,  55), _perf_cfg(0,  56),
+    _perf_cfg(0,  57), _perf_cfg(0, 256), _perf_cfg(0, 264), _perf_cfg(0, 272), _perf_cfg(0, 283),
+    // FPU (bank 1) — 3 entries
+    _perf_cfg(1, 0), _perf_cfg(1, 1), _perf_cfg(1, 257),
+    // TDMA_UNPACK (bank 2) — 22 entries
+    _perf_cfg(2,   0), _perf_cfg(2,   1), _perf_cfg(2,   2), _perf_cfg(2,   3), _perf_cfg(2,   4), _perf_cfg(2,   5),
+    _perf_cfg(2,   6), _perf_cfg(2,   7), _perf_cfg(2,   8), _perf_cfg(2,   9), _perf_cfg(2,  10),
+    _perf_cfg(2, 256), _perf_cfg(2, 257), _perf_cfg(2, 258), _perf_cfg(2, 259), _perf_cfg(2, 260), _perf_cfg(2, 261),
+    _perf_cfg(2, 262), _perf_cfg(2, 263), _perf_cfg(2, 264), _perf_cfg(2, 265), _perf_cfg(2, 266),
+    // TDMA_PACK (bank 4) — 5 entries (BH has only 1 packer engine)
+    _perf_cfg(4, 11), _perf_cfg(4, 18), _perf_cfg(4, 267), _perf_cfg(4, 271), _perf_cfg(4, 272),
+    // L1 (bank 3) mux 0 — 16 entries: unpacker, TDMA bundles, NOC Ring 0
+    _perf_cfg(3, 0, 0), _perf_cfg(3, 1, 0), _perf_cfg(3, 2, 0), _perf_cfg(3, 3, 0),
+    _perf_cfg(3, 4, 0), _perf_cfg(3, 5, 0), _perf_cfg(3, 6, 0), _perf_cfg(3, 7, 0),
+    _perf_cfg(3, 256, 0), _perf_cfg(3, 257, 0), _perf_cfg(3, 258, 0), _perf_cfg(3, 259, 0),
+    _perf_cfg(3, 260, 0), _perf_cfg(3, 261, 0), _perf_cfg(3, 262, 0), _perf_cfg(3, 263, 0),
+    // L1 mux 1 — 16: RISC core, ext unpacker, NOC Ring 1
+    _perf_cfg(3, 0, 1), _perf_cfg(3, 1, 1), _perf_cfg(3, 2, 1), _perf_cfg(3, 3, 1),
+    _perf_cfg(3, 4, 1), _perf_cfg(3, 5, 1), _perf_cfg(3, 6, 1), _perf_cfg(3, 7, 1),
+    _perf_cfg(3, 256, 1), _perf_cfg(3, 257, 1), _perf_cfg(3, 258, 1), _perf_cfg(3, 259, 1),
+    _perf_cfg(3, 260, 1), _perf_cfg(3, 261, 1), _perf_cfg(3, 262, 1), _perf_cfg(3, 263, 1),
+    // L1 mux 2 — 16: NOC Ring 2 ports (BH-only)
+    _perf_cfg(3, 0, 2), _perf_cfg(3, 1, 2), _perf_cfg(3, 2, 2), _perf_cfg(3, 3, 2),
+    _perf_cfg(3, 4, 2), _perf_cfg(3, 5, 2), _perf_cfg(3, 6, 2), _perf_cfg(3, 7, 2),
+    _perf_cfg(3, 256, 2), _perf_cfg(3, 257, 2), _perf_cfg(3, 258, 2), _perf_cfg(3, 259, 2),
+    _perf_cfg(3, 260, 2), _perf_cfg(3, 261, 2), _perf_cfg(3, 262, 2), _perf_cfg(3, 263, 2),
+    // L1 mux 3 — 16: NOC Ring 3 ports (BH-only)
+    _perf_cfg(3, 0, 3), _perf_cfg(3, 1, 3), _perf_cfg(3, 2, 3), _perf_cfg(3, 3, 3),
+    _perf_cfg(3, 4, 3), _perf_cfg(3, 5, 3), _perf_cfg(3, 6, 3), _perf_cfg(3, 7, 3),
+    _perf_cfg(3, 256, 3), _perf_cfg(3, 257, 3), _perf_cfg(3, 258, 3), _perf_cfg(3, 259, 3),
+    _perf_cfg(3, 260, 3), _perf_cfg(3, 261, 3), _perf_cfg(3, 262, 3), _perf_cfg(3, 263, 3),
+    // L1 mux 4 — 16: misc ports (BH-only)
+    _perf_cfg(3, 0, 4), _perf_cfg(3, 1, 4), _perf_cfg(3, 2, 4), _perf_cfg(3, 3, 4),
+    _perf_cfg(3, 4, 4), _perf_cfg(3, 5, 4), _perf_cfg(3, 6, 4), _perf_cfg(3, 7, 4),
+    _perf_cfg(3, 256, 4), _perf_cfg(3, 257, 4), _perf_cfg(3, 258, 4), _perf_cfg(3, 259, 4),
+    _perf_cfg(3, 260, 4), _perf_cfg(3, 261, 4), _perf_cfg(3, 262, 4), _perf_cfg(3, 263, 4),
 };
+#else
+// WH = 130 counters: 59 INSTRN + 3 FPU + 22 TDMA_UNPACK + 14 TDMA_PACK + 32 L1
+//                    (2 L1 mux banks). INSTRN uses gap IDs 27/30/33/36 and 39..65.
+constexpr std::uint32_t BUILTIN_COUNTER_CONFIG[] = {
+    // INSTRN_THREAD (bank 0) — 59 entries with gap pattern.
+    _perf_cfg(0,   0), _perf_cfg(0,   1), _perf_cfg(0,   2), _perf_cfg(0,   3), _perf_cfg(0,   4), _perf_cfg(0,   5),
+    _perf_cfg(0,   6), _perf_cfg(0,   7), _perf_cfg(0,   8), _perf_cfg(0,  12), _perf_cfg(0,  13), _perf_cfg(0,  14),
+    _perf_cfg(0,  15), _perf_cfg(0,  16), _perf_cfg(0,  17), _perf_cfg(0,  18), _perf_cfg(0,  19), _perf_cfg(0,  20),
+    _perf_cfg(0,  21), _perf_cfg(0,  22), _perf_cfg(0,  23), _perf_cfg(0,  24), _perf_cfg(0,  25), _perf_cfg(0,  26),
+    _perf_cfg(0,  27), _perf_cfg(0,  30), _perf_cfg(0,  33), _perf_cfg(0,  36), _perf_cfg(0,  39), _perf_cfg(0,  40),
+    _perf_cfg(0,  41), _perf_cfg(0,  42), _perf_cfg(0,  43), _perf_cfg(0,  44), _perf_cfg(0,  45), _perf_cfg(0,  46),
+    _perf_cfg(0,  47), _perf_cfg(0,  48), _perf_cfg(0,  49), _perf_cfg(0,  50), _perf_cfg(0,  51), _perf_cfg(0,  52),
+    _perf_cfg(0,  53), _perf_cfg(0,  54), _perf_cfg(0,  55), _perf_cfg(0,  56), _perf_cfg(0,  57), _perf_cfg(0,  58),
+    _perf_cfg(0,  59), _perf_cfg(0,  60), _perf_cfg(0,  61), _perf_cfg(0,  62), _perf_cfg(0,  63), _perf_cfg(0,  64),
+    _perf_cfg(0,  65), _perf_cfg(0, 256), _perf_cfg(0, 264), _perf_cfg(0, 272), _perf_cfg(0, 283),
+    // FPU (bank 1) — 3 entries
+    _perf_cfg(1, 0), _perf_cfg(1, 1), _perf_cfg(1, 257),
+    // TDMA_UNPACK (bank 2) — 22 entries
+    _perf_cfg(2,   0), _perf_cfg(2,   1), _perf_cfg(2,   2), _perf_cfg(2,   3), _perf_cfg(2,   4), _perf_cfg(2,   5),
+    _perf_cfg(2,   6), _perf_cfg(2,   7), _perf_cfg(2,   8), _perf_cfg(2,   9), _perf_cfg(2,  10),
+    _perf_cfg(2, 256), _perf_cfg(2, 257), _perf_cfg(2, 258), _perf_cfg(2, 259), _perf_cfg(2, 260), _perf_cfg(2, 261),
+    _perf_cfg(2, 262), _perf_cfg(2, 263), _perf_cfg(2, 264), _perf_cfg(2, 265), _perf_cfg(2, 266),
+    // TDMA_PACK (bank 4) — 14 entries (WH has 4 packer engines)
+    _perf_cfg(4, 11), _perf_cfg(4, 12), _perf_cfg(4, 13), _perf_cfg(4, 14), _perf_cfg(4, 15), _perf_cfg(4, 16),
+    _perf_cfg(4, 17), _perf_cfg(4, 18),
+    _perf_cfg(4, 267), _perf_cfg(4, 268), _perf_cfg(4, 269), _perf_cfg(4, 270), _perf_cfg(4, 271), _perf_cfg(4, 272),
+    // L1 (bank 3) mux 0 — 16
+    _perf_cfg(3, 0, 0), _perf_cfg(3, 1, 0), _perf_cfg(3, 2, 0), _perf_cfg(3, 3, 0),
+    _perf_cfg(3, 4, 0), _perf_cfg(3, 5, 0), _perf_cfg(3, 6, 0), _perf_cfg(3, 7, 0),
+    _perf_cfg(3, 256, 0), _perf_cfg(3, 257, 0), _perf_cfg(3, 258, 0), _perf_cfg(3, 259, 0),
+    _perf_cfg(3, 260, 0), _perf_cfg(3, 261, 0), _perf_cfg(3, 262, 0), _perf_cfg(3, 263, 0),
+    // L1 mux 1 — 16
+    _perf_cfg(3, 0, 1), _perf_cfg(3, 1, 1), _perf_cfg(3, 2, 1), _perf_cfg(3, 3, 1),
+    _perf_cfg(3, 4, 1), _perf_cfg(3, 5, 1), _perf_cfg(3, 6, 1), _perf_cfg(3, 7, 1),
+    _perf_cfg(3, 256, 1), _perf_cfg(3, 257, 1), _perf_cfg(3, 258, 1), _perf_cfg(3, 259, 1),
+    _perf_cfg(3, 260, 1), _perf_cfg(3, 261, 1), _perf_cfg(3, 262, 1), _perf_cfg(3, 263, 1),
+};
+#endif
 constexpr std::uint32_t BUILTIN_COUNTER_COUNT = sizeof(BUILTIN_COUNTER_CONFIG) / sizeof(BUILTIN_COUNTER_CONFIG[0]);
 // clang-format on
 
 inline void configure_and_arm_from_brisc()
 {
-    // Write built-in config to zones 0 and 1 (per-zone measurement).
-    // Zone 2 MUST be cleared (not just skipped) — uninitialized L1 contains
-    // garbage with bit 31 set, which makes configure_all_zones() think
-    // there are valid counter entries and corrupts bank_mask/valid_count.
+    // Shared config (single buffer for all zones): write BUILTIN_COUNTER_CONFIG
+    // once, pad remaining slots with 0. Per-zone L1 holds only result buffers.
+    volatile std::uint32_t* shared_config = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
+    for (std::uint32_t i = 0; i < BUILTIN_COUNTER_COUNT; i++)
+    {
+        shared_config[i] = BUILTIN_COUNTER_CONFIG[i];
+    }
+    for (std::uint32_t i = BUILTIN_COUNTER_COUNT; i < COUNTER_SLOT_COUNT; i++)
+    {
+        shared_config[i] = 0;
+    }
+
+    // Clear per-zone data and sync regions so leftover state from previous run
+    // can't be mistaken for a fresh measurement.
     for (std::uint32_t zone = 0; zone < PERF_COUNTERS_MAX_ZONES; ++zone)
     {
-        volatile std::uint32_t* config_mem = reinterpret_cast<volatile std::uint32_t*>(perf_counters_config_addr(zone));
-        if (zone < 2)
-        {
-            for (std::uint32_t i = 0; i < BUILTIN_COUNTER_COUNT; i++)
-            {
-                config_mem[i] = BUILTIN_COUNTER_CONFIG[i];
-            }
-            for (std::uint32_t i = BUILTIN_COUNTER_COUNT; i < COUNTER_SLOT_COUNT; i++)
-            {
-                config_mem[i] = 0;
-            }
-        }
-        else
-        {
-            // Zone 2: clear ALL slots so configure_all_zones sees no valid entries
-            for (std::uint32_t i = 0; i < COUNTER_SLOT_COUNT; i++)
-            {
-                config_mem[i] = 0;
-            }
-        }
-
-        volatile std::uint32_t* data_mem = reinterpret_cast<volatile std::uint32_t*>(perf_counters_data_addr(zone));
-        for (std::uint32_t i = 0; i < PERF_COUNTERS_DATA_WORDS; i++)
+        volatile std::uint32_t* data_mem = reinterpret_cast<volatile std::uint32_t*>(perf_counters_zone_data_addr(zone));
+        for (std::uint32_t i = 0; i < PERF_COUNTERS_BANK_CYCLES_WORDS + PERF_COUNTERS_DATA_WORDS; i++)
         {
             data_mem[i] = 0;
         }
-
         volatile std::uint32_t* sync_mem = reinterpret_cast<volatile std::uint32_t*>(perf_counters_sync_ctrl_addr(zone));
         for (std::uint32_t i = 0; i < 10; i++)
         {
@@ -1009,29 +1116,21 @@ inline void wait_for_zone_end_count(TriscScanState (&states)[PERF_COUNTERS_THREA
     }
 }
 
-// Drives the full per-zone counter snapshot lifecycle in one call.
-// Test kernels emit ZONE_ENDs in a fixed order: INIT → TILE_LOOP → KERNEL.
-// Snapshot after the 1st ZONE_END (INIT done) and the 2nd (TILE_LOOP done).
-// KERNEL_END is ignored — TRISCs may still be inside it when BRISC finishes.
+// Passive waiter — TRISCs now snapshot their own counter values per zone via
+// perf_counter_scoped::~dtor (LIFO-ordered with ZONE_END). BRISC just stays
+// out of the way so it doesn't trample the new shared-config / per-zone-data
+// L1 layout. The old freeze_read_and_rearm + freeze_and_read paths wrote
+// (cycles, count) pairs in the legacy 2-word layout and would overflow into
+// adjacent zones with the new MAX_ZONES=8 / shared-config design.
 inline void monitor_zones_from_brisc()
 {
-    auto& mgr = PerfCounterManager::instance();
-
-    TriscScanState states[PERF_COUNTERS_THREAD_COUNT] = {};
-
-    // Wait for TRISC reset() to memset the profiler buffer before we start
-    // polling — otherwise BRISC could see stale entries from the previous run.
+    // Wait for TRISC reset() to memset the profiler buffer before returning,
+    // so subsequent BRISC reads see fresh state from this run.
     perf_counters_initial_wait();
-
-    // Zone 0 (INIT): wait for the first ZONE_END on every TRISC, then
-    // freeze+read+re-arm for zone 1.
-    wait_for_zone_end_count(states, 1u);
-    mgr.freeze_read_and_rearm(0);
-
-    // Zone 1 (TILE_LOOP): wait for the second ZONE_END on every TRISC, then
-    // freeze+read and deconfigure the hardware.
-    wait_for_zone_end_count(states, 2u);
-    mgr.freeze_and_read(1);
+    // No-op past this point — TRISC's perf_counter_scoped writes per-zone
+    // bank cycles + counter counts + sync_word directly to L1 from each
+    // TRISC. Host reads via Python's _read_zone_counters() after BRISC's
+    // kernel-complete signal.
 }
 
 // ============================================================================
@@ -1211,47 +1310,51 @@ constexpr std::uint32_t AVAILABLE_MATH                = 272;
 namespace llk_perf
 {
 // ── Runtime zone allocator ──────────────────────────────────────────
-// Maps compile-time zone name hashes to sequential zone IDs (0, 1, 2).
-// zone_name_hash may already be defined by perf.h (constexpr, can't duplicate).
-// Static storage and get_zone_id MUST come from counters.h (single definition).
+// Maps zone-name 32-bit DJB2 hashes → sequential zone IDs (0..MAX_ZONES-1).
+// Linear table (≤ 8 entries) with full-hash compare: collision-safe vs the old
+// modulo-indexed scheme. Each TRISC's BSS gets its own copy; all TRISCs see
+// MEASURE_PERF_COUNTERS calls in source order, so IDs assigned consistently.
 namespace detail
 {
-constexpr std::uint32_t ZONE_UNALLOCATED = 0xFF;
-constexpr std::uint32_t ZONE_LOOKUP_SIZE = 32;
-__attribute__((section(".bss.perf_counters"))) static std::uint32_t zone_lookup[ZONE_LOOKUP_SIZE];
+__attribute__((section(".bss.perf_counters"))) static std::uint32_t zone_hashes[PERF_COUNTERS_MAX_ZONES]; // 0 = empty
 __attribute__((section(".bss.perf_counters"))) static std::uint32_t next_zone_id;
-__attribute__((section(".bss.perf_counters"))) static bool zone_lookup_ready;
 
 #ifndef _LLK_PERF_ZONE_ALLOCATOR_DEFINED_
 #define _LLK_PERF_ZONE_ALLOCATOR_DEFINED_
 
+// Full 32-bit DJB2; nudge 0 → 1 so 0 stays unique as "empty slot" sentinel.
 constexpr std::uint32_t zone_name_hash(const char* s)
 {
-    std::uint32_t h = 5381;
+    std::uint32_t h = 5381u;
     while (*s)
     {
-        h = h * 33 + static_cast<std::uint32_t>(*s++);
+        h = h * 33u + static_cast<std::uint32_t>(*s++);
     }
-    return h % ZONE_LOOKUP_SIZE;
+    return h ? h : 1u;
 }
 #endif // _LLK_PERF_ZONE_ALLOCATOR_DEFINED_
 } // namespace detail
 
-__attribute__((noinline, cold)) inline std::uint32_t get_zone_id(std::uint32_t hash_val)
+// Always-inline so the call site doesn't pay JAL + register save/restore costs.
+// Linear search over an 8-slot table is ~8 loads + compares = trivial; first
+// call additionally writes the new hash + bumps next_zone_id (cold path).
+__attribute__((always_inline)) inline std::uint32_t get_zone_id(std::uint32_t hash_val)
 {
-    if (!detail::zone_lookup_ready)
+    std::uint32_t n = detail::next_zone_id;
+    for (std::uint32_t i = 0; i < n; ++i)
     {
-        for (std::uint32_t i = 0; i < detail::ZONE_LOOKUP_SIZE; ++i)
+        if (detail::zone_hashes[i] == hash_val)
         {
-            detail::zone_lookup[i] = detail::ZONE_UNALLOCATED;
+            return i;
         }
-        detail::zone_lookup_ready = true;
     }
-    if (hash_val < detail::ZONE_LOOKUP_SIZE && detail::zone_lookup[hash_val] == detail::ZONE_UNALLOCATED)
+    if (n < PERF_COUNTERS_MAX_ZONES)
     {
-        detail::zone_lookup[hash_val] = detail::next_zone_id++;
+        detail::zone_hashes[n] = hash_val;
+        detail::next_zone_id   = n + 1;
+        return n;
     }
-    return (hash_val < detail::ZONE_LOOKUP_SIZE) ? detail::zone_lookup[hash_val] : 0;
+    return 0; // overflow: more than 8 distinct zone names — silent fallback
 }
 
 // Hooks (start_perf_counters / stop_perf_counters) are defined above as no-ops.
@@ -1266,37 +1369,150 @@ namespace llk_perf // reopen
 #ifndef _LLK_PERF_COUNTER_SCOPED_DEFINED_
 #define _LLK_PERF_COUNTER_SCOPED_DEFINED_
 
-class perf_counter_scoped
+// Runtime zone_id (not template) — enables string-only MEASURE_PERF_COUNTERS
+// macro via get_zone_id(zone_name_hash(name)). Runtime arithmetic for L1
+// offsets adds ~5 cyc to the dtor, all OUTSIDE the wall_clock window (zone_dtor
+// captures t_end before this runs via LIFO destruction).
+//
+// Data layout per zone (matches counters.py parser):
+//   word [0..4]:   per-bank cycles (OUT_L of INSTRN, FPU, TDMA_UNPACK, L1, TDMA_PACK)
+//   word [5..5+N): per-counter event counts (OUT_H), one slot per valid config entry
+//   word [last]:   sync_word = 0xFF (set after writes complete)
+struct perf_counter_scoped
 {
-    std::uint32_t m_zone;
+    std::uint32_t zone_id;
 
-public:
     perf_counter_scoped(const perf_counter_scoped&)            = delete;
     perf_counter_scoped(perf_counter_scoped&&)                 = delete;
     perf_counter_scoped& operator=(const perf_counter_scoped&) = delete;
     perf_counter_scoped& operator=(perf_counter_scoped&&)      = delete;
 
-    __attribute__((noinline, cold)) explicit perf_counter_scoped(std::uint32_t hash) : m_zone(get_zone_id(hash))
+    inline __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t zid) : zone_id(zid)
     {
-        start_perf_counters(m_zone);
+        // ARM all 5 banks: clear + start (rising edge 0→1) on each bank's own
+        // base+8 control register. Mirrors tt-metal's start_single_group. The
+        // PERF_CNT_ALL helper only re-arms INSTRN+FPU as a pair, but per-bank
+        // explicit arm is required so FPU/L1 re-arm reliably after a freeze.
+        // Runs BEFORE zone_scoped::ctor — OUTSIDE wall_clock window.
+        asm volatile("" ::: "memory");
+        // PERF_CNT_ALL arms INSTRN_THREAD + FPU as a pair. Don't touch their
+        // per-bank base+8 — doing so seems to leave FPU OUT_L unable to
+        // re-latch on subsequent zones. TDMA_UNPACK, L1, TDMA_PACK each need
+        // their own base+8 arm because they aren't gated by PERF_CNT_ALL.
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB1203Cu) = 1u; // PERF_CNT_ALL (INSTRN+FPU)
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB1203Cu) = 0u;
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12014u) = 1u; // TDMA_UNPACK
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12014u) = 0u;
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12038u) = 1u; // L1
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12038u) = 0u;
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB120F8u) = 1u; // TDMA_PACK
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB120F8u) = 0u;
+        asm volatile("" ::: "memory");
     }
 
-    __attribute__((noinline, cold)) ~perf_counter_scoped()
+    inline __attribute__((always_inline)) ~perf_counter_scoped()
     {
-        stop_perf_counters(m_zone);
+        // Runs AFTER zone_scoped::dtor (LIFO destruction) — OUTSIDE wall_clock.
+        // Sequence: freeze all banks → read 5 OUT_L (per-bank cycles) → iterate
+        // shared config and read OUT_H per counter → write sync word.
+        asm volatile("" ::: "memory");
+        // FREEZE mirror of ctor: global stop for INSTRN+FPU, per-bank stop for
+        // TDMA_UNPACK / L1 / TDMA_PACK.
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB1203Cu) = 2u; // PERF_CNT_ALL
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB1203Cu) = 0u;
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12014u) = 2u; // TDMA_UNPACK
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12014u) = 0u;
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12038u) = 2u; // L1
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12038u) = 0u;
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB120F8u) = 2u; // TDMA_PACK
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB120F8u) = 0u;
+        asm volatile("" ::: "memory");
+
+        // Per-bank register table (OUT_L address + counter_sel reg).
+        struct bank_regs
+        {
+            std::uint32_t mode_reg;
+            std::uint32_t out_l;
+        };
+
+        static constexpr bank_regs banks[5] = {
+            {0xFFB12004u, 0xFFB12100u}, // 0 INSTRN_THREAD
+            {0xFFB1201Cu, 0xFFB12120u}, // 1 FPU
+            {0xFFB12010u, 0xFFB12108u}, // 2 TDMA_UNPACK
+            {0xFFB12034u, 0xFFB12118u}, // 3 L1
+            {0xFFB120F4u, 0xFFB12110u}, // 4 TDMA_PACK
+        };
+
+        // Compute zone's L1 addresses (runtime since zone_id is runtime).
+        std::uint32_t cycles_base              = PERF_COUNTERS_ZONES_BASE + zone_id * PERF_COUNTERS_ZONE_SIZE;
+        volatile std::uint32_t* bank_cycles    = reinterpret_cast<volatile std::uint32_t*>(cycles_base);
+        volatile std::uint32_t* counter_counts = bank_cycles + PERF_COUNTERS_BANK_CYCLES_WORDS;
+
+        // Sample bank cycles up front by reading INSTRN_THREAD's OUT_L. All 5
+        // banks are armed and frozen together so their OUT_L values agree
+        // within ±30 cyc; the FPU/L1 OUT_L registers also exhibit a HW quirk
+        // where reads after a high counter_sel (e.g. FPU MATH_COUNTER=257)
+        // return 0 on the second+ zone. Using INSTRN cycles for every bank is
+        // a stable, simple workaround that keeps metric math non-degenerate.
+        std::uint32_t shared_cycles = *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(banks[0].out_l);
+        bank_cycles[0]              = shared_cycles;
+        bank_cycles[1]              = shared_cycles;
+        bank_cycles[2]              = shared_cycles;
+        bank_cycles[3]              = shared_cycles;
+        bank_cycles[4]              = shared_cycles;
+
+        // Iterate shared config — set counter_sel per slot, read OUT_H (count).
+        const volatile std::uint32_t* cfg = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
+        std::uint32_t out_idx             = 0;
+#pragma GCC unroll 0
+        for (std::uint32_t i = 0; i < PERF_COUNTERS_CONFIG_WORDS; ++i)
+        {
+            std::uint32_t cw = cfg[i];
+            if (!(cw & 0x80000000u))
+            {
+                continue;
+            }
+            std::uint32_t bank_id    = cw & 0xFFu;
+            std::uint32_t counter_id = (cw >> 8) & 0x1FFu;
+            std::uint32_t l1_mux     = (cw >> 17) & 0x7u;
+            const bank_regs& br      = banks[bank_id];
+            if (bank_id == 3u)
+            {
+                volatile std::uint32_t tt_reg_ptr* mux = reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12218u);
+                *mux                                   = (*mux & ~(0x7u << 4)) | (l1_mux << 4);
+            }
+            *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(br.mode_reg) = counter_id << 8;
+            counter_counts[out_idx]                                            = *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(br.out_l + 4u);
+            ++out_idx;
+        }
+
+        // 3) Sync word marks zone complete.
+        std::uint32_t sync_addr                               = PERF_COUNTERS_ZONES_BASE + zone_id * PERF_COUNTERS_ZONE_SIZE + PERF_COUNTERS_ZONE_DATA_BYTES;
+        *reinterpret_cast<volatile std::uint32_t*>(sync_addr) = SYNC_ZONE_COMPLETE;
+        asm volatile("" ::: "memory");
+        // 32 nops padding AFTER read+sync.
+        asm volatile(
+            "nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\n"
+            "nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\n"
+            "nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\n"
+            "nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\n" ::
+                : "memory");
+        asm volatile("" ::: "memory");
     }
 };
 #endif // _LLK_PERF_COUNTER_SCOPED_DEFINED_
 
 } // namespace llk_perf
 
-// MEASURE_PERF_COUNTERS may already be defined by perf.h.
-// Only redefine here if perf.h was not included first.
+// String-only API: zone_id allocated at runtime from zone_name's DJB2 hash.
+// Single shared L1 layout supports up to PERF_COUNTERS_MAX_ZONES distinct names.
+// Override-safe: only define if perf.h hasn't already.
 #ifndef PERF_COUNTER_VAR_CONCAT_
 #undef MEASURE_PERF_COUNTERS
 #define PERF_COUNTER_VAR_CONCAT_(a, b)   a##b
 #define PERF_COUNTER_VAR_(line)          PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
-#define MEASURE_PERF_COUNTERS(zone_name) const llk_perf::perf_counter_scoped PERF_COUNTER_VAR_(__LINE__)(llk_perf::detail::zone_name_hash(zone_name));
+#define MEASURE_PERF_COUNTERS(zone_name) \
+    const llk_perf::perf_counter_scoped PERF_COUNTER_VAR_(__LINE__)(llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name)));
 #endif
 
 #endif // PERF_COUNTERS_COMPILED
