@@ -11,7 +11,6 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 from models.common.utility_functions import skip_for_blackhole, skip_with_watcher
 
 
-
 def _out_size(in_size, pad, stride, k, dilation):
     effective_k = (dilation * (k - 1)) + 1
     return (in_size + 2 * pad - effective_k) // stride + 1
