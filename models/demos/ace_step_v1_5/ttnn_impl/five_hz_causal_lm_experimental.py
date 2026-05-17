@@ -2,39 +2,43 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Experimental TTNN causal LM bridge for ACE-Step 5 Hz checkpoints.
+"""Experimental TTNN causal LM bridge for ACE-Step 5 Hz checkpoints (full-device attention).
 
-Wraps :class:`~models.demos.ace_step_v1_5.ttnn_impl.ace_step_ds_r1_qwen.QwenModel`, which keeps the
-heavy compute on TTNN (token embedding, all Q/K/V/O matmuls, MLP gate/up/down, lm_head matmul) and
-runs RMSNorm, RoPE, attention softmax, and the host KV cache on torch CPU using HF's reference
-:class:`~transformers.models.qwen3.modeling_qwen3.Qwen3RotaryEmbedding` and
-:func:`~transformers.models.qwen2.modeling_qwen2.apply_rotary_pos_emb` — exactly matching HF
-semantics on bf16 weights.
+Wraps :class:`~models.demos.ace_step_v1_5.ttnn_impl.qwen_model_full_device.QwenModelFullDevice`,
+which runs **everything on TTNN**:
 
-**Precision configuration applied to ``QwenModel``** (``ace_step_ds_r1_qwen.py``):
+- Token embedding (``ttnn.embedding``)
+- Q / K / V / O / MLP / lm_head matmuls (HF-grade ``HiFi4 / fp32_dest_acc_en=True``, fp32 outputs)
+- RMSNorm (input / post-attn / final / q_norm / k_norm) — all fp32 weights, ``ttnn.rms_norm``
+- RoPE (``ttnn.experimental.rotary_embedding`` via :class:`TtHfRotaryEmbedding`)
+- Causal mask (host-built, tile-aligned, uploaded to device once)
+- KV cache (TTNN tensors, grown via ``ttnn.concat(dim=2)``)
+- SDPA (TTNN decomposed: matmul → softmax(fp32) → matmul; same kernel config)
 
-- HF-grade compute kernel config (``HiFi4``, ``math_approx_mode=False``, ``fp32_dest_acc_en=True``,
-  ``packer_l1_acc=True``) on every device matmul: Q / K / V / O, gate / up / down, lm_head.
-- Residual stream upgraded to ``fp32`` (``ttnn.typecast`` after embedding) and every device matmul
-  output forced to ``fp32`` (``dtype=ttnn.float32``) so the per-layer residual adds do not quantize
-  to bf16 — that was the dominant remaining drift in the deep layers (mean_abs > 200, max > 3000)
-  per the ``test_llm_per_layer_pcc_debug`` diagnostic.
-- ``RMSNorm`` weight stored as ``fp32`` so the manual mul/mean/sqrt/reciprocal/mul chain stays
-  uniformly fp32 on the upgraded residual stream.
+The host-attention :class:`~models.demos.ace_step_v1_5.ttnn_impl.ace_step_ds_r1_qwen.QwenModel`
+remains available for PCC parity checks (~0.984 vs HF Qwen3 1.7B at L=24) but is no longer the
+default — the device-resident path here matches the demo's spirit ("everything on Tensix") and
+saves the per-layer host↔device DMA inside attention.
 
-**Achievable PCC vs HF on bf16 weights:** ~0.984 for Qwen3 1.7B prefill at L=24
-(``test_llm_handler_experimental_causal_lm_prefill_decode_pcc_vs_torch``). A bit-exact match with
-torch is not possible because TTNN's tile-based bf16 matmul rounds at different boundaries than
-torch's BLAS GEMM. If you need ``comp_pcc == 1.0`` (e.g. for plumbing sanity), set
-``ACE_STEP_EXPERIMENTAL_LM_PCC=0.98`` (or replace this wrapper with a ``transformers``
-pass-through; the HF model API is the same).
+**Precision configuration applied to ``QwenModelFullDevice``** (``qwen_model_full_device.py``):
+
+- HF-grade ``compute_kernel_config`` on every device matmul (``HiFi4 / math_approx_mode=False /
+  fp32_dest_acc_en=True / packer_l1_acc=True``).
+- Q / K / V / O / lm_head matmul outputs forced to ``ttnn.float32`` so the residual stream does
+  not quantize to bf16 between layers (the dominant remaining drift on Qwen3 1.7B before this
+  fix).
+- All RMSNorm weights (input/post-attn/final + q_norm/k_norm) staged as ``ttnn.float32`` so the
+  ``ttnn.rms_norm`` reductions stay in fp32 on the upgraded residual stream.
+- Residual stream upgraded to ``fp32`` immediately after the embedding lookup.
+- Tile-aligned causal mask + Q/K/V seq-pad in :class:`AttentionFullDevice` so the decomposed
+  softmax does not absorb tile-pad keys (the bug that previously dropped prefill PCC to 0.93).
 
 **Limitations**
 
-- Host KV cache in :class:`Attention` uses **batch_size == 1**. Use ``guidance_scale==1`` for the
-  demo CLI when this backend is enabled.
-- ``QwenModel`` is constructed with ``validate_against_hf=False`` so HF weights are released after
-  staging.
+- Device KV cache uses **batch_size == 1**. The demo's ``--guidance_scale 1`` requirement (DiT
+  KV / mesh batch = 1) keeps this consistent.
+- Sliding-window attention layers are not supported by ``AttentionFullDevice`` (will raise at
+  init); Qwen3 1.7B in ACE-Step is all ``full_attention`` so this does not apply in practice.
 
 The wrapper exposes a minimal ``forward`` compatible with :meth:`LocalFiveHzLMHandler._forward_pass`
 (``logits``, ``past_key_values``).
@@ -50,13 +54,13 @@ import torch.nn as nn
 
 
 class AceStepFiveHzExperimentalTtnnCausalLM(nn.Module):
-    """HF-compatible thin wrapper around the TTNN ``QwenModel`` (host RoPE / KV / softmax + TTNN matmul)."""
+    """HF-compatible thin wrapper around ``QwenModelFullDevice`` (full-device LM body)."""
 
     def __init__(self, hf_model_dir: str, ttnn_device: Any, *, max_seq_len: int = 16384) -> None:
         super().__init__()
-        from models.demos.ace_step_v1_5.ttnn_impl.ace_step_ds_r1_qwen import QwenModel
+        from models.demos.ace_step_v1_5.ttnn_impl.qwen_model_full_device import QwenModelFullDevice
 
-        self.qwen = QwenModel(
+        self.qwen = QwenModelFullDevice(
             str(hf_model_dir),
             ttnn_device,
             max_seq_len=int(max_seq_len),
