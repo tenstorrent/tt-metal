@@ -94,11 +94,15 @@ def _build_t_schedule(*, shift: float, infer_steps: int, timesteps: str | None, 
     return t
 
 
+_VENDORED_ACESTEP_ROOT = Path(__file__).resolve().parent / "_vendored_acestep"
+
+
 def _resolve_ace_step_repo_root(*, ckpt_dir: str | None, ace_step_repo_root: str | None) -> Path | None:
     """
     Directory that contains the ``acestep/`` package (clone of ACE-Step-1.5), for ``trust_remote_code``.
 
-    Order: explicit ``ace_step_repo_root`` → env ``ACE_STEP_REPO_ROOT`` → walk parents of ``ckpt_dir``.
+    Order: explicit ``ace_step_repo_root`` → env ``ACE_STEP_REPO_ROOT`` → vendored copy under
+    ``torch_ref/_vendored_acestep/`` → walk parents of ``ckpt_dir``.
     """
     candidates: list[Path] = []
     if ace_step_repo_root:
@@ -106,6 +110,7 @@ def _resolve_ace_step_repo_root(*, ckpt_dir: str | None, ace_step_repo_root: str
     env = os.environ.get("ACE_STEP_REPO_ROOT")
     if env:
         candidates.append(Path(env).expanduser().resolve())
+    candidates.append(_VENDORED_ACESTEP_ROOT)
     if ckpt_dir:
         cur = Path(ckpt_dir).expanduser().resolve()
         for _ in range(8):
