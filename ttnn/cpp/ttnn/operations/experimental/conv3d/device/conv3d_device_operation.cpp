@@ -256,13 +256,9 @@ ttsl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
     const auto& weight_tensor = tensor_args.weight_tensor;
     const auto& bias_tensor = tensor_args.bias_tensor;
     const auto& input_shape = input_tensor.logical_shape();
-    // batch_size (N) affects compiled program constants (loop counts, buffer sizes, etc.)
-    // and must be part of the cache key to prevent incorrect cache hits across different
-    // batch sizes (see issue #44565).
     uint32_t batch_size = input_shape[0];
     operation::Hash hash = operation::hash_operation<Conv3dDeviceOperation>(
         args,
-        batch_size,
         input_tensor.dtype(),
         input_tensor.memory_config(),
         input_shape,
