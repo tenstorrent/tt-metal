@@ -16,6 +16,8 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 
 void kernel_main() {
@@ -66,21 +68,33 @@ void kernel_main() {
         cb_wait_front(cb_stats_reduced, stats_tile_stride);
 
         // Compute 1/sqrt(var + eps) into cb_recip_sqrt_var
-        cb_reserve_back(cb_recip_sqrt_var, 1);
-        reconfig_data_format(cb_stats_reduced, cb_eps);
-        pack_reconfig_data_format(cb_recip_sqrt_var);
-
-        add_tiles_init(cb_stats_reduced, cb_eps);
-        rsqrt_tile_init<true>();
-        tile_regs_acquire();
-        tile_regs_wait();
-        // stats_reduced tile 1 holds variance (after combine_welford_partials)
-        add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0);
-        rsqrt_tile<true>(0);
-        pack_tile(0, cb_recip_sqrt_var);
-        tile_regs_commit();
-        tile_regs_release();
-        cb_push_back(cb_recip_sqrt_var, 1);
+        // PARTIAL migration: BinaryFpu(Add, cb_stats_reduced[1], cb_eps[0]) +
+        // Rsqrt(legacy) + PackTile(cb_recip_sqrt_var). cb_stats_reduced is shared
+        // with downstream x_minus_mean / mul stages so NoWaitNoPop. cb_eps is
+        // pre-waited outside the outer loop.
+        {
+            using namespace compute_kernel_lib;
+            eltwise_chain(
+                1,
+                BinaryFpu<
+                    cb_stats_reduced,
+                    cb_eps,
+                    BinaryFpuOp::Add,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::Pinned,
+                    Dst::D0,
+                    CbIndexMode::Pinned>{/*a_tile_idx=*/1, /*b_tile_idx=*/0},
+                Rsqrt<Approx::Exact, Legacy::On, Dst::D0>{},
+                PackTile<
+                    cb_recip_sqrt_var,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
+        }
 
         // Process tiles across width in blocks
         for (uint32_t col_tile = 0; col_tile < Wt; col_tile += block_size) {
