@@ -390,12 +390,19 @@ enum class CopyTilePolicy : uint8_t {
 /// broadcast operand tiles before the chain starts. Same constraint as
 /// `binary_op_helpers`' ROW/COL static_assert.
 enum class CbIndexMode : uint8_t {
-    FirstTile,  // always tile 0 of the CB
-    BlockIter,  // 2D: tile (ht*Wt + wt) ; 1D: tile i. Requires non-streaming policy.
-    Pinned,     // fixed runtime k. Under single-tile-window policies, k must be 0.
-    Absolute,   // runtime idx ∈ caller's window. Requires non-streaming policy.
-    RowBcast,   // 2D only: tile wt (B replicated across rows). Requires non-streaming.
-    ColBcast,   // 2D only: tile ht (B replicated across cols). Requires non-streaming.
+    FirstTile,        // always tile 0 of the CB
+    BlockIter,        // 2D: tile (ht*Wt + wt) ; 1D: tile i. Requires non-streaming policy.
+    Pinned,           // fixed runtime k. Under single-tile-window policies, k must be 0.
+    Absolute,         // runtime idx ∈ caller's window. Requires non-streaming policy.
+    RowBcast,         // 2D only: tile wt (B replicated across rows). Requires non-streaming.
+    ColBcast,         // 2D only: tile ht (B replicated across cols). Requires non-streaming.
+    BlockIterOffset,  // runtime k + i (1D) or runtime k + ht*Wt+wt (2D). Requires
+                      // non-streaming policy. Use case: chain runs N tiles per outer
+                      // C++ loop iter; caller passes the outer-iter base via ctor
+                      // (a_tile_idx_ / b_tile_idx_), chain emits b_tile_idx_ + j for
+                      // each inner iter j. Unlocks the "block-streaming consumer with
+                      // global B index" pattern in normalization gamma/beta stages.
+                      // Caller-managed lifecycle (NoWaitNoPop) — chain doesn't wait/pop.
 };
 
 /// CopyTile dtype-reconfig.
@@ -469,10 +476,14 @@ enum class PackTilePolicy : uint8_t {
 
 /// PackTile output-tile-index mode (mirrors CbIndexMode).
 enum class PackTileIndexMode : uint8_t {
-    FirstTile,  // always output index 0
-    BlockIter,  // i (loop var). Requires UpfrontReservePushAtEnd / NoReserve* with caller-managed window.
-    Pinned,     // fixed runtime k.
-    Absolute,   // runtime idx.
+    FirstTile,        // always output index 0
+    BlockIter,        // i (loop var). Requires UpfrontReservePushAtEnd / NoReserve* with caller-managed window.
+    Pinned,           // fixed runtime k.
+    Absolute,         // runtime idx.
+    BlockIterOffset,  // runtime k + i (1D) or runtime k + i_flat (2D). Requires
+                      // NoReserveNoPush so caller owns the bulk reserve/push for the
+                      // output window. Use case: per-outer-iter pack to absolute
+                      // output slots `wt + wtr` matching pre-reserved Wt-wide window.
 };
 
 /// Pack-side dtype-reconfig.

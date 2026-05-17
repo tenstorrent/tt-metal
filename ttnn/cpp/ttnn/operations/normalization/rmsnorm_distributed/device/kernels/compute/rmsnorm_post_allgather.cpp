@@ -59,10 +59,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
     constexpr uint32_t cb_beta = tt::CBIndex::c_3;
-    uint32_t cb_times_gamma_out = cb_out;
-    if constexpr (do_gamma and do_beta) {
-        cb_times_gamma_out = tt::CBIndex::c_13;
-    }
+    constexpr uint32_t cb_times_gamma_out = (do_gamma && do_beta) ? tt::CBIndex::c_13 : cb_out;
 
     binary_op_init_common(cb_inp, cb_inp, cb_var);
 
@@ -114,24 +111,44 @@ void kernel_main() {
          * RMSNorm: X * 1/sqrt(E[X**2] + eps)
          */
 
-        uint32_t normed_output_cb = cb_x_normed;
-        if constexpr (!do_gamma) {
-            normed_output_cb = cb_out;
-        }
+        constexpr uint32_t normed_output_cb = do_gamma ? cb_x_normed : cb_out;
 
-        reconfig_data_format(cb_norm_x_input, cb_recip_sqrt_var);
-        pack_reconfig_data_format(normed_output_cb);
-        mul_bcast_cols_init_short(cb_norm_x_input, cb_recip_sqrt_var);
+        // Per-block streaming via eltwise_chain. Three nested stages:
+        //   1) x * recip(stdev)  — col-bcast B (cb_recip_sqrt_var) pinned at 0
+        //   2) * gamma            — row-bcast B (cb_gamma) walks wt+wtr globally
+        //   3) + beta             — row-bcast B (cb_beta) walks wt+wtr globally
+        //
+        // Stages 2 and 3 use the new BlockIterOffset index mode (chain returns
+        // b_tile_idx_ + j); caller passes wt as the per-outer-iter base via ctor.
+        // All operands NoWaitNoPop (caller owns wait/pop outside chain) and the
+        // pack uses NoReserveNoPush (caller owns reserve+push) — the C++ outer
+        // loop preserves the original per-blk wait/reserve/pop/push lifecycle.
         cb_wait_front(cb_recip_sqrt_var, 1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_norm_x_input, blk);
             cb_reserve_back(normed_output_cb, blk);
-            ACQ();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles_bcast_cols(cb_norm_x_input, cb_recip_sqrt_var, wtr, 0, wtr);
-                pack_tile(wtr, normed_output_cb);
+            {
+                using namespace compute_kernel_lib;
+                eltwise_chain(
+                    blk,
+                    BinaryFpu<
+                        cb_norm_x_input,
+                        cb_recip_sqrt_var,
+                        BinaryFpuOp::Mul,
+                        BroadcastDim::Col,
+                        BinaryDataFormatReconfig::Input,
+                        CopyTilePolicy::NoWaitNoPop,
+                        CopyTilePolicy::NoWaitNoPop,
+                        CbIndexMode::BlockIter,
+                        Dst::D0,
+                        CbIndexMode::FirstTile>{},
+                    PackTile<
+                        normed_output_cb,
+                        Dst::D0,
+                        PackTilePolicy::NoReserveNoPush,
+                        PackTileIndexMode::BlockIter,
+                        PackTileReconfig::Output>{});
             }
-            REL();
             cb_push_back(normed_output_cb, blk);
             cb_pop_front(cb_norm_x_input, blk);
         }
@@ -141,19 +158,32 @@ void kernel_main() {
             /*
              * x_normed * gamma
              */
-            reconfig_data_format(cb_x_normed, cb_gamma);
-            pack_reconfig_data_format(cb_times_gamma_out);
             cb_wait_front(cb_gamma, Wt);
-            mul_bcast_rows_init_short(cb_x_normed, cb_gamma);
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
                 cb_wait_front(cb_x_normed, blk);
                 cb_reserve_back(cb_times_gamma_out, blk);
-                ACQ();
-                for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                    mul_tiles_bcast_rows(cb_x_normed, cb_gamma, wtr, wt + wtr, wtr);
-                    pack_tile(wtr, cb_times_gamma_out);
+                {
+                    using namespace compute_kernel_lib;
+                    eltwise_chain(
+                        blk,
+                        BinaryFpu<
+                            cb_x_normed,
+                            cb_gamma,
+                            BinaryFpuOp::Mul,
+                            BroadcastDim::Row,
+                            BinaryDataFormatReconfig::Input,
+                            CopyTilePolicy::NoWaitNoPop,
+                            CopyTilePolicy::NoWaitNoPop,
+                            CbIndexMode::BlockIter,
+                            Dst::D0,
+                            CbIndexMode::BlockIterOffset>{/*a_tile_idx=*/0, /*b_tile_idx=*/wt},
+                        PackTile<
+                            cb_times_gamma_out,
+                            Dst::D0,
+                            PackTilePolicy::NoReserveNoPush,
+                            PackTileIndexMode::BlockIter,
+                            PackTileReconfig::Output>{});
                 }
-                REL();
                 cb_push_back(cb_times_gamma_out, blk);
                 cb_pop_front(cb_x_normed, blk);
             }
@@ -162,19 +192,32 @@ void kernel_main() {
                 /*
                  * x_normed * gamma + beta
                  */
-                reconfig_data_format(cb_times_gamma_out, cb_beta);
-                pack_reconfig_data_format(cb_out);
                 cb_wait_front(cb_beta, Wt);
-                add_bcast_rows_init_short(cb_times_gamma_out, cb_beta);
                 for (uint32_t wt = 0; wt < Wt; wt += blk) {
                     cb_wait_front(cb_times_gamma_out, blk);
                     cb_reserve_back(cb_out, blk);
-                    ACQ();
-                    for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                        add_tiles_bcast_rows(cb_times_gamma_out, cb_beta, wtr, wt + wtr, wtr);
-                        pack_tile(wtr, cb_out);
+                    {
+                        using namespace compute_kernel_lib;
+                        eltwise_chain(
+                            blk,
+                            BinaryFpu<
+                                cb_times_gamma_out,
+                                cb_beta,
+                                BinaryFpuOp::Add,
+                                BroadcastDim::Row,
+                                BinaryDataFormatReconfig::Input,
+                                CopyTilePolicy::NoWaitNoPop,
+                                CopyTilePolicy::NoWaitNoPop,
+                                CbIndexMode::BlockIter,
+                                Dst::D0,
+                                CbIndexMode::BlockIterOffset>{/*a_tile_idx=*/0, /*b_tile_idx=*/wt},
+                            PackTile<
+                                cb_out,
+                                Dst::D0,
+                                PackTilePolicy::NoReserveNoPush,
+                                PackTileIndexMode::BlockIter,
+                                PackTileReconfig::Output>{});
                     }
-                    REL();
                     cb_push_back(cb_out, blk);
                     cb_pop_front(cb_times_gamma_out, blk);
                 }

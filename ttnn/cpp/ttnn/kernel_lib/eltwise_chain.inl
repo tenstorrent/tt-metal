@@ -63,6 +63,9 @@ ALWI constexpr uint32_t idx_2d(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32
     else if constexpr (M == CbIndexMode::BlockIter) { (void)ht; (void)wt; (void)runtime_k; return i_flat; }
     else if constexpr (M == CbIndexMode::RowBcast)  { (void)i_flat; (void)ht; (void)runtime_k; return wt; }
     else if constexpr (M == CbIndexMode::ColBcast)  { (void)i_flat; (void)wt; (void)runtime_k; return ht; }
+    else if constexpr (M == CbIndexMode::BlockIterOffset) {
+        (void)ht; (void)wt; return runtime_k + i_flat;
+    }
     else                                             { (void)i_flat; (void)ht; (void)wt; return runtime_k; }
 }
 
@@ -71,15 +74,29 @@ ALWI constexpr uint32_t window_2d(uint32_t Ht, uint32_t Wt) noexcept {
     if constexpr (M == CbIndexMode::BlockIter || M == CbIndexMode::Absolute) return Ht * Wt;
     else if constexpr (M == CbIndexMode::RowBcast) { (void)Ht; return Wt; }
     else if constexpr (M == CbIndexMode::ColBcast) { (void)Wt; return Ht; }
+    // BlockIterOffset: chain doesn't wait/pop (caller-managed). window_2d is only
+    // consumed by wait_upfront_2d / pop_upfront_end_2d, which only fire for
+    // WaitUpfrontPopAtEnd / CumulativeWaitPopAtEnd — those are rejected by the
+    // valid_policy_mode_2d_v static_assert for this mode, so the returned value
+    // is dead-code in practice. Return 0 to make accidental misuse harmless.
+    else if constexpr (M == CbIndexMode::BlockIterOffset) { (void)Ht; (void)Wt; return 0u; }
     else                                            { (void)Ht; (void)Wt; return 1u; }
 }
 
 // Allowed (Policy × Mode) combinations in 2D. RowBcast/ColBcast cannot stream
 // per-tile — the producer must stage the full row/col upfront. Matches the
 // `binary_op_helpers` static_assert (ROW/SCALAR require WaitUpfront* / NoWait*).
+//
+// BlockIterOffset also requires non-streaming: it pulls `runtime_k + i` which can
+// reference an arbitrary tile in the caller-staged window, so streaming wait/pop
+// would under-wait or pop the wrong slot. Caller-managed lifecycle (NoWaitNoPop)
+// is the canonical pairing.
 template <CopyTilePolicy P, CbIndexMode M>
 inline constexpr bool valid_policy_mode_2d_v =
-    !(is_bcast_mode_v<M> && (P == CopyTilePolicy::WaitAndPop));
+    !(is_bcast_mode_v<M> && (P == CopyTilePolicy::WaitAndPop)) &&
+    !(M == CbIndexMode::BlockIterOffset &&
+      (P == CopyTilePolicy::WaitAndPop || P == CopyTilePolicy::WaitNoPop ||
+       P == CopyTilePolicy::NoWaitPop));
 
 // =============================================================================
 // A. Chain typed-list machinery
@@ -285,6 +302,7 @@ struct CopyTile : CopyTileTag {
         const uint32_t in_idx = [&]() -> uint32_t {
             if constexpr (IndexMode == CbIndexMode::FirstTile) return 0;
             else if constexpr (IndexMode == CbIndexMode::BlockIter) return i;
+            else if constexpr (IndexMode == CbIndexMode::BlockIterOffset) return cb_tile_idx_ + i;
             else return cb_tile_idx_;  // Pinned / Absolute
         }();
         copy_tile(Cb, in_idx, to_u32(DstSlot) + slot_offset);
@@ -352,6 +370,14 @@ struct PackTile : PackTileTag {
                   "PackTile: BlockIter index requires UpfrontReservePushAtEnd or NoReserve* policy");
     static_assert(!(Policy == PackTilePolicy::NoReservePushAtEnd    && IndexMode == PackTileIndexMode::BlockIter),
                   "PackTile: BlockIter requires Upfront* / NoReserveNoPush");
+    // BlockIterOffset packs to absolute slots `output_tile_idx_ + i`. Reserve+push
+    // bookkeeping for a strided window can only be expressed by the caller; the
+    // chain's per-tile / upfront reserve+push policies would push the wrong count.
+    // Restrict to NoReserveNoPush — caller owns the whole lifecycle.
+    static_assert(!(IndexMode == PackTileIndexMode::BlockIterOffset &&
+                    Policy != PackTilePolicy::NoReserveNoPush),
+                  "PackTile: BlockIterOffset index requires NoReserveNoPush policy "
+                  "(caller owns cb_reserve_back / cb_push_back).");
 
     static constexpr uint32_t          cb                  = Cb;
     static constexpr uint32_t          pack_cb_id()        { return Cb; }
@@ -394,6 +420,7 @@ struct PackTile : PackTileTag {
         const uint32_t out_idx = [&]() -> uint32_t {
             if constexpr (IndexMode == PackTileIndexMode::FirstTile) return 0;
             else if constexpr (IndexMode == PackTileIndexMode::BlockIter) return i;
+            else if constexpr (IndexMode == PackTileIndexMode::BlockIterOffset) return output_tile_idx_ + i;
             else return output_tile_idx_;  // Pinned / Absolute
         }();
         pack_tile(to_u32(DstSlot) + slot_offset, Cb, out_idx);
@@ -406,6 +433,7 @@ struct PackTile : PackTileTag {
         const uint32_t out_idx = [&]() -> uint32_t {
             if constexpr (IndexMode == PackTileIndexMode::FirstTile) return 0;
             else if constexpr (IndexMode == PackTileIndexMode::BlockIter) return i_flat;
+            else if constexpr (IndexMode == PackTileIndexMode::BlockIterOffset) return output_tile_idx_ + i_flat;
             else return output_tile_idx_;
         }();
         pack_tile(to_u32(DstSlot) + slot_offset, Cb, out_idx);
@@ -647,16 +675,20 @@ struct BinaryFpu : BinaryFpuTag {
     ALWI void exec(uint32_t i, uint32_t slot_offset) const {
         // Per-side index mode. AIndex drives a_idx, BIndex drives b_idx. The
         // canonical bcast walk is A=BlockIter (walks the tile range) + B=FirstTile
-        // (pins the scaler/vector operand at tile 0).
+        // (pins the scaler/vector operand at tile 0). BlockIterOffset adds a
+        // runtime base from the ctor (a_tile_idx_ / b_tile_idx_) to the per-iter
+        // index — used by per-outer-iter chains that pass `wt` as base.
         const uint32_t a_idx = [&]() -> uint32_t {
-            if constexpr      (AIndex == CbIndexMode::FirstTile)  return 0;
-            else if constexpr (AIndex == CbIndexMode::BlockIter)  return i;
-            else                                                  return a_tile_idx_;  // Pinned / Absolute
+            if constexpr      (AIndex == CbIndexMode::FirstTile)        return 0;
+            else if constexpr (AIndex == CbIndexMode::BlockIter)        return i;
+            else if constexpr (AIndex == CbIndexMode::BlockIterOffset)  return a_tile_idx_ + i;
+            else                                                        return a_tile_idx_;  // Pinned / Absolute
         }();
         const uint32_t b_idx = [&]() -> uint32_t {
-            if constexpr      (BIndex == CbIndexMode::FirstTile)  return 0;
-            else if constexpr (BIndex == CbIndexMode::BlockIter)  return i;
-            else                                                  return b_tile_idx_;  // Pinned / Absolute
+            if constexpr      (BIndex == CbIndexMode::FirstTile)        return 0;
+            else if constexpr (BIndex == CbIndexMode::BlockIter)        return i;
+            else if constexpr (BIndex == CbIndexMode::BlockIterOffset)  return b_tile_idx_ + i;
+            else                                                        return b_tile_idx_;  // Pinned / Absolute
         }();
         const uint32_t dst = to_u32(DstSlot) + slot_offset;
         if constexpr (Bcast == BroadcastDim::None) {
@@ -803,6 +835,7 @@ struct DestReuseBinary : DestReuseBinaryTag {
         const uint32_t in_idx = [&]() -> uint32_t {
             if constexpr (IndexMode == CbIndexMode::FirstTile) return 0;
             else if constexpr (IndexMode == CbIndexMode::BlockIter) return i;
+            else if constexpr (IndexMode == CbIndexMode::BlockIterOffset) return cb_tile_idx_ + i;
             else return cb_tile_idx_;
         }();
         binary_dest_reuse_tiles<et, reuse>(Cb, in_idx, to_u32(DstIn) + slot_offset);
