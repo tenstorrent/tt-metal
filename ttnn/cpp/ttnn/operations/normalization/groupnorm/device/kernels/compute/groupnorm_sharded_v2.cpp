@@ -15,6 +15,8 @@
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
 #include "api/compute/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
@@ -402,22 +404,31 @@ void kernel_main() {
             // global reduce results
 
             cb_eps.wait_front(1);
-            cb_ex_global.wait_front(1);
-            cb_ex2pe.reserve_back(1);
-
-            // (Var + eps)
-            tile_regs_acquire();
-            add_tiles_init(cb_ex_global_id, cb_eps_id);
-            add_tiles(cb_ex_global_id, cb_eps_id, 0, 0, dst0);
-            // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe_id);
-            tile_regs_release();
-            cb_ex2pe.push_back(1);
-            cb_ex_global.pop_front(1);
+            // (Var + eps) → 1/[sqrt(Var + eps)]
+            // PARTIAL migration: BinaryFpu(Add) + Rsqrt(legacy) + PackTile.
+            // cb_ex_global popped per chain iter (WaitAndPop); cb_eps stays alive (NoWaitNoPop).
+            {
+                using namespace compute_kernel_lib;
+                eltwise_chain(
+                    1,
+                    BinaryFpu<
+                        cb_ex_global_id,
+                        cb_eps_id,
+                        BinaryFpuOp::Add,
+                        BroadcastDim::None,
+                        BinaryDataFormatReconfig::Input,
+                        CopyTilePolicy::WaitAndPop,
+                        CopyTilePolicy::NoWaitNoPop,
+                        CbIndexMode::FirstTile,
+                        Dst::D0>{},
+                    Rsqrt<Approx::Exact, Legacy::On, Dst::D0>{},
+                    PackTile<
+                        cb_ex2pe_id,
+                        Dst::D0,
+                        PackTilePolicy::PerTileReserveAndPush,
+                        PackTileIndexMode::FirstTile,
+                        PackTileReconfig::Output>{});
+            }
             //  (x - Ex) * 1/[sqrt(Var + eps)]
             index_h_offset = 0;
             mul_tiles_bcast_scalar_init_short(cb_x_id, cb_ex2pe_id);
