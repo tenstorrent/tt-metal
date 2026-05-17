@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""5 Hz LM package used with TTNN assist; re-exports the canonical ``five_hz_lm`` implementation."""
+"""Vendored ACE-Step 5 Hz language model stack for tt-metal ACE-Step demos."""
 
-from .five_hz_llm_inference import LocalFiveHzLMHandler
+from .local_five_hz_llm import LocalFiveHzLMHandler
 
 __all__ = ["LocalFiveHzLMHandler"]

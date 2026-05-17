@@ -453,7 +453,7 @@ def main() -> None:
             from acestep.handler import AceStepHandler
             from acestep.inference import GenerationConfig, GenerationParams, generate_music
 
-            from models.demos.ace_step_v1_5.five_hz_lm import LocalFiveHzLMHandler
+            from models.demos.ace_step_v1_5.ttnn_impl.five_hz_lm import LocalFiveHzLMHandler
         except ModuleNotFoundError as e:
             raise RuntimeError(
                 "--use-official-lm requires AceStepHandler and its deps "
@@ -683,7 +683,7 @@ def main() -> None:
     try:
         from acestep.handler import AceStepHandler
 
-        from models.demos.ace_step_v1_5.five_hz_lm import LocalFiveHzLMHandler
+        from models.demos.ace_step_v1_5.ttnn_impl.five_hz_lm import LocalFiveHzLMHandler
     except ModuleNotFoundError as e:
         raise RuntimeError(
             "Default preprocessing imports AceStepHandler, which pulls ACE-Step training code "
