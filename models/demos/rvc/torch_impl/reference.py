@@ -81,7 +81,10 @@ def build_torch_generator(sd):
     )
     # Load only dec.* keys
     dec_sd = {k.replace("dec.", "", 1): v for k, v in sd.items() if k.startswith("dec.")}
-    gen.load_state_dict(dec_sd, strict=False)
+    result = gen.load_state_dict(dec_sd, strict=False)
+    # m_source/f0_upsamp keys are expected missing (SineGen not loaded here)
+    unexpected_missing = [k for k in result.missing_keys if "m_source" not in k and "f0_upsamp" not in k]
+    assert not unexpected_missing, f"Unexpected missing keys: {unexpected_missing}"
     gen.eval()
     return {"gen": gen}
 

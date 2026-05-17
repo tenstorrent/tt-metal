@@ -15,18 +15,20 @@ SPEECH_DIRECTORY = os.path.join(BASE_DIRECTORY, "speech")
 BATCH_AUDIO_SIZE = 8
 
 
-def audio2(i, o, format, sr):
-    inp = av.open(i, "r")
-    out = av.open(o, "w", format=format)
-    if format == "ogg":
-        format = "libvorbis"
-    if format == "f32le":
-        format = "pcm_f32le"
+def transcode_audio(input_stream, output_stream, output_format, sample_rate):
+    """Transcode audio between formats using PyAV."""
+    inp = av.open(input_stream, "r")
+    out = av.open(output_stream, "w", format=output_format)
+    codec = output_format
+    if codec == "ogg":
+        codec = "libvorbis"
+    if codec == "f32le":
+        codec = "pcm_f32le"
 
-    ostream = out.add_stream(format, rate=sr)
+    ostream = out.add_stream(codec, rate=sample_rate)
     try:
         ostream.layout = "mono"
-    except Exception:
+    except (ValueError, AttributeError):
         pass
 
     for frame in inp.decode(audio=0):
@@ -39,7 +41,7 @@ def audio2(i, o, format, sr):
 
 def _decode_audio(f, sr):
     with BytesIO() as out:
-        audio2(f, out, "f32le", sr)
+        transcode_audio(f, out, "f32le", sr)
         audio = np.frombuffer(out.getvalue(), np.float32).flatten().copy()
         return torch.from_numpy(audio)
 
