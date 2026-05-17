@@ -19,6 +19,8 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 #include "chain_llk.hpp"
 
@@ -130,20 +132,32 @@ void kernel_main() {
          */
 
         cb_wait_front(cb_stats_reduced, 2);
-        cb_reserve_back(cb_recip_sqrt_var, 1);
-        reconfig_data_format(cb_stats_reduced, cb_eps);
-        pack_reconfig_data_format(cb_recip_sqrt_var);
-
-        add_tiles_init(cb_stats_reduced, cb_eps);
-        tile_regs_acquire();
-        tile_regs_wait();
-        add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0);
-        rsqrt_tile_init<true>();
-        rsqrt_tile<true>(0);
-        pack_tile(0, cb_recip_sqrt_var);
-        tile_regs_commit();
-        tile_regs_release();
-        cb_push_back(cb_recip_sqrt_var, 1);
+        // PARTIAL migration: BinaryFpu(Add, cb_stats_reduced[1], cb_eps[0]) +
+        // Rsqrt(legacy) + PackTile(cb_recip_sqrt_var). cb_stats_reduced shared
+        // with downstream chain_llk stages (NoWaitNoPop); cb_eps pre-waited outside.
+        {
+            using namespace compute_kernel_lib;
+            eltwise_chain(
+                1,
+                BinaryFpu<
+                    cb_stats_reduced,
+                    cb_eps,
+                    BinaryFpuOp::Add,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::Pinned,
+                    Dst::D0,
+                    CbIndexMode::Pinned>{/*a_tile_idx=*/1, /*b_tile_idx=*/0},
+                Rsqrt<Approx::Exact, Legacy::On, Dst::D0>{},
+                PackTile<
+                    cb_recip_sqrt_var,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
+        }
 
         if constexpr (do_gamma && do_beta) {
             /*
