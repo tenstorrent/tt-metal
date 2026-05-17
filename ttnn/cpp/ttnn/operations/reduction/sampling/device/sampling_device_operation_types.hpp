@@ -23,6 +23,13 @@ struct SamplingInputs {
     Tensor p;
     Tensor temp;
     std::optional<Tensor> preallocated_output;
+    // tt-xla #4539 fix proposal: host-precomputed noise input.
+    // Shape [32], bf16, ROW_MAJOR — same convention as k/p/temp. Required
+    // on this branch — the kernel uses this instead of an internal RNG.
+    // Stored as a plain Tensor (not std::optional) so the device-operation
+    // framework's reflection tracks its buffer and updates the kernel's
+    // runtime arg per launch.
+    Tensor noise;
 };
 
 }  // namespace ttnn::prim

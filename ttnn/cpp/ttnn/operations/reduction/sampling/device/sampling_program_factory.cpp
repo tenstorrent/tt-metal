@@ -25,6 +25,8 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     const auto& k = tensor_args.k;
     const auto& p = tensor_args.p;
     const auto& temp = tensor_args.temp;
+    // tt-xla #4539 fix proposal: required host-precomputed noise tensor.
+    const auto& noise = tensor_args.noise;
 
     const auto& seed = operation_attributes.seed;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
@@ -48,6 +50,7 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     auto* k_buffer = k.buffer();
     auto* p_buffer = p.buffer();
     auto* temp_buffer = temp.buffer();
+    auto* noise_buffer = noise.buffer();  // tt-xla #4539 fix proposal
     auto* output_buffer = output_tensor.buffer();
 
     auto* device = input_values_tensor.device();
@@ -309,6 +312,20 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         }}},
     });
 
+    // tt-xla #4539 fix proposal: noise circular buffer (mirrors temp CB).
+    tt::DataFormat noise_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(noise.dtype());
+    uint32_t noise_cb_index = tt::CBIndex::c_18;
+    uint32_t noise_chunk_size = num_cores * bf16_bytes;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = noise_chunk_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(noise_cb_index),
+            .data_format = noise_cb_data_format,
+            .page_size = noise_chunk_size,
+        }}},
+    });
+
     std::vector<uint32_t> reader_compile_time_args = {
         input_values_cb_index,
         final_indices_rm_cb_index,
@@ -347,6 +364,8 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         tt::tt_metal::TensorAccessorArgs(temp_buffer).append_to(writer_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(p_buffer).append_to(writer_compile_time_args);
+        // tt-xla #4539 fix proposal: noise tensor accessor args, chained after p_args.
+        tt::tt_metal::TensorAccessorArgs(noise_buffer).append_to(writer_compile_time_args);
         writer_compile_time_args.insert(
             writer_compile_time_args.end(),
             {
@@ -366,6 +385,7 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
                 i,
                 tile_width,
                 num_cores,
+                noise_cb_index,  // tt-xla #4539 fix proposal
             });
 
         KernelDescriptor writer_desc;
@@ -375,7 +395,8 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         writer_desc.core_ranges = single_core;
         writer_desc.compile_time_args = writer_compile_time_args;
         writer_desc.config = WriterConfigDescriptor{};
-        writer_desc.emplace_runtime_args(core, {output_buffer, temp_buffer, k_buffer, p_buffer});
+        // tt-xla #4539 fix proposal: pass noise buffer as the 5th runtime arg.
+        writer_desc.emplace_runtime_args(core, {output_buffer, temp_buffer, k_buffer, p_buffer, noise_buffer});
         desc.kernels.push_back(std::move(writer_desc));
 
         std::vector<uint32_t> compute_args = {

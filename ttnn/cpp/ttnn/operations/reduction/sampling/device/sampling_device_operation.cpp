@@ -77,6 +77,12 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(k.logical_shape() == Shape({32}), "k must have shape [32]!");
     TT_FATAL(p.logical_shape() == Shape({32}), "p must have shape [32]!");
     TT_FATAL(temp.logical_shape() == Shape({32}), "temp must have shape [32]!");
+
+    // tt-xla #4539 fix proposal: noise tensor is required on this branch.
+    const auto& noise = tensor_args.noise;
+    TT_FATAL(noise.dtype() == DataType::BFLOAT16, "Only BFLOAT16 dtype is supported for noise!");
+    TT_FATAL(noise.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for noise!");
+    TT_FATAL(noise.logical_shape() == Shape({32}), "noise must have shape [32]!");
 }
 
 TensorSpec SamplingDeviceOperation::compute_output_specs(
@@ -111,7 +117,13 @@ ttnn::Tensor sampling(
     const Tensor& temp,
     const std::optional<uint32_t>& seed,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
-    const std::optional<Tensor>& preallocated_output_tensor) {
+    const std::optional<Tensor>& preallocated_output_tensor,
+    const std::optional<Tensor>& noise) {
+    // tt-xla #4539 fix proposal: noise is required on this branch.
+    TT_FATAL(
+        noise.has_value(),
+        "noise tensor must be provided (tt-xla #4539 fix proposal branch — "
+        "kernel uses host-precomputed noise instead of internal RNG).");
     return ttnn::device_operation::launch<SamplingDeviceOperation>(
         SamplingParams{.seed = seed, .sub_core_grids = sub_core_grids},
         SamplingInputs{
@@ -120,7 +132,8 @@ ttnn::Tensor sampling(
             .k = k,
             .p = p,
             .temp = temp,
-            .preallocated_output = preallocated_output_tensor});
+            .preallocated_output = preallocated_output_tensor,
+            .noise = noise.value()});
 }
 
 }  // namespace ttnn::prim

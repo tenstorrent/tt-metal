@@ -35,14 +35,17 @@ void kernel_main() {
     uint32_t temp_addr = get_arg_val<uint32_t>(1);
     uint32_t k_addr = get_arg_val<uint32_t>(2);
     uint32_t p_addr = get_arg_val<uint32_t>(3);
+    // tt-xla #4539 fix proposal: noise tensor buffer addr.
+    uint32_t noise_addr = get_arg_val<uint32_t>(4);
 
     uint32_t arg_id = 0;
     constexpr auto dst_args = TensorAccessorArgs<0>();
     constexpr auto temp_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
     constexpr auto k_args = TensorAccessorArgs<temp_args.next_compile_time_args_offset()>();
     constexpr auto p_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    constexpr auto noise_args = TensorAccessorArgs<p_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t args_base = p_args.next_compile_time_args_offset();
+    constexpr uint32_t args_base = noise_args.next_compile_time_args_offset();
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(args_base + 0);
     constexpr uint32_t cb_id_mask = get_compile_time_arg_val(args_base + 1);
     constexpr uint32_t scaler_max_cb_id = get_compile_time_arg_val(args_base + 2);
@@ -59,6 +62,8 @@ void kernel_main() {
     constexpr uint32_t core_id = get_compile_time_arg_val(args_base + 13);
     constexpr uint32_t ids_per_batch = get_compile_time_arg_val(args_base + 14);
     constexpr uint32_t num_cores = get_compile_time_arg_val(args_base + 15);
+    // tt-xla #4539 fix proposal: noise CB index.
+    constexpr uint32_t cb_id_noise = get_compile_time_arg_val(args_base + 16);
     constexpr uint32_t k_chunk_size = num_cores * sizeof(uint32_t);     // 4 bytes per uint32_t
     constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
@@ -111,10 +116,21 @@ void kernel_main() {
     constexpr uint32_t one = 1;
     generate_mask<cb_id_mask, one>(one, ids_per_batch / 32, k - 1);
     // get random number
-    cb_wait_front(rand_tile_index, 1);
-    uint32_t cb_rand_addr = get_read_ptr(rand_tile_index);
-    volatile tt_l1_ptr uint16_t* rand_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_rand_addr);
-    uint16_t rand = rand_values[0];
+    cb_wait_front(rand_tile_index, 1);  // still wait so compute kernel's flow is unblocked
+    // tt-xla #4539 fix proposal: read this core's noise value from the
+    // host-provided noise tensor instead of using rand_tile_index. Same
+    // pattern as k / p / temp above: read whole [32]-element chunk into a
+    // CB, then index by core_id.
+    constexpr uint32_t noise_chunk_size = num_cores * sizeof(uint16_t);
+    const auto addrg_noise = TensorAccessor(noise_args, noise_addr);
+    uint32_t cb_id_noise_ptr = get_write_ptr(cb_id_noise);
+    uint64_t noise_noc_addr = get_noc_addr(0, addrg_noise);
+    noc_async_read(noise_noc_addr, cb_id_noise_ptr, noise_chunk_size);
+    noc_async_read_barrier();
+    volatile tt_l1_ptr uint16_t* noise_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_id_noise_ptr);
+    // tt-xla #4539 fix proposal: read this core's noise value from the host
+    // -provided noise tensor.
+    uint16_t rand = noise_ptr[core_id];
     // wait for compute kernel
     cb_wait_front(output_final_indices_rm_cb_index, 32);
     cb_wait_front(output_local_values_cb_index, 1);
