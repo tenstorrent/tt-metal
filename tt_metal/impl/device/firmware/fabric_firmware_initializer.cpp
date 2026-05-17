@@ -2962,6 +2962,35 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
                 }
                 return;
             }
+            // FIX BZ (#42429): zero-sentinel early-exit.  0x00000000 means the L1 was
+            // cleared by FIX S9 (or an earlier session) but fabric firmware was NEVER launched
+            // on this channel — either FIX C skipped write_launch_msg_to_core because the
+            // channel ended up in all_dead_channels, or the channel was excluded from
+            // configure_fabric entirely for another reason (e.g. FIX AN's mmio_dead_master
+            // path caught it).  In normal operation the firmware canary (0xA0A0A0A0) is
+            // written in the very first instruction of kernel_main, so 0 disappears in <1ms.
+            // If the master channel is still at 0x00000000 after 2s, no firmware is running —
+            // skip ring sync instead of burning timeout_ms (up to 120s).
+            // This is the missing peer of FIX BG (0xdeadb07e = canary written but ERISC not
+            // executing) and FIX AO (0xa0b0c0d0 = STARTED but handshake stalled).
+            constexpr uint32_t kZeroSentinelEarlyExitMs = 2000;
+            if (master_router_status[0] == 0u && elapsed_ms > kZeroSentinelEarlyExitMs) {
+                log_warning(
+                    tt::LogMetal,
+                    "wait_for_fabric_router_sync: Device {} master chan={} stuck at 0x00000000 "
+                    "after {}ms — firmware launch was skipped (channel dead, FIX C excluded it) "
+                    "or ERISC crashed before writing firmware canary. "
+                    "Marking device as dead-master-chan and skipping ring sync. (FIX BZ #42429)",
+                    dev->id(),
+                    master_router_chan,
+                    elapsed_ms);
+                mmio_dead_master_chan_devices_.insert(dev->id());
+                if (has_base_umd_channels_) {
+                    timeout_on_base_umd_devices_.insert(dev->id());
+                    ring_sync_already_timed_out_ = true;
+                }
+                return;
+            }
             // FIX BG (#42429): host-pre-launch (0xdeadb07e) early-exit.  This sentinel means
             // write_launch_msg was called but ERISC has not yet started executing firmware.  In
             // normal operation the transition is instantaneous (<1ms).  If the master channel
@@ -3030,6 +3059,39 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
         }
     };
 
+    // FIX DX2 (#42429): Dynamic "all non-MMIO effectively dead?" helpers.
+    //
+    // FIX DX (above) pre-checks dead_relay_devices_ once at function entry — but that set was
+    // frozen BEFORE configure_fabric() ran.  FIX DY (in Device::configure_fabric) detects
+    // zombie ERISCs and sets fabric_relay_path_broken_=true DURING configure_fabric, after
+    // dead_relay_devices_ was already populated.  A non-MMIO device whose ERISC went zombie
+    // inside configure_fabric is therefore NOT in dead_relay_devices_, so FIX DX misses it.
+    //
+    // The effect: after FIX DY marks device N as broken, the ring sync loop still calls
+    // wait_for_handshake(mmio_dev) which spends the full timeout_ms (up to 120s) waiting for
+    // a sync value that can never arrive (peer ERISC is zombie → ring barrier can't close).
+    //
+    // Fix: after each non-MMIO wait_for_handshake() returns, re-check whether ALL non-MMIO
+    // devices are now effectively relay-dead (dead_relay_devices_ union fabric_relay_path_broken_).
+    // If so: set ring_sync_already_timed_out_=true so the subsequent wait_for_handshake(mmio_dev)
+    // fast-exits via FIX TJ (instead of burning timeout_ms), and add the MMIO device to
+    // mmio_dead_peer_devices_ so FIX I also fires on subsequent calls.
+    auto is_non_mmio_effectively_dead = [&](Device* d) -> bool {
+        return dead_relay_devices_.count(d->id()) > 0 || d->is_fabric_relay_path_broken();
+    };
+    auto all_non_mmio_effectively_dead = [&]() -> bool {
+        bool any_non_mmio = false;
+        for (auto* d : devices_) {
+            if (cluster_.get_associated_mmio_device(d->id()) != d->id()) {
+                any_non_mmio = true;
+                if (!is_non_mmio_effectively_dead(d)) {
+                    return false;
+                }
+            }
+        }
+        return any_non_mmio;  // false if no non-MMIO devices exist
+    };
+
     // Poll devices in tunnel order: farthest-to-closest, then MMIO device itself
     for (auto* dev : devices_) {
         if (cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
@@ -3044,6 +3106,27 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
                     std::find_if(devices_.begin(), devices_.end(), [&](Device* d) { return d->id() == tunnel[j]; });
                 if (it != devices_.end()) {
                     wait_for_handshake(*it);
+                    // FIX DX2 (#42429): Dynamic re-check after each non-MMIO handshake.
+                    // wait_for_handshake() may have just returned because the device timed out,
+                    // hit FIX AL (read exception), or FIX AO (stuck at STARTED).  Any of these
+                    // outcomes means the device is effectively dead for ring-barrier purposes.
+                    // Re-evaluate whether ALL non-MMIO devices are now effectively dead; if so,
+                    // short-circuit the subsequent wait_for_handshake(dev) for the MMIO device.
+                    if (!ring_sync_already_timed_out_ && all_non_mmio_effectively_dead()) {
+                        ring_sync_already_timed_out_ = true;
+                        if (mmio_dead_peer_devices_.count(dev->id()) == 0) {
+                            mmio_dead_peer_devices_.insert(dev->id());
+                            dev->set_fabric_is_mmio_dead_peer_device(true);
+                        }
+                        log_warning(
+                            tt::LogMetal,
+                            "wait_for_fabric_router_sync: All non-MMIO devices are now effectively "
+                            "relay-dead (dead_relay_devices_ ∪ fabric_relay_path_broken_). "
+                            "Setting ring_sync_already_timed_out_=true and adding MMIO Device {} "
+                            "to mmio_dead_peer_devices_ to skip its ring sync via FIX I/TJ. "
+                            "(FIX DX2 #42429)",
+                            dev->id());
+                    }
                 }
             }
         }
