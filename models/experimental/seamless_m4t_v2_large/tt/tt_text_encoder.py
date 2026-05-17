@@ -71,16 +71,25 @@ class TTSeamlessM4Tv2Encoder:
         # the reduction across grid_x cores -- typically 8 cores at seq=32 --
         # for a ~4-5x per-op speedup.
         self._ln_sharded_cache: dict = {}
+        # Reuse ``SDPAProgramConfig`` per (seq_q, seq_k) across encoder layers (same as decoder Stage 19).
+        self._sdpa_pc_cache: dict = {}
 
     def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
+        key = (seq_q, seq_k)
+        cached = self._sdpa_pc_cache.get(key)
+        if cached is not None:
+            return cached
+
         q_chunk = max(64, min(256, nearest_32(seq_q)))
         k_chunk = max(64, min(256, nearest_32(seq_k)))
-        return ttnn.SDPAProgramConfig(
+        out = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
             exp_approx_mode=False,
         )
+        self._sdpa_pc_cache[key] = out
+        return out
 
     def _linear(
         self,
