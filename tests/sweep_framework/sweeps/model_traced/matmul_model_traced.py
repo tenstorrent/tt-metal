@@ -54,42 +54,37 @@ if model_traced_params:
 
 
 _GLOBAL_CB = None
+_PREFETCHER_INFO = None
+
 
 def mesh_device_fixture():
     """
     Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
+    Replicates the model's sub-device manager + global circular buffer + dram prefetcher
+    setup so matmul can run with program_config + global_cb as the model does.
     """
-    global _GLOBAL_CB
-    mesh_shape = get_mesh_shape()
+    global _GLOBAL_CB, _PREFETCHER_INFO
+    from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+        get_model_traced_mesh_shape,
+        setup_sub_device_manager,
+        teardown_sub_device_manager,
+    )
 
-    if mesh_shape:
-        # Create mesh device based on env var
-        try:
-            device = create_mesh_device(mesh_shape)
-            result = setup_sub_device_manager(device)
-            sub_device_mgr = None
-            if isinstance(result, tuple):
-                sub_device_mgr, _GLOBAL_CB = result
-            else:
-                sub_device_mgr = result
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            teardown_sub_device_manager(device, sub_device_mgr)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    result = setup_sub_device_manager(device)
+    sub_device_mgr = None
+    if isinstance(result, tuple):
+        if len(result) == 3:
+            sub_device_mgr, _GLOBAL_CB, _PREFETCHER_INFO = result
+        else:
+            sub_device_mgr, _GLOBAL_CB = result
     else:
-        # Single device (default)
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+        sub_device_mgr = result
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    teardown_sub_device_manager(device, sub_device_mgr)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -119,9 +114,8 @@ def run(
     # correct matmul behavior with sharded memory configs.
     op_kwargs = build_op_kwargs(kwargs, exclude={"global_cb"})
 
-    # global_cb injection deferred to after weight tensor creation (see below)
-    if "global_cb" in op_kwargs and not hasattr(op_kwargs.get("global_cb"), "address"):
-        del op_kwargs["global_cb"]
+    # global_cb is injected after weight creation; remove any placeholder.
+    op_kwargs.pop("global_cb", None)
 
     # build_op_kwargs filters memory_config (infrastructure key), but matmul
     # accepts it as an op kwarg.  Re-inject from the traced kwargs when present.
@@ -230,10 +224,9 @@ def run(
                     device,
                     input_a_dtype,
                     input_a_layout,
-                    ttnn.DRAM_MEMORY_CONFIG,
+                    input_a_memory_config if input_a_memory_config else ttnn.DRAM_MEMORY_CONFIG,
                     input_a_tensor_placement,
                 )
-                pass
             else:
                 input_tensor_a = ttnn.from_torch(
                     torch_input_tensor_a,
@@ -265,16 +258,15 @@ def run(
     has_program_config = "program_config" in op_kwargs
 
     if input_b_is_sharded and not has_program_config:
-        # No program_config: matmul's default path requires input_b to be INTERLEAVED
-        input_tensor_b_interleaved = ttnn.from_torch(
+        input_tensor_b = ttnn.from_torch(
             torch_input_tensor_b,
             dtype=input_b_dtype,
             layout=input_b_layout,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        input_tensor_b = input_tensor_b_interleaved
     else:
+        _b_mc = input_b_memory_config if (has_program_config and input_b_memory_config) else ttnn.DRAM_MEMORY_CONFIG
         try:
             if not is_host:
                 if is_mesh_device and input_b_tensor_placement:
@@ -283,17 +275,16 @@ def run(
                         device,
                         input_b_dtype,
                         input_b_layout,
-                        ttnn.DRAM_MEMORY_CONFIG,
+                        _b_mc,
                         input_b_tensor_placement,
                     )
-                    pass
                 else:
                     input_tensor_b = ttnn.from_torch(
                         torch_input_tensor_b,
                         dtype=input_b_dtype,
                         layout=input_b_layout,
                         device=device,
-                        memory_config=input_b_memory_config,
+                        memory_config=_b_mc,
                     )
             else:
                 input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=input_b_dtype, layout=input_b_layout)
@@ -306,29 +297,45 @@ def run(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-    # Inject global_cb when weight is properly sharded; otherwise fallback
+    # Inject global_cb when weight is DRAM-sharded and fixture created one.
     gcb_raw = kwargs.get("global_cb")
-    if gcb_raw is not None and gcb_raw != "__ABSENT__" and isinstance(gcb_raw, dict):
+    if gcb_raw is not None and gcb_raw != "__ABSENT__":
         _w_mc = input_tensor_b.memory_config() if hasattr(input_tensor_b, "memory_config") else None
         _w_sharded = _w_mc is not None and _w_mc.is_sharded()
         if _w_sharded and _GLOBAL_CB is not None:
             op_kwargs["global_cb"] = _GLOBAL_CB
-        else:
-            # Weight stayed in DRAM interleaved; disable prefetcher features
-            _pc = op_kwargs.get("program_config")
-            if _pc is not None:
-                if hasattr(_pc, "num_global_cb_receivers"):
-                    _pc.num_global_cb_receivers = 1
-                if hasattr(_pc, "gather_in0"):
-                    _pc.gather_in0 = False
-            if "sub_device_id" in op_kwargs:
-                del op_kwargs["sub_device_id"]
-            if "memory_config" in op_kwargs:
-                del op_kwargs["memory_config"]
-            if "program_config" in op_kwargs:
-                del op_kwargs["program_config"]
-    elif "global_cb" in op_kwargs:
-        del op_kwargs["global_cb"]
+    # _GLOBAL_CB injected above is the real C++ object — no further validation needed.
+
+    # Dispatch dram_prefetcher before matmul when global_cb is active.
+    # This feeds the sender sub-device so it has work to do; without it,
+    # sync/close hangs because the sender cores wait for data indefinitely.
+    if _GLOBAL_CB is not None and "global_cb" in op_kwargs and _PREFETCHER_INFO is not None:
+        try:
+            _pi = _PREFETCHER_INFO
+            _dram_cores = _pi["dram_cores"]
+            _sender_crs = _pi["sender_core_range_set"]
+            _t_addrs = torch.tensor([input_tensor_b.buffer_address()], dtype=torch.int64)
+            _t_addrs = _t_addrs.repeat(len(_dram_cores), 1)
+            _t_addrs_mc = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    _sender_crs,
+                    [_t_addrs.shape[0] // len(_dram_cores), _t_addrs.shape[1]],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+            _tt_addrs = ttnn.from_torch(
+                _t_addrs,
+                dtype=ttnn.uint32,
+                device=device,
+                memory_config=_t_addrs_mc,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
+            ttnn.dram_prefetcher([input_tensor_b, _tt_addrs], num_layers=1, global_cb=_GLOBAL_CB)
+            device.set_sub_device_stall_group([ttnn.SubDeviceId(1)])
+        except Exception as _pf_err:
+            print(f"Warning: dram_prefetcher dispatch failed: {_pf_err}")
 
     try:
         start_time = start_measuring_time()
@@ -350,7 +357,9 @@ def run(
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        fallback_kwargs = {k: v for k, v in op_kwargs.items() if k != "program_config"}
+        fallback_kwargs = {
+            k: v for k, v in op_kwargs.items() if k not in ("program_config", "global_cb", "sub_device_id")
+        }
         fallback_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
         start_time = start_measuring_time()
         output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, **fallback_kwargs)

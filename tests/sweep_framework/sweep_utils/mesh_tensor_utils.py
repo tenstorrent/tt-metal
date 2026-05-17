@@ -20,6 +20,30 @@ from typing import Optional, Dict, Tuple
 import ast
 
 
+def _find_master_json() -> Optional[str]:
+    """Find the master trace JSON file, trying known filenames."""
+    env_path = os.environ.get("TTNN_MASTER_JSON_PATH", "")
+    if env_path and os.path.isfile(env_path):
+        return env_path
+
+    base_dirs = [
+        os.path.join(os.path.dirname(__file__), "..", "..", ".."),
+        os.environ.get("TT_METAL_HOME", ""),
+    ]
+    filenames = [
+        "ttnn_operations_master_main.json",
+        "ttnn_operations_master.json",
+    ]
+    for base in base_dirs:
+        if not base:
+            continue
+        for fn in filenames:
+            path = os.path.join(base, "model_tracer", "traced_operations", fn)
+            if os.path.isfile(path):
+                return os.path.abspath(path)
+    return None
+
+
 def parse_placement_from_traced(tensor_placement: Optional[Dict]) -> Optional[ttnn.TensorMemoryLayout]:
     """
     Parse tensor placement from traced config and return appropriate mesh mapper.
@@ -69,7 +93,6 @@ def parse_placement_from_traced(tensor_placement: Optional[Dict]) -> Optional[tt
     return None
 
 
-
 def setup_sub_device_manager(device, master_json_path=None):
     """Auto-detect and load sub-device manager from master JSON configs.
 
@@ -81,8 +104,7 @@ def setup_sub_device_manager(device, master_json_path=None):
     """
     import json, re as _re_sd
 
-    master_path = master_json_path or os.environ.get("TTNN_MASTER_JSON_PATH", "")
-    print(f"setup_sub_device_manager: master_path={master_path}, exists={os.path.isfile(master_path) if master_path else False}")
+    master_path = master_json_path or _find_master_json() or ""
     if not master_path or not os.path.isfile(master_path):
         return None
 
@@ -101,7 +123,7 @@ def setup_sub_device_manager(device, master_json_path=None):
             if isinstance(scg, dict) and scg.get("type") == "CoreRangeSet":
                 val = str(scg.get("value", ""))
                 ranges = _re_sd.findall(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", val)
-                core_count = sum((int(ex)-int(sx)+1) * (int(ey)-int(sy)+1) for sx, sy, ex, ey in ranges)
+                core_count = sum((int(ex) - int(sx) + 1) * (int(ey) - int(sy) + 1) for sx, sy, ex, ey in ranges)
                 if core_count > best_core_count:
                     best_core_count = core_count
                     best_scg = ranges
@@ -143,62 +165,72 @@ def setup_sub_device_manager(device, master_json_path=None):
                         if hy > max_y:
                             max_y = hy
 
-        # Use the model's exact core layout from get_core_ranges()
-        try:
-            from models.demos.llama3_70b_galaxy.tt.model_config import get_core_ranges as _get_core_ranges
-            num_reader_cores = 12
-            num_gcb_receivers = 2
-            (
-                _active_sender_cores, _dram_cores, _all_sender_cores,
-                _active_receiver_cores_list, _all_receiver_cores,
-                _worker_cores_range_set, _mm_optimised_ring_cores, _hop_grid,
-            ) = _get_core_ranges(num_reader_cores, num_gcb_receivers, is_functional_test=False)
-            worker_cores = _worker_cores_range_set
-            prefetcher_cores = ttnn.CoreRangeSet(
-                [ttnn.CoreRange(core_coord, core_coord) for core_coord in _all_sender_cores]
-            )
-        except Exception:
-            worker_cores = ttnn.CoreRangeSet({
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-            })
-            prefetcher_cores = ttnn.CoreRangeSet({
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 9)),
-            })
+        # Replicate the model's exact sub-device + global CB setup from
+        # TtLlamaPrefetcherSetup (prefetcher_common.py) in decode mode.
+        # Device must be opened with DispatchCoreConfig(axis=COL) giving grid (7, 10),
+        # where all model core ranges (x=0..6, y=0..9) are valid.
+        from models.demos.llama3_70b_galaxy.tt.model_config import get_core_ranges as _get_core_ranges
 
-        prefetcher_sub_device = ttnn.SubDevice([prefetcher_cores])
-        worker_sub_device = ttnn.SubDevice([worker_cores])
+        num_reader_cores = 12
+        num_gcb_receivers = 2
+        (
+            _active_sender_cores,
+            _dram_cores,
+            _all_sender_cores,
+            _active_receiver_cores_list,
+            _all_receiver_cores,
+            _worker_cores_range_set,
+            _mm_optimised_ring_cores,
+            _hop_grid,
+        ) = _get_core_ranges(num_reader_cores, num_gcb_receivers, is_functional_test=False)
+
+        sender_core_range_set = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(core_coord, core_coord) for core_coord in _active_sender_cores]
+        )
+        prefetcher_sub_device = ttnn.SubDevice([sender_core_range_set])
+        worker_sub_device = ttnn.SubDevice([_worker_cores_range_set])
 
         manager = device.create_sub_device_manager([prefetcher_sub_device, worker_sub_device], 0)
         device.load_sub_device_manager(manager)
         device.set_sub_device_stall_group([ttnn.SubDeviceId(0), ttnn.SubDeviceId(1)])
 
-        # Create global circular buffer using model's core mapping
         global_cb = None
         try:
-            try:
-                sender_receiver_mapping = list(zip(_all_sender_cores, _all_receiver_cores))
-                global_cb_size = 728 * 1088
-                global_cb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, global_cb_size)
-            except NameError:
-                pass  # get_core_ranges not available, skip global_cb
+            sender_receiver_mapping = list(zip(_all_sender_cores, _all_receiver_cores))
+            global_cb_size = 728 * 1088
+            global_cb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, global_cb_size)
         except Exception as e:
             print(f"Warning: Failed to create global circular buffer: {e}")
-            global_cb = None
 
-        return manager, global_cb
+        # Dispatch dram_prefetcher on sender sub-device so the prefetcher cores
+        # have work to do. Without this, sync/close hangs because the sender
+        # cores wait for data that never arrives.
+        if global_cb is not None:
+            try:
+                _dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))])
+                _prefetcher_setup_info = {
+                    "sender_core_range_set": sender_core_range_set,
+                    "dram_cores": _dram_cores,
+                }
+            except Exception:
+                _prefetcher_setup_info = None
+        else:
+            _prefetcher_setup_info = None
+
+        return manager, global_cb, _prefetcher_setup_info
     except Exception as e:
         import traceback
+
         print(f"Warning: Failed to setup sub-device manager: {e}")
         traceback.print_exc()
         return None
 
 
 def teardown_sub_device_manager(device, manager_id):
-    """Clean up sub-device manager."""
+    """Clean up sub-device manager with proper stall group reset."""
     if manager_id is not None:
         try:
+            device.reset_sub_device_stall_group()
             device.clear_loaded_sub_device_manager()
             device.remove_sub_device_manager(manager_id)
         except Exception:
@@ -261,17 +293,9 @@ def create_mesh_device(
 
     # Auto-discover master JSON if env var not set
     if not os.environ.get("TTNN_MASTER_JSON_PATH"):
-        _auto_master = os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "..",
-            "..",
-            "model_tracer",
-            "traced_operations",
-            "ttnn_operations_master.json",
-        )
-        if os.path.isfile(_auto_master):
-            os.environ["TTNN_MASTER_JSON_PATH"] = os.path.abspath(_auto_master)
+        _auto_master = _find_master_json()
+        if _auto_master:
+            os.environ["TTNN_MASTER_JSON_PATH"] = _auto_master
 
     # 2. Auto-detect from master configs (legacy path).
     # ROW dispatch gives compute_with_storage_grid_size = (8, 9): valid y in [0, 8].
@@ -284,6 +308,7 @@ def create_mesh_device(
     _needs_sub_device = False
     try:
         import json as _json_sd
+
         _mj = os.environ.get("TTNN_MASTER_JSON_PATH", "")
         if _mj and os.path.isfile(_mj):
             with open(_mj) as _f_sd:
@@ -406,7 +431,7 @@ def create_mesh_device(
     return ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(*mesh_shape),
         l1_small_size=l1_small_size,
-        dispatch_core_config=ttnn.DispatchCoreConfig(),
+        dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, ttnn.DispatchCoreAxis.ROW),
         **(dict(num_command_queues=1) if _needs_sub_device else {}),
     )
 
@@ -587,7 +612,21 @@ def replicate_with_topology(
         except Exception:
             return False
 
-    if _is_sharded(memory_config):
+    _is_dram_sharded = (
+        _is_sharded(memory_config)
+        and hasattr(memory_config, "buffer_type")
+        and memory_config.buffer_type == ttnn.BufferType.DRAM
+    )
+    if _is_dram_sharded:
+        tensor = ttnn.from_torch(
+            torch_tensor,
+            dtype=dtype,
+            layout=layout,
+            device=mesh_device,
+            memory_config=memory_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+    elif _is_sharded(memory_config):
         tensor = ttnn.from_torch(
             torch_tensor,
             dtype=dtype,
@@ -599,9 +638,6 @@ def replicate_with_topology(
         try:
             tensor = ttnn.to_memory_config(tensor, memory_config)
         except Exception:
-            # Best-effort upcast to the requested memory_config (e.g. L1
-            # sharded). On failure we keep the DRAM-resident tensor — sweeps
-            # tolerate the placement difference and the kernel still runs.
             pass
     else:
         tensor = ttnn.from_torch(
@@ -973,7 +1009,7 @@ def get_mesh_shape() -> Optional[Tuple[int, int]]:
     try:
         num_devices = ttnn.get_num_devices()
         if num_devices >= 32:
-            return (4, 8)  # Galaxy
+            return (8, 4)  # Galaxy — model uses (8, 4) = 8 rows x 4 cols
         elif num_devices >= 8:
             return (1, 8)  # T3000
         elif num_devices >= 2:
@@ -1001,23 +1037,7 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     # The master may contain configs from multiple devices (N300 + BH).
     # Only use mesh shape from configs whose device_series matches this machine.
     try:
-        _master_path = os.environ.get("TTNN_MASTER_JSON_PATH")
-        if not _master_path:
-            for _base in [
-                os.path.join(os.path.dirname(__file__), "..", "..", ".."),
-                os.environ.get("TT_METAL_HOME", ""),
-            ]:
-                if not _base:
-                    continue
-                _auto = os.path.join(
-                    _base,
-                    "model_tracer",
-                    "traced_operations",
-                    "ttnn_operations_master.json",
-                )
-                if os.path.isfile(_auto):
-                    _master_path = _auto
-                    break
+        _master_path = _find_master_json()
         if _master_path and os.path.isfile(_master_path):
             import json as _json_ms
 
@@ -1059,12 +1079,12 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     if shape:
         return shape
     # Auto-detect mesh shape from available hardware when env var not set.
-    # This ensures model-traced sweeps on Galaxy (32 devices) create a [4, 8]
+    # This ensures model-traced sweeps on Galaxy (32 devices) create an [8, 4]
     # mesh matching the topology used during model tracing.
     try:
         num_devices = ttnn.get_num_devices()
         if num_devices >= 32:
-            return (4, 8)  # Galaxy
+            return (8, 4)  # Galaxy — model uses (8, 4) = 8 rows x 4 cols
         elif num_devices >= 8:
             return (1, 8)  # T3000
         elif num_devices >= 2:

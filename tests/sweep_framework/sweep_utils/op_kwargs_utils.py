@@ -44,8 +44,9 @@ _INFRA_KEYS = frozenset(
         "timestamp",
         "input_hash",
         "tag",
+        "_sweep_source_hash",
         "__absent_keys__",
-            "mesh_device",
+        "mesh_device",
         "global_cb",
         "persistent_output_tensor",
         "indices_tensor",
@@ -172,6 +173,7 @@ def _parse_sub_device_id(value):
     """Parse a SubDeviceId dict to ttnn.SubDeviceId."""
     import re
     import ttnn
+
     if not isinstance(value, dict):
         return None
     val_str = str(value.get("value", value.get("repr", "")))
@@ -341,13 +343,19 @@ def build_op_kwargs(
             op_kwargs[key] = None
             continue
 
+        # Skip activation list kwargs entirely — nanobind rejects Python lists
+        # for Sequence[EltwiseUnaryWithParam] params.
+        if isinstance(value, list) and "activation" in key:
+            continue
         # Parse list-of-UnaryOpType-dicts (e.g. input_tensor_a_activations)
         list_parsed = _maybe_parse_unary_list(value)
         if list_parsed is not value:
             op_kwargs[key] = list_parsed
             continue
         # Parse SubDeviceId dicts
-        if isinstance(value, dict) and (value.get("type") == "SubDeviceId" or "SubDeviceId" in str(value.get("value", ""))):
+        if isinstance(value, dict) and (
+            value.get("type") == "SubDeviceId" or "SubDeviceId" in str(value.get("value", ""))
+        ):
             parsed_sdid = _parse_sub_device_id(value)
             if parsed_sdid is not None:
                 op_kwargs[key] = parsed_sdid
