@@ -8,6 +8,7 @@ from models.experimental.devstarl2_small.devstral_utils.fp8_dequantize_compat im
 from models.experimental.devstarl2_small.devstral_utils.multimodal_demo_helpers import (
     DEFAULT_MODEL_ID,
     apply_devstral_hf_trust_patches,
+    close_devstral_demo_mesh,
     cpu_lm_head_logits_last_token,
     demo_lm_head_max_columns_per_device,
     devstral_supports_on_device_sampling,
@@ -44,6 +45,7 @@ __all__ = (
     "eos_token_ids",
     "host_input_ids_to_tt_replicated",
     "image_token_placeholder_positions",
+    "close_devstral_demo_mesh",
     "open_devstral_demo_mesh",
     "pad_input_ids_and_positions_for_tt_prefill",
     "squeeze_tt_hidden_to_bsh",

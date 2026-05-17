@@ -71,6 +71,7 @@ from models.experimental.devstarl2_small.devstral_utils import (
     devstral_supports_on_device_sampling,
     eos_token_ids,
     host_input_ids_to_tt_replicated,
+    close_devstral_demo_mesh,
     open_devstral_demo_mesh,
     tt_append_uint32_token,
     tt_forward_prefill_from_device_ids,
@@ -130,6 +131,7 @@ class TtAgentRuntime:
     pad_token_id: int
     pad_row_1d: torch.Tensor
     cfg: TTAgentConfig
+    trace_includes_lm_head: bool = False
     sticky_pil: Optional[Image.Image] = None
     auto_processor: Optional[Any] = None
     image_token_id: Optional[int] = None
@@ -274,7 +276,7 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
         pad_token_id = int(pad_token_id)
 
     need = int(config.max_context_tokens) + int(config.max_new_tokens) + 2048
-    mesh_device = open_devstral_demo_mesh(max(1, min(config.mesh_width, ttnn.get_num_devices())))
+    mesh_device = open_devstral_demo_mesh(config.mesh_width)
     try:
         dtype_tt = ttnn.bfloat16
         if config.max_seq_len is None:
@@ -393,7 +395,7 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
                 args=model_args,
                 mesh_device=mesh_device,
                 tt_ccl=shared_tt_ccl,
-                enable_internal_trace=False,
+                enable_internal_trace=True,
             )
             sampling_empty_slots = list(range(sampling.tt_sampling.max_batch_size))
             seed_for_params = config.seed
@@ -409,6 +411,11 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
             formatted_sampling = format_sampling_params(sampling_in, len(sampling_empty_slots))
             sampling.reset_sampling_params(formatted_sampling)
             sampling.seed_manager.reset_seed(formatted_sampling.seed, sampling_empty_slots)
+
+        trace_includes_lm_head = False
+        if config.enable_decode_trace and not config.lm_head_cpu and tt_lm_head is not None:
+            tt_language_model.set_decode_lm_head(tt_lm_head, model_args)
+            trace_includes_lm_head = True
 
         print("TT agent runtime ready.")
         return TtAgentRuntime(
@@ -427,13 +434,14 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
             pad_token_id=pad_token_id,
             pad_row_1d=pad_row_1d,
             cfg=config,
+            trace_includes_lm_head=trace_includes_lm_head,
             sticky_pil=sticky_pil,
             auto_processor=auto_processor,
             image_token_id=image_token_id,
             _img_rows_cache=None,
         )
     except Exception:
-        ttnn.close_mesh_device(mesh_device)
+        close_devstral_demo_mesh(mesh_device)
         raise
 
 
@@ -560,11 +568,16 @@ def generate_assistant_text_tt(rt: TtAgentRuntime, messages: List[Dict[str, str]
                     # tt_out is owned by the model's Tracer — do not deallocate.
                     if rt.sampling is not None:
                         assert rt.tt_lm_head is not None
-                        logits_tt = tt_lm_head_logits_block(tt_out, 0, rt.model_args, rt.tt_lm_head)
-                        sample_result = rt.sampling.sample(logits_tt, enable_trace=False)
+                        # When trace_includes_lm_head, tt_out already holds logits — no separate dispatch.
+                        if rt.trace_includes_lm_head:
+                            logits_tt = tt_out
+                        else:
+                            logits_tt = tt_lm_head_logits_block(tt_out, 0, rt.model_args, rt.tt_lm_head)
+                        sample_result = rt.sampling.sample(logits_tt, enable_trace=True)
                         tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
                         next_scalar = tt_sampling_output_token_id(tt_next, 0)
-                        ttnn.deallocate(logits_tt)
+                        if not rt.trace_includes_lm_head:
+                            ttnn.deallocate(logits_tt)
                     else:
                         if config.lm_head_cpu:
                             assert rt.lm_head_weight_cpu is not None
@@ -575,6 +588,15 @@ def generate_assistant_text_tt(rt: TtAgentRuntime, messages: List[Dict[str, str]
                                 rt.lm_head_weight_cpu,
                                 int(rt.model_args.vocab_size),
                             )
+                        elif rt.trace_includes_lm_head:
+                            logits_torch = ttnn.to_torch(
+                                tt_out, mesh_composer=ttnn.ConcatMeshToTensor(rt.mesh_device, dim=0)
+                            )[0]
+                            while logits_torch.dim() > 3:
+                                logits_torch = logits_torch.squeeze(0)
+                            row = logits_torch[0:1, :] if logits_torch.dim() == 2 else logits_torch[0, 0:1, :]
+                            vs = int(rt.model_args.vocab_size)
+                            logits_row = row[..., :vs].contiguous()
                         else:
                             assert rt.tt_lm_head is not None
                             logits_row = tt_lm_head_logits_last_token(
@@ -879,7 +901,7 @@ def parse_tt_args() -> TTAgentConfig:
     p.add_argument("--max-tool-calls-per-turn", type=int, default=6)
 
     # TT
-    p.add_argument("--mesh-width", type=int, default=1)
+    p.add_argument("--mesh-width", type=int, default=1, help="Device mesh width (1 × N); default 1 (single device).")
     p.add_argument("--text-layers", type=int, default=None)
     p.add_argument("--lm-head-cpu", action="store_true")
     p.add_argument("--lm-head-max-device-cols", type=int, default=None)
@@ -959,7 +981,7 @@ def main() -> None:
     try:
         chat_loop_tt(rt, config)
     finally:
-        ttnn.close_mesh_device(rt.mesh_device)
+        close_devstral_demo_mesh(rt.mesh_device)
 
 
 if __name__ == "__main__":

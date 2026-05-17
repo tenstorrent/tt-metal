@@ -346,7 +346,7 @@ def run_tt(
     # Rounding up to the nearest multiple of 512 guarantees k_chunk_size >= 512.
     max_seq = ((max_seq + 511) // 512) * 512
 
-    mesh_device = _tt_demo.open_devstral_demo_mesh(max(1, min(mesh_width, ttnn.get_num_devices())))
+    mesh_device = _tt_demo.open_devstral_demo_mesh(mesh_width)
     try:
         dtype_tt = ttnn.bfloat16
 
@@ -462,7 +462,7 @@ def run_tt(
                 args=model_args,
                 mesh_device=mesh_device,
                 tt_ccl=TT_CCL(mesh_device),
-                enable_internal_trace=False,
+                enable_internal_trace=True,
             )
             sampling_empty_slots = list(range(sampling.tt_sampling.max_batch_size))
             seed_for_params = seed if seed is not None else None
@@ -517,6 +517,13 @@ def run_tt(
 
         tt_lm = tt_devstral.language_model
 
+        # When decode trace is enabled and an on-device LM head is available, include the LM head
+        # projection inside the trace region so no separate Python dispatch is needed per token.
+        trace_includes_lm_head = False
+        if enable_decode_trace and not lm_head_cpu and tt_lm_head is not None:
+            tt_lm.set_decode_lm_head(tt_lm_head, model_args)
+            trace_includes_lm_head = True
+
         gen_t0 = time.perf_counter()
         merge_s = 0.0
         prefill_s = 0.0
@@ -524,11 +531,15 @@ def run_tt(
         sample_post_s = 0.0
         steps = 0
 
-        def _sample_from_tt_out(tt_out, seq_last_idx, own_output: bool = True):
-            """Sample next token from hidden states at seq_last_idx.
+        def _sample_from_tt_out(
+            tt_out, seq_last_idx, own_output: bool = True, is_logits: bool = False, enable_sample_trace: bool = True
+        ):
+            """Sample next token from hidden states (or logits) at seq_last_idx.
 
             ``own_output``: when False the caller (Tracer) owns ``tt_out`` and it must not be
             deallocated here.  Set to False for all traced decode steps.
+            ``is_logits``: when True ``tt_out`` is already logits (LM head ran inside the trace);
+            skip the separate LM head dispatch and use ``tt_out`` directly.
             """
             nonlocal lmhead_s, sample_post_s
             if sampling is not None:
@@ -536,13 +547,17 @@ def run_tt(
                 tok_slot = seq_last_idx % 32
                 sampling.seed_manager.get_new_values()
                 t0 = time.perf_counter()
-                logits_tt = tt_lm_head_logits_block(tt_out, seq_last_idx, model_args, tt_lm_head)
+                if is_logits:
+                    logits_tt = tt_out  # LM head already ran inside the trace
+                else:
+                    logits_tt = tt_lm_head_logits_block(tt_out, seq_last_idx, model_args, tt_lm_head)
                 lmhead_s += time.perf_counter() - t0
                 t0 = time.perf_counter()
-                sample_result = sampling.sample(logits_tt, enable_trace=False)
+                sample_result = sampling.sample(logits_tt, enable_trace=enable_sample_trace)
                 tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
                 next_scalar = tt_sampling_output_token_id(tt_next, tok_slot)
-                ttnn.deallocate(logits_tt)
+                if not is_logits:
+                    ttnn.deallocate(logits_tt)
                 if own_output:
                     ttnn.deallocate(tt_out)
                 nid = torch.tensor([[next_scalar]], device=id_device, dtype=torch.long)
@@ -554,6 +569,19 @@ def run_tt(
                     logits_row = _tt_demo.cpu_lm_head_logits_last_token(
                         tt_out, seq_last_idx, mesh_device, lm_head_weight_cpu, int(model_args.vocab_size)
                     )
+                elif is_logits:
+                    # tt_out is already logits in DRAM — extract the token row without running LM head again.
+                    logits_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0]
+                    while logits_torch.dim() > 3:
+                        logits_torch = logits_torch.squeeze(0)
+                    r = seq_last_idx % 32
+                    logits_row = (
+                        logits_torch[r : r + 1, :] if logits_torch.dim() == 2 else logits_torch[0, r : r + 1, :]
+                    )
+                    vs = int(model_args.vocab_size)
+                    if logits_row.shape[-1] > vs:
+                        logits_row = logits_row[..., :vs]
+                    logits_row = logits_row.contiguous()
                 else:
                     assert tt_lm_head is not None
                     logits_row = _tt_demo.tt_lm_head_logits_last_token(
@@ -585,7 +613,7 @@ def run_tt(
         )
         prefill_s += time.perf_counter() - t0
 
-        next_id = _sample_from_tt_out(tt_out, sl - 1)
+        next_id = _sample_from_tt_out(tt_out, sl - 1, enable_sample_trace=False)
         steps += 1
         if eos_ids and int(next_id.item()) in eos_ids:
             pass  # will break after loop via final_seq_len check
@@ -615,7 +643,14 @@ def run_tt(
             prefill_s += time.perf_counter() - t0
 
             # When traced, tt_out is owned by the Tracer — do not deallocate it.
-            next_id = _sample_from_tt_out(tt_out, 0, own_output=not enable_decode_trace)
+            # When trace_includes_lm_head, tt_out is already logits (skip LM head dispatch).
+            next_id = _sample_from_tt_out(
+                tt_out,
+                0,
+                own_output=not enable_decode_trace,
+                is_logits=trace_includes_lm_head,
+                enable_sample_trace=True,
+            )
             steps += 1
             if eos_ids and int(next_id.item()) in eos_ids:
                 break
@@ -642,7 +677,8 @@ def run_tt(
         print(f"  {'Phase':<18} {'avg/step':>14}     %")
         print(f"  {'merge (host)':<18} {_avg_ms(merge_s):>10.2f} ms  {_pct(merge_s):>5.1f}%")
         print(f"  {'prefill + decode':<18} {_avg_s(prefill_s):>10.2f} s  {_pct(prefill_s):>5.1f}%")
-        print(f"  {'LM head':<18} {_avg_ms(lmhead_s):>10.2f} ms  {_pct(lmhead_s):>5.1f}%")
+        lmhead_label = "LM head (trace)" if trace_includes_lm_head else "LM head"
+        print(f"  {lmhead_label:<18} {_avg_ms(lmhead_s):>10.2f} ms  {_pct(lmhead_s):>5.1f}%")
         print(f"  {'sample / post':<18} {_avg_s(sample_post_s):>10.2f} s  {_pct(sample_post_s):>5.1f}%")
         print("──────────────────────────────────────────────────────────────")
         print(f"  Throughput             {thr:.3f} tok/s")
@@ -659,7 +695,7 @@ def run_tt(
         answer_text = tokenizer.decode(answer_ids.tolist(), skip_special_tokens=False)
         print(answer_text)
     finally:
-        ttnn.close_mesh_device(mesh_device)
+        _tt_demo.close_devstral_demo_mesh(mesh_device)
 
 
 def main() -> None:
@@ -681,7 +717,9 @@ def main() -> None:
     )
     parser.add_argument("--max-new-tokens", type=int, default=100)
     parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--mesh-width", type=int, default=1)
+    parser.add_argument(
+        "--mesh-width", type=int, default=1, help="Device mesh width (1 × N); default 1 (single device)."
+    )
     parser.add_argument("--text-layers", type=int, default=None)
     parser.add_argument("--greedy", action="store_true")
     parser.add_argument("--temperature", type=float, default=float(REFERENCE_GENERATE_KWARGS["temperature"]))

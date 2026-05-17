@@ -102,13 +102,33 @@ def pad_input_ids_and_positions_for_tt_prefill(
     return input_ids_pad, position_ids_pad, seq_len
 
 
+def _fabric_available() -> bool:
+    return hasattr(ttnn, "set_fabric_config") and hasattr(ttnn, "FabricConfig")
+
+
 def open_devstral_demo_mesh(mesh_width: int):
     device_params = {
         "trace_region_size": 100_000_000,  # 100 MB — sufficient for single-token 88-layer decode trace
         "num_command_queues": 1,
     }
     mesh_shape = ttnn.MeshShape(1, mesh_width)
-    return ttnn.open_mesh_device(mesh_shape=mesh_shape, **get_updated_device_params(device_params))
+    params = get_updated_device_params(device_params)
+    # fabric_config must never be forwarded to open_mesh_device; it is set via a separate call.
+    params.pop("fabric_config", None)
+    # Ethernet fabric is only required for multi-device communication (CCL / all_gather).
+    # Single-device runs must NOT initialise FABRIC_1D — the router sync requires all chips
+    # to be opened together, and opening one chip in isolation causes a timeout.
+    _use_fabric = _fabric_available() and mesh_width > 1
+    if _use_fabric:
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    return ttnn.open_mesh_device(mesh_shape=mesh_shape, **params)
+
+
+def close_devstral_demo_mesh(mesh_device) -> None:
+    """Close mesh device and tear down the Ethernet fabric if it was initialised."""
+    ttnn.close_mesh_device(mesh_device)
+    if _fabric_available():
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 def squeeze_tt_hidden_to_bsh(tt_lm_out: ttnn.Tensor, mesh_device, seq_len_keep: int) -> torch.Tensor:

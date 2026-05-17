@@ -67,6 +67,7 @@ from models.experimental.devstarl2_small.devstral_utils import (
     devstral_supports_on_device_sampling,
     eos_token_ids,
     host_input_ids_to_tt_replicated,
+    close_devstral_demo_mesh,
     open_devstral_demo_mesh,
     text_model_root,
     tt_append_uint32_token,
@@ -125,7 +126,9 @@ def main():
         default=None,
         help="Decoder layers on TT/HF cache after load (default: all). Required for quality matching full inference.",
     )
-    parser.add_argument("--mesh-width", type=int, default=1, help="Device mesh width (1 × N).")
+    parser.add_argument(
+        "--mesh-width", type=int, default=1, help="Device mesh width (1 × N); default 1 (single device)."
+    )
     parser.add_argument(
         "--verify",
         action="store_true",
@@ -191,7 +194,7 @@ def main():
     os.environ["HF_MODEL"] = args.model_id
     apply_devstral_hf_trust_patches()
 
-    mesh_device = open_devstral_demo_mesh(max(1, min(args.mesh_width, ttnn.get_num_devices())))
+    mesh_device = open_devstral_demo_mesh(args.mesh_width)
     try:
         dtype_tt = ttnn.bfloat16
 
@@ -622,7 +625,7 @@ def main():
                 finally:
                     ttnn.deallocate(ids_tt_gen)
     finally:
-        ttnn.close_mesh_device(mesh_device)
+        close_devstral_demo_mesh(mesh_device)
 
 
 if __name__ == "__main__":

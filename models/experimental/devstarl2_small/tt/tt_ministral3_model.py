@@ -179,6 +179,16 @@ class TtMinistral3Model(LightweightModule):
         h = ttnn.unsqueeze_to_4D(h)
         return self.forward_prefill_from_embeddings(h, rot_mats, position_ids, rope_start_pos)
 
+    def set_decode_lm_head(self, lm_head, model_args) -> None:
+        """Include the LM head inside the decode trace region for maximum throughput.
+
+        Call once before the first traced decode call (``enable_trace=True``). The LM head
+        projection is then captured as part of the trace so no separate Python dispatch occurs
+        per token. Returns logits tensor instead of hidden states from ``forward_decode``.
+        """
+        self._decode_lm_head = lm_head
+        self._decode_lm_head_args = model_args
+
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False)
     def _forward_decode_inner(
         self,
@@ -193,6 +203,9 @@ class TtMinistral3Model(LightweightModule):
         Decorated with ``@traced_function``: call with ``traced=True`` to capture on the first
         invocation and replay on subsequent ones; ``traced=False`` (default) runs the function
         directly with no overhead.
+
+        When ``set_decode_lm_head`` was called before trace capture, the LM head projection is
+        included in the trace and the return value is logits (DRAM) rather than hidden states.
         """
         # ttnn.embedding on pre-allocated cos/sin tables: safe inside a trace.
         rot_mats = self.tt_rotary_embedding.get_rot_mats(pos_uint32)
@@ -203,7 +216,17 @@ class TtMinistral3Model(LightweightModule):
         for layer in self.layers:
             h = layer.forward_decode(h, pos_int32, rot_mats)
         h_dram = ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG)
-        return self.norm(h_dram, Mode.DECODE)
+        h_normed = self.norm(h_dram, Mode.DECODE)
+        if self._decode_lm_head is not None:
+            lm_input_mem_cfg = self._decode_lm_head_args.get_lm_head_input_mem_config(Mode.PREFILL, None)
+            if lm_input_mem_cfg.is_sharded():
+                h_for_lm = ttnn.interleaved_to_sharded(h_normed, lm_input_mem_cfg)
+                ttnn.deallocate(h_normed)
+            else:
+                h_for_lm = h_normed  # LMHead.forward deallocates this
+            logits = self._decode_lm_head(h_for_lm)
+            return ttnn.to_memory_config(logits, ttnn.DRAM_MEMORY_CONFIG)
+        return h_normed
 
     def forward_decode(
         self,
