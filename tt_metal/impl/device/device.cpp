@@ -625,37 +625,55 @@ void Device::configure_fabric(
          programmable_core_type_index++) {
         CoreType core_type = hal.get_core_type(programmable_core_type_index);
         for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+            // FIX DY: Hoist ETH channel resolution to outer loop scope so downstream FIX C,
+            // the canary write, and the FIX DY postcode-verification poll all share a single
+            // resolution instead of repeating the soc_desc lookup three times per core.
+            static constexpr uint32_t kUnresolvedChan = std::numeric_limits<uint32_t>::max();
+            uint32_t hoisted_eth_chan = kUnresolvedChan;
+            bool is_fixm_chan = false;       // non-MMIO and in skip_soft_reset_channels (FIX M)
+            bool is_skip_reset_chan = false;  // skip canary: in skip_soft_reset OR external
+            if (core_type == CoreType::ETH) {
+                try {
+                    hoisted_eth_chan = soc_desc_for_dead.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    is_fixm_chan =
+                        !this->is_mmio_capable() && skip_soft_reset_channels.count(hoisted_eth_chan) > 0;
+                    is_skip_reset_chan =
+                        skip_soft_reset_channels.count(hoisted_eth_chan) > 0 ||
+                        external_umd_channels.count(hoisted_eth_chan) > 0;
+                } catch (...) {
+                    // Cannot resolve channel.  Treat conservatively: skip canary write (same as
+                    // before), and do NOT attempt FIX DY poll (unknown channel = no safe read).
+                    is_skip_reset_chan = true;
+                }
+            }
+
             // FIX C: skip write_launch_msg_to_core for ETH cores whose channel is dead.
             // write_launch_msg_to_core calls tt_cluster::write_core → WriteToDevice → UMD
             // write_to_device.  On a non-MMIO device, this routes through the ETH relay;
             // if the relay ERISC is dead the write hangs indefinitely (no per-write timeout).
             if (core_type == CoreType::ETH && !all_dead_channels.empty()) {
-                // Get the ETH channel for this logical core and skip if it is dead.
-                try {
-                    auto eth_chan = soc_desc_for_dead.get_eth_channel_for_core(
-                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
-                        CoordSystem::LOGICAL);
-                    if (all_dead_channels.count(eth_chan)) {
-                        log_debug(
-                            tt::LogMetal,
-                            "configure_fabric: Device {} skipping write_launch_msg_to_core for "
-                            "dead ETH core ({},{}) channel {}",
-                            this->id_,
-                            logical_core.x,
-                            logical_core.y,
-                            eth_chan);
-                        continue;
-                    }
-                } catch (const std::exception& e) {
-                    // If we can't resolve the channel, skip the write conservatively.
+                if (hoisted_eth_chan == kUnresolvedChan) {
+                    // Could not resolve channel earlier — skip conservatively.
                     log_warning(
                         tt::LogMetal,
                         "configure_fabric: Device {} cannot resolve ETH channel for logical core "
-                        "({},{}) — skipping write_launch_msg_to_core to avoid potential hang: {}",
+                        "({},{}) — skipping write_launch_msg_to_core to avoid potential hang",
+                        this->id_,
+                        logical_core.x,
+                        logical_core.y);
+                    continue;
+                }
+                if (all_dead_channels.count(hoisted_eth_chan)) {
+                    log_debug(
+                        tt::LogMetal,
+                        "configure_fabric: Device {} skipping write_launch_msg_to_core for "
+                        "dead ETH core ({},{}) channel {}",
                         this->id_,
                         logical_core.x,
                         logical_core.y,
-                        e.what());
+                        hoisted_eth_chan);
                     continue;
                 }
             }
@@ -664,39 +682,17 @@ void Device::configure_fabric(
             // session can distinguish "UMD relay never launched" (0x49706550) from "launch sent
             // but ERISC crashed before writing 0xA0A0A0A0 firmware canary" (0xDEADB07E).
             // Skip channels in skip_soft_reset_channels (live UMD relay — must NOT disturb).
-            if (core_type == CoreType::ETH) {
-                bool is_skip_reset_chan = false;
+            if (core_type == CoreType::ETH && !is_skip_reset_chan) {
                 try {
-                    auto eth_chan = soc_desc_for_dead.get_eth_channel_for_core(
-                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
-                        CoordSystem::LOGICAL);
-                    // FIX EXT (#42429): also skip canary write for external channels (same
-                    // reasoning — preserve live 0x49706550 sentinel for next session detection).
-                    is_skip_reset_chan =
-                        skip_soft_reset_channels.count(eth_chan) > 0 || external_umd_channels.count(eth_chan) > 0;
-                } catch (...) {
-                    // Cannot resolve channel — conservatively skip canary write.
+                    detail::WriteToDeviceL1(this, logical_core, router_sync_address, canary_buf, CoreType::ETH);
+                } catch (const std::exception& e) {
                     log_warning(
                         tt::LogMetal,
-                        "compile_fabric: Device {} cannot resolve ETH channel for logical core ({},{}) "
-                        "— unknown exception; is_skip_reset_chan set to true, skipping host-canary write",
+                        "configure_fabric: Device {} core ({},{}) host-canary write failed: {}",
                         this->id_,
                         logical_core.x,
-                        logical_core.y);
-                    is_skip_reset_chan = true;
-                }
-                if (!is_skip_reset_chan) {
-                    try {
-                        detail::WriteToDeviceL1(this, logical_core, router_sync_address, canary_buf, CoreType::ETH);
-                    } catch (const std::exception& e) {
-                        log_warning(
-                            tt::LogMetal,
-                            "configure_fabric: Device {} core ({},{}) host-canary write failed: {}",
-                            this->id_,
-                            logical_core.x,
-                            logical_core.y,
-                            e.what());
-                    }
+                        logical_core.y,
+                        e.what());
                 }
             }
 
@@ -712,6 +708,86 @@ void Device::configure_fabric(
                 msg,
                 go_msg,
                 hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
+
+            // FIX DY: For FIX M channels (non-MMIO ETH, skipped soft-reset), verify that the
+            // ERISC actually transitioned away from 0x49706550 (base-UMD sentinel).
+            //
+            // Root cause: write_launch_msg_to_core uses write_core_immediate (fire-and-forget,
+            // no relay-flush ACK).  If the MMIO relay drops the packet — e.g. due to congestion
+            // from a concurrent FIX S9 soft-reset on a nearby MMIO device — the ERISC silently
+            // stays at 0x49706550 ("zombie" state).  Subsequent dispatch init calls write_core
+            // (with timeout) on those zombie ERISCs and hits the 5-second hang × N devices that
+            // we observed in CI run 25979253612.
+            //
+            // Fix: poll router_sync_address for != 0x49706550, max 500 ms at 5 ms intervals.
+            // The MMIO relay is still alive here (Pass 1, before FIX S9 resets it), so the read
+            // goes through the working relay path.  On timeout, retry write_launch_msg_to_core
+            // once and re-poll for another 500 ms.  Log a warning if still stuck after retry.
+            if (is_fixm_chan) {
+                static constexpr uint32_t kBaseUmdSentinel = 0x49706550u;
+                static constexpr int kFIX_DY_PollIntervalMs = 5;
+                static constexpr int kFIX_DY_PollMaxMs = 500;
+                auto fixdy_poll = [&](bool is_retry) -> bool {
+                    const int max_iters = kFIX_DY_PollMaxMs / kFIX_DY_PollIntervalMs;
+                    for (int iter = 0; iter < max_iters; ++iter) {
+                        std::vector<uint32_t> status_buf(1, kBaseUmdSentinel);
+                        try {
+                            detail::ReadFromDeviceL1(
+                                this, logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+                        } catch (const std::exception& e) {
+                            log_warning(
+                                tt::LogMetal,
+                                "FIX DY: Device {} chan {} read failed{}: {}",
+                                this->id_,
+                                hoisted_eth_chan,
+                                is_retry ? " (retry)" : "",
+                                e.what());
+                            return false;
+                        }
+                        if (status_buf[0] != kBaseUmdSentinel) {
+                            log_info(
+                                tt::LogMetal,
+                                "FIX DY: Device {} chan {} transitioned from 0x49706550 → 0x{:08x} "
+                                "after {}ms{}",
+                                this->id_,
+                                hoisted_eth_chan,
+                                status_buf[0],
+                                iter * kFIX_DY_PollIntervalMs,
+                                is_retry ? " (retry)" : "");
+                            return true;
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(kFIX_DY_PollIntervalMs));
+                    }
+                    return false;
+                };
+
+                if (!fixdy_poll(/*is_retry=*/false)) {
+                    // Timeout on first attempt — relay may have dropped the packet.  Retry once.
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX DY: Device {} chan {} still at 0x49706550 after {}ms — "
+                        "retrying write_launch_msg_to_core (relay packet may have been dropped)",
+                        this->id_,
+                        hoisted_eth_chan,
+                        kFIX_DY_PollMaxMs);
+                    tt::llrt::write_launch_msg_to_core(
+                        this->id(),
+                        physical_core,
+                        msg,
+                        go_msg,
+                        hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
+                    if (!fixdy_poll(/*is_retry=*/true)) {
+                        log_warning(
+                            tt::LogMetal,
+                            "FIX DY: Device {} chan {} still at 0x49706550 after retry — "
+                            "channel is zombie; downstream write_core may hang.  "
+                            "Setting fabric_relay_path_broken_=true.",
+                            this->id_,
+                            hoisted_eth_chan);
+                        fabric_relay_path_broken_.store(true);
+                    }
+                }
+            }
         }
     }
     // FIX RZ (#42429): If this non-MMIO device had base-UMD relay channels that required
