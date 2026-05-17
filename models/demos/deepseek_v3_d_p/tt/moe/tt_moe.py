@@ -505,7 +505,10 @@ class TtMoe(LightweightModule):
         )
         if self.overlap_shared_expert_with_dispatch:
             self.mesh_device.clear_loaded_sub_device_manager()
-        x = ttnn.deallocate(x)
+        # Only deallocate x when the all-gather above produced a new tensor; otherwise x
+        # is still the caller's input and freeing it breaks subsequent forward calls.
+        if self.mesh_device.shape[1] > 1:
+            x = ttnn.deallocate(x)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
@@ -655,6 +658,7 @@ class TtMoe(LightweightModule):
                 combined_output=combined_output,
                 routed_output=routed_output,
                 expert_token_counts=tt_expert_token_counts,
+                expert_region_offsets=tt_expert_region_offsets,
             )
 
         return final_output, intermediates

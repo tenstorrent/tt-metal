@@ -12,8 +12,9 @@ Unlike TtSharedExpert, this module:
 - Each device holds weights for `experts_per_chip` local experts
 """
 
+from math import ceil
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar, Optional
 
 import torch
 from loguru import logger
@@ -32,6 +33,8 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
 
 
 class TtRoutedExpert(LightweightModule):
+    FIXED_EXPERT_LENGTH: ClassVar[int] = 2048
+
     @staticmethod
     def check_cache_complete(cache_path: Path, cache_name_prefix: str, experts_per_chip: int) -> bool:
         """Check if all routed expert weight cache files exist."""
@@ -218,10 +221,14 @@ class TtRoutedExpert(LightweightModule):
             activations_dtype: Data type for activations (default: bfloat8_b)
             weights_dtype: Data type for weights (default: bfloat4_b)
             compute_kernel_config: Compute kernel configuration
-            global_expert_idx_table: TTNN tensor mapping local expert slots to global expert ids.
-                          Produced by sharding ExpertMapping.create_global_expert_idx_table via
-                          get_ep_mesh_mapper, so each device holds (1, 1, experts_per_chip) of
-                          global ids. Required.
+            global_expert_idx_table: DRAM uint32 ROW_MAJOR_LAYOUT tensor mapping local
+                          expert slots to global expert ids. Produced by sharding
+                          ExpertMapping.create_global_expert_idx_table via
+                          get_ep_mesh_mapper, so each device holds (1, 1, experts_per_chip)
+                          of global ids. Immutable for the lifetime of this module —
+                          held here (not passed per-forward) because it does not change
+                          across forward calls. Required — drives the per-kernel guard
+                          in the routed_matmul / routed_unary device ops.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -366,39 +373,68 @@ class TtRoutedExpert(LightweightModule):
 
         return tt_weight
 
-    def _expert_ffn(
+    def _looped_expert_ffn(
         self,
-        x: ttnn.Tensor,
+        tokens: ttnn.Tensor,
+        out: ttnn.Tensor,
         gate_proj: ttnn.Tensor,
         up_proj: ttnn.Tensor,
         down_proj: ttnn.Tensor,
-        out: Optional[ttnn.Tensor] = None,
-    ) -> ttnn.Tensor:
+        local_expert_idx: int,
+        expert_token_counts: Optional[ttnn.Tensor] = None,
+    ) -> None:
         """
-        Single expert FFN computation.
+        Loop one expert's FFN over fixed-length chunks of ``tokens``.
 
-        Args:
-            x: Input tensor. Shape is (1, tokens, emb_dim) for the Blackhole path
-                (after ttnn.narrow) or (tokens, emb_dim) for the Wormhole path
-                (after tensor indexing).
-            gate_proj: Gate projection weight (emb_dim, hidden_dim)
-            up_proj: Up projection weight (emb_dim, hidden_dim)
-            down_proj: Down projection weight (hidden_dim, emb_dim)
-            out: Optional pre-allocated output tensor for in-place matmul result.
-                When provided, the final matmul writes directly into this buffer.
-                When None, a new tensor is allocated for the output.
+        Splits ``tokens`` along the token dim (-2) into ``ceil(num_tokens /
+        FIXED_EXPERT_LENGTH)`` chunks and calls ``routed_expert_ffn`` once per
+        chunk, writing each result into the matching slice of ``out`` via
+        ``ttnn.narrow``. The final chunk is short when ``num_tokens`` isn't a
+        multiple of ``FIXED_EXPERT_LENGTH``.
 
-        Returns:
-            Output tensor matching the shape of ``x``.
+        Architecture-agnostic: nothing here is BH-specific. The chunked loop
+        is what enables the per-iteration guard — each call passes
+        ``curr_expert_iter`` and ``expert_iter_length`` so the device-side
+        kernel can compare them against
+        ``expert_token_counts[global_expert_idx_table[local_expert_idx]]``
+        and skip iterations past the expert's actual token count, without
+        any device-to-host sync.
+
+        When ``self.global_expert_idx_table`` (set at __init__) and
+        ``expert_token_counts`` are both non-None, the call routes through
+        the forked routed-matmul / routed-unary device ops with the guard
+        active. When either is None, ``routed_expert_ffn`` falls back to
+        plain ttnn::matmul and the chunking still happens but every chunk
+        runs unconditionally.
         """
-        return ttnn.experimental.deepseek_prefill.routed_expert_ffn(
-            x,
-            gate_proj,
-            up_proj,
-            down_proj,
-            compute_kernel_config=self.compute_kernel_config,
-            output=out,
-        )
+        # Tokens can arrive as 2D (num_tokens, emb_dim) from the extract op, or
+        # 3D (1, num_tokens, emb_dim) from the narrow-based flow. The token
+        # dimension is always the second-to-last (`-2`) either way.
+        num_tokens = tokens.shape[-2]
+        expert_iters = ceil(num_tokens / self.FIXED_EXPERT_LENGTH)
+        expert_lengths = [self.FIXED_EXPERT_LENGTH] * expert_iters
+        expert_lengths[-1] = num_tokens - self.FIXED_EXPERT_LENGTH * (expert_iters - 1)
+
+        start = 0
+        for curr_expert_iter in range(expert_iters):
+            expert_tokens = ttnn.narrow(tokens, dim=-2, start=start, length=expert_lengths[curr_expert_iter])
+            expert_out = ttnn.narrow(out, dim=-2, start=start, length=expert_lengths[curr_expert_iter])
+            start += expert_lengths[curr_expert_iter]
+
+            ttnn.experimental.deepseek_prefill.routed_expert_ffn(
+                expert_tokens,
+                gate_proj,
+                up_proj,
+                down_proj,
+                compute_kernel_config=self.compute_kernel_config,
+                output=expert_out,
+                global_expert_idx_table=self.global_expert_idx_table,
+                expert_token_counts=expert_token_counts,
+                local_expert_idx=local_expert_idx,
+                curr_expert_iter=curr_expert_iter,
+                expert_iter_length=self.FIXED_EXPERT_LENGTH,
+            )
+            logger.debug(f"FFN iteration {curr_expert_iter+1} output shape {expert_out.shape}")
 
     def forward(
         self,
@@ -407,43 +443,38 @@ class TtRoutedExpert(LightweightModule):
         expert_region_offsets: ttnn.Tensor,
     ) -> ttnn.Tensor:
         """
-        Blackhole forward implementation using narrow and in-place writes.
+        Forward pass. Extracts per-expert token slices from the shared dispatch
+        buffer using the deepseek_prefill.extract op, runs the chunked guarded
+        FFN per expert (``_looped_expert_ffn``), and writes each expert's result
+        back into the buffer via deepseek_prefill.insert.
 
-        Pre-allocates the output tensor with empty_like and uses narrow to extract
-        per-expert slices and write FFN results directly into the output buffer,
-        avoiding extra allocations from unsqueeze/concat.
+        ``self.global_expert_idx_table`` (set at __init__) together with
+        ``expert_token_counts`` drives the routed_matmul / routed_unary
+        per-kernel guard: iterations where
+        ``expert_token_counts[global_expert_idx_table[local_expert]] <=
+        curr_expert_iter * FIXED_EXPERT_LENGTH`` early-return on device.
 
         Args:
-            dispatched_buffer: Dispatched tokens
-                shape: (max_dispatch_buffer_token_size, emb_dim)
-            expert_token_counts: Token counts per expert per chip
-                If provided, only processes tokens up to the count (currently unused,
-                all tokens are processed for simplicity)
+            dispatched_buffer: Dispatched tokens, shape (max_dispatch_buffer_token_size, emb_dim).
+            expert_token_counts: DRAM uint32 ROW_MAJOR_LAYOUT tensor of token counts
+                per global expert. Shape per device: (1, num_routed_experts).
             expert_region_offsets: Expert region start offsets per expert
                 (shared across source devices in a dispatch group). Produced by
                 offset_cumsum. Shape per device: (1, num_routed_experts).
 
         Returns:
-            expert_outputs: Expert output tensor, same shape as dispatched_buffer
+            expert_outputs: Expert output tensor, same shape as dispatched_buffer.
         """
         logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
 
-        # Convert input to activations dtype if needed
         if dispatched_buffer.dtype != self.activations_dtype:
             logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
             dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
-
-        # Process each local expert
-        # dispatched_buffer: (experts_per_chip, max_tokens, emb_dim)
-        # We process expert by expert and reassemble
-
         expert_outputs = dispatched_buffer
         for local_expert in range(self.experts_per_chip):
             signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
 
-            # Extract tokens for this expert using the deepseek_prefill extract op,
-            # which uses expert_region_offsets and expert_token_counts to slice out
-            # this expert's valid rows
+            # Per-expert slice from the shared dispatch buffer.
             tokens = ttnn.experimental.deepseek_prefill.extract(
                 dispatched_buffer,
                 expert_region_offsets,
@@ -454,21 +485,24 @@ class TtRoutedExpert(LightweightModule):
             )
             logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
 
-            # Run FFN
-            output = self._expert_ffn(
+            # Pre-allocate the per-expert FFN output — our chunked FFN writes
+            # into it in place, slice by slice.
+            out = ttnn.empty_like(tokens)
+            self._looped_expert_ffn(
                 tokens,
+                out,
                 self.gate_projs[local_expert],
                 self.up_projs[local_expert],
                 self.down_projs[local_expert],
-                out=None,
+                local_expert_idx=local_expert,
+                expert_token_counts=expert_token_counts,
             )
-            logger.debug(f"Expert {local_expert}: output shape {output.shape}")
+            logger.debug(f"Expert {local_expert}: output shape {out.shape}")
 
-            # Insert this expert's output back into the flat expert_outputs buffer at
-            # the expert's region (determined by expert_region_offsets and expert_token_counts).
+            # Write this expert's slice back into the flat buffer.
             expert_outputs = ttnn.experimental.deepseek_prefill.insert(
                 expert_outputs,
-                output,
+                out,
                 expert_region_offsets,
                 expert_token_counts,
                 self.global_expert_idx_table,
