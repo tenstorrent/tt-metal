@@ -17,30 +17,40 @@ def _layer_norm(x, p, eps=1e-5):
 
 def _split_heads(x, num_heads, b, seq, hidden):
     head_dim = hidden // num_heads
+    # First flatten to (b, seq, hidden) regardless of input shape
+    x = ttnn.reshape(x, (b, seq, hidden))
     x = ttnn.reshape(x, (b, seq, num_heads, head_dim))
-    return ttnn.transpose(x, 1, 2)
+    return ttnn.transpose(x, 1, 2)  # (b, num_heads, seq, head_dim)
 
 
 def _self_attention(x, pos, p, device, num_heads=8):
-    """Self-attention with pos embed added to Q and K only."""
-    x_pos = ttnn.add(x, pos, memory_config=ttnn.L1_MEMORY_CONFIG) if pos is not None else x
 
-    if len(x.shape) == 4:
-        b, _, seq, hidden = x.shape
+    # Normalize to (b, seq, hidden) regardless of whether input is 3D or 4D
+    shape = x.shape
+    if len(shape) == 4:
+        b, _, seq, hidden = shape[0], shape[1], shape[2], shape[3]
     else:
-        b, seq, hidden = x.shape
+        b, seq, hidden = shape[0], shape[1], shape[2]
+
+    # Flatten pos the same way before adding
+    x_flat = ttnn.reshape(x, (b, seq, hidden))
+    if pos is not None:
+        pos_flat = ttnn.reshape(pos, (b, seq, hidden))
+        x_pos = ttnn.add(x_flat, pos_flat, memory_config=ttnn.L1_MEMORY_CONFIG)
+    else:
+        x_pos = x_flat
 
     q = ttnn.linear(x_pos, p.q.weight, bias=p.q.bias, memory_config=ttnn.L1_MEMORY_CONFIG)
     k = ttnn.linear(x_pos, p.k.weight, bias=p.k.bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-    v = ttnn.linear(x,     p.v.weight, bias=p.v.bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+    v = ttnn.linear(x_flat, p.v.weight, bias=p.v.bias, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     q = _split_heads(q, num_heads, b, seq, hidden)
     k = _split_heads(k, num_heads, b, seq, hidden)
     v = _split_heads(v, num_heads, b, seq, hidden)
 
     out = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False)
-    out = ttnn.transpose(out, 1, 2)
-    out = ttnn.reshape(out, (b, 1, seq, hidden))
+    out = ttnn.transpose(out, 1, 2)                        # (b, seq, num_heads, head_dim)
+    out = ttnn.reshape(out, (b, 1, seq, hidden))           # restore dummy dim for layer norm
 
     return ttnn.linear(out, p.out_proj.weight, bias=p.out_proj.bias,
                        memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -184,73 +194,116 @@ def _print_shape(name, tensor):
     print(f"[DEBUG] {name: <30} | {t_type} | {shape_str}")
 
 
-def decoder_layer_debug(query_tt, query_pos_tt, torch_layer, tt_params,
-                  memory, ref_points, spatial_shapes, device, num_heads=8, layer_idx=0):
-    """Debug version of a single decoder layer with shape printing."""
-    print(f"\n{'='*15} LAYER {layer_idx} START {'='*15}")
-    
-    # 1. Self-attention on TT device
+def debug_decoder_layer_by_layer(query_tt, torch_decoder, tt_layer_params,
+                                  memory, ref_points, spatial_shapes, device):
+    """
+    Runs each decoder layer in both TTNN and pure PyTorch,
+    prints PCC and max-score per layer so we know exactly which layer breaks first.
+    """
+    from src.zoo.rtdetr.utils import inverse_sigmoid
+    import torch.nn.functional as F
 
-    residual = query_tt
-    sa_out = _self_attention(query_tt, query_pos_tt, tt_params.self_attn, device, num_heads)
+    actual_decoder = torch_decoder.decoder if hasattr(torch_decoder, 'decoder') else torch_decoder
 
-    query_tt = _layer_norm(
-        ttnn.add(residual, sa_out, memory_config=ttnn.L1_MEMORY_CONFIG),
-        tt_params.norm1,
-    )
+    if ref_points.dim() == 4:
+        ref_points_detach = ref_points[:, :, 0, :].clone()
+    else:
+        ref_points_detach = ref_points.clone()
 
-    # 2. Cross-attention on CPU (MSDeformableAttention)
-    # convert to pytorch tensors
-    query_torch = ttnn.to_torch(query_tt).squeeze(1).float()  
-    
-    memory_torch = ttnn.to_torch(memory).squeeze(1).float()
+    n_levels = spatial_shapes.shape[0]
 
-    with torch.no_grad():
-        ca_out = torch_layer.cross_attn(
-            query=query_torch, 
-            reference_points=ref_points, 
-            value=memory_torch,                  
-            value_spatial_shapes=spatial_shapes, 
-            value_mask=None
+    # Pull initial query to torch for reference PT run
+    query_pt = ttnn.to_torch(
+        query_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)
+    )[0:1].view(1, 300, 256).float()
+    ref_pt_parallel = ref_points_detach.clone()
+
+    memory_torch = ttnn.to_torch(
+        memory, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)
+    )[0:1].squeeze(1).float()
+
+    print("\n" + "="*60)
+    print("LAYER-BY-LAYER DECODER DEBUG")
+    print("="*60)
+
+    for i, (torch_layer, tt_params) in enumerate(zip(actual_decoder.layers, tt_layer_params)):
+
+        # ── TTNN forward (your existing run_decoder logic) ──────
+        with torch.no_grad():
+            query_pos = torch_decoder.query_pos_head(ref_points_detach)
+        query_pos_tt = ttnn.from_torch(
+            query_pos.reshape(1, 1, 300, 256).to(torch.bfloat16),
+            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+            device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
+        ref_points_input = ref_points_detach.unsqueeze(2).expand(-1, -1, n_levels, -1)
 
-    # Unsqueeze back to TTNN expected shape [B, 1, seq, hidden]
-    ca_out_tt = ttnn.from_torch(
-        ca_out.unsqueeze(1).to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-        device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-
-    residual = query_tt
-    query_tt = _layer_norm(
-        ttnn.add(residual, ca_out_tt, memory_config=ttnn.L1_MEMORY_CONFIG),
-        tt_params.norm2,
-    )
-
-    # 3. FFN on TT device
-    residual = query_tt
-    ffn = ttnn.linear(query_tt, tt_params.linear1.weight, bias=tt_params.linear1.bias,
-                      activation="relu", memory_config=ttnn.L1_MEMORY_CONFIG)
-    
-    ffn = ttnn.linear(ffn, tt_params.linear2.weight, bias=tt_params.linear2.bias,
-                      memory_config=ttnn.L1_MEMORY_CONFIG)
-
-    query_tt = _layer_norm(
-        ttnn.add(residual, ffn, memory_config=ttnn.L1_MEMORY_CONFIG),
-        tt_params.norm3,
-    )
-
-    return query_tt
-
-
-def run_decoder_debug(query_tt, query_pos_tt, torch_decoder, tt_layer_params,
-                memory, ref_points, spatial_shapes, device, num_heads=8):
-    """Debug version to run all 6 decoder layers."""
-    print(f"\n{'='*15} RUNNING DECODER DEBUG {'='*15}")
-    
-    for i, (torch_layer, tt_params) in enumerate(zip(torch_decoder.layers, tt_layer_params)):
-        query_tt = decoder_layer_debug(
+        from tt.rtdetr_decoder import decoder_layer
+        query_tt = decoder_layer(
             query_tt, query_pos_tt, torch_layer, tt_params,
-            memory, ref_points, spatial_shapes, device, num_heads, layer_idx=i
+            memory, ref_points_input, spatial_shapes, device, num_heads=8,
         )
+
+        query_tt_out = ttnn.to_torch(
+            query_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)
+        )[0:1].view(1, 300, 256).float()
+
+        # ── Pure PyTorch forward for same layer ─────────────────
+        with torch.no_grad():
+            query_pos_pt = torch_decoder.query_pos_head(ref_pt_parallel)
+            ref_pts_input_pt = ref_pt_parallel.unsqueeze(2).expand(-1, -1, n_levels, -1)
+
+            # self attn
+            q_with_pos = query_pt + query_pos_pt
+            sa_out, _ = torch_layer.self_attn(
+                q_with_pos, q_with_pos, query_pt,
+            )
+            query_pt = torch_layer.norm1(query_pt + sa_out)
+
+            # cross attn
+            q_with_pos2 = query_pt + query_pos_pt
+            ca_out = torch_layer.cross_attn(
+                query=q_with_pos2,
+                reference_points=ref_pts_input_pt,
+                value=memory_torch,
+                value_spatial_shapes=spatial_shapes,
+                value_mask=None,
+            )
+            query_pt = torch_layer.norm2(query_pt + ca_out)
+
+            # ffn
+            ffn_out = torch_layer.linear2(
+                F.relu(torch_layer.linear1(query_pt))
+            )
+            query_pt = torch_layer.norm3(query_pt + ffn_out)
+
+            # score with this layer's head
+            logits_tt  = torch_decoder.dec_score_head[i](query_tt_out)
+            logits_pt  = torch_decoder.dec_score_head[i](query_pt)
+
+            # PCC between TTNN and PT query outputs
+            tt_flat = query_tt_out.reshape(-1)
+            pt_flat = query_pt.reshape(-1)
+            pcc = torch.corrcoef(torch.stack([tt_flat, pt_flat]))[0, 1].item()
+
+        print(f"\nLayer {i}:")
+        print(f"  PCC (TTNN vs PT query):      {pcc:.4f}")
+        print(f"  TTNN head[{i}] sigmoid max:  {logits_tt[0].sigmoid().max().item():.4f}")
+        print(f"  PT   head[{i}] sigmoid max:  {logits_pt[0].sigmoid().max().item():.4f}")
+
+        # Update ref points for next layer
+        with torch.no_grad():
+            inter_ref_bbox = torch.sigmoid(
+                torch_decoder.dec_bbox_head[i](query_tt_out) +
+                inverse_sigmoid(ref_points_detach)
+            )
+            inter_ref_bbox_pt = torch.sigmoid(
+                torch_decoder.dec_bbox_head[i](query_pt) +
+                inverse_sigmoid(ref_pt_parallel)
+            )
+        ref_points_detach = inter_ref_bbox
+        ref_pt_parallel   = inter_ref_bbox_pt
+
+    print("\n" + "="*60)
     return query_tt

@@ -111,13 +111,16 @@ class TestDecoder:
         spatial_shapes = torch.tensor([[80, 80], [40, 40], [20, 20]], dtype=torch.long)
         level_start_index = torch.tensor([0, 6400, 8000], dtype=torch.long)
         
-        return torch_decoder, ref_points, spatial_shapes, level_start_index, dec_params
+        # FIX: Return pytorch_model instead of torch_decoder
+        return pytorch_model, ref_points, spatial_shapes, level_start_index, dec_params
 
     def test_pcc_layer1_output(self, ref, device):
         memory_list, query_tt, query_pos_tt = self._load_inputs(ref, device)
         memory_tt = ttnn.concat(memory_list, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
         
-        torch_decoder, ref_points, spatial_shapes, level_start_index, dec_params = self._prepare_hybrid_args(device)
+        # FIX: Unpack pytorch_model and explicitly get the decoder
+        pytorch_model, ref_points, spatial_shapes, level_start_index, dec_params = self._prepare_hybrid_args(device)
+        torch_decoder = pytorch_model.decoder 
 
         # 1. pytorch on cpu
         query_torch = ref["decoder_init_query"].squeeze(1).float() 
@@ -145,10 +148,36 @@ class TestDecoder:
     def test_output_shape(self, ref, device):
         memory_list, query, query_pos = self._load_inputs(ref, device)
         memory = ttnn.concat(memory_list, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        torch_decoder, ref_points, spatial_shapes, _, dec_params = self._prepare_hybrid_args(device)
         
-        out_tt = run_decoder(query, query_pos, torch_decoder, dec_params, memory, ref_points, spatial_shapes, device)
+        pytorch_model, ref_points, spatial_shapes, _, dec_params = self._prepare_hybrid_args(device)
+        
+        out_tt, updated_ref_points = run_decoder(
+            query, query_pos, pytorch_model, dec_params, memory, ref_points, spatial_shapes, device
+        )
+        
+        # Now out_tt is a single tensor
         out = ttnn.to_torch(out_tt)
 
         assert out.shape[-1] == 256
         assert out.shape[-2] == 300
+
+    def test_layer_by_layer_pcc(self, ref, device):
+        from tt.rtdetr_decoder import debug_decoder_layer_by_layer
+
+        memory_list, query_tt, query_pos_tt = self._load_inputs(ref, device)
+        memory_tt = ttnn.concat(memory_list, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        pytorch_model, ref_points, spatial_shapes, _, dec_params = self._prepare_hybrid_args(device)
+        print(type(pytorch_model))
+        print(hasattr(pytorch_model, 'query_pos_head'))
+        print(hasattr(pytorch_model.decoder, 'query_pos_head'))
+
+        debug_decoder_layer_by_layer(
+            query_tt,
+            pytorch_model,
+            dec_params,
+            memory_tt,
+            ref_points,
+            spatial_shapes,
+            device,
+        )

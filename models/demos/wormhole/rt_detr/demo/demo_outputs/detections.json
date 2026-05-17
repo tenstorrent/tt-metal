@@ -1,0 +1,802 @@
+{
+  "demo_image.png": [
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.9407,
+      "bbox": [
+        439.77,
+        281.58,
+        141.51,
+        112.19
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.9396,
+      "bbox": [
+        391.42,
+        267.76,
+        102.5,
+        82.56
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.9336,
+      "bbox": [
+        200.83,
+        250.49,
+        115.81,
+        113.17
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.9186,
+      "bbox": [
+        365.96,
+        251.56,
+        65.89,
+        53.63
+      ]
+    },
+    {
+      "label_idx": 0,
+      "label_name": "person",
+      "coco_cat_id": 1,
+      "score": 0.9095,
+      "bbox": [
+        18.25,
+        257.61,
+        25.36,
+        136.26
+      ]
+    },
+    {
+      "label_idx": 0,
+      "label_name": "person",
+      "coco_cat_id": 1,
+      "score": 0.9068,
+      "bbox": [
+        40.75,
+        258.26,
+        43.49,
+        141.23
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.8655,
+      "bbox": [
+        343.97,
+        250.52,
+        33.89,
+        43.34
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.8382,
+      "bbox": [
+        164.51,
+        247.74,
+        33.32,
+        45.76
+      ]
+    },
+    {
+      "label_idx": 7,
+      "label_name": "truck",
+      "coco_cat_id": 8,
+      "score": 0.7881,
+      "bbox": [
+        161.46,
+        227.2,
+        57.59,
+        62.65
+      ]
+    },
+    {
+      "label_idx": 0,
+      "label_name": "person",
+      "coco_cat_id": 1,
+      "score": 0.7876,
+      "bbox": [
+        -0.1,
+        251.9,
+        13.33,
+        74.72
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.7559,
+      "bbox": [
+        132.24,
+        234.56,
+        42.82,
+        87.47
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.7529,
+      "bbox": [
+        42.9,
+        235.84,
+        109.97,
+        112.79
+      ]
+    },
+    {
+      "label_idx": 0,
+      "label_name": "person",
+      "coco_cat_id": 1,
+      "score": 0.7406,
+      "bbox": [
+        8.86,
+        244.94,
+        16.13,
+        52.82
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.6169,
+      "bbox": [
+        313.42,
+        243.39,
+        27.74,
+        33.78
+      ]
+    },
+    {
+      "label_idx": 25,
+      "label_name": "umbrella",
+      "coco_cat_id": 28,
+      "score": 0.5693,
+      "bbox": [
+        64.71,
+        336.76,
+        19.32,
+        47.09
+      ]
+    },
+    {
+      "label_idx": 0,
+      "label_name": "person",
+      "coco_cat_id": 1,
+      "score": 0.5598,
+      "bbox": [
+        428.64,
+        247.14,
+        11.82,
+        23.96
+      ]
+    },
+    {
+      "label_idx": 7,
+      "label_name": "truck",
+      "coco_cat_id": 8,
+      "score": 0.5442,
+      "bbox": [
+        43.15,
+        234.81,
+        113.04,
+        113.54
+      ]
+    },
+    {
+      "label_idx": 0,
+      "label_name": "person",
+      "coco_cat_id": 1,
+      "score": 0.4532,
+      "bbox": [
+        307.32,
+        248.99,
+        11.24,
+        28.23
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.4403,
+      "bbox": [
+        329.57,
+        253.86,
+        18.62,
+        24.01
+      ]
+    }
+  ],
+  "sample.jpg": [
+    {
+      "label_idx": 57,
+      "label_name": "couch",
+      "coco_cat_id": 63,
+      "score": 0.9745,
+      "bbox": [
+        0.22,
+        0.66,
+        639.99,
+        474.48
+      ]
+    },
+    {
+      "label_idx": 15,
+      "label_name": "cat",
+      "coco_cat_id": 17,
+      "score": 0.9637,
+      "bbox": [
+        343.57,
+        24.29,
+        296.72,
+        347.27
+      ]
+    },
+    {
+      "label_idx": 15,
+      "label_name": "cat",
+      "coco_cat_id": 17,
+      "score": 0.956,
+      "bbox": [
+        12.62,
+        54.32,
+        305.82,
+        417.64
+      ]
+    },
+    {
+      "label_idx": 65,
+      "label_name": "remote",
+      "coco_cat_id": 75,
+      "score": 0.9545,
+      "bbox": [
+        40.11,
+        73.46,
+        135.87,
+        44.95
+      ]
+    },
+    {
+      "label_idx": 65,
+      "label_name": "remote",
+      "coco_cat_id": 75,
+      "score": 0.9254,
+      "bbox": [
+        333.84,
+        76.6,
+        36.12,
+        110.18
+      ]
+    }
+  ],
+  "street.jpg": [
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.9165,
+      "bbox": [
+        1763.83,
+        2973.54,
+        565.85,
+        366.74
+      ]
+    },
+    {
+      "label_idx": 0,
+      "label_name": "person",
+      "coco_cat_id": 1,
+      "score": 0.889,
+      "bbox": [
+        358.12,
+        2915.43,
+        112.76,
+        291.46
+      ]
+    },
+    {
+      "label_idx": 0,
+      "label_name": "person",
+      "coco_cat_id": 1,
+      "score": 0.874,
+      "bbox": [
+        2556.36,
+        3071.61,
+        188.08,
+        436.35
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.8422,
+      "bbox": [
+        2993.11,
+        3044.28,
+        174.68,
+        338.94
+      ]
+    },
+    {
+      "label_idx": 9,
+      "label_name": "traffic light",
+      "coco_cat_id": 10,
+      "score": 0.8377,
+      "bbox": [
+        1682.32,
+        2503.52,
+        82.13,
+        236.54
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.8344,
+      "bbox": [
+        0.85,
+        3193.87,
+        212.73,
+        328.67
+      ]
+    },
+    {
+      "label_idx": 9,
+      "label_name": "traffic light",
+      "coco_cat_id": 10,
+      "score": 0.8287,
+      "bbox": [
+        60.63,
+        2491.1,
+        89.23,
+        237.19
+      ]
+    },
+    {
+      "label_idx": 9,
+      "label_name": "traffic light",
+      "coco_cat_id": 10,
+      "score": 0.8132,
+      "bbox": [
+        1696.3,
+        2832.23,
+        102.83,
+        106.15
+      ]
+    },
+    {
+      "label_idx": 0,
+      "label_name": "person",
+      "coco_cat_id": 1,
+      "score": 0.8079,
+      "bbox": [
+        294.1,
+        2860.52,
+        99.34,
+        267.91
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.7275,
+      "bbox": [
+        2162.59,
+        2942.53,
+        287.56,
+        181.94
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.7039,
+      "bbox": [
+        1971.31,
+        2871.24,
+        185.03,
+        104.05
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.6887,
+      "bbox": [
+        2360.16,
+        2859.14,
+        228.16,
+        150.68
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.625,
+      "bbox": [
+        2342.23,
+        3018.57,
+        488.85,
+        338.53
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.5653,
+      "bbox": [
+        2144.87,
+        2834.3,
+        201.53,
+        112.69
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.5595,
+      "bbox": [
+        2621.36,
+        2856.71,
+        187.73,
+        118.09
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.5105,
+      "bbox": [
+        1988.85,
+        2792.88,
+        162.43,
+        85.36
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.4236,
+      "bbox": [
+        2490.6,
+        2975.24,
+        341.79,
+        229.55
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.4103,
+      "bbox": [
+        2149.24,
+        2880.87,
+        207.9,
+        94.34
+      ]
+    },
+    {
+      "label_idx": 0,
+      "label_name": "person",
+      "coco_cat_id": 1,
+      "score": 0.4079,
+      "bbox": [
+        337.42,
+        2869.95,
+        69.43,
+        257.54
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.4027,
+      "bbox": [
+        2507.79,
+        2840.66,
+        128.04,
+        69.25
+      ]
+    }
+  ],
+  "street2.jpg": [
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.9291,
+      "bbox": [
+        -0.54,
+        2980.74,
+        392.33,
+        366.73
+      ]
+    },
+    {
+      "label_idx": 0,
+      "label_name": "person",
+      "coco_cat_id": 1,
+      "score": 0.9205,
+      "bbox": [
+        1558.75,
+        2886.48,
+        351.66,
+        871.35
+      ]
+    },
+    {
+      "label_idx": 16,
+      "label_name": "dog",
+      "coco_cat_id": 18,
+      "score": 0.9168,
+      "bbox": [
+        1277.64,
+        3511.47,
+        629.17,
+        286.58
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.8977,
+      "bbox": [
+        420.0,
+        2932.53,
+        283.65,
+        193.04
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.8547,
+      "bbox": [
+        3024.02,
+        2946.25,
+        314.11,
+        212.91
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.8509,
+      "bbox": [
+        1257.08,
+        2931.7,
+        165.81,
+        132.98
+      ]
+    },
+    {
+      "label_idx": 7,
+      "label_name": "truck",
+      "coco_cat_id": 8,
+      "score": 0.8196,
+      "bbox": [
+        872.1,
+        2781.45,
+        360.12,
+        277.09
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.8067,
+      "bbox": [
+        2526.59,
+        2916.97,
+        161.62,
+        143.07
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.8032,
+      "bbox": [
+        2846.39,
+        2911.71,
+        284.98,
+        203.62
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.754,
+      "bbox": [
+        2617.53,
+        2945.1,
+        151.86,
+        122.64
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.7415,
+      "bbox": [
+        129.49,
+        2936.9,
+        280.49,
+        245.76
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.7243,
+      "bbox": [
+        733.46,
+        2905.59,
+        492.49,
+        455.35
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.7042,
+      "bbox": [
+        2377.9,
+        2913.97,
+        122.97,
+        124.97
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.635,
+      "bbox": [
+        2760.37,
+        2939.44,
+        136.12,
+        154.7
+      ]
+    },
+    {
+      "label_idx": 9,
+      "label_name": "traffic light",
+      "coco_cat_id": 10,
+      "score": 0.6207,
+      "bbox": [
+        2032.26,
+        2626.36,
+        43.24,
+        64.15
+      ]
+    },
+    {
+      "label_idx": 7,
+      "label_name": "truck",
+      "coco_cat_id": 8,
+      "score": 0.5994,
+      "bbox": [
+        734.15,
+        2902.67,
+        493.14,
+        458.34
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.5863,
+      "bbox": [
+        2472.61,
+        2910.6,
+        99.87,
+        137.02
+      ]
+    },
+    {
+      "label_idx": 9,
+      "label_name": "traffic light",
+      "coco_cat_id": 10,
+      "score": 0.5329,
+      "bbox": [
+        1974.61,
+        2633.04,
+        42.17,
+        49.14
+      ]
+    },
+    {
+      "label_idx": 7,
+      "label_name": "truck",
+      "coco_cat_id": 8,
+      "score": 0.5188,
+      "bbox": [
+        1401.87,
+        2891.62,
+        193.82,
+        114.5
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.4465,
+      "bbox": [
+        733.07,
+        2893.9,
+        122.13,
+        179.94
+      ]
+    },
+    {
+      "label_idx": 9,
+      "label_name": "traffic light",
+      "coco_cat_id": 10,
+      "score": 0.4342,
+      "bbox": [
+        2351.44,
+        2774.85,
+        31.32,
+        45.13
+      ]
+    },
+    {
+      "label_idx": 2,
+      "label_name": "car",
+      "coco_cat_id": 3,
+      "score": 0.4054,
+      "bbox": [
+        2341.11,
+        2907.43,
+        75.34,
+        109.49
+      ]
+    }
+  ]
+}

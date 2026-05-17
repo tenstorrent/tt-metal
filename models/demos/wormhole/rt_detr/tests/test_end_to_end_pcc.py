@@ -254,14 +254,28 @@ def _debug_decoder_trace(torch_model, device, tt_params):
 #  ttnn pipeline 
 
 def _run_tt_pipeline(sample_input, tt_params, torch_model, device):
-    global _captured_query, _captured_ref_points, _captured_query_pos, _captured_memory
+    global _captured_query, _captured_ref_points, _captured_query_pos
 
     x = _to_device(sample_input, device)
+    
+    # 1. Backbone
     s3, s4, s5 = presnet50(x, tt_params["backbone"], device)
+    
+    # 2. Encoder
     p3, p4, p5 = hybrid_encoder(s3, s4, s5, tt_params["encoder"], device)
 
+    # 3. ACTUAL Encoder-to-Decoder Handoff (No more cheating)
+    p3_pt = _pull(p3, device).squeeze(1).reshape(1, 80, 80, 256).permute(0, 3, 1, 2)
+    p4_pt = _pull(p4, device).squeeze(1).reshape(1, 40, 40, 256).permute(0, 3, 1, 2)
+    p5_pt = _pull(p5, device).squeeze(1).reshape(1, 20, 20, 256).permute(0, 3, 1, 2)
+
+    with torch.no_grad():
+        memory_pt, spatial_shapes, _ = torch_model.decoder._get_encoder_input([p3_pt, p4_pt, p5_pt])
+    
+    spatial_shapes = torch.tensor(spatial_shapes)
+    
     memory_tt = ttnn.from_torch(
-        _captured_memory.to(torch.bfloat16),
+        memory_pt.unsqueeze(1).to(torch.bfloat16),
         dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
         device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
@@ -276,16 +290,15 @@ def _run_tt_pipeline(sample_input, tt_params, torch_model, device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
 
+    # Initial query pos doesn't matter, run_decoder overwrites it
     query_pos_tt = ttnn.from_torch(
-        _captured_query_pos.reshape(1, 1, 300, 256).to(torch.bfloat16),
+        torch.zeros(1, 1, 300, 256, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
         device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
 
-    spatial_shapes = torch.tensor([[80, 80], [40, 40], [20, 20]])
-
-    # 5. TTNN Decoder 
+    # 4. TTNN Decoder 
     query_out, final_ref_points = run_decoder(
         query_tt, query_pos_tt,
         torch_decoder=decoder_pt,
@@ -296,25 +309,14 @@ def _run_tt_pipeline(sample_input, tt_params, torch_model, device):
         device=device,
     )
 
-    # 6. Prediction heads 
+    # 5. Prediction heads 
     query_torch = _pull(query_out, device).view(1, 300, 256)
     
     with torch.no_grad():
-        from src.zoo.rtdetr.utils import inverse_sigmoid
-        
         # Logits
         pred_logits = decoder_pt.dec_score_head[-1](query_torch)
-        
-        # Boxes
-        box_offsets = decoder_pt.dec_bbox_head[-1](query_torch).view(1, 300, 4)
-        final_ref_points = final_ref_points.view(1, 300, -1)
-        
-        if final_ref_points.shape[-1] == 4:
-            pred_boxes = torch.sigmoid(box_offsets + inverse_sigmoid(final_ref_points))
-        else:
-            pred_boxes = box_offsets.clone()
-            pred_boxes[..., :2] = box_offsets[..., :2] + inverse_sigmoid(final_ref_points)
-            pred_boxes = torch.sigmoid(pred_boxes)
+        # Boxes (already fully computed by run_decoder)
+        pred_boxes = final_ref_points.view(1, 300, 4) 
 
     return pred_logits, pred_boxes
 
