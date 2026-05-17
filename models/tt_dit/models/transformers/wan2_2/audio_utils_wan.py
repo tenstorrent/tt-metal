@@ -217,19 +217,17 @@ class MotionEncoder_tc(Module):
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # padding_tokens is stored as-is, [1, 1, 1, hidden_dim].
         pass
 
     def _causal_pad_host(self, x_torch: torch.Tensor, kernel_size: int) -> torch.Tensor:
-        """Replicate-pad the left of the temporal dim by kernel-1 frames.
+        """Left-replicate-pad the temporal dim by ``kernel_size - 1`` frames.
 
-        Mirrors HF's ``F.pad(x, (kernel-1, 0), mode='replicate')`` on the
-        ``[B, C, T]`` layout, here applied to ``[B, T, C]``.
+        HF equivalent: ``F.pad(x, (kernel-1, 0), mode='replicate')`` on ``[B, C, T]``;
+        we apply it to ``[B, T, C]``.
         """
         pad = kernel_size - 1
         if pad == 0:
             return x_torch
-        # x_torch: [B, T, C]; replicate-pad on T by repeating the first frame.
         first = x_torch[:, :1, :].expand(-1, pad, -1)
         return torch.cat([first, x_torch], dim=1)
 
@@ -241,20 +239,18 @@ class MotionEncoder_tc(Module):
         in_chan: int,
         out_chan: int,
     ) -> ttnn.Tensor:
-        """One conv-stage: ``[B_eff, T, in_chan]`` → causal-pad (host) → conv
-        → on-device no-affine LayerNorm → SiLU → TILE.
+        """``[B_eff, T, in_chan]`` → host causal-pad → conv → on-device
+        no-affine LayerNorm → SiLU → ``[B_eff, T_post, out_chan]``.
 
-        The causal pad needs the prior conv's output reshaped to ``[B, T, C]``,
-        so the pad step runs on the host. After the conv, the LayerNorm + SiLU
-        chain stays entirely on device — ``ttnn.layer_norm`` operates directly
-        on the conv's TILE 5D output ``[B, T, 1, 1, C]`` with weight=bias=None
-        for the no-affine reference behavior.
+        Pad runs on host because it needs the conv input reshaped to 3D.
+        Downstream code (final_linear / head-unmerge) expects 3D out, so we
+        reshape the conv's TILE 5D ``[B_eff, T, 1, 1, C]`` back at the end.
         """
         x_torch = local_device_to_torch(x_tile_BTC).reshape(B_eff, -1, in_chan)
         x_torch_p = self._causal_pad_host(x_torch, kernel_size=3)
         x_5d = x_torch_p.reshape(B_eff, x_torch_p.shape[1], 1, 1, in_chan).contiguous()
         x_dev = ttnn.from_torch(x_5d, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = conv(x_dev)  # TILE 5D [B_eff, T_post, 1, 1, out_chan]
+        x = conv(x_dev)
         x = ttnn.layer_norm(
             x,
             weight=None,
@@ -263,30 +259,24 @@ class MotionEncoder_tc(Module):
             compute_kernel_config=self.layer_norm_compute_kernel_config,
         )
         x = ttnn.silu(x)
-        # Collapse the singleton spatial dims so the returned tensor matches
-        # the prior 3D ``[B_eff, T_post, out_chan]`` contract that downstream
-        # stages (final_linear in the global branch, head-unmerge on the
-        # local branch) rely on.
         t_post = int(x.shape[1])
         return ttnn.reshape(x, [B_eff, t_post, out_chan])
 
     def forward(self, x_torch: torch.Tensor) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Run the 3-stage encoder.
+        """Run the 3-stage encoder on ``x_torch`` ``[B, T, in_dim]`` (CPU).
 
-        Input ``x_torch``: CPU ``[B, T, in_dim]`` (post-aggregation from
-        :class:`CausalAudioEncoder`). The causal pad is host-side; convs +
-        norms + SiLU + ``final_linear`` are on-device. Returns the local
-        branch alone, or ``(global, local)`` when ``need_global=True``.
+        Returns the local branch alone, or ``(global, local)`` when
+        ``need_global=True``.
         """
         B, T, _ = x_torch.shape
 
         # --- Local branch ---
-        # Stage 1: conv1_local maps in_dim → (hidden//4 * num_heads), then
-        # split heads on host to [(B*n), T, hidden//4].
+        # Stage 1 needs a host head-split between conv and layer_norm, so it's
+        # not folded into _conv_stage_BTC.
         x_torch_p = self._causal_pad_host(x_torch, kernel_size=3)
         x_5d = x_torch_p.reshape(B, x_torch_p.shape[1], 1, 1, self.in_dim).contiguous()
         x_dev = ttnn.from_torch(x_5d, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = self.conv1_local(x_dev)  # [B, T, 1, 1, (hidden/4) * num_heads]
+        x = self.conv1_local(x_dev)
         head_split = (
             local_device_to_torch(x)
             .reshape(B, T, self.num_heads, self.hidden_dim // 4)
@@ -298,16 +288,15 @@ class MotionEncoder_tc(Module):
             head_split_normed, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
         x_dev = ttnn.silu(x_dev)
-        # Stages 2 & 3.
         B_local = B * self.num_heads
         x_dev = self._conv_stage_BTC(x_dev, self.conv2, B_local, self.hidden_dim // 4, self.hidden_dim // 2)
         x_dev = self._conv_stage_BTC(x_dev, self.conv3, B_local, self.hidden_dim // 2, self.hidden_dim)
 
-        # Reshape [(B*n), T/4, hidden] → [B, T/4, n, hidden] and append the
-        # learned padding token as an extra "head" along the token axis.
+        # Unmerge heads back to ``[B, T/4, num_heads, hidden]`` and append the
+        # learned padding token as an extra head along the token axis.
         local_out = local_device_to_torch(x_dev).reshape(B, self.num_heads, -1, self.hidden_dim)
         T4 = local_out.shape[2]
-        local_out = local_out.permute(0, 2, 1, 3).contiguous()  # [B, T/4, n, hidden]
+        local_out = local_out.permute(0, 2, 1, 3).contiguous()
         pad_torch = (
             local_device_to_torch(self.padding_tokens.data)
             .reshape(1, 1, 1, self.hidden_dim)
@@ -320,22 +309,20 @@ class MotionEncoder_tc(Module):
             return local_dev
 
         # --- Global branch ---
-        # Mirrors the local branch but with conv1_global (in_dim → hidden//4,
-        # no head split), then final_linear projects up to hidden. Output
-        # shape ``[B, T/4, 1, hidden]`` (the n=1 dim matches the reference's
-        # ``rearrange('(b n) t c -> b t n c', b=b)`` with B==(b*n)).
+        # No head split → can stay 3D from conv1_global through to final_linear.
         x_5d = x_torch_p.reshape(B, x_torch_p.shape[1], 1, 1, self.in_dim).contiguous()
         x_dev = ttnn.from_torch(x_5d, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = self.conv1_global(x_dev)  # [B, T, 1, 1, hidden/4]
+        x = self.conv1_global(x_dev)
         x_torch = local_device_to_torch(x).reshape(B, T, self.hidden_dim // 4).float()
         x_torch_normed = torch.nn.functional.layer_norm(x_torch, (self.hidden_dim // 4,), eps=1e-6)
         x_dev = ttnn.from_torch(x_torch_normed, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         x_dev = ttnn.silu(x_dev)
         x_dev = self._conv_stage_BTC(x_dev, self.conv2, B, self.hidden_dim // 4, self.hidden_dim // 2)
         x_dev = self._conv_stage_BTC(x_dev, self.conv3, B, self.hidden_dim // 2, self.hidden_dim)
-        x_dev = self.final_linear(x_dev)  # [B, T/4, hidden]
-        global_dev = ttnn.unsqueeze(x_dev, 2)  # [B, T/4, 1, hidden]
-        return global_dev, local_dev
+        x_dev = self.final_linear(x_dev)
+        # Unsqueeze the singleton "head" axis to match the reference's
+        # ``rearrange('(b n) t c -> b t n c', b=b)`` with n=1.
+        return ttnn.unsqueeze(x_dev, 2), local_dev
 
 
 class CausalAudioEncoder(Module):
@@ -427,16 +414,13 @@ class CausalAudioEncoder(Module):
 
 
 class AdaLayerNormZero(Module):
-    """Holder for the per-layer ``Linear(adain_dim, 2*dim)`` projection used
-    by the production ``adain_mode="attn_norm"`` path.
+    """Parameter holder for the ``Linear(adain_dim, 2*dim)`` projection used by
+    the ``adain_mode="attn_norm"`` path.
 
-    The SP-aware spatial modulation lives in
-    :meth:`WanS2VTransformer3DModel.after_transformer_block` — it calls
-    ``self.linear(silu(audio_emb_global))`` directly and applies the
-    per-token shift/scale alongside the block's no-affine pre-norm. The
-    class exists so the state-dict path
-    ``audio_injector.injector_adain_layers[i].linear.{weight,bias}`` lands
-    on a tt_dit module.
+    The SP-aware modulation runs in
+    :meth:`WanS2VTransformer3DModel.after_transformer_block`; this class only
+    exists so the state-dict path
+    ``audio_injector.injector_adain_layers[i].linear.{weight,bias}`` lands.
     """
 
     def __init__(
@@ -450,8 +434,6 @@ class AdaLayerNormZero(Module):
         self.dim = dim
         self.adain_dim = adain_dim
         self.mesh_device = mesh_device
-        # HF AdaLayerNorm uses a plain Linear (replicated across mesh — small
-        # weight, single call per layer per step).
         self.linear = Linear(adain_dim, dim * 2, bias=True, mesh_device=mesh_device)
 
     def forward(self, *_args, **_kwargs):
@@ -531,30 +513,19 @@ class AudioInjector_WAN(Module):
             self.injector_adain_layers = ModuleList()
 
         # Per-injector cache of post-projection (k_BHNE, v_BHNE) tensors. The
-        # audio embedding fed to all injectors is the same constant
-        # ``merged_audio_emb_flat`` for an entire clip's denoising loop, so
-        # the ``to_kv`` matmul + ``norm_k`` + head-split for each injector
-        # produces the same result on every diffusion step. Populated lazily
-        # on first use; cleared by :meth:`invalidate_audio_kv_cache` from the
-        # S2V transformer's ``prepare_audio_emb`` (which is called once per
-        # clip and may change the audio).
+        # audio embedding is constant across a clip's diffusion loop, so
+        # ``to_kv`` + ``norm_k`` + head-split produce the same K/V on every
+        # step. Populated lazily; invalidated when the audio changes.
         self._audio_kv_cache: dict[int, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
 
     def invalidate_audio_kv_cache(self) -> None:
-        """Drop the cached per-injector (k_BHNE, v_BHNE) tensors.
-
-        Called from the S2V transformer's ``prepare_audio_emb`` after the
-        per-clip audio embedding has been rebuilt — the cached K/V is stale
-        as soon as the audio changes.
-        """
         for kv in self._audio_kv_cache.values():
             for t in kv:
                 ttnn.deallocate(t)
         self._audio_kv_cache = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # The HF pre-norm LayerNorms have no weights, so any leftover keys here
-        # would be unexpected — defensively drop them if encountered.
+        # HF pre-norm LayerNorms have no weights; drop any keys that slip through.
         for k in list(state):
             if k.startswith("injector_pre_norm_feat.") or k.startswith("injector_pre_norm_vec."):
                 state.pop(k)
