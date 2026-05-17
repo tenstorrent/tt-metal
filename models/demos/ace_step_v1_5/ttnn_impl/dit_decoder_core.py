@@ -45,8 +45,17 @@ def _ace_step_flush_device_profiler(ttnn, device) -> None:
     ``tools/tracy/process_ops_logs.py`` to abort with ``Device data missing``. Flushing after
     every Nth layer keeps the buffer within capacity. No-op when neither
     ``TT_METAL_DEVICE_PROFILER`` nor ``TTNN_OP_PROFILER`` is set, so production runs incur zero cost.
+
+    Also no-op when ``ACE_STEP_USE_TRACE=1`` is set: ``ttnn.synchronize_device`` is an event-sync
+    op and is illegal inside ``begin_trace_capture`` (TT_FATAL: "Event Synchronization is not
+    supported during trace capture"). The e2e trace path captures the DiT body forward, which
+    calls this helper once per layer — without this guard the capture would fire 24 fatals.
+    Tracy + e2e trace are mutually exclusive anyway: trace replays don't re-execute Python
+    layer code, so there'd be nothing to flush during replay.
     """
     if os.environ.get("TTNN_OP_PROFILER") != "1" and os.environ.get("TT_METAL_DEVICE_PROFILER") != "1":
+        return
+    if os.environ.get("ACE_STEP_USE_TRACE", "").lower() in ("1", "true", "yes"):
         return
     try:
         ttnn.synchronize_device(device)
