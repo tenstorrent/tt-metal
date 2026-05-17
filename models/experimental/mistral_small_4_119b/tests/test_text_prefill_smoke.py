@@ -19,6 +19,7 @@ Run::
 from __future__ import annotations
 
 import os
+import time
 
 import psutil
 import pytest
@@ -98,6 +99,20 @@ def test_mistral_small_4_prefill_smoke(reset_seeds, mesh_device):
 
     prompt = "The capital of France is"
     input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+
+    # Optional: pad/truncate to a fixed seq_len for perf profiling.
+    # Set MISTRAL4_PREFILL_SEQ_LEN=128 to run prefill at a fixed length.
+    target_seq_len = int(os.environ.get("MISTRAL4_PREFILL_SEQ_LEN", "0"))
+    if target_seq_len > 0:
+        cur = input_ids.shape[1]
+        if cur < target_seq_len:
+            # Repeat the last token to pad up. Padding token id doesn't matter
+            # for perf profiling — we only check output shape, not content.
+            pad_token = input_ids[:, -1:].repeat(1, target_seq_len - cur)
+            input_ids = torch.cat([input_ids, pad_token], dim=1)
+        else:
+            input_ids = input_ids[:, :target_seq_len]
+
     seq_len = input_ids.shape[1]
     logger.info(f"Prompt: {prompt!r}  →  {seq_len} tokens")
 
@@ -127,11 +142,53 @@ def test_mistral_small_4_prefill_smoke(reset_seeds, mesh_device):
     ttnn.synchronize_device(mesh_device)
     _log_mem("after prefill warmup")
 
-    signpost("Performance pass")
-    logger.info(f"Running TTNN prefill measured pass (seq_len={seq_len})...")
-    logits = model.prefill(input_ids)
+    # prefill() consumes the cached RoPE table (full-range ttnn.slice aliases the
+    # buffer, and the trailing ttnn.deallocate frees it). Re-cache before the
+    # measured pass. Done before the signpost so the upload is not in the report.
+    model.cache_rope_tables(cos_full, sin_full)
+
+    # ── Traced measured pass ────────────────────────────────────────────────
+    # Upload input_ids once into a persistent device buffer. The trace will
+    # reference this buffer directly; subsequent executions reuse it.
+    input_ids_tt = ttnn.as_tensor(
+        input_ids.to(torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # Compile pass: run prefill_device once to JIT-compile programs.
+    # The next call (under the signpost) is what Tracy will profile.
+    logger.info("Compile pass for prefill_device...")
+    t_compile = time.perf_counter()
+    _logits_compile = model.prefill_device(input_ids_tt, seq_len)
     ttnn.synchronize_device(mesh_device)
+    t_compile = time.perf_counter() - t_compile
+    ttnn.deallocate(_logits_compile)
+    logger.info(f"Compile pass wall-clock: {t_compile*1e3:.2f} ms")
+
+    # ── Signposted measured pass — this is what shows up in the perf report ──
+    # Single clean prefill_device call. Tracy filters per-op data to ops AFTER
+    # the last signpost, so anything we run after this will pollute the report.
+    signpost("Performance pass")
+    logger.info("Measured prefill pass...")
+    t_measured = time.perf_counter()
+    logits_tt = model.prefill_device(input_ids_tt, seq_len)
+    ttnn.synchronize_device(mesh_device)
+    t_measured = time.perf_counter() - t_measured
+    logger.info(f"Measured prefill wall-clock: {t_measured*1e3:.2f} ms")
     _log_mem("after prefill measured")
+
+    # Download logits from the measured pass.
+    logits_host = ttnn.to_torch(
+        logits_tt,
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3),
+    )
+    logits = logits_host[0].to(torch.bfloat16)
+    ttnn.deallocate(logits_tt)
+    ttnn.deallocate(input_ids_tt)
 
     assert logits.shape == (
         1,
