@@ -273,11 +273,11 @@ def test_conv3d_cache_address(
 def test_conv3d_program_cache_batch_size(device):
     """Regression test for issue #44565.
 
-    Verifies that the program cache key includes batch size (N), so that a
-    compiled program for B=1 is NOT reused for B=2.  When N is a compile-time
-    kernel constant, a wrong cache hit produces completely incorrect output
-    (PCC ≈ -0.002).  This test catches that regression by running B=1 then B=2
-    back-to-back on the same device and asserting correctness for both.
+    Running conv3d B=1 then B=2 on the same device produces garbage output for
+    B=2 (PCC ≈ 0.006). Root cause: device state contamination — the B=1 run
+    leaves some state (semaphores, L1, etc.) that the B=2 program does not
+    reinitialize, causing incorrect results. Program cache and compile-time args
+    are NOT involved (both runs are confirmed cache misses with correct N baked in).
     """
     grid_size = device.compute_with_storage_grid_size()
     # Fixed parameters that match a failing case from test_conv3d_sweep_shapes
