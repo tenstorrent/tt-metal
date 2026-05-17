@@ -48,18 +48,11 @@ constexpr uint32_t CMDBUF_1_TRID_START = 8;
 /* End transaction ID for command buffer 0 when using TID wrapping */
 constexpr uint32_t CMDBUF_1_TRID_END = 12;
 
-/* Read request virtual channel - used by both command buffers */
-constexpr uint32_t CMDBUF_RD_REQ_VC = 1;
-/* Read response virtual channel - used by both command buffers */
-constexpr uint32_t CMDBUF_RD_RESP_VC = 12;
-/* Write request virtual channel - used by both command buffers */
-constexpr uint32_t CMDBUF_WR_REQ_VC = 2;
-/* Write response virtual channel - used by both command buffers */
-constexpr uint32_t CMDBUF_WR_RESP_VC = 13;
-/* Multicast request virtual channel - used by both command buffers */
-constexpr uint32_t CMDBUF_MCAST_REQ_VC = 8;
-/* Multicast response virtual channel - used by both command buffers */
-constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
+// VC constants are defined by noc_nonblocking_api_v2.h at global scope with
+// identical values (CMDBUF_RD_REQ_VC=1, CMDBUF_RD_RESP_VC=12, CMDBUF_WR_REQ_VC=2,
+// CMDBUF_WR_RESP_VC=13, CMDBUF_MCAST_REQ_VC=8, CMDBUF_MCAST_RESP_VC=14).
+// Definitions are intentionally elided here so this header can be included
+// alongside the v2 header (e.g. via dataflow_api.h).
 
 #define DEFINE_CMD_BUFS(buf_name, cmdbuf)                                                                              \
                                                                                                                        \

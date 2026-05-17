@@ -37,4 +37,5 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     quasar_examples/quasar_addrgen/test_addrgen_example.cpp
     quasar_examples/quasar_im2col/test_im2col_example.cpp
     quasar_examples/quasar_idma/test_idma_example.cpp
+    quasar_one_to_one/test_quasar_one_to_one.cpp
 )
