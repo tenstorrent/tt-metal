@@ -21,6 +21,8 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "chain_llk.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -163,52 +165,87 @@ void kernel_main() {
 
         /*
          * E[x]**2
+         * PARTIAL migration: BinaryFpu(Mul) tile 1 of cb_stats_reduced with itself.
+         * Pinned at tile 1 because cb_stats_reduced holds [E(x**2), E(x)] and we want E(x).
          */
-        reconfig_data_format(cb_stats_reduced, cb_stats_reduced);
-        pack_reconfig_data_format(cb_mean_squared);
-        mul_tiles_init(cb_stats_reduced, cb_stats_reduced);
-        cb_reserve_back(cb_mean_squared, onetile);
         cb_wait_front(cb_stats_reduced, stats_tile_stride);
-        ACQ();
-        mul_tiles(cb_stats_reduced, cb_stats_reduced, 1, 1, 0);
-        pack_tile(0, cb_mean_squared);
-        REL();
-
-        cb_push_back(cb_mean_squared, 1);
+        {
+            using namespace compute_kernel_lib;
+            eltwise_chain(
+                1,
+                BinaryFpu<
+                    cb_stats_reduced,
+                    cb_stats_reduced,
+                    BinaryFpuOp::Mul,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::Pinned,
+                    Dst::D0,
+                    CbIndexMode::Pinned>{/*a_tile_idx=*/1, /*b_tile_idx=*/1},
+                PackTile<
+                    cb_mean_squared,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
+        }
 
         /*
          * E[x**2] - E[x]**2
+         * PARTIAL migration: BinaryFpu(Sub) cb_stats_reduced[0] - cb_mean_squared[0].
          */
-        reconfig_data_format(cb_stats_reduced, cb_mean_squared);
-        pack_reconfig_data_format(cb_var);
-        sub_tiles_init(cb_stats_reduced, cb_mean_squared);
-
-        cb_reserve_back(cb_var, onetile);
         cb_wait_front(cb_mean_squared, 1);
-        ACQ();
-        sub_tiles(cb_stats_reduced, cb_mean_squared, 0, 0, 0);
-        pack_tile(0, cb_var);
-        REL();
-        cb_push_back(cb_var, 1);
-        cb_pop_front(cb_mean_squared, 1);
+        {
+            using namespace compute_kernel_lib;
+            eltwise_chain(
+                1,
+                BinaryFpu<
+                    cb_stats_reduced,
+                    cb_mean_squared,
+                    BinaryFpuOp::Sub,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CopyTilePolicy::WaitAndPop,
+                    CbIndexMode::FirstTile,
+                    Dst::D0,
+                    CbIndexMode::FirstTile>{},
+                PackTile<
+                    cb_var,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
+        }
 
         /*
          * 1/sqrt(var + eps)
+         * PARTIAL migration: BinaryFpu(Add, cb_var, cb_eps) + Rsqrt + PackTile.
          */
-        cb_wait_front(cb_var, 1);
-        cb_reserve_back(cb_recip_sqrt_var, 1);
-        reconfig_data_format(cb_var, cb_eps);
-        pack_reconfig_data_format(cb_recip_sqrt_var);
-
-        add_tiles_init(cb_var, cb_eps);
-        ACQ();
-        add_tiles(cb_var, cb_eps, 0, 0, 0);
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(0);
-        pack_tile(0, cb_recip_sqrt_var);
-        REL();
-        cb_push_back(cb_recip_sqrt_var, 1);
-        cb_pop_front(cb_var, 1);
+        {
+            using namespace compute_kernel_lib;
+            eltwise_chain(
+                1,
+                BinaryFpu<
+                    cb_var,
+                    cb_eps,
+                    BinaryFpuOp::Add,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::WaitAndPop,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::FirstTile,
+                    Dst::D0>{},
+                Rsqrt<Approx::Exact, LEGACY_RSQRT ? Legacy::On : Legacy::Off, Dst::D0>{},
+                PackTile<
+                    cb_recip_sqrt_var,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
+        }
 
         if constexpr (do_gamma && do_beta) {
             /*
