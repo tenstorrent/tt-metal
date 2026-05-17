@@ -18,6 +18,8 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 void kernel_main() {
@@ -79,23 +81,35 @@ void kernel_main() {
 
         /*
          * 1/sqrt(mean_squared + eps)
+         * PARTIAL migration: BinaryFpu(Add) + Rsqrt + PackTile.
+         * The chain owns the cb_wait_front + cb_pop_front on reduce_result_cb (A operand)
+         * via WaitAndPop, and the cb_reserve_back + cb_push_back on reduce_result_cb
+         * (output) via PerTileReserveAndPush — A and output share the same CB so the
+         * chain effectively does a wait → pop → reserve → push cycle on reduce_result_cb,
+         * matching the original "pop then reserve" flow.
          */
-        cb_wait_front(reduce_result_cb, 1);
-        reconfig_data_format(reduce_result_cb, epsilon_cb);
-        pack_reconfig_data_format(reduce_result_cb);
-
-        add_tiles_init(reduce_result_cb, epsilon_cb);
-        tile_regs_acquire();
-        add_tiles(reduce_result_cb, epsilon_cb, 0, 0, 0);
-        rsqrt_tile_init<use_legacy_rsqrt>();
-        rsqrt_tile<use_legacy_rsqrt>(0);
-        tile_regs_commit();
-        cb_pop_front(reduce_result_cb, 1);
-        cb_reserve_back(reduce_result_cb, 1);
-        tile_regs_wait();
-        pack_tile(0, reduce_result_cb);
-        tile_regs_release();
-        cb_push_back(reduce_result_cb, 1);
+        {
+            using namespace compute_kernel_lib;
+            eltwise_chain(
+                1,
+                BinaryFpu<
+                    reduce_result_cb,
+                    epsilon_cb,
+                    BinaryFpuOp::Add,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::WaitAndPop,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::FirstTile,
+                    Dst::D0>{},
+                Rsqrt<Approx::Exact, use_legacy_rsqrt ? Legacy::On : Legacy::Off, Dst::D0>{},
+                PackTile<
+                    reduce_result_cb,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
+        }
 
         /*
          * norm x
