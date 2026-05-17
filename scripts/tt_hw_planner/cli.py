@@ -283,9 +283,17 @@ def cmd_prepare(args) -> int:
     if args.write_script:
         from pathlib import Path
 
-        path = Path(args.write_script)
+        # Resolve the user-supplied path and refuse anything that would land
+        # under a system directory. Mode is owner-only (0o700) — the script
+        # is private to the user invoking the planner.
+        path = Path(args.write_script).expanduser().resolve()
+        _SYSTEM_PREFIXES = ("/etc", "/usr", "/bin", "/sbin", "/boot", "/sys", "/proc", "/dev")
+        s = str(path)
+        if any(s == d or s.startswith(d + "/") for d in _SYSTEM_PREFIXES):
+            print(f"\nERROR: refusing to write bring-up script to system path: {path}", file=sys.stderr)
+            return 1
         path.write_text(render_bringup_script(plan))
-        path.chmod(0o755)
+        path.chmod(0o700)
         print(f"\nWrote bring-up script: {path}", file=sys.stderr)
 
     if args.execute:

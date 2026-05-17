@@ -141,7 +141,19 @@ def _run_all_gather_in_subprocess(mesh_shape: Tuple[int, int], hidden: int, seq:
     import sys
     import time
 
-    rows, cols = mesh_shape
+    # Coerce + bound the integers that get interpolated into the subprocess
+    # script body. Static taint analysis can't see that mesh_shape / hidden /
+    # seq came from a validated HF config; this makes the safety explicit.
+    rows = int(mesh_shape[0])
+    cols = int(mesh_shape[1])
+    hidden = int(hidden)
+    seq = int(seq)
+    if not (0 < rows <= 1024 and 0 < cols <= 1024):
+        raise ValueError(f"mesh_shape out of range: {mesh_shape!r}")
+    if not (0 < hidden <= 65536):
+        raise ValueError(f"hidden out of range: {hidden!r}")
+    if not (0 < seq <= 1_000_000):
+        raise ValueError(f"seq out of range: {seq!r}")
     op_label = f"all_gather (mesh={rows}x{cols}, hidden={hidden})"
 
     script = textwrap.dedent(

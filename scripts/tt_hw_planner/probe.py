@@ -18,9 +18,25 @@ NO model weights are downloaded — only metadata + config.json (a few KB).
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
+
+
+# HuggingFace repo-id grammar (mirrors huggingface_hub.utils._validators):
+# either `<name>` or `<org>/<name>`, each part starting with [A-Za-z0-9] and
+# containing only [A-Za-z0-9._-]. Used to gate dynamic input before passing
+# `model_id` to filesystem / subprocess / hub-download operations.
+_HF_ID_PART = r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}"
+_HF_ID_PATTERN = re.compile(rf"^{_HF_ID_PART}(/{_HF_ID_PART})?$")
+
+
+def _validate_hf_id(model_id: str) -> str:
+    if not isinstance(model_id, str) or not _HF_ID_PATTERN.match(model_id):
+        raise ValueError(f"invalid HuggingFace model id: {model_id!r}")
+    return model_id
+
 
 from .architecture import (
     ArchitectureSpec,
@@ -205,10 +221,11 @@ def _dominant_dtype(parameters, weight_bytes) -> Tuple[str, str, Optional[int], 
 
 def _maybe_fetch_config(model_id: str) -> Optional[dict]:
     """Try AutoConfig, fall back to raw config.json download."""
+    safe_id = _validate_hf_id(model_id)
     try:
         from transformers import AutoConfig
 
-        cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+        cfg = AutoConfig.from_pretrained(safe_id, trust_remote_code=True)
         return cfg.to_dict()
     except Exception:
         pass
@@ -216,7 +233,7 @@ def _maybe_fetch_config(model_id: str) -> Optional[dict]:
     try:
         from huggingface_hub import hf_hub_download
 
-        path = hf_hub_download(model_id, "config.json")
+        path = hf_hub_download(safe_id, "config.json")
         with open(path) as f:
             return json.load(f)
     except Exception:
@@ -229,6 +246,7 @@ def _maybe_fetch_config(model_id: str) -> Optional[dict]:
 
 
 def probe_model(model_id: str) -> ModelProbe:
+    _validate_hf_id(model_id)
     try:
         from huggingface_hub import HfApi
     except ImportError:

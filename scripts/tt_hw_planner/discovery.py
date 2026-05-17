@@ -204,6 +204,13 @@ def _classify_path(path: Path) -> str:
 def _git_grep(needle: str, repo_root: Path, scope: str = "models/") -> List[Path]:
     """Return repo-relative paths matching `needle` literally. Falls back to
     a Python walker if git isn't available."""
+    # Reject anything that isn't a well-formed HF id (or its tail) before
+    # invoking git. `-F` already tells git grep to treat the needle as a
+    # literal string, but validating up-front means subprocess.run only ever
+    # sees inputs in [A-Za-z0-9._-/].
+    from .probe import _validate_hf_id
+
+    _validate_hf_id(needle)
     gitexe = shutil.which("git")
     if gitexe and (repo_root / ".git").exists():
         try:
