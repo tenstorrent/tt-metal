@@ -101,6 +101,13 @@ public:
     const FabricBuilderContext& get_builder_context() const;
     bool has_builder_context() const { return builder_context_ != nullptr; }
 
+    // ============ Session Fence (FIX DZ2) ============
+    // Per-session nonce, randomised at FabricContext construction. The firmware XOR-encodes
+    // EDMStatus::LOCAL_HANDSHAKE_COMPLETE with this value when writing ring_sync_address, so
+    // stale values from a previous session cannot accidentally match the new session's expected
+    // poll value, preventing phantom ring-sync completions.  Always non-zero.
+    uint32_t get_session_nonce() const { return session_nonce_; }
+
     // ============ Static Utilities ============
     static tt::tt_fabric::Topology get_topology_from_config(tt::tt_fabric::FabricConfig fabric_config);
 
@@ -184,6 +191,10 @@ private:
     uint32_t routing_2d_buffer_size_ = 0;      // Valid only in 2D mode
 
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED by default
+
+    // FIX DZ2 (#42429): Per-session nonce for ring_sync_address fence.
+    // Initialized in constructor with time+counter entropy. Always non-zero.
+    uint32_t session_nonce_ = 0;
 
     // Builder context (lazy init on first access)
     mutable std::unique_ptr<FabricBuilderContext> builder_context_;

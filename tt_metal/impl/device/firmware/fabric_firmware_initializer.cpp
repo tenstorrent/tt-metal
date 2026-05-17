@@ -1217,7 +1217,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 //
                 // Fix: after confirming heartbeat, additionally wait for edm_status to transition
                 // away from 0x49705180.  Base-UMD writes 0x49706550 within <200ms of ROM boot
-                // completing, so a 2000ms poll window with no sleep between polls is sufficient.
+                // completing, so a 2000ms poll window with 5ms sleep between polls is sufficient.
                 // Uses cluster_.read_reg() for PCIe-direct MMIO access (same as heartbeat poll).
                 {
                     const uint32_t edm_sync_addr = static_cast<uint32_t>(
@@ -1370,9 +1370,9 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             }
             // OPTION C relay probe: when dead-relay devices exist in the mesh, probe this device
             // with a small ReadFromDeviceL1 before calling l1_barrier.  ReadFromDeviceL1 uses the
-            // UMD relay chain and throws on relay timeout (unlike l1_barrier which blocks forever).
+            // UMD relay chain and throws on relay timeout (probe may take up to 10s on dead relay;
+            // l1_barrier blocks forever without a throw, making it unsafe to call unguarded).
             if (!relay_dead_devices.empty()) {
-                bool probe_ok = false;
                 try {
                     const auto master_chan = builder_ctx.get_fabric_master_router_chan(dev->id());
                     const CoreCoord probe_logical =
@@ -1381,7 +1381,6 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                     std::vector<uint32_t> probe_buf(1, 0);
                     detail::ReadFromDeviceL1(
                         dev, probe_logical, opt_c_sync_addr, 4, probe_buf, CoreType::ETH);
-                    probe_ok = true;
                 } catch (const std::exception& probe_ex) {
                     log_warning(
                         tt::LogMetal,
@@ -1401,11 +1400,10 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                     relay_dead_devices.insert(dev->id());
                     continue;
                 }
-                if (!probe_ok) {
-                    continue;
-                }
             }
             // Relay confirmed alive (probe succeeded, or no dead-relay devices in mesh).
+            // Note: if probe threw, both catch branches above execute `continue`, so execution
+            // only reaches here when probe_ok == true — no explicit check needed.
             try {
                 cluster_.l1_barrier(dev->id());
                 log_debug(

@@ -1155,6 +1155,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["EDM_LOCAL_SYNC_PTR_ADDR"] = static_cast<uint32_t>(this->edm_local_sync_ptr);
     named_args["EDM_LOCAL_TENSIX_SYNC_PTR_ADDR"] = static_cast<uint32_t>(this->edm_local_tensix_sync_ptr);
     named_args["EDM_STATUS_PTR_ADDR"] = static_cast<uint32_t>(this->edm_status_ptr);
+    // FIX DZ2 (#42429): Per-session nonce — XOR'd with LOCAL_HANDSHAKE_COMPLETE by firmware.
+    named_args["EDM_SESSION_NONCE"] = fabric_context.get_session_nonce();
     named_args["NOTIFY_WORKER_OF_READ_COUNTER_UPDATE_SRC_ADDR"] =
         static_cast<uint32_t>(config.notify_worker_of_read_counter_update_src_address);
 

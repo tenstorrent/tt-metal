@@ -6,6 +6,8 @@
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -264,6 +266,18 @@ FabricContext::FabricContext(
     // Step 6: Additional independent configs
     auto fabric_tensix_config = control_plane.get_fabric_tensix_config();
     this->tensix_enabled_ = (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED);
+
+    // FIX DZ2 (#42429): Generate per-session nonce for ring_sync_address fence.
+    // Firmware XOR-encodes LOCAL_HANDSHAKE_COMPLETE with this nonce; host checks
+    // LOCAL_HANDSHAKE_COMPLETE ^ nonce. Stale values from previous sessions (encoded
+    // with old nonces) cannot accidentally match, preventing phantom sync completions.
+    // Mix steady_clock with a monotonic counter for uniqueness even within one process.
+    static std::atomic<uint32_t> s_session_counter{0u};
+    const uint32_t counter_bits = s_session_counter.fetch_add(1u, std::memory_order_relaxed);
+    const uint32_t time_bits = static_cast<uint32_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count() & 0xFFFFFFFFu);
+    // Mix counter and time; | 1u ensures nonce is never zero (a zero nonce is a no-op XOR).
+    this->session_nonce_ = (time_bits ^ (counter_bits * 0x6b8b4567u)) | 1u;
 
     // Compute intermesh VC configuration (requires ControlPlane to be initialized)
     // this->intermesh_vc_config_ = this->compute_intermesh_vc_config();

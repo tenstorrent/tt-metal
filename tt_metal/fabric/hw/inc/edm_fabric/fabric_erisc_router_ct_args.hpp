@@ -233,6 +233,9 @@ constexpr uint32_t termination_signal_addr = NAMED_CT_ARG("TERMINATION_SIGNAL_AD
 constexpr uint32_t edm_local_sync_ptr_addr = wait_for_host_signal ? NAMED_CT_ARG("EDM_LOCAL_SYNC_PTR_ADDR") : 0;
 constexpr uint32_t edm_local_tensix_sync_ptr_addr = NAMED_CT_ARG("EDM_LOCAL_TENSIX_SYNC_PTR_ADDR");
 constexpr uint32_t edm_status_ptr_addr = NAMED_CT_ARG("EDM_STATUS_PTR_ADDR");
+// FIX DZ2 (#42429): Per-session nonce. Firmware XOR-encodes LOCAL_HANDSHAKE_COMPLETE with
+// this nonce when writing ring_sync_address; host checks LOCAL_HANDSHAKE_COMPLETE ^ nonce.
+constexpr uint32_t session_nonce = NAMED_CT_ARG("EDM_SESSION_NONCE");
 
 // for blackhole we need to disable the noc flush in inline writes to L1 for better perf. For wormhole this flag is not
 // used.

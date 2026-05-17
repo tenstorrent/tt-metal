@@ -3015,15 +3015,40 @@ void initialize_fabric_telemetry() {
 }
 
 void kernel_main() {
-    // CANARY (#42429): Written as the very first L1 store in kernel_main(), before
-    // POSTCODE(INITIALIZATION_STARTED).  After write_launch_msg_to_core transitions this ERISC
-    // from base-UMD relay (0x49706550) to fabric firmware, there is a narrow window before
-    // POSTCODE fires where the firmware is running but edm_status is still 0x49706550.
-    // If the firmware crashes in this window, terminate_stale_erisc_routers() would mistake
-    // it for a live base-UMD relay and skip soft-reset (wrong — the ERISC is crashed).
-    // Writing 0xA0A0A0A0 here eliminates that ambiguity:
+    // FIX DZ (#42429): Firmware-side self-clean on FIX M restart.
+    //
+    // The host CANNOT write non-MMIO L1 without going through the UMD relay, which may be
+    // dead or unreliable between sessions.  But the firmware can always clean its own L1.
+    //
+    // Detect the FIX M path by checking edm_status_ptr_addr == 0x49706550 (base-UMD relay
+    // sentinel — means write_launch_msg_to_core launched fabric firmware over a running
+    // base-UMD relay, without a full soft-reset + L1 clear).  A previous session may have
+    // left EDMStatus::LOCAL_HANDSHAKE_COMPLETE at ring_sync_address (= edm_status_ptr_addr)
+    // that the host could not clear for non-MMIO channels.  If the host polls before this
+    // firmware session writes its own LOCAL_HANDSHAKE_COMPLETE, the stale value could be
+    // mistaken for a completed ring sync — a "phantom sync" that skips the ring barrier.
+    //
+    // Fix: zero ring_sync_address now, before the canary write.  Two effects:
+    //   1. Stale LOCAL_HANDSHAKE_COMPLETE can no longer phantom-match the host's poll.
+    //   2. If firmware subsequently crashes before writing the canary, the host sees
+    //      0x00000000 and FIX BZ (#42429) exits after 2s instead of burning timeout_ms.
+    //
+    // The explicit zero is followed immediately by the canary write (0xA0A0A0A0), so the
+    // host never sees 0x00000000 for long enough for FIX BZ to fire in the healthy path.
+    // Credit counters (stream registers) are reset unconditionally below via init_ptr_val.
+    if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_status_ptr_addr) == 0x49706550u) {
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_status_ptr_addr) = 0u;
+    }
+
+    // CANARY (#42429): Written as the very first L1 store in kernel_main() after FIX DZ,
+    // before POSTCODE(INITIALIZATION_STARTED).  After write_launch_msg_to_core transitions
+    // this ERISC from base-UMD relay (0x49706550) to fabric firmware, there is a narrow
+    // window before POSTCODE fires where the firmware is running but edm_status is still
+    // 0x49706550 (FIX DZ zeros it first) or 0x00000000 (after FIX DZ zero, before canary).
+    // Writing 0xA0A0A0A0 here eliminates the crash-ambiguity window:
     //   0x49706550 → base-UMD relay never transitioned (skip soft-reset, correct)
-    //   0xA0A0A0A0 → fabric firmware entered kernel_main but crashed before INITIALIZATION_STARTED
+    //   0x00000000 → firmware entered kernel_main, FIX DZ zeroed edm_status, crash possible
+    //   0xA0A0A0A0 → firmware entered kernel_main but crashed before INITIALIZATION_STARTED
     //                (soft-reset needed — terminate_stale_erisc_routers handles this)
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_status_ptr_addr) = 0xA0A0A0A0u;
 
@@ -3622,7 +3647,11 @@ void kernel_main() {
                     (uint32_t)edm_local_sync_ptr, num_local_edms, termination_signal_ptr);
             }
 
-            *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
+            // FIX DZ2 (#42429): XOR-encode ring sync value with per-session nonce.
+            // Host checks LOCAL_HANDSHAKE_COMPLETE ^ session_nonce (via get_fabric_router_sync_address_and_status).
+            // Stale values from previous sessions (encoded with a different nonce) cannot phantom-match.
+            *edm_status_ptr = static_cast<tt::tt_fabric::EDMStatus>(
+                static_cast<uint32_t>(tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE) ^ session_nonce);
 
             // 1. All risc cores wait for READY_FOR_TRAFFIC signal
             // 2. All risc cores in master eth core receive signal from host and exits from this wait
