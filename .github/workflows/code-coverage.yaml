@@ -6,6 +6,7 @@ name: "Nightly LLVM Code Coverage"
 # tenstorrent/tt-metal-code-coverage (gh-pages).
 
 on:
+  workflow_call:
   workflow_dispatch:
   schedule:
     - cron: '0 3 * * *'  # 03:00 UTC nightly
@@ -19,8 +20,8 @@ jobs:
     with:
       build-type: CodeCoverage
       build-wheel: false
-      tracy: false
-      skip-tt-train: true
+      tracy: true
+      skip-tt-train: false
       platform: "Ubuntu 22.04"
       enable-lto: false
 
