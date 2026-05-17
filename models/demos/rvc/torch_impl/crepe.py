@@ -289,7 +289,7 @@ class Crepe(torch.nn.Module):
 
 def load_crepe():
     """Load local model weights from the project assets directory."""
-    weights_path = Path(__file__).resolve().parent.parent / "data" / "assets" / f"crepe-tiny.safetensors"
+    weights_path = Path(__file__).resolve().parent.parent / "data" / "assets" / "crepe-tiny.safetensors"
     model = Crepe()
     from safetensors.torch import load_file
 

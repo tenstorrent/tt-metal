@@ -292,26 +292,6 @@ class RMVPE(nn.Module):
         return self.fc(x)
 
 
-def to_local_average_cents_old(salience, thred=0.5):
-    batch_size, n_features, n_bins = salience.shape
-    salience = salience.reshape(batch_size * n_features, n_bins)
-    if not hasattr(to_local_average_cents, "cents_mapping"):
-        to_local_average_cents.cents_mapping = torch.linspace(0, 7180, 360) + 1997.3794084376191
-
-    average_cents = []
-    for i in range(salience.shape[0]):
-        salience_i = salience[i, :]
-        center_i = int(torch.argmax(salience_i).item())
-        start = max(0, center_i - 4)
-        end = min(len(salience_i), center_i + 5)
-        salience_window = salience_i[start:end]
-        cents_window = to_local_average_cents.cents_mapping[start:end]
-        product_sum = torch.sum(salience_window * cents_window)
-        weight_sum = torch.sum(salience_window)
-        average_cents.append(product_sum / weight_sum if torch.max(salience_window) > thred else 0)
-
-    return torch.stack(average_cents).reshape(batch_size, n_features)
-
 
 def to_local_average_cents(salience, thred=0.5):
     batch_size, n_features, n_bins = salience.shape
@@ -376,7 +356,7 @@ class RMVPEPitchAlgorithm:
         if self.sample_rate != SAMPLE_RATE:
             from scipy.signal import resample
 
-            target_length = int(len(audio) * SAMPLE_RATE / self.sample_rate)
+            target_length = int(audio.shape[-1] * SAMPLE_RATE / self.sample_rate)
             audio = resample(audio.cpu().numpy(), target_length, axis=1)
             audio = torch.from_numpy(audio).float().contiguous()
 

@@ -183,10 +183,9 @@ class Pipeline:
         self._init_timing(self.tgt_sr, self.config)
 
     def _init_timing(self, tgt_sr: int, config: Config) -> None:
-        x_pad, x_center, x_max = (
+        x_pad, x_center = (
             config.x_pad,
             config.x_center,
-            config.x_max,
         )
         self.sr = 16000
         self.window = 160
@@ -199,13 +198,11 @@ class Pipeline:
 
     def _get_rmvpe_pitch_algorithm(self) -> RMVPEPitchAlgorithm:
         if self._rmvpe_pitch_algorithm is None:
-            device_type = self.device.type if isinstance(self.device, torch.device) else str(self.device)
             self._rmvpe_pitch_algorithm = RMVPEPitchAlgorithm(sample_rate=self.sr, hop_size=self.window)
         return self._rmvpe_pitch_algorithm
 
     def _get_crepe_predictor(self) -> CrepePredictor:
         if self._crepe_predictor is None:
-            device_type = self.device.type if isinstance(self.device, torch.device) else str(self.device)
             self._crepe_predictor = CrepePredictor()
         return self._crepe_predictor
 
@@ -394,7 +391,6 @@ class Pipeline:
         padded_length = ((audio_padded.shape[1] + block_size - 1) // block_size) * block_size
         audio_padded = F.pad(audio_padded, (0, padded_length - audio_padded.shape[1]), mode="constant")
         num_frames = audio_padded.shape[1] // self.window
-        opt_ts = []
         idx_list = self._get_time_stamps(audio, num_frames)
         pitch, pitchf = None, None
         if self.if_f0:

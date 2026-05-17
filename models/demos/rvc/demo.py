@@ -148,6 +148,10 @@ def load_feature_index(index_path):
     return index, big_npy
 
 
+# Module-level cache for torch fallback modules (used when TTNN hits L1 OOM)
+_torch_fallback_cache = {}
+
+
 def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
              f0_method="rmvpe", index_path=None, index_rate=0.0):
     """Run full hybrid inference pipeline."""
@@ -304,17 +308,18 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
                 audio_chunk = gen(z_chunk, har_chunk, g)
                 t_gen_total += time.time() - t0
                 backend = "TTNN"
-            except RuntimeError:
-                # Torch fallback for L1 OOM on later chunks
+            except RuntimeError as e:
+                if "out of memory" not in str(e).lower() and "l1" not in str(e).lower():
+                    raise  # Re-raise non-OOM errors
                 from models.demos.rvc.torch_impl.reference import (
                     load_flow_torch_modules, torch_flow_forward,
                     build_torch_generator, torch_generator_forward,
                 )
-                if not hasattr(run_demo, '_flow_mods'):
-                    run_demo._flow_mods = load_flow_torch_modules(sd)
-                    run_demo._gen_torch = build_torch_generator(sd)
-                z_chunk = torch_flow_forward(z_p_chunk, g, run_demo._flow_mods)
-                audio_chunk = torch_generator_forward(z_chunk, har_chunk, g, run_demo._gen_torch)
+                if 'flow_mods' not in _torch_fallback_cache:
+                    _torch_fallback_cache['flow_mods'] = load_flow_torch_modules(sd)
+                    _torch_fallback_cache['gen'] = build_torch_generator(sd)
+                z_chunk = torch_flow_forward(z_p_chunk, g, _torch_fallback_cache['flow_mods'])
+                audio_chunk = torch_generator_forward(z_chunk, har_chunk, g, _torch_fallback_cache['gen'])
                 backend = "torch"
 
             # Trim: first remove zero-padding, then remove overlap

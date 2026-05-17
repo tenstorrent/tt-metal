@@ -38,7 +38,7 @@ def _get_rvc_base_dir() -> str:
 
 class Config:
     def __init__(self):
-        self.device: str = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.instead: str | None = None
         self.x_pad, self.x_query, self.x_center, self.x_max = self.device_config()
 
@@ -51,7 +51,7 @@ class Config:
 
     def use_cpu(self) -> None:
         self.device = self.instead = "cpu"
-        self.params_config()
+        self.x_pad, self.x_query, self.x_center, self.x_max = self.params_config()
 
     def device_config(self) -> tuple:
         return self.params_config()
