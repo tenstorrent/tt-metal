@@ -127,6 +127,8 @@ def _build_t_schedule(*, shift: float, infer_steps: int, timesteps: str | None, 
     return t
 
 
+_VENDORED_ACESTEP_ROOT = Path(__file__).resolve().parent / "_vendored_acestep"
+
 _WELL_KNOWN_REPO_ROOTS = [
     Path.home() / "proj_sdk" / "ACE-Step-1.5",
     Path.home() / "ACE-Step-1.5",
@@ -135,12 +137,20 @@ _WELL_KNOWN_REPO_ROOTS = [
 
 
 def _resolve_ace_step_repo_root(*, ckpt_dir: str | None, ace_step_repo_root: str | None) -> Path | None:
+    """Locate a directory containing an ``acestep/`` package.
+
+    Prefers the **vendored copy** under
+    ``models/demos/ace_step_v1_5/torch_ref/_vendored_acestep/`` so the demo runs without an
+    external clone. ``--ace-step-repo-root`` / ``ACE_STEP_REPO_ROOT`` still take precedence as
+    explicit overrides.
+    """
     candidates: list[Path] = []
     if ace_step_repo_root:
         candidates.append(Path(ace_step_repo_root).expanduser().resolve())
     env = os.environ.get("ACE_STEP_REPO_ROOT")
     if env:
         candidates.append(Path(env).expanduser().resolve())
+    candidates.append(_VENDORED_ACESTEP_ROOT)
     if ckpt_dir:
         cur = Path(ckpt_dir).expanduser().resolve()
         for _ in range(8):
