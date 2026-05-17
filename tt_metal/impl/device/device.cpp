@@ -3155,8 +3155,10 @@ void Device::wait_for_fabric_workers_ready() {
     // READY_FOR_TRAFFIC — exactly what wait_for_fabric_router_sync() does at initial startup.
     // After that, a final per-channel health check confirms all channels are healthy.
     {
+        // FIX DZ3 (#42429): Pass use_fix_m_nonce=true for FIX M devices so the host uses nonce=0,
+        // matching the firmware's session_nonce_effective=0 on the FIX M path.
         const auto [router_sync_addr, sync_status] =
-            builder_ctx.get_fabric_router_sync_address_and_status();
+            builder_ctx.get_fabric_router_sync_address_and_status(this->is_fabric_stale_base_umd_channels());
         constexpr uint32_t expected_ready =
             static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
         // FIX BO (#42429): When stale base-UMD channels are present in the cluster (set by

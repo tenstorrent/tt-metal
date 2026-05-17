@@ -3036,7 +3036,16 @@ void kernel_main() {
     // The explicit zero is followed immediately by the canary write (0xA0A0A0A0), so the
     // host never sees 0x00000000 for long enough for FIX BZ to fire in the healthy path.
     // Credit counters (stream registers) are reset unconditionally below via init_ptr_val.
-    if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_status_ptr_addr) == 0x49706550u) {
+    // FIX DZ3 (#42429): Track whether this is a FIX M path launch so we can bypass DZ2 nonce
+    // at ring sync.  CT args (including session_nonce / EDM_SESSION_NONCE) are STALE on the
+    // FIX M path — write_launch_msg_to_core does not refresh L1.  If FIX DZ2 XOR-encodes
+    // LOCAL_HANDSHAKE_COMPLETE with the stale old_nonce, the host (expecting new_nonce) can
+    // never match → ERISC permanently stuck at REMOTE_HANDSHAKE_COMPLETE → relay blocked.
+    // Fix: use session_nonce_effective=0 on FIX M path, so the firmware writes the bare
+    // LOCAL_HANDSHAKE_COMPLETE value (same as pre-DZ2 baseline) and the host uses nonce=0.
+    const bool is_fix_m_path =
+        (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_status_ptr_addr) == 0x49706550u);
+    if (is_fix_m_path) {
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_status_ptr_addr) = 0u;
     }
 
@@ -3650,8 +3659,14 @@ void kernel_main() {
             // FIX DZ2 (#42429): XOR-encode ring sync value with per-session nonce.
             // Host checks LOCAL_HANDSHAKE_COMPLETE ^ session_nonce (via get_fabric_router_sync_address_and_status).
             // Stale values from previous sessions (encoded with a different nonce) cannot phantom-match.
+            //
+            // FIX DZ3 (#42429): On the FIX M path (is_fix_m_path=true), CT args including
+            // session_nonce are STALE from the previous session — write_launch_msg_to_core does
+            // not refresh L1.  Use session_nonce_effective=0 so the firmware writes the bare
+            // LOCAL_HANDSHAKE_COMPLETE value; the host uses nonce=0 for FIX M channels.
+            const uint32_t session_nonce_effective = is_fix_m_path ? 0u : session_nonce;
             *edm_status_ptr = static_cast<tt::tt_fabric::EDMStatus>(
-                static_cast<uint32_t>(tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE) ^ session_nonce);
+                static_cast<uint32_t>(tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE) ^ session_nonce_effective);
 
             // 1. All risc cores wait for READY_FOR_TRAFFIC signal
             // 2. All risc cores in master eth core receive signal from host and exits from this wait

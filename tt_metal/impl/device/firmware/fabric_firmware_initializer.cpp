@@ -2891,7 +2891,12 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
         const auto master_router_logical_core =
             cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(master_router_chan, CoordSystem::LOGICAL);
 
-        const auto [router_sync_address, expected_status] = builder_context.get_fabric_router_sync_address_and_status();
+        // FIX DZ3 (#42429): FIX M path channels have stale CT args (EDM_SESSION_NONCE is from
+        // the previous session).  Firmware uses session_nonce_effective=0 on that path; host
+        // must use nonce=0 too.  is_fabric_stale_base_umd_channels() identifies FIX M devices.
+        const bool use_fix_m_nonce = dev->is_fabric_stale_base_umd_channels();
+        const auto [router_sync_address, expected_status] =
+            builder_context.get_fabric_router_sync_address_and_status(use_fix_m_nonce);
         std::vector<std::uint32_t> master_router_status{0};
 
         auto start_time = std::chrono::steady_clock::now();

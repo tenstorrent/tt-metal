@@ -215,13 +215,18 @@ std::vector<size_t> FabricBuilderContext::get_fabric_router_addresses_to_clear()
     return addresses_to_clear;
 }
 
-std::pair<uint32_t, uint32_t> FabricBuilderContext::get_fabric_router_sync_address_and_status() const {
+std::pair<uint32_t, uint32_t> FabricBuilderContext::get_fabric_router_sync_address_and_status(
+    bool use_fix_m_nonce) const {
     // FIX DZ2 (#42429): XOR LOCAL_HANDSHAKE_COMPLETE with the per-session nonce so that
     // stale values from a previous session (encoded with the old nonce) cannot accidentally
     // match the current poll.  The firmware also XOR-encodes with session_nonce when it
     // writes LOCAL_HANDSHAKE_COMPLETE (see fabric_erisc_router.cpp kernel_main).
-    const uint32_t expected = static_cast<uint32_t>(EDMStatus::LOCAL_HANDSHAKE_COMPLETE)
-                              ^ fabric_context_.get_session_nonce();
+    //
+    // FIX DZ3 (#42429): On the FIX M path, CT args (including EDM_SESSION_NONCE) are stale —
+    // write_launch_msg_to_core does not refresh L1.  The firmware uses session_nonce_effective=0
+    // (is_fix_m_path=true), so the host must also use nonce=0 to match.
+    const uint32_t nonce = use_fix_m_nonce ? 0u : fabric_context_.get_session_nonce();
+    const uint32_t expected = static_cast<uint32_t>(EDMStatus::LOCAL_HANDSHAKE_COMPLETE) ^ nonce;
     return std::make_pair(router_config_->edm_status_address, expected);
 }
 

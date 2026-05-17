@@ -152,7 +152,9 @@ public:
 
     // ============ Router Address Info ============
     std::vector<size_t> get_fabric_router_addresses_to_clear() const;
-    std::pair<uint32_t, uint32_t> get_fabric_router_sync_address_and_status() const;
+    // FIX DZ3 (#42429): use_fix_m_nonce=true bypasses the DZ2 nonce (uses 0) for channels that
+    // took the FIX M launch path — CT args including EDM_SESSION_NONCE are stale on that path.
+    std::pair<uint32_t, uint32_t> get_fabric_router_sync_address_and_status(bool use_fix_m_nonce = false) const;
     std::optional<std::pair<uint32_t, EDMStatus>> get_fabric_router_ready_address_and_signal() const;
     std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
 
