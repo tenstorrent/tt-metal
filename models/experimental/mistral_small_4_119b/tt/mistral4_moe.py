@@ -599,16 +599,20 @@ class TtMistral4MoELayer(LightweightModule):
 
         # ── Batched expert matmul ──────────────────────────────────────────
         # Expand x to [EPD, 1, seq, H] so batch dims match the stacked weights.
-        x_exp = ttnn.repeat(x, ttnn.Shape([self.experts_per_device, 1, 1, 1]), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if x_exp.layout != ttnn.TILE_LAYOUT:
-            x_exp = ttnn.to_layout(x_exp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Use concat along dim=0 instead of ttnn.repeat: repeat is implemented
+        # in ROW_MAJOR and forces an expensive untilize+tilize cycle (~1.1ms
+        # at seq=128). Concat on the outer batch dim preserves TILE_LAYOUT
+        # since it doesn't touch the inner tile boundaries.
+        x_exp = ttnn.concat([x] * self.experts_per_device, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         I = EXPERT_INTERMEDIATE_SIZE
         # Fused gate+up: [EPD, 1, seq, H] × [EPD, 1, H, 2*I] → [EPD, 1, seq, 2*I]
+        # Use LoFi: BFP4 quantization error dominates HiFi2's extra precision, so
+        # LoFi halves FPU cycles at no meaningful PCC cost.
         gate_up_all = ttnn.matmul(
             x_exp,
             self.expert_gate_up,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.expert_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -635,7 +639,7 @@ class TtMistral4MoELayer(LightweightModule):
         expert_out_all = ttnn.matmul(
             hidden_all,
             self.expert_down,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.expert_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [EPD, 1, seq, H]
@@ -771,14 +775,14 @@ class TtMistral4MoELayer(LightweightModule):
 
         routing_weights = self._compute_routing_weights(x, 1)
 
-        x_exp = ttnn.repeat(x, ttnn.Shape([self.experts_per_device, 1, 1, 1]), memory_config=_mem)
-        if x_exp.layout != ttnn.TILE_LAYOUT:
-            x_exp = ttnn.to_layout(x_exp, ttnn.TILE_LAYOUT, memory_config=_mem)
+        # See comment in forward(): concat preserves TILE_LAYOUT, avoiding
+        # the untilize+tilize cycle that ttnn.repeat triggers.
+        x_exp = ttnn.concat([x] * self.experts_per_device, dim=0, memory_config=_mem)
 
         gate_up_all = ttnn.matmul(
             x_exp,
             self.expert_gate_up,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.expert_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=_mem,
         )
@@ -797,7 +801,7 @@ class TtMistral4MoELayer(LightweightModule):
         expert_out_all = ttnn.matmul(
             hidden_all,
             self.expert_down,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.expert_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=_mem,
         )
