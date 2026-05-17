@@ -7,6 +7,7 @@ Command-line interface for tt_hw_planner.
 
 Subcommands:
     plan          (default for HF model IDs)   — memory-budget recommendation
+    compat        — list which TT building blocks the model needs and which exist
     calibrate     — open a mesh on real hw, measure usable HBM, write to YAML
     smoke-test    — open a mesh, run hot ops at the model's shapes
     list-meshes   — print the canonical mesh topology table
@@ -15,6 +16,7 @@ Subcommands:
 Usage:
     python -m scripts.tt_hw_planner Qwen/Qwen3-32B               # plan (implicit)
     python -m scripts.tt_hw_planner plan Qwen/Qwen3-32B          # plan (explicit)
+    python -m scripts.tt_hw_planner compat Qwen/Qwen3-32B        # bring-up checklist
     python -m scripts.tt_hw_planner calibrate --box QB2 --mesh 1,4
     python -m scripts.tt_hw_planner smoke-test --model Qwen/Qwen3-32B --box QB2 --mesh 1,4
     python -m scripts.tt_hw_planner list-meshes
@@ -31,9 +33,17 @@ import sys
 from typing import List, Optional, Tuple
 
 from .architecture import DTYPE_BYTES
+from .compatibility import check_compatibility
 from .hardware import HARDWARE, find_box, reload_calibration, _CALIBRATED_OVERHEAD
+from .kernel_constraints import evaluate_kernels
 from .probe import probe_model
-from .report import render_json, render_markdown, render_table
+from .report import (
+    render_compat_json,
+    render_compat_table,
+    render_json,
+    render_markdown,
+    render_table,
+)
 from .verdict import evaluate_all
 
 
@@ -151,6 +161,37 @@ def _render_weights_only(probe, boxes, dtypes, args) -> int:
                 probe, verdict, args.batch, args.seq, args.kv_dtype, dtypes, show_overhead=not args.no_overhead_detail
             )
         )
+    return 0
+
+
+def cmd_compat(args) -> int:
+    probe = probe_model(args.model_id)
+    if not probe.raw_config:
+        print(
+            f"ERROR: could not load config.json for {args.model_id}. "
+            "Compatibility analysis needs the HuggingFace config; check that "
+            "the repo is public (or HF_TOKEN is set) and that model_type is "
+            "exposed in config.json.",
+            file=sys.stderr,
+        )
+        return 1
+
+    report = check_compatibility(args.model_id, probe.raw_config)
+
+    kernel_report = None
+    if not args.skip_kernel_check:
+        tp_grid = args.tp_grid if args.tp_grid else None
+        kernel_report = evaluate_kernels(probe.raw_config, tp_grid=tp_grid)
+
+    if args.format == "json":
+        print(render_compat_json(report, kernel_report))
+    else:
+        print(render_compat_table(report, kernel_report, verbose=args.verbose))
+
+    if report.overall == "BLOCKED":
+        return 2
+    if kernel_report is not None and kernel_report.has_blockers(tp=1):
+        return 2
     return 0
 
 
@@ -550,7 +591,17 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Backward-compat: if the first arg looks like an HF model ID (has a
     # slash and isn't a known subcommand), inject `plan`.
-    SUBCOMMANDS = {"plan", "calibrate", "smoke-test", "list-meshes", "show-overhead", "-h", "--help"}
+    SUBCOMMANDS = {
+        "plan",
+        "compat",
+        "calibrate",
+        "smoke-test",
+        "validate",
+        "list-meshes",
+        "show-overhead",
+        "-h",
+        "--help",
+    }
     if argv and argv[0] not in SUBCOMMANDS and ("/" in argv[0] or argv[0].startswith("-")):
         argv = ["plan"] + argv
 
@@ -575,6 +626,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     pp.add_argument("--format", choices=["table", "json", "markdown"], default="table")
     pp.add_argument("--no-overhead-detail", action="store_true")
     pp.set_defaults(func=cmd_plan)
+
+    # --- compat --------------------------------------------------------------
+    pcompat = sub.add_parser(
+        "compat",
+        help="list which TT building blocks + kernel constraints the model needs",
+    )
+    pcompat.add_argument("model_id", help="HuggingFace model id, e.g. Qwen/Qwen3-32B")
+    pcompat.add_argument("--format", choices=["table", "json"], default="table")
+    pcompat.add_argument("--verbose", action="store_true", help="show notes for every block + every kernel finding")
+    pcompat.add_argument(
+        "--skip-kernel-check",
+        action="store_true",
+        help="only check building-block availability, not kernel constraints",
+    )
+    pcompat.add_argument(
+        "--tp-grid", type=int, nargs="+", default=None, help="TP values to check for divisibility (default: 1 2 4 8 32)"
+    )
+    pcompat.set_defaults(func=cmd_compat)
 
     # --- calibrate -----------------------------------------------------------
     pc = sub.add_parser("calibrate", help="measure usable per-chip HBM on hardware")

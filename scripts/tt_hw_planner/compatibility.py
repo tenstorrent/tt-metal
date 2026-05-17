@@ -1,0 +1,617 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+HuggingFace -> tt-metal compatibility checker.
+
+Given a HuggingFace model id, identify which architectural building blocks
+the model needs and report, for each one:
+
+  - whether tt-metal has a reusable implementation,
+  - which file/directory ships it,
+  - any known constraints or gotchas,
+  - what kind of effort a port would be (drop-in / light / heavy / new).
+
+The output answers: "if I wanted to bring this model up on TT, what is
+already done and what is left to do?"
+
+Implementation deliberately avoids importing tt-metal at runtime - it only
+inspects the HuggingFace config dict and consults a static knowledge base
+of TT building blocks below.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Callable, Dict, List, Optional
+
+
+class Status(str, Enum):
+    SUPPORTED = "SUPPORTED"
+    PARTIAL = "PARTIAL"
+    MISSING = "MISSING"
+    UNNEEDED = "UNNEEDED"
+
+
+class Effort(str, Enum):
+    DROP_IN = "drop-in"
+    LIGHT = "light port (days)"
+    HEAVY = "heavy port (weeks)"
+    NEW = "new building block (months)"
+    NONE = "n/a"
+
+
+@dataclass
+class BuildingBlock:
+    """A required component for running an HF model on TT hardware."""
+
+    name: str
+    description: str
+    needed_when: Callable[[dict], bool]
+    tt_path: Optional[str]
+    status_when_needed: Status
+    effort_when_needed: Effort
+    notes: str = ""
+
+
+@dataclass
+class CheckResult:
+    block: BuildingBlock
+    needed: bool
+    status: Status
+    effort: Effort
+    notes: str
+
+
+@dataclass
+class CompatReport:
+    model_id: str
+    architecture_family: str
+    similar_supported_model: Optional[str]
+    results: List[CheckResult] = field(default_factory=list)
+    overall: str = "UNKNOWN"
+    effort_summary: str = ""
+
+    def by_status(self, status: Status) -> List[CheckResult]:
+        return [r for r in self.results if r.status == status and r.needed]
+
+
+LLAMA_FAMILY_MODEL_TYPES = {
+    "llama",
+    "qwen2",
+    "qwen3",
+    "qwen2_moe",
+    "qwen3_moe",
+    "mistral",
+    "phi3",
+    "phi4",
+    "gemma",
+    "gemma2",
+    "gemma3",
+    "mixtral",
+    "falcon",
+}
+
+MLA_MODEL_TYPES = {"deepseek_v2", "deepseek_v3", "deepseek_v4"}
+SSM_MODEL_TYPES = {"mamba", "mamba2", "rwkv", "rwkv5", "rwkv6"}
+VLM_MODEL_TYPES = {
+    "qwen2_vl",
+    "qwen3_vl",
+    "qwen2_5_vl",
+    "mllama",
+    "llama4",
+    "mistral3",
+    "pixtral",
+    "gemma3",
+    "gemma4",
+    "phi3_v",
+    "phi4_multimodal",
+}
+
+
+def detect_family(cfg: dict) -> str:
+    """One-word architecture family for the top of the report."""
+    mt = (cfg.get("model_type") or "").lower()
+    if mt in MLA_MODEL_TYPES:
+        return "MLA (DeepSeek-style)"
+    if mt in SSM_MODEL_TYPES:
+        return "SSM (state-space)"
+    if mt in VLM_MODEL_TYPES or cfg.get("vision_config"):
+        return "VLM (vision-language)"
+    if _is_moe(cfg):
+        return "MoE (mixture-of-experts)"
+    if mt in LLAMA_FAMILY_MODEL_TYPES:
+        return "Llama-family causal LM"
+    return f"unknown ({mt or 'no model_type'})"
+
+
+SUPPORTED_HF_MODELS = {
+    "meta-llama/Llama-3.2-1B",
+    "meta-llama/Llama-3.2-3B",
+    "meta-llama/Llama-3.1-8B",
+    "meta-llama/Llama-3.2-11B-Vision",
+    "meta-llama/Llama-3.1-70B",
+    "meta-llama/Llama-3.2-90B-Vision",
+    "meta-llama/Llama-3.3-70B-Instruct",
+    "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+    "Qwen/Qwen2.5-7B",
+    "Qwen/Qwen2.5-32B",
+    "Qwen/Qwen2.5-72B",
+    "Qwen/Qwen2.5-VL-3B-Instruct",
+    "Qwen/Qwen2.5-VL-7B-Instruct",
+    "Qwen/Qwen2.5-VL-32B-Instruct",
+    "Qwen/Qwen2.5-VL-72B-Instruct",
+    "Qwen/Qwen3-VL-32B-Instruct",
+    "Qwen/Qwen3-32B",
+    "Qwen/Qwen3-Embedding-8B",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+    "Qwen/QwQ-32B",
+    "mistralai/Mistral-7B-Instruct-v0.3",
+    "mistralai/Mixtral-8x7B-Instruct-v0.1",
+    "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
+    "microsoft/Phi-3.5-mini-instruct",
+    "microsoft/Phi-3-mini-128k-instruct",
+    "microsoft/Phi-4",
+    "google/gemma-3-1b-it",
+    "google/gemma-3-4b-it",
+    "google/gemma-3-27b-it",
+    "google/medgemma-4b-it",
+    "google/medgemma-27b-text-it",
+    "tiiuae/falcon-7b-instruct",
+    "tiiuae/falcon-40b-instruct",
+    "state-spaces/mamba-2.8b-slimpj",
+}
+
+
+def closest_supported_model(model_id: str, cfg: dict) -> Optional[str]:
+    """Pick the most architecturally-similar already-supported model, or None."""
+    if model_id in SUPPORTED_HF_MODELS:
+        return model_id
+
+    mt = (cfg.get("model_type") or "").lower()
+    arches = [a.lower() for a in cfg.get("architectures") or []]
+
+    candidates = {
+        "qwen2": "Qwen/Qwen2.5-32B",
+        "qwen3": "Qwen/Qwen3-32B",
+        "qwen2_moe": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+        "qwen3_moe": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+        "llama": "meta-llama/Llama-3.1-8B",
+        "mistral": "mistralai/Mistral-7B-Instruct-v0.3",
+        "mixtral": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+        "phi3": "microsoft/Phi-3.5-mini-instruct",
+        "phi4": "microsoft/Phi-4",
+        "gemma3": "google/gemma-3-27b-it",
+        "falcon": "tiiuae/falcon-7b-instruct",
+        "mllama": "meta-llama/Llama-3.2-11B-Vision",
+        "qwen2_vl": "Qwen/Qwen2.5-VL-7B-Instruct",
+        "qwen3_vl": "Qwen/Qwen3-VL-32B-Instruct",
+        "qwen2_5_vl": "Qwen/Qwen2.5-VL-7B-Instruct",
+        "mamba": "state-spaces/mamba-2.8b-slimpj",
+        "mamba2": "state-spaces/mamba-2.8b-slimpj",
+    }
+    if mt in candidates:
+        return candidates[mt]
+    for a in arches:
+        for key, val in candidates.items():
+            if key in a:
+                return val
+    return None
+
+
+def _text_config(cfg: dict) -> dict:
+    """Multimodal HF configs nest the text part under text_config; flatten."""
+    return cfg.get("text_config") or cfg
+
+
+def _is_moe(cfg: dict) -> bool:
+    t = _text_config(cfg)
+    return bool(
+        t.get("num_local_experts")
+        or t.get("n_routed_experts")
+        or t.get("num_experts")
+        or t.get("moe_intermediate_size")
+    )
+
+
+def _is_mla(cfg: dict) -> bool:
+    t = _text_config(cfg)
+    return bool(t.get("kv_lora_rank") or t.get("q_lora_rank"))
+
+
+def _is_sliding(cfg: dict) -> bool:
+    t = _text_config(cfg)
+    return bool(t.get("sliding_window")) or bool(t.get("layer_types"))
+
+
+def _is_ssm(cfg: dict) -> bool:
+    mt = (cfg.get("model_type") or "").lower()
+    return mt in SSM_MODEL_TYPES
+
+
+def _has_vision(cfg: dict) -> bool:
+    return bool(cfg.get("vision_config")) or (cfg.get("model_type") or "").lower() in VLM_MODEL_TYPES
+
+
+def _has_cross_attn(cfg: dict) -> bool:
+    t = _text_config(cfg)
+    return bool(t.get("cross_attention_layers"))
+
+
+def _attn_grouping(cfg: dict) -> str:
+    t = _text_config(cfg)
+    nh = t.get("num_attention_heads") or 0
+    nkv = t.get("num_key_value_heads") or nh
+    if nh == 0:
+        return "unknown"
+    if nkv == 1:
+        return "MQA"
+    if nkv < nh:
+        return "GQA"
+    return "MHA"
+
+
+def _rope_scaling_type(cfg: dict) -> Optional[str]:
+    t = _text_config(cfg)
+    rs = t.get("rope_scaling")
+    if not isinstance(rs, dict):
+        return None
+    return (rs.get("type") or rs.get("rope_type") or "").lower() or None
+
+
+def _hidden_act(cfg: dict) -> str:
+    t = _text_config(cfg)
+    return (t.get("hidden_act") or t.get("hidden_activation") or "silu").lower()
+
+
+def _tied_embeddings(cfg: dict) -> bool:
+    t = _text_config(cfg)
+    return bool(t.get("tie_word_embeddings"))
+
+
+BUILDING_BLOCKS: List[BuildingBlock] = [
+    BuildingBlock(
+        name="Token embedding",
+        description="Embedding lookup (input ids -> hidden states)",
+        needed_when=lambda c: True,
+        tt_path="models/tt_transformers/tt/embedding.py",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+        notes="BF16 weights only; ScaledEmbedding variant for Gemma is included.",
+    ),
+    BuildingBlock(
+        name="MHA attention",
+        description="Standard multi-head attention",
+        needed_when=lambda c: _attn_grouping(c) == "MHA" and not _is_mla(c),
+        tt_path="models/tt_transformers/tt/attention.py",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+    ),
+    BuildingBlock(
+        name="GQA attention",
+        description="Grouped-query attention (num_kv_heads < num_heads)",
+        needed_when=lambda c: _attn_grouping(c) == "GQA" and not _is_mla(c),
+        tt_path="models/tt_transformers/tt/attention.py",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+        notes="Requires num_attention_heads % num_key_value_heads == 0.",
+    ),
+    BuildingBlock(
+        name="MQA attention",
+        description="Multi-query attention (single KV head)",
+        needed_when=lambda c: _attn_grouping(c) == "MQA" and not _is_mla(c),
+        tt_path="models/tt_transformers/tt/attention.py",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+    ),
+    BuildingBlock(
+        name="MLA attention",
+        description="Multi-head latent attention with compressed KV (DeepSeek-V2/V3)",
+        needed_when=_is_mla,
+        tt_path="models/demos/deepseek_v3/tt/mla/",
+        status_when_needed=Status.PARTIAL,
+        effort_when_needed=Effort.HEAVY,
+        notes=(
+            "Reference impl in demo only; no path in shared tt_transformers "
+            "library. Adapting to other MLA models requires lifting the demo "
+            "modules into a reusable form."
+        ),
+    ),
+    BuildingBlock(
+        name="Q/K RMSNorm",
+        description="Per-head Q/K normalization (Qwen3, Phi-4)",
+        needed_when=lambda c: (c.get("model_type") or "").lower().startswith("qwen3"),
+        tt_path="models/tt_transformers/tt/attention.py",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+        notes="Auto-detected from q_norm / k_norm tensor names in the checkpoint.",
+    ),
+    BuildingBlock(
+        name="Sliding-window attention",
+        description="Local-window attention for some/all layers",
+        needed_when=_is_sliding,
+        tt_path="models/tt_transformers/tt/attention.py",
+        status_when_needed=Status.PARTIAL,
+        effort_when_needed=Effort.LIGHT,
+        notes=(
+            "Supported for prefill + decode. NOT supported in combination "
+            "with chunked prefill -- raises NotImplementedError. Hybrid "
+            "full/sliding patterns work via layer_types config field."
+        ),
+    ),
+    BuildingBlock(
+        name="Standard RoPE",
+        description="Rotary positional embedding",
+        needed_when=lambda c: not _is_ssm(c) and _rope_scaling_type(c) in (None, "default"),
+        tt_path="models/tt_transformers/tt/rope.py",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+    ),
+    BuildingBlock(
+        name="Llama-3 RoPE scaling",
+        description="Frequency rescaling used by Llama-3.1+",
+        needed_when=lambda c: _rope_scaling_type(c) == "llama3",
+        tt_path="models/tt_transformers/tt/rope.py",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+    ),
+    BuildingBlock(
+        name="YaRN RoPE scaling",
+        description="YaRN long-context extrapolation",
+        needed_when=lambda c: _rope_scaling_type(c) == "yarn",
+        tt_path="models/tt_transformers/tt/rope.py",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+    ),
+    BuildingBlock(
+        name="LongRoPE (Phi-3)",
+        description="Phi-3 long-context RoPE scaling",
+        needed_when=lambda c: _rope_scaling_type(c) == "longrope",
+        tt_path="models/tt_transformers/tt/rope.py",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+    ),
+    BuildingBlock(
+        name="mRoPE",
+        description="Multimodal RoPE used by some VL models",
+        needed_when=lambda c: _rope_scaling_type(c) == "mrope",
+        tt_path=None,
+        status_when_needed=Status.MISSING,
+        effort_when_needed=Effort.HEAVY,
+        notes=(
+            "Code path currently warns and drops the scaling - inference "
+            "may diverge from HF reference. Needs a real kernel."
+        ),
+    ),
+    BuildingBlock(
+        name="ALiBi positional bias",
+        description="Linear bias positional encoding (Falcon-1, MPT)",
+        needed_when=lambda c: bool(_text_config(c).get("alibi_bias_max")),
+        tt_path=None,
+        status_when_needed=Status.MISSING,
+        effort_when_needed=Effort.HEAVY,
+    ),
+    BuildingBlock(
+        name="RMSNorm (text)",
+        description="Root-mean-square normalization between blocks",
+        needed_when=lambda c: not _is_ssm(c),
+        tt_path="models/tt_transformers/tt/distributed_norm.py (wraps models/common/rmsnorm.py)",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+        notes="ttnn.rms_norm requires TILE layout; distributed RMSNorm handles multi-chip.",
+    ),
+    BuildingBlock(
+        name="Extra Gemma-style norms",
+        description="pre_/post_feedforward_layernorm (Gemma 2/3/4)",
+        needed_when=lambda c: (c.get("model_type") or "").lower().startswith("gemma"),
+        tt_path="models/tt_transformers/tt/decoder.py",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+        notes="Auto-detected from checkpoint keys; activates only if present.",
+    ),
+    BuildingBlock(
+        name="SwiGLU MLP",
+        description="Gate/up/down projections with SiLU gating",
+        needed_when=lambda c: _hidden_act(c) in ("silu", "swiglu", "gelu_pytorch_tanh")
+        and not _is_moe(c)
+        and not _is_ssm(c),
+        tt_path="models/tt_transformers/tt/mlp.py",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+        notes="hidden_act dispatched via activation_map; supports silu/gelu/relu/quick_gelu/gelu_pytorch_tanh.",
+    ),
+    BuildingBlock(
+        name="MoE routing (Mixtral-style)",
+        description="Top-k expert routing + weighted combine",
+        needed_when=lambda c: _is_moe(c)
+        and (c.get("model_type") or "").lower().startswith(("mixtral", "qwen", "phi", "gemma")),
+        tt_path="models/tt_transformers/tt/mixtral_moe.py",
+        status_when_needed=Status.PARTIAL,
+        effort_when_needed=Effort.LIGHT,
+        notes=(
+            "Generic MoE block currently hard-codes num_devices=8 and top-2. "
+            "Adapting to other top-k or device counts needs a small refactor. "
+            "Larger-scale MoE (DeepSeek/GPT-OSS) has standalone demos."
+        ),
+    ),
+    BuildingBlock(
+        name="DeepSeek-style MoE (routed + shared)",
+        description="DeepSeek MoE with both routed experts and a shared expert",
+        needed_when=lambda c: _is_mla(c) and _is_moe(c),
+        tt_path="models/demos/deepseek_v3/tt/moe.py",
+        status_when_needed=Status.PARTIAL,
+        effort_when_needed=Effort.HEAVY,
+        notes="Lives in deepseek_v3 demo only; not generalized for other MLA+MoE models.",
+    ),
+    BuildingBlock(
+        name="SSM / Mamba blocks",
+        description="State-space sequence model (no attention)",
+        needed_when=_is_ssm,
+        tt_path="models/demos/wormhole/mamba/tt/",
+        status_when_needed=Status.PARTIAL,
+        effort_when_needed=Effort.HEAVY,
+        notes="Separate stack from tt_transformers; covers state-spaces/mamba-2.8b-slimpj. Other Mamba variants would need adaptation.",
+    ),
+    BuildingBlock(
+        name="LM head",
+        description="Output projection over vocabulary",
+        needed_when=lambda c: True,
+        tt_path="models/tt_transformers/tt/lm_head.py",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+        notes="Sharded vocab + all_reduce; pads to padded_vocab_size.",
+    ),
+    BuildingBlock(
+        name="Tied embeddings",
+        description="LM head shares weights with token embedding",
+        needed_when=_tied_embeddings,
+        tt_path="models/tt_transformers/tt/load_checkpoints.py",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+        notes="standardize_hf_keys auto-duplicates embed_tokens -> lm_head.",
+    ),
+    BuildingBlock(
+        name="Vision tower",
+        description="Image encoder (ViT-style)",
+        needed_when=_has_vision,
+        tt_path="models/tt_transformers/tt/multimodal/ + models/demos/{qwen25_vl,qwen3_vl,multimodal/gemma3,mistral_24b}/",
+        status_when_needed=Status.PARTIAL,
+        effort_when_needed=Effort.LIGHT,
+        notes=(
+            "Three vision stacks exist: Llama-vision, Pixtral/Mistral, and "
+            "Qwen-VL. A new VLM family typically needs adapting one of these "
+            "to the model-specific patch / projector layout."
+        ),
+    ),
+    BuildingBlock(
+        name="Cross-attention (vision -> text)",
+        description="Image-conditioned cross-attention layers in the decoder",
+        needed_when=_has_cross_attn,
+        tt_path="models/tt_transformers/tt/multimodal/llama_cross_attention.py",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+        notes="Llama-vision style cross-attention; other VLMs use feature concat instead.",
+    ),
+    BuildingBlock(
+        name="Checkpoint key remap",
+        description="Mapping HF state-dict keys to TT module fields",
+        needed_when=lambda c: True,
+        tt_path="models/tt_transformers/tt/load_checkpoints.py",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+        notes=(
+            "convert_hf_to_meta() handles QKV permutation; "
+            "_no_qkv_permute() handles HF-RoPE-native checkpoints. "
+            "New families may need entries in map_hf_to_meta_keys()."
+        ),
+    ),
+    BuildingBlock(
+        name="Tokenizer",
+        description="HF tokenizer / processor for tokens and (optional) image input",
+        needed_when=lambda c: True,
+        tt_path="HF AutoTokenizer.from_pretrained(HF_MODEL)",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+        notes="If the HF repo doesn't ship tokenizer files, add an entry to base_model_tokenizer_mapping in model_config.py.",
+    ),
+    BuildingBlock(
+        name="Generator / inference loop",
+        description="Prefill + decode orchestration with KV cache",
+        needed_when=lambda c: True,
+        tt_path="models/tt_transformers/tt/generator.py",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+        notes="Chunked prefill, paged KV, tracing, sampling.",
+    ),
+    BuildingBlock(
+        name="Top-k / sampling",
+        description="Logits-to-token sampling",
+        needed_when=lambda c: True,
+        tt_path="ttnn.argmax / ttnn.topk + on-device sampling helpers",
+        status_when_needed=Status.SUPPORTED,
+        effort_when_needed=Effort.DROP_IN,
+        notes="Top-p is composed in host code; multi-core top-k requires k<=64 and power-of-2 dim.",
+    ),
+]
+
+
+_OVERALL_FROM_STATUSES = [
+    (
+        lambda r: r.by_status(Status.MISSING),
+        "BLOCKED",
+        "Some required building blocks have no TT implementation. Porting "
+        "requires writing new kernels / modules from scratch.",
+    ),
+    (
+        lambda r: r.by_status(Status.PARTIAL),
+        "FEASIBLE WITH WORK",
+        "All needed blocks exist somewhere in tt-metal but not all in the "
+        "shared library. Plan on lifting/adapting demo code.",
+    ),
+    (
+        lambda _: [],
+        "READY",
+        "All required blocks already exist in models/tt_transformers/. Likely "
+        "drop-in via the existing porting checklist.",
+    ),
+]
+
+
+def _aggregate_overall(report: CompatReport) -> None:
+    if report.model_id in SUPPORTED_HF_MODELS:
+        report.overall = "ALREADY SUPPORTED"
+        report.effort_summary = (
+            "This exact model appears in the tt_transformers perf/prefill "
+            "tables -- it has already been brought up. Re-run `plan` for the "
+            "memory budget; this compat table shows the blocks it uses."
+        )
+        return
+    for predicate, label, summary in _OVERALL_FROM_STATUSES:
+        if predicate(report):
+            report.overall = label
+            report.effort_summary = summary
+            return
+
+
+def check_compatibility(model_id: str, cfg: dict) -> CompatReport:
+    """
+    Walk the building-block registry against the HF config and return a
+    structured report.
+    """
+    family = detect_family(cfg)
+    closest = closest_supported_model(model_id, cfg)
+
+    results: List[CheckResult] = []
+    for blk in BUILDING_BLOCKS:
+        needed = bool(blk.needed_when(cfg))
+        if not needed:
+            results.append(
+                CheckResult(
+                    block=blk,
+                    needed=False,
+                    status=Status.UNNEEDED,
+                    effort=Effort.NONE,
+                    notes="",
+                )
+            )
+            continue
+        results.append(
+            CheckResult(
+                block=blk,
+                needed=True,
+                status=blk.status_when_needed,
+                effort=blk.effort_when_needed,
+                notes=blk.notes,
+            )
+        )
+
+    report = CompatReport(
+        model_id=model_id,
+        architecture_family=family,
+        similar_supported_model=closest,
+        results=results,
+    )
+    _aggregate_overall(report)
+    return report

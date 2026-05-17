@@ -11,6 +11,11 @@ The design follows the structure used by NVIDIA TRT-LLM's model deployment
 planner: a static memory model that's calibrated against measured hardware,
 plus optional smoke-tests of the hot ops at the model's exact shapes.
 
+> **Adding support for something new?** See [`EXTENDING.md`](EXTENDING.md) for
+> the append-only registries (building blocks, kernel constraints, hardware
+> boxes, architecture families, dtypes, pipeline tags) and worked examples
+> for each.
+
 ---
 
 ## Commands
@@ -39,6 +44,47 @@ Tunable knobs:
 | `--all-meshes` | report every canonical mesh, not just largest TP |
 | `--explore-pp` | enumerate TP×PP combinations (e.g. T3K TP=4 PP=2) |
 | `--format {table,json,markdown}` | output backend |
+
+### `compat` — bring-up compatibility checklist
+
+Walks the HuggingFace config against a registry of TT building blocks *and* a
+registry of kernel-level constraints (the `TT_FATAL` preconditions inside
+ttnn device ops). No hardware required.
+
+```bash
+python -m scripts.tt_hw_planner compat Qwen/Qwen3-32B
+python -m scripts.tt_hw_planner compat deepseek-ai/DeepSeek-V3 --format json
+python -m scripts.tt_hw_planner compat google/gemma-3-27b-it --verbose
+python -m scripts.tt_hw_planner compat <model> --skip-kernel-check     # modules only
+python -m scripts.tt_hw_planner compat <model> --tp-grid 1 4           # custom TPs
+```
+
+The report has two sections:
+
+**Section 1 — Building-block availability.** Per HF-equivalent module (decoder,
+attention, MLP, norm, RoPE, vision tower, ...) reports drop-in / partial / missing
+and the TT file or directory that implements it.
+
+**Section 2 — Kernel-level constraints.** Per ttnn op (matmul, SDPA, RoPE,
+RMSNorm, embedding, top-k, MoE) reports whether the model's shapes and dtypes
+satisfy the kernel's preconditions. Severity tiers:
+- `[FAIL]` blocker — kernel will refuse to launch (e.g. `head_dim % 32 != 0`)
+- `[warn]` runtime warning — works but may fall back to a slow path or pad
+- `[info]` informational — automatic padding overhead, etc.
+
+A "Per-TP divisibility" sub-table shows which mesh shapes are feasible for the
+model's hidden / heads / intermediate sizes (e.g. TP=2,4 pass; TP=8,32 fail).
+
+Top-line verdicts:
+| Verdict | Meaning |
+|---|---|
+| `ALREADY SUPPORTED` | Model id is in the `tt_transformers` prefill/perf tables. |
+| `READY` | All required blocks exist in `models/tt_transformers/`; expect drop-in port. |
+| `FEASIBLE WITH WORK` | All blocks exist *somewhere* but some are demo-only and need lifting. |
+| `BLOCKED` | At least one required block has no TT implementation; needs new kernels. |
+
+Exit code is `2` when there are blockers at TP=1 (i.e. unfixable by mesh choice),
+`0` otherwise — usable in CI.
 
 ### `calibrate` — measure actual usable HBM (Phase 2)
 

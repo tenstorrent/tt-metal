@@ -18,7 +18,9 @@ import json
 from dataclasses import asdict
 from typing import Optional
 
+from .compatibility import CompatReport, Status
 from .hardware import Overhead
+from .kernel_constraints import KernelReport, Severity
 from .probe import ModelProbe
 from .verdict import FitRow, FitVerdict, Tightness
 
@@ -354,3 +356,180 @@ def render_markdown(probe: ModelProbe, verdict: FitVerdict, batch: int, seq: int
     p(f"**Confidence**: {_confidence_for(probe)}")
 
     return "\n".join(out)
+
+
+_STATUS_GLYPH = {
+    Status.SUPPORTED: "[ ok ]",
+    Status.PARTIAL: "[part]",
+    Status.MISSING: "[MISS]",
+    Status.UNNEEDED: "[ -- ]",
+}
+
+
+def render_compat_table(
+    report: CompatReport, kernel_report: Optional[KernelReport] = None, *, verbose: bool = False
+) -> str:
+    """Human-readable compatibility table."""
+    out = []
+    p = out.append
+
+    p("=" * 92)
+    p(f"HF model:          {report.model_id}")
+    p(f"Architecture:      {report.architecture_family}")
+    if report.similar_supported_model and report.similar_supported_model != report.model_id:
+        p(f"Closest TT port:   {report.similar_supported_model}  (use as a starting point)")
+    elif report.similar_supported_model == report.model_id:
+        p(f"Already supported: yes -- listed in tt_transformers prefill/perf tables")
+    p(f"Overall verdict:   {report.overall}")
+    p(f"                   {report.effort_summary}")
+    p("=" * 92)
+    p("")
+    p("SECTION 1 -- Building-block availability (does TT have a module for each HF concept?)")
+    p("-" * 92)
+    p(f"{'STATUS':<7} {'BLOCK':<32} {'EFFORT':<24} TT IMPLEMENTATION")
+    p("-" * 92)
+
+    needed = [r for r in report.results if r.needed]
+    not_needed = [r for r in report.results if not r.needed]
+
+    for r in needed:
+        glyph = _STATUS_GLYPH[r.status]
+        tt = r.block.tt_path or "(none)"
+        effort = r.effort.value if r.status != Status.SUPPORTED else "drop-in"
+        p(f"{glyph:<7} {r.block.name:<32} {effort:<24} {tt}")
+        if r.notes and (verbose or r.status != Status.SUPPORTED):
+            for line in _wrap_notes(r.notes, indent=8):
+                p(line)
+
+    if verbose and not_needed:
+        p("")
+        p("Not required by this architecture:")
+        for r in not_needed:
+            p(f"  {_STATUS_GLYPH[Status.UNNEEDED]} {r.block.name}")
+
+    p("")
+    p("-" * 92)
+    missing = report.by_status(Status.MISSING)
+    partial = report.by_status(Status.PARTIAL)
+    supported = [r for r in report.results if r.needed and r.status == Status.SUPPORTED]
+    p(f"Summary: {len(supported)} ready  /  {len(partial)} partial  /  {len(missing)} missing")
+
+    if kernel_report is not None:
+        p("")
+        p("")
+        p("SECTION 2 -- Kernel-level constraints (do the model's shapes/dtypes satisfy TTNN ops?)")
+        p("-" * 92)
+        _render_kernel_section(kernel_report, p, verbose=verbose)
+
+    if missing or partial:
+        p("")
+    if missing:
+        p("BLOCKERS -- these require new TT building blocks before this model can run:")
+        for r in missing:
+            p(f"  * {r.block.name}: {r.block.description}")
+    if partial:
+        p("WORK ITEMS -- these exist but require adaptation:")
+        for r in partial:
+            p(f"  * {r.block.name}  ({r.block.tt_path})")
+
+    return "\n".join(out)
+
+
+def _render_kernel_section(kr: KernelReport, p, *, verbose: bool) -> None:
+    """Render the kernel constraints table inside a compat report."""
+    shape = kr.shape_findings
+    blockers_shape = [f for f in shape if not f.passes and f.severity == Severity.BLOCKER]
+    warns_shape = [f for f in shape if not f.passes and f.severity == Severity.WARN]
+    info_shape = [f for f in shape if not f.passes and f.severity == Severity.INFO]
+
+    p(f"{'STATUS':<7} {'OP':<48} {'FIELD':<24} CONSTRAINT")
+    p("-" * 92)
+    show_set = shape if verbose else (blockers_shape + warns_shape + info_shape)
+    if not show_set:
+        p("[ ok ]  all shape / dtype constraints pass.")
+    else:
+        for f in show_set:
+            field_val = f"{f.field}={f.value}"
+            p(f"{f.status_glyph():<7} {f.op:<48} {field_val:<24} {f.constraint}")
+            if not f.passes and f.fix:
+                for line in _wrap_notes(f"fix: {f.fix}", indent=8):
+                    p(line)
+            if verbose and f.source:
+                p(f"        source: {f.source}")
+
+    tp_fail = kr.tp_dependent_findings
+    p("")
+    p("Per-TP divisibility:")
+    for tp in kr.tp_grid:
+        fails = tp_fail.get(tp, [])
+        if not fails:
+            p(f"  TP={tp:<3} [ ok ]  all divisibility constraints satisfied")
+        else:
+            short = ", ".join(f"{f.field}={f.value}" for f in fails)
+            p(f"  TP={tp:<3} [FAIL]  {short}")
+    if tp_fail:
+        p("")
+        p("  Note: TP failures rule out that mesh shape, not the model overall.")
+        p("        Pick a TP from the rows marked [ ok ] above.")
+
+
+def _wrap_notes(notes: str, indent: int = 8) -> list:
+    """Naive word-wrap so notes don't sprawl past ~88 cols."""
+    width = 80
+    pad = " " * indent
+    words = notes.replace("\n", " ").split()
+    lines, line = [], pad
+    for w in words:
+        if len(line) + len(w) + 1 > width:
+            lines.append(line.rstrip())
+            line = pad + w
+        else:
+            line += (" " + w) if line.strip() else w
+    if line.strip():
+        lines.append(line.rstrip())
+    return lines
+
+
+def render_compat_json(report: CompatReport, kernel_report: Optional[KernelReport] = None) -> str:
+    """Machine-readable compatibility report."""
+    payload = {
+        "schema_version": "compat-1.1",
+        "model_id": report.model_id,
+        "architecture_family": report.architecture_family,
+        "closest_supported_model": report.similar_supported_model,
+        "overall": report.overall,
+        "effort_summary": report.effort_summary,
+        "blocks": [
+            {
+                "name": r.block.name,
+                "description": r.block.description,
+                "needed": r.needed,
+                "status": r.status.value,
+                "effort": r.effort.value,
+                "tt_path": r.block.tt_path,
+                "notes": r.notes if r.needed else "",
+            }
+            for r in report.results
+        ],
+    }
+    if kernel_report is not None:
+        payload["kernel_constraints"] = {
+            "tp_grid": kernel_report.tp_grid,
+            "findings_by_tp": {
+                str(tp): [
+                    {
+                        "op": f.op,
+                        "field": f.field,
+                        "value": f.value,
+                        "constraint": f.constraint,
+                        "passes": f.passes,
+                        "severity": f.severity.value,
+                        "fix": f.fix,
+                        "source": f.source,
+                    }
+                    for f in findings
+                ]
+                for tp, findings in kernel_report.findings_by_tp.items()
+            },
+        }
+    return json.dumps(payload, indent=2)
