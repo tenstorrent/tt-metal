@@ -1,0 +1,191 @@
+name: "Nightly LLVM Code Coverage"
+
+# Nightly LLVM-instrumented code coverage for ttnn.
+# Builds with CodeCoverage build type via the standard build-artifact workflow,
+# runs ttnn unit tests on WH N300, and publishes an HTML report to
+# tenstorrent/tt-metal-code-coverage (gh-pages).
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * *'  # 03:00 UTC nightly
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: CodeCoverage
+      build-wheel: false
+      tracy: true
+      skip-tt-train: false
+      platform: "Ubuntu 22.04"
+      enable-lto: false
+
+  run-coverage:
+    name: "Run tests & generate coverage"
+    needs: [build-artifact]
+    runs-on:
+      - tt-ubuntu-2204-N300-viommu-stable
+    timeout-minutes: 240
+    container:
+      image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          filter: blob:none
+          submodules: recursive
+          path: docker-job
+
+      - name: Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+
+      - name: Run ttnn unit tests with coverage instrumentation
+        run: |
+          source python_env/bin/activate
+          export PYTHONPATH=$(pwd)
+
+          mkdir -p coverage
+          export LLVM_PROFILE_FILE=$(pwd)/coverage/%p-%m.profraw
+
+          # Run ttnn unit tests; do not fail the workflow on test failures
+          # since we want partial coverage data even if some tests fail
+          pytest tests/ttnn/unit_tests/ \
+            --timeout 300 \
+            -v \
+            --tb=no \
+            -q \
+            || true
+
+          echo "Collected $(ls coverage/*.profraw 2>/dev/null | wc -l) profraw files"
+
+      - name: Merge profraw data
+        run: |
+          if ! ls coverage/*.profraw 1>/dev/null 2>&1; then
+            echo "::error::No profraw files found — tests may not have run"
+            exit 1
+          fi
+          llvm-profdata-17 merge -sparse coverage/*.profraw -o coverage/coverage.profdata
+          echo "Merged profile data: $(du -h coverage/coverage.profdata | cut -f1)"
+
+      - name: Generate per-object coverage reports
+        run: |
+          objects=(
+            ./build/lib/libtt_metal.so
+            ./build/lib/libtt_stl.so
+            ./build/lib/_ttnncpp.so
+            ./build/lib/_ttnn.so
+          )
+
+          mkdir -p coverage_per_object
+          for obj in "${objects[@]}"; do
+            if [ -f "$obj" ]; then
+              base=$(basename "$obj" .so)
+              llvm-cov-17 report \
+                -instr-profile=coverage/coverage.profdata \
+                "$obj" > "coverage_per_object/${base}.txt" 2>&1 || true
+              echo "--- ${base} ---"
+              head -5 "coverage_per_object/${base}.txt"
+            else
+              echo "::warning::Object not found: $obj"
+            fi
+          done
+
+      - name: Generate HTML report
+        run: |
+          objects=()
+          for obj in ./build/lib/libtt_metal.so ./build/lib/libtt_stl.so ./build/lib/_ttnncpp.so ./build/lib/_ttnn.so; do
+            [ -f "$obj" ] && objects+=("$obj")
+          done
+
+          if [ ${#objects[@]} -eq 0 ]; then
+            echo "::error::No instrumented objects found"
+            exit 1
+          fi
+
+          # Build -object= flags for llvm-cov
+          obj_flags=()
+          for obj in "${objects[@]}"; do
+            obj_flags+=("-object=${obj}")
+          done
+
+          llvm-cov-17 show \
+            --format=html \
+            --instr-profile=coverage/coverage.profdata \
+            "${obj_flags[@]}" \
+            --output-dir=coverage_html
+
+          echo "HTML report size: $(du -sh coverage_html | cut -f1)"
+
+      - name: Generate JSON summary
+        run: |
+          objects=()
+          for obj in ./build/lib/libtt_metal.so ./build/lib/libtt_stl.so ./build/lib/_ttnncpp.so ./build/lib/_ttnn.so; do
+            [ -f "$obj" ] && objects+=("$obj")
+          done
+
+          obj_flags=()
+          for obj in "${objects[@]}"; do
+            obj_flags+=("-object=${obj}")
+          done
+
+          llvm-cov-17 export \
+            --format=json \
+            --instr-profile=coverage/coverage.profdata \
+            "${obj_flags[@]}" \
+            --summary-only > coverage/summary.json
+
+          # Print summary to step output
+          echo "## Code Coverage Summary" >> "$GITHUB_STEP_SUMMARY"
+          python3 -c "
+          import json, sys
+          with open('coverage/summary.json') as f:
+              data = json.load(f)
+          totals = data['data'][0]['totals']
+          for k in ('lines', 'functions', 'regions'):
+              t = totals[k]
+              pct = t['percent']
+              print(f'| {k.title()} | {t[\"covered\"]}/{t[\"count\"]} | {pct:.1f}% |')
+          " | (echo '| Metric | Covered/Total | Percent |'; echo '|--------|---------------|---------|'; cat) >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish to tt-metal-code-coverage (gh-pages)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git clone --depth 1 --branch gh-pages \
+            "https://x-access-token:${{ secrets.CLANGSA_RESULTS_PAT }}@github.com/tenstorrent/tt-metal-code-coverage.git" \
+            coverage-pages 2>/dev/null || \
+          git clone \
+            "https://x-access-token:${{ secrets.CLANGSA_RESULTS_PAT }}@github.com/tenstorrent/tt-metal-code-coverage.git" \
+            coverage-pages
+
+          cd coverage-pages
+          git checkout --orphan new-pages 2>/dev/null || true
+          git rm -rf . 2>/dev/null || true
+
+          cp -r ../coverage_html/* .
+          cp ../coverage/summary.json .
+          echo '{ "date": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'", "commit": "${{ github.sha }}" }' > meta.json
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "coverage $(date -u +%Y-%m-%d) @ ${{ github.sha }}"
+          git push --force origin HEAD:gh-pages
