@@ -634,6 +634,8 @@ def run(
             return ttnn.linear(_a, _b, **_kw)
 
         output_tensor = _do_linear(ttnn_a, ttnn_b, **linear_kwargs)
+        if _GLOBAL_CB is not None and "global_cb" in linear_kwargs:
+            device.reset_sub_device_stall_group()
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
 

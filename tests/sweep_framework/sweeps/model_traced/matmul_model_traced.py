@@ -340,6 +340,8 @@ def run(
     try:
         start_time = start_measuring_time()
         output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, **op_kwargs)
+        if _GLOBAL_CB is not None and "global_cb" in op_kwargs:
+            device.reset_sub_device_stall_group()
         output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
         e2e_perf = stop_measuring_time(start_time)
     except Exception:
