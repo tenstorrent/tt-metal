@@ -21,6 +21,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 void kernel_main() {
     /*
@@ -336,20 +338,32 @@ void kernel_main() {
         // Wait for final welford values in cb_ex_global_id
         cb_ex_global.wait_front(2 * num_groups);
         cb_ex2pe.reserve_back(num_groups);
-        // (Var + eps)
-        add_tiles_init(cb_ex_global_id, cb_eps_id);
-        reconfig_data_format_srcb(cb_eps_id);
+        // (Var + eps), then 1/[sqrt(Var + eps)]
+        // PARTIAL migration: chain per group iter — A pinned at runtime (2*g + 1),
+        // B pinned at 0. NoReserveNoPush so caller owns the bulk reserve/push.
+        // cb_ex_global is NoWaitNoPop (waited above, not popped here — stays for next stage).
         for (uint32_t g = 0; g < num_groups; ++g) {
-            tile_regs_acquire();
-            add_tiles(cb_ex_global_id, cb_eps_id, 1 + (g << 1), 0, dst0);
-
-            // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe_id);
-            tile_regs_release();
+            using namespace compute_kernel_lib;
+            eltwise_chain(
+                1,
+                BinaryFpu<
+                    cb_ex_global_id,
+                    cb_eps_id,
+                    BinaryFpuOp::Add,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::Pinned,
+                    Dst::D0,
+                    CbIndexMode::Pinned>{/*a_tile_idx=*/1 + (g << 1), /*b_tile_idx=*/0},
+                Rsqrt<Approx::Exact, Legacy::On, Dst::D0>{},
+                PackTile<
+                    cb_ex2pe_id,
+                    Dst::D0,
+                    PackTilePolicy::NoReserveNoPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
         }
         cb_ex2pe.push_back(num_groups);
         // End Normalization Factor Calculation
