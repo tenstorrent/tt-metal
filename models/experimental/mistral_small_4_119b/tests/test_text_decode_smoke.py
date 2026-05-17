@@ -20,6 +20,7 @@ Run manually::
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 import torch
@@ -133,6 +134,10 @@ def test_mistral_small_4_text_decode_smoke(reset_seeds, mesh_device):
     next_token = prefill_logits[0, -1, :].argmax().item()
     logger.info(f"First decode token (greedy from prefill): {next_token}")
 
+    # Step 0 is the JIT-compile pass (slow). Steps after the signpost are
+    # the perf-measured iterations. Wall-clock is logged for each step so
+    # we can see steady-state decode latency.
+    decode_times = []
     for step in range(_N_STEPS):
         if step == 1:
             ttnn.synchronize_device(mesh_device)
@@ -140,7 +145,12 @@ def test_mistral_small_4_text_decode_smoke(reset_seeds, mesh_device):
         current_pos = _PREFILL_LEN + step
         tok_tensor = torch.tensor([[next_token]], dtype=torch.long)
 
+        t0 = time.perf_counter()
         decode_logits = model.decode(tok_tensor, current_pos)
+        ttnn.synchronize_device(mesh_device)
+        dt = time.perf_counter() - t0
+        if step >= 1:
+            decode_times.append(dt)
 
         assert decode_logits.shape == (
             1,
@@ -150,6 +160,13 @@ def test_mistral_small_4_text_decode_smoke(reset_seeds, mesh_device):
         assert torch.isfinite(decode_logits.to(torch.float32)).all(), f"Step {step}: non-finite values in decode logits"
 
         next_token = decode_logits[0, 0, :].argmax().item()
-        logger.info(f"Decode step {step} (pos={current_pos}): OK, next token={next_token}")
+        logger.info(f"Decode step {step} (pos={current_pos}): {dt*1e3:.2f} ms, next token={next_token}")
 
+    if decode_times:
+        ts = sorted(decode_times)
+        med = ts[len(ts) // 2] * 1e3
+        logger.info(
+            f"Steady-state decode wall-clock: median={med:.2f} ms"
+            f" (min={ts[0]*1e3:.2f}, max={ts[-1]*1e3:.2f}, n={len(decode_times)})"
+        )
     logger.info(f"{_N_LAYERS}-layer prefill({_PREFILL_LEN})+decode({_N_STEPS}) smoke: PASSED")
