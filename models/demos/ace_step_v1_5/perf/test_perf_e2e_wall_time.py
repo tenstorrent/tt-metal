@@ -34,6 +34,14 @@ Useful env (shared with the Tracy test):
 - ``ACE_STEP_PERF_MAX_SECONDS``: assert the timed generate finishes within this budget.
 - ``ACE_STEP_PERF_TIMED_RUNS`` (default 1): number of timed generates to average for the report.
 - ``ACE_STEP_PERF_NO_DOWNLOAD`` / ``ACE_STEP_PERF_DOWNLOAD=0``: skip Hugging Face fetch.
+- ``ACE_STEP_USE_TRACE=1``: wrap the per-step DiT body (``pipe.forward_with_temb_tp``) in a
+  captured TTNN trace + 2CQ replay. The trace covers patch_embed + DiT core + output_head;
+  the pre/post-DiT glue (BF16 row build, CFG split, APG/ADG guidance, Euler step) remains
+  eager because it depends on per-step Python scalars. The trace is captured lazily after the
+  first two eager Euler steps of the compile pass, then replayed for every remaining step in
+  that generate and every step of subsequent generates. Expect ``compile_and_first_generate``
+  to grow slightly (warmup + capture overhead), ``warmup_generate_total`` to shrink, and
+  ``perf_generate_avg`` to shrink the most.
 
 The test uses the **shared session ``device``** from ``perf/conftest.py`` (which now
 defaults to 2 CQs + 128 MB trace region), so it runs cleanly alongside the sibling
@@ -185,7 +193,7 @@ def test_perf_ace_step_e2e_wall_time(device):
     pytest.importorskip("transformers")
 
     ckpt_root = Path(os.environ.get("ACE_STEP_CKPT_DIR", str(_DEFAULT_CKPT_DIR))).expanduser().resolve()
-    variant = os.environ.get("ACE_STEP_PERF_VARIANT", "acestep-v15-turbo")
+    variant = os.environ.get("ACE_STEP_PERF_VARIANT", "acestep-v15-base")
     dit_st, silence_pt, vae_dir, qwen_st = _resolve_or_fetch_checkpoints(ckpt_root, variant)
 
     cfg = _make_config(dit_st=dit_st, silence_pt=silence_pt, vae_dir=vae_dir, qwen_st=qwen_st, variant=variant)
