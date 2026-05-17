@@ -9,6 +9,8 @@ from loguru import logger
 from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+pytestmark = pytest.mark.use_module_device
+
 
 def get_rotate_tolerances(input_shape, angle, interpolation_mode):
     """
