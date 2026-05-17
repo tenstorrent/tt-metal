@@ -87,6 +87,9 @@ class TTSeamlessM4Tv2Decoder:
         # Stage 19: reuse identical matmul ``ProgramConfig`` objects across layers (same shapes
         # every block) for stable JIT/program-cache keys and less host-side churn.
         self._projection_pc_cache: dict = {}
+        # Same rationale for SDPA chunk schedules: ``forward`` / greedy decode revisit the same
+        # ``(seq_q, seq_k, large_chunks)`` keys many times (24 layers × steps); reuse one object.
+        self._sdpa_pc_cache: dict = {}
 
     def _sdpa_program_config(self, seq_q: int, seq_k: int, *, large_chunks: bool = True) -> ttnn.SDPAProgramConfig:
         """Chunk sizes for ``ttnn.transformer.scaled_dot_product_attention``.
@@ -95,18 +98,25 @@ class TTSeamlessM4Tv2Decoder:
         (speech after adaptor subsampling, often ``< 32``) must not force ``k_chunk=64`` against a
         narrow key sequence; that schedule misaligns SDPA with PyTorch and tanks full-model speech PCC.
         """
+        key = (seq_q, seq_k, large_chunks)
+        cached = self._sdpa_pc_cache.get(key)
+        if cached is not None:
+            return cached
+
         if large_chunks:
             q_chunk = max(64, min(256, nearest_32(seq_q)))
             k_chunk = max(64, min(256, nearest_32(seq_k)))
         else:
             q_chunk = max(32, min(256, nearest_32(seq_q)))
             k_chunk = max(32, min(256, nearest_32(seq_k)))
-        return ttnn.SDPAProgramConfig(
+        out = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
             exp_approx_mode=False,
         )
+        self._sdpa_pc_cache[key] = out
+        return out
 
     _PROJECTION_1D_SEQ_THRESHOLD = 384
 
