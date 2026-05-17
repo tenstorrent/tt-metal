@@ -10,6 +10,8 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // SPLIT REDUCE across Cores
@@ -201,26 +203,33 @@ void kernel_main() {
                 compute_kernel_lib::ReduceInputBlockShape::row(num_distributed_blocks));
             cb_pop_front(cb_stats, num_distributed_blocks);
 
-            // 1/[sqrt(Var + eps)],
-            reconfig_data_format(cb_var, cb_eps);  // cb_var is cb_stats in case of RMS norm
-            pack_reconfig_data_format(cb_stats_reduced);
-            cb_wait_front(cb_var, 1);
-            cb_wait_front(cb_eps, 1);
-
-            add_tiles_init(cb_var, cb_eps);
-            tile_regs_acquire();
-            add_tiles(cb_var, cb_eps, 0, 0, post_dst0);
-            tile_regs_wait();
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(post_dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            cb_reserve_back(cb_stats_reduced, 1);
-            pack_tile(post_dst0, cb_stats_reduced);
-            tile_regs_release();
-            cb_pop_front(cb_var, 1);
-            cb_pop_front(cb_eps, 1);
-            cb_push_back(cb_stats_reduced, 1);
+            // 1/[sqrt(Var + eps)]
+            // PARTIAL migration: BinaryFpu(Add, cb_var, cb_eps) + Rsqrt(legacy) +
+            // PackTile(cb_stats_reduced). Both inputs are WaitAndPop (matches
+            // original cb_pop_front lifecycle).
+            {
+                using namespace compute_kernel_lib;
+                eltwise_chain(
+                    1,
+                    BinaryFpu<
+                        cb_var,
+                        cb_eps,
+                        BinaryFpuOp::Add,
+                        BroadcastDim::None,
+                        BinaryDataFormatReconfig::Input,
+                        CopyTilePolicy::WaitAndPop,
+                        CopyTilePolicy::WaitAndPop,
+                        CbIndexMode::FirstTile,
+                        Dst::D0,
+                        CbIndexMode::FirstTile>{},
+                    Rsqrt<Approx::Exact, Legacy::On, Dst::D0>{},
+                    PackTile<
+                        cb_stats_reduced,
+                        Dst::D0,
+                        PackTilePolicy::PerTileReserveAndPush,
+                        PackTileIndexMode::FirstTile,
+                        PackTileReconfig::Output>{});
+            }
         }
     }
     pack_reconfig_data_format(cb_im);
