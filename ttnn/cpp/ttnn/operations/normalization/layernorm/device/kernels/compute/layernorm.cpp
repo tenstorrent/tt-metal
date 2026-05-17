@@ -27,6 +27,8 @@
 #include "experimental/circular_buffer.h"
 
 #include "layernorm_compute_utils.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 namespace generic = norm::kernel_util::generic;
 namespace kutil = norm::kernel_util;
@@ -221,21 +223,30 @@ void kernel_main() {
         numeric::row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
             cb_xmm2, cb_scaler, cb_ex2, W, Wt, block_size, tile_width);
 
-        // Var[x] + eps
-        cb_ex2_obj.wait_front(1);
-        reconfig_data_format(cb_ex2, cb_eps);
-        ACQ();
-        add_tiles_init(cb_ex2, cb_eps);
-        add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
-
-        cb_ex2pe_obj.reserve_back(1);  // 1
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(dst0);
-        pack_reconfig_data_format(cb_ex2pe);
-        pack_tile(dst0, cb_ex2pe);
-        cb_ex2pe_obj.push_back(1);
-        REL();
-        cb_ex2_obj.pop_front(1);
+        // Var[x] + eps  →  1/sqrt(Var[x] + eps)
+        // PARTIAL migration: BinaryFpu(Add, cb_ex2, cb_eps) + Rsqrt + PackTile(cb_ex2pe).
+        {
+            using namespace compute_kernel_lib;
+            eltwise_chain(
+                1,
+                BinaryFpu<
+                    cb_ex2,
+                    cb_eps,
+                    BinaryFpuOp::Add,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::WaitAndPop,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::FirstTile,
+                    Dst::D0>{},
+                Rsqrt<Approx::Exact, LEGACY_RSQRT ? Legacy::On : Legacy::Off, Dst::D0>{},
+                PackTile<
+                    cb_ex2pe,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
+        }
 
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
         cb_ex2pe_obj.wait_front(1);
