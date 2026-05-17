@@ -4,6 +4,9 @@
 
 #include <cstdint>
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
@@ -89,54 +92,88 @@ void kernel_main() {
         }
 
         // compute x - max(x)
-        cb_reserve_back(cb_x_m_max, Wt);
-        cb_wait_front(cb_in0, Wt);
+        // PARTIAL migration: A walks Wt tiles upfront, B (cb_max) is col-broadcast
+        // pinned tile 0 (already waited). Chain owns cb_in0 / cb_x_m_max lifecycle;
+        // caller still owns cb_max pop.
         cb_wait_front(cb_max, 1);
-
-        for (uint32_t w = 0; w < Wt; ++w) {
-            tile_regs_acquire();
-            sub_bcast_cols_init_short_with_dt(cb_in0, cb_max);
-            sub_tiles_bcast<BroadcastType::COL>(cb_in0, cb_max, w, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_x_m_max);
-            tile_regs_release();
+        {
+            using namespace compute_kernel_lib;
+            eltwise_chain(
+                Wt,
+                BinaryFpu<
+                    cb_in0,
+                    cb_max,
+                    BinaryFpuOp::Sub,
+                    BroadcastDim::Col,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::WaitUpfrontPopAtEnd,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::BlockIter,
+                    Dst::D0,
+                    CbIndexMode::FirstTile>{},
+                PackTile<
+                    cb_x_m_max,
+                    Dst::D0,
+                    PackTilePolicy::UpfrontReservePushAtEnd,
+                    PackTileIndexMode::BlockIter,
+                    PackTileReconfig::Output>{});
         }
         cb_pop_front(cb_max, 1);
-        cb_pop_front(cb_in0, Wt);
-        cb_push_back(cb_x_m_max, Wt);
 
-        // compute exp(x - max(x))
-        cb_reserve_back(cb_exps, Wt);
+        // compute exp(x - max(x))  — last tile is masked.
+        // PARTIAL migration: split into two chains. Tiles [0, Wt-1) plain
+        // copy + (negative if SOFTMIN) + exp. Tile Wt-1 additionally loads mask
+        // into D1 and runs Mask. cb_x_m_max + cb_mask pre-waited (NoWaitNoPop).
         cb_wait_front(cb_x_m_max, Wt);
-        for (uint32_t w = 0; w < Wt; ++w) {
-            tile_regs_acquire();
-            copy_tile_init_with_dt(cb_x_m_max);
-            copy_tile(cb_x_m_max, w, dst0);
-
+        {
+            using namespace compute_kernel_lib;
+            if (Wt > 1) {
+                eltwise_chain(
+                    Wt - 1,
+                    CopyTile<
+                        cb_x_m_max,
+                        Dst::D0,
+                        CopyTilePolicy::NoWaitNoPop,
+                        CbIndexMode::BlockIter,
+                        CopyTileReconfig::Input>{},
 #ifndef SOFTMAX
-            negative_tile_init();
-            negative_tile(dst0);
+                    Negative<Dst::D0>{},
 #endif
-
-            exp_tile_init();
-            exp_tile(dst0);
-
-            if (w == Wt - 1) {
-                copy_tile_init_with_dt(cb_mask);
-                copy_tile(cb_mask, 0, dst1);
-
-                mask_tile_init();
-                mask_tile(dst0, dst1);
+                    Exp<Approx::Exact, Approx::Fast, Dst::D0>{},
+                    PackTile<
+                        cb_exps,
+                        Dst::D0,
+                        PackTilePolicy::PerTileReserveAndPush,
+                        PackTileIndexMode::FirstTile,
+                        PackTileReconfig::Output>{});
             }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_exps);
-            tile_regs_release();
+            // Last tile — masked path.
+            eltwise_chain(
+                1,
+                CopyTile<
+                    cb_x_m_max,
+                    Dst::D0,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::Pinned,
+                    CopyTileReconfig::Input>{Wt - 1},
+                CopyTile<
+                    cb_mask,
+                    Dst::D1,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::FirstTile,
+                    CopyTileReconfig::Input>{},
+#ifndef SOFTMAX
+                Negative<Dst::D0>{},
+#endif
+                Exp<Approx::Exact, Approx::Fast, Dst::D0>{},
+                Mask<DataFormat::Float16_b, Dst::D0>{},
+                PackTile<
+                    cb_exps,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
         }
-        cb_push_back(cb_exps, Wt);
 
 #ifdef LOG
         // log(sum) - pop tiles after reduce
@@ -169,41 +206,64 @@ void kernel_main() {
 #endif
 
         // compute final result
-        cb_reserve_back(cb_out0, Wt);
+        // PARTIAL migration: final divide stage as eltwise_chain.
+        // LOG branch  : out = (x - max) - log(sum)   — sub with cb_recipsumexps col-bcast
+        // !LOG branch : out = exp(x - max) / sum     — mul with cb_recipsumexps col-bcast
+        // A walks Wt tiles (BlockIter), B (cb_recipsumexps) col-broadcast pinned
+        // at tile 0 (NoWaitNoPop). Chain owns per-tile pack reserve/push on cb_out0.
         cb_wait_front(cb_x_m_max, Wt);
         cb_wait_front(cb_recipsumexps, 1);
-
 #ifndef LOG
         cb_wait_front(cb_exps, Wt);
 #endif
 
-        for (uint32_t w = 0; w < Wt; w += onetile) {
+        {
+            using namespace compute_kernel_lib;
 #ifdef LOG
-            // x - max - log(sum)
-            tile_regs_acquire();
-            sub_bcast_cols_init_short_with_dt(cb_x_m_max, cb_recipsumexps);
-            sub_tiles_bcast<BroadcastType::COL>(cb_x_m_max, cb_recipsumexps, w, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_out0);
-            tile_regs_release();
+            eltwise_chain(
+                Wt,
+                BinaryFpu<
+                    cb_x_m_max,
+                    cb_recipsumexps,
+                    BinaryFpuOp::Sub,
+                    BroadcastDim::Col,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::BlockIter,
+                    Dst::D0,
+                    CbIndexMode::FirstTile>{},
+                PackTile<
+                    cb_out0,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
 #else
-            // exp(x - max) / psum
-            tile_regs_acquire();
-            mul_bcast_cols_init_short_with_dt(cb_exps, cb_recipsumexps);
-            mul_tiles_bcast_cols(cb_exps, cb_recipsumexps, w, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_out0);
-            tile_regs_release();
+            eltwise_chain(
+                Wt,
+                BinaryFpu<
+                    cb_exps,
+                    cb_recipsumexps,
+                    BinaryFpuOp::Mul,
+                    BroadcastDim::Col,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::BlockIter,
+                    Dst::D0,
+                    CbIndexMode::FirstTile>{},
+                PackTile<
+                    cb_out0,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
 #endif
         }
 
         cb_pop_front(cb_recipsumexps, 1);
         cb_pop_front(cb_x_m_max, Wt);
-        cb_push_back(cb_out0, Wt);
 #ifndef LOG
         cb_pop_front(cb_exps, Wt);
 #endif
