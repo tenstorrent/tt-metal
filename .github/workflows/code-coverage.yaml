@@ -1,9 +1,9 @@
 name: "Nightly LLVM Code Coverage"
 
 # Nightly LLVM-instrumented code coverage for ttnn.
-# Builds with CodeCoverage build type via the standard build-artifact workflow,
-# runs ttnn unit tests on WH N300, and publishes an HTML report to
-# tenstorrent/tt-metal-code-coverage (gh-pages).
+# Builds with CodeCoverage build type, runs ALL ttnn test groups from
+# ttnn-tests.yaml in parallel on WH N300, then merges profdata and
+# publishes an HTML report to tenstorrent/tt-metal-code-coverage (gh-pages).
 
 on:
   workflow_dispatch:
@@ -24,11 +24,40 @@ jobs:
       platform: "Ubuntu 22.04"
       enable-lto: false
 
+  build-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn-tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+
+      - name: Install dependencies
+        run: pip3 install PyYAML
+
+      - name: Build test matrix (all groups, wh_n300_civ2 only)
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "wh_n300_civ2" \
+            ./.github/sku_config.yaml
+
   run-coverage:
-    name: "Run tests & generate coverage"
-    needs: [build-artifact]
-    runs-on:
-      - tt-ubuntu-2204-N300-viommu-stable
+    needs: [build-artifact, build-matrix]
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.build-matrix.outputs.matrix) }}
+    name: "Coverage - ${{ matrix.test-group.name }}"
+    runs-on: ${{ matrix.test-group.runs_on }}
     timeout-minutes: 240
     container:
       image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -58,32 +87,95 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
 
-      - name: Run ttnn unit tests with coverage instrumentation
+      - name: Set ttnn fast runtime if exists in config
+        if: ${{ matrix.test-group.fast_runtime_mode_off }}
+        run: |
+          echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
+
+      - name: Run tests with coverage instrumentation
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           source python_env/bin/activate
           export PYTHONPATH=$(pwd)
 
-          mkdir -p coverage
-          export LLVM_PROFILE_FILE=$(pwd)/coverage/%p-%m.profraw
+          mkdir -p /work/coverage
+          export LLVM_PROFILE_FILE=/work/coverage/%p-%m.profraw
 
-          # Run ttnn unit tests; do not fail the workflow on test failures
-          # since we want partial coverage data even if some tests fail
-          pytest tests/ttnn/unit_tests/ \
-            --timeout 300 \
-            -v \
-            --tb=no \
-            -q \
-            || true
+          # Run tests; do not fail the workflow on test failures
+          # since we want coverage data even if some tests fail
+          ${{ matrix.test-group.cmd }} || true
 
-          echo "Collected $(ls coverage/*.profraw 2>/dev/null | wc -l) profraw files"
+          echo "Collected $(ls /work/coverage/*.profraw 2>/dev/null | wc -l) profraw files"
 
-      - name: Merge profraw data
+      - name: Merge profraw into profdata
         run: |
-          if ! ls coverage/*.profraw 1>/dev/null 2>&1; then
-            echo "::error::No profraw files found — tests may not have run"
+          if ! ls /work/coverage/*.profraw 1>/dev/null 2>&1; then
+            echo "::warning::No profraw files found for this test group"
+            exit 0
+          fi
+          llvm-profdata-17 merge -sparse /work/coverage/*.profraw -o /work/coverage/job.profdata
+          echo "Merged profile data: $(du -h /work/coverage/job.profdata | cut -f1)"
+
+      - name: Upload profdata
+        if: ${{ hashFiles('/work/coverage/job.profdata') != '' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: "profdata-${{ matrix.test-group.name }}"
+          path: /work/coverage/job.profdata
+          retention-days: 1
+
+  aggregate-coverage:
+    name: "Aggregate & publish coverage report"
+    needs: [build-artifact, run-coverage]
+    if: always()
+    runs-on: tt-ubuntu-2204-large-stable
+    timeout-minutes: 60
+    container:
+      image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          filter: blob:none
+          submodules: recursive
+          path: docker-job
+
+      - name: Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+
+      - name: Download all profdata artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: profdata-*
+          path: /work/profdata-all
+
+      - name: Merge all profdata files
+        run: |
+          mkdir -p coverage
+          profdata_files=$(find /work/profdata-all -name '*.profdata' 2>/dev/null)
+          count=$(echo "$profdata_files" | grep -c . || true)
+          echo "Found ${count} profdata files to merge"
+
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No profdata files found from any test job"
             exit 1
           fi
-          llvm-profdata-17 merge -sparse coverage/*.profraw -o coverage/coverage.profdata
+
+          echo "$profdata_files"
+          llvm-profdata-17 merge -sparse $profdata_files -o coverage/coverage.profdata
           echo "Merged profile data: $(du -h coverage/coverage.profdata | cut -f1)"
 
       - name: Generate per-object coverage reports
@@ -121,7 +213,6 @@ jobs:
             exit 1
           fi
 
-          # Build -object= flags for llvm-cov
           obj_flags=()
           for obj in "${objects[@]}"; do
             obj_flags+=("-object=${obj}")
@@ -153,7 +244,6 @@ jobs:
             "${obj_flags[@]}" \
             --summary-only > coverage/summary.json
 
-          # Print summary to step output
           echo "## Code Coverage Summary" >> "$GITHUB_STEP_SUMMARY"
           python3 -c "
           import json, sys
