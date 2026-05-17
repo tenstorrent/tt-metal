@@ -84,8 +84,8 @@ class Encoder(nn.Module):
             self.norm_layers_2.append(LayerNorm(hidden_channels))
 
     def forward(self, x):
-        zippep = zip(self.attn_layers, self.norm_layers_1, self.ffn_layers, self.norm_layers_2, strict=True)
-        for attn_layers, norm_layers_1, ffn_layers, norm_layers_2 in zippep:
+        zipped = zip(self.attn_layers, self.norm_layers_1, self.ffn_layers, self.norm_layers_2, strict=True)
+        for attn_layers, norm_layers_1, ffn_layers, norm_layers_2 in zipped:
             y = attn_layers(x, x)
             x = norm_layers_1(x + y)
 

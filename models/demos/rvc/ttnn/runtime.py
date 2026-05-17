@@ -53,6 +53,23 @@ UPSAMPLE_RATES = [12, 10, 2, 2]
 UPSAMPLE_KERNELS = [24, 20, 4, 4]
 UPSAMPLE_INITIAL_CH = 512
 RESBLOCK_DILATIONS = [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+
+
+def _conv1d_to_torch(result, out_channels):
+    """Convert ttnn.conv1d result to torch tensor.
+
+    Handles sharded→interleaved conversion and reshaping.
+    This is the common postprocess path for all conv1d dispatches.
+    """
+    out_tt = result[0]
+    out_len = result[1]
+    try:
+        out_tt = ttnn.sharded_to_interleaved(out_tt)
+    except RuntimeError:
+        pass
+    out = ttnn.to_torch(ttnn.from_device(out_tt)).float()
+    out = out.reshape(1, 1, out_len, -1)[:, :, :, :out_channels].squeeze(1)
+    return out, out_len
 NUM_KERNELS = 3
 NUM_UPSAMPLES = 4
 LRELU_SLOPE = 0.1
@@ -142,7 +159,7 @@ class TTNNFlowDecoder:
         """Conditioned WN using persistent weights."""
         fw = self._flows[flow_idx]
         conv = self._conv_weights[flow_idx]
-        output_acc = torch.zeros(1, seq_len, HIDDEN_CH)
+        output_acc = torch.zeros(x_cl.shape[0], seq_len, HIDDEN_CH)
 
         for i in range(NUM_WN_LAYERS):
             d = DILATION_RATE ** i
@@ -158,12 +175,7 @@ class TTNNFlowDecoder:
                 dtype=DEFAULT_DTYPE, return_output_dim=True,
             )
             conv_out_tt = result[0]
-            try:
-                conv_out_tt = ttnn.sharded_to_interleaved(conv_out_tt)
-            except RuntimeError:
-                pass
-            conv_torch = ttnn.to_torch(ttnn.from_device(conv_out_tt)).float()
-            conv_torch = conv_torch.reshape(1, 1, result[1], -1)[:, :, :, :2*HIDDEN_CH].squeeze(1)
+            conv_torch, _ = _conv1d_to_torch(result, 2 * HIDDEN_CH)
             conv_torch = conv_torch + conv["bs"][i].unsqueeze(0).unsqueeze(0)
 
             # Conditioning
@@ -205,6 +217,7 @@ class TTNNFlowDecoder:
         Returns:
             z: [1, 192, T] channels-first decoded latent
         """
+        assert z_p.shape[0] == 1, f"Only batch=1 supported, got {z_p.shape[0]}"
         seq_len = z_p.shape[2]
         x_cl = z_p.permute(0, 2, 1)  # [1, T, C]
 
@@ -251,6 +264,7 @@ class TTNNFlowDecoder:
         return x_cl.permute(0, 2, 1)  # [1, C, T]
 
     def __call__(self, z_p, g):
+        """Enable callable syntax: flow(z_p, g) instead of flow.forward(z_p, g)."""
         return self.forward(z_p, g)
 
     def deallocate(self):
@@ -259,17 +273,17 @@ class TTNNFlowDecoder:
             for key in ["pre_w", "pre_b", "post_w", "post_b", "cond_w", "cond_b"]:
                 try:
                     ttnn.deallocate(fw[key])
-                except Exception:
+                except (RuntimeError, ValueError):
                     pass
             for w in fw["rsl_ws"]:
                 try:
                     ttnn.deallocate(w)
-                except Exception:
+                except (RuntimeError, ValueError):
                     pass
             for b in fw["rsl_bs"]:
                 try:
                     ttnn.deallocate(b)
-                except Exception:
+                except (RuntimeError, ValueError):
                     pass
         self._flows = []
         self._conv_weights = []
@@ -387,16 +401,10 @@ class TTNNGeneratorNSF:
             padding=padding, dilation=dilation, groups=1,
             dtype=DEFAULT_DTYPE, return_output_dim=True,
         )
-        out_tt = result[0]
-        try:
-            out_tt = ttnn.sharded_to_interleaved(out_tt)
-        except RuntimeError:
-            pass
-        out = ttnn.to_torch(ttnn.from_device(out_tt)).float()
-        out = out.reshape(1, 1, result[1], -1)[:, :, :, :out_ch].squeeze(1)
+        out, out_len = _conv1d_to_torch(result, out_ch)
         if b_torch is not None:
             out = out + b_torch.unsqueeze(0).unsqueeze(0)
-        return out, result[1]
+        return out, out_len
 
     def _conv1d_fused(self, x_tt_host, w_tt, b_tt, in_ch, out_ch, k, seq_len,
                       dilation=1, fuse_relu=True):
@@ -525,6 +533,7 @@ class TTNNGeneratorNSF:
         return torch.tanh(x_cl.permute(0, 2, 1))
 
     def __call__(self, z, har_source, g):
+        """Enable callable syntax: gen(z, har, g) instead of gen.forward(z, har, g)."""
         return self.forward(z, har_source, g)
 
     def deallocate(self):
@@ -533,7 +542,7 @@ class TTNNGeneratorNSF:
             if tensor is not None:
                 try:
                     ttnn.deallocate(tensor)
-                except Exception:
+                except (RuntimeError, ValueError):
                     pass
         self._cond_w = None
         self._cond_b = None

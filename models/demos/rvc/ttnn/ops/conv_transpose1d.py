@@ -17,6 +17,8 @@ Output size formula:
     L_out = (L_in - 1) * stride - 2 * padding + dilation * (kernel - 1) + output_padding + 1
 """
 
+from __future__ import annotations
+
 import torch
 import ttnn
 from typing import Optional, Tuple

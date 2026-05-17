@@ -164,14 +164,17 @@ class TestFullPipelineRuntime:
 
         # Run 3 times
         results = []
+        z_ttnn = None
         for i in range(3):
             z = flow(z_p, g)
+            if z_ttnn is None:
+                z_ttnn = z.clone()
             audio = gen(z, har, g)
             results.append(audio.clone())
             print(f"    Run {i}: shape={audio.shape}, range=[{audio.min():.4f}, {audio.max():.4f}]")
 
         # Correctness
-        flow_pcc = compute_pcc(z_ref, z)
+        flow_pcc = compute_pcc(z_ref, z_ttnn)
         audio_pcc = compute_pcc(audio_ref, results[0])
         assert flow_pcc > 0.995, f"Flow PCC={flow_pcc}"
         assert audio_pcc > 0.950, f"Audio PCC={audio_pcc}"

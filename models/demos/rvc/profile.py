@@ -149,15 +149,13 @@ def run_profile(max_secs=3.0, device_id=0):
     # ---- Load TTNN modules ----
     timer.start("TTNN modules load")
     flow = TTNNFlowDecoder.from_checkpoint(sd, device)
-    timer.stop()
-    timer.start("  flow.from_checkpoint")
-    # already counted above, just for labeling
-    timer.records[-1] = ("  flow.from_checkpoint", timer.records[-1][1])
+    flow_load_time = timer.stop()
+    timer.records[-1] = ("  flow.from_checkpoint", flow_load_time)
 
     timer.start("TTNN gen load")
     gen = TTNNGeneratorNSF.from_checkpoint(sd, device)
-    timer.stop()
-    timer.records[-1] = ("  gen.from_checkpoint", timer.records[-1][1])
+    gen_load_time = timer.stop()
+    timer.records[-1] = ("  gen.from_checkpoint", gen_load_time)
 
     # ==== PREPROCESSING ====
     with torch.no_grad():
@@ -265,9 +263,7 @@ def run_profile(max_secs=3.0, device_id=0):
     output_secs = audio_out.shape[2] / SR_TARGET
 
     # Record aggregate timings
-    timer.start("TTNN Flow (all chunks)")
     timer.records.append(("TTNN Flow (all chunks)", sum(chunk_flow_times)))
-    timer.start("TTNN Generator (all chunks)")
     timer.records.append(("TTNN Generator (all chunks)", sum(chunk_gen_times)))
 
     # ==== REPORT ====

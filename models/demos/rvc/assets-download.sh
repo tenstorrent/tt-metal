@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.

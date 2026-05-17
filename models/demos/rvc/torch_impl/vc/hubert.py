@@ -287,73 +287,33 @@ class MultiheadSelfAttention(nn.Module):
         src_len = tgt_len
         assert embed_dim == self.embed_dim, f"query dim {embed_dim} != {self.embed_dim}"
         assert list(query.size()) == [tgt_len, bsz, embed_dim]
-        if (
-            # The Multihead attention implemented in pytorch forces strong dimension check
-            # for input embedding dimention and K,Q,V projection dimension.
-            # Since pruning will break the dimension check and it is not easy to modify the pytorch API,
-            # it is preferred to bypass the pytorch MHA when we need to skip embed_dim_check
-            True
-        ):
-            return F.multi_head_attention_forward(
-                query,
-                query,
-                query,
-                self.embed_dim,
-                self.num_heads,
-                torch.empty([0]),
-                torch.cat((self.q_proj.bias, self.k_proj.bias, self.v_proj.bias)),
-                None,
-                None,
-                False,
-                0.0,
-                self.out_proj.weight,
-                self.out_proj.bias,
-                False,
-                None,
-                False,
-                None,
-                use_separate_proj_weight=True,
-                q_proj_weight=self.q_proj.weight,
-                k_proj_weight=self.k_proj.weight,
-                v_proj_weight=self.v_proj.weight,
-            )[0]
-
-        if self.self_attention:
-            q = self.q_proj(query)
-            k = self.k_proj(query)
-            v = self.v_proj(query)
-        else:
-            assert key is not None and value is not None
-            q = self.q_proj(query)
-            k = self.k_proj(key)
-            v = self.v_proj(value)
-        q *= self.scaling
-
-        q = q.contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim).transpose(0, 1)
-        kv_bsz = bsz  # need default value for scripting
-        if k is not None:
-            kv_bsz = k.size(1)
-            k = k.contiguous().view(-1, kv_bsz * self.num_heads, self.head_dim).transpose(0, 1)
-        if v is not None:
-            v = v.contiguous().view(-1, kv_bsz * self.num_heads, self.head_dim).transpose(0, 1)
-
-        assert k is not None
-        assert k.size(1) == src_len
-
-        attn_weights = torch.bmm(q, k.transpose(1, 2))
-
-        assert list(attn_weights.size()) == [bsz * self.num_heads, tgt_len, src_len]
-
-        attn_weights_float = F.softmax(attn_weights, dim=-1)
-        attn_weights = attn_weights_float.type_as(attn_weights)
-        attn_probs = attn_weights
-
-        assert v is not None
-        attn = torch.bmm(attn_probs, v)
-        assert list(attn.size()) == [bsz * self.num_heads, tgt_len, self.head_dim]
-        attn = attn.transpose(0, 1).contiguous().view(tgt_len, bsz, self.embed_dim)
-        attn = self.out_proj(attn)
-        return attn
+        # The Multihead attention implemented in pytorch forces strong dimension check
+        # for input embedding dimension and K,Q,V projection dimension.
+        # Since pruning will break the dimension check and it is not easy to modify the pytorch API,
+        # it is preferred to bypass the pytorch MHA when we need to skip embed_dim_check
+        return F.multi_head_attention_forward(
+            query,
+            query,
+            query,
+            self.embed_dim,
+            self.num_heads,
+            torch.empty([0]),
+            torch.cat((self.q_proj.bias, self.k_proj.bias, self.v_proj.bias)),
+            None,
+            None,
+            False,
+            0.0,
+            self.out_proj.weight,
+            self.out_proj.bias,
+            False,
+            None,
+            False,
+            None,
+            use_separate_proj_weight=True,
+            q_proj_weight=self.q_proj.weight,
+            k_proj_weight=self.k_proj.weight,
+            v_proj_weight=self.v_proj.weight,
+        )[0]
 
 
 def make_conv_pos(e, k, g, is_batch_norm=False):
@@ -396,7 +356,7 @@ class TransformerEncoder(nn.Module):
         self.embedding_dim = args["encoder_embed_dim"]
         self.required_seq_len_multiple = args.get("required_seq_len_multiple", 2)
 
-        pos_conv_depth = getattr(args, "pos_conv_depth", 1)
+        pos_conv_depth = args.get("pos_conv_depth", 1)
         if pos_conv_depth > 1:
             num_layers = args["pos_conv_depth"]
             k = max(3, args["conv_pos"] // num_layers)

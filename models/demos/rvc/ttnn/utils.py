@@ -21,7 +21,6 @@ All tensor format conventions:
 
 import torch
 import ttnn
-from typing import Optional
 
 
 # =====================================================================
