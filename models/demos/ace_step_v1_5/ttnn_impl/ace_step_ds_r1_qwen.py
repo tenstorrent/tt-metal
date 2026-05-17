@@ -57,13 +57,51 @@ def _head_rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Te
     return (x_normed * w).to(dtype=x.dtype)
 
 
+def _hf_grade_compute_kernel_config(device):
+    """HF-grade matmul precision: HiFi4 / approx=False / fp32 dest accumulator / packer L1 acc.
+
+    Per-layer PCC drift in :func:`test_llm_per_layer_pcc_debug` was traced to bf16 matmul
+    accumulator drift in deep layers where activations grow to ~3000+ (bf16 precision ~16).
+    This config matches the recipe used by ``qwen3_embedding_encoder``, ``audio_code_detokenizer``,
+    ``condition_encoder``, ``vae/conv1d`` for their high-precision matmul paths.
+    """
+    init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
+    if not callable(init_ck) or not hasattr(device, "arch"):
+        print(
+            "[ace_step_v1_5][qwen] WARN: init_device_compute_kernel_config unavailable, "
+            "matmuls will use TTNN defaults (bf16 dest accumulator).",
+            flush=True,
+        )
+        return None
+    try:
+        ck = init_ck(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        print(f"[ace_step_v1_5][qwen] HF-grade compute_kernel_config built: {ck}", flush=True)
+        return ck
+    except Exception as e:
+        print(f"[ace_step_v1_5][qwen] WARN: init_device_compute_kernel_config failed ({e!r})", flush=True)
+        return None
+
+
 # ============================================================================
 # Model Implementation by Claude and Codex with manually edits
 # ============================================================================
 
 
 class RMSNorm:
-    """RMS Normalization in TTNN"""
+    """RMS Normalization in TTNN.
+
+    Weights staged in fp32 so the manual chain (mul/mean/sqrt/reciprocal/mul) stays uniformly in
+    fp32 when called with an fp32 residual stream. With Qwen3 1.7B, after the matmuls were moved
+    to fp32 dest accumulator (see :func:`_hf_grade_compute_kernel_config`) and the residual stream
+    upgraded to fp32 in :meth:`QwenModel.forward`, RMSNorm precision becomes the next-largest
+    drift source — fp32 weight + fp32 ops keeps the variance reduction faithful to HF.
+    """
 
     def __init__(self, weight: torch.Tensor, eps: float, device):
         self.eps = eps
@@ -71,7 +109,10 @@ class RMSNorm:
         self.weight_torch = weight
         self.ref_module = None  # optional HF module for validation
         self.weight = ttnn.from_torch(
-            weight.unsqueeze(0).unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            weight.detach().to(dtype=torch.float32).unsqueeze(0).unsqueeze(0),
+            device=device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
         )
 
     @compare_to_torch(
@@ -182,6 +223,9 @@ class Attention:
         self.cache_k = torch.zeros((1, num_kv_heads, max_seq_len, head_dim), dtype=torch.bfloat16)
         self.cache_v = torch.zeros((1, num_kv_heads, max_seq_len, head_dim), dtype=torch.bfloat16)
 
+        # HF-grade compute kernel config for Q/K/V/O matmuls (fp32 destination accumulator).
+        self._mm_ck = _hf_grade_compute_kernel_config(device)
+
         # Optional HF attention module and past KV for validation
         self.hf_attn = None
         self.hf_past_kv = None
@@ -210,10 +254,14 @@ class Attention:
         mask: Optional[torch.Tensor] = None,
         position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
     ):  # TTNN tensor [1, seq_len, hidden_size]
-        # Project to Q, K, V (+ bias if available)
-        xq = ttnn.matmul(x, self.wq)
-        xk = ttnn.matmul(x, self.wk)
-        xv = ttnn.matmul(x, self.wv)
+        # Project to Q, K, V (+ bias if available). Force fp32 output so the residual stream the
+        # caller adds these into stays fp32 (bf16 would quantize ~2/elem at deep-layer activations
+        # which is the dominant remaining drift on Qwen3 1.7B PCC).
+        ck_kw = dict(compute_kernel_config=self._mm_ck) if self._mm_ck is not None else dict()
+        ck_kw["dtype"] = ttnn.float32
+        xq = ttnn.matmul(x, self.wq, **ck_kw)
+        xk = ttnn.matmul(x, self.wk, **ck_kw)
+        xv = ttnn.matmul(x, self.wv, **ck_kw)
         if self.bq is not None:
             xq = ttnn.add(xq, self.bq)
         if self.bk is not None:
@@ -293,18 +341,28 @@ class Attention:
 
         attn = torch.nn.functional.softmax(scores, dim=-1, dtype=torch.float32).to(xq_torch.dtype)
 
-        # Apply attention to values
-        output = torch.matmul(attn, values)
+        # Apply attention to values. ``xq_torch`` may now be fp32 (when the upstream Q/K/V matmul
+        # output dtype is fp32 to keep the residual stream precise), so ``attn`` is fp32 too.
+        # The cache stays in bf16 to keep host RAM bounded; cast values to ``attn``'s dtype just
+        # for this matmul so PyTorch doesn't reject the mixed-dtype matmul.
+        if values.dtype != attn.dtype:
+            output = torch.matmul(attn, values.to(attn.dtype))
+        else:
+            output = torch.matmul(attn, values)
 
         # Reshape back to [batch, seq_len, hidden_size]
         output = output.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
 
-        # Convert back to TTNN and apply output projection
+        # Convert back to TTNN as fp32 so the wo matmul input is fp32 (matches the upgraded
+        # residual stream's precision and avoids the deep-layer bf16 quantization observed in
+        # the per-layer PCC diagnostic).
         output_tt = ttnn.from_torch(
-            output.unsqueeze(0), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            output.float().unsqueeze(0), device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
         )
 
-        output_tt = ttnn.matmul(output_tt, self.wo)
+        ck_kw = dict(compute_kernel_config=self._mm_ck) if self._mm_ck is not None else dict()
+        ck_kw["dtype"] = ttnn.float32
+        output_tt = ttnn.matmul(output_tt, self.wo, **ck_kw)
 
         return output_tt
 
@@ -354,9 +412,11 @@ class MLP:
         up_proj: torch.Tensor,
         down_proj: torch.Tensor,
         device,
+        compute_kernel_config=None,
     ):
         # Optional HF MLP module for validation
         self.ref_module = None
+        self.compute_kernel_config = compute_kernel_config
         self.gate_proj = ttnn.from_torch(
             gate_proj.T.unsqueeze(0).unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
@@ -377,14 +437,18 @@ class MLP:
         enabled=False,
     )
     def __call__(self, x):
-        # SwiGLU activation: gate(x) * up(x) then down projection
-        gate = ttnn.matmul(x, self.gate_proj)
+        # SwiGLU activation: gate(x) * up(x) then down projection.
+        # Output every matmul in fp32 so the caller's residual add stays in fp32 (avoids bf16
+        # quantization that dominates remaining PCC drift in deep layers).
+        ck_kw = dict(compute_kernel_config=self.compute_kernel_config) if self.compute_kernel_config is not None else {}
+        ck_kw["dtype"] = ttnn.float32
+        gate = ttnn.matmul(x, self.gate_proj, **ck_kw)
         gate = ttnn.silu(gate)
 
-        up = ttnn.matmul(x, self.up_proj)
+        up = ttnn.matmul(x, self.up_proj, **ck_kw)
 
         hidden = ttnn.mul(gate, up)
-        output = ttnn.matmul(hidden, self.down_proj)
+        output = ttnn.matmul(hidden, self.down_proj, **ck_kw)
 
         return output
 
@@ -444,7 +508,8 @@ class TransformerBlock:
             rms_norm_eps=float(config.rms_norm_eps),
         )
 
-        # MLP
+        # MLP — share the HF-grade compute kernel config built by the attention layer so every
+        # large bf16 matmul (gate/up/down) runs with fp32 destination accumulator.
         self.mlp = MLP(
             hidden_size=config.hidden_size,
             intermediate_size=config.intermediate_size,
@@ -452,6 +517,7 @@ class TransformerBlock:
             up_proj=layer_weights["mlp.up_proj.weight"],
             down_proj=layer_weights["mlp.down_proj.weight"],
             device=device,
+            compute_kernel_config=self.attention._mm_ck,
         )
 
         # Norms
@@ -646,13 +712,16 @@ class QwenModel:
         if self._validate:
             self.norm.ref_module = hf_model.model.norm
 
-        # LM head (output projection)
+        # LM head (output projection) — large bf16 matmul (hidden=2048 -> vocab~152k);
+        # use HF-grade compute kernel so the per-token logits inherit the same fp32 accumulator
+        # precision as Q/K/V/O / MLP.
         self.lm_head = ttnn.from_torch(
             state_dict["lm_head.weight"].T.unsqueeze(0).unsqueeze(0),
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
         )
+        self._lm_head_mm_ck = _hf_grade_compute_kernel_config(device)
 
         print("Model loaded successfully!")
 
@@ -700,6 +769,12 @@ class QwenModel:
             start_pos=int(start_pos),
             rotary_emb=self.rotary_emb,
         )
+        # Upgrade the residual stream to fp32. The bf16 ttnn.add at deep layers (mean_abs ~700,
+        # max ~3000) was quantizing residuals to multiples of ~2-16, which dominated the
+        # remaining PCC drift after Q/K/V/O/MLP/lm_head matmuls were moved to fp32 dest accum.
+        # With fp32 residual + fp32 matmul outputs, the only bf16 step is the matmul **input**,
+        # which HF Qwen3 also uses (weights are bf16, not fp32).
+        h_tt = ttnn.typecast(h_tt, dtype=ttnn.float32)
 
         for layer in self.layers:
             h_tt = layer(h_tt, start_pos, mask, position_embeddings=position_embeddings)
@@ -707,8 +782,11 @@ class QwenModel:
         # Final norm
         h_tt = self.norm(h_tt)
 
-        # LM head
-        logits = ttnn.matmul(h_tt, self.lm_head)
+        # LM head — input is fp32 (preserved residual precision), weight bf16, output fp32 logits.
+        lm_head_kw = dict(dtype=ttnn.float32)
+        if self._lm_head_mm_ck is not None:
+            lm_head_kw["compute_kernel_config"] = self._lm_head_mm_ck
+        logits = ttnn.matmul(h_tt, self.lm_head, **lm_head_kw)
 
         return logits
 
