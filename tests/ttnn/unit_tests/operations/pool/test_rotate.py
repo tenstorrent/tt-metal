@@ -10,7 +10,6 @@ from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-
 def get_rotate_tolerances(input_shape, angle, interpolation_mode):
     """
     Get appropriate tolerances for rotate operation based on tensor size, angle, and interpolation mode.
