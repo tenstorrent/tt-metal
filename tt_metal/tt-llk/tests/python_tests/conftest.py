@@ -525,6 +525,10 @@ def pytest_runtest_makereport(item, call):
                     report.longrepr = f"LLK ASSERT HIT {test_file_and_func}{report.test_params} {exc_msg}"
                 elif exc_type == TimeoutError:
                     report.longrepr = f"TENSIX TIMED OUT {test_file_and_func}{report.test_params} {exc_msg}"
+                    # Log the timeout error
+                    logger.error(
+                        f"TENSIX TIMED OUT {test_file_and_func}{report.test_params} {exc_msg}"
+                    )
                 elif exc_type == AssertionError:
                     # If we want to record test ordering, we already now from order report if test failed, thus to de-clutter logs,
                     # we will mark test as if it passed to speed the whole execution up

@@ -49,6 +49,10 @@ Trigger examples for `arch-lookup`:
 - "Explain [LLK function] parameters", "What are the differences between WH and QSR?"
 - Any question about Tensix hardware, ISA instructions, or LLK implementation details
 
+## Coding Style
+
+- **`const` placement**: write `const <type>` (e.g. `const uint32_t x`), never `<type> const` (e.g. `uint32_t const x`). Semantics are identical, but the codebase uses `const <type>` everywhere — match it. Applies to all type qualifiers in the same position (e.g. `volatile`, `constexpr` modifiers on declarations).
+
 ## Test Infrastructure
 
 ### Two-Phase Test Flow
@@ -58,7 +62,6 @@ Trigger examples for `arch-lookup`:
 ### Key Concepts
 - `CHIP_ARCH` env var selects the target architecture (`blackhole`, `wormhole`, `quasar`)
 - Tests run from the `tests/` directory
-- Logs: `/tmp/llk_test_$(whoami)/compile.log` (compilation), `/tmp/llk_test_$(whoami)/run.log` (execution)
 - Test isolation: tests can affect each other via HW state leaking between kernel reconfigurations (reconfig escapes)
 - Key files: `tests/python_tests/conftest.py`, `tests/python_tests/helpers/test_config.py`
 
