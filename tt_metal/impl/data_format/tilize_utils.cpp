@@ -9,6 +9,8 @@
 #include <functional>
 #include <numeric>
 #include <ostream>
+#include <thread>
+#include <algorithm>
 
 #include <tt_stl/assert.hpp>
 #include "constants.hpp"
@@ -63,13 +65,38 @@ std::vector<T> to_tile_major_layout_swizzled(
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
     tilized_result.resize(in_row_major.size());
-    for (size_t b = 0; b < B; b++) {
-        for (size_t hs = 0; hs < H; hs += tile_H) {
-            for (size_t ws = 0; ws < W; ws += tile_W) {
-                for (size_t ht = 0; ht < tile_H; ht++) {
-                    size_t src_idx = (b * H * W) + ((hs + ht) * W) + ws;
-                    size_t dst_idx = (b * H * W) + (hs * W) + (ws * tile_H) + (ht * tile_W);
-                    std::memcpy(&tilized_result[dst_idx], &in_row_major[src_idx], tile_W * sizeof(T));
+
+    // Use multi-threading if the number of batches is large enough
+    const size_t min_batch_for_threading = 4;
+    if (B >= min_batch_for_threading) {
+        std::vector<std::thread> threads;
+        threads.reserve(B);
+        for (size_t b = 0; b < B; ++b) {
+            threads.emplace_back([b, B, H, W, tile_H, tile_W, &in_row_major, &tilized_result]() {
+                for (size_t hs = 0; hs < H; hs += tile_H) {
+                    for (size_t ws = 0; ws < W; ws += tile_W) {
+                        for (size_t ht = 0; ht < tile_H; ht++) {
+                            size_t src_idx = (b * H * W) + ((hs + ht) * W) + ws;
+                            size_t dst_idx = (b * H * W) + (hs * W) + (ws * tile_H) + (ht * tile_W);
+                            std::memcpy(&tilized_result[dst_idx], &in_row_major[src_idx], tile_W * sizeof(T));
+                        }
+                    }
+                }
+            });
+        }
+        for (auto& t : threads) {
+            t.join();
+        }
+    } else {
+        // Single-threaded version
+        for (size_t b = 0; b < B; b++) {
+            for (size_t hs = 0; hs < H; hs += tile_H) {
+                for (size_t ws = 0; ws < W; ws += tile_W) {
+                    for (size_t ht = 0; ht < tile_H; ht++) {
+                        size_t src_idx = (b * H * W) + ((hs + ht) * W) + ws;
+                        size_t dst_idx = (b * H * W) + (hs * W) + (ws * tile_H) + (ht * tile_W);
+                        std::memcpy(&tilized_result[dst_idx], &in_row_major[src_idx], tile_W * sizeof(T));
+                    }
                 }
             }
         }
@@ -101,14 +128,40 @@ std::vector<T> convert_layout_tile_swizzled_to_row_major(
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
     result.resize(in_tile_swizzled.size());
-    for (size_t b = 0; b < B; b++) {
-        for (size_t hs = 0; hs < H; hs += tile_H) {
-            for (size_t ws = 0; ws < W; ws += tile_W) {
-                for (size_t ht = 0; ht < tile_H; ht++) {
-                    // Note: the only difference with tilize_row_major - switched src and dst indices
-                    size_t src_idx = (b * H * W) + (hs * W) + (ws * tile_H) + (ht * tile_W);
-                    size_t dst_idx = (b * H * W) + ((hs + ht) * W) + ws;
-                    std::memcpy(&result[dst_idx], &in_tile_swizzled[src_idx], tile_W * sizeof(T));
+
+    // Use multi-threading if the number of batches is large enough
+    const size_t min_batch_for_threading = 4;
+    if (B >= min_batch_for_threading) {
+        std::vector<std::thread> threads;
+        threads.reserve(B);
+        for (size_t b = 0; b < B; ++b) {
+            threads.emplace_back([b, B, H, W, tile_H, tile_W, &in_tile_swizzled, &result]() {
+                for (size_t hs = 0; hs < H; hs += tile_H) {
+                    for (size_t ws = 0; ws < W; ws += tile_W) {
+                        for (size_t ht = 0; ht < tile_H; ht++) {
+                            // Note: the only difference with tilize_row_major - switched src and dst indices
+                            size_t src_idx = (b * H * W) + (hs * W) + (ws * tile_H) + (ht * tile_W);
+                            size_t dst_idx = (b * H * W) + ((hs + ht) * W) + ws;
+                            std::memcpy(&result[dst_idx], &in_tile_swizzled[src_idx], tile_W * sizeof(T));
+                        }
+                    }
+                }
+            });
+        }
+        for (auto& t : threads) {
+            t.join();
+        }
+    } else {
+        // Single-threaded version
+        for (size_t b = 0; b < B; b++) {
+            for (size_t hs = 0; hs < H; hs += tile_H) {
+                for (size_t ws = 0; ws < W; ws += tile_W) {
+                    for (size_t ht = 0; ht < tile_H; ht++) {
+                        // Note: the only difference with tilize_row_major - switched src and dst indices
+                        size_t src_idx = (b * H * W) + (hs * W) + (ws * tile_H) + (ht * tile_W);
+                        size_t dst_idx = (b * H * W) + ((hs + ht) * W) + ws;
+                        std::memcpy(&result[dst_idx], &in_tile_swizzled[src_idx], tile_W * sizeof(T));
+                    }
                 }
             }
         }
