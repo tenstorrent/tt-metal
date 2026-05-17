@@ -10,6 +10,7 @@
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal {
 
@@ -76,13 +77,33 @@ bool run_att_write_perf(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
     constexpr const char* DM_KERNEL = "att_write_perf";
     constexpr uint32_t kSrcAddr = 0x10000;
     constexpr uint32_t kDstAddr = 0x20000;
-    constexpr uint32_t kMasterX = 0;
-    constexpr uint32_t kMasterY = 0;
-    constexpr uint32_t kDstX = 1;
-    constexpr uint32_t kDstY = 0;
+    constexpr uint32_t kMasterLogicalX = 0;
+    constexpr uint32_t kMasterLogicalY = 0;
+    constexpr uint32_t kDstLogicalX = 1;
+    constexpr uint32_t kDstLogicalY = 0;
     constexpr uint32_t kPayloadBytes = 16;
     constexpr uint32_t kNumIters = 1000;
-    const experimental::metal2_host_api::NodeCoord node{kMasterX, kMasterY};
+
+    // The kernel writes data via the NOC and configures ATT endpoint entries
+    // using physical NOC coordinates, so convert from logical here.
+    IDevice* device = mesh_device->get_devices()[0];
+    const CoreCoord master_core{kMasterLogicalX, kMasterLogicalY};
+    const CoreCoord dst_core{kDstLogicalX, kDstLogicalY};
+    const CoreCoord master_phys = device->worker_core_from_logical_core(master_core);
+    const CoreCoord dst_phys = device->worker_core_from_logical_core(dst_core);
+    log_info(
+        tt::LogTest,
+        "AttWritePerf: master logical ({},{}) -> physical ({},{}); dst logical ({},{}) -> physical ({},{})",
+        master_core.x,
+        master_core.y,
+        master_phys.x,
+        master_phys.y,
+        dst_core.x,
+        dst_core.y,
+        dst_phys.x,
+        dst_phys.y);
+
+    const experimental::metal2_host_api::NodeCoord node{kMasterLogicalX, kMasterLogicalY};
 
     experimental::metal2_host_api::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
@@ -91,10 +112,10 @@ bool run_att_write_perf(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
         .compile_time_arg_bindings =
             {{"src_addr", kSrcAddr},
              {"dst_addr", kDstAddr},
-             {"dst_x", kDstX},
-             {"dst_y", kDstY},
-             {"master_x", kMasterX},
-             {"master_y", kMasterY},
+             {"dst_x", static_cast<uint32_t>(dst_phys.x)},
+             {"dst_y", static_cast<uint32_t>(dst_phys.y)},
+             {"master_x", static_cast<uint32_t>(master_phys.x)},
+             {"master_y", static_cast<uint32_t>(master_phys.y)},
              {"payload_bytes", kPayloadBytes},
              {"num_iters", kNumIters}},
         .config_spec =
@@ -122,6 +143,18 @@ bool run_att_write_perf(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
     }};
     experimental::metal2_host_api::SetProgramRunParameters(program, params);
 
+    // Seed master's source L1 with a known pattern and zero the destination so
+    // we can detect whether the writes (any phase) landed at all.
+    const uint32_t num_words = kPayloadBytes / sizeof(uint32_t);
+    std::vector<uint32_t> pattern(num_words);
+    for (uint32_t i = 0; i < num_words; i++) {
+        pattern[i] = 0xCAFE0000u | i;
+    }
+    std::vector<uint32_t> zeros(num_words, 0);
+    tt_metal::detail::WriteToDeviceL1(device, master_core, kSrcAddr, pattern);
+    tt_metal::detail::WriteToDeviceL1(device, dst_core, kDstAddr, zeros);
+    MetalContext::instance().get_cluster().l1_barrier(device->id());
+
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
     workload.add_program(device_range, std::move(program));
@@ -129,6 +162,30 @@ bool run_att_write_perf(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
+    // After both phases all 6 DMs have repeatedly written the pattern to
+    // dst_core/kDstAddr. The last write wins, so dst should equal pattern
+    // if either phase actually transferred data.
+    std::vector<uint32_t> readback;
+    tt_metal::detail::ReadFromDeviceL1(device, dst_core, kDstAddr, kPayloadBytes, readback);
+
+    if (readback != pattern) {
+        log_error(
+            tt::LogTest,
+            "AttWritePerf validity check failed: destination L1 at logical ({},{})+0x{:x} did not "
+            "match the seeded pattern",
+            kDstLogicalX,
+            kDstLogicalY,
+            kDstAddr);
+        log_info(tt::LogTest, "expected ({} words):", num_words);
+        for (uint32_t i = 0; i < num_words; i++) {
+            log_info(tt::LogTest, "  [{}] 0x{:08x}", i, pattern[i]);
+        }
+        log_info(tt::LogTest, "got:");
+        for (uint32_t i = 0; i < readback.size(); i++) {
+            log_info(tt::LogTest, "  [{}] 0x{:08x}", i, readback[i]);
+        }
+        return false;
+    }
     return true;
 }
 
