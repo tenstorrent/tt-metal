@@ -306,28 +306,22 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
                 ..., t * hw_per_frame : (t + 1) * hw_per_frame, t * K_per_frame : (t + 1) * K_per_frame
             ] = 0.0
 
-        def _upload(t_BCsk: torch.Tensor, pad_value: float) -> ttnn.Tensor:
-            return from_torch(
-                t_BCsk.contiguous(),
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_axes=[None, None, sp_axis, None],
-                pad_value=pad_value,
-            )
-
-        # TILE_LAYOUT pads Sk → next TILE multiple. The noisy mask must pad
-        # with -inf so SDPA softmax does not attend to the zero-filled padded
-        # K positions (which would dilute the attention output by ~20% on
-        # typical configs). The const mask is all-zero; pad with 0.0.
+        # TILE_LAYOUT pads Sk to the next TILE multiple. The noisy mask pads
+        # with -inf so SDPA softmax ignores the zero-filled padded K columns;
+        # the all-zero const mask pads with 0.0.
+        upload_kwargs = dict(
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_axes=[None, None, sp_axis, None],
+        )
+        noisy_mask_tt = from_torch(noisy_mask_torch.contiguous(), pad_value=float("-inf"), **upload_kwargs)
         if padded_const > 0:
             const_mask_torch = torch.zeros(1, 1, padded_const, Sk, dtype=torch.float32)
-            mask_tt = ttnn.concat(
-                [_upload(noisy_mask_torch, pad_value=float("-inf")), _upload(const_mask_torch, pad_value=0.0)],
-                dim=-2,
-            )
+            const_mask_tt = from_torch(const_mask_torch.contiguous(), pad_value=0.0, **upload_kwargs)
+            mask_tt = ttnn.concat([noisy_mask_tt, const_mask_tt], dim=-2)
         else:
-            mask_tt = _upload(noisy_mask_torch, pad_value=float("-inf"))
+            mask_tt = noisy_mask_tt
 
         self._frame_attn_mask_cache[cache_key] = mask_tt
         return mask_tt
@@ -424,19 +418,12 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
             cos_const = pad_vision_seq_parallel(cos_const, num_devices=sp_factor)
             sin_const = pad_vision_seq_parallel(sin_const, num_devices=sp_factor)
 
-        def _upload_rope_seg(t: torch.Tensor) -> ttnn.Tensor:
-            return from_torch(
-                t.contiguous(),
-                device=self.mesh_device,
-                dtype=ttnn.float32,
-                mesh_axes=[..., sp_axis, None],
-            )
-
-        cos_n_tt = _upload_rope_seg(cos_noisy)
-        sin_n_tt = _upload_rope_seg(sin_noisy)
+        rope_upload_kwargs = dict(device=self.mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None])
+        cos_n_tt = from_torch(cos_noisy.contiguous(), **rope_upload_kwargs)
+        sin_n_tt = from_torch(sin_noisy.contiguous(), **rope_upload_kwargs)
         if N_const > 0:
-            cos_c_tt = _upload_rope_seg(cos_const)
-            sin_c_tt = _upload_rope_seg(sin_const)
+            cos_c_tt = from_torch(cos_const.contiguous(), **rope_upload_kwargs)
+            sin_c_tt = from_torch(sin_const.contiguous(), **rope_upload_kwargs)
             cos_tt = ttnn.concat([cos_n_tt, cos_c_tt], dim=-2)
             sin_tt = ttnn.concat([sin_n_tt, sin_c_tt], dim=-2)
         else:
@@ -501,17 +488,18 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         # 2D shard matches spatial_1BND's per-device layout so binary_ng's
         # last-two-dim broadcast classifier picks NONE.
         shard_mapping = {sp_axis: 2, tp_axis: 3}
-
-        def _upload(t: torch.Tensor) -> ttnn.Tensor:
-            return bf16_tensor_2dshard(
-                t.unsqueeze(0).to(torch.float32).contiguous(),
-                self.mesh_device,
-                shard_mapping=shard_mapping,
-                layout=ttnn.TILE_LAYOUT,
-            )
-
-        shift_tt = _upload(shift_per_token)
-        scale_tt = _upload(scale_per_token)
+        shift_tt = bf16_tensor_2dshard(
+            shift_per_token.unsqueeze(0).to(torch.float32).contiguous(),
+            self.mesh_device,
+            shard_mapping=shard_mapping,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        scale_tt = bf16_tensor_2dshard(
+            scale_per_token.unsqueeze(0).to(torch.float32).contiguous(),
+            self.mesh_device,
+            shard_mapping=shard_mapping,
+            layout=ttnn.TILE_LAYOUT,
+        )
         self._adain_modulation_cache[cache_key] = (shift_tt, scale_tt)
         return shift_tt, scale_tt
 
@@ -550,7 +538,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         if self.enable_adain and self.audio_emb_global_token0_dev is not None:
             shift_full, scale_plus_one_full = self._build_adain_modulation_for_layer(audio_attn_id, N)
             x_normed = block.norm1(spatial_1BND)
-            normed = ttnn.add(ttnn.multiply(x_normed, scale_plus_one_full), shift_full)
+            normed = ttnn.addcmul(shift_full, x_normed, scale_plus_one_full)
         else:
             normed = block.norm1(spatial_1BND)
 
@@ -715,27 +703,28 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         # Per-segment build + on-device concat (same reason as the rope path):
         # a naive global SP-shard of ``[padded_N_total, 1]`` wouldn't match the
         # per-device ``[noisy_local | const_local]`` spatial layout.
-        def _upload_seg(t_BNF: torch.Tensor) -> ttnn.Tensor:
-            return float32_tensor(
-                t_BNF.contiguous(),
-                device=self.mesh_device,
-                mesh_axis=sp_axis,
-                shard_dim=2,
-                layout=ttnn.TILE_LAYOUT,
-            )
+        seg_upload_kwargs = dict(device=self.mesh_device, mesh_axis=sp_axis, shard_dim=2, layout=ttnn.TILE_LAYOUT)
 
         mask_n_noisy_torch = torch.zeros(1, 1, padded_N_noisy, 1, dtype=torch.float32)
         mask_n_noisy_torch[:, :, :N_noisy, :] = 1.0
         mask_n_const_torch = torch.zeros(1, 1, padded_const, 1, dtype=torch.float32)
         self._cached_mask_noisy = ttnn.concat(
-            [_upload_seg(mask_n_noisy_torch), _upload_seg(mask_n_const_torch)], dim=-2
+            [
+                float32_tensor(mask_n_noisy_torch.contiguous(), **seg_upload_kwargs),
+                float32_tensor(mask_n_const_torch.contiguous(), **seg_upload_kwargs),
+            ],
+            dim=-2,
         )
 
         mask_c_noisy_torch = torch.zeros(1, 1, padded_N_noisy, 1, dtype=torch.float32)
         mask_c_const_torch = torch.zeros(1, 1, padded_const, 1, dtype=torch.float32)
         mask_c_const_torch[:, :, : N_ref + N_motion, :] = 1.0
         self._cached_mask_constant = ttnn.concat(
-            [_upload_seg(mask_c_noisy_torch), _upload_seg(mask_c_const_torch)], dim=-2
+            [
+                float32_tensor(mask_c_noisy_torch.contiguous(), **seg_upload_kwargs),
+                float32_tensor(mask_c_const_torch.contiguous(), **seg_upload_kwargs),
+            ],
+            dim=-2,
         )
 
         # Zero-timestep projection: same shape as the per-step real-t
@@ -788,8 +777,10 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         shift_r, scale_r, gate_r, c_shift_r, c_scale_r, c_gate_r = ttnn.chunk(shifted_real, 6, dim=2)
         shift_z, scale_z, gate_z, c_shift_z, c_scale_z, c_gate_z = ttnn.chunk(shifted_zero, 6, dim=2)
 
-        # Match the base block's fp32→bf16 cast for the gates (the addcmul
-        # path uses bf16 because fp32 gate input was less accurate).
+        # ``ttnn.addcmul`` requires all three operands to share the spatial's
+        # bf16 dtype; gates are the only modulation tensors that go through it
+        # below, so typecast just those (matches T2V's "addcmul less accurate
+        # with fp32 gate" workaround in ``transformer_wan.py``).
         gate_r = ttnn.typecast(gate_r, dtype=ttnn.bfloat16)
         gate_z = ttnn.typecast(gate_z, dtype=ttnn.bfloat16)
         c_gate_r = ttnn.typecast(c_gate_r, dtype=ttnn.bfloat16)
@@ -810,7 +801,9 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         c_scale_msa = _per_token(c_scale_r, c_scale_z)
         c_gate_msa = _per_token(c_gate_r, c_gate_z)
 
-        # Self-attention
+        # Self-attention. Modulation stays as add(multiply, ...) because
+        # shift/scale are fp32 and spatial is bf16 — addcmul would force an
+        # extra typecast that exceeds its savings here.
         spatial_normed = block.norm1(spatial_1BND)
         spatial_normed = ttnn.add(
             ttnn.multiply(spatial_normed, ttnn.add(scale_msa, 1.0)),
@@ -823,7 +816,8 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
             rope_sin=rope_sin,
             trans_mat=trans_mat,
         )
-        spatial_1BND = ttnn.add(spatial_1BND, ttnn.multiply(attn_out, gate_msa))
+        # Gate residual matches T2V's ``ttnn.addcmul(spatial, ff, c_gate)``.
+        spatial_1BND = ttnn.addcmul(spatial_1BND, attn_out, gate_msa)
 
         # Cross-attention. norm2 keeps its learned affine — the reference
         # calls ``norm2(x).float()`` with no per-segment scale/shift here.
@@ -846,7 +840,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
                 spatial_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
         ffn_out = block.ffn(spatial_normed, compute_kernel_config=block.ff_compute_kernel_config)
-        spatial_1BND = ttnn.add(spatial_1BND, ttnn.multiply(ffn_out, c_gate_msa))
+        spatial_1BND = ttnn.addcmul(spatial_1BND, ffn_out, c_gate_msa)
 
         return spatial_1BND
 
