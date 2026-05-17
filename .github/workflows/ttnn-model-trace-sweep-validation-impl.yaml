@@ -237,6 +237,7 @@ jobs:
         env:
           SCOPE_TARGET: ${{ inputs.scope-targets }}
           PINNED_TRACE_ID: ${{ inputs.pinned-trace-id }}
+          MODELS_FILTER: ${{ inputs.models-filter }}
         run: |
           EXPORT_DIR="tests/sweep_framework/vectors_export"
           SCOPED_VECTORS_DIR="tests/sweep_framework/validation_vectors"
@@ -278,9 +279,11 @@ jobs:
           fi
 
           if [[ "${SCOPE_TARGET}" == "lead_models" || "${SCOPE_TARGET}" == "all" ]]; then
+            _lead_mode=lead
+            if [[ -n "${MODELS_FILTER}" ]]; then _lead_mode=all; fi
             generate_scope_vectors \
               lead_models \
-              --model-traced lead \
+              --model-traced $_lead_mode \
               --suite-name model_traced \
               --group-by hw \
               --master-trace /work/model_tracer/traced_operations/ttnn_operations_master.json \
