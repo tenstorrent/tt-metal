@@ -627,16 +627,24 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self._sdpa_pc_cache: dict = {}
 
     def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
+        key = (seq_q, seq_k)
+        cached = self._sdpa_pc_cache.get(key)
+        if cached is not None:
+            return cached
+
         q_chunk = max(64, min(256, nearest_32(seq_q)))
         k_chunk = max(64, min(256, nearest_32(seq_k)))
-        return ttnn.SDPAProgramConfig(
+        out = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
             exp_approx_mode=False,
         )
+        self._sdpa_pc_cache[key] = out
+        return out
 
     def _linear(
         self,
@@ -874,8 +882,14 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             else None
         )
         self._conv1d_prepared_cache: Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]] = {}
+        self._sdpa_pc_cache: dict = {}
 
     def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
+        key = (seq_q, seq_k)
+        cached = self._sdpa_pc_cache.get(key)
+        if cached is not None:
+            return cached
+
         m = max(seq_q, seq_k)
         if m > 96:
             cap = 32
@@ -887,12 +901,14 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             cap = 256
         q_chunk = max(32, min(cap, nearest_32(seq_q)))
         k_chunk = max(32, min(cap, nearest_32(seq_k)))
-        return ttnn.SDPAProgramConfig(
+        out = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
             exp_approx_mode=False,
         )
+        self._sdpa_pc_cache[key] = out
+        return out
 
     def _linear(
         self,
