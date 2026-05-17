@@ -59,15 +59,20 @@ if model_traced_params:
 
 
 _GLOBAL_CB = None
+_PREFETCHER_INFO = None
+
 
 def mesh_device_fixture():
-    global _GLOBAL_CB
+    global _GLOBAL_CB, _PREFETCHER_INFO
     mesh_shape = get_model_traced_mesh_shape()
     device = create_mesh_device(mesh_shape)
     result = setup_sub_device_manager(device)
     sub_device_mgr = None
     if isinstance(result, tuple):
-        sub_device_mgr, _GLOBAL_CB = result
+        if len(result) == 3:
+            sub_device_mgr, _GLOBAL_CB, _PREFETCHER_INFO = result
+        else:
+            sub_device_mgr, _GLOBAL_CB = result
     else:
         sub_device_mgr = result
     device_name = ttnn.get_arch_name()
@@ -593,6 +598,35 @@ def run(
         # __absent_keys__ tells us which form the vector preserves.
         _absent = kwargs.get("__absent_keys__", set()) or set()
         _used_named_b = "input_b_shape" in _absent and "input_tensor_b_shape" not in _absent
+
+        # Dispatch dram_prefetcher before linear when global_cb is active.
+        if _GLOBAL_CB is not None and "global_cb" in linear_kwargs and _PREFETCHER_INFO is not None:
+            try:
+                _pi = _PREFETCHER_INFO
+                _dram_cores = _pi["dram_cores"]
+                _sender_crs = _pi["sender_core_range_set"]
+                _t_addrs = torch.tensor([ttnn_b.buffer_address()], dtype=torch.int64)
+                _t_addrs = _t_addrs.repeat(len(_dram_cores), 1)
+                _t_addrs_mc = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(
+                        _sender_crs,
+                        [_t_addrs.shape[0] // len(_dram_cores), _t_addrs.shape[1]],
+                        ttnn.ShardOrientation.ROW_MAJOR,
+                    ),
+                )
+                _tt_addrs = ttnn.from_torch(
+                    _t_addrs,
+                    dtype=ttnn.uint32,
+                    device=device,
+                    memory_config=_t_addrs_mc,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                )
+                ttnn.dram_prefetcher([ttnn_b, _tt_addrs], num_layers=1, global_cb=_GLOBAL_CB)
+                device.set_sub_device_stall_group([ttnn.SubDeviceId(1)])
+            except Exception as _pf_err:
+                print(f"Warning: dram_prefetcher dispatch failed: {_pf_err}")
 
         def _do_linear(_a, _b, **_kw):
             if _used_named_b:
