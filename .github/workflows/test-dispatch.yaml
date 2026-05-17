@@ -53,6 +53,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      run-code-coverage:
+        required: false
+        type: boolean
+        default: false
+        description: "Run the nightly code coverage workflow instead of a custom command"
 
 run-name: ${{ inputs.description }}
 jobs:
@@ -136,3 +141,8 @@ jobs:
         shell: bash
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+
+  code-coverage:
+    if: ${{ inputs.run-code-coverage }}
+    uses: ./.github/workflows/code-coverage.yaml
+    secrets: inherit
