@@ -117,6 +117,29 @@ class TtMistral4TextModel:
         self.sin_table_tt: ttnn.Tensor | None = None
         self._rope_table_positions: int = 0
 
+        # ── Pre-allocated per-step device tensors for decode ──────────────
+        # The decode loop calls ttnn.as_tensor(...) for input_id and
+        # current_pos every step. as_tensor on a 4-device mesh allocates
+        # fresh device buffers and runs ReplicateTensorToMesh. Pre-allocating
+        # once and updating in-place via ttnn.copy_host_to_device_tensor
+        # skips the per-step device allocation and the mesh-mapper dispatch.
+        self._decode_input_id_device = ttnn.as_tensor(
+            torch.zeros((1, 1), dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        self._decode_cur_pos_device = ttnn.as_tensor(
+            torch.zeros(1, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
     # ── RoPE table caching ─────────────────────────────────────────────────
 
     def cache_rope_tables(self, cos_full: torch.Tensor, sin_full: torch.Tensor) -> None:
@@ -333,6 +356,28 @@ class TtMistral4TextModel:
         ttnn.deallocate(x)
         return logits_tt
 
+    def _decode_upload_step_state(self, input_id: torch.Tensor, current_pos: int) -> None:
+        """Update pre-allocated input_id and cur_pos device tensors in-place.
+
+        Skips the per-step device allocation and ReplicateTensorToMesh dispatch
+        that ttnn.as_tensor(device=...) does for small per-step tensors.
+        """
+        input_id_host = ttnn.from_torch(
+            input_id.to(torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(input_id_host, self._decode_input_id_device)
+
+        cur_pos_host = ttnn.from_torch(
+            torch.tensor([current_pos], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(cur_pos_host, self._decode_cur_pos_device)
+
     def decode(self, input_id: torch.Tensor, current_pos: int) -> torch.Tensor:
         """
         Decode one token at position ``current_pos``.
@@ -344,26 +389,22 @@ class TtMistral4TextModel:
         Returns:
             logits: [1, 1, vocab_size] bfloat16 CPU tensor
         """
+        self._decode_upload_step_state(input_id, current_pos)
+
         cos_tt, sin_tt = self._rope_slice(current_pos, current_pos + 1)
 
-        x = self._embed(input_id)
+        x = ttnn.embedding(
+            self._decode_input_id_device,
+            self.embed_weight,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         x = ttnn.reshape(x, [1, 1, 1, HIDDEN_SIZE])
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
-        # One upload for all 36 layers instead of one per layer.
-        cur_pos_tensor = ttnn.as_tensor(
-            torch.tensor([current_pos], dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-
         for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
-            x = layer.forward_decode(x, cos_tt, sin_tt, kv_cache, current_pos, cur_pos_tensor)
+            x = layer.forward_decode(x, cos_tt, sin_tt, kv_cache, current_pos, self._decode_cur_pos_device)
 
-        ttnn.deallocate(cur_pos_tensor)
         ttnn.deallocate(cos_tt)
         ttnn.deallocate(sin_tt)
 
@@ -400,25 +441,22 @@ class TtMistral4TextModel:
 
     def decode_next_token(self, input_id: torch.Tensor, current_pos: int) -> int:
         """Decode one token and return the greedy next token id (on-device argmax)."""
+        self._decode_upload_step_state(input_id, current_pos)
+
         cos_tt, sin_tt = self._rope_slice(current_pos, current_pos + 1)
 
-        x = self._embed(input_id)
+        x = ttnn.embedding(
+            self._decode_input_id_device,
+            self.embed_weight,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         x = ttnn.reshape(x, [1, 1, 1, HIDDEN_SIZE])
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
-        cur_pos_tensor = ttnn.as_tensor(
-            torch.tensor([current_pos], dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-
         for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
-            x = layer.forward_decode(x, cos_tt, sin_tt, kv_cache, current_pos, cur_pos_tensor)
+            x = layer.forward_decode(x, cos_tt, sin_tt, kv_cache, current_pos, self._decode_cur_pos_device)
 
-        ttnn.deallocate(cur_pos_tensor)
         ttnn.deallocate(cos_tt)
         ttnn.deallocate(sin_tt)
 
