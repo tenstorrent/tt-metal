@@ -40,6 +40,9 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
     const auto& input_shape = input_tensor_a.logical_shape();
+    // DEBUG #44565: confirm this fires on every invocation vs cache hit path
+    log_info(tt::LogOp, "conv3d DEBUG validate_on_program_cache_miss: N={} full_shape=[{},{},{},{},{}]",
+        input_shape[0], input_shape[0], input_shape[1], input_shape[2], input_shape[3], input_shape[4]);
 
     TT_FATAL(
         input_tensor_a.logical_shape().size() == 5,

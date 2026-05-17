@@ -374,6 +374,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
             ? tt::div_up(W_shard_full_for_coalesce, device_num_dram_banks) * coalesced_read_row_bytes
             : 0;
 
+    // DEBUG #44565: log every cache miss (fresh program creation)
+    log_info(tt::LogOp, "conv3d DEBUG create (CACHE MISS): N={} T_in={} H_in={} W_in={} C_in={} C_out={}", N, T_in, H_in, W_in, C_in, C_out);
     log_debug(tt::LogOp, "Input tensor shape: N={}, T={}, H={}, W={}, C={}", N, T_in, H_in, W_in, C_in);
     log_debug(tt::LogOp, "Output tensor shape: T={}, H={}, W={}, C={}", T_out, H_out, W_out, C_out);
     log_debug(
@@ -639,6 +641,11 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         static_cast<uint32_t>(enable_dram_read_staging),
         dram_read_alignment};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
+
+    // DEBUG #44565: log compile-time args[1] = N to confirm correct value baked into kernel
+    log_info(tt::LogOp, "conv3d DEBUG reader_compile_time_args: [0]={} [1](N)={} [2](T_in)={} [3](H_in)={} [4](W_in)={} [5](C_in)={}",
+        reader_compile_time_args[0], reader_compile_time_args[1], reader_compile_time_args[2],
+        reader_compile_time_args[3], reader_compile_time_args[4], reader_compile_time_args[5]);
 
     auto reader_kernels_id = CreateKernel(
         program,
@@ -1193,6 +1200,37 @@ void Conv3dProgramFactory::override_runtime_arguments(
     auto weight_addr = tensor_args.weight_tensor.buffer()->address();
     auto output_addr = tensor_return_value.buffer()->address();
     auto bias_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
+
+    // DEBUG #44565: log every cache hit so we know N and addresses
+    {
+        const auto& input_shape = tensor_args.input_tensor.logical_shape();
+        uint32_t N_actual = input_shape[0];
+        log_info(
+            tt::LogOp,
+            "conv3d DEBUG override_runtime_arguments (CACHE HIT): N={} input_addr={:#010x} output_addr={:#010x} "
+            "weight_addr={:#010x} num_cores={}",
+            N_actual,
+            input_addr,
+            output_addr,
+            weight_addr,
+            num_cores);
+        // Also log existing reader_args[1] to see what N compile-time baked value might have been
+        if (num_cores > 0) {
+            CoreCoord core0 = cores.at(0);
+            auto& ra = reader_args_by_core[core0.x][core0.y];
+            log_info(
+                tt::LogOp,
+                "conv3d DEBUG override_runtime_arguments core(0,0) reader_args: [0](input_addr)={:#010x} "
+                "[1]={} [2]={} [3]={} [4]={} [5]={} [6]={}",
+                ra.size() > 0 ? ra[0] : 0,
+                ra.size() > 1 ? ra[1] : 0,
+                ra.size() > 2 ? ra[2] : 0,
+                ra.size() > 3 ? ra[3] : 0,
+                ra.size() > 4 ? ra[4] : 0,
+                ra.size() > 5 ? ra[5] : 0,
+                ra.size() > 6 ? ra[6] : 0);
+        }
+    }
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = cores.at(i);
