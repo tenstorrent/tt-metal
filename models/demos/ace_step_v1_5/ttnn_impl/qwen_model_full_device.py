@@ -158,16 +158,18 @@ class AttentionFullDevice:
 
         if q_norm_weight is None or k_norm_weight is None:
             raise RuntimeError("AttentionFullDevice requires Qwen3 q_norm/k_norm weights.")
+        # Stage q_norm/k_norm weights as fp32 so the head RMSNorm runs in fp32 on the upgraded
+        # residual stream (matches HF Qwen3RMSNorm semantics).
         self.q_norm_w_tt = ttnn.from_torch(
-            q_norm_weight.unsqueeze(0).unsqueeze(0),
+            q_norm_weight.detach().to(dtype=torch.float32).unsqueeze(0).unsqueeze(0),
             device=device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
         )
         self.k_norm_w_tt = ttnn.from_torch(
-            k_norm_weight.unsqueeze(0).unsqueeze(0),
+            k_norm_weight.detach().to(dtype=torch.float32).unsqueeze(0).unsqueeze(0),
             device=device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
         )
 
@@ -199,7 +201,11 @@ class AttentionFullDevice:
         self._v_hist = None
 
     def __call__(self, x: Any, start_pos: int, mask_tt: Any = None) -> Any:
+        # Force fp32 output dtype so the residual stream the caller adds these into stays fp32 —
+        # bf16 ttnn.add at deep-layer activations (mean_abs ~700, max ~3000 on Qwen3 1.7B)
+        # quantizes residuals to multiples of ~2-16 and dominates per-layer PCC drift otherwise.
         ck_kw = dict(compute_kernel_config=self.compute_kernel_config) if self.compute_kernel_config is not None else {}
+        ck_kw["dtype"] = ttnn.float32
         xq = ttnn.matmul(x, self.wq, **ck_kw)
         xk = ttnn.matmul(x, self.wk, **ck_kw)
         xv = ttnn.matmul(x, self.wv, **ck_kw)
@@ -298,7 +304,11 @@ class AttentionFullDevice:
         out = ttnn.permute(ctx, (0, 2, 1, 3))
         S_out = int(out.shape[1])
         out = ttnn.reshape(out, (1, B, S_out, self.hidden_size))
-        return ttnn.matmul(out, self.wo, **ck_kw)
+        # wo matmul: bf16 weight × fp32 act × fp32 dest accumulator, fp32 output to keep residual
+        # stream in fp32 (avoids deep-layer bf16 quantization on Qwen3 1.7B).
+        wo_kw = dict(ck_kw)
+        wo_kw["dtype"] = ttnn.float32
+        return ttnn.matmul(out, self.wo, **wo_kw)
 
 
 class TransformerBlockFullDevice:
@@ -365,16 +375,18 @@ class TransformerBlockFullDevice:
             compute_kernel_config=compute_kernel_config,
         )
         self.rms_norm_eps = float(config.rms_norm_eps)
+        # fp32 RMSNorm weights so the variance reduction stays in fp32 on the upgraded residual
+        # stream (matches HF Qwen3RMSNorm precision).
         self.input_layernorm_w = ttnn.from_torch(
-            layer_weights["input_layernorm.weight"].unsqueeze(0).unsqueeze(0),
+            layer_weights["input_layernorm.weight"].detach().to(dtype=torch.float32).unsqueeze(0).unsqueeze(0),
             device=device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
         )
         self.post_attention_layernorm_w = ttnn.from_torch(
-            layer_weights["post_attention_layernorm.weight"].unsqueeze(0).unsqueeze(0),
+            layer_weights["post_attention_layernorm.weight"].detach().to(dtype=torch.float32).unsqueeze(0).unsqueeze(0),
             device=device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
         )
 
@@ -455,10 +467,11 @@ class QwenModelFullDevice:
                 print(f"  Loaded {layer_id + 1}/{self.config.num_hidden_layers} layers")
 
         self.rms_norm_eps = float(self.config.rms_norm_eps)
+        # Final norm weight in fp32 to preserve precision on the fp32 residual stream.
         self.norm_w = ttnn.from_torch(
-            state_dict["model.norm.weight"].unsqueeze(0).unsqueeze(0),
+            state_dict["model.norm.weight"].detach().to(dtype=torch.float32).unsqueeze(0).unsqueeze(0),
             device=device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
         )
         self.lm_head = ttnn.from_torch(
@@ -479,6 +492,10 @@ class QwenModelFullDevice:
             hidden_size=int(self.config.hidden_size),
             start_pos=int(start_pos),
         )
+        # Upgrade the residual stream to fp32. Each layer's matmuls now output fp32, the RMSNorm
+        # weights are fp32, and ttnn.add stays in fp32 — no per-layer bf16 quantization on the
+        # residual stream (the dominant remaining drift on Qwen3 1.7B before this fix).
+        h_tt = ttnn.typecast(h_tt, dtype=ttnn.float32)
         for layer in self.layers:
             h_tt = layer(h_tt, int(start_pos), mask_tt, position_embeddings=None)
         if mask_tt is not None and hasattr(ttnn, "deallocate"):
@@ -491,6 +508,10 @@ class QwenModelFullDevice:
         ck_kw = (
             dict(compute_kernel_config=self._compute_kernel_config) if self._compute_kernel_config is not None else {}
         )
+        # lm_head matmul: bf16 weight × fp32 act × fp32 dest accumulator → fp32 logits, matches
+        # the host-attention QwenModel path so the experimental wrapper's downstream consumers
+        # see the same precision regardless of which body they pick.
+        ck_kw["dtype"] = ttnn.float32
         return ttnn.matmul(h_tt, self.lm_head, **ck_kw)
 
     def reset_kv_cache(self) -> None:
