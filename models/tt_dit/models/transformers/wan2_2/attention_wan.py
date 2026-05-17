@@ -308,7 +308,9 @@ class WanAttention(Module):
         trans_mat: ttnn.Tensor | None = None,
         addcmul_residual: ttnn.Tensor | None = None,
         addcmul_gate: ttnn.Tensor | None = None,
-    ) -> ttnn.Tensor:
+        cached_kv_BHNE: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        return_fresh_kv: bool = False,
+    ) -> ttnn.Tensor | tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]:
         """
         spatial_1BND: fractured N on SP, fracturd D on TP
         prompt_1BLP: replicated on SP, replicated D on TP (optional)
@@ -319,8 +321,19 @@ class WanAttention(Module):
         trans_mat: replicated
         addcmul_residual: (optional) residual tensor for fused matmul+addcmul (self-attn only)
         addcmul_gate: (optional) gate tensor for fused matmul+addcmul (self-attn only)
+        cached_kv_BHNE: (optional, cross-attn only) pre-computed
+            ``(k_BHNE, v_BHNE)`` post-projection + post-norm_k + post-head-split
+            tensors. When supplied, ``prompt_1BLP`` is ignored and the
+            ``to_kv`` matmul / ``norm_k`` / V head-split steps are skipped.
+            Used by the S2V audio injector which reuses the same audio K/V
+            across every diffusion step.
+        return_fresh_kv: (cross-attn only) when ``True`` AND
+            ``cached_kv_BHNE is None``, the freshly-computed
+            ``(k_BHNE, v_BHNE)`` is returned alongside the output so the
+            caller can cache them for future calls. When ``False`` (the
+            default), only the output tensor is returned.
 
-        If prompt_1BLP is not provided, run self-attention.
+        If prompt_1BLP is not provided (and no cached_kv_BHNE), run self-attention.
         Otherwise, run cross-attention on prompt.
 
         When addcmul_residual and addcmul_gate are both provided (self-attention only),
@@ -328,7 +341,9 @@ class WanAttention(Module):
             output = addcmul_residual + to_out(attn_output) * addcmul_gate
 
         Outputs:
-        spatial_1BND: fractured N on SP, fractured D on TP
+        spatial_1BND: fractured N on SP, fractured D on TP. If
+        ``return_fresh_kv=True`` and the freshly-computed K/V path ran, the
+        return is the pair ``(spatial_1BND, (k_BHNE, v_BHNE))`` instead.
         """
 
         if rope_cos is not None:
@@ -336,6 +351,8 @@ class WanAttention(Module):
             assert rope_sin is not None
             assert trans_mat is not None
             assert prompt_1BLP is None
+            assert cached_kv_BHNE is None, "self-attention does not support cached_kv_BHNE"
+            assert not return_fresh_kv, "self-attention does not produce a K/V to cache"
 
         use_nonfused_agmm = (self.ccl_manager.topology == ttnn.Topology.Linear) and (
             self.parallel_config.tensor_parallel.factor > 1
@@ -345,6 +362,10 @@ class WanAttention(Module):
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
+        # Only the cross-attn freshly-computed K/V path can hand back K/V to
+        # cache; cached/self paths always return just the output tensor.
+        emit_fresh_kv = return_fresh_kv and (not self.is_self) and (cached_kv_BHNE is None)
+
         if self.is_self:
             # Fused QKV matmul with split output for self-attention
             q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
@@ -353,32 +374,27 @@ class WanAttention(Module):
                 parallel_config=None if use_nonfused_agmm else self.parallel_config,
             )
         else:
-            # Cross-attention: Q from spatial, fused KV from prompt
-            assert prompt_1BLP is not None
-            kv_input = prompt_1BLP
+            # Cross-attention: Q from spatial; K/V from prompt or from cache.
             q_1BNF = self.to_q(
                 spatial_1BND,
                 compute_kernel_config=self.mm_compute_kernel_config,
                 parallel_config=None if use_nonfused_agmm else self.parallel_config,
             )
-            k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
+            if cached_kv_BHNE is None:
+                assert prompt_1BLP is not None
+                k_1BNF, v_1BNF = self.to_kv(prompt_1BLP, compute_kernel_config=self.mm_compute_kernel_config)
+            else:
+                k_1BNF = None  # K/V already projected + normed + head-split below.
+                v_1BNF = None
 
         # Set norm output dtype to the input dtype required for ring self-attn.
         sdpa_input_dtype = getattr(self, "_sdpa_input_dtype", None)
         use_ring_sdpa = self.parallel_config.sequence_parallel.factor > 1
         norm_output_dtype = sdpa_input_dtype if (use_ring_sdpa and prompt_1BLP is None) else None
 
-        # Norm spatial before splitting heads
+        # Norm spatial Q (always recomputed since spatial changes each step).
         q_BHNE = self.norm_q(
             q_1BNF,
-            num_heads_per_device=self.n_local_heads,
-            rope_cos=rope_cos,
-            rope_sin=rope_sin,
-            trans_mat=trans_mat,
-            dtype=norm_output_dtype,
-        )
-        k_BHNE = self.norm_k(
-            k_1BNF,
             num_heads_per_device=self.n_local_heads,
             rope_cos=rope_cos,
             rope_sin=rope_sin,
@@ -395,10 +411,26 @@ class WanAttention(Module):
             )
             return out
 
-        v_BHNE = create_heads(v_1BNF)
+        if cached_kv_BHNE is not None:
+            # K/V already post-projection, post-norm_k, post-head-split.
+            k_BHNE, v_BHNE = cached_kv_BHNE
+        else:
+            k_BHNE = self.norm_k(
+                k_1BNF,
+                num_heads_per_device=self.n_local_heads,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+                trans_mat=trans_mat,
+                dtype=norm_output_dtype,
+            )
+            v_BHNE = create_heads(v_1BNF)
 
-        if prompt_1BLP is None:
-            # Self attention
+        if self.is_self:
+            # Self attention. ``prompt_1BLP`` is always None on this path.
+            # We dispatch on ``self.is_self`` rather than ``prompt_1BLP is
+            # None`` so that cross-attn callers using a cached K/V (where
+            # ``prompt_1BLP`` is also None — e.g. the S2V audio injector) do
+            # not get misrouted into the ring SDPA self-attn path.
             if self.parallel_config.sequence_parallel.factor > 1:
                 # Q and K already cast by norm kernel; cast V and dummy joint inputs to match
                 dummy_joint = self.dummy_joint_input
@@ -515,4 +547,6 @@ class WanAttention(Module):
                 parallel_config=None if use_nonfused_agmm else self.parallel_config,
             )
 
+        if emit_fresh_kv:
+            return spatial_1BND, (k_BHNE, v_BHNE)
         return spatial_1BND

@@ -264,6 +264,9 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         )
         # New clip → invalidate per-shape mask cache (T may have changed).
         self._frame_attn_mask_cache = {}
+        # New clip → drop the per-injector audio K/V cache (the audio
+        # embedding it was projected from has just been rebuilt).
+        self.audio_injector.invalidate_audio_kv_cache()
 
         if audio_global_emb is not None:
             global_torch = local_device_to_torch(audio_global_emb)
@@ -629,13 +632,32 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
             normed = block.norm1(spatial_1BND)
 
         # Cross-attention with block-diagonal frame mask.
+        # ``merged_audio_emb_flat`` is constant for the clip → cache the
+        # post-projection K/V tensors per inject layer and reuse them on every
+        # diffusion step. Caller signal: pass cached_kv_BHNE=None to ask
+        # ``WanAttention.forward`` to return the freshly-computed K/V along
+        # with the output the first time; on subsequent calls pass the cached
+        # tuple. The cache is invalidated by ``prepare_audio_emb`` when the
+        # audio embedding is rebuilt for a new clip.
         mask = self._get_or_build_frame_attn_mask(N)
-        residual = self.audio_injector.injector[audio_attn_id](
-            spatial_1BND=normed,
-            prompt_1BLP=self.merged_audio_emb_flat,
-            N=int(spatial_1BND.shape[-2]),
-            cross_attn_mask=mask,
-        )
+        cached_kv = self.audio_injector._audio_kv_cache.get(audio_attn_id)  # noqa: SLF001
+        if cached_kv is None:
+            residual, fresh_kv = self.audio_injector.injector[audio_attn_id](
+                spatial_1BND=normed,
+                prompt_1BLP=self.merged_audio_emb_flat,
+                N=int(spatial_1BND.shape[-2]),
+                cross_attn_mask=mask,
+                return_fresh_kv=True,
+            )
+            self.audio_injector._audio_kv_cache[audio_attn_id] = fresh_kv  # noqa: SLF001
+        else:
+            residual = self.audio_injector.injector[audio_attn_id](
+                spatial_1BND=normed,
+                prompt_1BLP=None,
+                N=int(spatial_1BND.shape[-2]),
+                cross_attn_mask=mask,
+                cached_kv_BHNE=cached_kv,
+            )
         # Zero the audio contribution at const (ref+motion) and pad positions
         # so only noisy tokens get the cross-attn residual — matches the
         # reference's noisy-only ``rearrange`` audio injection. Without this

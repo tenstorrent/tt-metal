@@ -18,6 +18,7 @@ optimization effort should focus on BH-LB (2x4).
 """
 
 import statistics
+from pathlib import Path
 
 import numpy as np
 import PIL
@@ -31,8 +32,23 @@ from models.tt_dit.pipelines.wan.pipeline_wan_s2v import WanPipelineS2V
 
 from ....utils.test import line_params
 
-_REF_IMAGE_PATH = "./ref_image.png"
-_AUDIO_PATH = "./prompt_audio.wav"
+# Canonical example inputs (see ``test_pipeline_wan_s2v.py`` for the
+# resolution order — the files exceed the repo's 500 KB pre-commit cap
+# and are not tracked; tests look first in a local ``assets/`` dir, then
+# fall back to ``/home/kevinmi/wan2_2_ref/examples/``).
+_LOCAL_ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+_REF_REPO_EXAMPLES = Path("/home/kevinmi/wan2_2_ref/examples")
+
+
+def _resolve_asset(name: str) -> str | None:
+    for candidate in (_LOCAL_ASSETS_DIR / name, _REF_REPO_EXAMPLES / name):
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+_REF_IMAGE_PATH = _resolve_asset("pose.png")
+_AUDIO_PATH = _resolve_asset("talk.wav")
 _PROMPT = "a person is talking"
 _NEGATIVE_PROMPT = (
     "画面模糊，最差质量，画面模糊，细节模糊不清，情绪激动剧烈，手快速抖动，字幕，丑陋的，残缺的，"
@@ -76,6 +92,13 @@ def test_s2v_pipeline_performance(
     num_inference_steps: int,
 ) -> None:
     """Performance breakdown for WanPipelineS2V."""
+    if _REF_IMAGE_PATH is None or _AUDIO_PATH is None:
+        pytest.skip(
+            f"Reference inputs (pose.png, talk.wav) not found. Copy from "
+            f"{_REF_REPO_EXAMPLES} into {_LOCAL_ASSETS_DIR} or make the "
+            f"reference repo available at {_REF_REPO_EXAMPLES}."
+        )
+
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 

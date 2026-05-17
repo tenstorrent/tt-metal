@@ -721,6 +721,10 @@ class WanPipelineS2V(WanPipeline):
             )
             ref_video = ref_tensor.unsqueeze(2)  # [B, C, T=1, H, W]
             ref_latent_torch = self._encode_normalized(ref_video)
+        # Stash for ``_postprocess_latents_for_vae`` so the VAE decoder sees
+        # ref as temporal past (eliminates the first-frame color transient).
+        # Matches ``wan/speech2video.py:651-652``.
+        self._ref_latent_torch = ref_latent_torch
 
         # 3. Audio: load wav, run wav2vec2, resample to video_rate, bucket to video FPS.
         # Matches the reference flow in `wan/speech2video.py:encode_audio`:
@@ -768,11 +772,27 @@ class WanPipelineS2V(WanPipeline):
                 target_num_frames=num_latent_frames,
             )
 
-        # 4. Motion latents — VAE-encoded zero pixels, NOT literal latent zeros.
-        # (See module docstring for the latent-space rationale.)
+        # 4. Motion latents. Reference's ``drop_first_motion=True`` for the
+        # first clip (wan_s2v_14B.py:56) means ``prepare_cond_emb`` ignores
+        # ``motion_latents_torch`` on that path — skip the ~16s VAE encode of
+        # 73 zero pixel frames entirely and pass a zero placeholder of the
+        # right latent shape. When drop_first_motion=False (multi-clip), do
+        # the real encode so the latents reflect the actual pixel context.
+        drop_first_motion = True  # reference default for the first clip
         with _stage("s2v_vae_encode_motion"):
-            motion_pixels = torch.zeros(1, 3, MOTION_FRAMES_PIXEL, height, width, dtype=torch.float32)
-            motion_latents_torch = self._encode_normalized(motion_pixels)
+            if drop_first_motion:
+                lat_motion_frames = LAT_MOTION_FRAMES
+                motion_latents_torch = torch.zeros(
+                    1,
+                    self.vae.config.z_dim,
+                    lat_motion_frames,
+                    latents.shape[3],
+                    latents.shape[4],
+                    dtype=torch.float32,
+                )
+            else:
+                motion_pixels = torch.zeros(1, 3, MOTION_FRAMES_PIXEL, height, width, dtype=torch.float32)
+                motion_latents_torch = self._encode_normalized(motion_pixels)
 
         # 5. Pose conditioning (cond_states): zero pose; matches the reference's
         # ``COND[0] * 0`` shortcut when ``pose_video`` is not provided.
@@ -789,19 +809,81 @@ class WanPipelineS2V(WanPipeline):
         # Build the on-device caches for pose / ref / motion / mask. After
         # this call the transformer's ``inner_step`` consumes ``_cached_*``
         # attributes.
-        # ``drop_first_motion=True`` matches reference (wan_s2v_14B.py:56).
-        # An earlier HANDOFF A/B argued for False, but that was pre rope/
-        # motion_frames fixes — motion latent is now 19 frames (was 5), and
-        # the reference drops it for the first clip.
         with _stage("s2v_prepare_cond_emb"):
             self.transformer.prepare_cond_emb(
                 noisy_latents_torch=latents,
                 ref_latent_torch=ref_latent_torch,
                 motion_latents_torch=motion_latents_torch,
                 cond_states_torch=cond_states_torch,
-                drop_first_motion=True,
+                drop_first_motion=drop_first_motion,
             )
         return latents, None
+
+    # ------------------------------------------------------------------
+    # VAE-decode causal-boundary fix.
+    #
+    # The WAN VAE temporal decoder is causal stride-4: latent[0] produces
+    # only pixel[0] (no past context) while latent[1+] each produce 4 pixel
+    # frames using up to 3 past latents as causal context. The first ~5
+    # decoded pixel frames have measurably different color/std statistics
+    # than steady-state (frame 0 R-std was 42% higher than frame 40 on a
+    # 5-step test). Reference fix (``wan/speech2video.py:649-656``): prepend
+    # the encoded reference image latent before VAE decode so the decoder
+    # has 1 real past frame for the first noisy latent, then drop the
+    # prepended ref pixel frames + 3 more transient frames after decode.
+    # ------------------------------------------------------------------
+
+    # Total number of pixel frames to trim from the start of the decoded
+    # output after the ref-prepend. The reference's ``image[:, :, 3:]``
+    # (speech2video.py:656) drops 3; reference additionally drops 1 via
+    # ``image[:, :, -infer_frames:]`` (the ref-pure pixel) for a total of 4.
+    # We use 3, keeping the ref-pure pixel as frame 0 — for our single-clip
+    # case this gives a clean "starts from the ref image" transition.
+    _S2V_VAE_TRANSIENT_TRIM = 3
+
+    # NOTE: We do NOT override ``_round_num_frames`` here, even though the
+    # ref-prepend + post-decode trim could in principle support any
+    # ``num_frames``. Reference's ``infer_frames=80`` works upstream because
+    # the reference doesn't hit our problem op. Non-(4k+1) num_frames produce
+    # a per-device noisy padded size that triggers a ttnn ``binary_ng``
+    # "Invalid subtile broadcast type" assertion inside AdaIN modulation
+    # (same op bug that gates the cond_emb parity test). Once that ttnn bug
+    # is fixed, override ``_round_num_frames`` here to ``max(int(n), 1)``.
+
+    def _postprocess_latents_for_vae(self, latents):
+        ref = getattr(self, "_ref_latent_torch", None)
+        if ref is None:
+            return latents
+        # latents: [B, C, T_latent, H_lat, W_lat]. ref: same dims with T=1.
+        # The parent's caller has already denormalized ``latents`` to VAE
+        # input space (multiplied by std, added mean), so the prepended ref
+        # needs the same treatment to live in the same space.
+        ref = ref.to(dtype=latents.dtype, device=latents.device)
+        ref_denorm = ref * self._vae_latents_std + self._vae_latents_mean
+        # Record how many prepended latents we added so the post-decode hook
+        # knows how many "pure-ref" pixel frames to trim. Causal stride-4
+        # VAE decoder maps N latents to 4N-3 pixels; prepending K latents
+        # to a tail of M latents adds exactly K extra pure-ref pixels at the
+        # front (the rest of the size delta is the original tail latents
+        # now having causal past context — that's the desired effect).
+        self._s2v_prepended_latents = int(ref_denorm.shape[2])
+        return torch.cat([ref_denorm, latents], dim=2)
+
+    def _postprocess_video(self, video_torch, *, d2h_permute):
+        prepended = getattr(self, "_s2v_prepended_latents", 0)
+        if prepended == 0:
+            return video_torch
+        # Drop only the VAE-decoder transient frames; keep the ref-pure
+        # pixel(s) so the output starts with the VAE round-trip of the
+        # reference image. Reference's full trim is
+        # ``prepended + transient`` (speech2video.py:654-656); we trim
+        # ``transient`` only by design.
+        trim = self._S2V_VAE_TRANSIENT_TRIM
+        if d2h_permute is not None:
+            # (B, T, H, W, C) — T is dim 1.
+            return video_torch[:, trim:, :, :, :]
+        # (B, C, T, H, W) — T is dim 2.
+        return video_torch[:, :, trim:, :, :]
 
     def get_model_input(self, latents, cond_latents):
         return super().get_model_input(latents, None)

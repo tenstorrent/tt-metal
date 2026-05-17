@@ -200,10 +200,10 @@ def test_audio_injector_block_diagonal_vs_per_frame(
     logger.info(f"Reference per-frame output: shape={tuple(ref_flat.shape)}")
 
     # ---- Pure-pytorch block-diagonal mask reference. ----
-    # Mirrors /home/kevinmi/wan2_2_ref/wan/modules/model.py:158 WanCrossAttention,
-    # extended to take an explicit additive mask. Uses the SAME synthetic
-    # weights as the host per-frame reference and the TT path. Comparing this
-    # to the host per-frame reference isolates whether the per-frame ≡
+    # Mirrors the reference WanCrossAttention math, extended to take an
+    # explicit additive mask. Uses the SAME synthetic weights as the host
+    # per-frame reference and the TT path. Comparing this to the host
+    # per-frame reference isolates whether the per-frame ≡
     # block-diagonal-mask math is correct; comparing it to TT isolates whether
     # the TT implementation matches its pytorch equivalent.
     N_noisy = T_VIDEO * N_PER_FRAME

@@ -14,8 +14,6 @@ Test bar: PCC ≥ 0.99.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 import torch
 from loguru import logger
@@ -29,9 +27,6 @@ from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.tensor import local_device_to_torch
 from ....utils.test import line_params
-
-_REF_REPO = Path("/home/kevinmi/wan2_2_ref")
-
 
 # Reduced config. patch_size=(1,2,2), so pph = H_lat // 2, ppw = W_lat // 2.
 # Production 480p: F=21, H=480, W=832 → ppf=21, pph=30, ppw=52.

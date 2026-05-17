@@ -205,6 +205,17 @@ class MotionEncoder_tc(Module):
             dtype=dtype,
         )
 
+        # No-affine LayerNorm runs once between each conv stage; cumulative
+        # error over the 3 stages compounds, so use HiFi4 + fp32_dest_acc to
+        # keep PCC > 0.99 against the reference at ~5120 inner dim.
+        self.layer_norm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # padding_tokens is stored as-is, [1, 1, 1, hidden_dim].
         pass
@@ -230,28 +241,34 @@ class MotionEncoder_tc(Module):
         in_chan: int,
         out_chan: int,
     ) -> ttnn.Tensor:
-        """One conv-stage: ``[B_eff, T, in_chan]`` → causal-pad → conv → LN
-        (host, no-affine) → SiLU → TILE.
+        """One conv-stage: ``[B_eff, T, in_chan]`` → causal-pad (host) → conv
+        → on-device no-affine LayerNorm → SiLU → TILE.
 
-        The tensor is replicated across devices throughout this method, so
-        the LN runs in torch before re-upload — keeping no-affine LayerNorm
-        out of the ttnn op set (where it lives only as an affine-required
-        ``DistributedLayerNorm``).
+        The causal pad needs the prior conv's output reshaped to ``[B, T, C]``,
+        so the pad step runs on the host. After the conv, the LayerNorm + SiLU
+        chain stays entirely on device — ``ttnn.layer_norm`` operates directly
+        on the conv's TILE 5D output ``[B, T, 1, 1, C]`` with weight=bias=None
+        for the no-affine reference behavior.
         """
         x_torch = local_device_to_torch(x_tile_BTC).reshape(B_eff, -1, in_chan)
         x_torch_p = self._causal_pad_host(x_torch, kernel_size=3)
         x_5d = x_torch_p.reshape(B_eff, x_torch_p.shape[1], 1, 1, in_chan).contiguous()
         x_dev = ttnn.from_torch(x_5d, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = conv(x_dev)
-        x_torch_full = local_device_to_torch(x).reshape(B_eff, -1, out_chan)
-        x_torch_normed = torch.nn.functional.layer_norm(x_torch_full.float(), (out_chan,), eps=1e-6)
-        x_dev = ttnn.from_torch(
-            x_torch_normed,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+        x = conv(x_dev)  # TILE 5D [B_eff, T_post, 1, 1, out_chan]
+        x = ttnn.layer_norm(
+            x,
+            weight=None,
+            bias=None,
+            epsilon=1e-6,
+            compute_kernel_config=self.layer_norm_compute_kernel_config,
         )
-        return ttnn.silu(x_dev)
+        x = ttnn.silu(x)
+        # Collapse the singleton spatial dims so the returned tensor matches
+        # the prior 3D ``[B_eff, T_post, out_chan]`` contract that downstream
+        # stages (final_linear in the global branch, head-unmerge on the
+        # local branch) rely on.
+        t_post = int(x.shape[1])
+        return ttnn.reshape(x, [B_eff, t_post, out_chan])
 
     def forward(self, x_torch: torch.Tensor) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run the 3-stage encoder.
@@ -512,6 +529,28 @@ class AudioInjector_WAN(Module):
             )
         else:
             self.injector_adain_layers = ModuleList()
+
+        # Per-injector cache of post-projection (k_BHNE, v_BHNE) tensors. The
+        # audio embedding fed to all injectors is the same constant
+        # ``merged_audio_emb_flat`` for an entire clip's denoising loop, so
+        # the ``to_kv`` matmul + ``norm_k`` + head-split for each injector
+        # produces the same result on every diffusion step. Populated lazily
+        # on first use; cleared by :meth:`invalidate_audio_kv_cache` from the
+        # S2V transformer's ``prepare_audio_emb`` (which is called once per
+        # clip and may change the audio).
+        self._audio_kv_cache: dict[int, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+
+    def invalidate_audio_kv_cache(self) -> None:
+        """Drop the cached per-injector (k_BHNE, v_BHNE) tensors.
+
+        Called from the S2V transformer's ``prepare_audio_emb`` after the
+        per-clip audio embedding has been rebuilt — the cached K/V is stale
+        as soon as the audio changes.
+        """
+        for kv in self._audio_kv_cache.values():
+            for t in kv:
+                ttnn.deallocate(t)
+        self._audio_kv_cache = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # The HF pre-norm LayerNorms have no weights, so any leftover keys here
