@@ -205,6 +205,22 @@ def _build_encoder_self_mask_4d(attention_mask_2d: ttnn.Tensor, *, device: ttnn.
     return _ensure_tile_bf16_sdpa_mask(expanded)
 
 
+def _encoder_self_additive_mask_all_zeros_4d(batch: int, seq: int, device: ttnn.Device) -> ttnn.Tensor:
+    """Additive encoder self-attention mask when every position is valid (all keys visible).
+
+    Numerically matches ``_build_encoder_self_mask_4d`` on an all-ones ``[B, seq]`` mask (zero padding
+    contribution everywhere), but uses a single ``zeros`` tensor instead of ``eq`` / ``expand`` chains.
+    """
+    zeros = ttnn.zeros(
+        [batch, 1, seq, seq],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return _ensure_tile_bf16_sdpa_mask(zeros)
+
+
 def _pad_input_ids_to(input_ids: ttnn.Tensor, padded_seq: int, pad_id: int, device: ttnn.Device) -> ttnn.Tensor:
     """Right-pad ``[B, S]`` uint32 to ``[B, padded_seq]`` with ``pad_id`` (on device, ``ttnn.concat``)."""
     bsz = int(input_ids.shape[0])
@@ -613,7 +629,10 @@ class TTSeamlessM4Tv2Model:
             attn_owned = attn_padded is not attention_mask
 
         pos_tt = _tt_position_ids(ids_padded, self.pad_token_id)
-        enc_mask_4d = _build_encoder_self_mask_4d(attn_padded, device=self.device)
+        if attention_mask is None:
+            enc_mask_4d = _encoder_self_additive_mask_all_zeros_4d(batch, padded_seq, self.device)
+        else:
+            enc_mask_4d = _build_encoder_self_mask_4d(attn_padded, device=self.device)
         return ids_padded, pos_tt, enc_mask_4d, attn_padded, attn_owned
 
     def _encode_text(
@@ -765,34 +784,57 @@ class TTSeamlessM4Tv2Model:
         encoder_attn_2d: ttnn.Tensor,
         decoder_input_ids: ttnn.Tensor,
         decoder_attention_mask: Optional[ttnn.Tensor],
+        *,
+        prebuilt_causal_4d: Optional[ttnn.Tensor] = None,
+        prebuilt_cross_4d: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
-        """text-decoder → lm_head with on-device mask construction. Returns ``[B, padded_dec_seq, V]`` logits."""
+        """text-decoder → lm_head with on-device mask construction. Returns ``[B, padded_dec_seq, V]`` logits.
+
+        When ``prebuilt_causal_4d`` and ``prebuilt_cross_4d`` are both set (greedy ``generate`` path),
+        ``decoder_attention_mask`` must be ``None``; those tensors are **not** freed here so callers
+        can reuse them across steps while tile-padded length is unchanged.
+        """
         batch = int(decoder_input_ids.shape[0])
         dec_seq = int(decoder_input_ids.shape[1])
         padded_dec_seq = _tile_align(dec_seq)
 
         ids_padded = _pad_input_ids_to(decoder_input_ids, padded_dec_seq, self.pad_token_id, self.device)
 
-        # Build padded decoder mask, tracking whether we own the result for deallocation.
-        if decoder_attention_mask is None:
-            dec_attn_padded = _ones_mask(batch, padded_dec_seq, self.device)
-            attn_owned = True
+        use_prebuilt = prebuilt_causal_4d is not None or prebuilt_cross_4d is not None
+        if use_prebuilt:
+            if prebuilt_causal_4d is None or prebuilt_cross_4d is None:
+                raise ValueError("Pass both prebuilt_causal_4d and prebuilt_cross_4d, or neither.")
+            if decoder_attention_mask is not None:
+                raise ValueError("prebuilt_* masks are only valid with decoder_attention_mask=None.")
+            causal_4d = prebuilt_causal_4d
+            cross_4d = prebuilt_cross_4d
+            own_masks = False
         else:
-            dec_attn_padded = _pad_mask_to(decoder_attention_mask, padded_dec_seq, self.device)
-            attn_owned = dec_attn_padded is not decoder_attention_mask
+            own_masks = True
+            # Decoder mask for ``_build_causal_with_padding_4d``: an all-ones 2-D mask adds **zero** padding
+            # to the causal 4-D mask (HF semantics). Skip allocating ``_ones_mask`` + ``_key_padding_additive``
+            # when the caller omits ``decoder_attention_mask`` — use the ``None`` fast path instead.
+            if decoder_attention_mask is None:
+                dec_attn_padded = None
+                attn_owned = False
+            else:
+                dec_attn_padded = _pad_mask_to(decoder_attention_mask, padded_dec_seq, self.device)
+                attn_owned = dec_attn_padded is not decoder_attention_mask
+
+            causal_4d = _build_causal_with_padding_4d(dec_attn_padded, batch, padded_dec_seq, self.device)
+            if attn_owned:
+                ttnn.deallocate(dec_attn_padded)
+            cross_4d = _build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=padded_dec_seq, device=self.device)
 
         pos_tt = _tt_position_ids(ids_padded, self.pad_token_id)
-        causal_4d = _build_causal_with_padding_4d(dec_attn_padded, batch, padded_dec_seq, self.device)
-        if attn_owned:
-            ttnn.deallocate(dec_attn_padded)
-        cross_4d = _build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=padded_dec_seq, device=self.device)
 
         dec_out = self.text_decoder.forward(ids_padded, pos_tt, encoder_hidden, causal_4d, cross_4d)
         if ids_padded is not decoder_input_ids:
             ttnn.deallocate(ids_padded)
         ttnn.deallocate(pos_tt)
-        ttnn.deallocate(causal_4d)
-        ttnn.deallocate(cross_4d)
+        if own_masks:
+            ttnn.deallocate(causal_4d)
+            ttnn.deallocate(cross_4d)
         logits = self._lm_head(dec_out)
         ttnn.deallocate(dec_out)
         return logits
@@ -815,8 +857,8 @@ class TTSeamlessM4Tv2Model:
         ids_padded = _pad_input_ids_to(decoder_input_ids, padded_dec_seq, self.pad_token_id, self.device)
 
         if decoder_attention_mask is None:
-            dec_attn_padded = _ones_mask(batch, padded_dec_seq, self.device)
-            attn_owned = True
+            dec_attn_padded = None
+            attn_owned = False
         else:
             dec_attn_padded = _pad_mask_to(decoder_attention_mask, padded_dec_seq, self.device)
             attn_owned = dec_attn_padded is not decoder_attention_mask
@@ -1157,9 +1199,31 @@ class TTSeamlessM4Tv2Model:
             raise ValueError("Provide `decoder_input_ids` or `tgt_lang` for TT generate.")
 
         # ---- Greedy decode loop (everything on device; one scalar readback per step for EOS) ----
+        # Causal + cross 4-D masks depend only on ``(batch, tile_padded_dec_seq, encoder_attn_2d)`` when
+        # ``decoder_attention_mask`` is omitted — rebuild only when that key changes (tile boundary).
         sequences_tt = seed_tt
+        gen_causal: Optional[ttnn.Tensor] = None
+        gen_cross: Optional[ttnn.Tensor] = None
+        gen_mask_key: Optional[Tuple[int, int, int]] = None
         for _ in range(max_new_tokens):
-            logits = self._decode_and_lm_head(enc_tt, enc_attn_tt, sequences_tt, None)
+            batch_i = int(sequences_tt.shape[0])
+            padded_i = _tile_align(int(sequences_tt.shape[1]))
+            mask_key = (batch_i, padded_i, id(enc_attn_tt))
+            if mask_key != gen_mask_key:
+                if gen_causal is not None:
+                    ttnn.deallocate(gen_causal)
+                    ttnn.deallocate(gen_cross)
+                gen_causal = _build_causal_with_padding_4d(None, batch_i, padded_i, self.device)
+                gen_cross = _build_cross_attn_mask_4d(enc_attn_tt, tgt_seq=padded_i, device=self.device)
+                gen_mask_key = mask_key
+            logits = self._decode_and_lm_head(
+                enc_tt,
+                enc_attn_tt,
+                sequences_tt,
+                None,
+                prebuilt_causal_4d=gen_causal,
+                prebuilt_cross_4d=gen_cross,
+            )
             next_tt, next_id = self._greedy_next_token(logits, int(sequences_tt.shape[1]))
             ttnn.deallocate(logits)
             new_seq = ttnn.concat([sequences_tt, next_tt], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1168,6 +1232,10 @@ class TTSeamlessM4Tv2Model:
             sequences_tt = new_seq
             if eos_ids and next_id in eos_ids:
                 break
+
+        if gen_causal is not None:
+            ttnn.deallocate(gen_causal)
+            ttnn.deallocate(gen_cross)
 
         # ---- Text-only generation: return tokens ----
         if not generate_speech:
