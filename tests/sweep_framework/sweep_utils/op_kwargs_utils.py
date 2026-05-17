@@ -324,6 +324,10 @@ def build_op_kwargs(
             continue
 
         # Parse list-of-UnaryOpType-dicts (e.g. input_tensor_a_activations)
+        # Skip empty activation lists — nanobind rejects plain [] for
+        # Sequence[EltwiseUnaryWithParam] params; omitting them uses the default.
+        if isinstance(value, list) and len(value) == 0 and "activation" in key:
+            continue
         list_parsed = _maybe_parse_unary_list(value)
         if list_parsed is not value:
             op_kwargs[key] = list_parsed
