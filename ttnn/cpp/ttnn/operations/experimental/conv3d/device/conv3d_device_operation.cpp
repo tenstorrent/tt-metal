@@ -268,6 +268,7 @@ ttsl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
         weight_tensor.logical_shape(),
         bias_tensor.has_value());
 
+    log_info(tt::LogOp, "conv3d compute_program_hash: N={} hash={:#018x}", batch_size, hash);
     return hash;
 }
 
