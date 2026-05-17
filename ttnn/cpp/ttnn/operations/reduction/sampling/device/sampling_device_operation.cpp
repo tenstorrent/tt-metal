@@ -103,6 +103,15 @@ Tensor SamplingDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_values.device());
 }
 
+// tt-xla #4539 fix (Bug C): exclude seed from the program-cache hash so
+// different seed values reuse the same compiled kernel binary. Pattern
+// borrowed from BernoulliDeviceOperation::compute_program_hash.
+ttsl::hash::hash_t SamplingDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<SamplingDeviceOperation>, attrs.sub_core_grids, tensor_args);
+}
+
 ttnn::Tensor sampling(
     const Tensor& input_values_tensor,
     const Tensor& input_indices_tensor,

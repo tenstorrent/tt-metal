@@ -23,7 +23,7 @@
 #define DEBUG_PRINT 0
 using namespace ckernel;
 
-void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
+void generate_rand_tile(const uint32_t cb_id, const uint32_t seed, const uint32_t core_idx) {
     init_sfpu(cb_id, cb_id);
 
     uint32_t rand_scale = 0;
@@ -31,9 +31,15 @@ void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
     std::memcpy(&rand_scale, &one_f, sizeof(uint32_t));  // Alternative to std::bit_cast
     uint32_t rand_from = 0;
 
-    if (seed != 0) {
-        rand_tile_init(seed);
+    // tt-xla #4539 fix (Bug A — no per-row entropy): mix core_idx into the
+    // seed so every core's SFPU RNG starts in a distinct state. Splitmix-style
+    // multiplicative hash; arbitrary non-zero odd multiplier is fine.
+    uint32_t effective_seed = seed ^ (0x9e3779b9u * (core_idx + 1u));
+    if (effective_seed == 0) {
+        effective_seed = 1;  // rand_tile_init treats 0 specially.
     }
+    rand_tile_init(effective_seed);
+
     cb_reserve_back(cb_id, 1);
 
     tile_regs_acquire();
@@ -365,11 +371,15 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(12);
     constexpr uint32_t logWt = get_compile_time_arg_val(13);
     constexpr uint32_t rand_tile_index = get_compile_time_arg_val(14);
-    constexpr uint32_t seed = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_local_vals = get_compile_time_arg_val(16);
-    constexpr uint32_t temp_cb_index = get_compile_time_arg_val(17);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(18);
-    generate_rand_tile(rand_tile_index, seed);
+    constexpr uint32_t cb_local_vals = get_compile_time_arg_val(15);
+    constexpr uint32_t temp_cb_index = get_compile_time_arg_val(16);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(17);
+    // tt-xla #4539 fix (Bug A): per-core index for seed derivation.
+    constexpr uint32_t core_idx = get_compile_time_arg_val(18);
+    // tt-xla #4539 fix (Bug C): seed is now a runtime arg, not compile-time,
+    // so program-cache lookups are insensitive to seed value.
+    const uint32_t seed = get_arg_val<uint32_t>(0);
+    generate_rand_tile(rand_tile_index, seed, core_idx);
 
     const uint32_t nearest32_K = 32;
     const uint32_t logk = 5;  // log(32)

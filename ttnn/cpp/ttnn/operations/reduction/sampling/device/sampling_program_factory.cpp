@@ -378,6 +378,10 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         writer_desc.emplace_runtime_args(core, {output_buffer, temp_buffer, k_buffer, p_buffer});
         desc.kernels.push_back(std::move(writer_desc));
 
+        // tt-xla #4539 fix (Bug A + Bug C): seed is now a runtime arg (not
+        // compile-time), so a different seed value reuses the same compiled
+        // kernel. Per-core index `i` is passed as a compile-time arg so the
+        // kernel can derive a per-core effective seed (Bug A fix).
         std::vector<uint32_t> compute_args = {
             input_values_cb_index,
             index_cb_index,
@@ -394,10 +398,10 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
             Wt,
             static_cast<uint32_t>(std::log2(Wt)),
             rand_tile_index,
-            random_seed,
             cb_local_vals_index,
             temp_cb_index,
-            tile_width};
+            tile_width,
+            i};  // core_idx for per-core seed derivation
 
         KernelDescriptor compute_desc;
         compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/compute/sampling.cpp";
@@ -405,6 +409,8 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         compute_desc.core_ranges = single_core;
         compute_desc.compile_time_args = compute_args;
         compute_desc.config = ComputeConfigDescriptor{};
+        // tt-xla #4539 fix (Bug C): seed flows in as a runtime arg.
+        compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{random_seed});
         desc.kernels.push_back(std::move(compute_desc));
     }
 
