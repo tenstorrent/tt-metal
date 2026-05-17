@@ -73,9 +73,25 @@ class CompatReport:
     results: List[CheckResult] = field(default_factory=list)
     overall: str = "UNKNOWN"
     effort_summary: str = ""
+    # Populated by `check_compatibility` from a source-tree scan; carries the
+    # discovered demo path and provenance. `None` only when discovery hasn't
+    # been run (e.g. unit tests bypassing the helper).
+    discovery: object = None  # type: ignore[assignment]  # forward ref
 
     def by_status(self, status: Status) -> List[CheckResult]:
         return [r for r in self.results if r.status == status and r.needed]
+
+    @property
+    def in_tt_transformers(self) -> bool:
+        return bool(getattr(self.discovery, "in_tt_transformers", False))
+
+    @property
+    def in_external_demo(self) -> bool:
+        return bool(getattr(self.discovery, "in_external_demo", False))
+
+    @property
+    def primary_demo(self):
+        return getattr(self.discovery, "primary_demo", None)
 
 
 LLAMA_FAMILY_MODEL_TYPES = {
@@ -560,18 +576,71 @@ _OVERALL_FROM_STATUSES = [
 
 
 def _aggregate_overall(report: CompatReport) -> None:
-    if report.model_id in SUPPORTED_HF_MODELS:
-        report.overall = "ALREADY SUPPORTED"
-        report.effort_summary = (
-            "This exact model appears in the tt_transformers perf/prefill "
-            "tables -- it has already been brought up. Re-run `plan` for the "
-            "memory budget; this compat table shows the blocks it uses."
-        )
+    """Derive the overall verdict primarily from source-tree discovery, with
+    `SUPPORTED_HF_MODELS` as a backstop for models the grep didn't catch."""
+    disc = report.discovery
+    is_supported = bool(getattr(disc, "is_supported", False)) or (report.model_id in SUPPORTED_HF_MODELS)
+    if is_supported:
+        in_external = bool(getattr(disc, "in_external_demo", False))
+        in_ttt = bool(getattr(disc, "in_tt_transformers", False))
+        demo_path = getattr(disc, "primary_demo", None)
+        arch_set = getattr(disc, "arch_compatibility", frozenset())
+        arch_tag = (next(iter(arch_set)) + "-only") if (arch_set and len(arch_set) == 1) else None
+        if in_external and demo_path is not None:
+            tag = f"external demo, {arch_tag}" if arch_tag else "external demo"
+            report.overall = f"ALREADY SUPPORTED ({tag})"
+            note = (
+                f"Supported, but the demo lives outside tt_transformers at "
+                f"`{demo_path.as_posix()}`. `prepare` routes there automatically; "
+                f"`scaffold` does not apply (its tables only affect tt_transformers)."
+            )
+            if arch_tag:
+                note += (
+                    f"  Demo path is restricted to {arch_tag.replace('-only', '')}; "
+                    f"`prepare` will refuse to emit a run command for any other arch."
+                )
+            report.effort_summary = note
+        elif in_ttt:
+            report.overall = "ALREADY SUPPORTED"
+            report.effort_summary = (
+                "Driven by tt_transformers/simple_text_demo.py. `prepare` will "
+                "build a simple_text_demo invocation with the right MESH_DEVICE."
+            )
+        else:
+            # Listed as supported (via SUPPORTED_HF_MODELS backstop) but the
+            # discovery didn't pinpoint a demo file. Be honest about it.
+            report.overall = "ALREADY SUPPORTED"
+            report.effort_summary = (
+                "Listed as supported but no demo file in models/ references "
+                "this HF id literally. `prepare` will assume the tt_transformers "
+                "path; if that fails, the model lives at a non-obvious entry "
+                "point and the demo file should be located manually."
+            )
         return
+
+    targeted = getattr(disc, "target_entry", None) is not None
+    if targeted:
+        # In model_targets.yaml but no demo file references the HF id — the
+        # CI tracks the model as a future target but it hasn't been wired in.
+        report.overall = "TARGETED (no demo wired)"
+        report.effort_summary = (
+            "Tracked in models/model_targets.yaml as a future target, but no "
+            "demo or test file references this HF id literally. Architecture "
+            "compatibility (below) tells you what would be needed to actually "
+            "run it."
+        )
+        # Fall through into block analysis too — the architectural picture
+        # still matters.
+
     for predicate, label, summary in _OVERALL_FROM_STATUSES:
         if predicate(report):
-            report.overall = label
-            report.effort_summary = summary
+            # Don't clobber TARGETED with the block-analysis verdict; surface
+            # the architectural label as a secondary line via effort_summary.
+            if targeted:
+                report.effort_summary += f"  Architectural verdict: {label}. {summary}"
+            else:
+                report.overall = label
+                report.effort_summary = summary
             return
 
 
@@ -607,11 +676,22 @@ def check_compatibility(model_id: str, cfg: dict) -> CompatReport:
             )
         )
 
+    # Source-tree discovery: derive supported/external/unknown from grep,
+    # not from a hand-maintained list. Local import keeps compatibility.py
+    # free of yaml dependency at module load time.
+    try:
+        from .discovery import discover_model
+
+        discovery = discover_model(model_id)
+    except Exception:
+        discovery = None
+
     report = CompatReport(
         model_id=model_id,
         architecture_family=family,
         similar_supported_model=closest,
         results=results,
+        discovery=discovery,
     )
     _aggregate_overall(report)
     return report

@@ -384,6 +384,24 @@ def render_compat_table(
     p(f"                   {report.effort_summary}")
     p("=" * 92)
     p("")
+
+    disc = getattr(report, "discovery", None)
+    if disc is not None:
+        from .discovery import format_inline as _format_discovery
+
+        p("REPO DISCOVERY -- where the model lives in tt-metal source:")
+        for line in _format_discovery(disc, indent="  "):
+            p(line)
+        if getattr(disc, "in_external_demo", False):
+            p("  --> `scaffold` does not apply here (its tables only affect tt_transformers).")
+            p("  --> `prepare` will route to the discovered pytest entry automatically.")
+        elif not getattr(disc, "is_supported", False) and getattr(disc, "target_entry", None) is not None:
+            p("  --> Listed as a future CI target, but not yet wired in. The")
+            p("      architectural breakdown below tells you what would be needed.")
+        elif not getattr(disc, "is_supported", False):
+            p("  --> This model is not yet referenced anywhere in models/. See the")
+            p("      block-by-block analysis below for what a port would entail.")
+        p("")
     p("SECTION 1 -- Building-block availability (does TT have a module for each HF concept?)")
     p("-" * 92)
     p(f"{'STATUS':<7} {'BLOCK':<32} {'EFFORT':<24} TT IMPLEMENTATION")
