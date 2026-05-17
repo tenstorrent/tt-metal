@@ -8,15 +8,19 @@ Command-line interface for tt_hw_planner.
 Subcommands:
     plan          (default for HF model IDs)   — memory-budget recommendation
     compat        — list which TT building blocks the model needs and which exist
+    scaffold      — generate a first-draft port (table entries + per-model JSONs)
+    prepare       — emit env + pytest invocation to run the model on the recommended box
     calibrate     — open a mesh on real hw, measure usable HBM, write to YAML
     smoke-test    — open a mesh, run hot ops at the model's shapes
+    validate      — run the full robustness + smoke battery for a (model, box, mesh)
     list-meshes   — print the canonical mesh topology table
     show-overhead — print current overhead constants (calibrated or analytical)
 
 Usage:
-    python -m scripts.tt_hw_planner Qwen/Qwen3-32B               # plan (implicit)
-    python -m scripts.tt_hw_planner plan Qwen/Qwen3-32B          # plan (explicit)
-    python -m scripts.tt_hw_planner compat Qwen/Qwen3-32B        # bring-up checklist
+    python -m scripts.tt_hw_planner Qwen/Qwen3-32B                    # plan (implicit)
+    python -m scripts.tt_hw_planner plan Qwen/Qwen3-32B               # plan (explicit)
+    python -m scripts.tt_hw_planner compat Qwen/Qwen3-32B             # bring-up checklist
+    python -m scripts.tt_hw_planner prepare Qwen/Qwen3-32B            # runnable command
     python -m scripts.tt_hw_planner calibrate --box QB2 --mesh 1,4
     python -m scripts.tt_hw_planner smoke-test --model Qwen/Qwen3-32B --box QB2 --mesh 1,4
     python -m scripts.tt_hw_planner list-meshes
@@ -29,10 +33,19 @@ and routes to `plan`.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from typing import List, Optional, Tuple
 
 from .architecture import DTYPE_BYTES
+from .bringup import (
+    BringupError,
+    REPO_ROOT,
+    prepare_bringup,
+    render_json as render_bringup_json,
+    render_script as render_bringup_script,
+    render_text as render_bringup_text,
+)
 from .compatibility import check_compatibility
 from .hardware import HARDWARE, find_box, reload_calibration, _CALIBRATED_OVERHEAD
 from .kernel_constraints import evaluate_kernels
@@ -191,6 +204,108 @@ def cmd_compat(args) -> int:
     if report.overall == "BLOCKED":
         return 2
     if kernel_report is not None and kernel_report.has_blockers(tp=1):
+        return 2
+    return 0
+
+
+def cmd_scaffold(args) -> int:
+    from .scaffold import (
+        ScaffoldError,
+        apply_scaffold,
+        plan_scaffold,
+        render_apply,
+        render_json as render_scaffold_json,
+        render_patch,
+        render_text,
+    )
+
+    try:
+        plan = plan_scaffold(args.model_id)
+    except ScaffoldError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+
+    if args.format == "json":
+        applied = apply_scaffold(plan) if args.apply else None
+        print(render_scaffold_json(plan, applied))
+        return 0
+    if args.format == "patch":
+        print(render_patch(plan))
+        if args.apply:
+            applied = apply_scaffold(plan)
+            print(render_apply(plan, applied), file=sys.stderr)
+        return 0
+
+    print(render_text(plan, show_diff=not args.no_diff))
+
+    if args.apply:
+        applied = apply_scaffold(plan)
+        print()
+        print(render_apply(plan, applied))
+
+    return 0
+
+
+def cmd_prepare(args) -> int:
+    mesh_override: Optional[Tuple[int, int]] = None
+    if args.mesh:
+        try:
+            mesh_override = _parse_mesh(args.mesh)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 1
+
+    try:
+        plan = prepare_bringup(
+            model_id=args.model_id,
+            box_override=args.box,
+            mesh_override=mesh_override,
+            dtype_override=args.dtype,
+            batch=args.batch,
+            max_seq_len=args.max_seq_len,
+            max_generated_tokens=args.max_generated_tokens,
+            accuracy=args.accuracy,
+            trace=not args.no_trace,
+            paged_attention=not args.no_paged_attention,
+            instruct=not args.no_instruct,
+        )
+    except BringupError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+
+    if args.format == "json":
+        print(render_bringup_json(plan))
+    elif args.format == "script":
+        print(render_bringup_script(plan))
+    else:
+        print(render_bringup_text(plan))
+
+    if args.write_script:
+        from pathlib import Path
+
+        path = Path(args.write_script)
+        path.write_text(render_bringup_script(plan))
+        path.chmod(0o755)
+        print(f"\nWrote bring-up script: {path}", file=sys.stderr)
+
+    if args.execute:
+        if plan.invocation is None:
+            print("\nERROR: no executable command (see blockers above).", file=sys.stderr)
+            return 2
+        if args.strict and plan.compat_overall not in {"ALREADY SUPPORTED", "READY"}:
+            print(
+                f"\nERROR: --strict refused — compat verdict is '{plan.compat_overall}'. "
+                "Remove --strict to execute despite PARTIAL blocks.",
+                file=sys.stderr,
+            )
+            return 2
+        import subprocess
+
+        full_env = {**os.environ, **plan.invocation.env}
+        print(f"\nExecuting in {REPO_ROOT} …", file=sys.stderr)
+        return subprocess.run(plan.invocation.argv(), cwd=REPO_ROOT, env=full_env).returncode
+
+    if plan.invocation is None:
         return 2
     return 0
 
@@ -594,6 +709,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     SUBCOMMANDS = {
         "plan",
         "compat",
+        "scaffold",
+        "prepare",
         "calibrate",
         "smoke-test",
         "validate",
@@ -644,6 +761,82 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--tp-grid", type=int, nargs="+", default=None, help="TP values to check for divisibility (default: 1 2 4 8 32)"
     )
     pcompat.set_defaults(func=cmd_compat)
+
+    # --- scaffold ------------------------------------------------------------
+    pscaf = sub.add_parser(
+        "scaffold",
+        help="generate first-draft port (table entries + per-model JSONs) for a READY model",
+    )
+    pscaf.add_argument("model_id", help="HuggingFace model id of the NEW model to port")
+    pscaf.add_argument(
+        "--apply",
+        action="store_true",
+        help="actually write the changes to the working tree (default: dry-run)",
+    )
+    pscaf.add_argument(
+        "--format",
+        choices=["text", "patch", "json"],
+        default="text",
+        help="text: human-readable plan + diff; patch: emit `git apply`-compatible diff; json: structured",
+    )
+    pscaf.add_argument("--no-diff", action="store_true", help="omit the inline diff in text format")
+    pscaf.set_defaults(func=cmd_scaffold)
+
+    # --- prepare -------------------------------------------------------------
+    pprep = sub.add_parser(
+        "prepare",
+        help="emit ready-to-run env + pytest invocation for the recommended box",
+    )
+    pprep.add_argument("model_id", help="HuggingFace model id, e.g. Qwen/Qwen3-32B")
+    pprep.add_argument(
+        "--box",
+        default=None,
+        choices=[b.name for b in HARDWARE],
+        help="override the planner's box pick",
+    )
+    pprep.add_argument("--mesh", default=None, help="override the planner's mesh (requires --box, e.g. 1,4)")
+    pprep.add_argument(
+        "--dtype",
+        default=None,
+        choices=list(DTYPE_BYTES.keys()),
+        help="override the planner's dtype pick",
+    )
+    pprep.add_argument("--batch", type=int, default=1, help="pytest --batch_size (default 1)")
+    pprep.add_argument("--max-seq-len", type=int, default=1024, help="pytest --max_seq_len (default 1024)")
+    pprep.add_argument(
+        "--max-generated-tokens", type=int, default=200, help="pytest --max_generated_tokens (default 200)"
+    )
+    pprep.add_argument(
+        "--accuracy",
+        action="store_true",
+        help="use the accuracy parametrization instead of performance",
+    )
+    pprep.add_argument("--no-trace", action="store_true", help="disable --enable_trace (slower; needed for accuracy)")
+    pprep.add_argument("--no-paged-attention", action="store_true", help="disable paged attention")
+    pprep.add_argument("--no-instruct", action="store_true", help="use raw completion path instead of chat template")
+    pprep.add_argument("--format", choices=["text", "script", "json"], default="text")
+    pprep.add_argument(
+        "--write-script",
+        default=None,
+        metavar="PATH",
+        help="also write a self-contained bash script to PATH",
+    )
+    pprep.add_argument(
+        "--execute",
+        action="store_true",
+        help="run the emitted pytest command in-process (requires a runnable plan)",
+    )
+    pprep.add_argument(
+        "--strict",
+        action="store_true",
+        help="refuse --execute unless compat is ALREADY SUPPORTED or READY (CI-friendly)",
+    )
+    pprep.add_argument(
+        "--allow-port",
+        action="store_true",
+        help="DEPRECATED: kept for backward compatibility; permissive execution is now the default",
+    )
+    pprep.set_defaults(func=cmd_prepare)
 
     # --- calibrate -----------------------------------------------------------
     pc = sub.add_parser("calibrate", help="measure usable per-chip HBM on hardware")
