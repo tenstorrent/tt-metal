@@ -62,7 +62,7 @@ void kernel_main() {
     uint32_t zero_buffer_addr = get_write_ptr(cb_zero_buffer_id);
 
     {
-        // DeviceZoneScopedN("combine-zero-init-idle-core");
+        DeviceZoneScopedN("combine-zero-init-writing-IDLE-core");
         fill_zero_buffer(cb_zero_buffer_id);
         zero_pages(zero_buffer_addr, page_start, page_end, aligned_output_page_size, output_addr_gen);
     }

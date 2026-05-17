@@ -748,6 +748,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     }
 
     std::map<std::string, std::string> writer_defines = fabric_defines;
+    writer_defines["INIT_ZEROS"] = operation_attributes.init_zeros ? "1" : "0";
 
     if (init_zeros) {
         uint32_t noc_max_burst_size;
@@ -821,13 +822,19 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         zero_init_cores_vec = idle_row_cores;
     }
 
-    // Reader compile-time args base (without num_idle_cores — that is per-sender and appended below).
+    // Reader compile-time args base. Reader no longer participates in zero-init (writer does),
+    // so c_7 / num_total_idle_cores aren't appended here anymore.
     std::vector<uint32_t> reader_compile_time_args_base = compile_time_args;
-    if (init_zeros) {
-        reader_compile_time_args_base.push_back(static_cast<uint32_t>(tt::CBIndex::c_7));  // zi_cb_id
-        reader_compile_time_args_base.push_back(num_idle_cores);  // num_total_idle_cores (both layouts need this)
-    }
     // num_idle_cores (per-sender k_s) and cb_untilize_id are appended per-sender below (TILE_LAYOUT only).
+
+    // Writer compile-time args. When init_zeros is enabled, the writer owns the sender-core
+    // zero-init slice (was previously in reader). Append c_7 (zero buffer CB) and total idle
+    // core count after the shared base so the writer can wait on zi_done.
+    std::vector<uint32_t> writer_compile_time_args = compile_time_args;
+    if (init_zeros) {
+        writer_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_7));  // zi_cb_id
+        writer_compile_time_args.push_back(num_idle_cores);                           // num_total_idle_cores
+    }
 
     // One reader_combine kernel per sender.  For TILE_LAYOUT, k_s (per-sender idle count)
     // is baked in as num_idle_cores so the sender only round-robins across its own dedicated
@@ -861,7 +868,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch()),
-            .compile_args = compile_time_args,
+            .compile_args = writer_compile_time_args,
             .defines = writer_defines});
 
     // Compute kernel on idle cores that untilizes dispatched_buffer data (TILE_LAYOUT only).
@@ -965,13 +972,6 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             expert_start,
             expert_end,
         };
-        if (init_zeros) {
-            uint32_t sender_page_start = (core_idx * pages_per_core) + std::min(core_idx, remainder_pages);
-            uint32_t sender_page_end = sender_page_start + pages_per_core + (core_idx < remainder_pages ? 1 : 0);
-            reader_runtime_args.push_back(sender_page_start);
-            reader_runtime_args.push_back(sender_page_end);
-            reader_runtime_args.push_back(zi_done_semaphore_id);
-        }
         if (is_tile_layout) {
             // Multicast targets only this sender's dedicated idle group
             const auto& mcast_cfg = sender_mcast_cfgs[core_idx];
@@ -1011,6 +1011,14 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         for (const auto& [noc_x, noc_y] : sender_noc_coords) {
             writer_runtime_args.push_back(noc_x);
             writer_runtime_args.push_back(noc_y);
+        }
+
+        if (init_zeros) {
+            uint32_t sender_page_start = (core_idx * pages_per_core) + std::min(core_idx, remainder_pages);
+            uint32_t sender_page_end = sender_page_start + pages_per_core + (core_idx < remainder_pages ? 1 : 0);
+            writer_runtime_args.push_back(sender_page_start);
+            writer_runtime_args.push_back(sender_page_end);
+            writer_runtime_args.push_back(zi_done_semaphore_id);
         }
 
         if (num_links > 0) {

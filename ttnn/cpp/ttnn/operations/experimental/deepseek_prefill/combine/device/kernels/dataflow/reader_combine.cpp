@@ -97,15 +97,9 @@ void kernel_main() {
     constexpr auto output_args = TensorAccessorArgs<experts_tok_counter_args.next_compile_time_args_offset()>();
     constexpr auto expert_region_offsets_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
-#if INIT_ZEROS
-    // Zero-init args follow immediately after the TensorAccessorArgs block
-    constexpr uint32_t zi_cb_id = get_compile_time_arg_val(expert_region_offsets_args.next_compile_time_args_offset());
-    constexpr uint32_t num_total_idle_cores =
-        get_compile_time_arg_val(expert_region_offsets_args.next_compile_time_args_offset() + 1);
-    constexpr uint32_t tile_layout_args_base = expert_region_offsets_args.next_compile_time_args_offset() + 2;
-#else
+    // Sender-core zero-init has moved to writer_combine (write NOC).  The reader no longer
+    // takes part — only waits on zero_init_sem (signaled by writer) before the multicast.
     constexpr uint32_t tile_layout_args_base = expert_region_offsets_args.next_compile_time_args_offset();
-#endif
 
 #if IS_TILE_LAYOUT
     constexpr uint32_t num_idle_cores_group = get_compile_time_arg_val(tile_layout_args_base);
@@ -132,28 +126,6 @@ void kernel_main() {
                    << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
-
-#if INIT_ZEROS
-    // Hybrid row zero-init: this core zeroes its assigned page range, then waits for idle row cores
-    {
-        uint32_t page_start = get_arg_val<uint32_t>(rt_args++);
-        uint32_t page_end = get_arg_val<uint32_t>(rt_args++);
-        uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args++);
-        uint32_t zi_done_sem_address = get_semaphore(zi_done_semaphore_id);
-        uint32_t zero_buf = get_write_ptr(zi_cb_id);
-
-        {
-            // DeviceZoneScopedN("combine-zero-init-writing");
-            fill_zero_buffer(zi_cb_id);
-            zero_pages(zero_buf, page_start, page_end, aligned_output_page_size, output_addr_gen);
-        }
-
-        volatile tt_l1_ptr uint32_t* zi_done_sem_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address);
-        noc_semaphore_wait(zi_done_sem_ptr, num_total_idle_cores);
-        noc_semaphore_set(zi_done_sem_ptr, 0);
-    }
-#endif
 
 #if IS_TILE_LAYOUT
     uint32_t counter_ready_semaphore_id = get_arg_val<uint32_t>(rt_args++);
@@ -195,25 +167,17 @@ void kernel_main() {
     }
 #endif
 
-    // Signal writer that zero-init is complete
+    // zero_init_sem is now signaled by the writer (after writer's zero-init + zi_done wait)
+    // and gated below right before the multicast (TILE_LAYOUT only).
     volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
-    noc_semaphore_set(zero_init_sem_ptr, 1);
-
-    // Wait for ALL writers (all cores) to complete init exchange.
-    // Each writer signals all readers' barrier sems via noc_semaphore_inc,
-    // so this reader waits for num_cores signals before proceeding.
-    volatile tt_l1_ptr uint32_t* barrier_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_barrier_address);
-    noc_semaphore_wait(barrier_sem_ptr, num_cores);
-    noc_semaphore_set(barrier_sem_ptr, 0);
 
     // Read expert token counts
     const auto experts_tok_counter_addr_gen = TensorAccessor(experts_tok_counter_args, experts_tok_counter_addr);
     cb_reserve_back(cb_experts_tok_counter_id, experts_tok_counter_pages);
     uint32_t counter_base_addr = get_write_ptr(cb_experts_tok_counter_id);
     {
-        // DeviceZoneScopedN("combine-reading-expert-token-counts");
+        DeviceZoneScopedN("combine-reading-expert-token-counts");
         for (uint32_t i = 0; i < experts_tok_counter_pages; i++) {
             noc_async_read_page(
                 i, experts_tok_counter_addr_gen, counter_base_addr + i * aligned_experts_tok_counter_page_size);
@@ -232,6 +196,13 @@ void kernel_main() {
     constexpr uint32_t offset = dispatch_group_idx * experts_per_dispatch_group + mesh_row * experts_per_chip;
     // Multicast expert token counts + receive_buf_addr to all idle cores
 #if IS_TILE_LAYOUT
+    // #if INIT_ZEROS
+    //     // Gate the multicast on the writer signaling global zero-init complete.  Idle cores treat
+    //     // counter_ready_sem (from this multicast) as the implicit "ok to write local rows" barrier,
+    //     // so the multicast must not fire until zero-init is done across this chip.
+    //     noc_semaphore_wait(zero_init_sem_ptr, 1);
+    //     noc_semaphore_set(zero_init_sem_ptr, 0);
+    // #endif
     // Each sender multicasts token counts + its own receive_buf_addr to its dedicated idle
     // group. The mcast destination covers only this sender's k_s idle cores (per-sender
     // bounding box), so all senders can multicast in parallel.
@@ -239,7 +210,7 @@ void kernel_main() {
     //   [0]: receive_buf_addr  — sender's c_18 L1 offset (where idle NOC-writes untilized data)
     //   [1]: metadata_buf_addr — sender's c_19 L1 offset (where idle NOC-writes routing metadata)
     {
-        // DeviceZoneScopedN("combine-sender-multicast-sending");
+        DeviceZoneScopedN("combine-sender-multicast-sending");
         constexpr uint32_t counter_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
 
         volatile tt_l1_ptr uint32_t* trailer_slot =
@@ -261,6 +232,14 @@ void kernel_main() {
         noc_async_atomic_barrier();
     }
 #endif
+
+    // Wait for ALL writers (all cores) to complete init exchange.
+    // Each writer signals all readers' barrier sems via noc_semaphore_inc,
+    // so this reader waits for num_cores signals before proceeding.
+    volatile tt_l1_ptr uint32_t* barrier_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_barrier_address);
+    noc_semaphore_wait(barrier_sem_ptr, num_cores);
+    noc_semaphore_set(barrier_sem_ptr, 0);
 
     volatile tt_l1_ptr uint32_t* experts_tok_counter_l1 =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr) + offset;

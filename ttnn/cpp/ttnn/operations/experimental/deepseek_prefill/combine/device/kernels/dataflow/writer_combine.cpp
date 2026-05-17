@@ -9,6 +9,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/zero_init_common.hpp"
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
@@ -94,6 +95,14 @@ void kernel_main() {
     constexpr auto experts_tok_counter_args =
         TensorAccessorArgs<dispatched_metadata_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<experts_tok_counter_args.next_compile_time_args_offset()>();
+    constexpr auto expert_region_offsets_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+
+#if INIT_ZEROS
+    // Zero-init args follow immediately after the TensorAccessorArgs block
+    constexpr uint32_t zi_cb_id = get_compile_time_arg_val(expert_region_offsets_args.next_compile_time_args_offset());
+    constexpr uint32_t num_total_idle_cores =
+        get_compile_time_arg_val(expert_region_offsets_args.next_compile_time_args_offset() + 1);
+#endif
 
     // ===== Runtime Args =====
     size_t rt_args_idx = 0;
@@ -126,6 +135,16 @@ void kernel_main() {
         all_core_barrier_noc_addrs[c] = get_noc_addr(noc_x, noc_y, zero_init_barrier_l1_offset);
     }
 
+#if INIT_ZEROS
+    // Sender-core zero-init: writer owns this slice (was previously in reader_combine).
+    // Running here keeps the writes on the dram-write NOC and frees the reader to do its
+    // DRAM counter reads in parallel.
+    uint32_t zi_page_start = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t zi_page_end = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t zi_done_sem_address = get_semaphore(zi_done_semaphore_id);
+#endif
+
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
     constexpr uint32_t combine_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
@@ -137,11 +156,25 @@ void kernel_main() {
     DPRINT_COMBINE << "Combine Writer: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
                    << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
 
-    // Wait for reader to complete zero-init
+    const auto output_addr_gen = TensorAccessor(output_args, output_addr);
     volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
-    noc_semaphore_wait(zero_init_sem_ptr, 1);
-    noc_semaphore_set(zero_init_sem_ptr, 0);
+
+#if INIT_ZEROS
+    {
+        DeviceZoneScopedN("combine-zero-init-writing-WRITER-core");
+        uint32_t zero_buf = get_write_ptr(zi_cb_id);
+        fill_zero_buffer(zi_cb_id);
+        zero_pages(zero_buf, zi_page_start, zi_page_end, aligned_output_page_size, output_addr_gen);
+    }
+
+    // Wait for all idle cores to finish their zero-init slices, then signal the reader
+    // that global zero-init is complete (gates the reader's multicast).
+    volatile tt_l1_ptr uint32_t* zi_done_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address);
+    noc_semaphore_wait(zi_done_sem_ptr, num_total_idle_cores);
+    noc_semaphore_set(zi_done_sem_ptr, 0);
+    noc_semaphore_set(zero_init_sem_ptr, 1);
+#endif
 
 #ifdef DEST_CHIP_ID
     constexpr uint32_t total_mesh_devices = mesh_rows * mesh_cols;
@@ -185,8 +218,6 @@ void kernel_main() {
         noc_semaphore_inc(all_core_barrier_noc_addrs[c], 1);
     }
     noc_async_atomic_barrier();
-
-    const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
     {
         // DeviceZoneScopedN("combine-ethernet-flow");
