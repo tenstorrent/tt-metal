@@ -12,6 +12,10 @@
 namespace ckernel::sfpu
 {
 
+namespace {
+    sfpi::vFloat vConstInfinity;
+}
+
 template <bool APPROXIMATION_MODE /*unused*/, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void _calculate_exp2_()
 {
@@ -33,9 +37,7 @@ inline void _calculate_exp2_()
             sfpi::vInt x_sign = sfpi::exsign(x);
             v_if (sfpi::isequal(x_sign, sfpi::vConst0))  // positive infinity
             {
-                result = sfpi::vConst0;  // We'll set to +inf
-                // Actually, we can set exponent to 255 and mantissa to 0 for +inf
-                result = sfpi::setexp(sfpi::vConst1, 255);  // 1.0 * 2^(255-bias) -> exponent 255 is infinity
+                result = vConstInfinity;
             }
             v_else  // negative infinity
             {
@@ -50,7 +52,7 @@ inline void _calculate_exp2_()
             v_if (sfpi::igequal(x, sfpi::vConst(128.0f)))
             {
                 // Overflow: result = +infinity
-                result = sfpi::setexp(sfpi::vConst1, 255);
+                result = vConstInfinity;
             }
             v_elseif (sfpi::ilequal(x, sfpi::vConst(-127.0f)))
             {
@@ -134,8 +136,7 @@ inline void _calculate_exp2_()
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void _init_exp2_()
 {
-    // Keep the initialization for compatibility, though it may not be used in the optimized version
-    sfpi::vConstFloatPrgm0 = 0.6931471805f;
+    vConstInfinity = sfpi::setexp(sfpi::vConst1, 255);
 }
 
 } // namespace ckernel::sfpu
