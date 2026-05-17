@@ -1203,6 +1203,91 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                         total_ms,
                         since_deassert_ms);
                 }
+
+                // FIX AQ2 (#42429): Poll edm_status != 0x49705180 on force-reset MMIO channels.
+                //
+                // Root cause of within-run contamination: FIX XZ above confirms base-UMD firmware
+                // is live (heartbeat = 0xABCDxxxx), but base-UMD firmware overwrites
+                // edm_status_address (router_sync_address) with 0x49705180 as a ROM boot postcode
+                // EARLY in its boot sequence, before settling to 0x49706550.  If the next test
+                // starts before base-UMD finishes writing 0x49706550, it reads 0x49705180 and
+                // terminate_stale_erisc_routers() classifies it as "STILL_INITIALIZING (ROM boot)"
+                // — which cascades into force-reset, 8s FIX XZ wait, and probe_dead for all
+                // non-MMIO descendants.
+                //
+                // Fix: after confirming heartbeat, additionally wait for edm_status to transition
+                // away from 0x49705180.  Base-UMD writes 0x49706550 within <200ms of ROM boot
+                // completing, so a 2000ms poll window with no sleep between polls is sufficient.
+                // Uses cluster_.read_reg() for PCIe-direct MMIO access (same as heartbeat poll).
+                {
+                    const uint32_t edm_sync_addr = static_cast<uint32_t>(
+                        builder_ctx.get_fabric_router_sync_address_and_status().first);
+                    constexpr uint32_t kRomPostcode = 0x49705180u;
+                    constexpr int kEdmStatusPollMs = 2000;
+                    constexpr auto kEdmStatusInterval = std::chrono::milliseconds(5);
+                    const auto edm_poll_start = std::chrono::steady_clock::now();
+
+                    // Track which channels still show the ROM postcode.
+                    std::vector<bool> edm_ready(mmio_reset_chans.size(), false);
+
+                    while (true) {
+                        bool all_edm_done = true;
+                        for (size_t idx = 0; idx < mmio_reset_chans.size(); ++idx) {
+                            if (edm_ready[idx]) {
+                                continue;
+                            }
+                            const auto& mc = mmio_reset_chans[idx];
+                            uint32_t edm_val = 0;
+                            try {
+                                cluster_.read_reg(&edm_val, mc.target, edm_sync_addr);
+                            } catch (...) {
+                                edm_ready[idx] = true;  // unreadable → skip
+                                continue;
+                            }
+                            if (edm_val != kRomPostcode) {
+                                edm_ready[idx] = true;
+                            } else {
+                                all_edm_done = false;
+                            }
+                        }
+                        if (all_edm_done) {
+                            break;
+                        }
+                        const auto edm_elapsed_ms =
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - edm_poll_start)
+                                .count();
+                        if (edm_elapsed_ms >= kEdmStatusPollMs) {
+                            const int still_stuck = static_cast<int>(
+                                std::count(edm_ready.begin(), edm_ready.end(), false));
+                            log_warning(
+                                tt::LogAlways,
+                                "FIX AQ2 (#42429): edm_status still 0x49705180 on {}/{} MMIO "
+                                "channel(s) after {}ms — next session may still see ROM postcode.",
+                                still_stuck,
+                                static_cast<int>(mmio_reset_chans.size()),
+                                edm_elapsed_ms);
+                            break;
+                        }
+                        std::this_thread::sleep_for(kEdmStatusInterval);
+                    }
+
+                    const int edm_ready_count =
+                        static_cast<int>(std::count(edm_ready.begin(), edm_ready.end(), true));
+                    if (edm_ready_count == static_cast<int>(mmio_reset_chans.size())) {
+                        const auto edm_total_ms =
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - edm_poll_start)
+                                .count();
+                        log_info(
+                            tt::LogAlways,
+                            "FIX AQ2 (#42429): all {} force-reset MMIO channel(s) cleared "
+                            "ROM postcode from edm_status in {}ms — within-run contamination "
+                            "window closed.",
+                            mmio_reset_chans.size(),
+                            edm_total_ms);
+                    }
+                }
             }
         }
     }
@@ -1229,38 +1314,51 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     // the relay drain is best-effort.  The next session's relay_broken guard still protects
     // against queue saturation; the drain just prevents *cumulative* degradation across
     // back-to-back sessions.
-    // FIX AK (#42429): transitive relay hang guard.
-    // The ETH relay network is shared across the mesh.  A dead relay on device X can cause
-    // wait_for_non_mmio_flush() to block indefinitely on *adjacent* non-MMIO devices that route
-    // through X — even though those devices are not in relay_dead_devices.  try/catch cannot
-    // protect against an indefinite block (no exception is thrown).
-    // If ANY device has a confirmed dead relay, skip l1_barrier for ALL non-MMIO devices.
-    // Cost: UMD relay queues on surviving non-MMIO devices may retain stuck commands; the next
-    // session's relay_broken guard handles queue saturation.  Observed: 4+ min hang avoided.
-    if (!relay_dead_devices.empty()) {
-        std::string dead_list;
-        for (const auto dead_id : relay_dead_devices) {
-            if (!dead_list.empty()) {
-                dead_list += ", ";
+    // OPTION C (#42429): enhanced FIX AK — per-device relay probe before l1_barrier.
+    //
+    // FIX AK previously blanket-skipped l1_barrier for ALL non-MMIO devices when ANY relay was
+    // dead.  This is overly conservative: on a T3K with one dead relay, the other 3 non-MMIO
+    // devices may have live relay paths and should have their UMD relay queues drained to prevent
+    // cumulative queue saturation across back-to-back sessions.
+    //
+    // OPTION C replaces the blanket skip with a per-device relay liveness probe:
+    //   1. Devices already confirmed dead-relay during the force-reset pass (relay_dead_devices)
+    //      are skipped immediately (FIX AJ — l1_barrier would block indefinitely).
+    //   2. When any dead-relay device exists in the mesh, probe remaining non-MMIO devices via a
+    //      small ReadFromDeviceL1 (uses the UMD relay chain, throws on relay timeout — unlike
+    //      l1_barrier which blocks indefinitely with no exception).
+    //   3. If the probe throws → relay dead for that device → skip l1_barrier.
+    //   4. If the probe succeeds → relay alive → call l1_barrier to drain the queue.
+    //   5. When no dead-relay devices exist, skip the probe overhead and go straight to l1_barrier
+    //      (same as the original FIX A path).
+    {
+        if (!relay_dead_devices.empty()) {
+            std::string dead_list;
+            for (const auto dead_id : relay_dead_devices) {
+                if (!dead_list.empty()) {
+                    dead_list += ", ";
+                }
+                dead_list += std::to_string(dead_id);
             }
-            dead_list += std::to_string(dead_id);
+            log_warning(
+                tt::LogMetal,
+                "FabricFirmwareInitializer::teardown: relay-dead device(s) [{}] confirmed. "
+                "OPTION C (#42429): probing remaining non-MMIO devices individually before "
+                "l1_barrier relay drain (instead of blanket-skip via FIX AK).",
+                dead_list);
         }
-        log_warning(
-            tt::LogMetal,
-            "FabricFirmwareInitializer::teardown: relay-dead device(s) [{}] confirmed; skipping "
-            "l1_barrier relay drain for ALL non-MMIO devices to prevent transitive relay hang "
-            "(FIX AK). UMD relay queues may retain stuck commands for surviving devices.",
-            dead_list);
-    } else {
+
+        // Address used for the relay probe read — router_sync_address (edm_status_address).
+        const uint32_t opt_c_sync_addr = static_cast<uint32_t>(
+            builder_ctx.get_fabric_router_sync_address_and_status().first);
+
         for (auto* dev : devices_) {
             if (cluster_.get_associated_mmio_device(dev->id()) == dev->id()) {
-                // MMIO devices: l1_barrier is always safe, but there is no relay queue to drain.
-                continue;
+                continue;  // MMIO — no relay queue to drain
             }
-            // FIX AJ (#42429): skip l1_barrier for devices whose relay path was confirmed dead
-            // (diagnostic read or assert_risc_reset threw) during the force-reset pass above.
-            // l1_barrier() → wait_for_non_mmio_flush() BLOCKS INDEFINITELY on a dead-relay
-            // non-MMIO device instead of throwing, so try/catch cannot protect against it.
+            // FIX AJ (#42429): already confirmed dead-relay during force-reset pass.
+            // l1_barrier() → wait_for_non_mmio_flush() blocks indefinitely on a dead-relay
+            // device — no exception, so try/catch cannot protect.  Skip unconditionally.
             if (relay_dead_devices.count(dev->id())) {
                 log_warning(
                     tt::LogMetal,
@@ -1270,6 +1368,44 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                     dev->id());
                 continue;
             }
+            // OPTION C relay probe: when dead-relay devices exist in the mesh, probe this device
+            // with a small ReadFromDeviceL1 before calling l1_barrier.  ReadFromDeviceL1 uses the
+            // UMD relay chain and throws on relay timeout (unlike l1_barrier which blocks forever).
+            if (!relay_dead_devices.empty()) {
+                bool probe_ok = false;
+                try {
+                    const auto master_chan = builder_ctx.get_fabric_master_router_chan(dev->id());
+                    const CoreCoord probe_logical =
+                        cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(
+                            master_chan, CoordSystem::LOGICAL);
+                    std::vector<uint32_t> probe_buf(1, 0);
+                    detail::ReadFromDeviceL1(
+                        dev, probe_logical, opt_c_sync_addr, 4, probe_buf, CoreType::ETH);
+                    probe_ok = true;
+                } catch (const std::exception& probe_ex) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FabricFirmwareInitializer::teardown: OPTION C relay probe threw for "
+                        "non-MMIO Device {} ({}); skipping l1_barrier to avoid indefinite hang. "
+                        "(#42429)",
+                        dev->id(),
+                        probe_ex.what());
+                    relay_dead_devices.insert(dev->id());
+                    continue;
+                } catch (...) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FabricFirmwareInitializer::teardown: OPTION C relay probe threw "
+                        "(unknown exception) for non-MMIO Device {}; skipping l1_barrier. (#42429)",
+                        dev->id());
+                    relay_dead_devices.insert(dev->id());
+                    continue;
+                }
+                if (!probe_ok) {
+                    continue;
+                }
+            }
+            // Relay confirmed alive (probe succeeded, or no dead-relay devices in mesh).
             try {
                 cluster_.l1_barrier(dev->id());
                 log_debug(
@@ -2650,6 +2786,33 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
 
     const auto& fabric_context = control_plane_.get_fabric_context();
     const auto& builder_context = fabric_context.get_builder_context();
+
+    // FIX DX (#42429): If every non-MMIO device is in dead_relay_devices_, the fabric ring
+    // can never close (ring barrier requires all ETH channels).  Pre-set
+    // ring_sync_already_timed_out_ so every subsequent wait_for_handshake() call fast-exits
+    // via the FIX TJ path instead of burning 120 s per MMIO device.
+    // Only applies when there ARE non-MMIO devices (single-chip setups have none).
+    {
+        bool any_non_mmio = false;
+        bool all_non_mmio_relay_dead = true;
+        for (auto* dev : devices_) {
+            if (cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
+                any_non_mmio = true;
+                if (dead_relay_devices_.count(dev->id()) == 0) {
+                    all_non_mmio_relay_dead = false;
+                    break;
+                }
+            }
+        }
+        if (any_non_mmio && all_non_mmio_relay_dead) {
+            log_warning(
+                tt::LogMetal,
+                "wait_for_fabric_router_sync: All non-MMIO devices are relay-dead — "
+                "ring sync can never complete.  Pre-setting ring_sync_already_timed_out_ "
+                "to fast-skip all subsequent wait_for_handshake calls (FIX DX #42429).");
+            ring_sync_already_timed_out_ = true;
+        }
+    }
 
     auto wait_for_handshake = [&](Device* dev) {
         if (!dev) {

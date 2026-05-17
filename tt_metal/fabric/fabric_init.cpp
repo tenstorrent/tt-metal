@@ -366,6 +366,15 @@ FabricCoresHealth configure_fabric_cores(
                 // The window where ERISC0 is halted is limited to the PCIe write round-trip.
                 cluster.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
 
+                // FIX DW (#42429): Brief delay after deassert before FIX DU poll.
+                // ERISC0 needs a few cycles to latch out of reset and begin executing ROM.
+                // Without this, a very fast first poll can read the pre-reset L1 value
+                // (which happens to be != kRomPostcode) and declare ROM "done" before it
+                // has even started — letting the subsequent L1 clear race with ROM init.
+                // 50ms is well within the >1s ROM boot sequence; cost on the fast path is
+                // negligible compared to the 5s FIX DU poll window that follows.
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
                 // FIX DU (#42429): Wait for ERISC to exit ROM phase before the L1 clear loop.
                 // FIX S9 above does assert+deassert to clean dirty L1/TXQ/MAC state, but without
                 // waiting for ROM to complete, the subsequent L1 clear (addresses_to_clear loop
