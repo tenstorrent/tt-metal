@@ -444,14 +444,23 @@ def _ace_step_cross_attention_decomposed(
     scale: float,
     additive_mask_b1qk,
     activations_dtype,
+    use_fp32: Optional[bool] = None,
+    softmax_fp32: bool = False,
+    compute_kernel_config=None,
 ):
     """
     Cross-attention without fused SDPA: matches torch_ref `dit_decoder_core._sdpa`
     (QK^T * scale, softmax on keys, @ V) while allowing additive padding / encoder masks.
 
-    torch_ref runs attention matmuls and softmax in FP32, then casts context back to BF16.
-    When `ttnn.float32` is available, this path does the same; otherwise it stays in
-    `activations_dtype` for the full decomposed op (tile tail-mask still applied when needed).
+    torch_ref (DiT) runs attention matmuls and softmax in FP32, then casts context back to BF16.
+    When `ttnn.float32` is available and ``use_fp32`` is not False, this path does the same;
+    otherwise it stays in ``activations_dtype`` for the full decomposed op.
+
+    Pass ``use_fp32=False`` when the reference model runs attention in BF16 (e.g. causal LM with
+    HF ``torch_dtype=torch.bfloat16``) to avoid a precision mismatch that compounds over layers.
+
+    Pass ``softmax_fp32=True`` along with ``use_fp32=False`` to upcast only the softmax to float32
+    and cast back (matches HF Qwen3 ``nn.functional.softmax(..., dtype=torch.float32).to(bf16)``).
 
     Shapes:
       q,k,v: [B, H, S_q or S_k, Dh] TILE
@@ -462,8 +471,14 @@ def _ace_step_cross_attention_decomposed(
     bh = int(b * h)
     mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
     mem_kw = dict(memory_config=mem) if mem is not None else {}
+    ck_kw = dict(compute_kernel_config=compute_kernel_config) if compute_kernel_config is not None else {}
     fp32 = getattr(ttnn, "float32", None)
-    use_fp32 = fp32 is not None
+    if use_fp32 is None:
+        use_fp32 = fp32 is not None
+    else:
+        use_fp32 = bool(use_fp32) and (fp32 is not None)
+    # softmax_fp32 only applies when not already running the full path in fp32
+    do_softmax_fp32 = bool(softmax_fp32) and (not use_fp32) and (fp32 is not None)
 
     qf = ttnn.reshape(q, (bh, s_q, dh))
     kf = ttnn.reshape(k, (bh, s_k, dh))
@@ -474,7 +489,7 @@ def _ace_step_cross_attention_decomposed(
         vf = ttnn.typecast(vf, dtype=fp32)
 
     kt = ttnn.permute(kf, (0, 2, 1))
-    scores = ttnn.matmul(qf, kt, **mem_kw)
+    scores = ttnn.matmul(qf, kt, **mem_kw, **ck_kw)
     scores = ttnn.multiply(scores, float(scale))
     if additive_mask_b1qk is not None:
         m = ttnn.repeat(additive_mask_b1qk, (1, int(h), 1, 1))
@@ -482,8 +497,12 @@ def _ace_step_cross_attention_decomposed(
         if use_fp32:
             m = ttnn.typecast(m, dtype=fp32)
         scores = ttnn.add(scores, m, **mem_kw)
+    if do_softmax_fp32:
+        scores = ttnn.typecast(scores, dtype=fp32)
     attn = ttnn.softmax(scores, dim=-1, **mem_kw)
-    ctx = ttnn.matmul(attn, vf, **mem_kw)
+    if do_softmax_fp32 and activations_dtype is not None:
+        attn = ttnn.typecast(attn, dtype=activations_dtype)
+    ctx = ttnn.matmul(attn, vf, **mem_kw, **ck_kw)
     if use_fp32 and activations_dtype is not None:
         ctx = ttnn.typecast(ctx, dtype=activations_dtype)
     return ttnn.reshape(ctx, (b, h, s_q, dh))
