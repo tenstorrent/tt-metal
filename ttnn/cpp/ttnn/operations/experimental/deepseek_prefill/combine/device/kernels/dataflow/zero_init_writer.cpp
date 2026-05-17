@@ -151,6 +151,7 @@ void kernel_main() {
     uint32_t credits_sem_l1 = get_semaphore(credits_semaphore_id);
     volatile tt_l1_ptr uint32_t* credits_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credits_sem_l1);
     uint64_t self_credits_noc_addr = get_noc_addr(my_x[noc_index], my_y[noc_index], credits_sem_l1);
+    uint32_t first_local_write = 1;
 
     // Wait on the same counter_ready sem reader_untilize waits on (neither kernel resets it,
     // so both see the single increment from the sender's multicast).  Then read the sender's
@@ -159,7 +160,6 @@ void kernel_main() {
     //   trailer[1] = sender's c_19 L1 offset (metadata ring for routing info)
     volatile tt_l1_ptr uint32_t* counter_ready_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(counter_ready_semaphore_id));
-    noc_semaphore_wait(counter_ready_sem_ptr, 1);
 
     uint32_t counter_cb_base = get_write_ptr(cb_experts_tok_counter_id);
     const volatile tt_l1_ptr uint32_t* trailer =
@@ -235,6 +235,11 @@ void kernel_main() {
                 uint32_t untilize_row_addr = untilize_read_ptr + t * aligned_output_page_size;
 
                 if (dst_chip == linearized_mesh_coord) {
+                    if (first_local_write) {
+                        noc_semaphore_wait(counter_ready_sem_ptr, 2);
+                        noc_semaphore_set(counter_ready_sem_ptr, 0);
+                        first_local_write = 0;
+                    }
                     DeviceZoneScopedN("combine-LOCAL-row-write");
                     uint32_t dst_token_idx = metadata[1];
                     uint32_t dst_topk_indice = metadata[2];
@@ -298,6 +303,10 @@ void kernel_main() {
         noc_semaphore_inc(self_credits_noc_addr, (uint32_t)(-(int32_t)n));
         noc_async_atomic_barrier();
         local_credits += n;
+    }
+    if (first_local_write) {
+        noc_semaphore_set(counter_ready_sem_ptr, 0);
+        first_local_write = 0;
     }
     uint64_t done_meta_noc = our_metadata_slice_noc_addr + write_slot * aligned_dispatched_metadata_page_size;
     noc_inline_dw_write(done_meta_noc, ROUTE_INFO_SENTINEL);

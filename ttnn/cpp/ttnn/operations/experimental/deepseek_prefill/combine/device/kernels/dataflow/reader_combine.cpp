@@ -241,11 +241,14 @@ void kernel_main() {
     noc_semaphore_wait(barrier_sem_ptr, num_cores);
     noc_semaphore_set(barrier_sem_ptr, 0);
 
+    noc_semaphore_inc_multicast(mcast_counter_sem_noc_addr, 1, num_idle_cores_group);
+    noc_async_atomic_barrier();
+
     volatile tt_l1_ptr uint32_t* experts_tok_counter_l1 =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr) + offset;
 
     // Set up scratch buffers for batched reads
-    cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);
+    // cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);
     uint32_t metadata_base = get_write_ptr(cb_dispatched_metadata_id);
     const auto dispatched_metadata_addr_gen =
         TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr, aligned_dispatched_metadata_page_size);

@@ -112,7 +112,7 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* counter_ready_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(counter_ready_semaphore_id));
-    noc_semaphore_wait(counter_ready_sem_ptr, 1);
+    noc_semaphore_wait_min(counter_ready_sem_ptr, 1);
 
     cb_push_back(cb_experts_tok_counter_id, experts_tok_counter_pages);
 
