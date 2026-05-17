@@ -35,6 +35,8 @@ import ttnn
 
 from ....layers.embeddings import WanPatchEmbed
 from ....layers.module import Parameter
+from ....utils.mochi import get_rot_transformation_mat
+from ....utils.padding import get_padded_vision_seq_len, pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch, local_device_to_torch
 from .audio_utils_wan import AudioInjector_WAN, CausalAudioEncoder
 from .motioner_wan import FramePackMotionerWan
@@ -276,27 +278,24 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         by ``_cached_mask_noisy`` in :meth:`after_transformer_block`, matching
         the reference's noisy-only audio rearrange.
         """
-        from ....utils.padding import get_padded_vision_seq_len
+        if self.original_seq_len == 0:
+            raise RuntimeError("prepare_cond_emb() must be called before audio injection fires.")
 
         T_video = self.num_frames
         K_per_frame = self.num_audio_tokens_per_frame
         Sk = T_video * K_per_frame
-        sp_factor = self.parallel_config.sequence_parallel.factor
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
 
-        padded_N_noisy = self._cached_padded_N_noisy or get_padded_vision_seq_len(
-            self.original_seq_len or N_total, sp_factor
-        )
+        padded_N_noisy = self._cached_padded_N_noisy
         padded_const = self._cached_padded_const
 
         cache_key = (padded_N_noisy, padded_const, Sk)
         if cache_key in self._frame_attn_mask_cache:
             return self._frame_attn_mask_cache[cache_key]
 
-        noisy_len = self.original_seq_len or N_total
+        noisy_len = self.original_seq_len
         if noisy_len % T_video != 0:
-            msg = f"noisy_len={noisy_len} not divisible by T_video={T_video}."
-            raise RuntimeError(msg)
+            raise RuntimeError(f"noisy_len={noisy_len} not divisible by T_video={T_video}.")
         hw_per_frame = noisy_len // T_video
 
         # Noisy part: ``[1, 1, padded_N_noisy, Sk]``, frame-block-diagonal
@@ -353,10 +352,6 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         """
         if self._cached_total_seq_len <= self.original_seq_len:
             return super().prepare_rope_features(hidden_states)
-
-        from ....utils.mochi import get_rot_transformation_mat
-        from ....utils.padding import pad_vision_seq_parallel
-        from ....utils.tensor import bf16_tensor as _bf16_tensor
 
         sp_factor = self.parallel_config.sequence_parallel.factor
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
@@ -447,7 +442,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         else:
             cos_tt = cos_n_tt
             sin_tt = sin_n_tt
-        trans_mat = _bf16_tensor(get_rot_transformation_mat(), device=self.mesh_device)
+        trans_mat = bf16_tensor(get_rot_transformation_mat(), device=self.mesh_device)
         return cos_tt, sin_tt, trans_mat
 
     def _build_adain_modulation_for_layer(
@@ -465,7 +460,10 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         +1 on scale is folded into the cached tensor so the on-device op is
         a plain multiply+add.
         """
-        from ....utils.padding import get_padded_vision_seq_len
+        if self.audio_emb_global_token0_dev is None:
+            raise RuntimeError("AdaIN enabled but audio_emb_global_token0_dev is None.")
+        if self.original_seq_len == 0:
+            raise RuntimeError("prepare_cond_emb() must be called before AdaIN modulation fires.")
 
         sp_factor = self.parallel_config.sequence_parallel.factor
         padded_N = get_padded_vision_seq_len(N_total, sp_factor)
@@ -473,11 +471,8 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         if cache_key in self._adain_modulation_cache:
             return self._adain_modulation_cache[cache_key]
 
-        if self.audio_emb_global_token0_dev is None:
-            raise RuntimeError("AdaIN enabled but audio_emb_global_token0_dev is None.")
-
         T_video = self.num_frames
-        noisy_len = self.original_seq_len or N_total
+        noisy_len = self.original_seq_len
         if noisy_len % T_video != 0:
             raise RuntimeError(f"noisy_len={noisy_len} not divisible by T_video={T_video}.")
         hw_per_frame = noisy_len // T_video
@@ -615,8 +610,6 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         and the noisy / total sequence lengths consumed by ``inner_step`` and
         the audio attn mask.
         """
-        from ....utils.padding import get_padded_vision_seq_len
-
         B, C, F, H, W = noisy_latents_torch.shape
         pT, pH, pW = self.patch_size
         N_noisy = (F // pT) * (H // pH) * (W // pW)
@@ -919,8 +912,6 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         # Drop the const (ref + motion) tail so the head + scheduler see only
         # the noisy-noise prediction.
         if has_cond:
-            from ....utils.padding import get_padded_vision_seq_len
-
             sp_factor = self.parallel_config.sequence_parallel.factor
             padded_noisy_per_dev = get_padded_vision_seq_len(self.original_seq_len, sp_factor) // sp_factor
             ends = list(spatial_1BND.shape)

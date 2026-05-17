@@ -55,12 +55,14 @@ the upstream ttnn ``binary_ng`` broadcast issue is resolved.
 from __future__ import annotations
 
 import os
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 import torch
 from diffusers.models import AutoencoderKLWan
+from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.schedulers import UniPCMultistepScheduler
 from diffusers.video_processor import VideoProcessor
 from loguru import logger
@@ -87,6 +89,7 @@ from ...solvers import UniPCSolver
 from ...utils import cache
 from ...utils.conv3d import conv3d_blocking_hash, conv_pad_height, conv_pad_in_channels
 from ...utils.tensor import bf16_tensor_2dshard, fast_device_to_host
+from ...utils.video import export_to_video, export_to_video_with_audio
 from .fm_solvers_unipc import FlowUniPCMultistepScheduler
 from .pipeline_wan import TransformerState, WanPipeline
 from .wan_s2v_loader import find_s2v_snapshot, load_s2v_config, load_s2v_state_dict
@@ -142,19 +145,24 @@ class WanPipelineS2V(WanPipeline):
         run_warmup: bool = False,
         audio_inject_layers: tuple[int, ...] | None = None,
     ):
-        # Initialize the abstract DiffusionPipeline base directly (the parent
-        # __init__ pulls in Diffusers loaders we can't satisfy here).
-        # ``WanPipeline`` extends ``DiffusionPipeline`` + ``WanLoraLoaderMixin``;
-        # we go through Python's MRO via ``object.__init__`` since neither
-        # needs construction beyond what attribute assignment provides.
-        from diffusers.pipelines.pipeline_utils import DiffusionPipeline  # noqa: WPS433
-
+        # Skip the parent __init__ — it's hard-wired to Diffusers loaders we
+        # can't satisfy. DiffusionPipeline.__init__ does only attribute setup.
         DiffusionPipeline.__init__(self)
 
         self.checkpoint_name = checkpoint_name
         self.aux_checkpoint_name = aux_checkpoint_name
         self.model_type = "s2v"
         self.vae_t_chunk_size = vae_t_chunk_size
+
+        # Per-call state populated by ``__call__`` / ``prepare_latents`` /
+        # ``_postprocess_latents_for_vae`` and consumed downstream in the same
+        # ``__call__``. Declared here so attribute access doesn't need
+        # ``getattr(self, name, default)``.
+        self._audio_prompt: Optional[str] = None
+        self._s2v_profiler: Optional[BenchmarkProfiler] = None
+        self._s2v_profiler_iteration: int = 0
+        self._ref_latent_torch: Optional[torch.Tensor] = None
+        self._s2v_prepended_latents: int = 0
 
         # ------------------------------------------------------------------
         # 1. Tokenizer + text encoder + VAE — load from the companion
@@ -635,11 +643,15 @@ class WanPipelineS2V(WanPipeline):
         self._audio_prompt = audio_prompt
         self._s2v_profiler = kwargs.get("profiler", None)
         self._s2v_profiler_iteration = kwargs.get("profiler_iteration", 0)
+        self._ref_latent_torch = None
+        self._s2v_prepended_latents = 0
         try:
             return super().__call__(*args, **kwargs)
         finally:
             self._audio_prompt = None
             self._s2v_profiler = None
+            self._ref_latent_torch = None
+            self._s2v_prepended_latents = 0
 
     def prepare_latents(
         self,
@@ -660,7 +672,7 @@ class WanPipelineS2V(WanPipeline):
         if pose_video is not None:
             raise NotImplementedError("--pose_video conditioning is not implemented; only zero-pose is supported")
         if audio_prompt is None:
-            audio_prompt = getattr(self, "_audio_prompt", None)
+            audio_prompt = self._audio_prompt
         if audio_prompt is None:
             raise ValueError("audio_prompt (path to a .wav/.mp3 file) is required for S2V")
         if image_prompt is None or not isinstance(image_prompt, Image.Image):
@@ -668,13 +680,11 @@ class WanPipelineS2V(WanPipeline):
 
         # Perf-test hook: each sub-stage wraps its work with
         # ``profiler("s2v_<stage>")`` if the caller passed a ``profiler=`` kwarg.
-        from contextlib import nullcontext as _nullctx
-
-        _prof = getattr(self, "_s2v_profiler", None)
-        _prof_it = getattr(self, "_s2v_profiler_iteration", 0)
+        _prof = self._s2v_profiler
+        _prof_it = self._s2v_profiler_iteration
 
         def _stage(name: str):
-            return _prof(name, _prof_it) if _prof is not None else _nullctx()
+            return _prof(name, _prof_it) if _prof is not None else nullcontext()
 
         # 1. Random noisy latents.
         latents, _ = WanPipeline.prepare_latents(
@@ -800,7 +810,7 @@ class WanPipelineS2V(WanPipeline):
     # ttnn op accepts the missing shape combinations.
 
     def _postprocess_latents_for_vae(self, latents):
-        ref = getattr(self, "_ref_latent_torch", None)
+        ref = self._ref_latent_torch
         if ref is None:
             return latents
         # latents are already in VAE input space (denormalized by the parent's
@@ -811,8 +821,7 @@ class WanPipelineS2V(WanPipeline):
         return torch.cat([ref_denorm, latents], dim=2)
 
     def _postprocess_video(self, video_torch, *, d2h_permute):
-        prepended = getattr(self, "_s2v_prepended_latents", 0)
-        if prepended == 0:
+        if self._s2v_prepended_latents == 0:
             return video_torch
         trim = self._S2V_VAE_TRANSIENT_TRIM
         if d2h_permute is not None:
@@ -825,8 +834,6 @@ class WanPipelineS2V(WanPipeline):
     @staticmethod
     def export(frames, output_path: str, *, audio_path: Optional[str] = None, fps: int = 16) -> str:
         """Encode pipeline output to MP4, optionally muxing in ``audio_path``."""
-        from ...utils.video import export_to_video, export_to_video_with_audio
-
         if audio_path is not None:
             return export_to_video_with_audio(frames, output_path, audio_path=audio_path, fps=fps)
         return export_to_video(frames, output_path, fps=fps)
