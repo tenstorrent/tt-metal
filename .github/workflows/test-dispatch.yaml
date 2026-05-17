@@ -142,7 +142,14 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
-  code-coverage:
-    if: ${{ inputs.run-code-coverage }}
-    uses: ./.github/workflows/code-coverage.yaml
-    secrets: inherit
+  trigger-code-coverage:
+    if: ${{ inputs.run-code-coverage == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger code-coverage workflow on this branch
+        run: |
+          gh api repos/tenstorrent/tt-metal/actions/workflows/code-coverage.yaml/dispatches \
+            --method POST \
+            -f ref="${{ github.ref_name }}"
+        env:
+          GH_TOKEN: ${{ github.token }}

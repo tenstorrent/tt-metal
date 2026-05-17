@@ -6,7 +6,6 @@ name: "Nightly LLVM Code Coverage"
 # tenstorrent/tt-metal-code-coverage (gh-pages).
 
 on:
-  workflow_call:
   workflow_dispatch:
   schedule:
     - cron: '0 3 * * *'  # 03:00 UTC nightly
