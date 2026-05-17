@@ -576,6 +576,18 @@ def run(
                                 for sx, sy, ex, ey in scg_ranges
                             )
                         )
+                # Clamp compute_with_storage_grid_size to fit the device compute grid.
+                # Traced configs may use a larger grid (e.g. 8x6 from ETH dispatch)
+                # than what COL dispatch provides (7x10). The sub_core_grids already
+                # specifies exact core placement within the available grid, so
+                # clamping only affects the grid-size validation path.
+                if hasattr(device, "compute_with_storage_grid_size"):
+                    dev_grid = device.compute_with_storage_grid_size()
+                    cg = _sdpa_kwargs["compute_with_storage_grid_size"]
+                    _sdpa_kwargs["compute_with_storage_grid_size"] = (
+                        min(cg[0], dev_grid.x),
+                        min(cg[1], dev_grid.y),
+                    )
                 op_kwargs["program_config"] = ttnn.SDPAProgramConfig(**_sdpa_kwargs)
         elif traced_pc is not None and traced_pc != "__ABSENT__" and not isinstance(traced_pc, dict):
             op_kwargs["program_config"] = traced_pc

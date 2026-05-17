@@ -418,7 +418,13 @@ def run(
     is_model_traced = input_a_shape is not None
 
     if is_model_traced:
-        if NUM_DEVICES < 2:
+        # Check device count at runtime, not import time — in forked
+        # subprocesses ttnn.get_num_devices() at import may return 0.
+        try:
+            _runtime_num_devices = ttnn.get_num_devices()
+        except Exception:
+            _runtime_num_devices = NUM_DEVICES
+        if _runtime_num_devices < 2:
             logger.warning("Skipping all_gather_async test: requires multi-device setup (2+ devices)")
             return [(True, "Skipped: requires 2+ devices"), 0.0]
 
@@ -565,9 +571,8 @@ def run(
         _dev_params = {}
         if is_model_traced:
             _dev_params = {
-                "dispatch_core_config": ttnn.DispatchCoreConfig(
-                    ttnn.DispatchCoreType.WORKER, ttnn.DispatchCoreAxis.COL
-                ),
+                "dispatch_core_type": ttnn.DispatchCoreType.WORKER,
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
                 "num_command_queues": 1,
                 "l1_small_size": 79104,
             }
@@ -752,10 +757,10 @@ def run(
                                 device=device,
                                 mesh_shape=mesh_shape,
                             )
-                            op_kwargs["persistent_output_buffer"] = pob_tensor
+                            op_kwargs["persistent_output_tensor"] = pob_tensor
                         elif pob_explicit_none:
                             # Master had `persistent_output_buffer=None` explicitly.
-                            op_kwargs["persistent_output_buffer"] = None
+                            op_kwargs["persistent_output_tensor"] = None
 
                         if subdevice_id is not None or "subdevice_id" not in absent_keys:
                             op_kwargs["subdevice_id"] = worker_sub_device_id
