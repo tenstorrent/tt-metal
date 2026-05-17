@@ -26,14 +26,23 @@
 #include "../../unified_kernels/ln.h"
 #include "../../unified_kernels/residual_add.h"
 #include "../../../../../demos/deepseek_v3_b1/unified_kernels/kernel_utils.hpp"
+// mcast.hpp — included to make deepseek_b1_ops::Mcast::Op visible for the
+// upcoming 8→36 fan-out between LN1 and QKV (task #10). At this stage we
+// only verify the include compiles in our fused_ops context; we don't yet
+// instantiate or invoke it. The actual mcast wiring + QKV phase comes in a
+// follow-up commit on this same branch.
+#include "../../../../../demos/deepseek_v3_b1/unified_kernels/mcast.hpp"
 
 // Core role flags — first increment is uniform (all 8 cores in the grid
 // run both LN1 and residual). With more phases, this expands into a
 // struct with per-phase is_<phase>_core flags gated by compile-time
-// args set per core range in op.py.
+// args set per core range in op.py. Stubs for upcoming role flags are
+// commented out below — concrete values come in with the mcast wiring.
 struct Core {
     static constexpr bool is_ln1_core = true;
     static constexpr bool is_residual_core = true;
+    // TODO #10: is_mcast_sender_<0..7>, is_mcast_receiver
+    // TODO #10: is_qkv_core
 };
 
 void kernel_main() {
