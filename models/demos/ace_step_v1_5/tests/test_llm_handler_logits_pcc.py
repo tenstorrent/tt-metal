@@ -29,8 +29,8 @@ import torch
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from models.common.utility_functions import comp_pcc
-from models.demos.ace_step_v1_5.five_hz_lm.five_hz_lm_paths import get_checkpoints_dir
 from models.demos.ace_step_v1_5.ttnn_impl.five_hz_causal_lm_experimental import AceStepFiveHzExperimentalTtnnCausalLM
+from models.demos.ace_step_v1_5.ttnn_impl.five_hz_lm.five_hz_lm_paths import get_checkpoints_dir
 from models.demos.ace_step_v1_5.ttnn_impl.lm_constrained_logits_ttnn import (
     logits_add_delta_bf16,
     logits_divide_by_scalar_bf16,

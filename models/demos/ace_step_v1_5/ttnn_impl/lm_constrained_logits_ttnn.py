@@ -4,7 +4,7 @@
 
 """TTNN helpers for 5 Hz LM constrained decoding logits (ACE demo).
 
-:class:`~models.demos.ace_step_v1_5.five_hz_lm.five_hz_constrained_logits_processor.MetadataConstrainedLogitsProcessor`
+:class:`~models.demos.ace_step_v1_5.ttnn_impl.five_hz_lm.five_hz_constrained_logits_processor.MetadataConstrainedLogitsProcessor`
 keeps FSM / tokenizer logic on the host. When ``LocalFiveHzLMHandler.set_ttnn_logits_device`` has run,
 the processor sets ``_ttnn_logits_device`` and these ops run on TTNN (strict no-fallback when supported):
 
