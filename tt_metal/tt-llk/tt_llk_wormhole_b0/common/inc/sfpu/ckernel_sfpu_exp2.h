@@ -69,18 +69,18 @@ inline void _calculate_exp2_()
                 //   n = trunc(x) for x >= 0, and n = trunc(x) - 1 for x < 0 and not integer
                 // However, we can use the SFPI function if available. Let's use trunc and adjust.
 
-                // First, truncate towards zero
+                // floor(x): trunc towards zero; for negative non-integers, subtract 1
                 sfpi::vFloat n_trunc = sfpi::trunc(x);
-                // Then, if x is negative and not an integer, we need to subtract 1
-                sfpi::vFloat is_neg_and_not_int = sfpi::vConst0;
+                sfpi::vFloat n = n_trunc;
                 v_if (sfpi::lessthan(x, sfpi::vConst0))
                 {
-                    sfpi::vInt x_int = sfpi::reinterpret<sfpi::vInt>(x);
-                    sfpi::vFloat x_as_int = sfpi::reinterpret<sfpi::vFloat>(x_int);
-                    is_neg_and_not_int = sfpi::iequal(x_as_int, x) ? sfpi::vConst0 : sfpi::vConst1;
+                    v_if (n_trunc != x)
+                    {
+                        n = n_trunc - sfpi::vConst1;
+                    }
+                    v_endif;
                 }
                 v_endif;
-                sfpi::vFloat n = n_trunc - is_neg_and_not_int;
                 sfpi::vFloat f = x - n;  // f in [0,1)
 
                 // Compute y = 2^f - 1 using a polynomial approximation
@@ -100,11 +100,6 @@ inline void _calculate_exp2_()
                 constexpr float C5 = LN2 * LN2 * LN2 * LN2 * LN2 * (1.0f/120.0f);
 
                 // Evaluate polynomial using Horner's method: y = f * (C1 + f * (C2 + f * (C3 + f * (C4 + f * C5))))
-                sfpi::vFloat f2 = f * f;
-                sfpi::vFloat f3 = f2 * f;
-                sfpi::vFloat f4 = f3 * f;
-                sfpi::vFloat f5 = f4 * f;
-
                 sfpi::vFloat y = f * (C1 + f * (C2 + f * (C3 + f * (C4 + f * C5))));
 
                 // Now, significand = 1.0 + y = 2^f
@@ -113,9 +108,7 @@ inline void _calculate_exp2_()
                 // Exponent (unbiased) = n
                 // Biased exponent = n + bias (where bias = 127 for single precision)
                 // We'll compute the biased exponent as a float and then convert to int
-                sfpi::vFloat biased_exp_float = n + vConstBias127;
-                // Convert to int (bitcast)
-                sfpi::vInt biased_exp = sfpi::reinterpret<sfpi::vInt>(biased_exp_float);
+                sfpi::vInt biased_exp = (sfpi::vInt)(n + vConstBias127);
 
                 // Build the floating point number: setexp(significand, biased_exp)
                 // setexp expects the exponent to be the biased exponent
