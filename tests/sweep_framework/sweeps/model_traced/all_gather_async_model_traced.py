@@ -33,7 +33,11 @@ TIMEOUT = 300
 try:
     NUM_DEVICES = ttnn.get_num_devices()
 except Exception:
-    NUM_DEVICES = 0  # Headless runner (vector generation only)
+    # ttnn.get_num_devices() crashes in forked subprocesses.
+    # Fall back to counting /dev/tenstorrent entries.
+    import glob as _glob_init
+
+    NUM_DEVICES = len(_glob_init.glob("/dev/tenstorrent/[0-9]*"))
 
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
@@ -418,12 +422,11 @@ def run(
     is_model_traced = input_a_shape is not None
 
     if is_model_traced:
-        # Check device count at runtime, not import time — in forked
-        # subprocesses ttnn.get_num_devices() at import may return 0.
-        try:
-            _runtime_num_devices = ttnn.get_num_devices()
-        except Exception:
-            _runtime_num_devices = NUM_DEVICES
+        # Check device count via /dev/tenstorrent — ttnn.get_num_devices()
+        # crashes in forked subprocesses (sweep runner uses multiprocessing).
+        import glob as _glob
+
+        _runtime_num_devices = len(_glob.glob("/dev/tenstorrent/[0-9]*"))
         if _runtime_num_devices < 2:
             logger.warning("Skipping all_gather_async test: requires multi-device setup (2+ devices)")
             return [(True, "Skipped: requires 2+ devices"), 0.0]
