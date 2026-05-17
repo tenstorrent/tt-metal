@@ -1545,3 +1545,74 @@ Same 12× pattern as FIX BO / FIX TH3. Prevents global teardown cascade.
 - `tt_metal/impl/device/firmware/risc_firmware_initializer.cpp`: FIX DU pre-scan (lines 516-570), skip check in reset loop (lines 577-581), pre-confirmed channels in FIX AR poll (lines 670-676)
 
 **Expected outcome**: When FIX DK-2/XZ brings up 12 MMIO channels to UMD firmware during Session 2 teardown, those channels will not be re-reset by FIX AC 11ms later. Only channels NOT at UMD firmware will be reset. ETH link training deadlock avoided.
+
+---
+## 2026-05-17 FIX AD Integration — Post-Landing Strategy Update
+
+**Date**: 2026-05-17 02:20 UTC
+**Branch HEAD**: d84940bfade
+
+### FIX AD Summary
+Landed 2026-05-16 ~20:37 UTC. Two commits:
+- `749979f96f4` — FIX AD: TCP-style symmetric ETH handshake (Fix A+D)
+- `aaa3b13a1e2` — research notes: fix_ad_implementation_notes.md
+- `cb91a6c8a37` — fix unused is_handshake_master variable (build fix)
+
+**Result**: STARTED-STARTED deadlock class CLOSED by construction.
+`prepare_handshake_state()` zeros local_value during Object Setup BEFORE edm_status=STARTED.
+`symmetric_handshake()` runs identically on both sides — both send+poll MAGIC, no role distinction.
+
+### Post-FIX AD CI Status
+Two runs confirmed correct: 25973430393 (t3k-12) and 25975237314 (t3k-01).
+Both runs fail at ring sync after 120s — NOT a handshake deadlock.
+New dominant failure class: non-MMIO relay queue saturation (Blocker 1).
+
+### Failure Class Table (2026-05-17)
+| Class | Status |
+|---|---|
+| STARTED-STARTED deadlock | CLOSED ✅ FIX AD |
+| MMIO base-UMD stale firmware | CLOSED ✅ FIX S9+DU |
+| FIX XZ stale heartbeat | CLOSED ✅ FIX DS |
+| Non-MMIO relay queue saturation | OPEN ❌ PRIMARY BLOCKER |
+| FIX DU stale read (0ms) | OPEN ❌ FIX DW not implemented |
+| FIX DX fast ring sync skip | NOT IMPLEMENTED ⚠️ |
+| FIX DV consuming code | NOT IMPLEMENTED ⚠️ |
+
+### Pending Fixes (not yet in codebase)
+- **FIX DW**: Add 50ms sleep_for after deassert_risc_reset_at_core in FIX S9/FIX DU path
+  (fabric_init.cpp, after line ~367). Prevents stale-read "0ms" false positive.
+- **FIX DX**: Fast ring sync skip when all non-MMIO relay broken
+  (fabric_firmware_initializer.cpp, wait_for_fabric_router_sync()). Saves 120s.
+- **Enhanced FIX AK**: Probe relay-alive before skipping l1_barrier drain in teardown.
+  Prevents queue saturation accumulation across sessions.
+
+### Full analysis in
+`research/strategy_report_20260517_0220.txt`
+`research/catchall_catch22_analysis_20260516.md`
+`research/within_run_contamination_20260517.md`
+
+---
+## 2026-05-17 — FIX DW/DX/AQ2/OPTION-C (commit a0ca8714022, CI run 25979253612)
+
+Four fixes addressing within-run contamination and unnecessary timeout overhead:
+
+### FIX DW (fabric_init.cpp ~line 367)
+50ms sleep after `deassert_risc_reset_at_core` before FIX DU poll. Prevents fast first
+poll from reading stale pre-reset L1 value and declaring ROM done before it has started.
+
+### FIX DX (wait_for_fabric_router_sync)
+Pre-sets `ring_sync_already_timed_out_` when ALL non-MMIO devices are in
+`dead_relay_devices_`. Ring barrier can never close in that state — this saves ~120s
+per failing run via the existing FIX TJ fast-skip path.
+
+### FIX AQ2 (teardown, inside FIX XZ block)
+Adds second poll after heartbeat confirmation: waits for `edm_status != 0x49705180`
+on force-reset MMIO channels. Closes within-run contamination window where base-UMD
+hasn't yet overwritten the ROM postcode with 0x49706550. Poll window: 2000ms with 5ms
+intervals. ROM-postcode-clear is typically within 200ms of heartbeat confirming live.
+
+### OPTION C (teardown FIX AK replacement)
+Replaces blanket-skip of ALL non-MMIO l1_barrier when any relay dead with per-device
+relay probe using ReadFromDeviceL1 (throws on timeout, unlike l1_barrier which blocks
+forever). Surviving relay paths get their UMD queues drained. Degraded relays detected
+and skipped individually.
