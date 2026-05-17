@@ -466,7 +466,11 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
         for (const auto& mmio_device_id : mmio_device_ids) {
             futures.emplace_back(tt_metal::detail::async([this, mmio_device_id]() {
                 ll_api::configure_static_tlbs(
-                    this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), *this->driver_);
+                    this->arch_,
+                    mmio_device_id,
+                    this->get_soc_desc(mmio_device_id),
+                    *this->driver_,
+                    this->target_type_ == TargetDevice::Silicon);
             }));
         }
 
@@ -1528,15 +1532,15 @@ void Cluster::register_sim_fabric_endpoint_direction(
             stderr,
             "[ttsim-fabric-terminal] tt-metal-register-direction chip=%d chan=%u dir=%u target=%u\n",
             chip_id,
-            static_cast<uint32_t>(eth_chan_id),
-            static_cast<uint32_t>(direction),
-            static_cast<uint32_t>(this->target_type_));
+            static_cast<std::uint32_t>(eth_chan_id),
+            static_cast<std::uint32_t>(direction),
+            static_cast<std::uint32_t>(this->target_type_));
     }
     if (this->target_type_ != tt::TargetDevice::Simulator) {
         return;
     }
     this->get_driver()->register_sim_fabric_endpoint_direction(
-        chip_id, static_cast<uint32_t>(eth_chan_id), static_cast<uint32_t>(direction));
+        chip_id, static_cast<std::uint32_t>(eth_chan_id), static_cast<std::uint32_t>(direction));
 }
 
 }  // namespace tt
