@@ -462,7 +462,15 @@ class WanTransformer3DModel(Module):
         logger.info(f"TT prompt shape: {tt_prompt_1BLP.shape}")
         return tt_temb_11BD, tt_timestep_proj_1BTD, tt_prompt_1BLP
 
-    def preprocess_spatial_input_host(self, spatial):
+    def preprocess_spatial_input_host(self, spatial, *, pad: bool = True):
+        """Host-side patchify of ``[B, C, F, H, W]`` → ``[1, B, N, pF*pH*pW*C]``.
+
+        With ``pad=True`` (default), the sequence dim is padded to the per-
+        device SP-shard boundary via :func:`pad_vision_seq_parallel`. S2V
+        passes ``pad=False`` for the reference-image latent, which keeps its
+        natural ``N_ref`` length so the on-device concat with the noisy
+        sequence is exact.
+        """
         B, C, F, H, W = spatial.shape
         logger.info(f"Preprocessing spatial input with shape {spatial.shape}")
         assert B == 1, "Batch size must be 1"
@@ -470,13 +478,13 @@ class WanTransformer3DModel(Module):
         patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
         N = patch_F * patch_H * patch_W
 
-        # Patchify video input
         spatial = spatial.reshape(B, C, patch_F, pF, patch_H, pH, patch_W, pW)
         spatial = spatial.permute(0, 2, 4, 6, 3, 5, 7, 1).reshape(1, B, N, pF * pH * pW * C)
         logger.info(f"spatial input after patchifying: {spatial.shape}")
 
-        spatial = pad_vision_seq_parallel(spatial, num_devices=self.parallel_config.sequence_parallel.factor)
-        logger.info(f"spatial input after padding: {spatial.shape}")
+        if pad:
+            spatial = pad_vision_seq_parallel(spatial, num_devices=self.parallel_config.sequence_parallel.factor)
+            logger.info(f"spatial input after padding: {spatial.shape}")
 
         return spatial, N
 

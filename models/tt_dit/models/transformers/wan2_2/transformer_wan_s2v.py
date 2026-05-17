@@ -608,24 +608,16 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         # --- Pose embedding (cond_encoder) ---
         if cond_states_torch is None:
             cond_states_torch = -torch.ones_like(noisy_latents_torch)
-        cond_1BNI, _ = self._patchify_for_embed(cond_states_torch, self.patch_size)
+        cond_1BNI, _ = self.preprocess_spatial_input_host(cond_states_torch, pad=True)
         padded_N_noisy = get_padded_vision_seq_len(N_noisy, sp_factor)
-        if padded_N_noisy > N_noisy:
-            cond_pad = torch.zeros(
-                cond_1BNI.shape[0],
-                cond_1BNI.shape[1],
-                padded_N_noisy - N_noisy,
-                cond_1BNI.shape[3],
-                dtype=cond_1BNI.dtype,
-            )
-            cond_1BNI = torch.cat([cond_1BNI, cond_pad], dim=2)
         cond_dev = bf16_tensor(
             cond_1BNI, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=2, layout=ttnn.TILE_LAYOUT
         )
         self._cached_pose_emb_1BND = self.cond_encoder(cond_dev)
 
-        # --- Reference latent (shares patch_embedding with noisy) ---
-        ref_1BNI, N_ref = self._patchify_for_embed(ref_latent_torch, self.patch_size)
+        # --- Reference latent (shares patch_embedding with noisy; un-padded
+        # so the on-device concat with the noisy sequence is exact).
+        ref_1BNI, N_ref = self.preprocess_spatial_input_host(ref_latent_torch, pad=False)
         ref_dev = bf16_tensor(ref_1BNI, device=self.mesh_device, layout=ttnn.TILE_LAYOUT)
         ref_emb_1BND = self.patch_embedding(ref_dev)
 
@@ -733,17 +725,6 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         zero_t_torch = torch.zeros(B, 1, 1, 1, dtype=torch.float32)
         zero_t_tt = float32_tensor(zero_t_torch, device=self.mesh_device)
         _, self._cached_timestep_proj_zero = self.prepare_timestep_conditioning(zero_t_tt)
-
-    @staticmethod
-    def _patchify_for_embed(x_BCTHW: torch.Tensor, patch_size: tuple[int, int, int]) -> tuple[torch.Tensor, int]:
-        """Host-side unfold for ``WanPatchEmbed``. Returns ``([1, B, N, pT*pH*pW*C], N)``."""
-        pT, pH, pW = patch_size
-        B, C, F, H, W = x_BCTHW.shape
-        patch_F, patch_H, patch_W = F // pT, H // pH, W // pW
-        N = patch_F * patch_H * patch_W
-        x = x_BCTHW.reshape(B, C, patch_F, pT, patch_H, pH, patch_W, pW)
-        x = x.permute(0, 2, 4, 6, 3, 5, 7, 1).reshape(1, B, N, pT * pH * pW * C)
-        return x, N
 
     def _s2v_segmented_block_forward(
         self,
