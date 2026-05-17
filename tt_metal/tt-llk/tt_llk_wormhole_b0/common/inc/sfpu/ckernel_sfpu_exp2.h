@@ -14,6 +14,7 @@ namespace ckernel::sfpu
 
 namespace {
     sfpi::vFloat vConstInfinity;
+    sfpi::vFloat vConstBias127;
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
@@ -112,7 +113,7 @@ inline void _calculate_exp2_()
                 // Exponent (unbiased) = n
                 // Biased exponent = n + bias (where bias = 127 for single precision)
                 // We'll compute the biased exponent as a float and then convert to int
-                sfpi::vFloat biased_exp_float = n + sfpi::vConst(127.0f);
+                sfpi::vFloat biased_exp_float = n + vConstBias127;
                 // Convert to int (bitcast)
                 sfpi::vInt biased_exp = sfpi::reinterpret<sfpi::vInt>(biased_exp_float);
 
@@ -136,7 +137,8 @@ inline void _calculate_exp2_()
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void _init_exp2_()
 {
-    vConstInfinity = sfpi::setexp(sfpi::vConst1, 255);
+    vConstInfinity = sfpi::setexp(sfpi::vConst1, 255); // Pre-computed +inf: setexp(vConst1, 255) → IEEE 754 positive infinity
+    vConstBias127 = sfpi::vConst(127.0f);
 }
 
 } // namespace ckernel::sfpu
