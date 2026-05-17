@@ -188,7 +188,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         num_blocks_per_core_group_1 *= batch_scale_factor;
         num_blocks_per_core_group_2 *= batch_scale_factor;
     } else {
-        CoreCoord grid = program_config.compute_with_storage_grid_size;
+        CoreCoord grid = program_config.allowed_worker_cores.value().bounding_box().grid_size();
         std::tie(
             num_cores,
             all_cores,

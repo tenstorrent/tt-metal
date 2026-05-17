@@ -297,7 +297,7 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
     return is_packer_to_L1_early_conversion_supported(in_reg, out_l1) || is_packer_to_L1_late_conversion_supported(in_reg, out_l1);
 }
 
-template <bool untilize = false, bool tilize = false>
+template <PackMode pack_mode = PackMode::Default>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
     std::uint32_t x_stride = (pack_src_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
@@ -308,7 +308,7 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
 
     // Untilize mode has 2 packer interfaces active, so z counter needs to jump by 2
     // faces, since z counter is only 1 bit (can't be programmed to inc by 2)
-    const std::uint32_t z_stride = ((untilize ^ tilize) && (tile_c_dim == TILE_C_DIM)) ? 2 * FACE_R_DIM * y_stride : FACE_R_DIM * y_stride;
+    const std::uint32_t z_stride = ((pack_mode != PackMode::Default) && (tile_c_dim == TILE_C_DIM)) ? 2 * FACE_R_DIM * y_stride : FACE_R_DIM * y_stride;
 
     TT_SETDMAREG(0, LOWER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, LO_16(p_gpr_pack::TMP0)); // x-stride not used!
     TT_SETDMAREG(0, UPPER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, HI_16(p_gpr_pack::TMP0));
@@ -320,7 +320,7 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TTI_NOP;
     TTI_NOP;
 
-    if constexpr (tilize && !untilize)
+    if constexpr (pack_mode == PackMode::Tilize)
     {
         const std::uint32_t z_stride_ch1 = FACE_R_DIM * y_stride;
         TT_SETDMAREG(0, LOWER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)), 0, LO_16(p_gpr_pack::TMP1));
@@ -562,10 +562,10 @@ inline void reconfig_packer_data_format(
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(pack_output_src_format);
 
     // Set packer strides
-    set_packer_strides(pack_output_src_format, tile_c_dim);
+    set_packer_strides<PackMode::Default>(pack_output_src_format, tile_c_dim);
 }
 
-template <bool is_fp32_dest_acc_en, bool untilize = false, bool tilize = false>
+template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -585,7 +585,7 @@ inline void configure_pack(
 
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
 
-    set_packer_strides<untilize, tilize>(pack_src_format, tile_c_dim);
+    set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
 
     t6_mutex_acquire(mutex::REG_RMW);
 
@@ -825,7 +825,7 @@ enum class PackerProgramType
 /**
  * Validates that all packers' config and counters match the expected formats and face dimension.
  * On mismatch, issues DEVICE_PRINT (when enabled) and LLK_ASSERT. Typically invoked via
- * `LLK_ASSERT_BLOCK(are_packers_configured_correctly<...>(...))` in llk_pack_api.h.
+ * `LLK_ASSERT_BLOCK(are_packers_configured_correctly<...>(...))` in llk_pack_tile_api.h.
  *
  * @param pack_src_format   Expected input data format for all packers
  * @param pack_dst_format   Expected output data format for all packers

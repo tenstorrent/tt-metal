@@ -245,14 +245,6 @@ Tensor atan2(
 Tensor nextafter(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
-Tensor isclose(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    float rtol,
-    float atol,
-    bool equal_nan,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
 Tensor div_no_nan(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 

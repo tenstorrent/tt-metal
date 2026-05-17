@@ -27,7 +27,7 @@ jobs:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_perf_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github
@@ -65,7 +65,7 @@ jobs:
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install SFPI
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
