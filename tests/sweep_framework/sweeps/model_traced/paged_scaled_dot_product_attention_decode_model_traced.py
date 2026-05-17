@@ -97,7 +97,13 @@ def mesh_device_fixture():
                             break
     except Exception:
         pass
-    device = create_mesh_device(mesh_shape)
+    # SDPA needs compute_with_storage_grid_size=(8,6) which requires x=7.
+    # COL dispatch reserves column 7, so use ETH dispatch which gives 8x8 grid.
+    device = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(*mesh_shape),
+        l1_small_size=79104,
+        dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
+    )
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
     ttnn.close_mesh_device(device)
@@ -422,7 +428,11 @@ def run(
                 )
                 golden_out[0, u, :, :] = attn_out.squeeze(2)
             torch_output_tensor = golden_out.to(torch_input_a.dtype)
-        except Exception:
+        except Exception as _golden_err:
+            import traceback
+
+            traceback.print_exc()
+            print(f"Golden failed: {_golden_err}", flush=True)
             torch_output_tensor = torch_input_a.clone()
     else:
         torch_output_tensor = torch_input_a.clone()

@@ -589,7 +589,7 @@ def run(
             _dev_params = {
                 "dispatch_core_type": ttnn.DispatchCoreType.WORKER,
                 "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-                "num_command_queues": 1,
+                "num_command_queues": 2,
                 "l1_small_size": 79104,
             }
         with device_context(mesh_shape, fabric_config, device_params=_dev_params) as (device, device_err):
