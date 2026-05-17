@@ -17,6 +17,8 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 ALWI void ACQ() {
@@ -82,21 +84,30 @@ void kernel_main() {
 
         /*
          * 1/sqrt(var + eps)
+         * PARTIAL migration: BinaryFpu(Add, cb_var, cb_eps) + Rsqrt + PackTile(cb_recip_sqrt_var).
          */
-        cb_wait_front(cb_var, 1);
-        cb_reserve_back(cb_recip_sqrt_var, 1);
-        reconfig_data_format(cb_var, cb_eps);
-        pack_reconfig_data_format(cb_recip_sqrt_var);
-
-        add_tiles_init(cb_var, cb_eps);
-        ACQ();
-        add_tiles(cb_var, cb_eps, 0, 0, 0);
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(0);
-        pack_tile(0, cb_recip_sqrt_var);
-        REL();
-        cb_push_back(cb_recip_sqrt_var, 1);
-        cb_pop_front(cb_var, 1);
+        {
+            using namespace compute_kernel_lib;
+            eltwise_chain(
+                onetile,
+                BinaryFpu<
+                    cb_var,
+                    cb_eps,
+                    BinaryFpuOp::Add,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::WaitAndPop,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::FirstTile,
+                    Dst::D0>{},
+                Rsqrt<Approx::Exact, LEGACY_RSQRT ? Legacy::On : Legacy::Off, Dst::D0>{},
+                PackTile<
+                    cb_recip_sqrt_var,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
+        }
 
         /*
          * norm x
