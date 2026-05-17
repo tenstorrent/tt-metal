@@ -295,7 +295,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     # Check if this is a model_traced vector (has input_a_memory_config instead of buffer_type)
     is_model_traced = "input_a_memory_config" in test_vector
 
-
     if is_model_traced:
         # Model traced vectors are pre-validated by the tracer.
         # Do NOT check device count here — vector generation may run on a
@@ -414,7 +413,6 @@ def run(
     )
     if not persistent_output_buffer_was_provided:
         persistent_output_buffer = None
-
 
     # Check if this is a model_traced run (V2 format has input_a_shape)
     is_model_traced = input_a_shape is not None
@@ -567,7 +565,9 @@ def run(
         _dev_params = {}
         if is_model_traced:
             _dev_params = {
-                "dispatch_core_config": ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, ttnn.DispatchCoreAxis.COL),
+                "dispatch_core_config": ttnn.DispatchCoreConfig(
+                    ttnn.DispatchCoreType.WORKER, ttnn.DispatchCoreAxis.COL
+                ),
                 "num_command_queues": 1,
                 "l1_small_size": 79104,
             }
@@ -644,17 +644,23 @@ def run(
                     device,
                 )
 
-            # Setup SubDevice and semaphores
-            compute_grid_size = device.compute_with_storage_grid_size()
-            # 2-sub-device layout matching Galaxy prefetcher decode mode
-            worker_cores = ttnn.CoreRangeSet({
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-            })
-            prefetcher_cores = ttnn.CoreRangeSet({
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 9)),
-            })
+            # Setup SubDevice and semaphores — use the model's actual core
+            # layout from get_core_ranges so that the sub-device partition
+            # matches what the model uses during inference.
+            from models.demos.llama3_70b_galaxy.tt.model_config import get_core_ranges as _ag_get_core_ranges
+
+            (
+                _ag_active_sender_cores,
+                _ag_dram_cores,
+                _ag_all_sender_cores,
+                _ag_active_receiver_cores_list,
+                _ag_all_receiver_cores,
+                _ag_worker_cores_range_set,
+                _ag_mm_optimised_ring_cores,
+                _ag_hop_grid,
+            ) = _ag_get_core_ranges(12, 2, is_functional_test=False)
+            worker_cores = _ag_worker_cores_range_set
+            prefetcher_cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in _ag_active_sender_cores])
             _ag_sub_dev_mgr = device.create_sub_device_manager(
                 [ttnn.SubDevice([prefetcher_cores]), ttnn.SubDevice([worker_cores])], 0
             )
@@ -776,9 +782,7 @@ def run(
                                 tt_input, _dim, _cluster_axis, _mesh_dev, _topology, _semaphore, **op_kwargs
                             )
                         else:
-                            tt_out_tensor = ttnn.experimental.all_gather_async(
-                                tt_input, _dim, _semaphore, **op_kwargs
-                            )
+                            tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, _dim, _semaphore, **op_kwargs)
                     else:
                         _ag_kwargs = dict(
                             num_links=num_links,

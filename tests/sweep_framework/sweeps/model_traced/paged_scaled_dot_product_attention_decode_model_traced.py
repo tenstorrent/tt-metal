@@ -71,12 +71,8 @@ if model_traced_params:
 def mesh_device_fixture():
     mesh_shape = get_model_traced_mesh_shape()
     device = create_mesh_device(mesh_shape)
-    from tests.sweep_framework.sweep_utils.mesh_tensor_utils import setup_sub_device_manager, teardown_sub_device_manager
-    result = setup_sub_device_manager(device)
-    sub_device_mgr = result[0] if isinstance(result, tuple) else result
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
-    teardown_sub_device_manager(device, sub_device_mgr)
     ttnn.close_mesh_device(device)
     del device
 
@@ -568,14 +564,18 @@ def run(
                 scg = re.search(r"sub_core_grids=\{(.+?)\}", val)
                 if scg:
                     import ttnn as _ttnn_scg
+
                     scg_ranges = re.findall(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", scg.group(1))
                     if scg_ranges:
-                        _sdpa_kwargs["sub_core_grids"] = _ttnn_scg.CoreRangeSet(set(
-                            _ttnn_scg.CoreRange(
-                                _ttnn_scg.CoreCoord(int(sx), int(sy)),
-                                _ttnn_scg.CoreCoord(int(ex), int(ey)),
-                            ) for sx, sy, ex, ey in scg_ranges
-                        ))
+                        _sdpa_kwargs["sub_core_grids"] = _ttnn_scg.CoreRangeSet(
+                            set(
+                                _ttnn_scg.CoreRange(
+                                    _ttnn_scg.CoreCoord(int(sx), int(sy)),
+                                    _ttnn_scg.CoreCoord(int(ex), int(ey)),
+                                )
+                                for sx, sy, ex, ey in scg_ranges
+                            )
+                        )
                 op_kwargs["program_config"] = ttnn.SDPAProgramConfig(**_sdpa_kwargs)
         elif traced_pc is not None and traced_pc != "__ABSENT__" and not isinstance(traced_pc, dict):
             op_kwargs["program_config"] = traced_pc

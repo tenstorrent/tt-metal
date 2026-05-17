@@ -53,6 +53,46 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def _get_master_memory_configs(config_hash):
+    """Read the original memory configs from the master JSON for a specific config.
+
+    The vector serialization pipeline may reorder CoreRangeSet cores (e.g., sorting
+    by x,y), breaking WIDTH_SHARDED layouts where core ordering determines which data
+    shard maps to which core. This function reads directly from the master JSON to
+    get the original model-defined core ordering.
+
+    Returns (input_a_mc, input_b_mc, output_mc) or (None, None, None) if not found.
+    """
+    import json, os
+    from tests.sweep_framework.sweep_utils.mesh_tensor_utils import _find_master_json
+    from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config
+
+    master_path = os.environ.get("TTNN_MASTER_JSON_PATH") or _find_master_json()
+    if not master_path or not os.path.isfile(master_path):
+        return None, None, None
+
+    try:
+        with open(master_path) as f:
+            master = json.load(f)
+    except Exception:
+        return None, None, None
+
+    configs = master.get("operations", {}).get("ttnn.matmul", {}).get("configurations", [])
+    for cfg in configs:
+        h = cfg.get("config_hash", "")
+        if h == config_hash or (config_hash and h.startswith(config_hash[:8])):
+            args = cfg.get("arguments", {})
+            a0_mc = args.get("arg0", {}).get("memory_config")
+            a1_mc = args.get("arg1", {}).get("memory_config")
+            out_mc = args.get("memory_config")
+            return (
+                dict_to_memory_config(a0_mc) if a0_mc else None,
+                dict_to_memory_config(a1_mc) if a1_mc else None,
+                dict_to_memory_config(out_mc) if out_mc else None,
+            )
+    return None, None, None
+
+
 _GLOBAL_CB = None
 _PREFETCHER_INFO = None
 
@@ -124,6 +164,22 @@ def run(
         from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 
         op_kwargs["memory_config"] = parse_dict_value("memory_config", raw_mc) if isinstance(raw_mc, dict) else raw_mc
+
+    # When the GCB/prefetcher path is active, the shard grid ordering matters.
+    # Vector serialization may reorder CoreRangeSet cores (e.g., sorting by x,y),
+    # which breaks WIDTH_SHARDED layouts where core ordering determines which data
+    # shard maps to which core. Override memory configs from the original master
+    # JSON to preserve the model-defined core ordering.
+    config_hash = kwargs.get("config_hash")
+    gcb_raw_check = kwargs.get("global_cb")
+    if config_hash and gcb_raw_check is not None and gcb_raw_check != "__ABSENT__":
+        master_a_mc, master_b_mc, master_out_mc = _get_master_memory_configs(config_hash)
+        if master_a_mc is not None:
+            input_a_memory_config = master_a_mc
+        if master_b_mc is not None:
+            input_b_memory_config = master_b_mc
+        if master_out_mc is not None:
+            op_kwargs["memory_config"] = master_out_mc
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape

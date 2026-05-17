@@ -343,14 +343,17 @@ def build_op_kwargs(
             op_kwargs[key] = None
             continue
 
-        # Skip activation list kwargs entirely — nanobind rejects Python lists
-        # for Sequence[EltwiseUnaryWithParam] params.
-        if isinstance(value, list) and "activation" in key:
-            continue
         # Parse list-of-UnaryOpType-dicts (e.g. input_tensor_a_activations)
+        # before the activation-list stripping below, so that valid enum lists
+        # like [UnaryOpType.SILU] are kept in op_kwargs.
         list_parsed = _maybe_parse_unary_list(value)
         if list_parsed is not value:
             op_kwargs[key] = list_parsed
+            continue
+        # Skip raw activation list kwargs that failed enum parsing above.
+        # nanobind rejects plain Python dicts/lists for
+        # Sequence[EltwiseUnaryWithParam] params.
+        if isinstance(value, list) and "activation" in key:
             continue
         # Parse SubDeviceId dicts
         if isinstance(value, dict) and (
