@@ -287,7 +287,8 @@ struct CopyTile : CopyTileTag {
     ALWI void wait_per_tile(uint32_t cumulative_count) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(Cb, 1);
-        } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+        } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd ||
+                             Policy == CopyTilePolicy::CumulativeWaitNoPop) {
             cb_wait_front(Cb, cumulative_count);
         }
     }
@@ -644,13 +645,15 @@ struct BinaryFpu : BinaryFpuTag {
     ALWI void wait_per_tile(uint32_t cumulative_count) const {
         if constexpr (APolicy == CopyTilePolicy::WaitAndPop || APolicy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(CbA, 1);
-        } else if constexpr (APolicy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+        } else if constexpr (APolicy == CopyTilePolicy::CumulativeWaitPopAtEnd ||
+                             APolicy == CopyTilePolicy::CumulativeWaitNoPop) {
             cb_wait_front(CbA, cumulative_count);
         }
         if constexpr (!same_cb) {
             if constexpr (BPolicy == CopyTilePolicy::WaitAndPop || BPolicy == CopyTilePolicy::WaitNoPop) {
                 cb_wait_front(CbB, 1);
-            } else if constexpr (BPolicy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+            } else if constexpr (BPolicy == CopyTilePolicy::CumulativeWaitPopAtEnd ||
+                                 BPolicy == CopyTilePolicy::CumulativeWaitNoPop) {
                 cb_wait_front(CbB, cumulative_count);
             }
         }
@@ -818,7 +821,8 @@ struct DestReuseBinary : DestReuseBinaryTag {
     ALWI void wait_per_tile(uint32_t cumulative_count) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(Cb, 1);
-        } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+        } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd ||
+                             Policy == CopyTilePolicy::CumulativeWaitNoPop) {
             cb_wait_front(Cb, cumulative_count);
         }
     }
@@ -924,7 +928,8 @@ struct UnaryBcast : UnaryBcastTag {
     ALWI void wait_per_tile(uint32_t cumulative_count) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(Cb, 1);
-        } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+        } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd ||
+                             Policy == CopyTilePolicy::CumulativeWaitNoPop) {
             cb_wait_front(Cb, cumulative_count);
         }
     }
@@ -1097,6 +1102,7 @@ namespace detail {
 constexpr bool policy_supports_block(CopyTilePolicy p) {
     return p == CopyTilePolicy::WaitUpfrontPopAtEnd ||
            p == CopyTilePolicy::CumulativeWaitPopAtEnd ||
+           p == CopyTilePolicy::CumulativeWaitNoPop ||
            p == CopyTilePolicy::NoWaitNoPop;
 }
 

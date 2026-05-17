@@ -13,6 +13,7 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
@@ -40,25 +41,32 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         /*
          * x**2
+         *
+         * Migrated: same-CB BinaryFpu(Mul) over Wt with chain BlockSize=blk.
+         * CumulativeWaitNoPop matches cb_wait_front(cb_inp, wt+blk) per-iter
+         * cumulative grow without popping — caller pops cb_inp(Wt) after the
+         * downstream sum(x²) reduce completes. same_cb dedup avoids duplicate
+         * waits when CbA==CbB==cb_inp.
          */
-        reconfig_data_format(cb_inp, cb_inp);
-        pack_reconfig_data_format(cb_x2);
-        mul_tiles_init(cb_inp, cb_inp);
-
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_inp, wt + blk);  // cumulative wait
-
-            cb_reserve_back(cb_x2, blk);
-            ACQ();
-
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles(cb_inp, cb_inp, wt + wtr, wt + wtr, wtr);
-                pack_tile(wtr, cb_x2, wt + wtr);
-            }
-            REL();
-
-            cb_push_back(cb_x2, blk);
-        }
+        compute_kernel_lib::eltwise_chain<blk>(
+            Wt,
+            compute_kernel_lib::BinaryFpu<
+                cb_inp,
+                cb_inp,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::CopyTilePolicy::CumulativeWaitNoPop,
+                compute_kernel_lib::CopyTilePolicy::CumulativeWaitNoPop,
+                compute_kernel_lib::CbIndexMode::BlockIter,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::CbIndexMode::BlockIter>{},
+            compute_kernel_lib::PackTile<
+                cb_x2,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::PackTilePolicy::UpfrontReservePushAtEnd,
+                compute_kernel_lib::PackTileIndexMode::BlockIter,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         /*
          * sum(x**2)

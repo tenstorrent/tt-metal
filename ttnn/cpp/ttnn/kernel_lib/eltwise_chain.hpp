@@ -368,6 +368,11 @@ enum class CopyTilePolicy : uint8_t {
                              // soon as producer has pushed i+1 tiles, vs WaitUpfrontPopAtEnd which
                              // blocks iter 0 on the full N. BlockIter / Absolute / Pinned all
                              // legal — cumulative wait guarantees tile i present at iter i.)
+    CumulativeWaitNoPop,     // per-iter cumulative wait + NO pop. Same wait shape as
+                             // CumulativeWaitPopAtEnd but caller keeps the tiles alive — used
+                             // when downstream stages (e.g. a sum reduce after the x² stage)
+                             // still need the same CB. Caller is responsible for the final
+                             // pop after the consuming stage(s) finish.
 };
 
 /// CB-input tile indexing.
