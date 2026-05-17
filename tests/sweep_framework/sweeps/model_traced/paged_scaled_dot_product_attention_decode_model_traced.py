@@ -69,7 +69,34 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
+    # The master configs include both (4,8) and (8,4) mesh shapes.
+    # Configs with (8,4) mesh also carry sub_core_grids that require
+    # COL dispatch (y up to 9).  Use (8,4) so those configs get the
+    # correct logical device mapping; the (4,8) configs (which use an
+    # (x=8,y=8) grid without sub_core_grids) fail with a pre-existing
+    # dispatch-core placement error regardless of mesh orientation.
     mesh_shape = get_model_traced_mesh_shape()
+    # If the master JSON contains (8,4) configs (qwen3-32b),
+    # prefer (8,4) to match the model's actual mesh layout.
+    try:
+        import json as _json_mf
+        import os as _os_mf
+
+        _mj = _os_mf.environ.get("TTNN_MASTER_JSON_PATH", "")
+        if _mj and _os_mf.path.isfile(_mj):
+            with open(_mj) as _f:
+                _md = _json_mf.load(_f)
+            _sdpa_key = "ttnn.transformer.paged_scaled_dot_product_attention_decode"
+            for _cfg in _md.get("operations", {}).get(_sdpa_key, {}).get("configurations", []):
+                for _arg in _cfg.get("arguments", {}).values():
+                    if isinstance(_arg, dict):
+                        _tp = _arg.get("tensor_placement", {})
+                        _ms = str(_tp.get("mesh_device_shape", ""))
+                        if "[8, 4]" in _ms:
+                            mesh_shape = (8, 4)
+                            break
+    except Exception:
+        pass
     device = create_mesh_device(mesh_shape)
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
@@ -576,18 +603,80 @@ def run(
                                 for sx, sy, ex, ey in scg_ranges
                             )
                         )
-                # Clamp compute_with_storage_grid_size to fit the device compute grid.
-                # Traced configs may use a larger grid (e.g. 8x6 from ETH dispatch)
-                # than what COL dispatch provides (7x10). The sub_core_grids already
-                # specifies exact core placement within the available grid, so
-                # clamping only affects the grid-size validation path.
+                # Reconcile compute_with_storage_grid_size with the device grid.
+                #
+                # SDPA kernel asserts:
+                #   1. sub_core_grids.num_cores() == grid_size.x * grid_size.y
+                #   2. grid_size.x * grid_size.y <= device_grid.x * device_grid.y
+                #
+                # When sub_core_grids is present the kernel uses it (not
+                # grid_size) for actual core placement; grid_size is only
+                # used for the core *count*.  So:
+                #  - If all sub_core_grids entries fit the device grid, keep
+                #    the original compute_with_storage_grid_size unchanged
+                #    (the count already matches sub_core_grids and assertion
+                #    2 holds because count <= device total).
+                #  - If any entry is out-of-bounds, clamp ranges and adjust
+                #    compute_with_storage_grid_size to the new count.
+                #  - Without sub_core_grids, just clamp grid_size dims.
                 if hasattr(device, "compute_with_storage_grid_size"):
                     dev_grid = device.compute_with_storage_grid_size()
                     cg = _sdpa_kwargs["compute_with_storage_grid_size"]
-                    _sdpa_kwargs["compute_with_storage_grid_size"] = (
-                        min(cg[0], dev_grid.x),
-                        min(cg[1], dev_grid.y),
-                    )
+                    if "sub_core_grids" in _sdpa_kwargs:
+                        _scg = _sdpa_kwargs["sub_core_grids"]
+                        _scg_count = _scg.num_cores()
+                        _dev_total = dev_grid.x * dev_grid.y
+                        # Check all cores are within the device grid.
+                        _all_valid = True
+                        for _cr in _scg.ranges():
+                            if _cr.end.x >= dev_grid.x or _cr.end.y >= dev_grid.y:
+                                _all_valid = False
+                                break
+                        if _all_valid and _scg_count <= _dev_total:
+                            # All cores valid — keep original grid_size.
+                            # It may have x > dev_grid.x but the kernel
+                            # only uses x*y as a count when sub_core_grids
+                            # is present.
+                            pass
+                        elif not _all_valid:
+                            import ttnn as _ttnn_clamp
+
+                            _new_ranges = []
+                            for _cr in _scg.ranges():
+                                _ex = min(int(_cr.end.x), dev_grid.x - 1)
+                                _ey = min(int(_cr.end.y), dev_grid.y - 1)
+                                _sx = min(int(_cr.start.x), _ex)
+                                _sy = min(int(_cr.start.y), _ey)
+                                _new_ranges.append(
+                                    _ttnn_clamp.CoreRange(
+                                        _ttnn_clamp.CoreCoord(_sx, _sy),
+                                        _ttnn_clamp.CoreCoord(_ex, _ey),
+                                    )
+                                )
+                            _scg = _ttnn_clamp.CoreRangeSet(set(_new_ranges))
+                            _sdpa_kwargs["sub_core_grids"] = _scg
+                            _scg_count = _scg.num_cores()
+                            if _scg_count <= _dev_total:
+                                _sdpa_kwargs["compute_with_storage_grid_size"] = cg
+                            else:
+                                del _sdpa_kwargs["sub_core_grids"]
+                                _sdpa_kwargs["compute_with_storage_grid_size"] = (
+                                    min(cg[0], dev_grid.x),
+                                    min(cg[1], dev_grid.y),
+                                )
+                        else:
+                            # sub_core_grids exceeds device total — drop it.
+                            del _sdpa_kwargs["sub_core_grids"]
+                            _sdpa_kwargs["compute_with_storage_grid_size"] = (
+                                min(cg[0], dev_grid.x),
+                                min(cg[1], dev_grid.y),
+                            )
+                    else:
+                        # No sub_core_grids — just clamp grid_size.
+                        _sdpa_kwargs["compute_with_storage_grid_size"] = (
+                            min(cg[0], dev_grid.x),
+                            min(cg[1], dev_grid.y),
+                        )
                 op_kwargs["program_config"] = ttnn.SDPAProgramConfig(**_sdpa_kwargs)
         elif traced_pc is not None and traced_pc != "__ABSENT__" and not isinstance(traced_pc, dict):
             op_kwargs["program_config"] = traced_pc

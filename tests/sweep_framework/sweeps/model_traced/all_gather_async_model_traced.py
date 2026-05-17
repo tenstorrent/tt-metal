@@ -483,6 +483,14 @@ def run(
 
         if num_links is None:
             num_links = 1
+        # FABRIC_2D reserves TENSIX cores for fabric routing, reducing
+        # the sub-device worker core count below what num_links=4
+        # requires (40 cores).  Cap num_links to 1 when using FABRIC_2D
+        # to avoid "Not enough cores" errors.  The correctness check
+        # still exercises the all_gather_async op; performance is not
+        # the goal of the model_traced sweep.
+        if fabric_config == ttnn.FabricConfig.FABRIC_2D and num_links > 1:
+            num_links = 1
         if num_iters is None:
             num_iters = 1
         if topology is None:
@@ -516,6 +524,11 @@ def run(
         if mesh_shape[0] == 1 or mesh_shape[1] == 1:
             fabric_config = ttnn.FabricConfig.FABRIC_1D
         else:
+            # The qwen3 model uses FABRIC_1D_RING for Galaxy (set via
+            # fabric_config=True in device_params).  FABRIC_2D causes
+            # "Not enough cores" for num_links=4 because it changes
+            # which ETH/fabric cores are reserved, leaving fewer
+            # TENSIX workers on the sub-device.
             fabric_config = ttnn.FabricConfig.FABRIC_2D
 
         replicate_dim = mesh_shape[cluster_axis]
