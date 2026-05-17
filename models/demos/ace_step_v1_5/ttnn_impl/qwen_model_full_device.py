@@ -34,7 +34,7 @@ import torch
 from transformers import AutoModelForCausalLM
 
 import ttnn
-from models.demos.ace_step_v1_5.ttnn_impl.ace_step_ds_r1_qwen import MLP, RMSNorm
+from models.demos.ace_step_v1_5.ttnn_impl.ace_step_ds_r1_qwen import MLP
 from models.demos.ace_step_v1_5.ttnn_impl.dit_decoder_core import (
     TtHfRotaryEmbedding,
     _ace_step_cross_attention_decomposed,
@@ -111,6 +111,7 @@ class AttentionFullDevice:
         k_norm_weight: Optional[torch.Tensor] = None,
         rms_norm_eps: float = 1e-6,
         rope_theta: float = 1_000_000.0,
+        compute_kernel_config=None,
     ):
         if sliding_window is not None and int(sliding_window) > 0:
             raise RuntimeError(
@@ -125,6 +126,7 @@ class AttentionFullDevice:
         self.hidden_size = int(hidden_size)
         self.device = device
         self.rms_norm_eps = float(rms_norm_eps)
+        self.compute_kernel_config = compute_kernel_config
 
         self.wq = ttnn.from_torch(
             wq.T.unsqueeze(0).unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
@@ -197,9 +199,10 @@ class AttentionFullDevice:
         self._v_hist = None
 
     def __call__(self, x: Any, start_pos: int, mask_tt: Any = None) -> Any:
-        xq = ttnn.matmul(x, self.wq)
-        xk = ttnn.matmul(x, self.wk)
-        xv = ttnn.matmul(x, self.wv)
+        ck_kw = dict(compute_kernel_config=self.compute_kernel_config) if self.compute_kernel_config is not None else {}
+        xq = ttnn.matmul(x, self.wq, **ck_kw)
+        xk = ttnn.matmul(x, self.wk, **ck_kw)
+        xv = ttnn.matmul(x, self.wv, **ck_kw)
         if self.bq is not None:
             xq = ttnn.add(xq, self.bq)
         if self.bk is not None:
@@ -287,19 +290,28 @@ class AttentionFullDevice:
             scale=1.0 / math.sqrt(float(self.head_dim)),
             additive_mask_b1qk=mask_tt,
             activations_dtype=act,
+            use_fp32=False,
+            softmax_fp32=True,  # HF Qwen3: softmax(..., dtype=torch.float32).to(bf16)
+            compute_kernel_config=self.compute_kernel_config,
         )
 
         out = ttnn.permute(ctx, (0, 2, 1, 3))
         S_out = int(out.shape[1])
         out = ttnn.reshape(out, (1, B, S_out, self.hidden_size))
-        return ttnn.matmul(out, self.wo)
+        return ttnn.matmul(out, self.wo, **ck_kw)
 
 
 class TransformerBlockFullDevice:
     """Decoder block using :class:`AttentionFullDevice` (no host RoPE tensors)."""
 
     def __init__(
-        self, layer_id: int, config: Any, layer_weights: dict[str, torch.Tensor], device: Any, max_seq_len: int = 2048
+        self,
+        layer_id: int,
+        config: Any,
+        layer_weights: dict[str, torch.Tensor],
+        device: Any,
+        max_seq_len: int = 2048,
+        compute_kernel_config=None,
     ):
         self.layer_id = int(layer_id)
 
@@ -340,6 +352,7 @@ class TransformerBlockFullDevice:
             k_norm_weight=k_norm_w,
             rms_norm_eps=float(config.rms_norm_eps),
             rope_theta=rope_theta,
+            compute_kernel_config=compute_kernel_config,
         )
 
         self.mlp = MLP(
@@ -349,18 +362,29 @@ class TransformerBlockFullDevice:
             up_proj=layer_weights["mlp.up_proj.weight"],
             down_proj=layer_weights["mlp.down_proj.weight"],
             device=device,
+            compute_kernel_config=compute_kernel_config,
         )
-        self.input_layernorm = RMSNorm(layer_weights["input_layernorm.weight"], config.rms_norm_eps, device)
-        self.post_attention_layernorm = RMSNorm(
-            layer_weights["post_attention_layernorm.weight"], config.rms_norm_eps, device
+        self.rms_norm_eps = float(config.rms_norm_eps)
+        self.input_layernorm_w = ttnn.from_torch(
+            layer_weights["input_layernorm.weight"].unsqueeze(0).unsqueeze(0),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        self.post_attention_layernorm_w = ttnn.from_torch(
+            layer_weights["post_attention_layernorm.weight"].unsqueeze(0).unsqueeze(0),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
         )
 
     def __call__(self, x: Any, start_pos: int, mask_tt: Any = None, position_embeddings: Any = None) -> Any:
         del position_embeddings
-        h = self.input_layernorm(x)
+        mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        h = ttnn.rms_norm(x, weight=self.input_layernorm_w, epsilon=self.rms_norm_eps, memory_config=mem)
         h = self.attention(h, start_pos, mask_tt)
         x = ttnn.add(x, h)
-        h = self.post_attention_layernorm(x)
+        h = ttnn.rms_norm(x, weight=self.post_attention_layernorm_w, epsilon=self.rms_norm_eps, memory_config=mem)
         h = self.mlp(h)
         return ttnn.add(x, h)
 
@@ -382,6 +406,21 @@ class QwenModelFullDevice:
         self.config = hf_model.config
         self.device = device
         self.max_seq_len = int(max_seq_len)
+
+        # HiFi4 matmul with fp32 accumulation matches PyTorch bfloat16 matmul precision.
+        init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
+        self._compute_kernel_config = None
+        if callable(init_ck) and hasattr(device, "arch"):
+            try:
+                self._compute_kernel_config = init_ck(
+                    device.arch(),
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=True,
+                )
+            except Exception:
+                pass
 
         state_dict = hf_model.state_dict()
 
@@ -409,12 +448,19 @@ class QwenModelFullDevice:
                     layer_weights=layer_weights,
                     device=device,
                     max_seq_len=max_seq_len,
+                    compute_kernel_config=self._compute_kernel_config,
                 )
             )
             if (layer_id + 1) % 4 == 0:
                 print(f"  Loaded {layer_id + 1}/{self.config.num_hidden_layers} layers")
 
-        self.norm = RMSNorm(state_dict["model.norm.weight"], self.config.rms_norm_eps, device)
+        self.rms_norm_eps = float(self.config.rms_norm_eps)
+        self.norm_w = ttnn.from_torch(
+            state_dict["model.norm.weight"].unsqueeze(0).unsqueeze(0),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
         self.lm_head = ttnn.from_torch(
             state_dict["lm_head.weight"].T.unsqueeze(0).unsqueeze(0),
             device=device,
@@ -440,8 +486,12 @@ class QwenModelFullDevice:
                 ttnn.deallocate(mask_tt)
             except Exception:
                 pass
-        h_tt = self.norm(h_tt)
-        return ttnn.matmul(h_tt, self.lm_head)
+        mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        h_tt = ttnn.rms_norm(h_tt, weight=self.norm_w, epsilon=self.rms_norm_eps, memory_config=mem)
+        ck_kw = (
+            dict(compute_kernel_config=self._compute_kernel_config) if self._compute_kernel_config is not None else {}
+        )
+        return ttnn.matmul(h_tt, self.lm_head, **ck_kw)
 
     def reset_kv_cache(self) -> None:
         for layer in self.layers:
