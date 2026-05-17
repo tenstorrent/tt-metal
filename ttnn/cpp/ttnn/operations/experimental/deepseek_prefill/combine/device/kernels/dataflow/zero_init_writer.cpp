@@ -35,15 +35,21 @@ void kernel_main() {
     constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(0);
     constexpr uint32_t num_sender_cores = get_compile_time_arg_val(1);
     constexpr uint32_t cb_zero_buffer_id = get_compile_time_arg_val(2);
+    constexpr uint32_t num_dram_banks = get_compile_time_arg_val(3);
 
-    // TensorAccessorArgs for the output tensor (starting at index 3)
-    constexpr auto output_args = TensorAccessorArgs<3>();
+    // TensorAccessorArgs for the output tensor (starting at index 4)
+    constexpr auto output_args = TensorAccessorArgs<4>();
 
     // ===== Runtime args =====
+    // Bank-locality zero-init: this idle owns DRAM bank `my_bank` (paired host-side to be the
+    // bank physically closest to this idle core) and zeros its `my_pages_count` pages by
+    // striding page indices by num_dram_banks.  Idles whose closest bank is already taken or
+    // who weren't picked for zero-init pass my_pages_count = 0 and skip the prologue (no
+    // fill, no writes, no zi_done inc) — they only participate in the TILE_LAYOUT send loop.
     uint32_t rt_args_idx = 0;
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t page_start = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t page_end = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t my_bank = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t my_pages_count = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
 
     // The semaphore was created on all worker cores (including this one),
@@ -61,18 +67,23 @@ void kernel_main() {
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
     uint32_t zero_buffer_addr = get_write_ptr(cb_zero_buffer_id);
 
-    {
-        DeviceZoneScopedN("combine-zero-init-writing-IDLE-core");
-        fill_zero_buffer(cb_zero_buffer_id);
-        zero_pages(zero_buffer_addr, page_start, page_end, aligned_output_page_size, output_addr_gen);
-    }
+    if (my_pages_count > 0) {
+        {
+            DeviceZoneScopedN("combine-zero-init-writing-IDLE-core");
+            fill_zero_buffer(cb_zero_buffer_id);
+            zero_pages(
+                zero_buffer_addr, my_bank, my_pages_count, num_dram_banks, aligned_output_page_size, output_addr_gen);
+        }
 
-    // Signal all sender/reader cores that zero-init is complete
-    for (uint32_t c = 0; c < num_sender_cores; c++) {
-        noc_semaphore_inc(sender_sem_noc_addrs[c], 1);
-    }
+        // Signal all sender/writer cores that this bank's zero-init is complete.  Idles that
+        // didn't get a bank (my_pages_count == 0) don't signal — the writer's wait threshold
+        // is sized to the active idle count.
+        for (uint32_t c = 0; c < num_sender_cores; c++) {
+            noc_semaphore_inc(sender_sem_noc_addrs[c], 1);
+        }
 
-    noc_async_atomic_barrier();
+        noc_async_atomic_barrier();
+    }
 
 #if IS_TILE_LAYOUT
     // ===== Untilized-data send path =====

@@ -5,6 +5,7 @@
 #include "combine_device_operation.hpp"
 #include <algorithm>
 #include <array>
+#include <numeric>
 #include <utility>
 #include <limits>
 #include <tt-metalium/core_coord.hpp>
@@ -524,8 +525,17 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     tt::tt_metal::KernelHandle zero_init_kernel_id = 0;
     std::vector<CoreCoord> zero_init_cores_vec;
     uint32_t zi_done_semaphore_id = 0;
-    uint32_t pages_per_core = 0;
-    uint32_t remainder_pages = 0;
+    // Bank-locality zero-init: each active worker owns one DRAM bank, paired by NoC
+    // distance using mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(NOC).
+    // sender_bank_assignment[s] / idle_bank_assignment[i] = bank index for that core, or
+    // std::numeric_limits<uint32_t>::max() if the core didn't win any bank (will skip prologue).
+    uint32_t num_dram_banks = 0;
+    uint32_t num_zi_active_idles = 0;
+    uint32_t pages_per_bank = 0;
+    uint32_t bank_remainder = 0;
+    constexpr uint32_t ZI_NO_BANK = std::numeric_limits<uint32_t>::max();
+    std::vector<uint32_t> sender_bank_assignment;
+    std::vector<uint32_t> idle_bank_assignment;
 
     // idle_row_cores: all same-row idle cores, ordered by sender group then by x.
     std::vector<CoreCoord>& idle_row_cores = all_idle_cores;
@@ -766,10 +776,188 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                 .set_page_size(tt::CBIndex::c_7, noc_max_burst_size);
         tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, zi_inline_cb_config);
 
-        uint32_t total_zero_init_cores = num_cores + num_idle_cores;
+        // Bank-locality pairing.  The kernel writes via NOC1 (preferred_noc_for_dram_write
+        // on BH/WH).  NOC1 routes -X, -Y on the chip torus, so the hop count from worker
+        // (xw, yw) to bank (xb, yb) is:
+        //   dx = (xw - xb + Gx) % Gx;  dy = (yw - yb + Gy) % Gy;  dist = dx + dy;
+        //
+        // Bank NoC coordinates are HARDCODED per the SoC descriptor's NOC1 worker_endpoint
+        // (see blackhole_140_arch.yaml dram_views[].worker_endpoint[1]).  The generic
+        // virtual_core_from_logical_core(..., CoreType::DRAM) API returns one fixed
+        // subchannel per channel — likely the NOC0 endpoint — and computing NOC1 torus
+        // distance against the wrong endpoint gives nonsense for our matching.
+        //
+        // Matching strategy: HARDEST-BANK-FIRST greedy.  For each bank, compute the minimum
+        // possible distance over all workers in our pool, sort banks descending by that
+        // minimum (hardest banks first), then for each bank assign its currently-closest
+        // available worker.  This optimises the BOTTLENECK (max distance), unlike
+        // smallest-first greedy which would lock cheap pairs first and force a hard bank
+        // onto a far worker.
+        num_dram_banks = mesh_device->allocator()->get_num_banks(output_tensor.buffer()->buffer_type());
+        TT_FATAL(num_dram_banks > 0, "Mesh device reported zero DRAM banks for zero-init pairing.");
+        TT_FATAL(
+            num_cores + num_idle_cores >= num_dram_banks,
+            "Bank-locality zero-init expects num_workers ({} senders + {} idles) >= num_dram_banks ({}); "
+            "fewer workers would leave some banks unzeroed.",
+            num_cores,
+            num_idle_cores,
+            num_dram_banks);
+        TT_FATAL(
+            arch == tt::ARCH::BLACKHOLE,
+            "Bank-locality zero-init currently hardcodes NOC1 endpoints for BH; extend for arch {}.",
+            arch);
+
+        auto to_worker_virtual = [&](const CoreCoord& c) -> CoreCoord {
+            return mesh_device->virtual_core_from_logical_core(c, tt::CoreType::WORKER);
+        };
+
+        const auto chip_grid = mesh_device->grid_size();
+        const uint32_t noc_grid_x = chip_grid.x;
+        const uint32_t noc_grid_y = chip_grid.y;
+        TT_FATAL(noc_grid_x > 0 && noc_grid_y > 0, "Chip NoC grid size reported as zero.");
+
+        // NOC1 torus distance: -X, -Y direction with toroidal wraparound.
+        auto noc1_torus_dist = [noc_grid_x, noc_grid_y](const CoreCoord& src, const CoreCoord& dst) -> uint32_t {
+            uint32_t dx = (src.x + noc_grid_x - dst.x) % noc_grid_x;
+            uint32_t dy = (src.y + noc_grid_y - dst.y) % noc_grid_y;
+            return dx + dy;
+        };
+
+        std::vector<CoreCoord> sender_virtual(num_cores);
+        for (uint32_t s = 0; s < num_cores; s++) {
+            sender_virtual[s] = to_worker_virtual(sender_cores[s]);
+        }
+        std::vector<CoreCoord> idle_virtual(num_idle_cores);
+        for (uint32_t i = 0; i < num_idle_cores; i++) {
+            idle_virtual[i] = to_worker_virtual(idle_row_cores[i]);
+        }
+
+        // Hardcoded NOC1 DRAM endpoints for Blackhole (from blackhole_140_arch.yaml).
+        // Each entry is worker_endpoint[1] of the corresponding dram_views channel.
+        static constexpr CoreCoord BH_NOC1_DRAM_ENDPOINTS[8] = {
+            {0, 1},   // Ch0
+            {0, 10},  // Ch1
+            {0, 4},   // Ch2
+            {0, 7},   // Ch3
+            {9, 1},   // Ch4
+            {9, 10},  // Ch5
+            {9, 4},   // Ch6
+            {9, 7},   // Ch7
+        };
+        TT_FATAL(
+            num_dram_banks == 8, "Bank-locality assumes BH 8 DRAM channels but got num_dram_banks={}.", num_dram_banks);
+        std::vector<CoreCoord> bank_virtual(num_dram_banks);
+        for (uint32_t b = 0; b < num_dram_banks; b++) {
+            bank_virtual[b] = BH_NOC1_DRAM_ENDPOINTS[b];
+        }
+
+        // Compute min-dist per bank to drive "hardest first" ordering.
+        std::vector<uint32_t> bank_min_dist(num_dram_banks, std::numeric_limits<uint32_t>::max());
+        for (uint32_t b = 0; b < num_dram_banks; b++) {
+            for (uint32_t s = 0; s < num_cores; s++) {
+                bank_min_dist[b] = std::min(bank_min_dist[b], noc1_torus_dist(sender_virtual[s], bank_virtual[b]));
+            }
+            for (uint32_t i = 0; i < num_idle_cores; i++) {
+                bank_min_dist[b] = std::min(bank_min_dist[b], noc1_torus_dist(idle_virtual[i], bank_virtual[b]));
+            }
+        }
+        std::vector<uint32_t> bank_order(num_dram_banks);
+        std::iota(bank_order.begin(), bank_order.end(), 0u);
+        std::sort(bank_order.begin(), bank_order.end(), [&bank_min_dist](uint32_t a, uint32_t b) {
+            return bank_min_dist[a] > bank_min_dist[b];  // hardest first
+        });
+
+        sender_bank_assignment.assign(num_cores, ZI_NO_BANK);
+        idle_bank_assignment.assign(num_idle_cores, ZI_NO_BANK);
+        for (uint32_t b : bank_order) {
+            int best_sender = -1;
+            int best_idle = -1;
+            uint32_t best_dist = std::numeric_limits<uint32_t>::max();
+            bool best_is_sender = false;
+            for (uint32_t s = 0; s < num_cores; s++) {
+                if (sender_bank_assignment[s] != ZI_NO_BANK) {
+                    continue;
+                }
+                uint32_t d = noc1_torus_dist(sender_virtual[s], bank_virtual[b]);
+                if (d < best_dist) {
+                    best_dist = d;
+                    best_sender = static_cast<int>(s);
+                    best_is_sender = true;
+                }
+            }
+            for (uint32_t i = 0; i < num_idle_cores; i++) {
+                if (idle_bank_assignment[i] != ZI_NO_BANK) {
+                    continue;
+                }
+                uint32_t d = noc1_torus_dist(idle_virtual[i], bank_virtual[b]);
+                if (d < best_dist) {
+                    best_dist = d;
+                    best_idle = static_cast<int>(i);
+                    best_is_sender = false;
+                }
+            }
+            TT_FATAL(
+                best_sender >= 0 || best_idle >= 0, "Bank-locality zero-init: bank {} has no available worker.", b);
+            if (best_is_sender) {
+                sender_bank_assignment[best_sender] = b;
+            } else {
+                idle_bank_assignment[best_idle] = b;
+            }
+        }
+
+        num_zi_active_idles = 0;
+        for (auto b : idle_bank_assignment) {
+            if (b != ZI_NO_BANK) {
+                num_zi_active_idles++;
+            }
+        }
+
         uint32_t total_output_pages = detail::get_num_pages(output_tensor);
-        pages_per_core = total_output_pages / total_zero_init_cores;
-        remainder_pages = total_output_pages % total_zero_init_cores;
+        pages_per_bank = total_output_pages / num_dram_banks;
+        bank_remainder = total_output_pages % num_dram_banks;
+
+        log_debug(
+            tt::LogOp,
+            "Combine zero-init bank-locality: num_dram_banks={} num_zi_active_idles={} pages_per_bank={} "
+            "bank_remainder={}",
+            num_dram_banks,
+            num_zi_active_idles,
+            pages_per_bank,
+            bank_remainder);
+        for (uint32_t s = 0; s < num_cores; s++) {
+            if (sender_bank_assignment[s] != ZI_NO_BANK) {
+                uint32_t b = sender_bank_assignment[s];
+                log_debug(
+                    tt::LogOp,
+                    "  sender {} logical ({},{}) virtual ({},{}) -> bank {} virtual ({},{}) noc1_dist={}",
+                    s,
+                    sender_cores[s].x,
+                    sender_cores[s].y,
+                    sender_virtual[s].x,
+                    sender_virtual[s].y,
+                    b,
+                    bank_virtual[b].x,
+                    bank_virtual[b].y,
+                    noc1_torus_dist(sender_virtual[s], bank_virtual[b]));
+            }
+        }
+        for (uint32_t i = 0; i < num_idle_cores; i++) {
+            if (idle_bank_assignment[i] != ZI_NO_BANK) {
+                uint32_t b = idle_bank_assignment[i];
+                log_debug(
+                    tt::LogOp,
+                    "  idle {} logical ({},{}) virtual ({},{}) -> bank {} virtual ({},{}) noc1_dist={}",
+                    i,
+                    idle_row_cores[i].x,
+                    idle_row_cores[i].y,
+                    idle_virtual[i].x,
+                    idle_virtual[i].y,
+                    b,
+                    bank_virtual[b].x,
+                    bank_virtual[b].y,
+                    noc1_torus_dist(idle_virtual[i], bank_virtual[b]));
+            }
+        }
 
         tt::tt_metal::CircularBufferConfig zi_idle_cb_config =
             tt::tt_metal::CircularBufferConfig(noc_max_burst_size, {{tt::CBIndex::c_6, tt::DataFormat::UInt8}})
@@ -784,6 +972,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             num_cores,  // num_sender_cores = num_cores: each idle core signals all sender cores that its zero-init
                         // portion is done and output pages are initializer with 0 for that chip
             static_cast<uint32_t>(tt::CBIndex::c_6),
+            num_dram_banks,  // bank-stick stride for the zero-write loop
         };
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(zi_compile_time_args);
 
@@ -833,7 +1022,8 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     std::vector<uint32_t> writer_compile_time_args = compile_time_args;
     if (init_zeros) {
         writer_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_7));  // zi_cb_id
-        writer_compile_time_args.push_back(num_idle_cores);                           // num_total_idle_cores
+        writer_compile_time_args.push_back(num_zi_active_idles);                      // num_total_idle_cores
+        writer_compile_time_args.push_back(num_dram_banks);                           // num_dram_banks
     }
 
     // One reader_combine kernel per sender.  For TILE_LAYOUT, k_s (per-sender idle count)
@@ -905,18 +1095,24 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         sender_noc_coords.emplace_back(noc_coord.x, noc_coord.y);
     }
 
-    // Set runtime args for hybrid idle row cores
+    // Set runtime args for hybrid idle row cores.  Bank-locality: each idle either won a
+    // bank (via the optimal pairing or fallback) or didn't.  Idles with no bank pass
+    // my_pages_count = 0 and skip the prologue.
     if (init_zeros) {
         for (uint32_t idle_idx = 0; idle_idx < num_idle_cores; idle_idx++) {
-            uint32_t row_idx = num_cores + idle_idx;
-            uint32_t page_start = (row_idx * pages_per_core) + std::min(row_idx, remainder_pages);
-            uint32_t page_end = page_start + pages_per_core + (row_idx < remainder_pages ? 1 : 0);
+            uint32_t my_bank = idle_bank_assignment[idle_idx];
+            uint32_t my_pages_count = 0;
+            if (my_bank != ZI_NO_BANK) {
+                my_pages_count = pages_per_bank + (my_bank < bank_remainder ? 1u : 0u);
+            } else {
+                my_bank = 0;  // unused when count is 0, but pass a valid value
+            }
 
             // Each idle core signals all sender cores
             std::vector<uint32_t> zi_runtime_args = {
                 output_tensor.buffer()->address(),
-                page_start,
-                page_end,
+                my_bank,
+                my_pages_count,
                 zi_done_semaphore_id,
             };
             for (const auto& [noc_x, noc_y] : sender_noc_coords) {
@@ -1014,10 +1210,15 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         }
 
         if (init_zeros) {
-            uint32_t sender_page_start = (core_idx * pages_per_core) + std::min(core_idx, remainder_pages);
-            uint32_t sender_page_end = sender_page_start + pages_per_core + (core_idx < remainder_pages ? 1 : 0);
-            writer_runtime_args.push_back(sender_page_start);
-            writer_runtime_args.push_back(sender_page_end);
+            uint32_t my_bank = sender_bank_assignment[core_idx];
+            uint32_t my_pages_count = 0;
+            if (my_bank != ZI_NO_BANK) {
+                my_pages_count = pages_per_bank + (my_bank < bank_remainder ? 1u : 0u);
+            } else {
+                my_bank = 0;
+            }
+            writer_runtime_args.push_back(my_bank);
+            writer_runtime_args.push_back(my_pages_count);
             writer_runtime_args.push_back(zi_done_semaphore_id);
         }
 

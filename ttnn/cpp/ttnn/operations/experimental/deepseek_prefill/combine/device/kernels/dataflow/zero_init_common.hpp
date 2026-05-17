@@ -22,11 +22,23 @@ FORCE_INLINE void fill_zero_buffer(uint32_t cb_id) {
     noc_async_write_barrier();
 }
 
-// Write zeros to a range of interleaved pages using the pre-filled zero buffer.
+// Write zeros to one DRAM bank's pages of an interleaved tensor.
+//
+// For an interleaved tensor with `num_banks` banks, page `p` lives on bank `p % num_banks`.
+// This core owns bank `my_bank` and zeros its `my_pages_count` pages by iterating
+// page = my_bank, my_bank + num_banks, my_bank + 2*num_banks, ...  Each core thus hits
+// only one bank's queue.  Pair this with bank-locality core selection on the host (each
+// core gets its physically closest bank) to minimise NoC distance to DRAM.
 template <typename AddrGen>
 FORCE_INLINE void zero_pages(
-    uint32_t zero_buf, uint32_t page_start, uint32_t page_end, uint32_t page_size, const AddrGen& addr_gen) {
-    for (uint32_t page = page_start; page < page_end; page++) {
+    uint32_t zero_buf,
+    uint32_t my_bank,
+    uint32_t my_pages_count,
+    uint32_t num_banks,
+    uint32_t page_size,
+    const AddrGen& addr_gen) {
+    uint32_t page = my_bank;
+    for (uint32_t i = 0; i < my_pages_count; i++) {
         uint64_t page_noc_addr = get_noc_addr(page, addr_gen);
         uint32_t remaining = page_size;
         while (remaining > 0) {
@@ -35,6 +47,7 @@ FORCE_INLINE void zero_pages(
             page_noc_addr += chunk;
             remaining -= chunk;
         }
+        page += num_banks;
     }
     noc_async_write_barrier();
 }

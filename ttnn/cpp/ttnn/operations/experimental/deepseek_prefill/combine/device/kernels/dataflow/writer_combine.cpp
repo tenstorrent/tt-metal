@@ -98,10 +98,14 @@ void kernel_main() {
     constexpr auto expert_region_offsets_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
 #if INIT_ZEROS
-    // Zero-init args follow immediately after the TensorAccessorArgs block
+    // Zero-init args follow immediately after the TensorAccessorArgs block.
+    // num_total_idle_cores counts only the idles picked for bank-locality zero-init (the
+    // ones whose closest bank wasn't already taken by a sender or another idle).
     constexpr uint32_t zi_cb_id = get_compile_time_arg_val(expert_region_offsets_args.next_compile_time_args_offset());
     constexpr uint32_t num_total_idle_cores =
         get_compile_time_arg_val(expert_region_offsets_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t num_dram_banks =
+        get_compile_time_arg_val(expert_region_offsets_args.next_compile_time_args_offset() + 2);
 #endif
 
     // ===== Runtime Args =====
@@ -136,11 +140,12 @@ void kernel_main() {
     }
 
 #if INIT_ZEROS
-    // Sender-core zero-init: writer owns this slice (was previously in reader_combine).
-    // Running here keeps the writes on the dram-write NOC and frees the reader to do its
-    // DRAM counter reads in parallel.
-    uint32_t zi_page_start = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t zi_page_end = get_arg_val<uint32_t>(rt_args_idx++);
+    // Sender-core zero-init: writer owns one DRAM bank (assigned host-side by bank-locality
+    // pairing — the bank physically closest to this sender's core) and zeros its slice.
+    // If the host couldn't pair this sender with any bank (rare), zi_my_pages_count is 0
+    // and the prologue is skipped.
+    uint32_t zi_my_bank = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t zi_my_pages_count = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t zi_done_sem_address = get_semaphore(zi_done_semaphore_id);
 #endif
@@ -161,11 +166,11 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
 
 #if INIT_ZEROS
-    {
+    if (zi_my_pages_count > 0) {
         DeviceZoneScopedN("combine-zero-init-writing-WRITER-core");
         uint32_t zero_buf = get_write_ptr(zi_cb_id);
         fill_zero_buffer(zi_cb_id);
-        zero_pages(zero_buf, zi_page_start, zi_page_end, aligned_output_page_size, output_addr_gen);
+        zero_pages(zero_buf, zi_my_bank, zi_my_pages_count, num_dram_banks, aligned_output_page_size, output_addr_gen);
     }
 
     // Wait for all idle cores to finish their zero-init slices, then signal the reader
