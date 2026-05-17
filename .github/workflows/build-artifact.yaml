@@ -662,3 +662,4 @@ jobs:
       ref: ${{ inputs.wheel-ref || inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      build-type: ${{ inputs.build-type || 'Release' }}
