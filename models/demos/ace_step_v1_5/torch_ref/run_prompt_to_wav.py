@@ -612,7 +612,7 @@ def main() -> None:
         from acestep.handler import AceStepHandler
         from acestep.inference import GenerationConfig, GenerationParams, generate_music
 
-        from models.demos.ace_step_v1_5.five_hz_lm import LocalFiveHzLMHandler
+        from models.demos.ace_step_v1_5.ttnn_impl.five_hz_lm import LocalFiveHzLMHandler
 
         dit_handler = AceStepHandler()
         llm_handler = LocalFiveHzLMHandler()
