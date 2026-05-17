@@ -80,8 +80,7 @@ class TtMinistralAttention(Attention):
         floored = ttnn.floor(ratio)
         log_term = ttnn.log1p(floored)
         scaled = ttnn.mul(log_term, beta)
-        ones = ttnn.ones_like(pos_f)
-        return ttnn.add(ones, scaled)
+        return ttnn.add(scaled, 1.0)
 
     def _reshape_decode_positions(self, current_pos: ttnn.Tensor, batch_dim: int) -> ttnn.Tensor:
         """Return positions with shape ``[1, batch_dim]`` for per-row scale (matches ``q`` batch axis)."""

@@ -104,7 +104,7 @@ def pad_input_ids_and_positions_for_tt_prefill(
 
 def open_devstral_demo_mesh(mesh_width: int):
     device_params = {
-        "trace_region_size": 30000000,
+        "trace_region_size": 100_000_000,  # 100 MB — sufficient for single-token 88-layer decode trace
         "num_command_queues": 1,
     }
     mesh_shape = ttnn.MeshShape(1, mesh_width)

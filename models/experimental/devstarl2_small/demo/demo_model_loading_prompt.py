@@ -295,6 +295,7 @@ def run_tt(
     vision_max_edge: int,
     vision_square_pixels: int | None,
     cpu_sampling: bool,
+    enable_decode_trace: bool = False,
 ) -> None:
     if not image_path.is_file():
         raise FileNotFoundError(f"TT multimodal path requires an image file; missing {image_path}.")
@@ -523,8 +524,12 @@ def run_tt(
         sample_post_s = 0.0
         steps = 0
 
-        def _sample_from_tt_out(tt_out, seq_last_idx):
-            """Sample next token from prefill hidden states at seq_last_idx. Returns (next_id, lmhead_s_inc, sample_s_inc)."""
+        def _sample_from_tt_out(tt_out, seq_last_idx, own_output: bool = True):
+            """Sample next token from hidden states at seq_last_idx.
+
+            ``own_output``: when False the caller (Tracer) owns ``tt_out`` and it must not be
+            deallocated here.  Set to False for all traced decode steps.
+            """
             nonlocal lmhead_s, sample_post_s
             if sampling is not None:
                 assert tt_lm_head is not None
@@ -538,7 +543,8 @@ def run_tt(
                 tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
                 next_scalar = tt_sampling_output_token_id(tt_next, tok_slot)
                 ttnn.deallocate(logits_tt)
-                ttnn.deallocate(tt_out)
+                if own_output:
+                    ttnn.deallocate(tt_out)
                 nid = torch.tensor([[next_scalar]], device=id_device, dtype=torch.long)
                 sample_post_s += time.perf_counter() - t0
             else:
@@ -555,7 +561,8 @@ def run_tt(
                     )
                 lmhead_s += time.perf_counter() - t0
                 t0 = time.perf_counter()
-                ttnn.deallocate(tt_out)
+                if own_output:
+                    ttnn.deallocate(tt_out)
                 if do_sample:
                     probs = torch.softmax(logits_row.float().squeeze(0) / max(gen_temperature, 1e-6), dim=-1)
                     nid = torch.multinomial(probs, num_samples=1).view(1, 1)
@@ -586,6 +593,8 @@ def run_tt(
             current_ids = torch.cat([current_ids, next_id], dim=1)
 
         # ── Decode loop: 1 token per step using cached KV ────────────────────────
+        # With --enable-decode-trace the first iteration captures the command trace;
+        # every subsequent iteration replays it (zero host-dispatch overhead).
         for _step in range(1, max_new_tokens):
             if eos_ids and int(next_id.item()) in eos_ids:
                 break
@@ -600,12 +609,13 @@ def run_tt(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
-            tt_out = tt_lm.forward_decode(new_id_tt, decode_pos)
+            tt_out = tt_lm.forward_decode(new_id_tt, decode_pos, enable_trace=enable_decode_trace)
+            # token tensor safe to release: model clones on first traced call, copies on later ones.
             ttnn.deallocate(new_id_tt)
             prefill_s += time.perf_counter() - t0
 
-            # decode output is [1,1,1,H]; last_token_index=0 for the single-token block
-            next_id = _sample_from_tt_out(tt_out, 0)
+            # When traced, tt_out is owned by the Tracer — do not deallocate it.
+            next_id = _sample_from_tt_out(tt_out, 0, own_output=not enable_decode_trace)
             steps += 1
             if eos_ids and int(next_id.item()) in eos_ids:
                 break
@@ -683,6 +693,13 @@ def main() -> None:
         help="Use PyTorch softmax/multinomial/argmax on host logits instead of on-device SamplingGenerator.",
     )
     parser.add_argument(
+        "--enable-decode-trace",
+        action="store_true",
+        help="Capture a device-command trace on the first decode step and replay it for every subsequent "
+        "token (lower host dispatch overhead). Prefill is untraced; only the single-token decode loop "
+        "is captured. No effect on the HF backend.",
+    )
+    parser.add_argument(
         "--vision-max-edge",
         type=int,
         default=0,
@@ -727,6 +744,7 @@ def main() -> None:
             vision_max_edge=args.vision_max_edge,
             vision_square_pixels=args.vision_square_pixels,
             cpu_sampling=args.cpu_sampling,
+            enable_decode_trace=args.enable_decode_trace,
         )
 
 

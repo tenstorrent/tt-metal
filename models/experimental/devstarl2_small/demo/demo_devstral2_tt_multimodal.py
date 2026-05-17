@@ -175,6 +175,12 @@ def main():
         action="store_true",
         help="Force PyTorch softmax/argmax on host from TT logits (disables on-device SamplingGenerator).",
     )
+    parser.add_argument(
+        "--enable-decode-trace",
+        action="store_true",
+        help="Use KV-cache decode loop with device-command trace (prefill once, then replay traced single-token "
+        "decode). Reduces host dispatch overhead versus the default full-prefill-per-step path.",
+    )
     args = parser.parse_args()
     prefer_stochastic_sampling = (not args.greedy) and ref_do_sample
 
@@ -454,65 +460,167 @@ def main():
                 logger.warning(
                     "No eos_token_id on config/text_config/tokenizer; TT loop will only stop at --max-new-tokens."
                 )
-            gen_sl = seq_len_lm
-            ids_tt_gen = host_input_ids_to_tt_replicated(mesh_device, input_ids)
 
             mode = "greedy" if not prefer_stochastic_sampling else f"sample (T={args.temperature})"
             lm_mode = "CPU lm_head (chunked torch)" if args.lm_head_cpu else "TT lm_head"
-            samp_mode = (
-                "on-device SamplingGenerator (mirrors Transformer + format_sampling_params / seed_manager)"
-                if sampling is not None
-                else "CPU softmax / argmax on TT logits (host)"
-            )
-            logger.info(
-                f"TT generation: up to {args.max_new_tokens} new tokens, {mode}; "
-                f"TT decoder + {lm_mode}; {samp_mode}. Prompt ids buffered on TT (ttnn.concat / pad)."
-            )
-            try:
-                for _step in range(args.max_new_tokens):
-                    tok_slot = (gen_sl - 1) % 32
+            samp_mode = "on-device SamplingGenerator" if sampling is not None else "CPU softmax / argmax on TT logits"
+
+            if args.enable_decode_trace:
+                # ------------------------------------------------------------------
+                # Traced decode path: prefill once to fill KV cache, then replay a
+                # captured single-token decode command trace for every new token.
+                # ------------------------------------------------------------------
+                logger.info(
+                    f"TT decode-trace generation: up to {args.max_new_tokens} new tokens, {mode}; "
+                    f"TT prefill (KV fill) + traced single-token decode; {lm_mode}; {samp_mode}."
+                )
+                ids_tt_initial = host_input_ids_to_tt_replicated(mesh_device, input_ids)
+                try:
+                    # Phase 1: prefill fills the KV cache and yields the first next-token.
                     if sampling is not None:
                         sampling.seed_manager.get_new_values()
-                    tt_out = tt_forward_prefill_from_device_ids(
-                        ids_tt_gen, gen_sl, pad_token_id, mesh_device, tt_model, model_args
+                    tt_out_prefill = tt_forward_prefill_from_device_ids(
+                        ids_tt_initial, seq_len_lm, pad_token_id, mesh_device, tt_model, model_args
                     )
+                    last_prefill_idx = seq_len_lm - 1
                     if sampling is not None:
                         assert tt_lm_head is not None
-                        logits_tt = tt_lm_head_logits_block(tt_out, gen_sl - 1, model_args, tt_lm_head)
+                        logits_tt = tt_lm_head_logits_block(tt_out_prefill, last_prefill_idx, model_args, tt_lm_head)
                         sample_result = sampling.sample(logits_tt, enable_trace=False)
                         tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
-                        next_scalar = tt_sampling_output_token_id(tt_next, tok_slot)
+                        next_scalar = tt_sampling_output_token_id(tt_next, last_prefill_idx % 32)
                         ttnn.deallocate(logits_tt)
-                        ttnn.deallocate(tt_out)
                     else:
                         if args.lm_head_cpu:
                             assert lm_head_weight_cpu is not None
                             logits_row = cpu_lm_head_logits_last_token(
-                                tt_out, gen_sl - 1, mesh_device, lm_head_weight_cpu, int(model_args.vocab_size)
+                                tt_out_prefill,
+                                last_prefill_idx,
+                                mesh_device,
+                                lm_head_weight_cpu,
+                                int(model_args.vocab_size),
                             )
                         else:
                             assert tt_lm_head is not None
                             logits_row = tt_lm_head_logits_last_token(
-                                tt_out, gen_sl - 1, mesh_device, model_args, tt_lm_head
+                                tt_out_prefill, last_prefill_idx, mesh_device, model_args, tt_lm_head
                             )
-                        ttnn.deallocate(tt_out)
                         if do_sample:
                             probs = torch.softmax(logits_row.float().squeeze(0) / max(args.temperature, 1e-6), dim=-1)
                             next_scalar = int(torch.multinomial(probs, num_samples=1).item())
                         else:
                             next_scalar = int(logits_row.argmax(dim=-1).item())
+                    ttnn.deallocate(tt_out_prefill)
 
-                    if next_scalar in eos_ids:
-                        break
-                    ids_tt_gen = tt_append_uint32_token(ids_tt_gen, next_scalar, mesh_device)
-                    gen_sl += 1
+                    # Phase 2: traced single-token decode loop.
+                    # tt_out from forward_decode is owned by the model's Tracer — do not deallocate.
+                    generated_scalars: list[int] = []
+                    for step in range(args.max_new_tokens):
+                        if next_scalar in eos_ids:
+                            break
+                        generated_scalars.append(next_scalar)
+                        decode_pos = seq_len_lm + step
+                        token_tt = ttnn.from_torch(
+                            torch.tensor([[next_scalar]], dtype=torch.int32),
+                            device=mesh_device,
+                            dtype=ttnn.uint32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                        )
+                        if sampling is not None:
+                            sampling.seed_manager.get_new_values()
+                        tt_out = tt_model.forward_decode(token_tt, decode_pos, enable_trace=True)
+                        # token_tt is safe to release: model cloned it on first call, copies on later calls.
+                        ttnn.deallocate(token_tt)
+                        if sampling is not None:
+                            assert tt_lm_head is not None
+                            logits_tt = tt_lm_head_logits_block(tt_out, 0, model_args, tt_lm_head)
+                            sample_result = sampling.sample(logits_tt, enable_trace=False)
+                            tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
+                            next_scalar = tt_sampling_output_token_id(tt_next, 0)
+                            ttnn.deallocate(logits_tt)
+                        else:
+                            if args.lm_head_cpu:
+                                assert lm_head_weight_cpu is not None
+                                logits_row = cpu_lm_head_logits_last_token(
+                                    tt_out, 0, mesh_device, lm_head_weight_cpu, int(model_args.vocab_size)
+                                )
+                            else:
+                                assert tt_lm_head is not None
+                                logits_row = tt_lm_head_logits_last_token(
+                                    tt_out, 0, mesh_device, model_args, tt_lm_head
+                                )
+                            if do_sample:
+                                probs = torch.softmax(
+                                    logits_row.float().squeeze(0) / max(args.temperature, 1e-6), dim=-1
+                                )
+                                next_scalar = int(torch.multinomial(probs, num_samples=1).item())
+                            else:
+                                next_scalar = int(logits_row.argmax(dim=-1).item())
 
-                ids_host = tt_replicated_ids_to_torch_long(mesh_device, ids_tt_gen, gen_sl)
-                answer_ids = ids_host[prompt_len:]
-                answer_text = tokenizer.decode(answer_ids.tolist(), skip_special_tokens=False)
-                logger.info(f"TT stack + TT lm_head generated ({answer_ids.numel()} tokens):\n{answer_text}")
-            finally:
-                ttnn.deallocate(ids_tt_gen)
+                    answer_text = tokenizer.decode(generated_scalars, skip_special_tokens=False)
+                    logger.info(f"TT decode-trace generated ({len(generated_scalars)} tokens):\n{answer_text}")
+                finally:
+                    ttnn.deallocate(ids_tt_initial)
+
+            else:
+                # ------------------------------------------------------------------
+                # Default path: full prefill on the growing sequence every step.
+                # ------------------------------------------------------------------
+                gen_sl = seq_len_lm
+                ids_tt_gen = host_input_ids_to_tt_replicated(mesh_device, input_ids)
+                logger.info(
+                    f"TT generation: up to {args.max_new_tokens} new tokens, {mode}; "
+                    f"TT decoder + {lm_mode}; {samp_mode}. Prompt ids buffered on TT (ttnn.concat / pad)."
+                )
+                try:
+                    for _step in range(args.max_new_tokens):
+                        tok_slot = (gen_sl - 1) % 32
+                        if sampling is not None:
+                            sampling.seed_manager.get_new_values()
+                        tt_out = tt_forward_prefill_from_device_ids(
+                            ids_tt_gen, gen_sl, pad_token_id, mesh_device, tt_model, model_args
+                        )
+                        if sampling is not None:
+                            assert tt_lm_head is not None
+                            logits_tt = tt_lm_head_logits_block(tt_out, gen_sl - 1, model_args, tt_lm_head)
+                            sample_result = sampling.sample(logits_tt, enable_trace=False)
+                            tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
+                            next_scalar = tt_sampling_output_token_id(tt_next, tok_slot)
+                            ttnn.deallocate(logits_tt)
+                            ttnn.deallocate(tt_out)
+                        else:
+                            if args.lm_head_cpu:
+                                assert lm_head_weight_cpu is not None
+                                logits_row = cpu_lm_head_logits_last_token(
+                                    tt_out, gen_sl - 1, mesh_device, lm_head_weight_cpu, int(model_args.vocab_size)
+                                )
+                            else:
+                                assert tt_lm_head is not None
+                                logits_row = tt_lm_head_logits_last_token(
+                                    tt_out, gen_sl - 1, mesh_device, model_args, tt_lm_head
+                                )
+                            ttnn.deallocate(tt_out)
+                            if do_sample:
+                                probs = torch.softmax(
+                                    logits_row.float().squeeze(0) / max(args.temperature, 1e-6), dim=-1
+                                )
+                                next_scalar = int(torch.multinomial(probs, num_samples=1).item())
+                            else:
+                                next_scalar = int(logits_row.argmax(dim=-1).item())
+
+                        if next_scalar in eos_ids:
+                            break
+                        ids_tt_gen = tt_append_uint32_token(ids_tt_gen, next_scalar, mesh_device)
+                        gen_sl += 1
+
+                    ids_host = tt_replicated_ids_to_torch_long(mesh_device, ids_tt_gen, gen_sl)
+                    answer_ids = ids_host[prompt_len:]
+                    answer_text = tokenizer.decode(answer_ids.tolist(), skip_special_tokens=False)
+                    logger.info(f"TT stack + TT lm_head generated ({answer_ids.numel()} tokens):\n{answer_text}")
+                finally:
+                    ttnn.deallocate(ids_tt_gen)
     finally:
         ttnn.close_mesh_device(mesh_device)
 
