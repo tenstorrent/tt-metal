@@ -33,17 +33,21 @@
 // follow-up commit on this same branch.
 #include "../../../../../demos/deepseek_v3_b1/unified_kernels/mcast.hpp"
 
-// Core role flags — first increment is uniform (all 8 cores in the grid
-// run both LN1 and residual). With more phases, this expands into a
-// struct with per-phase is_<phase>_core flags gated by compile-time
-// args set per core range in op.py. Stubs for upcoming role flags are
-// commented out below — concrete values come in with the mcast wiring.
-struct Core {
-    static constexpr bool is_ln1_core = true;
-    static constexpr bool is_residual_core = true;
-    // TODO #10: is_mcast_sender_<0..7>, is_mcast_receiver
-    // TODO #10: is_qkv_core
-};
+// Role gating is done at runtime via get_relative_logical_x()/y() — the
+// Op-struct's IsActiveCore template is hardcoded to true at every call site,
+// and a runtime `if` skips the call on cores that don't participate in that
+// phase. For this first increment LN1 and residual share the same 8-core row
+// (y=0, x=0..7), so the runtime branches are tautologies; the structural
+// pattern is what task #10's later commits need (LN1 row + larger QKV grid
+// will require per-phase runtime gating once the grid expands).
+//
+// Why not compile-time per-range gating (one descriptor per CoreRange with
+// different CT args)? Once we add QKV and the 8→36 fan-out, the participating
+// sub-ranges overlap and multiply; three+ descriptors with bespoke CT args
+// would balloon the host-side wiring. Runtime branching costs a few extra
+// instructions and some compiled-out code per core but keeps op.py to a
+// single kernel descriptor over the union grid. Compile-time gating can be
+// reintroduced as a perf pass once the math is locked in.
 
 void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
@@ -95,12 +99,19 @@ void kernel_main() {
     constexpr uint32_t in_tiles = get_named_compile_time_arg_val("in_tiles");
     constexpr uint32_t eps_bits = get_named_compile_time_arg_val("eps_bits");
 
+    // Runtime role flags. For Commit 1 of task #10 the kernel grid is the
+    // 8-core row (y=0, x=0..7) — both phases participate on every core, so
+    // these branches are tautologies. They become load-bearing in Commit 2
+    // when the grid expands to LN1 ∪ QKV (y=0 x=0..7 plus y=1..5 x=0..5).
+    const bool is_ln1_core = (get_relative_logical_y() == 0) && (get_relative_logical_x() < 8);
+    const bool is_residual_core = is_ln1_core;
+
     // =========================================================================
     // PHASE 1: LN1 — y = ((x - mean) / sqrt(var + eps)) * gamma + beta
     //          Reads: ln_in_cb, gamma_cb, beta_cb, scaler_cb, ones_cb
     //          Writes: ln_out_cb (consumed by Phase 2)
     // =========================================================================
-    {
+    if (is_ln1_core) {
         using LNCTArgs = pi05_siglip_ops::LayerNorm::ComputeCTArgs<
             ln_in_cb,
             gamma_cb,
@@ -118,7 +129,7 @@ void kernel_main() {
             in_tiles,
             eps_bits>;
 
-        pi05_siglip_ops::LayerNorm::Op<LNCTArgs, Core::is_ln1_core> ln1;
+        pi05_siglip_ops::LayerNorm::Op<LNCTArgs, true> ln1;
         pi05_siglip_ops::LayerNorm::RTArgs ln_args{};
         ln1(ln_args);
     }
@@ -128,10 +139,10 @@ void kernel_main() {
     //          Reads: ln_out_cb (from Phase 1), x_residual_cb (separate L1 copy of x)
     //          Writes: final_out_cb
     // =========================================================================
-    {
+    if (is_residual_core) {
         using ResCTArgs = pi05_siglip_ops::ResidualAdd::ComputeCTArgs<ln_out_cb, x_residual_cb, final_out_cb, in_tiles>;
 
-        pi05_siglip_ops::ResidualAdd::Op<ResCTArgs, Core::is_residual_core> residual;
+        pi05_siglip_ops::ResidualAdd::Op<ResCTArgs, true> residual;
         pi05_siglip_ops::ResidualAdd::RTArgs res_args{};
         residual(res_args);
     }
