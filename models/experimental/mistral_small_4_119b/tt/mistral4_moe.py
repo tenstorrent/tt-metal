@@ -599,11 +599,21 @@ class TtMistral4MoELayer(LightweightModule):
 
         # ── Batched expert matmul ──────────────────────────────────────────
         # Expand x to [EPD, 1, seq, H] so batch dims match the stacked weights.
-        # Use concat along dim=0 instead of ttnn.repeat: repeat is implemented
-        # in ROW_MAJOR and forces an expensive untilize+tilize cycle (~1.1ms
-        # at seq=128). Concat on the outer batch dim preserves TILE_LAYOUT
-        # since it doesn't touch the inner tile boundaries.
-        x_exp = ttnn.concat([x] * self.experts_per_device, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Architecture-specific path:
+        #   Blackhole: ttnn.concat([x]*EPD, dim=0) preserves TILE_LAYOUT and is
+        #     faster than ttnn.repeat, which forces an untilize+tilize round-trip
+        #     (~1.1ms at seq=128 on P150x4). Verified speedup on Blackhole only.
+        #   Wormhole and others: keep the original repeat + tile-check fallback
+        #     because concat behavior on those architectures may not preserve
+        #     TILE_LAYOUT and has been observed to regress on T3K.
+        if ttnn.device.is_blackhole(self.mesh_device):
+            x_exp = ttnn.concat([x] * self.experts_per_device, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            x_exp = ttnn.repeat(
+                x, ttnn.Shape([self.experts_per_device, 1, 1, 1]), memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            if x_exp.layout != ttnn.TILE_LAYOUT:
+                x_exp = ttnn.to_layout(x_exp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         I = EXPERT_INTERMEDIATE_SIZE
         # Fused gate+up: [EPD, 1, seq, H] × [EPD, 1, H, 2*I] → [EPD, 1, seq, 2*I]
@@ -775,9 +785,13 @@ class TtMistral4MoELayer(LightweightModule):
 
         routing_weights = self._compute_routing_weights(x, 1)
 
-        # See comment in forward(): concat preserves TILE_LAYOUT, avoiding
-        # the untilize+tilize cycle that ttnn.repeat triggers.
-        x_exp = ttnn.concat([x] * self.experts_per_device, dim=0, memory_config=_mem)
+        # See comment in forward(): architecture-specific expansion path.
+        if ttnn.device.is_blackhole(self.mesh_device):
+            x_exp = ttnn.concat([x] * self.experts_per_device, dim=0, memory_config=_mem)
+        else:
+            x_exp = ttnn.repeat(x, ttnn.Shape([self.experts_per_device, 1, 1, 1]), memory_config=_mem)
+            if x_exp.layout != ttnn.TILE_LAYOUT:
+                x_exp = ttnn.to_layout(x_exp, ttnn.TILE_LAYOUT, memory_config=_mem)
 
         gate_up_all = ttnn.matmul(
             x_exp,
