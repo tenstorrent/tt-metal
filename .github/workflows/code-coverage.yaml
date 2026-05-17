@@ -85,7 +85,7 @@ jobs:
           fi
           echo "Found ${#profdata_files[@]} profdata files to merge"
           mkdir -p /work/coverage
-          llvm-profdata-17 merge -sparse "${profdata_files[@]}" \
+          llvm-profdata-20 merge -sparse "${profdata_files[@]}" \
             -o /work/coverage/coverage.profdata
           echo "Merged profdata: $(du -h /work/coverage/coverage.profdata | cut -f1)"
 
@@ -112,13 +112,13 @@ jobs:
           mkdir -p /work/coverage_per_object
           for obj in "${objects[@]}"; do
             base=$(basename "$obj" .so)
-            llvm-cov-17 report \
+            llvm-cov-20 report \
               -instr-profile=/work/coverage/coverage.profdata \
               "$obj" > "/work/coverage_per_object/${base}.txt" 2>&1 || true
           done
 
           # HTML report
-          llvm-cov-17 show \
+          llvm-cov-20 show \
             --format=html \
             --instr-profile=/work/coverage/coverage.profdata \
             "${obj_flags[@]}" \
@@ -126,7 +126,7 @@ jobs:
           echo "HTML report: $(du -sh /work/coverage_html | cut -f1)"
 
           # JSON summary
-          llvm-cov-17 export \
+          llvm-cov-20 export \
             --format=json \
             --instr-profile=/work/coverage/coverage.profdata \
             "${obj_flags[@]}" \

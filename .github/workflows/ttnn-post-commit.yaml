@@ -167,7 +167,7 @@ jobs:
             echo "No profraw files found, skipping upload"
             exit 0
           fi
-          llvm-profdata-17 merge -sparse /work/coverage/*.profraw \
+          llvm-profdata-20 merge -sparse /work/coverage/*.profraw \
             -o /work/coverage/job.profdata
           echo "Merged $(ls /work/coverage/*.profraw | wc -l) profraw files into job.profdata ($(du -h /work/coverage/job.profdata | cut -f1))"
         shell: bash
