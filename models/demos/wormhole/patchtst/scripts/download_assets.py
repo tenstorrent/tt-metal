@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import time
 import urllib.request
 import zipfile
@@ -32,6 +33,11 @@ DATASET_URLS = {
     ),
     "heartbeat_cls": ("https://www.timeseriesclassification.com/aeon-toolkit/Heartbeat.zip", None),
     "flood_modeling1_reg": ("https://www.timeseriesclassification.com/aeon-toolkit/FloodModeling1.zip", None),
+}
+
+ARCHIVE_DOWNLOAD_FILES = {
+    "heartbeat_cls": Path("heartbeat_cls.zip"),
+    "flood_modeling1_reg": Path("flood_modeling1_reg.zip"),
 }
 
 
@@ -72,6 +78,23 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _resolve_dataset_path(dataset_root: Path, relative_path: Path) -> Path:
+    base_directory = dataset_root.resolve(strict=False)
+    destination = (base_directory / relative_path).resolve(strict=False)
+    if os.path.commonpath([str(base_directory), str(destination)]) != str(base_directory):
+        raise RuntimeError(
+            f"Resolved path {destination} escapes dataset root {base_directory} for requested path {relative_path}"
+        )
+    return destination
+
+
+def _unlink_dataset_path(dataset_root: Path, relative_path: Path) -> None:
+    destination = _resolve_dataset_path(dataset_root, relative_path)
+    if destination.exists() and not destination.is_file():
+        raise RuntimeError(f"Refusing to remove non-file dataset path {destination}")
+    destination.unlink(missing_ok=True)
+
+
 def _extract_archive_dataset(dataset_name: str, archive_path: Path, dataset_root: Path) -> list[Path]:
     spec = ARCHIVE_DATASET_FILES[dataset_name]
     extracted_paths: list[Path] = []
@@ -83,7 +106,7 @@ def _extract_archive_dataset(dataset_name: str, archive_path: Path, dataset_root
                 raise RuntimeError(
                     f"Archive {archive_path} did not contain expected member {relative_path.name} for {dataset_name}"
                 ) from error
-            destination = dataset_root / relative_path
+            destination = _resolve_dataset_path(dataset_root, relative_path)
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(payload)
             extracted_paths.append(destination)
@@ -135,7 +158,8 @@ def main() -> None:
     for dataset_name in args.datasets:
         primary_url, fallback_url = DATASET_URLS[dataset_name]
         if dataset_name in ARCHIVE_DATASET_FILES:
-            destination = args.dataset_root / f"{dataset_name}.zip"
+            archive_relative_path = ARCHIVE_DOWNLOAD_FILES[dataset_name]
+            destination = _resolve_dataset_path(args.dataset_root, archive_relative_path)
             if fallback_url is None:
                 _download(primary_url, destination, timeout_seconds=args.timeout_seconds, retries=args.retries)
             else:
@@ -147,10 +171,10 @@ def main() -> None:
                     retries=args.retries,
                 )
             extracted = _extract_archive_dataset(dataset_name, destination, args.dataset_root)
-            destination.unlink(missing_ok=True)
+            _unlink_dataset_path(args.dataset_root, archive_relative_path)
             downloaded_paths.extend(extracted)
         else:
-            destination = args.dataset_root / FORECAST_DATASET_FILES[dataset_name]
+            destination = _resolve_dataset_path(args.dataset_root, FORECAST_DATASET_FILES[dataset_name])
             if fallback_url is None:
                 _download(primary_url, destination, timeout_seconds=args.timeout_seconds, retries=args.retries)
             else:
