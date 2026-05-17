@@ -286,6 +286,53 @@ class TtMistral4TextModel:
 
         return self._to_logits(x)
 
+    def prefill_device(self, input_ids_tt: ttnn.Tensor, seq_len: int) -> ttnn.Tensor:
+        """
+        Device-only prefill for trace capture/execution.
+
+        Identical to ``prefill`` but: takes a pre-uploaded device tensor for
+        input_ids, returns a device tensor for logits (no host download), and
+        does NOT deallocate the RoPE slices (so the trace can be re-executed
+        without re-caching the RoPE tables).
+
+        Args:
+            input_ids_tt: uint32 device tensor of shape ``[1, seq_len]``,
+                          replicated across the mesh.
+            seq_len:      sequence length (passed explicitly so it's a Python
+                          int known at trace-capture time).
+
+        Returns:
+            logits_tt: device tensor ``[1, 1, seq_len, vocab/n_devices]``
+                       column-sharded across the mesh.
+        """
+        cos_tt, sin_tt = self._rope_slice(0, seq_len)
+
+        x = ttnn.embedding(
+            input_ids_tt,
+            self.embed_weight,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        x = ttnn.reshape(x, [1, 1, seq_len, HIDDEN_SIZE])
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
+        for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
+            x = layer.forward_with_cache(x, cos_tt, sin_tt, kv_cache)
+
+        # NOTE: do not deallocate cos_tt/sin_tt — they may alias the cached
+        # RoPE buffer; deallocation would invalidate the buffer for trace replay.
+
+        x = _rms_norm(x, self.final_norm_w, self.compute_kernel_config)
+        logits_tt = ttnn.linear(
+            x,
+            self.lm_head_weight,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(x)
+        return logits_tt
+
     def decode(self, input_id: torch.Tensor, current_pos: int) -> torch.Tensor:
         """
         Decode one token at position ``current_pos``.
