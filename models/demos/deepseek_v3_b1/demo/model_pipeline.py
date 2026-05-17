@@ -23,14 +23,7 @@ from models.demos.deepseek_v3_b1.demo.weight_provider import (
     WeightProvider,
 )
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import StageMetadata
-from models.demos.deepseek_v3_b1.model import (
-    TOKEN_ID_BYTES,
-    DecodeResult,
-    DeepSeekV3,
-    TokenType,
-    page_size_bytes,
-    to_spec_input,
-)
+from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DecodeResult, DeepSeekV3, page_size_bytes, to_spec_input
 
 
 class ModelPipeline:
@@ -47,6 +40,7 @@ class ModelPipeline:
         moe_layer_id_override: int | None = None,
         io_socket_descriptor_prefix: str | None = None,
         num_slots: int = 64,
+        num_mtp_levels: int = 1,
         relaxed_acceptance_delta: float = 0.6,
         top_k: int = 1,
         top_p: float = 1.0,
@@ -71,19 +65,17 @@ class ModelPipeline:
                 "DeepSeek V3 B1 pod pipeline requires slow dispatch mode. Set TT_METAL_SLOW_DISPATCH_MODE=1 and rerun."
             )
         self.mesh_device = mesh_device
+        self._num_mtp_levels = num_mtp_levels
         self.relaxed_acceptance_delta = relaxed_acceptance_delta
         self.top_k = top_k
         self.top_p = top_p
         self.temperature = temperature
         num_procs = int(ttnn.distributed_context_get_size())
-        if num_procs not in (4, 16, 64):
-            raise RuntimeError(f"Pod pipeline requires 4, 16, or 64 distributed processes; got {num_procs}")
-        if not enable_speculative_decode and num_procs not in (16, 64):
-            raise RuntimeError("Base decode is currently supported only for the 16- and 64-process pipelines")
+        if num_procs not in (4, 16, 64, 80):
+            raise RuntimeError(f"Pod pipeline requires 4, 16, 64, or 80 distributed processes; got {num_procs}")
         ttnn.enable_asynchronous_slow_dispatch(self.mesh_device)
         self.enable_speculative_decode = enable_speculative_decode
 
-        # Each host loads/creates only the weights for its stage via the provider.
         if weights_mode == "real":
             if cache_path is None:
                 raise ValueError("weights_mode='real' requires cache_path")
@@ -156,8 +148,8 @@ class ModelPipeline:
             persistent_mode=lm_head_persistent_mode,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
-            enable_mtp=enable_speculative_decode,
-            enable_speculative_decode=enable_speculative_decode,
+            enable_mtp=self._num_mtp_levels > 0,
+            num_mtp_levels=self._num_mtp_levels,
             num_slots=num_slots,
             enable_sram_bspm=enable_sram_bspm,
         )
@@ -165,12 +157,6 @@ class ModelPipeline:
             raise RuntimeError(f"Pipeline configuration has {config.num_stages} stages but {num_procs} processes")
 
         logger.info("Building pipeline")
-        # Propagate an identical, explicit pipeline_config and stages_metadata
-        # to every rank. Without this, each rank independently calls
-        # generate_blitz_decode_pipeline() and the submesh-aware code paths
-        # added in #42002 can produce inconsistent entry/exit MeshCoordinates
-        # across ranks, causing the inter-mesh MeshSocket handshake in
-        # SpecEmbeddingPipelineBlock.__init__'s h2d_host_io to time out.
         pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
         stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
         self.pipeline = config.build_pipeline(
@@ -199,30 +185,39 @@ class ModelPipeline:
 
         logger.info(f"Created ModelPipeline for stage {self.pipeline.my_stage_idx}.")
 
+    # ------------------------------------------------------------------
+    # Prefill
+    # ------------------------------------------------------------------
+
     def prefill_forward(self, tokens: list[int]) -> list[DecodeResult]:
         """Prefill prompt tokens and return the DecodeResults from the last prompt token's outputs."""
         if self.pipeline.my_stage_idx != 0:
             raise RuntimeError("prefill_forward() should only be called on mesh id 0")
         assert self.model is not None
         logger.debug(f"Prefilling with {len(tokens)} tokens...")
+        n = len(tokens)
         prompt_token_tensors = [
             to_spec_input(
                 tokens[i],
-                tokens[i + 1] if i < len(tokens) - 1 else -1,
-                user_id=0,
+                slot_id=0,
                 position_id=i,
                 page_size_datums=self._page_size_datums,
-                token_type=TokenType.BASE,
+                lane_id=0,
                 temperature=self.temperature,
                 top_k=self.top_k,
-                probability_mass_threshold=self.top_p,
+                top_p=self.top_p,
+                prefill_token_ids=[tokens[i + 1 + j] if i + 1 + j < n else -1 for j in range(self._num_mtp_levels)],
             )
-            for i in range(len(tokens))
+            for i in range(n)
         ]
         results = self.model.prefill(prompt_token_tensors)
         self.position_id = len(tokens)
         logger.debug(f"Done prefilling with {len(tokens)} tokens.")
         return results
+
+    # ------------------------------------------------------------------
+    # Single-step decode (non-speculative)
+    # ------------------------------------------------------------------
 
     def decode_forward(self, input_token: int) -> int:
         """Run 1 decode step and return the next token id."""
@@ -234,17 +229,40 @@ class ModelPipeline:
 
         self.model.write_input(
             input_token,
-            -1,
-            user_id=0,
+            slot_id=0,
             position_id=self.position_id,
-            token_type=TokenType.BASE,
+            lane_id=0,
             temperature=self.temperature,
             top_k=self.top_k,
-            probability_mass_threshold=self.top_p,
+            top_p=self.top_p,
         )
         result = self.model.read_result()
         self.position_id += 1
-        return result.token_0
+        return result.base_token
+
+    # ------------------------------------------------------------------
+    # Speculative-decode helpers
+    # ------------------------------------------------------------------
+
+    def _sampling_params(self) -> dict:
+        return dict(
+            temperature=self.temperature,
+            top_k=self.top_k if self._in_thinking_phase else 1,
+            top_p=self.top_p,
+        )
+
+    def _spec_chain(self, result: DecodeResult) -> list[tuple[int, int]]:
+        """Extract (token_id, position) for each speculative level from a DecodeResult."""
+        return [(result.spec_token(i), result.spec_position(i)) for i in range(self._num_mtp_levels)]
+
+    def _write_spec_tokens(self, result: DecodeResult) -> int:
+        """Write base + N spec tokens from a DecodeResult into the pipeline. Returns write count."""
+        assert self.model is not None
+        params = self._sampling_params()
+        self.model.write_input(result.base_token, slot_id=0, position_id=result.position_id, lane_id=0, **params)
+        for level, (token_id, pos) in enumerate(self._spec_chain(result)):
+            self.model.write_input(token_id, slot_id=0, position_id=pos, lane_id=level + 1, **params)
+        return 1 + self._num_mtp_levels
 
     def check_acceptance(self, prev_spec_token_id: int, result: DecodeResult) -> bool:
         """Check whether the speculative token should be accepted.
@@ -261,39 +279,9 @@ class ModelPipeline:
         p_draft_prob = result.p_scores[prev_spec_token_index]
         return (p_max_prob - p_draft_prob) <= self.relaxed_acceptance_delta
 
-    def _write_spec_pair(
-        self,
-        token_0: int,
-        pos_0: int,
-        token_1: int,
-        pos_1: int,
-        user_id: int = 0,
-        temperature: float = 0.6,
-        top_k: int = 1,
-        probability_mass_threshold: float = 1.0,
-    ) -> None:
-        """Write two tokens (base + speculation) into the pipeline."""
-        assert self.model is not None
-        self.model.write_input(
-            token_0,
-            -1,
-            user_id,
-            pos_0,
-            token_type=TokenType.BASE,
-            temperature=temperature,
-            top_k=top_k,
-            probability_mass_threshold=probability_mass_threshold,
-        )
-        self.model.write_input(
-            token_1,
-            -1,
-            user_id,
-            pos_1,
-            token_type=TokenType.SPEC,
-            temperature=temperature,
-            top_k=top_k,
-            probability_mass_threshold=probability_mass_threshold,
-        )
+    # ------------------------------------------------------------------
+    # Speculative-decode inference loop
+    # ------------------------------------------------------------------
 
     def run_inference_base_decode(
         self,
@@ -404,17 +392,10 @@ class ModelPipeline:
         think_token_ids: list[int] | None = None,
         return_generated_tokens: bool = False,
     ) -> list[int] | None:
-        """Run speculative-decode inference: prefill then decode with multi-token prediction.
+        """Run speculative-decode inference: prefill then decode with MTP-N.
 
-        The pipeline produces structured 2-token output pages (base + speculation).
-        Each output page carries position IDs that the host uses directly for
-        write-back, so no manual position tracking is needed.
-
-        The host drives the ACCEPT / REJECT / STALE / CONTINUE state machine:
-          - ACCEPT:   emit confirmed token, then read CONTINUE.
-          - CONTINUE: emit bonus token, write tokens at device-supplied positions.
-          - REJECT:   emit base output, write tokens at device-supplied positions.
-          - STALE:    discard and re-read.
+        Each cycle writes 1+N tokens (base + N specs) and reads 1+N result pages.
+        Acceptance walks the chain; the pivot result seeds the next cycle.
         """
         if not self.enable_speculative_decode:
             return self.run_inference_base_decode(
@@ -431,8 +412,6 @@ class ModelPipeline:
 
         self._in_thinking_phase = False
         generated_tokens: list[int] = []
-        verified_spec_tokens: list[int] = []
-        unverified_spec_tokens: list[int] = []
         if think_token_ids is not None:
             think_open_id, think_close_id = think_token_ids
         else:
@@ -442,12 +421,9 @@ class ModelPipeline:
         last_emit_time: float | None = None
 
         def is_eos(token_id: int) -> bool:
-            """Returns True if a token is the EOS token"""
             return eos_token_id is not None and token_id == eos_token_id
 
         def emit(token_id: int) -> None:
-            """Emit a token to the caller and update thinking-phase state."""
-            nonlocal first_emit_time, last_emit_time
             if on_token is not None:
                 on_token(token_id)
             generated_tokens.append(token_id)
@@ -460,108 +436,71 @@ class ModelPipeline:
             elif token_id == think_close_id:
                 self._in_thinking_phase = False
 
+        def finished() -> bool:
+            return bool(generated_tokens) and (is_eos(generated_tokens[-1]) or len(generated_tokens) >= max_new_tokens)
+
         # --- Prefill --------------------------------------------------------
         prefill_start = time.time()
         prefill_results = self.prefill_forward(prompt_token_ids)
-        prefill_end = time.time()
-
-        # Seed the state machine with both pages from the last prefill write,
-        # then read from the pipeline for all subsequent results.
         pending: deque[DecodeResult] = deque(prefill_results)
-        base_accept = 0
-        spec_accept = 0
-        base_reject = 0
-        spec_reject = 0
-        # --- Speculative decode state machine --------------------------------
-        decode_start = time.time()
+
+        tokens_per_cycle = 1 + self._num_mtp_levels
+        depth_counts = [0] * tokens_per_cycle
         num_writes = 0
         num_reads = 0
-        signal_to_exit = False
-        while len(generated_tokens) < max_new_tokens or signal_to_exit:
+        start_time = time.time()
+
+        def read_one() -> DecodeResult:
+            nonlocal num_reads
             if pending:
-                result = pending.popleft()
-            else:
-                result = self.model.read_result()
-                num_reads += 1
+                return pending.popleft()
+            num_reads += 1
+            return self.model.read_result()
 
-            if not unverified_spec_tokens and not verified_spec_tokens:
-                unverified_spec_tokens.append(result.token_1)
-                emit(result.token_0)
-            else:
-                if result.token_0_type == TokenType.BASE:
-                    if self.check_acceptance(unverified_spec_tokens[-1], result):
-                        verified_spec_tokens.append(unverified_spec_tokens.pop())
-                        emit(result.token_0)
-                        base_accept += 1
-                        signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
-                        continue
-                    else:
-                        unverified_spec_tokens.pop()
-                        unverified_spec_tokens.append(result.token_1)
-                        emit(result.token_0)
-                        base_reject += 1
-                        signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
+        # --- Seed: first result from prefill, no verification yet -----------
+        seed = read_one()
+        emit(seed.base_token)
+        prev_chain = self._spec_chain(seed)
+        pivot = seed
 
-                if result.token_0_type == TokenType.SPEC:
-                    if verified_spec_tokens:
-                        verified_spec_tokens.pop()
-                        unverified_spec_tokens.append(result.token_1)
+        # --- Speculative decode loop ----------------------------------------
+        while not finished():
+            num_writes += self._write_spec_tokens(pivot)
 
-                        if signal_to_exit:
-                            break
+            cycle_results = [read_one() for _ in range(tokens_per_cycle)]
 
-                        emit(result.token_0)
-                        spec_accept += 1
-                    else:
-                        if signal_to_exit:
-                            break
-                        spec_reject += 1
-                        continue
+            depth = 0
+            for i in range(self._num_mtp_levels):
+                if self.check_acceptance(prev_chain[i][0], cycle_results[i]):
+                    depth += 1
+                else:
+                    break
+            depth_counts[depth] += 1
 
-            if is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens:
+            for i in range(depth):
+                emit(cycle_results[i].base_token)
+                if finished():
+                    break
+            if finished():
                 break
 
-            self._write_spec_pair(
-                result.token_0,
-                result.token_0_pos,
-                result.token_1,
-                result.token_1_pos,
-                temperature=self.temperature,
-                top_k=self.top_k if self._in_thinking_phase else 1,
-                probability_mass_threshold=self.top_p,
-            )
-            num_writes += 2
+            pivot = cycle_results[depth]
+            emit(pivot.base_token)
+            prev_chain = self._spec_chain(pivot)
 
-        decode_end = time.time()
-
+        # Drain remaining in-flight results
         while num_reads < num_writes:
             self.model.read_result()
             num_reads += 1
 
-        n_emitted = len(generated_tokens)
-        decode_elapsed = decode_end - decode_start
-        # TTFT = prefill + time to first emitted decode token.
-        ttft = (first_emit_time - prefill_start) if first_emit_time is not None else float("nan")
-        # Steady-state inter-token throughput excludes the first emission.
-        if first_emit_time is not None and last_emit_time is not None and n_emitted > 1:
-            tpot_elapsed = last_emit_time - first_emit_time
-            tps_steady = (n_emitted - 1) / max(tpot_elapsed, 1e-9)
-        else:
-            tps_steady = float("nan")
-        tps_avg = n_emitted / max(decode_elapsed, 1e-9)
-        prefill_elapsed = prefill_end - prefill_start
+        elapsed = time.time() - start_time
+        total_cycles = sum(depth_counts)
+        logger.debug(f"Time taken: {elapsed:.2f}s")
+        logger.debug(f"Tokens per second: {len(generated_tokens) / elapsed:.1f}")
         logger.debug(
-            "Prefill: {:.2f}s ({} tokens, {:.1f} tok/s)",
-            prefill_elapsed,
-            len(prompt_token_ids),
-            len(prompt_token_ids) / max(prefill_elapsed, 1e-9),
-        )
-        logger.debug(f"TTFT (prefill + first decode token): {ttft:.3f}s")
-        logger.debug(f"Decode wall-time (excl. drain): {decode_elapsed:.2f}s")
-        logger.debug(f"Tokens per second (steady-state, inter-token): {tps_steady:.1f}")
-        logger.debug(f"Tokens per second (avg over decode loop): {tps_avg:.1f}")
-        logger.debug(
-            f"Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
+            "Acceptance depth: {} ({} cycles)",
+            ", ".join(f"d{i}={c}" for i, c in enumerate(depth_counts)),
+            total_cycles,
         )
         logger.debug("Generation complete ({} tokens generated)", n_emitted)
         return generated_tokens if return_generated_tokens else None

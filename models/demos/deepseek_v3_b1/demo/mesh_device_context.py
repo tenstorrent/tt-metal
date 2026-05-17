@@ -18,64 +18,73 @@ FABRIC_PACKET_SIZE_BYTES = 15232
 
 # TODO: Store these values inside the stages and fetch based on pipeline config
 DEFAULT_WORKER_L1_SIZE = 1431568
-LM_HEAD_WORKER_L1_SIZE = 1453716
-LM_HEAD_RANK_64_PROCS = 62
-LM_HEAD_RANK_16_PROCS = 14
+LM_HEAD_WORKER_L1_SIZE = 1455316
+
+
+def _base_lm_head_ranks(num_procs: int, num_mtp_levels: int) -> list[int]:
+    """Mesh ids that run a Base LM-head stage for this topology.
+
+    Mirrors the placement in `pipeline.py`:
+      - 16 procs (single_pod_spec_decode): base_idx = 16 - 2N + 2k, k in [0, N)
+      - 64 procs (sp4):                    base_idx = [62]
+      - 66/68/70 procs (sp5):              base_idx = 62 + 2k, k in [0, N)
+    """
+    if num_procs == 16:
+        first = 16 - 2 * num_mtp_levels
+        return [first + 2 * k for k in range(num_mtp_levels)]
+    if num_procs == 64:
+        return [62]
+    if num_procs == 68:
+        return [62 + 2 * k for k in range(num_mtp_levels)]
+    return []
 
 
 def _fabric_config_for_num_procs(num_procs: int):
-    """Infer fabric config from process count: 4 → FABRIC_2D, 16/64 → FABRIC_2D_TORUS_Y."""
+    """Infer fabric config from process count: 4 → FABRIC_2D, 16/64/80 → FABRIC_2D_TORUS_Y."""
     if num_procs == 4:
         return ttnn.FabricConfig.FABRIC_2D
-    if num_procs in (16, 64):
+    if num_procs in (16, 64, 68, 80):
         return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
-    raise ValueError(f"Unsupported num_procs for fabric config: {num_procs} (expected 4, 16, or 64)")
+    raise ValueError(f"Unsupported num_procs for fabric config: {num_procs} (expected 4, 16, 64, or 80)")
 
 
-def _needs_extended_worker_l1(num_procs: int, *, enable_speculative_decode: bool = True) -> bool:
+def _needs_extended_worker_l1(num_procs: int, num_mtp_levels: int) -> bool:
     """Return true when this worker must use the larger L1 budget.
 
     TT_MESH_ID must be provided by launch tooling for 16/64-proc runs.
     """
-    if not enable_speculative_decode:
+    if num_mtp_levels == 0:
+        return False
+
+    target_ranks = _base_lm_head_ranks(num_procs, num_mtp_levels)
+    if not target_ranks:
         return False
 
     mesh_id = os.environ.get("TT_MESH_ID")
-    target_rank = None
-    if num_procs == 64:
-        target_rank = LM_HEAD_RANK_64_PROCS
-    elif num_procs == 16:
-        target_rank = LM_HEAD_RANK_16_PROCS
-    else:
-        return False
-
     if mesh_id is None:
         raise RuntimeError("TT_MESH_ID must be set for 16/64-process runs to select worker_l1_size")
 
     try:
-        return int(mesh_id) == target_rank
+        return int(mesh_id) in target_ranks
     except ValueError as exc:
         raise RuntimeError(f"Invalid TT_MESH_ID={mesh_id!r}; expected an integer") from exc
 
 
-def _worker_l1_size_for_rank(num_procs: int, *, enable_speculative_decode: bool = True) -> int:
+def _worker_l1_size_for_rank(num_procs: int, num_mtp_levels: int) -> int:
     """Select worker L1 size for rank-specific LM-head memory requirements."""
-    if _needs_extended_worker_l1(num_procs=num_procs, enable_speculative_decode=enable_speculative_decode):
+    if _needs_extended_worker_l1(num_procs=num_procs, num_mtp_levels=num_mtp_levels):
         return LM_HEAD_WORKER_L1_SIZE
     return DEFAULT_WORKER_L1_SIZE
 
 
 @contextlib.contextmanager
-def open_mesh_device(*, enable_speculative_decode: bool = True):
+def open_mesh_device(*, num_mtp_levels: int = 1):
     """Open mesh device for pod demos with shared fabric and worker L1 settings."""
     if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
         os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS_DEFAULT
 
     num_procs = int(ttnn.distributed_context_get_size())
-    worker_l1_size = _worker_l1_size_for_rank(
-        num_procs=num_procs,
-        enable_speculative_decode=enable_speculative_decode,
-    )
+    worker_l1_size = _worker_l1_size_for_rank(num_procs=num_procs, num_mtp_levels=num_mtp_levels)
     device_params = {
         "fabric_config": _fabric_config_for_num_procs(num_procs),
         "fabric_router_config": create_fabric_router_config(FABRIC_PACKET_SIZE_BYTES),

@@ -42,6 +42,37 @@ MESH_ROOT2 = 2
 MESH_ROOT1 = 3
 
 
+def get_root3_row(root_row: int, use_torus: bool = False) -> int:
+    """Pick the row of ROOT3 for a given root row.
+
+    Linear (default) mode covers all 4 rows of a 4x2 mesh by always placing
+    ROOT3 on an inner row (1 or 2). For inner roots this matches the historical
+    "other inner row" rule. For corner roots (0 or 3) we pick the inner row on
+    the OPPOSITE side of the root, which keeps the LEAF→{ROOT3,ROOT_ROW} hops
+    1 row apart and only forces the ROOT3→ROOT_ROW hop to be 2 rows
+    (resolved via fabric multi-hop routing, see `reduce_num_hops`).
+
+    Torus mode is retained for callers that explicitly know the fabric wraps
+    rows; it is no longer auto-enabled by lm_head_sampling.
+    """
+    if use_torus:
+        if root_row == 0:
+            return 3
+        if root_row == 3:
+            return 0
+        raise ValueError(f"Torus mode requires root at corner row (0 or 3), got row {root_row}")
+
+    if root_row == 0:
+        return 2
+    if root_row == 1:
+        return 2
+    if root_row == 2:
+        return 1
+    if root_row == 3:
+        return 1
+    raise ValueError(f"Unsupported root_row {root_row} for 4-row mesh")
+
+
 def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate, use_torus: bool = False) -> int:
     """Determine the role of a device based on its coordinate and the root coordinate."""
     if coord[0] == root_coord[0] and coord[1] == root_coord[1]:
@@ -50,29 +81,10 @@ def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate,
     root_row = root_coord[0]
     my_row = coord[0]
 
-    # ROOT2: same row as ROOT1, different column
     if my_row == root_row:
         return MESH_ROOT2
 
-    # ROOT3 coord
-    if use_torus:
-        # Torus: root must be at corner (row 0 or 3), ROOT3 is opposite corner
-        if root_row == 0:
-            root3_row = 3
-        elif root_row == 3:
-            root3_row = 0
-        else:
-            raise ValueError(f"Torus mode requires root at corner row (0 or 3), got row {root_row}")
-    else:
-        # Linear: root must be at inner row (1 or 2), ROOT3 is the other inner row
-        if root_row == 1:
-            root3_row = 2
-        elif root_row == 2:
-            root3_row = 1
-        else:
-            raise ValueError(f"Linear mode requires root at inner row (1 or 2), got row {root_row}")
-
-    if my_row == root3_row:
+    if my_row == get_root3_row(root_row, use_torus):
         return MESH_ROOT3
 
     return MESH_LEAF
