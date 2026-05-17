@@ -81,6 +81,9 @@ def single_head_sdpa_device_padded(device, q_h_pad, k_h_pad, v_h_pad, scale):
     act1, w1, out1 = build_matmul_tensors_m_parallel(device, q_h_pad, kT, M=M, K=HEAD_DIM_PADDED, N=M_KV, num_cores=8)
     run_encoder_matmul(act1, w1, out1, M=M, K=HEAD_DIM_PADDED, N=M_KV, parallel="M", num_cores=8)
     qk_host = ttnn.to_torch(out1).contiguous()
+    ttnn.deallocate(act1)
+    ttnn.deallocate(w1)
+    ttnn.deallocate(out1)
 
     # softmax(qk_T)
     (act_sm, scaler_sm, max_t, exp_t, sum_t, isum_t, attn_sm) = build_tensors_for_softmax_test(
@@ -88,13 +91,19 @@ def single_head_sdpa_device_padded(device, q_h_pad, k_h_pad, v_h_pad, scale):
     )
     SigLIPSoftmaxOp.op(act_sm, scaler_sm, attn_sm, max_t, exp_t, sum_t, isum_t, M=M, K=M_KV, num_cores=8)
     attn_host = ttnn.to_torch(attn_sm).contiguous()
+    for _t in (act_sm, scaler_sm, max_t, exp_t, sum_t, isum_t, attn_sm):
+        ttnn.deallocate(_t)
 
     # out_pad = attn @ V_h_pad
     act3, w3, out3 = build_matmul_tensors_m_parallel(
         device, attn_host, v_h_pad, M=M, K=M_KV, N=HEAD_DIM_PADDED, num_cores=8
     )
     run_encoder_matmul(act3, w3, out3, M=M, K=M_KV, N=HEAD_DIM_PADDED, parallel="M", num_cores=8)
-    return ttnn.to_torch(out3)
+    out_host = ttnn.to_torch(out3)
+    ttnn.deallocate(act3)
+    ttnn.deallocate(w3)
+    ttnn.deallocate(out3)
+    return out_host
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
