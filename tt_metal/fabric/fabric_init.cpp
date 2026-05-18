@@ -147,6 +147,13 @@ FabricCoresHealth configure_fabric_cores(
     // PCIe-direct soft reset.  Returned to configure_fabric() so it can subtract them from
     // pre_dead_channels and load firmware on those channels instead of skipping them.
     std::unordered_set<uint32_t> recovered_channels;
+    // FIX SA (#42429): Strategy A — deferred deassert channels.
+    // MMIO channels where FIX S9 asserted ERISC reset and FIX EG zeroed fw_launch_addr,
+    // but deassert was NOT performed here.  ERISC stays halted so all subsequent L1 writes
+    // (L1 clear, ConfigureDeviceWithProgram, write_launch_msg_to_core) are atomic from
+    // ERISC's perspective — no race with base-UMD execution.  device.cpp performs deassert
+    // + FIX DW + FIX DU + go_msg for these channels after all L1 mutations are complete.
+    std::unordered_set<uint32_t> deferred_deassert_channels;
     // Note: all_channels_healthy is computed at the END of this function (after FIX RR may
     // have recovered pre_known_dead channels from dead_channels).  Do not set it here.
     if (!pre_known_dead_channels.empty()) {
@@ -518,110 +525,32 @@ FabricCoresHealth configure_fabric_cores(
                     }
                 }
 
-                // Immediately deassert so ERISC0 restarts into base UMD firmware.
-                // The window where ERISC0 is halted is limited to the PCIe write round-trip.
-                cluster.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
-
-                // FIX OP (#42429): Log how long ERISC0 was held in reset.
+                // FIX SA (#42429): Strategy A — Deferred Deassert.
+                // ERISC stays halted. All subsequent L1 writes (L1 clear loop,
+                // ConfigureDeviceWithProgram, write_launch_msg_to_core) happen while ERISC
+                // is in reset — no race with base-UMD execution.  device.cpp will:
+                //   1. Write fw_launch_addr=1 while halted (FIX MM equivalent)
+                //   2. Write launch_msg while halted (send_go=false)
+                //   3. Write handshake_bypass=1 while halted (STRATEGY7 equivalent)
+                //   4. Deassert ERISC reset
+                //   5. FIX DW: 50ms sleep
+                //   6. FIX DU: poll edm_status until != ROM postcode
+                //   7. Write go_msg (RUN_MSG_GO)
+                //
+                // FIX OP: log how long assert has been held (deassert timing captured in device.cpp).
                 {
                     auto fix_s9_end = std::chrono::steady_clock::now();
                     auto fix_s9_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         fix_s9_end - fix_s9_start).count();
                     log_info(
                         tt::LogMetal,
-                        "FIX OP (#42429): FIX S9 assert→deassert window — Device {} chan={} "
-                        "ERISC0 held in reset for {}ms (includes FIX EG zero + readback)",
+                        "FIX SA (#42429): Strategy A — Device {} chan={} ERISC0 asserted for "
+                        "{}ms (FIX EG done). Deferring deassert to device.cpp after all L1 writes.",
                         chip_id, router_chan, fix_s9_ms);
                 }
-
-                // FIX DW (#42429): Brief delay after deassert before FIX DU poll.
-                // ERISC0 needs a few cycles to latch out of reset and begin executing ROM.
-                // Without this, a very fast first poll can read the pre-reset L1 value
-                // (which happens to be != kRomPostcode) and declare ROM "done" before it
-                // has even started — letting the subsequent L1 clear race with ROM init.
-                // 50ms is well within the >1s ROM boot sequence; cost on the fast path is
-                // negligible compared to the 5s FIX DU poll window that follows.
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-                // FIX DU (#42429): Wait for ERISC to exit ROM phase before the L1 clear loop.
-                // FIX S9 above does assert+deassert to clean dirty L1/TXQ/MAC state, but without
-                // waiting for ROM to complete, the subsequent L1 clear (addresses_to_clear loop
-                // below) races with ROM execution.  ROM writes to L1 including ring_sync_address
-                // (0x00018070) during its init sequence; if the L1 clear zeroes that address
-                // WHILE ROM is running, the fabric firmware later sees 0x00000000 at ring sync
-                // and the 120-second ring sync timeout fires (run 25970786992: device 0 chan=8
-                // stuck at 0x00000000 → all MMIO channels fail → entire fabric down).
-                //
-                // Fix: poll edm_status_address until value != ROM postcode (0x49705180),
-                // identical to the FIX BH pattern used in the dead-channel recovery path above.
-                // Only MMIO base-UMD channels reach this point (FIX S9); non-MMIO already
-                // `continue`d.  PCIe-direct cluster.read_core is safe here.
-                {
-                    constexpr uint32_t kRomPostcode_DU = 0x49705180u;
-                    constexpr uint32_t kFIX_DU_BootWaitMs = 5000;
-                    constexpr uint32_t kFIX_DU_PollIntervalMs = 5;
-                    const uint64_t edm_addr =
-                        static_cast<uint64_t>(router_config.edm_status_address);
-                    // FIX MN (#42429): Snapshot edm_status at FIX DU poll entry.
-                    // If ERISC already exited ROM (elapsed=0ms), this tells us what
-                    // state it reached before we started polling.
-                    std::vector<uint32_t> du_initial(1, 0);
-                    cluster.read_core(du_initial, sizeof(uint32_t), core_loc, edm_addr);
-                    log_info(
-                        tt::LogMetal,
-                        "FIX MN (#42429): FIX DU poll entry — Device {} chan={} "
-                        "edm_status=0x{:08X} at poll start (ROM=0x49705180)",
-                        chip_id, router_chan, du_initial[0]);
-                    uint32_t elapsed_du_ms = 0;
-                    bool fix_du_ok = false;
-                    while (elapsed_du_ms < kFIX_DU_BootWaitMs) {
-                        std::vector<uint32_t> status_buf(1, 0);
-                        cluster.read_core(status_buf, sizeof(uint32_t), core_loc, edm_addr);
-                        if (status_buf[0] != kRomPostcode_DU) {
-                            fix_du_ok = true;
-                            log_info(
-                                tt::LogMetal,
-                                "configure_fabric_cores: device {} channel {} FIX DU — "
-                                "ERISC exited ROM to 0x{:08x} after {}ms (safe to L1 clear).",
-                                chip_id,
-                                router_chan,
-                                status_buf[0],
-                                elapsed_du_ms);
-                            break;
-                        }
-                        std::this_thread::sleep_for(
-                            std::chrono::milliseconds(kFIX_DU_PollIntervalMs));
-                        elapsed_du_ms += kFIX_DU_PollIntervalMs;
-                    }
-                    if (!fix_du_ok) {
-                        // ROM did not complete within timeout — channel is irrecoverable this
-                        // session.  Add to dead_channels to skip L1 clear and firmware launch.
-                        uint32_t final_val = kRomPostcode_DU;
-                        try {
-                            std::vector<uint32_t> final_buf(1, 0);
-                            cluster.read_core(final_buf, sizeof(uint32_t), core_loc, edm_addr);
-                            final_val = final_buf[0];
-                        } catch (...) {}
-                        dead_channels.insert(router_chan);
-                        newly_dead_channels.insert(router_chan);
-                        log_warning(
-                            tt::LogMetal,
-                            "configure_fabric_cores: device {} channel {} FIX DU — "
-                            "ERISC did not exit ROM within {}ms after FIX S9 deassert "
-                            "(edm_status=0x{:08x}). Marking dead to prevent L1 race.",
-                            chip_id,
-                            router_chan,
-                            kFIX_DU_BootWaitMs,
-                            final_val);
-                    }
-                }
-
-                log_debug(
-                    tt::LogMetal,
-                    "configure_fabric_cores: ERISC0 soft reset bounce on device {} channel {} "
-                    "(BRISC halt recovery)",
-                    chip_id,
-                    router_chan);
+                deferred_deassert_channels.insert(router_chan);
+                // Skip FIX DW, FIX DU, FIX MM — all done in device.cpp after L1 writes.
+                // L1 clear loop below still runs (PCIe writes to halted ERISC L1 work fine).
             } catch (const std::exception& e) {
                 // Fatal for this channel: remote chip is unreachable.
                 // Skip L1 writes for this channel — WriteToDeviceL1 on a non-MMIO chip routes
@@ -794,18 +723,10 @@ FabricCoresHealth configure_fabric_cores(
     }
 
     // STRATEGY7 (#42429): Write handshake_bypass=1 to each ERISC's L1 handshake_info.
-    // This flag tells firmware to skip the ETH DMA handshake loop entirely at
-    // fabric_symmetric_handshake() entry (see fabric_router_eth_handshake.hpp).
-    // The handshake's only functional purpose is ETH link liveness confirmation, which the
-    // host already provides via STARTED status poll + firmware write relay during configure_fabric.
-    // Bypassing eliminates all handshake-related race conditions: TXQ races, STARTED deadlocks,
-    // lost MAGIC overwrites.
-    //
-    // The bypass field is at handshake_addr + 32 (offsetof(handshake_info_t, handshake_bypass)).
-    // This write fires AFTER the L1 clear loop (which does not touch the handshake region)
-    // and BEFORE ConfigureDeviceWithProgram writes the firmware binary to L1.
-    // prepare_handshake_state() (firmware Object Setup) does NOT overwrite handshake_bypass,
-    // so the flag persists from this host write through to fabric_symmetric_handshake() entry.
+    // FIX S7-MOVE (#42429): For deferred_deassert channels (Strategy A), the bypass write
+    // moves to device.cpp — AFTER ConfigureDeviceWithProgram, while ERISC is still halted.
+    // This prevents ConfigureDeviceWithProgram's BSS zeroing from overwriting the flag.
+    // Non-deferred channels (non-MMIO) still get the write here.
     {
         const uint32_t handshake_bypass_offset = 32;  // offsetof(handshake_info_t, handshake_bypass)
         const uint32_t handshake_bypass_l1_addr =
@@ -816,17 +737,21 @@ FabricCoresHealth configure_fabric_cores(
             if (dead_channels.count(router_chan_s7)) {
                 continue;  // Dead channels — no firmware will run.
             }
+            if (deferred_deassert_channels.count(router_chan_s7)) {
+                // FIX S7-MOVE: bypass write handled in device.cpp after ConfigureDeviceWithProgram.
+                log_debug(
+                    tt::LogMetal,
+                    "STRATEGY7 (#42429): Device {} chan={} — deferred (Strategy A), "
+                    "handshake_bypass write deferred to device.cpp [FIX S7-MOVE]",
+                    chip_id_s7, router_chan_s7);
+                continue;
+            }
             auto router_logical_core_s7 = soc_desc.get_eth_core_for_channel(router_chan_s7, CoordSystem::LOGICAL);
-            // Use WriteToDeviceL1 — works for both MMIO (PCIe-direct) and non-MMIO (relay).
-            // Same API used by the addresses_to_clear loop above.
             std::vector<uint32_t> bypass_buf = {1};
             tt::tt_metal::detail::WriteToDeviceL1(
                 device, router_logical_core_s7, handshake_bypass_l1_addr, bypass_buf, CoreType::ETH);
 
             // FIX NO (#42429): Readback verify the handshake_bypass write.
-            // If this write is silently dropped (PCIe contention, relay failure),
-            // firmware never sees bypass=1 and enters the full ETH DMA handshake
-            // loop — all handshake race conditions return.  Mirrors FIX GI pattern.
             std::vector<uint32_t> bypass_verify(1, 0xFFFFFFFF);
             tt::tt_metal::detail::ReadFromDeviceL1(
                 device, router_logical_core_s7, handshake_bypass_l1_addr, sizeof(uint32_t), bypass_verify, CoreType::ETH);
@@ -848,93 +773,15 @@ FabricCoresHealth configure_fabric_cores(
         }
     }
 
-    // FIX MM (#42429): Unconditional fw_launch_addr restore after L1 clear.
-    // FIX EG (in the reset window above) zeroed fw_launch_addr to prevent
-    // premature stale-firmware launch. Now that the L1 clear is complete,
-    // restore fw_launch_addr=1 so base-UMD firmware will launch when
-    // write_launch_msg_to_core() is called by device.cpp.
-    // This replaces the per-path FIX IJ / FIX KL conditions which were
-    // incomplete — centralizing here guarantees every channel that got
-    // FIX EG'd also gets its restore, unconditionally.
+    // FIX MM (#42429): fw_launch_addr restore — MOVED to device.cpp for deferred channels.
+    // Strategy A (FIX SA) keeps ERISC halted through all L1 writes. For deferred channels,
+    // fw_launch_addr restore happens in device.cpp while ERISC is still halted, which is
+    // the correct sequence: FIX EG zero → L1 clear → ConfigureDeviceWithProgram → FIX MM
+    // restore → write_launch_msg → handshake_bypass → deassert → FIX DW → FIX DU → go_msg.
     //
-    // IMPORTANT: This runs on ALL channels for which we did the FIX S9
-    // soft reset (MMIO channels — both skip_soft_reset and normal path,
-    // plus FIX RR recovered channels). Non-MMIO channels that skipped
-    // FIX S9 never had FIX EG run, so no restore needed for them.
-    //
-    // NOTE: This fires BEFORE ConfigureDeviceWithProgram and write_launch_msg_to_core.
-    //
-    // active_erisc.cc lifecycle (corrected description):
-    //   1. Writes flag_disable[0] = 1   (== fw_launch_addr = 0x9004) — ONCE at startup
-    //   2. Writes go_messages[0].signal = RUN_MSG_DONE
-    //   3. Enters polling loop: waits for go_messages[0].signal == RUN_MSG_GO
-    //   4. The flag_disable[0] != 1 check (line 264) is an EXIT condition:
-    //      if the host zeros flag_disable[0] (to signal "stop"), base-UMD returns.
-    //      It does NOT poll fw_launch_addr as a launch gate.
-    //
-    // FIX EG zeroed fw_launch_addr during the reset window to prevent premature
-    // old-firmware launch. Now that L1 is clean and we're about to deassert,
-    // restore it to 1 so active_erisc's startup write is a no-op (not a transition).
-    // NOTE: This restore is a no-op in practice since active_erisc overwrites it,
-    // but is kept for documentation clarity and to match expected hardware state.
-    //
-    // Sequence:
-    //   FIX EG: zero fw_launch_addr (prevents stale launch during reset)
-    //   L1 clear: zero sync addresses
-    //   FIX MM (here): restore fw_launch_addr=1 (match expected active_erisc startup state)
-    //   ConfigureDeviceWithProgram: writes fabric firmware binary to L1
-    //   write_launch_msg_to_core: writes launch_msg + go_msg → base-UMD runs kernel
-    if (device->is_mmio_capable()) {
-        const auto& hal_mm = tt::tt_metal::MetalContext::instance().hal();
-        const auto aeth_idx_mm = hal_mm.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-        const uint32_t fw_launch_addr_mm = hal_mm.get_jit_build_config(aeth_idx_mm, 0, 0).fw_launch_addr;
-        const uint32_t fw_launch_val_mm = hal_mm.get_jit_build_config(aeth_idx_mm, 0, 0).fw_launch_addr_value;
-        const auto chip_id_mm = device->id();
-
-        for (const auto& [router_chan_mm, _] : router_chans_and_direction) {
-            if (dead_channels.count(router_chan_mm)) {
-                continue;  // Dead channels — no point restoring; firmware won't launch on them.
-            }
-            auto virtual_core_mm = cluster.get_virtual_eth_core_from_channel(chip_id_mm, router_chan_mm);
-
-            // Pre-restore snapshot (diagnostic — mirrors FIX MN pattern).
-            std::vector<uint32_t> mm_pre(1, 0xFFFFFFFF);
-            cluster.read_core(mm_pre, sizeof(uint32_t),
-                tt_cxy_pair(chip_id_mm, virtual_core_mm),
-                static_cast<uint64_t>(fw_launch_addr_mm));
-            log_info(
-                tt::LogMetal,
-                "FIX MM (#42429): pre-restore — Device {} chan={} "
-                "fw_launch_addr=0x{:08X} pre_val=0x{:08X} (expect 0 from FIX EG)",
-                chip_id_mm, router_chan_mm, fw_launch_addr_mm, mm_pre[0]);
-
-            cluster.write_core_immediate(
-                chip_id_mm, virtual_core_mm, std::vector<uint32_t>{fw_launch_val_mm}, fw_launch_addr_mm);
-
-            // Readback verify (mirrors FIX GI pattern).
-            std::vector<uint32_t> mm_verify(1, 0);
-            cluster.read_core(mm_verify, sizeof(uint32_t),
-                tt_cxy_pair(chip_id_mm, virtual_core_mm),
-                static_cast<uint64_t>(fw_launch_addr_mm));
-            if (mm_verify[0] != fw_launch_val_mm) {
-                log_warning(
-                    tt::LogMetal,
-                    "FIX MM (#42429): fw_launch_addr readback MISMATCH — wrote "
-                    "0x{:08X} to 0x{:08X} on Device {} chan={} but read back 0x{:08X}. "
-                    "Base-UMD may stay at 0xDEADB07E.",
-                    fw_launch_val_mm, fw_launch_addr_mm,
-                    chip_id_mm, router_chan_mm, mm_verify[0]);
-            } else {
-                log_info(
-                    tt::LogMetal,
-                    "FIX MM (#42429): restored fw_launch_addr_value=0x{:08X} at "
-                    "fw_launch_addr=0x{:08X} for Device {} chan={} after L1 clear "
-                    "(readback verified). Base-UMD will launch when write_launch_msg_to_core fires.",
-                    fw_launch_val_mm, fw_launch_addr_mm,
-                    chip_id_mm, router_chan_mm);
-            }
-        }
-    }
+    // On MMIO devices, ALL channels go through FIX S9 and are deferred — FIX MM is a no-op here.
+    // On non-MMIO devices, FIX EG was never run, so FIX MM is also not needed.
+    // Kept as a comment block for historical context; the actual restore is in device.cpp.
 
     // FIX RR (#42429): re-evaluate all_channels_healthy after FIX RR may have recovered
     // pre_known_dead channels.  If all pre-known dead channels were recovered (dead_channels
@@ -984,7 +831,7 @@ FabricCoresHealth configure_fabric_cores(
         all_channels_healthy ? "true" : "false",
         fix_m_count, fix_s9_count, normal_reset_count);
 
-    return FabricCoresHealth{all_channels_healthy, std::move(newly_dead_channels), std::move(recovered_channels)};
+    return FabricCoresHealth{all_channels_healthy, std::move(newly_dead_channels), std::move(recovered_channels), std::move(deferred_deassert_channels)};
 }
 
 }  // namespace tt::tt_fabric

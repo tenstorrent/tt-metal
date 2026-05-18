@@ -596,6 +596,236 @@ void Device::configure_fabric(
     detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_, dead_eth_logical_cores);
     detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_, dead_eth_logical_cores);
 
+    // =========================================================================
+    // FIX SA (#42429): Strategy A — Deferred Deassert.
+    // For MMIO channels where configure_fabric_cores() asserted ERISC reset (FIX S9)
+    // but deferred the deassert:  ERISC is still halted.  All L1 writes above
+    // (L1 clear, WriteRuntimeArgsToDevice, ConfigureDeviceWithProgram) completed
+    // while ERISC was in reset — zero race with base-UMD execution.
+    //
+    // Now perform the post-L1-write sequence for each deferred channel:
+    //   1. Write fw_launch_addr=1 while halted (FIX MM equivalent)
+    //   2. Write launch_msg while halted (send_go=false — no go_msg yet)
+    //   3. Write handshake_bypass=1 while halted (STRATEGY7 / FIX S7-MOVE)
+    //   4. Deassert ERISC reset
+    //   5. FIX DW: 50ms sleep (let ERISC latch out of reset)
+    //   6. FIX DU: poll edm_status until != ROM postcode (5s timeout)
+    //   7. Write go_msg (RUN_MSG_GO) — ERISC is now in base-UMD polling loop
+    // =========================================================================
+    if (!health.deferred_deassert_channels.empty()) {
+        auto& cluster_sa = env_impl.get_cluster();
+        const auto& hal_sa = env_impl.get_hal();
+        const auto& soc_desc_sa = cluster_sa.get_soc_desc(this->id_);
+        const auto& control_plane_sa = MetalContext::instance().get_control_plane();
+        const auto& fabric_context_sa = control_plane_sa.get_fabric_context();
+        const auto& builder_ctx_sa = fabric_context_sa.get_builder_context();
+        const auto& router_config_sa = builder_ctx_sa.get_fabric_router_config();
+
+        // HAL info for fw_launch_addr (FIX MM equivalent).
+        const auto aeth_idx_sa = hal_sa.get_programmable_core_type_index(
+            HalProgrammableCoreType::ACTIVE_ETH);
+        const uint32_t fw_launch_addr_sa = hal_sa.get_jit_build_config(aeth_idx_sa, 0, 0).fw_launch_addr;
+        const uint32_t fw_launch_val_sa = hal_sa.get_jit_build_config(aeth_idx_sa, 0, 0).fw_launch_addr_value;
+
+        // STRATEGY7 handshake_bypass address.
+        const uint32_t handshake_bypass_offset_sa = 32;  // offsetof(handshake_info_t, handshake_bypass)
+        const uint32_t handshake_bypass_l1_addr_sa =
+            static_cast<uint32_t>(router_config_sa.handshake_addr) + handshake_bypass_offset_sa;
+
+        // FIX DU constants.
+        constexpr uint32_t kRomPostcode_SA = 0x49705180u;
+        constexpr uint32_t kFIX_DU_BootWaitMs_SA = 5000;
+        constexpr uint32_t kFIX_DU_PollIntervalMs_SA = 5;
+        const uint64_t edm_status_addr_sa =
+            static_cast<uint64_t>(router_config_sa.edm_status_address);
+
+        // Build logical_core→channel mapping for the write_launch_msg_to_core calls.
+        // We need to find the program's kernel group for each deferred channel's logical core.
+        const auto logical_cores_sa = fabric_program_->impl().logical_cores();
+
+        log_info(
+            tt::LogMetal,
+            "FIX SA (#42429): Strategy A — Device {} processing {} deferred deassert channel(s) "
+            "after ConfigureDeviceWithProgram",
+            this->id_, health.deferred_deassert_channels.size());
+
+        for (const auto& deferred_chan : health.deferred_deassert_channels) {
+            if (all_dead_channels.count(deferred_chan)) {
+                continue;  // Became dead during configure_fabric_cores — skip.
+            }
+
+            auto virtual_core_sa = cluster_sa.get_virtual_eth_core_from_channel(this->id_, deferred_chan);
+            tt_cxy_pair core_loc_sa(this->id_, virtual_core_sa);
+            auto logical_core_sa = soc_desc_sa.get_eth_core_for_channel(deferred_chan, CoordSystem::LOGICAL);
+
+            // Step 1: Write fw_launch_addr=1 while halted (FIX MM equivalent).
+            // PCIe writes to halted ERISC L1 work — proven by FIX EG.
+            cluster_sa.write_core_immediate(
+                this->id_, virtual_core_sa, std::vector<uint32_t>{fw_launch_val_sa}, fw_launch_addr_sa);
+            // Readback verify (FIX GI pattern).
+            std::vector<uint32_t> mm_verify_sa(1, 0);
+            cluster_sa.read_core(mm_verify_sa, sizeof(uint32_t), core_loc_sa,
+                static_cast<uint64_t>(fw_launch_addr_sa));
+            if (mm_verify_sa[0] != fw_launch_val_sa) {
+                log_warning(
+                    tt::LogMetal,
+                    "FIX SA (#42429): FIX MM fw_launch_addr readback MISMATCH — wrote 0x{:08X} "
+                    "to 0x{:08X} on Device {} chan={} but read back 0x{:08X}",
+                    fw_launch_val_sa, fw_launch_addr_sa, this->id_, deferred_chan, mm_verify_sa[0]);
+            } else {
+                log_info(
+                    tt::LogMetal,
+                    "FIX SA (#42429): FIX MM restored fw_launch_addr=0x{:08X} on Device {} chan={} "
+                    "while halted (readback verified)",
+                    fw_launch_addr_sa, this->id_, deferred_chan);
+            }
+
+            // Step 2: Write launch_msg while halted (send_go=false).
+            // Find the kernel group for this logical core to get launch_msg/go_msg.
+            // We store the KernelGroup* so step 7 can get go_msg.view() without
+            // default-constructing ConstView (BaseStructView has no default ctor).
+            bool launch_msg_written = false;
+            KernelGroup* kg_sa_ptr = nullptr;
+            for (uint32_t pct_sa = 0; pct_sa < logical_cores_sa.size(); pct_sa++) {
+                if (hal_sa.get_core_type(pct_sa) != CoreType::ETH) continue;
+                for (const auto& lc : logical_cores_sa[pct_sa]) {
+                    if (lc.x == logical_core_sa.x && lc.y == logical_core_sa.y) {
+                        kg_sa_ptr = fabric_program_->impl().kernels_on_core(lc, pct_sa);
+                        dev_msgs::launch_msg_t::View msg_sa = kg_sa_ptr->launch_msg.view();
+                        auto go_msg_sa = kg_sa_ptr->go_msg.view();
+                        msg_sa.kernel_config().host_assigned_id() = fabric_program_->get_runtime_id();
+
+                        auto physical_core_sa = this->virtual_core_from_logical_core(lc, CoreType::ETH);
+                        tt::llrt::write_launch_msg_to_core(
+                            this->id(),
+                            physical_core_sa,
+                            msg_sa,
+                            go_msg_sa,
+                            /* send_go= */ false);  // FIX SA: launch_msg only, go_msg after deassert
+
+                        log_info(
+                            tt::LogMetal,
+                            "FIX SA (#42429): wrote launch_msg (send_go=false) for Device {} chan={} "
+                            "logical ({},{}) while ERISC halted",
+                            this->id_, deferred_chan, lc.x, lc.y);
+                        launch_msg_written = true;
+                        break;
+                    }
+                }
+                if (launch_msg_written) break;
+            }
+            if (!launch_msg_written) {
+                log_warning(
+                    tt::LogMetal,
+                    "FIX SA (#42429): Device {} chan={} — could not find kernel group for "
+                    "logical core ({},{}).  Skipping deferred deassert for this channel.",
+                    this->id_, deferred_chan, logical_core_sa.x, logical_core_sa.y);
+                continue;
+            }
+
+            // Step 3: Write handshake_bypass=1 while halted (STRATEGY7 / FIX S7-MOVE).
+            // This is AFTER ConfigureDeviceWithProgram, so BSS zeroing cannot overwrite it.
+            {
+                std::vector<uint32_t> bypass_buf_sa = {1};
+                detail::WriteToDeviceL1(
+                    this, CoreCoord(logical_core_sa.x, logical_core_sa.y),
+                    handshake_bypass_l1_addr_sa, bypass_buf_sa, CoreType::ETH);
+                // FIX NO readback verify.
+                std::vector<uint32_t> bypass_verify_sa(1, 0xFFFFFFFF);
+                detail::ReadFromDeviceL1(
+                    this, CoreCoord(logical_core_sa.x, logical_core_sa.y),
+                    handshake_bypass_l1_addr_sa, sizeof(uint32_t), bypass_verify_sa, CoreType::ETH);
+                if (bypass_verify_sa[0] != 1) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX SA (#42429): STRATEGY7 handshake_bypass readback MISMATCH — wrote 1 "
+                        "to L1[0x{:08X}] on Device {} chan={} but read back 0x{:08X} [FIX S7-MOVE]",
+                        handshake_bypass_l1_addr_sa, this->id_, deferred_chan, bypass_verify_sa[0]);
+                } else {
+                    log_info(
+                        tt::LogMetal,
+                        "FIX SA (#42429): STRATEGY7 handshake_bypass=1 at L1[0x{:08X}] for "
+                        "Device {} chan={} while halted — readback verified [FIX S7-MOVE]",
+                        handshake_bypass_l1_addr_sa, this->id_, deferred_chan);
+                }
+            }
+
+            // Step 4: Deassert ERISC reset.
+            cluster_sa.deassert_risc_reset_at_core(core_loc_sa, tt::umd::RiscType::ERISC0);
+            log_info(
+                tt::LogMetal,
+                "FIX SA (#42429): deasserted ERISC0 on Device {} chan={} — "
+                "all L1 writes complete (fw_launch_addr + launch_msg + handshake_bypass)",
+                this->id_, deferred_chan);
+
+            // Step 5: FIX DW — 50ms sleep after deassert.
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+            // Step 6: FIX DU — poll edm_status until != ROM postcode.
+            {
+                uint32_t elapsed_sa = 0;
+                bool fix_du_ok_sa = false;
+                while (elapsed_sa < kFIX_DU_BootWaitMs_SA) {
+                    std::vector<uint32_t> status_sa(1, 0);
+                    cluster_sa.read_core(status_sa, sizeof(uint32_t), core_loc_sa, edm_status_addr_sa);
+                    if (status_sa[0] != kRomPostcode_SA) {
+                        fix_du_ok_sa = true;
+                        log_info(
+                            tt::LogMetal,
+                            "FIX SA (#42429): FIX DU — Device {} chan={} ERISC exited ROM to "
+                            "0x{:08x} after {}ms post-deassert",
+                            this->id_, deferred_chan, status_sa[0], elapsed_sa);
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(kFIX_DU_PollIntervalMs_SA));
+                    elapsed_sa += kFIX_DU_PollIntervalMs_SA;
+                }
+                if (!fix_du_ok_sa) {
+                    uint32_t final_val_sa = kRomPostcode_SA;
+                    try {
+                        std::vector<uint32_t> final_buf_sa(1, 0);
+                        cluster_sa.read_core(final_buf_sa, sizeof(uint32_t), core_loc_sa, edm_status_addr_sa);
+                        final_val_sa = final_buf_sa[0];
+                    } catch (...) {}
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX SA (#42429): FIX DU timeout — Device {} chan={} ERISC did not exit "
+                        "ROM within {}ms (edm_status=0x{:08x}). Channel may be unresponsive.",
+                        this->id_, deferred_chan, kFIX_DU_BootWaitMs_SA, final_val_sa);
+                    // Don't add to dead_channels here — the write_launch_msg_to_core loop will
+                    // handle this channel normally (it's already in the program).
+                    continue;
+                }
+            }
+
+            // Step 7: Write go_msg (RUN_MSG_GO) — ERISC is now in base-UMD polling loop.
+            {
+                auto go_msg_view_sa = kg_sa_ptr->go_msg.view();
+                auto physical_core_go = this->virtual_core_from_logical_core(
+                    CoreCoord(logical_core_sa.x, logical_core_sa.y), CoreType::ETH);
+                uint64_t go_addr_sa = hal_sa.get_dev_noc_addr(
+                    HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
+                cluster_sa.write_core_immediate(
+                    go_msg_view_sa.data(), go_msg_view_sa.size(),
+                    {static_cast<size_t>(this->id_), physical_core_go}, go_addr_sa);
+                log_info(
+                    tt::LogMetal,
+                    "FIX SA (#42429): wrote go_msg (RUN_MSG_GO) for Device {} chan={} — "
+                    "ERISC should now launch fabric firmware",
+                    this->id_, deferred_chan);
+            }
+        }
+
+        log_info(
+            tt::LogMetal,
+            "FIX SA (#42429): Strategy A complete for Device {} — {} deferred channel(s) "
+            "deasserted and go_msg sent",
+            this->id_, health.deferred_deassert_channels.size());
+    }
+    // =========================================================================
+    // End FIX SA (Strategy A)
+    // =========================================================================
+
     // Only issue l1_barrier if we have no dead ETH channels on this device.  l1_barrier
     // calls driver_->l1_membar which internally calls wait_for_non_mmio_flush — on a non-MMIO
     // device with stuck relay commands that call blocks until the relay drains, which can hang
@@ -682,6 +912,18 @@ void Device::configure_fabric(
                         hoisted_eth_chan);
                     continue;
                 }
+            }
+
+            // FIX SA (#42429): Skip deferred-deassert channels — launch_msg + go_msg already
+            // written in the Strategy A block above (after ConfigureDeviceWithProgram).
+            if (core_type == CoreType::ETH && hoisted_eth_chan != kUnresolvedChan &&
+                health.deferred_deassert_channels.count(hoisted_eth_chan)) {
+                log_debug(
+                    tt::LogMetal,
+                    "FIX SA (#42429): Device {} skipping write_launch_msg_to_core for "
+                    "deferred-deassert chan={} logical ({},{}) — already handled in Strategy A",
+                    this->id_, hoisted_eth_chan, logical_core.x, logical_core.y);
+                continue;
             }
 
             // Write host-side pre-launch canary so terminate_stale_erisc_routers() in the next

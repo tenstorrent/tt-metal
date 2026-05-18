@@ -25,10 +25,16 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_
 //                       recovered via FIX RR (PCIe-direct soft reset).  configure_fabric()
 //                       subtracts these from pre_dead_channels to compute the effective
 //                       dead set; recovered channels get fabric firmware loaded on them.
+// deferred_deassert_channels: MMIO channels where FIX S9 asserted ERISC reset but did NOT
+//                       deassert — Strategy A keeps ERISC halted through all L1 writes
+//                       (ConfigureDeviceWithProgram, write_launch_msg_to_core). device.cpp
+//                       must deassert + FIX DW + FIX DU + write go_msg for these channels
+//                       after all L1 mutations are complete.
 struct FabricCoresHealth {
     bool all_channels_healthy;
     std::unordered_set<uint32_t> newly_dead_channels;
     std::unordered_set<uint32_t> recovered_channels;
+    std::unordered_set<uint32_t> deferred_deassert_channels;
 };
 
 // Perform additional configuration (writing to specific L1 addresses, etc.) for fabric kernels on this device.
