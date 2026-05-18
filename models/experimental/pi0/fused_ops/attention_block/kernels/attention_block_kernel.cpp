@@ -96,6 +96,13 @@ void kernel_main() {
     constexpr uint32_t num_sdpa_workers_per_head = get_named_compile_time_arg_val("num_sdpa_workers_per_head");
     constexpr uint32_t m_tiles_per_sdpa_worker = get_named_compile_time_arg_val("m_tiles_per_sdpa_worker");
     constexpr uint32_t sdpa_q_tiles_per_worker = get_named_compile_time_arg_val("sdpa_q_tiles_per_worker");
+    // #11 Commit 5: 1-tile streaming probes for K and V. No persistent K/V
+    // CBs (global L1 budget is full — see #11 Commit 4 measurement). Each
+    // worker reads tile (0, 0) of its head's K and V via the production
+    // streaming pattern (noc_async_read with no caching) and writes them to
+    // these 1-tile probe CBs for host-side validation.
+    constexpr uint32_t sdpa_k_probe_cb = get_named_compile_time_arg_val("sdpa_k_probe_cb");
+    constexpr uint32_t sdpa_v_probe_cb = get_named_compile_time_arg_val("sdpa_v_probe_cb");
 
     const bool is_ln1_core_nc = (get_relative_logical_y() == 0) && (get_relative_logical_x() < ln1_num_cores);
     const bool is_qkv_core_nc = (get_relative_logical_y() < qkv_grid_y) && (get_relative_logical_x() < qkv_grid_x);
@@ -238,10 +245,13 @@ void kernel_main() {
         cb_pop_front(qkv_done_trigger_cb, 1);
 
         const uint32_t my_qkv_shard_idx = get_relative_logical_y() * qkv_grid_x + get_relative_logical_x();
-        // #11 Commit 4 scope: only Q producers signal (shards 0..num_heads-1).
-        // K and V producers join once their CBs land on SDPA workers.
-        if (my_qkv_shard_idx < num_heads) {
-            const uint32_t head_idx = my_qkv_shard_idx;
+        // All 3 producers signal (Q, K, V). SDPA workers wait for sem ≥ 3
+        // before any reads. Linear QKV-shard layout:
+        //   [0..num_heads-1]:             Q heads
+        //   [num_heads..2*num_heads-1]:   K heads
+        //   [2*num_heads..3*num_heads-1]: V heads
+        if (my_qkv_shard_idx < 3 * num_heads) {
+            const uint32_t head_idx = my_qkv_shard_idx % num_heads;
             const uint32_t head_col = head_idx % sdpa_grid_x;  // x within SDPA (0..3)
             const uint32_t head_row = head_idx / sdpa_grid_x;  // y/num_workers within SDPA (0..3)
             // Workers of head h are at logical
@@ -307,8 +317,31 @@ void kernel_main() {
         const uint32_t q_byte_offset = worker_idx_self * q_bytes_per_worker;
         const uint64_t q_src_noc_addr = get_noc_addr(q_src_phys_x, q_src_phys_y, qkv_out_l1_addr + q_byte_offset);
         noc_async_read(q_src_noc_addr, get_write_ptr(sdpa_q_cb), q_bytes_per_worker);
+
+        // #11 Commit 5: K and V streaming probes. Read ONE tile each from the
+        // head's K and V source cores using the production streaming pattern
+        // (noc_async_read, no caching). The same call shape will be used
+        // tile-by-tile during the future QK^T and Attn@V matmul loops; this
+        // commit just validates the reader works end-to-end with sem ≥ 3
+        // signaling.
+        cb_reserve_back(sdpa_k_probe_cb, 1);
+        const uint32_t k_shard_idx = num_heads + head_idx_self;  // shards [16..31]
+        const uint32_t k_src_phys_x = phys_origin_x_local + (k_shard_idx % qkv_grid_x);
+        const uint32_t k_src_phys_y = phys_origin_y_local + (k_shard_idx / qkv_grid_x);
+        const uint64_t k_src_noc_addr = get_noc_addr(k_src_phys_x, k_src_phys_y, qkv_out_l1_addr);
+        noc_async_read(k_src_noc_addr, get_write_ptr(sdpa_k_probe_cb), tile_size_bytes);
+
+        cb_reserve_back(sdpa_v_probe_cb, 1);
+        const uint32_t v_shard_idx = 2 * num_heads + head_idx_self;  // shards [32..47]
+        const uint32_t v_src_phys_x = phys_origin_x_local + (v_shard_idx % qkv_grid_x);
+        const uint32_t v_src_phys_y = phys_origin_y_local + (v_shard_idx / qkv_grid_x);
+        const uint64_t v_src_noc_addr = get_noc_addr(v_src_phys_x, v_src_phys_y, qkv_out_l1_addr);
+        noc_async_read(v_src_noc_addr, get_write_ptr(sdpa_v_probe_cb), tile_size_bytes);
+
         noc_async_read_barrier();
         cb_push_back(sdpa_q_cb, sdpa_q_tiles_per_worker);
+        cb_push_back(sdpa_k_probe_cb, 1);
+        cb_push_back(sdpa_v_probe_cb, 1);
     }
 #endif  // COMPILE_FOR_NCRISC
 
