@@ -102,15 +102,16 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # Extract weight and bias named tensor kwargs from traced config
+    # Extract named tensor kwargs from traced config
     weight_kwargs = extract_named_tensor_kwargs(kwargs, "weight")
     bias_kwargs = extract_named_tensor_kwargs(kwargs, "bias")
+    residual_kwargs = extract_named_tensor_kwargs(kwargs, "residual_input_tensor")
 
-    # Create weight and bias torch tensors for golden and device tensors
     weight_shape = None
     bias_shape = None
     torch_weight = None
     torch_bias = None
+    torch_residual = None
 
     if weight_kwargs is not None and weight_kwargs.get("shape") is not None:
         weight_shape = tuple(weight_kwargs["shape"])
@@ -120,12 +121,19 @@ def run(
         bias_shape = tuple(bias_kwargs["shape"])
         torch_bias = torch.randn(bias_shape, dtype=torch.float32)
 
+    if residual_kwargs is not None and residual_kwargs.get("shape") is not None:
+        torch_residual = gen_func_with_cast_tt(
+            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        )(tuple(residual_kwargs["shape"]))
+
     # Layer norm on last dimension — PyTorch expects weight/bias to be 1D
     normalized_shape = shape[-1:]
     golden_weight = torch_weight.squeeze() if torch_weight is not None else None
     golden_bias = torch_bias.squeeze() if torch_bias is not None else None
+    # Matches test_layer_norm_with_weight_bias_and_residual_input: residual is added to input before layer_norm.
+    golden_input = torch_input_tensor_a + torch_residual if torch_residual is not None else torch_input_tensor_a
     torch_output_tensor = torch.nn.functional.layer_norm(
-        torch_input_tensor_a,
+        golden_input,
         normalized_shape,
         weight=golden_weight,
         bias=golden_bias,
@@ -203,6 +211,41 @@ def run(
         else:
             tt_bias = ttnn.from_torch(torch_bias, dtype=b_dtype, layout=b_layout)
         op_kwargs["bias"] = tt_bias
+
+    # Create residual_input_tensor on device if traced config had it
+    if torch_residual is not None:
+        r_dtype = residual_kwargs.get("dtype") or input_a_dtype
+        if isinstance(r_dtype, dict):
+            r_dtype = parse_dict_value("residual_input_tensor_dtype", r_dtype) or input_a_dtype
+        r_layout = residual_kwargs.get("layout") or ttnn.TILE_LAYOUT
+        if isinstance(r_layout, dict):
+            r_layout = parse_dict_value("residual_input_tensor_layout", r_layout) or ttnn.TILE_LAYOUT
+        r_mem = residual_kwargs.get("memory_config") or input_a_memory_config
+        if isinstance(r_mem, dict):
+            r_mem = parse_dict_value("residual_input_tensor_memory_config", r_mem) or input_a_memory_config
+        r_placement = residual_kwargs.get("tensor_placement")
+
+        if not is_host:
+            if is_mesh_device and r_placement:
+                tt_residual = create_tensor_on_mesh(torch_residual, device, r_dtype, r_layout, r_mem, r_placement)
+            else:
+                tt_residual = ttnn.from_torch(
+                    torch_residual, dtype=r_dtype, layout=r_layout, device=device, memory_config=r_mem
+                )
+        else:
+            tt_residual = ttnn.from_torch(torch_residual, dtype=r_dtype, layout=r_layout)
+        op_kwargs["residual_input_tensor"] = tt_residual
+
+    # recip_tensor is a Welford-algorithm LUT — build via the ttnn factory so
+    # numerical output matches torch's golden (random data would corrupt it).
+    recip_kwargs = extract_named_tensor_kwargs(kwargs, "recip_tensor")
+    if recip_kwargs is not None and recip_kwargs.get("shape") is not None and not is_host:
+        recip_width = tuple(recip_kwargs["shape"])[-1]
+        grid = device.compute_with_storage_grid_size()
+        recip_core_range_set = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+        )
+        op_kwargs["recip_tensor"] = ttnn.create_layer_norm_reciprocals(device, recip_core_range_set, recip_width)
 
     start_time = start_measuring_time()
     output_tensor = ttnn.layer_norm(input_tensor_a, **op_kwargs)

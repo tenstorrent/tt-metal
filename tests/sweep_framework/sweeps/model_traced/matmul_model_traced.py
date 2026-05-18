@@ -19,7 +19,11 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
+    build_op_kwargs,
+    extract_named_tensor_kwargs,
+    parse_dict_value,
+)
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -164,6 +168,11 @@ def run(
     # matching K, so tile B along K by the inferred mesh factor.
     torch_a_for_golden = torch_input_tensor_a.float()
     torch_b_for_golden = torch_input_tensor_b.float()
+    # Apply transpose flags before matmul — torch.matmul has no transpose_a/b kwargs.
+    if op_kwargs.get("transpose_a"):
+        torch_a_for_golden = torch_a_for_golden.transpose(-1, -2)
+    if op_kwargs.get("transpose_b"):
+        torch_b_for_golden = torch_b_for_golden.transpose(-1, -2)
     if torch_a_for_golden.ndim >= 2 and torch_b_for_golden.ndim >= 2:
         a_K = torch_a_for_golden.shape[-1]
         b_K = torch_b_for_golden.shape[-2]
@@ -287,6 +296,34 @@ def run(
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+
+    # Reconstruct optional_output_tensor when the master traced one — matmul writes
+    # the result into this pre-allocated buffer instead of allocating its own.
+    opt_out_kwargs = extract_named_tensor_kwargs(kwargs, "optional_output_tensor")
+    if opt_out_kwargs is not None and opt_out_kwargs.get("shape") is not None:
+        opt_out_shape = tuple(opt_out_kwargs["shape"])
+        opt_out_dtype = opt_out_kwargs.get("dtype") or input_a_dtype
+        if isinstance(opt_out_dtype, dict):
+            opt_out_dtype = parse_dict_value("optional_output_tensor_dtype", opt_out_dtype) or input_a_dtype
+        opt_out_layout = opt_out_kwargs.get("layout") or ttnn.TILE_LAYOUT
+        if isinstance(opt_out_layout, dict):
+            opt_out_layout = parse_dict_value("optional_output_tensor_layout", opt_out_layout) or ttnn.TILE_LAYOUT
+        opt_out_mem = opt_out_kwargs.get("memory_config") or ttnn.DRAM_MEMORY_CONFIG
+        if isinstance(opt_out_mem, dict):
+            opt_out_mem = (
+                parse_dict_value("optional_output_tensor_memory_config", opt_out_mem) or ttnn.DRAM_MEMORY_CONFIG
+            )
+        opt_out_placement = opt_out_kwargs.get("tensor_placement")
+        torch_opt_out = torch.zeros(opt_out_shape, dtype=torch.float32)
+        if is_mesh_device and opt_out_placement:
+            tt_opt_out = create_tensor_on_mesh(
+                torch_opt_out, device, opt_out_dtype, opt_out_layout, opt_out_mem, opt_out_placement
+            )
+        else:
+            tt_opt_out = ttnn.from_torch(
+                torch_opt_out, dtype=opt_out_dtype, layout=opt_out_layout, device=device, memory_config=opt_out_mem
+            )
+        op_kwargs["optional_output_tensor"] = tt_opt_out
 
     try:
         start_time = start_measuring_time()

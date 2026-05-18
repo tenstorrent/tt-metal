@@ -213,12 +213,15 @@ def dict_to_compute_kernel_config(cfg):
             return v
         return str(v).lower() not in ("false", "0", "none", "")
 
-    return ttnn.WormholeComputeKernelConfig(
+    kwargs = dict(
         math_fidelity=math_fidelity,
         math_approx_mode=_to_bool(cfg.get("math_approx_mode", False)),
         fp32_dest_acc_en=_to_bool(cfg.get("fp32_dest_acc_en", False)),
         packer_l1_acc=_to_bool(cfg.get("packer_l1_acc", True)),
     )
+    if "dst_full_sync_en" in cfg:
+        kwargs["dst_full_sync_en"] = _to_bool(cfg["dst_full_sync_en"])
+    return ttnn.WormholeComputeKernelConfig(**kwargs)
 
 
 def dict_to_program_config(cfg, input_b_memory_config=None, input_a_memory_config=None):
@@ -293,7 +296,14 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
         )
 
     if "LayerNormDefaultProgramConfig" in value_str:
-        return ttnn.LayerNormDefaultProgramConfig()
+        legacy_reduction = re.search(r"legacy_reduction=(\d+)", value_str)
+        legacy_rsqrt = re.search(r"legacy_rsqrt=(\d+)", value_str)
+        use_welford = re.search(r"use_welford=(\d+)", value_str)
+        return ttnn.LayerNormDefaultProgramConfig(
+            legacy_reduction=bool(int(legacy_reduction.group(1))) if legacy_reduction else False,
+            legacy_rsqrt=bool(int(legacy_rsqrt.group(1))) if legacy_rsqrt else False,
+            use_welford=bool(int(use_welford.group(1))) if use_welford else False,
+        )
 
     if "SoftmaxShardedMultiCoreProgramConfig" in value_str:
         grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
@@ -316,17 +326,54 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
     return None
 
 
+def _build_hop_cores(hop_cores_list):
+    """Convert traced hop_cores list [{start: {x,y}, end: {x,y}}, ...] to ttnn.CoreRangeSet.
+
+    Returns None if the value is missing/empty/malformed so callers can fall back
+    to the program-config default (empty CoreRangeSet).
+    """
+    if not hop_cores_list or not isinstance(hop_cores_list, list):
+        return None
+    core_ranges = []
+    for r in hop_cores_list:
+        if not isinstance(r, dict):
+            continue
+        start = r.get("start", {})
+        end = r.get("end", {})
+        if "x" in start and "y" in start and "x" in end and "y" in end:
+            core_ranges.append(
+                ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"]))
+            )
+    if not core_ranges:
+        return None
+    return ttnn.CoreRangeSet(core_ranges)
+
+
+def _build_unary_with_param(activation_dict: dict):
+    """Construct ttnn.UnaryWithParam from a traced {"op_type": int, "param": [...]} dict.
+
+    Match the master exactly: an empty `param` list means the activation was constructed
+    *without* a param (e.g. RELU), so use the single-arg overload — passing 0.0 would
+    add a phantom params=[0] that breaks comparison against the master.
+    """
+    op_type_enum = ttnn.UnaryOpType(int(activation_dict["op_type"]))
+    param = activation_dict.get("param", [])
+    if not isinstance(param, list) or len(param) == 0:
+        return ttnn.UnaryWithParam(op_type_enum)
+    if len(param) == 1:
+        return ttnn.UnaryWithParam(op_type_enum, float(param[0]))
+    if len(param) == 2:
+        return ttnn.UnaryWithParam(op_type_enum, float(param[0]), float(param[1]))
+    return ttnn.UnaryWithParam(op_type_enum, float(param[0]))
+
+
 def _build_program_config_by_type(type_name: str, cfg: dict):
     """Build a program config object using the explicit type name."""
     fused_activation = cfg.get("fused_activation")
     if fused_activation is None or fused_activation == "None" or str(fused_activation) == "std::nullopt":
         fused_activation = None
     elif isinstance(fused_activation, dict) and "op_type" in fused_activation:
-        # Convert dict {"op_type": 2, "param": [1.0]} to UnaryWithParam
-        op_type = int(fused_activation["op_type"])
-        param = fused_activation.get("param", [])
-        param_val = float(param[0]) if isinstance(param, list) and param else 0.0
-        fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType(op_type), param_val)
+        fused_activation = _build_unary_with_param(fused_activation)
 
     grid = cfg.get("compute_with_storage_grid_size")
     core_coord = None
@@ -371,6 +418,17 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 kwargs["out_block_h"] = int(cfg["out_block_h"])
             if cfg.get("out_block_w") is not None:
                 kwargs["out_block_w"] = int(cfg["out_block_w"])
+            # gather_in0=True flips the input_a sharding requirement from
+            # HEIGHT_SHARDED to WIDTH_SHARDED; dropping it makes the op assert.
+            if "gather_in0" in cfg:
+                kwargs["gather_in0"] = bool(cfg["gather_in0"])
+            if "num_global_cb_receivers" in cfg:
+                kwargs["num_global_cb_receivers"] = int(cfg["num_global_cb_receivers"])
+            if "untilize_out" in cfg:
+                kwargs["untilize_out"] = bool(cfg["untilize_out"])
+            hop = _build_hop_cores(cfg.get("hop_cores"))
+            if hop is not None:
+                kwargs["hop_cores"] = hop
             return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(**kwargs)
 
         if type_name == "MatmulMultiCoreReuseProgramConfig":
@@ -428,7 +486,11 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
             )
 
         if type_name == "LayerNormDefaultProgramConfig":
-            return ttnn.LayerNormDefaultProgramConfig()
+            return ttnn.LayerNormDefaultProgramConfig(
+                legacy_reduction=bool(int(cfg.get("legacy_reduction", 0))),
+                legacy_rsqrt=bool(int(cfg.get("legacy_rsqrt", 0))),
+                use_welford=bool(int(cfg.get("use_welford", 0))),
+            )
 
         if type_name == "SoftmaxShardedMultiCoreProgramConfig":
             return ttnn.SoftmaxShardedMultiCoreProgramConfig(
@@ -459,11 +521,7 @@ def _build_program_config_heuristic(cfg, input_b_memory_config=None, input_a_mem
     if fused_activation is None or fused_activation == "None" or str(fused_activation) == "std::nullopt":
         fused_activation = None
     elif isinstance(fused_activation, dict) and "op_type" in fused_activation:
-        # Convert dict {"op_type": 2, "param": [1.0]} to UnaryWithParam
-        op_type = int(fused_activation["op_type"])
-        param = fused_activation.get("param", [])
-        param_val = float(param[0]) if isinstance(param, list) and param else 0.0
-        fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType(op_type), param_val)
+        fused_activation = _build_unary_with_param(fused_activation)
 
     grid = cfg.get("compute_with_storage_grid_size")
 
@@ -504,6 +562,15 @@ def _build_program_config_heuristic(cfg, input_b_memory_config=None, input_a_mem
                 kwargs["out_block_h"] = int(cfg["out_block_h"])
             if cfg.get("out_block_w") is not None:
                 kwargs["out_block_w"] = int(cfg["out_block_w"])
+            if "gather_in0" in cfg:
+                kwargs["gather_in0"] = bool(cfg["gather_in0"])
+            if "num_global_cb_receivers" in cfg:
+                kwargs["num_global_cb_receivers"] = int(cfg["num_global_cb_receivers"])
+            if "untilize_out" in cfg:
+                kwargs["untilize_out"] = bool(cfg["untilize_out"])
+            hop = _build_hop_cores(cfg.get("hop_cores"))
+            if hop is not None:
+                kwargs["hop_cores"] = hop
             try:
                 return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(**kwargs)
             except Exception:
