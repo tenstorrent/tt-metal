@@ -71,7 +71,7 @@ def test_pipeline_inference(
     # ``infer_frames=80`` would round to 81 in our pipeline as well — see
     # PLAN_WAN_S2V_CLEANUP.md for why 80 is blocked on a ttnn ``binary_ng`` bug.
     num_frames = 81
-    num_inference_steps = 40  # production
+    num_inference_steps = int(os.environ.get("S2V_STEPS", 40))
     # Reference s2v_14B uses sample_guide_scale=4.5 (wan_s2v_14B.py:59).
     guidance_scale = 4.5
     guidance_scale_2 = 4.5
