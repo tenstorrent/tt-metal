@@ -38,7 +38,7 @@ def test_deepseek_v3_mla_perf_galaxy():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4,
-        expected_device_perf_ns_per_iteration=18_835_157,
+        expected_device_perf_ns_per_iteration=15_427_562,
         subdir="deepseek_v3_mla",
         model_name="deepseek_v3_mla_glx_8x4",
         num_iterations=1,
