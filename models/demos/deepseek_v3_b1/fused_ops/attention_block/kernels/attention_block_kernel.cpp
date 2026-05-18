@@ -1042,20 +1042,24 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_TRISC)
     // CTArgs type aliases (required for Op templates)
 
+    // rmsnorm (input_layernorm) and rmsnorm2 (q_a_layernorm) γ are folded into
+    // q_a_proj / kv_a_proj / q_b_proj at weight prep time, so DoGamma=false here.
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("rmsnorm_num_tiles"),
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
         get_named_compile_time_arg_val("rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
-        get_named_compile_time_arg_val("rmsnorm_output_cb")>;
+        0,  // gamma_cb unused (DoGamma=false)
+        get_named_compile_time_arg_val("rmsnorm_output_cb"),
+        false>;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("rmsnorm2_num_tiles"),
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
         get_named_compile_time_arg_val("rmsnorm2_input_cb"),
-        get_named_compile_time_arg_val("rmsnorm2_gamma_cb"),
-        get_named_compile_time_arg_val("rmsnorm2_output_cb")>;
+        0,  // gamma_cb unused (DoGamma=false)
+        get_named_compile_time_arg_val("rmsnorm2_output_cb"),
+        false>;
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
 
     // RMSNorm compute runtime args
