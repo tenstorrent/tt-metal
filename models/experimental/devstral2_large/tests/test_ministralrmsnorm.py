@@ -23,7 +23,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstral2_large.tests._devstral_weights import (
     load_hf_tensors_for_keys,
     load_text_config,
-    to_bf16_host_if_fp8,
+    replicated_tt_to_torch,
 )
 from models.experimental.devstral2_large.tt.model_args import (
     DEVSTRAL2_LARGE_L1_SMALL_SIZE,
@@ -62,12 +62,10 @@ def test_rmsnorm_pcc_real_weights(mesh_device, seq_len):
         weights = load_hf_tensors_for_keys([weight_key])
     except Exception as exc:
         pytest.skip(f"Could not download Devstral-2-123B layer-0 norm weight: {exc}")
-    real_weight = to_bf16_host_if_fp8(weights[weight_key]).to(torch.bfloat16)
-
     ref = Ministral3RMSNorm(text_cfg.hidden_size, eps=text_cfg.rms_norm_eps).to(torch.bfloat16).eval()
-    ref.weight.data.copy_(real_weight)
+    ref.weight.data.copy_(weights[weight_key])
 
-    state_dict = {weight_key: real_weight}
+    state_dict = {weight_key: weights[weight_key]}
     args = Devstral2Args.from_hf_config(
         text_cfg,
         mesh_shape=tuple(mesh_device.shape),
@@ -85,7 +83,7 @@ def test_rmsnorm_pcc_real_weights(mesh_device, seq_len):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_out = tt_norm(tt_x)
-    tt_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0:1]
+    tt_torch = replicated_tt_to_torch(tt_out)
 
     ref_out = ref(x)
     passing, msg = comp_pcc(ref_out, tt_torch, PCC_REQUIRED)

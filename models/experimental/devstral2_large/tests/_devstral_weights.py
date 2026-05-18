@@ -80,6 +80,30 @@ def to_bf16_host_if_fp8(t: torch.Tensor, scale_inv: torch.Tensor | None = None) 
     return t
 
 
+def layer_decoder_weight_keys(layer_idx: int) -> list[str]:
+    """HF state-dict keys for one ``Ministral3DecoderLayer`` (with ``model.`` prefix)."""
+    p = f"model.layers.{layer_idx}"
+    return [
+        f"{p}.input_layernorm.weight",
+        f"{p}.post_attention_layernorm.weight",
+        f"{p}.self_attn.q_proj.weight",
+        f"{p}.self_attn.k_proj.weight",
+        f"{p}.self_attn.v_proj.weight",
+        f"{p}.self_attn.o_proj.weight",
+        f"{p}.mlp.gate_proj.weight",
+        f"{p}.mlp.up_proj.weight",
+        f"{p}.mlp.down_proj.weight",
+    ]
+
+
+def model_prefill_weight_keys(num_layers: int) -> list[str]:
+    """Weights for ``TtMinistral3Model`` prefill PCC (embed + ``num_layers`` decoder blocks + final norm)."""
+    keys = ["model.embed_tokens.weight", "model.norm.weight"]
+    for layer_idx in range(num_layers):
+        keys.extend(layer_decoder_weight_keys(layer_idx))
+    return keys
+
+
 def load_hf_tensors_for_keys(keys: list[str]) -> dict[str, torch.Tensor]:
     """Download shards for ``keys`` and return host tensors (weights dequantized to bf16 when FP8)."""
     from huggingface_hub import hf_hub_download
@@ -126,3 +150,54 @@ def load_hf_tensors_for_keys(keys: list[str]) -> dict[str, torch.Tensor]:
         else:
             out[key] = t
     return out
+
+
+def load_ministral3_decoder_layer_weights(
+    layer: "Ministral3DecoderLayer",
+    state_dict: dict[str, torch.Tensor],
+    layer_idx: int,
+) -> None:
+    """Copy ``model.layers.<i>.*`` tensors from ``state_dict`` into a HF decoder layer."""
+    from transformers.models.ministral3.modeling_ministral3 import Ministral3DecoderLayer
+
+    if not isinstance(layer, Ministral3DecoderLayer):
+        raise TypeError(f"Expected Ministral3DecoderLayer, got {type(layer)!r}")
+    p = f"model.layers.{layer_idx}"
+    layer.input_layernorm.weight.data.copy_(state_dict[f"{p}.input_layernorm.weight"])
+    layer.post_attention_layernorm.weight.data.copy_(state_dict[f"{p}.post_attention_layernorm.weight"])
+    attn = layer.self_attn
+    attn.q_proj.weight.data.copy_(state_dict[f"{p}.self_attn.q_proj.weight"])
+    attn.k_proj.weight.data.copy_(state_dict[f"{p}.self_attn.k_proj.weight"])
+    attn.v_proj.weight.data.copy_(state_dict[f"{p}.self_attn.v_proj.weight"])
+    attn.o_proj.weight.data.copy_(state_dict[f"{p}.self_attn.o_proj.weight"])
+    mlp = layer.mlp
+    mlp.gate_proj.weight.data.copy_(state_dict[f"{p}.mlp.gate_proj.weight"])
+    mlp.up_proj.weight.data.copy_(state_dict[f"{p}.mlp.up_proj.weight"])
+    mlp.down_proj.weight.data.copy_(state_dict[f"{p}.mlp.down_proj.weight"])
+
+
+def load_ministral3_model_weights(
+    model: "Ministral3Model",
+    state_dict: dict[str, torch.Tensor],
+) -> None:
+    """Copy downloaded weights into a HF ``Ministral3Model`` (layer count must match)."""
+    from transformers.models.ministral3.modeling_ministral3 import Ministral3Model
+
+    if not isinstance(model, Ministral3Model):
+        raise TypeError(f"Expected Ministral3Model, got {type(model)!r}")
+    model.embed_tokens.weight.data.copy_(state_dict["model.embed_tokens.weight"])
+    model.norm.weight.data.copy_(state_dict["model.norm.weight"])
+    for layer_idx, layer in enumerate(model.layers):
+        load_ministral3_decoder_layer_weights(layer, state_dict, layer_idx)
+
+
+def replicated_tt_to_torch(tensor: "ttnn.Tensor", *, reshape: tuple[int, ...] | None = None) -> torch.Tensor:
+    """Read a replicated mesh tensor from one device (post all-reduce activations)."""
+    import ttnn
+
+    tt = ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
+    if tt.ndim == 4:
+        tt = tt[0:1]
+    if reshape is not None:
+        tt = tt.reshape(*reshape)
+    return tt

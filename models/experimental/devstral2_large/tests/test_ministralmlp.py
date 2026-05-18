@@ -18,7 +18,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstral2_large.tests._devstral_weights import (
     load_hf_tensors_for_keys,
     load_text_config,
-    to_bf16_host_if_fp8,
+    replicated_tt_to_torch,
 )
 from models.experimental.devstral2_large.tt.model_args import (
     DEVSTRAL2_LARGE_L1_SMALL_SIZE,
@@ -63,7 +63,7 @@ def test_mlp_pcc_real_weights(mesh_device, seq_len):
         raw = load_hf_tensors_for_keys(keys)
     except Exception as exc:
         pytest.skip(f"Could not download Devstral-2-123B layer-0 MLP weights: {exc}")
-    state_dict = {k: to_bf16_host_if_fp8(v).to(torch.bfloat16) for k, v in raw.items()}
+    state_dict = raw
 
     ref = Ministral3MLP(text_cfg).to(torch.bfloat16).eval()
     ref.gate_proj.weight.data.copy_(state_dict[keys[0]])
@@ -88,7 +88,7 @@ def test_mlp_pcc_real_weights(mesh_device, seq_len):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_out = tt_mlp(tt_x)
-    tt_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0:1]
+    tt_torch = replicated_tt_to_torch(tt_out)
 
     ref_out = ref(x)
     passing, msg = comp_pcc(ref_out, tt_torch, PCC_REQUIRED)
