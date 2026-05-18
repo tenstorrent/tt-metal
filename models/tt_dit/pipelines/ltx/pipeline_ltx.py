@@ -751,8 +751,7 @@ class LTXPipeline:
             sys.path.insert(0, "LTX-2/packages/ltx-core/src")
             sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
             torch.cuda.synchronize = lambda *a, **kw: None  # No CUDA on TT host
-            from ltx_pipelines.utils.helpers import encode_prompts
-            from ltx_pipelines.utils.model_ledger import ModelLedger
+            from ltx_pipelines.utils.blocks import PromptEncoder
         except ImportError as e:
             raise ImportError(
                 "encode_prompts_reference() requires the LTX-2 reference package. "
@@ -774,16 +773,17 @@ class LTXPipeline:
             logger.info(f"Loading cached embeddings from {cache_path}")
             return torch.load(cache_path, weights_only=False)
 
-        ledger = ModelLedger(
+        # PromptEncoder owns Gemma text encoder + embeddings processor lifecycle:
+        # builds Gemma, encodes, frees, then builds the embeddings processor.
+        prompt_encoder = PromptEncoder(
+            checkpoint_path=checkpoint_path,
+            gemma_root=gemma_path,
             dtype=torch.bfloat16,
             device=torch.device("cpu"),
-            checkpoint_path=checkpoint_path,
-            gemma_root_path=gemma_path,
         )
-        results = encode_prompts(prompts, ledger)
-        del ledger
+        results = prompt_encoder(prompts)
+        del prompt_encoder
 
-        # Cache for future use
         torch.save(results, cache_path)
         logger.info(f"Cached embeddings to {cache_path}")
         return results
@@ -1476,20 +1476,36 @@ class LTXPipeline:
             sys.path.insert(0, "LTX-2/packages/ltx-core/src")
             sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
             torch.cuda.synchronize = lambda *a, **kw: None
-            from ltx_core.model.audio_vae.audio_vae import decode_audio as vae_decode_audio
             from ltx_core.types import Audio
-            from ltx_pipelines.utils.model_ledger import ModelLedger
+            from ltx_pipelines.utils.blocks import AudioDecoder
 
-            ledger = ModelLedger(dtype=torch.bfloat16, device=torch.device("cpu"), checkpoint_path=checkpoint_path)
-            audio_decoder = ledger.audio_decoder()
-            vocoder = ledger.vocoder()
+            # AudioDecoder block owns both the audio VAE decoder and the
+            # vocoder lifecycle (build → decode → free), replacing the old
+            # `ModelLedger.audio_decoder()` + `ledger.vocoder()` +
+            # `vae_decode_audio(...)` triplet from LTX-2 pre-1.1.
+            #
+            # NOTE: must build in fp32 on CPU.  LTX-2 main's `VocoderWithBWE.forward`
+            # wraps itself in `torch.autocast(dtype=torch.float32)` and feeds the
+            # vocoder `mel_spec.float()`.  On GPU autocast handles the bf16-weight ↔
+            # fp32-input mismatch per-op; on CPU `autocast(dtype=fp32)` is silently
+            # disabled (a UserWarning is logged at import time), so the fp32 input
+            # collides with bf16 conv biases and the decode aborts with
+            # "Input type (float) and bias type (c10::BFloat16) should be the same".
+            # Loading both audio_decoder and vocoder in fp32 sidesteps this; the
+            # audio VAE + vocoder are small relative to the 22B transformer.
+            audio_block = AudioDecoder(
+                checkpoint_path=checkpoint_path,
+                dtype=torch.float32,
+                device=torch.device("cpu"),
+            )
 
-            # Unpatchify: (1, N, 128) → (1, 8, N, 16)
+            # Unpatchify: (1, N, 128) → (1, 8, N, 16).  Match the fp32 audio
+            # decoder dtype to avoid the same bias-dtype mismatch at its first conv.
             audio_N = audio_latent.shape[1]
-            audio_spatial = audio_latent.reshape(1, audio_N, 8, 16).permute(0, 2, 1, 3).bfloat16()
+            audio_spatial = audio_latent.reshape(1, audio_N, 8, 16).permute(0, 2, 1, 3).float()
 
             with torch.no_grad():
-                audio_obj = vae_decode_audio(audio_spatial, audio_decoder, vocoder)
+                audio_obj = audio_block(audio_spatial)
 
             # Trim to video duration
             video_duration = num_frames / fps
