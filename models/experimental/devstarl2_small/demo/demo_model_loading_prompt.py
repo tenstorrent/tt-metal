@@ -614,6 +614,7 @@ def run_tt(
         prefill_s += time.perf_counter() - t0
 
         next_id = _sample_from_tt_out(tt_out, sl - 1, enable_sample_trace=False)
+        ttft_s = time.perf_counter() - gen_t0
         steps += 1
         if eos_ids and int(next_id.item()) in eos_ids:
             pass  # will break after loop via final_seq_len check
@@ -673,6 +674,7 @@ def run_tt(
 
         print("──────────────────────────────────────────────────────────────")
         print(f"  Generation timing  ({steps} step(s), wall {wall_s:.2f} s)")
+        print(f"  Time to first token (TTFT)  {ttft_s * 1000:.2f} ms  ({ttft_s:.2f} s)")
         print("──────────────────────────────────────────────────────────────")
         print(f"  {'Phase':<18} {'avg/step':>14}     %")
         print(f"  {'merge (host)':<18} {_avg_ms(merge_s):>10.2f} ms  {_pct(merge_s):>5.1f}%")
