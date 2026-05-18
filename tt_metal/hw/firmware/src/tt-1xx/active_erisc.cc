@@ -248,6 +248,19 @@ int __attribute__((noinline)) main(void) {
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
+#ifdef STRATEGY_A_FW_READY_GATE
+    // FIX SA-A (#42429): Firmware-Side Ready Gate — signal to host that ERISC has completed
+    // ROM boot + all initialization (flag_disable, go_messages, launch_msg_rd_ptr).
+    // Host polls FW_READY_OFFSET and only writes the boot fence token once it sees
+    // FW_READY_VALUE. This eliminates timing assumptions about ROM link training duration.
+    // Must come AFTER all init writes above and BEFORE the boot fence poll below.
+    {
+        volatile uint32_t* fw_ready_ptr = reinterpret_cast<volatile uint32_t*>(
+            MEM_AERISC_FABRIC_SCRATCH_BASE + FW_READY_OFFSET);
+        *fw_ready_ptr = FW_READY_VALUE;
+    }
+#endif  // STRATEGY_A_FW_READY_GATE
+
 #ifdef STRATEGY8_BOOT_FENCE
     // FIX S8 (Boot Fence): Wait for host to write boot_fence token before entering the
     // dispatch loop.  The host writes BOOT_FENCE_READY after ALL L1 writes are complete

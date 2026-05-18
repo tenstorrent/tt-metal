@@ -162,6 +162,7 @@ public:
             }
             defines.push_back("STRATEGY8_BOOT_FENCE");
             defines.push_back("STRATEGY9_SESSION_ID");
+            defines.push_back("STRATEGY_A_FW_READY_GATE");
         }
         return defines;
     }

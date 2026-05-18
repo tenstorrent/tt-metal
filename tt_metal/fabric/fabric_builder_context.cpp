@@ -227,6 +227,9 @@ std::vector<size_t> FabricBuilderContext::get_fabric_router_addresses_to_clear()
             4u /* MEM_AERISC_FABRIC_POSTCODES_SIZE */);
         addresses_to_clear.push_back(scratch_base + BOOT_FENCE_OFFSET);
         addresses_to_clear.push_back(scratch_base + SESSION_ID_OFFSET);
+        // FIX SA-A (#42429): Clear fw_ready token so stale FW_READY_VALUE from a previous
+        // session does not cause the host to prematurely release the boot fence.
+        addresses_to_clear.push_back(scratch_base + FW_READY_OFFSET);
     }
 
     return addresses_to_clear;

@@ -407,6 +407,10 @@ std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines(cons
     // FIX S9 (#42429): Session ID tagging — firmware validates session_id on go_msg/launch_msg.
     defines["STRATEGY9_SESSION_ID"] = "1";
 
+    // FIX SA-A (#42429): Firmware-Side Ready Gate — ERISC writes FW_READY_VALUE after init,
+    // host polls for it before writing boot fence token.
+    defines["STRATEGY_A_FW_READY_GATE"] = "1";
+
     return defines;
 }
 

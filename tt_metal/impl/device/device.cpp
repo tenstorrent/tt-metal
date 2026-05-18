@@ -780,6 +780,46 @@ void Device::configure_fabric(
                 "all L1 writes complete (fw_launch_addr + launch_msg + handshake_bypass)",
                 this->id_, deferred_chan);
 
+            // Step 4b: FIX SA-A (#42429) Firmware-Side Ready Gate — wait for ERISC to
+            // signal that init is complete before writing boot fence token.
+            // ERISC writes FW_READY_VALUE to FW_READY_OFFSET after flag_disable +
+            // go_messages setup in active_erisc.cc.  Host polls until it appears or
+            // FW_READY_TIMEOUT_MS expires.  If timeout, channel is marked dead (ERISC
+            // stuck in ROM or crashed) — no boot fence or go_msg is written.
+            // Constants defined in fabric_boot_fence.h (included by both host and firmware).
+            {
+                const uint32_t fw_ready_addr_sa = scratch_base_sa + FW_READY_OFFSET;
+                constexpr uint32_t kFwReadyPollMs = 5;
+                uint32_t fw_ready_elapsed = 0;
+                bool fw_ready_ok = false;
+                while (fw_ready_elapsed < FW_READY_TIMEOUT_MS) {
+                    std::vector<uint32_t> rb(1, 0);
+                    cluster_sa.read_core(rb, sizeof(uint32_t), core_loc_sa,
+                        static_cast<uint64_t>(fw_ready_addr_sa));
+                    if (rb[0] == FW_READY_VALUE) {
+                        fw_ready_ok = true;
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(kFwReadyPollMs));
+                    fw_ready_elapsed += kFwReadyPollMs;
+                }
+                if (!fw_ready_ok) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX SA-A (#42429): Device {} chan={} ERISC did not signal FW_READY within {}ms. "
+                        "Channel may be stuck in ROM or link training. Marking dead — skipping boot fence + go_msg.",
+                        this->id_, deferred_chan, FW_READY_TIMEOUT_MS);
+                    // Mark as dead so downstream code knows this channel failed.
+                    all_dead_channels_storage.insert(deferred_chan);
+                    continue;  // skip boot fence + go_msg for this channel
+                }
+                log_info(
+                    tt::LogMetal,
+                    "FIX SA-A (#42429): Device {} chan={} ERISC signaled FW_READY after {}ms — "
+                    "init confirmed, proceeding to boot fence.",
+                    this->id_, deferred_chan, fw_ready_elapsed);
+            }
+
             // Step 5: FIX S8 (#42429) Boot Fence — write BOOT_FENCE_READY to L1.
             // Replaces FIX DW (50ms sleep) + FIX DU (ROM postcode poll) + FIX PQ (two-phase guard).
             // Firmware (active_erisc.cc) polls boot_fence after ROM boot completes and before
