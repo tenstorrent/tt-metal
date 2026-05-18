@@ -1,6 +1,21 @@
 # Z-Image-Turbo
 
-Text-to-image generation on 4x Blackhole P150 with Metal Trace.
+Text-to-image pipeline ([Tongyi-MAI/Z-Image-Turbo](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo)) on Tenstorrent hardware.
+
+## Hardware
+
+- **Board:** QB2 (2x p300 cards)
+- **Mesh:** (1, 4) — four chips over 1D fabric
+
+## Parallelism Strategy
+
+| Model | Parallelism |
+|---|---|
+| Text Encoder (Qwen3) | TP=4 |
+| Transformer (DIT) | TP=4 |
+| VAE Decoder | Replicated |
+
+All three models are Metal-Traced after compilation for fast inference (no host dispatch overhead).
 
 ## Quick Start
 
