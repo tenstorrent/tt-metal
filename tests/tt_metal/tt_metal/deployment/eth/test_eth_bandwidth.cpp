@@ -28,7 +28,6 @@ static bool run_test_bandwidth(
     const CoreCoord& recv_core,
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0) {
     /* ======================= */
-    bool same_device = send_mesh_device == recv_mesh_device;
     auto* const send_device = send_mesh_device->get_devices()[0];
     auto* const recv_device = recv_mesh_device->get_devices()[0];
 
@@ -49,8 +48,10 @@ static bool run_test_bandwidth(
 
     uint32_t recv_l1_address = 0;
 
-    tt_metal::Program send_program = tt_metal::Program(), recv_program_ = tt_metal::Program();
-    tt_metal::Program& recv_program = same_device ? send_program : recv_program_;
+    map<shared_ptr<distributed::MeshDevice>, shared_ptr<tt_metal::Program>> programs = {
+        {send_mesh_device, make_shared<Program>()},
+        {recv_mesh_device, make_shared<Program>()},
+    };
 
     prepare_receiver(
         recv_device,
@@ -62,7 +63,7 @@ static bool run_test_bandwidth(
         processor,
         progress_counter,
         &recv_l1_address,
-        &recv_program);
+        programs[recv_mesh_device].get());
 
     uint32_t send_delta_addr = 0;
     prepare_sender(
@@ -77,21 +78,25 @@ static bool run_test_bandwidth(
         num_bytes_per_send,
         send_progress_counter,
         recv_l1_address,
-        &send_program);
+        programs[send_mesh_device].get());
 
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    wait_to_finish_eth_timeout(
-        fixture,
-        send_program,
-        recv_program,
-        send_mesh_device,
-        recv_mesh_device,
-        device_range,
-        send_core,
-        recv_core,
-        progress_counter,
-        transfer_count);
+    vector<struct core_setup> cores = {
+        {
+            .program = programs[send_mesh_device],
+            .mesh_device = send_mesh_device,
+            .core = send_core,
+            .iter_l1_addr = progress_counter,
+            .expected_count = transfer_count,
+        },
+        {
+            .program = programs[recv_mesh_device],
+            .mesh_device = recv_mesh_device,
+            .core = recv_core,
+            .iter_l1_addr = progress_counter,
+            .expected_count = transfer_count,
+        },
+    };
+    wait_to_finish_eth_timeout_cores(fixture, cores, programs);
 
     double threshold = get_eth_bw() * 0.75;
 
