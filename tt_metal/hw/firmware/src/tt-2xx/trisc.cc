@@ -72,10 +72,11 @@ namespace ckernel {
 
 // Flip between 0 and 1 to keep state between kernel calls
 thread_local uint32_t cfg_state_id __attribute__((used)) = 0;
-// Flip between 0 and 1 to keep dest pointer between kernel calls
-thread_local uint32_t dest_offset_id __attribute__((used)) = 0;
-
 thread_local uint32_t op_info_offset __attribute__((used)) = 0;
+namespace trisc {
+// Flip between 0 and 1 to keep dest pointer between kernel calls
+thread_local uint32_t dest_register_offset __attribute__((used)) = 0;
+}  // namespace trisc
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
 }  // namespace ckernel
