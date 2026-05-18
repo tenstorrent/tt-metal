@@ -63,6 +63,7 @@ from typing import Optional
 import torch
 from diffusers.models import AutoencoderKLWan
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
+from diffusers.pipelines.wan.pipeline_output import WanPipelineOutput
 from diffusers.schedulers import UniPCMultistepScheduler
 from diffusers.video_processor import VideoProcessor
 from loguru import logger
@@ -86,9 +87,15 @@ from ...models.vae.vae_wan2_1 import WanDecoder, WanEncoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...solvers import UniPCSolver
-from ...utils import cache
+from ...utils import cache, tensor
 from ...utils.conv3d import conv3d_blocking_hash, conv_pad_height, conv_pad_in_channels
-from ...utils.tensor import bf16_tensor_2dshard, fast_device_to_host
+from ...utils.tensor import (
+    bf16_tensor_2dshard,
+    fast_device_to_host,
+    float32_tensor,
+    local_device_to_torch,
+    typed_tensor_2dshard,
+)
 from ...utils.video import export_to_video, export_to_video_with_audio
 from .fm_solvers_unipc import FlowUniPCMultistepScheduler
 from .pipeline_wan import TransformerState, WanPipeline
@@ -595,13 +602,43 @@ class WanPipelineS2V(WanPipeline):
         self.tt_audio_encoder.bind_cpu_modules(self.torch_audio_encoder)
 
     # ----------------------------------------------------------------------
+    # Reference-faithful frame-count constants (wan_s2v_14B + speech2video.py).
+    # ----------------------------------------------------------------------
+
+    # Pixel frames per clip. The reference's ``infer_frames=80``
+    # (speech2video.py:404) tripped a ttnn ``binary_ng`` "Invalid subtile
+    # broadcast type" assertion at the resulting Sq=8224 (= 257 tiles per
+    # device on (2,4) BH 480p). Bumping by 1 gives Sq=8608 (= 269 tiles),
+    # which the op handles. Motion-frame, audio-bucketing, and clip-trim
+    # semantics still match the reference.
+    _INFER_FRAMES_PIXEL = 81
+    # Motion-context pixel frames carried between clips
+    # (config wan_s2v_14B.py:51, ``motion_frames=73``).
+    _MOTION_FRAMES_PIXEL = 73
+    # Latent frames the motion context occupies after VAE encode
+    # (``(motion_frames + 3) // 4``, speech2video.py:491).
+    _LAT_MOTION_FRAMES = 19
+    # Latent frames the noisy clip is denoised over: ``(81-1)//4 + 1 = 21``,
+    # the natural 4k+1 size for the WAN causal stride-4 VAE temporal decoder.
+    _LAT_TARGET_FRAMES = 21
+    # Clip-0 pixel-transient trim. With ``drop_first_motion=True`` the VAE
+    # decode is ``ref(1) + noisy(21) = 22 latents → 4*22-3 = 85 pixels``;
+    # we keep the last ``INFER_FRAMES_PIXEL = 81`` and drop 3 more transient
+    # frames at the front, matching ``speech2video.py:654-656``.
+    _S2V_VAE_CLIP0_TRIM = 3
+
+    # ----------------------------------------------------------------------
     # Pre-denoise plumbing for S2V — invoked by __call__() once per clip.
     # ----------------------------------------------------------------------
 
-    def _encode_normalized(self, pixels_BCTHW: torch.Tensor) -> torch.Tensor:
+    def _encode_normalized(self, pixels_BCTHW: torch.Tensor, *, encoder_t_chunk_size: int = 4) -> torch.Tensor:
         """TT VAE encode + ``(mu - latents_mean) / latents_std`` normalization.
 
         ``pixels_BCTHW`` → ``[B, z_dim=16, T_lat, H_lat, W_lat]``.
+
+        The default ``encoder_t_chunk_size=4`` bounds the peak VAE-encoder
+        intermediate; multi-clip's 73-frame motion encode trips a DRAM OOM
+        at the larger chunk sizes that worked for single-frame ref encoding.
         """
         pixels_BTHWC = pixels_BCTHW.to(torch.float32).permute(0, 2, 3, 4, 1)
         pixels_BTHWC = conv_pad_in_channels(pixels_BTHWC)
@@ -618,9 +655,9 @@ class WanPipelineS2V(WanPipeline):
                 self.vae_parallel_config.width_parallel.mesh_axis: 3,
             },
         )
-        # encoder_t_chunk_size=16 (vs the default 4) → ~3-4× fewer encoder
-        # calls for the 81-frame cond_states path.
-        latent_BCTHW, new_logical_h = self.tt_vae_encoder(pixels_dev, logical_h, encoder_t_chunk_size=16)
+        latent_BCTHW, new_logical_h = self.tt_vae_encoder(
+            pixels_dev, logical_h, encoder_t_chunk_size=encoder_t_chunk_size
+        )
         concat_dims = [None, None]
         concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
         concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
@@ -632,153 +669,79 @@ class WanPipelineS2V(WanPipeline):
             torch.float32
         )
 
-    @torch.no_grad()
-    def __call__(self, *args, audio_prompt: Optional[str] = None, **kwargs):
-        """S2V entry point. ``audio_prompt`` and the perf-test ``profiler`` /
-        ``profiler_iteration`` kwargs are stashed on ``self`` because the
-        parent ``__call__`` predates these args and doesn't forward extras.
+    def _prepare_audio_full(self, audio_prompt: str) -> tuple[torch.Tensor, int]:
+        """Run wav2vec2 + bucket the full audio file to per-clip windows.
+
+        Mirrors ``wan/speech2video.py:283-294``: wav2vec2 outputs at 50 Hz
+        → linear_interpolation to 30 Hz → ``get_audio_embed_bucket_fps``
+        evenly samples one feature per video frame at 16 fps, padding to
+        ``num_repeat * INFER_FRAMES_PIXEL`` frames.
+
+        Returns ``(audio_BLNF_full, num_repeat)`` where ``audio_BLNF_full``
+        has shape ``[1, num_layers, audio_dim, num_repeat * 80]``.
         """
-        if audio_prompt is None:
-            raise ValueError("audio_prompt (path to a .wav/.mp3 file) is required for S2V")
-        self._audio_prompt = audio_prompt
-        self._s2v_profiler = kwargs.get("profiler", None)
-        self._s2v_profiler_iteration = kwargs.get("profiler_iteration", 0)
-        self._ref_latent_torch = None
-        self._s2v_prepended_latents = 0
-        try:
-            return super().__call__(*args, **kwargs)
-        finally:
-            self._audio_prompt = None
-            self._s2v_profiler = None
-            self._ref_latent_torch = None
-            self._s2v_prepended_latents = 0
+        input_values = load_audio_to_input_values(audio_prompt, self.audio_processor)
+        all_hidden = self.tt_audio_encoder(input_values, output_hidden_states=True)
+        hidden_torch = torch.stack(
+            [
+                fast_device_to_host(h, self.mesh_device, [None, None], ccl_manager=self.encoder_ccl_manager).float()
+                for h in all_hidden
+            ],
+            dim=1,
+        )  # [1, num_layers, T_50Hz, audio_dim]
+        num_repeat: Optional[int] = None
+        bucketed_per_layer = []
+        for layer_idx in range(hidden_torch.shape[1]):
+            feat_30Hz = linear_interpolation(
+                hidden_torch[0, layer_idx], input_fps=WAV2VEC2_HZ, output_fps=S2V_VIDEO_RATE
+            )
+            aligned, this_num_repeat = get_audio_embed_bucket_fps(
+                feat_30Hz, fps=16, batch_frames=self._INFER_FRAMES_PIXEL, video_rate=S2V_VIDEO_RATE
+            )
+            bucketed_per_layer.append(aligned)
+            num_repeat = this_num_repeat  # identical across layers
+        audio_BLNF_full = torch.stack(bucketed_per_layer, dim=0).unsqueeze(0).permute(0, 1, 3, 2)
+        return audio_BLNF_full, int(num_repeat)
 
-    def prepare_latents(
+    def _prepare_clip(
         self,
-        batch_size: int,
-        image_prompt=None,
-        num_channels_latents: int = 16,
-        height: int = 480,
-        width: int = 832,
-        num_frames: int = 81,
-        dtype: Optional[torch.dtype] = None,
-        device: Optional[torch.device] = None,
-        latents: Optional[torch.Tensor] = None,
-        audio_prompt: Optional[str] = None,
-        pose_video: Optional[str] = None,
-    ) -> tuple:
-        if batch_size != 1:
-            raise NotImplementedError(f"S2V only supports batch_size=1, got {batch_size}")
-        if pose_video is not None:
-            raise NotImplementedError("--pose_video conditioning is not implemented; only zero-pose is supported")
-        if audio_prompt is None:
-            audio_prompt = self._audio_prompt
-        if audio_prompt is None:
-            raise ValueError("audio_prompt (path to a .wav/.mp3 file) is required for S2V")
-        if image_prompt is None or not isinstance(image_prompt, Image.Image):
-            raise ValueError("image_prompt (PIL.Image) is required for S2V (reference image)")
+        *,
+        clip_idx: int,
+        audio_clip: torch.Tensor,
+        ref_latent_torch: torch.Tensor,
+        motion_latents_torch: torch.Tensor,
+        drop_first_motion: bool,
+        height: int,
+        width: int,
+        seed: int,
+        _stage,
+    ) -> torch.Tensor:
+        """Set up the transformer caches for one clip and return its noise latents.
 
-        # Perf-test hook: each sub-stage wraps its work with
-        # ``profiler("s2v_<stage>")`` if the caller passed a ``profiler=`` kwarg.
-        _prof = self._s2v_profiler
-        _prof_it = self._s2v_profiler_iteration
+        Generates clip-specific noise (``seed + clip_idx``, reference 542),
+        calls ``prepare_audio_emb`` on the audio slice, and ``prepare_cond_emb``
+        with the motion latents threaded in from the previous clip (or the
+        zero placeholder for clip 0 with ``drop_first_motion=True``).
+        """
+        latent_h = height // self.vae_scale_factor_spatial
+        latent_w = width // self.vae_scale_factor_spatial
 
-        def _stage(name: str):
-            return _prof(name, _prof_it) if _prof is not None else nullcontext()
-
-        # 1. Random noisy latents.
-        latents, _ = WanPipeline.prepare_latents(
-            self,
-            batch_size=batch_size,
-            num_channels_latents=num_channels_latents,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            dtype=dtype,
-            device=device,
-            latents=latents,
+        torch.manual_seed(seed + clip_idx)
+        latents = torch.randn(
+            1, self.vae.config.z_dim, self._LAT_TARGET_FRAMES, latent_h, latent_w, dtype=torch.float32
         )
 
-        # 2. Reference image → VAE encode + normalize. Stash on ``self`` for
-        # ``_postprocess_latents_for_vae`` to prepend before VAE decode,
-        # eliminating the first-frame color transient.
-        with _stage("s2v_vae_encode_ref"):
-            ref_tensor = self.video_processor.preprocess(image_prompt, height=height, width=width).to(
-                device, dtype=torch.float32
-            )
-            ref_video = ref_tensor.unsqueeze(2)
-            ref_latent_torch = self._encode_normalized(ref_video)
-        self._ref_latent_torch = ref_latent_torch
-
-        # 3. Audio: wav2vec2 (50 Hz) → linear_interpolation (30 Hz) →
-        # bucket to ``num_frames`` features at 16 fps. Skipping the resample or
-        # zero-padding short clips misaligns the audio against the latents and
-        # the model produces silent / incoherent output.
-        with _stage("s2v_wav2vec2"):
-            input_values = load_audio_to_input_values(audio_prompt, self.audio_processor)
-            all_hidden = self.tt_audio_encoder(input_values, output_hidden_states=True)
-            hidden_torch = torch.stack(
-                [
-                    fast_device_to_host(h, self.mesh_device, [None, None], ccl_manager=self.encoder_ccl_manager).float()
-                    for h in all_hidden
-                ],
-                dim=1,
-            )  # [B=1, num_layers, T_50Hz, audio_dim]
-            bucketed_per_layer = []
-            for layer_idx in range(hidden_torch.shape[1]):
-                feat_30Hz = linear_interpolation(
-                    hidden_torch[0, layer_idx], input_fps=WAV2VEC2_HZ, output_fps=S2V_VIDEO_RATE
-                )
-                aligned, _ = get_audio_embed_bucket_fps(
-                    feat_30Hz, fps=16, batch_frames=num_frames, video_rate=S2V_VIDEO_RATE
-                )
-                bucketed_per_layer.append(aligned)
-            audio_BLNF = torch.stack(bucketed_per_layer, dim=0).unsqueeze(0).permute(0, 1, 3, 2)
-        # s2v_14B reference: motion_frames=73 pixel / 19 latent (any other
-        # values shift the audio off the latent timeline and lip-sync breaks).
-        MOTION_FRAMES_PIXEL = 73
-        LAT_MOTION_FRAMES = (MOTION_FRAMES_PIXEL + 3) // 4
-        # Snap audio T to the latent frame count so hw_per_frame is integer.
-        num_latent_frames = latents.shape[2]
-        with _stage("s2v_prepare_audio_emb"):
+        with _stage(f"s2v_clip_{clip_idx}_prepare_audio_emb"):
             self.transformer.prepare_audio_emb(
-                audio_BLNF,
-                motion_frames=(MOTION_FRAMES_PIXEL, LAT_MOTION_FRAMES),
-                target_num_frames=num_latent_frames,
+                audio_clip,
+                motion_frames=(self._MOTION_FRAMES_PIXEL, self._LAT_MOTION_FRAMES),
+                target_num_frames=self._LAT_TARGET_FRAMES,
             )
 
-        # 4. Motion latents. With drop_first_motion=True (reference default
-        # for the first clip), prepare_cond_emb ignores motion_latents_torch
-        # — we pass a zero placeholder of the right latent shape to skip the
-        # ~16s VAE encode of 73 zero pixel frames.
-        drop_first_motion = True
-        with _stage("s2v_vae_encode_motion"):
-            if drop_first_motion:
-                motion_latents_torch = torch.zeros(
-                    1,
-                    self.vae.config.z_dim,
-                    LAT_MOTION_FRAMES,
-                    latents.shape[3],
-                    latents.shape[4],
-                    dtype=torch.float32,
-                )
-            else:
-                motion_pixels = torch.zeros(1, 3, MOTION_FRAMES_PIXEL, height, width, dtype=torch.float32)
-                motion_latents_torch = self._encode_normalized(motion_pixels)
-
-        # 5. Pose conditioning: zero pose matches the reference's
-        # ``COND[0] * 0`` shortcut when ``pose_video`` is absent.
-        latent_shape = latents.shape
         cond_states_torch = torch.zeros(
-            1,
-            self.vae.config.z_dim,
-            latent_shape[2],
-            latent_shape[3],
-            latent_shape[4],
-            dtype=torch.float32,
+            1, self.vae.config.z_dim, self._LAT_TARGET_FRAMES, latent_h, latent_w, dtype=torch.float32
         )
-
-        with _stage("s2v_prepare_cond_emb"):
+        with _stage(f"s2v_clip_{clip_idx}_prepare_cond_emb"):
             self.transformer.prepare_cond_emb(
                 noisy_latents_torch=latents,
                 ref_latent_torch=ref_latent_torch,
@@ -786,47 +749,308 @@ class WanPipelineS2V(WanPipeline):
                 cond_states_torch=cond_states_torch,
                 drop_first_motion=drop_first_motion,
             )
-        return latents, None
+        return latents
 
-    # VAE-decode causal-boundary fix
-    # -------------------------------
-    # The WAN VAE temporal decoder is causal stride-4: latent[0] produces only
-    # pixel[0] (no past context); latent[1+] each produce 4 frames using up to
-    # 3 past latents. Without a fix the first ~5 decoded frames drift in
-    # color/std vs steady-state. Reference fix (``wan/speech2video.py:649-656``):
-    # prepend the encoded ref latent before decode so latent[0] has past context,
-    # then trim the transient frames after decode.
+    def _denoise_clip(
+        self,
+        *,
+        latents_torch: torch.Tensor,
+        num_inference_steps: int,
+        traced: bool,
+    ) -> torch.Tensor:
+        """Run the diffusion loop for one clip and return the post-denoise latents.
 
-    # Pixel frames trimmed from the front after the ref-prepend. Reference trims
-    # ``prepended + transient`` (= 4 with 1 prepended); we trim 3 only, keeping
-    # the ref-pure pixel as frame 0 for a clean opener in single-clip mode.
-    _S2V_VAE_TRANSIENT_TRIM = 3
+        Assumes text-conditioning buffers (``ts.prompt_buffer`` /
+        ``negative_prompt_buffer``) are already populated — they're
+        clip-invariant and built once in ``__call__``. Duplicated structure
+        from ``WanPipeline.__call__`` lines 949-1055.
+        """
+        self._solver.set_schedule(num_inference_steps, device="cpu")
+        timesteps = self._solver.timesteps
 
-    # We deliberately do NOT override ``_round_num_frames`` even though the
-    # ref-prepend + trim could support any ``num_frames``: non-(4k+1) values
-    # produce a per-device noisy padded size that hits a ttnn ``binary_ng``
-    # "Invalid subtile broadcast type" assertion in AdaIN modulation (same bug
-    # that gates the cond_emb parity test). Restore the override once that
-    # ttnn op accepts the missing shape combinations.
+        sp_axis = self.transformer_states[0].model.parallel_config.sequence_parallel.mesh_axis
+        ts = self.transformer_states[0]
 
-    def _postprocess_latents_for_vae(self, latents):
-        ref = self._ref_latent_torch
-        if ref is None:
-            return latents
-        # latents are already in VAE input space (denormalized by the parent's
-        # caller); the prepended ref needs the same treatment.
-        ref = ref.to(dtype=latents.dtype, device=latents.device)
-        ref_denorm = ref * self._vae_latents_std + self._vae_latents_mean
-        self._s2v_prepended_latents = int(ref_denorm.shape[2])
-        return torch.cat([ref_denorm, latents], dim=2)
+        permuted_latent, patchified_seqlen = ts.model.preprocess_spatial_input_host(latents_torch)
+        rope_cos_1HND, rope_sin_1HND, trans_mat = ts.model.get_rope_features(latents_torch)
+        rope_args = {
+            "rope_cos_1HND": rope_cos_1HND,
+            "rope_sin_1HND": rope_sin_1HND,
+            "trans_mat": trans_mat,
+        }
+        permuted_latent_tt = tensor.from_torch(
+            permuted_latent,
+            device=self.mesh_device,
+            mesh_axes=[None, None, sp_axis, None],
+            dtype=ts.model.output_dtype,
+        )
+        if self.latent_buffer is None:
+            self.latent_buffer = permuted_latent_tt
+        else:
+            ttnn.copy(permuted_latent_tt, self.latent_buffer)
+            ttnn.deallocate(permuted_latent_tt)
 
-    def _postprocess_video(self, video_torch, *, d2h_permute):
-        if self._s2v_prepended_latents == 0:
-            return video_torch
-        trim = self._S2V_VAE_TRANSIENT_TRIM
-        if d2h_permute is not None:
-            return video_torch[:, trim:, :, :, :]  # (B, T, H, W, C)
-        return video_torch[:, :, trim:, :, :]  # (B, C, T, H, W)
+        with self.progress_bar(total=num_inference_steps) as progress_bar:
+            for i, t in enumerate(timesteps):
+                timestep = t.expand(latents_torch.shape[0])  # S2V uses expand_timesteps=False
+                timestep = float32_tensor(
+                    timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=(None if traced else self.mesh_device)
+                )
+                permuted_model_input = self.get_model_input(self.latent_buffer, self.condition_buffer)
+                permuted_noise_pred_tt = ts.model.combined_step(
+                    do_classifier_free_guidance=self.do_classifier_free_guidance,
+                    spatial_1BNI=permuted_model_input,
+                    prompt_1BLP=ts.prompt_buffer,
+                    negative_prompt_1BLP=ts.negative_prompt_buffer,
+                    N=patchified_seqlen,
+                    timestep=timestep,
+                    **rope_args,
+                    guidance_scale=ts.guidance_scale,
+                    traced=traced,
+                    gather_output=False,
+                )
+                permuted_latent_tt = self._solver.step(
+                    step=i,
+                    latent=self.latent_buffer,
+                    velocity_pred=permuted_noise_pred_tt,
+                )
+                progress_bar.update()
+
+        permuted_latent_tt = ts.model.ccl_manager.all_gather_persistent_buffer(
+            permuted_latent_tt, dim=2, mesh_axis=sp_axis
+        )
+        permuted_latent = local_device_to_torch(permuted_latent_tt)
+        latents_out = ts.model.postprocess_spatial_output_host(
+            permuted_latent,
+            F=latents_torch.shape[2],
+            H=latents_torch.shape[3],
+            W=latents_torch.shape[4],
+            N=patchified_seqlen,
+        )
+        return latents_out
+
+    def _decode_clip(
+        self,
+        *,
+        latents_torch: torch.Tensor,
+        prepend_latents_torch: torch.Tensor,
+    ) -> torch.Tensor:
+        """VAE-decode ``[prepend | noisy]`` and return ``[1, 3, T_decoded, H, W]`` (float).
+
+        ``prepend_latents_torch`` is either ``ref_latents`` (clip 0 with
+        ``drop_first_motion=True``) or the previous clip's motion latents.
+        Both must already be in VAE input space (denormalized).
+        """
+        # Caller passes latents in normalized model space; denormalize to VAE
+        # input space, prepend (also in VAE input space), and run VAE decode.
+        latents = latents_torch.to(self.vae.dtype) * self._vae_latents_std + self._vae_latents_mean
+        prepend = prepend_latents_torch.to(dtype=latents.dtype, device=latents.device)
+        decode_latents = torch.cat([prepend, latents], dim=2)
+
+        tt_latents_BTHWC, logical_h = self.tt_vae.prepare_input(decode_latents)
+        tt_latents_BTHWC = typed_tensor_2dshard(
+            tt_latents_BTHWC,
+            self.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            shard_mapping={
+                self.vae_parallel_config.height_parallel.mesh_axis: 2,
+                self.vae_parallel_config.width_parallel.mesh_axis: 3,
+            },
+            dtype=self.tt_vae.dtype,
+        )
+        self._prepare_vae()
+        tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, t_chunk_size=self.vae_t_chunk_size)
+        concat_dims = [None, None]
+        concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
+        concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
+        video_BCTHW = fast_device_to_host(
+            tt_video_BCTHW, self.mesh_device, concat_dims, ccl_manager=self.vae_ccl_manager
+        )
+        return video_BCTHW[:, :, :, :new_logical_h, :].float()  # crop to logical_h, keep float
+
+    @torch.no_grad()
+    def __call__(
+        self,
+        prompt: str,
+        image_prompt: Image.Image,
+        audio_prompt: str,
+        *,
+        negative_prompt: str = (
+            "画面模糊，最差质量，画面模糊，细节模糊不清，情绪激动剧烈，手快速抖动，字幕，丑陋的，残缺的，"
+            "多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，"
+            "静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+        ),
+        height: int = 480,
+        width: int = 832,
+        num_clips: Optional[int] = None,
+        num_inference_steps: int = 40,
+        guidance_scale: float = 4.5,
+        guidance_scale_2: Optional[float] = None,
+        seed: Optional[int] = None,
+        output_type: str = "uint8",
+        return_dict: bool = True,
+        max_sequence_length: int = 512,
+        traced: bool = False,
+        profiler: Optional[BenchmarkProfiler] = None,
+        profiler_iteration: int = 0,
+        # accepted for parity with WanPipeline.__call__ but ignored — S2V derives
+        # the latent frame count from ``num_clips`` and the reference's fixed
+        # ``infer_frames=80`` per clip.
+        num_frames: Optional[int] = None,  # noqa: ARG002
+    ):
+        """S2V entry point. Multi-clip: each clip is 80 pixel frames; per-clip
+        motion latents thread the previous clip's pixel tail through the VAE
+        encoder. Matches ``wan/speech2video.py:540-670`` clip-for-clip.
+        """
+        if audio_prompt is None:
+            raise ValueError("audio_prompt (path to a .wav/.mp3 file) is required for S2V")
+        if image_prompt is None or not isinstance(image_prompt, Image.Image):
+            raise ValueError("image_prompt (PIL.Image) is required for S2V (reference image)")
+
+        self._s2v_profiler = profiler
+        self._s2v_profiler_iteration = profiler_iteration
+        self.transformer_states[0].guidance_scale = guidance_scale
+        self.transformer_states[1].guidance_scale = guidance_scale if guidance_scale_2 is None else guidance_scale_2
+
+        def _stage(name: str):
+            return profiler(name, profiler_iteration) if profiler is not None else nullcontext()
+
+        # 1. Text encode (once across all clips). Resulting prompt + negative
+        # buffers also live across clips — they're clip-invariant.
+        with _stage("encoder"):
+            self._prepare_text_encoder()
+            prompt_embeds, negative_prompt_embeds = self.encode_prompt(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                do_classifier_free_guidance=self.do_classifier_free_guidance,
+                num_videos_per_prompt=1,
+                prompt_embeds=None,
+                negative_prompt_embeds=None,
+                max_sequence_length=max_sequence_length,
+                traced=traced,
+            )
+        ts = self.transformer_states[0]
+        self._prepare_transformer(0)
+        ts.prompt_buffer = self.prepare_text_conditioning(ts.model, prompt_embeds, ts.prompt_buffer, traced)
+        ts.negative_prompt_buffer = self.prepare_text_conditioning(
+            ts.model, negative_prompt_embeds, ts.negative_prompt_buffer, traced
+        )
+
+        with _stage("prepare_latents"):
+            # 2. Reference image VAE encode (once).
+            with _stage("s2v_vae_encode_ref"):
+                ref_tensor = self.video_processor.preprocess(image_prompt, height=height, width=width).to(
+                    "cpu", dtype=torch.float32
+                )
+                ref_video = ref_tensor.unsqueeze(2)  # [1, 3, 1, H, W]
+                ref_latent_torch = self._encode_normalized(ref_video)
+            # Pre-denormalized form for the VAE-decode prepend on clip 0
+            # (the decode path expects VAE-input-space tensors).
+            ref_latents_for_decode = (
+                ref_latent_torch.to(self.vae.dtype) * self._vae_latents_std + self._vae_latents_mean
+            )
+
+            # 3. Audio: wav2vec2 + bucket the whole file.
+            with _stage("s2v_wav2vec2"):
+                audio_BLNF_full, num_repeat = self._prepare_audio_full(audio_prompt)
+            # speech2video.py:488-489 — caller can request fewer clips than
+            # the audio supports (e.g. early termination); never more.
+            if num_clips is None:
+                num_clips = num_repeat
+            else:
+                num_clips = min(num_clips, num_repeat)
+            logger.info(
+                f"S2V multi-clip: {num_clips} clips × {self._INFER_FRAMES_PIXEL} pixels = "
+                f"{num_clips * self._INFER_FRAMES_PIXEL - self._S2V_VAE_CLIP0_TRIM} final frames"
+            )
+
+            # 4. Initialize motion state (matches reference 478-507).
+            videos_last_frames = torch.zeros(1, 3, self._MOTION_FRAMES_PIXEL, height, width, dtype=torch.float32)
+            with _stage("s2v_vae_encode_motion"):
+                motion_latents_torch = self._encode_normalized(videos_last_frames)
+
+            if seed is None:
+                seed = int(torch.seed())
+
+        # 5. Per-clip loop.
+        clip_videos: list[torch.Tensor] = []
+        for clip_idx in range(num_clips):
+            drop_first_motion = clip_idx == 0
+            with _stage(f"s2v_clip_{clip_idx}_total"):
+                audio_clip = audio_BLNF_full[
+                    ..., clip_idx * self._INFER_FRAMES_PIXEL : (clip_idx + 1) * self._INFER_FRAMES_PIXEL
+                ]
+                latents = self._prepare_clip(
+                    clip_idx=clip_idx,
+                    audio_clip=audio_clip,
+                    ref_latent_torch=ref_latent_torch,
+                    motion_latents_torch=motion_latents_torch,
+                    drop_first_motion=drop_first_motion,
+                    height=height,
+                    width=width,
+                    seed=seed,
+                    _stage=_stage,
+                )
+
+                with _stage(f"s2v_clip_{clip_idx}_denoise"):
+                    latents = self._denoise_clip(
+                        latents_torch=latents,
+                        num_inference_steps=num_inference_steps,
+                        traced=traced,
+                    )
+
+                with _stage(f"s2v_clip_{clip_idx}_vae_decode"):
+                    # Clip 0 with drop_first_motion prepends ref; everything
+                    # else prepends the previous clip's motion latents.
+                    if drop_first_motion:
+                        prepend_for_decode = ref_latents_for_decode
+                    else:
+                        prepend_for_decode = (
+                            motion_latents_torch.to(self.vae.dtype) * self._vae_latents_std + self._vae_latents_mean
+                        )
+                    image_BCTHW = self._decode_clip(
+                        latents_torch=latents,
+                        prepend_latents_torch=prepend_for_decode,
+                    )
+
+                # Trim per reference 654-656.
+                image_BCTHW = image_BCTHW[:, :, -self._INFER_FRAMES_PIXEL :]
+                if drop_first_motion:
+                    image_BCTHW = image_BCTHW[:, :, self._S2V_VAE_CLIP0_TRIM :]
+
+                # Slide videos_last_frames forward (reference 658-663).
+                overlap = min(self._MOTION_FRAMES_PIXEL, image_BCTHW.shape[2])
+                videos_last_frames = torch.cat(
+                    [
+                        videos_last_frames[:, :, overlap:],
+                        image_BCTHW[:, :, -overlap:],
+                    ],
+                    dim=2,
+                )
+                with _stage(f"s2v_clip_{clip_idx}_vae_encode_motion"):
+                    motion_latents_torch = self._encode_normalized(videos_last_frames)
+
+                clip_videos.append(image_BCTHW)
+
+        # 6. Concat clip outputs (reference 670).
+        videos_BCTHW = torch.cat(clip_videos, dim=2)
+
+        # 7. Final dtype / layout conversion.
+        if output_type == "latent":
+            video: object = videos_BCTHW
+        elif output_type == "uint8":
+            video_BTHWC = videos_BCTHW.permute(0, 2, 3, 4, 1)
+            video = ((video_BTHWC.clamp(-1, 1) + 1) * 127.5).round().to(torch.uint8).numpy()
+        elif output_type == "np":
+            video_BTHWC = videos_BCTHW.permute(0, 2, 3, 4, 1)
+            video = ((video_BTHWC.clamp(-1, 1) + 1) * 0.5).numpy()
+        else:
+            video = self.video_processor.postprocess_video(videos_BCTHW, output_type=output_type)
+
+        self._s2v_profiler = None
+        if not return_dict:
+            return (video,)
+        return WanPipelineOutput(frames=video)
 
     def get_model_input(self, latents, cond_latents):
         return super().get_model_input(latents, None)

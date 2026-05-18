@@ -66,15 +66,13 @@ def test_pipeline_inference(
 
     ref_image = PIL.Image.open(_REF_IMAGE_PATH)
 
-    # ``num_frames=81`` is the production target. (81-1)/4+1 = 21 latent frames,
-    # the natural ``4k+1`` size for the WAN VAE temporal decoder. Reference's
-    # ``infer_frames=80`` would round to 81 in our pipeline as well — see
-    # PLAN_WAN_S2V_CLEANUP.md for why 80 is blocked on a ttnn ``binary_ng`` bug.
-    num_frames = 81
+    # ``num_clips`` matches the reference's per-clip ``infer_frames=80``
+    # (speech2video.py:404). ``S2V_CLIPS=4`` makes the test run a 20-second
+    # generation on the same audio; default keeps it at 1 clip (~5 s) for the
+    # smoke-test budget.
+    num_clips = int(os.environ.get("S2V_CLIPS", 1))
     num_inference_steps = int(os.environ.get("S2V_STEPS", 40))
-    # Reference s2v_14B uses sample_guide_scale=4.5 (wan_s2v_14B.py:59).
-    guidance_scale = 4.5
-    guidance_scale_2 = 4.5
+    guidance_scale = 4.5  # reference wan_s2v_14B.py:59
 
     pipeline = WanPipelineS2V.create_pipeline(
         mesh_device=mesh_device,
@@ -87,10 +85,10 @@ def test_pipeline_inference(
         sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
         height=height,
         width=width,
-        num_frames=num_frames,
+        num_frames=81,  # reserved hook into create_pipeline's config-loading path
     )
 
-    logger.info(f"Running S2V inference: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
+    logger.info(f"Running S2V inference: {height}x{width}, {num_clips} clips, {num_inference_steps} steps")
     with torch.no_grad():
         result = pipeline(
             prompt=_PROMPT,
@@ -99,11 +97,10 @@ def test_pipeline_inference(
             negative_prompt=_NEGATIVE_PROMPT,
             height=height,
             width=width,
-            num_frames=num_frames,
+            num_clips=num_clips,
             num_inference_steps=num_inference_steps,
             seed=0,
             guidance_scale=guidance_scale,
-            guidance_scale_2=guidance_scale_2,
             output_type="uint8",
         )
 

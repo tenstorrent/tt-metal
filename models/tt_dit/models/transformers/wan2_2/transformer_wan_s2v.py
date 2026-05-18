@@ -232,16 +232,23 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         # Flatten to ``[1, B, T*(N+1), dim]`` cross-attn K/V; audio is small
         # enough that we keep it SP-replicated.
         flat_torch = local_torch.reshape(B, T_video * num_tok_p1, dim).unsqueeze(0).contiguous()
+        if self.merged_audio_emb_flat is not None:
+            ttnn.deallocate(self.merged_audio_emb_flat)
         self.merged_audio_emb_flat = from_torch(
             flat_torch,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
         )
-        # New clip → drop per-T mask cache + per-injector K/V cache.
+        # New clip → drop per-T mask + AdaIN modulation + per-injector K/V caches.
+        for t in self._frame_attn_mask_cache.values():
+            ttnn.deallocate(t)
         self._frame_attn_mask_cache = {}
         self.audio_injector.invalidate_audio_kv_cache()
 
+        if self.audio_emb_global_token0_dev is not None:
+            ttnn.deallocate(self.audio_emb_global_token0_dev)
+            self.audio_emb_global_token0_dev = None
         if audio_global_emb is not None:
             global_torch = local_device_to_torch(audio_global_emb)
             global_torch = global_torch[:, motion_frames[1] :, :, :]
@@ -261,7 +268,9 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
             )
         else:
             self.audio_emb_global_token0_torch = None
-            self.audio_emb_global_token0_dev = None
+        for kv in self._adain_modulation_cache.values():
+            for t in kv:
+                ttnn.deallocate(t)
         self._adain_modulation_cache = {}
 
     # ----------------------------------------------------------------------
@@ -325,6 +334,19 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
 
         self._frame_attn_mask_cache[cache_key] = mask_tt
         return mask_tt
+
+    def get_rope_features(self, hidden_states):
+        """S2V override: cache key also depends on the const-segment length.
+
+        The base's cache keys on ``hidden_states.shape`` alone, but the S2V
+        rope size scales with ``_cached_total_seq_len`` (which changes between
+        clips when motion tokens get added). Without the extra key term, clip
+        1+ would re-use clip 0's rope and trip a shape assertion downstream.
+        """
+        key = (tuple(hidden_states.shape), int(self._cached_total_seq_len))
+        if key not in self.cached_rope_features:
+            self.cached_rope_features[key] = self.prepare_rope_features(hidden_states)
+        return self.cached_rope_features[key]
 
     def prepare_rope_features(self, hidden_states):
         """Reference-faithful rope for the extended ``noisy + ref + motion`` Sq.
@@ -538,7 +560,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         if self.enable_adain and self.audio_emb_global_token0_dev is not None:
             shift_full, scale_plus_one_full = self._build_adain_modulation_for_layer(audio_attn_id, N)
             x_normed = block.norm1(spatial_1BND)
-            normed = ttnn.addcmul(shift_full, x_normed, scale_plus_one_full)
+            normed = ttnn.add(ttnn.multiply(x_normed, scale_plus_one_full), shift_full)
         else:
             normed = block.norm1(spatial_1BND)
 
@@ -598,6 +620,22 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         and the noisy / total sequence lengths consumed by ``inner_step`` and
         the audio attn mask.
         """
+        # New clip → free the previous clip's spatial caches before we
+        # allocate replacements below. (Python GC eventually does this, but
+        # DRAM doesn't free fast enough across the multi-clip loop.)
+        for attr in (
+            "_cached_pose_emb_1BND",
+            "_cached_const_tokens_1BND",
+            "_cached_noisy_mask_emb_1BND",
+            "_cached_mask_noisy",
+            "_cached_mask_constant",
+            "_cached_timestep_proj_zero",
+        ):
+            prev = getattr(self, attr, None)
+            if prev is not None:
+                ttnn.deallocate(prev)
+                setattr(self, attr, None)
+
         B, C, F, H, W = noisy_latents_torch.shape
         pT, pH, pW = self.patch_size
         N_noisy = (F // pT) * (H // pH) * (W // pW)
@@ -758,10 +796,9 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         shift_r, scale_r, gate_r, c_shift_r, c_scale_r, c_gate_r = ttnn.chunk(shifted_real, 6, dim=2)
         shift_z, scale_z, gate_z, c_shift_z, c_scale_z, c_gate_z = ttnn.chunk(shifted_zero, 6, dim=2)
 
-        # ``ttnn.addcmul`` requires all three operands to share the spatial's
-        # bf16 dtype; gates are the only modulation tensors that go through it
-        # below, so typecast just those (matches T2V's "addcmul less accurate
-        # with fp32 gate" workaround in ``transformer_wan.py``).
+        # T2V casts gates to bf16 (``transformer_wan.py``: fp32 gate is less
+        # accurate). We mirror that for shift/scale → bf16 multiply with the
+        # bf16 spatial tensor.
         gate_r = ttnn.typecast(gate_r, dtype=ttnn.bfloat16)
         gate_z = ttnn.typecast(gate_z, dtype=ttnn.bfloat16)
         c_gate_r = ttnn.typecast(c_gate_r, dtype=ttnn.bfloat16)
@@ -797,8 +834,11 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
             rope_sin=rope_sin,
             trans_mat=trans_mat,
         )
-        # Gate residual matches T2V's ``ttnn.addcmul(spatial, ff, c_gate)``.
-        spatial_1BND = ttnn.addcmul(spatial_1BND, attn_out, gate_msa)
+        # ``ttnn.add(*, ttnn.multiply(*, *))`` rather than ``ttnn.addcmul``:
+        # addcmul's binary_ng subtile-broadcast classifier asserts on certain
+        # per-device padded sequence lengths that come out of the reference's
+        # ``lat_target_frames=20`` (e.g. 8224 tiles on (2, 4) BH 480p).
+        spatial_1BND = ttnn.add(spatial_1BND, ttnn.multiply(attn_out, gate_msa))
 
         # Cross-attention. norm2 keeps its learned affine — the reference
         # calls ``norm2(x).float()`` with no per-segment scale/shift here.
@@ -821,7 +861,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
                 spatial_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
         ffn_out = block.ffn(spatial_normed, compute_kernel_config=block.ff_compute_kernel_config)
-        spatial_1BND = ttnn.addcmul(spatial_1BND, ffn_out, c_gate_msa)
+        spatial_1BND = ttnn.add(spatial_1BND, ttnn.multiply(ffn_out, c_gate_msa))
 
         return spatial_1BND
 
