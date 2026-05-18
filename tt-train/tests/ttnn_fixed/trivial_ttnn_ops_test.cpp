@@ -77,7 +77,7 @@ TEST_F(TrivialTnnFixedTest, TestStableSoftmax_0) {
     const size_t batch_size = 1U;
     const size_t features = 2U;
     std::vector<float> data(batch_size * features);
-    for (int i = 0; i < data.size(); ++i) {
+    for (size_t i = 0; i < data.size(); ++i) {
         data[i] = 100.F + static_cast<float>(i);
     }
     auto shape = ttnn::Shape({batch_size, 1, 1, features});
@@ -98,7 +98,7 @@ TEST_F(TrivialTnnFixedTest, TestOriginalStableSoftmax_AllNegative) {
     const size_t batch_size = 1U;
     const size_t features = 2U;
     std::vector<float> data(batch_size * features);
-    for (int i = 0; i < data.size(); ++i) {
+    for (size_t i = 0; i < data.size(); ++i) {
         data[i] = -100.F + static_cast<float>(i);
     }
     auto shape = ttnn::Shape({batch_size, 1, 1, features});
@@ -139,7 +139,7 @@ TEST_F(TrivialTnnFixedTest, TestStableSoftmax_2) {
         exp_sum += std::exp(elem);
     }
 
-    for (int i = 0; i < res_vector.size(); ++i) {
+    for (size_t i = 0; i < res_vector.size(); ++i) {
         EXPECT_NEAR(res_vector[i], std::exp(data[i]) / exp_sum, 1e-2);
     }
 }
@@ -176,7 +176,7 @@ TEST_F(TrivialTnnFixedTest, TestDivide) {
     std::vector<float> lhs(batch_size * features);
     std::vector<float> rhs(batch_size * features);
 
-    for (int i = 0; i < lhs.size(); ++i) {
+    for (size_t i = 0; i < lhs.size(); ++i) {
         lhs[i] = static_cast<float>(i);
         rhs[i] = static_cast<float>(i + 1);
     }
@@ -195,7 +195,7 @@ TEST_F(TrivialTnnFixedTest, TestDivide) {
 
     std::vector<float> resulting_vector = ttml::core::to_vector(result);
     EXPECT_EQ(resulting_vector.size(), batch_size * features);
-    for (int i = 0; i < resulting_vector.size(); ++i) {
+    for (size_t i = 0; i < resulting_vector.size(); ++i) {
         EXPECT_NEAR(resulting_vector[i], static_cast<float>(i) / static_cast<float>(i + 1), 1e-2);
     }
 }
@@ -208,7 +208,7 @@ TEST_F(TrivialTnnFixedTest, TestSumOverBatch_1) {
     std::vector<float> data(batch_size * features);
     float step = 0.1F;
     float value = 0.0F;
-    for (int i = 0; i < data.size(); ++i) {
+    for (size_t i = 0; i < data.size(); ++i) {
         data[i] = value;
         value += step;
     }
@@ -232,9 +232,9 @@ TEST_F(TrivialTnnFixedTest, TestSumOverBatch_1) {
     std::vector<float> resulting_vector = ttml::core::to_vector(result);
     EXPECT_EQ(resulting_vector.size(), features);
     const float eps = 1.0F;
-    for (int i = 0; i < resulting_vector.size(); ++i) {
+    for (size_t i = 0; i < resulting_vector.size(); ++i) {
         float expected_value = 0.F;
-        for (int j = 0; j < batch_size; ++j) {
+        for (size_t j = 0; j < batch_size; ++j) {
             expected_value += static_cast<float>(i + j * features) * step;
         }
 
