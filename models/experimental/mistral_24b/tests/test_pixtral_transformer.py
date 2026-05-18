@@ -14,6 +14,23 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.vision_pixtral_transformer import TtPixtralTransformer
 from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
 
+# Mesh trace region (bytes) by architecture.
+TRACE_REGION_SIZE_WORMHOLE = 30_000_000  # 30 MiB
+TRACE_REGION_SIZE_BLACKHOLE = 35_000_000  # 35 MiB
+
+
+def fabric_1d_trace_device_params(*, num_command_queues: int = 1):
+    from models.common.utility_functions import is_wormhole_b0
+
+    trace_region_size = TRACE_REGION_SIZE_WORMHOLE if is_wormhole_b0() else TRACE_REGION_SIZE_BLACKHOLE
+    return [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": trace_region_size,
+            "num_command_queues": num_command_queues,
+        }
+    ]
+
 
 @run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
@@ -23,7 +40,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wor
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "P150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -31,7 +48,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wor
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 35000000, "num_command_queues": 1}],
+    fabric_1d_trace_device_params(num_command_queues=1),
     indirect=True,
 )
 def test_image_transformer_inference(batch, num_chunks, mesh_device):

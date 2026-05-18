@@ -23,6 +23,24 @@ from models.experimental.mistral_24b.tt.generator import MistralGenerator
 from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 
+# Mesh trace region (bytes) by architecture.
+TRACE_REGION_SIZE_WORMHOLE = 30_000_000  # 30 MiB
+TRACE_REGION_SIZE_BLACKHOLE = 35_000_000  # 35 MiB
+
+
+def fabric_1d_trace_device_params(*, num_command_queues: int = 1):
+    from models.common.utility_functions import is_wormhole_b0
+
+    trace_region_size = TRACE_REGION_SIZE_WORMHOLE if is_wormhole_b0() else TRACE_REGION_SIZE_BLACKHOLE
+    return [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": trace_region_size,
+            "num_command_queues": num_command_queues,
+        }
+    ]
+
+
 from models.tt_transformers.tt.model_config import ModelArgs
 from transformers import AutoProcessor, AutoModelForVision2Seq
 
@@ -536,8 +554,7 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
 )
 @pytest.mark.parametrize(
     "device_params",
-    # Prefill/decode trace capture needs >30MiB on BH×4 (mesh_trace buffer limit vs trace_region_size).
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 35000000, "num_command_queues": 2}],
+    fabric_1d_trace_device_params(num_command_queues=1),
     indirect=True,
 )
 @pytest.mark.parametrize(
