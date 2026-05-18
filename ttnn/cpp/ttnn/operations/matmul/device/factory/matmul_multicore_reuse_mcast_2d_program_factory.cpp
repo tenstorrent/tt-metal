@@ -3079,6 +3079,12 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
         operation_attributes.program_config.value());
 
     if (!program_config.allowed_worker_cores.has_value()) {
+        log_warning(
+            tt::LogOp,
+            "matmul_multi_core_reuse_mcast_2d_optimized_helper: program_config.allowed_worker_cores not populated; "
+            "auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. "
+            "CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program "
+            "config first. This will become a hard error in a future release.");
         program_config.allowed_worker_cores = CoreRangeSet(CoreRange(
             CoreCoord(0, 0),
             CoreCoord(
