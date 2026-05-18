@@ -9,16 +9,16 @@ Projects hidden states to vocabulary logits:
     Input:  [dispatch_group_size, seq_len, emb_dim]
     Output: [dispatch_group_size, TILE_SIZE, vocab_size]
 
-Two TP strategies are supported via the `mode` parameter:
+Two TP strategies are supported via the `is_column_parallel` flag:
 
-- mode="column" (default, current behavior):
+- is_column_parallel=True:
     Weight sharded on output (vocab) dim across mesh columns.
     Per-device weight: [emb_dim, vocab_size / tp_factor]
     mesh_mapper dims=(None, -1)
     Forward: all_gather(x, dim=emb) -> matmul -> output is TP-sharded on vocab.
     Host-side concat reassembles the full vocab.
 
-- mode="row":
+- is_column_parallel=False (default — row-parallel):
     Weight sharded on input (emb) dim across mesh columns.
     Per-device weight: [emb_dim / tp_factor, vocab_size]
     mesh_mapper dims=(None, -2)
@@ -27,7 +27,7 @@ Two TP strategies are supported via the `mode` parameter:
 """
 
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Optional
 
 import torch
 from loguru import logger
@@ -36,8 +36,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import global_to_local_token_id
-
-LMHeadMode = Literal["column", "row"]
 
 COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -59,23 +57,23 @@ class TtLMHead(LightweightModule):
     """
 
     @staticmethod
-    def _weight_shard_dims(mode: LMHeadMode) -> tuple:
-        """TP sharding dims for the transposed [emb, vocab] weight, by mode."""
+    def _weight_shard_dims(is_column_parallel: bool) -> tuple:
+        """TP sharding dims for the transposed [emb, vocab] weight."""
         # column: shard vocab (last dim) across TP; row: shard emb (second-to-last) across TP.
-        return (None, -1) if mode == "column" else (None, -2)
+        return (None, -1) if is_column_parallel else (None, -2)
 
     @staticmethod
-    def _cache_file_basename(mode: LMHeadMode) -> str:
+    def _cache_file_basename(is_column_parallel: bool) -> str:
         """Cache filename stem. Column keeps the historical name so existing caches still load;
         row gets a suffix so the two modes don't collide."""
-        return "lm_head_weight" if mode == "column" else "lm_head_weight_row"
+        return "lm_head_weight" if is_column_parallel else "lm_head_weight_row"
 
     @staticmethod
-    def check_cache_complete(cache_path: Path, mode: LMHeadMode = "column") -> bool:
+    def check_cache_complete(cache_path: Path, is_column_parallel: bool = True) -> bool:
         """Check if LM head weight cache files exist for the requested mode."""
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
-        pattern = f"{TtLMHead._cache_file_basename(mode)}*.tensorbin"
+        pattern = f"{TtLMHead._cache_file_basename(is_column_parallel)}*.tensorbin"
         if not pattern_exists(pattern, "LMHead"):
             logger.debug(f"TTNN cache missing: {pattern}")
             return False
@@ -90,7 +88,7 @@ class TtLMHead(LightweightModule):
         dtype: ttnn.DataType,
         cache_path: Path | None,
         device: ttnn.MeshDevice | None = None,
-        mode: LMHeadMode = "column",
+        is_column_parallel: bool = True,
     ) -> ttnn.Tensor | None:
         """
         Shared logic for converting LM head weight to ttnn with caching.
@@ -104,7 +102,7 @@ class TtLMHead(LightweightModule):
             dtype: Data type
             cache_path: Cache directory path
             device: None for cache-only, mesh_device for cache+load
-            mode: Determines weight sharding dims.
+            is_column_parallel: True → column-parallel sharding (vocab dim), False → row-parallel (emb dim).
 
         Returns:
             ttnn.Tensor if device is not None, else None
@@ -123,10 +121,10 @@ class TtLMHead(LightweightModule):
         mesh_mapper = ttnn.ShardTensor2dMesh(
             mesh_device,
             mesh_shape=mesh_device.shape,
-            dims=TtLMHead._weight_shard_dims(mode),
+            dims=TtLMHead._weight_shard_dims(is_column_parallel),
         )
 
-        cache_file_name = str(cache_path / TtLMHead._cache_file_basename(mode)) if cache_path else None
+        cache_file_name = str(cache_path / TtLMHead._cache_file_basename(is_column_parallel)) if cache_path else None
 
         tt_weight = ttnn.as_tensor(
             torch_weight,
@@ -155,11 +153,18 @@ class TtLMHead(LightweightModule):
         mesh_device: ttnn.MeshDevice,
         cache_path: Path,
         dtype: ttnn.DataType = ttnn.bfloat16,
-        mode: LMHeadMode = "column",
+        is_column_parallel: bool = True,
     ):
         """Build TTNN cache for LM head weight without device copy."""
         TtLMHead._convert_and_cache_weight(
-            torch_weight, emb_dim, vocab_size, mesh_device, dtype, cache_path, device=None, mode=mode
+            torch_weight,
+            emb_dim,
+            vocab_size,
+            mesh_device,
+            dtype,
+            cache_path,
+            device=None,
+            is_column_parallel=is_column_parallel,
         )
 
     def __init__(
@@ -175,7 +180,7 @@ class TtLMHead(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
         is_balanced: bool = False,
         weight_cache_path: Optional[Path] = None,
-        mode: LMHeadMode = "row",
+        is_column_parallel: bool = False,
     ):
         """
         Initialize TtLMHead module.
@@ -194,11 +199,11 @@ class TtLMHead(LightweightModule):
             is_balanced: If True, uses zigzag token mapping. If False (default),
                          uses sequential mapping. Should match TtMLA's is_balanced.
             weight_cache_path: Optional path to weight cache directory
-            mode: Weights parallelism strategy - "column" (all_gather emb, output TP-sharded on
-                  vocab) or "row" (matmul partials + all_reduce, output TP-replicated).
+            is_column_parallel: TP strategy. True → column-parallel (all_gather emb, output
+                                TP-sharded on vocab). False (default) → row-parallel
+                                (matmul partials + all_reduce, output TP-replicated).
         """
         super().__init__()
-        assert mode in ("column", "row"), f"mode must be 'column' or 'row', got {mode!r}"
         self.mesh_device = mesh_device
         self.emb_dim = emb_dim
         self.vocab_size = vocab_size
@@ -212,7 +217,7 @@ class TtLMHead(LightweightModule):
         self.compute_kernel_config = compute_kernel_config
         self.is_balanced = is_balanced
         self.weight_cache_path = weight_cache_path
-        self.mode = mode
+        self.is_column_parallel = is_column_parallel
 
         logger.debug(f"Initializing TtLMHead with emb_dim={emb_dim}, vocab_size={vocab_size}")
         logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
@@ -232,13 +237,13 @@ class TtLMHead(LightweightModule):
                 self.weights_dtype,
                 self.weight_cache_path,
                 device=self.mesh_device,
-                mode=self.mode,
+                is_column_parallel=self.is_column_parallel,
             )
         else:
             logger.debug("Creating random sharded weight")
             self.weight = self._create_random_sharded_weight(
                 shape=(emb_dim, vocab_size),
-                dims=self._weight_shard_dims(self.mode),
+                dims=self._weight_shard_dims(self.is_column_parallel),
                 name="lm_head_weight",
                 dtype=self.weights_dtype,
             )
@@ -304,9 +309,9 @@ class TtLMHead(LightweightModule):
             torch_weight: [vocab_size, emb_dim] in HF format
 
         Returns:
-            Sharded ttnn tensor. Per-device shape depends on mode:
-            - column: [emb_dim, vocab_size / tp_factor]
-            - row:    [emb_dim / tp_factor, vocab_size]
+            Sharded ttnn tensor. Per-device shape depends on is_column_parallel:
+            - True (column):  [emb_dim, vocab_size / tp_factor]
+            - False (row):    [emb_dim / tp_factor, vocab_size]
         """
         tt_weight = self._convert_and_cache_weight(
             torch_weight,
@@ -316,7 +321,7 @@ class TtLMHead(LightweightModule):
             self.weights_dtype,
             self.weight_cache_path,
             device=self.mesh_device,
-            mode=self.mode,
+            is_column_parallel=self.is_column_parallel,
         )
         logger.debug(f"Created sharded LM head weight: {tt_weight.shape}")
         return tt_weight
@@ -332,8 +337,8 @@ class TtLMHead(LightweightModule):
         Returns:
             tuple[ttnn.Tensor, tuple[int, int]]:
                 - Logits tensor. Per-device shape:
-                    column mode: [dispatch_group_size, TILE_SIZE, vocab_size/tp]
-                    row mode:    [dispatch_group_size, TILE_SIZE, vocab_size] (TP-replicated)
+                    is_column_parallel=True:  [dispatch_group_size, TILE_SIZE, vocab_size/tp]
+                    is_column_parallel=False: [dispatch_group_size, TILE_SIZE, vocab_size] (TP-replicated)
                 - (device_id, token_offset): which SP device holds the target token
                   and the index within the tile
         """
@@ -361,7 +366,7 @@ class TtLMHead(LightweightModule):
 
         tp_size = self.mesh_device.shape[1]
 
-        if self.mode == "column":
+        if self.is_column_parallel:
             # ========================================
             # Column-parallel: all_gather emb -> matmul (output TP-sharded on vocab)
             # ========================================
@@ -420,9 +425,9 @@ class TtLMHead(LightweightModule):
         # Mesh row-major flat index: sp_i * tp + tp_j
         base_idx = device_id * tp
 
-        if self.mode == "row":
-            # All TP slices on this SP row are identical (TP-replicated by
-            # all-reduce). Take TP=0.
+        if not self.is_column_parallel:
+            # Row-parallel: all TP slices on this SP row are identical
+            # (TP-replicated by all-reduce). Take TP=0.
             return ttnn.to_torch(shards[base_idx + 0]).to(torch.bfloat16)
 
         # column: 4 TP slices, each holds vocab/tp; concat on vocab dim to assemble the full vocab on host.

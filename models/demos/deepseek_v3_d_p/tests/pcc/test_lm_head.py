@@ -50,7 +50,7 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
     return config, weights
 
 
-@pytest.mark.parametrize("mode", ["column", "row"], ids=["col", "row"])
+@pytest.mark.parametrize("is_column_parallel", [True, False], ids=["col", "row"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
 @pytest.mark.parametrize(
     "batch_seq_len, emb_dim, vocab_size, run_full_pcc_check",
@@ -112,7 +112,7 @@ def test_lm_head(
     num_links: int,
     topology: ttnn.Topology,
     is_balanced: bool,
-    mode: str,
+    is_column_parallel: bool,
 ):
     """
     Test TtLMHead PCC against torch.nn.Linear reference.
@@ -155,7 +155,7 @@ def test_lm_head(
         logger.debug(f"Torch output shape: {torch_output.shape}")
 
     # Create TTNN LM head model
-    logger.debug(f"Creating TtLMHead (mode={mode})")
+    logger.debug(f"Creating TtLMHead (is_column_parallel={is_column_parallel})")
     tt_model = TtLMHead(
         mesh_device=mesh_device,
         emb_dim=emb_dim,
@@ -166,7 +166,7 @@ def test_lm_head(
         activations_dtype=ttnn_activations_dtype,
         weights_dtype=ttnn_weights_dtype,
         is_balanced=is_balanced,
-        mode=mode,
+        is_column_parallel=is_column_parallel,
     )
 
     tt_input = ttnn.from_torch(
