@@ -245,11 +245,13 @@ class ExpertStateConfig(_TTOpKwargs):
     cluster_axis: int
     has_bias: bool
     expert_mapping: list[int]
+    num_routed_experts: int
+    num_shared_experts: int
     shared_expert_ids_to_devices: Optional[dict[int, list[int]]] = None
 
     @classmethod
     def adopt_fields(cls) -> set[str]:
-        return {"mesh_shape", "cluster_axis", "has_bias"}
+        return {"mesh_shape", "cluster_axis", "has_bias", "num_routed_experts", "num_shared_experts"}
 
 
 class BuffersConfig(_TTOpKwargs):
@@ -286,6 +288,7 @@ class TTMoEDecodeConfig(BaseModel):
     batch_per_device: int
     hidden_size: int
     select_experts_k: int
+    num_routed_experts: int
     num_shared_experts: int
     has_bias: bool
 
@@ -305,7 +308,7 @@ class TTMoEDecodeConfig(BaseModel):
     reduce: ReduceConfig
     deepseek_moe_reduce_scatter: DeepseekMoEReduceScatterConfig
     reduce_scatter: ReduceScatterConfig
-    state: ExpertStateConfig
+    experts: ExpertStateConfig
     buffers: BuffersConfig
 
     # Top-level fields exposed to sub-configs as-is (passthrough); their values
