@@ -1,5 +1,128 @@
 
 ---
+## 2026-05-18 — FIX IJ build fix: kUnresolvedChan undeclared (commit 486c04dddca)
+
+### Root Cause of CI Run 26017755240 failure (build break from FIX IJ)
+
+**What failed:** Build error — `kUnresolvedChan` undeclared identifier at device.cpp:2073, 2087, 2596, 2610.
+
+**Root cause:** FIX IJ (6805e11439d) added `kUnresolvedChan` references in two new function scopes:
+- `quiesce_and_restart_fabric_workers()` (lines ~2073/2087)
+- `launch_eth_cores_for_quiesce()` (lines ~2596/2610)
+
+The constant was only defined as `static constexpr uint32_t kUnresolvedChan = std::numeric_limits<uint32_t>::max();`
+inside `configure_fabric()`'s inner for-loop — a completely different scope.
+
+**Fix applied (commit 486c04dddca):** Added the identical `static constexpr` definition locally at the
+top of each `if (this->is_mmio_capable())` block that uses it in the two affected functions.
+No semantic change — same sentinel value (UINT32_MAX), same usage pattern.
+
+**Files changed:** `tt_metal/impl/device/device.cpp` (+2 lines)
+
+---
+## 2026-05-18 — FIX IJ: Move fw_launch_addr restore after firmware binary load
+
+### Root Cause of CI Run 26016088997 failure (FIX GH sequencing bug)
+
+**FIX GH** (commit 449d6bd0aba) restored `fw_launch_addr=1` immediately after the L1 clear in
+`configure_fabric_cores()` (fabric_init.cpp). This fires BEFORE:
+1. `ConfigureDeviceWithProgram()` writes the fabric firmware binary to L1 (device.cpp)
+2. `write_launch_msg_to_core()` writes the launch message header to the LAUNCH address (device.cpp)
+
+When base-UMD (ERISC dispatch firmware) polls `fw_launch_addr` and sees it set to 1, it immediately
+tries to execute from the LAUNCH address in L1 — but that region still contains zeroed or stale content
+(just been L1-cleared). ERISC crashes/hangs, leaving `edm_status` at `0xdeadb07e` indefinitely.
+FIX EF 500ms poll times out on all 4 MMIO devices (chan=8, devices 0-3).
+
+### Correct sequence (FIX IJ)
+
+```
+configure_fabric_cores(): FIX EG zeros fw_launch_addr (prevents stale launch)
+ConfigureDeviceWithProgram(): writes fabric firmware binary to L1
+write_launch_msg_to_core(): writes launch message to L1 LAUNCH address
+FIX IJ: sets fw_launch_addr=1 — base-UMD reads the ready launch message
+FIX EF poll: waits for ERISC to exit 0xDEADB07E and enter fabric firmware
+```
+
+### Scope
+
+FIX IJ was added to THREE places in device.cpp (all three ETH launch loops):
+
+1. **`configure_fabric()`** (initial boot, lines ~712-779): After `write_launch_msg_to_core`, for
+   `core_type==ETH && is_mmio_capable() && skip_soft_reset_channels.count(hoisted_eth_chan)`.
+
+2. **`quiesce_and_restart_fabric_workers()` inline path** (defer_eth_launch=false, lines ~2067-2127):
+   After `write_launch_msg_to_core` in the ETH loop, for `is_mmio_capable()`.
+
+3. **`launch_eth_cores_for_quiesce()`** (deferred path, lines ~2591-2650):
+   After `write_launch_msg_to_core` in the ETH loop, for `is_mmio_capable()`.
+
+FIX GH block in `configure_fabric_cores()` (fabric_init.cpp lines 652-665) replaced with an
+explanatory comment pointing to FIX IJ in device.cpp.
+
+All three FIX IJ blocks include:
+- `cluster.write_core()` to restore `fw_launch_addr_value` (0x1) at `fw_launch_addr` (0x9004)
+- Readback verify (belt+suspenders: silent PCIe write failure would leave base-UMD at 0xDEADB07E)
+- `log_info` on success, `log_warning` on readback mismatch
+
+### Files Changed
+
+- `tt_metal/fabric/fabric_init.cpp` — FIX GH block replaced with comment
+- `tt_metal/impl/device/device.cpp` — FIX IJ added to 3 ETH launch sites
+
+### Commits
+
+- FIX IJ commit (pending push)
+
+---
+## 2026-05-18 — Audit Task 2: Testing Gaps
+
+### Audit Summary
+
+Audited the fix chain for testing gaps: FIX S9 → FIX EG → FIX DU → FIX GH → FIX EA → FIX GJ, plus fabric_firmware_initializer.cpp (FIX XZ, FIX DS) and the analyze script.
+
+### Gaps Found
+
+1. **FIX EG had NO logging** — The PCIe write zeroing fw_launch_addr (while ERISC0 is halted in FIX S9 window) was completely silent. If it failed, zero diagnostic trace in CI logs.
+
+2. **FIX GH had no readback verification** — The write restoring fw_launch_addr_value after L1 clear had no readback. If the PCIe write was silently lost, base-UMD would see fw_launch_addr==0, stay at 0xDEADB07E, and FIX EF times out. This was the exact scenario FIX GH was designed to fix — but without readback, we couldn't distinguish "write never happened" from "write happened but firmware still hung."
+
+3. **FIX EA already implemented** — Confirmed present in device_manager.cpp (lambda `is_dispatch_eligible`). Uses both `dead_relay_devices.count()` and `dev->is_fabric_base_umd_fixm_init()` to filter non-MMIO devices from dispatch writes. No gap here.
+
+4. **Dispatch eligibility count not logged** — When FIX EA skipped devices on the clean-boot path, there was no summary of eligible vs skipped. Made ring-sync failure correlation difficult.
+
+5. **analyze_fabric_hang_log.sh missing FIX tags** — FIX GH, FIX EG, FIX EA, FIX SC2 were not in the TIMELINE/PHASES grep patterns. No counters for these. 0xDEADB07E (host-pre-launch canary) not detected in timeline.
+
+### Fixes Applied
+
+**FIX GI** (commit aa0e4681b0b): Readback-after-write verification for both FIX EG (zero) and FIX GH (restore). Logs warning on mismatch, info on success. Also adds log_info to FIX EG which previously had no output at all.
+
+**FIX GJ** (commit aa0e4681b0b): Dispatch eligibility summary in device_manager.cpp — logs how many devices eligible vs skipped and why (dead_relay vs fixm_init).
+
+**analyze script update** (commit 977ce437d8c):
+- Added FIX EA, EG, GH, GI, GJ, SC2 to TIMELINE + PHASES grep patterns
+- Added `readback MISMATCH`, `readback verified`, `dispatch init.*eligible`, `0xDEADB07E` keywords
+- Added 9 new counter variables (FIX_GH_FIRES, FIX_EG_FIRES, FIX_GI_MISMATCH, FIX_GI_VERIFY, FIX_GJ_FULL, FIX_GJ_PARTIAL, FIX_EA_FIRES, DEADB07E_COUNT)
+- Added interpretation blocks for all new counters
+
+### Files Changed
+
+- `tt_metal/fabric/fabric_init.cpp` — FIX GI readback on FIX EG + FIX GH writes
+- `tt_metal/impl/device/device_manager.cpp` — FIX GJ dispatch eligibility summary
+- `scripts/analyze_fabric_hang_log.sh` — new FIX tags, counters, interpretations
+
+### Commits
+
+1. `aa0e4681b0b` — FIX GI+GJ: readback verification and diagnostic logging for fw_launch_addr writes
+2. `977ce437d8c` — Update analyze_fabric_hang_log.sh: add FIX GH/GI/GJ/EG/EA/SC2 patterns
+
+### What This Enables
+
+- **FIX GI readback mismatch** would appear as a WARNING in CI log — immediately flagging lost PCIe writes. Without this, a lost write silently produces 0xDEADB07E, which takes 500ms+ (FIX EF timeout) to manifest and is hard to root-cause.
+- **FIX GJ summary** correlates dispatch skip decisions with ring-sync outcomes — "4/8 eligible, 4 skipped (fixm_init)" immediately tells you WHY ring sync worked on only 4 devices.
+- **analyze script** now detects 0xDEADB07E in timeline, counts all new FIX fires, and warns on readback mismatches.
+
+---
 ## 2026-05-18 — Cycle N+2: CI Run 26013584094 — SILENT EXIT IN TOPOLOGY CHECK (FIX SC2)
 
 ### CI Run: 26013584094 — FAILURE (exit code 1, NO tests ran)
