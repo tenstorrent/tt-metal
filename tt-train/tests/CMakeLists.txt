@@ -55,6 +55,7 @@ set(SOURCES
     ops/distributed/ring_sdpa_test.cpp
     ops/distributed/vocab_parallel_cross_entropy_loss_test.cpp
     ops/distributed/subtract_fp32_col_b_bcast_test.cpp
+    ops/distributed/subtract_fp32_col_b_bcast_single_device_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
     ops/cross_entropy_bw_op_test.cpp

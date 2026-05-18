@@ -42,6 +42,14 @@
 //   \
 //     ../build_Release/tt-train/tests/ttml_tests \
 //     --gtest_filter='SubtractFp32ColBBcastTest.*'
+//
+// A companion file `subtract_fp32_col_b_bcast_single_device_test.cpp` runs the
+// same op on a SINGLE chip with the exact local shape that each chip in the
+// sharded test sees. It bisects the question "is sharding/multi-device actually
+// a precondition, or is this a single-chip kernel bug that just happens to be
+// reachable via the sharded code path?". No MGD env var needed for that one:
+//   REPRO_W_TILES_PER_SHARD=3 ../build_Release/tt-train/tests/ttml_tests \
+//     --gtest_filter='SubtractFp32ColBBcastSingleDeviceTest.*'
 
 #include <fmt/core.h>
 #include <gtest/gtest.h>
