@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 
 namespace ttml::metal::moe_ungroup {
