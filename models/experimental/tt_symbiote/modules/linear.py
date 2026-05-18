@@ -193,6 +193,12 @@ def _dp_matmul_program_config(device, input_shape, weight_shape):
     return _dp_prefill_matmul_program_config(device, input_shape, weight_shape)
 
 
+def _decode_linear_output_memory_config(device, input_shape):
+    if _tp_requires_ccl(device):
+        return ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.L1_MEMORY_CONFIG if int(input_shape[-2]) <= 32 else ttnn.DRAM_MEMORY_CONFIG
+
+
 def _linear_mesh_num_devices(device) -> int:
     """Rank count on the active mesh. Single-device meshes cannot use fabric CCLs."""
     if device is None or not hasattr(device, "get_num_devices"):
@@ -345,7 +351,7 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
             input_tensor,
             self.tt_weight,
             bias=fused_bias,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_decode_linear_output_memory_config(self.device, input_shape),
             compute_kernel_config=self.compute_kernel_config,
             program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
@@ -401,7 +407,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
             input_tensor,
             self.tt_weight,
             bias=fused_bias,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_decode_linear_output_memory_config(self.device, input_shape),
             compute_kernel_config=self.compute_kernel_config,
             program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
@@ -552,7 +558,7 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
             input_tensor,
             self.tt_weight,
             bias=self.tt_bias,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_decode_linear_output_memory_config(self.device, input_shape),
             compute_kernel_config=self.compute_kernel_config,
             program_config=program_config,
         )
@@ -742,7 +748,7 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
             self.tt_weight,
             bias=self.tt_bias,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_decode_linear_output_memory_config(self.device, input_shape),
             compute_kernel_config=self.compute_kernel_config,
             program_config=program_config,
         )

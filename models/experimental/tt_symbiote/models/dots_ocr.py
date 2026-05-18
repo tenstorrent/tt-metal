@@ -323,18 +323,26 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
         N_vision = int(vision_tt.shape[2])
         H_per_device = int(vision_tt.shape[3])
+        scatter_memory_config = ttnn.L1_MEMORY_CONFIG
 
         vision_2d = ttnn.reshape(vision_tt, (N_vision, H_per_device))
 
         self._ensure_scatter_zero_row(num_devices, self._hidden_size, H_per_device)
-        vision_table = ttnn.concat([self._scatter_zero_row, vision_2d], dim=0)
+        vision_table = ttnn.concat([self._scatter_zero_row, vision_2d], dim=0, memory_config=scatter_memory_config)
         ttnn.deallocate(vision_tt)
         ttnn.deallocate(vision_2d)
 
-        full_vision_col_sharded = ttnn.embedding(tt_idx, vision_table, layout=ttnn.TILE_LAYOUT)
+        full_vision_col_sharded = ttnn.embedding(
+            tt_idx,
+            vision_table,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=scatter_memory_config,
+        )
         ttnn.deallocate(vision_table)
 
-        return ttnn.where(tt_mask, full_vision_col_sharded, text_embeds)
+        fused = ttnn.where(tt_mask, full_vision_col_sharded, text_embeds, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(full_vision_col_sharded)
+        return fused
 
     def forward(
         self, hidden_states, cache_position, *mm_args, past_key_value=None, mm_grid_thw: Optional[torch.Tensor] = None

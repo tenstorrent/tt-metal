@@ -123,6 +123,7 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
 
         seq_len = hs.shape[-2]
         is_decode = seq_len == 1
+        decode_l1_mc = ttnn.L1_MEMORY_CONFIG if is_decode else None
         attn_out, _ = self.self_attn(
             hidden_states=hs,
             position_embeddings=None,
@@ -133,7 +134,11 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
             decode_cos_sin=kwargs.get("decode_cos_sin"),
         )
 
-        hs = ttnn.add(residual, attn_out)
+        hs = (
+            ttnn.add(residual, attn_out, memory_config=decode_l1_mc)
+            if decode_l1_mc is not None
+            else ttnn.add(residual, attn_out)
+        )
         ttnn.deallocate(attn_out)
 
         # MLP block
@@ -141,7 +146,11 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         hs = self.post_attention_layernorm(hs)
         mlp_out = self.mlp(hs)
 
-        hs = ttnn.add(residual, mlp_out)
+        hs = (
+            ttnn.add(residual, mlp_out, memory_config=decode_l1_mc)
+            if decode_l1_mc is not None
+            else ttnn.add(residual, mlp_out)
+        )
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(residual)
 

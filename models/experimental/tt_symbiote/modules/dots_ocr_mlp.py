@@ -150,7 +150,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
         )
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
-    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, input_tensor: ttnn.Tensor, output_memory_config=None) -> ttnn.Tensor:
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         input_tensor_shape = list(input_tensor.shape)
@@ -160,12 +160,13 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
         input_tensor = ttnn.reshape(input_tensor, input_shape)
         needs_ccl = _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device)
         fused_bias = None if needs_ccl else self.tt_bias
+        matmul_mc = ttnn.DRAM_MEMORY_CONFIG if needs_ccl else (output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
         tt_output = ttnn.linear(
             input_tensor,
             self.tt_weight,
             bias=fused_bias,
             dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=matmul_mc,
             compute_kernel_config=self.compute_kernel_config,
             program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
@@ -265,7 +266,8 @@ class TTNNDotsOCRMLP(TTNNModule):
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
 
-        output = self.down_proj(gate_up_mul)
+        down_output_mc = activation_mc if is_decode else None
+        output = self.down_proj(gate_up_mul, output_memory_config=down_output_mc)
         ttnn.deallocate(gate_up_mul)
 
         return output
