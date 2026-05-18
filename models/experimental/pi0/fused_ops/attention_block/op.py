@@ -183,6 +183,17 @@ class SigLIPAttentionBlockFused:
         "sdpa_softmax_isum_cb": 25,
         "sdpa_softmax_scaler_cb": 26,
         "sdpa_softmax_out_cb": 27,
+        # #11 Commit 10: Attn @ V via streaming V.
+        # sdpa_v_partial_cb: aliased to fused_scratch on SDPA cores @ byte
+        #   offset 90112 (44 * tile_size), size 3 tiles = 6 KB. NCRISC
+        #   streams one V-row at a time from the head's V source core.
+        # sdpa_attn_out_cb: aliased to fused_scratch on SDPA cores @ byte
+        #   offset 65536 (32 * tile_size), size 12 tiles = 24 KB. Per-worker
+        #   (M_per_worker=128, head_dim_padded=96) output of softmax(QK^T) @ V.
+        # Both fit in the extended 72-tile fused_scratch shard alongside
+        # xmm/xmm2 (LN1 cores) and qk_scores+softmax_out (SDPA cores 0..64 KB).
+        "sdpa_v_partial_cb": 28,
+        "sdpa_attn_out_cb": 29,
     }
 
     # SDPA QKV-ready semaphore (id=3). All three QKV producers (Q, K, V)
@@ -205,7 +216,6 @@ class SigLIPAttentionBlockFused:
         ones_tt,
         accum_tt,
         fused_scratch_tt,
-        xmm2_tt,
         mean_tt,
         var_tt,
         ivar_tt,
@@ -314,6 +324,11 @@ class SigLIPAttentionBlockFused:
             # #11 Commit 9: NCRISC marks softmax_scaler as pushed (1 tile of
             # 1.0 pre-loaded from host); TRISC's reduce_init reads it.
             ("sdpa_softmax_scaler_cb", SigLIPAttentionBlockFused.CB["sdpa_softmax_scaler_cb"]),
+            # #11 Commit 10: NCRISC streams V tile-by-tile into v_partial_cb
+            # after the K-stream loop completes. Same shape as K's stream:
+            # head_dim_n_tiles tiles per V-row, m_kv_n_tiles V-rows total.
+            ("sdpa_v_partial_cb", SigLIPAttentionBlockFused.CB["sdpa_v_partial_cb"]),
+            ("head_dim_n_tiles", SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE),  # 3
         ]
         # TRISC needs all CBs + tile counts + eps + QKV matmul shape params.
         trisc_ct = [
@@ -355,6 +370,12 @@ class SigLIPAttentionBlockFused:
             ("sdpa_softmax_isum_cb", SigLIPAttentionBlockFused.CB["sdpa_softmax_isum_cb"]),
             ("sdpa_softmax_scaler_cb", SigLIPAttentionBlockFused.CB["sdpa_softmax_scaler_cb"]),
             ("sdpa_softmax_out_cb", SigLIPAttentionBlockFused.CB["sdpa_softmax_out_cb"]),
+            # #11 Commit 10: Attn @ V — TRISC reads softmax_qk + V_partial and
+            # accumulates per (m_out, d_out) output tile across all M_KV k-steps,
+            # packing 12 tiles per worker to attn_out.
+            ("sdpa_v_partial_cb", SigLIPAttentionBlockFused.CB["sdpa_v_partial_cb"]),
+            ("sdpa_attn_out_cb", SigLIPAttentionBlockFused.CB["sdpa_attn_out_cb"]),
+            ("head_dim_n_tiles", SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE),  # 3
         ]
 
         # Physical NoC coords for the worker grid. BH's logical-to-physical x
@@ -522,10 +543,28 @@ class SigLIPAttentionBlockFused:
         )
         bf16_tile_bytes = bf16_page
         xmm_total_size = in_tiles * bf16_tile_bytes  # 36 tiles per LN1 core
+        xmm2_offset = xmm_total_size  # xmm2 follows xmm in the fused shard
         qk_scores_tiles_per_worker = m_tiles_per_sdpa_worker * (
             SigLIPAttentionBlockFused.M // SigLIPAttentionBlockFused.TILE
         )
         qk_scores_total_size = qk_scores_tiles_per_worker * bf16_tile_bytes
+        # #11 Commit 10: Attn @ V buffers, aliased into fused_scratch's
+        # spare room on SDPA cores (LN1 cores use the same offsets for xmm/xmm2
+        # — disjoint grids, no conflict).
+        head_dim_n_tiles = SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE  # 3
+        attn_out_tiles_per_worker = m_tiles_per_sdpa_worker * head_dim_n_tiles  # 12
+        attn_out_offset = qk_scores_total_size  # 32 * 2048 = 65536 B
+        attn_out_total_size = attn_out_tiles_per_worker * bf16_tile_bytes  # 24 KB
+        v_partial_offset = attn_out_offset + attn_out_total_size  # 90112 B
+        # #11 Commit 10: full V per worker (M_KV_TILES × head_dim_n_tiles = 24
+        # tiles = 48 KB) fits in fused_scratch's spare room after qk_scores
+        # and attn_out. With full V in L1, TRISC can use EncoderMatmul-style
+        # nested loop (output tile outer × K_TILES inner, ct=head_dim_n_tiles)
+        # for proper dst accumulation across K. Streaming row-by-row instead
+        # required dst accumulation across non-consecutive output tiles, which
+        # the matmul_block FPU pattern doesn't support.
+        v_partial_tiles_total = (SigLIPAttentionBlockFused.M // SigLIPAttentionBlockFused.TILE) * head_dim_n_tiles  # 24
+        v_partial_total_size = v_partial_tiles_total * bf16_tile_bytes  # 48 KB
 
         xmm_cb_aliased = ttnn.cb_descriptor_from_sharded_tensor(
             SigLIPAttentionBlockFused.CB["xmm_cb"],
@@ -563,6 +602,39 @@ class SigLIPAttentionBlockFused:
         softmax_out_cb_aliased.format_descriptors[0].tile = tile_descriptor
         softmax_out_cb_aliased.format_descriptors[0].page_size = bf16_tile_bytes
 
+        # #11 Commit 10: xmm2_cb aliases fused_scratch @ xmm2_offset on LN1.
+        xmm2_cb_aliased = ttnn.cb_descriptor_from_sharded_tensor(
+            SigLIPAttentionBlockFused.CB["xmm2_cb"],
+            fused_scratch_tt,
+            address_offset=xmm2_offset,
+            total_size=xmm_total_size,  # same shape as xmm
+            core_ranges=ln1_grid_alias,
+        )
+        xmm2_cb_aliased.format_descriptors[0].tile = tile_descriptor
+        xmm2_cb_aliased.format_descriptors[0].page_size = bf16_tile_bytes
+
+        # #11 Commit 10: sdpa_attn_out_cb (Attn @ V output) aliased on SDPA cores.
+        attn_out_cb_aliased = ttnn.cb_descriptor_from_sharded_tensor(
+            SigLIPAttentionBlockFused.CB["sdpa_attn_out_cb"],
+            fused_scratch_tt,
+            address_offset=attn_out_offset,
+            total_size=attn_out_total_size,
+            core_ranges=sdpa_grid_alias,
+        )
+        attn_out_cb_aliased.format_descriptors[0].tile = tile_descriptor
+        attn_out_cb_aliased.format_descriptors[0].page_size = bf16_tile_bytes
+
+        # #11 Commit 10: sdpa_v_partial_cb (one streaming V-row) aliased on SDPA cores.
+        v_partial_cb_aliased = ttnn.cb_descriptor_from_sharded_tensor(
+            SigLIPAttentionBlockFused.CB["sdpa_v_partial_cb"],
+            fused_scratch_tt,
+            address_offset=v_partial_offset,
+            total_size=v_partial_total_size,
+            core_ranges=sdpa_grid_alias,
+        )
+        v_partial_cb_aliased.format_descriptors[0].tile = tile_descriptor
+        v_partial_cb_aliased.format_descriptors[0].page_size = bf16_tile_bytes
+
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
@@ -573,7 +645,7 @@ class SigLIPAttentionBlockFused:
                 _cb(SigLIPAttentionBlockFused.CB["ones_cb"], ones_tt),
                 _cb(SigLIPAttentionBlockFused.CB["accum_cb"], accum_tt),
                 xmm_cb_aliased,
-                _cb(SigLIPAttentionBlockFused.CB["xmm2_cb"], xmm2_tt),
+                xmm2_cb_aliased,
                 _cb(SigLIPAttentionBlockFused.CB["mean_cb"], mean_tt),
                 _cb(SigLIPAttentionBlockFused.CB["var_cb"], var_tt),
                 _cb(SigLIPAttentionBlockFused.CB["ivar_cb"], ivar_tt),
@@ -587,6 +659,8 @@ class SigLIPAttentionBlockFused:
                 _cb(SigLIPAttentionBlockFused.CB["qkv_done_trigger_cb"], qkv_done_trigger_tt),
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_q_cb"], sdpa_q_tt),
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_k_partial_cb"], sdpa_k_partial_tt),
+                v_partial_cb_aliased,
+                attn_out_cb_aliased,
                 qk_scores_cb_aliased,
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_softmax_max_cb"], sdpa_softmax_max_tt),
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_softmax_exp_cb"], sdpa_softmax_exp_tt),
@@ -607,7 +681,6 @@ class SigLIPAttentionBlockFused:
                 ones_tt,
                 accum_tt,
                 fused_scratch_tt,
-                xmm2_tt,
                 mean_tt,
                 var_tt,
                 ivar_tt,
@@ -737,7 +810,7 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
             memory_config=in_mem,
         )
 
-    xmm2_tt = _make_dtile()
+    # #11 Commit 10: xmm2 aliased into fused_scratch (offset xmm_total_size).
     ln_out_tt = _make_dtile()
     final_out_tt = _make_dtile()
 
@@ -910,7 +983,12 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
             ),  # SDPA: 32 cores
         }
     )
-    fused_scratch_shard_h = SigLIPAttentionBlockFused.D_TILES * TILE  # 36 * 32 = 1152
+    # #11 Commit 10: shard grew from 36 → 72 tiles to fit xmm2 (LN1, 36 tiles
+    # following xmm) and Attn @ V buffers (SDPA, attn_out 12 + v_partial 3
+    # tiles after qk_scores's 32 tiles). On disjoint grids, the 72-tile region
+    # serves whichever role each core plays.
+    fused_scratch_shard_tiles = 2 * SigLIPAttentionBlockFused.D_TILES  # 72
+    fused_scratch_shard_h = fused_scratch_shard_tiles * TILE  # 72 * 32 = 2304
     fused_scratch_shard_w = TILE  # 32
     fused_scratch_num_cores = num_cores + sdpa_num_workers  # 8 + 32 = 40
     fused_scratch_shard = ttnn.ShardSpec(
@@ -983,7 +1061,6 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         ones_tt,
         accum_tt,
         fused_scratch_tt,
-        xmm2_tt,
         mean_tt,
         var_tt,
         ivar_tt,

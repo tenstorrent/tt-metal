@@ -91,14 +91,15 @@ def test_attention_block_fused_ln_plus_residual(device):
 
     # Positional layout (positive indices for resilience to future growth):
     #   0..5: ln_in, gamma, beta, scaler, ones, accum
-    #   6:   fused_scratch
-    #   7..10: xmm2, mean, var, ivar
-    #   11..13: ln_out, x_residual, final_out
-    #   14..15: qkv_act, ln_done_trigger
-    #   16..18: qkv_w, qkv_out, qkv_done_trigger
-    #   19..20: sdpa_q, sdpa_k_partial
-    #   21..25: softmax max, exp, sum, isum, scaler  (Commit 9)
-    final_out_tt = tensors[13]
+    #   6:   fused_scratch  (aliases xmm, xmm2 on LN1; qk_scores, attn_out,
+    #         v_partial on SDPA — Commits 8/9/10)
+    #   7..9: mean, var, ivar
+    #   10..12: ln_out, x_residual, final_out
+    #   13..14: qkv_act, ln_done_trigger
+    #   15..17: qkv_w, qkv_out, qkv_done_trigger
+    #   18..19: sdpa_q, sdpa_k_partial
+    #   20..24: softmax max, exp, sum, isum, scaler  (Commit 9)
+    final_out_tt = tensors[12]
     y_device = _ttnn.to_torch(final_out_tt)
 
     p = pcc(y_golden, y_device)
@@ -128,8 +129,8 @@ def test_attention_block_fused_ln_mcast_probe(device):
 
     import ttnn as _ttnn
 
-    # qkv_act_tt is at positional index 14 (see test_attention_block_fused_ln_plus_residual).
-    qkv_act_tt = tensors[14]
+    # qkv_act_tt is at positional index 13 (see test_attention_block_fused_ln_plus_residual).
+    qkv_act_tt = tensors[13]
     qkv_act_torch = _ttnn.to_torch(qkv_act_tt)
 
     num_receivers = SigLIPAttentionBlockFused.QKV_NUM_CORES
@@ -178,10 +179,10 @@ def test_attention_block_fused_qkv_matmul(device):
 
     import ttnn as _ttnn
 
-    # qkv_out_tt is at positional index 17.
+    # qkv_out_tt is at positional index 16.
     # Device shape is the padded (M, 4608); we slice each head's first
     # head_dim_true cols to recover the natural (M, 3456) layout before PCC.
-    qkv_out_tt = tensors[17]
+    qkv_out_tt = tensors[16]
     qkv_out_device_padded = _ttnn.to_torch(qkv_out_tt)
     assert qkv_out_device_padded.shape == (
         M,
@@ -230,8 +231,8 @@ def test_attention_block_fused_sdpa_q_probe(device):
 
     import ttnn as _ttnn
 
-    # sdpa_q_tt is at positional index 19.
-    sdpa_q_tt = tensors[19]
+    # sdpa_q_tt is at positional index 18.
+    sdpa_q_tt = tensors[18]
     sdpa_q_torch = _ttnn.to_torch(sdpa_q_tt)
 
     sdpa_num_workers = SigLIPAttentionBlockFused.SDPA_NUM_CORES  # 32 (#11 Commit 4: relocated SDPA)
@@ -331,7 +332,8 @@ def test_attention_block_fused_sdpa_softmax_probe(device):
     ln1_num_cores = SigLIPAttentionBlockFused.LN1_NUM_CORES  # 8
     D_TILES = SigLIPAttentionBlockFused.D_TILES  # 36
 
-    shard_h = D_TILES * SigLIPAttentionBlockFused.TILE  # 1152
+    # #11 Commit 10: fused_scratch shard grew from 36 → 72 tiles. shard_h = 2 * D_TILES * TILE.
+    shard_h = 2 * D_TILES * SigLIPAttentionBlockFused.TILE  # 2304
     expected_shape = ((ln1_num_cores + sdpa_num_workers) * shard_h, SigLIPAttentionBlockFused.TILE)
     assert (
         fused_scratch_torch.shape == expected_shape
@@ -397,3 +399,114 @@ def test_attention_block_fused_sdpa_softmax_probe(device):
     # The pi0_base standalone SigLIP SDPA test runs at the same precision
     # regime.
     assert min_pcc >= 0.996, f"min softmax probe PCC {min_pcc} below 0.996"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_attention_block_fused_sdpa_attn_v_probe(device):
+    """Streaming-V Attn @ V compute (Commit 10).
+
+    Each SDPA worker computes (softmax(Q @ K^T) @ V) for its M-slice of the
+    head, producing a (M_per_worker=128, head_dim_padded=96) bf16 = 12-tile
+    output in sdpa_attn_out_cb (aliased into fused_scratch at byte offset
+    65536 on SDPA cores).
+
+    TRISC accumulates over the M_KV inner dimension by streaming V tile-by-tile
+    via sdpa_v_partial_cb (3 tiles per V-row). 12 dst register slots hold
+    one (m_out, d_out) output tile each; after all 8 K iterations, all 12
+    tiles pack to attn_out in (m_out × 3 + d_out) order.
+
+    Golden: per-head torch.softmax(Q @ K^T, dim=-1) @ V (no scaling).
+    """
+    x, gamma, beta = make_inputs(seed=42)
+    w_qkv = make_qkv_weight(seed=7)
+
+    ln_out_golden = F.layer_norm(x.float(), (D,), gamma.float(), beta.float(), eps=EPS)
+    qkv_golden_unpadded = (ln_out_golden.to(torch.float32) @ w_qkv.to(torch.float32)).to(torch.bfloat16)
+
+    q_padded_per_head = torch.zeros(NUM_HEADS, M, HEAD_DIM_PADDED, dtype=torch.bfloat16)
+    k_padded_per_head = torch.zeros(NUM_HEADS, M, HEAD_DIM_PADDED, dtype=torch.bfloat16)
+    v_padded_per_head = torch.zeros(NUM_HEADS, M, HEAD_DIM_PADDED, dtype=torch.bfloat16)
+    for h in range(NUM_HEADS):
+        q_start = h * HEAD_DIM_TRUE
+        k_start = D + h * HEAD_DIM_TRUE
+        v_start = 2 * D + h * HEAD_DIM_TRUE
+        q_padded_per_head[h, :, :HEAD_DIM_TRUE] = qkv_golden_unpadded[:, q_start : q_start + HEAD_DIM_TRUE]
+        k_padded_per_head[h, :, :HEAD_DIM_TRUE] = qkv_golden_unpadded[:, k_start : k_start + HEAD_DIM_TRUE]
+        v_padded_per_head[h, :, :HEAD_DIM_TRUE] = qkv_golden_unpadded[:, v_start : v_start + HEAD_DIM_TRUE]
+
+    tensors = build_tensors_for_fused_attention_block(device, x, gamma, beta, w_qkv_torch=w_qkv)
+    SigLIPAttentionBlockFused.op(*tensors, eps=EPS)
+
+    import ttnn as _ttnn
+
+    fused_scratch_tt = tensors[6]
+    fused_scratch_torch = _ttnn.to_torch(fused_scratch_tt)
+
+    sdpa_num_workers = SigLIPAttentionBlockFused.SDPA_NUM_CORES  # 32
+    sdpa_grid_x = SigLIPAttentionBlockFused.SDPA_GRID_X  # 4
+    num_workers_per_head = SigLIPAttentionBlockFused.NUM_SDPA_WORKERS_PER_HEAD  # 2
+    rows_per_worker = M // num_workers_per_head  # 128
+    ln1_num_cores = SigLIPAttentionBlockFused.LN1_NUM_CORES  # 8
+    head_dim_padded = HEAD_DIM_PADDED  # 96
+    head_dim_n_tiles = SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE  # 3
+    m_per_worker_tiles = rows_per_worker // SigLIPAttentionBlockFused.TILE  # 4
+    attn_out_tiles_per_worker = m_per_worker_tiles * head_dim_n_tiles  # 12
+
+    # fused_scratch shard layout (Commit 10): 72 tiles per worker.
+    #   tiles 0..31 (rows 0..1023):    qk_scores / softmax_out
+    #   tiles 32..43 (rows 1024..1407): attn_out  ← 12 tiles, this commit's output
+    #   tiles 44..46 (rows 1408..1503): v_partial (transient; final state holds the last V row)
+    shard_h = 2 * SigLIPAttentionBlockFused.D_TILES * SigLIPAttentionBlockFused.TILE  # 72 * 32 = 2304
+    attn_out_start_tile = m_per_worker_tiles * (M // SigLIPAttentionBlockFused.TILE)  # 4*8 = 32
+    attn_out_start_row = attn_out_start_tile * SigLIPAttentionBlockFused.TILE  # 1024
+    attn_out_rows = attn_out_tiles_per_worker * SigLIPAttentionBlockFused.TILE  # 384
+
+    expected_shape = ((ln1_num_cores + sdpa_num_workers) * shard_h, SigLIPAttentionBlockFused.TILE)
+    assert (
+        fused_scratch_torch.shape == expected_shape
+    ), f"fused_scratch shape {tuple(fused_scratch_torch.shape)} != {expected_shape}"
+
+    min_pcc = float("inf")
+    worst = None
+    for worker_linear in range(sdpa_num_workers):
+        shard_start = (ln1_num_cores + worker_linear) * shard_h
+        attn_region_start = shard_start + attn_out_start_row
+        attn_region = fused_scratch_torch[attn_region_start : attn_region_start + attn_out_rows, :]
+        tile_stack = attn_region.reshape(
+            attn_out_tiles_per_worker, SigLIPAttentionBlockFused.TILE, SigLIPAttentionBlockFused.TILE
+        )
+        attn_worker = torch.zeros(rows_per_worker, head_dim_padded, dtype=attn_region.dtype)
+        for tile_idx in range(attn_out_tiles_per_worker):
+            m_out = tile_idx // head_dim_n_tiles
+            d_out = tile_idx % head_dim_n_tiles
+            attn_worker[
+                m_out * SigLIPAttentionBlockFused.TILE : (m_out + 1) * SigLIPAttentionBlockFused.TILE,
+                d_out * SigLIPAttentionBlockFused.TILE : (d_out + 1) * SigLIPAttentionBlockFused.TILE,
+            ] = tile_stack[tile_idx]
+
+        y = worker_linear // sdpa_grid_x
+        x_rel = worker_linear % sdpa_grid_x
+        head_idx = (y // num_workers_per_head) * sdpa_grid_x + x_rel
+        worker_idx = y % num_workers_per_head
+        m_start = worker_idx * rows_per_worker
+
+        q_slice = q_padded_per_head[head_idx, m_start : m_start + rows_per_worker, :].to(torch.float32)
+        k_full = k_padded_per_head[head_idx, :, :].to(torch.float32)
+        v_full = v_padded_per_head[head_idx, :, :].to(torch.float32)
+        scores = q_slice @ k_full.T
+        softmax_scores = torch.softmax(scores, dim=-1)
+        expected = (softmax_scores @ v_full).to(torch.bfloat16)
+
+        p = pcc(expected, attn_worker)
+        if p < min_pcc:
+            min_pcc = p
+            worst = (worker_linear, head_idx, worker_idx)
+
+    print(
+        f"\nPCC (SDPA Attn @ V probe, min/32 workers) = "
+        f"{min_pcc:.6f} (worst: worker={worst[0]}, head={worst[1]}, w_idx={worst[2]})"
+    )
+    print(f"  per-worker shape={(rows_per_worker, head_dim_padded)}, dtype={attn_worker.dtype}")
+    # Attn @ V stacks another bfp8/HiFi4 matmul on top of softmax — same
+    # precision regime, gate stays at 0.996.
+    assert min_pcc >= 0.996, f"min Attn @ V probe PCC {min_pcc} below 0.996"

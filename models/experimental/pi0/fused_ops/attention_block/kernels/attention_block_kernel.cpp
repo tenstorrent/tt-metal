@@ -106,6 +106,8 @@ void kernel_main() {
     constexpr uint32_t sdpa_qk_scores_cb = get_named_compile_time_arg_val("sdpa_qk_scores_cb");
     constexpr uint32_t sdpa_k_partial_tiles = get_named_compile_time_arg_val("sdpa_k_partial_tiles");
     constexpr uint32_t m_kv_n_tiles = get_named_compile_time_arg_val("m_kv_n_tiles");
+    constexpr uint32_t sdpa_v_partial_cb = get_named_compile_time_arg_val("sdpa_v_partial_cb");
+    constexpr uint32_t head_dim_n_tiles = get_named_compile_time_arg_val("head_dim_n_tiles");
 
     const bool is_ln1_core_nc = (get_relative_logical_y() == 0) && (get_relative_logical_x() < ln1_num_cores);
     const bool is_qkv_core_nc = (get_relative_logical_y() < qkv_grid_y) && (get_relative_logical_x() < qkv_grid_x);
@@ -354,6 +356,25 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(sdpa_k_partial_cb, sdpa_k_partial_tiles);
         }
+
+        // #11 Commit 10: read the head's FULL V slice (M_KV * head_dim_padded
+        // = 24 tiles = 48 KB) in one noc_async_read. The TRISC Attn @ V
+        // matmul needs all V K-rows visible for the standard
+        // (output_tile_outer × K_inner) nested loop with kt_dim=M_KV_TILES.
+        // Streaming row-by-row would force the K loop to be outermost, and
+        // the matmul_block FPU pattern doesn't accumulate correctly across
+        // non-consecutive output-tile idsts. V fits in fused_scratch's spare
+        // room (~50 KB after qk_scores + attn_out).
+        const uint32_t v_shard_idx = 2 * num_heads + head_idx_self;  // shards [32..47]
+        const uint32_t v_src_phys_x = phys_origin_x_local + (v_shard_idx % qkv_grid_x);
+        const uint32_t v_src_phys_y = phys_origin_y_local + (v_shard_idx / qkv_grid_x);
+        const uint32_t v_full_tiles = m_kv_n_tiles * head_dim_n_tiles;  // 24
+        const uint32_t v_full_bytes = v_full_tiles * tile_size_bytes;   // 48 KB
+        cb_reserve_back(sdpa_v_partial_cb, v_full_tiles);
+        const uint64_t v_src_noc_addr = get_noc_addr(v_src_phys_x, v_src_phys_y, qkv_out_l1_addr);
+        noc_async_read(v_src_noc_addr, get_write_ptr(sdpa_v_partial_cb), v_full_bytes);
+        noc_async_read_barrier();
+        cb_push_back(sdpa_v_partial_cb, v_full_tiles);
     }
 #endif  // COMPILE_FOR_NCRISC
 
@@ -426,6 +447,10 @@ void kernel_main() {
     constexpr uint32_t sdpa_softmax_isum_cb_tr = get_named_compile_time_arg_val("sdpa_softmax_isum_cb");
     constexpr uint32_t sdpa_softmax_scaler_cb_tr = get_named_compile_time_arg_val("sdpa_softmax_scaler_cb");
     constexpr uint32_t sdpa_softmax_out_cb_tr = get_named_compile_time_arg_val("sdpa_softmax_out_cb");
+    // #11 Commit 10: Attn @ V CBs.
+    constexpr uint32_t sdpa_v_partial_cb_tr = get_named_compile_time_arg_val("sdpa_v_partial_cb");
+    constexpr uint32_t sdpa_attn_out_cb_tr = get_named_compile_time_arg_val("sdpa_attn_out_cb");
+    constexpr uint32_t head_dim_n_tiles_tr = get_named_compile_time_arg_val("head_dim_n_tiles");
     const bool is_ln1_core_tr = (get_relative_logical_y() == 0) && (get_relative_logical_x() < ln1_num_cores_tr);
     const bool is_residual_core_tr = is_ln1_core_tr;
     const bool is_qkv_core_tr =
@@ -648,6 +673,89 @@ void kernel_main() {
         pi05_siglip_ops::Softmax::Op<SoftmaxCTArgs, true> softmax;
         pi05_siglip_ops::Softmax::RTArgs softmax_args{};
         softmax(softmax_args);
+    }
+
+    // =========================================================================
+    // PHASE 7 (#11 Commit 10): Attn @ V — streaming V matmul.
+    //
+    // Compute: attn_out[m, d] = sum_k softmax_qk[m, k] * V[k, d]
+    //                          m ∈ [0..M_per_worker_tiles-1] (4)
+    //                          d ∈ [0..head_dim_n_tiles-1]    (3)
+    //                          k ∈ [0..m_kv_n_tiles-1]        (8)
+    //
+    // NCRISC streamed 8 V-rows (3 tiles each) into sdpa_v_partial_cb after
+    // the K-stream loop. TRISC pulls one V-row at a time and accumulates the
+    // 12 output tiles (M_per_worker_tiles × head_dim_n_tiles) in dst regs
+    // across all 8 k iterations. After the k loop, pack all 12 tiles to
+    // sdpa_attn_out_cb in row-major (m_out, d_out) order.
+    //
+    // The matmul reads softmax_qk via sdpa_qk_scores_cb (same L1 region as
+    // sdpa_softmax_out_cb after Phase 6's in-place softmax wrote it).
+    //
+    // Output: (M_per_worker, head_dim_padded) = (128, 96) bf16 per worker
+    //         = 12 tiles aliased into fused_scratch @ byte offset 65536.
+    // =========================================================================
+    if (is_sdpa_core_tr) {
+        constexpr uint32_t softmax_in_tiles_av = m_per_worker_n_tiles_tr * m_kv_n_tiles_tr;  // 32
+        constexpr uint32_t attn_out_tiles = m_per_worker_n_tiles_tr * head_dim_n_tiles_tr;   // 12
+        constexpr uint32_t v_full_tiles = m_kv_n_tiles_tr * head_dim_n_tiles_tr;             // 24
+
+        // Wait for softmax to push its 32 tiles into qk_scores's L1 (via the
+        // aliased softmax_out_cb push) AND for NCRISC to push the full 24-tile
+        // V into v_partial_cb.
+        cb_wait_front(sdpa_softmax_out_cb_tr, softmax_in_tiles_av);
+        cb_wait_front(sdpa_v_partial_cb_tr, v_full_tiles);
+        cb_reserve_back(sdpa_attn_out_cb_tr, attn_out_tiles);
+
+        reconfig_data_format(sdpa_qk_scores_cb_tr, sdpa_v_partial_cb_tr);
+        pack_reconfig_data_format(sdpa_attn_out_cb_tr);
+        mm_init(sdpa_qk_scores_cb_tr, sdpa_v_partial_cb_tr, sdpa_attn_out_cb_tr);
+
+        // EncoderMatmul-style nested loop:
+        //   outer: m_out (Q-row tile index) — one output sub-row per iteration,
+        //          ct_dim = head_dim_n_tiles = 3 output cols at once.
+        //   inner: k_v (M_KV K-step) — accumulates softmax_qk[m_out, k_v] @ V[k_v, :]
+        //          into dst[0..ct_dim-1].
+        // V is fully in L1 (24 tiles laid out K-row-major: tile_idx = k_v * 3 + d).
+        // softmax_qk layout: tile_idx = m_out * 8 + k_v.
+        mm_block_init_short(
+            sdpa_qk_scores_cb_tr,
+            sdpa_v_partial_cb_tr,
+            /*transpose=*/0,
+            /*ct_dim=*/head_dim_n_tiles_tr,
+            /*rt_dim=*/1,
+            /*kt_dim=*/m_kv_n_tiles_tr);
+
+        for (uint32_t m_out = 0; m_out < m_per_worker_n_tiles_tr; ++m_out) {
+            tile_regs_acquire();
+            uint32_t in0_index = m_out * m_kv_n_tiles_tr;
+            uint32_t in1_index = 0;
+            for (uint32_t k_v = 0; k_v < m_kv_n_tiles_tr; ++k_v) {
+                matmul_block(
+                    sdpa_qk_scores_cb_tr,
+                    sdpa_v_partial_cb_tr,
+                    in0_index,
+                    in1_index,
+                    /*idst=*/0,
+                    /*transpose=*/false,
+                    /*ct_dim=*/head_dim_n_tiles_tr,
+                    /*rt_dim=*/1,
+                    /*kt_dim=*/m_kv_n_tiles_tr);
+                in0_index += 1;
+                in1_index += head_dim_n_tiles_tr;
+            }
+            tile_regs_commit();
+
+            tile_regs_wait();
+            for (uint32_t d_out = 0; d_out < head_dim_n_tiles_tr; ++d_out) {
+                pack_tile<true>(d_out, sdpa_attn_out_cb_tr, m_out * head_dim_n_tiles_tr + d_out);
+            }
+            tile_regs_release();
+        }
+
+        cb_push_back(sdpa_attn_out_cb_tr, attn_out_tiles);
+        cb_pop_front(sdpa_softmax_out_cb_tr, softmax_in_tiles_av);
+        cb_pop_front(sdpa_v_partial_cb_tr, v_full_tiles);
     }
 #endif
 }
