@@ -141,6 +141,18 @@ except Exception as e:
   #   "rescue of stuck dispatch cores" — Metal hard-reset ERISCs, leaving go_msg=0x02 stale
   # When detected, flag that the hardware is NOT ready for traffic.
   WARM_RING_TIMEOUT=0
+  # FIX LM (#42429): cold-start relay-dead detection.
+  # When FIX BX or FIX NZ fires for non-MMIO devices during warm-up, the ERISC relay
+  # path (host MMIO chan=8 → remote chips 4-7) is dead BEFORE reset_cores begins.
+  # This is hardware degradation (progressive link failure) that tt-smi -r cannot fix.
+  # Detect this pattern so the FIX TL/TM recovery cycle is skipped — tt-smi -r
+  # resets the chips but the relay stays dead, causing an identical 3-minute futile
+  # retry before the same exit-1 is reached (observed: run 26052603107, t3k-05).
+  WARM_RELAY_DEAD=0
+  if echo "$WARM_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX BX.*initialize_and_launch_firmware threw.*non-MMIO|FIX NZ.*skipping initialize_and_launch_firmware.*relay broken)"; then
+    WARM_RELAY_DEAD=1
+    echo "LOG_METAL: [FIX LM] cold-start relay-dead detected in warm-up (FIX BX/NZ fired for non-MMIO devices) — tt-smi -r cannot recover hardware degradation. (#42429)" >&2
+  fi
   # [FIX UP-2]: Strip ANSI escape codes and CR before grepping — ANSI codes embedded in
   # WARM_OUTPUT (e.g. from Metal's coloured log output) corrupt grep pattern matching and
   # cause false negatives even when "FIX TK" is present in the raw output (run 26022229604).
@@ -184,6 +196,15 @@ except Exception as e:
     n_chips="0"
   fi
   if [[ "$n_chips" -lt 8 ]]; then
+    # FIX LM (#42429): if cold-start relay-dead was detected in the warm-up, skip the
+    # FIX TL/TM recovery cycle entirely — tt-smi -r cannot restore a dead ERISC relay
+    # caused by hardware degradation.  Failing fast saves 3+ minutes of futile retries
+    # (2× warm-up cycles + 2× tt-smi -r) that all end with the same exit-1 outcome.
+    if [[ $WARM_RELAY_DEAD -eq 1 ]]; then
+      echo "LOG_METAL: [FIX LM] relay dead from cold start (FIX BX/NZ in warm-up) — skipping FIX TL/TM recovery (tt-smi -r cannot fix hardware link degradation)." >&2
+      echo "LOG_METAL: ERROR — T3K topology degraded (${n_chips}/8 chips): ERISC relay path dead before reset_cores. Hardware needs engineer attention or host reboot." >&2
+      exit 1
+    fi
     # FIX TL (#42429): warm-up subprocess atexit can leave non-MMIO chips unreachable
     # (ARC timeout / relay-dead channels corrupt device visibility).
     # Attempt one recovery reset before failing the job entirely.
@@ -214,6 +235,13 @@ except Exception as e:
     if echo "$TM_WARM_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
       echo "LOG_METAL: [FIX TM2] ring-sync timeout detected in post-TL warm-up — hardware may not be ready for traffic." >&2
       TM_RING_TIMEOUT=1
+    fi
+    # FIX LM (#42429): also detect cold-start relay-dead in the FIX TM post-recovery warm-up.
+    # If FIX BX fires again after tt-smi -r, the relay is permanently dead — fail fast.
+    if echo "$TM_WARM_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX BX.*initialize_and_launch_firmware threw.*non-MMIO|FIX NZ.*skipping initialize_and_launch_firmware.*relay broken)"; then
+      echo "LOG_METAL: [FIX LM] cold-start relay-dead PERSISTS after tt-smi -r (FIX BX/NZ in post-TL warm-up) — hardware cannot be recovered by reset. (#42429)" >&2
+      echo "LOG_METAL: ERROR — T3K topology still degraded: ERISC relay dead after recovery. Hardware needs engineer attention or host reboot." >&2
+      exit 1
     fi
     raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>&1) || true
     n_chips=$(echo "$raw_output" | tr -d '\r' | grep -E '^[0-9]+$' | tail -1) || true
@@ -606,6 +634,18 @@ except Exception as e:
   WARM_END=$(date +%s)
   WARM_DURATION=$((WARM_END - WARM_START))
   WARM_RING_TIMEOUT=0
+  # FIX LM (#42429): cold-start relay-dead detection.
+  # When FIX BX or FIX NZ fires for non-MMIO devices during warm-up, the ERISC relay
+  # path (host MMIO chan=8 → remote chips 4-7) is dead BEFORE reset_cores begins.
+  # This is hardware degradation (progressive link failure) that tt-smi -r cannot fix.
+  # Detect this pattern so the FIX TL/TM recovery cycle is skipped — tt-smi -r
+  # resets the chips but the relay stays dead, causing an identical 3-minute futile
+  # retry before the same exit-1 is reached (observed: run 26052603107, t3k-05).
+  WARM_RELAY_DEAD=0
+  if echo "$WARM_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX BX.*initialize_and_launch_firmware threw.*non-MMIO|FIX NZ.*skipping initialize_and_launch_firmware.*relay broken)"; then
+    WARM_RELAY_DEAD=1
+    echo "LOG_METAL: [FIX LM] cold-start relay-dead detected in warm-up (FIX BX/NZ fired for non-MMIO devices) — tt-smi -r cannot recover hardware degradation. (#42429)" >&2
+  fi
   # [FIX UP-2]: Strip ANSI escape codes and CR before grepping — ANSI codes embedded in
   # WARM_OUTPUT (e.g. from Metal's coloured log output) corrupt grep pattern matching and
   # cause false negatives even when "FIX TK" is present in the raw output (run 26022229604).
@@ -634,6 +674,15 @@ except Exception as e:
     n_chips="0"
   fi
   if [[ "$n_chips" -lt 8 ]]; then
+    # FIX LM (#42429): if cold-start relay-dead was detected in the warm-up, skip the
+    # FIX TL/TM recovery cycle entirely — tt-smi -r cannot restore a dead ERISC relay
+    # caused by hardware degradation.  Failing fast saves 3+ minutes of futile retries
+    # (2× warm-up cycles + 2× tt-smi -r) that all end with the same exit-1 outcome.
+    if [[ $WARM_RELAY_DEAD -eq 1 ]]; then
+      echo "LOG_METAL: [FIX LM] relay dead from cold start (FIX BX/NZ in warm-up) — skipping FIX TL/TM recovery (tt-smi -r cannot fix hardware link degradation)." >&2
+      echo "LOG_METAL: ERROR — T3K topology degraded (${n_chips}/8 chips): ERISC relay path dead before reset_cores. Hardware needs engineer attention or host reboot." >&2
+      exit 1
+    fi
     echo "LOG_METAL: [FIX TL] T3K topology damaged after warm-up (${n_chips}/8 chips) — attempting recovery via tt-smi -r"
     timeout 30 tt-smi -r || true
     local TM_WARM_OUTPUT TM_RING_TIMEOUT
@@ -652,6 +701,13 @@ except Exception as e:
     if echo "$TM_WARM_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
       echo "LOG_METAL: [FIX TM2] ring-sync timeout detected in post-TL warm-up — hardware may not be ready for traffic." >&2
       TM_RING_TIMEOUT=1
+    fi
+    # FIX LM (#42429): also detect cold-start relay-dead in the FIX TM post-recovery warm-up.
+    # If FIX BX fires again after tt-smi -r, the relay is permanently dead — fail fast.
+    if echo "$TM_WARM_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX BX.*initialize_and_launch_firmware threw.*non-MMIO|FIX NZ.*skipping initialize_and_launch_firmware.*relay broken)"; then
+      echo "LOG_METAL: [FIX LM] cold-start relay-dead PERSISTS after tt-smi -r (FIX BX/NZ in post-TL warm-up) — hardware cannot be recovered by reset. (#42429)" >&2
+      echo "LOG_METAL: ERROR — T3K topology still degraded: ERISC relay dead after recovery. Hardware needs engineer attention or host reboot." >&2
+      exit 1
     fi
     raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>&1) || true
     n_chips=$(echo "$raw_output" | tr -d '\r' | grep -E '^[0-9]+$' | tail -1) || true
