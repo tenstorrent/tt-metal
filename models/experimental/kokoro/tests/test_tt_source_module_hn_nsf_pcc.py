@@ -194,3 +194,80 @@ def test_tt_source_module_hn_nsf_noise_path(device):
     print(f"TTSourceModuleHnNSF (noise path) sine_merge PCC: {pcc_sm:.6f}, noise PCC: {pcc_n:.6f}")
     assert pcc_sm > 0.99, f"sine_merge PCC too low: {pcc_sm}"
     assert pcc_n > 0.99, f"noise PCC too low: {pcc_n}"
+
+
+def test_tt_source_module_hn_nsf_tanh_only_vs_linear_fallback(device):
+    """Compare source-module PCC when only tanh falls back vs when linear falls back.
+
+    Mirrors the generator-side fallback investigation using Kokoro-like source settings:
+    ``upsample_scale=300`` and ``harmonic_num=8`` (``dim=9``).
+    """
+    torch.manual_seed(11)
+    sampling_rate = 24000.0
+    upsample_scale = 300
+    harmonic_num = 8
+    time_len = 1500
+    B = 1
+
+    ref = _make_ref(sampling_rate=sampling_rate, upsample_scale=upsample_scale, harmonic_num=harmonic_num)
+    f0 = torch.relu(torch.randn(B, time_len, 1) * 200.0)
+
+    with torch.no_grad(), _torch_random_zeros():
+        sine_merge_ref, _noise_ref, _uv_ref = ref(f0)
+
+    params = preprocess_tt_source_module_hn_nsf(
+        ref,
+        device,
+        sampling_rate=sampling_rate,
+        upsample_scale=upsample_scale,
+        harmonic_num=harmonic_num,
+        voiced_threshold=0.0,
+        time_len=time_len,
+    )
+
+    f0_tt = ttnn.from_torch(f0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_linear = TTSourceModuleHnNSF(device, params, use_torch_linear_fallback=True, use_torch_tanh_fallback=False)
+    tt_tanh_only = TTSourceModuleHnNSF(device, params, use_torch_linear_fallback=False, use_torch_tanh_fallback=True)
+    tt_both = TTSourceModuleHnNSF(device, params, use_torch_linear_fallback=True, use_torch_tanh_fallback=True)
+
+    sm_linear_tt, noise_linear_tt, uv_linear_tt = tt_linear(f0_tt)
+    sm_tanh_tt, noise_tanh_tt, uv_tanh_tt = tt_tanh_only(f0_tt)
+    sm_both_tt, noise_both_tt, uv_both_tt = tt_both(f0_tt)
+
+    sm_linear_h = ttnn.to_torch(sm_linear_tt).float()
+    sm_tanh_h = ttnn.to_torch(sm_tanh_tt).float()
+    sm_both_h = ttnn.to_torch(sm_both_tt).float()
+    while sm_linear_h.dim() > sine_merge_ref.dim():
+        sm_linear_h.squeeze_(0)
+    while sm_tanh_h.dim() > sine_merge_ref.dim():
+        sm_tanh_h.squeeze_(0)
+    while sm_both_h.dim() > sine_merge_ref.dim():
+        sm_both_h.squeeze_(0)
+
+    _, pcc_linear = comp_pcc(sine_merge_ref, sm_linear_h, pcc=0.0)
+    _, pcc_tanh_only = comp_pcc(sine_merge_ref, sm_tanh_h, pcc=0.0)
+    _, pcc_both = comp_pcc(sine_merge_ref, sm_both_h, pcc=0.0)
+    delta = pcc_linear - pcc_tanh_only
+    print(
+        "TTSourceModuleHnNSF fallback comparison: "
+        f"linear-only PCC={pcc_linear:.6f}, tanh-only PCC={pcc_tanh_only:.6f}, "
+        f"both-fallbacks PCC={pcc_both:.6f}, delta={delta:.6f}"
+    )
+
+    # Matches the generator-level observation: preserving TTNN linear keeps the dominant BF16
+    # dot-product error, so tanh-only fallback should not outperform linear fallback.
+    assert pcc_linear >= pcc_tanh_only, (
+        f"Expected linear fallback PCC >= tanh-only fallback PCC; got "
+        f"linear={pcc_linear:.6f}, tanh-only={pcc_tanh_only:.6f}"
+    )
+
+    ttnn.deallocate(sm_linear_tt)
+    ttnn.deallocate(noise_linear_tt)
+    ttnn.deallocate(uv_linear_tt)
+    ttnn.deallocate(sm_tanh_tt)
+    ttnn.deallocate(noise_tanh_tt)
+    ttnn.deallocate(uv_tanh_tt)
+    ttnn.deallocate(sm_both_tt)
+    ttnn.deallocate(noise_both_tt)
+    ttnn.deallocate(uv_both_tt)
+    ttnn.deallocate(f0_tt)

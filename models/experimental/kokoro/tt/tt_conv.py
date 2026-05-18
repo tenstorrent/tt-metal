@@ -48,6 +48,105 @@ class TTConv1dParams:
     dilation: int = 1
 
 
+def _chunked_tt_conv1d_nlc(
+    *,
+    x_nlc: ttnn.Tensor,
+    params: "TTConv1dParams",
+    device,
+    compute_config=None,
+    out_dtype=ttnn.bfloat16,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    chunk_out: int = 512,
+) -> ttnn.Tensor:
+    """Dilated conv1d on large L via overlapping sliding-window chunks (device-only).
+
+    For dilated convolutions with L > 2048, the default sharding configuration exceeds
+    L1 on BH.  Reducing act_block_h_override would corrupt boundary outputs because the
+    halo rows (positions ±dilation*(k//2) outside the block) are not fetched for dilated
+    kernels.  Instead, we slice the input into overlapping windows on-device so each chunk
+    has L_chunk = chunk_out + (kernel_size-1)*dilation < 2048, avoiding the overflow.
+
+    Each chunk's input includes its left and right halo explicitly; the conv is called
+    with padding=0 so no virtual padding is applied inside ttnn.conv1d.
+    """
+    B = int(x_nlc.shape[0])
+    L = int(x_nlc.shape[1])
+    C_in = int(x_nlc.shape[2])
+
+    out_L = (L + 2 * params.padding - params.dilation * (params.kernel_size - 1) - 1) // params.stride + 1
+
+    # chunk_params: no padding — we include halo in each extracted slice
+    cp = TTConv1dParams(
+        weight=params.weight,
+        bias=params.bias,
+        in_channels=params.in_channels,
+        out_channels=params.out_channels,
+        kernel_size=params.kernel_size,
+        stride=params.stride,
+        padding=0,
+        groups=params.groups,
+        dilation=params.dilation,
+    )
+
+    output_chunks: list[ttnn.Tensor] = []
+    out_s = 0
+    while out_s < out_L:
+        out_e = min(out_s + chunk_out, out_L)
+
+        # Virtual input range needed for output positions [out_s, out_e)
+        vin_s = out_s * params.stride - params.padding
+        vin_e = (out_e - 1) * params.stride - params.padding + params.dilation * (params.kernel_size - 1)
+
+        # Actual (physical) input range — clamp to [0, L)
+        in_s = max(0, vin_s)
+        in_e = min(L - 1, vin_e)
+        left_pad = max(0, -vin_s)
+        right_pad = max(0, vin_e - (L - 1))
+
+        x_slice = ttnn.slice(x_nlc, [0, in_s, 0], [B, in_e + 1, C_in], [1, 1, 1], memory_config=memory_config)
+
+        if left_pad > 0:
+            z_l = ttnn.zeros(
+                [B, left_pad, C_in],
+                dtype=x_nlc.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=memory_config,
+            )
+            x_slice = ttnn.concat([z_l, x_slice], dim=1, memory_config=memory_config)
+            ttnn.deallocate(z_l)
+        if right_pad > 0:
+            z_r = ttnn.zeros(
+                [B, right_pad, C_in],
+                dtype=x_nlc.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=memory_config,
+            )
+            x_slice = ttnn.concat([x_slice, z_r], dim=1, memory_config=memory_config)
+            ttnn.deallocate(z_r)
+
+        y_c = tt_conv1d_nlc(
+            x_nlc=x_slice,
+            params=cp,
+            device=device,
+            compute_config=compute_config,
+            out_dtype=out_dtype,
+            memory_config=memory_config,
+        )
+        ttnn.deallocate(x_slice)
+
+        if y_c.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+            y_c = ttnn.to_memory_config(y_c, memory_config)
+        output_chunks.append(y_c)
+        out_s = out_e
+
+    out = ttnn.concat(output_chunks, dim=1, memory_config=memory_config)
+    for c in output_chunks:
+        ttnn.deallocate(c)
+    return out
+
+
 def tt_conv1d_nlc(
     *,
     x_nlc: ttnn.Tensor,
@@ -113,6 +212,20 @@ def tt_conv1d_nlc(
         ttnn.deallocate(zeros)
         L = _BL_PAD_TARGET
 
+    # For large L with dilation > 1: use sliding-window chunked conv to avoid
+    # L1 CB overflow while keeping dilated convolutions correct.  act_block_h_override
+    # cannot be used here because TTNN does not fetch halo rows for the dilated kernel
+    # when the activation block is smaller than the kernel span, corrupting ~30% of outputs.
+    if L > 2048 and params.dilation > 1 and conv_config is None:
+        return _chunked_tt_conv1d_nlc(
+            x_nlc=x_nlc,
+            params=params,
+            device=device,
+            compute_config=compute_config,
+            out_dtype=out_dtype,
+            memory_config=memory_config,
+        )
+
     if conv_config is None:
         conv_config = ttnn.Conv1dConfig(weights_dtype=params.weight.dtype)
         conv_config.config_tensors_in_dram = True
@@ -122,6 +235,11 @@ def tt_conv1d_nlc(
                 conv_config.force_split_reader = True
             except Exception:
                 pass
+        # For large L with dilation=1: capping act_block_h to 32 (one TILE row) reduces
+        # the per-core CB footprint to avoid L1 overflow.  For dilation=1 this is correct
+        # because the halo is only (kernel_size-1)//2 rows, well within a 32-row block.
+        if L > 2048:
+            conv_config.act_block_h_override = 32
     if compute_config is None:
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(), math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True
@@ -245,6 +363,19 @@ def tt_conv_transpose1d_nlc(
     x = ttnn.reshape(x_nlc, (x_nlc.shape[0], 1, x_nlc.shape[1], x_nlc.shape[2]), memory_config=memory_config)
     if conv_config is None:
         conv_config = ttnn.Conv2dConfig(weights_dtype=params.weight.dtype)
+        # Keep conv-transpose configuration/bias tensors in DRAM and free activations eagerly
+        # to reduce pressure on L1_SMALL (the generator path can otherwise OOM on BH).
+        conv_config.config_tensors_in_dram = True
+        conv_config.deallocate_activation = True
+        try:
+            conv_config.enable_act_double_buffer = False
+        except Exception:
+            pass
+        if params.out_channels >= 256 or params.kernel_size >= 7:
+            try:
+                conv_config.force_split_reader = True
+            except Exception:
+                pass
     if compute_config is None:
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(), math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True

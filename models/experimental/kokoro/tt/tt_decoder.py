@@ -70,8 +70,6 @@ def _conv1d_to_tt(conv: nn.Conv1d, device, *, weights_dtype) -> TTConv1dParams:
         w,
         dtype=weights_dtype,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     b_tt = None
     if conv.bias is not None:
@@ -79,8 +77,6 @@ def _conv1d_to_tt(conv: nn.Conv1d, device, *, weights_dtype) -> TTConv1dParams:
             conv.bias.detach().cpu().reshape(1, 1, 1, -1),
             dtype=weights_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
     return TTConv1dParams(
         weight=w_tt,
