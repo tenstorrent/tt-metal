@@ -70,7 +70,7 @@ from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 
 
-def _tighten_wo_prefill_prog_cfg(cfg):
+def _tighten_wo_prefill_prog_cfg(cfg, *, per_core_K_tiles: int | None = None):
     """Tighten WO matmul output blocks on wide multi-device paths (prefill + decode interleaved WO).
 
     Default TTNN behavior sets ``out_block_w`` to ``per_core_N`` (~48 tiles), which overflows static
@@ -82,6 +82,9 @@ def _tighten_wo_prefill_prog_cfg(cfg):
     that budget entirely on ``out_subblock_w`` (1×4) instead of 1×2. When ``per_core_N`` is even, use
     ``out_block_w/out_subblock_w`` that match the largest divisor of ``per_core_N`` ≤ 4 (so out subblocks
     pack the full DST budget). When ``per_core_N`` is odd (some decode shardings), fall back to ``1×1``.
+
+    When ``per_core_K_tiles`` is provided, widen ``in0_block_w`` up to the full per-core K (one inner
+    iteration). With ``out_block_w`` then picked under an L1-budget cap, ``in1_cb`` stays bounded.
     """
     if cfg is None:
         return cfg
@@ -95,6 +98,18 @@ def _tighten_wo_prefill_prog_cfg(cfg):
     out_subblock_h = 1
     if max_sub_h >= 2 and per_core_M % 2 == 0:
         out_subblock_h = 2
+
+    # Widen ``in0_block_w`` to per-core K first so the L1 budget for ``out_block_w`` reflects the
+    # actual ``in1_cb`` cost (which scales as in0_block_w * out_block_w * 2 BF16 tiles).
+    in0_bw = int(cfg.in0_block_w)
+    if per_core_K_tiles is not None:
+        target = int(per_core_K_tiles)
+        if target > 0 and target >= in0_bw and target <= 16:
+            for cand in range(target, in0_bw - 1, -1):
+                if target % cand == 0:
+                    in0_bw = cand
+                    break
+
     if per_core_N % 2 == 0:
         # Choose largest legal ``out_subblock_w`` so subblock product (DST tiles) is maximized.
         cap_w = max(1, 4 // out_subblock_h)
@@ -103,13 +118,23 @@ def _tighten_wo_prefill_prog_cfg(cfg):
             if cand <= cap_w and per_core_N % cand == 0:
                 out_subblock_w = cand
                 break
-        out_block_w = max(2, out_subblock_w)
+        # Pick the largest legal ``out_block_w`` (multiple of ``out_subblock_w``, divides
+        # ``per_core_N``) capped so ``in1_cb = in0_block_w * out_block_w * 2`` BF16 tiles stays
+        # under ~512 KiB per core (≈256 BF16 tiles). Wider ``out_block_w`` halves the inner-loop
+        # iteration count (output-block iters drop from ``per_core_N/out_block_w``).
+        max_obw_l1_tiles = max(2, 256 // max(1, in0_bw))
+        out_block_w = out_subblock_w
+        for cand in range(min(per_core_N, max_obw_l1_tiles), out_subblock_w - 1, -1):
+            if cand % out_subblock_w == 0 and per_core_N % cand == 0:
+                out_block_w = cand
+                break
+        out_block_w = max(out_block_w, max(2, out_subblock_w))
     else:
         out_subblock_w = 1
         out_block_w = 1
     return mc(
         compute_with_storage_grid_size=cfg.compute_with_storage_grid_size,
-        in0_block_w=cfg.in0_block_w,
+        in0_block_w=in0_bw,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
         out_block_h=max(1, out_subblock_h),
@@ -199,7 +224,8 @@ def _decode_wo_interleaved_multicast_prog_cfg(args):
         grid_size=grid_size,
         fuse_batch=True,
     )
-    return _tighten_wo_prefill_prog_cfg(cfg)
+    per_core_K_tiles = max(1, k_tiles // max(1, rows))
+    return _tighten_wo_prefill_prog_cfg(cfg, per_core_K_tiles=per_core_K_tiles)
 
 
 def _widen_qkv_prefill_in0_block_w(cfg, in0_block_w: int = 4):
@@ -300,7 +326,14 @@ class TtDevstral2LargeAttention(Attention):
                 cfg = _base_get_attn_wo(mode, seq_len, prefetcher)
                 if mode != Mode.PREFILL:
                     return cfg
-                return _tighten_wo_prefill_prog_cfg(cfg)
+                # Compute per-core K so the tightener can also widen ``in0_block_w`` for prefill.
+                grid_size = cfg.compute_with_storage_grid_size if cfg is not None else None
+                if grid_size is None:
+                    return _tighten_wo_prefill_prog_cfg(cfg)
+                grid_y = int(getattr(grid_size, "y", grid_size[1] if isinstance(grid_size, (list, tuple)) else 1))
+                k_dim = (self.args.n_heads * self.args.head_dim) // self.args.num_devices
+                per_core_K_tiles = max(1, (k_dim // ttnn.TILE_SIZE) // max(1, grid_y))
+                return _tighten_wo_prefill_prog_cfg(cfg, per_core_K_tiles=per_core_K_tiles)
 
             self.args.get_attn_wo_program_config = _get_attn_wo_wide_prefill  # type: ignore[method-assign]
 

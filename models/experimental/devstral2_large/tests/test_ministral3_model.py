@@ -328,7 +328,7 @@ def devstral_one_text_layer_hf_params(monkeypatch):
     ],
     indirect=True,
 )
-def test_ministral3_model_pcc_devstral2_large_partial_weights_one_layer(
+def test_ministral3_model_pcc_devstral2_large_partial_weights_one_layer_prefill(
     mesh_device,
     seq_len,
     batch_size,
