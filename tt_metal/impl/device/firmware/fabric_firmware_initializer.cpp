@@ -1753,15 +1753,44 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                         }
                     }
                     if (peer_in_cluster) {
-                        base_umd_channels.insert(eth_chan_id);
-                        log_info(
-                            tt::LogMetal,
-                            "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} "
-                            "(base-UMD-firmware sentinel) — relay is live, skipping all writes. "
-                            "Added to base_umd_channels to skip soft reset in configure_fabric_cores.",
-                            dev->id(),
-                            eth_chan_id,
-                            status_buf[0]);
+                        if (dev->is_mmio_capable()) {
+                            // FIX EE (#42429): MMIO device ETH channels at the base-UMD sentinel
+                            // are reachable directly via PCIe — it is safe to soft-reset them.
+                            // Do NOT add to base_umd_channels / skip_soft_reset_channels.
+                            // The FIX M skip-soft-reset is ONLY valid for non-MMIO relay ERISCs
+                            // whose soft-reset would cascade (halting the relay BRISC that
+                            // upstream devices depend on for all ETH-routed writes).
+                            //
+                            // BUG this fixes: without this guard, MMIO dispatch ERISCs (e.g.
+                            // chan=8 on D0-D3 after tt-smi -r) were added to base_umd_channels,
+                            // causing configure_fabric to (a) skip the soft-reset AND (b) call
+                            // write_launch_msg_to_core with FABRIC RELAY firmware on the dispatch
+                            // ERISC.  This corrupted the dispatch path (FIX DT-1 / physical-core
+                            // 23-17,19-17 timeouts) and caused a ring-sync nonce mismatch because
+                            // fabric_stale_base_umd_channels_ is only set for !is_mmio_capable()
+                            // devices, so the host polled with the session nonce while the firmware
+                            // wrote LOCAL_HANDSHAKE_COMPLETE ^ 0.  Permanent mismatch → all
+                            // non-MMIO devices stuck at REMOTE_HANDSHAKE_COMPLETE → FIX NX.
+                            log_warning(
+                                tt::LogMetal,
+                                "terminate_stale_erisc_routers: Device {} chan={} (MMIO) "
+                                "edm_status=0x{:08x} (base-UMD sentinel) — allowing soft-reset "
+                                "via configure_fabric_cores (FIX EE: MMIO ETH is PCIe-accessible, "
+                                "no relay-cascade risk). (#42429)",
+                                dev->id(),
+                                eth_chan_id,
+                                status_buf[0]);
+                        } else {
+                            base_umd_channels.insert(eth_chan_id);
+                            log_info(
+                                tt::LogMetal,
+                                "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} "
+                                "(base-UMD-firmware sentinel) — relay is live, skipping all writes. "
+                                "Added to base_umd_channels to skip soft reset in configure_fabric_cores.",
+                                dev->id(),
+                                eth_chan_id,
+                                status_buf[0]);
+                        }
                     } else {
                         external_umd_channels.insert(eth_chan_id);
                         log_info(
