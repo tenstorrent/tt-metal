@@ -201,6 +201,9 @@ def main() -> int:
                 continue
         if "mgd" in model:
             os.environ["TT_MESH_GRAPH_DESC_PATH"] = os.path.expandvars(model["mgd"])
+        else:
+            # Since mgd is optional, clear env so previous iterations won't affect current
+            os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
 
         binary = os.path.expandvars(model["binary"])
         args = process_args(model["args"]) if model["args"] is not None else []
@@ -308,8 +311,8 @@ def main() -> int:
             print(df_md, file=fh)
 
     # Return error code 1 if any tests have failed
-    sys.exit(any([s["run status"] == "❌" for s in model_status]))
+    return 1 if any(s["run status"] == "❌" for s in model_status) else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
