@@ -197,12 +197,9 @@ class _MoeRoutedExpertContext:
     residual_mcast_params: dict
 
     # RMSNorm (sender core: raw input → normalized input before input mcast)
-    rmsnorm_gamma_cb: int
-    rmsnorm_gamma_cb_descriptor: Any
     rmsnorm_epsilon_packed: int
     rmsnorm_scalar_packed: int
     rmsnorm_num_tiles: int
-    rmsnorm_gamma_num_pages: int
 
     # Per-core values (for core descriptors)
     bank_id_core_values: list
@@ -666,6 +663,7 @@ class MoeRoutedExpertOp:
         use_hardcoded_expert_index=False,
         hardcoded_expert_index=0,
         explicit_expert_scale=None,
+        routing_input_tensor=None,
     ):
         """
         PyTorch reference implementation for validation.
@@ -673,7 +671,7 @@ class MoeRoutedExpertOp:
         When enable_routing=False, uses expert 0 with no routing and no expert scale.
 
         Args:
-            input_tensor: [1, K] torch.Tensor
+            input_tensor: [1, K] torch.Tensor — used for the expert matmuls.
             gate_proj_weights_dict: Dict[int, Tensor] expert_idx → [1,1,K,N_expert]
             up_proj_weights_dict: Dict[int, Tensor] expert_idx → [1,1,K,N_expert]
             down_proj_weights_dict: Dict[int, Tensor] expert_idx → [1,1,N_expert,K]
@@ -683,6 +681,10 @@ class MoeRoutedExpertOp:
             bias_tensor: [1, 8, 32] (routing only)
             eps, scaling_factor, use_hardcoded_expert_index, hardcoded_expert_index,
             explicit_expert_scale: routed expert gate params (routing only)
+            routing_input_tensor: [1, K] (optional). When provided, used for the routing
+                matmul instead of input_tensor. Set when the caller has folded ffn_norm γ
+                into routing_weights_tensor and passes the rmsnormed-without-γ activation
+                here; experts still consume input_tensor (rmsnormed-with-γ).
 
         Returns:
             When enable_routing=True: (top8_scores, top8_indices, final_output)
@@ -697,7 +699,8 @@ class MoeRoutedExpertOp:
             from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
             # 1. Routing matmul + sigmoid (truncate to bfloat16 to approximate device accumulation)
-            logits = (input_tensor.bfloat16().float() @ routing_weights_tensor.bfloat16().float()).bfloat16().float()
+            routing_input = routing_input_tensor if routing_input_tensor is not None else input_tensor
+            logits = (routing_input.bfloat16().float() @ routing_weights_tensor.bfloat16().float()).bfloat16().float()
             scores = torch.sigmoid(logits)
 
             # 2. Gate: top-8 selection with normalized scores
@@ -945,7 +948,6 @@ class MoeRoutedExpertOp:
 
         # Tensor-backed CBs with reinterpreted rmsnorm tile
         residual_mcast_src_cb = cb_id_context.get_cb_id(data_format, rmsnorm_tile_descriptor)
-        rmsnorm_gamma_cb = cb_id_context.get_cb_id(data_format, rmsnorm_tile_descriptor)
         rmsnorm_output_cb = cb_id_context.get_cb_id(data_format, rmsnorm_tile_descriptor)
 
         # ==================================================================
@@ -986,18 +988,8 @@ class MoeRoutedExpertOp:
         rmsnorm_output_cb_descriptor.format_descriptors[0].tile = rmsnorm_tile_descriptor
         rmsnorm_output_cb_descriptor.format_descriptors[0].page_size = rmsnorm_cb_page_size
 
-        rmsnorm_gamma_fused_device0 = ttnn.get_device_tensors(rmsnorm_gamma_tensor.fused_tensor)[0]
-        rmsnorm_gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(
-            rmsnorm_gamma_cb, rmsnorm_gamma_tensor, rmsnorm_gamma_fused_device0
-        )
-        rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = rmsnorm_tile_descriptor
-        rmsnorm_gamma_cb_descriptor.format_descriptors[0].page_size = rmsnorm_cb_page_size
-
         rmsnorm_epsilon_packed = float_to_uint32(epsilon)
         rmsnorm_scalar_packed = float_to_uint32(1.0 / math.sqrt(float(K)))
-
-        # setup_sharded_buffer num_pages for gamma: use reinterpreted 32x32 tile count
-        rmsnorm_gamma_num_pages = rmsnorm_num_tiles
 
         # ==================================================================
         # RMSNorm Mcast (broadcasts normalized input from rmsnorm_output_cb to all cores)
@@ -1448,12 +1440,9 @@ class MoeRoutedExpertOp:
             residual_mcast_src_cb_descriptor=residual_mcast_src_cb_descriptor,
             residual_mcast_params=residual_mcast_params,
             # RMSNorm
-            rmsnorm_gamma_cb=rmsnorm_gamma_cb,
-            rmsnorm_gamma_cb_descriptor=rmsnorm_gamma_cb_descriptor,
             rmsnorm_epsilon_packed=rmsnorm_epsilon_packed,
             rmsnorm_scalar_packed=rmsnorm_scalar_packed,
             rmsnorm_num_tiles=rmsnorm_num_tiles,
-            rmsnorm_gamma_num_pages=rmsnorm_gamma_num_pages,
             # Per-core values
             bank_id_core_values=bank_id_core_values,
             vc_core_values=vc_core_values,
@@ -1522,9 +1511,6 @@ class MoeRoutedExpertOp:
             ("shared_residual_mcast_data_receiver_semaphore_addr", ctx.residual_mcast_receiver_semaphore_addr),
             ("shared_residual_cb", ctx.residual_mcast_dst_cb),
             ("shared_residual_num_pages", ctx.residual_mcast_params["dst_num_pages"]),
-            # RMSNorm (setup_sharded_buffer for gamma on sender core)
-            ("moe_rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
-            ("moe_rmsnorm_gamma_num_pages", ctx.rmsnorm_gamma_num_pages),
             # Gate matmul reader (routing only — 0 when disabled)
             ("gate_mm_in0", ctx.gate_mm_params["in0_cb"] if ctx.enable_routing else 0),
             ("gate_mm_in1", ctx.gate_mm_params["in1_cb"] if ctx.enable_routing else 0),
@@ -1727,7 +1713,6 @@ class MoeRoutedExpertOp:
         trisc_named_compile_time_args = [
             # RMSNorm compute (sender core only)
             ("moe_rmsnorm_input_cb", ctx.residual_mcast_src_cb),
-            ("moe_rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
             ("moe_rmsnorm_output_cb", ctx.rmsnorm_output_cb),
             ("moe_rmsnorm_fp32_acc", 0),
             ("moe_rmsnorm_num_tiles", ctx.rmsnorm_num_tiles),
@@ -1868,7 +1853,6 @@ class MoeRoutedExpertOp:
             ctx.add_params["cb_out_descriptor"],
             ctx.residual_mcast_src_cb_descriptor,
             ctx.residual_mcast_params["dst_cb_descriptor"],
-            ctx.rmsnorm_gamma_cb_descriptor,
         ]
 
         # Reduce CBs (39-45)
@@ -3116,17 +3100,39 @@ class MoeOp:
 
         from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 
-        # Apply RMSNorm: raw input → normalized input (truncate to bfloat16 to match device)
+        # Apply RMSNorm without γ — γ is folded into every downstream weight at weight-prep
+        # time (routing gate, shared expert gate/up, routed expert gate/up). down_proj is
+        # not folded (it operates on the SwiGLU intermediate, not on rmsnorm(h, ffn_norm)).
         x = input_tensor.float()
         variance = x.pow(2).mean(-1, keepdim=True)
-        normalized_input = ((x * torch.rsqrt(variance + rmsnorm_epsilon)) * rmsnorm_gamma.float()).bfloat16().float()
+        normalized_input = (x * torch.rsqrt(variance + rmsnorm_epsilon)).bfloat16().float()
 
-        # Shared expert: normalized input for compute, residual (raw input) added when include_residual=True
+        # Mirror prepare.py folds: γ * W for every consumer of rmsnorm(h, ffn_norm).
+        γ_col = rmsnorm_gamma.reshape(-1, 1).float()
+        folded_shared_gate = (γ_col * shared_gate_weights.float()).to(shared_gate_weights.dtype)
+        folded_shared_up = (γ_col * shared_up_weights.float()).to(shared_up_weights.dtype)
+        folded_routing_weights = (
+            (γ_col.to(routing_weights_tensor.dtype) * routing_weights_tensor)
+            if (enable_routing and routing_weights_tensor is not None)
+            else routing_weights_tensor
+        )
+        # gate_proj / up_proj dicts: [1, 1, K, N_expert] per expert. Broadcast γ as (1, 1, K, 1).
+        γ_4d = rmsnorm_gamma.reshape(1, 1, -1, 1).float()
+
+        def _fold_expert_dict(d):
+            if d is None:
+                return None
+            return {e: (γ_4d * w.float()).to(w.dtype) for e, w in d.items()}
+
+        folded_gate_proj_dict = _fold_expert_dict(gate_proj_weights_dict)
+        folded_up_proj_dict = _fold_expert_dict(up_proj_weights_dict)
+
+        # Shared expert: pre-γ input + γ-folded gate/up weights. Down weights unchanged.
         residual = input_tensor.float() if include_residual else torch.zeros_like(input_tensor.float())
         shared_output = SharedExpertOp.golden(
             normalized_input.float(),
-            shared_gate_weights.float(),
-            shared_up_weights.float(),
+            folded_shared_gate.float(),
+            folded_shared_up.float(),
             shared_down_weights.float(),
             residual,
         ).bfloat16()
@@ -3136,12 +3142,12 @@ class MoeOp:
 
         return MoeRoutedExpertOp.golden(
             normalized_input,
-            gate_proj_weights_dict=gate_proj_weights_dict,
-            up_proj_weights_dict=up_proj_weights_dict,
+            gate_proj_weights_dict=folded_gate_proj_dict,
+            up_proj_weights_dict=folded_up_proj_dict,
             down_proj_weights_dict=down_proj_weights_dict,
             fused_add_tensor=shared_for_add,
             enable_routing=enable_routing,
-            routing_weights_tensor=routing_weights_tensor,
+            routing_weights_tensor=folded_routing_weights,
             bias_tensor=bias_tensor,
             eps=eps,
             scaling_factor=scaling_factor,
@@ -3215,14 +3221,32 @@ class MoeOp:
             topk_weight = topk_weight * scaling_factor
             return topk_weight, topk_idx
 
-        # RMSNorm(h) for MoE input.
+        # RMSNorm(h). At prep time, ffn_norm γ is folded into every weight that consumes
+        # rmsnorm(h, ffn_norm): the MoE router (mlp.gate.weight), the shared expert gate/up,
+        # and each routed expert gate/up. We mirror that here: drop γ from the rmsnorm
+        # output and fold γ into each downstream weight for the matmul. down_proj is not
+        # folded (it operates on the SwiGLU intermediate, not on rmsnorm(h, ffn_norm)).
+        # When rmsnorm_gamma is None the caller is signalling that everything is already
+        # folded externally, so we skip the explicit fold inside the golden.
         x = _as_2d(input_tensor)
         variance = x.pow(2).mean(-1, keepdim=True)
-        norm_x = (x * torch.rsqrt(variance + rmsnorm_epsilon)) * _as_2d(rmsnorm_gamma)
+        norm_x = (x * torch.rsqrt(variance + rmsnorm_epsilon)).to(x.dtype)
 
-        # Shared expert branch: (SiLU(hWg) * (hWu))Wd + residual.
-        sh_gate = _reshape_weight(shared_gate_weights, norm_x.shape[-1])
-        sh_up = _reshape_weight(shared_up_weights, norm_x.shape[-1])
+        gamma_col = (
+            rmsnorm_gamma.reshape(-1, 1).to(norm_x.dtype)
+            if rmsnorm_gamma is not None
+            else torch.tensor(1.0, dtype=norm_x.dtype)
+        )
+
+        def _fold_W(w: torch.Tensor) -> torch.Tensor:
+            # w in (K, N) after _reshape_weight; γ broadcasts on K via (K, 1) * (K, N).
+            if rmsnorm_gamma is None:
+                return w
+            return gamma_col * w
+
+        # Shared expert branch: (SiLU(hWg) * (hWu))Wd + residual. Gate/up are folded; down is not.
+        sh_gate = _fold_W(_reshape_weight(shared_gate_weights, norm_x.shape[-1]))
+        sh_up = _fold_W(_reshape_weight(shared_up_weights, norm_x.shape[-1]))
         sh_down = _reshape_weight(shared_down_weights, sh_gate.shape[-1])
         shared_hidden = torch.nn.functional.silu(norm_x @ sh_gate) * (norm_x @ sh_up)
         shared_output = shared_hidden @ sh_down
@@ -3236,7 +3260,8 @@ class MoeOp:
             selected_experts = sorted(gate_proj_weights_dict.keys())
             selected_scales = [torch.tensor(1.0, dtype=torch.bfloat16)] * len(selected_experts)
         else:
-            logits = norm_x @ routing_weights_tensor.to(norm_x.dtype)
+            routing_weights_folded = _fold_W(routing_weights_tensor.to(norm_x.dtype))
+            logits = norm_x @ routing_weights_folded
             scores = torch.sigmoid(logits)
             scores_flat = scores.reshape(1, -1)
             bias_flat = bias_tensor.reshape(1, -1).to(scores_flat.dtype)
@@ -3251,8 +3276,8 @@ class MoeOp:
 
         routed_sum = torch.zeros_like(shared_output)
         for expert_idx, expert_scale in zip(selected_experts, selected_scales, strict=True):
-            gate_w = _reshape_weight(gate_proj_weights_dict[expert_idx], norm_x.shape[-1])
-            up_w = _reshape_weight(up_proj_weights_dict[expert_idx], norm_x.shape[-1])
+            gate_w = _fold_W(_reshape_weight(gate_proj_weights_dict[expert_idx], norm_x.shape[-1]))
+            up_w = _fold_W(_reshape_weight(up_proj_weights_dict[expert_idx], norm_x.shape[-1]))
             down_w = _reshape_weight(down_proj_weights_dict[expert_idx], gate_w.shape[-1])
             gate_out = torch.nn.functional.silu(norm_x @ gate_w)
             up_out = norm_x @ up_w
