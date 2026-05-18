@@ -245,10 +245,18 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             const uint32_t cache_head_dim = k_shape[3];
             const uint32_t q_head_dim = q_shape[3];
             const uint32_t effective_block_size = operation_attributes.block_size_override.value();
+            // num_kv_heads on the call-view side may differ from the cache when the
+            // caller is reading an HMA cross-group buffer (e.g. Gemma4-26B-A4B sliding
+            // kv=8 cache read by a full layer with kv=2). Earlier versions of this
+            // check used cache_num_kv_heads on both sides, so the kv factor cancelled
+            // and the per-kv-heads dimension was unchecked — masking real mismatches
+            // when num_kv_heads_override was set, and rejecting legitimate asymmetric
+            // calls when it wasn't. Use the override (or default to cache when unset).
+            const uint32_t view_num_kv_heads = operation_attributes.num_kv_heads_override.value_or(cache_num_kv_heads);
             const uint64_t cache_elems_per_block =
                 static_cast<uint64_t>(cache_num_kv_heads) * cache_block_size * cache_head_dim;
             const uint64_t view_elems_per_block =
-                static_cast<uint64_t>(cache_num_kv_heads) * effective_block_size * q_head_dim;
+                static_cast<uint64_t>(view_num_kv_heads) * effective_block_size * q_head_dim;
             TT_FATAL(
                 view_elems_per_block == cache_elems_per_block,
                 "paged_scaled_dot_product_attention_decode geometry mismatch: cache has {} elems/block "
@@ -259,7 +267,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
                 cache_block_size,
                 cache_head_dim,
                 view_elems_per_block,
-                cache_num_kv_heads,
+                view_num_kv_heads,
                 effective_block_size,
                 q_head_dim);
             TT_FATAL(
@@ -497,6 +505,8 @@ ttsl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
         operation_attributes.sliding_window_size,
         // Enters compile-time args (page_block_size_t, DHt, St).
         operation_attributes.block_size_override,
+        // Enters compile-time args via num_kv_heads (parallelization grid + strides).
+        operation_attributes.num_kv_heads_override,
         tensor_args.q,
         tensor_args.k,
         tensor_args.v,
@@ -528,7 +538,8 @@ Tensor sdpa_decode(
     std::optional<bool> share_cache,
     std::optional<bool> use_mla,
     std::optional<uint32_t> head_dim_v,
-    std::optional<uint32_t> block_size_override) {
+    std::optional<uint32_t> block_size_override,
+    std::optional<uint32_t> num_kv_heads_override) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
@@ -544,6 +555,7 @@ Tensor sdpa_decode(
         .use_mla = use_mla,
         .head_dim_v = head_dim_v,
         .block_size_override = block_size_override,
+        .num_kv_heads_override = num_kv_heads_override,
     };
 
     auto tensor_args = OperationType::tensor_args_t{
