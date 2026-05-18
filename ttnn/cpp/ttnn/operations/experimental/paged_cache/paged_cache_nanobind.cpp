@@ -29,7 +29,12 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
          defaults to ``cache_tensor.padded_shape[2]``; pass the kwarg to override it for
          callers that reinterpret one physical buffer with different
          ``(block_size, head_dim)`` tile layouts (e.g. vLLM's hybrid kv-cache-groups
-         path). ``num_kv_heads * block_size * head_dim`` must be preserved across views.
+         path). ``num_kv_heads`` defaults to ``cache_tensor.padded_shape[1]``; pass the
+         kwarg when the input view has a different kv-head count from the cache (e.g.
+         Gemma4 sliding kv=8 / full kv=2 sharing one HMA buffer) — the decode-time
+         input is height-sharded with the kv-heads dim padded to TILE_HEIGHT so the
+         logical count can't be inferred from the tensor.
+         ``num_kv_heads * block_size * head_dim`` must be preserved across views.
         )doc";
 
     ttnn::bind_function<"paged_update_cache", "ttnn.experimental.">(
@@ -46,7 +51,8 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         nb::arg("batch_offset") = 0,
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
         nb::arg("mesh_coords").noconvert() = nb::none(),
-        nb::arg("block_size") = nb::none());
+        nb::arg("block_size") = nb::none(),
+        nb::arg("num_kv_heads") = nb::none());
 
     const auto* paged_fused_update_cache_doc =
         R"doc(
