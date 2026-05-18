@@ -287,11 +287,20 @@ def test_cross_mesh_socket_smoke(mesh_device, tensor_size_bytes, fifo_size, num_
 
 @pytest.mark.parametrize(
     # (logical_rows, logical_cols, page_size_bytes, num_logical_tensors)
-    # 640 × 1792 bf16 = 2,293,760 bytes; page=4096 → 560 pages per logical tensor.
+    # 640 × 1792 bf16 = 2,293,760 bytes per logical tensor. Sweep page sizes
+    # to map the bandwidth curve (per-call overhead vs L1 footprint).
+    # Constraint: logical_tensor_bytes % page_size_bytes == 0 (verified inline).
+    # Each point allocates fifo = 4 × page_size in L1.
     "logical_rows, logical_cols, page_size_bytes, num_logical_tensors",
     [
+        (640, 1792, 256, 20),
+        (640, 1792, 1024, 20),
+        (640, 1792, 2048, 20),
         (640, 1792, 4096, 20),
+        (640, 1792, 8192, 20),
+        (640, 1792, 16384, 20),
     ],
+    ids=["pg256", "pg1024", "pg2048", "pg4096", "pg8192", "pg16384"],
 )
 @pytest.mark.parametrize("h2d_mode", [ttnn.H2DMode.HOST_PUSH])
 @pytest.mark.parametrize(
