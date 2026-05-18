@@ -406,6 +406,11 @@ void Device::configure_fabric(
     const std::unordered_set<uint32_t>& skip_soft_reset_channels,
     const std::unordered_set<uint32_t>& external_umd_channels,
     const std::unordered_set<uint32_t>& mmio_base_umd_channels) {
+    // FIX IJ/KL code that used mmio_base_umd_channels is disabled under
+    // #ifdef FIXIJ_REDUNDANT_AFTER_FIX_MM (made redundant by FIX MM).  The
+    // parameter is kept in the signature so callers need no churn when/if the
+    // ifdef block is removed.  Suppress the -Wunused-parameter warning.
+    (void)mmio_base_umd_channels;
     if (fabric_program_ == nullptr) {
         return;
     }
