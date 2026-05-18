@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -42,6 +43,15 @@ TEST(GetValueType, IntegerSameType_SizeT) {
 TEST(GetValueType, IntegerSameType_Int) {
     auto d = make_dict(int{-7});
     EXPECT_EQ(get_value_type<int>(d, "k"), -7);
+}
+
+TEST(GetValueType, IntegerSameType_SizeTAboveIntMax_RoundTrips) {
+    // A size_t value that does not fit in int. The same-type read must
+    // preserve it bit-for-bit, i.e. the implementation must not narrow
+    // through int.
+    constexpr std::size_t big = static_cast<std::size_t>(std::numeric_limits<int>::max()) + 1;
+    auto d = make_dict(big);
+    EXPECT_EQ(get_value_type<std::size_t>(d, "k"), big);
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +181,16 @@ TEST(GetValueType, FloatSameType) {
 TEST(GetValueType, DoubleSameType) {
     auto d = make_dict(double{0.1});
     EXPECT_EQ(get_value_type<double>(d, "k"), 0.1);
+}
+
+TEST(GetValueType, DoubleSameType_NotRepresentableInFloat_RoundTrips) {
+    // 0.1 has no exact binary representation; the nearest float and the
+    // nearest double differ. The same-type read must preserve full double
+    // precision, i.e. the implementation must not narrow through float.
+    constexpr double v = 0.1;
+    static_assert(static_cast<double>(static_cast<float>(v)) != v, "0.1 must differ between float and double");
+    auto d = make_dict(v);
+    EXPECT_EQ(get_value_type<double>(d, "k"), v);
 }
 
 TEST(GetValueType, FloatToDouble_Widens) {
