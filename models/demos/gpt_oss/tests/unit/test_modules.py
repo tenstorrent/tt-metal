@@ -623,7 +623,14 @@ def test_decoder(
             "Only batch size 1 is supported for mesh shape without row-sharding."
         )
 
-    if is_blackhole() and mesh_device.shape[0] > 1 and batch_size * seq_len > 1:
+    # Parse test_modules (supports comma-separated values)
+    modules_to_test = set(test_modules.split(","))
+    run_all = "all" in modules_to_test
+    only_non_moe = modules_to_test.issubset({"attention", "rms_norm"})
+    
+    # TODO: Add remove skipping for MoE tests once it's implemented for BH-GLX: 
+    # https://github.com/tenstorrent/tt-metal/issues/41132?reload=1%3Fissue%3Dtenstorrent%7Ctt-metal%7C41824
+    if is_blackhole() and mesh_device.shape[0] > 1 and batch_size * seq_len > 1 and not only_non_moe:
         pytest.skip(
             f"Skipping batch={batch_size} seq_len={seq_len} on Blackhole {tuple(mesh_device.shape)}: "
             "this configuration uses throughput experts which are not supported on Blackhole."
@@ -735,10 +742,6 @@ def test_decoder(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.int32,
     )
-
-    # Parse test_modules (supports comma-separated values)
-    modules_to_test = set(test_modules.split(","))
-    run_all = "all" in modules_to_test
 
     logger.info(f"Running tests: {test_modules}")
 
