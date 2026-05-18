@@ -1,5 +1,34 @@
 
 ---
+## 2026-05-18 — Cycle N+2: CI Run 26013584094 — SILENT EXIT IN TOPOLOGY CHECK (FIX SC2)
+
+### CI Run: 26013584094 — FAILURE (exit code 1, NO tests ran)
+### What failed: Silent script exit — set -eo pipefail + grep on empty string
+
+**Failure sequence:**
+1. Warm-up ran ~55s. FIX NX fired for devices 4,5,6,7 (non-MMIO relay dead).
+   FIX DT-1 fired (dispatch ERISC timeout) — but NOT caught by FIX UP grep.
+2. FIX UP grep pattern missed "FIX DT-1" because it matched "rescue of stuck dispatch cores"
+   (spaces) but the actual log says "rescue_stuck_dispatch_cores" (underscores).
+3. GetNumAvailableDevices topology check: board in degraded state → python3 failed → raw_output=""
+4. BUG: `n_chips=$(echo "$raw_output" | tr -d '\r' | grep -E '^[0-9]+$' | tail -1)`
+   grep returned exit code 1 (no match on empty input).
+   set -eo pipefail → script exited 1 SILENTLY. No error message, no tests run.
+
+**Root cause**: Two bugs:
+- Primary: `n_chips=$(... | grep ...)` without `|| true` — pipefail kills script on grep non-match
+- Secondary: FIX UP grep pattern uses "rescue of stuck dispatch cores" (spaces), but Metal logs
+  "rescue_stuck_dispatch_cores" (underscores). FIX DT-1 never triggered FIX UP / FIX TO remedial reset.
+
+**Fix applied (FIX SC2)**:
+- FIX A: Added `|| true` to ALL 4 `n_chips=$(... | grep ...)` pipeline assignments
+- FIX B: Changed `n_chips="ERROR"` + `exit 1` to `n_chips="0"` fallthrough → triggers FIX TL recovery
+- FIX C: Added `FIX DT-1` and `rescue_stuck_dispatch_cores` to ALL 8 warm-up detection grep patterns
+
+**Commit**: 8bd3e3dbea8
+**Files changed**: tests/scripts/t3000/run_t3000_unit_tests.sh (+20/-12 across both functions)
+
+---
 ## 2026-05-18 — Cycle N+1: CI Run 26013023193 — BUILD FAILURE: Missing namespace qualifier (FIX EG2)
 
 ### CI Run: 26013023193 — BUILD FAILED (tests never ran)
