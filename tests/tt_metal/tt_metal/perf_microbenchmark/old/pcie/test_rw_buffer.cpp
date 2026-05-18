@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
             auto end = std::chrono::steady_clock::now();
             auto elapsed_sum = end - begin;
 
-            for (int i = 0; i < iter; i++) {
+            for (uint32_t i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
                 tt_metal::distributed::WriteShard(
                     device->mesh_command_queue(0),
@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
             auto end = std::chrono::steady_clock::now();
             auto elapsed_sum = end - begin;
 
-            for (int i = 0; i < iter; i++) {
+            for (uint32_t i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
                 tt_metal::distributed::ReadShard(
                     device->mesh_command_queue(0),

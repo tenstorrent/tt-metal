@@ -1165,11 +1165,11 @@ protected:
     void pad_host_data(Common::DeviceData& device_data) {
         Common::one_core_data_t& host_data = device_data.get_data()[device_data.get_host_core()][0];
 
-        int pad =
+        size_t pad =
             dispatch_buffer_page_size_ - ((host_data.data.size() * sizeof(uint32_t)) % dispatch_buffer_page_size_);
         pad = pad % dispatch_buffer_page_size_;
 
-        for (int i = 0; i < pad / sizeof(uint32_t); i++) {
+        for (size_t i = 0; i < pad / sizeof(uint32_t); i++) {
             device_data.push_one(device_data.get_host_core(), 0, HOST_DATA_DIRTY_PATTERN);
         }
     }
