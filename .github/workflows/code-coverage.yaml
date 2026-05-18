@@ -108,7 +108,7 @@ jobs:
           # Collect ttnn Python extension .so files from installed wheel
           while IFS= read -r -d '' obj; do
             objects+=("$obj")
-          done < <(find /opt/venv/lib -path "*/ttnn/*.so" -print0 2>/dev/null)
+          done < <(find /opt/venv/lib -path "*/ttnn/build/lib/*.so" -print0 2>/dev/null)
 
           if [ ${#objects[@]} -eq 0 ]; then
             echo "::error::No instrumented objects found"
