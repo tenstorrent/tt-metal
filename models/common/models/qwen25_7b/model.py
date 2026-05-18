@@ -962,9 +962,14 @@ class Qwen25_7B(LightweightModule):
         return self.norm.forward(h, "decode")
 
     def lm_logits(self, hidden: ttnn.Tensor) -> ttnn.Tensor:
-        """Project last hidden to logits (vocab-sharded on multi-device)."""
+        """Project last hidden to logits (vocab-sharded on multi-device).
+
+        Skip the explicit interleaved→shard if the caller already produced a sharded
+        input (``decode_from_token_ids`` returns the decode-mode RMSNorm's width-sharded
+        output, which already matches ``LMHead1D.config.input_memcfg``).
+        """
         x = hidden
         lm_head_memcfg = self.lm_head.config.input_memcfg
-        if lm_head_memcfg is not None and lm_head_memcfg.is_sharded():
+        if lm_head_memcfg is not None and lm_head_memcfg.is_sharded() and not x.memory_config().is_sharded():
             x = ttnn.interleaved_to_sharded(x, lm_head_memcfg)
         return self.lm_head.forward(x)

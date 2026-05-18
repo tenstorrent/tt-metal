@@ -144,7 +144,13 @@ def test_qwen25_7b_prefill_smoke(mesh_device, hf_model_id, seq_len: int, tmp_pat
 
 @_slow
 def test_qwen25_7b_decode_one_step(mesh_device, hf_model_id, tmp_path_factory):
-    """Prefill 128 tokens, then one greedy decode step at position 128."""
+    """Prefill 128 tokens, then one greedy decode step at position 128.
+
+    Single-user (``max_batch_size=1``): the legacy ``decode_from_token_ids`` path only
+    fills one KV slot per call, so the non-paged ``paged_update_cache`` validation
+    (``num_indices == batch_size``) requires the model be built at batch=1. Multi-user
+    decode goes through the paged executor (covered by ``executor_prefill_smoke``).
+    """
     _skip_unless_heads_divide_mesh(mesh_device, hf_model_id)
     num_layers = int(os.environ.get("QWEN25_DEMO_NUM_LAYERS", "1"))
     cache = tmp_path_factory.mktemp("qwen25_decode_cache")
@@ -154,14 +160,14 @@ def test_qwen25_7b_decode_one_step(mesh_device, hf_model_id, tmp_path_factory):
         model = Qwen25_7B.from_pretrained(
             mesh_device,
             hf_model_id,
-            max_batch_size=32,
+            max_batch_size=1,
             max_seq_len=max(512, seq_len + 8),
             num_layers=num_layers,
             cache_dir=cache,
             executor_mode=False,
         )
     except Exception as e:
-        pytest.skip(f"Could not build model: {e}")
+        pytest.skip(f"Could not build model (weights / memory): {e}")
 
     ttnn.SetDefaultDevice(mesh_device)
     try:
@@ -174,11 +180,8 @@ def test_qwen25_7b_decode_one_step(mesh_device, hf_model_id, tmp_path_factory):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
-        try:
-            _ = run_prefill(model, x, start_pos=0)
-            _ = greedy_decode_one_step(model, token_id=64, current_pos=seq_len)
-        except Exception as e:
-            pytest.skip(f"Prefill/decode path not runnable: {e}")
+        _ = run_prefill(model, x, start_pos=0)
+        _ = greedy_decode_one_step(model, token_id=64, current_pos=seq_len)
     finally:
         ttnn.SetDefaultDevice(None)
         cleanup_model_case(model, mesh_device)
