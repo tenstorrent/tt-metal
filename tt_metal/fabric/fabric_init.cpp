@@ -822,12 +822,29 @@ FabricCoresHealth configure_fabric_cores(
             std::vector<uint32_t> bypass_buf = {1};
             tt::tt_metal::detail::WriteToDeviceL1(
                 device, router_logical_core_s7, handshake_bypass_l1_addr, bypass_buf, CoreType::ETH);
-            log_info(
-                tt::LogMetal,
-                "STRATEGY7 (#42429): wrote handshake_bypass=1 at L1[0x{:08X}] for Device {} chan={} "
-                "(handshake_addr=0x{:08X} + offset={})",
-                handshake_bypass_l1_addr, chip_id_s7, router_chan_s7,
-                static_cast<uint32_t>(router_config.handshake_addr), handshake_bypass_offset);
+
+            // FIX NO (#42429): Readback verify the handshake_bypass write.
+            // If this write is silently dropped (PCIe contention, relay failure),
+            // firmware never sees bypass=1 and enters the full ETH DMA handshake
+            // loop — all handshake race conditions return.  Mirrors FIX GI pattern.
+            std::vector<uint32_t> bypass_verify(1, 0xFFFFFFFF);
+            tt::tt_metal::detail::ReadFromDeviceL1(
+                device, router_logical_core_s7, handshake_bypass_l1_addr, sizeof(uint32_t), bypass_verify, CoreType::ETH);
+            if (bypass_verify[0] != 1) {
+                log_warning(
+                    tt::LogMetal,
+                    "FIX NO (#42429): STRATEGY7 handshake_bypass readback MISMATCH — wrote 1 to "
+                    "L1[0x{:08X}] on Device {} chan={} but read back 0x{:08X}. "
+                    "Firmware may enter full handshake loop — race conditions NOT eliminated.",
+                    handshake_bypass_l1_addr, chip_id_s7, router_chan_s7, bypass_verify[0]);
+            } else {
+                log_info(
+                    tt::LogMetal,
+                    "STRATEGY7 (#42429): wrote handshake_bypass=1 at L1[0x{:08X}] for Device {} chan={} "
+                    "(handshake_addr=0x{:08X} + offset={}) — FIX NO readback verified",
+                    handshake_bypass_l1_addr, chip_id_s7, router_chan_s7,
+                    static_cast<uint32_t>(router_config.handshake_addr), handshake_bypass_offset);
+            }
         }
     }
 

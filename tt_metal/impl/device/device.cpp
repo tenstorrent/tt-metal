@@ -932,15 +932,32 @@ void Device::configure_fabric(
                     // Set fabric_relay_path_broken_ so compile_and_configure_fabric FIX SB2
                     // propagates the broken state to non-MMIO devices, preventing them from
                     // issuing routing-table writes through a relay that never became ready.
+
+                    // FIX NP (#42429): Read actual edm_status at timeout for accurate diagnostics.
+                    // The poll assumes 0xDEADB07E but ERISC may have transitioned to a DIFFERENT
+                    // bad state (e.g., 0x00000000, 0xA0A0A0A0). Without this read, the log says
+                    // "still at 0xDEADB07E" which may be misleading.
+                    uint32_t actual_status_at_timeout = kPreLaunchCanary;  // default assumption
+                    try {
+                        std::vector<uint32_t> timeout_buf(1, kPreLaunchCanary);
+                        detail::ReadFromDeviceL1(
+                            this, logical_core, router_sync_address, 4, timeout_buf, CoreType::ETH);
+                        actual_status_at_timeout = timeout_buf[0];
+                    } catch (...) {
+                        // Best-effort — PCIe read may fail if device is in a bad state.
+                    }
                     fabric_relay_path_broken_.store(true);
                     log_warning(
                         tt::LogMetal,
-                        "FIX EF: Device {} chan {} (MMIO) still at 0xDEADB07E after {}ms — "
-                        "relay ERISC did not start. Setting fabric_relay_path_broken_=true "
-                        "to block D4-D7 routing writes through dead relay. (#42429)",
+                        "FIX EF: Device {} chan {} (MMIO) did not exit canary after {}ms — "
+                        "actual edm_status=0x{:08x} (expected 0xDEADB07E). "
+                        "Setting fabric_relay_path_broken_=true "
+                        "to block D4-D7 routing writes through dead relay. "
+                        "FIX NP (#42429): timeout snapshot.",
                         this->id_,
                         hoisted_eth_chan,
-                        kFIX_EF_PollMaxMs);
+                        kFIX_EF_PollMaxMs,
+                        actual_status_at_timeout);
                 }
             }
         }
@@ -2748,12 +2765,28 @@ void Device::launch_eth_cores_for_quiesce() {
                 // non-MMIO ERISC never starts and ring-sync times out 120s later.
                 // With the flag set, FIX SB2 propagates the broken state to non-MMIO devices,
                 // which then skip their relay reads and avoid the 120s hang.
+
+                // FIX NP (#42429): Read actual edm_status at timeout for accurate diagnostics.
+                // Mirrors FIX NP in FIX EF path — the poll assumes 0xDEADB07E but ERISC may
+                // have transitioned to a different bad state.
+                uint32_t actual_qr_status = kPreLaunchCanary_QR;  // default assumption
+                try {
+                    std::vector<uint32_t> timeout_qr_buf(1, kPreLaunchCanary_QR);
+                    cluster_qr.read_core(timeout_qr_buf, sizeof(uint32_t),
+                        tt_cxy_pair(this->id(), qr_virtual),
+                        static_cast<uint64_t>(qr_sync_addr));
+                    actual_qr_status = timeout_qr_buf[0];
+                } catch (...) {
+                    // Best-effort read — may fail if relay is truly dead.
+                }
                 fabric_relay_path_broken_.store(true);
                 log_warning(tt::LogMetal,
-                    "FIX QR: Device {} chan {} (MMIO) still at 0xDEADB07E after {}ms in quiesce — "
-                    "relay ERISC did not start. Setting fabric_relay_path_broken_=true to block "
-                    "non-MMIO Pass 1c launch through dead relay. (#42429)",
-                    this->id(), qr_chan, kFIX_QR_PollMaxMs);
+                    "FIX QR: Device {} chan {} (MMIO) did not exit canary after {}ms in quiesce — "
+                    "actual edm_status=0x{:08x} (expected 0xDEADB07E). "
+                    "Setting fabric_relay_path_broken_=true to block "
+                    "non-MMIO Pass 1c launch through dead relay. "
+                    "FIX NP (#42429): timeout snapshot.",
+                    this->id(), qr_chan, kFIX_QR_PollMaxMs, actual_qr_status);
             }
         }
     }
