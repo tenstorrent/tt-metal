@@ -21,6 +21,8 @@ constexpr uint32_t cb1 = tt::CBIndex::c_1;
 constexpr uint32_t cb24 = tt::CBIndex::c_24;
 constexpr uint32_t cb16 = tt::CBIndex::c_16;
 
+constexpr uint32_t onetile = 1;
+
 #ifdef TRISC_MATH
 #include <cstdint>
 #include "llk_math_common.h"
@@ -53,7 +55,7 @@ void core_agnostic_main() {
                     BroadcastType::NONE,
                     DST_ACCUM_MODE,
                     MATH_FIDELITY,
-                    EltwiseBinaryReuseDestType::NONE>(0);
+                    EltwiseBinaryReuseDestType::NONE>(0 /*dst_index*/);
                 llk_math_dest_section_done<DST_ACCUM_MODE>();
             }
         }
@@ -74,27 +76,26 @@ void core_agnostic_main() {
 
     llk_unpack_hw_configure<DST_ACCUM_MODE>(cb0, cb1);
 
-    // llk_unpack_untilize_init(cb0);
     for (uint32_t block = 0U; block < per_core_num_blocks; ++block) {
         for (uint32_t r = 0; r < per_core_block_r_tiles; r++) {
             llk_unpack_untilize_init(cb0);
-            llk_wait_tiles(cb0, per_core_block_c_tiles);
+            cb_wait_front(cb0, per_core_block_c_tiles);
             llk_unpack_untilize(cb0, per_core_block_c_tiles);
 #ifdef ARCH_BLACKHOLE
             llk_unpack_untilize_uninit(cb0);
 #else
             llk_unpack_untilize_uninit();
 #endif
-            llk_pop_tiles(cb0, per_core_block_c_tiles);
-            llk_pop_tiles(cb1, per_core_block_c_tiles);
+            cb_pop_front(cb0, per_core_block_c_tiles);
+            cb_pop_front(cb1, per_core_block_c_tiles);
 
             llk_unpack_AB_init<BroadcastType::NONE>(cb24, cb1);
             for (uint32_t c = 0; c < per_core_block_c_tiles; c++) {
-                llk_wait_tiles(cb24, 1);
-                llk_wait_tiles(cb1, 1);
-                llk_unpack_AB(cb24, cb1, 0, 0);
-                llk_pop_tiles(cb24, 1);
-                llk_pop_tiles(cb1, 1);
+                cb_wait_front(cb24, onetile);
+                cb_wait_front(cb1, onetile);
+                llk_unpack_AB(cb24, cb1, 0 /*11_tile_index_a*/, 0 /*l1_tile_index_b*/);
+                cb_pop_front(cb24, onetile);
+                cb_pop_front(cb1, onetile);
             }
         }
     }
@@ -116,21 +117,21 @@ void core_agnostic_main() {
 
     for (uint32_t block = 0; block < per_core_num_blocks; block++) {
         for (uint32_t r = 0; r < per_core_block_r_tiles; r++) {
-            llk_wait_for_free_tiles<false, false, false>(cb24, per_core_block_c_tiles);
+            cb_reserve_back(cb24, per_core_block_c_tiles);
             for (uint32_t c = 0; c < per_core_block_c_tiles; c++) {
                 llk_packer_wait_for_math_done();
-                llk_pack<DST_ACCUM_MODE, false, PackMode::Default>(0, cb24);
+                llk_pack<DST_ACCUM_MODE, false /*out_of_order_output*/, PackMode::Default>(0 /*dst_tile_index*/, cb24);
                 llk_pack_dest_section_done<DST_ACCUM_MODE>();
             }
-            llk_push_tiles<false, false>(cb24, per_core_block_c_tiles);
+            cb_push_back(cb24, per_core_block_c_tiles);
 
-            llk_wait_for_free_tiles<false, false, false>(cb16, per_core_block_c_tiles);
+            cb_reserve_back(cb16, per_core_block_c_tiles);
             for (uint32_t c = 0; c < per_core_block_c_tiles; c++) {
                 llk_packer_wait_for_math_done();
-                llk_pack<DST_ACCUM_MODE, false, PackMode::Default>(0, cb16);
+                llk_pack<DST_ACCUM_MODE, false /*out_of_order_output*/, PackMode::Default>(0 /*dst_tile_index*/, cb16);
                 llk_pack_dest_section_done<DST_ACCUM_MODE>();
             }
-            llk_push_tiles<false, false>(cb16, per_core_block_c_tiles);
+            cb_push_back(cb16, per_core_block_c_tiles);
         }
     }
 }
