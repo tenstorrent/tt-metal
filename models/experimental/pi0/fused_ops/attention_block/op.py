@@ -1,17 +1,37 @@
 """Fused SigLIP attention sub-block — Python op wrapper.
 
-First increment: LN1 + residual fused into one dispatch. Math:
-    out = LN1(x; gamma, beta) + x
-
-This is the validation skeleton for the multi-Op chaining pattern. Future
-increments will add QKV, 16-head SDPA, O-proj.
+Increment status (task #10):
+    Commit 1: LN1 + residual fused into one dispatch on the 8-core LN1 row.
+        Math: residual_out = LN1(x; gamma, beta) + x_residual.
+    Commit 2 (current): expand the kernel grid to LN1 ∪ QKV = 38 distinct cores.
+        After LN1's TRISC pushes ln_out_cb on the 8-core row (y=0, x=0..7), the
+        36 QKV receivers (y=0..5, x=0..5) pull 8 shards each via noc_async_read
+        and assemble the full (256, 1152) activation in qkv_act_cb. Residual is
+        still added on the LN1 row only — qkv_act_cb is produced for the probe
+        test, not consumed downstream yet (QKV matmul lands in Commit 3).
+    Commit 3 (next): QKV EncoderMatmul::Op on the 36-core grid.
 
 CB plan (this increment):
-    LN1 inputs:      ln_in_cb=0, gamma_cb=1, beta_cb=2, scaler_cb=3, ones_cb=4
-    LN1 intermediates: accum_cb=5, xmm_cb=6, xmm2_cb=7, mean_cb=8, var_cb=9, ivar_cb=10
-    Chaining:        ln_out_cb=11 (LN writes, residual reads as its a-input)
-    Residual second: x_residual_cb=12 (separate L1 copy of x for b-input)
-    Final output:    final_out_cb=13
+    LN1 inputs (LN1 grid):       ln_in_cb=0, gamma_cb=1, beta_cb=2, scaler_cb=3, ones_cb=4
+    LN1 intermediates (LN1 grid): accum_cb=5, xmm_cb=6, xmm2_cb=7, mean_cb=8, var_cb=9, ivar_cb=10
+    Chaining (LN1 grid):         ln_out_cb=11
+    Residual extras (LN1 grid):  x_residual_cb=12, final_out_cb=13
+    Mcast destination (QKV grid): qkv_act_cb=14 — holds the full (256, 1152)
+                                  activation re-assembled from 8 LN1 shards.
+
+Semaphores:
+    counter_sem (QKV grid, id=2): each QKV receiver waits for it to reach 8
+        atomic +1s (one per LN1 sender), then resets to 0.
+
+NCRISC common RT args (positional, named on host side for clarity):
+    [0] ln_out_l1_addr: deterministic L1 address of every LN1 core's ln_out_cb
+        shard (sharded buffers share an address across all owning cores).
+
+Receiver-pull mechanics (vs an Mcast::Op sender push):
+    Avoids 8 parallel multicasts contending for fabric. Senders are 8, each
+    does 36 tiny atomic NoC writes (288 total). Receivers each issue 8
+    noc_async_reads (288 total). Both numbers are well below fabric limits
+    and decouple cleanly from any matmul work that follows.
 """
 import torch
 import ttnn
@@ -20,7 +40,8 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import UnifiedKernelD
 
 
 class SigLIPAttentionBlockFused:
-    """Fused LN1 + residual on a single 8-core row (first increment)."""
+    """Fused LN1 + residual on the LN1 row, with receiver-pull mcast of LN1's
+    output to a 36-core QKV grid (no QKV matmul yet)."""
 
     KERNEL_SOURCE = "models/experimental/pi0/fused_ops/attention_block/kernels/attention_block_kernel.cpp"
 
@@ -30,6 +51,17 @@ class SigLIPAttentionBlockFused:
     M_TILES = M // TILE
     D_TILES = D // TILE
     EPS = 1e-6
+
+    # Grid layout (task #10 Commit 2):
+    #   LN1 row: y=0, x=0..7  → 8 cores. Produce ln_out_cb shards (32, 1152).
+    #   QKV grid: y=0..5, x=0..5  → 36 cores. Pull 8 shards each into
+    #     qkv_act_cb of shape (256, 1152) (full LN1 output, replicated per core).
+    #   Union (38 distinct cores) is the kernel core_ranges; CBs and semaphores
+    #     live on the sub-grids they need to.
+    LN1_NUM_CORES = 8
+    QKV_GRID_X = 6
+    QKV_GRID_Y = 6
+    QKV_NUM_CORES = QKV_GRID_X * QKV_GRID_Y  # 36
 
     # CB IDs (must match the kernel's get_named_compile_time_arg_val calls)
     CB = {
@@ -47,7 +79,19 @@ class SigLIPAttentionBlockFused:
         "ln_out_cb": 11,
         "x_residual_cb": 12,
         "final_out_cb": 13,
+        "qkv_act_cb": 14,
+        # 1-tile sync CB (LN1 row): TRISC pushes after LN1 completes, NCRISC
+        # sender waits/pops before issuing 36 counter-sem increments. Decouples
+        # the NCRISC sender from TRISC residual on ln_out_cb (multi-consumer
+        # races: residual's cb_pop_front would otherwise starve the sender's
+        # cb_wait_front, since both read pages_received - pages_acked).
+        "ln_done_trigger_cb": 15,
     }
+
+    # Counter semaphore for the LN1→QKV receiver-pull. Each QKV receiver
+    # increments-and-waits on its own copy at this ID; the host allocates the
+    # actual L1 backing on the QKV grid.
+    COUNTER_SEM_ID = 2
 
     @staticmethod
     def op(
@@ -65,20 +109,28 @@ class SigLIPAttentionBlockFused:
         ln_out_tt,
         x_residual_tt,
         final_out_tt,
-        num_cores: int = 8,
+        qkv_act_tt,
+        ln_done_trigger_tt,
         math_fidelity=ttnn.MathFidelity.HiFi4,
         eps: float = 1e-6,
     ):
+        num_cores = SigLIPAttentionBlockFused.LN1_NUM_CORES
         m_per_core = SigLIPAttentionBlockFused.M_TILES // num_cores
         assert m_per_core * num_cores == SigLIPAttentionBlockFused.M_TILES
 
-        in_tiles = m_per_core * SigLIPAttentionBlockFused.D_TILES
+        in_tiles = m_per_core * SigLIPAttentionBlockFused.D_TILES  # per-LN1-core: 1 * 36 = 36
         gamma_tiles = SigLIPAttentionBlockFused.D_TILES
+
+        # Per-receiver qkv_act_cb holds the full re-assembled (256, 1152) = 8 LN1
+        # shards = 8 * 36 = 288 tiles.
+        qkv_act_tiles_per_core = SigLIPAttentionBlockFused.LN1_NUM_CORES * in_tiles
 
         eps_bf16 = torch.tensor(eps, dtype=torch.bfloat16).view(torch.uint16).item()
         eps_bits = eps_bf16 << 16
 
-        # NCRISC needs only the CBs it sets up sharded buffers for.
+        # NCRISC CT args: existing setup-sharded-buffer plumbing for the LN1
+        # row, plus the new qkv_act_cb / shard sizing / semaphore-id needed by
+        # the receiver-pull added in Commit 2.
         ncrisc_ct = [
             ("ln_in_cb", SigLIPAttentionBlockFused.CB["ln_in_cb"]),
             ("gamma_cb", SigLIPAttentionBlockFused.CB["gamma_cb"]),
@@ -87,8 +139,16 @@ class SigLIPAttentionBlockFused:
             ("ones_cb", SigLIPAttentionBlockFused.CB["ones_cb"]),
             ("x_residual_cb", SigLIPAttentionBlockFused.CB["x_residual_cb"]),
             ("final_out_cb", SigLIPAttentionBlockFused.CB["final_out_cb"]),
+            ("ln_out_cb", SigLIPAttentionBlockFused.CB["ln_out_cb"]),
+            ("qkv_act_cb", SigLIPAttentionBlockFused.CB["qkv_act_cb"]),
+            ("ln_done_trigger_cb", SigLIPAttentionBlockFused.CB["ln_done_trigger_cb"]),
             ("in_tiles", in_tiles),
             ("gamma_tiles", gamma_tiles),
+            ("ln1_num_cores", SigLIPAttentionBlockFused.LN1_NUM_CORES),
+            ("qkv_grid_x", SigLIPAttentionBlockFused.QKV_GRID_X),
+            ("qkv_grid_y", SigLIPAttentionBlockFused.QKV_GRID_Y),
+            ("qkv_act_tiles_per_core", qkv_act_tiles_per_core),
+            ("counter_sem_id", SigLIPAttentionBlockFused.COUNTER_SEM_ID),
         ]
         # TRISC needs all CBs + tile counts + eps.
         trisc_ct = [
@@ -98,14 +158,62 @@ class SigLIPAttentionBlockFused:
             ("eps_bits", eps_bits),
         ]
 
-        core_grid = final_out_tt.memory_config().shard_spec.grid
+        # Physical NoC coords for the worker grid. BH's logical-to-physical x
+        # mapping is contiguous for the first 6..7 columns (1..7) but then
+        # jumps over the eth/PCIe rows: logical x=7 → physical x=10, NOT 8.
+        # The 6×6 QKV receiver grid stays inside the contiguous block, so we
+        # can pass an origin and add logical offsets. The 8-core LN1 row spans
+        # the gap (logical x=0..7), so we explicitly enumerate the 8 LN1
+        # physical x coords and pass them as a runtime array.
+        _device = ln_in_tt.device()
+        _phys_origin = _device.worker_core_from_logical_core(ttnn.CoreCoord(0, 0))
+        _ln1_phys_xs = [
+            _device.worker_core_from_logical_core(ttnn.CoreCoord(lx, 0)).x
+            for lx in range(SigLIPAttentionBlockFused.LN1_NUM_CORES)
+        ]
+
+        # Kernel runs on every core in LN1 ∪ QKV (38 distinct). Runtime role
+        # flags inside the kernel gate the LN1 / sender / receiver bodies.
+        ln1_range = ttnn.CoreRange(
+            ttnn.CoreCoord(0, 0),
+            ttnn.CoreCoord(SigLIPAttentionBlockFused.LN1_NUM_CORES - 1, 0),
+        )
+        # QKV grid is y=0..5, x=0..5; the y=0 row overlaps LN1's x=0..5. Express
+        # the union as the LN1 row plus the strictly-below-y=0 QKV rows so the
+        # two ranges don't overlap (CoreRangeSet requires disjoint ranges).
+        qkv_rows_below = ttnn.CoreRange(
+            ttnn.CoreCoord(0, 1),
+            ttnn.CoreCoord(SigLIPAttentionBlockFused.QKV_GRID_X - 1, SigLIPAttentionBlockFused.QKV_GRID_Y - 1),
+        )
+        union_core_grid = ttnn.CoreRangeSet({ln1_range, qkv_rows_below})
 
         unified_kernel = UnifiedKernelDescriptor(
             kernel_source=SigLIPAttentionBlockFused.KERNEL_SOURCE,
-            core_ranges=core_grid,
+            core_ranges=union_core_grid,
             ncrisc_named_compile_time_args=ncrisc_ct,
             brisc_named_compile_time_args=[],
             trisc_named_compile_time_args=trisc_ct,
+            # NCRISC: senders read get_read_ptr(ln_out_cb), receivers read the
+            # remote LN1 cores' ln_out_cb shard at the same L1 address (sharded
+            # persistent buffer ⇒ deterministic per-core L1 location). The two
+            # phys_origin args carry the worker-grid logical-(0,0)→NoC-physical
+            # mapping: BH places logical (0,0) at NoC physical (1,2), and the
+            # worker grid is contiguous from there, so kernel derives a target
+            # core's physical NoC coord as (phys_origin + logical). Atomic-inc
+            # responses don't appear to route through the HW translation table
+            # on BH, so passing physical coords directly is the safe pattern
+            # (matches deepseek's gather op host-side compute).
+            ncrisc_named_common_runtime_args=[
+                ("ln_out_l1_addr", ln_out_tt.buffer_address()),
+                ("worker_phys_origin_x", _phys_origin.x),
+                ("worker_phys_origin_y", _phys_origin.y),
+            ],
+            ncrisc_named_common_runtime_arg_arrays=[
+                # 8 physical NoC x coords, one per LN1 sender (logical x=0..7).
+                # Kernel reads via positional get_common_arg_val starting at
+                # the slot after the 3 scalar named common args above.
+                ("ln1_phys_x", _ln1_phys_xs),
+            ],
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=math_fidelity,
                 math_approx_mode=False,
@@ -124,6 +232,22 @@ class SigLIPAttentionBlockFused:
             d.format_descriptors[0].page_size = bf16_page
             return d
 
+        # Counter semaphore lives on the 36 QKV receivers. Senders unicast +1
+        # via NoC; receivers wait for value ≥ ln1_num_cores then reset.
+        qkv_sem_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(SigLIPAttentionBlockFused.QKV_GRID_X - 1, SigLIPAttentionBlockFused.QKV_GRID_Y - 1),
+                )
+            }
+        )
+        counter_sem = ttnn.SemaphoreDescriptor(
+            id=SigLIPAttentionBlockFused.COUNTER_SEM_ID,
+            core_ranges=qkv_sem_grid,
+            initial_value=0,
+        )
+
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
@@ -141,8 +265,10 @@ class SigLIPAttentionBlockFused:
                 _cb(SigLIPAttentionBlockFused.CB["ln_out_cb"], ln_out_tt),
                 _cb(SigLIPAttentionBlockFused.CB["x_residual_cb"], x_residual_tt),
                 _cb(SigLIPAttentionBlockFused.CB["final_out_cb"], final_out_tt),
+                _cb(SigLIPAttentionBlockFused.CB["qkv_act_cb"], qkv_act_tt),
+                _cb(SigLIPAttentionBlockFused.CB["ln_done_trigger_cb"], ln_done_trigger_tt),
             ],
-            semaphores=[],
+            semaphores=[counter_sem],
         )
 
         ttnn.generic_op(
@@ -161,31 +287,36 @@ class SigLIPAttentionBlockFused:
                 ln_out_tt,
                 x_residual_tt,
                 final_out_tt,
+                qkv_act_tt,
+                ln_done_trigger_tt,
             ],
             program_descriptor,
         )
-        return final_out_tt
+        return final_out_tt, qkv_act_tt
 
 
-def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_torch, num_cores: int = 8):
-    """Build all 14 sharded tensors needed by the fused LN1 + residual op.
+def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_torch):
+    """Build all sharded tensors needed by the fused attention-block op.
 
-    Extends build_tensors_for_ln_test with the additional `x_residual` and
-    `final_out` tensors needed for the residual phase.
+    Returns a 15-tuple matching SigLIPAttentionBlockFused.op's positional inputs.
+    The first 14 entries match Commit 1 (LN1 + residual on the 8-core row); the
+    15th is qkv_act_tt — a (36 × 256, 1152) HEIGHT_SHARDED tensor that the 36
+    QKV receivers write into via NCRISC noc_async_read.
     """
     M = SigLIPAttentionBlockFused.M
     D = SigLIPAttentionBlockFused.D
     TILE = SigLIPAttentionBlockFused.TILE
+    num_cores = SigLIPAttentionBlockFused.LN1_NUM_CORES
     assert x_torch.shape == (M, D)
     assert gamma_torch.shape == (D,)
     assert beta_torch.shape == (D,)
     assert M % num_cores == 0
     m_per_core = M // num_cores
 
-    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    ln1_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
 
     # Input x (LN1 in_cb).
-    in_shard = ttnn.ShardSpec(core_grid, (m_per_core, D), ttnn.ShardOrientation.ROW_MAJOR)
+    in_shard = ttnn.ShardSpec(ln1_core_grid, (m_per_core, D), ttnn.ShardOrientation.ROW_MAJOR)
     in_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in_shard)
     ln_in_tt = ttnn.from_torch(
         x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mem
@@ -213,7 +344,7 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         .repeat(num_cores, 1, 1)
         .reshape(num_cores * TILE, D)
     )
-    gb_shard = ttnn.ShardSpec(core_grid, (TILE, D), ttnn.ShardOrientation.ROW_MAJOR)
+    gb_shard = ttnn.ShardSpec(ln1_core_grid, (TILE, D), ttnn.ShardOrientation.ROW_MAJOR)
     gb_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gb_shard)
     gamma_tt = ttnn.from_torch(
         gamma_stacked, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=gb_mem
@@ -224,7 +355,7 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
 
     # Single-tile per-core helpers (scaler 1/D, ones).
     inv_d = 1.0 / D
-    tile_shard = ttnn.ShardSpec(core_grid, (TILE, TILE), ttnn.ShardOrientation.ROW_MAJOR)
+    tile_shard = ttnn.ShardSpec(ln1_core_grid, (TILE, TILE), ttnn.ShardOrientation.ROW_MAJOR)
     tile_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, tile_shard)
     scaler_tile = torch.full((TILE, TILE), inv_d, dtype=torch.bfloat16)
     ones_tile = torch.full((TILE, TILE), 1.0, dtype=torch.bfloat16)
@@ -252,7 +383,7 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
     var_tt = _make_1tile()
     ivar_tt = _make_1tile()
 
-    # D-tile per core intermediates and outputs.
+    # D-tile per LN1 core intermediates and outputs.
     def _make_dtile():
         return ttnn.from_torch(
             torch.zeros(M, D, dtype=torch.bfloat16),
@@ -266,6 +397,39 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
     xmm2_tt = _make_dtile()
     ln_out_tt = _make_dtile()
     final_out_tt = _make_dtile()
+
+    # qkv_act_tt — 36 receivers each hold the full (256, 1152) re-assembled
+    # activation. HEIGHT_SHARDED across the 6×6 QKV grid at (M, D) per shard.
+    qkv_num_cores = SigLIPAttentionBlockFused.QKV_NUM_CORES
+    qkv_core_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(SigLIPAttentionBlockFused.QKV_GRID_X - 1, SigLIPAttentionBlockFused.QKV_GRID_Y - 1),
+            )
+        }
+    )
+    qkv_shard = ttnn.ShardSpec(qkv_core_grid, (M, D), ttnn.ShardOrientation.ROW_MAJOR)
+    qkv_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, qkv_shard)
+    qkv_act_tt = ttnn.from_torch(
+        torch.zeros(qkv_num_cores * M, D, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=qkv_mem,
+    )
+
+    # 1-tile sync CB on the LN1 row. TRISC pushes after LN1 completes; NCRISC
+    # sender waits/pops before issuing the receiver-pull NoC increments.
+    # Single-tile-per-core; payload is unused — only the push/pop counters
+    # carry the signal.
+    ln_done_trigger_tt = ttnn.from_torch(
+        torch.zeros(num_cores * TILE, TILE, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=tile_mem,
+    )
 
     return (
         ln_in_tt,
@@ -282,4 +446,6 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         ln_out_tt,
         x_residual_tt,
         final_out_tt,
+        qkv_act_tt,
+        ln_done_trigger_tt,
     )
