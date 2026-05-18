@@ -59,124 +59,85 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_core_unsafe_(sfpi::vFloat x)
     return sfpi::setexp(p, new_exp);
 }
 
-// FP32 accurate path for 2^x with full special-case handling.
+// FP32 accurate path for 2^x with branch-free saturation and explicit NaN override.
+//
+// Thresholds are applied directly in the base-2 domain (x = log2 of result):
+//   - x ≥ 128 would overflow biased exponent (≥ 255) → clamp lands on the +inf encoding.
+//   - x ≤ -127 underflows into the denormal range → setexp produces a subnormal that
+//     flushes to zero, matching IEEE FTZ semantics used elsewhere in the SFPU stack.
+//
+// vec_min_max handles ±inf naturally (clamped to ±boundary) but propagates NaN
+// unreliably under -ffast-math, so we re-detect NaN on the *original* x using the
+// integer-exponent pattern from `_calculate_isnan_` (exexp default mode returns the
+// unbiased exponent, where 128 = biased 255 = inf-or-NaN).
 sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x)
 {
-    sfpi::vFloat result = sfpi::vConst0;
-
-    // Thresholds are applied directly in the base-2 domain (x = log2 of result).
-    // For finite normal fp32 outputs: bias-1 ≥ true_exp ≥ -126, i.e. biased_exp ∈ [1, 254].
-    // - x ≥ 128 → result would overflow (biased_exp ≥ 255), so return +inf.
-    // - x ≤ -127 → result would underflow well into the denormal range, so return 0.
-    // Inputs in (-127, -126) produce subnormal results; setexp flushes those to zero
-    // (the high-mantissa bits become the subnormal mantissa with biased_exp=0), which
-    // matches IEEE flush-to-zero semantics and the convention used by _sfpu_exp_fp32_accurate_.
     constexpr float OVERFLOW_THRESHOLD  = 128.0f;
     constexpr float UNDERFLOW_THRESHOLD = -127.0f;
 
-    sfpi::vInt exp_bits = sfpi::exexp(x);
+    // Clamp x to [-127, 128]; out-of-range inputs land on ±boundary and pick up
+    // the exact +inf / +0 encodings via setexp saturation in the core.
+    sfpi::vFloat x_clamped = x;
+    sfpi::vec_min_max(sfpi::vFloat(UNDERFLOW_THRESHOLD), x_clamped);
+    sfpi::vec_min_max(x_clamped, sfpi::vFloat(OVERFLOW_THRESHOLD));
 
-    // NaN/±inf check FIRST (integer compare, immune to -ffinite-math-only).
-    // Float compares against ±inf / NaN are undefined behaviour under fast-math,
-    // which is enabled in the kernel build (see -ffast-math in build.cpp). Doing
-    // the IEEE-special-class dispatch on the integer exponent bits sidesteps this
-    // entirely, and is also one cheaper compare in the common (finite) case.
-    v_if (exp_bits == 255)
+    sfpi::vFloat result = _sfpu_exp2_core_unsafe_(x_clamped);
+
+    // NaN override: default sfpi::exexp returns the *unbiased* exponent, so both
+    // inf and NaN have exp == 128, distinguished by mantissa (matches the canonical
+    // pattern in `_calculate_isnan_`). Only true NaN needs an override — ±inf inputs
+    // already produce the correct ±inf / 0 result via the clamp.
+    sfpi::vInt nan_exp = sfpi::exexp(x);
+    sfpi::vInt nan_man = sfpi::exman(x);
+    v_if (nan_exp == 128 && nan_man != 0)
     {
-        // exponent==255 is either ±inf (mantissa==0) or NaN (mantissa!=0).
-        // For exp2: exp2(+inf) = +inf, exp2(-inf) = 0, exp2(NaN) = NaN.
-        // We can collapse +inf and NaN into a single branch that just returns x:
-        //   * +inf → x is +inf → result is +inf (correct).
-        //   * NaN  → x is NaN  → result is NaN  (correct, NaN propagates).
-        // -inf is the only sub-case that needs a different result; it's caught
-        // by the sign of x below.
-        v_if (x < 0.0f)
-        {
-            result = sfpi::vConst0;  // exp2(-inf) = 0
-        }
-        v_else
-        {
-            result = x;              // exp2(+inf) = +inf, exp2(NaN) = NaN
-        }
-        v_endif;
-    }
-    v_elseif (x >= OVERFLOW_THRESHOLD)
-    {
-        result = std::numeric_limits<float>::infinity();
-    }
-    v_elseif (x <= UNDERFLOW_THRESHOLD)
-    {
-        result = sfpi::vConst0;
-    }
-    v_else
-    {
-        result = _sfpu_exp2_core_unsafe_(x);
+        result = std::numeric_limits<float>::quiet_NaN();
     }
     v_endif;
 
     return result;
 }
 
-// BF16 path: same algorithm, lower-degree polynomial; followed by an explicit
-// round-to-nearest-even into bf16 to avoid the truncation that SFPSTORE would
-// otherwise apply when DEST is bf16 (matches the pattern in _sfpu_exp_21f_bf16_).
+// BF16 path: branch-free saturation using the mantissa-as-fractional-part trick
+// from the production `_sfpu_exp_21f_bf16_` kernel — but specialised for exp2 by
+// skipping the `* (1/ln2)` multiply (we are already in base-2). vec_min_max clamps
+// xlog2 to [0, 255], so the natural saturation of setexp + the final bf16 round
+// give the correct overflow → +inf and underflow → 0 boundary encodings for free.
 sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x)
 {
-    sfpi::vFloat result = sfpi::vConst0;
+    // Map x → xlog2 such that 2^x has biased exponent floor(xlog2) and the
+    // fractional mantissa supplies the (xlog2 - floor) refinement.
+    sfpi::vFloat xlog2 = x + 127.f;
 
-    constexpr float OVERFLOW_THRESHOLD  = 128.0f;
-    constexpr float UNDERFLOW_THRESHOLD = -127.0f;
+    // Clamp to [0, 255]. Boundary inputs land on the +inf / +0 encodings after
+    // setexp + bf16 round, NaN propagates through as a bf16 NaN-class pattern.
+    sfpi::vFloat threshold_low  = 0.f;
+    sfpi::vFloat threshold_high = sfpi::vFloat(255.f);
+    sfpi::vec_min_max(threshold_low, xlog2);
+    sfpi::vec_min_max(xlog2, threshold_high);
 
-    sfpi::vInt exp_bits = sfpi::exexp(x);
+    // Decompose xlog2 in [0, 255] into:
+    //   exponential_part = floor(xlog2)             (integer in [0, 255])
+    //   fractional_part  = (xlog2 - floor) * 2^23   (integer in [0, 2^23))
+    sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
 
-    // See _sfpu_exp2_fp32_accurate_ for why the special-class check goes first.
-    v_if (exp_bits == 255)
-    {
-        v_if (x < 0.0f)
-        {
-            result = sfpi::vConst0;  // exp2(-inf) = 0
-        }
-        v_else
-        {
-            result = x;              // exp2(+inf) = +inf, exp2(NaN) = NaN
-        }
-        v_endif;
-    }
-    v_elseif (x >= OVERFLOW_THRESHOLD)
-    {
-        result = std::numeric_limits<float>::infinity();
-    }
-    v_elseif (x <= UNDERFLOW_THRESHOLD)
-    {
-        result = sfpi::vConst0;
-    }
-    v_else
-    {
-        // Same n+f split as the fp32 path.
-        sfpi::vInt n_int;
-        sfpi::vFloat n_float = _sfpu_round_to_nearest_int32_(x, n_int);
-        sfpi::vFloat f       = x - n_float;
+    sfpi::vInt exponential_part = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
+    sfpi::vInt fractional_part  = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));
 
-        // Degree-3 truncated Taylor polynomial of exp(f·ln2): bf16 only carries
-        // 7 mantissa bits, so this is more than enough headroom to hit ≤ 0.5 ulp
-        // after the final bf16 round.
-        sfpi::vFloat p = PolynomialEvaluator::eval(
-            f,
-            sfpi::vConst1,    // c0 = 1
-            0x1.62e430p-1f,   // c1 = ln(2)
-            0x1.ebfbe0p-3f,   // c2 = ln(2)²/2
-            0x1.c6b08ep-5f    // c3 = ln(2)³/6
-        );
+    sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, sfpi::RoundMode::NearestEven);
 
-        sfpi::vInt p_exp   = sfpi::exexp(p, sfpi::ExponentMode::NoDebias);
-        sfpi::vInt new_exp = p_exp + n_int;
-        result             = sfpi::setexp(p, new_exp);
-    }
-    v_endif;
+    // Refine 2^x_f on x_f to [0, 2^23). Same minimax coefficients as the
+    // production exp_21f kernel (≤ 3 fp32 ULP, well under 1 bf16 ULP).
+    frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+
+    // Recombine: 2^x = (1.frac_mantissa) * 2^(exponential_part - 127).
+    sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
 
     // SFPSTORE truncates fp32→bf16; round explicitly so the bf16 result matches
-    // a faithful nearest-even rounding of the fp32 mathematical value.
-    return sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+    // a faithful nearest-even rounding of the fp32 mathematical value, and so
+    // that the saturation tricks above (overflow → +inf, underflow → 0) land
+    // on the correct bf16 encoding.
+    return sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
