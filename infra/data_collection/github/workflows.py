@@ -76,7 +76,7 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     )
 
     if not has_reset:
-        return [{"attempt": 1, "final_status": "UNKNOWN",
+        return [{"tt_smi_reset_attempt": 1, "final_status": "UNKNOWN",
                  "total_reset_time_sec": None, "error_summary": "No tt-smi reset found"}]
 
     # Find where the reset section starts
@@ -147,7 +147,7 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     else:
         error_summary = None
 
-    return [{"attempt": num_smi_attempts, "final_status": final_status,
+    return [{"tt_smi_reset_attempt": num_smi_attempts, "final_status": final_status,
              "total_reset_time_sec": duration, "error_summary": error_summary}]
 
 def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int, workflow_attempt: int):

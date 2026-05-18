@@ -64,7 +64,7 @@ class JobStatus(str, Enum):
 class TtSmiReset(BaseModel):
     github_job_id: int
     workflow_attempt: Optional[int] = None
-    attempt: int
+    tt_smi_reset_attempt: int
     final_status: Optional[str] = None
     total_reset_time_sec: Optional[float] = None
     error_summary: Optional[str] = None
