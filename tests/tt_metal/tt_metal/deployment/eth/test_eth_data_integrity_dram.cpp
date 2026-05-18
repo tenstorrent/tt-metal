@@ -141,8 +141,6 @@ static bool run_test_integrity_dram(
     bool init_send_dram,
     bool init_recv_dram) {
     /* ============= */
-    bool same_device = send_mesh_device == recv_mesh_device;
-
     TEST_PARAM(uint32_t, dram_start_addr, 0x500000u, "ETH_TEST_START_ADDR");
     TEST_PARAM(uint32_t, dram_end_addr, 0xfe000000u, "ETH_TEST_END_ADDR");
     TEST_PARAM(uint32_t, transfer_size, 160 * 1024, "ETH_TEST_TRANSFER_SIZE");
@@ -170,8 +168,10 @@ static bool run_test_integrity_dram(
     const uint32_t recv_bank_id = next_bank_id++;
     const uint32_t send_bank_id = next_bank_id++;
 
-    tt_metal::Program send_program = tt_metal::Program(), recv_program_ = tt_metal::Program();
-    tt_metal::Program& recv_program = same_device ? send_program : recv_program_;
+    map<shared_ptr<distributed::MeshDevice>, shared_ptr<tt_metal::Program>> programs = {
+        {send_mesh_device, make_shared<Program>()},
+        {recv_mesh_device, make_shared<Program>()},
+    };
 
     /* Receivers */
     prepare_receiver_integrity_dram(
@@ -187,7 +187,7 @@ static bool run_test_integrity_dram(
         dram_end_addr,
         recv_bank_id,
         send_bank_id,
-        &recv_program,
+        programs[recv_mesh_device].get(),
         init_recv_dram);
 
     /* Senders */
@@ -207,22 +207,26 @@ static bool run_test_integrity_dram(
         dram_start_addr,
         dram_end_addr,
         send_bank_id,
-        &send_program,
+        programs[send_mesh_device].get(),
         init_send_dram);
 
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    wait_to_finish_eth_timeout(
-        fixture,
-        send_program,
-        recv_program,
-        send_mesh_device,
-        recv_mesh_device,
-        device_range,
-        send_core,
-        recv_core,
-        progress_counter,
-        dram_end_addr);
+    vector<struct core_setup> cores = {
+        {
+            .program = programs[send_mesh_device],
+            .mesh_device = send_mesh_device,
+            .core = send_core,
+            .iter_l1_addr = progress_counter,
+            .expected_count = dram_end_addr,
+        },
+        {
+            .program = programs[recv_mesh_device],
+            .mesh_device = recv_mesh_device,
+            .core = recv_core,
+            .iter_l1_addr = progress_counter,
+            .expected_count = dram_end_addr,
+        },
+    };
+    wait_to_finish_eth_timeout_cores(fixture, cores, programs);
 
     auto* const send_device = send_mesh_device->get_devices()[0];
     double threshold = get_eth_bw() * 0.5;
