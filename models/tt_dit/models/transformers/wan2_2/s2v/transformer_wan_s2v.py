@@ -33,15 +33,15 @@ import torch
 
 import ttnn
 
-from ....layers.embeddings import WanPatchEmbed
-from ....layers.module import Parameter
-from ....utils.mochi import get_rot_transformation_mat
-from ....utils.padding import get_padded_vision_seq_len, pad_vision_seq_parallel
-from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch, local_device_to_torch
+from .....layers.embeddings import WanPatchEmbed
+from .....layers.module import Parameter
+from .....utils.mochi import get_rot_transformation_mat
+from .....utils.padding import get_padded_vision_seq_len, pad_vision_seq_parallel
+from .....utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch, local_device_to_torch
+from ..transformer_wan import WanTransformer3DModel
 from .audio_utils import AudioInjector_WAN, CausalAudioEncoder
 from .motioner import FramePackMotionerWan
 from .rope_s2v import rope_precompute
-from .transformer_wan import WanTransformer3DModel
 
 
 class WanS2VTransformer3DModel(WanTransformer3DModel):

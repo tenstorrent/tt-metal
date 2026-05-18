@@ -33,10 +33,10 @@ import torch
 
 import ttnn
 
-from ....layers.embeddings import WanPatchEmbed
-from ....layers.module import Module
-from ....parallel.config import DiTParallelConfig
-from ....utils.tensor import bf16_tensor
+from .....layers.embeddings import WanPatchEmbed
+from .....layers.module import Module
+from .....parallel.config import DiTParallelConfig
+from .....utils.tensor import bf16_tensor
 from .rope_s2v import rope_params, rope_precompute
 
 

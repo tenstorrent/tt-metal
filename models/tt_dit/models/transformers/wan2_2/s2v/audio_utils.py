@@ -35,13 +35,13 @@ import torch
 
 import ttnn
 
-from ....layers.linear import Linear
-from ....layers.module import Module, ModuleList, Parameter
-from ....parallel.config import DiTParallelConfig
-from ....parallel.manager import CCLManager
-from ....utils.conv3d import get_conv3d_config, register_conv3d_configs
-from ....utils.tensor import local_device_to_torch
-from .attention_wan import WanAttention
+from .....layers.linear import Linear
+from .....layers.module import Module, ModuleList, Parameter
+from .....parallel.config import DiTParallelConfig
+from .....parallel.manager import CCLManager
+from .....utils.conv3d import get_conv3d_config, register_conv3d_configs
+from .....utils.tensor import local_device_to_torch
+from ..attention_wan import WanAttention
 
 # Custom conv3d blockings for the MotionEncoder's CausalConv1d shapes. All are
 # kernel-3 stride-{1,2} temporal convs over short sequences (T ≤ ~100 frames at

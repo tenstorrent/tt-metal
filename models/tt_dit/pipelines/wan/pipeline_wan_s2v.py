@@ -83,7 +83,7 @@ from ...encoders.wav2vec2.audio_preprocess import (
 )
 from ...encoders.wav2vec2.config_wav2vec2 import Wav2Vec2Config
 from ...encoders.wav2vec2.model_wav2vec2 import Wav2Vec2Encoder
-from ...models.transformers.wan2_2.transformer_wan_s2v import WanS2VTransformer3DModel
+from ...models.transformers.wan2_2.s2v.transformer_wan_s2v import WanS2VTransformer3DModel
 from ...models.vae.vae_wan2_1 import WanDecoder, WanEncoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
