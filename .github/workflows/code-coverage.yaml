@@ -18,8 +18,8 @@ jobs:
     with:
       build-type: CodeCoverage
       build-wheel: true
-      tracy: true
-      skip-tt-train: false
+      tracy: false
+      skip-tt-train: true
       platform: "Ubuntu 22.04"
       enable-lto: false
 
@@ -100,10 +100,6 @@ jobs:
 
       - name: Generate coverage reports
         run: |
-          # Debug: show what's available
-          echo "=== build/lib contents ===" && ls -la ./build/lib/*.so 2>/dev/null || echo "(no .so in build/lib)"
-          echo "=== ttnn .so in venv ===" && find /opt/venv/lib -path "*/ttnn/*.so" 2>/dev/null || echo "(none)"
-
           objects=()
           # Collect instrumented .so files from build artifact
           while IFS= read -r -d '' obj; do
@@ -149,7 +145,7 @@ jobs:
             --summary-only > /work/coverage/summary.json
 
           # Step summary
-          echo "## TTNN Code Coverage" >> "$GITHUB_STEP_SUMMARY"
+          echo "## tt-metal Code Coverage" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Metric | Covered | Total | % |" >> "$GITHUB_STEP_SUMMARY"
           echo "|--------|---------|-------|---|" >> "$GITHUB_STEP_SUMMARY"
