@@ -21,7 +21,7 @@ from transformers.models.pixtral.modeling_pixtral import position_ids_in_meshgri
 
 import ttnn
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
-from models.experimental.devstarl2_small.demo import demo_devstral2_tt_multimodal as _tt_demo
+from models.experimental.devstarl2_small.demo import tt_text_demo as _tt_demo
 from models.experimental.devstarl2_small.devstral_utils import (
     devstral_supports_on_device_sampling,
     pad_input_ids_and_positions_for_tt_prefill,

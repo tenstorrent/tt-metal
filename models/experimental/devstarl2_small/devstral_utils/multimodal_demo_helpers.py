@@ -478,7 +478,7 @@ def _tt_decode_lm_head_logits(
     model_args: ModelArgs,
     tt_lm_head: LMHead,
 ) -> ttnn.Tensor:
-    """Trace-safe LM head over the decode hidden block ``[1,1,32,dim]`` -> logits ``[1,1,32,V/shard]``. Mirrors :func:`tt_lm_head_logits_block` but skips the prefill-only ``ttnn.slice`` because decode output is already ``[1, 1, 32, dim]``. Uses ``Mode.PREFILL`` for the input mem config: this is what the non-traced decode path in ``demo_model_loading_prompt.py`` uses (the default non-prefetcher PREFILL / DECODE configs are identical in ``ModelArgs``)."""
+    """Trace-safe LM head over the decode hidden block ``[1,1,32,dim]`` -> logits ``[1,1,32,V/shard]``. Mirrors :func:`tt_lm_head_logits_block` but skips the prefill-only ``ttnn.slice`` because decode output is already ``[1, 1, 32, dim]``. Uses ``Mode.PREFILL`` for the input mem config: this is what the non-traced decode path in ``tt_image_demo.py`` uses (the default non-prefetcher PREFILL / DECODE configs are identical in ``ModelArgs``)."""
     h = tt_hidden
     lm_head_input_mem_cfg = model_args.get_lm_head_input_mem_config(Mode.PREFILL, None)
     if lm_head_input_mem_cfg is not None and lm_head_input_mem_cfg.is_sharded():

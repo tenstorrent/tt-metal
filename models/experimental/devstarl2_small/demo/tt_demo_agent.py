@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# Tenstorrent variant of ``demo_agent.py``: same interactive agent tools and chat loop, but generation runs on **TT** via ``TtDevstral2SmallModel`` (Pixtral vision + projector + ``TtMinistral3`` LM), then LM head and ``SamplingGenerator`` / CPU logits (``demo_devstral2_tt_multimodal`` / ``demo_model_loading_prompt``). **Per turn:** one full TT prefill of the current chat history (rebuilds KV cache) followed by a **traced TT decode** for each new token. The single-token decode trace is captured...
+# Tenstorrent variant of ``demo_agent.py``: same interactive agent tools and chat loop, but generation runs on **TT** via ``TtDevstral2SmallModel`` (Pixtral vision + projector + ``TtMinistral3`` LM), then LM head and ``SamplingGenerator`` / CPU logits (``tt_text_demo`` / ``tt_image_demo``). **Per turn:** one full TT prefill of the current chat history (rebuilds KV cache) followed by a **traced TT decode** for each new token. The single-token decode trace is captured...
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from transformers.models.ministral3.configuration_ministral3 import Ministral3Co
 from transformers.models.mistral3.modeling_mistral3 import Mistral3Model
 
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
-from models.experimental.devstarl2_small.demo import demo_model_loading_prompt as _mlp
+from models.experimental.devstarl2_small.demo import tt_image_demo as _mlp
 from models.experimental.devstarl2_small.demo.demo_agent import (
     DEFAULT_AGENT_RULES,
     DEFAULT_SYSTEM_PROMPT,
