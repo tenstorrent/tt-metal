@@ -157,6 +157,7 @@ class ComputeConfig(_TTOpKwargs):
     )
     has_bias: bool
     activation_type: ActivationFunction
+    intermediate_size: int
 
     @classmethod
     def adopt_fields(cls) -> set[str]:
@@ -320,6 +321,7 @@ class TTMoEDecodeConfig(BaseModel):
         "batch_per_device",
         "hidden_size",
         "select_experts_k",
+        "num_routed_experts",
         "num_shared_experts",
         "has_bias",
         "num_links",
