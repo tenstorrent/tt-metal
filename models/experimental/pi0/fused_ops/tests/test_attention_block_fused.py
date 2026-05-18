@@ -35,8 +35,26 @@ from op import (  # noqa: E402
 )
 
 M, D = 256, 1152
-N_QKV = 3 * D  # 3456
+N_QKV_UNPADDED = 3 * D  # 3456 — natural Q/K/V concat at head_dim=72
+NUM_HEADS = 16
+HEAD_DIM_TRUE = 72
+HEAD_DIM_PADDED = 96
+N_QKV_PADDED = 3 * NUM_HEADS * HEAD_DIM_PADDED  # 4608 — device-side, head-aligned
 EPS = 1e-6
+
+
+def unpad_qkv_output(out_padded):
+    """Slice (M, 4608) device output back to (M, 3456) by taking the first
+    HEAD_DIM_TRUE cols of each head's HEAD_DIM_PADDED block. Inverse of the
+    weight padding in build_tensors_for_fused_attention_block."""
+    out_M = out_padded.shape[0]
+    out = torch.zeros(out_M, N_QKV_UNPADDED, dtype=out_padded.dtype)
+    for qkv_idx in range(3):
+        for h in range(NUM_HEADS):
+            src_start = qkv_idx * NUM_HEADS * HEAD_DIM_PADDED + h * HEAD_DIM_PADDED
+            dst_start = qkv_idx * D + h * HEAD_DIM_TRUE
+            out[:, dst_start : dst_start + HEAD_DIM_TRUE] = out_padded[:, src_start : src_start + HEAD_DIM_TRUE]
+    return out
 
 
 def make_inputs(seed: int = 42):
@@ -49,9 +67,13 @@ def make_inputs(seed: int = 42):
 
 def make_qkv_weight(seed: int = 7):
     """Match build_tensors_for_fused_attention_block's default w_qkv generator
-    so the test golden uses the same weight matrix the device sees."""
+    so the test golden uses the same weight matrix the device sees.
+
+    Returns the UNPADDED (D, 3D=3456) weight — build_tensors does the per-head
+    zero-padding internally.
+    """
     g = torch.Generator().manual_seed(seed)
-    return torch.randn(D, N_QKV, generator=g, dtype=torch.bfloat16) * 0.05
+    return torch.randn(D, N_QKV_UNPADDED, generator=g, dtype=torch.bfloat16) * 0.05
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -136,27 +158,37 @@ def test_attention_block_fused_qkv_matmul(device):
     with the N-dimension concatenated in the grid's row-major order.
     """
     x, gamma, beta = make_inputs(seed=42)
-    w_qkv = make_qkv_weight(seed=7)
+    w_qkv = make_qkv_weight(seed=7)  # unpadded (D, 3D=3456)
 
-    # Golden: LN1(x) @ W_qkv in fp32, output bf16. bfp8 quantization happens
-    # on the device side when from_torch loads the weight; we keep the golden
-    # in bf16 against the *bf16* weight so the PCC includes the bfp8 noise.
+    # Golden: LN1(x) @ W_qkv in fp32 against the UNPADDED weight, bf16 output.
+    # bfp8 quantization happens on the device side when from_torch loads the
+    # weight; we keep the golden in bf16 against the bf16 weight so the PCC
+    # includes the bfp8 noise.
     ln_out_golden = F.layer_norm(x.float(), (D,), gamma.float(), beta.float(), eps=EPS)
-    qkv_golden = (ln_out_golden.to(torch.float32) @ w_qkv.to(torch.float32)).to(torch.bfloat16)
+    qkv_golden_unpadded = (ln_out_golden.to(torch.float32) @ w_qkv.to(torch.float32)).to(torch.bfloat16)
 
     tensors = build_tensors_for_fused_attention_block(device, x, gamma, beta, w_qkv_torch=w_qkv)
     SigLIPAttentionBlockFused.op(*tensors, eps=EPS)
 
     import ttnn as _ttnn
 
-    # qkv_out_tt is the last tensor in the build_tensors ordering.
+    # qkv_out_tt is the last tensor in build_tensors order. Device shape is
+    # the padded (M, 4608); we slice each head's first head_dim_true cols to
+    # recover the natural (M, 3456) layout before PCC.
     qkv_out_tt = tensors[-1]
-    qkv_out_device = _ttnn.to_torch(qkv_out_tt)
+    qkv_out_device_padded = _ttnn.to_torch(qkv_out_tt)
+    assert qkv_out_device_padded.shape == (
+        M,
+        N_QKV_PADDED,
+    ), f"qkv_out (padded) shape {tuple(qkv_out_device_padded.shape)} != {(M, N_QKV_PADDED)}"
+    qkv_out_device = unpad_qkv_output(qkv_out_device_padded)
+    assert qkv_out_device.shape == (M, N_QKV_UNPADDED)
 
-    assert qkv_out_device.shape == (M, N_QKV), f"qkv_out shape {tuple(qkv_out_device.shape)} != {(M, N_QKV)}"
-
-    p = pcc(qkv_golden, qkv_out_device)
-    print(f"\nPCC (QKV matmul vs torch LN1(x) @ W_qkv) = {p:.6f}")
-    print(f"  shape={tuple(qkv_out_device.shape)}, dtype={qkv_out_device.dtype}")
+    p = pcc(qkv_golden_unpadded, qkv_out_device)
+    print(f"\nPCC (QKV matmul vs torch LN1(x) @ W_qkv, head-unpadded) = {p:.6f}")
+    print(
+        f"  device padded shape={tuple(qkv_out_device_padded.shape)}, "
+        f"unpadded shape={tuple(qkv_out_device.shape)}, dtype={qkv_out_device.dtype}"
+    )
     # bfp8 weight + HiFi4 accumulator typically lands ≥ 0.999 on this shape.
     assert p >= 0.999, f"PCC {p} below 0.999 gate"

@@ -227,9 +227,18 @@ void kernel_main() {
     // Runtime role flags. Same logic as NCRISC; named with _tr suffix to keep
     // is-ln1-core unambiguous if the NCRISC and TRISC bodies are ever read
     // side-by-side.
-    const bool is_ln1_core_tr = (get_relative_logical_y() == 0) && (get_relative_logical_x() < 8);
+    // TRISC role gating: keep `ln1_num_cores` and `qkv_grid_{x,y}` as CT-args
+    // pulled from the same named-arg list NCRISC uses (lifted into TRISC at the
+    // top of this function), so the role bounds stay consistent if the host
+    // descriptor changes them. Hardcoded `8` / `6` previously made this body
+    // silently drift from NCRISC's role check when the QKV grid expanded.
+    constexpr uint32_t ln1_num_cores_tr = get_named_compile_time_arg_val("ln1_num_cores");
+    constexpr uint32_t qkv_grid_x_tr = get_named_compile_time_arg_val("qkv_grid_x");
+    constexpr uint32_t qkv_grid_y_tr = get_named_compile_time_arg_val("qkv_grid_y");
+    const bool is_ln1_core_tr = (get_relative_logical_y() == 0) && (get_relative_logical_x() < ln1_num_cores_tr);
     const bool is_residual_core_tr = is_ln1_core_tr;
-    const bool is_qkv_core_tr = (get_relative_logical_y() < 6) && (get_relative_logical_x() < 6);
+    const bool is_qkv_core_tr =
+        (get_relative_logical_y() < qkv_grid_y_tr) && (get_relative_logical_x() < qkv_grid_x_tr);
 
     // =========================================================================
     // PHASE 1: LN1 — y = ((x - mean) / sqrt(var + eps)) * gamma + beta

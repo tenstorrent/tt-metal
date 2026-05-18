@@ -52,25 +52,36 @@ class SigLIPAttentionBlockFused:
     D_TILES = D // TILE
     EPS = 1e-6
 
-    # Grid layout (task #10 Commit 2):
+    # Grid layout (task #11 Commit 1):
     #   LN1 row: y=0, x=0..7  → 8 cores. Produce ln_out_cb shards (32, 1152).
-    #   QKV grid: y=0..5, x=0..5  → 36 cores. Pull 8 shards each into
-    #     qkv_act_cb of shape (256, 1152) (full LN1 output, replicated per core).
-    #   Union (38 distinct cores) is the kernel core_ranges; CBs and semaphores
-    #     live on the sub-grids they need to.
+    #   QKV grid: y=0..7, x=0..5  → 48 cores. Pull 8 shards each into qkv_act_cb
+    #     of shape (256, 1152) (full LN1 output, replicated per core). Each core
+    #     also owns exactly ONE head's padded slice of Q, K, or V (see below).
+    #   Union (50 distinct cores) is the kernel core_ranges.
+    #
+    # Why 48-core QKV instead of 36 (Commit 3): SDPA in task #11 needs each
+    # core's slice to be exactly one head's worth, so head_dim addressing is
+    # clean across cores. SigLIP-So400m has head_dim=72, padded to 96 for tile
+    # alignment, × 16 heads × 3 Q/K/V = 4608 N-cols total. 4608 / 96 = 48 cores.
     LN1_NUM_CORES = 8
     QKV_GRID_X = 6
-    QKV_GRID_Y = 6
-    QKV_NUM_CORES = QKV_GRID_X * QKV_GRID_Y  # 36
+    QKV_GRID_Y = 8
+    QKV_NUM_CORES = QKV_GRID_X * QKV_GRID_Y  # 48
 
-    # QKV matmul (encoder-shape) — fused Q/K/V projection.
-    #   Activation per core: (M=256, K=1152) bf16, replicated across 36 cores.
-    #   Weight per core:     (K=1152, N=96)  bfp8, width-sharded across 36 cores.
-    #   Output per core:     (M=256, N=96)   bf16, width-sharded across 36 cores.
-    # Total weight + output cover N=3456 = 3·D — concatenated Q, K, V projections.
-    QKV_N = 3 * D  # 3456
-    QKV_N_TILES = QKV_N // TILE  # 108
-    QKV_N_TILES_PER_CORE = QKV_N_TILES // QKV_NUM_CORES  # 3
+    # Multi-head shape (SigLIP-So400m).
+    NUM_HEADS = 16
+    HEAD_DIM_TRUE = 72  # NUM_HEADS * HEAD_DIM_TRUE = D (=1152)
+    HEAD_DIM_PADDED = 96  # 3 tiles; last 24 cols of each per-head slice are 0.
+
+    # QKV matmul (encoder-shape) — fused Q/K/V projection, head-padded.
+    #   Activation per core: (M=256, K=1152) bf16, replicated across 48 cores.
+    #   Weight per core:     (K=1152, N=96)  bfp8, width-sharded across 48 cores.
+    #   Output per core:     (M=256, N=96)   bf16, width-sharded across 48 cores.
+    # N=96 per core is exactly ONE head's padded slice; the 48-core grid covers
+    #   3 (Q,K,V) × 16 heads = 48 head-positions. Total padded N=4608.
+    QKV_N = 3 * NUM_HEADS * HEAD_DIM_PADDED  # 4608
+    QKV_N_TILES = QKV_N // TILE  # 144
+    QKV_N_TILES_PER_CORE = QKV_N_TILES // QKV_NUM_CORES  # 3 (= 1 padded head)
 
     # CB IDs (must match the kernel's get_named_compile_time_arg_val calls)
     CB = {
@@ -196,6 +207,10 @@ class SigLIPAttentionBlockFused:
             ("qkv_n_tiles_per_core", SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE),
             ("qkv_act_total_tiles", qkv_act_tiles_per_core),
             ("qkv_weight_tiles", qkv_weight_tiles),
+            # Role-flag bounds duplicated for TRISC (NCRISC has them above).
+            ("ln1_num_cores", SigLIPAttentionBlockFused.LN1_NUM_CORES),
+            ("qkv_grid_x", SigLIPAttentionBlockFused.QKV_GRID_X),
+            ("qkv_grid_y", SigLIPAttentionBlockFused.QKV_GRID_Y),
         ]
 
         # Physical NoC coords for the worker grid. BH's logical-to-physical x
@@ -490,19 +505,44 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         memory_config=tile_mem,
     )
 
-    # QKV matmul weight + output, WIDTH_SHARDED across the 36-core QKV grid.
-    # Weight is bfp8 (matches the qkv_op.py pattern), output is bf16.
-    N = SigLIPAttentionBlockFused.QKV_N  # 3456
-    n_per_core = N // qkv_num_cores  # 96
+    # QKV matmul weight + output, WIDTH_SHARDED across the 48-core QKV grid.
+    # Weight is bfp8, output is bf16. The weight is supplied as an unpadded
+    # (D, 3·D) = (1152, 3456) tensor (Q,K,V concatenated, each (D, D); within
+    # each, heads laid out as (D, num_heads*head_dim_true)). We pad each head's
+    # head_dim from 72 → 96 by zero-extending columns, producing (D, 3·16·96)
+    # = (D, 4608). The padded zero columns produce zero output columns; SDPA
+    # later slices the first head_dim_true cols of each head's output.
+    N_padded = SigLIPAttentionBlockFused.QKV_N  # 4608
+    N_unpadded = 3 * D  # 3456
+    num_heads = SigLIPAttentionBlockFused.NUM_HEADS  # 16
+    head_dim_true = SigLIPAttentionBlockFused.HEAD_DIM_TRUE  # 72
+    head_dim_padded = SigLIPAttentionBlockFused.HEAD_DIM_PADDED  # 96
+    n_per_core = N_padded // qkv_num_cores  # 96 = exactly 1 head's padded slice
+
     if w_qkv_torch is None:
         g = torch.Generator().manual_seed(7)
-        w_qkv_torch = torch.randn(D, N, generator=g, dtype=torch.bfloat16) * 0.05
-    assert w_qkv_torch.shape == (D, N), f"w_qkv shape {tuple(w_qkv_torch.shape)} != {(D, N)}"
+        w_qkv_torch = torch.randn(D, N_unpadded, generator=g, dtype=torch.bfloat16) * 0.05
+    assert w_qkv_torch.shape == (
+        D,
+        N_unpadded,
+    ), f"w_qkv shape {tuple(w_qkv_torch.shape)} != expected unpadded {(D, N_unpadded)}"
+
+    # Pad each head's head_dim from 72 → 96. Per Q/K/V (each (D, D) = (D, 1152)
+    # of 16 heads of 72), the padded form is (D, 1536) of 16 heads of 96 with
+    # zeros in cols [72:96] of each head block.
+    w_qkv_padded = torch.zeros(D, N_padded, dtype=w_qkv_torch.dtype)
+    for qkv_idx in range(3):  # Q, K, V
+        for h in range(num_heads):
+            src_start = qkv_idx * D + h * head_dim_true
+            dst_start = qkv_idx * num_heads * head_dim_padded + h * head_dim_padded
+            w_qkv_padded[:, dst_start : dst_start + head_dim_true] = w_qkv_torch[
+                :, src_start : src_start + head_dim_true
+            ]
 
     qkv_w_shard = ttnn.ShardSpec(qkv_core_grid, (D, n_per_core), ttnn.ShardOrientation.ROW_MAJOR)
     qkv_w_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, qkv_w_shard)
     qkv_w_tt = ttnn.from_torch(
-        w_qkv_torch,
+        w_qkv_padded,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -512,7 +552,7 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
     qkv_out_shard = ttnn.ShardSpec(qkv_core_grid, (M, n_per_core), ttnn.ShardOrientation.ROW_MAJOR)
     qkv_out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, qkv_out_shard)
     qkv_out_tt = ttnn.from_torch(
-        torch.zeros(M, N, dtype=torch.bfloat16),
+        torch.zeros(M, N_padded, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
