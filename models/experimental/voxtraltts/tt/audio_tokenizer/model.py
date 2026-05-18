@@ -33,6 +33,7 @@ from models.experimental.voxtraltts.tt.audio_tokenizer.transformer import (
     VoxtralTTAudioTokenizerDecoderTransformerBlock,
 )
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
+from models.experimental.voxtraltts.utils.config_helpers import COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER
 
 AUDIO_TOKENIZER_ENCODER_OPTIONAL_PREFIXES = ("input_proj.", "encoder_blocks.")
 
@@ -60,6 +61,7 @@ class VoxtralTTAudioTokenizer:
         self.cfg = tokenizer_cfg
         self._dtype = dtype
         self._audio_tokenizer_sd = state_dict
+        self._compute_kernel_config = COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER
 
         self.input_proj: VoxtralTTAudioTokenizerInputProj | None = None
         try:
@@ -88,6 +90,7 @@ class VoxtralTTAudioTokenizer:
                 layer_index=0,
                 weight_dtype=dtype,
                 output_dtype=dtype,
+                compute_kernel_config=self._compute_kernel_config,
             )
         except KeyError:
             pass
@@ -102,6 +105,7 @@ class VoxtralTTAudioTokenizer:
                 layer_index=1,
                 weight_dtype=dtype,
                 output_dtype=dtype,
+                compute_kernel_config=self._compute_kernel_config,
             )
         except KeyError:
             pass
@@ -116,6 +120,7 @@ class VoxtralTTAudioTokenizer:
                 layer_index=0,
                 weight_dtype=dtype,
                 output_dtype=dtype,
+                compute_kernel_config=self._compute_kernel_config,
             )
         except KeyError:
             pass
@@ -130,6 +135,7 @@ class VoxtralTTAudioTokenizer:
                 layer_index=1,
                 weight_dtype=dtype,
                 output_dtype=dtype,
+                compute_kernel_config=self._compute_kernel_config,
             )
         except KeyError:
             pass
@@ -184,6 +190,7 @@ class VoxtralTTAudioTokenizer:
                 layer_index=0,
                 weight_dtype=dtype,
                 output_dtype=dtype,
+                compute_kernel_config=self._compute_kernel_config,
             )
         except KeyError:
             pass
@@ -198,6 +205,7 @@ class VoxtralTTAudioTokenizer:
                 layer_index=1,
                 weight_dtype=dtype,
                 output_dtype=dtype,
+                compute_kernel_config=self._compute_kernel_config,
             )
         except KeyError:
             pass
@@ -232,6 +240,7 @@ class VoxtralTTAudioTokenizer:
                 layer_index=0,
                 weight_dtype=dtype,
                 output_dtype=dtype,
+                compute_kernel_config=self._compute_kernel_config,
             )
         except KeyError:
             pass
@@ -246,6 +255,7 @@ class VoxtralTTAudioTokenizer:
                 layer_index=1,
                 weight_dtype=dtype,
                 output_dtype=dtype,
+                compute_kernel_config=self._compute_kernel_config,
             )
         except KeyError:
             pass
@@ -447,12 +457,17 @@ class VoxtralTTAudioTokenizer:
             )
 
         b, _, input_t, input_c = (int(latent_b1tc.shape[i]) for i in range(4))
+        # Keep decoder transformer sequence lengths tile-aligned.  TT SDPA operates
+        # on tiled tensors; non-multiple-of-32 generated-code lengths can let padded
+        # tile lanes perturb attention numerics.  The stack is causal/sliding-window,
+        # so right-padding then trimming preserves the logical decoded prefix.
         min_decode_t = 32
+        decode_t = max(min_decode_t, ((input_t + 31) // 32) * 32)
         stack_input = latent_b1tc
         padded_stack_input = None
-        if input_t < min_decode_t:
+        if input_t < decode_t:
             pad = ttnn.from_torch(
-                torch.zeros((b, 1, min_decode_t - input_t, input_c), dtype=torch.bfloat16),
+                torch.zeros((b, 1, decode_t - input_t, input_c), dtype=torch.bfloat16),
                 device=self.mesh_device,
                 dtype=self._dtype,
                 layout=ttnn.TILE_LAYOUT,
@@ -486,7 +501,7 @@ class VoxtralTTAudioTokenizer:
         m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]))
         x = self.decoder_blocks_7_forward(x, attn_mask=m)
         ttnn.deallocate(m)
-        if input_t < min_decode_t:
+        if input_t < decode_t:
             upsample = 1
             for stride in parse_csv_ints(self.cfg.decoder_convs_strides_str)[1:]:
                 upsample *= int(stride)
