@@ -197,8 +197,8 @@ int main(int argc, char** argv) {
                                               : tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = (noc_index == 0) ? tt_metal::NOC::RISCV_0_default : tt_metal::NOC::RISCV_1_default});
 
-        for (int i = 0; i < num_cores_r; i++) {
-            for (int j = 0; j < num_cores_c; j++) {
+        for (uint32_t i = 0; i < num_cores_r; i++) {
+            for (uint32_t j = 0; j < num_cores_c; j++) {
                 CoreCoord logical_core = {(std::size_t)j, (std::size_t)i};
 
                 CoreCoord adjacent_core_logical = {(std::size_t)j, (std::size_t)i};
