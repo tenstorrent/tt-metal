@@ -192,9 +192,15 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
 
     auto program_cbs = program.circular_buffers();
     for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
-        if (desc.cbs[ci].buffer) {
-            UpdateDynamicCircularBufferAddress(
-                program, program_cbs[ci]->id(), *desc.cbs[ci].buffer, desc.cbs[ci].address_offset);
+        const auto& cb_desc = desc.cbs[ci];
+        TT_FATAL(
+            !(cb_desc.buffer && cb_desc.tensor),
+            "CBDescriptor cannot specify both buffer and tensor as the globally-allocated backing storage");
+        if (cb_desc.tensor) {
+            Buffer* buf = cb_desc.tensor->mesh_buffer().get_reference_buffer();
+            UpdateDynamicCircularBufferAddress(program, program_cbs[ci]->id(), *buf, cb_desc.address_offset);
+        } else if (cb_desc.buffer) {
+            UpdateDynamicCircularBufferAddress(program, program_cbs[ci]->id(), *cb_desc.buffer, cb_desc.address_offset);
         }
     }
 }
