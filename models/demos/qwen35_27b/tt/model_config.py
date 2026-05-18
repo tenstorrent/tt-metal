@@ -244,6 +244,54 @@ class Qwen35ModelArgs(ModelArgs):
             # Bump to satisfy parent assertion; we handle replication ourselves
             self.n_kv_heads = self.num_devices
 
+    def _set_hf_params(self, checkpoint_dir):
+        """Bypass transformers.AutoConfig for the `qwen3_5` model_type.
+
+        The Qwen3.5 architecture is only registered in transformers >= 5.2.
+        Older versions raise ValueError for model_type='qwen3_5' even though
+        all the fields we need are plain dict entries in config.json. We read
+        the file directly and expose a minimal object as `self.hf_config` so
+        downstream code that calls `.to_dict()` keeps working. The demo loads
+        weights through `load_qwen35_state_dict`, so no HF model class is
+        needed.
+        """
+        from types import SimpleNamespace
+
+        config_dir = self.LOCAL_HF_PARAMS[self.model_name] if self.dummy_weights else checkpoint_dir
+        config_path = os.path.join(config_dir, "config.json")
+        with open(config_path, "r") as f:
+            config = json.load(f)
+
+        class _HFConfigShim(SimpleNamespace):
+            """Minimal stand-in for a transformers PretrainedConfig."""
+
+            def __init__(self, cfg):
+                super().__init__(**cfg)
+                self._raw = cfg
+
+            def to_dict(self):
+                return dict(self._raw)
+
+        self.hf_config = _HFConfigShim(config)
+
+        def merge_text_config(base_config):
+            text_config = dict(base_config.get("text_config", {}))
+            text_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
+            return text_config
+
+        def merge_vision_config(base_config):
+            vision_config = dict(base_config.get("vision_config", {}))
+            vision_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
+            return vision_config
+
+        if "text_config" in config or "vision_config" in config:
+            self._set_params_from_dict(merge_text_config(config))
+            if "vision_config" in config:
+                self._set_vision_params({"vision_config": merge_vision_config(config)})
+            self.is_multimodal = "vision_config" in config or self.is_vision()
+        else:
+            self._set_params_from_dict(config)
+
     def __init__(self, mesh_device, **kwargs):
         super().__init__(mesh_device, **kwargs)
 

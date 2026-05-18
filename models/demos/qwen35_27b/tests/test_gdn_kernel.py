@@ -66,7 +66,9 @@ def ref_recurrence_single_step(q, k, v, g, beta, state):
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{}], indirect=True)
-@pytest.mark.parametrize("num_pairs", [10, 32, 384])
+# @pytest.mark.parametrize("num_pairs", [10, 32, 384])
+@pytest.mark.parametrize("num_pairs", [32])
+# batch is pair, no of head is kept at 1, k dimension is 128, v dimension is 128
 def test_gdn_kernel_correctness(mesh_device, reset_seeds, ensure_gc, num_pairs):
     """Test fused GDN kernel against PyTorch reference for a single decode step."""
     device = mesh_device

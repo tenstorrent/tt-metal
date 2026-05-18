@@ -50,7 +50,8 @@ def _sync(mesh_device):
     indirect=True,
 )
 def test_gdn_section_breakdown(mesh_device, reset_seeds, ensure_gc):
-    model_path = _get_model_path()
+    # model_path = _get_model_path()
+    model_path = "Qwen3.5-27B-FP8"
     batch_size = 32
     max_seq_len = 2048
 

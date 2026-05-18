@@ -77,7 +77,8 @@ def _unwrap_layer(layer):
 )
 def test_profile_breakdown(mesh_device, reset_seeds, ensure_gc):
     """Per-component timing breakdown of a single decode step."""
-    model_path = _get_model_path()
+    # model_path = _get_model_path()
+    model_path = "Qwen3.5-27B-FP8"
     batch_size = 32
     max_seq_len = 2048
 
