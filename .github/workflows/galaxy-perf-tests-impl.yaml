@@ -58,6 +58,15 @@ jobs:
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
             echo "$MATRIX" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
+          elif [ "${{ inputs.model }}" = "tt-training-models" ]; then
+            FILTERED=$(echo "$MATRIX" | jq -c '[.[] | select(.team == "train")]')
+            if [ "$FILTERED" = "[]" ]; then
+              echo "::error::No tests found for team 'train'. Ensure train-team entries exist in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
+              exit 1
+            fi
+            echo "matrix<<EOF" >> $GITHUB_OUTPUT
+            echo "$FILTERED" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           else
             FILTERED=$(echo "$MATRIX" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model == $m)]')
             if [ "$FILTERED" = "[]" ]; then
@@ -113,11 +122,28 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_RUNTIME_ROOT=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -v ${{ contains(matrix.test-group.sku, 'perf') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
           install_wheel: true
           run_args: |
+            if [ "${{ matrix.test-group.team }}" == "train" ]; then
+              # Create .pth files the same way as create_venv.sh script
+              SITE_PACKAGES=$(uv pip show ttnn | sed -n 's/^Location: //p')
+              if [[ -z "$SITE_PACKAGES" ]]; then
+                echo "ERROR: Could not determine site-packages from ttnn. Is the wheel installed?"
+                exit 1
+              fi
+              TTML_SRC_DIR="$TT_METAL_RUNTIME_ROOT/tt-train/sources/ttml"
+              TTML_BUILD_DIR="$TT_METAL_RUNTIME_ROOT/build/tt-train/sources/ttml"
+              echo "$TTML_SRC_DIR" > "$SITE_PACKAGES/ttml.pth"
+              echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
+              # Install minimal dependencies for processing metrics
+              uv pip list
+              uv pip install "gitpython==3.1.47" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
+            fi
+
             ${{ matrix.test-group.cmd }}
       - name: Check if benchmark data directory exists
         id: check-benchmark-data-directory
@@ -153,7 +179,7 @@ jobs:
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !(matrix.test-group.save-perf-data) && !cancelled() }}
+        if: ${{ !(matrix.test-group.save-perf-data) && !cancelled() && matrix.test-group.team != 'train'}}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
@@ -199,6 +225,16 @@ jobs:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
           path:
             ${{ steps.check-perf-report.outputs.perf_report_filename_all_gather }}
+      - name: Upload metrics data to AWS SFTP bucket
+        timeout-minutes: 5
+        if: ${{ !cancelled() && matrix.test-group.team == 'train'}}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.TT_TRAIN_AWS_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/tt_train_model_metrics.txt
+          username: ${{ secrets.TT_TRAIN_AWS_USERNAME }}
+          hostname: ${{ secrets.TT_TRAIN_AWS_HOSTNAME }}
+          path: ./
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

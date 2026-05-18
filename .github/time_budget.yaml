@@ -237,4 +237,4 @@ umd:
 
 train:
   perf:
-    bh_galaxy: 160
+    bh_galaxy_perf: 160
