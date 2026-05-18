@@ -538,13 +538,18 @@ def test_cross_mesh_socket_perf(
     # (num_channels, page_size_bytes, num_logical_tensors_per_channel)
     # Each channel transfers a 640×1792 bf16 (= 2,293,760 bytes) "logical tensor"
     # per iteration. Aggregate per iteration = num_channels × that.
+    #
+    # Iteration count is intentionally small (2 per channel) — early measurements
+    # showed that inter-galaxy per-channel bandwidth doesn't drop with N, so the
+    # full N-channel sweep would otherwise take ~10 min/point on 2 galaxies.
+    # Bump iters once we know the curve shape we want stable measurements over.
     "num_channels, page_size_bytes, num_logical_tensors_per_channel",
     [
-        (1, 4096, 20),
-        (4, 4096, 20),
-        (8, 4096, 20),
-        (16, 4096, 20),
-        (32, 4096, 20),
+        (1, 4096, 2),
+        (4, 4096, 2),
+        (8, 4096, 2),
+        (16, 4096, 2),
+        (32, 4096, 2),
     ],
     ids=["nc1", "nc4", "nc8", "nc16", "nc32"],
 )
