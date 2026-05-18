@@ -1,8 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC: truncated HF ``PixtralVisionModel`` vs ``TtPixtralVisionModel`` (first ``n_layers`` blocks)."""
+# PCC: truncated HF ``PixtralVisionModel`` vs ``TtPixtralVisionModel`` (first ``n_layers`` blocks).
 
 from __future__ import annotations
 

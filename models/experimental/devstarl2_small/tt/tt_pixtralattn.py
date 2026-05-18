@@ -1,10 +1,6 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
-
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""
-Modified vision attention for Mistral-Small / Pixtral-class checkpoints.
-Uses ``apply_rotary_pos_emb_vision_tt`` for Devstral-compatible RoPE.
-"""
+# Modified vision attention for Mistral-Small / Pixtral-class checkpoints. Uses ``apply_rotary_pos_emb_vision_tt`` for Devstral-compatible RoPE.
 
 import os
 
@@ -16,12 +12,7 @@ from models.experimental.devstarl2_small.tt.tt_pixtral_seq_chunk import pixtral_
 
 
 def _pixtral_sdpa_qk_chunk_sizes() -> tuple[int, int]:
-    """
-    Tile chunk sizes for :func:`scaled_dot_product_attention` program config.
-
-    Must stay **small** for L1: scaling by ``num_matmul_chunks`` (``seq_len / max_mm_seq_len``) is wrong here
-    and drives ``q_chunk_size`` into the thousands when vision sequences are long.
-    """
+    """Tile chunk sizes for :func:`scaled_dot_product_attention` program config. Must stay **small** for L1: scaling by ``num_matmul_chunks`` (``seq_len / max_mm_seq_len``) is wrong here and drives ``q_chunk_size`` into the thousands when vision sequences are long."""
     q = int(os.environ.get("PIXTRAL_SDPA_Q_CHUNK", "32"))
     k = int(os.environ.get("PIXTRAL_SDPA_K_CHUNK", "32"))
     q = max(32, min(q, 128))
@@ -242,7 +233,6 @@ class TtMistralImageAttention(LightweightModule):
         return out
 
     def forward(self, x_11SH, position_embeddings=None):
-        # DRAM residency before fused matmuls; L1 circular buffers inside the kernel still scale with M.
         x_11SH = ttnn.to_memory_config(x_11SH, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         seq_len = int(x_11SH.shape[-2])

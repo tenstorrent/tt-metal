@@ -1,8 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""TT ``Mistral3Model``-style backbone for Devstral Small: vision → multimodal projector → text stack."""
+# TT ``Mistral3Model``-style backbone for Devstral Small: vision → multimodal projector → text stack.
 
 from __future__ import annotations
 
@@ -16,10 +15,7 @@ from models.experimental.devstarl2_small.tt.tt_pixtral_vision_model import TtPix
 
 
 class TtDevstral2SmallModel(LightweightModule):
-    """
-    Composes :class:`TtPixtralVisionModel`, :class:`TTMistral3MultiModalProjector`, and
-    :class:`TtMinistral3Model` (same submodule names as HF ``Mistral3Model``).
-    """
+    """Composes :class:`TtPixtralVisionModel`, :class:`TTMistral3MultiModalProjector`, and :class:`TtMinistral3Model` (same submodule names as HF ``Mistral3Model``)."""
 
     def __init__(
         self,
@@ -76,10 +72,7 @@ class TtDevstral2SmallModel(LightweightModule):
         self.language_model = TtMinistral3Model(**lm_kwargs)
 
     def get_projected_image_features(self, pixel_values, image_sizes, position_ids_tt: ttnn.Tensor) -> ttnn.Tensor:
-        """
-        Vision tower (last hidden state) → multimodal projector; matches HF ``Mistral3Model.get_image_features``
-        merged tokens (``torch.cat`` over returned tuple) for the same ``pixel_values`` / sizes.
-        """
+        """Vision tower (last hidden state) → multimodal projector; matches HF ``Mistral3Model.get_image_features`` merged tokens (``torch.cat`` over returned tuple) for the same ``pixel_values`` / sizes."""
         vt = self.vision_tower(pixel_values, image_sizes, position_ids_tt)
         seq_len, hidden = int(vt.shape[2]), int(vt.shape[3])
         tokens = ttnn.reshape(vt, (seq_len, hidden))

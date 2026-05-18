@@ -1,8 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared Pixtral vision sequence chunk size for L1-bound matmuls (attention + MLP)."""
+# Shared Pixtral vision sequence chunk size for L1-bound matmuls (attention + MLP).
 
 from __future__ import annotations
 
@@ -12,14 +11,7 @@ from models.common.utility_functions import nearest_32
 
 
 def pixtral_vision_seq_chunk_len(configuration) -> int:
-    """
-    Tokens per chunk along the vision sequence axis for TT ops whose matmul programs grow L1 CB with ``m``.
-
-    - **PIXTRAL_VISION_MM_SEQ_CHUNK**: if set, use only this (tile-rounded). Ignores ``VISION_MAX_MM_SEQ``.
-    - Else: ``min(VISION_MAX_MM_SEQ, PIXTRAL_VISION_MM_SEQ_CHUNK_CAP)`` (default cap 448).
-
-    **PIXTRAL_VISION_SEQ_CHUNK_DEBUG=1**: print resolved chunk (once per distinct value).
-    """
+    """Tokens per chunk along the vision sequence axis for TT ops whose matmul programs grow L1 CB with ``m``. - **PIXTRAL_VISION_MM_SEQ_CHUNK**: if set, use only this (tile-rounded). Ignores ``VISION_MAX_MM_SEQ``. - Else: ``min(VISION_MAX_MM_SEQ, PIXTRAL_VISION_MM_SEQ_CHUNK_CAP)`` (default cap 448). **PIXTRAL_VISION_SEQ_CHUNK_DEBUG=1**: print resolved chunk (once per distinct value)."""
     force = os.environ.get("PIXTRAL_VISION_MM_SEQ_CHUNK")
     if force is not None and str(force).strip() != "":
         chunk = max(32, nearest_32(int(force)))

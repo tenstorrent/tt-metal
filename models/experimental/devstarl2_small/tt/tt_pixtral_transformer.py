@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 from models.common.lightweightmodule import LightweightModule

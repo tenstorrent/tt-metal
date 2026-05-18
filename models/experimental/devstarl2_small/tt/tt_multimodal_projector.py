@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import torch
@@ -85,7 +88,6 @@ class TTMistral3MultiModalProjector(LightweightModule):
         )
 
     def forward(self, image_features: ttnn.Tensor, image_sizes) -> ttnn.Tensor:
-        # tt_rmsnorm expects rank-4 tensors; projector input is [tokens, hidden].
         x = ttnn.reshape(image_features, (1, 1, image_features.shape[0], image_features.shape[1]))
         x = self.norm(x, mode="prefill")
         x = ttnn.reshape(x, image_features.shape)

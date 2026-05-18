@@ -1,13 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Shared chat template + generation kwargs for ``reference/inference.py`` and the TT demo.
-
-Keeping a single source for these values avoids drift; the TT demo uses them by default for tokenization
-and includes ``--hf-generate`` for the same ``generate()`` kwargs as ``reference/inference.py``.
-"""
+# Shared chat template + generation kwargs for ``reference/inference.py`` and the TT demo. Keeping a single source for these values avoids drift; the TT demo uses them by default for tokenization and includes ``--hf-generate`` for the same ``generate()`` kwargs as ``reference/inference.py``.
 
 from __future__ import annotations
 

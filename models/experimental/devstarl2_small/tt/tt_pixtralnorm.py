@@ -1,15 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-TT RMSNorm for Pixtral vision (HF ``PixtralRMSNorm`` / ``LlamaRMSNorm`` math).
-
-Loads the affine ``weight`` vector from an explicit checkpoint key (no Llama-style
-``base_url`` / ``layer_num`` layout). The forward uses ``ttnn.rms_norm`` with
-``pad_by_zero``, matching the path used by ``TtLlamaRMSNorm`` in
-``models/experimental/llama/tt/llama_layer_norm.py``.
-"""
+# TT RMSNorm for Pixtral vision (HF ``PixtralRMSNorm`` / ``LlamaRMSNorm`` math). Loads the affine ``weight`` vector from an explicit checkpoint key (no Llama-style ``base_url`` / ``layer_num`` layout). The forward uses ``ttnn.rms_norm`` with ``pad_by_zero``, matching the path used by ``TtLlamaRMSNorm`` in ``models/experimental/llama/tt/llama_layer_norm.py``.
 
 from __future__ import annotations
 
@@ -35,24 +27,7 @@ def _resolve_weight_state_dict_key(weight_key: str | None, state_dict_prefix: st
 
 
 class TtPixtralRMSNorm(LightweightModule):
-    """
-    Thin Pixtral/Llama-style RMSNorm on TTNN: ``output = rms_norm(x, eps) * gamma``.
-
-    HF reference: ``transformers.models.pixtral.modeling_pixtral.PixtralRMSNorm``
-    (default ``eps=1e-6`` in the class; Pixtral blocks use ``eps=1e-5`` — match the
-    checkpoint you load).
-
-    Args:
-        mesh_device: Mesh or device hosting the norm weight and compute.
-        state_dict: Torch state dict (e.g. meta-format keys under ``vision_tower...``).
-        eps: Epsilon inside RMS (use ``1e-5`` for Pixtral transformer norms).
-        weight_key: Full key for the 1D gamma tensor, e.g.
-            ``"vision_tower.transformer.layers.0.attention_norm.weight"``.
-        state_dict_prefix: Alternative to ``weight_key``: prefix without the final
-            ``weight`` field, e.g. ``"vision_tower.transformer.layers.0.attention_norm."``
-            or ``"...attention_norm"`` (``.weight`` is appended).
-        dtype: TT dtype for the tilized weight (``pad_by_zero`` / ``torch2tt_tensor``).
-    """
+    # Pixtral/Llama-style RMSNorm on TTNN (rms_norm with gamma); use eps=1e-5 for Pixtral blocks.
 
     def __init__(
         self,

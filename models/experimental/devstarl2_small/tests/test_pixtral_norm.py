@@ -1,12 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-PCC test: Hugging Face PixtralRMSNorm vs TtPixtralRMSNorm using real gamma weights from
-mistralai/Devstral-Small-2-24B-Instruct-2512 (vision tower layer 0 ``attention_norm``).
-
-Weights are loaded via safetensors partial read so the full checkpoint is not loaded into RAM.
-"""
+# PCC test: Hugging Face PixtralRMSNorm vs TtPixtralRMSNorm using real gamma weights from mistralai/Devstral-Small-2-24B-Instruct-2512 (vision tower layer 0 ``attention_norm``). Weights are loaded via safetensors partial read so the full checkpoint is not loaded into RAM.
 
 import os
 

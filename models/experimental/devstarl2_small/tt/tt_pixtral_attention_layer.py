@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import ttnn
@@ -8,10 +11,7 @@ from models.experimental.devstarl2_small.tt.tt_pixtralnorm import TtPixtralRMSNo
 
 
 class TtPixtralAttentionLayer(LightweightModule):
-    """
-    TT composition of HF ``PixtralAttentionLayer``:
-    attention_norm -> attention + residual -> ffn_norm -> mlp + residual.
-    """
+    """TT composition of HF ``PixtralAttentionLayer``: attention_norm -> attention + residual -> ffn_norm -> mlp + residual."""
 
     def __init__(
         self,
