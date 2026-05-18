@@ -218,6 +218,44 @@
   </p>
 </section>
 
+<!-- SLIDE 4 — backward_softmax deep dive -->
+<section class="slide">
+  <h1>backward_softmax — bucket-C, four refinements deep</h1>
+  <h2>Same agent pipeline, more ambitious target — one of Makora's <a href="https://github.com/makora-ai/kernels" target="_blank">upcoming</a> deliverables (added 2026-05-15)</h2>
+
+  <h3>Built incrementally: each refinement is a single agent invocation</h3>
+  <table>
+    <tr><th>Stage</th><th>What landed</th><th class="num">$</th><th class="num">Time</th></tr>
+    <tr><td>Phase 0</td><td>Single-core fp32 fused VJP; verifier found + fixed 2 critical kernel bugs</td><td class="num">$36.10</td><td class="num">~73 min</td></tr>
+    <tr><td>R1</td><td>Multi-core balanced distribution across the full grid</td><td class="num">$4.36</td><td class="num">10 min</td></tr>
+    <tr><td>R2</td><td>Three-strategy input buffering (whole-row DB / SB / per-tile fallback)</td><td class="num">$9.48</td><td class="num">22 min</td></tr>
+    <tr><td>R3</td><td>bf16 / bfp8 dtypes with dtype-aware default compute config</td><td class="num">$5.19</td><td class="num">10 min</td></tr>
+    <tr><td>R4</td><td><code>compute_kernel_config</code> exposed to caller (HiFi*, fp32_dest_acc, math_approx)</td><td class="num">$5.56</td><td class="num">12 min</td></tr>
+    <tr><td><b>Total</b></td><td><b>Multi-core, 3 dtypes, 3 cache strategies, full config override</b></td><td class="num"><b>$60.70</b></td><td class="num"><b>~2h 7m</b></td></tr>
+  </table>
+  <p class="small" style="margin-top:4px;">
+    <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/dnijemcevic/backward_softmax_agentic/ttnn/ttnn/operations/backward_softmax/op_requirements.md" target="_blank">op_requirements.md</a>
+    <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/dnijemcevic/backward_softmax_agentic/ttnn/ttnn/operations/backward_softmax/kernels/backward_softmax_compute.cpp" target="_blank">backward_softmax_compute.cpp</a>
+    <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/dnijemcevic/backward_softmax_agentic/ttnn/ttnn/operations/backward_softmax/changelog.md" target="_blank">changelog.md</a>
+  </p>
+
+  <h3 class="pad-top">Head-to-head vs Makora's hand-tuned bf16 kernel (compute config matched 1:1)</h3>
+  <table>
+    <tr><th>Shape</th><th>Wt</th><th>Lanes</th><th class="num">Full pipeline</th><th class="num">Compute-only</th><th>Note</th></tr>
+    <tr><td>(1, 1, 2048, 64)</td><td>2</td><td>64</td><td class="num">1.06×</td><td class="num">1.02×</td><td></td></tr>
+    <tr class="highlight"><td>(1, 1, 1024, 1024)</td><td>32</td><td>32</td><td class="num">1.54×</td><td class="num">1.07×</td><td>sparse grid — half the cores idle</td></tr>
+    <tr><td>(1, 1, 2048, 2048)</td><td>64</td><td>64</td><td class="num">1.14×</td><td class="num">1.06×</td><td></td></tr>
+    <tr><td>(1, 8, 1024, 1024)</td><td>32</td><td>256</td><td class="num win">0.95×</td><td class="num win">0.95×</td><td>agent <b>faster</b></td></tr>
+    <tr><td>(1, 256, 64, 64)</td><td>2</td><td>512</td><td class="num">1.06×</td><td class="num win">0.98×</td><td>agent <b>faster</b> compute-only</td></tr>
+    <tr><td><b>GMEAN</b></td><td></td><td></td><td class="num"><b>1.13×</b></td><td class="num"><b>1.02×</b></td><td></td></tr>
+  </table>
+
+  <p class="footnote">
+    PCC = 1.0000 across all shapes — kernels numerically equivalent at bf16.
+    <b>Compute kernel is at parity (gmean 1.02×)</b>; the 11-percentage-point full-pipeline gap is in dataflow plumbing — per-tile NoC barriers + CB sync overhead that Makora's 27-iteration hand-tuned design coalesces. A bulk-barrier reader hack didn't close the gap (NCRISC already pipelines reads internally; the real lever is writer-side coalescing with a deeper output CB — out of scope for this measurement).
+  </p>
+</section>
+
 <!-- SLIDE 5 — Takeaway -->
 <section class="slide">
   <h1>Takeaway</h1>
@@ -225,9 +263,7 @@
     <li><b>Two agent stacks at parity.</b> Across four compute-kernel head-to-heads, Makora is at most <b>3% faster</b>; the agent is <b>7% faster</b> on one of them.</li>
     <li><b>End-to-end cost per op: one working session.</b> Planner ~12 min, implementer ~9 min, verifier ~5 min. Refinements 5–10 min each. Tests, capability docs, and refinement checklist are byproducts.</li>
     <li><b>The compounding wins are below the kernel.</b> The agent's edge comes from the <code>kernel_lib</code> helpers absorbing complexity, and from a prompt + refinement protocol that captures hardware constraints precisely. The kernel-level work is straightforward; the leverage is in the layers around it.</li>
-    <li><b>Helpers are an LLM-friendly surface.</b> Writing kernels through the <code>kernel_lib</code> helper layer is materially easier for the agent to get right than hand-rolling raw LLK calls. The same pipeline already generated <b>backward_softmax</b> — one of Makora's upcoming deliverables — end-to-end on 2026-05-08, with <b>34/43</b> tests green at the Phase-0 verifier checkpoint.
-      <a class="ev" href="https://github.com/tenstorrent/tt-metal/commit/7e4d134b14cb52c055f1b4ee855a5bbf96c2551a" target="_blank">commit 7e4d134</a>
-      <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/dnijemcevic/backward_softmax_agentic/ttnn/ttnn/operations/backward_softmax/kernels/backward_softmax_compute.cpp" target="_blank">backward_softmax_compute.cpp</a></li>
+    <li><b>Helpers are an LLM-friendly surface.</b> Writing kernels through the <code>kernel_lib</code> helper layer is materially easier for the agent to get right than hand-rolling raw LLK calls. <b>backward_softmax</b> (slide 4) — taken through Phase 0 + four refinements for $60.70 / ~2h of agent time — lands at gmean 1.02× of Makora's hand-tuned bf16 kernel on compute kernel duration.</li>
   </ul>
   <p class="footnote">
     Bucket B (TTNN-primitive baseline) was not part of this comparison — TTNN's own primitives were uplifted in March–April 2026 and now beat Makora 2–4× without any agent involvement; those kernels are obsolete.

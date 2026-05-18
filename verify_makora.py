@@ -120,6 +120,15 @@ README_SHAPES: dict[str, list[tuple]] = {
     # Bucket C (eltwise+reduction): shape sets are from Makora's per-op .json.
     "atan_mean_tall": [(1, 1, 2048, 64), (1, 1, 1024, 64), (1, 1, 2048, 32), (1, 1, 1024, 32)],
     "atan_mean_high_channel": [(1, 256, 64, 64), (256, 1, 64, 64), (1, 128, 128, 128), (128, 1, 128, 128)],
+    # backward_softmax: bucket C, no Makora-published shapes yet. Pulled from
+    # analogous eltwise+reduction kernels' shape sets; all fit Makora's L1.
+    "backward_softmax": [
+        (1, 1, 2048, 64),  # tall, Wt=2
+        (1, 1, 1024, 1024),  # square small attention, Wt=32
+        (1, 1, 2048, 2048),  # square medium attention, Wt=64
+        (1, 8, 1024, 1024),  # multi-head, Wt=32
+        (1, 256, 64, 64),  # high-channel, Wt=2
+    ],
 }
 
 
@@ -190,6 +199,23 @@ def _ttnn_atan_mean(a):
     return atan_mean(a)
 
 
+def _ttnn_backward_softmax(a, b):
+    """Apples-to-apples Makora head-to-head.
+
+    Harness convention: a = y (softmax output), b = grad. Agent's signature is
+    backward_softmax(grad_output, output), so swap inside. Pass a compute config
+    that matches Makora's regime exactly (HiFi2 + fp32_dest_acc + math_approx).
+    """
+    from ttnn.operations.backward_softmax import backward_softmax
+
+    cfg = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+    )
+    return backward_softmax(b, a, compute_kernel_config=cfg)
+
+
 # Per-op extras: `makora_op` overrides the Makora kernel folder (default = key);
 # `dtype` overrides ttnn.bfloat16 default; `safe_domain` shifts random inputs.
 OP_REGISTRY: dict[str, dict] = {
@@ -239,6 +265,14 @@ OP_REGISTRY: dict[str, dict] = {
         "ttnn": _ttnn_atan_mean,
         "makora_kwargs": {},
         "makora_op": "atan_mean_high_channel",
+    },
+    "backward_softmax": {
+        "category": "eltwise_reduction",
+        "binary": True,
+        "ttnn": _ttnn_backward_softmax,
+        "makora_kwargs": {},
+        "makora_op": "softmax_backward",
+        # bf16 default — matches Makora's bf16-locked storage regime.
     },
 }
 
