@@ -9,11 +9,11 @@ knob in :class:`HostIoDecoderSweepConfig` is exposed as a flag; boolean knobs
 use ``argparse.BooleanOptionalAction`` so each is toggleable with
 ``--knob`` / ``--no-knob``.
 
-The same entrypoint supports one local decoder-layer sweep, a chained local
-multi-layer pass, and rank-parallel layer verification under ``tt-run`` /
+The same entrypoint supports one local decoder-layer sweep and rank-parallel
+layer verification under ``tt-run`` /
 ``mpirun`` / ``srun``. When multiple ``--decoder-layer-indices`` values are supplied
-without ``--chained-layer-pass``, rank ``i`` verifies the i-th layer id and the
-launcher world size must match the number of layer ids.
+rank ``i`` verifies the i-th layer id, and the launcher world size must match
+the number of layer ids.
 
 Environment variables (read only as fallback defaults; flags always win):
     DEEPSEEK_V3_HIDDEN_STATES_DIR   -> --hidden-states-dir
@@ -76,16 +76,6 @@ Four-layer rank-parallel verification::
         --validate-hidden-states-cross-trace \\
         --validate-kv-cache-cross-trace
 
-Chained four-layer local pass (feed layer 4 input through layers 4→7, compare
-against layer 7 output)::
-
-    TT_METAL_SLOW_DISPATCH_MODE=1 \\
-    python_env/bin/python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
-        --decoder-layer-indices 4 5 6 7 \\
-        --chained-layer-pass \\
-        --hidden-states-dir-template '/data/username/pipeclean_traces/cache_design_gen8192/layer_{layer:02d}' \\
-        --prompt cache_design_gen8192 \\
-        --pcc-threshold 0.97
 """
 
 from __future__ import annotations
@@ -146,7 +136,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         metavar="LAYER",
         help=(
             "DeepSeek V3 decoder layer index or indices to instantiate. A single value runs the normal "
-            "local sweep; multiple values require one launcher rank per layer unless --chained-layer-pass is set."
+            "local sweep; multiple values require one launcher rank per layer."
         ),
     )
     required.add_argument(
@@ -165,7 +155,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help=(
-            "Per-layer reference trace directory template for rank-parallel or chained verification. Supports "
+            "Per-layer reference trace directory template for rank-parallel verification. Supports "
             "{layer}, {layer_idx}, and {rank}; for example /data/gpu_reference/layer_{layer:02d}."
         ),
     )
@@ -196,18 +186,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Replication slots (1 = Mode A; >1 = Mode B); must be < --num-slots. Defaults to 8 for a "
-            "single local layer and 1 for rank-parallel layer verification or chained layer passes."
-        ),
-    )
-    parser.add_argument(
-        "--chained-layer-pass",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Interpret multiple --decoder-layer-indices values as one ordered local pass. The first layer's "
-            "trace supplies inputs, each TT layer output feeds the next layer, and final outputs compare "
-            "against the last layer's trace. Without this flag, multiple layer ids keep the existing "
-            "one-rank-per-layer verification behavior."
+            "single local layer and 1 for rank-parallel layer verification."
         ),
     )
 
@@ -243,7 +222,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Per-(prompt, slot) PCC of collected output against the prompt's reference 'output' trace. "
-            "Defaults to off for a single local layer and on for rank-parallel or chained verification."
+            "Defaults to off for a single local layer and on for rank-parallel verification."
         ),
     )
     val.add_argument(
@@ -401,16 +380,11 @@ def _config_from_args_for_rank(
     layer_parallel: bool,
 ) -> HostIoDecoderSweepConfig:
     """Build a frozen config for either local single-layer or rank-selected layer mode."""
-    layer_chain = bool(args.chained_layer_pass)
-    layer_indices = tuple(_layer_ids_from_args(args)) if layer_chain else (layer_idx,)
-    reference_hidden_states_dir = (
-        _resolve_hidden_states_dir(args, layer_idx=layer_indices[-1], rank=rank) if len(layer_indices) > 1 else None
-    )
-    dump_layer_idx = layer_indices[-1] if layer_chain else layer_idx
+    layer_indices = (layer_idx,)
 
     num_replication_slots = args.num_replication_slots
     if num_replication_slots is None:
-        num_replication_slots = 1 if layer_parallel or layer_chain else 8
+        num_replication_slots = 1 if layer_parallel else 8
 
     validate_hidden_states_cross_slot = args.validate_hidden_states_cross_slot
     if validate_hidden_states_cross_slot is None:
@@ -422,13 +396,12 @@ def _config_from_args_for_rank(
 
     validate_hidden_states_cross_trace = args.validate_hidden_states_cross_trace
     if validate_hidden_states_cross_trace is None:
-        validate_hidden_states_cross_trace = layer_parallel or layer_chain
+        validate_hidden_states_cross_trace = layer_parallel
 
     return HostIoDecoderSweepConfig(
         decoder_layer_indices=layer_indices,
         hidden_states_dir=_resolve_hidden_states_dir(args, layer_idx=layer_idx, rank=rank),
         prompt_names=tuple(args.prompt_names),
-        reference_hidden_states_dir=reference_hidden_states_dir,
         max_seq_len=args.max_seq_len,
         num_slots=args.num_slots,
         mesh_rows=args.mesh_rows,
@@ -443,7 +416,7 @@ def _config_from_args_for_rank(
         kv_cache_pcc_threshold=args.kv_cache_pcc_threshold,
         dump_hidden_states=args.dump_hidden_states,
         dump_kv_cache=args.dump_kv_cache,
-        dump_dir=_resolve_dump_dir(args, layer_idx=dump_layer_idx, rank=rank, layer_parallel=layer_parallel),
+        dump_dir=_resolve_dump_dir(args, layer_idx=layer_idx, rank=rank, layer_parallel=layer_parallel),
         hf_model_path=args.hf_model_path,
         cache_path=args.cache_path,
         seed=args.seed,
@@ -495,7 +468,6 @@ def _log_resolved_config(config: HostIoDecoderSweepConfig) -> None:
     for field, value in (
         ("decoder_layer_indices", config.decoder_layer_indices),
         ("hidden_states_dir", config.hidden_states_dir),
-        ("reference_hidden_states_dir", config.reference_hidden_states_dir),
         ("prompt_names", list(config.prompt_names)),
         ("max_seq_len", config.max_seq_len),
         ("num_slots", config.num_slots),
@@ -529,15 +501,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     layer_ids = _layer_ids_from_args(args)
     multi_layer_requested = len(layer_ids) > 1
-    chained_layer_pass = bool(args.chained_layer_pass)
     rank: int | None = None
     world_size: int | None = None
     layer_parallel = False
 
     try:
-        if chained_layer_pass and not multi_layer_requested:
-            raise ValueError("--chained-layer-pass requires at least two --decoder-layer-indices values")
-        if multi_layer_requested and not chained_layer_pass:
+        if multi_layer_requested:
             rank, world_size = _init_rank_context_or_error()
             layer_idx = _layer_for_rank(layer_ids, rank=rank, world_size=world_size)
             layer_parallel = True
@@ -574,8 +543,6 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("=" * 80)
     if rank is not None and world_size is not None:
         logger.info(f"SUMMARY rank={rank}/{world_size} layer={config.decoder_layer_indices[0]}")
-    elif len(config.decoder_layer_indices) > 1:
-        logger.info(f"SUMMARY chained_layers={list(config.decoder_layer_indices)}")
     else:
         logger.info("SUMMARY")
     logger.info("=" * 80)

@@ -18,10 +18,8 @@ this models a single user (slot) continuing a multi-turn conversation, fanned
 out across ``num_replication_slots`` identical-state replicas for cross-slot
 determinism validation.
 
-For a single layer, the persistent decoder + H2D/D2H sockets are launched once
-before the first prompt and torn down once after the last prompt. For a chained
-layer pass, each layer is launched in order and the collected output of layer N
-feeds layer N+1; validation runs only after the final layer.
+The persistent decoder + H2D/D2H sockets are launched once before the first
+prompt and torn down once after the last prompt.
 
 Validation gates (every gate is independently toggleable in the config)
 -----------------------------------------------------------------------
@@ -55,10 +53,8 @@ I/O files
 Inputs (per prompt, loaded by preflight):
 - ``{prompt}.pt`` — required. ``{"input", "output"}`` dict of
   ``(L_p, HIDDEN_SIZE)`` bf16 tensors. ``trace["input"]`` from
-  ``hidden_states_dir`` is fed through the first decoder layer one row per H2D
-  iteration. ``trace["output"]`` from ``reference_hidden_states_dir`` (or
-  ``hidden_states_dir`` when no separate reference dir is set) is the
-  cross-trace PCC reference for final outputs.
+  ``hidden_states_dir`` is fed through the decoder layer one row per H2D
+  iteration; ``trace["output"]`` is the cross-trace PCC reference.
 - ``kv_cache_reference_{prompt}.pt`` — required iff
   ``validate_kv_cache_cross_trace`` is on. Slot-agnostic ``(1, L_p, KV_PE_DIM)``
   bf16 tensor in HF/split-halves RoPE layout from the active reference trace
@@ -132,16 +128,15 @@ DEFAULT_CACHE_PATH = Path.home() / ".cache"
 # for the same constant in the other code path.)
 NUM_DENSE_LAYERS = 3
 
-# DeepSeek V3 MLA compressed-cache channel dim: 512 (kv_latent_normed,
-# post-RMSNorm) + 64 (k_pe_roped, RoPE'd shared positional key) = 576. Matches
-# the last dim of HostIoDecoderStage's on-device KV cache. Inlined here (rather
-# than re-derived from a downstream module) so the harness's KV-cache shape
-# contract is self-contained.
-KV_PE_DIM = 576
-# Sub-channel slice boundary inside the 576-wide kv_post_transform tensor.
+# DeepSeek V3 MLA compressed-cache channel dim: kv_latent_normed
+# (post-RMSNorm) + k_pe_roped (RoPE'd shared positional key). Source these from
+# LogicalModelDimensions so the harness stays aligned with the model's canonical
+# configuration and does not silently drift.
+KV_PE_DIM = D.KV_A_DIM
+# Sub-channel slice boundary inside the kv_post_transform tensor.
 # Channels [:KV_LATENT_DIM] = kv_latent_normed; channels [KV_LATENT_DIM:] =
 # k_pe_roped. Used by the per-channel PCC diagnostic on cross-trace KV failure.
-KV_LATENT_DIM = 512
+KV_LATENT_DIM = D.KV_B_LORA_RANK
 # Size of the k_pe (RoPE'd shared positional key) channel slice = 64 = 32
 # complex frequency pairs. Used to permute the k_pe sub-channel between the
 # HF/split-halves and TT/interleaved RoPE storage conventions.
@@ -246,7 +241,6 @@ class HostIoDecoderSweepConfig:
     decoder_layer_indices: tuple[int, ...]
     hidden_states_dir: Path
     prompt_names: tuple[str, ...]
-    reference_hidden_states_dir: Path | None = None
 
     # --- model shape ---
     max_seq_len: int = 128 * 1024
@@ -289,6 +283,8 @@ class HostIoDecoderSweepConfig:
         """Validate static invariants. Trace-dependent checks live in preflight."""
         if not self.decoder_layer_indices:
             raise ValueError("decoder_layer_indices must contain at least one entry")
+        if len(self.decoder_layer_indices) != 1:
+            raise ValueError("HostIoDecoderSweepConfig expects exactly one decoder layer per run")
         for layer_idx in self.decoder_layer_indices:
             if layer_idx < 0:
                 raise ValueError(f"decoder_layer_indices must be >= 0, got {self.decoder_layer_indices}")
@@ -595,7 +591,7 @@ def _extract_metadata_from_d2h(output_tensor: ttnn.Tensor):
 
 def _preflight(
     config: HostIoDecoderSweepConfig,
-) -> tuple[MultiTurnSchedule, dict[str, dict[str, torch.Tensor]], dict[str, dict[str, torch.Tensor]]]:
+) -> tuple[MultiTurnSchedule, dict[str, dict[str, torch.Tensor]]]:
     """Load all reference traces and build the multi-turn schedule.
 
     Validates trace-dependent invariants that ``HostIoDecoderSweepConfig.__post_init__``
@@ -607,10 +603,8 @@ def _preflight(
     dummy in :func:`run_sweep`'s phase 1).
 
     Returns:
-        ``(schedule, input_traces, reference_traces)`` where both trace dicts are
-        keyed by prompt_name. In a chained layer pass, ``input_traces`` comes
-        from the first layer directory and ``reference_traces`` comes from the
-        final layer directory.
+        ``(schedule, traces)`` where ``traces`` is keyed by prompt_name and
+        each value is the dict returned by :func:`_load_reference_trace`.
 
     Raises:
         ValueError: any trace-dependent invariant violated.
@@ -620,30 +614,12 @@ def _preflight(
     if not config.hidden_states_dir.is_dir():
         raise ValueError(f"hidden_states_dir does not exist or is not a directory: {config.hidden_states_dir}")
 
-    input_traces: dict[str, dict[str, torch.Tensor]] = {}
+    traces: dict[str, dict[str, torch.Tensor]] = {}
     prompt_lengths: list[int] = []
     for prompt_name in config.prompt_names:
         trace = _load_reference_trace(config.hidden_states_dir, prompt_name)
-        input_traces[prompt_name] = trace
+        traces[prompt_name] = trace
         prompt_lengths.append(int(trace["input"].shape[0]))
-
-    reference_dir = config.reference_hidden_states_dir or config.hidden_states_dir
-    if not reference_dir.is_dir():
-        raise ValueError(f"reference_hidden_states_dir does not exist or is not a directory: {reference_dir}")
-
-    if reference_dir == config.hidden_states_dir:
-        reference_traces = input_traces
-    else:
-        reference_traces: dict[str, dict[str, torch.Tensor]] = {}
-        for prompt_idx, prompt_name in enumerate(config.prompt_names):
-            trace = _load_reference_trace(reference_dir, prompt_name)
-            expected_len = prompt_lengths[prompt_idx]
-            if int(trace["output"].shape[0]) != expected_len:
-                raise ValueError(
-                    f"{reference_dir / f'{prompt_name}.pt'}: reference output seq_len "
-                    f"{trace['output'].shape[0]} does not match input seq_len {expected_len}"
-                )
-            reference_traces[prompt_name] = trace
 
     schedule = MultiTurnSchedule(prompt_lengths=tuple(prompt_lengths))
 
@@ -654,7 +630,7 @@ def _preflight(
             f">= max_seq_len ({config.max_seq_len}). Reduce prompt seq_lens or increase max_seq_len."
         )
 
-    return schedule, input_traces, reference_traces
+    return schedule, traces
 
 
 # ---------------------------------------------------------------------------
@@ -801,10 +777,6 @@ def open_mesh_device(device_params: dict) -> Iterator[ttnn.MeshDevice]:
 
     with bh_2d_mesh_device_context(device_params) as parent_mesh:
         yield parent_mesh
-
-
-def _reference_trace_dir(config: HostIoDecoderSweepConfig) -> Path:
-    return config.reference_hidden_states_dir or config.hidden_states_dir
 
 
 def _inputs_from_traces(
@@ -1002,9 +974,50 @@ def run_sweep(
     """Run one multi-turn HostIoDecoderStage sweep end-to-end.
 
     Single-layer and rank-parallel invocations carry one layer id in
-    ``decoder_layer_indices``. Chained local invocations carry multiple layer ids;
-    the collected output of layer N is fed as the input to layer N+1, and final
-    validation uses ``reference_hidden_states_dir`` when provided.
+    ``decoder_layer_indices``.
+
+    Phases (see module docstring for full semantics):
+        0.  Preflight: load traces, build :class:`MultiTurnSchedule`, validate
+            trace-dependent invariants.
+        0.5 Layer pass: create submesh, load weights, instantiate
+            :class:`HostIoDecoderStage`, launch persistent kernels, sweep all
+            prompts, and terminate the decoder. In rank-parallel mode each
+            launcher rank runs this function with its rank-selected layer id.
+        1.  Multi-turn prompt loop: per-prompt sweep into pre-allocated
+            collectors. No validation in this phase — keeps the hot path
+            (write/read/round-trip/store) free of per-prompt host work other
+            than the per-iteration metadata round-trip asserts.
+        2.  Termination for the persistent decoder, followed by the optional
+            final KV-cache pull when any KV validation or dump needs it.
+        3.  Hidden state validation (post-teardown):
+            3a. Per-prompt cross-slot ``torch.equal`` across replicated slots.
+            3b. Optional per-(prompt, slot) cross-trace PCC vs ``trace["output"]``.
+        4.  KV cache validation:
+            4a. Per-prompt cross-slot ``torch.equal`` across replicated slots.
+            4b. Optional per-(prompt, slot) cross-trace PCC vs
+                ``kv_cache_reference_{prompt}.pt``, with split-halves →
+                TT-interleaved RoPE-layout permutation applied to the reference
+                before compare. Short-circuits to slot 0 as a proxy for all
+                replicated slots when 4a proved cross-slot equality, mirroring
+                3b's optimization.
+        5.  Per-(prompt, slot) dumps for hidden states and KV cache.
+
+    Args:
+        config: Frozen configuration. Validate-only and dump-only invocations
+            are supported by toggling the relevant knobs.
+        parent_mesh: Parent ``MeshDevice`` owned by the caller (e.g. by
+            :func:`open_mesh_device`); not closed by ``run_sweep``.
+
+    Returns:
+        :class:`SweepResult` with collected outputs, full KV cache when pulled,
+        schedule, loaded reference traces, and optional KV references.
+
+    Raises:
+        AssertionError: any enabled validation gate that fires.
+        ValueError: preflight invariants violated (trace shape, sum of seq lens
+            vs max_seq_len, missing dump_dir while a dump knob is set, etc.).
+        RuntimeError: not invoked under slow dispatch (sets the env var
+            ``TT_METAL_SLOW_DISPATCH_MODE=1`` upstream).
     """
     # =========================================================================
     # Phase 0: Preflight + environment checks
@@ -1019,7 +1032,7 @@ def run_sweep(
 
     torch.manual_seed(config.seed)
     layer_indices = config.decoder_layer_indices
-    schedule, input_traces, reference_traces = _preflight(config)
+    schedule, traces = _preflight(config)
     logger.info(
         f"preflight: layers={list(layer_indices)} prompts={list(config.prompt_names)} "
         f"prompt_lengths={schedule.prompt_lengths} total_length={schedule.total_length()} "
@@ -1046,7 +1059,7 @@ def run_sweep(
         or config.validate_kv_cache_cross_trace
     )
 
-    input_hidden_states = _inputs_from_traces(config, input_traces)
+    input_hidden_states = _inputs_from_traces(config, traces)
     collected: dict[str, dict[int, torch.Tensor]] | None = None
     kv_cache_torch: torch.Tensor | None = None
     for layer_position, layer_idx in enumerate(layer_indices):
@@ -1104,7 +1117,7 @@ def run_sweep(
             f"(cross_slot_proven_in_3a={cross_slot_proven})"
         )
         for prompt_name in config.prompt_names:
-            expected = reference_traces[prompt_name]["output"]
+            expected = traces[prompt_name]["output"]
             for slot in slots_to_pcc:
                 passing, pcc = comp_pcc(
                     expected.flatten(),
@@ -1171,7 +1184,7 @@ def run_sweep(
         for prompt_idx, prompt_name in enumerate(config.prompt_names):
             start, end = schedule.range_for(prompt_idx)
             L_p = end - start
-            expected_kv = _load_kv_cache_reference(_reference_trace_dir(config), prompt_name, L_p=L_p)
+            expected_kv = _load_kv_cache_reference(config.hidden_states_dir, prompt_name, L_p=L_p)
             # The on-disk reference (produced from a bit_sculpt / HF trace) is
             # in HF/split-halves RoPE storage; permute the k_pe channels into
             # TT/interleaved storage so the PCC compares like-for-like against
@@ -1259,6 +1272,6 @@ def run_sweep(
         collected=collected,
         kv_cache=kv_cache_torch,
         schedule=schedule,
-        traces=reference_traces,
+        traces=traces,
         kv_cache_references=kv_cache_references,
     )

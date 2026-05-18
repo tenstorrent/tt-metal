@@ -132,33 +132,6 @@ Single-layer defaults are still useful for local determinism checks:
 
 For cross-trace correctness against one GPU reference, `--num-replication-slots 1` is usually enough.
 
-## Chained Multi-Layer Pass
-
-Use `--chained-layer-pass` when you want to test a whole decoder span instead
-of checking each layer independently. For example, this feeds layer 4's GPU
-input trace through TT layers 4, 5, 6, and 7, then compares the final TT hidden
-states against layer 7's GPU output trace:
-
-```bash
-cd "$TT_METAL_HOME"
-
-TT_METAL_SLOW_DISPATCH_MODE=1 \
-python_env/bin/python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \
-  --decoder-layer-indices 4 5 6 7 \
-  --chained-layer-pass \
-  --hidden-states-dir-template "$TRACE_ROOT/layer_{layer:02d}" \
-  --prompt "$PROMPT" \
-  --pcc-threshold 0.97
-```
-
-In chained mode:
-
-- `trace["input"]` is loaded from the first layer directory (`layer_04` above).
-- Each TT layer's collected outputs feed the next TT layer as injected hidden states.
-- `trace["output"]` and optional `kv_cache_reference_<prompt>.pt` are loaded from the final layer directory (`layer_07` above).
-- `--num-replication-slots` defaults to `1`.
-- `--validate-hidden-states-cross-trace` defaults to on.
-
 ## Multi-Layer Parallel Sweep
 
 For independent per-layer checks in parallel, launch one rank per layer. With:
