@@ -94,15 +94,15 @@ if [[ "${SKIP_RECOVERY}" != true && ! -x "${VALIDATION_BIN}" ]]; then
 fi
 echo "[prereq] OK"
 
-echo "[prereq] checking SSH between hosts..."
+echo "[prereq] checking SSH to both hosts in BatchMode (mpirun's launcher path)..."
+# mpirun spawns remote MPI procs by ssh-ing from THIS host to each --host entry,
+# so what we need to verify is that this host can reach both A and B without
+# interactive prompts. We don't need to test "A reaching B" — mpirun never does
+# that (it launches from here to both, not via a hop).
 ssh -o BatchMode=yes -o ConnectTimeout=5 "${HOST_A}" hostname >/dev/null 2>&1 \
-    || { echo "ERROR: cannot SSH to ${HOST_A} without password" >&2; exit 1; }
+    || { echo "ERROR: cannot SSH to ${HOST_A} from here without password" >&2; exit 1; }
 ssh -o BatchMode=yes -o ConnectTimeout=5 "${HOST_B}" hostname >/dev/null 2>&1 \
-    || { echo "ERROR: cannot SSH to ${HOST_B} without password" >&2; exit 1; }
-# Cross-host hop (A reaching B) — mpirun needs this.
-ssh -o BatchMode=yes -o ConnectTimeout=5 "${HOST_A}" \
-    "ssh -o BatchMode=yes -o ConnectTimeout=5 ${HOST_B} hostname" >/dev/null 2>&1 \
-    || { echo "ERROR: cannot SSH from ${HOST_A} to ${HOST_B} without password" >&2; exit 1; }
+    || { echo "ERROR: cannot SSH to ${HOST_B} from here without password" >&2; exit 1; }
 echo "[prereq] OK"
 
 # --- Recovery -------------------------------------------------------------
