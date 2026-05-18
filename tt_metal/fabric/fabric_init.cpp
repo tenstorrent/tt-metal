@@ -362,6 +362,37 @@ FabricCoresHealth configure_fabric_cores(
                 // The subordinate ERISC continues running and maintains the ETH PHY link.
                 cluster.assert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
 
+                // FIX EG (#42429): While ERISC0 is halted, zero fw_launch_addr (0x9004 =
+                // LAUNCH_ERISC_APP_FLAG).
+                //
+                // Root cause of FIX EF timeout: after a fabric session ends, fw_launch_addr is
+                // NOT cleared for fabric router channels (chan=8) — unlike dispatch channels
+                // (FIX PF) and phase-2.5 force-reset channels (FIX PD).  On the next session,
+                // FIX S9 asserts then deasserts ERISC0.  After deassert the ERISC boots from
+                // ROM and sees the stale fw_launch_addr == 1.  The L1 clear only zeros 4 sync
+                // addresses; the firmware CODE region from the previous session is still present
+                // in L1.  ERISC dispatch firmware (active_erisc.cc) checks fw_launch_addr != 1
+                // to decide whether to exit — with the stale value it instead begins executing
+                // the old fabric binary still resident in L1.  That binary runs in a corrupt /
+                // terminated state, crashes or hangs, and leaves ERISC0 unable to receive the
+                // new write_launch_msg_to_core.  Result: edm_status_address stays at DEADB07E
+                // indefinitely → FIX EF 500ms poll times out on all 4 MMIO devices
+                // (CI run #26007922914).
+                //
+                // Fix: zero fw_launch_addr via PCIe while ERISC0 is halted (cannot self-modify
+                // L1 while in reset).  On deassert, ERISC0 boots from ROM cleanly, sees
+                // fw_launch_addr == 0, and does NOT prematurely launch any stale firmware.
+                // Analogous to FIX PF (dispatch ETH channels) and FIX PD (phase-2.5 channels).
+                {
+                    const auto& hal_eg = tt::tt_metal::MetalContext::instance().hal();
+                    const auto aeth_idx_eg = hal_eg.get_programmable_core_type_index(
+                        HalProgrammableCoreType::ACTIVE_ETH);
+                    const uint32_t fw_launch_addr_eg =
+                        hal_eg.get_jit_build_config(aeth_idx_eg, 0, 0).fw_launch_addr;
+                    cluster.write_core_immediate(
+                        chip_id, virtual_core, std::vector<uint32_t>{0}, fw_launch_addr_eg);
+                }
+
                 // Immediately deassert so ERISC0 restarts into base UMD firmware.
                 // The window where ERISC0 is halted is limited to the PCIe write round-trip.
                 cluster.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
