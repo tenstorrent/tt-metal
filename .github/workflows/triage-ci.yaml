@@ -18,7 +18,7 @@ jobs:
           import json, os, urllib.request
 
           SLACK_TOKEN = os.environ["SLACK_BOT_TOKEN"]
-          BRAIN_UID   = "U0AK48VCFM0"
+          BRAIN_UID   = "U0AK4BVCFM0"
           CHANNEL     = "C0B1F8Z7GQM"
 
           text = (
