@@ -9,14 +9,14 @@ push them through the TTMoEDecode module, and verify the final output against a
 torch reference. Combine output verification is intentionally skipped — that
 intermediate buffer is exercised by the optimized-block test directly.
 
-Configs are constructed in-code for now; we'll switch to YAML-based parametrization
-later. No shared experts or bias on this initial pass.
+Parametrized over every YAML model config in `models/common/modules/moe/configs/`.
 """
 
 from __future__ import annotations
 
 import os
 import random
+from pathlib import Path
 
 import pytest
 import torch
@@ -139,7 +139,12 @@ def _verify_output(
     return pcc_passed and allclose_passed
 
 
-CONFIG_PATHS = [Path(fn) for fn in ...]
+CONFIGS_DIR = Path(__file__).resolve().parents[3] / "modules" / "moe" / "configs"
+CONFIG_PATHS = sorted(CONFIGS_DIR.glob("*.yaml"))
+
+
+def _config_id(path: Path) -> str:
+    return path.stem
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +156,10 @@ CONFIG_PATHS = [Path(fn) for fn in ...]
 @pytest.mark.skipif(os.getenv("USE_TORUS_MODE") is None, reason="Requires ring fabric")
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
-    [pytest.param((16, 8), (16, 8), id="16x8_grid")],
+    [
+        pytest.param((1, 16), (1, 16), id="1x16"),
+        pytest.param((1, 8), (1, 8), id="1x8"),
+    ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -166,59 +174,54 @@ CONFIG_PATHS = [Path(fn) for fn in ...]
     ids=["fabric_1D_ring"],
     indirect=True,
 )
-@pytest.mark.parametrize("config_path", CONFIG_PATHS)
+@pytest.mark.parametrize("num_iterations", [3])
+@pytest.mark.parametrize("config_path", CONFIG_PATHS, ids=_config_id)
 @torch.no_grad()
 def test_tt_moe_decode(
     mesh_shape: tuple[int, int],
     mesh_device: ttnn.MeshDevice,
-    config_path,
+    config_path: Path,
     num_iterations: int,
 ):
     torch.manual_seed(2005)
     random.seed(2005)
 
-    config = TTMoEDecodeConfig.from_yaml(config_path)
+    config = TTMoEDecodeConfig.from_yaml(config_path.read_text())
     if config.mesh_shape != mesh_shape:
-        pytest.mark.skip("Test mesh shape does not match model config mesh shape")
+        pytest.skip(f"config mesh_shape {config.mesh_shape} != fixture mesh_shape {mesh_shape}")
 
-    # --- derived sizes ---
+    # --- derived sizes (all from config) ---
     cluster_axis = config.cluster_axis
     routed_experts = config.num_routed_experts
+    hidden_size = config.hidden_size
+    intermediate_size = config.compute.intermediate_size
+    select_experts_k = config.select_experts_k
+    batches_per_device = config.batch_per_device
+
     num_devices = mesh_shape[0] * mesh_shape[1]
     num_dispatch_devices = mesh_shape[cluster_axis]
-    num_replicated_devices = num_devices // num_dispatch_devices
     batch = batches_per_device * num_dispatch_devices
-
-    routed_experts = routed_experts_per_device * num_devices
-    experts_per_cluster = routed_experts // num_replicated_devices
 
     shard_dim = 0
     shard_dims = (shard_dim, None) if cluster_axis == 0 else (None, shard_dim)
 
     logger.info(
-        f"Setup: mesh_shape={mesh_shape} cluster_axis={cluster_axis} num_devices={num_devices} "
-        f"batch={batch} routed_experts={routed_experts} select_experts_k={select_experts_k}"
+        f"Setup [{config_path.stem}]: mesh_shape={mesh_shape} cluster_axis={cluster_axis} "
+        f"num_devices={num_devices} batch={batch} hidden={hidden_size} N={intermediate_size} "
+        f"routed_experts={routed_experts} select_experts_k={select_experts_k} "
+        f"has_bias={config.has_bias} activation={config.compute.activation_type.name}"
     )
-
-    # --- expert mapping (linearized mesh coord per expert) ---
-    expert_mapping = [
-        _linearized_expert_to_device(
-            e, cluster_axis, num_replicated_devices, experts_per_cluster, routed_experts_per_device
-        )
-        for e in range(routed_experts)
-    ]
 
     # --- weights: [num_layers=1, routed_experts, H/N, N/H] ---
     num_layers = 1
     torch_w0 = _create_per_expert_weights(num_layers, routed_experts, hidden_size, intermediate_size)
     torch_w1 = _create_per_expert_weights(num_layers, routed_experts, hidden_size, intermediate_size)
     torch_w2 = _create_per_expert_weights(num_layers, routed_experts, intermediate_size, hidden_size)
-    # per-expert split for the golden reference
     w0_per_expert = [torch_w0[:, e : e + 1, ...] for e in range(routed_experts)]
     w1_per_expert = [torch_w1[:, e : e + 1, ...] for e in range(routed_experts)]
     w2_per_expert = [torch_w2[:, e : e + 1, ...] for e in range(routed_experts)]
 
-    # --- build module (state + buffers) ---
+    # --- build module ---
     decode = TTMoEDecode(
         mesh_device=mesh_device,
         config=config,
@@ -304,4 +307,4 @@ def test_tt_moe_decode(
         if not _verify_output(it, mesh_device, mesh_shape, tt_outputs[it], output_goldens[it]):
             all_passed = False
 
-    assert all_passed, "TTMoEDecode output verification failed"
+    assert all_passed, f"TTMoEDecode output verification failed for {config_path.stem}"

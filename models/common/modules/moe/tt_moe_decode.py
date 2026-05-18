@@ -402,6 +402,7 @@ class TTMoEDecode:
             tt_dispatch_input_expert_indices_tensor,
             tt_dispatch_input_expert_scores_tensor,
             self.state.tt_expert_mapping,
+            layer_id=layer_id,
             **self.config.dispatch.model_dump(),
             # shared_expert_ids
             # cluster_axi
