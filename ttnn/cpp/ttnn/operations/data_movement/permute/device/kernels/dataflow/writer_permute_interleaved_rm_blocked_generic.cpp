@@ -156,7 +156,8 @@ void kernel_main() {
             // Compute the L1 address from which to write (offset by W-block pages)
             uint32_t l1_addr = transposed_buffer_read_addr + (w - w_start) * output_cb_page_size;
 
-            // Perform an asynchronous write of the X-block to the destination
+            // TODO(#32019): rows split across BLOCK/WIDTH-sharded cores need
+            // tt::data_movement::common::noc_async_write_sharded instead.
             noc_async_write(l1_addr, dst_noc_addr, x_read_size_bytes);
         }
 

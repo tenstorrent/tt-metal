@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "transpose_wh_program_factory.hpp"
@@ -282,6 +282,9 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (src0_cb_data_format == tt::DataFormat::Float32) {
+        // Keep the source CB in full Float32 on the unpack-to-dest path. In
+        // the row-major kernel, the tile-formatted intermediate (c_24) also
+        // feeds the transpose, so it needs the same treatment.
         unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         if (row_major) {
             unpack_to_dest_mode[static_cast<std::size_t>(tt::CBIndex::c_24)] =
