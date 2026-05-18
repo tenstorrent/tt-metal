@@ -787,6 +787,75 @@ void Device::configure_fabric(
                         fabric_relay_path_broken_.store(true);
                     }
                 }
+            } else if (
+                this->is_mmio_capable() && core_type == CoreType::ETH &&
+                hoisted_eth_chan != kUnresolvedChan && !is_skip_reset_chan) {
+                // FIX EF (#42429): For MMIO ETH channels (D0-D3 relay ERISCs), poll after
+                // write_launch_msg_to_core until the channel exits HOST_PRE_LAUNCH_CANARY
+                // (0xDEADB07E) before proceeding.
+                //
+                // Root cause of missing sync: write_launch_msg_to_core is fire-and-forget.
+                // On MMIO devices the write goes direct via PCIe, so there is no relay-drop
+                // risk — but there IS a startup-time gap between the host sending the launch
+                // message and the ERISC actually executing kernel_main and overwriting
+                // router_sync_address.  If D4-D7 routing-table writes reach the D0-D3 relay
+                // ERISC before it has finished initialising, those writes may be silently
+                // dropped or processed out of order, leaving D4-D7 permanently stuck at
+                // REMOTE_HANDSHAKE_COMPLETE (FIX NX) or causing FIX DT-1 dispatch timeouts
+                // on physical cores 23-17 / 19-17.
+                //
+                // This is the MMIO analogue of FIX DY (which protects non-MMIO FIX M
+                // channels from the same fire-and-forget race).  FIX DY polls for exit from
+                // 0x49706550; FIX EF polls for exit from 0xDEADB07E.
+                //
+                // Poll parameters: same as FIX DY (500 ms max, 5 ms interval).  MMIO reads
+                // are direct PCIe and typically complete in < 1 ms, so the poll itself
+                // adds negligible overhead on the healthy path.  On timeout: log a warning
+                // (no retry needed — the write reached the ERISC directly; if it hasn't
+                // started in 500 ms the ERISC has a firmware problem, not a packet-drop).
+                static constexpr uint32_t kPreLaunchCanary =
+                    static_cast<uint32_t>(EthDiagSentinel::HOST_PRE_LAUNCH_CANARY);
+                static constexpr int kFIX_EF_PollIntervalMs = 5;
+                static constexpr int kFIX_EF_PollMaxMs = 500;
+                const int max_iters = kFIX_EF_PollMaxMs / kFIX_EF_PollIntervalMs;
+                bool exited_canary = false;
+                for (int iter = 0; iter < max_iters; ++iter) {
+                    std::vector<uint32_t> status_buf(1, kPreLaunchCanary);
+                    try {
+                        detail::ReadFromDeviceL1(
+                            this, logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+                    } catch (const std::exception& e) {
+                        log_warning(
+                            tt::LogMetal,
+                            "FIX EF: Device {} chan {} read failed: {}",
+                            this->id_,
+                            hoisted_eth_chan,
+                            e.what());
+                        break;
+                    }
+                    if (status_buf[0] != kPreLaunchCanary) {
+                        log_info(
+                            tt::LogMetal,
+                            "FIX EF: Device {} chan {} (MMIO) exited 0xDEADB07E → 0x{:08x} "
+                            "after {}ms — relay ERISC ready. (#42429)",
+                            this->id_,
+                            hoisted_eth_chan,
+                            status_buf[0],
+                            iter * kFIX_EF_PollIntervalMs);
+                        exited_canary = true;
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(kFIX_EF_PollIntervalMs));
+                }
+                if (!exited_canary) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX EF: Device {} chan {} (MMIO) still at 0xDEADB07E after {}ms — "
+                        "relay ERISC did not start; D4-D7 routing writes may race. (#42429)",
+                        this->id_,
+                        hoisted_eth_chan,
+                        kFIX_EF_PollMaxMs);
+                }
             }
         }
     }
