@@ -8,12 +8,11 @@ the PyTorch reference (HuggingFace Qwen3Model).
 
 import pytest
 import torch
-from transformers import AutoModel, AutoTokenizer
 
 import ttnn
+from models.demos.z_image_turbo.tt.text_encoder import model_pt
 from models.demos.z_image_turbo.tt.text_encoder.model_ttnn import TextEncoderTTNN
 
-MODEL_ID = "Tongyi-MAI/Z-Image-Turbo"
 CAP_TOKENS = 128
 DRAM_RM = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)
 
@@ -47,20 +46,6 @@ def pcc(a, b):
     return (num / den).item() if den > 0 else 0.0
 
 
-def _tokenize_prompt(prompt):
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, subfolder="tokenizer")
-    messages = [{"role": "user", "content": prompt}]
-    try:
-        formatted = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True, enable_thinking=True
-        )
-    except TypeError:
-        formatted = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    return tokenizer(formatted, padding="max_length", truncation=True, max_length=CAP_TOKENS, return_tensors="pt")[
-        "input_ids"
-    ]
-
-
 @pytest.fixture(scope="function")
 def device_params(request):
     return {"l1_small_size": 1 << 15, "trace_region_size": 70_000_000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}
@@ -70,16 +55,11 @@ def device_params(request):
 def test_text_encoder_vs_pytorch(mesh_device):
     mesh_device.enable_program_cache()
 
-    prompt = "a beautiful sunset over the ocean"
-    input_ids = _tokenize_prompt(prompt)
+    input_ids = model_pt.tokenize("a beautiful sunset over the ocean")
 
     # --- PyTorch reference ---
-    pt_model = AutoModel.from_pretrained(
-        MODEL_ID, subfolder="text_encoder", torch_dtype=torch.bfloat16, use_cache=False
-    ).eval()
-    with torch.no_grad():
-        pt_out = pt_model(input_ids, output_hidden_states=True).hidden_states[-2]
-    pt_result = pt_out.squeeze(0).float()  # [seq_len, 2560]
+    pt_model = model_pt.load_model()
+    pt_result = model_pt.forward(pt_model, input_ids)
     del pt_model
 
     # --- TTNN ---
