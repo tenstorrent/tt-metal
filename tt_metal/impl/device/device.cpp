@@ -2070,6 +2070,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
             // never sees the launch flag and stays at 0xDEADB07E indefinitely.
             // Same logic as the initial configure_fabric() FIX IJ above.
             if (this->is_mmio_capable()) {
+                static constexpr uint32_t kUnresolvedChan = std::numeric_limits<uint32_t>::max();
                 uint32_t hoisted_eth_chan_q = kUnresolvedChan;
                 try {
                     hoisted_eth_chan_q = soc_desc_q.get_eth_channel_for_core(
@@ -2593,6 +2594,7 @@ void Device::launch_eth_cores_for_quiesce() {
             // zeroed fw_launch_addr (FIX EG); without this restore base-UMD never sees the launch
             // flag and stays at 0xDEADB07E indefinitely.
             if (this->is_mmio_capable()) {
+                static constexpr uint32_t kUnresolvedChan = std::numeric_limits<uint32_t>::max();
                 uint32_t hoisted_eth_chan_dq = kUnresolvedChan;
                 try {
                     hoisted_eth_chan_dq = soc_desc_q.get_eth_channel_for_core(
