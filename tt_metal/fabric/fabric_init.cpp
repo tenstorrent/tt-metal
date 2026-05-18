@@ -876,7 +876,7 @@ FabricCoresHealth configure_fabric_cores(
     //   write_launch_msg_to_core: writes launch message → base-UMD jumps
     if (device->is_mmio_capable()) {
         const auto& hal_mm = tt::tt_metal::MetalContext::instance().hal();
-        const auto aeth_idx_mm = hal_mm.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+        const auto aeth_idx_mm = hal_mm.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
         const uint32_t fw_launch_addr_mm = hal_mm.get_jit_build_config(aeth_idx_mm, 0, 0).fw_launch_addr;
         const uint32_t fw_launch_val_mm = hal_mm.get_jit_build_config(aeth_idx_mm, 0, 0).fw_launch_addr_value;
         const auto chip_id_mm = device->id();
