@@ -13,6 +13,7 @@ Invoke with `subagent_type: Explore`. Replace placeholders:
 - `{{COMPUTE_API_DIR}}` — e.g. `tt_metal/hw/inc/api/compute/eltwise_unary`
 - `{{SECONDARY_SOURCE}}` — enum or op_utils file for cross-check, e.g. `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp`
 - `{{KNOWN_GROUPS}}` — optional: pre-seeded group→ops mapping from the HQ table. If provided, use it for group assignment; only assign "Ungrouped" to ops that don't match any known group.
+- `{{PATTERNS_FILE}}` — optional absolute path to a curated patterns file. Schema is **not fixed**; inspect the top of the file at runtime to learn its format. When non-empty and it carries call-site locations, those rows are the **source of truth** for Locator Results (see Phase 1D below). Empty/unset → skip Phase 1D and fall back to grep.
 
 ## Prompt Template
 
@@ -56,6 +57,35 @@ Compare LLK_OPS and API_OPS:
 
   echo '{"ts":"'"$(date -Iseconds)"'","event":"gap","op":"OP","found_via":"API","missing_from":"LLK"}' >> $BCRUMB
   echo '{"ts":"'"$(date -Iseconds)"'","event":"phase_done","phase":"1C","both":N,"top_down_only":A,"llk_only":B}' >> $BCRUMB
+
+PHASE 1D: PATTERNS INGEST (only when {{PATTERNS_FILE}} is non-empty)
+
+If {{PATTERNS_FILE}} resolves to a non-empty path, treat the file as the
+SOURCE OF TRUTH for whatever data it carries. Replace mode — do NOT
+augment with additional grep for slices the file covers.
+
+Steps:
+1. Read the top of {{PATTERNS_FILE}} (header / first lines / leading
+   structure) to learn its schema at runtime. Record those lines verbatim
+   as `PATTERNS_HEADER: <...>` in the output document. Do NOT assume any
+   particular column set — different runs may use different formats.
+2. Determine which fields, if any, encode call-site locations (something
+   that resolves to a file path plus optionally a line number) and which
+   field identifies the op. If the file does not carry information from
+   which a per-op call-site list can be derived, STOP and emit
+   `STAGE_INCOMPLETE: PATTERNS_FILE not interpretable for catalog`.
+3. Group entries by op. The deduplicated set of call-site locations per
+   op is the authoritative Locator Results call-site list, passed
+   unchanged to Phase 1 investigation agents.
+4. Drift check: for each entry, verify the referenced file path still
+   exists on disk. Entries whose file is gone are flagged in a "Pattern
+   Drift" table but NOT dropped — file is source of truth, drift is a
+   signal the file needs regeneration.
+
+  echo '{"ts":"'"$(date -Iseconds)"'","event":"phase_done","phase":"1D","patterns_file":"'"{{PATTERNS_FILE}}"'","entries":N,"unique_ops":M,"drift_entries":D}' >> $BCRUMB
+
+If {{PATTERNS_FILE}} is empty/unset, skip Phase 1D entirely and fall back
+to grep for call-site discovery in the Locator Results table.
 
 PHASE 2: GROUP ASSIGNMENT
 
@@ -124,4 +154,18 @@ One row per group. Ops is a comma-separated list.
 |----|----------|-------------|
 
 Only ops found in secondary source but NOT in Phases 1A+1B.
+
+## 6. Patterns File (only when {{PATTERNS_FILE}} is set)
+
+`PATTERNS_HEADER: <verbatim header / first lines of the file>`
+
+### Locator-from-Patterns
+| Op | Call Sites (deduped from patterns file) |
+|----|-----------------------------------------|
+
+### Pattern Drift
+| Op | Location | Reason |
+|----|----------|--------|
+
+(entries whose file path no longer exists — flagged, not dropped)
 ```
