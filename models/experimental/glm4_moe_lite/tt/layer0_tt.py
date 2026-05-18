@@ -609,6 +609,10 @@ def run_layer0_decode_one_step_unpaged_tt(
     )
 
     scale = _mla_scale()
+    # Match paged-decode helpers: size K for FlashMLA k_chunk_size (blocks_per_seq was missing here).
+    blocks_per_seq = max(1, padded_len // int(block_size))
+    min_blocks_per_seq = max(1, (128 + int(block_size) - 1) // int(block_size))
+    blocks_per_seq = max(blocks_per_seq, min_blocks_per_seq)
     total_k_len = int(blocks_per_seq * block_size)
     # Pick a chunk size <= total K length to avoid edge cases on very short prompts.
     k_chunk_size = 128

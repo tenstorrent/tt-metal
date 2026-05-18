@@ -33,7 +33,8 @@ def _load_hparams(snapshot_dir: Path) -> Glm4MoeLiteHParams:
     return hparams
 
 
-def _mesh_shape_from_env(default: tuple[int, int] = (1, 8)) -> tuple[int, int]:
+# Default 1x4 for 4-device lab hosts; override with TT_TEST_MESH_SHAPE (e.g. 1x8 on T3K).
+def _mesh_shape_from_env(default: tuple[int, int] = (1, 4)) -> tuple[int, int]:
     raw = os.environ.get("TT_TEST_MESH_SHAPE", "").strip().lower()
     if not raw:
         return default
@@ -42,6 +43,22 @@ def _mesh_shape_from_env(default: tuple[int, int] = (1, 8)) -> tuple[int, int]:
     if len(parts) != 2:
         raise ValueError(f"Invalid TT_TEST_MESH_SHAPE={raw!r}; expected 'rowsxcols' (e.g. '1x8')")
     return (int(parts[0]), int(parts[1]))
+
+
+def _set_fabric_config_for_mesh(num_devices: int) -> None:
+    """Initialize fabric before open_mesh_device; required for CCL (e.g. all_reduce)."""
+    if int(num_devices) <= 1:
+        return
+    is_galaxy = ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+    fabric = ttnn.FabricConfig.FABRIC_1D_RING if is_galaxy else ttnn.FabricConfig.FABRIC_1D
+    ttnn.set_fabric_config(
+        fabric,
+        ttnn.FabricReliabilityMode.STRICT_INIT,
+        None,
+        ttnn.FabricTensixConfig.DISABLED,
+        ttnn.FabricUDMMode.DISABLED,
+        ttnn.FabricManagerMode.DEFAULT,
+    )
 
 
 @pytest.mark.skipif(
@@ -80,6 +97,9 @@ def test_layer1_routed_experts_mesh_matches_reference_given_reference_routing(
     ref = run_layer_moe_reference_from_hidden_states(Path(snap), layer_idx=layer_idx, hidden_states=x)
 
     mesh_rows, mesh_cols = _mesh_shape_from_env()
+    num_devices = mesh_rows * mesh_cols
+    # Fabric must be configured before open_mesh_device or mesh all_reduce hits uninitialized fabric_context.
+    _set_fabric_config_for_mesh(num_devices)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(mesh_rows, mesh_cols),
         dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER),
@@ -152,6 +172,9 @@ def test_layer1_routed_experts_mesh_matches_reference_given_reference_routing(
         except Exception:
             pass
         ttnn.close_mesh_device(mesh_device)
+    # Leave fabric disabled so later single-device tests in the same process are not affected.
+    if num_devices > 1:
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
     ok, msg = comp_pcc(routed, ref.routed_out, pcc=0.98)
     assert ok, f"layer1 routed experts (mesh) output mismatch vs reference: {msg}"
