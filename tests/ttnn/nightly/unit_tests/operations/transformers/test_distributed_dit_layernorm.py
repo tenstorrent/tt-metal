@@ -555,9 +555,12 @@ def test_distributed_dit_layernorm_program_cache(
 def test_distributed_dit_pre_allgather_welford_precision(device, inp_shape, inp_dtype, stats_dtype, reset_seeds):
     """DiT pre_allgather (welford) per-row mean and var vs torch reference.
 
-    The fp32 tolerance is tight enough to catch e.g. welford finalize buffer (cb_x2)
-    being held in bfloat16 rather than float32 when fp32_dest_acc_en is set; the bf16
-    tolerance is loosened to the bf16 noise floor.
+    For fp32 stats: scratch CB c_1 is fp32 with UnpackToDestFp32, so the welford recurrence
+    and the final transpose round-trip both preserve full fp32 precision. The tolerance is at
+    the analytical Welford noise floor (~sqrt(W)*eps_fp32) so any precision regression -- e.g.
+    holding a fp32 intermediate in bf16 or losing UnpackToDestFp32 -- is caught.
+
+    For bf16 stats: scratch CB and output are bf16, so the floor is bf16 quantization (~8e-3).
     """
     torch.manual_seed(0)
     w = inp_shape[-1]
@@ -594,29 +597,36 @@ def test_distributed_dit_pre_allgather_welford_precision(device, inp_shape, inp_
     tt_mean = out[..., 0]
     tt_var = out[..., 32]
 
+    # fp32 stats: For W=1024 (the larger parametrization) Welford mean/var noise is bounded by
+    # sqrt(W) * eps_fp32 ~ 3.8e-6; atol/rtol 1e-5 leaves ~2x headroom.
     if stats_dtype == ttnn.float32:
-        atol = 0.002
-        rtol = 0.002
-        pcc = 0.9999
+        atol = 1e-5
+        rtol = 1e-5
+        pcc = 0.99999
+        frobenius_threshold = 1e-5
     else:
         atol = 0.01
         rtol = 0.01
         pcc = 0.999
-    assert_numeric_metrics(torch_mean, tt_mean, rtol=rtol, atol=atol, pcc_threshold=pcc)
-    assert_numeric_metrics(torch_var, tt_var, rtol=rtol, atol=atol, pcc_threshold=pcc)
+        frobenius_threshold = 0.004
+    assert_numeric_metrics(
+        torch_mean, tt_mean, rtol=rtol, atol=atol, pcc_threshold=pcc, frobenius_threshold=frobenius_threshold
+    )
+    assert_numeric_metrics(
+        torch_var, tt_var, rtol=rtol, atol=atol, pcc_threshold=pcc, frobenius_threshold=frobenius_threshold
+    )
 
 
 @pytest.mark.parametrize("offset", [0.0, 1e6])
 def test_dit_layernorm_pre_allgather_fp32_precision(device, offset):
     """dit_layernorm_pre_allgather Welford stats are accurate for Float32 input regardless of mean offset.
 
-    Without the unpack_to_dest_mode=UnpackToDestFp32 fix in the program factory (and the kernel-
-    side replay-buffer recovery after transpose_wh_tile), the unpacker silently downcasts fp32
-    through SrcA to TF32 (10 mantissa bits). Large-mean inputs (offset=1e6) then make the
-    Welford recurrence's (x - M) subtraction lose precision -- mean/variance produced for the
-    post_allgather stage become wrong.
-
-    With the fix the answer matches torch fp64 within fp32 noise even at offset=1e6.
+    The Welford kernel requires fp32 precision end-to-end: the input CB and the intermediate
+    scratch CB must both use Float32 format, and the unpacker must be configured with
+    unpack_to_dest_mode=UnpackToDestFp32 so that fp32 values are not silently downcast to
+    TF32 (10 mantissa bits) when routed through SrcA. When either of these conditions is
+    violated, the Welford (x - M) subtraction catastrophically loses precision at large offsets
+    because the subtracted values share a large common exponent.
     """
     torch.manual_seed(0)
     embedding_dim = 128
@@ -655,21 +665,57 @@ def test_dit_layernorm_pre_allgather_fp32_precision(device, offset):
     tt_mean = actual[..., 0].to(torch.float64).squeeze(-1)
     tt_var = actual[..., 32].to(torch.float64).squeeze(-1)
 
-    # Mean tolerance: scales with offset magnitude due to fp32 Welford's inherent precision
-    # loss when |mean| >> std (each (x - M) subtraction loses ~log2(|mean|/std) bits). At
-    # offset=1e6 this gives ~1e3 absolute error.  The tolerance here is loose enough to
-    # absorb that, tight enough to catch the TF32 catastrophe (which gives ~1e6 absolute
-    # error: the recovered mean collapses or gets entirely truncated).
-    mean_atol = max(1e-2, abs(offset) * 1e-2)
-    assert torch.allclose(
-        tt_mean, torch_mean, rtol=1e-3, atol=mean_atol
-    ), f"offset={offset} mean mismatch: max_abs_err={(tt_mean - torch_mean).abs().max().item()}"
+    mean_pcc_threshold = 0.99999
+    mean_frob = 1e-5
+    if offset == 0.0:
+        # No catastrophic cancellation: Welford is at the fp32 noise floor for W=128 (mean/var
+        # error ~sqrt(W)*eps_fp32 ~ 1.4e-6), so tolerances can be tight to catch any precision
+        # regression.
+        mean_check_pcc = True
+        mean_rtol = 1e-7
+        mean_atol = 1e-7
+        var_pcc_threshold = 0.99999
+        var_frob = 1e-5
+        var_rtol = 1e-5
+        var_atol = 1e-5
+    else:
+        # At large offset, Welford mean stagnates once delta/k < ULP(offset)/2; the final mean
+        # reflects only the first few samples, giving low theoretical PCC.  Intrinsic to
+        # stagnation, so PCC check is disabled.
+        mean_check_pcc = False
+        mean_rtol = 6e-7
+        mean_atol = 1e-5
+        # Variance error per row has a long tail. Typical error stays small so PCC stays high.
+        # Relative Frobenius is larger here than for the mean: even though the variance's
+        # absolute error is smaller than the mean's, it's divided by ~1.0 (variance is
+        # translation-invariant), while the mean's larger absolute error is dwarfed when
+        # divided by ~1e6.
+        var_pcc_threshold = 0.95
+        var_frob = 0.05
+        var_rtol = 0.001
+        var_atol = 0.25
 
-    # Variance is translation-invariant so the reference value is ~1.0 in both cases.  Without
-    # the fix at offset=1e6 the variance collapses toward 0 entirely (relative error ~1.0,
-    # absolute error ~ref_variance).  With the fix the recovered variance has fp32 Welford
-    # noise scaling with the mean/std ratio -- atol=0.5 is loose enough to absorb that but
-    # tight enough to catch the TF32 catastrophe.
-    assert torch.allclose(
-        tt_var, torch_var, rtol=0.3, atol=0.5
-    ), f"offset={offset} variance mismatch: max_abs_err={(tt_var - torch_var).abs().max().item()} tt_var={tt_var.flatten()[:5].tolist()} ref={torch_var.flatten()[:5].tolist()}"
+    mean_passed, mean_msg = assert_numeric_metrics(
+        torch_mean,
+        tt_mean,
+        rtol=mean_rtol,
+        atol=mean_atol,
+        frobenius_threshold=mean_frob,
+        pcc_threshold=mean_pcc_threshold,
+        check_pcc=mean_check_pcc,
+        assert_on_fail=False,
+    )
+    var_passed, var_msg = assert_numeric_metrics(
+        torch_var,
+        tt_var,
+        rtol=var_rtol,
+        atol=var_atol,
+        frobenius_threshold=var_frob,
+        pcc_threshold=var_pcc_threshold,
+        assert_on_fail=False,
+    )
+    assert mean_passed and var_passed, (
+        f"offset={offset}\n"
+        f"--- MEAN: {'PASSED' if mean_passed else 'FAILED'} ---\n{mean_msg}\n"
+        f"--- VARIANCE: {'PASSED' if var_passed else 'FAILED'} ---\n{var_msg}"
+    )

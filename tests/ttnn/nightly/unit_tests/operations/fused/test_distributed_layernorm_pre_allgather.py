@@ -726,17 +726,19 @@ def test_residual_logical_shape_mismatch_rejected(device, op_name, inp_shape, re
 def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype, stats_dtype):
     """Welford pre_all_gather, both FUSE_PRE_ADD and no-residual paths.
 
-    Both paths go through LayerNormPreAllGatherWelfordProgramFactory. The fp32 tolerance is
-    tight enough to catch e.g. the welford finalize buffer (cb_x2) being held in bfloat16
-    rather than desired float32; the bf16 tolerance is loosened to the bf16 noise floor.
+    Both paths go through LayerNormPreAllGatherWelfordProgramFactory.
 
-    1. Fused-pre-add output (input, residual) vs torch reference for mean and variance.
-    2. No-residual output (manually-pre-added input) vs the same torch reference. Independently
-       exercises the welford path without FUSE_PRE_ADD set, so a regression isolated to either
-       the residual CB plumbing or the welford-only CBs (e.g., cb_x2 width/format) is caught.
-    3. Fused-pre-add output vs manually-pre-added output, tight against each other. Catches
-       fused-add-specific bugs whose magnitude is below the bf16 torch tolerance, since the
-       shared kernel/quantization noise cancels between the two paths.
+    Two precision regimes are exercised:
+    - The no-residual ("combined") path is pure welford with fp32 unpack-to-dest on c_0 and
+      the scratch CB c_1, so it stays at the fp32 noise floor. The "combined vs torch"
+      tolerance is set tight enough to catch a regression like the scratch CB being held
+      in bf16 or losing UnpackToDestFp32.
+    - The FUSE_PRE_ADD ("fused") path uses add_tiles on the FPU, which routes fp32 through
+      SrcA/SrcB and truncates to TF32 (10 mantissa bits). The "fused vs torch" and
+      "fused vs combined" tolerances are set at TF32 ULP * 2 (looser than the welford floor
+      but still tight enough to catch a fused-add-specific bug that breaks beyond TF32 noise).
+
+    bf16 stats: scratch CB and output are bf16, so the floor is bf16 quantization (~8e-3).
     """
     torch.manual_seed(0)
 
@@ -814,48 +816,69 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
     combined_mean = out_combined[..., 0]
     combined_var = out_combined[..., 32]
 
-    # Tolerance is tight enough in fp32 to catch welford CB width/format regressions
-    # (e.g., cb_x2 held in bfloat16 in fp32-dest-acc mode); loosened to the bf16 noise floor
-    # for bf16 stats.
+    # Two tolerance sets:
+    #
+    # - "welford" applies to the no-residual path (FUSE_PRE_ADD unset). c_0 carries fp32 with
+    #   UnpackToDestFp32, the scratch CB c_1 is fp32, and the transpose round-trip preserves
+    #   full fp32 precision, so the floor is the welford recurrence's own fp32 noise
+    #   (~sqrt(W) * eps_fp32 ~ a few times 1e-6).
+    # - "fused" applies to any comparison involving the FUSE_PRE_ADD output. The in-kernel
+    #   add_tiles consumes the input via SrcA/SrcB which routes fp32 through TF32 (10 mantissa
+    #   bits) -- a property of the FPU add path, not a bug -- so the floor is TF32 ULP at the
+    #   value magnitude: |mean| ~ 2/sqrt(W), |var| ~ 2 for randn+randn input, giving
+    #   atol_mean ~ 2/sqrt(W) * 2^-10 and atol_var ~ 2 * 2^-10. For W=128 the larger of the two
+    #   parametrizations sets the bound: atol_mean ~ 1.8e-4, atol_var ~ 2e-3.
+    # - bf16 stats: scratch CB and output are bf16, floor is bf16 quantization (~8e-3).
     if stats_dtype == ttnn.float32:
-        atol = 0.002
-        rtol = 0.003
-        pcc = 0.9999
-        frobenius_threshold = 0.001
+        welford_atol = 1e-5
+        welford_rtol = 1e-5
+        welford_pcc = 0.99999
+        welford_frob = 1e-5
+        # FUSE tolerances: TF32 ULP * 2 at the worst-case magnitude.
+        fused_atol_mean = 4e-4
+        fused_atol_var = 4e-3
+        fused_rtol = 3e-3
+        fused_pcc = 0.99999
+        fused_frob_mean = 1e-3
+        fused_frob_var = 1e-3
     else:
-        atol = 0.01
-        rtol = 0.01
-        pcc = 0.999
-        frobenius_threshold = 0.004
+        welford_atol = 0.01
+        welford_rtol = 0.01
+        welford_pcc = 0.999
+        welford_frob = 0.004
+        fused_atol_mean = 0.01
+        fused_atol_var = 0.01
+        fused_rtol = 0.01
+        fused_pcc = 0.999
+        fused_frob_mean = 0.004
+        fused_frob_var = 0.004
 
-    # Run every check independently and collect results, so a single test report identifies
-    # all failing comparisons instead of stopping at the first one. Each entry is
-    # (label, expected, actual). Labels describe what the comparison covers.
+    # Each entry: (label, expected, actual, atol, rtol, pcc_threshold, frobenius_threshold).
     checks = [
-        # Fused-pre-add path (FUSE_PRE_ADD set) vs torch reference.
-        ("fused vs torch: mean", torch_mean, fused_mean),
-        ("fused vs torch: var", torch_var, fused_var),
-        # No-residual path (FUSE_PRE_ADD unset) vs the same torch reference. Independently
-        # exercises the welford path without the in-kernel add, so a regression isolated to
-        # either side is caught.
-        ("combined vs torch: mean", torch_mean, combined_mean),
-        ("combined vs torch: var", torch_var, combined_var),
-        # Fused-pre-add output vs manually-pre-added output. Catches fused-add-specific bugs
-        # whose magnitude is below the bf16 torch tolerance: the shared kernel/quantization
-        # noise that limits that tolerance cancels between the two paths.
-        ("fused vs combined: mean", combined_mean, fused_mean),
-        ("fused vs combined: var", combined_var, fused_var),
+        # Fused-pre-add path (FUSE_PRE_ADD set) vs torch reference. add_tiles is on the FPU
+        # path, so this is at TF32 precision -- expected, not a regression.
+        ("fused vs torch: mean", torch_mean, fused_mean, fused_atol_mean, fused_rtol, fused_pcc, fused_frob_mean),
+        ("fused vs torch: var", torch_var, fused_var, fused_atol_var, fused_rtol, fused_pcc, fused_frob_var),
+        # No-residual path (FUSE_PRE_ADD unset) vs the same torch reference. Pure welford
+        # path; the floor is fp32 noise, so tight tolerances catch any precision regression
+        # (e.g., the scratch CB being held in bf16, missing UnpackToDestFp32 on c_0 / c_1).
+        ("combined vs torch: mean", torch_mean, combined_mean, welford_atol, welford_rtol, welford_pcc, welford_frob),
+        ("combined vs torch: var", torch_var, combined_var, welford_atol, welford_rtol, welford_pcc, welford_frob),
+        # Fused-pre-add output vs manually-pre-added output. Catches fused-add-specific bugs.
+        # The FUSE TF32 floor dominates, so use the same tolerances as fused-vs-torch.
+        ("fused vs combined: mean", combined_mean, fused_mean, fused_atol_mean, fused_rtol, fused_pcc, fused_frob_mean),
+        ("fused vs combined: var", combined_var, fused_var, fused_atol_var, fused_rtol, fused_pcc, fused_frob_var),
     ]
 
     failures = []
-    for label, expected, actual in checks:
+    for label, expected, actual, atol, rtol, pcc, frob in checks:
         passed, message = assert_numeric_metrics(
             expected,
             actual,
             rtol=rtol,
             atol=atol,
             pcc_threshold=pcc,
-            frobenius_threshold=frobenius_threshold,
+            frobenius_threshold=frob,
             assert_on_fail=False,
         )
         if not passed:

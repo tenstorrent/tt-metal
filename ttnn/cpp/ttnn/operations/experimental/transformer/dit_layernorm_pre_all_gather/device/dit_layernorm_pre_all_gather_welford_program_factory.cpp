@@ -42,10 +42,8 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     constexpr uint32_t double_buffer = 2;
     const uint32_t in0_tiles = block_size * double_buffer;
@@ -120,6 +118,15 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
+    // Intermediate scratch CB (c_1) holds data only for the final transpose operation,
+    // so its format mirrors out_data_format. When both that format is Float32 and DEST
+    // is in fp32 mode, force fp32 unpack on c_1 too so the read-back doesn't truncate to
+    // TF32. For non-fp32 outputs the final pack to c_14 truncates anyway, so unpacking to
+    // fp32 would not be useful.
+    if (out_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_1)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     // Compute kernel
     KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source = compute_kernel_file;
@@ -177,14 +184,18 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
             .data_format = in_data_format,
             .page_size = in_single_tile_size}}}});
 
-    // c_intermed0 -> x^2 (CB 1)
+    // Intermediate scratch for the post-Welford transpose round-trip (CB 1). Used only for
+    // the last transpose operation before copying data into the output CB, which is why its
+    // data format is tied to the output format. Anything wider would waste SRAM and gain no
+    // precision (the read-back unpack truncates to TF32 unless the output is Float32, in
+    // which case UnpackToDestFp32 above preserves it).
     program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = in0_tiles * single_tile_size,
+        .total_size = in0_tiles * out_single_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size}}}});
+            .data_format = out_data_format,
+            .page_size = out_single_tile_size}}}});
 
     // Output (CB 14)
     program_descriptor.cbs.push_back(CBDescriptor{
