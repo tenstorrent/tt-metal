@@ -1,5 +1,156 @@
 
 ---
+## 2026-05-18 — FIX EF: Blocking poll upgrade (commit 9f7f59a9404)
+
+### What Failed
+
+CI run 26019962592 showed DEADB07E_COUNT=25 — 25 MMIO relay ERISCs stuck at
+0xDEADB07E after firmware launch. FIX NX fired on multiple chips as routing
+writes timed out at 5 s each (FIX_NX fires: routing table writes timing out on
+dead relay). The existing FIX EF poll was WARNING-ONLY with 500 ms timeout.
+
+### Root Cause
+
+FIX EF detected the problem but took no corrective action on timeout. The 500 ms
+warning log "relay ERISC did not start; D4-D7 routing writes may race" was exactly
+correct diagnostically but the code still let subsequent routing writes proceed,
+even though the relay ERISC had not started.
+
+### FIX EF Blocking Poll Implementation
+
+**File**: `tt_metal/impl/device/device.cpp` lines ~908-969
+
+Two changes to the existing FIX EF poll block:
+
+1. **Timeout extended**: `kFIX_EF_PollMaxMs` 500 → 3000 ms. Relay startup is
+   typically < 50 ms; 3 s gives margin for worst-case (slow boot, firmware hang)
+   without unbounded stall.
+
+2. **On timeout: set `fabric_relay_path_broken_.store(true)`** — same flag used
+   by FIX DY (non-MMIO zombie ERISCs), FIX AN (Phase 2.5 relay read failures), etc.
+   With `fabric_relay_path_broken_=true` on the MMIO device:
+   - compile_and_configure_fabric FIX SB2 propagates the broken state to all
+     non-MMIO devices behind this MMIO host.
+   - Non-MMIO devices then skip their relay reads in Phase 2.5/3/5 (existing guards:
+     `if (fabric_relay_path_broken_ && !is_mmio_capable())`).
+   - This prevents D4-D7 routing writes from going through a relay that never started.
+
+The warning log updated to: "Setting fabric_relay_path_broken_=true to block
+D4-D7 routing writes through dead relay."
+
+### What Was NOT Changed
+
+- No test tolerance changes
+- No test disablements
+- No device-number hardcoding
+
+### Commit
+
+`9f7f59a9404`
+
+---
+## 2026-05-18 — Audit Task 2 Round 2: Testing Gaps (commits 2dd406456b6, 0d84f0cfe07)
+
+### Audit Scope
+
+Systematic review of all FIX code paths (EG, IJ, KL, DU, GI, GJ, MN) for missing
+diagnostic logging, pre/post state capture, and summary aggregation.
+
+### Gaps Found and Fixed
+
+**GAP 1 — FIX EG pre-zero state missing (fabric_init.cpp)**
+- Problem: FIX EG zeroed fw_launch_addr but never logged what the value was BEFORE
+  the zero-write. If it was already 0, the write was harmless. If it was 1, FIX EG
+  caught genuinely stale state from a prior session. No CI log evidence either way.
+- Fix (FIX MN): Added pre-zero read + log before the write_core_immediate call.
+  Log line: `FIX MN (#42429): FIX EG pre-zero snapshot — Device X chan=Y ... pre_val=0xZ`
+
+**GAP 2 — FIX DU poll entry state missing (fabric_init.cpp)**
+- Problem: FIX DU (post-soft-reset ROM boot wait) logged successful exit and timeout,
+  but not the initial edm_status at poll start. If ERISC already exited ROM before
+  polling began (elapsed=0ms), we couldn't tell what state it was in.
+- Fix (FIX MN): Added initial edm_status read at FIX DU poll entry.
+  Log line: `FIX MN (#42429): FIX DU poll entry — Device X chan=Y edm_status=0xZ`
+
+**GAP 3 — configure_fabric_cores summary missing (fabric_init.cpp)**
+- Problem: CI logs showed individual channel decisions but no aggregate summary.
+  When investigating failures, you had to count individual log lines manually.
+- Fix (FIX MN): Added summary log at function exit with total/dead/recovered/skip counts.
+  Log line: `FIX MN (#42429): configure_fabric_cores SUMMARY — Device X total=N dead=M ...`
+
+**GAP 4 — FIX IJ pre-restore state missing (device.cpp, all 3 paths)**
+- Problem: FIX IJ restored fw_launch_addr after firmware load, but never logged what
+  the value was before the restore. Couldn't distinguish "FIX EG correctly zeroed it
+  and we're restoring" from "FIX EG didn't fire for this channel (pre_val already non-zero)".
+- Fix (FIX MN): Added pre-restore read + log to all three FIX IJ sites:
+  - Initial configure_fabric() path (device.cpp ~line 762)
+  - Quiesce path (device.cpp ~line 2105)
+  - Deferred-quiesce / launch_eth_cores_for_quiesce path (device.cpp ~line 2642)
+  Log line: `FIX MN (#42429): FIX IJ [path] pre-restore — Device X chan=Y ... pre_val=0xZ`
+
+**GAP 5 — Analyze script missing new patterns**
+- Problem: analyze_fabric_hang_log.sh did not capture FIX IJ, FIX KL, FIX MN, FIX DU,
+  FIX DY, FIX EE, FIX EF patterns.
+- Fix: Updated both grep pattern lines + added counters + interpretation blocks for:
+  FIX_MN_PRE_ZERO_STALE, FIX_MN_PRE_RESTORE_NONZERO, FIX_IJ_MISMATCH, FIX_KL_FIRES
+
+### What Was NOT Changed
+
+- No test tolerance changes
+- No test disablements
+- No device-number hardcoding
+- All logging is diagnostic only (no control-flow changes)
+
+### Commits
+
+- `2dd406456b6` — FIX MN: pre-state snapshots and summary logging for diagnostic gaps
+- `0d84f0cfe07` — Update analyze_fabric_hang_log.sh: add FIX MN/IJ/KL patterns
+
+---
+## 2026-05-18 — FIX KL: fw_launch_addr restore for MMIO base-UMD channels (FIX EE path) (commit e0bd7acc540)
+
+### Bug
+
+FIX IJ restored `fw_launch_addr` after `write_launch_msg_to_core` for MMIO base-UMD channels,
+but its condition was:
+```cpp
+skip_soft_reset_channels.count(hoisted_eth_chan)
+```
+
+FIX EE deliberately keeps MMIO channels OUT of `skip_soft_reset_channels` (PCIe-direct, so
+soft-reset is safe; FIX M skip-soft-reset is only for non-MMIO relay ERISCs). Result: MMIO
+channels at `0x49706550` sentinel went through the correct soft-reset path, but `fw_launch_addr`
+was still zeroed by FIX EG (inside `configure_fabric_cores()` during reset). After firmware load
+completed, FIX IJ never fired for these channels → `fw_launch_addr` stayed `0` → ERISC polled
+indefinitely at `0xDEADB07E`.
+
+### Fix
+
+- **`TerminateStaleResult`** (`fabric_firmware_initializer.hpp`): added `mmio_base_umd_channels`
+  field — set by FIX EE branch for MMIO in-cluster channels at `0x49706550`.
+- **`terminate_stale_erisc_routers()`** (`.cpp`): inserts into local `mmio_base_umd_channels`,
+  returns in struct. Added `mmio_base_umd_channels` local variable and updated both return sites.
+- **`compile_and_configure_fabric()`** (`.cpp`): collects per-device into `mmio_base_umd_channels_map`,
+  added `get_mmio_base_umd` lambda, passes to both Pass 1 (non-MMIO) and Pass 2 (MMIO async) calls.
+- **`configure_fabric()` declaration** (`device_impl.hpp`): added `mmio_base_umd_channels = {}` param.
+- **`configure_fabric()` definition + FIX IJ** (`device.cpp`): added param to signature;
+  extended FIX IJ condition with `|| mmio_base_umd_channels.count(hoisted_eth_chan)`;
+  added `via_ee_path` bool to emit a `FIX IJ EE` log_debug when the new path fires.
+
+### Why FIX EE channels still need FIX IJ
+
+FIX EE path: MMIO device, in-cluster peer, `edm_status == 0x49706550`.
+- Soft-reset IS performed (PCIe-direct, safe).
+- `configure_fabric_cores()` FIX EG zeros `fw_launch_addr` during reset window.
+- After firmware load + `write_launch_msg_to_core`, `fw_launch_addr` must be restored to
+  `fw_launch_addr_value` so base-UMD can launch the new firmware.
+- FIX IJ covers this — FIX KL just extends it to the EE path.
+
+### Commit
+
+`e0bd7acc540`
+
+---
 ## 2026-05-18 — FIX IJ build fix: kUnresolvedChan undeclared (commit 486c04dddca)
 
 ### Root Cause of CI Run 26017755240 failure (build break from FIX IJ)
