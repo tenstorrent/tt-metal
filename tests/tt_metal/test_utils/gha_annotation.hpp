@@ -172,7 +172,7 @@ inline void append_escaped_text(fmt::memory_buffer& out, std::string_view text, 
     annotation_level level,
     std::string_view message,
     std::source_location loc = std::source_location::current()) noexcept {
-    annotation ann{.level = level, .message = message, .file = {}};
+    annotation ann{.level = level, .message = message, .file = {}, .line = {}, .end_line = {}, .column = {}, .end_column = {}, .title = {}};
     return detail::annotation_at(ann, loc);
 }
 

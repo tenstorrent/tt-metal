@@ -77,6 +77,9 @@ TEST(GhaAnnotationTest, MakeAnnotationFromAnnotationPreservesExplicitFields) {
         .message = "msg",
         .file = {},
         .line = std::uint_least32_t{42},
+        .end_line = {},
+        .column = {},
+        .end_column = {},
         .title = "explicit_title",
     };
     const annotation a = make_annotation(base);
@@ -120,7 +123,7 @@ TEST(GhaAnnotationTest, EmitAnnotationAtWritesToStream) {
 TEST(GhaAnnotationTest, EmitAnnotationAtFromAnnotationWritesToStream) {
     std::FILE* stream = std::tmpfile();
     ASSERT_NE(stream, nullptr);
-    const annotation ann{.level = annotation_level::warning, .message = "emit_at_annotation_msg", .file = {}};
+    const annotation ann{.level = annotation_level::warning, .message = "emit_at_annotation_msg", .file = {}, .line = {}, .end_line = {}, .column = {}, .end_column = {}, .title = {}};
     emit_annotation_at(ann, stream);
     const std::string output = read_stream_contents(stream);
     EXPECT_THAT(output, ::testing::HasSubstr("::warning"));
