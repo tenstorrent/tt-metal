@@ -431,7 +431,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor)
         // Replay the recorded body for the remaining ITERATIONS - 1 elements.
         // Each replay is one REPLAY-equivalent issue; the body executes as
         // if it had been issued inline, dst_reg advancing via ADDR_MOD_6.
-        TTI_REPLAY(0, BODY_LEN, 1, 0);
+        TTI_REPLAY(0, BODY_LEN, 0, 0);
     }
 }
 
