@@ -85,6 +85,15 @@ void kernel_main() {
     // weight CB (weights stay L1-resident).
     constexpr uint32_t qkv_w_cb = get_named_compile_time_arg_val("qkv_w_cb");
     constexpr uint32_t qkv_weight_tiles = get_named_compile_time_arg_val("qkv_weight_tiles");
+    // #11 Commit 3: per-head Q delivery from QKV → SDPA workers.
+    constexpr uint32_t qkv_done_trigger_cb = get_named_compile_time_arg_val("qkv_done_trigger_cb");
+    constexpr uint32_t sdpa_q_cb = get_named_compile_time_arg_val("sdpa_q_cb");
+    constexpr uint32_t sdpa_qkv_ready_sem_id = get_named_compile_time_arg_val("sdpa_qkv_ready_sem_id");
+    constexpr uint32_t num_qkv_signals_per_worker = get_named_compile_time_arg_val("num_qkv_signals_per_worker");
+    constexpr uint32_t num_heads = get_named_compile_time_arg_val("num_heads");
+    constexpr uint32_t num_sdpa_workers_per_head = get_named_compile_time_arg_val("num_sdpa_workers_per_head");
+    constexpr uint32_t m_tiles_per_sdpa_worker = get_named_compile_time_arg_val("m_tiles_per_sdpa_worker");
+    constexpr uint32_t sdpa_q_tiles_per_worker = get_named_compile_time_arg_val("sdpa_q_tiles_per_worker");
 
     const bool is_ln1_core_nc = (get_relative_logical_y() == 0) && (get_relative_logical_x() < ln1_num_cores);
     const bool is_qkv_core_nc = (get_relative_logical_y() < qkv_grid_y) && (get_relative_logical_x() < qkv_grid_x);
@@ -183,9 +192,10 @@ void kernel_main() {
         // BH (eth/PCIe columns split the worker grid: logical x=7 → physical
         // x=10, not 8). Pull the 8 physical x coords from the host-supplied
         // array (named "ln1_phys_x") rather than computing origin + offset.
-        // Array slot 0 sits at common-arg-index 3 (after ln_out_l1_addr,
-        // worker_phys_origin_x, worker_phys_origin_y).
-        constexpr uint32_t LN1_PHYS_X_BASE = 3;
+        // Array slot 0 sits at common-arg-index 4 (after the 4 scalar named
+        // common args: ln_out_l1_addr, worker_phys_origin_x,
+        // worker_phys_origin_y, qkv_out_l1_addr).
+        constexpr uint32_t LN1_PHYS_X_BASE = 4;
         for (uint32_t i = 0; i < ln1_num_cores; ++i) {
             const uint32_t ln1_phys_x = get_common_arg_val<uint32_t>(LN1_PHYS_X_BASE + i);
             const uint64_t src = get_noc_addr(ln1_phys_x, ln1_phys_y, ln_out_l1_addr);
@@ -194,6 +204,109 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         cb_push_back(qkv_act_cb, qkv_act_tiles_per_core);
+    }
+
+    // =========================================================================
+    // PHASE 4a (Commit 3 of #11): QKV → SDPA per-head fan-out.
+    //
+    // After TRISC pushes qkv_done_trigger_cb (right after EncoderMatmul writes
+    // qkv_out_cb), QKV NCRISC determines its head h and which 4 SDPA workers
+    // need that head's slice, then atomic-incs each worker's sdpa_qkv_ready_sem.
+    //
+    // QKV shard layout (Commit 1 of #11): linear shard index s = y*qkv_grid_x + x.
+    //   s ∈ [0..15]: Q heads 0..15
+    //   s ∈ [16..31]: K heads 0..15
+    //   s ∈ [32..47]: V heads 0..15
+    // For this commit only Q producers signal (num_qkv_signals_per_worker=1);
+    // K and V producers will be added in subsequent commits.
+    //
+    // SDPA worker mapping (Commit 2 of #11):
+    //   head h → workers at logical (head_col = h%sdpa_grid_x,
+    //                                head_row = h/sdpa_grid_x,
+    //                                y = head_row*num_sdpa_workers_per_head + w)
+    //   for w ∈ [0..num_sdpa_workers_per_head-1]. Note sdpa_grid_x is the head
+    //   count per head-row (8) — same numerical value as the SDPA grid x, by
+    //   construction.
+    // =========================================================================
+    if (is_qkv_core_nc) {
+        cb_wait_front(qkv_done_trigger_cb, 1);
+        cb_pop_front(qkv_done_trigger_cb, 1);
+
+        const uint32_t my_qkv_shard_idx = get_relative_logical_y() * qkv_grid_x + get_relative_logical_x();
+        // Only Q shards (0..num_heads-1) signal this commit. K/V join later.
+        if (my_qkv_shard_idx < num_heads) {
+            const uint32_t head_idx = my_qkv_shard_idx;
+            const uint32_t head_col = head_idx % sdpa_grid_x;  // x of head's workers
+            const uint32_t head_row = head_idx / sdpa_grid_x;  // 0 or 1
+            const uint32_t sdpa_y_base = head_row * num_sdpa_workers_per_head;
+
+            // sdpa_phys_x is the SDPA grid's physical NoC x array (8 entries),
+            // sitting right after ln1_phys_x in the common RT arg slots:
+            //   slot  0: ln_out_l1_addr
+            //   slot  1: worker_phys_origin_x
+            //   slot  2: worker_phys_origin_y
+            //   slot  3: qkv_out_l1_addr (this commit)
+            //   slots 4..11: ln1_phys_x[0..7]
+            //   slots 12..19: sdpa_phys_x[0..7]
+            constexpr uint32_t SDPA_PHYS_X_BASE = 4 + 8;
+            const uint32_t sdpa_worker_phys_x = get_common_arg_val<uint32_t>(SDPA_PHYS_X_BASE + head_col);
+            const uint32_t phys_origin_y_local = get_common_arg_val<uint32_t>(2);
+            const uint32_t sem_l1_addr = get_semaphore(sdpa_qkv_ready_sem_id);
+            for (uint32_t w = 0; w < num_sdpa_workers_per_head; ++w) {
+                const uint32_t sdpa_worker_phys_y = phys_origin_y_local + (sdpa_y_base + w);
+                const uint64_t sem_noc_addr = get_noc_addr(sdpa_worker_phys_x, sdpa_worker_phys_y, sem_l1_addr);
+                noc_semaphore_inc(sem_noc_addr, 1);
+            }
+            noc_async_atomic_barrier();
+        }
+    }
+
+    // =========================================================================
+    // PHASE 4b (Commit 3 of #11): SDPA NCRISC reader — wait for head's Q ready,
+    // pull (M/num_sdpa_workers_per_head=64, 96) Q-shard from the QKV core
+    // holding this head's Q (linear QKV shard idx = head_idx) at byte offset
+    // worker_idx * (m_tiles_per_sdpa_worker * qkv_n_tiles_per_core) * tile_size.
+    //
+    // K and V reads land in Commit 4+ of #11; this commit validates the Q path
+    // alone, so the sem-wait threshold is num_qkv_signals_per_worker=1.
+    // =========================================================================
+    if (is_sdpa_core_nc) {
+        const uint32_t head_col_self = get_relative_logical_x();  // h % sdpa_grid_x
+        const uint32_t head_row_self = get_relative_logical_y() / num_sdpa_workers_per_head;
+        const uint32_t worker_idx_self = get_relative_logical_y() % num_sdpa_workers_per_head;
+        const uint32_t head_idx_self = head_row_self * sdpa_grid_x + head_col_self;
+
+        // Wait for the head's QKV producer(s) to signal Q-ready.
+        const uint32_t sdpa_sem_l1_addr = get_semaphore(sdpa_qkv_ready_sem_id);
+        volatile tt_l1_ptr uint32_t* sdpa_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sdpa_sem_l1_addr);
+
+        cb_reserve_back(sdpa_q_cb, sdpa_q_tiles_per_worker);
+        noc_semaphore_wait_min(sdpa_sem_ptr, num_qkv_signals_per_worker);
+        noc_semaphore_set(sdpa_sem_ptr, 0);
+
+        // QKV source core for Q head head_idx_self: linear shard = head_idx,
+        // core at logical (head_idx % qkv_grid_x, head_idx / qkv_grid_x).
+        // QKV grid logical x ∈ [0..5] is contiguous (no eth gap), so
+        // physical = origin + logical works.
+        const uint32_t phys_origin_x_local = get_common_arg_val<uint32_t>(1);
+        const uint32_t phys_origin_y_local = get_common_arg_val<uint32_t>(2);
+        const uint32_t qkv_out_l1_addr = get_common_arg_val<uint32_t>(3);
+        const uint32_t q_src_qkv_x = head_idx_self % qkv_grid_x;
+        const uint32_t q_src_qkv_y = head_idx_self / qkv_grid_x;
+        const uint32_t q_src_phys_x = phys_origin_x_local + q_src_qkv_x;
+        const uint32_t q_src_phys_y = phys_origin_y_local + q_src_qkv_y;
+
+        // Byte offset into the source core's qkv_out_cb: each worker takes
+        // m_tiles_per_sdpa_worker row-tiles × qkv_n_tiles_per_core col-tiles,
+        // contiguous in the tile-major (row-major over tiles) L1 layout.
+        const uint32_t tile_size_bytes = get_tile_size(sdpa_q_cb);
+        const uint32_t q_bytes_per_worker = sdpa_q_tiles_per_worker * tile_size_bytes;
+        const uint32_t src_byte_offset = worker_idx_self * q_bytes_per_worker;
+        const uint64_t q_src_noc_addr = get_noc_addr(q_src_phys_x, q_src_phys_y, qkv_out_l1_addr + src_byte_offset);
+        const uint32_t q_dst_local_addr = get_write_ptr(sdpa_q_cb);
+        noc_async_read(q_src_noc_addr, q_dst_local_addr, q_bytes_per_worker);
+        noc_async_read_barrier();
+        cb_push_back(sdpa_q_cb, sdpa_q_tiles_per_worker);
     }
 #endif  // COMPILE_FOR_NCRISC
 
@@ -334,6 +447,13 @@ void kernel_main() {
         pi05_siglip_ops::EncoderMatmul::Op<QkvMmCTArgs, true> qkv_mm;
         pi05_siglip_ops::EncoderMatmul::RTArgs qkv_args{};
         qkv_mm(qkv_args);
+
+        // #11 Commit 3: release the QKV→SDPA fan-out atomic-inc. The matmul
+        // Op-struct ended with cb_push_back(qkv_out_cb), so the (M, 96) head
+        // slice is now in L1; we just need to tell NCRISC to fire its incs.
+        constexpr uint32_t qkv_done_trigger_cb_tr = get_named_compile_time_arg_val("qkv_done_trigger_cb");
+        cb_reserve_back(qkv_done_trigger_cb_tr, 1);
+        cb_push_back(qkv_done_trigger_cb_tr, 1);
     }
 #endif
 }

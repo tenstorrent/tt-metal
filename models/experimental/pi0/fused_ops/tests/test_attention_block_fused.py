@@ -89,9 +89,10 @@ def test_attention_block_fused_ln_plus_residual(device):
 
     import ttnn as _ttnn
 
-    # build_tensors order: ..., final_out_tt, qkv_act_tt, ln_done_trigger_tt,
-    # qkv_w_tt, qkv_out_tt.  Indexing from the end: final_out_tt is -5.
-    final_out_tt = tensors[-5]
+    # build_tensors order tail: ..., final_out_tt, qkv_act_tt,
+    # ln_done_trigger_tt, qkv_w_tt, qkv_out_tt, qkv_done_trigger_tt, sdpa_q_tt.
+    # Indexing from the end: final_out_tt is -7.
+    final_out_tt = tensors[-7]
     y_device = _ttnn.to_torch(final_out_tt)
 
     p = pcc(y_golden, y_device)
@@ -121,9 +122,9 @@ def test_attention_block_fused_ln_mcast_probe(device):
 
     import ttnn as _ttnn
 
-    # qkv_act_tt is index -4 in the (... qkv_act_tt, ln_done_trigger_tt,
-    # qkv_w_tt, qkv_out_tt) ordering.
-    qkv_act_tt = tensors[-4]
+    # qkv_act_tt is index -6 in the (... qkv_act_tt, ln_done_trigger_tt,
+    # qkv_w_tt, qkv_out_tt, qkv_done_trigger_tt, sdpa_q_tt) ordering.
+    qkv_act_tt = tensors[-6]
     qkv_act_torch = _ttnn.to_torch(qkv_act_tt)
 
     num_receivers = SigLIPAttentionBlockFused.QKV_NUM_CORES
@@ -172,10 +173,11 @@ def test_attention_block_fused_qkv_matmul(device):
 
     import ttnn as _ttnn
 
-    # qkv_out_tt is the last tensor in build_tensors order. Device shape is
-    # the padded (M, 4608); we slice each head's first head_dim_true cols to
-    # recover the natural (M, 3456) layout before PCC.
-    qkv_out_tt = tensors[-1]
+    # qkv_out_tt is now at index -3 in build_tensors order (followed by
+    # qkv_done_trigger_tt and sdpa_q_tt). Device shape is the padded
+    # (M, 4608); we slice each head's first head_dim_true cols to recover
+    # the natural (M, 3456) layout before PCC.
+    qkv_out_tt = tensors[-3]
     qkv_out_device_padded = _ttnn.to_torch(qkv_out_tt)
     assert qkv_out_device_padded.shape == (
         M,
@@ -192,3 +194,73 @@ def test_attention_block_fused_qkv_matmul(device):
     )
     # bfp8 weight + HiFi4 accumulator typically lands ≥ 0.999 on this shape.
     assert p >= 0.999, f"PCC {p} below 0.999 gate"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_attention_block_fused_sdpa_q_probe(device):
+    """Probe the QKV → SDPA per-head Q delivery on the 64-core SDPA grid.
+
+    Each SDPA worker for head h pulls its M-slice (64 rows × 96 cols padded)
+    of Q head h from the QKV core holding that head's slice. We read
+    sdpa_q_tt back as (64*64, 96), reshape to (64 workers, 64, 96), and
+    check each worker matches the expected M-slice of the head's padded Q.
+
+    PCC gate matches the QKV matmul probe (0.999) since the data is just
+    a NoC copy of QKV's bfp8/HiFi4 output — no additional compute.
+    """
+    x, gamma, beta = make_inputs(seed=42)
+    w_qkv = make_qkv_weight(seed=7)
+
+    # Build golden: padded QKV output sliced into per-head Q (16 × (M, 96)).
+    ln_out_golden = F.layer_norm(x.float(), (D,), gamma.float(), beta.float(), eps=EPS)
+    qkv_golden_unpadded = (ln_out_golden.to(torch.float32) @ w_qkv.to(torch.float32)).to(torch.bfloat16)
+    # Reconstruct the device-side padded layout per-head (16 padded Q heads
+    # of shape (M, HEAD_DIM_PADDED), with last 24 cols zero).
+    q_heads_padded = torch.zeros(NUM_HEADS, M, HEAD_DIM_PADDED, dtype=torch.bfloat16)
+    for h in range(NUM_HEADS):
+        src_start = h * HEAD_DIM_TRUE
+        q_heads_padded[h, :, :HEAD_DIM_TRUE] = qkv_golden_unpadded[:, src_start : src_start + HEAD_DIM_TRUE]
+
+    tensors = build_tensors_for_fused_attention_block(device, x, gamma, beta, w_qkv_torch=w_qkv)
+    SigLIPAttentionBlockFused.op(*tensors, eps=EPS)
+
+    import ttnn as _ttnn
+
+    # sdpa_q_tt is the last tensor in build_tensors order.
+    sdpa_q_tt = tensors[-1]
+    sdpa_q_torch = _ttnn.to_torch(sdpa_q_tt)
+
+    sdpa_num_workers = SigLIPAttentionBlockFused.SDPA_NUM_CORES  # 64
+    rows_per_worker = M // SigLIPAttentionBlockFused.NUM_SDPA_WORKERS_PER_HEAD  # 64
+    assert sdpa_q_torch.shape == (
+        sdpa_num_workers * rows_per_worker,
+        HEAD_DIM_PADDED,
+    ), f"sdpa_q shape {tuple(sdpa_q_torch.shape)} != expected"
+
+    # Reshape to (workers, rows, cols). Workers laid out row-major across the
+    # 8×8 grid: worker linear idx = y * SDPA_GRID_X + x. Worker (x, y) is the
+    # w-th worker of head head_idx = (y // num_workers_per_head) * SDPA_GRID_X + x,
+    # with worker_idx = y % num_workers_per_head.
+    sdpa_q_workers = sdpa_q_torch.reshape(sdpa_num_workers, rows_per_worker, HEAD_DIM_PADDED)
+    sdpa_grid_x = SigLIPAttentionBlockFused.SDPA_GRID_X
+    num_workers_per_head = SigLIPAttentionBlockFused.NUM_SDPA_WORKERS_PER_HEAD
+
+    min_pcc = float("inf")
+    worst = None
+    for worker_linear in range(sdpa_num_workers):
+        y = worker_linear // sdpa_grid_x
+        x = worker_linear % sdpa_grid_x
+        head_idx = (y // num_workers_per_head) * sdpa_grid_x + x
+        worker_idx = y % num_workers_per_head
+        expected = q_heads_padded[head_idx, worker_idx * rows_per_worker : (worker_idx + 1) * rows_per_worker, :]
+        p = pcc(expected, sdpa_q_workers[worker_linear])
+        if p < min_pcc:
+            min_pcc = p
+            worst = (worker_linear, x, y, head_idx, worker_idx)
+
+    print(f"\nPCC (SDPA Q probe, min across {sdpa_num_workers} workers) = {min_pcc:.6f}")
+    print(
+        f"  worst worker: linear={worst[0]}, (x,y)=({worst[1]},{worst[2]}), " f"head={worst[3]}, worker_idx={worst[4]}"
+    )
+    print(f"  per-worker shape={(rows_per_worker, HEAD_DIM_PADDED)}, dtype={sdpa_q_workers.dtype}")
+    assert min_pcc >= 0.999, f"min worker PCC {min_pcc} below 0.999 gate"

@@ -133,7 +133,23 @@ class SigLIPAttentionBlockFused:
         #   left for downstream (#11 SDPA) to consume.
         "qkv_w_cb": 16,
         "qkv_out_cb": 17,
+        # #11 Commit 3: QKV → SDPA per-head delivery.
+        # qkv_done_trigger_cb: 1-tile sync CB on the QKV grid. TRISC pushes
+        #   after EncoderMatmul finishes; NCRISC waits then atomic-incs each of
+        #   the 4 SDPA workers for this core's head.
+        # sdpa_q_cb: per-SDPA-worker Q slice, (64, 96) bf16 = 6 tiles. The 4
+        #   workers of head h together cover Q head h's full (256, 96) by
+        #   pulling 64-row M-slices. K and V land in subsequent commits.
+        "qkv_done_trigger_cb": 18,
+        "sdpa_q_cb": 19,
     }
+
+    # SDPA QKV-ready semaphore (id=3 on SDPA grid). QKV NCRISC atomic-incs
+    # each head's 4 SDPA workers after the matmul completes. SDPA NCRISC
+    # waits for count = NUM_QKV_SIGNALS_PER_WORKER (= 1 this commit; will be
+    # 3 once K and V land — one inc each from the head's Q, K, V source).
+    SDPA_QKV_READY_SEM_ID = 3
+    NUM_QKV_SIGNALS_PER_WORKER = 1  # Q only this commit
 
     # Counter semaphore for the LN1→QKV receiver-pull. Each QKV receiver
     # increments-and-waits on its own copy at this ID; the host allocates the
@@ -160,6 +176,8 @@ class SigLIPAttentionBlockFused:
         ln_done_trigger_tt,
         qkv_w_tt,
         qkv_out_tt,
+        qkv_done_trigger_tt,
+        sdpa_q_tt,
         math_fidelity=ttnn.MathFidelity.HiFi4,
         eps: float = 1e-6,
     ):
@@ -183,6 +201,18 @@ class SigLIPAttentionBlockFused:
         # full (M, D) = (256, 1152) replicated).
         qkv_weight_tiles = SigLIPAttentionBlockFused.D_TILES * SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE
         qkv_out_tiles_per_core = SigLIPAttentionBlockFused.M_TILES * SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE
+
+        # #11 Commit 3 — per-SDPA-worker Q tile count.
+        # Each head's (256, 96) padded Q is split M-parallel 4 ways: each
+        # worker gets (64, 96) = 2 row-tiles × 3 col-tiles = 6 tiles.
+        m_tiles_per_sdpa_worker = (
+            SigLIPAttentionBlockFused.M_TILES // SigLIPAttentionBlockFused.NUM_SDPA_WORKERS_PER_HEAD
+        )
+        assert (
+            m_tiles_per_sdpa_worker * SigLIPAttentionBlockFused.NUM_SDPA_WORKERS_PER_HEAD
+            == SigLIPAttentionBlockFused.M_TILES
+        )
+        sdpa_q_tiles_per_worker = m_tiles_per_sdpa_worker * SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE
 
         eps_bf16 = torch.tensor(eps, dtype=torch.bfloat16).view(torch.uint16).item()
         eps_bits = eps_bf16 << 16
@@ -215,6 +245,15 @@ class SigLIPAttentionBlockFused:
             # SDPA grid bounds (task #11 Commit 2 — role-flag plumbing only).
             ("sdpa_grid_x", SigLIPAttentionBlockFused.SDPA_GRID_X),
             ("sdpa_grid_y", SigLIPAttentionBlockFused.SDPA_GRID_Y),
+            # #11 Commit 3: per-head Q delivery from QKV → SDPA workers.
+            ("qkv_done_trigger_cb", SigLIPAttentionBlockFused.CB["qkv_done_trigger_cb"]),
+            ("sdpa_q_cb", SigLIPAttentionBlockFused.CB["sdpa_q_cb"]),
+            ("sdpa_qkv_ready_sem_id", SigLIPAttentionBlockFused.SDPA_QKV_READY_SEM_ID),
+            ("num_qkv_signals_per_worker", SigLIPAttentionBlockFused.NUM_QKV_SIGNALS_PER_WORKER),
+            ("num_heads", SigLIPAttentionBlockFused.NUM_HEADS),
+            ("num_sdpa_workers_per_head", SigLIPAttentionBlockFused.NUM_SDPA_WORKERS_PER_HEAD),
+            ("m_tiles_per_sdpa_worker", m_tiles_per_sdpa_worker),
+            ("sdpa_q_tiles_per_worker", sdpa_q_tiles_per_worker),
         ]
         # TRISC needs all CBs + tile counts + eps + QKV matmul shape params.
         trisc_ct = [
@@ -248,6 +287,15 @@ class SigLIPAttentionBlockFused:
         _ln1_phys_xs = [
             _device.worker_core_from_logical_core(ttnn.CoreCoord(lx, 0)).x
             for lx in range(SigLIPAttentionBlockFused.LN1_NUM_CORES)
+        ]
+        # SDPA grid logical x ∈ [0..7] also spans the eth/PCIe gap at logical
+        # x=7 (just like the LN1 row), so QKV NCRISC needs an explicit array of
+        # 8 physical x coords to atomic-inc its head's SDPA workers. The y
+        # dimension is contiguous within 0..7, so phys_origin_y + logical_y is
+        # always correct for SDPA workers.
+        _sdpa_phys_xs = [
+            _device.worker_core_from_logical_core(ttnn.CoreCoord(lx, 0)).x
+            for lx in range(SigLIPAttentionBlockFused.SDPA_GRID_X)
         ]
 
         # Kernel runs on every core in LN1 ∪ QKV ∪ SDPA. Since SDPA's logical
@@ -287,12 +335,20 @@ class SigLIPAttentionBlockFused:
                 ("ln_out_l1_addr", ln_out_tt.buffer_address()),
                 ("worker_phys_origin_x", _phys_origin.x),
                 ("worker_phys_origin_y", _phys_origin.y),
+                # #11 Commit 3: SDPA workers read each head's Q from its QKV
+                # source core's qkv_out_cb. Sharded persistent buffer ⇒ the
+                # L1 address is the same on every QKV core, so one runtime
+                # arg suffices.
+                ("qkv_out_l1_addr", qkv_out_tt.buffer_address()),
             ],
             ncrisc_named_common_runtime_arg_arrays=[
                 # 8 physical NoC x coords, one per LN1 sender (logical x=0..7).
-                # Kernel reads via positional get_common_arg_val starting at
-                # the slot after the 3 scalar named common args above.
+                # Slots after the 4 scalar named common args above.
                 ("ln1_phys_x", _ln1_phys_xs),
+                # 8 physical NoC x coords for the SDPA grid (logical x=0..7).
+                # Used by QKV NCRISC for the head's atomic-inc fan-out and by
+                # SDPA NCRISC for self-coord lookup if needed.
+                ("sdpa_phys_x", _sdpa_phys_xs),
             ],
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=math_fidelity,
@@ -336,6 +392,26 @@ class SigLIPAttentionBlockFused:
             initial_value=0,
         )
 
+        # #11 Commit 3: SDPA-Q-ready semaphore on the 64-core SDPA grid. QKV
+        # NCRISC atomic-incs each head's 4 SDPA workers; workers wait for
+        # value ≥ NUM_QKV_SIGNALS_PER_WORKER (=1 this commit, =3 once K+V
+        # land in subsequent commits).
+        sdpa_sem_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(
+                        SigLIPAttentionBlockFused.SDPA_GRID_X - 1, SigLIPAttentionBlockFused.SDPA_GRID_Y - 1
+                    ),
+                )
+            }
+        )
+        sdpa_qkv_ready_sem = ttnn.SemaphoreDescriptor(
+            id=SigLIPAttentionBlockFused.SDPA_QKV_READY_SEM_ID,
+            core_ranges=sdpa_sem_grid,
+            initial_value=0,
+        )
+
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
@@ -357,8 +433,10 @@ class SigLIPAttentionBlockFused:
                 _cb(SigLIPAttentionBlockFused.CB["ln_done_trigger_cb"], ln_done_trigger_tt),
                 _cb(SigLIPAttentionBlockFused.CB["qkv_w_cb"], qkv_w_tt),
                 _cb(SigLIPAttentionBlockFused.CB["qkv_out_cb"], qkv_out_tt),
+                _cb(SigLIPAttentionBlockFused.CB["qkv_done_trigger_cb"], qkv_done_trigger_tt),
+                _cb(SigLIPAttentionBlockFused.CB["sdpa_q_cb"], sdpa_q_tt),
             ],
-            semaphores=[counter_sem],
+            semaphores=[counter_sem, sdpa_qkv_ready_sem],
         )
 
         ttnn.generic_op(
@@ -381,10 +459,12 @@ class SigLIPAttentionBlockFused:
                 ln_done_trigger_tt,
                 qkv_w_tt,
                 qkv_out_tt,
+                qkv_done_trigger_tt,
+                sdpa_q_tt,
             ],
             program_descriptor,
         )
-        return final_out_tt, qkv_act_tt, qkv_out_tt
+        return final_out_tt, qkv_act_tt, qkv_out_tt, sdpa_q_tt
 
 
 def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_torch, w_qkv_torch=None):
@@ -584,6 +664,40 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         memory_config=qkv_out_mem,
     )
 
+    # #11 Commit 3: 1-tile sync CB on the 48-core QKV grid — TRISC pushes
+    # after the QKV matmul; NCRISC waits then atomic-incs SDPA workers.
+    qkv_done_trigger_tt = ttnn.from_torch(
+        torch.zeros(qkv_num_cores * TILE, TILE, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(qkv_core_grid, (TILE, TILE), ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+    )
+
+    # #11 Commit 3: per-SDPA-worker Q slice CB on the 64-core SDPA grid.
+    # Each worker holds (64, head_dim_padded=96) bf16 = 6 tiles. Total
+    # tensor shape: (64 workers × 64 rows, 96 cols) = (4096, 96).
+    sdpa_grid_x = SigLIPAttentionBlockFused.SDPA_GRID_X
+    sdpa_grid_y = SigLIPAttentionBlockFused.SDPA_GRID_Y
+    sdpa_num_workers = SigLIPAttentionBlockFused.SDPA_NUM_CORES
+    sdpa_core_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(sdpa_grid_x - 1, sdpa_grid_y - 1))}
+    )
+    rows_per_worker = M // SigLIPAttentionBlockFused.NUM_SDPA_WORKERS_PER_HEAD  # 64
+    sdpa_q_shard = ttnn.ShardSpec(sdpa_core_grid, (rows_per_worker, head_dim_padded), ttnn.ShardOrientation.ROW_MAJOR)
+    sdpa_q_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_q_shard)
+    sdpa_q_tt = ttnn.from_torch(
+        torch.zeros(sdpa_num_workers * rows_per_worker, head_dim_padded, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sdpa_q_mem,
+    )
+
     return (
         ln_in_tt,
         gamma_tt,
@@ -603,4 +717,6 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         ln_done_trigger_tt,
         qkv_w_tt,
         qkv_out_tt,
+        qkv_done_trigger_tt,
+        sdpa_q_tt,
     )
