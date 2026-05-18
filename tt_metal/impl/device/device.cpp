@@ -768,7 +768,52 @@ void Device::configure_fabric(
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
             // Step 6: FIX DU — poll edm_status until != ROM postcode.
+            // FIX PQ (#42429): Two-phase guard against FIX CL pre-cleared edm_status.
+            // FIX CL (teardown) zeros edm_status to 0x00000000 before asserting ERISC reset.
+            // On the next run, if we start Phase 2 (the != ROM postcode check) while
+            // edm_status is still 0x00000000, the condition is immediately true —
+            // "ERISC exited ROM to 0x00000000 after 0ms" — a false positive.  go_msg is
+            // then sent while ERISC is still early in ROM boot → firmware never starts →
+            // ring master never launches → all devices stuck.
+            // Phase 1 detects this: if the first read is 0x00000000, we wait for ERISC to
+            // write *any* non-zero value before entering Phase 2.  This ensures ERISC has
+            // at minimum started writing its ROM postcode before we look for the exit.
             {
+                // FIX PQ Phase 1: if edm_status is pre-cleared (0x00000000), wait for
+                // ERISC to begin writing its ROM boot postcode sequence.
+                {
+                    std::vector<uint32_t> init_buf_sa(1, 0);
+                    cluster_sa.read_core(init_buf_sa, sizeof(uint32_t), core_loc_sa, edm_status_addr_sa);
+                    if (init_buf_sa[0] == 0x00000000u) {
+                        uint32_t pq_elapsed = 0;
+                        bool pq_transitioned = false;
+                        while (pq_elapsed < kFIX_DU_BootWaitMs_SA) {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(kFIX_DU_PollIntervalMs_SA));
+                            pq_elapsed += kFIX_DU_PollIntervalMs_SA;
+                            std::vector<uint32_t> pq_buf(1, 0);
+                            cluster_sa.read_core(pq_buf, sizeof(uint32_t), core_loc_sa, edm_status_addr_sa);
+                            if (pq_buf[0] != 0x00000000u) {
+                                pq_transitioned = true;
+                                log_info(
+                                    tt::LogMetal,
+                                    "FIX PQ (#42429): Device {} chan={} edm_status transitioned from "
+                                    "zero to 0x{:08x} after {}ms (ERISC started L1 writes).",
+                                    this->id_, deferred_chan, pq_buf[0], pq_elapsed);
+                                break;
+                            }
+                        }
+                        if (!pq_transitioned) {
+                            log_warning(
+                                tt::LogMetal,
+                                "FIX PQ (#42429): timeout — Device {} chan={} edm_status still zero "
+                                "after {}ms (ERISC may not have started ROM execution). "
+                                "Continuing to Phase 2.",
+                                this->id_, deferred_chan, kFIX_DU_BootWaitMs_SA);
+                        }
+                    }
+                }
+
+                // FIX PQ Phase 2: existing FIX DU loop — poll until != ROM postcode.
                 uint32_t elapsed_sa = 0;
                 bool fix_du_ok_sa = false;
                 while (elapsed_sa < kFIX_DU_BootWaitMs_SA) {
