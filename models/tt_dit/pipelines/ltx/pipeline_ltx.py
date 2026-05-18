@@ -16,8 +16,10 @@ Reference: LTX-2/packages/ltx-pipelines/ + Wan pipeline_wan.py
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import torch
@@ -35,6 +37,40 @@ from ...utils.tensor import to_torch as _tt_to_torch
 
 if TYPE_CHECKING:
     pass
+
+
+# Files whose contents change the on-device weight layout or load semantics for LTX.
+# The hash of these files goes into the cache key so editing any of them invalidates
+# the cache automatically — protects against stale-cache noise after RoPE/norm/
+# scale_shift/interleave fixes that don't change Parameter total_shape.
+_TT_DIT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_CACHE_RELEVANT_FILES = (
+    "pipelines/ltx/pipeline_ltx.py",
+    "models/transformers/ltx/ltx_transformer.py",
+    "models/transformers/ltx/attention_ltx.py",
+    "models/vae/vae_ltx.py",
+    "layers/module.py",
+    "layers/linear.py",
+    "layers/normalization.py",
+    "layers/embeddings.py",
+    "layers/conv3d.py",
+    "utils/tensor.py",
+)
+
+
+@lru_cache(maxsize=1)
+def _ltx_cache_code_hash() -> str:
+    h = hashlib.sha1()
+    for rel in _CACHE_RELEVANT_FILES:
+        path = os.path.join(_TT_DIT_ROOT, rel)
+        try:
+            with open(path, "rb") as f:
+                h.update(f.read())
+        except OSError as err:
+            # Missing file ⇒ unstable key; force a unique value so we don't silently
+            # reuse a cache built when the file existed.
+            h.update(f"MISSING:{rel}:{err}".encode())
+    return h.hexdigest()[:8]
 
 
 # =============================================================================
@@ -277,11 +313,14 @@ class LTXPipeline:
     def _torch_cache_path(self, subfolder: str) -> str | None:
         """Path to per-config torch-tensor cache for a subcomponent. None when cache is disabled.
 
-        Uses the same {model_name}/{subfolder}/{parallel_config × mesh × dtype} key shape as
-        utils.cache.model_cache_dir, but stores a single .pt of host torch tensors rather than
-        per-parameter flatbuffers. This sidesteps a `ttnn.dump_tensor(DISTRIBUTED_GATHER)`
-        round-trip that mis-distributes weights replicated on a non-CCL mesh axis (e.g. the
-        Linear in LTXAdaLayerNormSingle).
+        Stores a single .pt of host torch tensors per (checkpoint × parallel_config × mesh ×
+        source_hash). Sidesteps a `ttnn.dump_tensor(DISTRIBUTED_GATHER)` round-trip that
+        mis-distributes weights replicated on a non-CCL mesh axis (e.g. the Linear in
+        LTXAdaLayerNormSingle). The trailing source-file hash invalidates the cache whenever
+        any file in _CACHE_RELEVANT_FILES changes — Parameter.load_torch_tensor only checks
+        total_shape, so a stale cache from an earlier code version would otherwise load
+        silently with the wrong head interleaving, scale_shift reshape, or RoPE layout and
+        produce noise.
         """
         cache_root = os.environ.get("TT_DIT_CACHE_DIR")
         ckpt_path = getattr(self, "_vae_checkpoint_path", None)
@@ -290,7 +329,7 @@ class LTXPipeline:
         model_name = os.path.splitext(os.path.basename(ckpt_path))[0]
         parallel_key = _cache_utils.config_id(self.parallel_config)
         mesh_key = "x".join(str(x) for x in self.mesh_device.shape)
-        key = f"{parallel_key}mesh{mesh_key}_bf16"
+        key = f"{parallel_key}mesh{mesh_key}_src{_ltx_cache_code_hash()}"
         return os.path.join(cache_root, model_name, subfolder, key, "torch_state.pt")
 
     @staticmethod
