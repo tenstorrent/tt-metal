@@ -138,7 +138,13 @@ PadRmReaderWriterProgramFactory::cached_program_t PadRmReaderWriterProgramFactor
     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, cores, reader_rt_args);
     tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, cores, writer_rt_args);
 
-    return cached_program_t{std::move(program), {reader_kernel_id, writer_kernel_id}};
+    return cached_program_t{
+        std::move(program),
+        {/*ncores_h=*/0,
+         /*ncores_w=*/0,
+         reader_kernel_id,
+         writer_kernel_id,
+         /*pad_value_const_tensor=*/pad_value_const_tensor}};
 }
 
 void PadRmReaderWriterProgramFactory::override_runtime_arguments(
@@ -148,18 +154,25 @@ void PadRmReaderWriterProgramFactory::override_runtime_arguments(
     Tensor& tensor_return_value) {
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
+    // pad_value_const_tensor is owned by shared_variables so its DRAM buffer survives
+    // the cache hit. Forward its current address into the kernel's runtime args; the
+    // allocator may have placed it at a different DRAM offset than the previous run.
+    const uint32_t pad_value_const_tensor_addr =
+        cached_program.shared_variables.pad_value_const_tensor.buffer()->address();
     CoreCoord core = {0, 0};
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(
             cached_program.program, cached_program.shared_variables.reader_kernel_id, core);
         runtime_args[0] = src_buffer->address();
         runtime_args[1] = dst_buffer->address();
+        runtime_args[13] = pad_value_const_tensor_addr;
     }
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(
             cached_program.program, cached_program.shared_variables.writer_kernel_id, core);
         runtime_args[0] = src_buffer->address();
         runtime_args[1] = dst_buffer->address();
+        runtime_args[13] = pad_value_const_tensor_addr;
     }
 }
 
