@@ -26,44 +26,14 @@ NUM_MEASURE = 50
 
 _TTL_WORKER_L1_RESERVE_BYTES = 77824
 
-_TTML_SOURCES = Path(__file__).resolve().parents[1]
-_TTLANG = _TTML_SOURCES / "ttlang"
-for _p in (_TTML_SOURCES, _TTLANG):
-    if _p.is_dir() and str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
-
-
-def _ensure_ttl_package_path() -> None:
-    """Put the nanobind ``ttl`` package on ``sys.path`` (same logic as ``ttl_tml_rmsnorm_comp``)."""
-    candidates: list[Path] = []
-    env = os.environ.get("TTL_PYTHON_PACKAGES", "").strip()
-    if env:
-        candidates.append(Path(env).expanduser())
-    candidates.append(Path("/opt/ttlang-toolchain/python_packages"))
-    exe_parent = Path(sys.executable).resolve().parent.parent
-    if (exe_parent / "python_packages").is_dir():
-        candidates.append(exe_parent / "python_packages")
-    for p in candidates:
-        if p.is_dir() and (p / "ttl").is_dir() and str(p) not in sys.path:
-            sys.path.insert(0, str(p))
-            return
-
-
-def _import_ttl_rmsnorm_bw_2pass():
-    """Import ``ttl_rmsnorm_bw_2pass`` (2-pass tile-streaming TTL backward; needs ``ttl``)."""
-    _ensure_ttl_package_path()
-    import ttl_rmsnorm_bw_2pass  # noqa: PLC0415
-
-    return ttl_rmsnorm_bw_2pass
-
-
+import ttl_rmsnorm_bw_2pass
 import ttml
 from ttml.autograd import AutoContext, Tensor, create_tensor
 
 
-def _open_mesh_for_kernel_bw(ctx: AutoContext, bw_kernel: str) -> None:
+def _open_mesh_for_kernel_bw(ctx: AutoContext, kernel: str) -> None:
     """Open a single-device mesh ``(1, 1)``; TTL reserves worker L1 for large kernel configs."""
-    if bw_kernel != "ttl_2pass":
+    if kernel != "ttl_2pass":
         ctx.open_device((1, 1))
         return
     max_l1 = ttnn.device.get_max_worker_l1_unreserved_size()
@@ -164,24 +134,20 @@ def _metal_rmsnorm_bw_tensors_from_numpy(
     return x_t, g_t, dL_t, rms_t
 
 
-def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
+def _run_kernel(kernel: str = "metal") -> None:
     """Benchmark RMSNorm backward kernel"""
 
     ttl_mod = None
-    twopass_mod = None
-    if bw_kernel == "ttl_2pass":
-        twopass_mod = _import_ttl_rmsnorm_bw_2pass()
-        import ttl_rmsnorm_bw  # noqa: PLC0415
-
-        ttl_mod = ttl_rmsnorm_bw
+    if kernel == "ttl_2pass":
+        ttl_mod = ttl_rmsnorm_bw_2pass
 
     ctx = AutoContext.get_instance()
-    _open_mesh_for_kernel_bw(ctx, bw_kernel)
+    _open_mesh_for_kernel_bw(ctx, kernel)
     try:
         mesh = ctx.get_device()
         mesh.enable_program_cache()
 
-        if bw_kernel == "metal":
+        if kernel == "metal":
             tag = "Metal"
         else:
             tag = "TTL (2-pass)"
@@ -196,15 +162,14 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
             d_np = rng.uniform(-1.0, 1.0, (b, 1, s_len, c)).astype(np.float32)
             rms_np = _torch_rmsnorm_rms_numpy(x_np, RMSNORM_EPS)
 
-            if bw_kernel == "metal":
+            if kernel == "metal":
                 x_t, g_t, dL_t, rms_t = _metal_rmsnorm_bw_tensors_from_numpy(x_np, g_np, d_np, rms_np)
 
                 def run_step() -> None:
                     d_in, d_gamma = ttml.ops.rmsnorm.rmsnorm_bw(x_t, g_t, rms_t, dL_t)
 
-            elif bw_kernel == "ttl_2pass":
+            elif kernel == "ttl_2pass":
                 assert ttl_mod is not None
-                assert twopass_mod is not None
                 rows = b * s_len
                 columns = c
                 x2, dL2, g2, r2 = _ttl_rmsnorm_bw_numpy_to_2d(x_np, d_np, g_np, rms_np, rows, columns)
@@ -212,13 +177,13 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
                 x_p, g_p, rms_p, dL_p, out_da, out_dg = _ttl_rmsnorm_bw_tensors_to_padded_device(
                     ttl_mod, mesh, x2, g2, r2, dL2, rows_p, cols_p
                 )
-                k_2pass = twopass_mod.make_kernel()
+                ttl_kernel = ttl_mod.make_kernel()
 
                 def run_step() -> None:
-                    k_2pass(x_p, g_p, rms_p, dL_p, out_da, out_dg)
+                    ttl_kernel(x_p, g_p, rms_p, dL_p, out_da, out_dg)
 
             else:
-                raise ValueError(f"unknown bw_kernel: {bw_kernel}")
+                raise ValueError(f"unknown kernel: {kernel}")
 
             for _ in range(NUM_WARMUP):
                 run_step()
@@ -230,10 +195,10 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
                 ttnn.synchronize_device(mesh)
                 total += time.perf_counter() - t0
             avg_s = total / NUM_MEASURE
-            if bw_kernel == "metal":
-                suffix = "KernelBw_Metal"
+            if kernel == "metal":
+                suffix = "Kernel_Metal"
             else:
-                suffix = "KernelBw_TTL_2Pass"
+                suffix = "Kernel_TTL_2Pass"
             row = f"{name}_{suffix}"
             print(f"  {row:28}  Time_us={avg_s * 1e6:10.2f}")
     finally:
@@ -244,19 +209,19 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
-        "--bw-kernel",
+        "--kernel",
         choices=("metal", "ttl_2pass"),
         default="metal",
         help=(
             "metal: ttml rmsnorm_bw; "
-            "ttl_2pass: ttl rmsnorm_bw "
+            "ttl_2pass: ttl_2pass rmsnorm_bw "
         ),
     )
     args = p.parse_args()
 
-    print(f"warmup={NUM_WARMUP}  measure={NUM_MEASURE}  epsilon={RMSNORM_EPS}  --bw-kernel={args.bw_kernel}\n")
+    print(f"warmup={NUM_WARMUP}  measure={NUM_MEASURE}  epsilon={RMSNORM_EPS}  --kernel={args.kernel}\n")
 
-    _run_kernel_bw_only(args.bw_kernel)
+    _run_kernel(args.kernel)
     print()
 
     return 0

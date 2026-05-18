@@ -76,8 +76,6 @@ def _run_case(
 
     da = ttnn.to_torch(out_da)[:rows, :cols]
     dg = ttnn.to_torch(out_dg)[:rows, :cols]
-    ttnn.deallocate(out_da)
-    ttnn.deallocate(out_dg)
 
     torch.testing.assert_close(da, dL_dx_ref, rtol=rtol, atol=atol)
     print(f"OK {label}: dL/dx matches torch ref (rtol={rtol}, atol={atol}).")

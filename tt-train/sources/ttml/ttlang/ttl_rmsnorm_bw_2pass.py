@@ -1,14 +1,13 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """
-RMSNorm backward — 2-pass tile streaming (vs. ``remsnorm_whole_row.py`` whole-row strip).
+RMSNorm backward — 2-pass tile streaming.
 
 **Pass 1:** per tile-column, accumulate row scalar
-``scale = Σ_c (x · (γ/rms) · dL_dout)`` via ``(contrib @ ones)`` matmul reduction
-(same workaround as ``polynorm3_on_tiles_2pass_working.py``).
+``scale = Sum_c (x · (gamma/rms) · dL_dout)`` via ``(contrib @ ones)`` matmul reduction
 
 **Pass 2:** re-stream tiles and emit
-``dL_dinput = (γ/rms)·dL_dout − scale·x·(1/rms)²·(1/C)``,
+``dL_dinput = (gamma/rms)·dL_dout - scale·x·(1/rms)^2·(1/C)``,
 ``dL_dgamma = x·(1/rms)·dL_dout``.
 """
 from __future__ import annotations
@@ -55,6 +54,8 @@ def make_kernel():
 
         # Constant 1/C tile for rhs
         inv_c_dfb = ttl.make_dataflow_buffer_like(input_t, shape=one, block_count=1)
+        # Unity tile for (contrib @ ones) row reduction
+        reduce_tile_dfb = ttl.make_dataflow_buffer_like(input_t, shape=one, block_count=1)
 
         @ttl.compute()
         def compute():
@@ -63,6 +64,10 @@ def make_kernel():
             with inv_c_dfb.reserve() as ic:
                 ic.store(ttl.math.fill(ic, inv_c_scalar))
             inv_c = inv_c_dfb.wait()
+
+            with reduce_tile_dfb.reserve() as rt:
+                rt.store(ttl.math.fill(rt, 1.0))
+            reduce_tile = reduce_tile_dfb.wait()
 
             for local_row in range(rows_per_core):
                 row = core_linear * rows_per_core + local_row
@@ -82,7 +87,6 @@ def make_kernel():
                             recip = ttl.math.recip(rmv)
                             gained = recip * gv * dlv
                             contrib = iv * gained
-                            reduce_tile = ttl.math.fill(contrib, 1.0)
                             with scale_acc.reserve() as o:
                                 o.store(s + (contrib @ reduce_tile))
 
@@ -142,3 +146,17 @@ def make_kernel():
                             ttl.copy(b, dL_dgamma_comp_out[r, local_col]).wait()
 
     return rmsnorm_bw_2pass
+
+
+def _to_dev(t, device):
+    return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                            device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+def _pad(t, rows_padded, cols_padded):
+    rows, cols = t.shape
+    pad_r = rows_padded - rows
+    pad_c = cols_padded - cols
+    if pad_r == 0 and pad_c == 0:
+        return t
+    return torch.nn.functional.pad(t, (0, pad_c, 0, pad_r), value=0.0)
