@@ -759,7 +759,8 @@ void py_module(nb::module_& mod) {
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("global_cb") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()));
+            nb::arg("sub_device_id") = nb::none(),
+            nb::arg("dram_sender_global_cb") = nb::none()));
 
     ttnn::bind_function<"linear">(
         mod,
@@ -832,7 +833,8 @@ void py_module(nb::module_& mod) {
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("global_cb") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()));
+            nb::arg("sub_device_id") = nb::none(),
+            nb::arg("dram_sender_global_cb") = nb::none()));
 
     ttnn::bind_function<"matmul_batched_weights">(
         mod,
@@ -898,7 +900,8 @@ void py_module(nb::module_& mod) {
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("global_cb") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()));
+            nb::arg("sub_device_id") = nb::none(),
+            nb::arg("dram_sender_global_cb") = nb::none()));
 
     ttnn::bind_function<"addmm">(
         mod,

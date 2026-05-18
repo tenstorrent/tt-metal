@@ -1998,6 +1998,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     tt::DataFormat output_data_format,
     bool untilize_out,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<const tt::tt_metal::experimental::DramSenderGlobalCircularBuffer>& dram_sender_global_cb,
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<CoreRangeSet> restricted_cores,
@@ -2006,8 +2007,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     const auto num_output_cb = out_buffers.size();
     const auto batch = b_tensors.size();
     const bool in1_is_dram_interleaved = in1_buffer->is_dram() && !b.is_sharded();
+    // When a (DRAM-sender) GCB is in use, b lives in DRAM but the matmul reads it from c_31 via
+    // the receiver-side CB attachment — not via direct DRAM reads.
     const bool in1_is_dram_sharded =
-        in1_buffer->is_dram() && b.is_sharded() && !global_cb.has_value();  // read from DRAM directly
+        in1_buffer->is_dram() && b.is_sharded() && !global_cb.has_value() && !dram_sender_global_cb.has_value();
 
     /* Core setup */
     constexpr bool row_major = true;
@@ -2056,7 +2059,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     // unnecessary overhead for reconfigs are added
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
-    bool use_global_cb = global_cb.has_value();
+    const bool use_dram_sender_global_cb = dram_sender_global_cb.has_value();
+    bool use_global_cb = global_cb.has_value() || use_dram_sender_global_cb;
+    const uint32_t effective_global_cb_size =
+        global_cb.has_value() ? global_cb->size() : (use_dram_sender_global_cb ? dram_sender_global_cb->size() : 0);
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -2149,12 +2155,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     if (use_global_cb) {
         uint32_t in1_block_size_bytes = in1_single_tile_size * in1_block_num_tiles;
         tt_metal::CircularBufferConfig remote_cb_config =
-            tt_metal::CircularBufferConfig((global_cb->size() / in1_block_size_bytes) * in1_block_size_bytes);
+            tt_metal::CircularBufferConfig((effective_global_cb_size / in1_block_size_bytes) * in1_block_size_bytes);
         remote_cb_config.remote_index(remote_cb_index)
             .set_page_size(in1_block_size_bytes)
             .set_data_format(in1_data_format);
         remote_cb_config.index(src1_cb_index).set_page_size(in1_single_tile_size).set_data_format(in1_data_format);
-        cb_src1 = tt_metal::experimental::CreateCircularBuffer(program, all_cores, remote_cb_config, *global_cb);
+        if (use_dram_sender_global_cb) {
+            cb_src1 = tt_metal::experimental::CreateCircularBuffer(
+                program, all_cores, remote_cb_config, *dram_sender_global_cb);
+        } else {
+            cb_src1 = tt_metal::experimental::CreateCircularBuffer(program, all_cores, remote_cb_config, *global_cb);
+        }
     } else {
         tt_metal::CircularBufferConfig src1_cb_config =
             tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
@@ -4853,6 +4864,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<const tt::tt_metal::experimental::DramSenderGlobalCircularBuffer>& dram_sender_global_cb,
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
@@ -5029,6 +5041,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             output_data_format,
             untilize_out,
             global_cb,
+            dram_sender_global_cb,
             num_global_cb_receivers,
             sub_device_id,
             std::move(restricted_cores),
@@ -5374,6 +5387,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<const tt::tt_metal::experimental::DramSenderGlobalCircularBuffer>& dram_sender_global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
     std::optional<CoreRangeSet> restricted_cores) {
@@ -5407,6 +5421,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         untilize_out,
         fused_op_signaler,
         global_cb,
+        dram_sender_global_cb,
         config.num_global_cb_receivers,
         sub_device_id,
         start_cb_index,
@@ -5458,6 +5473,7 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
                 attributes.untilize_out,
                 empty_signaler,
                 attributes.global_cb,
+                attributes.dram_sender_global_cb,
                 pc.num_global_cb_receivers,
                 attributes.sub_device_id,
                 tt::CBIndex::c_0,
@@ -5497,6 +5513,7 @@ matmul_multi_core_reuse_mcast_1d_optimized_helper(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<const tt::tt_metal::experimental::DramSenderGlobalCircularBuffer>& dram_sender_global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t shared_vars =
         matmul_multi_core_reuse_mcast_1d_optimized_helper(
@@ -5511,6 +5528,7 @@ matmul_multi_core_reuse_mcast_1d_optimized_helper(
             untilize_out,
             fused_op_signaler,
             global_cb,
+            dram_sender_global_cb,
             sub_device_id,
             tt::CBIndex::c_0,
             std::nullopt);

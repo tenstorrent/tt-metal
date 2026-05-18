@@ -320,7 +320,8 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
     if (std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
             chosen_program_config) &&
-        attributes.global_cb.has_value() && input_tensor_b.is_sharded() && input_tensor_b.buffer()->is_dram()) {
+        (attributes.global_cb.has_value() || attributes.dram_sender_global_cb.has_value()) &&
+        input_tensor_b.is_sharded() && input_tensor_b.buffer()->is_dram()) {
         for (uint32_t i = 1; i < input_tensors.size(); ++i) {
             TT_FATAL(
                 input_tensor_b.logical_shape() == input_tensors[i].logical_shape(),
@@ -482,7 +483,8 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             (input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
                              input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM),
                         "Input tensor B must be width sharded or DRAM interleaved when using gather_in0.");
-                    if (!attributes.global_cb.has_value() && input_tensor_b.is_sharded()) {
+                    if (!attributes.global_cb.has_value() && !attributes.dram_sender_global_cb.has_value() &&
+                        input_tensor_b.is_sharded()) {
                         if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1) {
                             TT_FATAL(
                                 input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
@@ -499,7 +501,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
                     if (!input_tensor_b.is_sharded()) {
                         TT_FATAL(
-                            !attributes.global_cb.has_value(),
+                            !attributes.global_cb.has_value() && !attributes.dram_sender_global_cb.has_value(),
                             "Global CB is not supported for DRAM_INTERLEAVED in1 when using gather_in0.");
                         TT_FATAL(
                             input_tensor_b.layout() == Layout::TILE,
@@ -511,7 +513,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             "and in1 is DRAM_INTERLEAVED.");
                     }
 
-                    if (!attributes.global_cb.has_value()) {
+                    if (!attributes.global_cb.has_value() && !attributes.dram_sender_global_cb.has_value()) {
                         TT_FATAL(
                             program_config.num_global_cb_receivers == 1,
                             "Num global CB receivers must be 1 when global CB is not provided.");
@@ -1608,6 +1610,7 @@ MatmulParams create_matmul_attributes(
         parameters.transpose_b,
         output_tile,
         parameters.global_cb,
+        parameters.dram_sender_global_cb,
         parameters.sub_device_id};
 }
 

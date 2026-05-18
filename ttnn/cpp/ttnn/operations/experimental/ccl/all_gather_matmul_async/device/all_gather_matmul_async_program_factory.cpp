@@ -106,6 +106,7 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
                     untilize_out,
                     matmul_fused_op_signaler,
                     std::nullopt,
+                    std::nullopt,
                     std::nullopt);
 
                 program = std::move(cached_program.program);

@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "tt-metalium/dram_sender_global_circular_buffer.hpp"
 #include "tt-metalium/global_circular_buffer.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"  // for DEFAULT_OUTPUT_MEMORY_CONFIG
@@ -26,6 +27,9 @@ struct MatmulParams {
     bool transpose_b = false;
     std::optional<tt::tt_metal::Tile> output_tile = std::nullopt;
     std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
+    // Alternative to global_cb when the sender lives on a programmable DRAM core (Blackhole only).
+    // Mutually exclusive with global_cb. The receiver-side c_31 attachment uses this when set.
+    std::optional<tt::tt_metal::experimental::DramSenderGlobalCircularBuffer> dram_sender_global_cb = std::nullopt;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt;
 };
 
