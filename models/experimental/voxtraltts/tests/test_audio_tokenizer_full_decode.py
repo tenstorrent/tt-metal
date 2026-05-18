@@ -27,6 +27,7 @@ _PCC_TARGET = 0.99
     [
         (4, _PCC_TARGET),
         (32, _PCC_TARGET),
+        (39, _PCC_TARGET),
         (64, _PCC_TARGET),
         pytest.param(
             96,
