@@ -7,8 +7,10 @@ Test for TtPrefillTransformer — verifies composition of embed -> [block x N] -
 
 Validates output shapes and PCC against torch reference.
 
-Uses HF DeepseekV3Model as the reference: creates a model with random or pretrained
-weights, extracts those weights into our TT state_dict format, and compares forward passes.
+Reference sources are checked in priority order:
+1. Debug trace on disk (pre-computed safetensors from a known-good run)
+2. Reference cache (previously computed and cached PyTorch outputs)
+3. HF model computation (creates HF DeepseekV3Model and runs forward on the fly)
 
 Parametrized over:
 - use_pretrained: real pretrained weights from DeepSeek-R1-0528 vs random weights
@@ -32,6 +34,7 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
+    global_to_local_token_id,
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
@@ -83,7 +86,42 @@ LONGBOOK_QA_ENG_25024 = TRACE_DIR_BASE / "longbook_qa_eng_25088"
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
 INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"}
 SEQ_LEN_1K = 1024
-SEQ_LEN_25K = 25 * 1024
+SEQ_LEN_25K = 25088
+
+# Identity-based trace lookup: (input_source, isl_total, padding_side) -> Path.
+# Traces are only used when use_pretrained=True and n_routed_experts=256, since they
+# were generated from the full pretrained model.
+TRACE_LOOKUP: dict[tuple[str, int, str], Path] = {
+    ("json_prompts", SEQ_LEN_1K, "right"): ILLIAD_1024_TRACE,
+    ("json_prompts", SEQ_LEN_25K, "right"): ILLIAD_25024_TRACE,
+    ("abc_1k", SEQ_LEN_1K, "right"): ABC_1K_PAD_RIGHT_1024,
+    ("abc_1k", SEQ_LEN_1K, "left"): ABC_1K_PAD_LEFT_1024,
+    ("longbook_qa_eng", SEQ_LEN_25K, "right"): LONGBOOK_QA_ENG_25024,
+}
+
+
+def find_trace_dir(
+    input_source: str,
+    isl_total: int,
+    padding_side: str,
+    use_pretrained: bool,
+    n_routed_experts: int,
+) -> Path | None:
+    """Return the trace directory for an exact test configuration, or None.
+
+    A trace is eligible only when:
+    - the model uses pretrained weights with 256 experts (traces were generated from
+      the full pretrained DeepSeek-R1 model)
+    - (input_source, isl_total, padding_side) match a known trace exactly
+    - the directory exists and contains a metadata.json
+    """
+    if not use_pretrained or n_routed_experts != 256:
+        return None
+
+    path = TRACE_LOOKUP.get((input_source, isl_total, padding_side))
+    if path is not None and path.exists() and (path / "metadata.json").exists():
+        return path
+    return None
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
@@ -241,6 +279,20 @@ def test_prefill_transformer(
         else False
     )
 
+    # Priority 1: debug trace on disk
+    trace = None
+    trace_dir = (
+        find_trace_dir(input_source, isl_total, padding_side, use_pretrained, n_routed_experts)
+        if pcc_validation
+        else None
+    )
+    if trace_dir is not None:
+        trace = load_debug_trace(trace_dir, num_layers=num_layers)
+        logger.info(
+            f"Loaded debug trace from {trace_dir} "
+            f"(trace n_layers={trace.metadata.get('n_layers')}, test num_layers={num_layers})"
+        )
+
     cache_key = ReferenceCacheKey(
         weight_type=weight_type,
         input_source=input_source,
@@ -249,13 +301,15 @@ def test_prefill_transformer(
         n_routed_experts=n_routed_experts,
         padding_side=padding_side,
     )
-    ref_cache_exists = check_reference_cache_exists(cache_key) if pcc_validation else False
+    ref_cache_exists = check_reference_cache_exists(cache_key) if (pcc_validation and trace is None) else False
 
-    logger.info(f"Cache status: TTNN={ttnn_cache_complete}, Reference={ref_cache_exists}")
+    logger.info(
+        f"Cache status: TTNN={ttnn_cache_complete}, Trace={'YES' if trace else 'NO'}, Reference={ref_cache_exists}"
+    )
 
     # Determine what we need to load
     need_to_load_weights = not ttnn_cache_complete
-    need_to_compute_reference = pcc_validation and not ref_cache_exists
+    need_to_compute_reference = pcc_validation and trace is None and not ref_cache_exists
     need_hf_model = need_to_load_weights or need_to_compute_reference
 
     logger.info(
@@ -272,7 +326,16 @@ def test_prefill_transformer(
     report_and_clear()
 
     # --- Create input (needed early for reference computation) ---
-    if input_source == "random":
+    if trace is not None:
+        # When a trace is selected, the TT model must run on the exact token IDs the
+        # trace was generated from, otherwise PCC compares two different inputs.
+        token_ids = trace.token_ids
+        assert (
+            token_ids.shape[1] == isl_total
+        ), f"Trace token count {token_ids.shape[1]} does not match isl_total {isl_total}"
+        attention_mask = torch.ones_like(token_ids)
+        logger.info(f"Using {isl_total} tokens from trace (skipping tokenization)")
+    elif input_source == "random":
         token_ids = torch.randint(0, config.vocab_size, (1, isl_total), dtype=torch.int64)
         attention_mask = torch.ones(1, isl_total, dtype=torch.int64)
     else:
@@ -515,7 +578,18 @@ def test_prefill_transformer(
     # --- PCC check ---
     if pcc_validation:
         profiler.start("pcc_validation")
-        if use_pretrained and input_source != "random":
+
+        # --- Determine threshold based on reference source ---
+        if trace is not None:
+            if gate_fallback_mode == GateComputeMode.DEVICE:
+                threshold = TRACE_PCC_THRESHOLD_DEVICE_BF16
+            elif gate_fallback_mode == GateComputeMode.DEVICE_FP32:
+                threshold = TRACE_PCC_THRESHOLD_DEVICE_FP32
+            elif gate_fallback_mode == GateComputeMode.HOST_ALL:
+                threshold = TRACE_PCC_THRESHOLD_HOST
+            else:
+                threshold = TRACE_PCC_THRESHOLD
+        elif use_pretrained and input_source != "random":
             threshold = 0.97
         elif use_pretrained:
             threshold = 0.95
@@ -523,44 +597,52 @@ def test_prefill_transformer(
             threshold = 0.985
         else:
             threshold = PCC_THRESHOLD  # 0.99
-        logger.info(f"PCC threshold: {threshold}")
+        logger.info(f"PCC threshold: {threshold} (ref_source={'trace' if trace else 'host'})")
 
-        # Load reference from cache if not already computed
-        if ref_snapshots is None:
-            logger.info("Loading reference from cache...")
-            ref_snapshots, ref_kvpe_list = load_reference_cache(cache_key)
-        # else: already computed by load_and_compute_layer_by_layer()
-
-        # Per-stage PCC comparison
-        # ref_snapshots is a list of tensors: [embed, layer_0, ..., layer_N, norm, lm_head]
-        # tt_intermediates is a dict with keys: "embed", "layer_0", ..., "layer_N", "norm", "lm_head", "first_token"
+        # --- Load reference snapshots (priority: trace > cache > already computed) ---
         pcc_results = []
-        ref_labels = ["embed"] + [f"layer_{i}" for i in range(num_layers)] + ["norm", "lm_head"]
-        for label, ref_host in zip(ref_labels, ref_snapshots):
-            if label not in tt_intermediates:
-                logger.error(f"{label:<20s}  Missing from TT intermediates")
-                pcc_results.append((label, -1.0))
-                continue
-            tt_host = tt_intermediates[label]
-            try:
-                # ignore padded tokens in comparison
-                _, pcc = comp_pcc(
-                    slice_non_padded(ref_host, number_of_non_padded_tokens, padding_side).float(),
-                    slice_non_padded(tt_host, number_of_non_padded_tokens, padding_side).float(),
-                )
-                logger.debug(f"{label:<20s}  PCC = {pcc:.6f}")
-                pcc_results.append((label, pcc))
-            except Exception as e:
-                logger.error(f"{label:<20s}  PCC comparison failed: {e}")
-                pcc_results.append((label, -1.0))
+        if trace is not None:
+            for label, tt_host in tt_intermediates.items():
+                if label not in trace.ref_snapshots:
+                    logger.debug(f"Skipping {label} (no trace reference)")
+                    continue
+                ref_host = trace.ref_snapshots[label]
+                try:
+                    _, pcc = comp_pcc(ref_host.float(), tt_host.float())
+                    logger.debug(f"{label:<20s}  PCC = {pcc:.6f}")
+                    pcc_results.append((label, pcc))
+                except Exception as e:
+                    logger.error(f"{label:<20s}  PCC comparison failed: {e}")
+                    pcc_results.append((label, -1.0))
+        else:
+            if ref_snapshots is None:
+                logger.info("Loading reference from cache...")
+                ref_snapshots, ref_kvpe_list = load_reference_cache(cache_key)
+
+            ref_labels = ["embed"] + [f"layer_{i}" for i in range(num_layers)] + ["norm", "lm_head"]
+            for label, ref_host in zip(ref_labels, ref_snapshots):
+                if label not in tt_intermediates:
+                    logger.error(f"{label:<20s}  Missing from TT intermediates")
+                    pcc_results.append((label, -1.0))
+                    continue
+                tt_host = tt_intermediates[label]
+                try:
+                    _, pcc = comp_pcc(
+                        slice_non_padded(ref_host, number_of_non_padded_tokens, padding_side).float(),
+                        slice_non_padded(tt_host, number_of_non_padded_tokens, padding_side).float(),
+                    )
+                    logger.debug(f"{label:<20s}  PCC = {pcc:.6f}")
+                    pcc_results.append((label, pcc))
+                except Exception as e:
+                    logger.error(f"{label:<20s}  PCC comparison failed: {e}")
+                    pcc_results.append((label, -1.0))
 
         # Per-layer KVPE PCC comparison — read back from external cache
-        if do_return_kv:
+        if do_return_kv and ref_kvpe_list is not None:
             tt_kvpe_all = ttnn.to_torch(
                 tt_kvpe_cache,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
             ).to(torch.bfloat16)
-            # Shape: [num_layers, tp_factor, seq_total, head_dim] — take first TP replica
             tt_kvpe_all_layers = tt_kvpe_all[:, :1, :, :]
             if is_balanced:
                 tt_kvpe_all_layers = reverse_reorder_tensor_chunks(tt_kvpe_all_layers, chunk_order, seq_dim=2)
@@ -569,7 +651,6 @@ def test_prefill_transformer(
                 tt_kvpe_layer = tt_kvpe_all_layers[i : i + 1, :, :, :]
                 label = f"layer_{i}_kvpe"
                 try:
-                    # ignore padded tokens in comparison
                     _, kv_pcc = comp_pcc(
                         slice_non_padded(
                             ref_kvpe[..., :kv_lora_rank], number_of_non_padded_tokens, padding_side
@@ -578,7 +659,6 @@ def test_prefill_transformer(
                             tt_kvpe_layer[..., :kv_lora_rank], number_of_non_padded_tokens, padding_side
                         ).float(),
                     )
-                    # ignore padded tokens in comparison
                     _, pe_pcc = comp_pcc(
                         slice_non_padded(
                             ref_kvpe[..., kv_lora_rank:], number_of_non_padded_tokens, padding_side
@@ -595,9 +675,43 @@ def test_prefill_transformer(
                     pcc_results.append((f"{label}_kv", -1.0))
                     pcc_results.append((f"{label}_pe", -1.0))
 
+        # --- Logits PCC check (last-token logits vs trace reference) ---
+        # Trace logits / next-token are products of the full traced model. They are
+        # only meaningful when the TT model ran the same number of layers as the trace.
+        trace_full_model = trace is not None and num_layers == trace.metadata.get("n_layers")
+        trace_logits = trace.logits if trace_full_model else None
+        if trace is not None and not trace_full_model:
+            logger.info(
+                f"Skipping trace logits/first-token checks: "
+                f"num_layers={num_layers} != trace n_layers={trace.metadata.get('n_layers')}"
+            )
+        if trace_logits is not None and "lm_head" in tt_intermediates:
+            try:
+                tt_logits_full = tt_intermediates["lm_head"]
+                global_token_id = isl_total - 1
+                device_id, local_token_id = global_to_local_token_id(
+                    global_token_id,
+                    sp_factor,
+                    isl_total,
+                    is_balanced=is_balanced,
+                )
+                token_offset = local_token_id % ttnn.TILE_SIZE
+                tt_last_token_logits = tt_logits_full[device_id, 0, token_offset, :].unsqueeze(0)
+                logger.debug(
+                    f"Logits extraction: full={list(tt_logits_full.shape)}, "
+                    f"device_id={device_id}, local_token_id={local_token_id}, token_offset={token_offset}, "
+                    f"extracted={list(tt_last_token_logits.shape)}, trace={list(trace_logits.shape)}"
+                )
+                _, logits_pcc = comp_pcc(trace_logits.float(), tt_last_token_logits.float())
+                logger.info(f"{'logits':<20s}  PCC = {logits_pcc:.6f}")
+                pcc_results.append(("logits", logits_pcc))
+            except Exception as e:
+                logger.error(f"{'logits':<20s}  PCC comparison failed: {e}")
+                pcc_results.append(("logits", -1.0))
+
         profiler.end("pcc_validation")
 
-        # Summary table
+        # --- Summary table ---
         logger.info(f"\n{'='*50}")
         logger.info(f"{'Stage':<20s}  {'PCC':>10s}  {'Status':>8s}")
         logger.info(f"{'-'*50}")
@@ -609,15 +723,33 @@ def test_prefill_transformer(
                 failures.append((label, pcc))
         logger.info(f"{'='*50}")
 
-        # Log first token info (returned value is for first temperature in list)
+        # --- First token info ---
         tok = tokenizer
-
-        # Decode token to string
         token_text = tok.decode([first_token_id]) if tok else "N/A"
         first_temp = temperature[0] if isinstance(temperature, list) else temperature
         logger.info(
             f"First Token: ID={first_token_id} [{repr(token_text)}] prob={first_token_prob*100:.1f}% temp={first_temp}"
         )
+
+        # First-token match against trace metadata (full-layer trace only)
+        if trace_full_model:
+            ref_token_id = trace.metadata.get("next_token_id")
+            ref_token_text = trace.metadata.get("next_token_text")
+            if ref_token_id is None or ref_token_text is None:
+                output_meta_path = trace_dir / "output_metadata.json"
+                if output_meta_path.exists():
+                    with open(output_meta_path) as f:
+                        output_meta = json.load(f)
+                    ref_token_id = ref_token_id or output_meta.get("next_token_id")
+                    ref_token_text = ref_token_text or output_meta.get("next_token_text")
+            if ref_token_text is None:
+                ref_token_text = "N/A"
+            token_match = first_token_id == ref_token_id if ref_token_id is not None else None
+            logger.info(
+                f"Trace first token: TT={first_token_id} (prob={first_token_prob:.4f}), "
+                f"Trace={ref_token_id} [{repr(ref_token_text)}], "
+                f"Match={'YES' if token_match else 'NO' if token_match is not None else 'N/A'}"
+            )
 
         # Log all temperature results from intermediates
         if tt_intermediates and "first_token" in tt_intermediates:
@@ -627,7 +759,6 @@ def test_prefill_transformer(
                 ttemp = result["temperature"]
                 ttext = tok.decode([tid]) if tok else "N/A"
                 logger.debug(f"First Token: ID={tid} [{repr(ttext)}] prob={tprob*100:.1f}% temp={ttemp}")
-                # Print top5
                 if "top5" in result:
                     for i, t5 in enumerate(result["top5"]):
                         t5_id = t5["token_id"]
@@ -635,7 +766,6 @@ def test_prefill_transformer(
                         t5_text = tok.decode([t5_id]) if tok else "N/A"
                         logger.debug(f"  top{i+1}: ID={t5_id} [{repr(t5_text)}] prob={t5_prob*100:.1f}%")
 
-        # Store failures for deferred check (after timing report)
         has_pcc_failures = len(failures) > 0
 
         if not has_pcc_failures:
@@ -643,7 +773,7 @@ def test_prefill_transformer(
                 f"TtPrefillTransformer PCC test passed "
                 f"(num_layers={num_layers}, n_routed_experts={n_routed_experts}, "
                 f"gate_fallback_mode={gate_fallback_mode}, "
-                f"weights={weight_type})"
+                f"weights={weight_type}, ref_source={'trace' if trace else 'host'})"
             )
         else:
             pcc_failure_msg = "; ".join(f"{label}: {pcc:.6f}" for label, pcc in failures)
@@ -651,6 +781,7 @@ def test_prefill_transformer(
                 f"TtPrefillTransformer PCC test has failures " f"(num_layers={num_layers}, failures={len(failures)})"
             )
     else:
+        pcc_results = []
         logger.success(
             f"TtPrefillTransformer smoke test passed "
             f"(num_layers={num_layers}, n_routed_experts={n_routed_experts}, "
@@ -667,437 +798,34 @@ def test_prefill_transformer(
     for key in profiler.times:
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
 
+    # --- CI PCC summary (Mermaid charts + markdown table for $GITHUB_STEP_SUMMARY) ---
+    if pcc_results:
+        output_pcc = {}
+        kvpe_kv_pcc = {}
+        kvpe_pe_pcc = {}
+        for label, pcc in pcc_results:
+            if "_kv" in label:
+                kvpe_kv_pcc[label] = pcc
+            elif "_pe" in label:
+                kvpe_pe_pcc[label] = pcc
+            else:
+                output_pcc[label] = pcc
+
+        summary_result = {
+            "pcc": (output_pcc, kvpe_kv_pcc, kvpe_pe_pcc),
+            "num_layers": num_layers,
+            "isl_total": isl_total,
+            "weight_type": weight_type,
+            "input_source": trace_dir.name if trace_dir else input_source,
+            "mesh_shape": mesh_shape,
+            "n_routed_experts": n_routed_experts,
+            "capacity_factor": dispatch_buffer_capacity_factor,
+            "threshold": threshold,
+        }
+        write_pcc_summary(summary_result, threshold=threshold)
+        if not os.getenv("GITHUB_ACTIONS") and trace_dir is not None:
+            generate_pcc_plots(summary_result, output_dir=str(trace_dir))
+
     # Deferred PCC failure check (after timing report)
     if pcc_validation and has_pcc_failures:
         pytest.fail(f"PCC below {threshold} at: {pcc_failure_msg}")
-
-
-# ---------------------------------------------------------------------------
-# Trace-based PCC test
-# ---------------------------------------------------------------------------
-
-
-def plot_pcc_results(
-    pcc_results: list[tuple[str, float]],
-    trace_dir: Path,
-    dataset_name: str = "",
-    gate_fallback_mode: str = "",
-    threshold: float = TRACE_PCC_THRESHOLD,
-    filename: str = "pcc_results.png",
-    title_prefix: str = "",
-    annotation: str = "",
-) -> None:
-    """Save a bar chart of per-layer and logits PCC values to disk next to the trace directory."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    filtered = [
-        (label, pcc)
-        for label, pcc in pcc_results
-        if label.startswith("layer_")
-        and "_kvpe" not in label
-        and "_kv" not in label
-        and "_pe" not in label
-        or label in ("lm_head", "logits")
-    ]
-    if not filtered:
-        logger.warning("No layer/logits PCC results to plot")
-        return
-
-    labels = [label for label, _ in filtered]
-    values = [pcc for _, pcc in filtered]
-
-    fig, ax = plt.subplots(figsize=(max(12, len(labels) * 0.35), 6))
-    colors = ["#2ecc71" if v > threshold else "#e74c3c" for v in values]
-    ax.bar(range(len(values)), values, color=colors, edgecolor="none", width=0.8)
-
-    ax.axhline(y=threshold, color="orange", linestyle="--", linewidth=1, label=f"threshold={threshold}")
-    ax.set_ylabel("PCC")
-    ax.set_xlabel("Layer")
-    title = f"{dataset_name}    gate_mode = {gate_fallback_mode}"
-    if title_prefix:
-        title = f"{title_prefix}\n{title}"
-    ax.set_title(title)
-    ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=90, fontsize=7)
-    ax.set_ylim(min(0, min(values) - 0.02), 1.01)
-    ax.legend(loc="lower left")
-    if annotation:
-        ax.text(
-            0.99,
-            0.02,
-            annotation,
-            transform=ax.transAxes,
-            fontsize=8,
-            verticalalignment="bottom",
-            horizontalalignment="right",
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="wheat", alpha=0.8),
-        )
-    fig.tight_layout()
-
-    out_path = trace_dir / filename
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    logger.info(f"PCC plot saved to {out_path}")
-
-
-@pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
-@pytest.mark.parametrize(
-    "trace_dir, max_seq_len, pad_left",
-    [(LONGBOOK_QA_ENG_25024, None, False)],
-    ids=["longbook_25k_qa_eng"],
-)
-@pytest.mark.parametrize("num_layers", [61])
-@pytest.mark.parametrize(
-    "n_routed_experts, capacity_factor, gate_fallback_mode",
-    [(256, 2, GateComputeMode.DEVICE_FP32)],
-    ids=["e256_cf32_device_fp32"],
-)
-@pytest.mark.parametrize("dequant_method", ["tt"], ids=["dequant_tt"])
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.timeout(0)
-def test_prefill_transformer_from_trace(
-    config_only,
-    mesh_device,
-    device_params,
-    trace_dir,
-    max_seq_len,
-    pad_left,
-    num_layers,
-    n_routed_experts,
-    capacity_factor,
-    gate_fallback_mode,
-    dequant_method,
-    num_links,
-    topology,
-    weight_cache_path,
-    request,
-):
-    """
-    PCC test using pre-computed reference tensors from a bit_sculpt debug trace.
-
-    Loads real intermediate hidden states (per-layer decoder outputs) and KVPE
-    from safetensors files, runs the TT model on the same input tokens, and
-    compares per-layer PCC.
-
-    TTNN weight cache is built automatically if missing (requires pretrained
-    weights accessible via model_path fixture).
-    """
-    torch.manual_seed(42)
-
-    profiler.clear()
-    profiler.start("total_test_time")
-
-    config = config_only
-    trace = load_debug_trace(trace_dir, num_layers=num_layers)
-
-    n_real_tokens = trace.token_ids.shape[1]
-
-    if max_seq_len is not None and max_seq_len > n_real_tokens:
-        tok = request.getfixturevalue("tokenizer")
-        pad_token_id = tok.pad_token_id if tok.pad_token_id is not None else tok.eos_token_id
-        pad_len = max_seq_len - n_real_tokens
-        padding = torch.full((1, pad_len), pad_token_id, dtype=torch.int64)
-
-        if pad_left:
-            token_ids = torch.cat([padding, trace.token_ids], dim=1)
-        else:
-            token_ids = torch.cat([trace.token_ids, padding], dim=1)
-
-        isl_total = max_seq_len
-        logger.info(
-            f"Padded {n_real_tokens} tokens to {max_seq_len} "
-            f"({'left' if pad_left else 'right'}-padded, pad_token_id={pad_token_id})"
-        )
-    else:
-        token_ids = trace.token_ids
-        isl_total = n_real_tokens
-
-    config.max_seq_len = isl_total
-
-    sp_axis = 0
-    tp_axis = 1
-    mesh_shape = list(mesh_device.shape)
-    sp_factor = mesh_shape[sp_axis]
-    tp_factor = mesh_shape[tp_axis]
-    isl_per_chip = isl_total // sp_factor
-
-    logger.info(
-        f"Trace-based test: trace={trace_dir.name}, isl={isl_total}, "
-        f"num_layers={num_layers}, mesh={mesh_shape}, "
-        f"sp_factor={sp_factor}, tp_factor={tp_factor}, "
-        f"n_routed_experts={n_routed_experts}, capacity_factor={capacity_factor}, "
-        f"gate_fallback_mode={gate_fallback_mode}"
-    )
-
-    monkeypatch = request.getfixturevalue("monkeypatch")
-    monkeypatch.setattr(DeepSeekV3Config, "NUM_ROUTED_EXPERTS", n_routed_experts)
-
-    # --- Weight cache: build if missing, reuse if present ---
-    if weight_cache_path is not None:
-        rows, cols = mesh_shape
-        cache_subdir = f"v2/{rows}x{cols}" if dequant_method == "hf" else f"{rows}x{cols}"
-        effective_cache_path = weight_cache_path / cache_subdir
-        effective_cache_path.mkdir(parents=True, exist_ok=True)
-    else:
-        pytest.skip("weight_cache_path is None (pretrained weights unavailable)")
-
-    profiler.start("cache_check")
-    experts_per_chip = 256 // (mesh_shape[0] * mesh_shape[1])
-    ttnn_cache_complete = TtPrefillTransformer.check_cache_complete(effective_cache_path, num_layers, experts_per_chip)
-    profiler.end("cache_check")
-
-    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import report_and_clear
-
-    report_and_clear()
-
-    logger.info(f"Cache status: TTNN={ttnn_cache_complete}, dequant_method={dequant_method}")
-    logger.info(f"Cache lookup path: {effective_cache_path}")
-
-    if not ttnn_cache_complete:
-        logger.info(f"TTNN weight cache incomplete — building from HF weights (dequant={dequant_method})...")
-        model_path = request.getfixturevalue("model_path")
-        profiler.start("cache_build")
-        load_and_compute_layer_by_layer(
-            model_path=model_path,
-            config=config,
-            num_layers=num_layers,
-            token_ids=None,
-            attention_mask=None,
-            compute_reference=False,
-            build_ttnn_cache=True,
-            weight_cache_path=effective_cache_path,
-            mesh_device=mesh_device,
-            seq_len=isl_total,
-            num_links=num_links,
-            topology=topology,
-            sp_axis=sp_axis,
-            tp_axis=tp_axis,
-            gate_fallback_mode=gate_fallback_mode,
-            dequant_method=dequant_method,
-        )
-        gc.collect()
-        profiler.end("cache_build")
-        logger.info(f"TTNN weight cache built at {effective_cache_path}")
-    else:
-        logger.info(f"TTNN weight cache found at {effective_cache_path}")
-
-    # --- TT transformer ---
-    cache_entries_before = mesh_device.num_program_cache_entries()
-    logger.info(f"Program cache entries BEFORE transformer creation: {cache_entries_before}")
-
-    profiler.start("tt_transformer_creation")
-    transformer = TtPrefillTransformer(
-        mesh_device=mesh_device,
-        config=config,
-        state_dict={},
-        num_layers=num_layers,
-        seq_len=isl_total,
-        num_links=num_links,
-        topology=topology,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        gate_fallback_mode=gate_fallback_mode,
-        dispatch_buffer_capacity_factor=capacity_factor,
-        weight_cache_path=effective_cache_path,
-    )
-    ttnn.ReadDeviceProfiler(mesh_device)
-    ttnn.synchronize_device(mesh_device)
-
-    cache_entries_after = mesh_device.num_program_cache_entries()
-    logger.info(f"Program cache entries AFTER transformer creation: {cache_entries_after}")
-    logger.info(f"Program cache entries ADDED during creation: {cache_entries_after - cache_entries_before}")
-    profiler.end("tt_transformer_creation")
-
-    # --- Create external KVPE cache ---
-    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_cache_head_dim,
-        mesh_device=mesh_device,
-        seq_len=isl_total,
-        mesh_shape=mesh_shape,
-        sp_axis=sp_axis,
-        num_kvpe_cache_layers=num_layers,
-    )
-
-    # --- Shard token_ids to device ---
-    token_ids_reshaped = token_ids.reshape(sp_factor, 1, isl_per_chip)
-    tt_tokens = ttnn.from_torch(
-        token_ids_reshaped,
-        device=mesh_device,
-        dtype=ttnn.uint32,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, None)),
-    )
-
-    # --- Forward ---
-    profiler.start("tt_forward")
-    logger.info("Running TtPrefillTransformer forward...")
-    first_token_id, first_token_prob, tt_intermediates = transformer(
-        tt_tokens,
-        tt_kvpe_cache,
-        number_of_non_padded_tokens=isl_total,
-        return_intermediates=True,
-        read_profiler=True,
-    )
-    ttnn.synchronize_device(mesh_device)
-    profiler.end("tt_forward")
-    logger.info("Forward pass completed successfully")
-
-    # --- PCC check: TT intermediates vs trace references ---
-    profiler.start("pcc_validation")
-    pcc_results = []
-
-    for label, tt_host in tt_intermediates.items():
-        if label not in trace.ref_snapshots:
-            logger.debug(f"Skipping {label} (no trace reference)")
-            continue
-        ref_host = trace.ref_snapshots[label]
-        try:
-            _, pcc = comp_pcc(ref_host.float(), tt_host.float())
-            logger.debug(f"{label:<20s}  PCC = {pcc:.6f}")
-            pcc_results.append((label, pcc))
-        except Exception as e:
-            logger.error(f"{label:<20s}  PCC comparison failed: {e}")
-            pcc_results.append((label, -1.0))
-
-    # --- Logits PCC check ---
-    # tt_intermediates["lm_head"] has shape [sp_factor, 1, TILE_SIZE, vocab_size]
-    # trace.logits is [1, vocab_size] — last real token only.
-    # Extract the matching last-token logits using the same device/offset logic as the LM head.
-    if trace.logits is not None and "lm_head" in tt_intermediates:
-        from models.demos.deepseek_v3_d_p.tt.mla.utils import global_to_local_token_id
-
-        try:
-            tt_logits_full = tt_intermediates["lm_head"]
-            global_token_id = isl_total - 1
-            device_id, local_token_id = global_to_local_token_id(
-                global_token_id,
-                sp_factor,
-                isl_total,
-                is_balanced=False,
-            )
-            token_offset = local_token_id % ttnn.TILE_SIZE
-            tt_last_token_logits = tt_logits_full[device_id, 0, token_offset, :].unsqueeze(0)
-            logger.debug(
-                f"Logits extraction: full={list(tt_logits_full.shape)}, "
-                f"device_id={device_id}, local_token_id={local_token_id}, token_offset={token_offset}, "
-                f"extracted={list(tt_last_token_logits.shape)}, trace={list(trace.logits.shape)}"
-            )
-            _, logits_pcc = comp_pcc(trace.logits.float(), tt_last_token_logits.float())
-            logger.info(f"{'logits':<20s}  PCC = {logits_pcc:.6f}")
-            pcc_results.append(("logits", logits_pcc))
-        except Exception as e:
-            logger.error(f"{'logits':<20s}  PCC comparison failed: {e}")
-            pcc_results.append(("logits", -1.0))
-
-    # --- First token comparison ---
-    # next_token_id/text may be in metadata.json or output_metadata.json
-    ref_token_id = trace.metadata.get("next_token_id")
-    ref_token_text = trace.metadata.get("next_token_text")
-    if ref_token_id is None or ref_token_text is None:
-        output_meta_path = trace_dir / "output_metadata.json"
-        if output_meta_path.exists():
-            with open(output_meta_path) as f:
-                output_meta = json.load(f)
-            ref_token_id = ref_token_id or output_meta.get("next_token_id")
-            ref_token_text = ref_token_text or output_meta.get("next_token_text")
-    if ref_token_text is None:
-        ref_token_text = "N/A"
-    token_match = first_token_id == ref_token_id if ref_token_id is not None else None
-    logger.info(
-        f"First token: TT={first_token_id} (prob={first_token_prob:.4f}), "
-        f"Trace={ref_token_id} [{repr(ref_token_text)}], "
-        f"Match={'YES' if token_match else 'NO' if token_match is not None else 'N/A'}"
-    )
-
-    profiler.end("pcc_validation")
-
-    # --- Per-mode threshold ---
-    if gate_fallback_mode == GateComputeMode.DEVICE:
-        trace_threshold = TRACE_PCC_THRESHOLD_DEVICE_BF16
-    elif gate_fallback_mode == GateComputeMode.DEVICE_FP32:
-        trace_threshold = TRACE_PCC_THRESHOLD_DEVICE_FP32
-    elif gate_fallback_mode == GateComputeMode.HOST_ALL:
-        trace_threshold = TRACE_PCC_THRESHOLD_HOST
-    else:
-        trace_threshold = TRACE_PCC_THRESHOLD
-    logger.info(f"Trace PCC threshold: {trace_threshold} (gate_mode={gate_fallback_mode})")
-
-    # --- Summary table ---
-    logger.info(f"\n{'='*50}")
-    logger.info(f"{'Stage':<20s}  {'PCC':>10s}  {'Status':>8s}")
-    logger.info(f"{'-'*50}")
-    failures = []
-    for label, pcc in pcc_results:
-        status = "PASS" if pcc > trace_threshold else ("FAIL" if pcc >= 0 else "ERROR")
-        logger.info(f"{label:<20s}  {pcc:>10.6f}  {status:>8s}")
-        if pcc <= trace_threshold:
-            failures.append((label, pcc))
-    logger.info(f"{'='*50}")
-
-    profiler.end("total_test_time")
-
-    # --- Timing report ---
-    logger.info(f"\n{'='*60}")
-    logger.info("Timing Report")
-    logger.info(f"{'='*60}")
-    for key in profiler.times:
-        logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
-
-    first_token_annotation = (
-        f"First token: TT={first_token_id} (prob={first_token_prob:.4f}), "
-        f"Trace={ref_token_id} [{repr(ref_token_text)}], "
-        f"Match={'YES' if token_match else 'NO' if token_match is not None else 'N/A'}"
-    )
-    logger.info("%s", first_token_annotation)
-
-    # --- CI PCC summary (Mermaid charts + markdown table for $GITHUB_STEP_SUMMARY) ---
-    output_pcc = {}
-    kvpe_kv_pcc = {}
-    kvpe_pe_pcc = {}
-    for label, pcc in pcc_results:
-        if "_kv" in label:
-            kvpe_kv_pcc[label] = pcc
-        elif "_pe" in label:
-            kvpe_pe_pcc[label] = pcc
-        else:
-            output_pcc[label] = pcc
-
-    summary_result = {
-        "pcc": (output_pcc, kvpe_kv_pcc, kvpe_pe_pcc),
-        "num_layers": num_layers,
-        "isl_total": isl_total,
-        "weight_type": "pretrained",
-        "input_source": trace_dir.name,
-        "mesh_shape": mesh_shape,
-        "n_routed_experts": n_routed_experts,
-        "capacity_factor": capacity_factor,
-        "threshold": trace_threshold,
-    }
-    write_pcc_summary(summary_result, threshold=trace_threshold)
-    if not os.getenv("GITHUB_ACTIONS"):
-        generate_pcc_plots(summary_result, output_dir=str(trace_dir))
-
-    if failures:
-        pcc_failure_msg = "; ".join(f"{label}: {pcc:.6f}" for label, pcc in failures)
-        pytest.fail(f"PCC below {trace_threshold} at: {pcc_failure_msg}")
