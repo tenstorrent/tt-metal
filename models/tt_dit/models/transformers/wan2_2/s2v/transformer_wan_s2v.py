@@ -475,13 +475,21 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
             raise RuntimeError("prepare_cond_emb() must be called before AdaIN modulation fires.")
 
         sp_factor = self.parallel_config.sequence_parallel.factor
-        padded_N = get_padded_vision_seq_len(N_total, sp_factor)
-        cache_key = (audio_attn_id, padded_N)
+        # The spatial path pads noisy and const segments *separately* to
+        # (sp_factor * TILE) alignment then concats; AdaIN must use the same
+        # per-segment strategy or the resulting scale/shift will be 1 tile
+        # short whenever ``noisy_len`` and ``noisy_len + const_len`` don't
+        # land on the same padding boundary (e.g., LAT_TARGET=20 at 480p).
+        noisy_len = self.original_seq_len
+        const_len = N_total - noisy_len
+        padded_noisy = get_padded_vision_seq_len(noisy_len, sp_factor)
+        padded_const = get_padded_vision_seq_len(const_len, sp_factor) if const_len > 0 else 0
+        padded_N = padded_noisy + padded_const
+        cache_key = (audio_attn_id, padded_noisy, padded_const)
         if cache_key in self._adain_modulation_cache:
             return self._adain_modulation_cache[cache_key]
 
         T_video = self.num_frames
-        noisy_len = self.original_seq_len
         if noisy_len % T_video != 0:
             raise RuntimeError(f"noisy_len={noisy_len} not divisible by T_video={T_video}.")
         hw_per_frame = noisy_len // T_video
@@ -495,15 +503,20 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
             # Fold +1 into scale so the device op is a plain `x * scale + shift`.
             scale_noisy = scale_per_frame.repeat_interleave(hw_per_frame, dim=1) + 1.0
             B = shift_noisy.shape[0]
-            if padded_N > noisy_len:
-                # Identity modulation on ref/motion + pad slots so AdaIN leaves them untouched.
-                shift_extra = torch.zeros(B, padded_N - noisy_len, self.dim, dtype=shift_noisy.dtype)
-                scale_extra = torch.ones(B, padded_N - noisy_len, self.dim, dtype=scale_noisy.dtype)
-                shift_per_token = torch.cat([shift_noisy, shift_extra], dim=1)
-                scale_per_token = torch.cat([scale_noisy, scale_extra], dim=1)
-            else:
-                shift_per_token = shift_noisy
-                scale_per_token = scale_noisy
+
+            # Pad the noisy segment to ``padded_noisy``, then append identity
+            # modulation for the (already-padded) const segment so the const
+            # tokens flow through AdaIN untouched.
+            shift_parts = [shift_noisy]
+            scale_parts = [scale_noisy]
+            if padded_noisy > noisy_len:
+                shift_parts.append(torch.zeros(B, padded_noisy - noisy_len, self.dim, dtype=shift_noisy.dtype))
+                scale_parts.append(torch.ones(B, padded_noisy - noisy_len, self.dim, dtype=scale_noisy.dtype))
+            if padded_const > 0:
+                shift_parts.append(torch.zeros(B, padded_const, self.dim, dtype=shift_noisy.dtype))
+                scale_parts.append(torch.ones(B, padded_const, self.dim, dtype=scale_noisy.dtype))
+            shift_per_token = torch.cat(shift_parts, dim=1)
+            scale_per_token = torch.cat(scale_parts, dim=1)
 
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis

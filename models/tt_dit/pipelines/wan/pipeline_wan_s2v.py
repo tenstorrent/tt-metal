@@ -608,9 +608,9 @@ class WanPipelineS2V(WanPipeline):
     # Latent frames the motion context occupies after VAE encode
     # (``(motion_frames + 3) // 4``, speech2video.py:491).
     _LAT_MOTION_FRAMES = 19
-    # Latent frames the noisy clip is denoised over: ``(81-1)//4 + 1 = 21``,
-    # the natural 4k+1 size for the WAN causal stride-4 VAE temporal decoder.
-    _LAT_TARGET_FRAMES = 21
+    # Reference-exact: ``(infer_frames + 3 + motion_frames) // 4 - motion_lat_frames``
+    # = (80 + 3 + 73) // 4 - 19 = 20 (speech2video.py:544-545).
+    _LAT_TARGET_FRAMES = 20
     # Clip-0 pixel-transient trim. With ``drop_first_motion=True`` the VAE
     # decode is ``ref(1) + noisy(21) = 22 latents → 4*22-3 = 85 pixels``;
     # we keep the last ``INFER_FRAMES_PIXEL = 81`` and drop 3 more transient
