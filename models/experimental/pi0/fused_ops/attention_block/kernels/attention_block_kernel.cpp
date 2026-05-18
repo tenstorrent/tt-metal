@@ -145,8 +145,14 @@ void kernel_main() {
     // QKV weight is pre-loaded; mark all 108 tiles pushed on every QKV core so
     // the TRISC matmul's cb_wait_front returns immediately. Skipped on LN1-only
     // cores (no qkv_w_cb allocated there).
+    constexpr uint32_t qkv_b_cb_nc = get_named_compile_time_arg_val("qkv_b_cb");
+    constexpr uint32_t qkv_n_tiles_per_core_nc = get_named_compile_time_arg_val("qkv_n_tiles_per_core");
     if (is_qkv_core_nc) {
         unified_kernels::setup_sharded_buffer(qkv_w_cb, qkv_weight_tiles);
+        // #14: QKV bias is pre-loaded (qkv_n_tiles_per_core tiles of (32, 32)
+        // bf16 per core, replicated rows). Mark pushed so TRISC's bias-add
+        // cb_wait_front returns immediately.
+        unified_kernels::setup_sharded_buffer(qkv_b_cb_nc, qkv_n_tiles_per_core_nc);
     }
 
     // #11 Commit 9: softmax scaler (1 tile of 1.0 per SDPA worker) is
@@ -649,9 +655,43 @@ void kernel_main() {
         pi05_siglip_ops::EncoderMatmul::RTArgs qkv_args{};
         qkv_mm(qkv_args);
 
-        // #11 Commit 3: release the QKV→SDPA fan-out atomic-inc. The matmul
-        // Op-struct ended with cb_push_back(qkv_out_cb), so the (M, 96) head
-        // slice is now in L1; we just need to tell NCRISC to fire its incs.
+        // =====================================================================
+        // PHASE 3.5 (#14): QKV bias-add — y = x @ W + b.
+        //
+        // EncoderMatmul pushed M_TILES × N_TILES_PER_CORE = 24 tiles to
+        // qkv_out_cb. Each (32, 32) output tile gets bias added: read out tile,
+        // add the matching bias tile from qkv_b_cb (which has its rows
+        // replicated so element-wise add does the right broadcast), pack back
+        // in place via pack_tile<true>. CB counters stay unchanged so the
+        // downstream NCRISC fan-out sees the same push count.
+        //
+        // bias tile index: col-position w (cycles 0..N_TILES_PER_CORE-1 as we
+        //   walk the M dim; bias only depends on N-position).
+        // out tile index: m * N_TILES_PER_CORE + w.
+        // =====================================================================
+        constexpr uint32_t qkv_b_cb_tr = get_named_compile_time_arg_val("qkv_b_cb");
+        cb_wait_front(qkv_b_cb_tr, qkv_n_tiles_per_core);
+        // qkv_out_cb already has all 24 tiles pushed by the matmul Op; bias-add
+        // operates in place. The wait below just synchronizes data visibility
+        // for our reads — it returns immediately.
+        cb_wait_front(qkv_out_cb_tr, qkv_m_tiles * qkv_n_tiles_per_core);
+        reconfig_data_format(qkv_out_cb_tr, qkv_b_cb_tr);
+        pack_reconfig_data_format(qkv_out_cb_tr);
+        add_tiles_init(qkv_out_cb_tr, qkv_b_cb_tr);
+        for (uint32_t m = 0; m < qkv_m_tiles; ++m) {
+            for (uint32_t w = 0; w < qkv_n_tiles_per_core; ++w) {
+                const uint32_t tile_idx = m * qkv_n_tiles_per_core + w;
+                tile_regs_acquire();
+                add_tiles(qkv_out_cb_tr, qkv_b_cb_tr, tile_idx, w, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile<true>(0, qkv_out_cb_tr, tile_idx);
+                tile_regs_release();
+            }
+        }
+
+        // #11 Commit 3: release the QKV→SDPA fan-out atomic-inc. After bias-add,
+        // the (M, 96) head slice is now in L1; tell NCRISC to fire its incs.
         constexpr uint32_t qkv_done_trigger_cb_tr = get_named_compile_time_arg_val("qkv_done_trigger_cb");
         cb_reserve_back(qkv_done_trigger_cb_tr, 1);
         cb_push_back(qkv_done_trigger_cb_tr, 1);

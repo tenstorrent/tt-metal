@@ -818,12 +818,14 @@ def test_attention_block_fused_real_weights(device):
     and runs the full attention block (fused kernel + standalone O-proj) on
     a real patch_embed + pos_embed activation.
 
-    Limitations vs the full SigLIP attention math (after #13):
+    Limitations vs the full SigLIP attention math (after #13/#14):
       * 1/sqrt(head_dim) softmax scaling: NOW APPLIED by the kernel via
         in-place Q pre-scaling in TRISC SDPA.
-      * No QKV / O-proj biases. The kernel's matmul Op-struct doesn't
-        currently support output bias, so the torch reference here also
-        omits them.
+      * QKV bias: NOW APPLIED by the kernel via post-matmul add_tiles +
+        pack_tile<true> in TRISC. Torch reference here includes the QKV
+        bias.
+      * No O-proj bias. The standalone oproj_op.py doesn't currently
+        accept a bias param. Torch reference here zeroes it.
       * No attention residual. We compare against the bare attention(LN1(x))
         output, not (attention(LN1(x)) + x).
 
@@ -848,9 +850,9 @@ def test_attention_block_fused_real_weights(device):
     x = _make_real_input_activation(seed=42)
     assert x.shape == (M, D)
 
-    # ---- Torch golden (no scaling, no bias, no residual) ------------------
+    # ---- Torch golden (scaling ON, QKV bias ON, O-proj bias OFF, no residual) ----
     ln_out = F.layer_norm(x.float(), (D,), ln1_w.float(), ln1_b.float(), eps=EPS)
-    qkv_golden_unpadded = (ln_out @ qkv_w_unpadded.float()).to(torch.bfloat16)
+    qkv_golden_unpadded = (ln_out @ qkv_w_unpadded.float() + qkv_b.float()).to(torch.bfloat16)
     sdpa_concat = torch.zeros(M, D, dtype=torch.bfloat16)
     for h in range(NUM_HEADS):
         q = qkv_golden_unpadded[:, h * HEAD_DIM_TRUE : (h + 1) * HEAD_DIM_TRUE].to(torch.float32)
@@ -868,6 +870,7 @@ def test_attention_block_fused_real_weights(device):
         ln1_w,  # gamma (LN1's learned scale)
         ln1_b,  # beta (LN1's learned shift)
         w_qkv_torch=qkv_w_unpadded,
+        b_qkv_torch=qkv_b,
     )
     SigLIPAttentionBlockFused.op(*tensors, eps=EPS)
 
@@ -909,7 +912,7 @@ def test_attention_block_fused_real_weights(device):
     oproj_device = _ttnn.to_torch(output_tt)
 
     p = pcc(oproj_golden, oproj_device)
-    print(f"\nPCC (fused+O-proj on REAL pi0.5_base layer-0 weights, vs no-scale no-bias torch) = {p:.6f}")
+    print(f"\nPCC (fused+O-proj on REAL pi0.5_base layer-0 weights, scale+QKV-bias ON) = {p:.6f}")
     print(f"  output shape={tuple(oproj_device.shape)}, dtype={oproj_device.dtype}")
     # Real-weight dynamic range vs synthetic. The bfp8 quantization on real
     # weights can be slightly worse than on small random weights (real layer-

@@ -214,6 +214,11 @@ class SigLIPAttentionBlockFused:
         # the QK^T compute produces scores already scaled by 1/sqrt(d_k);
         # softmax math is unchanged.
         "sdpa_q_scale_cb": 32,
+        # #14: QKV matmul output bias. Per QKV core: (32, N_per_core=96) =
+        # 3 tiles bf16, width-sharded. Each (32, 32) col-tile stores the bias
+        # vector for that col range, replicated across all 32 rows so a plain
+        # add_tiles (no broadcast) suffices in the post-matmul bias-add stage.
+        "qkv_b_cb": 33,
     }
 
     # #11 Commit 11: semaphore on the LN1 row — each SDPA worker that serves
@@ -262,6 +267,7 @@ class SigLIPAttentionBlockFused:
         sdpa_softmax_scaler_tt,
         sdpa_attn_done_trigger_tt,
         sdpa_q_scale_tt,
+        qkv_b_tt,
         math_fidelity=ttnn.MathFidelity.HiFi4,
         eps: float = 1e-6,
     ):
@@ -362,6 +368,10 @@ class SigLIPAttentionBlockFused:
             ("sdpa_softmax_scaler_cb", SigLIPAttentionBlockFused.CB["sdpa_softmax_scaler_cb"]),
             # #13: NCRISC marks sdpa_q_scale as pushed (1 tile of 1/sqrt(72)).
             ("sdpa_q_scale_cb", SigLIPAttentionBlockFused.CB["sdpa_q_scale_cb"]),
+            # #14: NCRISC marks qkv_b as pushed (pre-loaded bias tiles).
+            ("qkv_b_cb", SigLIPAttentionBlockFused.CB["qkv_b_cb"]),
+            ("qkv_n_tiles_per_core", SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE),
+            ("qkv_m_tiles", SigLIPAttentionBlockFused.M_TILES),
             # #11 Commit 10: NCRISC streams V tile-by-tile into v_partial_cb
             # after the K-stream loop completes. Same shape as K's stream:
             # head_dim_n_tiles tiles per V-row, m_kv_n_tiles V-rows total.
@@ -429,6 +439,9 @@ class SigLIPAttentionBlockFused:
             # before QK^T. mul_tiles_bcast<SCALAR>(Q, scale, ...) + pack<true>
             # to overwrite each Q tile in place.
             ("sdpa_q_scale_cb", SigLIPAttentionBlockFused.CB["sdpa_q_scale_cb"]),
+            # #14: TRISC reads qkv_b (replicated-row bias tiles) post-QKV-matmul
+            # and adds in place via add_tiles + pack_tile<true>.
+            ("qkv_b_cb", SigLIPAttentionBlockFused.CB["qkv_b_cb"]),
         ]
 
         # Physical NoC coords for the worker grid. BH's logical-to-physical x
@@ -759,6 +772,7 @@ class SigLIPAttentionBlockFused:
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_softmax_scaler_cb"], sdpa_softmax_scaler_tt),
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_attn_done_trigger_cb"], sdpa_attn_done_trigger_tt),
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_q_scale_cb"], sdpa_q_scale_tt),
+                _cb(SigLIPAttentionBlockFused.CB["qkv_b_cb"], qkv_b_tt),
                 softmax_out_cb_aliased,
             ],
             semaphores=[counter_sem, sdpa_qkv_ready_sem, sdpa_done_sem],
@@ -793,13 +807,16 @@ class SigLIPAttentionBlockFused:
                 sdpa_softmax_scaler_tt,
                 sdpa_attn_done_trigger_tt,
                 sdpa_q_scale_tt,
+                qkv_b_tt,
             ],
             program_descriptor,
         )
         return final_out_tt, qkv_act_tt, qkv_out_tt, sdpa_q_tt, sdpa_k_partial_tt, fused_scratch_tt
 
 
-def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_torch, w_qkv_torch=None):
+def build_tensors_for_fused_attention_block(
+    device, x_torch, gamma_torch, beta_torch, w_qkv_torch=None, b_qkv_torch=None
+):
     """Build all sharded tensors needed by the fused attention-block op.
 
     Returns a 17-tuple matching SigLIPAttentionBlockFused.op's positional inputs.
@@ -993,6 +1010,33 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=qkv_out_mem,
+    )
+
+    # #14: QKV bias. Logical bias shape is (N_unpadded=3D=3456,). Pad to
+    # N_padded=4608 with zeros for the head_dim padding cols (matches the
+    # weight padding scheme). Replicate across TILE=32 rows so a plain
+    # add_tiles (no broadcast) in TRISC works with bias_cb[w] as an (32, 32)
+    # tile aligned to qkv_out_cb's (32, 32) tile layout.
+    if b_qkv_torch is None:
+        b_qkv_torch = torch.zeros(N_unpadded, dtype=torch.bfloat16)
+    assert b_qkv_torch.shape == (N_unpadded,)
+    b_qkv_padded = torch.zeros(N_padded, dtype=b_qkv_torch.dtype)
+    for qkv_idx in range(3):
+        for h in range(num_heads):
+            src_start = qkv_idx * D + h * head_dim_true
+            dst_start = qkv_idx * num_heads * head_dim_padded + h * head_dim_padded
+            b_qkv_padded[dst_start : dst_start + head_dim_true] = b_qkv_torch[src_start : src_start + head_dim_true]
+    # Replicate the bias vector across TILE=32 rows so the post-matmul
+    # add_tiles in TRISC works element-wise without needing a broadcast op.
+    qkv_b_replicated = b_qkv_padded.unsqueeze(0).expand(TILE, -1).contiguous()  # (32, 4608)
+    qkv_b_shard = ttnn.ShardSpec(qkv_core_grid, (TILE, n_per_core), ttnn.ShardOrientation.ROW_MAJOR)
+    qkv_b_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, qkv_b_shard)
+    qkv_b_tt = ttnn.from_torch(
+        qkv_b_replicated,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=qkv_b_mem,
     )
 
     # #11 Commit 3: 1-tile sync CB on the 48-core QKV grid — TRISC pushes
@@ -1203,4 +1247,5 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         sdpa_softmax_scaler_tt,
         sdpa_attn_done_trigger_tt,
         sdpa_q_scale_tt,
+        qkv_b_tt,
     )
