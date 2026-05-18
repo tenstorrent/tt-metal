@@ -31,6 +31,7 @@ export PYTHONPATH="${TT_METAL_ROOT}:${PYTHONPATH:-}"
 : "${HOST_A:?Set HOST_A to the hostname of galaxy A}"
 : "${HOST_B:?Set HOST_B to the hostname of galaxy B}"
 TCP_INTERFACE="${TT_TCP_INTERFACE:-ens5f0np0}"
+K_FILTER="${K_FILTER:-2galaxy}"
 
 HOSTSP="${HOST_A}:1,${HOST_B}:1"
 
@@ -53,4 +54,4 @@ tt-run \
     --tcp-interface "${TCP_INTERFACE}" \
     --rank-binding "${RANK_BINDING}" \
     --mpi-args "--host ${HOSTSP} --tag-output --allow-run-as-root --mca btl tcp,self --mca btl_tcp_if_include ${TCP_INTERFACE}" \
-    python -m pytest "${TEST_FILE}" -svv --no-header -k 2galaxy
+    python -m pytest "${TEST_FILE}" -svv --no-header -k "${K_FILTER}"

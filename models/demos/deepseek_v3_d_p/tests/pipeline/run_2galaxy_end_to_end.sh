@@ -142,4 +142,5 @@ source ./env.sh
 HOST_A="${HOST_A}" \
 HOST_B="${HOST_B}" \
 TT_TCP_INTERFACE="${TT_TCP_INTERFACE}" \
+K_FILTER="${K_FILTER:-2galaxy}" \
     bash "${RUNME}"
