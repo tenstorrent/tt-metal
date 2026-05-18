@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include "internal/ethernet/dataflow_api.h"
 #include "hostdevcommon/fabric_common.h"
@@ -71,6 +72,15 @@ struct handshake_info_t {
     uint32_t diag_eth_link_reg;       // Byte 48: ETH_LINK_ERR_STATUS_ADDR (0x1440) value at init time
     uint32_t diag_reserved[3];        // Bytes 52-63: Reserved for future diagnostics
 };
+
+// FIX V11-SA1 (#42429): Compile-time assertion — handshake_bypass must be at byte 32.
+// device.cpp writes the bypass flag at handshake_addr + 32 (hardcoded offset).  If the
+// struct layout changes, the write lands in the wrong field silently.  This assertion
+// turns that into a build error.
+static_assert(
+    offsetof(handshake_info_t, handshake_bypass) == 32,
+    "handshake_info_t::handshake_bypass must be at byte offset 32 "
+    "(device.cpp writes bypass flag at handshake_addr + 32)");
 
 // FIX AD (#42429): prepare_handshake_state — called during Object Setup (before edm_status = STARTED)
 // to separate destructive init from the handshake loop. This eliminates the race where
