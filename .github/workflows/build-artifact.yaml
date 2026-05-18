@@ -373,6 +373,7 @@ jobs:
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
+        CCACHE_LOGFILE: /tmp/ccache/ccache.log
         # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161
         TRACY_NO_INVARIANT_CHECK: 1
         TRACY_NO_ISA_EXTENSIONS: 1
@@ -566,6 +567,15 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload ccache log
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ccache-log-${{ env.build_artifact_name || github.run_id }}
+          path: /tmp/ccache/ccache.log
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: ☁️ Upload packages
         if: ${{ inputs.publish-package }}
