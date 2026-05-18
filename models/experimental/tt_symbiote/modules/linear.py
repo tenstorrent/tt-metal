@@ -561,12 +561,15 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
 
 
 class TTNNLinearLLamaIColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
-    """Column-sharded linear with matmul + all-gather; weights in bfloat8_b (e.g. dots.ocr QKV / gate / up).
+    """Column-sharded linear with matmul + all-gather; weights in bfloat8_b (e.g. dots.ocr QKV).
+
+    Step-1 quality baseline: keep **BF16 activations × BFP8 weights** for fused QKV
+    while other dots matmuls are moved to BFP4 weights incrementally.
 
     Compute kernel is tuned for bfloat8_b weights: HiFi2 matches the vision-tower
     setting that runs at ~39% of peak FLOPs (perf.txt) and avoids the 2x cost of
     HiFi4 phases with no precision benefit (input is already capped by BFP8).
-    fp32_dest_acc_en=False doubles the dst register size (4 -> 8 tiles), roughly
+    ``fp32_dest_acc_en=False`` doubles the dst register size (4 -> 8 tiles), roughly
     halving the number of matmul passes for these decode-bound projections —
     matches the working pattern in qwen_attention.py / linear_intelligent.py.
 
@@ -638,13 +641,13 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
         weight_mapper = _tp_mesh_mapper(self.device, self.weight_dim)
         gate_w_host = preprocess_linear_weight(
             self._gate_weight_torch,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
             weights_mesh_mapper=weight_mapper,
         )
         up_w_host = preprocess_linear_weight(
             self._up_weight_torch,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
             weights_mesh_mapper=weight_mapper,
         )
@@ -688,17 +691,17 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
 
 
 class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
-    """Weight column-sharded linear with bfloat8_b weights (e.g. dots.ocr o_proj / down_proj).
+    """Weight column-sharded linear with bfloat4_b weights (e.g. dots.ocr o_proj / down_proj).
 
     See TTNNLinearLLamaIColShardedWAllReduced for the compute-kernel rationale —
-    HiFi2 + fp32_dest_acc_en=False is the proven setting for bfloat8_b weights.
+    HiFi2 + fp32_dest_acc_en=False matches the BF16×BFP4 matmul schedule on Wormhole.
     """
 
     def move_weights_to_device_impl(self):
         if isinstance(self.tt_weight_host, torch.Tensor):
             self.tt_weight_host = preprocess_linear_weight(
                 self.tt_weight_host,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 weights_mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
             )
@@ -717,6 +720,29 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        """bf16 output for residual stream; weights are ``bfloat4_b``."""
+        if input_tensor.layout != ttnn.TILE_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        input_tensor_shape = list(input_tensor.shape)
+        input_shape = list(input_tensor_shape)
+        while len(input_shape) < 4:
+            input_shape.insert(1, 1)
+        input_tensor = ttnn.reshape(input_tensor, input_shape)
+        program_config = _dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape)
+        tt_output = ttnn.linear(
+            input_tensor,
+            self.tt_weight,
+            bias=self.tt_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=program_config,
+        )
+        tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
+        return tt_output
 
 
 @trace_disabled
@@ -900,6 +926,13 @@ class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
     """
 
     MAX_COLUMNS_PER_CHUNK = 12288  # see top-of-block notes
+
+    # Decode LM head is bandwidth-bound: each step does sharded_to_interleaved
+    # (width-sharded RMSNorm -> interleaved), to_memory_config (interleaved ->
+    # L1 width-sharded for matmul), per-chunk DRAM-sharded matmul, then
+    # sharded_to_interleaved again. Future work: (1) emit RMSNorm in interleaved
+    # TILE BF16 when M==1 to skip the first de-shard; (2) A/B L1 vs DRAM for
+    # sharded_to_interleaved staging on tiny tensors (watch L1 trace budgets).
 
     def __init__(self) -> None:
         super().__init__()

@@ -81,9 +81,11 @@ class TTNNEmbedding(TTNNModule):
         # Typecast requires last dim to be a multiple of 32 for row-major, so
         # pad -> typecast -> slice back if needed.
         if tt_indices.dtype != ttnn.uint32:
-            seq_len = tt_indices.shape[-1]
-            pad_to = ((seq_len + 31) // 32) * 32
-            if seq_len != pad_to:
+            seq_len = int(tt_indices.shape[-1])
+            if seq_len % 32 == 0:
+                tt_indices = ttnn.typecast(tt_indices, ttnn.uint32)
+            else:
+                pad_to = ((seq_len + 31) // 32) * 32
                 tt_indices = ttnn.pad(
                     tt_indices,
                     padding=tuple(
@@ -92,8 +94,7 @@ class TTNNEmbedding(TTNNModule):
                     ),
                     value=0,
                 )
-            tt_indices = ttnn.typecast(tt_indices, ttnn.uint32)
-            if seq_len != pad_to:
+                tt_indices = ttnn.typecast(tt_indices, ttnn.uint32)
                 starts = [0] * len(tt_indices.shape)
                 ends = list(tt_indices.shape)
                 ends[-1] = seq_len
