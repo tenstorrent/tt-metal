@@ -78,6 +78,7 @@ from .math_perf_env import (
     ace_step_dit_fused_wkv_linear_program_config,
     ace_step_dit_linear_l1_memory_config,
     ace_step_dit_linear_perf_enabled,
+    ace_step_dit_mlp_down_proj_linear_program_config,
     ace_step_dit_mlp_gate_up_linear_program_config,
     ace_step_init_dit_linear_compute_kernel_config,
     ace_step_permute_kwargs,
@@ -602,7 +603,7 @@ class TtAceStepAttentionSDPA:
             return t
         return self.ttnn.to_memory_config(t, self._act_l1)
 
-    def _linear_kwargs(self, *, seq_len: int, in_dim: int, out_dim: int) -> dict:
+    def _linear_kwargs(self, *, batch_size: int, seq_len: int, in_dim: int, out_dim: int) -> dict:
         kw: dict = {}
         if self._linear_ck is not None:
             kw["compute_kernel_config"] = self._linear_ck
@@ -612,6 +613,7 @@ class TtAceStepAttentionSDPA:
                 seq_len=int(seq_len),
                 in_dim=int(in_dim),
                 out_dim=int(out_dim),
+                batch_size=int(batch_size),
             )
             if pc is not None:
                 kw["program_config"] = pc
@@ -619,13 +621,13 @@ class TtAceStepAttentionSDPA:
             kw["memory_config"] = self._linear_out_l1
         return kw
 
-    def _wkv_linear_kwargs(self, *, seq_len: int, in_dim: int) -> dict:
+    def _wkv_linear_kwargs(self, *, batch_size: int, seq_len: int, in_dim: int) -> dict:
         """HiFi2 + L1 + wide-N program config for fused ``wkv`` (256×2048×2048 family)."""
         kw: dict = {}
         if self._linear_ck is not None:
             kw["compute_kernel_config"] = self._linear_ck
         if self._dit_linear_perf:
-            key = (int(seq_len), int(in_dim))
+            key = (int(batch_size), int(seq_len), int(in_dim))
             pc = self._wkv_pc_cache.get(key)
             if pc is None:
                 pc = ace_step_dit_fused_wkv_linear_program_config(
@@ -633,6 +635,7 @@ class TtAceStepAttentionSDPA:
                     seq_len=int(seq_len),
                     hidden_size=int(in_dim),
                     fused_kv_dim=self._fused_kv_dim,
+                    batch_size=int(batch_size),
                 )
                 if pc is not None:
                     self._wkv_pc_cache[key] = pc
@@ -658,20 +661,27 @@ class TtAceStepAttentionSDPA:
         _pk = ace_step_permute_kwargs(ttnn)
         _trace = _ace_step_attn_trace_print(debug_prefix)
         x = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)  # [B,1,S,D]
+        b_x = int(x.shape[0])
         s_q = int(x.shape[2])
         d_in = int(x.shape[-1])
         x = self._l1_activation(x)
-        lin_q = self._linear_kwargs(seq_len=s_q, in_dim=d_in, out_dim=self.d_model)
+        lin_q = self._linear_kwargs(
+            batch_size=b_x,
+            seq_len=s_q,
+            in_dim=d_in,
+            out_dim=self.d_model,
+        )
         q = ttnn.linear(x, self.wq, bias=self.bq, transpose_b=True, **lin_q)
         if encoder_hidden_states is None:
-            lin_kv = self._wkv_linear_kwargs(seq_len=s_q, in_dim=d_in)
+            lin_kv = self._wkv_linear_kwargs(batch_size=b_x, seq_len=s_q, in_dim=d_in)
             kv = ttnn.linear(x, self.wkv, bias=self.bkv, transpose_b=True, **lin_kv)
         else:
             enc = ttnn.to_layout(encoder_hidden_states, ttnn.TILE_LAYOUT)
+            b_enc = int(enc.shape[0])
             s_enc = int(enc.shape[2])
             d_enc = int(enc.shape[-1])
             enc = self._l1_activation(enc)
-            lin_kv = self._wkv_linear_kwargs(seq_len=s_enc, in_dim=d_enc)
+            lin_kv = self._wkv_linear_kwargs(batch_size=b_enc, seq_len=s_enc, in_dim=d_enc)
             kv = ttnn.linear(enc, self.wkv, bias=self.bkv, transpose_b=True, **lin_kv)
 
         B = int(q.shape[0])
@@ -977,7 +987,12 @@ class TtAceStepAttentionSDPA:
         if S_ctx != S:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (B, 1, S, H * Dh))
         ctx = self._l1_activation(ctx)
-        lin_o = self._linear_kwargs(seq_len=S, in_dim=H * Dh, out_dim=self.d_model)
+        lin_o = self._linear_kwargs(
+            batch_size=B,
+            seq_len=S,
+            in_dim=H * Dh,
+            out_dim=self.d_model,
+        )
         out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True, **lin_o)
         if _trace:
             _ace_step_log_ttnn_tensor(f"{debug_prefix}attn_out_B1SD", out, ttnn=ttnn)
@@ -1037,19 +1052,20 @@ class TtQwen3MLP:
         self._act_l1 = activation_l1_memory_config
         self._linear_out_l1 = linear_output_l1_memory_config
         self._gate_up_pc_cache: dict = {}
+        self._down_pc_cache: dict = {}
 
     def _l1_activation(self, t):
         if self._act_l1 is None:
             return t
         return self.ttnn.to_memory_config(t, self._act_l1)
 
-    def _gate_up_linear_kwargs(self, *, seq_len: int) -> dict:
+    def _gate_up_linear_kwargs(self, *, batch_size: int, seq_len: int) -> dict:
         """HiFi2 + L1 + wide-N program config for ``gate_proj`` / ``up_proj`` (256×3072×3072)."""
         kw: dict = {}
         if self._linear_ck is not None:
             kw["compute_kernel_config"] = self._linear_ck
         if self._dit_linear_perf:
-            key = int(seq_len)
+            key = (int(batch_size), int(seq_len))
             pc = self._gate_up_pc_cache.get(key)
             if pc is None:
                 pc = ace_step_dit_mlp_gate_up_linear_program_config(
@@ -1057,6 +1073,7 @@ class TtQwen3MLP:
                     seq_len=int(seq_len),
                     hidden_size=self.hidden_size,
                     intermediate_size=self.intermediate_size,
+                    batch_size=int(batch_size),
                 )
                 if pc is not None:
                     self._gate_up_pc_cache[key] = pc
@@ -1066,12 +1083,37 @@ class TtQwen3MLP:
             kw["memory_config"] = self._linear_out_l1
         return kw
 
+    def _down_linear_kwargs(self, *, batch_size: int, seq_len: int) -> dict:
+        """HiFi2 + L1 + 1D-mcast program config for ``down_proj`` (intermediate→hidden)."""
+        kw: dict = {}
+        if self._linear_ck is not None:
+            kw["compute_kernel_config"] = self._linear_ck
+        if self._dit_linear_perf:
+            key = (int(batch_size), int(seq_len))
+            pc = self._down_pc_cache.get(key)
+            if pc is None:
+                pc = ace_step_dit_mlp_down_proj_linear_program_config(
+                    self.mesh_device,
+                    seq_len=int(seq_len),
+                    intermediate_size=self.intermediate_size,
+                    hidden_size=self.hidden_size,
+                    batch_size=int(batch_size),
+                )
+                if pc is not None:
+                    self._down_pc_cache[key] = pc
+            if pc is not None:
+                kw["program_config"] = pc
+        if self._linear_out_l1 is not None:
+            kw["memory_config"] = self._linear_out_l1
+        return kw
+
     def __call__(self, x, *, debug: Optional[dict] = None, debug_prefix: str = ""):
         ttnn = self.ttnn
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        b_x = int(x.shape[0])
         s = int(x.shape[2])
         x = self._l1_activation(x)
-        lin_gu = self._gate_up_linear_kwargs(seq_len=s)
+        lin_gu = self._gate_up_linear_kwargs(batch_size=b_x, seq_len=s)
         gate = ttnn.linear(x, self.w_gate, bias=None, transpose_b=True, **lin_gu)
         up = ttnn.linear(x, self.w_up, bias=None, transpose_b=True, **lin_gu)
         if debug is not None and debug.get("enabled", False):
@@ -1081,7 +1123,9 @@ class TtQwen3MLP:
         if debug is not None and debug.get("enabled", False):
             debug[f"{debug_prefix}gate_act"] = gate
         h = ttnn.multiply(gate, up)
-        out = ttnn.linear(h, self.w_down, bias=None, transpose_b=True)
+        h = self._l1_activation(h)
+        lin_down = self._down_linear_kwargs(batch_size=b_x, seq_len=s)
+        out = ttnn.linear(h, self.w_down, bias=None, transpose_b=True, **lin_down)
         if debug is not None and debug.get("enabled", False):
             debug[f"{debug_prefix}mlp_raw_out"] = out
         return out

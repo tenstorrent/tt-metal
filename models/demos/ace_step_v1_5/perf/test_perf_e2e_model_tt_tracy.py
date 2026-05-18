@@ -24,10 +24,10 @@ Optional environment variables:
 - ``ACE_STEP_PERF_WARMUP``: number of ``generate`` warmup iterations after the compile pass (default: ``1``).
 - ``ACE_STEP_PERF_MAX_SECONDS``: optional upper bound on the timed perf ``generate`` (fails the test if exceeded).
 - ``ACE_STEP_TRACY_EACH_DENOISE_STEP``: set to ``1`` for one Tracy signpost per Euler step inside the DiT loop.
-- ``ACE_STEP_TM_OUTPUT_L1``: set to ``0`` to disable L1 reshape/permute outputs during perf (enabled by default in ``perf/conftest.py``).
-- ``ACE_STEP_DIT_LINEAR_PERF``: set to ``0`` to disable HiFi2 + L1 + matmul program config on DiT attn ``q``/``wkv``/``o`` and MLP gate/up (enabled by default in ``perf/conftest.py``).
-- ``ACE_STEP_COND_LINEAR_PERF``: set to ``0`` to disable the same tuning on condition lyric/timbre encoders (enabled by default in ``perf/conftest.py``).
-- ``ACE_STEP_VAE_CONV_PERF``: set to ``0`` to disable L1 + HiFi2-oriented tuning on Oobleck VAE convs (enabled by default in ``perf/conftest.py``).
+- ``ACE_STEP_TM_OUTPUT_L1``: set to ``0`` to disable L1 reshape/permute outputs (on by default).
+- ``ACE_STEP_DIT_LINEAR_PERF``: set to ``0`` to disable HiFi2 + L1 + matmul program config on DiT attn ``q``/``wkv``/``o`` and MLP gate/up/down (on by default).
+- ``ACE_STEP_COND_LINEAR_PERF``: set to ``0`` to disable the same tuning on condition lyric/timbre encoders and Qwen3 text encoder (on by default).
+- ``ACE_STEP_VAE_CONV_PERF``: set to ``0`` to disable L1 + HiFi2-oriented tuning on Oobleck VAE convs (on by default).
 
 When weights are absent, this test pulls the same bundles as ``run_prompt_to_wav.py`` via ``huggingface_hub``
 (requires network on first run).

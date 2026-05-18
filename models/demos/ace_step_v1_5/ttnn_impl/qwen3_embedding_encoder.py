@@ -21,8 +21,11 @@ import numpy as np
 import ttnn
 
 from .math_perf_env import (
+    ace_step_cond_linear_perf_enabled,
     ace_step_cond_linear_program_config,
     ace_step_cond_mlp_gate_up_linear_program_config,
+    ace_step_init_hifi2_linear_compute_kernel_config,
+    ace_step_linear_l1_memory_config,
     ace_step_permute_kwargs,
     ace_step_reshape_kwargs,
 )
@@ -184,6 +187,7 @@ class TtQwen3EncoderMLP:
         linear_output_l1_memory_config=None,
     ):
         self.device = device
+        self.mem = mem
         self.hidden_size = int(hidden_size)
         self.intermediate_size = int(intermediate_size)
         self._linear_ck = linear_compute_kernel_config
@@ -205,18 +209,20 @@ class TtQwen3EncoderMLP:
         self.w_gate = as_w("gate_proj")
         self.w_up = as_w("up_proj")
         self.w_down = as_w("down_proj")
+        # 6144-wide cond MLPs + reuse-mcast-1d matmul CBS exhaust L1 if activations live in L1.
+        self._mlp_keep_dram_activations = int(intermediate_size) >= 4608
 
     def _l1_activation(self, t: ttnn.Tensor) -> ttnn.Tensor:
         if self._act_l1 is None:
             return t
         return ttnn.to_memory_config(t, self._act_l1)
 
-    def _gate_up_linear_kwargs(self, *, seq_len: int) -> dict:
+    def _gate_up_linear_kwargs(self, *, batch_size: int, seq_len: int) -> dict:
         kw: dict = {}
         if self._linear_ck is not None:
             kw["compute_kernel_config"] = self._linear_ck
         if self._linear_perf:
-            key = int(seq_len)
+            key = (int(batch_size), int(seq_len))
             pc = self._gate_up_pc_cache.get(key)
             if pc is None:
                 pc = ace_step_cond_mlp_gate_up_linear_program_config(
@@ -224,16 +230,17 @@ class TtQwen3EncoderMLP:
                     seq_len=int(seq_len),
                     hidden_size=self.hidden_size,
                     intermediate_size=self.intermediate_size,
+                    batch_size=int(batch_size),
                 )
                 if pc is not None:
                     self._gate_up_pc_cache[key] = pc
             if pc is not None:
                 kw["program_config"] = pc
-        if self._linear_out_l1 is not None:
+        if self._linear_out_l1 is not None and not self._mlp_keep_dram_activations:
             kw["memory_config"] = self._linear_out_l1
         return kw
 
-    def _down_linear_kwargs(self, *, seq_len: int) -> dict:
+    def _down_linear_kwargs(self, *, batch_size: int, seq_len: int) -> dict:
         kw: dict = {}
         if self._linear_ck is not None:
             kw["compute_kernel_config"] = self._linear_ck
@@ -243,24 +250,31 @@ class TtQwen3EncoderMLP:
                 seq_len=int(seq_len),
                 in_dim=self.intermediate_size,
                 out_dim=self.hidden_size,
+                batch_size=int(batch_size),
             )
             if pc is not None:
                 kw["program_config"] = pc
-        if self._linear_out_l1 is not None:
+        if self._linear_out_l1 is not None and not self._mlp_keep_dram_activations:
             kw["memory_config"] = self._linear_out_l1
         return kw
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        b_x = int(x.shape[0])
         s = int(x.shape[2])
-        x = self._l1_activation(x)
-        lin_gu = self._gate_up_linear_kwargs(seq_len=s)
+        if self._mlp_keep_dram_activations:
+            if self.mem is not None:
+                x = ttnn.to_memory_config(x, self.mem)
+        else:
+            x = self._l1_activation(x)
+        lin_gu = self._gate_up_linear_kwargs(batch_size=b_x, seq_len=s)
         gate = ttnn.linear(x, self.w_gate, bias=None, transpose_b=True, **lin_gu)
         up = ttnn.linear(x, self.w_up, bias=None, transpose_b=True, **lin_gu)
         gate = ttnn.silu(gate) if hasattr(ttnn, "silu") else ttnn.gelu(gate)
         h = ttnn.multiply(gate, up)
-        h = self._l1_activation(h)
-        lin_down = self._down_linear_kwargs(seq_len=s)
+        if not self._mlp_keep_dram_activations:
+            h = self._l1_activation(h)
+        lin_down = self._down_linear_kwargs(batch_size=b_x, seq_len=s)
         return ttnn.linear(h, self.w_down, bias=None, transpose_b=True, **lin_down)
 
 
@@ -303,6 +317,7 @@ class _TtQwen3EncoderLayer:
         self._linear_perf = bool(linear_perf)
         self._act_l1 = activation_l1_memory_config
         self._linear_out_l1 = linear_output_l1_memory_config
+        # Keys: (batch, seq, in_dim, out_dim) — GQA makes q's N (nh*dh) wider than k/v (nkv*dh).
         self._attn_pc_cache: dict = {}
 
         def as_t(suffix: str, *, row_major: bool = False):
@@ -348,19 +363,20 @@ class _TtQwen3EncoderLayer:
             return t
         return ttnn.to_memory_config(t, self._act_l1)
 
-    def _attn_linear_kwargs(self, *, seq_len: int) -> dict:
+    def _attn_linear_kwargs(self, *, batch_size: int, seq_len: int, in_dim: int, out_dim: int) -> dict:
         kw: dict = {}
         if self._linear_ck is not None:
             kw["compute_kernel_config"] = self._linear_ck
         if self._linear_perf:
-            key = int(seq_len)
+            key = (int(batch_size), int(seq_len), int(in_dim), int(out_dim))
             pc = self._attn_pc_cache.get(key)
             if pc is None:
                 pc = ace_step_cond_linear_program_config(
                     self.device,
                     seq_len=int(seq_len),
-                    in_dim=self.hidden_size,
-                    out_dim=self.hidden_size,
+                    in_dim=int(in_dim),
+                    out_dim=int(out_dim),
+                    batch_size=int(batch_size),
                 )
                 if pc is not None:
                     self._attn_pc_cache[key] = pc
@@ -380,12 +396,16 @@ class _TtQwen3EncoderLayer:
         H, kv_h, Dh = self.nh, self.nkv, self.dh
 
         x = self._l1_activation(x)
-        lin_kw = self._attn_linear_kwargs(seq_len=s)
+        hsz = self.hidden_size
+        q_dim_o = int(H * Dh)
+        kv_dim_o = int(kv_h * Dh)
+        lin_q = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=hsz, out_dim=q_dim_o)
+        lin_kv = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=hsz, out_dim=kv_dim_o)
         _sr = ace_step_reshape_kwargs(ttnn)
         _pk = ace_step_permute_kwargs(ttnn)
-        q = ttnn.linear(x, self.wq, bias=None, transpose_b=True, **lin_kw)
-        k = ttnn.linear(x, self.wk, bias=None, transpose_b=True, **lin_kw)
-        v = ttnn.linear(x, self.wv, bias=None, transpose_b=True, **lin_kw)
+        q = ttnn.linear(x, self.wq, bias=None, transpose_b=True, **lin_q)
+        k = ttnn.linear(x, self.wk, bias=None, transpose_b=True, **lin_kv)
+        v = ttnn.linear(x, self.wv, bias=None, transpose_b=True, **lin_kv)
 
         q = ttnn.reshape(q, (b, 1, s, H, Dh), **_sr)
         q = ttnn.permute(q, (0, 3, 2, 4, 1), **_pk)
@@ -432,7 +452,8 @@ class _TtQwen3EncoderLayer:
         ctx = ttnn.permute(ctx, (0, 2, 1, 3), **_pk)
         ctx = ttnn.reshape(ctx, (b, 1, s, H * Dh), **_sr)
         ctx = self._l1_activation(ctx)
-        attn_out = ttnn.linear(ctx, self.wo, bias=None, transpose_b=True, **lin_kw)
+        lin_o = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=q_dim_o, out_dim=hsz)
+        attn_out = ttnn.linear(ctx, self.wo, bias=None, transpose_b=True, **lin_o)
         ttnn.deallocate(ctx)
 
         h = ttnn.add(res, attn_out)
@@ -489,10 +510,22 @@ class TtQwen3EmbeddingEncoder:
             mesh_mapper=mapper,
         )
 
+        init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
+        linear_perf = ace_step_cond_linear_perf_enabled()
         sdpa_compute_kernel_config = None
         linear_compute_kernel_config = None
-        init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
-        if callable(init_ck):
+        l1_mc = ace_step_linear_l1_memory_config(ttnn) if linear_perf else None
+        if linear_perf:
+            linear_compute_kernel_config = ace_step_init_hifi2_linear_compute_kernel_config(device)
+            if callable(init_ck):
+                sdpa_compute_kernel_config = init_ck(
+                    device.arch(),
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=True,
+                )
+        elif callable(init_ck):
             sdpa_compute_kernel_config = init_ck(
                 device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -526,6 +559,12 @@ class TtQwen3EmbeddingEncoder:
             mesh_mapper=mapper,
         )
 
+        _layer_kw = dict(
+            linear_compute_kernel_config=linear_compute_kernel_config,
+            linear_perf=linear_perf,
+            activation_l1_memory_config=l1_mc,
+            linear_output_l1_memory_config=l1_mc,
+        )
         self.layers = [
             _TtQwen3EncoderLayer(
                 device=device,
@@ -537,7 +576,7 @@ class TtQwen3EmbeddingEncoder:
                 mapper=mapper,
                 sdpa_compute_kernel_config=sdpa_compute_kernel_config,
                 sdpa_program_config=sdpa_program_config,
-                linear_compute_kernel_config=linear_compute_kernel_config,
+                **_layer_kw,
             )
             for i in range(self.cfg.num_hidden_layers)
         ]

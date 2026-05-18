@@ -193,12 +193,12 @@ class _TtAceStepTinyEncoder:
             return t
         return ttnn.to_memory_config(t, self._act_l1)
 
-    def _embed_linear_kwargs(self, *, seq_len: int) -> dict:
+    def _embed_linear_kwargs(self, *, batch_size: int, seq_len: int) -> dict:
         kw: dict = {}
         if self._linear_ck is not None:
             kw["compute_kernel_config"] = self._linear_ck
         if self._linear_perf:
-            key = (int(seq_len), int(self.input_dim))
+            key = (int(batch_size), int(seq_len), int(self.input_dim))
             pc = self._embed_pc_cache.get(key)
             if pc is None:
                 pc = ace_step_cond_linear_program_config(
@@ -206,6 +206,7 @@ class _TtAceStepTinyEncoder:
                     seq_len=int(seq_len),
                     in_dim=int(self.input_dim),
                     out_dim=self.hidden_size,
+                    batch_size=int(batch_size),
                 )
                 if pc is not None:
                     self._embed_pc_cache[key] = pc
@@ -249,7 +250,7 @@ class _TtAceStepTinyEncoder:
         x = ttnn.reshape(x, (b, 1, s, self.input_dim), **_sr)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = self._l1_activation(x)
-        lin_embed = self._embed_linear_kwargs(seq_len=s)
+        lin_embed = self._embed_linear_kwargs(batch_size=b, seq_len=s)
         h = ttnn.linear(x, self.embed_w, bias=self.embed_b, transpose_b=True, **lin_embed)
         cos_tt = ttnn.slice(self.cos_tt, (0, 0, 0, 0), (1, 1, s, int(self.cos_tt.shape[-1])))
         sin_tt = ttnn.slice(self.sin_tt, (0, 0, 0, 0), (1, 1, s, int(self.sin_tt.shape[-1])))

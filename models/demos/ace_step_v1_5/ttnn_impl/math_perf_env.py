@@ -9,15 +9,14 @@ Stacked E2E summaries often show large DRAM-interleaved shares for:
 - ``PermuteDeviceOperation`` (~26 %)
 - ``ReshapeViewDeviceOperation`` (~22 %)
 
-Both ``ttnn.reshape`` and ``ttnn.permute`` accept ``memory_config``; optionally placing outputs in
-L1 can trim DRAM traffic. **Off by default** so demos keep DRAM-backed activations (quality /
-L1 capacity). Perf tests enable these via ``perf/conftest.py``.
+Both ``ttnn.reshape`` and ``ttnn.permute`` accept ``memory_config``; placing outputs in L1 trims
+DRAM traffic. **On by default** for demo, E2E, and Tracy paths (set env vars to ``0`` to disable).
 
-DiT linears are often DRAM-bound at HiFi4:
+DiT linears are often DRAM-bound at HiFi4 without tuning:
 
 - ``256×1024×1024`` — attn ``q_proj`` / ``o_proj``
 - ``256×2048×2048`` — fused attn ``wkv``
-- ``256×3072×3072`` — MLP ``gate_proj`` / ``up_proj``
+- ``256×3072×3072`` — MLP ``gate_proj`` / ``up_proj`` / ``down_proj``
 
 VAE decode exposes large-M matmuls inside ``conv1d`` / ``conv_transpose2d`` im2col (e.g.
 ``1920×512×512``, ``30720×128×128``, ``61440×128×128``). Enable L1 activations via
@@ -31,14 +30,14 @@ Condition encoder linears (lyric/timbre, ``hidden_size=2048``) are often DRAM-bo
 
 ``perf5.txt`` recommends L1 activations, ``in0_block_w≥2``, and HiFi2 when not FLOP-bound.
 
-Environment:
+Environment (all default **on**; set to ``0`` / ``false`` to disable for PCC/debug):
 
-- ``ACE_STEP_TM_OUTPUT_L1``: ``1`` enables L1 for **both** reshape and permute outputs (perf shortcut).
-- ``ACE_STEP_RESHAPE_OUTPUT_L1``: ``1`` enables L1 only for ``ttnn.reshape``.
-- ``ACE_STEP_PERMUTE_OUTPUT_L1``: ``1`` enables L1 only for ``ttnn.permute``.
-- ``ACE_STEP_DIT_LINEAR_PERF``: ``1`` enables HiFi2 + L1 + matmul program config on DiT attn + MLP gate/up.
-- ``ACE_STEP_COND_LINEAR_PERF``: ``1`` enables HiFi2 + L1 + matmul program config on condition lyric/timbre encoders.
-- ``ACE_STEP_VAE_CONV_PERF``: ``1`` enables L1 activations/outputs on Oobleck VAE convs (large-M matmuls are inside ``conv1d`` / ``conv_transpose2d``).
+- ``ACE_STEP_TM_OUTPUT_L1``: L1 for **both** reshape and permute outputs (shortcut).
+- ``ACE_STEP_RESHAPE_OUTPUT_L1``: L1 only for ``ttnn.reshape``.
+- ``ACE_STEP_PERMUTE_OUTPUT_L1``: L1 only for ``ttnn.permute``.
+- ``ACE_STEP_DIT_LINEAR_PERF``: HiFi2 + L1 + matmul program config on DiT attn + MLP gate/up/down.
+- ``ACE_STEP_COND_LINEAR_PERF``: same on condition lyric/timbre encoders and Qwen3 text encoder.
+- ``ACE_STEP_VAE_CONV_PERF``: L1 activations/outputs on Oobleck VAE convs.
 """
 
 from __future__ import annotations
@@ -59,9 +58,9 @@ def _env_truthy(name: str, default: bool) -> bool:
 
 
 def _l1_enabled_for(name: str) -> bool:
-    if _env_truthy("ACE_STEP_TM_OUTPUT_L1", False):
+    if _env_truthy("ACE_STEP_TM_OUTPUT_L1", True):
         return True
-    return _env_truthy(name, False)
+    return _env_truthy(name, True)
 
 
 def _l1_memory_kwargs(ttnn: Any) -> dict:
@@ -85,17 +84,17 @@ def ace_step_permute_kwargs(ttnn: Any) -> dict:
 
 def ace_step_dit_linear_perf_enabled() -> bool:
     """When true, DiT ``TtAceStepAttentionSDPA`` uses tuned ``ttnn.linear`` kwargs."""
-    return _env_truthy("ACE_STEP_DIT_LINEAR_PERF", False)
+    return _env_truthy("ACE_STEP_DIT_LINEAR_PERF", True)
 
 
 def ace_step_cond_linear_perf_enabled() -> bool:
     """When true, condition lyric/timbre encoder layers use tuned ``ttnn.linear`` kwargs."""
-    return _env_truthy("ACE_STEP_COND_LINEAR_PERF", False)
+    return _env_truthy("ACE_STEP_COND_LINEAR_PERF", True)
 
 
 def ace_step_vae_conv_perf_enabled() -> bool:
     """When true, Oobleck VAE ``TtConv1d`` / ``TtConvTranspose1d`` use L1 + HiFi2-oriented conv paths."""
-    return _env_truthy("ACE_STEP_VAE_CONV_PERF", False)
+    return _env_truthy("ACE_STEP_VAE_CONV_PERF", True)
 
 
 def ace_step_vae_large_m_matmul_program_config(
@@ -182,11 +181,22 @@ def _mcast_1d_linear_program_config(
     seq_len: int,
     in_dim: int,
     out_dim: int,
+    batch_size: int = 1,
     in0_block_w_cap: int = 2,
     out_subblock_h_cap: int = 4,
     out_subblock_w: int = 1,
 ):
-    """Shared 1D mcast matmul program config builder for ACE-Step linears."""
+    """Shared 1D mcast matmul program config builder for ACE-Step linears.
+
+    With ``fuse_batch=True``, TTNN fuses batch into the ``M`` dim (tile rows) for tensors
+    shaped ``[B, 1, S, K]``. TILE layout pads ``S`` to the tile height, so runtime
+    ``M`` (tiles) is ``B * ceil(seq_len / tile)`` once ``S`` is padded to TILE height.
+    ``seq_len`` without batch—or ignoring TILE padding along ``S``—can under-report
+    ``per_core_M``. For ``N`` (tiles across the output inner dim), derive ``per_core_N`` from
+    ``ceil(out_dim / tile)`` spread across ``grid.x`` so ``num_blocks_x`` stays within core count.
+    ``out_subblock_w`` is clipped so ``per_core_N % out_subblock_w == 0`` (default ``out_block_w``
+    equals ``per_core_N``).
+    """
     import ttnn
 
     cfg_cls = getattr(ttnn, "MatmulMultiCoreReuseMultiCast1DProgramConfig", None)
@@ -195,25 +205,38 @@ def _mcast_1d_linear_program_config(
 
     grid = device.compute_with_storage_grid_size()
     tile = int(getattr(ttnn, "TILE_SIZE", 32))
-    m = max(1, int(seq_len))
+    bsz = max(1, int(batch_size))
+    seq = max(1, int(seq_len))
+    # Match get_M_dim for fuse_batch: batch × sequence span in tile rows (~ceil(S_pad / tile)).
+    s_tiles = (seq + tile - 1) // tile
+    per_core_m = max(1, bsz * s_tiles)
     k = max(tile, int(in_dim))
-    n = max(tile, int(out_dim))
 
     k_tiles = max(1, k // tile)
     in0_block_w = min(int(in0_block_w_cap), k_tiles)
 
-    per_core_m = max(1, (m + tile - 1) // tile)
-    per_core_n = max(1, (n + int(grid.x) * tile - 1) // (int(grid.x) * tile))
+    # per_core_N is in TILE columns along N (same units as Nt in MatmulReuseMcast1D factory).
+    # Spreading ceil(out_dim / tile) across grid.x avoids the old stripe formula mixing element
+    # widths with a large (grid.x * tile) denominator—it could set per_core_N too low on wide
+    # grids so num_blocks_x exceeded available cores.
+    n_width_tiles = max(1, (int(out_dim) + tile - 1) // tile)
+    gx = max(1, int(grid.x))
+    per_core_n = max(1, (n_width_tiles + gx - 1) // gx)
 
     out_subblock_h = min(int(out_subblock_h_cap), per_core_m)
     while per_core_m % out_subblock_h != 0 and out_subblock_h > 1:
         out_subblock_h -= 1
 
+    # Default ``out_block_w`` is ``per_core_N``; TTNN requires ``out_block_w % out_subblock_w == 0``.
+    out_subblock_w_eff = min(int(out_subblock_w), max(1, int(per_core_n)))
+    while per_core_n % out_subblock_w_eff != 0 and out_subblock_w_eff > 1:
+        out_subblock_w_eff -= 1
+
     return cfg_cls(
         compute_with_storage_grid_size=(int(grid.x), 1),
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
-        out_subblock_w=int(out_subblock_w),
+        out_subblock_w=out_subblock_w_eff,
         per_core_M=per_core_m,
         per_core_N=per_core_n,
         fuse_batch=True,
@@ -228,6 +251,7 @@ def ace_step_dit_attn_linear_program_config(
     seq_len: int,
     in_dim: int,
     out_dim: int,
+    batch_size: int = 1,
 ):
     """``MatmulMultiCoreReuseMultiCast1DProgramConfig`` for square DiT ``q`` / ``o`` (e.g. 256×1024×1024)."""
     return _mcast_1d_linear_program_config(
@@ -235,6 +259,7 @@ def ace_step_dit_attn_linear_program_config(
         seq_len=seq_len,
         in_dim=in_dim,
         out_dim=out_dim,
+        batch_size=batch_size,
         in0_block_w_cap=2,
         out_subblock_h_cap=4,
         out_subblock_w=1,
@@ -247,6 +272,7 @@ def ace_step_cond_linear_program_config(
     seq_len: int,
     in_dim: int,
     out_dim: int,
+    batch_size: int = 1,
 ):
     """Program config for condition encoder linears (e.g. 32×2048×2048, 288×2048×2048)."""
     short = int(seq_len) <= 64
@@ -255,6 +281,7 @@ def ace_step_cond_linear_program_config(
         seq_len=seq_len,
         in_dim=in_dim,
         out_dim=out_dim,
+        batch_size=batch_size,
         in0_block_w_cap=2,
         out_subblock_h_cap=2 if short else 4,
         out_subblock_w=2 if short else 1,
@@ -267,15 +294,22 @@ def ace_step_cond_mlp_gate_up_linear_program_config(
     seq_len: int,
     hidden_size: int,
     intermediate_size: int,
+    batch_size: int = 1,
 ):
-    """Program config for condition MLP gate/up (e.g. 32×6144×6144)."""
+    """Program config for condition MLP gate/up (e.g. 32×6144×6144).
+
+    Lyric/timbre encoders use intermediate 6144×2048; ``in0_block_w=2`` plus L1-hosted
+    activations can overrun per-core circular-buffer budget (static CB vs tensor L1).
+    Use ``in0_block_w_cap=1`` on this wide path by default.
+    """
     short = int(seq_len) <= 64
     return _mcast_1d_linear_program_config(
         device,
         seq_len=seq_len,
         in_dim=hidden_size,
         out_dim=intermediate_size,
-        in0_block_w_cap=2,
+        batch_size=batch_size,
+        in0_block_w_cap=1,
         out_subblock_h_cap=2 if short else 4,
         out_subblock_w=2 if short else 1,
     )
@@ -287,6 +321,7 @@ def ace_step_dit_fused_wkv_linear_program_config(
     seq_len: int,
     hidden_size: int,
     fused_kv_dim: int,
+    batch_size: int = 1,
 ):
     """Program config for fused ``wkv`` (e.g. 256×2048×2048 when ``hidden_size=1024``, GQA ``fused_kv_dim=2048``)."""
     return _mcast_1d_linear_program_config(
@@ -294,6 +329,7 @@ def ace_step_dit_fused_wkv_linear_program_config(
         seq_len=seq_len,
         in_dim=hidden_size,
         out_dim=fused_kv_dim,
+        batch_size=batch_size,
         in0_block_w_cap=2,
         out_subblock_h_cap=4,
         out_subblock_w=1,
@@ -306,6 +342,7 @@ def ace_step_dit_mlp_gate_up_linear_program_config(
     seq_len: int,
     hidden_size: int,
     intermediate_size: int,
+    batch_size: int = 1,
 ):
     """Program config for MLP ``gate_proj`` / ``up_proj`` (e.g. 256×3072×3072)."""
     return _mcast_1d_linear_program_config(
@@ -313,6 +350,28 @@ def ace_step_dit_mlp_gate_up_linear_program_config(
         seq_len=seq_len,
         in_dim=hidden_size,
         out_dim=intermediate_size,
+        batch_size=batch_size,
+        in0_block_w_cap=2,
+        out_subblock_h_cap=4,
+        out_subblock_w=1,
+    )
+
+
+def ace_step_dit_mlp_down_proj_linear_program_config(
+    device: Any,
+    *,
+    seq_len: int,
+    intermediate_size: int,
+    hidden_size: int,
+    batch_size: int = 1,
+):
+    """Program config for MLP ``down_proj`` (e.g. 256×3072×3072 when intermediate==hidden)."""
+    return _mcast_1d_linear_program_config(
+        device,
+        seq_len=seq_len,
+        in_dim=intermediate_size,
+        out_dim=hidden_size,
+        batch_size=batch_size,
         in0_block_w_cap=2,
         out_subblock_h_cap=4,
         out_subblock_w=1,
