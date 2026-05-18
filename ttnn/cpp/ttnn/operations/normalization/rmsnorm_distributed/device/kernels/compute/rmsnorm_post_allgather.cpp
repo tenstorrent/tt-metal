@@ -113,114 +113,97 @@ void kernel_main() {
 
         constexpr uint32_t normed_output_cb = do_gamma ? cb_x_normed : cb_out;
 
-        // Per-block streaming via eltwise_chain. Three nested stages:
-        //   1) x * recip(stdev)  — col-bcast B (cb_recip_sqrt_var) pinned at 0
-        //   2) * gamma            — row-bcast B (cb_gamma) walks wt+wtr globally
-        //   3) + beta             — row-bcast B (cb_beta) walks wt+wtr globally
-        //
-        // Stages 2 and 3 use the new BlockIterOffset index mode (chain returns
-        // b_tile_idx_ + j); caller passes wt as the per-outer-iter base via ctor.
-        // All operands NoWaitNoPop (caller owns wait/pop outside chain) and the
-        // pack uses NoReserveNoPush (caller owns reserve+push) — the C++ outer
-        // loop preserves the original per-blk wait/reserve/pop/push lifecycle.
+        // Three eltwise stages via eltwise_chain. Each stage is a single chain
+        // call over the full Wt with BlockSize=blk; the chain owns all of:
+        //   - A-side wait_upfront / pop_at_end on the streaming input CB,
+        //   - B-side index walk (FirstTile for cb_recip_sqrt_var, BlockIter for
+        //     cb_gamma / cb_beta which already span all Wt tiles upfront),
+        //   - pack-side reserve_upfront / push_at_end on the output CB,
+        //   - entry-time srca/srcb + pack reconfig (fold-driven, compile-time
+        //     elided when prev == curr).
+        // The C++ kernel only sets up the once-per-NCHt wait on the B operands
+        // (cb_recip_sqrt_var per ncht; cb_gamma / cb_beta once upfront for all
+        // NCHt — they are reused across rows and the trailing cb_pop_front
+        // after the NCHt loop releases them).
+
+        /*
+         * x * 1/sqrt(stdev)
+         */
         cb_wait_front(cb_recip_sqrt_var, 1);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_norm_x_input, blk);
-            cb_reserve_back(normed_output_cb, blk);
-            {
-                using namespace compute_kernel_lib;
-                eltwise_chain(
-                    blk,
-                    BinaryFpu<
-                        cb_norm_x_input,
-                        cb_recip_sqrt_var,
-                        BinaryFpuOp::Mul,
-                        BroadcastDim::Col,
-                        BinaryDataFormatReconfig::Input,
-                        CopyTilePolicy::NoWaitNoPop,
-                        CopyTilePolicy::NoWaitNoPop,
-                        CbIndexMode::BlockIter,
-                        Dst::D0,
-                        CbIndexMode::FirstTile>{},
-                    PackTile<
-                        normed_output_cb,
-                        Dst::D0,
-                        PackTilePolicy::NoReserveNoPush,
-                        PackTileIndexMode::BlockIter,
-                        PackTileReconfig::Output>{});
-            }
-            cb_push_back(normed_output_cb, blk);
-            cb_pop_front(cb_norm_x_input, blk);
+        {
+            using namespace compute_kernel_lib;
+            eltwise_chain<blk>(
+                Wt,
+                BinaryFpu<
+                    cb_norm_x_input,
+                    cb_recip_sqrt_var,
+                    BinaryFpuOp::Mul,
+                    BroadcastDim::Col,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::WaitUpfrontPopAtEnd,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::BlockIter,
+                    Dst::D0,
+                    CbIndexMode::FirstTile>{},
+                PackTile<
+                    normed_output_cb,
+                    Dst::D0,
+                    PackTilePolicy::UpfrontReservePushAtEnd,
+                    PackTileIndexMode::BlockIter,
+                    PackTileReconfig::Output>{});
         }
         cb_pop_front(cb_recip_sqrt_var, 1);
 
         if constexpr (do_gamma) {
             /*
-             * x_normed * gamma
+             * x_normed * gamma   (cb_gamma walks BlockIter — index = 0..Wt-1)
              */
-            cb_wait_front(cb_gamma, Wt);
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                cb_wait_front(cb_x_normed, blk);
-                cb_reserve_back(cb_times_gamma_out, blk);
-                {
-                    using namespace compute_kernel_lib;
-                    eltwise_chain(
-                        blk,
-                        BinaryFpu<
-                            cb_x_normed,
-                            cb_gamma,
-                            BinaryFpuOp::Mul,
-                            BroadcastDim::Row,
-                            BinaryDataFormatReconfig::Input,
-                            CopyTilePolicy::NoWaitNoPop,
-                            CopyTilePolicy::NoWaitNoPop,
-                            CbIndexMode::BlockIter,
-                            Dst::D0,
-                            CbIndexMode::BlockIterOffset>{/*a_tile_idx=*/0, /*b_tile_idx=*/wt},
-                        PackTile<
-                            cb_times_gamma_out,
-                            Dst::D0,
-                            PackTilePolicy::NoReserveNoPush,
-                            PackTileIndexMode::BlockIter,
-                            PackTileReconfig::Output>{});
-                }
-                cb_push_back(cb_times_gamma_out, blk);
-                cb_pop_front(cb_x_normed, blk);
-            }
+            cb_wait_front(cb_gamma, Wt);  // gamma is reused across NCHt — wait once per row
+            using namespace compute_kernel_lib;
+            eltwise_chain<blk>(
+                Wt,
+                BinaryFpu<
+                    cb_x_normed,
+                    cb_gamma,
+                    BinaryFpuOp::Mul,
+                    BroadcastDim::Row,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::WaitUpfrontPopAtEnd,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::BlockIter,
+                    Dst::D0,
+                    CbIndexMode::BlockIter>{},
+                PackTile<
+                    cb_times_gamma_out,
+                    Dst::D0,
+                    PackTilePolicy::UpfrontReservePushAtEnd,
+                    PackTileIndexMode::BlockIter,
+                    PackTileReconfig::Output>{});
 
             if constexpr (do_beta) {
                 /*
-                 * x_normed * gamma + beta
+                 * (x_normed * gamma) + beta   (cb_beta walks BlockIter — 0..Wt-1)
                  */
                 cb_wait_front(cb_beta, Wt);
-                for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                    cb_wait_front(cb_times_gamma_out, blk);
-                    cb_reserve_back(cb_out, blk);
-                    {
-                        using namespace compute_kernel_lib;
-                        eltwise_chain(
-                            blk,
-                            BinaryFpu<
-                                cb_times_gamma_out,
-                                cb_beta,
-                                BinaryFpuOp::Add,
-                                BroadcastDim::Row,
-                                BinaryDataFormatReconfig::Input,
-                                CopyTilePolicy::NoWaitNoPop,
-                                CopyTilePolicy::NoWaitNoPop,
-                                CbIndexMode::BlockIter,
-                                Dst::D0,
-                                CbIndexMode::BlockIterOffset>{/*a_tile_idx=*/0, /*b_tile_idx=*/wt},
-                            PackTile<
-                                cb_out,
-                                Dst::D0,
-                                PackTilePolicy::NoReserveNoPush,
-                                PackTileIndexMode::BlockIter,
-                                PackTileReconfig::Output>{});
-                    }
-                    cb_push_back(cb_out, blk);
-                    cb_pop_front(cb_times_gamma_out, blk);
-                }
+                eltwise_chain<blk>(
+                    Wt,
+                    BinaryFpu<
+                        cb_times_gamma_out,
+                        cb_beta,
+                        BinaryFpuOp::Add,
+                        BroadcastDim::Row,
+                        BinaryDataFormatReconfig::Input,
+                        CopyTilePolicy::WaitUpfrontPopAtEnd,
+                        CopyTilePolicy::NoWaitNoPop,
+                        CbIndexMode::BlockIter,
+                        Dst::D0,
+                        CbIndexMode::BlockIter>{},
+                    PackTile<
+                        cb_out,
+                        Dst::D0,
+                        PackTilePolicy::UpfrontReservePushAtEnd,
+                        PackTileIndexMode::BlockIter,
+                        PackTileReconfig::Output>{});
             }
         }
     }
