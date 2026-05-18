@@ -10,6 +10,14 @@
 
 namespace ttnn::prim {
 
+DramPrefetcherOperation::program_factory_t DramPrefetcherOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
+    if (args.run_on_dram_cores) {
+        return DramPrefetcherDramCoreProgramFactory{};
+    }
+    return DramPrefetcherProgramFactory{};
+}
+
 void DramPrefetcherOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto input_tensors = tensor_args.input_tensors;

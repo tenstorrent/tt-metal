@@ -70,14 +70,6 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const EthernetConfig& config);
 
-struct DramConfig {
-    NOC noc = NOC::NOC_0;
-    std::vector<uint32_t> compile_args;
-    std::map<std::string, std::string> defines;
-    std::unordered_map<std::string, uint32_t> named_compile_args;
-    KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
-};
-
 KernelHandle CreateKernel(
     Program& program,
     const std::string& file_name,
