@@ -208,6 +208,12 @@ class SigLIPAttentionBlockFused:
         # qk_scores / softmax_out so its push counter semantics across RISCs
         # are subtle).
         "sdpa_attn_done_trigger_cb": 31,
+        # #13: pre-softmax SDPA scaling. 1 tile bf16 per worker pre-loaded
+        # with 1/sqrt(HEAD_DIM_TRUE) = 1/sqrt(72) ≈ 0.118. TRISC pre-multiplies
+        # the 12 Q tiles in place via mul_tiles_bcast<SCALAR>. After this,
+        # the QK^T compute produces scores already scaled by 1/sqrt(d_k);
+        # softmax math is unchanged.
+        "sdpa_q_scale_cb": 32,
     }
 
     # #11 Commit 11: semaphore on the LN1 row — each SDPA worker that serves
@@ -255,6 +261,7 @@ class SigLIPAttentionBlockFused:
         sdpa_softmax_isum_tt,
         sdpa_softmax_scaler_tt,
         sdpa_attn_done_trigger_tt,
+        sdpa_q_scale_tt,
         math_fidelity=ttnn.MathFidelity.HiFi4,
         eps: float = 1e-6,
     ):
@@ -353,6 +360,8 @@ class SigLIPAttentionBlockFused:
             # #11 Commit 9: NCRISC marks softmax_scaler as pushed (1 tile of
             # 1.0 pre-loaded from host); TRISC's reduce_init reads it.
             ("sdpa_softmax_scaler_cb", SigLIPAttentionBlockFused.CB["sdpa_softmax_scaler_cb"]),
+            # #13: NCRISC marks sdpa_q_scale as pushed (1 tile of 1/sqrt(72)).
+            ("sdpa_q_scale_cb", SigLIPAttentionBlockFused.CB["sdpa_q_scale_cb"]),
             # #11 Commit 10: NCRISC streams V tile-by-tile into v_partial_cb
             # after the K-stream loop completes. Same shape as K's stream:
             # head_dim_n_tiles tiles per V-row, m_kv_n_tiles V-rows total.
@@ -416,6 +425,10 @@ class SigLIPAttentionBlockFused:
             ("sdpa_attn_out_cb", SigLIPAttentionBlockFused.CB["sdpa_attn_out_cb"]),
             ("head_dim_n_tiles", SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE),  # 3
             ("sdpa_attn_done_trigger_cb", SigLIPAttentionBlockFused.CB["sdpa_attn_done_trigger_cb"]),
+            # #13: TRISC reads sdpa_q_scale (1-tile broadcast) to pre-scale Q
+            # before QK^T. mul_tiles_bcast<SCALAR>(Q, scale, ...) + pack<true>
+            # to overwrite each Q tile in place.
+            ("sdpa_q_scale_cb", SigLIPAttentionBlockFused.CB["sdpa_q_scale_cb"]),
         ]
 
         # Physical NoC coords for the worker grid. BH's logical-to-physical x
@@ -745,6 +758,7 @@ class SigLIPAttentionBlockFused:
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_softmax_isum_cb"], sdpa_softmax_isum_tt),
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_softmax_scaler_cb"], sdpa_softmax_scaler_tt),
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_attn_done_trigger_cb"], sdpa_attn_done_trigger_tt),
+                _cb(SigLIPAttentionBlockFused.CB["sdpa_q_scale_cb"], sdpa_q_scale_tt),
                 softmax_out_cb_aliased,
             ],
             semaphores=[counter_sem, sdpa_qkv_ready_sem, sdpa_done_sem],
@@ -778,6 +792,7 @@ class SigLIPAttentionBlockFused:
                 sdpa_softmax_isum_tt,
                 sdpa_softmax_scaler_tt,
                 sdpa_attn_done_trigger_tt,
+                sdpa_q_scale_tt,
             ],
             program_descriptor,
         )
@@ -1142,6 +1157,24 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         memory_config=sdpa_softmax_tile_mem,
     )
 
+    # #13: Q-scaling tile pre-loaded with 1/sqrt(HEAD_DIM_TRUE=72) so TRISC's
+    # pre-QK^T scale stage scales Q in place. Broadcast across the (TILE, TILE)
+    # tile so mul_tiles_bcast<SCALAR> works uniformly per element.
+    import math as _math
+
+    sdpa_scale_value = 1.0 / _math.sqrt(SigLIPAttentionBlockFused.HEAD_DIM_TRUE)
+    sdpa_q_scale_per_worker = torch.full((TILE, TILE), sdpa_scale_value, dtype=torch.bfloat16)
+    sdpa_q_scale_stacked = (
+        sdpa_q_scale_per_worker.unsqueeze(0).repeat(sdpa_num_workers, 1, 1).reshape(sdpa_num_workers * TILE, TILE)
+    )
+    sdpa_q_scale_tt = ttnn.from_torch(
+        sdpa_q_scale_stacked,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sdpa_softmax_tile_mem,
+    )
+
     return (
         ln_in_tt,
         gamma_tt,
@@ -1169,4 +1202,5 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         sdpa_softmax_isum_tt,
         sdpa_softmax_scaler_tt,
         sdpa_attn_done_trigger_tt,
+        sdpa_q_scale_tt,
     )

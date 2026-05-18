@@ -18,6 +18,7 @@ Validates the multi-Op chaining + receiver-pull mcast + QKV matmul:
     against the torch golden LN1(x) @ W_qkv. bfp8 weights drop the PCC bar
     from the LN1 floor (~0.99999) to the matmul floor (~0.999).
 """
+import math
 import sys
 from pathlib import Path
 
@@ -41,6 +42,11 @@ HEAD_DIM_TRUE = 72
 HEAD_DIM_PADDED = 96
 N_QKV_PADDED = 3 * NUM_HEADS * HEAD_DIM_PADDED  # 4608 — device-side, head-aligned
 EPS = 1e-6
+# #13: HuggingFace SiglipAttention applies softmax(Q @ K^T / sqrt(head_dim_true)).
+# Our kernel pre-scales Q in place by SDPA_SCALE before QK^T (mathematically
+# equivalent: (Q * scale) @ K^T = scale * (Q @ K^T)). All goldens that go
+# through softmax must include this factor too.
+SDPA_SCALE = 1.0 / math.sqrt(HEAD_DIM_TRUE)
 
 
 def unpad_qkv_output(out_padded):
@@ -399,8 +405,7 @@ def test_attention_block_fused_sdpa_softmax_probe(device):
         m_start = worker_idx * rows_per_worker
         q_slice = q_padded_per_head[head_idx, m_start : m_start + rows_per_worker, :].to(torch.float32)
         k_slice = k_padded_per_head[head_idx, :, :].to(torch.float32)  # full (M_KV, head_dim_padded)
-        scores = q_slice @ k_slice.T  # (rows_per_worker, M_KV) fp32
-        # Pure softmax(scores, dim=-1) — no 1/sqrt(d_k) scaling in this commit.
+        scores = (q_slice @ k_slice.T) * SDPA_SCALE  # #13: 1/sqrt(head_dim) scaling
         expected = torch.softmax(scores, dim=-1).to(torch.bfloat16)
 
         p = pcc(expected, qk_worker)
@@ -513,7 +518,7 @@ def test_attention_block_fused_sdpa_attn_v_probe(device):
         q_slice = q_padded_per_head[head_idx, m_start : m_start + rows_per_worker, :].to(torch.float32)
         k_full = k_padded_per_head[head_idx, :, :].to(torch.float32)
         v_full = v_padded_per_head[head_idx, :, :].to(torch.float32)
-        scores = q_slice @ k_full.T
+        scores = (q_slice @ k_full.T) * SDPA_SCALE  # #13: scaling
         softmax_scores = torch.softmax(scores, dim=-1)
         expected = (softmax_scores @ v_full).to(torch.bfloat16)
 
@@ -574,7 +579,7 @@ def test_attention_block_fused_sdpa_assembled_probe(device):
         q = q_padded_per_head[h].to(torch.float32)
         k = k_padded_per_head[h].to(torch.float32)
         v = v_padded_per_head[h].to(torch.float32)
-        scores = q @ k.T
+        scores = (q @ k.T) * SDPA_SCALE  # #13: scaling
         softmax_scores = torch.softmax(scores, dim=-1)
         sdpa_per_head[h] = (softmax_scores @ v).to(torch.bfloat16)
     # Concat heads horizontally: (M, NUM_HEADS * HEAD_DIM_PADDED) = (256, 1536).
@@ -677,7 +682,7 @@ def test_attention_block_fused_with_oproj(device):
         q = qkv_golden_unpadded[:, h * HEAD_DIM_TRUE : (h + 1) * HEAD_DIM_TRUE].to(torch.float32)
         k = qkv_golden_unpadded[:, D + h * HEAD_DIM_TRUE : D + (h + 1) * HEAD_DIM_TRUE].to(torch.float32)
         v = qkv_golden_unpadded[:, 2 * D + h * HEAD_DIM_TRUE : 2 * D + (h + 1) * HEAD_DIM_TRUE].to(torch.float32)
-        scores = q @ k.T
+        scores = (q @ k.T) * SDPA_SCALE  # #13: scaling
         attn = torch.softmax(scores, dim=-1) @ v
         sdpa_concat_unpadded[:, h * HEAD_DIM_TRUE : (h + 1) * HEAD_DIM_TRUE] = attn.to(torch.bfloat16)
     oproj_golden = (sdpa_concat_unpadded.to(torch.float32) @ w_oproj.to(torch.float32)).to(torch.bfloat16)
@@ -813,9 +818,9 @@ def test_attention_block_fused_real_weights(device):
     and runs the full attention block (fused kernel + standalone O-proj) on
     a real patch_embed + pos_embed activation.
 
-    Limitations vs the full SigLIP attention math:
-      * No 1/sqrt(head_dim) softmax scaling. The fused kernel applies pure
-        softmax(Q @ K^T), so the torch reference here also omits the scale.
+    Limitations vs the full SigLIP attention math (after #13):
+      * 1/sqrt(head_dim) softmax scaling: NOW APPLIED by the kernel via
+        in-place Q pre-scaling in TRISC SDPA.
       * No QKV / O-proj biases. The kernel's matmul Op-struct doesn't
         currently support output bias, so the torch reference here also
         omits them.
@@ -851,7 +856,7 @@ def test_attention_block_fused_real_weights(device):
         q = qkv_golden_unpadded[:, h * HEAD_DIM_TRUE : (h + 1) * HEAD_DIM_TRUE].to(torch.float32)
         k = qkv_golden_unpadded[:, D + h * HEAD_DIM_TRUE : D + (h + 1) * HEAD_DIM_TRUE].to(torch.float32)
         v = qkv_golden_unpadded[:, 2 * D + h * HEAD_DIM_TRUE : 2 * D + (h + 1) * HEAD_DIM_TRUE].to(torch.float32)
-        scores = q @ k.T  # NO 1/sqrt(d_k) scaling
+        scores = (q @ k.T) * SDPA_SCALE  # #13: kernel now applies 1/sqrt(d_k) scaling
         attn = torch.softmax(scores, dim=-1) @ v
         sdpa_concat[:, h * HEAD_DIM_TRUE : (h + 1) * HEAD_DIM_TRUE] = attn.to(torch.bfloat16)
     oproj_golden = (sdpa_concat.float() @ o_w.float()).to(torch.bfloat16)  # NO O-proj bias

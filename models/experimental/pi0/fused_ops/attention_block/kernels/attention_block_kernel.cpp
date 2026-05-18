@@ -153,8 +153,11 @@ void kernel_main() {
     // pre-loaded from host; mark it pushed so TRISC's reduce_init can
     // cb_wait_front it without waiting.
     constexpr uint32_t sdpa_softmax_scaler_cb_nc = get_named_compile_time_arg_val("sdpa_softmax_scaler_cb");
+    // #13: Q-scale (1 tile of 1/sqrt(72) per SDPA worker), same setup.
+    constexpr uint32_t sdpa_q_scale_cb_nc = get_named_compile_time_arg_val("sdpa_q_scale_cb");
     if (is_sdpa_core_nc) {
         unified_kernels::setup_sharded_buffer(sdpa_softmax_scaler_cb_nc, 1);
+        unified_kernels::setup_sharded_buffer(sdpa_q_scale_cb_nc, 1);
     }
 
     // =========================================================================
@@ -555,6 +558,8 @@ void kernel_main() {
     constexpr uint32_t sdpa_attn_out_cb_tr = get_named_compile_time_arg_val("sdpa_attn_out_cb");
     constexpr uint32_t head_dim_n_tiles_tr = get_named_compile_time_arg_val("head_dim_n_tiles");
     constexpr uint32_t sdpa_attn_done_trigger_cb_tr = get_named_compile_time_arg_val("sdpa_attn_done_trigger_cb");
+    // #13: pre-softmax scale tile (1/sqrt(72)) for in-place Q scaling.
+    constexpr uint32_t sdpa_q_scale_cb_tr = get_named_compile_time_arg_val("sdpa_q_scale_cb");
     const bool is_ln1_core_tr = (get_relative_logical_y() == 0) && (get_relative_logical_x() < ln1_num_cores_tr);
     const bool is_residual_core_tr = is_ln1_core_tr;
     const bool is_qkv_core_tr =
@@ -676,6 +681,31 @@ void kernel_main() {
     // =========================================================================
     if (is_sdpa_core_tr) {
         cb_wait_front(sdpa_q_cb_tr, sdpa_q_tiles_per_worker_tr);
+
+        // =====================================================================
+        // PHASE 4.5 (#13): pre-scale Q in place by 1/sqrt(HEAD_DIM_TRUE).
+        //
+        // Folds the SDPA scale factor into Q before QK^T so that the resulting
+        // scores are already scaled. Softmax math stays bit-identical to the
+        // pure-softmax Op-struct (no plumbing changes there).
+        //
+        // mul_tiles_bcast<SCALAR>(q, scale_scalar, in0_idx, in1_idx, dst)
+        // multiplies the (32, 32) q tile by the broadcast scalar; pack_tile<true>
+        // overwrites the same Q-CB slot, leaving CB push/pop counters untouched.
+        // =====================================================================
+        cb_wait_front(sdpa_q_scale_cb_tr, 1);
+        reconfig_data_format(sdpa_q_cb_tr, sdpa_q_scale_cb_tr);
+        pack_reconfig_data_format(sdpa_q_cb_tr);
+        init_bcast<ELWMUL, BroadcastType::SCALAR>(sdpa_q_cb_tr, sdpa_q_scale_cb_tr, sdpa_q_cb_tr);
+        for (uint32_t i = 0; i < sdpa_q_tiles_per_worker_tr; ++i) {
+            tile_regs_acquire();
+            mul_tiles_bcast<BroadcastType::SCALAR>(sdpa_q_cb_tr, sdpa_q_scale_cb_tr, i, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile<true>(0, sdpa_q_cb_tr, i);
+            tile_regs_release();
+        }
+
         // #11 Commit 8: full QK^T per worker.
         // Output: (M_per_worker, M_KV) = m_per_worker_n_tiles × m_kv_n_tiles tiles
         //         = 4 × 8 = 32 tiles bf16 = 64 KB per worker.
