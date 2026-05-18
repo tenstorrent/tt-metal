@@ -144,7 +144,7 @@ class _RefCausalAudioEncoder(nn.Module):
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_prepare_audio_emb_parity(
+def test_prepare_audio_emb(
     mesh_device: ttnn.MeshDevice,
     mesh_shape: tuple[int, int],
     sp_axis: int,

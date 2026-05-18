@@ -120,7 +120,7 @@ def _build_ref_grid_sizes(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("include_motion", [False, True], ids=["noisy_ref", "noisy_ref_motion"])
-def test_prepare_rope_features_parity(
+def test_prepare_rope_features(
     mesh_device: ttnn.MeshDevice,
     mesh_shape: tuple[int, int],
     sp_axis: int,

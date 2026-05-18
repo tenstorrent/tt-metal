@@ -69,7 +69,7 @@ W_LATENT = 16  # → ppw=8
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("drop_first_motion", [True, False], ids=["drop_motion", "keep_motion"])
-def test_prepare_cond_emb_parity(
+def test_prepare_cond_emb(
     mesh_device: ttnn.MeshDevice,
     mesh_shape: tuple[int, int],
     sp_axis: int,

@@ -139,7 +139,7 @@ class _RefFramePackMotioner(nn.Module):
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_frame_packer_parity(
+def test_frame_packer(
     mesh_device: ttnn.MeshDevice,
     mesh_shape: tuple[int, int],
     sp_axis: int,
