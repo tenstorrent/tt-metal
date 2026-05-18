@@ -48,13 +48,13 @@ void print(const Tensor<T>& tensor) {
     std::cout << "Strides = [" << tensor_strides[0] << "," << tensor_strides[1] << "," << tensor_strides[2] << ","
               << tensor_strides[3] << "]" << std::endl;
     std::cout << "Values = [";
-    for (auto w = 0; w < tensor_shape[0]; w++) {
+    for (auto w = 0u; w < tensor_shape[0]; w++) {
         std::cout << "[";
-        for (auto z = 0; z < tensor_shape[1]; z++) {
+        for (auto z = 0u; z < tensor_shape[1]; z++) {
             std::cout << "[";
-            for (auto y = 0; y < tensor_shape[2]; y++) {
+            for (auto y = 0u; y < tensor_shape[2]; y++) {
                 std::cout << "[";
-                for (auto x = 0; x < tensor_shape[3]; x++) {
+                for (auto x = 0u; x < tensor_shape[3]; x++) {
                     auto idx = x + (tensor_shape[3] * y) + (tensor_shape[3] * tensor_shape[2] * z) +
                                (tensor_shape[3] * tensor_shape[2] * tensor_shape[1] * w);
                     std::cout << tensor_data[idx] << ",";
@@ -107,10 +107,10 @@ Tensor<T> permute(const Tensor<T>& input, std::array<int, 4> dims) {
     std::vector<T> out = std::vector<T>(output_volume);
 
     auto input_values = input.get_values();
-    for (auto w = 0; w < in_shape[0]; w++) {              // N
-        for (auto z = 0; z < in_shape[1]; z++) {          // Z
-            for (auto y = 0; y < in_shape[2]; y++) {      // Y
-                for (auto x = 0; x < in_shape[3]; x++) {  // X
+    for (auto w = 0u; w < in_shape[0]; w++) {              // N
+        for (auto z = 0u; z < in_shape[1]; z++) {          // Z
+            for (auto y = 0u; y < in_shape[2]; y++) {      // Y
+                for (auto x = 0u; x < in_shape[3]; x++) {  // X
                     auto in_idx = x + (y * in_shape[3]) + (z * in_shape[3] * in_shape[2]) +
                                   (w * in_shape[3] * in_shape[2] * in_shape[1]);
                     auto out_idx = z + (x * out_shape[3]) + (y * out_shape[3] * out_shape[2]) +
@@ -161,39 +161,39 @@ Tensor<T> pad(Tensor<T>& input, std::array<std::array<uint32_t, 2>, 4> pad_size,
     auto output_strides = output.get_strides();
     auto input_values = input.get_values();
     std::vector<T> out;
-    for (auto i = 0; i < pad_size[0][0] * output_strides[0]; i++) {
+    for (auto i = 0u; i < pad_size[0][0] * output_strides[0]; i++) {
         out.push_back(val);
     }
-    for (auto dim0 = 0; dim0 < in_shape[0]; dim0++) {
-        for (auto i = 0; i < pad_size[1][0] * output_strides[1]; i++) {
+    for (auto dim0 = 0u; dim0 < in_shape[0]; dim0++) {
+        for (auto i = 0u; i < pad_size[1][0] * output_strides[1]; i++) {
             out.push_back(val);
         }
-        for (auto dim1 = 0; dim1 < in_shape[1]; dim1++) {
-            for (auto i = 0; i < pad_size[2][0] * output_strides[2]; i++) {
+        for (auto dim1 = 0u; dim1 < in_shape[1]; dim1++) {
+            for (auto i = 0u; i < pad_size[2][0] * output_strides[2]; i++) {
                 out.push_back(val);
             }
-            for (auto dim2 = 0; dim2 < in_shape[2]; dim2++) {
-                for (auto i = 0; i < pad_size[3][0] * output_strides[3]; i++) {
+            for (auto dim2 = 0u; dim2 < in_shape[2]; dim2++) {
+                for (auto i = 0u; i < pad_size[3][0] * output_strides[3]; i++) {
                     out.push_back(val);
                 }
-                for (auto dim3 = 0; dim3 < in_shape[3]; dim3++) {
+                for (auto dim3 = 0u; dim3 < in_shape[3]; dim3++) {
                     auto idx = dim3 + (in_shape[3] * dim2) + (in_shape[3] * in_shape[2] * dim1) +
                                (in_shape[3] * in_shape[2] * in_shape[1] * dim0);
                     out.push_back(input_values[idx]);
                 }
-                for (auto i = 0; i < pad_size[3][1] * output_strides[3]; i++) {
+                for (auto i = 0u; i < pad_size[3][1] * output_strides[3]; i++) {
                     out.push_back(val);
                 }
             }
-            for (auto i = 0; i < pad_size[2][1] * output_strides[2]; i++) {
+            for (auto i = 0u; i < pad_size[2][1] * output_strides[2]; i++) {
                 out.push_back(val);
             }
         }
-        for (auto i = 0; i < pad_size[1][1] * output_strides[1]; i++) {
+        for (auto i = 0u; i < pad_size[1][1] * output_strides[1]; i++) {
             out.push_back(val);
         }
     }
-    for (auto i = 0; i < pad_size[0][1] * output_strides[0]; i++) {
+    for (auto i = 0u; i < pad_size[0][1] * output_strides[0]; i++) {
         out.push_back(val);
     }
 
