@@ -1189,9 +1189,32 @@ FIX_EA_FIRES=$(grep -cE 'FIX EA.*non-MMIO FIX M path' "$CLEAN" 2>/dev/null; :)
 # FIX OP (#42429): FIX S9 assert→deassert window timing.
 FIX_OP_FIRES=$(grep -cE 'FIX OP.*assert.*deassert window' "$CLEAN" 2>/dev/null; :)
 FIX_OP_MAX_MS=$(grep -oP 'FIX OP.*held in reset for \K[0-9]+' "$CLEAN" 2>/dev/null | sort -rn | head -1)
+# GAP 7 / FIX OP RR (#42429): FIX RR assert→deassert+BH window timing (mirrors FIX OP on normal path).
+# Log: "FIX OP RR (#42429): FIX RR assert→deassert+BH window — Device N chan=N total recovery took Nms"
+FIX_OP_RR_FIRES=$(grep -cE 'FIX OP RR.*total recovery took' "$CLEAN" 2>/dev/null; :)
+FIX_OP_RR_MAX_MS=$(grep -oP 'FIX OP RR.*total recovery took \K[0-9]+' "$CLEAN" 2>/dev/null | sort -rn | head -1)
+# GAP 8 / Strategy 11 (#42429): ETH link error status check on MMIO channels before firmware launch.
+# Warning: "ETH link error status=0xNN ... [Strategy 11 #42429]"
+# OK (debug): "ETH link status OK (0x0) [Strategy 11 #42429]"
+STRATEGY_11_WARN=$(grep -cE 'ETH link error status.*Strategy 11' "$CLEAN" 2>/dev/null; :)
+STRATEGY_11_OK=$(grep -cE 'ETH link status OK.*Strategy 11' "$CLEAN" 2>/dev/null; :)
+STRATEGY_11_FAIL=$(grep -cE 'ETH link status read failed.*Strategy 11' "$CLEAN" 2>/dev/null; :)
+# GAP 10 / FIX EG RR (#42429): zeroed fw_launch_addr on FIX RR path (pre-known-dead channels).
+# Log: "FIX EG RR (#42429): zeroed fw_launch_addr=0xNNN on Device N chan=N"
+FIX_EG_RR_FIRES=$(grep -cE 'FIX EG RR.*zeroed fw_launch_addr' "$CLEAN" 2>/dev/null; :)
+# GAP 10 / FIX GI RR (#42429): readback MISMATCH after zeroing fw_launch_addr on FIX RR path.
+# Log: "FIX GI RR (#42429): FIX EG RR readback MISMATCH"
+FIX_GI_RR_MISMATCH=$(grep -cE 'FIX GI RR.*readback MISMATCH' "$CLEAN" 2>/dev/null; :)
+# GAP 10 / FIX MN RR (#42429): pre-zero snapshot on FIX RR path.
+# Log: "FIX MN RR (#42429): FIX EG RR pre-zero snapshot — Device N chan=N fw_launch_addr=0xNNN pre_val=0xNNN"
+FIX_MN_RR_FIRES=$(grep -cE 'FIX MN RR.*pre-zero snapshot' "$CLEAN" 2>/dev/null; :)
+FIX_MN_RR_STALE=$(grep -cE 'FIX MN RR.*pre_val=0x00000001' "$CLEAN" 2>/dev/null; :)
 # FIX QR (#42429): quiesce FIX EF analogue — poll MMIO relay ERISCs after launch.
 FIX_QR_FIRES=$(grep -cE 'FIX QR.*exited 0xDEADB07E' "$CLEAN" 2>/dev/null; :)
 FIX_QR_TIMEOUT=$(grep -cE 'FIX QR.*WARNING.*still at 0xDEADB07E' "$CLEAN" 2>/dev/null; :)
+# GAP 6 / FIX QR escalation (#42429): FIX QR timeout now sets fabric_relay_path_broken_=true.
+# Log: "FIX QR: Device N chan N (MMIO) still at 0xDEADB07E after Nms ... Setting fabric_relay_path_broken_=true"
+FIX_QR_ESCALATION=$(grep -cE 'FIX QR.*Setting fabric_relay_path_broken_=true' "$CLEAN" 2>/dev/null; :)
 # 0xDEADB07E: base-UMD stuck at host-pre-launch canary (fw_launch_addr not restored).
 DEADB07E_COUNT=$(grep -ciE '0xdeadb07e' "$CLEAN" 2>/dev/null; :)
 # FIX QW-B (#42429): C++ fixture skip guard fires because stale_base_umd_channels=true.
@@ -1496,6 +1519,29 @@ if [ "${FIX_RR_SUCCESS:-0}" -gt 0 ] || [ "${FIX_RR_FAIL:-0}" -gt 0 ] || [ "${FIX
         echo "     FAIL: ${FIX_RR_FAIL:-0} MMIO channel(s) did not respond to PCIe-direct reset → moved to newly_dead_channels → TT_THROW."
         echo "     Likely cause: PCIe link error or hardware fault on Device 0."
     fi
+fi
+if [ "${FIX_OP_RR_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX OP RR] FIX RR recovery timing: ${FIX_OP_RR_FIRES} event(s), max ${FIX_OP_RR_MAX_MS:-?}ms."
+    echo "     This is the assert→deassert+BH polling window for pre-known-dead MMIO channels."
+fi
+if [ "${STRATEGY_11_WARN:-0}" -gt 0 ] || [ "${STRATEGY_11_FAIL:-0}" -gt 0 ]; then
+    echo "  => [Strategy 11] ETH link status check: ${STRATEGY_11_WARN:-0} link error(s), ${STRATEGY_11_OK:-0} OK, ${STRATEGY_11_FAIL:-0} read failure(s)."
+    if [ "${STRATEGY_11_WARN:-0}" -gt 0 ]; then
+        echo "     WARNING: MMIO channel(s) have ETH link error BEFORE firmware launch — handshake will likely fail."
+    fi
+fi
+if [ "${FIX_EG_RR_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX EG RR] zeroed fw_launch_addr on FIX RR path: ${FIX_EG_RR_FIRES} channel(s)."
+    if [ "${FIX_GI_RR_MISMATCH:-0}" -gt 0 ]; then
+        echo "     WARNING: ${FIX_GI_RR_MISMATCH} readback MISMATCH(es) — PCIe write to fw_launch_addr failed."
+    fi
+    if [ "${FIX_MN_RR_STALE:-0}" -gt 0 ]; then
+        echo "     ${FIX_MN_RR_STALE} channel(s) had stale fw_launch_addr=1 (previous session residue)."
+    fi
+fi
+if [ "${FIX_QR_ESCALATION:-0}" -gt 0 ]; then
+    echo "  => [FIX QR ESCALATION] FIX QR timeout set fabric_relay_path_broken_=true (${FIX_QR_ESCALATION} event(s))."
+    echo "     GAP 6 fix: quiesce relay ERISC did not start — non-MMIO Pass 1c launch blocked."
 fi
 if [ "${FIX_M_TRANSITION_COUNT:-0}" -gt 0 ]; then
     echo "  => [FIX M] base-UMD channel transitions via launch_msg: ${FIX_M_TRANSITION_COUNT} device(s) set stale_base_umd=true."
