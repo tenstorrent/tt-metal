@@ -89,10 +89,11 @@ def test_attention_block_fused_ln_plus_residual(device):
 
     import ttnn as _ttnn
 
-    # build_tensors order tail: ..., final_out_tt, qkv_act_tt,
-    # ln_done_trigger_tt, qkv_w_tt, qkv_out_tt, qkv_done_trigger_tt,
-    # sdpa_q_tt, sdpa_k_partial_tt, sdpa_qk_probe_tt. final_out_tt is -9.
-    final_out_tt = tensors[-9]
+    # #11 Commit 8: build_tensors dropped xmm_tt and sdpa_qk_probe_tt, added
+    # one fused_scratch_tt — tuple length 22 → 21. Tail order:
+    # ..., final_out_tt, qkv_act_tt, ln_done_trigger_tt, qkv_w_tt, qkv_out_tt,
+    # qkv_done_trigger_tt, sdpa_q_tt, sdpa_k_partial_tt. final_out_tt is -8.
+    final_out_tt = tensors[-8]
     y_device = _ttnn.to_torch(final_out_tt)
 
     p = pcc(y_golden, y_device)
@@ -122,10 +123,10 @@ def test_attention_block_fused_ln_mcast_probe(device):
 
     import ttnn as _ttnn
 
-    # qkv_act_tt is index -8 in the (... qkv_act_tt, ln_done_trigger_tt,
+    # qkv_act_tt is index -7 in the (... qkv_act_tt, ln_done_trigger_tt,
     # qkv_w_tt, qkv_out_tt, qkv_done_trigger_tt, sdpa_q_tt,
-    # sdpa_k_partial_tt, sdpa_qk_probe_tt) ordering.
-    qkv_act_tt = tensors[-8]
+    # sdpa_k_partial_tt) ordering after Commit 8's tensor-list shrink.
+    qkv_act_tt = tensors[-7]
     qkv_act_torch = _ttnn.to_torch(qkv_act_tt)
 
     num_receivers = SigLIPAttentionBlockFused.QKV_NUM_CORES
@@ -174,11 +175,11 @@ def test_attention_block_fused_qkv_matmul(device):
 
     import ttnn as _ttnn
 
-    # qkv_out_tt is now at index -5 in build_tensors order (followed by
-    # qkv_done_trigger_tt, sdpa_q_tt, sdpa_k_partial_tt, sdpa_qk_probe_tt).
+    # qkv_out_tt is at index -4 in build_tensors order (followed by
+    # qkv_done_trigger_tt, sdpa_q_tt, sdpa_k_partial_tt).
     # Device shape is the padded (M, 4608); we slice each head's first
     # head_dim_true cols to recover the natural (M, 3456) layout before PCC.
-    qkv_out_tt = tensors[-5]
+    qkv_out_tt = tensors[-4]
     qkv_out_device_padded = _ttnn.to_torch(qkv_out_tt)
     assert qkv_out_device_padded.shape == (
         M,
@@ -227,9 +228,10 @@ def test_attention_block_fused_sdpa_q_probe(device):
 
     import ttnn as _ttnn
 
-    # sdpa_q_tt is at index -3 in build_tensors order (followed by
-    # sdpa_k_partial_tt and sdpa_qk_probe_tt as of #11 Commit 6).
-    sdpa_q_tt = tensors[-3]
+    # sdpa_q_tt is at index -2 in build_tensors order (followed by
+    # sdpa_k_partial_tt; sdpa_qk_probe was dropped in Commit 8 in favor of
+    # the fused_scratch alias).
+    sdpa_q_tt = tensors[-2]
     sdpa_q_torch = _ttnn.to_torch(sdpa_q_tt)
 
     sdpa_num_workers = SigLIPAttentionBlockFused.SDPA_NUM_CORES  # 32 (#11 Commit 4: relocated SDPA)
@@ -272,19 +274,24 @@ def test_attention_block_fused_sdpa_q_probe(device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_attention_block_fused_sdpa_qk_compute_probe(device):
-    """Streaming QK^T compute: full M-row 0 of QK^T per worker.
+    """Streaming QK^T compute: full per-worker QK^T (M_per_worker × M_KV).
 
-    Each of the 32 SDPA workers computes its M-slice's first 32 rows × full
-    M_KV cols of QK^T (a (32, 256) slice = 8 tiles), using:
-      - Q tiles from sdpa_q_cb (M-row 0 of the worker's M-slice).
-      - K tiles streamed in tile-by-tile via sdpa_k_partial_cb (one K-row
-        per matmul iteration, all 8 K-rows of the head).
-    TRISC iterates n_out_tile ∈ [0..7]: waits on the next K-row from NCRISC,
-    matmuls Q @ K^T (transpose=true), packs the output tile, pops the
-    K-row. NCRISC and TRISC pipeline naturally through sdpa_k_partial_cb.
+    Each of the 32 SDPA workers computes its full M-slice's QK^T = (128, 256)
+    bf16 = 32 tiles, aliased into fused_scratch_tt at byte offset 0 on the
+    SDPA grid (same L1 region the LN1 row's xmm_cb uses on LN1 cores —
+    disjoint grids, no conflict).
 
-    Golden: torch Q_padded[h, worker_M_slice[:32], :] @ K_padded[h, :, :].T
-    = (32, 256), where _padded has head_dim_padded=96 cols with
+    TRISC iterates n_out (K-row) ∈ [0..7]: waits on NCRISC-streamed K-row,
+    then for each m_out (Q-row) ∈ [0..3] matmuls Q[m_out, :] @ K[n_out, :]^T
+    and packs to qk_scores tile slot (m_out * M_KV_TILES + n_out). Each
+    K-row streams once and serves all 4 M-rows in sequence.
+
+    Read-back: ttnn.to_torch(fused_scratch_tt) returns the full
+    (LN1+SDPA) buffer; we slice each SDPA core's shard and pull the first
+    32 tiles (the qk_scores region).
+
+    Golden: torch Q_padded[h, worker_M_slice, :] @ K_padded[h, :, :].T
+    = (128, 256), where _padded has head_dim_padded=96 cols with
     head_dim_true=72 real values + 24 zero cols.
     """
     x, gamma, beta = make_inputs(seed=42)
@@ -308,42 +315,77 @@ def test_attention_block_fused_sdpa_qk_compute_probe(device):
 
     import ttnn as _ttnn
 
-    # sdpa_qk_probe_tt is the last tensor in build_tensors order.
-    sdpa_qk_probe_tt = tensors[-1]
-    sdpa_qk_probe_torch = _ttnn.to_torch(sdpa_qk_probe_tt)
+    # fused_scratch_tt is at index 6 in build_tensors order.
+    # Shape: (40 cores × 1152 rows, 32 cols). First 8 shards = LN1 cores
+    # (holding xmm data). Next 32 shards = SDPA workers (holding qk_scores
+    # at the front of each shard).
+    fused_scratch_tt = tensors[6]
+    fused_scratch_torch = _ttnn.to_torch(fused_scratch_tt)
 
     sdpa_num_workers = SigLIPAttentionBlockFused.SDPA_NUM_CORES  # 32
     sdpa_grid_x = SigLIPAttentionBlockFused.SDPA_GRID_X  # 4
     num_workers_per_head = SigLIPAttentionBlockFused.NUM_SDPA_WORKERS_PER_HEAD  # 2
     rows_per_worker = M // num_workers_per_head  # 128
     m_kv = M  # 256
+    ln1_num_cores = SigLIPAttentionBlockFused.LN1_NUM_CORES  # 8
+    D_TILES = SigLIPAttentionBlockFused.D_TILES  # 36
 
-    # Per-worker probe is (32, m_kv) → tensor shape (32 * num_workers, m_kv).
-    expected_shape = (sdpa_num_workers * 32, m_kv)
+    shard_h = D_TILES * SigLIPAttentionBlockFused.TILE  # 1152
+    expected_shape = ((ln1_num_cores + sdpa_num_workers) * shard_h, SigLIPAttentionBlockFused.TILE)
     assert (
-        sdpa_qk_probe_torch.shape == expected_shape
-    ), f"qk probe shape {tuple(sdpa_qk_probe_torch.shape)} != {expected_shape}"
-    qk_per_worker = sdpa_qk_probe_torch.reshape(sdpa_num_workers, 32, m_kv)
+        fused_scratch_torch.shape == expected_shape
+    ), f"fused_scratch shape {tuple(fused_scratch_torch.shape)} != {expected_shape}"
+
+    # Extract each SDPA worker's qk_scores from its shard.
+    # Per-worker shard: rows [ln1_num_cores + worker_idx] × shard_h .. +shard_h.
+    # qk_scores occupies the FIRST 32 tiles = 32 row-tiles (since shard width is
+    # one tile wide) = 32 × 32 = 1024 rows of the shard.
+    # Each row-tile in the shard is one packed tile in CB-slot order; the CB's
+    # pack_tile call wrote slot (m_out * M_KV_TILES + n_out) for the (m_out,
+    # n_out) output tile, so:
+    #   tile_idx → (m_out=tile_idx // M_KV_TILES, n_out=tile_idx % M_KV_TILES)
+    m_kv_tiles = m_kv // SigLIPAttentionBlockFused.TILE  # 8
+    m_per_worker_tiles = rows_per_worker // SigLIPAttentionBlockFused.TILE  # 4
+    qk_scores_tiles_per_worker = m_per_worker_tiles * m_kv_tiles  # 32
+    qk_scores_rows_per_worker = qk_scores_tiles_per_worker * SigLIPAttentionBlockFused.TILE  # 1024
 
     min_pcc = float("inf")
     worst = None
     for worker_linear in range(sdpa_num_workers):
+        shard_start = (ln1_num_cores + worker_linear) * shard_h
+        worker_shard = fused_scratch_torch[shard_start : shard_start + qk_scores_rows_per_worker, :]
+        # Reshape to (qk_scores_tiles_per_worker, TILE, TILE).
+        tile_stack = worker_shard.reshape(
+            qk_scores_tiles_per_worker, SigLIPAttentionBlockFused.TILE, SigLIPAttentionBlockFused.TILE
+        )
+        # Re-arrange into the natural (M_per_worker, M_KV) layout.
+        qk_worker = torch.zeros(rows_per_worker, m_kv, dtype=worker_shard.dtype)
+        for tile_idx in range(qk_scores_tiles_per_worker):
+            m_out = tile_idx // m_kv_tiles
+            n_out = tile_idx % m_kv_tiles
+            qk_worker[
+                m_out * SigLIPAttentionBlockFused.TILE : (m_out + 1) * SigLIPAttentionBlockFused.TILE,
+                n_out * SigLIPAttentionBlockFused.TILE : (n_out + 1) * SigLIPAttentionBlockFused.TILE,
+            ] = tile_stack[tile_idx]
+
+        # Head/worker mapping (same as in sdpa_q_probe).
         y = worker_linear // sdpa_grid_x
         x_rel = worker_linear % sdpa_grid_x
         head_idx = (y // num_workers_per_head) * sdpa_grid_x + x_rel
         worker_idx = y % num_workers_per_head
         m_start = worker_idx * rows_per_worker
-        q_slice = q_padded_per_head[head_idx, m_start : m_start + 32, :].to(torch.float32)
+        q_slice = q_padded_per_head[head_idx, m_start : m_start + rows_per_worker, :].to(torch.float32)
         k_slice = k_padded_per_head[head_idx, :, :].to(torch.float32)  # full (M_KV, head_dim_padded)
-        expected = (q_slice @ k_slice.T).to(torch.bfloat16)  # (32, M_KV)
-        p = pcc(expected, qk_per_worker[worker_linear])
+        expected = (q_slice @ k_slice.T).to(torch.bfloat16)  # (rows_per_worker, M_KV)
+
+        p = pcc(expected, qk_worker)
         if p < min_pcc:
             min_pcc = p
             worst = (worker_linear, head_idx, worker_idx)
 
     print(
-        f"\nPCC (SDPA QK^T full-M-row-0 compute probe, min/32 workers) = "
+        f"\nPCC (SDPA full QK^T compute probe, min/32 workers) = "
         f"{min_pcc:.6f} (worst: worker={worst[0]}, head={worst[1]}, w_idx={worst[2]})"
     )
-    print(f"  per-worker shape={(32, m_kv)}, dtype={qk_per_worker.dtype}")
+    print(f"  per-worker shape={(rows_per_worker, m_kv)}, dtype={qk_worker.dtype}")
     assert min_pcc >= 0.998, f"min QK^T probe PCC {min_pcc} below 0.998"

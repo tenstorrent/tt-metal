@@ -164,7 +164,12 @@ class SigLIPAttentionBlockFused:
         #   output: QK^T[worker_M_slice[0:32], 0:32] for the worker's head.
         # V probe dropped (V isn't used until Attn@V; V signaling stays).
         "sdpa_k_partial_cb": 20,
-        "sdpa_qk_probe_cb": 21,
+        # #11 Commit 8: sdpa_qk_scores_cb is the FULL per-worker QK^T output
+        # (M_per_worker, M_KV) = (128, 256) = 32 tiles = 64 KB bf16. Aliased
+        # into fused_scratch_tt at byte offset 0 on SDPA cores only — same
+        # L1 region used by xmm_cb on LN1 cores (disjoint grids, no
+        # conflict). Replaces sdpa_qk_probe_cb from Commit 6/7.
+        "sdpa_qk_scores_cb": 21,
     }
 
     # SDPA QKV-ready semaphore (id=3). All three QKV producers (Q, K, V)
@@ -186,7 +191,7 @@ class SigLIPAttentionBlockFused:
         scaler_tt,
         ones_tt,
         accum_tt,
-        xmm_tt,
+        fused_scratch_tt,
         xmm2_tt,
         mean_tt,
         var_tt,
@@ -201,7 +206,6 @@ class SigLIPAttentionBlockFused:
         qkv_done_trigger_tt,
         sdpa_q_tt,
         sdpa_k_partial_tt,
-        sdpa_qk_probe_tt,
         math_fidelity=ttnn.MathFidelity.HiFi4,
         eps: float = 1e-6,
     ):
@@ -283,7 +287,9 @@ class SigLIPAttentionBlockFused:
             ("sdpa_x_offset", SigLIPAttentionBlockFused.SDPA_X_OFFSET),
             # #11 Commit 6: streaming K partial (3 tiles) + QK^T probe.
             ("sdpa_k_partial_cb", SigLIPAttentionBlockFused.CB["sdpa_k_partial_cb"]),
-            ("sdpa_qk_probe_cb", SigLIPAttentionBlockFused.CB["sdpa_qk_probe_cb"]),
+            # #11 Commit 8: renamed sdpa_qk_probe → sdpa_qk_scores (full
+            # 32-tile per-worker QK^T output, aliased into fused_scratch).
+            ("sdpa_qk_scores_cb", SigLIPAttentionBlockFused.CB["sdpa_qk_scores_cb"]),
             ("sdpa_k_partial_tiles", 3),  # K row 0: 3 head_dim tiles
             # #11 Commit 7: NCRISC loops over M_KV K-rows to stream each one.
             ("m_kv_n_tiles", SigLIPAttentionBlockFused.M // SigLIPAttentionBlockFused.TILE),
@@ -314,6 +320,10 @@ class SigLIPAttentionBlockFused:
             # #11 Commit 7: TRISC iterates n_out ∈ [0..M_KV_TILES-1] for the
             # full M-row 0 of QK^T per worker.
             ("m_kv_n_tiles", SigLIPAttentionBlockFused.M // SigLIPAttentionBlockFused.TILE),
+            # #11 Commit 8: outer m_out loop — TRISC iterates m_out ∈
+            # [0..m_per_worker_n_tiles-1] within each n_out's K-row to fill
+            # the full per-worker (M_per_worker, M_KV) qk_scores buffer.
+            ("m_per_worker_n_tiles", m_tiles_per_sdpa_worker),
         ]
 
         # Physical NoC coords for the worker grid. BH's logical-to-physical x
@@ -457,6 +467,55 @@ class SigLIPAttentionBlockFused:
             initial_value=0,
         )
 
+        # #11 Commit 8: fused_scratch_tt aliases.
+        #   xmm_cb         → fused_scratch @ offset 0, on LN1 cores only, 36 tiles.
+        #   sdpa_qk_scores_cb → fused_scratch @ offset 0, on SDPA cores only, 32 tiles.
+        # LN1 and SDPA grids are disjoint, so the two CBs share the same L1
+        # address range without conflict — saving 64 KB globally vs allocating
+        # qk_scores as a separate sharded tensor.
+        ln1_grid_alias = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(SigLIPAttentionBlockFused.LN1_NUM_CORES - 1, 0),
+                )
+            }
+        )
+        sdpa_grid_alias = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(sdpa_x_lo, SigLIPAttentionBlockFused.SDPA_Y_OFFSET),
+                    ttnn.CoreCoord(sdpa_x_hi, sdpa_y_hi),
+                )
+            }
+        )
+        bf16_tile_bytes = bf16_page
+        xmm_total_size = in_tiles * bf16_tile_bytes  # 36 tiles per LN1 core
+        qk_scores_tiles_per_worker = m_tiles_per_sdpa_worker * (
+            SigLIPAttentionBlockFused.M // SigLIPAttentionBlockFused.TILE
+        )
+        qk_scores_total_size = qk_scores_tiles_per_worker * bf16_tile_bytes
+
+        xmm_cb_aliased = ttnn.cb_descriptor_from_sharded_tensor(
+            SigLIPAttentionBlockFused.CB["xmm_cb"],
+            fused_scratch_tt,
+            address_offset=0,
+            total_size=xmm_total_size,
+            core_ranges=ln1_grid_alias,
+        )
+        xmm_cb_aliased.format_descriptors[0].tile = tile_descriptor
+        xmm_cb_aliased.format_descriptors[0].page_size = bf16_tile_bytes
+
+        qk_scores_cb_aliased = ttnn.cb_descriptor_from_sharded_tensor(
+            SigLIPAttentionBlockFused.CB["sdpa_qk_scores_cb"],
+            fused_scratch_tt,
+            address_offset=0,
+            total_size=qk_scores_total_size,
+            core_ranges=sdpa_grid_alias,
+        )
+        qk_scores_cb_aliased.format_descriptors[0].tile = tile_descriptor
+        qk_scores_cb_aliased.format_descriptors[0].page_size = bf16_tile_bytes
+
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
@@ -466,7 +525,7 @@ class SigLIPAttentionBlockFused:
                 _cb(SigLIPAttentionBlockFused.CB["scaler_cb"], scaler_tt),
                 _cb(SigLIPAttentionBlockFused.CB["ones_cb"], ones_tt),
                 _cb(SigLIPAttentionBlockFused.CB["accum_cb"], accum_tt),
-                _cb(SigLIPAttentionBlockFused.CB["xmm_cb"], xmm_tt),
+                xmm_cb_aliased,
                 _cb(SigLIPAttentionBlockFused.CB["xmm2_cb"], xmm2_tt),
                 _cb(SigLIPAttentionBlockFused.CB["mean_cb"], mean_tt),
                 _cb(SigLIPAttentionBlockFused.CB["var_cb"], var_tt),
@@ -481,7 +540,7 @@ class SigLIPAttentionBlockFused:
                 _cb(SigLIPAttentionBlockFused.CB["qkv_done_trigger_cb"], qkv_done_trigger_tt),
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_q_cb"], sdpa_q_tt),
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_k_partial_cb"], sdpa_k_partial_tt),
-                _cb(SigLIPAttentionBlockFused.CB["sdpa_qk_probe_cb"], sdpa_qk_probe_tt),
+                qk_scores_cb_aliased,
             ],
             semaphores=[counter_sem, sdpa_qkv_ready_sem],
         )
@@ -494,7 +553,7 @@ class SigLIPAttentionBlockFused:
                 scaler_tt,
                 ones_tt,
                 accum_tt,
-                xmm_tt,
+                fused_scratch_tt,
                 xmm2_tt,
                 mean_tt,
                 var_tt,
@@ -509,11 +568,10 @@ class SigLIPAttentionBlockFused:
                 qkv_done_trigger_tt,
                 sdpa_q_tt,
                 sdpa_k_partial_tt,
-                sdpa_qk_probe_tt,
             ],
             program_descriptor,
         )
-        return final_out_tt, qkv_act_tt, qkv_out_tt, sdpa_q_tt, sdpa_k_partial_tt, sdpa_qk_probe_tt
+        return final_out_tt, qkv_act_tt, qkv_out_tt, sdpa_q_tt, sdpa_k_partial_tt, fused_scratch_tt
 
 
 def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_torch, w_qkv_torch=None):
@@ -621,7 +679,6 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
             memory_config=in_mem,
         )
 
-    xmm_tt = _make_dtile()
     xmm2_tt = _make_dtile()
     ln_out_tt = _make_dtile()
     final_out_tt = _make_dtile()
@@ -775,22 +832,41 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         memory_config=sdpa_k_partial_mem,
     )
 
-    # #11 Commit 7: full M-row 0 of QK^T per worker = (TILE, M_KV) = (32, 256)
-    # bf16 = 8 tiles per worker. TRISC iterates n_out_tile ∈ [0..M_KV_TILES-1],
-    # streaming one K-row (3 tiles) per output tile and matmul'ing it against
-    # the (already-loaded) Q-row 0.
-    m_kv = M  # full attention key/value sequence length = 256
-    m_kv_n_tiles = m_kv // TILE  # 8
-    sdpa_qk_probe_shard = ttnn.ShardSpec(sdpa_core_grid, (TILE, m_kv), ttnn.ShardOrientation.ROW_MAJOR)
-    sdpa_qk_probe_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_qk_probe_shard
+    # #11 Commit 8: fused scratch buffer aliasing xmm_cb (LN1 row) and
+    # sdpa_qk_scores_cb (SDPA grid). One sharded tensor on LN1 ∪ SDPA = 40
+    # cores; per-core shard is 36 tiles = 72 KB (xmm's size, > sdpa qk_scores'
+    # 32 tiles = 64 KB). LN1 and SDPA core sets are disjoint, so xmm_cb on
+    # LN1 cores and sdpa_qk_scores_cb on SDPA cores share the same L1 address
+    # range without conflict — saving 64 KB globally vs allocating qk_scores
+    # as a separate tensor.
+    #
+    # Shard layout: (D_TILES=36 rows × TILE=32 = 1152) × TILE=32 = (1152, 32)
+    # per shard. TILE_LAYOUT bf16, so 36 tiles per shard. Total tensor shape:
+    # (40 cores × 1152, 32) = (46080, 32).
+    fused_scratch_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0)),  # LN1: 8 cores
+            ttnn.CoreRange(
+                ttnn.CoreCoord(sdpa_x_offset, sdpa_y_offset),
+                ttnn.CoreCoord(sdpa_x_offset + sdpa_grid_x - 1, sdpa_y_offset + sdpa_grid_y - 1),
+            ),  # SDPA: 32 cores
+        }
     )
-    sdpa_qk_probe_tt = ttnn.from_torch(
-        torch.zeros(sdpa_num_workers * TILE, m_kv, dtype=torch.bfloat16),
+    fused_scratch_shard_h = SigLIPAttentionBlockFused.D_TILES * TILE  # 36 * 32 = 1152
+    fused_scratch_shard_w = TILE  # 32
+    fused_scratch_num_cores = num_cores + sdpa_num_workers  # 8 + 32 = 40
+    fused_scratch_shard = ttnn.ShardSpec(
+        fused_scratch_grid, (fused_scratch_shard_h, fused_scratch_shard_w), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    fused_scratch_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, fused_scratch_shard
+    )
+    fused_scratch_tt = ttnn.from_torch(
+        torch.zeros(fused_scratch_num_cores * fused_scratch_shard_h, fused_scratch_shard_w, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=sdpa_qk_probe_mem,
+        memory_config=fused_scratch_mem,
     )
 
     return (
@@ -800,7 +876,7 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         scaler_tt,
         ones_tt,
         accum_tt,
-        xmm_tt,
+        fused_scratch_tt,
         xmm2_tt,
         mean_tt,
         var_tt,
@@ -815,5 +891,4 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         qkv_done_trigger_tt,
         sdpa_q_tt,
         sdpa_k_partial_tt,
-        sdpa_qk_probe_tt,
     )

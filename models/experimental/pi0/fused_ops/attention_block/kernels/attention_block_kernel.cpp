@@ -102,7 +102,7 @@ void kernel_main() {
     // 1-tile sdpa_qk_probe_cb. The same noc_async_read shape extends to
     // other K rows in future commits.
     constexpr uint32_t sdpa_k_partial_cb = get_named_compile_time_arg_val("sdpa_k_partial_cb");
-    constexpr uint32_t sdpa_qk_probe_cb = get_named_compile_time_arg_val("sdpa_qk_probe_cb");
+    constexpr uint32_t sdpa_qk_scores_cb = get_named_compile_time_arg_val("sdpa_qk_scores_cb");
     constexpr uint32_t sdpa_k_partial_tiles = get_named_compile_time_arg_val("sdpa_k_partial_tiles");
     constexpr uint32_t m_kv_n_tiles = get_named_compile_time_arg_val("m_kv_n_tiles");
 
@@ -405,10 +405,11 @@ void kernel_main() {
     // #11 Commit 6: TRISC SDPA worker computes first QK^T tile per worker.
     constexpr uint32_t sdpa_q_cb_tr = get_named_compile_time_arg_val("sdpa_q_cb");
     constexpr uint32_t sdpa_k_partial_cb_tr = get_named_compile_time_arg_val("sdpa_k_partial_cb");
-    constexpr uint32_t sdpa_qk_probe_cb_tr = get_named_compile_time_arg_val("sdpa_qk_probe_cb");
+    constexpr uint32_t sdpa_qk_scores_cb_tr = get_named_compile_time_arg_val("sdpa_qk_scores_cb");
     constexpr uint32_t sdpa_q_tiles_per_worker_tr = get_named_compile_time_arg_val("sdpa_q_tiles_per_worker");
     constexpr uint32_t sdpa_k_partial_tiles_tr = get_named_compile_time_arg_val("sdpa_k_partial_tiles");
     constexpr uint32_t m_kv_n_tiles_tr = get_named_compile_time_arg_val("m_kv_n_tiles");
+    constexpr uint32_t m_per_worker_n_tiles_tr = get_named_compile_time_arg_val("m_per_worker_n_tiles");
     const bool is_ln1_core_tr = (get_relative_logical_y() == 0) && (get_relative_logical_x() < ln1_num_cores_tr);
     const bool is_residual_core_tr = is_ln1_core_tr;
     const bool is_qkv_core_tr =
@@ -530,56 +531,65 @@ void kernel_main() {
     // =========================================================================
     if (is_sdpa_core_tr) {
         cb_wait_front(sdpa_q_cb_tr, sdpa_q_tiles_per_worker_tr);
-        cb_reserve_back(sdpa_qk_probe_cb_tr, m_kv_n_tiles_tr);
+        // #11 Commit 8: full QK^T per worker.
+        // Output: (M_per_worker, M_KV) = m_per_worker_n_tiles × m_kv_n_tiles tiles
+        //         = 4 × 8 = 32 tiles bf16 = 64 KB per worker.
+        // Aliased into fused_scratch_tt at byte offset 0 on SDPA cores only;
+        // the same L1 region holds xmm_cb on LN1 cores (disjoint grids).
+        constexpr uint32_t qk_scores_total_tiles = m_per_worker_n_tiles_tr * m_kv_n_tiles_tr;
+        cb_reserve_back(sdpa_qk_scores_cb_tr, qk_scores_total_tiles);
 
         constexpr uint32_t SUBBLOCK_H = 1;
         constexpr uint32_t SUBBLOCK_W = 1;
 
         reconfig_data_format(sdpa_k_partial_cb_tr, sdpa_q_cb_tr);
-        pack_reconfig_data_format(sdpa_qk_probe_cb_tr);
-        mm_init(sdpa_q_cb_tr, sdpa_k_partial_cb_tr, sdpa_qk_probe_cb_tr);
+        pack_reconfig_data_format(sdpa_qk_scores_cb_tr);
+        mm_init(sdpa_q_cb_tr, sdpa_k_partial_cb_tr, sdpa_qk_scores_cb_tr);
 
-        // #11 Commit 7: full M-row 0 of QK^T per worker.
-        // For each n_out_tile ∈ [0..m_kv_n_tiles-1]:
-        //   wait for NCRISC-streamed K-row n_out_tile,
-        //   matmul Q[m=0, k_inner=0..2] × K[m=n_out_tile, k_inner=0..2]^T,
-        //   pack the result into the n_out-th slot of sdpa_qk_probe_cb,
+        // For each K-row n_out ∈ [0..m_kv_n_tiles-1]:
+        //   wait for NCRISC-streamed K-row n_out (3 tiles),
+        //   for each Q M-row m_out ∈ [0..m_per_worker_n_tiles-1]:
+        //     matmul Q[m_out, k_inner=0..2] × K[m=n_out, k_inner=0..2]^T,
+        //     pack the result into qk_scores slot (m_out * m_kv_n_tiles + n_out),
         //   pop the K-row so NCRISC can refill it.
-        // NCRISC and TRISC pipeline naturally via the CB push/pop counters.
+        // K-rows stream once and serve all m_per_worker_n_tiles M-rows in
+        // sequence — 32 matmul ops total per worker (vs 8 in Commit 7).
         for (uint32_t n_out = 0; n_out < m_kv_n_tiles_tr; ++n_out) {
             cb_wait_front(sdpa_k_partial_cb_tr, sdpa_k_partial_tiles_tr);
 
-            mm_block_init_short(
-                sdpa_q_cb_tr,
-                sdpa_k_partial_cb_tr,
-                /*transpose=*/1,
-                /*ct_dim=*/SUBBLOCK_W,
-                /*rt_dim=*/SUBBLOCK_H,
-                /*kt_dim=*/sdpa_k_partial_tiles_tr);
-
-            tile_regs_acquire();
-            for (uint32_t k = 0; k < sdpa_k_partial_tiles_tr; ++k) {
-                matmul_block(
+            for (uint32_t m_out = 0; m_out < m_per_worker_n_tiles_tr; ++m_out) {
+                mm_block_init_short(
                     sdpa_q_cb_tr,
                     sdpa_k_partial_cb_tr,
-                    /*in0_index=*/k,  // Q[m=0, k_inner]
-                    /*in1_index=*/k,  // K[m=n_out_tile, k_inner] (transpose folds the rows in)
-                    /*idst=*/0,
-                    /*transpose=*/true,
+                    /*transpose=*/1,
                     /*ct_dim=*/SUBBLOCK_W,
                     /*rt_dim=*/SUBBLOCK_H,
                     /*kt_dim=*/sdpa_k_partial_tiles_tr);
-            }
-            tile_regs_commit();
 
-            tile_regs_wait();
-            pack_tile<true>(0, sdpa_qk_probe_cb_tr, n_out);
-            tile_regs_release();
+                tile_regs_acquire();
+                for (uint32_t k = 0; k < sdpa_k_partial_tiles_tr; ++k) {
+                    matmul_block(
+                        sdpa_q_cb_tr,
+                        sdpa_k_partial_cb_tr,
+                        /*in0_index=*/m_out * sdpa_k_partial_tiles_tr + k,  // Q[m_out, k_inner]
+                        /*in1_index=*/k,  // K[m=n_out_tile, k_inner] (transpose folds the rows in)
+                        /*idst=*/0,
+                        /*transpose=*/true,
+                        /*ct_dim=*/SUBBLOCK_W,
+                        /*rt_dim=*/SUBBLOCK_H,
+                        /*kt_dim=*/sdpa_k_partial_tiles_tr);
+                }
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_tile<true>(0, sdpa_qk_scores_cb_tr, m_out * m_kv_n_tiles_tr + n_out);
+                tile_regs_release();
+            }
 
             cb_pop_front(sdpa_k_partial_cb_tr, sdpa_k_partial_tiles_tr);
         }
 
-        cb_push_back(sdpa_qk_probe_cb_tr, m_kv_n_tiles_tr);
+        cb_push_back(sdpa_qk_scores_cb_tr, qk_scores_total_tiles);
         cb_pop_front(sdpa_q_cb_tr, sdpa_q_tiles_per_worker_tr);
     }
 #endif
