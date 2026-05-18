@@ -133,10 +133,10 @@ std::vector<std::vector<T>> untilize_weights(
     }
 
     // 2d matrix is tilized. Tiles are arranged in row major order. Elements within tiles are in row major order.
-    for (int tr = 0; tr < num_tiles_rows; tr++) {
-        for (int tc = 0; tc < num_tiles_cols; tc++) {
-            for (int r = 0; r < row_tile_size; r++) {
-                for (int c = 0; c < col_tile_size; c++) {
+    for (uint32_t tr = 0; tr < num_tiles_rows; tr++) {
+        for (uint32_t tc = 0; tc < num_tiles_cols; tc++) {
+            for (uint32_t r = 0; r < row_tile_size; r++) {
+                for (uint32_t c = 0; c < col_tile_size; c++) {
                     uint32_t tilized_index = c + r * col_tile_size + tc * row_tile_size * col_tile_size +
                                              tr * num_tiles_cols * row_tile_size * col_tile_size;
                     // determine indices in untilized act

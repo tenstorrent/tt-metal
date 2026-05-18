@@ -100,9 +100,9 @@ int main(int argc, char** argv) {
         tt_metal::detail::LaunchProgram(device, program);
         log_info(LogTest, "Kernels done");
 
-        for (int i = 0; i < grid_size.y; i++) {
-            for (int j = 0; j < grid_size.x; j++) {
-                CoreCoord dest_core = {(std::size_t)core_start.x + j, (std::size_t)core_start.y + i};
+        for (size_t i = 0; i < grid_size.y; i++) {
+            for (size_t j = 0; j < grid_size.x; j++) {
+                CoreCoord dest_core = {core_start.x + j, core_start.y + i};
                 std::vector<uint32_t> dest_core_data;
                 tt_metal::detail::ReadFromDeviceL1(
                     device, dest_core, dest_buffer_addr, dram_buffer_size, dest_core_data);
