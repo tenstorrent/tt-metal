@@ -113,22 +113,26 @@ class TtMistral4DecoderLayer(LightweightModule):
             [1, 1, seq, HIDDEN_SIZE]
         """
         # ── Attention sub-layer ─────────────────────────────────────────
+        # Residual adds and rms_norm outputs in L1 so consecutive ops avoid the
+        # DRAM round-trip. Output `x` of each sub-layer remains [1,1,seq,H] which
+        # fits L1 interleaved at seq up to ~2048 on a P150-class grid.
+        _mem = ttnn.L1_MEMORY_CONFIG
         residual = x
 
-        normed = _rms_norm(x, self.input_norm_w, self.compute_kernel_config)
+        normed = _rms_norm(x, self.input_norm_w, self.compute_kernel_config, _mem)
         attn_out = self.attn.forward(normed, cos, sin)
         ttnn.deallocate(normed)
 
-        x = ttnn.add(residual, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(residual, attn_out, memory_config=_mem)
         ttnn.deallocate(attn_out)
 
         # ── MoE sub-layer ───────────────────────────────────────────────
         residual = x
-        normed = _rms_norm(x, self.post_attn_norm_w, self.compute_kernel_config)
+        normed = _rms_norm(x, self.post_attn_norm_w, self.compute_kernel_config, _mem)
         moe_out = self.moe.forward(normed)
         ttnn.deallocate(normed)
 
-        x = ttnn.add(residual, moe_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(residual, moe_out, memory_config=_mem)
         ttnn.deallocate(moe_out)
 
         return x
@@ -141,18 +145,19 @@ class TtMistral4DecoderLayer(LightweightModule):
         kv_cache: tuple,
     ) -> ttnn.Tensor:
         """Prefill forward that also fills the attention KV cache in-place."""
+        _mem = ttnn.L1_MEMORY_CONFIG
         residual = x
-        normed = _rms_norm(x, self.input_norm_w, self.compute_kernel_config)
+        normed = _rms_norm(x, self.input_norm_w, self.compute_kernel_config, _mem)
         attn_out = self.attn.forward(normed, cos, sin, kv_cache=kv_cache)
         ttnn.deallocate(normed)
-        x = ttnn.add(residual, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(residual, attn_out, memory_config=_mem)
         ttnn.deallocate(attn_out)
 
         residual = x
-        normed = _rms_norm(x, self.post_attn_norm_w, self.compute_kernel_config)
+        normed = _rms_norm(x, self.post_attn_norm_w, self.compute_kernel_config, _mem)
         moe_out = self.moe.forward(normed)
         ttnn.deallocate(normed)
-        x = ttnn.add(residual, moe_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(residual, moe_out, memory_config=_mem)
         ttnn.deallocate(moe_out)
         return x
 

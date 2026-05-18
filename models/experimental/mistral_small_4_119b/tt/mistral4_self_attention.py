@@ -340,11 +340,13 @@ class TtMistral4Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, 1, seq, Q_LORA_RANK]
 
+        # rms_norm output to L1: small tensor (Q_LORA_RANK ≪ HIDDEN_SIZE) and the
+        # downstream q_b_proj matmul gets an L1 in0 for cheaper reads.
         q_latent = ttnn.rms_norm(
             q_latent,
             weight=self.q_a_norm,
             epsilon=NORM_EPS,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         q = ttnn.linear(
@@ -387,11 +389,13 @@ class TtMistral4Attention(LightweightModule):
         k_rope_raw = ttnn.slice(kv_combined, [0, 0, 0, self.kv_lora_rank], [1, 1, seq_len, self.kv_a_proj_out])
         ttnn.deallocate(kv_combined)
 
+        # rms_norm output to L1: KV_LORA_RANK ≪ HIDDEN_SIZE, downstream kv_b_proj
+        # matmul reads from L1.
         kv_latent_normed = ttnn.rms_norm(
             kv_latent,
             weight=self.kv_a_norm,
             epsilon=NORM_EPS,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         # Keep kv_latent alive; will be reused for kv_b_proj
 
