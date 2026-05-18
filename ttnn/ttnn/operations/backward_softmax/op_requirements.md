@@ -57,21 +57,42 @@
 - **Params**: `dim ∈ {-1, -2}`, `memory_config`
 - **Test shapes**: `(1,1,32,32)`, `(1,1,32,256)`, `(1,1,256,32)`, `(1,1,64,128)`, `(1,1,128,64)`, `(2,4,64,128)`
 
-### [ ] Refinement 1 — Multi-core
+### [x] Refinement 1 — Multi-core distribution (balanced load across the full grid)
 
-- Enable `split_work_to_cores(grid_size, total_lanes)` so each core processes a subset of lanes (one row of tiles for `dim=-1`, one column for `dim=-2`).
-- Each core's reader uses `start_lane` (RT arg), `num_lanes` (RT arg, replacing the compile-time `total_lanes`), and walks its assigned slice of `core_group_1` and `core_group_2`.
-- No inter-core communication is needed — lanes are embarrassingly parallel.
-- **Note from verifier**: the program descriptor currently sets `core_grid = CoreRange(CoreCoord(0,0))` and `num_lanes` is wired as a compile-time arg. To convert: (1) replace `core_grid` with the union `all_cores` returned by `split_work_to_cores`; (2) move `num_lanes` from CT to RT and per-core; (3) split RT args by `core_group_1` / `core_group_2`. CB descriptors already use `core_ranges = core_grid` so they will fan out automatically once `core_grid` is the union.
+- **Goal**: distribute the independent lanes (one tile-row per lane for `dim=-1`, one tile-column for `dim=-2`) across **all cores in the chip's compute-with-storage grid**, with load balanced so that no two cores differ by more than 1 lane. This is the operative contract — the implementation must satisfy it, not approximate it.
+- **Properties**: lanes are embarrassingly parallel — no inter-core communication, no work-stealing, no sub-lane splitting. Each core runs its assigned lanes end-to-end.
+- **Grid**: use `device.compute_with_storage_grid_size()` for the full available grid; do not hard-code a subset.
+- **Tests**: add shape(s) whose lane count is not a clean multiple of the grid (forcing the remainder distribution to kick in). Existing Phase-0 tests must continue to pass.
+- **Verifier notes (current Phase-0 state)**:
+  - Program descriptor pins `core_grid = CoreRange(CoreCoord(0,0))` and passes `total_lanes` as a compile-time arg.
+  - To convert: (1) replace `core_grid` with the union of all cores in the grid; (2) move `num_lanes` and `start_lane` from CT to per-core RT args; (3) the CB descriptors already key off `core_ranges = core_grid` so they will fan out automatically once `core_grid` is the union.
 
-### [ ] Refinement 2 — Compute kernel config
+### [ ] Refinement 2 — Choose input-buffering strategy by shape and L1 budget
+
+- **Goal**: minimize DRAM bandwidth by holding `grad_output` and `output` tiles in L1 across both passes when possible. The strategy must be **chosen at program-descriptor time** as a function of shape (dtype × reduce_dim_tiles) and the per-core L1 budget — no runtime probing.
+- **Why it matters**: the current Phase-0 reader fetches each input tile twice per output tile (once for the multiply-then-reduce pass, once for the subtract-then-multiply pass). DRAM bandwidth is the gating resource for memory-bound ops like this one — eliminating the second read is the single biggest perf lever after multi-core.
+- **Three known-good strategies, in order of preference when L1 allows**:
+  1. **Whole row, double-buffered.** Cache CBs sized to `2 × reduce_dim_tiles` pages each. Each input tile is read from DRAM exactly once per output tile, AND the reader can stage lane N+1 while compute processes lane N — overlapping DRAM read latency with compute.
+  2. **Whole row, single-buffered.** Cache CBs sized to `reduce_dim_tiles` pages each. Each input tile is read from DRAM exactly once per output tile. Reader and compute alternate per lane (no cross-lane overlap), but DRAM traffic is already halved vs Phase 0.
+  3. **Per-tile streaming (fallback).** Cache CBs sized to a small constant (the Phase-0 behavior). Each tile is read twice — once per pass — but the per-core working set stays tiny. This is the fallback for shapes whose reduce dimension is too large to cache in L1 under strategies 1 or 2.
+- **Selection contract**: pick the deepest strategy whose per-core working set fits within the chosen L1 budget. The choice must be deterministic given shape, dtype, and grid. **Do not fail** on shapes too large for strategies 1 or 2 — degrade to strategy 3.
+- **L1 budget (rough, per Tensix core on Wormhole B0)**: ~1 MB usable after firmware/dispatch overhead. The agent must pick a conservative number that leaves headroom for output / scaler / intermediate CBs, kernel stacks, and any helper-allocated scratch; an off-by-2× overestimate hangs the device at CB allocation. Document the chosen budget in `capabilities.md`.
+- **Numerical correctness**: must continue to satisfy the Phase-0 contract (PCC and atol). Precision is the subject of Refinement 4, not this one.
+- **Tests**:
+  - Existing acceptance + extended + precision-baseline must pass unchanged.
+  - Add a shape that triggers strategy 1 (small `reduce_dim_tiles`).
+  - Add a shape that triggers strategy 2 (medium `reduce_dim_tiles`, fits single-buffered but not double-buffered).
+  - If no in-scope shape triggers strategy 3, that's fine — note in `capabilities.md` that strategy 3 is reachable only at very large reduce dimensions and is not exercised by the test set.
+- **Verifier hint**: the standard TTNN pattern for keeping a CB live across multiple compute passes is to `cb_wait_front(cb, N)` once at the top and only `cb_pop_front(cb, N)` after the last pass that reads it. Compute APIs that take a tile-index argument read at arbitrary offsets within the waited region.
+
+### [ ] Refinement 3 — Compute kernel config
 
 - Expose `compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None` on `backward_softmax(...)`.
 - Default to `HiFi4 + fp32_dest_acc_en=True` (current behavior). Forward to `ComputeConfigDescriptor` in `create_program_descriptor`.
 - Allow overriding `math_fidelity`, `fp32_dest_acc_en`, `dst_full_sync_en`. The `unpack_to_dest_mode` field should also be settable per CB.
 - **Note from verifier**: HiFi4 + fp32_dest_acc on Wormhole B0 is reportedly affected by hardware bug #38306. The numerical_stability.md flags this. Empirically on this branch HiFi4 outperformed HiFi3 by ~1.4× on absolute error; the bug's impact in this op is mild but exposing the config gives callers an escape hatch. **`UnpackToDestMode::UnpackToDestFp32` cannot simply be applied to all fp32 CBs** — when set on `cb_prod` it produced `inf` outputs in a verifier probe. The matmul-based REDUCE_ROW SUM path is incompatible with that mode. Apply with care, possibly only to non-matmul-input CBs.
 
-### [ ] Refinement 3 — Tighten precision baseline / address `(dy − s)` cancellation
+### [ ] Refinement 4 — Tighten precision baseline / address `(dy − s)` cancellation
 
 - Today's PCC is 0.9999 but absolute error reaches ~0.3 at positions where `dy_i ≈ s` because the matmul-based REDUCE_ROW SUM accumulates with worse-than-fp32 effective precision (likely due to the SrcA TF32 path on Wormhole, see numerical_stability.md).
 - Goals: (a) make the spec test pass (`atol=0.01, rtol=0.05`) for all currently-defined shapes; (b) document the achievable precision floor.
@@ -81,37 +102,37 @@
   - Lower-precision pass-2 sub on a re-summed-in-fp32-CPU-by-default path.
 - **Note from verifier**: this is the single biggest gap between what the spec test asserts and what the operation delivers. Without it the operation is "correct in PCC, off by hardware-precision-floor in atol".
 
-### [ ] Refinement 4 — Float32 alternative dtypes (BFLOAT16, BFLOAT8_B)
+### [ ] Refinement 5 — Float32 alternative dtypes (BFLOAT16, BFLOAT8_B)
 
 - Add support for bfloat16 and bfloat8_b inputs/outputs.
 - Both inputs must match dtype. The output dtype matches the input.
 - Update CB formats and tile sizes accordingly.
 - The matmul reduce already accepts mixed scaler (bf16) + fp32 inputs; switching to bf16 inputs will need a bf16 scaler too.
 
-### [ ] Refinement 5 — Non-tile-aligned shapes (`H` or `W` % 32 ≠ 0)
+### [ ] Refinement 6 — Non-tile-aligned shapes (`H` or `W` % 32 ≠ 0)
 
 - Today's validator rejects non-aligned. The reader assumes tile-aligned per-lane tile counts; the reduce assumes the scaler lands on the first column / row of a single tile.
 - Add a partial-scaler path: `dataflow_kernel_lib::prepare_partial_reduce_scalers` plus `ReducePartialScaler::last_tile_at(1)` in the compute kernel, like `toy_variance` does.
 - Ensure the partial-scaler tile zeros the padded positions so the reduce sees `0 × y_pad` for those lanes.
 - **Note from verifier**: this is straightforward — toy_variance is a textbook reference, all the helper plumbing exists. Mostly bookkeeping.
 
-### [ ] Refinement 6 — ROW_MAJOR input support
+### [ ] Refinement 7 — ROW_MAJOR input support
 
 - Today's validator rejects ROW_MAJOR layout. Add an in-kernel tilize / fused tilize-then-compute path (or rely on host-side `to_layout(TILE)` being implicit when the API accepts ROW_MAJOR).
 - Probably easier to call host-side `to_layout` inside the entry point and document the cost.
 
-### [ ] Refinement 7 — Rank flexibility
+### [ ] Refinement 8 — Rank flexibility
 
 - Today's validator rejects rank ≠ 4. PyTorch supports any rank (with the reduction dim valid for that rank).
 - Internally reshape to `(N, C, H, W)` (e.g. by squeezing to 4D via leading-1 dims) before launch. This is a pure entry-point change — no kernel changes — as long as `dim ∈ {-1, -2}` corresponds to W/H of the reshaped 4D tensor.
 
-### [ ] Refinement 8 — Additional `dim` values (`dim=-3`, `dim=-4`, positive dims)
+### [ ] Refinement 9 — Additional `dim` values (`dim=-3`, `dim=-4`, positive dims)
 
 - Today's validator rejects all dims except `{-1, -2}`. The kernel only knows two reader formulas (W reduce, H reduce).
 - For other dims, the natural implementation is to permute the tensor so the reduction axis lands on the last axis, run the existing kernel, then permute back. Or write new reader formulas.
 - Probably easiest as a permute + recurse-on-self.
 
-### [ ] Refinement 9 — Memory pressure (sharded inputs/outputs, large shapes)
+### [ ] Refinement 10 — Memory pressure (sharded inputs/outputs, large shapes)
 
 - Today the operation always launches with interleaved DRAM/L1 inputs and outputs.
 - For sharded inputs, the reader's `TensorAccessor` pattern works without changes if the shard layout matches lane decomposition; otherwise the reader needs core-local lane→tile_id mapping.

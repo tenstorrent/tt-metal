@@ -1,13 +1,13 @@
 # Capabilities: backward_softmax
 
-> Last updated: 2026-05-08 by incremental-verifier (Phase 0)
+> Last updated: 2026-05-18 by ttnn-implementer (Refinement 1)
 
 | Dimension | Status | Details |
 |-----------|--------|---------|
 | **Data formats** | float32 only | `_validate` rejects any dtype other than `ttnn.float32` (`backward_softmax.py:68-80`). bfloat16, bfloat8_b, int32 etc. → `ValueError`. Both inputs must match. |
 | **Layouts** | TILE only | `_validate` rejects `ROW_MAJOR_LAYOUT` for both inputs (`backward_softmax.py:83-90`). Caller must `to_layout(TILE_LAYOUT)` first. |
 | **Memory configs** | DRAM or L1 interleaved | The entry point's `memory_config` kwarg routes the *output* (default `DRAM_MEMORY_CONFIG`); inputs may live in DRAM or L1 (the kernel uses `TensorAccessor` which handles either). No sharded path. |
-| **Core count** | **Single-core** | The program descriptor pins `core_grid = CoreRange(CoreCoord(0,0))` (`backward_softmax_program_descriptor.py:81-82`). All lanes for the full tensor are processed serially on Tensix (0,0). |
+| **Core count** | **Multi-core — full `compute_with_storage` grid, balanced** | Lanes (one tile-row for `dim=-1`, one tile-column for `dim=-2`) are partitioned across `device.compute_with_storage_grid_size()` via `ttnn.split_work_to_cores`. Per-core lane counts differ by at most one (`backward_softmax_program_descriptor.py:86-104, 247-281`). When `total_lanes < num_grid_cores`, only the cores that receive work are part of the program. No inter-core communication; each core runs its lane slice end-to-end. `num_lanes` and `start_lane` are per-core runtime args. |
 | **Compute config** | Hard-coded, not exposed | Entry point does **not** accept `compute_kernel_config`. Internally pins `MathFidelity.HiFi4` + `fp32_dest_acc_en=True` (`backward_softmax_program_descriptor.py:251-258`). |
 | **Shape support** | Tile-aligned only, rank exactly 4 | `_validate` requires `len(shape) == 4` and `H % 32 == 0`, `W % 32 == 0` (`backward_softmax.py:93-115`). Non-aligned or rank ≠ 4 → `ValueError`. |
 | **Rank support** | 4 only | Rank 2, 3, 5+ all rejected by `_validate`. |
