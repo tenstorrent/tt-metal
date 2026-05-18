@@ -61,7 +61,7 @@ class TTProsodyPredictorParams:
     style_dim: int
 
 
-def _conv1d_no_weightnorm_to_tt_params(conv: nn.Conv1d, device, *, weights_dtype) -> TTConv1dParams:
+def _conv1d_no_weightnorm_to_tt_params(conv: nn.Conv1d, *, weights_dtype) -> TTConv1dParams:
     """Upload a plain ``nn.Conv1d`` (no weight_norm) to TT in the layout :func:`tt_conv1d_nlc` expects."""
     w = conv.weight.detach().cpu().unsqueeze(-1)
     w_tt = ttnn.from_torch(
@@ -121,8 +121,8 @@ def preprocess_tt_prosody_predictor(
         for b in module.N
     )
 
-    f0_proj = _conv1d_no_weightnorm_to_tt_params(module.F0_proj, device, weights_dtype=conv_weights_dtype)
-    n_proj = _conv1d_no_weightnorm_to_tt_params(module.N_proj, device, weights_dtype=conv_weights_dtype)
+    f0_proj = _conv1d_no_weightnorm_to_tt_params(module.F0_proj, weights_dtype=conv_weights_dtype)
+    n_proj = _conv1d_no_weightnorm_to_tt_params(module.N_proj, weights_dtype=conv_weights_dtype)
 
     d_hid = int(module.text_encoder.d_model)
     style_dim = int(module.text_encoder.sty_dim)
@@ -280,12 +280,12 @@ class TTProsodyPredictor:
         ck = self.compute_kernel_config
         y = x_nlc
         for block in blocks:
-            y = block.forward(y, style_bs, memory_config=memory_config)
+            y_new = block.forward(y, style_bs, memory_config=memory_config)
+            if y is not x_nlc:
+                ttnn.deallocate(y)
+            y = y_new
         y = tt_conv1d_nlc(
             x_nlc=y, params=proj_params, device=self.device, compute_config=ck, memory_config=memory_config
         )
-        # ``y`` is ``[B, T_out, 1]``; squeeze the channel dim.
-        y_shape = list(y.shape)
-        assert int(y_shape[-1]) == 1, f"Expected single-channel output, got {y_shape}"
-        y = ttnn.squeeze(y, -1)
-        return y
+        assert int(y.shape[-1]) == 1, f"Expected single-channel output, got {list(y.shape)}"
+        return ttnn.squeeze(y, -1)

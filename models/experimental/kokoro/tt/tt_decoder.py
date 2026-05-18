@@ -190,9 +190,9 @@ def preprocess_tt_decoder(
 class TTDecoder:
     """TTNN port of ``Decoder`` (``TorchSTFT`` path; ``disable_complex=True`` is out of scope).
 
-    ``use_torch_stft_fallback`` / ``use_torch_phase_fallback`` are passed through to
-    :class:`TTGenerator`; both are required together to achieve PCC > 0.99 on BH hardware
-    (see :class:`TTGenerator` and ``test_tt_generator_pcc`` for the rationale).
+    Generator fallback controls are passed through to :class:`TTGenerator`.
+    For highest-PCC matching on BH hardware, combine STFT/phase with source linear/tanh
+    fallbacks (see :class:`TTGenerator` and ``test_tt_generator_pcc``).
     """
 
     def __init__(
@@ -202,6 +202,8 @@ class TTDecoder:
         *,
         use_torch_stft_fallback: bool = False,
         use_torch_phase_fallback: bool = False,
+        use_torch_linear_fallback: bool = False,
+        use_torch_tanh_fallback: bool = False,
     ) -> None:
         self.device = device
         self.params = params
@@ -219,6 +221,8 @@ class TTDecoder:
             params.generator,
             use_torch_stft_fallback=use_torch_stft_fallback,
             use_torch_phase_fallback=use_torch_phase_fallback,
+            use_torch_linear_fallback=use_torch_linear_fallback,
+            use_torch_tanh_fallback=use_torch_tanh_fallback,
         )
 
     def forward(
@@ -290,23 +294,38 @@ class TTDecoder:
         if len(n_shape) == 2:
             ttnn.deallocate(n_nlc)
 
-        # dtype of the conditioning tensors — cast x back to this after each block so that
-        # TTAdainResBlk1d's default bfloat16 output doesn't create a dtype mismatch in concat.
-        cond_dtype = F0_down.dtype
+        # Keep the whole decode-conditioning path in fp32. In end-to-end runs F0/N/asr often
+        # enter as bf16; recasting x back to bf16 after each AdaIN block compounds error and
+        # lowers decoder/full-model PCC.
+        target_dtype = ttnn.float32
+        if F0_down.dtype != target_dtype:
+            F0_down_cast = ttnn.typecast(F0_down, target_dtype, memory_config=memory_config)
+            ttnn.deallocate(F0_down)
+            F0_down = F0_down_cast
+        if N_down.dtype != target_dtype:
+            N_down_cast = ttnn.typecast(N_down, target_dtype, memory_config=memory_config)
+            ttnn.deallocate(N_down)
+            N_down = N_down_cast
+
+        asr_nlc_fp32 = asr_nlc
+        owns_asr_nlc_fp32 = False
+        if asr_nlc.dtype != target_dtype:
+            asr_nlc_fp32 = ttnn.typecast(asr_nlc, target_dtype, memory_config=memory_config)
+            owns_asr_nlc_fp32 = True
 
         # -- Encode block -------------------------------------------------------
         # x = cat([asr, F0, N], dim=channel)  [B, T_mel, dim_in+2]
-        x = ttnn.concat([asr_nlc, F0_down, N_down], dim=2, memory_config=memory_config)
+        x = ttnn.concat([asr_nlc_fp32, F0_down, N_down], dim=2, memory_config=memory_config)
         x = self._encode.forward(x, s_bs, memory_config=memory_config)  # [B, T_mel, 1024]
-        if x.dtype != cond_dtype:
-            x_cast = ttnn.typecast(x, cond_dtype, memory_config=memory_config)
+        if x.dtype != target_dtype:
+            x_cast = ttnn.typecast(x, target_dtype, memory_config=memory_config)
             ttnn.deallocate(x)
             x = x_cast
 
         # -- ASR residual projection (1x1 conv) ---------------------------------
         asr_res = _to_interleaved(
             tt_conv1d_nlc(
-                x_nlc=asr_nlc,
+                x_nlc=asr_nlc_fp32,
                 params=p.asr_res,
                 device=dev,
                 compute_config=ck,
@@ -315,6 +334,8 @@ class TTDecoder:
             ),
             memory_config,
         )  # [B, T_mel, 64]
+        if owns_asr_nlc_fp32:
+            ttnn.deallocate(asr_nlc_fp32)
 
         # -- Decode blocks ------------------------------------------------------
         res = True
@@ -325,8 +346,8 @@ class TTDecoder:
                 x = x_cat
             x = blk.forward(x, s_bs, memory_config=memory_config)
             # Cast back so the next iteration's concat sees a uniform dtype.
-            if x.dtype != cond_dtype:
-                x_cast = ttnn.typecast(x, cond_dtype, memory_config=memory_config)
+            if x.dtype != target_dtype:
+                x_cast = ttnn.typecast(x, target_dtype, memory_config=memory_config)
                 ttnn.deallocate(x)
                 x = x_cast
             if blk._params.layer_type != "none":
