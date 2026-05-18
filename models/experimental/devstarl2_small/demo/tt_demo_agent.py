@@ -1,16 +1,21 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# Tenstorrent variant of ``demo_agent.py``: same interactive agent tools and chat loop, but generation runs on **TT** via ``TtDevstral2SmallModel`` (Pixtral vision + projector + ``TtMinistral3`` LM), then LM head and ``SamplingGenerator`` / CPU logits (``demo_devstral2_tt_multimodal`` / ``demo_model_loading_prompt``). **Per turn:** one full TT prefill of the current chat history (rebuilds KV cache) followed by a **traced TT decode** for each new token. The single-token decode trace is captured...
+# Tenstorrent variant of the CPU agent demo: same interactive agent tools and chat loop inlined below, via ``TtDevstral2SmallModel`` (Pixtral vision + projector + ``TtMinistral3`` LM), then LM head and ``SamplingGenerator`` / CPU logits (``tt_text_demo`` / ``tt_image_demo``). **Per turn:** one full TT prefill of the current chat history (rebuilds KV cache) followed by a **traced TT decode** for each new token. The single-token decode trace is captured...
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import shlex
+import subprocess
 import types
-from dataclasses import dataclass
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -22,15 +27,7 @@ from transformers.models.ministral3.configuration_ministral3 import Ministral3Co
 from transformers.models.mistral3.modeling_mistral3 import Mistral3Model
 
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
-from models.experimental.devstarl2_small.demo import demo_model_loading_prompt as _mlp
-from models.experimental.devstarl2_small.demo.demo_agent import (
-    DEFAULT_AGENT_RULES,
-    DEFAULT_SYSTEM_PROMPT,
-    AgentState,
-    ChatConfig,
-    execute_tool_call,
-    parse_tool_call,
-)
+from models.experimental.devstarl2_small.demo import tt_image_demo as _mlp
 from models.experimental.devstarl2_small.devstral_utils import (
     DEFAULT_MODEL_ID,
     TtDecodeTraceContext,
@@ -66,6 +63,336 @@ from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import ModelArgs
 
 apply_fp8_dequantize_compat()
+
+# --- Agent tool scaffolding (inlined from demo_agent.py; TT path replaces HF generate only) ---
+
+DEFAULT_SYSTEM_PROMPT = (
+    "You are Devstral Agent, a concise and practical coding assistant. "
+    "Help with debugging, implementation, and code review in a local repository."
+)
+DEFAULT_AGENT_RULES = """
+You have these tools available:
+- terminal(command)
+- bash(command)
+- read_file(path, offset=1, limit=200)
+- write_file(path, content, append=false)
+- search_replace(path, search, replace, max_replacements=0)
+- grep(pattern, path=".", glob="*", case_insensitive=false, max_results=200)
+- web_search(query, max_results=5)
+- web_fetch(url, max_chars=12000)
+- todo(action, id="", content="", status="", items=[])
+- ask_user_question(question)
+- load_skill(path)
+- inspect_codebase(path=".", max_entries=300)
+- delegate_task(command, description="")
+
+Tool-call format (only this content when calling a tool):
+<tool_call>
+{"name":"tool_name","arguments":{"arg":"value"}}
+</tool_call>
+
+When you receive <tool_result>, use it and continue.
+Prefer read_file/write_file/search_replace/grep for repository tasks over generic terminal commands.
+"""
+
+
+@dataclass
+class ChatConfig:
+    model_id: str
+    max_new_tokens: int
+    temperature: float
+    top_p: float
+    do_sample: bool
+    device: str
+    system_prompt: str
+    workspace_root: str
+    command_timeout_sec: int
+    max_tool_calls_per_turn: int
+
+
+@dataclass
+class AgentState:
+    todos: List[Dict[str, str]] = field(default_factory=list)
+
+
+def parse_tool_call(text: str) -> Optional[Dict[str, Any]]:
+    match = re.search(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", text, flags=re.DOTALL)
+    if not match:
+        return None
+    try:
+        payload = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _limit_text(text: str, max_chars: int = 12000) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n... [truncated]"
+
+
+def _resolve_workspace_path(workspace_root: str, raw_path: str) -> Path:
+    root = Path(workspace_root).resolve()
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    candidate = candidate.resolve()
+    if root not in candidate.parents and candidate != root:
+        raise ValueError("Path escapes workspace_root.")
+    return candidate
+
+
+def run_shell(command: str, workspace_root: str, timeout_sec: int) -> Dict[str, Any]:
+    try:
+        completed = subprocess.run(
+            ["bash", "-lc", command],
+            cwd=workspace_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+        output = (
+            (completed.stdout or "")
+            + ("\n" if completed.stdout and completed.stderr else "")
+            + (completed.stderr or "")
+        ).strip()
+        return {
+            "ok": completed.returncode == 0,
+            "exit_code": completed.returncode,
+            "output": _limit_text(output),
+        }
+    except subprocess.TimeoutExpired as exc:
+        partial = ((exc.stdout or "") + ("\n" if exc.stdout and exc.stderr else "") + (exc.stderr or "")).strip()
+        return {
+            "ok": False,
+            "exit_code": None,
+            "output": _limit_text(partial),
+            "error": f"Command timed out after {timeout_sec} seconds.",
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "exit_code": None, "output": "", "error": str(exc)}
+
+
+def tool_read_file(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
+    try:
+        path = _resolve_workspace_path(config.workspace_root, str(args.get("path", "")))
+        offset = int(args.get("offset", 1))
+        limit = int(args.get("limit", 200))
+        lines = path.read_text(encoding="utf-8").splitlines()
+        start = max(offset - 1, 0)
+        end = min(start + max(limit, 1), len(lines))
+        rendered = "\n".join(f"{idx + 1}|{lines[idx]}" for idx in range(start, end))
+        return {"ok": True, "path": str(path), "output": _limit_text(rendered)}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
+def tool_write_file(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
+    try:
+        path = _resolve_workspace_path(config.workspace_root, str(args.get("path", "")))
+        content = str(args.get("content", ""))
+        append = bool(args.get("append", False))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        mode = "a" if append else "w"
+        with path.open(mode, encoding="utf-8") as f:
+            f.write(content)
+        return {"ok": True, "path": str(path), "bytes_written": len(content.encode("utf-8"))}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
+def tool_search_replace(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
+    try:
+        path = _resolve_workspace_path(config.workspace_root, str(args.get("path", "")))
+        search = str(args.get("search", ""))
+        replace = str(args.get("replace", ""))
+        max_replacements = int(args.get("max_replacements", 0))
+        text = path.read_text(encoding="utf-8")
+        if max_replacements <= 0:
+            count = text.count(search)
+            updated = text.replace(search, replace)
+        else:
+            updated = text.replace(search, replace, max_replacements)
+            count = min(text.count(search), max_replacements)
+        path.write_text(updated, encoding="utf-8")
+        return {"ok": True, "path": str(path), "replacements": count}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
+def tool_grep(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
+    pattern = str(args.get("pattern", ""))
+    rel_path = str(args.get("path", "."))
+    glob = str(args.get("glob", "*"))
+    case_insensitive = bool(args.get("case_insensitive", False))
+    max_results = int(args.get("max_results", 200))
+    if not pattern:
+        return {"ok": False, "error": "pattern is required"}
+    target = _resolve_workspace_path(config.workspace_root, rel_path)
+    cmd = ["rg", "-n", "--glob", glob, "--max-count", str(max_results), pattern, str(target)]
+    if case_insensitive:
+        cmd.insert(1, "-i")
+    return run_shell(
+        " ".join(subprocess.list2cmdline([part]) for part in cmd), config.workspace_root, config.command_timeout_sec
+    )
+
+
+def tool_web_fetch(args: Dict[str, Any]) -> Dict[str, Any]:
+    url = str(args.get("url", ""))
+    max_chars = int(args.get("max_chars", 12000))
+    if not url:
+        return {"ok": False, "error": "url is required"}
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "devstral-demo-agent/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+        return {"ok": True, "url": url, "output": _limit_text(body, max_chars=max_chars)}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
+def tool_web_search(args: Dict[str, Any]) -> Dict[str, Any]:
+    query = str(args.get("query", "")).strip()
+    max_results = int(args.get("max_results", 5))
+    if not query:
+        return {"ok": False, "error": "query is required"}
+    encoded = urllib.parse.quote_plus(query)
+    url = f"https://duckduckgo.com/html/?q={encoded}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "devstral-demo-agent/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+        matches = re.findall(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', html)
+        results: List[Dict[str, str]] = []
+        for href, title_html in matches[:max_results]:
+            title = re.sub(r"<.*?>", "", title_html)
+            results.append({"title": title, "url": href})
+        return {"ok": True, "query": query, "results": results}
+    except urllib.error.URLError as exc:
+        return {"ok": False, "error": f"Search failed: {exc}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
+def tool_todo(args: Dict[str, Any], state: AgentState) -> Dict[str, Any]:
+    action = str(args.get("action", "list")).lower()
+    if action == "list":
+        return {"ok": True, "todos": state.todos}
+    if action == "clear":
+        state.todos = []
+        return {"ok": True, "todos": state.todos}
+    if action == "add":
+        item = {
+            "id": str(args.get("id", f"todo-{len(state.todos) + 1}")),
+            "content": str(args.get("content", "")),
+            "status": str(args.get("status", "pending")),
+        }
+        state.todos.append(item)
+        return {"ok": True, "todos": state.todos}
+    if action == "update":
+        todo_id = str(args.get("id", ""))
+        for item in state.todos:
+            if item["id"] == todo_id:
+                if "content" in args:
+                    item["content"] = str(args["content"])
+                if "status" in args:
+                    item["status"] = str(args["status"])
+                return {"ok": True, "todos": state.todos}
+        return {"ok": False, "error": f"Todo id not found: {todo_id}"}
+    if action == "set":
+        raw_items = args.get("items", [])
+        if not isinstance(raw_items, list):
+            return {"ok": False, "error": "items must be a list"}
+        parsed: List[Dict[str, str]] = []
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                continue
+            parsed.append(
+                {
+                    "id": str(raw.get("id", f"todo-{len(parsed) + 1}")),
+                    "content": str(raw.get("content", "")),
+                    "status": str(raw.get("status", "pending")),
+                }
+            )
+        state.todos = parsed
+        return {"ok": True, "todos": state.todos}
+    return {"ok": False, "error": f"Unsupported todo action: {action}"}
+
+
+def tool_ask_user_question(args: Dict[str, Any]) -> Dict[str, Any]:
+    question = str(args.get("question", "Please provide more detail:")).strip()
+    answer = input(f"[Agent question] {question}\nYour answer: ").strip()
+    return {"ok": True, "question": question, "answer": answer}
+
+
+def tool_load_skill(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
+    try:
+        path = _resolve_workspace_path(config.workspace_root, str(args.get("path", "")))
+        content = path.read_text(encoding="utf-8")
+        return {"ok": True, "path": str(path), "content": _limit_text(content)}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
+def tool_inspect_codebase(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
+    try:
+        base = _resolve_workspace_path(config.workspace_root, str(args.get("path", ".")))
+        max_entries = int(args.get("max_entries", 300))
+        entries: List[str] = []
+        for p in sorted(base.rglob("*")):
+            if ".git" in p.parts:
+                continue
+            entries.append(str(p.relative_to(config.workspace_root)))
+            if len(entries) >= max_entries:
+                break
+        return {"ok": True, "path": str(base), "entries": entries}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
+def execute_tool_call(tool_call: Dict[str, Any], config: ChatConfig, state: AgentState) -> Dict[str, Any]:
+    name = str(tool_call.get("name", ""))
+    args = tool_call.get("arguments", {})
+    if not isinstance(args, dict):
+        return {"ok": False, "error": "arguments must be an object"}
+
+    if name in ("terminal", "bash"):
+        if "command" not in args:
+            return {"ok": False, "error": "command is required"}
+        return run_shell(str(args["command"]), config.workspace_root, config.command_timeout_sec)
+    if name == "read_file":
+        return tool_read_file(args, config)
+    if name == "write_file":
+        return tool_write_file(args, config)
+    if name == "search_replace":
+        return tool_search_replace(args, config)
+    if name == "grep":
+        return tool_grep(args, config)
+    if name == "web_search":
+        return tool_web_search(args)
+    if name == "web_fetch":
+        return tool_web_fetch(args)
+    if name == "todo":
+        return tool_todo(args, state)
+    if name == "ask_user_question":
+        return tool_ask_user_question(args)
+    if name == "load_skill":
+        return tool_load_skill(args, config)
+    if name == "inspect_codebase":
+        return tool_inspect_codebase(args, config)
+    if name == "delegate_task":
+        if "command" not in args:
+            return {"ok": False, "error": "command is required"}
+        result = run_shell(str(args["command"]), config.workspace_root, config.command_timeout_sec)
+        result["description"] = str(args.get("description", ""))
+        result["delegated"] = True
+        return result
+    return {"ok": False, "error": f"Unknown tool: {name}"}
+
 
 # Tell the instruct model that Pixtral inputs are real in this demo; otherwise it mimics a text-only agent.
 TT_AGENT_MULTIMODAL_SYSTEM_APPEND = """
@@ -113,9 +440,7 @@ class TtAgentRuntime:
     auto_processor: Optional[Any] = None
     image_token_id: Optional[int] = None
     _img_rows_cache: Optional[torch.Tensor] = None
-    # Lazily captured single-token decode trace. Shared across all generate calls in the
-    # session: the kernel sequence does not depend on the prompt or chat history, only the
-    # KV cache state, so one warmup + capture amortizes over every turn of the agent loop.
+    # Lazily captured single-token decode trace (reuse session-wide; KV differs per turn but graph is fixed).
     decode_trace_ctx: Optional[TtDecodeTraceContext] = None
 
 
@@ -133,7 +458,9 @@ def _tokenizer_apply_messages(
 
 
 def _inject_image_into_first_human_user(messages: List[Dict[str, str]]) -> List[Dict[str, Any]]:
-    """First non-tool ``user`` message becomes Pixtral-style image + text; ``<tool_result>`` rows stay plain."""
+    """Upgrade the first real ``user`` turn to Pixtral-style image+text.
+
+    Skip rows whose content starts with ``<tool_result>``."""
     out: List[Dict[str, Any]] = []
     image_done = False
     for m in messages:
@@ -233,11 +560,10 @@ def _parse_tt_image_command(line: str) -> tuple[Path, str | None] | None:
 
 
 def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
-    """Open mesh, load weights, build ``TtDevstral2SmallModel`` + LM head + optional ``SamplingGenerator``."""
+    """Load tokenizer/HF cache, open mesh, construct TT Devstral + LM head + optional device sampling."""
     os.environ["HF_MODEL"] = config.model_id
     apply_devstral_hf_trust_patches()
 
-    print(f"Loading tokenizer: {config.model_id}")
     _tok_kw: dict[str, Any] = {}
     if os.getenv("CI") == "true":
         _tok_kw["local_files_only"] = True
@@ -262,15 +588,13 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
         dtype_tt = ttnn.bfloat16
         if config.max_seq_len is None:
             max_seq = max(4096, need)
-            print(f"TT max_seq_len={max_seq} (default cap; need={need}).")
         else:
             if config.max_seq_len < need:
                 print(f"Warning: --max-seq-len {config.max_seq_len} < need {need}; using {need} for ModelArgs.")
                 max_seq = need
             else:
                 max_seq = config.max_seq_len
-            print(f"TT max_seq_len={max_seq} (explicit --max-seq-len; need={need}).")
-        # Round up to a multiple of 512 so SDPA decode k_chunk_size is always >= 512 (a multiple of 32).
+        # Round max_seq to multiple of 512 so SDPA decode k_chunk_size stays ≥512 (multiple of 32).
         max_seq = ((max_seq + 511) // 512) * 512
 
         model_args = ModelArgs(
@@ -281,15 +605,12 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
             use_hf_rope=True,
             cache_hf=True,
         )
-        # Multi-chip: PREFILL is gathered to full-dim inside the decoder layer
-        # (replicated norm), DECODE leaves residual width-fractured across chips
-        # (distributed norm). Single chip: replicated norm for both modes.
+        # Multi-chip: prefill uses gathered residual (replicated norm); decode keeps width-sharded residual (distributed norm). Single device: replicated both.
         model_args.is_distributed_norm = types.MethodType(
             lambda self, mode: self.is_multichip and mode == Mode.DECODE,
             model_args,
         )
 
-        print("Loading checkpoint via ModelArgs.load_state_dict() …")
         meta_state_dict = model_args.load_state_dict()
 
         if config.text_layers is not None:
@@ -337,7 +658,6 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
         if config.vision_image is not None:
             img_path = Path(config.vision_image)
             sticky_pil, auto_processor, image_token_id = _load_sticky_image_bundle(config, hf_full, img_path)
-            print(f"Multimodal: sticky image {img_path.resolve()} (token id {image_token_id}).")
 
         sd_prefix = model_args.get_state_dict_prefix("", None)
         out_key = f"{sd_prefix}output.weight"
@@ -348,7 +668,6 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
         tt_lm_head: Optional[LMHead] = None
         if config.lm_head_cpu:
             lm_head_weight_cpu = meta_state_dict[out_key].detach().to(torch.bfloat16).cpu().contiguous()
-            print(f"CPU LM head weight shape {tuple(lm_head_weight_cpu.shape)}.")
         else:
             lm_max = demo_lm_head_max_columns_per_device(model_args, cli_cap=config.lm_head_max_device_cols)
             tt_lm_head = LMHead(
@@ -399,7 +718,6 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
             sampling.reset_sampling_params(formatted_sampling)
             sampling.seed_manager.reset_seed(formatted_sampling.seed, sampling_empty_slots)
 
-        print("TT agent runtime ready.")
         return TtAgentRuntime(
             mesh_device=mesh_device,
             tokenizer=tokenizer,
@@ -427,12 +745,13 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
 
 
 def _ensure_decode_trace(rt: TtAgentRuntime, seed_token_id: int, seed_decode_pos: int) -> TtDecodeTraceContext:
-    """Lazily build the session-wide single-token decode trace. Called once on the first decode step of the first generate call. The captured trace is reused across every following call (text or multimodal) because the kernel sequence for one decode step does not depend on the prompt — only on the KV cache contents, which the per-call prefill rewrites."""
+    """Capture once per session; replay for every decode step after each prefill refreshes KV.
+
+    Graph is prompt-independent; only KV tensor contents change between turns."""
     if rt.decode_trace_ctx is not None:
         return rt.decode_trace_ctx
     decode_buffers = tt_alloc_decode_input_buffers(rt.mesh_device)
     tt_update_decode_input_buffers(rt.mesh_device, decode_buffers, int(seed_token_id), int(seed_decode_pos))
-    print("Capturing decode trace (warmup + capture)…")
     rt.decode_trace_ctx = tt_capture_decode_trace(
         rt.mesh_device,
         rt.tt_language_model,
@@ -441,7 +760,6 @@ def _ensure_decode_trace(rt: TtAgentRuntime, seed_token_id: int, seed_decode_pos
         tt_lm_head=None if rt.cfg.lm_head_cpu else rt.tt_lm_head,
         sampling=rt.sampling,
     )
-    print("Decode trace ready (reused across all subsequent turns).")
     return rt.decode_trace_ctx
 
 
@@ -492,7 +810,9 @@ def _sample_next_from_decode_trace(rt: TtAgentRuntime) -> int:
 
 
 def generate_assistant_text_tt(rt: TtAgentRuntime, messages: List[Dict[str, str]], config: TTAgentConfig) -> str:
-    """One prompt-prefill + per-token traced decode (text or sticky-image multimodal). Decode trace is captured lazily on the first call of the session and reused for every subsequent turn (see :func:`_ensure_decode_trace`)."""
+    """Prefill full prompt then append tokens via traced decode (text or sticky vision).
+
+    Uses :func:`_ensure_decode_trace` for the reusable single-step decode graph."""
     pixel_values: Optional[torch.Tensor] = None
     image_sizes: Optional[torch.Tensor] = None
     image_sizes_list: Optional[list[tuple[int, int]]] = None
@@ -778,7 +1098,7 @@ def parse_tt_args() -> TTAgentConfig:
     )
     p.add_argument("--model", default=DEFAULT_MODEL_ID, help=f"HF model id (default {DEFAULT_MODEL_ID})")
 
-    # Agent (same names as demo_agent.py where possible)
+    # Agent (CLI parity with demo_agent.py)
     p.add_argument("--max-new-tokens", type=int, default=256, help="Max new tokens per model call")
     p.add_argument("--temperature", type=float, default=0.15)
     p.add_argument("--top-p", type=float, default=0.95)

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# Shared chat template + generation kwargs for ``reference/inference.py`` and the TT demo. Keeping a single source for these values avoids drift; the TT demo uses them by default for tokenization and includes ``--hf-generate`` for the same ``generate()`` kwargs as ``reference/inference.py``.
+# Shared system prompt, tool schemas, default chat messages, and Hugging Face ``generate()`` kwargs for TT text/image demos (no imports with side effects).
 
 from __future__ import annotations
 
@@ -39,7 +39,6 @@ REFERENCE_MESSAGES: list = [
             {
                 "type": "text",
                 "text": (
-                    # "Write a Python one-liner or short function factorial(n). Use the python tool to run factorial(6) and report the integer result only (no prose)."
                     "Can you implement in Python a method to compute the fibonnaci sequence at the `n`th element "
                     "with `n` a parameter passed to the function? Start the sequence from 1."
                 ),
@@ -146,14 +145,12 @@ REFERENCE_TOOLS: list = [
     },
 ]
 
-# Keyword arguments passed to ``Mistral3ForConditionalGeneration.generate`` in ``reference/inference.py``.
 REFERENCE_GENERATE_KWARGS = {
     "max_new_tokens": 200,
     "do_sample": True,
     "temperature": 0.15,
 }
 
-# Backward-compatible name used by ``reference/inference.py`` after refactor.
 REFERENCE_TEMPLATE_INPUT = {"messages": REFERENCE_MESSAGES, "tools": REFERENCE_TOOLS}
 
 __all__ = [

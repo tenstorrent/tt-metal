@@ -11,7 +11,7 @@ from models.common.lightweightmodule import LightweightModule
 
 
 class TtPixtralPatchConv(LightweightModule):
-    """Patch Conv for Pixtral / Devstral vision towers. Maps checkpoint keys ``{prefix}_linear.weight`` / ``{prefix}_linear.bias`` (meta layout after ``convert_vision_hf_to_meta``). Accepts torch ``[N, C, H, W]``, returns ``[N, num_patches, out_channels]``."""
+    """Pixtral patch Conv via meta keys ``{prefix}_linear.*``; torch ``[N,C,H,W]`` → ``[N,patches,out]``."""
 
     def __init__(
         self,

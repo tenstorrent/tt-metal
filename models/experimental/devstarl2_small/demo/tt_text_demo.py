@@ -18,7 +18,7 @@ from transformers.models.mistral3.modeling_mistral3 import Mistral3Model
 
 import ttnn
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
-from models.common.utility_functions import comp_allclose, comp_pcc
+from models.common.utility_functions import comp_pcc
 from models.experimental.devstarl2_small.devstral_utils import (
     DEFAULT_MODEL_ID,
     apply_devstral_hf_trust_patches,
@@ -46,7 +46,7 @@ from models.experimental.devstarl2_small.devstral_utils import (
     tt_sampling_output_token_id,
     tt_update_decode_input_buffers,
 )
-from models.experimental.devstarl2_small.reference.inference_fixtures import (
+from models.experimental.devstarl2_small.devstral_utils.chat_reference import (
     REFERENCE_GENERATE_KWARGS,
     REFERENCE_MESSAGES,
     REFERENCE_TOOLS,
@@ -86,7 +86,7 @@ def main():
         "--simple-chat",
         action="store_true",
         help="Tokenize a minimal chat from --prompt/--system-prompt only. "
-        "Default: same messages+tools as reference/inference.py (inference_fixtures).",
+        "Default: same messages+tools as ``devstral_utils/chat_reference.py``.",
     )
     parser.add_argument(
         "--text-layers",
@@ -104,12 +104,12 @@ def main():
         "--max-new-tokens",
         type=int,
         default=ref_max,
-        help=f"New tokens after prompt (default {ref_max}, same as reference/inference.py). 0 = skip generation.",
+        help=f"New tokens after prompt (default {ref_max}, from devstral_utils.chat_reference). 0 = skip generation.",
     )
     parser.add_argument(
         "--greedy",
         action="store_true",
-        help=f"Greedy argmax (default: sample with temperature {ref_temp}, like reference/inference.py).",
+        help=f"Greedy argmax (default: sample with temperature {ref_temp}, from devstral_utils.chat_reference).",
     )
     parser.add_argument(
         "--temperature",
@@ -192,8 +192,7 @@ def main():
         input_ids = tokenized["input_ids"]
         prompt_len = int(input_ids.shape[1])
         extra_tokens = max(0, args.max_new_tokens)
-        # Upper bound padded prefill length: 128-step fixes for KV shard tile height + generation growth.
-        # Round up to a multiple of 512 so SDPA decode k_chunk_size is always >= 512 (a multiple of 32).
+        # Padded max_seq covers KV tile stepping + growth; round to 512 so SDPA decode k_chunk ≥512.
         max_seq = max(4096, prompt_len + extra_tokens + 2048)
         max_seq = ((max_seq + 511) // 512) * 512
 
@@ -205,15 +204,12 @@ def main():
             use_hf_rope=True,
             cache_hf=True,
         )
-        # Multi-chip: PREFILL is gathered to full-dim inside the decoder layer
-        # (replicated norm), DECODE leaves residual width-fractured across chips
-        # (distributed norm). Single chip: replicated norm for both modes.
+        # Multi-chip: prefill uses gathered residual (replicated norm); decode keeps width-sharded residual (distributed norm). Single device: replicated both.
         model_args.is_distributed_norm = types.MethodType(
             lambda self, mode: self.is_multichip and mode == Mode.DECODE,
             model_args,
         )
 
-        logger.info("Loading checkpoint via ModelArgs.load_state_dict() …")
         try:
             meta_state_dict = model_args.load_state_dict()
         except Exception as exc:
@@ -229,9 +225,7 @@ def main():
                 )
             model_args.n_layers = args.text_layers
             if args.max_new_tokens > 0 and not args.hf_generate:
-                logger.warning(
-                    "Partial --text-layers: TT generation will not match full-model reference/inference.py quality."
-                )
+                logger.warning("Partial --text-layers: TT generation will not match full-model HF quality.")
 
         hf_full = model_args.cached_hf_model
         if hf_full is None:
@@ -271,20 +265,8 @@ def main():
         tt_lm_head: LMHead | None = None
         if args.lm_head_cpu:
             lm_head_weight_cpu = meta_state_dict[out_key].detach().to(torch.bfloat16).cpu().contiguous()
-            logger.info(
-                f"CPU LM head: chunked torch matmul; weight {tuple(lm_head_weight_cpu.shape)} {lm_head_weight_cpu.dtype}."
-            )
         else:
             lm_head_max_cols = demo_lm_head_max_columns_per_device(model_args, cli_cap=args.lm_head_max_device_cols)
-            logger.info(
-                f"On-device LMHead max columns per shard: {lm_head_max_cols} "
-                f"(ModelArgs value {model_args.max_columns_per_device_lm_head})."
-            )
-            if lm_head_max_cols < int(model_args.max_columns_per_device_lm_head):
-                logger.info(
-                    "Tune with --lm-head-max-device-cols or DEVSTRAL2_LM_HEAD_MAX_COLUMNS_PER_DEVICE, "
-                    "or use --lm-head-cpu if L1 CB errors persist."
-                )
             tt_lm_head = LMHead(
                 args=model_args,
                 mesh_device=mesh_device,
@@ -336,12 +318,6 @@ def main():
             sampling.reset_sampling_params(formatted_sampling)
             sampling.seed_manager.reset_seed(formatted_sampling.seed, sampling_empty_slots)
 
-        _sampling_splits = model_args.num_devices if list(mesh_device.shape) != [1, 1] else 2
-        if sampling is not None and model_args.vocab_size // _sampling_splits <= 64 * 1024:
-            logger.info(
-                f"Using on-device SamplingGenerator (vocab split check OK; {len(sampling_empty_slots)} sampling slots)."
-            )
-
         input_ids = input_ids.to(hf_inner.get_input_embeddings().weight.device)
         seq_len_lm = int(input_ids.shape[1])
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
@@ -351,21 +327,10 @@ def main():
             pad_token_id = int(pad_token_id)
 
         target_lm = tt_prefill_target_seqlen(seq_len_lm, int(model_args.n_kv_heads), int(model_args.cluster_shape[1]))
-        if target_lm != seq_len_lm:
-            logger.info(
-                f"Padded language sequence length {seq_len_lm} → {target_lm} for TT prefill "
-                "(128-divisible seq + KV prefill shard tile alignment)."
-            )
 
-        logger.info(
-            f"TT language model prefill ({model_args.n_layers} decoder layers; TT embed + TtMinistral3RotaryEmbedding); "
-            f"prompt template: {'simple-chat' if args.simple_chat else 'inference_fixtures (inference.py)'}."
-        )
         tt_lm_torch = tt_prefill_hidden_states_from_ids(
             input_ids, pad_token_id, mesh_device, tt_model, seq_len_lm, model_args
         )
-
-        logger.info(f"TT prefill hidden states shape (batch, seq, dim): {tuple(tt_lm_torch.shape)}")
 
         if args.verify:
             text_root = text_model_root(hf_inner)
@@ -396,8 +361,6 @@ def main():
             if tt_cmp.shape != ref_out.shape:
                 tt_cmp = tt_cmp.reshape(ref_out.shape)
             pcc_ok, msg = comp_pcc(ref_out, tt_cmp, 0.90)
-            logger.info(comp_allclose(ref_out, tt_cmp))
-            logger.info(f"PCC (HF ref on HF embeddings vs full TT prefill): {msg}")
             if not pcc_ok:
                 logger.warning(f"PCC check did not reach threshold: {msg}")
 
@@ -411,12 +374,11 @@ def main():
                     torch.cuda.manual_seed_all(args.seed)
             prompt_vec = tokenized["input_ids"][0]
             input_ids_gen = tokenized["input_ids"].to(gen_device)
-            logger.info(f"HF baseline generate {REFERENCE_GENERATE_KWARGS} on {gen_device} …")
             with torch.inference_mode():
                 out = hf_full.generate(input_ids_gen, **REFERENCE_GENERATE_KWARGS)
             seq = out[0]
             answer_text = tokenizer.decode(seq[len(prompt_vec) :].tolist(), skip_special_tokens=False)
-            logger.info(f"HF generate baseline ({seq.numel() - prompt_vec.numel()} new tokens):\n{answer_text}")
+            logger.info(answer_text)
         else:
             do_sample = prefer_stochastic_sampling
             if args.seed is not None:
@@ -431,24 +393,8 @@ def main():
                 )
             gen_sl = seq_len_lm
             ids_tt_gen = host_input_ids_to_tt_replicated(mesh_device, input_ids)
-            # Collect generated token IDs on the host to avoid DRAM allocations inside the
-            # traced decode loop.  Growing ids_tt_gen via tt_append_uint32_token while the
-            # trace is captured triggers TT's "unsafe allocation" warning: the allocator can
-            # reuse addresses that the trace's output buffers already occupy, corrupting the
-            # token ID sequence on the next trace replay.
+            # Keep token history on host: growing ids_tt_gen during trace risks allocator overlap with trace outputs.
             generated_token_ids: list[int] = []
-
-            mode = "greedy" if not prefer_stochastic_sampling else f"sample (T={args.temperature})"
-            lm_mode = "CPU lm_head (chunked torch)" if args.lm_head_cpu else "TT lm_head"
-            samp_mode = (
-                "on-device SamplingGenerator (mirrors Transformer + format_sampling_params / seed_manager)"
-                if sampling is not None
-                else "CPU softmax / argmax on TT logits (host)"
-            )
-            logger.info(
-                f"TT generation: prompt prefill once, then traced decode (warmup + capture) for up to "
-                f"{args.max_new_tokens} new tokens; mode {mode}; TT decoder + {lm_mode}; {samp_mode}."
-            )
 
             def _sample_from_prefill_out(tt_out: ttnn.Tensor, last_token_index: int) -> int:
                 """Single token sample from a prefill hidden-states block at ``last_token_index``."""
@@ -478,7 +424,7 @@ def main():
 
             decode_trace_ctx = None
             try:
-                # Step 0: one full TT prefill of the prompt (fills the KV cache).
+                # Step 0: full TT prefill (fills KV).
                 tt_out = tt_forward_prefill_from_device_ids(
                     ids_tt_gen, gen_sl, pad_token_id, mesh_device, tt_model, model_args
                 )
@@ -495,7 +441,6 @@ def main():
 
                     decode_buffers = tt_alloc_decode_input_buffers(mesh_device)
                     tt_update_decode_input_buffers(mesh_device, decode_buffers, int(next_scalar), gen_sl - 1)
-                    logger.info("Capturing decode trace (warmup + capture)…")
                     decode_trace_ctx = tt_capture_decode_trace(
                         mesh_device,
                         tt_model,
@@ -504,13 +449,11 @@ def main():
                         tt_lm_head=None if args.lm_head_cpu else tt_lm_head,
                         sampling=sampling,
                     )
-                    logger.info("Decode trace ready; entering replay loop.")
 
                     for _step in range(1, args.max_new_tokens):
                         decode_pos = gen_sl - 1  # absolute position of the just-appended token
                         if sampling is not None:
-                            # Advance the SamplingGenerator host-side RNG / push fresh device
-                            # seeds before each replay (no-op in steady unseeded state).
+                            # Refresh sampling RNG/seeds each traced step (no-op if unseeded).
                             sampling.seed_manager.get_new_values()
                         tt_update_decode_input_buffers(
                             mesh_device, decode_trace_ctx.buffers, int(next_scalar), decode_pos
@@ -542,7 +485,7 @@ def main():
 
                 answer_ids = torch.tensor(generated_token_ids, dtype=torch.long)
                 answer_text = tokenizer.decode(answer_ids.tolist(), skip_special_tokens=False)
-                logger.info(f"TT stack + TT lm_head generated ({answer_ids.numel()} tokens):\n{answer_text}")
+                logger.info(answer_text)
             finally:
                 if decode_trace_ctx is not None:
                     tt_release_decode_trace(mesh_device, decode_trace_ctx)
