@@ -29,7 +29,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
@@ -81,12 +80,13 @@ ILLIAD_25024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2_25024"
 ABC_1K_PAD_RIGHT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_right_1024"
 ABC_1K_PAD_LEFT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_left_1024"
 LONGBOOK_QA_ENG_25024 = TRACE_DIR_BASE / "longbook_qa_eng_25088"
+LONGBOOK_QA_ENG_25600 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_25600_nopad"
 
 # Input sources: "random" = random token IDs, "json_prompts" = test_prompts_1024.json,
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
 INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"}
 SEQ_LEN_1K = 1024
-SEQ_LEN_25K = 25088
+SEQ_LEN_25K = 25600
 
 # Identity-based trace lookup: (input_source, isl_total, padding_side) -> Path.
 # Traces are only used when use_pretrained=True and n_routed_experts=256, since they
@@ -96,7 +96,8 @@ TRACE_LOOKUP: dict[tuple[str, int, str], Path] = {
     ("json_prompts", SEQ_LEN_25K, "right"): ILLIAD_25024_TRACE,
     ("abc_1k", SEQ_LEN_1K, "right"): ABC_1K_PAD_RIGHT_1024,
     ("abc_1k", SEQ_LEN_1K, "left"): ABC_1K_PAD_LEFT_1024,
-    ("longbook_qa_eng", SEQ_LEN_25K, "right"): LONGBOOK_QA_ENG_25024,
+    # ("longbook_qa_eng", SEQ_LEN_25K, "right"): LONGBOOK_QA_ENG_25024,
+    ("longbook_qa_eng", SEQ_LEN_25K, "right"): LONGBOOK_QA_ENG_25600,
 }
 
 
@@ -156,7 +157,7 @@ def find_trace_dir(
     [
         5,
         12,
-        pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="Testing entire-prefill only on Galaxy")),
+        pytest.param(61, marks=pytest.mark.skipif(False, reason="Testing entire-prefill only on Galaxy")),
     ],
     ids=["5_layers", "12_layers", "61_layers"],
 )
