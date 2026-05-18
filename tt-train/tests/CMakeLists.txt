@@ -71,6 +71,9 @@ set(SOURCES
     ops/layernorm_fw_fused_op_test.cpp
     ops/swiglu_op_test.cpp
     ops/moe_ffn_swiglu_op_test.cpp
+    ops/moe_group_op_test.cpp
+    ops/moe_ungroup_op_test.cpp
+    ops/moe_profile_sweep_test.cpp
     ops/binary_ops_fw_test.cpp
     ops/binary_ops_bw_test.cpp
     ops/variable_matmul_test.cpp

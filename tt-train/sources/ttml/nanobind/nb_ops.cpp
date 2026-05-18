@@ -566,16 +566,7 @@ void py_module(nb::module_& m) {
         auto py_metal = static_cast<nb::module_>(m.attr("metal"));
         py_metal.def(
             "moe_group",
-            [](const ttnn::Tensor& dispatched,
-               const ttnn::Tensor& metadata,
-               const ttnn::Tensor& scores,
-               const ttnn::Tensor& local_expert_ids,
-               uint32_t e_local,
-               uint32_t k) {
-                auto [grouped, grouped_scores, k_slot, counts, offsets, plan] =
-                    ttml::metal::moe_group(dispatched, metadata, scores, local_expert_ids, e_local, k);
-                return nb::make_tuple(grouped, grouped_scores, k_slot, counts, offsets, plan);
-            },
+            &ttml::metal::moe_group,
             nb::arg("dispatched"),
             nb::arg("metadata"),
             nb::arg("scores"),
@@ -593,16 +584,7 @@ void py_module(nb::module_& m) {
             "in pad slots.");
         py_metal.def(
             "moe_ungroup",
-            [](const ttnn::Tensor& expert_out,
-               const ttnn::Tensor& plan,
-               const ttnn::Tensor& offsets,
-               const ttnn::Tensor& grouped_scores,
-               uint32_t e_local,
-               uint32_t d,
-               uint32_t b,
-               uint32_t s) {
-                return ttml::metal::moe_ungroup(expert_out, plan, offsets, grouped_scores, e_local, d, b, s);
-            },
+            &ttml::metal::moe_ungroup,
             nb::arg("expert_out"),
             nb::arg("plan"),
             nb::arg("offsets"),

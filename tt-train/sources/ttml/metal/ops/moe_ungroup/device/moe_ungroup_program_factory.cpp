@@ -18,7 +18,7 @@ namespace {
 constexpr auto kReaderKernelPath =
     "tt-train/sources/ttml/metal/ops/moe_ungroup/device/kernels/dataflow/moe_ungroup_reader.cpp";
 constexpr auto kWriterKernelPath =
-    "tt-train/sources/ttml/metal/ops/moe_ungroup/device/kernels/dataflow/moe_ungroup_writer.cpp";
+    "tt-train/sources/ttml/metal/ops/moe_ungroup/device/kernels/dataflow/moe_ungroup_rmw_writer.cpp";
 constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/moe_ungroup/device/kernels/compute/moe_ungroup_untilize_kernel.cpp";
 
@@ -46,11 +46,11 @@ constexpr uint32_t kTargetChunkBytes = 128U * 1024U;
 // that may be 1 (single chunk covering all of Wt).
 uint32_t pick_num_chunks(uint32_t h) {
     // ceil(h / TILE_WIDTH) — last tile may be partial when h isn't tile-aligned.
-    uint32_t Wt = tt::round_up(h, tt::constants::TILE_WIDTH) / tt::constants::TILE_WIDTH;
+    const uint32_t Wt = tt::round_up(h, tt::constants::TILE_WIDTH) / tt::constants::TILE_WIDTH;
     if (Wt == 0U) {
         return 1U;
     }
-    uint32_t tile_row_bytes = 32U * tt::constants::TILE_WIDTH * 2U;  // = 2 KiB per tile-column
+    const uint32_t tile_row_bytes = 32U * tt::constants::TILE_WIDTH * 2U;  // = 2 KiB per tile-column
     uint32_t tpc_cap = kTargetChunkBytes / tile_row_bytes;
     if (tpc_cap == 0U) {
         tpc_cap = 1U;
@@ -89,8 +89,8 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     const uint32_t prior_chunks_bytes = (num_chunks - 1U) * hidden_chunk_bytes;
     const uint32_t last_chunk_bytes = h * 2U - prior_chunks_bytes;
 
-    auto compute_grid = device->compute_with_storage_grid_size();
-    tt::tt_metal::CoreCoord lead_coord{0, 0};
+    const auto compute_grid = device->compute_with_storage_grid_size();
+    const tt::tt_metal::CoreCoord lead_coord{0, 0};
 
     // Run on the full compute grid (mirrors moe_group). Inactive cores no-op
     // through the per-expert loops in lockstep, participating in barriers and
@@ -99,27 +99,21 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
         tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{compute_grid.x - 1U, compute_grid.y - 1U}}};
     tt::tt_metal::CoreRangeSet worker_group_1 = worker_all;
     tt::tt_metal::CoreRangeSet worker_group_2{};
-    uint32_t num_workers = compute_grid.x * compute_grid.y;
-    uint32_t num_total_cores = num_workers;
+    const uint32_t num_workers = compute_grid.x * compute_grid.y;
+    const uint32_t num_total_cores = num_workers;
 
     // -------------------------------------------------------------------------
     // Circular buffers
     // -------------------------------------------------------------------------
-    uint32_t bf16_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint32_t bf16_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
 
     // cb_src0: TILE bf16, double-buffered
-    tt::tt_metal::CircularBufferConfig cb_src0_cfg =
-        tt::tt_metal::CircularBufferConfig(
-            2U * tiles_per_chunk * bf16_tile_bytes, {{kCbSrc0, tt::DataFormat::Float16_b}})
-            .set_page_size(kCbSrc0, bf16_tile_bytes);
-    CreateCircularBuffer(program, worker_all, cb_src0_cfg);
+    create_circular_buffer(
+        program, worker_all, kCbSrc0, tt::DataFormat::Float16_b, bf16_tile_bytes, 2U * tiles_per_chunk);
 
     // cb_out: row-major bf16 produced by untilize, double-buffered
-    tt::tt_metal::CircularBufferConfig cb_out_cfg =
-        tt::tt_metal::CircularBufferConfig(
-            2U * tiles_per_chunk * bf16_tile_bytes, {{kCbOut, tt::DataFormat::Float16_b}})
-            .set_page_size(kCbOut, bf16_tile_bytes);
-    CreateCircularBuffer(program, worker_all, cb_out_cfg);
+    create_circular_buffer(
+        program, worker_all, kCbOut, tt::DataFormat::Float16_b, bf16_tile_bytes, 2U * tiles_per_chunk);
 
     // cb_zero: reader scratch holding offsets DMA + per-expert caches:
     //   offsets_l1 (e_local+1) u32  +  tr_start_per_expert e_local u32
@@ -127,59 +121,43 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     // Backing the caches in L1 keeps NCRISC stack usage bounded for large
     // e_local (e.g. 300+) where stack arrays would otherwise overflow.
     const uint32_t kL1_ALIGN = tt::tt_metal::hal::get_l1_alignment();
-    uint32_t cb_zero_bytes = tt::round_up((3U * e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
-    tt::tt_metal::CircularBufferConfig cb_zero_cfg =
-        tt::tt_metal::CircularBufferConfig(cb_zero_bytes, {{kCbZero, tt::DataFormat::UInt32}})
-            .set_page_size(kCbZero, cb_zero_bytes);
-    CreateCircularBuffer(program, worker_all, cb_zero_cfg);
+    const uint32_t cb_zero_bytes = tt::round_up((3U * e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
+    create_circular_buffer_bytes(program, worker_all, kCbZero, tt::DataFormat::UInt32, cb_zero_bytes);
 
     // cb_w: 32×32 broadcast weight tile (TILE bf16). BRISC writer builds this
     // each chunk where w_tile[r,c] = bf16(w[r]); compute multiplies cb_src0
     // against it before untilizing. Capacity: 2 (double-buffer for pipelining).
-    tt::tt_metal::CircularBufferConfig cb_w_cfg =
-        tt::tt_metal::CircularBufferConfig(2U * bf16_tile_bytes, {{kCbW, tt::DataFormat::Float16_b}})
-            .set_page_size(kCbW, bf16_tile_bytes);
-    CreateCircularBuffer(program, worker_all, cb_w_cfg);
+    create_circular_buffer(program, worker_all, kCbW, tt::DataFormat::Float16_b, bf16_tile_bytes, 2U);
 
     // cb_existing_rm: row-major existing rows from ungrouped DRAM (writer fills,
     // compute tilizes). Asymmetric pages: one page per ROW (hidden_chunk_bytes).
     // 32 pages per chunk (one per tile-row's row), so tilize sees the data as
     // row-major with each row = block_width_tiles*32 cols contiguous.
-    uint32_t cb_existing_rm_pages = 32U;  // 32 rows per chunk
-    tt::tt_metal::CircularBufferConfig cb_existing_rm_cfg =
-        tt::tt_metal::CircularBufferConfig(
-            cb_existing_rm_pages * hidden_chunk_bytes, {{kCbExistingRm, tt::DataFormat::Float16_b}})
-            .set_page_size(kCbExistingRm, hidden_chunk_bytes);
-    CreateCircularBuffer(program, worker_all, cb_existing_rm_cfg);
+    constexpr uint32_t cb_existing_rm_pages = 32U;  // 32 rows per chunk
+    create_circular_buffer_bytes(
+        program,
+        worker_all,
+        kCbExistingRm,
+        tt::DataFormat::Float16_b,
+        cb_existing_rm_pages * hidden_chunk_bytes,
+        hidden_chunk_bytes);
 
     // cb_existing_tile: compute's tilize output, fed into mul+add.
-    tt::tt_metal::CircularBufferConfig cb_existing_tile_cfg =
-        tt::tt_metal::CircularBufferConfig(
-            tiles_per_chunk * bf16_tile_bytes, {{kCbExistingTile, tt::DataFormat::Float16_b}})
-            .set_page_size(kCbExistingTile, bf16_tile_bytes);
-    CreateCircularBuffer(program, worker_all, cb_existing_tile_cfg);
+    create_circular_buffer(
+        program, worker_all, kCbExistingTile, tt::DataFormat::Float16_b, bf16_tile_bytes, tiles_per_chunk);
 
     // cb_combined: compute's add output, untilize input.
-    tt::tt_metal::CircularBufferConfig cb_combined_cfg =
-        tt::tt_metal::CircularBufferConfig(
-            tiles_per_chunk * bf16_tile_bytes, {{kCbCombined, tt::DataFormat::Float16_b}})
-            .set_page_size(kCbCombined, bf16_tile_bytes);
-    CreateCircularBuffer(program, worker_all, cb_combined_cfg);
+    create_circular_buffer(
+        program, worker_all, kCbCombined, tt::DataFormat::Float16_b, bf16_tile_bytes, tiles_per_chunk);
 
     // cb_scaled: compute's mul output, add input.
-    tt::tt_metal::CircularBufferConfig cb_scaled_cfg =
-        tt::tt_metal::CircularBufferConfig(tiles_per_chunk * bf16_tile_bytes, {{kCbScaled, tt::DataFormat::Float16_b}})
-            .set_page_size(kCbScaled, bf16_tile_bytes);
-    CreateCircularBuffer(program, worker_all, cb_scaled_cfg);
+    create_circular_buffer(program, worker_all, kCbScaled, tt::DataFormat::Float16_b, bf16_tile_bytes, tiles_per_chunk);
 
     // cb_ctrl: NCRISC reader publishes per-core active-block count once at
     // startup; compute reads it to size its outer loop. 16B page (one uint32
     // padded to L1 alignment), single-page CB.
     constexpr uint32_t cb_ctrl_bytes = 16U;
-    tt::tt_metal::CircularBufferConfig cb_ctrl_cfg =
-        tt::tt_metal::CircularBufferConfig(cb_ctrl_bytes, {{kCbCtrl, tt::DataFormat::UInt32}})
-            .set_page_size(kCbCtrl, cb_ctrl_bytes);
-    CreateCircularBuffer(program, worker_all, cb_ctrl_cfg);
+    create_circular_buffer_bytes(program, worker_all, kCbCtrl, tt::DataFormat::UInt32, cb_ctrl_bytes);
 
     // cb_scratch: writer's scratch — zero buf + offsets + plan + grouped_scores
     // slice + w + rmw_buf. With moe_group emitting grouped_scores per row, we
@@ -193,16 +171,8 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     scratch_bytes += tt::round_up(32U * sizeof(uint32_t), kL1_ALIGN);  // plan_buf
     scratch_bytes += tt::round_up(32U * sizeof(uint16_t), kL1_ALIGN);  // w_buf (bf16,
                                                                        //   directly read from grouped_scores)
-    // stage_buf: 32 contiguous slots of hidden_chunk_bytes — required by the
-    // OPT 1 barrier-coalesced writer. Worst-case size: 32 * 128KB / 32 = 128KB
-    // (chunk size is capped at kTargetChunkBytes).
-    scratch_bytes += tt::round_up(32U * hidden_chunk_bytes, kL1_ALIGN);  // stage_buf
     scratch_bytes = tt::round_up(scratch_bytes, kL1_ALIGN);
-
-    tt::tt_metal::CircularBufferConfig cb_scratch_cfg =
-        tt::tt_metal::CircularBufferConfig(scratch_bytes, {{kCbScratch, tt::DataFormat::UInt32}})
-            .set_page_size(kCbScratch, scratch_bytes);
-    CreateCircularBuffer(program, worker_all, cb_scratch_cfg);
+    create_circular_buffer_bytes(program, worker_all, kCbScratch, tt::DataFormat::UInt32, scratch_bytes);
 
     // -------------------------------------------------------------------------
     // Semaphores
@@ -212,10 +182,10 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     // Both pairs are reused for the prezero barrier and every inter-expert
     // barrier (each call resets the sems to 0 before the next handshake).
     // -------------------------------------------------------------------------
-    uint32_t up_sem_id = tt::tt_metal::CreateSemaphore(program, worker_all, 0U);
-    uint32_t down_sem_id = tt::tt_metal::CreateSemaphore(program, worker_all, 0U);
-    uint32_t brisc_done_sem_id = tt::tt_metal::CreateSemaphore(program, worker_all, 0U);
-    uint32_t brisc_release_sem_id = tt::tt_metal::CreateSemaphore(program, worker_all, 0U);
+    const uint32_t up_sem_id = tt::tt_metal::CreateSemaphore(program, worker_all, 0U);
+    const uint32_t down_sem_id = tt::tt_metal::CreateSemaphore(program, worker_all, 0U);
+    const uint32_t brisc_done_sem_id = tt::tt_metal::CreateSemaphore(program, worker_all, 0U);
+    const uint32_t brisc_release_sem_id = tt::tt_metal::CreateSemaphore(program, worker_all, 0U);
 
     // -------------------------------------------------------------------------
     // Buffer pointers
@@ -229,14 +199,14 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     // -------------------------------------------------------------------------
     // Mcast rectangle (covers full worker grid).
     // -------------------------------------------------------------------------
-    auto lead_virt = device->worker_core_from_logical_core(lead_coord);
-    auto mcast_tl = device->worker_core_from_logical_core({0, 0});
-    auto mcast_br = device->worker_core_from_logical_core({compute_grid.x - 1U, compute_grid.y - 1U});
-    uint32_t mcast_sx = std::min(mcast_tl.x, mcast_br.x);
-    uint32_t mcast_ex = std::max(mcast_tl.x, mcast_br.x);
-    uint32_t mcast_sy = std::min(mcast_tl.y, mcast_br.y);
-    uint32_t mcast_ey = std::max(mcast_tl.y, mcast_br.y);
-    uint32_t mcast_num_dests_incl_self = compute_grid.x * compute_grid.y;
+    const auto lead_virt = device->worker_core_from_logical_core(lead_coord);
+    const auto mcast_tl = device->worker_core_from_logical_core({0, 0});
+    const auto mcast_br = device->worker_core_from_logical_core({compute_grid.x - 1U, compute_grid.y - 1U});
+    const uint32_t mcast_sx = std::min(mcast_tl.x, mcast_br.x);
+    const uint32_t mcast_ex = std::max(mcast_tl.x, mcast_br.x);
+    const uint32_t mcast_sy = std::min(mcast_tl.y, mcast_br.y);
+    const uint32_t mcast_ey = std::max(mcast_tl.y, mcast_br.y);
+    const uint32_t mcast_num_dests_incl_self = compute_grid.x * compute_grid.y;
 
     // -------------------------------------------------------------------------
     // Reader CT args
@@ -259,6 +229,7 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
         mcast_ey,                   // 14
         mcast_num_dests_incl_self,  // 15
         kCbCtrl,                    // 16
+        Wt,                         // 17
     };
     tt::tt_metal::TensorAccessorArgs(expert_out_buf).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(reader_ct_args);

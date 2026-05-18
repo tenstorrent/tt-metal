@@ -136,7 +136,7 @@ sfpi_inline sfpi::vFloat _round_even_(sfpi::vFloat v)
     v_if (exp < 23)
     {
         // v.{Exp,Man}=tmp.{Exp,Man}; retaining original sign.
-        v = sfpi::setsgn(tmp, v);
+        v = sfpi::copysgn(tmp, v);
     }
     v_endif;
     return v;

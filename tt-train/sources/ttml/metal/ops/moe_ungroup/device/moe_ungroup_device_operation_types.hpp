@@ -29,7 +29,6 @@ struct MoeUngroupTensorArgs {
 using MoeUngroupSpecReturn = ttnn::TensorSpec;
 using MoeUngroupTensorReturn = ttnn::Tensor;
 
-// Aliases required by the ttnn::device_operation framework.
 using operation_attributes_t = MoeUngroupAttributes;
 using tensor_args_t = MoeUngroupTensorArgs;
 using spec_return_value_t = MoeUngroupSpecReturn;

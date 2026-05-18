@@ -1,0 +1,279 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Opt-in profile sweeps for moe_group + moe_ungroup. Mirrors the Python
+// suite under tests/python/test_moe_*.py::TestMoe*Profile but runs the same
+// shape grid as native gtest cases so the whole thing can be driven from
+// the C++ test binary under Tracy.
+//
+// Enable by setting TTML_RUN_PROFILE_TESTS=1. Each test:
+//   1. Emits a `TT_SIGNPOST: moe_<op>_start_<routing>` tracy message
+//   2. Warmups (2) and timed iters (10) of the device op
+//   3. Emits the matching `_end_` signpost
+//
+// tools/profiling/parse_moe_profile.py picks the signpost-bracketed rows
+// out of the tracy CSV.
+
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <random>
+#include <string>
+#include <tools/profiler/op_profiler.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
+#include <ttnn/operations/core/core.hpp>
+#include <vector>
+
+#include "autograd/auto_context.hpp"
+#include "core/tt_tensor_utils.hpp"
+#include "metal/ops/moe_group/moe_group.hpp"
+#include "metal/ops/moe_ungroup/moe_ungroup.hpp"
+
+namespace {
+
+bool profile_tests_enabled() {
+    const char* env = std::getenv("TTML_RUN_PROFILE_TESTS");
+    if (env == nullptr)
+        return false;
+    const std::string v(env);
+    return v == "1" || v == "true" || v == "True";
+}
+
+void signpost(const std::string& name) {
+    // Format the Tracy parser recognizes — matches the Python `signpost`
+    // helper in tools/tracy/__init__.py.
+    tt::tt_metal::op_profiler::tracy_message(std::string("`TT_SIGNPOST: ") + name + "`");
+}
+
+class MoeProfileTest : public ::testing::Test {
+protected:
+    static void SetUpTestSuite() {
+        if (!profile_tests_enabled()) {
+            GTEST_SKIP() << "Profile sweep is opt-in: set TTML_RUN_PROFILE_TESTS=1 to enable";
+        }
+        ttml::autograd::ctx().open_device();
+        ttml::autograd::ctx().set_seed(42);
+    }
+    static void TearDownTestSuite() {
+        if (!profile_tests_enabled())
+            return;
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+// Same input builders as the correctness suites.
+xt::xarray<float> make_dispatched(uint32_t D, uint32_t B, uint32_t S, uint32_t H, uint32_t seed) {
+    xt::xarray<float> out = xt::zeros<float>({D, B, S, H});
+    std::mt19937 rng(seed + 5);
+    std::uniform_real_distribution<float> dist(-1.0F, 1.0F);
+    for (auto it = out.begin(); it != out.end(); ++it) *it = dist(rng);
+    return out;
+}
+
+xt::xarray<uint32_t> make_metadata(uint32_t D, uint32_t B, uint32_t S, uint32_t K, uint32_t E, uint32_t seed) {
+    xt::xarray<uint32_t> out = xt::zeros<uint32_t>({D, B, S, K});
+    std::mt19937 rng(seed + 1);
+    std::vector<uint32_t> all(E);
+    for (uint32_t e = 0; e < E; ++e) all[e] = e;
+    for (uint32_t d = 0; d < D; ++d) {
+        for (uint32_t b = 0; b < B; ++b) {
+            for (uint32_t s = 0; s < S; ++s) {
+                std::shuffle(all.begin(), all.end(), rng);
+                for (uint32_t ki = 0; ki < K; ++ki) out(d, b, s, ki) = all[ki];
+            }
+        }
+    }
+    return out;
+}
+
+// "fully_skewed" routing: every token's top-K is entirely local (peak T_active).
+xt::xarray<uint32_t> make_metadata_all_local(
+    uint32_t D, uint32_t B, uint32_t S, uint32_t K, const std::vector<uint16_t>& leids) {
+    xt::xarray<uint32_t> out = xt::zeros<uint32_t>({D, B, S, K});
+    for (uint32_t d = 0; d < D; ++d) {
+        for (uint32_t b = 0; b < B; ++b) {
+            for (uint32_t s = 0; s < S; ++s) {
+                for (uint32_t ki = 0; ki < K; ++ki) {
+                    out(d, b, s, ki) = leids[ki % leids.size()];
+                }
+            }
+        }
+    }
+    return out;
+}
+
+xt::xarray<float> make_scores(uint32_t D, uint32_t B, uint32_t S, uint32_t K, uint32_t seed) {
+    xt::xarray<float> out = xt::zeros<float>({D, B, S, K});
+    std::mt19937 rng(seed + 13);
+    std::uniform_real_distribution<float> dist(0.0F, 0.5F);
+    for (auto it = out.begin(); it != out.end(); ++it) *it = dist(rng);
+    return out;
+}
+
+struct ShapeCfg {
+    uint32_t D, B, S, H, E, K, E_local;
+};
+
+constexpr std::array<ShapeCfg, 22> kShapeSweep = {{
+    // Tiny / smoke
+    {2, 1, 128, 512, 4, 2, 2},
+    {2, 1, 128, 1024, 8, 2, 2},
+    {4, 1, 256, 2048, 16, 4, 4},
+    // H sweep (D=8, S=2048, E=32, K=4, E_local=4)
+    {8, 1, 2048, 1024, 32, 4, 4},
+    {8, 1, 2048, 2048, 32, 4, 4},
+    {8, 1, 2048, 4096, 32, 4, 4},
+    {8, 1, 2048, 7168, 32, 4, 4},
+    {8, 1, 2048, 8192, 32, 4, 4},
+    // S sweep (D=8, H=4096, E=96, K=8, E_local=12)
+    {8, 1, 512, 4096, 96, 8, 12},
+    {8, 1, 1024, 4096, 96, 8, 12},
+    {8, 1, 2048, 4096, 96, 8, 12},
+    {8, 1, 4096, 4096, 96, 8, 12},  // roofline Config B
+    {8, 1, 8192, 4096, 96, 8, 12},
+    // Routing sparsity at fixed D=8, S=4096, H=4096
+    {8, 1, 4096, 4096, 16, 2, 2},
+    {8, 1, 4096, 4096, 32, 8, 2},
+    {8, 1, 4096, 4096, 64, 8, 4},
+    {8, 1, 4096, 4096, 96, 8, 12},
+    {8, 1, 4096, 4096, 128, 8, 16},
+    // Large-H (DeepSeek-like)
+    {8, 1, 1024, 7168, 64, 8, 2},
+    {8, 1, 2048, 7168, 64, 8, 2},
+    {8, 1, 4096, 7168, 64, 8, 2},
+    {8, 1, 4096, 8192, 64, 8, 4},
+}};
+
+// Build device tensors for one shape config.
+struct DeviceInputs {
+    ttnn::Tensor disp;
+    ttnn::Tensor md;
+    ttnn::Tensor sc;
+    ttnn::Tensor leids;
+};
+
+DeviceInputs to_device(
+    const xt::xarray<float>& disp,
+    const xt::xarray<uint32_t>& md,
+    const xt::xarray<float>& sc,
+    const std::vector<uint16_t>& leids) {
+    auto& dev = ttml::autograd::ctx().get_device();
+    xt::xarray<uint16_t> md16 = xt::cast<uint16_t>(md);
+    xt::xarray<uint16_t> leids_arr = xt::adapt(leids, std::vector<size_t>{leids.size()});
+    return {
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(disp, &dev, ttnn::Layout::ROW_MAJOR),
+        ttml::core::from_xtensor<uint16_t, ttnn::DataType::UINT16>(md16, &dev, ttnn::Layout::ROW_MAJOR),
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(sc, &dev, ttnn::Layout::ROW_MAJOR),
+        ttml::core::from_xtensor<uint16_t, ttnn::DataType::UINT16>(leids_arr, &dev, ttnn::Layout::ROW_MAJOR),
+    };
+}
+
+constexpr uint32_t kWarmup = 2;
+constexpr uint32_t kTimedIters = 10;
+
+void run_group_iters(const DeviceInputs& in, uint32_t e_local, uint32_t k) {
+    auto& dev = ttml::autograd::ctx().get_device();
+    for (uint32_t i = 0; i < kWarmup; ++i) {
+        auto _ = ttml::metal::moe_group(in.disp, in.md, in.sc, in.leids, e_local, k);
+    }
+    tt::tt_metal::distributed::Synchronize(&dev, std::nullopt);
+    for (uint32_t i = 0; i < kTimedIters; ++i) {
+        auto _ = ttml::metal::moe_group(in.disp, in.md, in.sc, in.leids, e_local, k);
+        tt::tt_metal::distributed::Synchronize(&dev, std::nullopt);
+        // Tracy `-r` flushes the device profiler buffer at process exit; no
+        // per-iter ReadDeviceProfilerResults call here (the IDevice* overload
+        // doesn't accept MeshDevice).
+    }
+}
+
+void run_ungroup_iters(
+    const ttnn::Tensor& expert_out,
+    const ttnn::Tensor& plan,
+    const ttnn::Tensor& offsets,
+    const ttnn::Tensor& grouped_scores,
+    uint32_t e_local,
+    uint32_t D,
+    uint32_t B,
+    uint32_t S) {
+    auto& dev = ttml::autograd::ctx().get_device();
+    for (uint32_t i = 0; i < kWarmup; ++i) {
+        auto _ = ttml::metal::moe_ungroup(expert_out, plan, offsets, grouped_scores, e_local, D, B, S);
+    }
+    tt::tt_metal::distributed::Synchronize(&dev, std::nullopt);
+    for (uint32_t i = 0; i < kTimedIters; ++i) {
+        auto _ = ttml::metal::moe_ungroup(expert_out, plan, offsets, grouped_scores, e_local, D, B, S);
+        tt::tt_metal::distributed::Synchronize(&dev, std::nullopt);
+        // Tracy `-r` flushes the device profiler buffer at process exit; no
+        // per-iter ReadDeviceProfilerResults call here (the IDevice* overload
+        // doesn't accept MeshDevice).
+    }
+}
+
+void group_sweep_one(const ShapeCfg& c, bool all_local) {
+    std::vector<uint16_t> leids;
+    for (uint32_t i = 0; i < c.E_local; ++i) leids.push_back(static_cast<uint16_t>(i));
+    auto disp = make_dispatched(c.D, c.B, c.S, c.H, 42);
+    auto md =
+        all_local ? make_metadata_all_local(c.D, c.B, c.S, c.K, leids) : make_metadata(c.D, c.B, c.S, c.K, c.E, 42);
+    auto sc = make_scores(c.D, c.B, c.S, c.K, 42);
+    auto in = to_device(disp, md, sc, leids);
+
+    const std::string routing = all_local ? "fully_skewed" : "balanced";
+    signpost("moe_group_start_" + routing);
+    run_group_iters(in, c.E_local, c.K);
+    signpost("moe_group_end_" + routing);
+}
+
+void ungroup_sweep_one(const ShapeCfg& c, bool all_local) {
+    std::vector<uint16_t> leids;
+    for (uint32_t i = 0; i < c.E_local; ++i) leids.push_back(static_cast<uint16_t>(i));
+    auto disp = make_dispatched(c.D, c.B, c.S, c.H, 42);
+    auto md =
+        all_local ? make_metadata_all_local(c.D, c.B, c.S, c.K, leids) : make_metadata(c.D, c.B, c.S, c.K, c.E, 42);
+    auto sc = make_scores(c.D, c.B, c.S, c.K, 42);
+    auto in = to_device(disp, md, sc, leids);
+
+    // Build (expert_out, plan, offsets, grouped_scores) from moe_group; we reuse
+    // `grouped` as the FFN's `expert_out` (identity FFN — fine for benchmarking
+    // ungroup's DRAM bandwidth).
+    auto [grouped, grouped_scores, k_slot, counts, offsets, plan] =
+        ttml::metal::moe_group(in.disp, in.md, in.sc, in.leids, c.E_local, c.K);
+
+    const std::string routing = all_local ? "fully_skewed" : "balanced";
+    signpost("moe_ungroup_start_" + routing);
+    run_ungroup_iters(grouped, plan, offsets, grouped_scores, c.E_local, c.D, c.B, c.S);
+    signpost("moe_ungroup_end_" + routing);
+}
+
+}  // namespace
+
+class MoeGroupProfileSweep : public MoeProfileTest, public ::testing::WithParamInterface<ShapeCfg> {};
+class MoeUngroupProfileSweep : public MoeProfileTest, public ::testing::WithParamInterface<ShapeCfg> {};
+
+TEST_P(MoeGroupProfileSweep, Balanced) {
+    group_sweep_one(GetParam(), /*all_local=*/false);
+}
+
+TEST_P(MoeUngroupProfileSweep, Balanced) {
+    ungroup_sweep_one(GetParam(), /*all_local=*/false);
+}
+
+INSTANTIATE_TEST_SUITE_P(Shapes, MoeGroupProfileSweep, ::testing::ValuesIn(kShapeSweep));
+INSTANTIATE_TEST_SUITE_P(Shapes, MoeUngroupProfileSweep, ::testing::ValuesIn(kShapeSweep));
+
+// Worst-case routing: every token's top-K is entirely local experts. Uses the
+// same shape as the balanced roofline test — the signpost label differs so the
+// parser splits the two patterns in the summary table.
+TEST_F(MoeProfileTest, GroupAllLocalRouting) {
+    group_sweep_one(ShapeCfg{8, 1, 4096, 4096, 96, 8, 12}, /*all_local=*/true);
+}
+
+TEST_F(MoeProfileTest, UngroupAllLocalRouting) {
+    ungroup_sweep_one(ShapeCfg{8, 1, 4096, 4096, 96, 8, 12}, /*all_local=*/true);
+}

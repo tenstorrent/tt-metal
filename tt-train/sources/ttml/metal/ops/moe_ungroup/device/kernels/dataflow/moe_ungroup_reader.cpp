@@ -41,16 +41,15 @@ constexpr uint32_t mcast_ex = get_compile_time_arg_val(13);
 constexpr uint32_t mcast_ey = get_compile_time_arg_val(14);
 constexpr uint32_t mcast_num_dests_incl_self = get_compile_time_arg_val(15);
 constexpr uint32_t cb_id_ctrl = get_compile_time_arg_val(16);
+// ceil(h / TILE_W) — computed host-side in program factory.
+constexpr uint32_t Wt = get_compile_time_arg_val(17);
 
-constexpr auto expert_out_args = TensorAccessorArgs<17>();
+constexpr auto expert_out_args = TensorAccessorArgs<18>();
 constexpr auto offsets_args = TensorAccessorArgs<expert_out_args.next_compile_time_args_offset()>();
 
-constexpr uint32_t TILE_H = 32U;
-constexpr uint32_t TILE_W = 32U;
-constexpr uint32_t TILE_BYTES = TILE_H * TILE_W * 2U;  // bf16 tile
-// ceil(h / TILE_W) — must match the program factory; reader needs to address
-// partial-last-tile cases when h isn't a TILE_W multiple.
-constexpr uint32_t Wt = round_up(h, TILE_W) / TILE_W;
+constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
+constexpr uint32_t TILE_W = tt::constants::TILE_WIDTH;
+constexpr uint32_t TILE_BYTES = tt::constants::TILE_HW * 2U;  // bf16 tile
 
 inline void barrier_fanin_mcast(uint32_t my_core_idx) {
     if (my_core_idx > 0) {
@@ -59,8 +58,7 @@ inline void barrier_fanin_mcast(uint32_t my_core_idx) {
     }
     if (my_core_idx == 0) {
         if (num_total_cores > 1U) {
-            volatile tt_l1_ptr uint32_t* up_sem =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(up_sem_id));
+            volatile tt_l1_ptr uint32_t* up_sem = get_sem_ptr(up_sem_id);
             noc_semaphore_wait(up_sem, num_total_cores - 1U);
             noc_semaphore_set(up_sem, 0U);
         }
@@ -69,8 +67,7 @@ inline void barrier_fanin_mcast(uint32_t my_core_idx) {
         mcast_sender_signal_receivers_loopback(
             down_sem_ptr, down_sem_addr, mcast_sx, mcast_sy, mcast_ex, mcast_ey, mcast_num_dests_incl_self);
     } else {
-        volatile tt_l1_ptr uint32_t* down_sem =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(down_sem_id));
+        volatile tt_l1_ptr uint32_t* down_sem = get_sem_ptr(down_sem_id);
         noc_semaphore_wait(down_sem, 1U);
         noc_semaphore_set(down_sem, 0U);
     }
@@ -80,8 +77,7 @@ inline void barrier_fanin_mcast(uint32_t my_core_idx) {
 // cross-core mcast barrier, then release local BRISC. Reused for prezero
 // and inter-expert syncs (semaphores are reset to 0 between calls).
 inline void handshake_then_barrier_then_release(uint32_t my_core_idx) {
-    volatile tt_l1_ptr uint32_t* brisc_done =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(brisc_done_sem_id));
+    volatile tt_l1_ptr uint32_t* brisc_done = get_sem_ptr(brisc_done_sem_id);
     do {
         invalidate_l1_cache();
     } while ((*brisc_done) == 0U);
@@ -90,8 +86,7 @@ inline void handshake_then_barrier_then_release(uint32_t my_core_idx) {
 
     barrier_fanin_mcast(my_core_idx);
 
-    volatile tt_l1_ptr uint32_t* brisc_release =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(brisc_release_sem_id));
+    volatile tt_l1_ptr uint32_t* brisc_release = get_sem_ptr(brisc_release_sem_id);
     *brisc_release = 1U;
 }
 
@@ -125,12 +120,11 @@ void kernel_main() {
     // cb_ctrl.
     uint32_t my_total_active_steps = 0U;
     for (uint32_t e = 0; e < e_local; ++e) {
-        uint32_t expert_start_tr = offsets_l1[e] / TILE_H;
-        uint32_t expert_total_tr = (offsets_l1[e + 1U] - offsets_l1[e]) / TILE_H;
-        auto slice = ttml::metal::moe_ungroup::slice_for_core(expert_total_tr, num_total_cores, my_core_idx);
-        tr_start_per_expert[e] = expert_start_tr + slice.start;
-        my_real_count_per_expert[e] = slice.count;
-        my_total_active_steps += slice.count;
+        auto slice =
+            ttml::metal::moe_ungroup::expert_slice_for_core(offsets_l1, e, TILE_H, num_total_cores, my_core_idx);
+        tr_start_per_expert[e] = slice.my_start_tr_global;
+        my_real_count_per_expert[e] = slice.my_count;
+        my_total_active_steps += slice.my_count;
     }
     cb_reserve_back(cb_id_ctrl, 1U);
     volatile tt_l1_ptr uint32_t* ctrl_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id_ctrl));
