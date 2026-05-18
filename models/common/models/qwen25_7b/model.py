@@ -132,6 +132,25 @@ def _qwen_wh_decode_attn_lofi_kernel() -> ttnn.WormholeComputeKernelConfig:
     )
 
 
+def _qwen_wh_attn_hifi4_kernel() -> ttnn.WormholeComputeKernelConfig:
+    """HiFi4 + fp32 dest acc for Qwen2.5-7B attention matmuls (LI_QKV, LI_O, SDPA).
+
+    Matches the TTTv1 ``ModelArgs.compute_kernel_config_hifi4`` used by both
+    ``ModelOptimizations.performance`` and ``ModelOptimizations.accuracy`` for
+    Qwen2.5-7B / Qwen2.5-VL-7B (see ``models/tt_transformers/tt/model_config.py``).
+    The TTTv2 ``Attention1D`` defaults are HiFi2 with fp16 accumulation; that
+    silently downgrades attention prefill QKV/WO and decode QKV/SDPA/WO matmul
+    precision for this model, producing the broad per-layer divergence reported
+    in ``context/qwen25_7b_debugging/numerical_divergence_vs_hf_2026-05-14.md``.
+    """
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
 def _slice_last_token_tile(x: ttnn.Tensor, last_token_idx: int) -> ttnn.Tensor:
     """Slice the 32-row tile containing ``last_token_idx`` from ``[1, 1, S, W]``.
 
@@ -202,9 +221,15 @@ class _Qwen25WHTuning:
     mlp_decode_ff_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
     lm_head_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
     perf_decode_sdpa_cfg: ttnn.SDPAProgramConfig | None = None
-    perf_li_qkv_decode: ttnn.WormholeComputeKernelConfig | None = None
-    perf_sdpa_decode: ttnn.WormholeComputeKernelConfig | None = None
-    perf_li_o_decode: ttnn.WormholeComputeKernelConfig | None = None
+    # Attention prefill compute kernels: always HiFi4 + fp32 dest acc on Qwen
+    # (Attention1D defaults are HiFi2/fp16 acc — too lossy for this model).
+    attn_li_qkv_prefill_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+    attn_li_o_prefill_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+    # Attention decode compute kernels: HiFi4 + fp32 dest acc by default; LoFi
+    # under ``perf_decode_tuning`` (performance demo only).
+    attn_li_qkv_decode_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+    attn_sdpa_decode_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+    attn_li_o_decode_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
 
 
 def _resolve_qwen_wh_tuning(
@@ -231,6 +256,16 @@ def _resolve_qwen_wh_tuning(
     t.mlp_decode_ff_compute_kernel_cfg = (
         _qwen_wh_mlp_decode_matmul_compute_kernel() if perf_decode_tuning else t.mlp_ff_compute_kernel_cfg
     )
+
+    # Attention prefill always uses HiFi4 + fp32 dest acc on Qwen (matches TTTv1).
+    attn_hifi4 = _qwen_wh_attn_hifi4_kernel()
+    t.attn_li_qkv_prefill_kernel_cfg = attn_hifi4
+    t.attn_li_o_prefill_kernel_cfg = attn_hifi4
+    # Attention decode defaults to HiFi4 + fp32 dest acc; LoFi only under perf_decode_tuning.
+    t.attn_li_qkv_decode_kernel_cfg = attn_hifi4
+    t.attn_sdpa_decode_kernel_cfg = attn_hifi4
+    t.attn_li_o_decode_kernel_cfg = attn_hifi4
+
     if perf_decode_tuning:
         lo = _qwen_wh_decode_attn_lofi_kernel()
         t.perf_decode_sdpa_cfg = ttnn.SDPAProgramConfig(
@@ -239,12 +274,13 @@ def _resolve_qwen_wh_tuning(
             q_chunk_size=0,
             k_chunk_size=0,
         )
-        t.perf_li_qkv_decode = lo
-        t.perf_sdpa_decode = lo
-        t.perf_li_o_decode = lo
+        t.attn_li_qkv_decode_kernel_cfg = lo
+        t.attn_sdpa_decode_kernel_cfg = lo
+        t.attn_li_o_decode_kernel_cfg = lo
     logger.info(
-        f"MLP/LM tuning for {hf_model_id} on {num_dev} device(s): "
-        f"prefill_len_cutoff=256, FF prefill HiFi4, decode spill W1→DRAM={t.mlp_decode_spill_w1_to_dram}, "
+        f"MLP/LM/attention tuning for {hf_model_id} on {num_dev} device(s): "
+        f"prefill_len_cutoff=256, FF prefill HiFi4, attn prefill+decode HiFi4+fp32, "
+        f"decode spill W1→DRAM={t.mlp_decode_spill_w1_to_dram}, "
         f"perf_decode_tuning={perf_decode_tuning}"
     )
     return t
@@ -323,9 +359,11 @@ def _build_decoder_layer(
             kv_cache=None,
             kv_cache_dtype=kv_cache_dtype,
             decode_sdpa_prg_config=wh.perf_decode_sdpa_cfg,
-            li_qkv_decode_compute_kernel_cfg=wh.perf_li_qkv_decode,
-            sdpa_decode_compute_kernel_cfg=wh.perf_sdpa_decode,
-            li_o_decode_compute_kernel_cfg=wh.perf_li_o_decode,
+            li_qkv_decode_compute_kernel_cfg=wh.attn_li_qkv_decode_kernel_cfg,
+            sdpa_decode_compute_kernel_cfg=wh.attn_sdpa_decode_kernel_cfg,
+            li_o_decode_compute_kernel_cfg=wh.attn_li_o_decode_kernel_cfg,
+            li_qkv_prefill_compute_kernel_cfg=wh.attn_li_qkv_prefill_kernel_cfg,
+            li_o_prefill_compute_kernel_cfg=wh.attn_li_o_prefill_kernel_cfg,
         )
     )
 
