@@ -255,6 +255,9 @@ static void track_eth_progress_timeout_cores(std::span<struct core_setup> cores)
     std::vector<std::thread> threads;
 
     for (const auto& c : cores) {
+        if (!c.iter_l1_addr) {
+            continue;
+        }
         threads.emplace_back([&] {
             auto* const device = c.mesh_device->get_devices()[0];
             track_eth_progress_timeout(device, nullptr, c.core, c.core, c.iter_l1_addr, c.expected_count);
