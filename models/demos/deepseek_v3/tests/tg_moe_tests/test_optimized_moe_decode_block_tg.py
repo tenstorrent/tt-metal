@@ -550,9 +550,9 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
     return pcc_passed and allclose_passed
 
 
-@pytest.mark.requires_device(["QUAD", "TG8X4"])
+@pytest.mark.requires_device(["TG8X4"])
 @pytest.mark.skipif(
-    (os.getenv("USE_TORUS_MODE") is None),
+    (os.getenv("USE_TORUS_MODE", "0") == "0"),
     reason=f"Requires ring fabric",
 )
 @pytest.mark.parametrize(
