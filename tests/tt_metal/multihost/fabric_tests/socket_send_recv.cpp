@@ -87,7 +87,7 @@ std::vector<SocketTestConfig> generate_socket_test_configs(SystemConfig system_c
         TestVariant::MULTI_CONN_FWD,
         TestVariant::MULTI_CONN_BIDIR};
 
-    for (int config_idx = 0; config_idx < fifo_sizes.size(); ++config_idx) {
+    for (size_t config_idx = 0; config_idx < fifo_sizes.size(); ++config_idx) {
         for (const auto& variant : variants) {
             configs.push_back(
                 {.socket_fifo_size = fifo_sizes[config_idx],
