@@ -638,6 +638,12 @@ public:
     bool udm_mode = false;                        // UDM mode: router connects to local tensix relay
     uint32_t local_tensix_relay_num_buffers = 0;  // Number of buffers in the local relay channel
 
+    // STRATEGY3 (#42429): True if this builder is for an MMIO-capable device.
+    // Propagated to firmware as IS_HANDSHAKE_SENDER=1, meaning this side enters
+    // the symmetric handshake immediately and signals HANDSHAKE_READY to the peer.
+    // Non-MMIO side polls for HANDSHAKE_READY before entering the handshake loop.
+    bool is_mmio_device = false;
+
 private:
     // Per-RISC channel servicing flags [risc_id][channel_id]
     std::array<std::array<bool, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS> is_sender_channel_serviced_{};

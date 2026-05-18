@@ -125,8 +125,11 @@ constexpr uint32_t SWITCH_INTERVAL =
 constexpr bool fuse_receiver_flush_and_completion_ptr = NAMED_CT_ARG("FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR");
 constexpr bool enable_deadlock_avoidance = NAMED_CT_ARG("ENABLE_DEADLOCK_AVOIDANCE");
 constexpr bool is_intermesh_router = NAMED_CT_ARG("IS_INTERMESH_ROUTER");
-// FIX AD (#42429): is_handshake_sender is DEPRECATED — symmetric handshake means both sides
-// run the same code path. Kept for compile compat; always 0 (set in erisc_datamover_builder.cpp).
+// STRATEGY3 (#42429): is_handshake_sender = 1 for MMIO devices, 0 for non-MMIO.
+// With STRATEGY3_NO_PREPING, MMIO side enters the symmetric handshake immediately
+// and signals HANDSHAKE_READY to the peer. Non-MMIO side polls edm_status for
+// HANDSHAKE_READY before entering the handshake loop.
+// (Previously: FIX AD set this to 0 unconditionally.)
 constexpr bool is_handshake_sender = NAMED_CT_ARG("IS_HANDSHAKE_SENDER") != 0;
 constexpr size_t handshake_addr = NAMED_CT_ARG("HANDSHAKE_ADDR");
 

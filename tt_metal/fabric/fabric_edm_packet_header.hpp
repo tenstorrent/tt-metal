@@ -90,7 +90,14 @@ enum EDMStatus : uint32_t {
     ROUTING_TABLE_INITIALIZED = 0xB9C9D9E9,
 
     // Initialization complete
-    INITIALIZATION_COMPLETE = 0xBACADAEA
+    INITIALIZATION_COMPLETE = 0xBACADAEA,
+
+    // STRATEGY3 (#42429): MMIO side signals readiness for handshake entry.
+    // Non-MMIO side polls edm_status for this value before entering the
+    // symmetric handshake loop.  This stagger eliminates the class of
+    // races where non-MMIO firmware enters the handshake before MMIO
+    // firmware is ready (e.g. after soft-reset / FIX EG recovery).
+    HANDSHAKE_READY = 0xC0FFEE01
 };
 
 // 3 bits

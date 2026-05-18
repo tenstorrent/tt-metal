@@ -1120,9 +1120,14 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR"] = this->fuse_receiver_flush_and_completion_ptr;
     named_args["ENABLE_DEADLOCK_AVOIDANCE"] = fabric_context.need_deadlock_avoidance_support(this->direction_);
     named_args["IS_INTERMESH_ROUTER"] = this->is_inter_mesh;
-    // FIX AD (#42429): IS_HANDSHAKE_SENDER is no longer used — symmetric handshake means
-    // both sides run the same code path. Set to 0 to avoid dead-code confusion.
-    named_args["IS_HANDSHAKE_SENDER"] = 0;
+    // STRATEGY3 (#42429): Repurpose IS_HANDSHAKE_SENDER to indicate MMIO side.
+    // When STRATEGY3_NO_PREPING is active, the MMIO side (IS_HANDSHAKE_SENDER=1)
+    // enters the symmetric handshake immediately and signals HANDSHAKE_READY to
+    // the peer via eth_send_packet. The non-MMIO side (IS_HANDSHAKE_SENDER=0)
+    // polls its local edm_status for HANDSHAKE_READY before entering the loop.
+    // (Previously: FIX AD set this to 0 unconditionally.)
+    named_args["IS_HANDSHAKE_SENDER"] = this->is_mmio_device ? 1 : 0;
+    named_args["STRATEGY3_NO_PREPING"] = 1;
     named_args["HANDSHAKE_ADDR"] = static_cast<uint32_t>(this->handshake_address);
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
     named_args["FABRIC_TENSIX_EXTENSION_MUX_MODE"] = this->has_tensix_extension;
@@ -1526,7 +1531,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             sender_channels_connection_semaphore_id[i] = config.sender_channels_connection_semaphore_address[i];
         }
     }
-    return FabricEriscDatamoverBuilder(
+    auto builder = FabricEriscDatamoverBuilder(
         ethernet_core,
         device->ethernet_core_from_logical_core(ethernet_core).x,
         device->ethernet_core_from_logical_core(ethernet_core).y,
@@ -1547,6 +1552,14 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         actual_sender_channels_per_vc,
         actual_receiver_channels_per_vc,
         channel_trimming_overrides);
+
+    // STRATEGY3 (#42429): Propagate MMIO flag from device to builder.
+    // This becomes IS_HANDSHAKE_SENDER=1 in firmware CT args, enabling
+    // the MMIO side to enter the handshake immediately while non-MMIO
+    // waits for HANDSHAKE_READY.
+    builder.is_mmio_device = device->is_mmio_capable();
+
+    return builder;
 }
 
 SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_channel(

@@ -3616,6 +3616,46 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
     if constexpr (enable_ethernet_handshake) {
+#if STRATEGY3_NO_PREPING
+        // STRATEGY3 (#42429): Stagger handshake entry using edm_status.
+        //
+        // Problem: When both MMIO and non-MMIO ERISCs enter fabric_symmetric_handshake()
+        // simultaneously after boot/reset, the non-MMIO side may start sending eth_send_packet
+        // before the MMIO side has finished post-reset initialization (FIX EG/MM recovery,
+        // fw_launch_addr restore, etc.), causing lost handshake messages.
+        //
+        // Solution: MMIO side (is_handshake_sender=1) signals readiness FIRST by writing
+        // HANDSHAKE_READY to its own edm_status and sending it to the peer's edm_status
+        // via eth_send_packet. Non-MMIO side (is_handshake_sender=0) polls its own edm_status
+        // for HANDSHAKE_READY before entering the symmetric handshake loop.
+        //
+        // This ensures non-MMIO firmware never enters the handshake until the MMIO side
+        // is actually ready to participate.
+        if constexpr (is_handshake_sender) {
+            // MMIO side: signal readiness to peer via ETH, then enter handshake immediately.
+            // Write HANDSHAKE_READY to local edm_status (staging area for eth_send_packet).
+            *edm_status_ptr = tt::tt_fabric::EDMStatus::HANDSHAKE_READY;
+            asm volatile("nop");
+            // Send 16 bytes from local edm_status to remote edm_status (same L1 offset).
+            internal_::eth_send_packet(
+                0,
+                edm_status_ptr_addr / tt::tt_fabric::PACKET_WORD_SIZE_BYTES,
+                edm_status_ptr_addr / tt::tt_fabric::PACKET_WORD_SIZE_BYTES,
+                1);
+        } else {
+            // Non-MMIO side: wait for HANDSHAKE_READY from MMIO peer before entering handshake.
+            // The MMIO peer writes HANDSHAKE_READY to our edm_status via eth_send_packet.
+            while (*edm_status_ptr != tt::tt_fabric::EDMStatus::HANDSHAKE_READY
+#ifndef ARCH_WORMHOLE
+                   && !tt::tt_fabric::got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(
+                          termination_signal_ptr)
+#endif
+            ) {
+                invalidate_l1_cache();
+            }
+        }
+#endif  // STRATEGY3_NO_PREPING
+
         // FIX AD (#42429): Single symmetric handshake — both sides send AND poll.
         // prepare_handshake_state() was already called during Object Setup (above),
         // so local_value is zeroed and scratch contains MAGIC. No sender/receiver
