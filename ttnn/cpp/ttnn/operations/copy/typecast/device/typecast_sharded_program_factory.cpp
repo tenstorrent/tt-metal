@@ -7,6 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 
 namespace ttnn::prim {
 
@@ -76,7 +77,7 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
         num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / input_tile_size;  // ceil value
     }
 
-    uint32_t in_cb_id = tt::CBIndex::c_0;
+    const uint8_t in_cb_id = tt::CBIndex::c_0;
     uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
     uint32_t aligned_input_tile_nbytes =
         round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
@@ -94,7 +95,7 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
     });
 
     // output sharded CB
-    uint32_t out_cb_id = tt::CBIndex::c_2;
+    const uint8_t out_cb_id = tt::CBIndex::c_2;
     uint32_t aligned_output_tile_nbytes =
         round_up_to_mul32(output_tile_size);  // will have issue if the page is not multiple of 32
     uint32_t out_cb_pagesize = aligned_output_tile_nbytes;

@@ -229,7 +229,7 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
         all_cores = ttnn::CoreRangeSet(ttnn::CoreRange(cores[0]));
     }
 
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
+    const uint8_t src0_cb_index = tt::CBIndex::c_0;
     constexpr uint32_t num_input_tiles = 2;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = num_input_tiles * single_tile_size,
@@ -241,7 +241,7 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
         }}},
     });
 
-    uint32_t output_cb_index = tt::CBIndex::c_2;
+    const uint8_t output_cb_index = tt::CBIndex::c_2;
     constexpr uint32_t num_output_tiles = 2;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = num_output_tiles * single_tile_size_output,
