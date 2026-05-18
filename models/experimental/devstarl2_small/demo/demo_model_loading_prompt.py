@@ -54,14 +54,23 @@ from models.experimental.devstarl2_small.demo import demo_devstral2_tt_multimoda
 from models.experimental.devstarl2_small.devstral_utils import (
     devstral_supports_on_device_sampling,
     pad_input_ids_and_positions_for_tt_prefill,
+    tt_alloc_decode_input_buffers,
+    tt_capture_decode_trace,
+    tt_execute_decode_trace,
     tt_lm_head_logits_block,
+    tt_read_decode_traced_hidden,
+    tt_read_decode_traced_logits,
+    tt_read_decode_traced_token,
+    tt_release_decode_trace,
     tt_sampling_output_token_id,
+    tt_update_decode_input_buffers,
 )
 from models.experimental.devstarl2_small.reference.inference_fixtures import REFERENCE_GENERATE_KWARGS
 from models.experimental.devstarl2_small.tt.tt_devstral2_small_model import TtDevstral2SmallModel
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.lm_head import LMHead
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 _DEFAULT_MODEL_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 _DEMO_DIR = Path(__file__).resolve().parent
@@ -350,6 +359,16 @@ def run_tt(
         dtype_tt = ttnn.bfloat16
 
         logger.info("Loading checkpoint via ModelArgs.load_state_dict() …")
+        # ``optimizations`` picks the precision recipe for the 40 decoder
+        # layers. ``DecodersPrecision.performance`` maps to ``bfp4`` MLP
+        # FF1/FF3, ``bfp8`` everything else (WQKV, WO, KV_CACHE, FF2) and
+        # cuts per-token decode bandwidth from ~48 GB (bf16) to ~14 GB —
+        # the single biggest decode-throughput knob on multi-chip.
+        # The MLP / attention modules already consult
+        # ``args.decoders_optimizations.get_tensor_dtype(...)`` at construction
+        # time (see ``tt_ministralmlp.py:93-127``, ``attention.py:115-128``),
+        # so no other code changes are needed. ``dtype_tt`` below is kept as
+        # ``bfloat16`` so activations / embeddings / LM head behave as before.
         model_args = ModelArgs(
             mesh_device,
             max_batch_size=1,
@@ -357,8 +376,23 @@ def run_tt(
             dummy_weights=False,
             use_hf_rope=True,
             cache_hf=True,
+            optimizations=lambda ma: DecodersPrecision.performance(ma.n_layers, ma.model_name),
         )
-        model_args.is_distributed_norm = types.MethodType(lambda self, mode: False, model_args)
+        # The two model paths use different multi-chip tensor conventions at the
+        # norm boundary:
+        #   * PREFILL: ``forward_prefill`` in ``tt_ministral3_decoder_layer.py``
+        #     already issues an ``all_gather(dim=3)`` after attention and after
+        #     MLP, so the residual is full-width on every chip when it reaches
+        #     RMSNorm. We must use the replicated norm (full gamma).
+        #   * DECODE: tensors stay width-fractured across chips (the residual
+        #     mem config slices by ``dim/num_devices``), so RMSNorm input is
+        #     1/N of the full hidden dim per chip. We must use the distributed
+        #     norm (auto-sharded gamma + all-gather of stats).
+        # Single chip: both modes use the replicated path (no CCL needed).
+        model_args.is_distributed_norm = types.MethodType(
+            lambda self, mode: self.is_multichip and mode == Mode.DECODE,
+            model_args,
+        )
         meta_state_dict = model_args.load_state_dict()
 
         if text_layers is not None:
@@ -516,23 +550,39 @@ def run_tt(
 
         tt_lm = tt_devstral.language_model
 
-        gen_t0 = time.perf_counter()
-        merge_s = 0.0
-        prefill_s = 0.0
-        lmhead_s = 0.0
-        sample_post_s = 0.0
-        steps = 0
+        # ── Generation timing accumulators ────────────────────────────────────────
+        # The demo runs the prompt through prefill + traced-decode exactly once.
+        # ``ttft_s`` is the standard LLM TTFT (wall time from start of prefill to
+        # the first new token on host); ``first_traced_step_s`` exposes any
+        # cold-cache overhead on the very first ``execute_trace`` replay.
+        stats = {
+            "merge_s": 0.0,
+            "prefill_s": 0.0,
+            "first_sample_s": 0.0,
+            "decode_s": 0.0,
+            "lmhead_s": 0.0,
+            "sample_post_s": 0.0,
+            "trace_capture_s": 0.0,
+            "steps": 0,
+            "ttft_s": None,
+            "first_traced_step_s": None,
+            "wall_s": 0.0,
+        }
 
         def _sample_from_tt_out(tt_out, seq_last_idx):
-            """Sample next token from prefill hidden states at seq_last_idx. Returns (next_id, lmhead_s_inc, sample_s_inc)."""
-            nonlocal lmhead_s, sample_post_s
+            """Sample next token from prefill hidden states at ``seq_last_idx``.
+
+            Returns the sampled ``[1, 1]`` token tensor and accumulates lm-head /
+            sample timings into ``stats``. Used only for the prefill-side
+            first-token sample; decode-loop sampling runs inside the trace.
+            """
             if sampling is not None:
                 assert tt_lm_head is not None
                 tok_slot = seq_last_idx % 32
                 sampling.seed_manager.get_new_values()
                 t0 = time.perf_counter()
                 logits_tt = tt_lm_head_logits_block(tt_out, seq_last_idx, model_args, tt_lm_head)
-                lmhead_s += time.perf_counter() - t0
+                stats["lmhead_s"] += time.perf_counter() - t0
                 t0 = time.perf_counter()
                 sample_result = sampling.sample(logits_tt, enable_trace=False)
                 tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
@@ -540,7 +590,7 @@ def run_tt(
                 ttnn.deallocate(logits_tt)
                 ttnn.deallocate(tt_out)
                 nid = torch.tensor([[next_scalar]], device=id_device, dtype=torch.long)
-                sample_post_s += time.perf_counter() - t0
+                stats["sample_post_s"] += time.perf_counter() - t0
             else:
                 t0 = time.perf_counter()
                 if lm_head_cpu:
@@ -553,7 +603,7 @@ def run_tt(
                     logits_row = _tt_demo.tt_lm_head_logits_last_token(
                         tt_out, seq_last_idx, mesh_device, model_args, tt_lm_head
                     )
-                lmhead_s += time.perf_counter() - t0
+                stats["lmhead_s"] += time.perf_counter() - t0
                 t0 = time.perf_counter()
                 ttnn.deallocate(tt_out)
                 if do_sample:
@@ -562,81 +612,191 @@ def run_tt(
                 else:
                     nid = logits_row.argmax(dim=-1, keepdim=True)
                 nid = nid.to(id_device)
-                sample_post_s += time.perf_counter() - t0
+                stats["sample_post_s"] += time.perf_counter() - t0
             return nid
 
-        # ── Step 0: single prefill of the full prompt (fills KV cache) ──────────
+        # Optional Tracy profiler signposts: when this demo is launched under
+        # ``python3 -m tracy -r ...`` the signposts let post-processing scripts
+        # isolate the decode-loop ops from the prefill / trace-capture noise.
+        # The import is best-effort so this still runs cleanly when Tracy is
+        # not available (release builds without ENABLE_TRACY).
+        try:
+            from tracy import signpost as _profiler_signpost  # type: ignore
+        except Exception:  # pragma: no cover - optional dependency
+
+            def _profiler_signpost(_name: str) -> None:
+                return None
+
+        # ── Prefill: merge image + text embeddings, fill KV cache, sample 1st tok.
+        run_t0 = time.perf_counter()
         sl = int(current_ids.shape[1])
+
+        _profiler_signpost("prefill-start")
         t0 = time.perf_counter()
         merged = _merge_image_into_text_embeds(hf_inner, current_ids, img_rows, image_token_id)
         merged_bf = merged.to(torch.bfloat16)
-        merge_s += time.perf_counter() - t0
+        stats["merge_s"] = time.perf_counter() - t0
 
         t0 = time.perf_counter()
         tt_out = _tt_prefill_from_merged_embeds(
             current_ids, merged_bf, pad_row, pad_token_id, mesh_device, tt_lm, model_args, sl
         )
-        prefill_s += time.perf_counter() - t0
+        stats["prefill_s"] = time.perf_counter() - t0
 
+        t0 = time.perf_counter()
         next_id = _sample_from_tt_out(tt_out, sl - 1)
-        steps += 1
-        if eos_ids and int(next_id.item()) in eos_ids:
-            pass  # will break after loop via final_seq_len check
-        else:
-            current_ids = torch.cat([current_ids, next_id], dim=1)
+        stats["first_sample_s"] = time.perf_counter() - t0
+        _profiler_signpost("prefill-end")
 
-        # ── Decode loop: 1 token per step using cached KV ────────────────────────
-        for _step in range(1, max_new_tokens):
-            if eos_ids and int(next_id.item()) in eos_ids:
-                break
+        # TTFT = wall time from start of prefill to first new token on host.
+        stats["ttft_s"] = time.perf_counter() - run_t0
+        stats["steps"] = 1  # first token comes from sampling the prefill output
+        current_ids = torch.cat([current_ids, next_id], dim=1)
 
-            decode_pos = int(current_ids.shape[1]) - 1  # position of token we just appended
-            t0 = time.perf_counter()
-            new_id_tt = ttnn.from_torch(
-                next_id.to(torch.int32),
-                device=mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        # ── Capture decode trace (warmup is done inside; not counted as a step).
+        decode_trace_ctx = None
+        if max_new_tokens > 1 and (eos_ids is None or int(next_id.item()) not in eos_ids):
+            decode_buffers = tt_alloc_decode_input_buffers(mesh_device)
+            decode_pos_init = int(current_ids.shape[1]) - 1
+            tt_update_decode_input_buffers(
+                mesh_device,
+                decode_buffers,
+                int(next_id.item()),
+                decode_pos_init,
             )
-            tt_out = tt_lm.forward_decode(new_id_tt, decode_pos)
-            ttnn.deallocate(new_id_tt)
-            prefill_s += time.perf_counter() - t0
+            logger.info("Capturing decode trace (warmup + capture)…")
+            _profiler_signpost("trace-capture-start")
+            t_capture = time.perf_counter()
+            decode_trace_ctx = tt_capture_decode_trace(
+                mesh_device,
+                tt_lm,
+                model_args,
+                decode_buffers,
+                tt_lm_head=None if lm_head_cpu else tt_lm_head,
+                sampling=sampling,
+            )
+            stats["trace_capture_s"] = time.perf_counter() - t_capture
+            _profiler_signpost("trace-capture-end")
+            logger.info(
+                f"Decode trace captured in {stats['trace_capture_s']*1000:.1f} ms (warmup + decode + sampling)."
+            )
 
-            # decode output is [1,1,1,H]; last_token_index=0 for the single-token block
-            next_id = _sample_from_tt_out(tt_out, 0)
-            steps += 1
-            if eos_ids and int(next_id.item()) in eos_ids:
-                break
-            current_ids = torch.cat([current_ids, next_id], dim=1)
+        # ── Single decode loop using the captured trace ────────────────────────
+        try:
+            _profiler_signpost("decode-loop-start")
+            for _step in range(1, max_new_tokens):
+                if eos_ids and int(next_id.item()) in eos_ids:
+                    break
 
-        wall_s = time.perf_counter() - gen_t0
-        final_seq_len = int(current_ids.shape[1])
-        new_token_count = final_seq_len - prompt_len
+                decode_pos = int(current_ids.shape[1]) - 1  # position of token we just appended
+
+                if sampling is not None:
+                    # Advance host-side RNG / push fresh seeds outside the trace each step,
+                    # otherwise stochastic sampling would replay the captured RNG and emit
+                    # the same token every iteration.
+                    sampling.seed_manager.get_new_values()
+
+                step_t0 = time.perf_counter()
+                t0 = time.perf_counter()
+                tt_update_decode_input_buffers(mesh_device, decode_trace_ctx.buffers, int(next_id.item()), decode_pos)
+                tt_execute_decode_trace(mesh_device, decode_trace_ctx)
+                stats["decode_s"] += time.perf_counter() - t0
+
+                # Blocking read forces device-side trace completion before we
+                # observe the token, so this charge is dominated by device latency.
+                t0 = time.perf_counter()
+                if decode_trace_ctx.output_tokens is not None:
+                    next_scalar = tt_read_decode_traced_token(decode_trace_ctx, batch_slot=0)
+                    nid = torch.tensor([[next_scalar]], device=id_device, dtype=torch.long)
+                    stats["sample_post_s"] += time.perf_counter() - t0
+                elif decode_trace_ctx.output_logits is not None:
+                    logits_row = tt_read_decode_traced_logits(decode_trace_ctx, mesh_device, model_args, batch_slot=0)
+                    stats["lmhead_s"] += time.perf_counter() - t0
+                    t0 = time.perf_counter()
+                    if do_sample:
+                        probs = torch.softmax(logits_row.float().squeeze(0) / max(gen_temperature, 1e-6), dim=-1)
+                        nid = torch.multinomial(probs, num_samples=1).view(1, 1)
+                    else:
+                        nid = logits_row.argmax(dim=-1, keepdim=True)
+                    nid = nid.to(id_device)
+                    stats["sample_post_s"] += time.perf_counter() - t0
+                else:
+                    # CPU LM head: clone trace hidden block, run host LM head + sample.
+                    h_clone = tt_read_decode_traced_hidden(decode_trace_ctx, mesh_device, batch_slot=0)
+                    nid = _sample_from_tt_out(h_clone, 0)
+
+                if stats["first_traced_step_s"] is None:
+                    stats["first_traced_step_s"] = time.perf_counter() - step_t0
+
+                next_id = nid
+                stats["steps"] += 1
+                if eos_ids and int(next_id.item()) in eos_ids:
+                    break
+                current_ids = torch.cat([current_ids, next_id], dim=1)
+            _profiler_signpost("decode-loop-end")
+        finally:
+            if decode_trace_ctx is not None:
+                tt_release_decode_trace(mesh_device, decode_trace_ctx)
+
+        stats["wall_s"] = time.perf_counter() - run_t0
+
+        # ── Report ────────────────────────────────────────────────────────────
+        wall_s = stats["wall_s"]
+        steps = stats["steps"]
+        decode_steps = max(steps - 1, 0)
+        ttft_s = stats["ttft_s"] or 0.0
 
         def _pct(part: float) -> float:
             return 100.0 * part / wall_s if wall_s > 0 else 0.0
 
-        def _avg_ms(part: float) -> float:
-            return 1000.0 * part / steps if steps > 0 else 0.0
+        def _decode_avg_ms(part: float) -> float:
+            return 1000.0 * part / decode_steps if decode_steps > 0 else 0.0
 
-        def _avg_s(part: float) -> float:
-            return part / steps if steps > 0 else 0.0
+        decode_loop_total_s = stats["decode_s"] + stats["lmhead_s"] + stats["sample_post_s"]
+        steady_per_tok_s = decode_loop_total_s / decode_steps if decode_steps > 0 else 0.0
+        steady_tok_s = 1.0 / steady_per_tok_s if steady_per_tok_s > 0 else 0.0
+        thr = steps / wall_s if wall_s > 0 else 0.0
 
-        thr = new_token_count / wall_s if wall_s > 0 else 0.0
+        print()
+        print("──────────────────────────────────────────────────────────────")
+        print(
+            f"  TT · traced decode  ({steps} new token(s); {decode_steps} traced decode step(s); wall {wall_s:.2f} s)"
+        )
+        print("──────────────────────────────────────────────────────────────")
+        print(f"  {'Phase':<22} {'total':>14}     %")
+        print(f"  {'merge (host)':<22} {stats['merge_s']*1000:>10.2f} ms  {_pct(stats['merge_s']):>5.1f}%")
+        print(f"  {'prefill (1x)':<22} {stats['prefill_s']*1000:>10.2f} ms  {_pct(stats['prefill_s']):>5.1f}%")
+        print(
+            f"  {'first-token sample':<22} {stats['first_sample_s']*1000:>10.2f} ms  {_pct(stats['first_sample_s']):>5.1f}%"
+        )
+        print(
+            f"  {'trace capture (1x)':<22} {stats['trace_capture_s']*1000:>10.2f} ms  {_pct(stats['trace_capture_s']):>5.1f}%   (warmup + decode + sampling)"
+        )
+        print(
+            f"  {'traced decode submit':<22} {stats['decode_s']*1000:>10.2f} ms  {_pct(stats['decode_s']):>5.1f}%"
+            f"   (avg {_decode_avg_ms(stats['decode_s']):.2f} ms / decoded tok)"
+        )
+        print(
+            f"  {'lm head (decode)':<22} {stats['lmhead_s']*1000:>10.2f} ms  {_pct(stats['lmhead_s']):>5.1f}%"
+            f"   (avg {_decode_avg_ms(stats['lmhead_s']):.2f} ms / decoded tok)"
+        )
+        print(
+            f"  {'sample / post-decode':<22} {stats['sample_post_s']*1000:>10.2f} ms  {_pct(stats['sample_post_s']):>5.1f}%"
+            f"   (avg {_decode_avg_ms(stats['sample_post_s']):.2f} ms / decoded tok)"
+        )
+        print("──────────────────────────────────────────────────────────────")
+        print(f"  TTFT (prompt -> 1st new tok)        {ttft_s*1000:>10.2f} ms")
+        if stats["first_traced_step_s"] is not None:
+            print(f"  First traced decode step latency    {stats['first_traced_step_s']*1000:>10.2f} ms")
+        if decode_steps > 0:
+            print(f"  Steady-state decode latency / tok   {steady_per_tok_s*1000:>10.2f} ms")
+            print(f"  Steady-state decode throughput      {steady_tok_s:>10.3f} tok/s")
+        print(f"  End-to-end throughput               {thr:>10.3f} tok/s")
+        print("──────────────────────────────────────────────────────────────")
 
-        print("──────────────────────────────────────────────────────────────")
-        print(f"  Generation timing  ({steps} step(s), wall {wall_s:.2f} s)")
-        print("──────────────────────────────────────────────────────────────")
-        print(f"  {'Phase':<18} {'avg/step':>14}     %")
-        print(f"  {'merge (host)':<18} {_avg_ms(merge_s):>10.2f} ms  {_pct(merge_s):>5.1f}%")
-        print(f"  {'prefill + decode':<18} {_avg_s(prefill_s):>10.2f} s  {_pct(prefill_s):>5.1f}%")
-        print(f"  {'LM head':<18} {_avg_ms(lmhead_s):>10.2f} ms  {_pct(lmhead_s):>5.1f}%")
-        print(f"  {'sample / post':<18} {_avg_s(sample_post_s):>10.2f} s  {_pct(sample_post_s):>5.1f}%")
-        print("──────────────────────────────────────────────────────────────")
-        print(f"  Throughput             {thr:.3f} tok/s")
-        print("──────────────────────────────────────────────────────────────")
+        final_seq_len = int(current_ids.shape[1])
+        new_token_count = final_seq_len - prompt_len
+
         print("  TT · generation done")
         print("──────────────────────────────────────────────────────────────")
         print(f"  Final sequence  {final_seq_len:,} tokens")
@@ -649,7 +809,7 @@ def run_tt(
         answer_text = tokenizer.decode(answer_ids.tolist(), skip_special_tokens=False)
         print(answer_text)
     finally:
-        ttnn.close_mesh_device(mesh_device)
+        _tt_demo.close_devstral_demo_mesh(mesh_device)
 
 
 def main() -> None:
