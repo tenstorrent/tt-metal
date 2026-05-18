@@ -194,7 +194,27 @@ class SigLIPAttentionBlockFused:
         # xmm/xmm2 (LN1 cores) and qk_scores+softmax_out (SDPA cores 0..64 KB).
         "sdpa_v_partial_cb": 28,
         "sdpa_attn_out_cb": 29,
+        # #11 Commit 11: per-head output assembly on the LN1 row.
+        # sdpa_assembled_out_cb aliases fused_scratch on LN1 cores @ offset 0,
+        # size 48 tiles = 96 KB. Holds the 8 LN1 cores' (32, 1536) M-slice of
+        # the concatenated 16-head Attn @ V output. Overlaps with xmm/xmm2 on
+        # LN1 cores — those CBs are dead by the time this gets filled (the
+        # LN1 compute completed in Phase 1).
+        "sdpa_assembled_out_cb": 30,
+        # #11 Commit 11: 1-tile sync CB on the SDPA grid. TRISC pushes after
+        # cb_push_back(attn_out); NCRISC waits + pops before atomic_inc'ing the
+        # LN1 cores. Avoids the NCRISC-waiting-on-attn_out-CB race that TRISC's
+        # in-place fused_scratch alias creates (attn_out_cb is shared L1 with
+        # qk_scores / softmax_out so its push counter semantics across RISCs
+        # are subtle).
+        "sdpa_attn_done_trigger_cb": 31,
     }
+
+    # #11 Commit 11: semaphore on the LN1 row — each SDPA worker that serves
+    # an LN1 core atomic_incs this sem on that core. Each LN1 core waits for
+    # NUM_HEADS=16 incs (one per head, all from the worker_idx serving its
+    # M-slice), then fan-in-reads from those 16 SDPA workers.
+    SDPA_DONE_SEM_ID = 4
 
     # SDPA QKV-ready semaphore (id=3). All three QKV producers (Q, K, V)
     # atomic-inc each head's SDPA workers; workers wait for sem ≥ 3 before
@@ -234,6 +254,7 @@ class SigLIPAttentionBlockFused:
         sdpa_softmax_sum_tt,
         sdpa_softmax_isum_tt,
         sdpa_softmax_scaler_tt,
+        sdpa_attn_done_trigger_tt,
         math_fidelity=ttnn.MathFidelity.HiFi4,
         eps: float = 1e-6,
     ):
@@ -272,6 +293,14 @@ class SigLIPAttentionBlockFused:
 
         eps_bf16 = torch.tensor(eps, dtype=torch.bfloat16).view(torch.uint16).item()
         eps_bits = eps_bf16 << 16
+
+        # #11 Commit 11: attn_out lives in fused_scratch on SDPA cores at byte
+        # offset equal to qk_scores's total size (32 tiles for our shape).
+        # NCRISC SDPA atomic_inc + LN1 NCRISC fan-in need this as a CT arg.
+        TILE_SIZE_BF16 = SigLIPAttentionBlockFused.TILE * SigLIPAttentionBlockFused.TILE * 2  # 2048
+        _attn_out_offset_bytes = (
+            m_tiles_per_sdpa_worker * (SigLIPAttentionBlockFused.M // SigLIPAttentionBlockFused.TILE) * TILE_SIZE_BF16
+        )  # 4 * 8 * 2048 = 65536
 
         # NCRISC CT args: existing setup-sharded-buffer plumbing for the LN1
         # row, plus the new qkv_act_cb / shard sizing / semaphore-id needed by
@@ -329,6 +358,16 @@ class SigLIPAttentionBlockFused:
             # head_dim_n_tiles tiles per V-row, m_kv_n_tiles V-rows total.
             ("sdpa_v_partial_cb", SigLIPAttentionBlockFused.CB["sdpa_v_partial_cb"]),
             ("head_dim_n_tiles", SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE),  # 3
+            # #11 Commit 11: assembly fan-in.
+            # sdpa_done_sem_id: SDPA NCRISC atomic_incs after Attn @ V; LN1 NCRISC waits ≥ NUM_HEADS.
+            # sdpa_attn_out_offset: where attn_out lives in fused_scratch on SDPA cores.
+            # sdpa_assembled_out_cb: LN1-row destination for the fan-in.
+            ("sdpa_done_sem_id", SigLIPAttentionBlockFused.SDPA_DONE_SEM_ID),
+            ("sdpa_attn_out_offset", _attn_out_offset_bytes),
+            ("sdpa_assembled_out_cb", SigLIPAttentionBlockFused.CB["sdpa_assembled_out_cb"]),
+            # NCRISC also needs sdpa_attn_out_cb to wait_front before signaling.
+            ("sdpa_attn_out_cb", SigLIPAttentionBlockFused.CB["sdpa_attn_out_cb"]),
+            ("sdpa_attn_done_trigger_cb", SigLIPAttentionBlockFused.CB["sdpa_attn_done_trigger_cb"]),
         ]
         # TRISC needs all CBs + tile counts + eps + QKV matmul shape params.
         trisc_ct = [
@@ -376,6 +415,7 @@ class SigLIPAttentionBlockFused:
             ("sdpa_v_partial_cb", SigLIPAttentionBlockFused.CB["sdpa_v_partial_cb"]),
             ("sdpa_attn_out_cb", SigLIPAttentionBlockFused.CB["sdpa_attn_out_cb"]),
             ("head_dim_n_tiles", SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE),  # 3
+            ("sdpa_attn_done_trigger_cb", SigLIPAttentionBlockFused.CB["sdpa_attn_done_trigger_cb"]),
         ]
 
         # Physical NoC coords for the worker grid. BH's logical-to-physical x
@@ -445,6 +485,10 @@ class SigLIPAttentionBlockFused:
                 # L1 address is the same on every QKV core, so one runtime
                 # arg suffices.
                 ("qkv_out_l1_addr", qkv_out_tt.buffer_address()),
+                # #11 Commit 11: LN1 NCRISC reads SDPA workers' attn_out (in
+                # fused_scratch at byte offset sdpa_attn_out_offset). Need
+                # the fused_scratch's L1 base address.
+                ("fused_scratch_l1_addr", fused_scratch_tt.buffer_address()),
             ],
             ncrisc_named_common_runtime_arg_arrays=[
                 # 8 physical NoC x coords, one per LN1 sender (logical x=0..7).
@@ -516,6 +560,23 @@ class SigLIPAttentionBlockFused:
         sdpa_qkv_ready_sem = ttnn.SemaphoreDescriptor(
             id=SigLIPAttentionBlockFused.SDPA_QKV_READY_SEM_ID,
             core_ranges=sdpa_sem_grid,
+            initial_value=0,
+        )
+
+        # #11 Commit 11: sdpa_done_sem lives on the LN1 row (8 cores). Each
+        # SDPA worker atomic_incs the LN1 cores it serves; each LN1 core waits
+        # for value ≥ NUM_HEADS (= one inc per head from its worker_idx).
+        ln1_sem_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(SigLIPAttentionBlockFused.LN1_NUM_CORES - 1, 0),
+                )
+            }
+        )
+        sdpa_done_sem = ttnn.SemaphoreDescriptor(
+            id=SigLIPAttentionBlockFused.SDPA_DONE_SEM_ID,
+            core_ranges=ln1_sem_grid,
             initial_value=0,
         )
 
@@ -635,6 +696,21 @@ class SigLIPAttentionBlockFused:
         v_partial_cb_aliased.format_descriptors[0].tile = tile_descriptor
         v_partial_cb_aliased.format_descriptors[0].page_size = bf16_tile_bytes
 
+        # #11 Commit 11: sdpa_assembled_out_cb aliases fused_scratch on LN1 cores
+        # at offset 0 (overlapping xmm/xmm2 — both dead post-LN1). 48 tiles =
+        # (M_per_LN1_core=32, NUM_HEADS * head_dim_padded = 16 * 96 = 1536) bf16.
+        assembled_out_tiles = SigLIPAttentionBlockFused.NUM_HEADS * head_dim_n_tiles  # 16 * 3 = 48
+        assembled_out_total_size = assembled_out_tiles * bf16_tile_bytes  # 96 KB
+        sdpa_assembled_out_cb_aliased = ttnn.cb_descriptor_from_sharded_tensor(
+            SigLIPAttentionBlockFused.CB["sdpa_assembled_out_cb"],
+            fused_scratch_tt,
+            address_offset=0,
+            total_size=assembled_out_total_size,
+            core_ranges=ln1_grid_alias,
+        )
+        sdpa_assembled_out_cb_aliased.format_descriptors[0].tile = tile_descriptor
+        sdpa_assembled_out_cb_aliased.format_descriptors[0].page_size = bf16_tile_bytes
+
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
@@ -662,14 +738,16 @@ class SigLIPAttentionBlockFused:
                 v_partial_cb_aliased,
                 attn_out_cb_aliased,
                 qk_scores_cb_aliased,
+                sdpa_assembled_out_cb_aliased,
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_softmax_max_cb"], sdpa_softmax_max_tt),
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_softmax_exp_cb"], sdpa_softmax_exp_tt),
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_softmax_sum_cb"], sdpa_softmax_sum_tt),
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_softmax_isum_cb"], sdpa_softmax_isum_tt),
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_softmax_scaler_cb"], sdpa_softmax_scaler_tt),
+                _cb(SigLIPAttentionBlockFused.CB["sdpa_attn_done_trigger_cb"], sdpa_attn_done_trigger_tt),
                 softmax_out_cb_aliased,
             ],
-            semaphores=[counter_sem, sdpa_qkv_ready_sem],
+            semaphores=[counter_sem, sdpa_qkv_ready_sem, sdpa_done_sem],
         )
 
         ttnn.generic_op(
@@ -699,6 +777,7 @@ class SigLIPAttentionBlockFused:
                 sdpa_softmax_sum_tt,
                 sdpa_softmax_isum_tt,
                 sdpa_softmax_scaler_tt,
+                sdpa_attn_done_trigger_tt,
             ],
             program_descriptor,
         )
@@ -1053,6 +1132,16 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         memory_config=sdpa_softmax_tile_mem,
     )
 
+    # #11 Commit 11: 1-tile sync CB on SDPA grid (TRISC → NCRISC). Same
+    # pattern as ln_done_trigger_cb on the LN1 row.
+    sdpa_attn_done_trigger_tt = ttnn.from_torch(
+        torch.zeros(sdpa_num_workers * TILE, TILE, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sdpa_softmax_tile_mem,
+    )
+
     return (
         ln_in_tt,
         gamma_tt,
@@ -1079,4 +1168,5 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         sdpa_softmax_sum_tt,
         sdpa_softmax_isum_tt,
         sdpa_softmax_scaler_tt,
+        sdpa_attn_done_trigger_tt,
     )

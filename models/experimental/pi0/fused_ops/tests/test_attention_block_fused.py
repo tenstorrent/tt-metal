@@ -510,3 +510,106 @@ def test_attention_block_fused_sdpa_attn_v_probe(device):
     # Attn @ V stacks another bfp8/HiFi4 matmul on top of softmax — same
     # precision regime, gate stays at 0.996.
     assert min_pcc >= 0.996, f"min Attn @ V probe PCC {min_pcc} below 0.996"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_attention_block_fused_sdpa_assembled_probe(device):
+    """Per-head output assembly on the LN1 row (Commit 11).
+
+    After all 32 SDPA workers finish Attn @ V, each atomic_incs the 4 LN1
+    cores it serves on sdpa_done_sem. Each LN1 core waits for the sem to
+    reach NUM_HEADS=16, then fan-in-reads its M-slice of every head's
+    attn_out (32 rows × 96 cols = 3 tiles per head). The 16 head slices
+    concatenate horizontally into a (32, 16 * 96 = 1536) per-LN1-core
+    block, totaling (256, 1536) across the LN1 row.
+
+    Destination: sdpa_assembled_out_cb aliased into fused_scratch on LN1
+    cores at byte offset 0 — overlapping (and overwriting) xmm/xmm2's L1
+    region, which is dead by this phase. 48 tiles per LN1 core.
+
+    Golden: per-head torch.softmax(Q @ K^T, dim=-1) @ V (padded to 96 cols),
+    concatenated horizontally → (256, 1536). Each LN1 core's expected slice
+    is rows [c*32 : (c+1)*32] of the concat.
+    """
+    x, gamma, beta = make_inputs(seed=42)
+    w_qkv = make_qkv_weight(seed=7)
+
+    ln_out_golden = F.layer_norm(x.float(), (D,), gamma.float(), beta.float(), eps=EPS)
+    qkv_golden_unpadded = (ln_out_golden.to(torch.float32) @ w_qkv.to(torch.float32)).to(torch.bfloat16)
+
+    q_padded_per_head = torch.zeros(NUM_HEADS, M, HEAD_DIM_PADDED, dtype=torch.bfloat16)
+    k_padded_per_head = torch.zeros(NUM_HEADS, M, HEAD_DIM_PADDED, dtype=torch.bfloat16)
+    v_padded_per_head = torch.zeros(NUM_HEADS, M, HEAD_DIM_PADDED, dtype=torch.bfloat16)
+    for h in range(NUM_HEADS):
+        q_start = h * HEAD_DIM_TRUE
+        k_start = D + h * HEAD_DIM_TRUE
+        v_start = 2 * D + h * HEAD_DIM_TRUE
+        q_padded_per_head[h, :, :HEAD_DIM_TRUE] = qkv_golden_unpadded[:, q_start : q_start + HEAD_DIM_TRUE]
+        k_padded_per_head[h, :, :HEAD_DIM_TRUE] = qkv_golden_unpadded[:, k_start : k_start + HEAD_DIM_TRUE]
+        v_padded_per_head[h, :, :HEAD_DIM_TRUE] = qkv_golden_unpadded[:, v_start : v_start + HEAD_DIM_TRUE]
+
+    # Build per-head torch SDPA outputs → concat to (M, NUM_HEADS * HEAD_DIM_PADDED).
+    sdpa_per_head = torch.zeros(NUM_HEADS, M, HEAD_DIM_PADDED, dtype=torch.bfloat16)
+    for h in range(NUM_HEADS):
+        q = q_padded_per_head[h].to(torch.float32)
+        k = k_padded_per_head[h].to(torch.float32)
+        v = v_padded_per_head[h].to(torch.float32)
+        scores = q @ k.T
+        softmax_scores = torch.softmax(scores, dim=-1)
+        sdpa_per_head[h] = (softmax_scores @ v).to(torch.bfloat16)
+    # Concat heads horizontally: (M, NUM_HEADS * HEAD_DIM_PADDED) = (256, 1536).
+    D_padded = NUM_HEADS * HEAD_DIM_PADDED  # 1536
+    sdpa_concat = torch.zeros(M, D_padded, dtype=torch.bfloat16)
+    for h in range(NUM_HEADS):
+        sdpa_concat[:, h * HEAD_DIM_PADDED : (h + 1) * HEAD_DIM_PADDED] = sdpa_per_head[h]
+
+    tensors = build_tensors_for_fused_attention_block(device, x, gamma, beta, w_qkv_torch=w_qkv)
+    SigLIPAttentionBlockFused.op(*tensors, eps=EPS)
+
+    import ttnn as _ttnn
+
+    fused_scratch_tt = tensors[6]
+    fused_scratch_torch = _ttnn.to_torch(fused_scratch_tt)
+
+    ln1_num_cores = SigLIPAttentionBlockFused.LN1_NUM_CORES  # 8
+    head_dim_padded = HEAD_DIM_PADDED  # 96
+    head_dim_n_tiles = SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE  # 3
+    m_per_ln1_core = M // ln1_num_cores  # 32 (one tile-row)
+    shard_h = 2 * SigLIPAttentionBlockFused.D_TILES * SigLIPAttentionBlockFused.TILE  # 2304
+
+    # Each LN1 core's shard contains 48 tiles of sdpa_assembled_out at the
+    # first 1536 rows (= 48 row-tiles × 32). Tile h*3 + d holds (32, 32) at
+    # cols [d*32 : (d+1)*32] of head h.
+    assembled_tiles_per_core = SigLIPAttentionBlockFused.NUM_HEADS * head_dim_n_tiles  # 48
+    assembled_rows = assembled_tiles_per_core * SigLIPAttentionBlockFused.TILE  # 1536
+
+    min_pcc = float("inf")
+    worst = None
+    for c in range(ln1_num_cores):
+        shard_start = c * shard_h  # LN1 shards 0..7 at rows 0..(8*2304-1)
+        assembled_region = fused_scratch_torch[shard_start : shard_start + assembled_rows, :]
+        tile_stack = assembled_region.reshape(
+            assembled_tiles_per_core, SigLIPAttentionBlockFused.TILE, SigLIPAttentionBlockFused.TILE
+        )
+        # Re-assemble into (m_per_ln1_core=32, D_padded=1536).
+        per_core = torch.zeros(m_per_ln1_core, D_padded, dtype=assembled_region.dtype)
+        for h in range(SigLIPAttentionBlockFused.NUM_HEADS):
+            for d in range(head_dim_n_tiles):
+                tile_idx = h * head_dim_n_tiles + d
+                col_start = h * head_dim_padded + d * SigLIPAttentionBlockFused.TILE
+                per_core[:, col_start : col_start + SigLIPAttentionBlockFused.TILE] = tile_stack[tile_idx]
+
+        expected = sdpa_concat[c * m_per_ln1_core : (c + 1) * m_per_ln1_core, :]
+        p = pcc(expected, per_core)
+        if p < min_pcc:
+            min_pcc = p
+            worst = c
+
+    print(
+        f"\nPCC (SDPA assembled output on LN1 row, min/{ln1_num_cores} LN1 cores) = "
+        f"{min_pcc:.6f} (worst LN1 core={worst})"
+    )
+    print(f"  per-core shape={(m_per_ln1_core, D_padded)}, dtype={per_core.dtype}")
+    # Assembly is a pure NoC copy of Attn @ V's output — no new compute, so
+    # PCC should match Commit 10's gate.
+    assert min_pcc >= 0.996, f"min assembled probe PCC {min_pcc} below 0.996"

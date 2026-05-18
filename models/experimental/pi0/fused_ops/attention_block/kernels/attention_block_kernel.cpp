@@ -108,6 +108,14 @@ void kernel_main() {
     constexpr uint32_t m_kv_n_tiles = get_named_compile_time_arg_val("m_kv_n_tiles");
     constexpr uint32_t sdpa_v_partial_cb = get_named_compile_time_arg_val("sdpa_v_partial_cb");
     constexpr uint32_t head_dim_n_tiles = get_named_compile_time_arg_val("head_dim_n_tiles");
+    // #11 Commit 11: assembly fan-in.
+    constexpr uint32_t sdpa_done_sem_id = get_named_compile_time_arg_val("sdpa_done_sem_id");
+    constexpr uint32_t sdpa_attn_out_offset = get_named_compile_time_arg_val("sdpa_attn_out_offset");
+    constexpr uint32_t sdpa_assembled_out_cb = get_named_compile_time_arg_val("sdpa_assembled_out_cb");
+    constexpr uint32_t sdpa_attn_out_cb_nc = get_named_compile_time_arg_val("sdpa_attn_out_cb");
+    constexpr uint32_t sdpa_attn_done_trigger_cb_nc = get_named_compile_time_arg_val("sdpa_attn_done_trigger_cb");
+    // Need an attn_out tile count for the NCRISC SDPA wait — same as TRISC's tile count.
+    constexpr uint32_t sdpa_attn_out_tiles = m_tiles_per_sdpa_worker * head_dim_n_tiles;  // 4 * 3 = 12
 
     const bool is_ln1_core_nc = (get_relative_logical_y() == 0) && (get_relative_logical_x() < ln1_num_cores);
     const bool is_qkv_core_nc = (get_relative_logical_y() < qkv_grid_y) && (get_relative_logical_x() < qkv_grid_x);
@@ -185,6 +193,32 @@ void kernel_main() {
         // important since the same core (if "both" role) is about to wait on
         // its own counter as a receiver in the block below.
         noc_async_atomic_barrier();
+
+        // =====================================================================
+        // PHASE 8 (#11 Commit 11): per-head output assembly on the LN1 row.
+        //
+        // Wait for the 16 SDPA workers (one per head) that serve this LN1
+        // core's M-slice to signal Attn @ V completion via sdpa_done_sem.
+        // Then fan-in-read each head's (32, head_dim_padded=96) = 3-tile slice
+        // from its SDPA worker's attn_out_cb into our sdpa_assembled_out_cb.
+        //
+        // Worker-to-LN1 mapping:
+        //   LN1 cores 0..3  → worker_idx=0 of each head (rows 0..127)
+        //   LN1 cores 4..7  → worker_idx=1 of each head (rows 128..255)
+        //
+        // Within an SDPA worker's attn_out (4 m-tile-rows × 3 d-cols = 12
+        // tiles), our LN1 core wants m_out_within_worker = my_logical_x % 4
+        // (i.e., m_out=0..3 for LN1 cores 0..3 or 4..7). Read 3 contiguous
+        // tiles (one m-row) from each head's worker.
+        //
+        // Destination layout in sdpa_assembled_out_cb: 16 heads × 3 tiles =
+        // 48 tiles, head h at tile-offset h * 3 (= L1 byte offset h * 6144).
+        // =====================================================================
+        // The fan-in wait + read for Commit 11 MUST go after the QKV-receiver
+        // block below (LN1 cores 0..5 are dual-role: sender here, receiver
+        // there). Otherwise the receiver code never runs and the entire
+        // pipeline deadlocks. The fan-in lives in a separate is_ln1_core_nc
+        // block at the bottom of NCRISC.
     }
 
     // =========================================================================
@@ -217,10 +251,11 @@ void kernel_main() {
         // BH (eth/PCIe columns split the worker grid: logical x=7 → physical
         // x=10, not 8). Pull the 8 physical x coords from the host-supplied
         // array (named "ln1_phys_x") rather than computing origin + offset.
-        // Array slot 0 sits at common-arg-index 4 (after the 4 scalar named
+        // Array slot 0 sits at common-arg-index 5 (after the 5 scalar named
         // common args: ln_out_l1_addr, worker_phys_origin_x,
-        // worker_phys_origin_y, qkv_out_l1_addr).
-        constexpr uint32_t LN1_PHYS_X_BASE = 4;
+        // worker_phys_origin_y, qkv_out_l1_addr, fused_scratch_l1_addr).
+        // (Commit 11 added fused_scratch_l1_addr at slot 4, shifting arrays by 1.)
+        constexpr uint32_t LN1_PHYS_X_BASE = 5;
         for (uint32_t i = 0; i < ln1_num_cores; ++i) {
             const uint32_t ln1_phys_x = get_common_arg_val<uint32_t>(LN1_PHYS_X_BASE + i);
             const uint64_t src = get_noc_addr(ln1_phys_x, ln1_phys_y, ln_out_l1_addr);
@@ -280,9 +315,10 @@ void kernel_main() {
             //   slot  1: worker_phys_origin_x
             //   slot  2: worker_phys_origin_y
             //   slot  3: qkv_out_l1_addr
-            //   slots 4..11:  ln1_phys_x[0..7]
-            //   slots 12..15: sdpa_phys_x[0..3]
-            constexpr uint32_t SDPA_PHYS_X_BASE = 4 + 8;
+            //   slot  4: fused_scratch_l1_addr  (Commit 11)
+            //   slots 5..12:  ln1_phys_x[0..7]
+            //   slots 13..16: sdpa_phys_x[0..3]
+            constexpr uint32_t SDPA_PHYS_X_BASE = 5 + 8;  // = 13
             const uint32_t sdpa_worker_phys_x = get_common_arg_val<uint32_t>(SDPA_PHYS_X_BASE + head_col);
             const uint32_t phys_origin_y_local = get_common_arg_val<uint32_t>(2);
             const uint32_t sem_l1_addr = get_semaphore(sdpa_qkv_ready_sem_id);
@@ -375,6 +411,73 @@ void kernel_main() {
         noc_async_read(v_src_noc_addr, get_write_ptr(sdpa_v_partial_cb), v_full_bytes);
         noc_async_read_barrier();
         cb_push_back(sdpa_v_partial_cb, v_full_tiles);
+
+        // #11 Commit 11: wait for TRISC's Attn @ V via a single-consumer
+        // sync CB (sdpa_attn_done_trigger). TRISC pushes a 1-tile signal
+        // after cb_push_back(attn_out, 12) — this matches the LN1-row
+        // ln_done_trigger_cb pattern from Commit 2, which avoids subtleties
+        // of cb_wait_front on a CB shared via fused-scratch alias.
+        cb_wait_front(sdpa_attn_done_trigger_cb_nc, 1);
+        cb_pop_front(sdpa_attn_done_trigger_cb_nc, 1);
+
+        const uint32_t sdpa_done_sem_l1_addr = get_semaphore(sdpa_done_sem_id);
+        const uint32_t ln1_phys_y_target = phys_origin_y_local;  // LN1 row at logical y=0
+        // worker_idx=0 serves LN1 cores 0..3; worker_idx=1 serves LN1 cores 4..7.
+        const uint32_t ln1_start_x_assembly = worker_idx_self * (ln1_num_cores / 2);
+        for (uint32_t target_lx = ln1_start_x_assembly; target_lx < ln1_start_x_assembly + (ln1_num_cores / 2);
+             ++target_lx) {
+            const uint32_t target_phys_x = get_common_arg_val<uint32_t>(5 + target_lx);  // ln1_phys_x[target_lx]
+            const uint64_t target_sem_addr = get_noc_addr(target_phys_x, ln1_phys_y_target, sdpa_done_sem_l1_addr);
+            noc_semaphore_inc(target_sem_addr, 1);
+        }
+        noc_async_atomic_barrier();
+    }
+
+    // =========================================================================
+    // PHASE 8 (#11 Commit 11): per-head output assembly on the LN1 row.
+    //
+    // This block runs AFTER the QKV receiver block above — important because
+    // LN1 cores 0..5 are also QKV cores (dual role: senders here as Phase 2,
+    // receivers there at Phase 3). Putting the fan-in wait inside the LN1
+    // sender block would block dual-role cores from reaching the QKV receiver
+    // code → entire pipeline deadlocks.
+    //
+    // Wait for the 16 SDPA workers (one per head) that serve this LN1 core's
+    // M-slice. Then fan-in-read each head's (32, head_dim_padded=96) =
+    // 3-tile slice from its SDPA worker into sdpa_assembled_out_cb at byte
+    // offset h * 6144.
+    // =========================================================================
+    if (is_ln1_core_nc) {
+        const uint32_t sdpa_done_sem_l1_addr_rx = get_semaphore(sdpa_done_sem_id);
+        volatile tt_l1_ptr uint32_t* sdpa_done_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sdpa_done_sem_l1_addr_rx);
+        noc_semaphore_wait_min(sdpa_done_sem_ptr, num_heads);
+        noc_semaphore_set(sdpa_done_sem_ptr, 0);
+
+        const uint32_t my_lx = get_relative_logical_x();
+        const uint32_t my_worker_idx_for_assembly = (my_lx < (ln1_num_cores / 2)) ? 0u : 1u;
+        const uint32_t m_out_within_worker = my_lx % (ln1_num_cores / 2);                         // 0..3
+        const uint32_t per_head_bytes = head_dim_n_tiles * get_tile_size(sdpa_assembled_out_cb);  // 6144
+        // attn_out lives in fused_scratch at byte offset sdpa_attn_out_offset on SDPA cores.
+        // Absolute L1 addr = fused_scratch's buffer_address (slot 4) + offset.
+        const uint32_t fused_scratch_l1_base = get_common_arg_val<uint32_t>(4);
+        const uint32_t src_l1_addr =
+            fused_scratch_l1_base + sdpa_attn_out_offset + m_out_within_worker * per_head_bytes;
+        const uint32_t dst_base_addr = get_write_ptr(sdpa_assembled_out_cb);
+        const uint32_t phys_origin_y_assembly = get_common_arg_val<uint32_t>(2);
+
+        cb_reserve_back(sdpa_assembled_out_cb, num_heads * head_dim_n_tiles);
+        for (uint32_t h = 0; h < num_heads; ++h) {
+            const uint32_t sdpa_lx = h % sdpa_grid_x;
+            const uint32_t sdpa_ly = (h / sdpa_grid_x) * num_sdpa_workers_per_head + my_worker_idx_for_assembly;
+            const uint32_t sdpa_phys_x_h = get_common_arg_val<uint32_t>(5 + 8 + sdpa_lx);  // sdpa_phys_x[sdpa_lx]
+            const uint32_t sdpa_phys_y_h = phys_origin_y_assembly + sdpa_ly;
+            const uint64_t src_noc_addr = get_noc_addr(sdpa_phys_x_h, sdpa_phys_y_h, src_l1_addr);
+            const uint32_t dst_addr = dst_base_addr + h * per_head_bytes;
+            noc_async_read(src_noc_addr, dst_addr, per_head_bytes);
+        }
+        noc_async_read_barrier();
+        cb_push_back(sdpa_assembled_out_cb, num_heads * head_dim_n_tiles);
     }
 #endif  // COMPILE_FOR_NCRISC
 
@@ -451,6 +554,7 @@ void kernel_main() {
     constexpr uint32_t sdpa_v_partial_cb_tr = get_named_compile_time_arg_val("sdpa_v_partial_cb");
     constexpr uint32_t sdpa_attn_out_cb_tr = get_named_compile_time_arg_val("sdpa_attn_out_cb");
     constexpr uint32_t head_dim_n_tiles_tr = get_named_compile_time_arg_val("head_dim_n_tiles");
+    constexpr uint32_t sdpa_attn_done_trigger_cb_tr = get_named_compile_time_arg_val("sdpa_attn_done_trigger_cb");
     const bool is_ln1_core_tr = (get_relative_logical_y() == 0) && (get_relative_logical_x() < ln1_num_cores_tr);
     const bool is_residual_core_tr = is_ln1_core_tr;
     const bool is_qkv_core_tr =
@@ -756,6 +860,12 @@ void kernel_main() {
         cb_push_back(sdpa_attn_out_cb_tr, attn_out_tiles);
         cb_pop_front(sdpa_softmax_out_cb_tr, softmax_in_tiles_av);
         cb_pop_front(sdpa_v_partial_cb_tr, v_full_tiles);
+
+        // #11 Commit 11: signal NCRISC that attn_out has been pushed and is
+        // safe to atomic_inc the LN1 row's fan-in semaphore. Single-tile sync
+        // CB; payload unused, only push/pop counters carry the signal.
+        cb_reserve_back(sdpa_attn_done_trigger_cb_tr, 1);
+        cb_push_back(sdpa_attn_done_trigger_cb_tr, 1);
     }
 #endif
 }
