@@ -2622,9 +2622,9 @@ public:
         uint32_t num_iterations,
         bool /*wait_for_completion*/ = true,
         bool /*wait_for_host_writes*/ = false) override {
-        using entry_t = DispatchSettings::prefetch_q_entry_type;  // uint16_t
-
         const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        const uint32_t entry_size = memmap.prefetch_q_entry_size_bytes();
+        TT_FATAL(entry_size == 4, "Entry size must be 32 bits for worker cores used to launch prefetcher in this test");
         const uint32_t dispatch_cb_base = memmap.dispatch_buffer_base();
         const uint32_t dispatch_buffer_pages = memmap.dispatch_buffer_pages();
 
@@ -2693,7 +2693,7 @@ public:
         // write_prefetcher_cmd: streaming-store cmd to hugepage + write one FetchQ entry via TLB.
         // cmd_size_bytes must be a multiple of 64 (host alignment) and cmd_size_entry is the
         // pre-computed FetchQ value (may have MSB stall flag set for exec_buf).
-        auto write_prefetcher_cmd = [&](const uint32_t* src, uint32_t cmd_size_bytes, entry_t cmd_size_entry) {
+        auto write_prefetcher_cmd = [&](const uint32_t* src, uint32_t cmd_size_bytes, uint32_t cmd_size_entry) {
             const uint64_t host_offset =
                 static_cast<uint64_t>(reinterpret_cast<char*>(host_mem_ptr) - static_cast<char*>(host_hugepage_base));
             TT_FATAL(
@@ -2702,8 +2702,9 @@ public:
             tt::tt_metal::memcpy_to_device<true>(host_mem_ptr, src, cmd_size_bytes);
             host_mem_ptr += cmd_size_bytes / sizeof(uint32_t);
 
-            prefetch_q_tlb->write16(prefetch_q_dev_ptr, cmd_size_entry);
-            prefetch_q_dev_ptr += sizeof(entry_t);
+            prefetch_q_tlb->write32(prefetch_q_dev_ptr, cmd_size_entry);
+            // this->prefetch_q_windows[cq_id]->write32(this->prefetch_q_dev_ptrs[cq_id], entry_val);
+            prefetch_q_dev_ptr += entry_size;
             if (prefetch_q_dev_ptr >= prefetch_q_dev_fence) {
                 prefetch_q_dev_ptr = prefetch_q_base;
             }
@@ -2714,9 +2715,11 @@ public:
             const uint32_t size = tt::align(cmd.size_bytes(), host_align);
             std::vector<uint8_t> padded(size, 0u);
             std::memcpy(padded.data(), cmd.data(), cmd.size_bytes());
-            entry_t entry = static_cast<entry_t>(size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
+            uint32_t entry = static_cast<uint32_t>(size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
             if (stall) {
-                entry |= static_cast<entry_t>(1u << 15);
+                const uint32_t shift_for_msb = entry_size * 8 - 1;
+                const uint32_t max_encodable = 1u << shift_for_msb;
+                entry |= max_encodable;
             }
             write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(padded.data()), size, entry);
         };
@@ -2770,6 +2773,7 @@ public:
             dispatch_buffer_pages,
             pf_downstream_cb_sem,
             pf_sync_sem,
+            entry_size,
             phys_prefetch,
             phys_disp);
         auto prefetch_kernel = tt_metal::CreateKernel(

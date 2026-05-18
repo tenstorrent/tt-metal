@@ -1323,6 +1323,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
     uint32_t dispatch_cb_pages,
     uint32_t dispatch_cb_sem_id,
     uint32_t downstream_sync_sem_id,
+    uint32_t entry_size,
     const CoreCoord& phys_prefetch,
     const CoreCoord& phys_dispatch) {
     const auto my_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_prefetch);
@@ -1393,6 +1394,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"OFFSETOF_TO_DEV_ID", "1"},
         {"OFFSETOF_ROUTER_DIRECTION", "2"},
         {"FD_CORE_TYPE", "0"},
+        {"PREFETCH_Q_ENTRY_BITS", std::to_string(entry_size * 8)},
         // FABRIC_RELAY intentionally omitted - must be undefined for #if defined(FABRIC_RELAY) to be false
     };
 }
