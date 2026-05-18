@@ -74,10 +74,10 @@ ALWI void binary_tiles_init(
     state_configure(icb0, icb1, call_line);
 
     if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL) {
-        MATH((llk_math_eltwise_binary_init_with_operands<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY>(
+        MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY>(
             icb0, icb1, acc_to_dest)));
     } else {
-        MATH((llk_math_eltwise_binary_init_with_operands<eltwise_binary_type, BroadcastType::NONE, MathFidelity::LoFi>(
+        MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MathFidelity::LoFi>(
             icb0, icb1, acc_to_dest)));
     }
 
@@ -245,9 +245,14 @@ ALWI void binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __bui
     #endif
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, acc_to_dest, binary_reuse_dest>(false, false, icb0)));
     if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL) {
-        MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(false)));
+        MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(
+            icb0, icb0, false)));
     } else {
-        MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MathFidelity::LoFi, binary_reuse_dest>(false)));
+        MATH((llk_math_eltwise_binary_init<
+              eltwise_binary_type,
+              BroadcastType::NONE,
+              MathFidelity::LoFi,
+              binary_reuse_dest>(icb0, icb0, false)));
     }
 }
 

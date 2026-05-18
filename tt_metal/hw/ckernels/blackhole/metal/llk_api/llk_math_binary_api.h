@@ -10,27 +10,13 @@
  * LLK ELTWISE BINARY
  *************************************************************************/
 
-// Version with no operand (assumes default 32x32 tile)
-template <
-    EltwiseBinaryType eltwise_binary_type,
-    BroadcastType src_b_bcast_type,
-    MathFidelity math_fidelity,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_math_eltwise_binary_init(const std::uint32_t acc_to_dest = 0) {
-    _llk_math_eltwise_binary_init_<
-        eltwise_binary_type,
-        src_b_bcast_type,
-        math_fidelity,
-        binary_reuse_dest>(ckernel::DEFAULT_TENSOR_SHAPE, acc_to_dest);
-}
-
 // Version with operands
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_math_eltwise_binary_init_with_operands(
+inline void llk_math_eltwise_binary_init(
     const std::uint32_t operand_A, const std::uint32_t operand_B, const std::uint32_t acc_to_dest = 0) {
     const std::uint32_t operand_id = get_operand_id(operand_A);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
