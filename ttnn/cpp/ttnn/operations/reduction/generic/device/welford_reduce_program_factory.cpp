@@ -66,6 +66,18 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
+    bool is_std = (operation_attributes.math_op == ReduceOpMath::STD);
+
+    // For variance output (is_std=false) to bf16, the scratch CBs (c_19 for W-reduce,
+    // c_22 for HW-reduce) do not need to be wider than bf16: there is no math between
+    // the scratch read-back and the final pack to output, so bf16-rounding once at the
+    // pack to scratch vs once at the pack to output produces a bit-identical result.
+    // For std output, sqrt sits between the read-back and the output pack, so keep the
+    // scratch at the wider precision to avoid quantizing the variance before sqrt
+    // (which could shift the std output by up to one bf16-ULP on elements whose post-
+    // sqrt value straddles a bf16 rounding boundary).
+    bool narrow_scratch_to_bf16 = !is_std && dst_cb_data_format == tt::DataFormat::Float16_b;
+
     tt_metal::IDevice* device = tensor_arg.device();
 
     // Work division:
@@ -189,8 +201,11 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     // be transposed back to column orientation).
     if (reduce_w) {
         CBIndex scratch_cb_index = CBIndex::c_19;
-        // It stores temporary data from the DST register, so data format is the same as the DST register.
-        tt::DataFormat scratch_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        // Float32 only when the DST register is fp32 and we are not narrowing the scratch
+        // to the output dtype (variance output to bf16 -- see narrow_scratch_to_bf16 above);
+        // bf16 otherwise.
+        tt::DataFormat scratch_cb_data_format =
+            (fp32_dest_acc_en && !narrow_scratch_to_bf16) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
         uint32_t scratch_single_tile_size = tt::tile_size(scratch_cb_data_format);
         desc.cbs.push_back(CBDescriptor{
             .total_size = scratch_single_tile_size,
@@ -240,13 +255,15 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         });
 
         // cb_combined (c_22): HW-reduce only -- holds the combined scalar result
-        // (one Float32 tile per output) written by the writer kernel after
-        // W-combining all per-column partials and applying Bessel's correction.
+        // (one tile per output) written by the writer kernel after W-combining
+        // all per-column partials and applying Bessel's correction.
         // The compute kernel reads this tile, applies sqrt_tile for std, and
         // re-packs it to cb_out in the correct output data format (the packer
         // hardware is required for BFLOAT8_B conversion).
+        // Float32 unless we can safely narrow to bf16.
         CBIndex combined_cb_index = CBIndex::c_22;
-        tt::DataFormat combined_cb_data_format = tt::DataFormat::Float32;
+        tt::DataFormat combined_cb_data_format =
+            narrow_scratch_to_bf16 ? tt::DataFormat::Float16_b : tt::DataFormat::Float32;
         uint32_t combined_single_tile_size = tt::tile_size(combined_cb_data_format);
         desc.cbs.push_back(CBDescriptor{
             .total_size = combined_single_tile_size,
@@ -297,7 +314,6 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     }
 
     // --- Compute + Writer kernels ---
-    bool is_std = (operation_attributes.math_op == ReduceOpMath::STD);
 
     KernelDescriptor writer_desc;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -314,7 +330,13 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
 
         // HW-reduce: custom writer that combines partial stats and constructs output tile.
         std::vector<uint32_t> writer_compile_time_args = {
-            Wt, W, tile_width, H, static_cast<uint32_t>(operation_attributes.correction), reduce_batch_size};
+            Wt,
+            W,
+            tile_width,
+            H,
+            static_cast<uint32_t>(operation_attributes.correction),
+            reduce_batch_size,
+            static_cast<uint32_t>(narrow_scratch_to_bf16)};
         TensorAccessorArgs(output).append_to(writer_compile_time_args);
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -388,10 +410,10 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     if (input_cb_data_format == tt::DataFormat::Float32) {
         unpack_to_dest_mode[static_cast<uint32_t>(input_cb_index)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    if (reduce_w && fp32_dest_acc_en) {
+    if (reduce_w && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
         unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_19)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    if (reduce_hw && fp32_dest_acc_en) {
+    if (reduce_hw && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
         unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_22)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
