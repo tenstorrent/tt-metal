@@ -23,9 +23,15 @@
 //     4  PASS     8  HANG  (and HANG for all larger W tested up to 256)
 //
 // I.e. the hang is **non-monotonic in W** in the 3..7 range. Smallest known
-// hanging configuration is W=3 (96 columns per shard). The two PASS controls
-// (replicated LHS and no-broadcast) below show that sharding + COL_B broadcast
-// are both required to hit the bug.
+// hanging configuration is W=3 (96 columns per shard).
+//
+// ALL FOUR TESTS in this file read W from the same env var
+// (`REPRO_W_TILES_PER_SHARD`, default 2), so a single sweep step covers
+// {BF16+COL_B+replicated, FP32+no-bcast+replicated, FP32+COL_B+replicated,
+// FP32+COL_B+sharded} at the same per-device width. The three controls being
+// independent of the bug means they double as smoke checks: if a control fails
+// or hangs, the parametric outcome that follows is suspect (likely a wedged
+// device, not a real bug repro).
 //
 // Each test prints + Synchronizes between dispatch and the next host call so
 // that on hang we can tell whether the freeze is host-side (dispatch never
@@ -77,6 +83,9 @@ constexpr uint32_t kMeshDevices = kMeshRows * kMeshCols;
 
 class SubtractFp32ColBBcastTest : public ::testing::Test {
 protected:
+    static constexpr uint32_t kTileW = 32U;
+    static constexpr uint32_t kDefaultWTilesPerShard = 2U;
+
     void SetUp() override {
         const auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
         if (cluster_desc->get_number_of_chips() < kMeshDevices) {
@@ -89,6 +98,18 @@ protected:
 
     void TearDown() override {
         ttml::autograd::ctx().close_device();
+    }
+
+    // Read REPRO_W_TILES_PER_SHARD from the environment, defaulting to a
+    // known-passing value if unset. All tests use this so a single sweep step
+    // exercises controls + parametric with the same per-device width.
+    static uint32_t w_tiles_per_shard() {
+        const char* w_env = std::getenv("REPRO_W_TILES_PER_SHARD");
+        if (w_env == nullptr) {
+            return kDefaultWTilesPerShard;
+        }
+        const auto w = static_cast<uint32_t>(std::stoul(w_env));
+        return (w == 0U) ? kDefaultWTilesPerShard : w;
     }
 
     // Synchronize then print, so we know exactly which dispatched op has finished.
@@ -104,13 +125,14 @@ protected:
 // ─── Control 1 ───────────────────────────────────────────────────────────────
 // COL_B broadcast (rhs W=1) but NO output_dtype override → keeps BF16 throughout.
 // This is the path the production code uses when not in diagnostic mode and is
-// expected to PASS.
+// expected to PASS at all W (BF16 path doesn't have the typecast injection).
 TEST_F(SubtractFp32ColBBcastTest, ColBBroadcast_DefaultDtype_NoHang) {
     SKIP_FOR_WATCHER();
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
-    const uint32_t B = 2U, S = 32U, V = 128U;
+    const uint32_t W = w_tiles_per_shard();
+    const uint32_t B = 2U, S = 32U, V = W * kTileW;
 
     xt::xarray<float> lhs_xt = xt::ones<float>({B, 1U, S, V});
     xt::xarray<float> rhs_xt = xt::ones<float>({B, 1U, S, 1U});
@@ -118,6 +140,9 @@ TEST_F(SubtractFp32ColBBcastTest, ColBBroadcast_DefaultDtype_NoHang) {
     const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto lhs = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(lhs_xt, device, ttnn::Layout::TILE, replicate.get());
     auto rhs = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(rhs_xt, device, ttnn::Layout::TILE, replicate.get());
+
+    std::fprintf(stderr, "[repro] replicated default-dtype W_tiles=%u (V=%u)\n", W, V);
+    std::fflush(stderr);
 
     sync_mesh(device, "before subtract (default dtype, COL_B bcast)");
     auto out = ttnn::subtract(lhs, rhs);  // no output_dtype override
@@ -131,13 +156,14 @@ TEST_F(SubtractFp32ColBBcastTest, ColBBroadcast_DefaultDtype_NoHang) {
 // ─── Control 2 ───────────────────────────────────────────────────────────────
 // FP32 output but NO broadcast (rhs has same shape as lhs). If this passes and
 // the broadcast test below hangs, the bug is specifically in the FP32 + COL_B
-// broadcast combination.
+// broadcast combination, not in the FP32 output itself.
 TEST_F(SubtractFp32ColBBcastTest, NoBroadcast_Fp32Output_NoHang) {
     SKIP_FOR_WATCHER();
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
-    const uint32_t B = 2U, S = 32U, V = 128U;
+    const uint32_t W = w_tiles_per_shard();
+    const uint32_t B = 2U, S = 32U, V = W * kTileW;
 
     xt::xarray<float> lhs_xt = xt::ones<float>({B, 1U, S, V});
     xt::xarray<float> rhs_xt = xt::ones<float>({B, 1U, S, V});
@@ -145,6 +171,9 @@ TEST_F(SubtractFp32ColBBcastTest, NoBroadcast_Fp32Output_NoHang) {
     const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto lhs = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(lhs_xt, device, ttnn::Layout::TILE, replicate.get());
     auto rhs = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(rhs_xt, device, ttnn::Layout::TILE, replicate.get());
+
+    std::fprintf(stderr, "[repro] replicated FP32-no-bcast W_tiles=%u (V=%u)\n", W, V);
+    std::fflush(stderr);
 
     sync_mesh(device, "before subtract (FP32 out, no bcast)");
     auto out = ttnn::subtract(lhs, rhs, ttnn::DataType::FLOAT32);
@@ -157,14 +186,18 @@ TEST_F(SubtractFp32ColBBcastTest, NoBroadcast_Fp32Output_NoHang) {
 
 // ─── Replicated FP32 + COL_B broadcast ──────────────────────────────────────
 // COL_B broadcast (rhs W=1) AND FP32 output override, BOTH operands replicated.
-// Originally written as the suspected hang case; empirically PASSES on a 1x4
-// p150_x4 mesh, so the bug needs more than just dtype + broadcast.
+// Originally written as the suspected hang case; at W=4 it empirically PASSES,
+// so the bug needs more than just dtype + broadcast. Parametrizing by W lets us
+// check whether the sharded test's non-monotonic hang pattern (3,5,7,8 …) also
+// appears with replicated tensors. If this test starts hanging at the same Ws
+// as the sharded one, sharding isn't actually a precondition.
 TEST_F(SubtractFp32ColBBcastTest, ColBBroadcast_Fp32Output_ReplicatedLhs_NoHang) {
     SKIP_FOR_WATCHER();
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
-    const uint32_t B = 2U, S = 32U, V = 128U;
+    const uint32_t W = w_tiles_per_shard();
+    const uint32_t B = 2U, S = 32U, V = W * kTileW;
 
     xt::xarray<float> lhs_xt = xt::ones<float>({B, 1U, S, V});
     xt::xarray<float> rhs_xt = xt::ones<float>({B, 1U, S, 1U});
@@ -172,6 +205,9 @@ TEST_F(SubtractFp32ColBBcastTest, ColBBroadcast_Fp32Output_ReplicatedLhs_NoHang)
     const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto lhs = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(lhs_xt, device, ttnn::Layout::TILE, replicate.get());
     auto rhs = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(rhs_xt, device, ttnn::Layout::TILE, replicate.get());
+
+    std::fprintf(stderr, "[repro] replicated FP32+COL_B W_tiles=%u (V=%u)\n", W, V);
+    std::fflush(stderr);
 
     sync_mesh(device, "before subtract (FP32 out, COL_B bcast, replicated lhs)");
     auto out = ttnn::subtract(lhs, rhs, ttnn::DataType::FLOAT32);
@@ -212,15 +248,9 @@ TEST_F(SubtractFp32ColBBcastTest, ColBBroadcast_Fp32Output_ShardedLhs_Hangs) {
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
-    constexpr uint32_t kTileW = 32U;
-    constexpr uint32_t kDefaultWTilesPerShard = 2U;
-    const char* w_env = std::getenv("REPRO_W_TILES_PER_SHARD");
-    const uint32_t W_tiles_per_shard =
-        (w_env != nullptr) ? static_cast<uint32_t>(std::stoul(w_env)) : kDefaultWTilesPerShard;
-    ASSERT_GE(W_tiles_per_shard, 1U);
-
+    const uint32_t W = w_tiles_per_shard();
     const uint32_t B = 5U, S = 256U;
-    const uint32_t V_per_shard = W_tiles_per_shard * kTileW;
+    const uint32_t V_per_shard = W * kTileW;
     const uint32_t V_total = V_per_shard * kMeshDevices;
 
     xt::xarray<float> lhs_xt = xt::ones<float>({B, 1U, S, V_total});
@@ -236,13 +266,13 @@ TEST_F(SubtractFp32ColBBcastTest, ColBBroadcast_Fp32Output_ShardedLhs_Hangs) {
         "[repro] sharded lhs.shape=%s rhs.shape=%s W_tiles_per_shard=%u (V_per_shard=%u)\n",
         fmt::format("{}", lhs.logical_shape()).c_str(),
         fmt::format("{}", rhs.logical_shape()).c_str(),
-        W_tiles_per_shard,
+        W,
         V_per_shard);
     std::fflush(stderr);
 
     sync_mesh(device, "before subtract (FP32 out, COL_B bcast, sharded)");
     auto out = ttnn::subtract(lhs, rhs, ttnn::DataType::FLOAT32);
-    std::fprintf(stderr, "[repro] dispatch returned (W_tiles=%u)\n", W_tiles_per_shard);
+    std::fprintf(stderr, "[repro] dispatch returned (W_tiles=%u)\n", W);
     std::fflush(stderr);
     sync_mesh(device, "after  subtract (FP32 out, COL_B bcast, sharded)");
 
