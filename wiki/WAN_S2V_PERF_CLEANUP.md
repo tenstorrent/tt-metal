@@ -53,10 +53,9 @@ Repro: `pytest models/tt_dit/tests/models/wan2_2/test_performance_wan_s2v.py::te
 - **Approach**: extend `bruteforce_conv3d_sweep.py` with a wav2vec2 sweep variant; parse winners.
 - **Estimated impact**: **~1-2 s saved** on wav2vec2 transformer per run.
 
-### 6. `LAT_TARGET=20` binary_ng workaround (precision, not throughput)
-- Ship with `LAT_TARGET=21` (one extra latent frame); reference uses 20. The ttnn `binary_ng` op asserts at `Sq=8224` (257 tiles).
-- **Approach**: file ttnn ticket OR host-pad operands in `prepare_cond_emb` before upload to dodge the broadcast classifier.
-- **Impact**: lip-sync precision, not wall-clock.
+### 6. ~~`LAT_TARGET=20` binary_ng workaround~~ — **LANDED**
+- Root cause was **our own** padding mismatch, not a ttnn bug: the spatial path padded noisy / const segments separately to `(sp_factor * TILE)` alignment then concat, but `_build_adain_modulation_for_layer` padded their sum. At LAT_TARGET=20 these two strategies land 32 elements apart per device (8224 vs 8192 on (2,4) BH 480p) so binary_ng's broadcast classifier rejected the multiply with "Invalid subtile broadcast type".
+- **Fix**: `_build_adain_modulation_for_layer` now pads `noisy_len` and `const_len` independently to match the spatial path. `_LAT_TARGET_FRAMES` and `_INFER_FRAMES_PIXEL` switched back to reference-exact (20 / 80) — output is now `4*80-3 = 317` frames at 4 clips.
 
 ### 7. Encoder `compute_encoder_dims.T_tconv` convention cleanup (NOT a bug, doc-only)
 - `T_tconv = cur_T` but the actual conv input is `cur_T + 1` (cache concat prepends 1 frame). Lookup convention is internally consistent (sweep + runtime both use cur_T as the key); the comment is misleading but the blocking is correct.
@@ -72,8 +71,8 @@ Repro: `pytest models/tt_dit/tests/models/wan2_2/test_performance_wan_s2v.py::te
 - [x] Encoder conv3d sweep (12/13 layers).
 - [x] Item 2: wav2vec2 chunking on-device trim+concat (-33 s measured).
 - [x] Item 4a: padd_lat zero-alloc cleanup (cosmetic ~20 ms).
+- [x] Item 6: AdaIN padding fix → reference-exact LAT_TARGET=20 / INFER_FRAMES=80.
 - [ ] Item 1: DiT denoise matmul tuning.
 - [ ] Item 2.5 / Item 5: wav2vec2 transformer matmul + conv3d tuning.
 - [ ] Item 4b: motioner on-device conv3d (deferred until sweep).
-- [ ] Item 6: LAT_TARGET=20 ttnn workaround.
 - [ ] Item 7: T_tconv comment cleanup.

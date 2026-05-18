@@ -595,25 +595,20 @@ class WanPipelineS2V(WanPipeline):
     # Reference-faithful frame-count constants (wan_s2v_14B + speech2video.py).
     # ----------------------------------------------------------------------
 
-    # Per-clip pixel frame count. The reference uses ``infer_frames=80``
-    # (speech2video.py:404) with ``lat_target_frames=20``; we use 81/21 because
-    # ``20`` triggers a ttnn ``binary_ng`` "Invalid subtile broadcast type"
-    # assertion at the resulting Sq=8224 (= 257 tiles per device on (2,4) BH
-    # 480p). Both single-clip and multi-clip mostly match reference except for
-    # a ~1-frame audio-to-pixel offset per clip; accepted.
-    _INFER_FRAMES_PIXEL = 81
+    # Per-clip pixel frame count (speech2video.py:404, ``infer_frames=80``).
+    _INFER_FRAMES_PIXEL = 80
     # Motion-context pixel frames carried between clips
     # (config wan_s2v_14B.py:51, ``motion_frames=73``).
     _MOTION_FRAMES_PIXEL = 73
     # Latent frames the motion context occupies after VAE encode
     # (``(motion_frames + 3) // 4``, speech2video.py:491).
     _LAT_MOTION_FRAMES = 19
-    # Reference-exact: ``(infer_frames + 3 + motion_frames) // 4 - motion_lat_frames``
-    # = (80 + 3 + 73) // 4 - 19 = 20 (speech2video.py:544-545).
+    # ``(infer_frames + 3 + motion_frames) // 4 - motion_lat_frames`` =
+    # ``(80 + 3 + 73) // 4 - 19 = 20`` (speech2video.py:544-545).
     _LAT_TARGET_FRAMES = 20
     # Clip-0 pixel-transient trim. With ``drop_first_motion=True`` the VAE
-    # decode is ``ref(1) + noisy(21) = 22 latents → 4*22-3 = 85 pixels``;
-    # we keep the last ``INFER_FRAMES_PIXEL = 81`` and drop 3 more transient
+    # decode is ``ref(1) + noisy(20) = 21 latents → 4*21-3 = 81 pixels``;
+    # we keep the last ``INFER_FRAMES_PIXEL = 80`` and drop 3 more transient
     # frames at the front, matching ``speech2video.py:654-656``.
     _S2V_VAE_CLIP0_TRIM = 3
 
