@@ -27,6 +27,17 @@ from ttml.common.utils import no_grad
 from ttml.datasets import Batch, TTMLDataloader
 from ttml.trainers.callback import TrainerCallback
 
+try:
+    import tracy as _tracy
+
+    def _signpost(header: str) -> None:
+        _tracy.signpost(header)
+
+except ImportError:
+
+    def _signpost(header: str) -> None:
+        pass
+
 
 @dataclass
 class SFTConfig:
@@ -70,6 +81,7 @@ class SFTConfig:
     max_grad_norm: float = 0.0
     log_interval: int = 1
     gradient_checkpointing: bool = False
+    profile_warmup_steps: int = 0
 
 
 class SFTTrainer:
@@ -208,7 +220,12 @@ class SFTTrainer:
                 return next(data_iter)
 
         bar = tqdm(range(cfg.max_steps), desc="SFTTrainer")
+        warmup_announced = False
         for _ in bar:
+            measure = self.step >= cfg.profile_warmup_steps
+            if measure and not warmup_announced and cfg.profile_warmup_steps > 0:
+                _signpost(f"WARMUP_END after={cfg.profile_warmup_steps}")
+                warmup_announced = True
             # self.step is 0-based so external lr_schedule callables (e.g.
             # SpeedrunScheduler.lr_at) receive the expected step index.
             lr = self._lr_schedule(self.step)
@@ -220,15 +237,21 @@ class SFTTrainer:
                 batch = _next_batch()
                 profiler_marker(None, "dataloader_step_done")
 
+                if measure:
+                    _signpost(f"FWD_BEGIN step={self.step}")
                 loss = self._compute_loss(batch)
                 micro_losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer).mean()))
-                profiler_marker(None, "forward_pass_done")
-
+                profiler_marker(None, "forward_pass_done", dump_results=True)
+                if measure:
+                    _signpost(f"FWD_END step={self.step}")
+                    _signpost(f"BWD_BEGIN step={self.step}")
                 if cfg.gradient_accumulation_steps > 1:
                     loss = ttml.ops.binary.mul(loss, 1.0 / cfg.gradient_accumulation_steps)
                 loss.backward(False)
                 ttml.autograd.AutoContext.get_instance().reset_graph()
-                profiler_marker(None, "backward_pass_done")
+                profiler_marker(None, "backward_pass_done", dump_results=True)
+                if measure:
+                    _signpost(f"BWD_END step={self.step}")
 
             for cb in self._callbacks:
                 cb.on_before_optimizer_step(self)
@@ -238,10 +261,14 @@ class SFTTrainer:
 
             profiler_marker(None, "gradient_sync_done")
 
+            if measure:
+                _signpost(f"OPT_BEGIN step={self.step}")
             self._optimizer.step()
             self.step += 1
 
-            profiler_marker(None, "optimizer_step_done")
+            profiler_marker(None, "optimizer_step_done", dump_results=True)
+            if measure:
+                _signpost(f"OPT_END step={self.step - 1}")
 
             step_loss = float(np.mean(micro_losses))
             if cfg.log_interval > 0 and self.step % cfg.log_interval == 0:

@@ -43,7 +43,7 @@ WEIGHT_DECAY = 0.01
 
 LORA_RANK = 8
 LORA_ALPHA = 16
-LORA_TARGET_MODULES = ["q_linear", "kv_linear", "out_linear"]
+LORA_TARGET_MODULES = ["q_linear", "kv_linear"]
 LORA_DROPOUT = 0.05
 
 
@@ -176,6 +176,7 @@ def llama_config_from_yaml(yaml_config: dict, vocab_size: int, use_tp: bool = Fa
 
     return LlamaConfig(
         hidden_size=tc.get("embedding_dim", 384),
+        intermediate_size=tc.get("intermediate_dim"),
         num_hidden_layers=tc.get("num_blocks", 6),
         num_attention_heads=tc.get("num_heads", 6),
         num_key_value_heads=tc.get("num_groups", 3),
@@ -256,6 +257,12 @@ def parse_args():
         type=str,
         default=None,
         help="Path to write per-step loss JSON (disabled if not set).",
+    )
+    parser.add_argument(
+        "--profile_warmup_steps",
+        type=int,
+        default=0,
+        help="Number of initial steps to exclude from profiling signposts (default: 0).",
     )
     return parser.parse_args()
 
@@ -403,6 +410,7 @@ def main():
         save_interval=args.save_every,
         checkpoint_dir=args.save_dir,
         eval_interval=0,
+        profile_warmup_steps=args.profile_warmup_steps,
     )
 
     trainer = SFTTrainer(
