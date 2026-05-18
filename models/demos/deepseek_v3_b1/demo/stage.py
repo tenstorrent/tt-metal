@@ -610,8 +610,16 @@ class BaseLMHeadStage(StageKind):
     N_TOTAL = NUM_MATMUL_CORES * N_PER_CORE
     A_TILE = ttnn.Tile([1, 32])
     OUT_TILE = ttnn.Tile([1, 32])
-    ARGMAX_FINAL_CORE = ttnn.CoreCoord(0, 1)
-    LMHEAD_INPUT_CORE = ttnn.CoreCoord(10, 9)
+    ARGMAX_FINAL_CORE = ttnn.CoreCoord(1, 0)
+    # NOTE: LMHEAD_INPUT_CORE intentionally lives at col 11, not col 12. The
+    # mcast bounding box is the rectangular hull of matmul_core_grid ∪ {sender},
+    # so putting the sender at col 12 would force the bbox into col 12 — and
+    # col 12 hosts the persistent D2D socket relay at PIPELINE_CORE_COORD=(12,8)
+    # for BaseLMHeadStage. The LM-head kernel can't co-exist on (12,8) with the
+    # persistent socket kernel and the op hangs at launch. Keeping the sender
+    # at col 11 caps the bbox at col 11 (matching shared_expert/down_proj's
+    # avoidance pattern for the col-12 phantom cores).
+    LMHEAD_INPUT_CORE = ttnn.CoreCoord(11, 9)
 
     def __init__(
         self,
@@ -652,13 +660,10 @@ class BaseLMHeadStage(StageKind):
         )
         up_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
         up_fifo = activation_fifo_size_bytes(up_page, self._upstream_fifo_pages)
-        # MTP: forward activation+metadata downstream; non-MTP: only the token result goes downstream.
-        if self._send_mtp_output_downstream:
-            down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
-            down_fifo = activation_fifo_size_bytes(down_page, self._downstream_fifo_pages)
-        else:
-            down_page = TOKEN_META_PAGE_SIZE_BYTES
-            down_fifo = TOKEN_META_FIFO_SIZE
+        down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
+        down_fifo = activation_fifo_size_bytes(down_page, self._downstream_fifo_pages)
+
+        loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD))
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -689,8 +694,10 @@ class BaseLMHeadStage(StageKind):
         )
         matmul_core_grid = ttnn.CoreRangeSet(
             [
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(10, 0), ttnn.CoreCoord(10, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(10, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(11, 0), ttnn.CoreCoord(11, 8)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 2)),
             ]
         )
         argmax_final_core_grid = ttnn.CoreRangeSet(

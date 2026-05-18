@@ -324,6 +324,18 @@ class DeepSeekV3SpecWeights(UploadableMixin):
 
     lm_head: ttnn.Tensor  # LM head projection (with shared_head_norm folded into weight matrix)
 
+    def as_lm_head_weights(self) -> "DeepSeekV3LMHeadWeights":
+        """Convert to DeepSeekV3LMHeadWeights for use in intermediate BaseLMHeadStage instances.
+
+        NOTE: spec weights are sharded on `_SPEC_LM_HEAD_MATMUL_CORE_GRID` (original
+        compact layout). BaseLMHeadStage's matmul_core_grid is the non-overlapping
+        layout (cols 1-6, 8-11, (12,0)). The two only match when num_mtp_levels==1
+        (where this conversion is never invoked — level 0 uses ``load_lm_head``).
+        For num_mtp_levels>1, the MTP-level>0 BaseLMHead stage will hit a sharding
+        mismatch — re-shard or move spec weights to the base grid before using.
+        """
+        return DeepSeekV3LMHeadWeights(lm_head=self.lm_head)
+
 
 # MoE routed experts (DeepSeek V3 config: n_routed_experts=256).
 NUM_ROUTED_EXPERTS = D.GATE_NUM_INDICES
@@ -347,7 +359,35 @@ _GATE_BIAS_SENDER_CORE_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(_GATE_BIAS_SENDE
 
 _LM_HEAD_K = D.HIDDEN_SIZE
 _LM_HEAD_VOCAB_SIZE = D.VOCAB_SIZE
+# BaseLMHead layout. Mirror this layout in BaseLMHeadStage.setup
+# (demo/stage.py). The LM-head mcast bbox is the rectangular hull of this
+# grid ∪ {_LM_HEAD_MCAST_CORE=(11,9)}. Requirements:
+#   * Col 7 free for the pinned EH DRAM-matmul cores at rows {1,4,6,9}.
+#   * Col 0 covered by the bbox (we place 2 cells in col 0 at non-EH rows
+#     {1,2}) so the col-0 EH cores at rows {0,3,7,9} land inside `all_cores`
+#     — without this the EH reduce hangs on the eh_matmul_done semaphore.
+#   * Col 12 NOT covered: PIPELINE_CORE_COORD=(12,8) hosts the persistent
+#     D2D socket relay on BaseLMHeadStage; the LM-head kernel cannot
+#     co-exist with it. Sender capped at col 11 to keep bbox.max.x == 11.
+#   * (11,9) reserved for the mcast sender / input core (excluded here).
+# 101 cores: 60 (cols 1-6) + 30 (cols 8-10) + 9 (col 11 rows 0-8) + 2
+# (col 0 rows 1-2).
 _LM_HEAD_MATMUL_CORE_GRID = ttnn.CoreRangeSet(
+    [
+        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 9)),
+        ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(10, 9)),
+        ttnn.CoreRange(ttnn.CoreCoord(11, 0), ttnn.CoreCoord(11, 8)),
+        ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 2)),
+    ]
+)
+# SpecLMHead layout: the spec verify stage does NOT run the EH DRAM matmul, so
+# overlapping with the DRAM-pinned cores is fine here. More importantly the
+# combined SpecLMHead+Embedding stage runs persistent embedding I/O kernels on
+# column 12, so the LM-head mcast bbox must stay out of column 12 on this
+# stage. We keep the original compact layout: (0,0)-(9,9) + (10,0) and mcast
+# sender at (10,9). Must mirror SpecLMHeadStage.matmul_core_grid /
+# LMHEAD_INPUT_CORE in demo/stage.py.
+_SPEC_LM_HEAD_MATMUL_CORE_GRID = ttnn.CoreRangeSet(
     [
         ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 9)),
         ttnn.CoreRange(ttnn.CoreCoord(10, 0), ttnn.CoreCoord(10, 0)),
@@ -356,8 +396,10 @@ _LM_HEAD_MATMUL_CORE_GRID = ttnn.CoreRangeSet(
 _LM_HEAD_B_TILE = ttnn.Tile([32, 32])
 _LM_HEAD_A_TILE = ttnn.Tile([1, 32])
 _LM_HEAD_N_PER_CORE = 160
-_LM_HEAD_MCAST_CORE = ttnn.CoreCoord(10, 9)
+_LM_HEAD_MCAST_CORE = ttnn.CoreCoord(11, 9)
 _LM_HEAD_MCAST_CORE_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(_LM_HEAD_MCAST_CORE, _LM_HEAD_MCAST_CORE)])
+_SPEC_LM_HEAD_MCAST_CORE = ttnn.CoreCoord(10, 9)
+_SPEC_LM_HEAD_MCAST_CORE_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(_SPEC_LM_HEAD_MCAST_CORE, _SPEC_LM_HEAD_MCAST_CORE)])
 
 _NORM_MEM_CONFIG = ttnn.MemoryConfig(
     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -390,7 +432,7 @@ _EMBEDDING_TARGET = TensorTarget(
 )
 
 
-def _lm_head_target(name: str) -> TensorTarget:
+def _lm_head_target(name: str, matmul_core_grid: ttnn.CoreRangeSet = _LM_HEAD_MATMUL_CORE_GRID) -> TensorTarget:
     return TensorTarget(
         name=name,
         dtype=ttnn.bfloat8_b,
@@ -398,9 +440,7 @@ def _lm_head_target(name: str) -> TensorTarget:
         memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                _LM_HEAD_MATMUL_CORE_GRID, (_LM_HEAD_K, _LM_HEAD_N_PER_CORE), ttnn.ShardOrientation.ROW_MAJOR
-            ),
+            ttnn.ShardSpec(matmul_core_grid, (_LM_HEAD_K, _LM_HEAD_N_PER_CORE), ttnn.ShardOrientation.ROW_MAJOR),
         ),
         mesh_mapper_config=ShardMeshMapper(dim=1),
         transform_version=3,
@@ -409,7 +449,12 @@ def _lm_head_target(name: str) -> TensorTarget:
 
 _LM_HEAD_TARGET = _lm_head_target("lm_head")
 _LM_HEAD_FOLDED_NORM_TARGET = _lm_head_target("lm_head_folded_norm")
-_LM_HEAD_FOLDED_SPEC_NORM_TARGET = _lm_head_target("lm_head_folded_shared_head_norm")
+# Spec stage uses the original compact layout, not the non-overlapping one,
+# because it does not run the EH DRAM matmul and the combined SpecLMHead+
+# Embedding stage reserves column 12 for embedding I/O kernels.
+_LM_HEAD_FOLDED_SPEC_NORM_TARGET = _lm_head_target(
+    "lm_head_folded_shared_head_norm", matmul_core_grid=_SPEC_LM_HEAD_MATMUL_CORE_GRID
+)
 
 _FINAL_NORM_TARGET = TensorTarget(
     name="final_norm",
