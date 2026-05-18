@@ -787,6 +787,88 @@ FabricCoresHealth configure_fabric_cores(
         // after write_launch_msg_to_core, for MMIO skip_soft_reset ETH channels.  At that
         // point the firmware binary AND launch message are both in L1, so base-UMD can safely
         // act on the flag.
+        //
+        // FIX MM (#42429): fw_launch_addr restore is now unconditionally applied below
+        // (after this loop) for ALL surviving MMIO channels that had FIX EG/EG RR run.
+        // FIX IJ/KL in device.cpp are disabled (#ifdef FIXIJ_REDUNDANT_AFTER_FIX_MM).
+    }
+
+    // FIX MM (#42429): Unconditional fw_launch_addr restore after L1 clear.
+    // FIX EG (in the reset window above) zeroed fw_launch_addr to prevent
+    // premature stale-firmware launch. Now that the L1 clear is complete,
+    // restore fw_launch_addr=1 so base-UMD firmware will launch when
+    // write_launch_msg_to_core() is called by device.cpp.
+    // This replaces the per-path FIX IJ / FIX KL conditions which were
+    // incomplete — centralizing here guarantees every channel that got
+    // FIX EG'd also gets its restore, unconditionally.
+    //
+    // IMPORTANT: This runs on ALL channels for which we did the FIX S9
+    // soft reset (MMIO channels — both skip_soft_reset and normal path,
+    // plus FIX RR recovered channels). Non-MMIO channels that skipped
+    // FIX S9 never had FIX EG run, so no restore needed for them.
+    //
+    // NOTE: This fires BEFORE ConfigureDeviceWithProgram and write_launch_msg_to_core.
+    // base-UMD sees fw_launch_addr=1 but the launch message isn't in L1 yet.
+    // This is safe because base-UMD polls fw_launch_addr in a tight loop and
+    // only acts on it when it sees a VALID launch message structure in the
+    // LAUNCH address region.  The actual launch message is written by
+    // write_launch_msg_to_core() later in device.cpp — at which point base-UMD
+    // reads the ready launch message and jumps.  The sequence is:
+    //   FIX EG: zero fw_launch_addr (prevents stale launch during reset)
+    //   L1 clear: zero sync addresses
+    //   FIX MM (here): restore fw_launch_addr=1 (base-UMD starts polling)
+    //   ConfigureDeviceWithProgram: writes fabric firmware binary to L1
+    //   write_launch_msg_to_core: writes launch message → base-UMD jumps
+    if (device->is_mmio_capable()) {
+        const auto& hal_mm = tt::tt_metal::MetalContext::instance().hal();
+        const auto aeth_idx_mm = hal_mm.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+        const uint32_t fw_launch_addr_mm = hal_mm.get_jit_build_config(aeth_idx_mm, 0, 0).fw_launch_addr;
+        const uint32_t fw_launch_val_mm = hal_mm.get_jit_build_config(aeth_idx_mm, 0, 0).fw_launch_addr_value;
+        const auto chip_id_mm = device->id();
+
+        for (const auto& [router_chan_mm, _] : router_chans_and_direction) {
+            if (dead_channels.count(router_chan_mm)) {
+                continue;  // Dead channels — no point restoring; firmware won't launch on them.
+            }
+            auto virtual_core_mm = cluster.get_virtual_eth_core_from_channel(chip_id_mm, router_chan_mm);
+
+            // Pre-restore snapshot (diagnostic — mirrors FIX MN pattern).
+            std::vector<uint32_t> mm_pre(1, 0xFFFFFFFF);
+            cluster.read_core(mm_pre, sizeof(uint32_t),
+                tt_cxy_pair(chip_id_mm, virtual_core_mm),
+                static_cast<uint64_t>(fw_launch_addr_mm));
+            log_info(
+                tt::LogMetal,
+                "FIX MM (#42429): pre-restore — Device {} chan={} "
+                "fw_launch_addr=0x{:08X} pre_val=0x{:08X} (expect 0 from FIX EG)",
+                chip_id_mm, router_chan_mm, fw_launch_addr_mm, mm_pre[0]);
+
+            cluster.write_core_immediate(
+                chip_id_mm, virtual_core_mm, std::vector<uint32_t>{fw_launch_val_mm}, fw_launch_addr_mm);
+
+            // Readback verify (mirrors FIX GI pattern).
+            std::vector<uint32_t> mm_verify(1, 0);
+            cluster.read_core(mm_verify, sizeof(uint32_t),
+                tt_cxy_pair(chip_id_mm, virtual_core_mm),
+                static_cast<uint64_t>(fw_launch_addr_mm));
+            if (mm_verify[0] != fw_launch_val_mm) {
+                log_warning(
+                    tt::LogMetal,
+                    "FIX MM (#42429): fw_launch_addr readback MISMATCH — wrote "
+                    "0x{:08X} to 0x{:08X} on Device {} chan={} but read back 0x{:08X}. "
+                    "Base-UMD may stay at 0xDEADB07E.",
+                    fw_launch_val_mm, fw_launch_addr_mm,
+                    chip_id_mm, router_chan_mm, mm_verify[0]);
+            } else {
+                log_info(
+                    tt::LogMetal,
+                    "FIX MM (#42429): restored fw_launch_addr_value=0x{:08X} at "
+                    "fw_launch_addr=0x{:08X} for Device {} chan={} after L1 clear "
+                    "(readback verified). Base-UMD will launch when write_launch_msg_to_core fires.",
+                    fw_launch_val_mm, fw_launch_addr_mm,
+                    chip_id_mm, router_chan_mm);
+            }
+        }
     }
 
     // FIX RR (#42429): re-evaluate all_channels_healthy after FIX RR may have recovered

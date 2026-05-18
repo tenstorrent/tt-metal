@@ -710,36 +710,12 @@ void Device::configure_fabric(
                 go_msg,
                 hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
 
-            // FIX IJ (#42429): For MMIO base-UMD channels (FIX S9 path, skip_soft_reset_channels
-            // && is_mmio_capable), restore fw_launch_addr (LAUNCH_ERISC_APP_FLAG) to
-            // fw_launch_addr_value AFTER write_launch_msg_to_core has loaded the fabric firmware
-            // launch message into L1.
-            //
-            // Previous placement bug (FIX GH): fw_launch_addr_value was written inside
-            // configure_fabric_cores() immediately after the L1 clear — before
-            // ConfigureDeviceWithProgram loaded the firmware binary and before
-            // write_launch_msg_to_core wrote the launch message.  When base-UMD saw
-            // fw_launch_addr=1 at that point it tried to execute from the LAUNCH address in L1,
-            // but that region was still zeroed (L1 clear) or stale.  ERISC crashed / hung,
-            // leaving edm_status at 0xdeadb07e indefinitely → FIX EF poll timed out on all 4
-            // MMIO devices (CI run 26016088997).
-            //
-            // Correct sequence (FIX IJ):
-            //   configure_fabric_cores(): FIX EG zeros fw_launch_addr (prevents stale launch)
-            //   ConfigureDeviceWithProgram(): writes fabric firmware binary to L1
-            //   write_launch_msg_to_core(): writes launch message to L1 LAUNCH address
-            //   FIX IJ (here): sets fw_launch_addr=1 → base-UMD reads the ready launch message
-            //   FIX EF poll: waits for ERISC to exit 0xDEADB07E and enter fabric firmware
-            //
-            // Only MMIO ETH channels in skip_soft_reset_channels reach this path:
-            //   - non-MMIO skip_soft_reset channels `continue`d in configure_fabric_cores (FIX M)
-            //   - non-skip_soft_reset MMIO ETH channels have fw_launch_addr managed elsewhere
-            //   - external_umd_channels have is_skip_reset_chan=true but skip firmware load here
-            // FIX KL (#42429): Also restore fw_launch_addr for MMIO base-UMD channels (FIX EE
-            // path).  FIX EE intentionally keeps them out of skip_soft_reset_channels (soft-reset
-            // is safe via PCIe), but configure_fabric_cores() still zeros fw_launch_addr (FIX EG)
-            // during the soft-reset window.  Without FIX KL, fw_launch_addr stays 0 and ERISC
-            // polls indefinitely at 0xDEADB07E after firmware load completes.
+            // FIX IJ/KL (#42429): DISABLED — now redundant after FIX MM.
+            // FIX MM unconditionally restores fw_launch_addr in configure_fabric_cores()
+            // for ALL surviving MMIO channels after L1 clear. This eliminates the
+            // whack-a-mole problem where FIX IJ/KL conditions were incomplete and missed
+            // some channel paths (26 DEADB07E occurrences in CI run 26022229604).
+#ifdef FIXIJ_REDUNDANT_AFTER_FIX_MM
             if (core_type == CoreType::ETH && this->is_mmio_capable() &&
                 hoisted_eth_chan != kUnresolvedChan &&
                 (skip_soft_reset_channels.count(hoisted_eth_chan) ||
@@ -776,8 +752,6 @@ void Device::configure_fabric(
                     sizeof(uint32_t),
                     tt_cxy_pair(this->id(), virtual_core_ij),
                     jit_cfg_ij.fw_launch_addr);
-                // FIX GI readback verify: silent PCIe write failure would leave fw_launch_addr=0
-                // and base-UMD stuck at 0xDEADB07E indefinitely.
                 std::vector<uint32_t> ij_verify(1, 0);
                 cluster_ij.read_core(ij_verify, sizeof(uint32_t),
                     tt_cxy_pair(this->id(), virtual_core_ij),
@@ -805,6 +779,7 @@ void Device::configure_fabric(
                         hoisted_eth_chan);
                 }
             }
+#endif  // FIXIJ_REDUNDANT_AFTER_FIX_MM
 
             // FIX DY: For FIX M channels (non-MMIO ETH, skipped soft-reset), verify that the
             // ERISC actually transitioned away from 0x49706550 (base-UMD sentinel).
@@ -2106,11 +2081,10 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                 logical_core.x,
                 logical_core.y);
 
-            // FIX IJ (#42429) quiesce path: restore fw_launch_addr for MMIO base-UMD channels.
-            // configure_fabric_cores() with quiesce_skip_reset_chans (all active channels) runs
-            // FIX EG (zeros fw_launch_addr) for MMIO channels.  Without this restore, base-UMD
-            // never sees the launch flag and stays at 0xDEADB07E indefinitely.
-            // Same logic as the initial configure_fabric() FIX IJ above.
+            // FIX IJ quiesce (#42429): DISABLED — now redundant after FIX MM.
+            // FIX MM in configure_fabric_cores() unconditionally restores fw_launch_addr
+            // for ALL surviving MMIO channels after L1 clear (including quiesce path).
+#ifdef FIXIJ_REDUNDANT_AFTER_FIX_MM
             if (this->is_mmio_capable()) {
                 static constexpr uint32_t kUnresolvedChan = std::numeric_limits<uint32_t>::max();
                 uint32_t hoisted_eth_chan_q = kUnresolvedChan;
@@ -2135,9 +2109,6 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     auto& cluster_ij_q = env_impl.get_cluster();
                     auto virtual_core_ij_q =
                         cluster_ij_q.get_virtual_eth_core_from_channel(this->id(), hoisted_eth_chan_q);
-                    // FIX MN (#42429): Pre-restore snapshot of fw_launch_addr.
-                    // Expected: 0 (FIX EG zeroed it).  If non-zero, FIX EG may not have
-                    // fired for this channel — anomalous and worth investigating.
                     std::vector<uint32_t> ij_q_pre(1, 0xFFFFFFFF);
                     cluster_ij_q.read_core(ij_q_pre, sizeof(uint32_t),
                         tt_cxy_pair(this->id(), virtual_core_ij_q),
@@ -2181,6 +2152,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     }
                 }
             }
+#endif  // FIXIJ_REDUNDANT_AFTER_FIX_MM
         }
     }
     // FIX AR (#42429): clear force-reset set after inline ETH launch pass — channels are
@@ -2644,10 +2616,10 @@ void Device::launch_eth_cores_for_quiesce() {
                 logical_core.x,
                 logical_core.y);
 
-            // FIX IJ (#42429) deferred-quiesce path: restore fw_launch_addr for MMIO base-UMD
-            // channels.  Same requirement as the inline quiesce path above — configure_fabric_cores()
-            // zeroed fw_launch_addr (FIX EG); without this restore base-UMD never sees the launch
-            // flag and stays at 0xDEADB07E indefinitely.
+            // FIX IJ deferred-quiesce (#42429): DISABLED — now redundant after FIX MM.
+            // FIX MM in configure_fabric_cores() unconditionally restores fw_launch_addr
+            // for ALL surviving MMIO channels after L1 clear (including deferred-quiesce path).
+#ifdef FIXIJ_REDUNDANT_AFTER_FIX_MM
             if (this->is_mmio_capable()) {
                 static constexpr uint32_t kUnresolvedChan = std::numeric_limits<uint32_t>::max();
                 uint32_t hoisted_eth_chan_dq = kUnresolvedChan;
@@ -2672,7 +2644,6 @@ void Device::launch_eth_cores_for_quiesce() {
                     auto& cluster_ij_dq = env_impl.get_cluster();
                     auto virtual_core_ij_dq =
                         cluster_ij_dq.get_virtual_eth_core_from_channel(this->id(), hoisted_eth_chan_dq);
-                    // FIX MN (#42429): Pre-restore snapshot of fw_launch_addr (deferred path).
                     std::vector<uint32_t> ij_dq_pre(1, 0xFFFFFFFF);
                     cluster_ij_dq.read_core(ij_dq_pre, sizeof(uint32_t),
                         tt_cxy_pair(this->id(), virtual_core_ij_dq),
@@ -2716,6 +2687,7 @@ void Device::launch_eth_cores_for_quiesce() {
                     }
                 }
             }
+#endif  // FIXIJ_REDUNDANT_AFTER_FIX_MM
         }
     }
 
