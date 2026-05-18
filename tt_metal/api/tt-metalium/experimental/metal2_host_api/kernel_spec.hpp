@@ -22,17 +22,54 @@
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 struct ComputeConfiguration {
-    // Tensix hardware resource configuration (configured by compute kernels)
+    // Tensix hardware resource configuration for compute kernels.
     // Gen1 and Gen2 configurations are currently identical.
+    //
+    // Background: the Tensix Engine is a 3-stage pipeline (Unpack → Math → Pack)
+    // driven by three concurrent TRISC threads. The FPU reads operands from the
+    // SrcA / SrcB register files (~19-bit elements) and writes to the Dest
+    // register file (16- or 32-bit elements, configurable). The SFPU runs SIMD
+    // transcendentals (exp, gelu, etc.) and can only see Dest. The fields below
+    // tune that pipeline.
 
+    // Number of multiply passes the FPU runs to use more mantissa bits.
+    // The FPU multipliers are 5b × 7b; full-precision multiply requires multiple
+    // passes accumulating different mantissa slices. Higher fidelity → lower throughput.
+    //   LoFi (1 pass) ... HiFi4 (4 passes).
     MathFidelity math_fidelity = MathFidelity::HiFi4;
+
+    // Configure the Dest register to hold 32-bit elements (and the FPU to accumulate
+    // in FP32) instead of the default 16-bit. Trade-off: half as many tiles fit in Dest.
+    // Prerequisite for using UnpackToDestMode::UnpackToDestFp32 below.
     bool fp32_dest_acc_en = false;
+
+    // Dest register sync mode.
+    //   false (Half) — Dest is split in half; math and pack pipeline (double-buffered).
+    //   true  (Full) — Dest is one buffer; twice the tile capacity, no math/pack overlap.
     bool dst_full_sync_en = false;
+
+    // Pack-side precision tweak for the Bfp8 block-float format.
+    // Affects how exponents are reconciled when converting Dest contents → Bfp8 in L1.
     bool bfp8_pack_precise = false;
+
+    // Select fast-and-approximate vs slow-and-precise variants of SFPU transcendentals
+    // (exp, gelu, sqrt, etc.). Only some SFPU ops respect this flag; the rest ignore it.
     bool math_approx_mode = false;
 
-    // "Unpack to dest" mode must be specified on a per-DFB basis
-    // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
+    // Per-DFB choice of how the unpacker delivers data into the math stage:
+    //   Default          — unpack via SrcA/B (limited to ~19-bit elements; full FPU access,
+    //                      including binary ops).
+    //   UnpackToDestFp32 — direct Unpacker0 → Dest path (full FP32 in Dest; SrcA/B-path ops
+    //                      on this DFB are disabled, so binary FPU ops cannot use it).
+    //
+    // The choice has a meaningful effect only when ALL of the following hold for the binding:
+    //   1. The kernel has a CONSUMER endpoint on the DFB (only consumers unpack).
+    //   2. The DFB's data format is Float32.
+    //   3. fp32_dest_acc_en is true (Dest must be 32-bit-wide to hold FP32).
+    // In that case, an explicit entry is REQUIRED — the two values have very different
+    // runtime semantics, and we want the choice surfaced in source. Outside that case,
+    // Default is silently assumed; supplying UnpackToDestFp32 is rejected as meaningless
+    // (non-consumer / non-FP32) or incoherent (fp32_dest_acc_en=false → Dest is 16-bit).
     using UnpackToDestModeEntry = std::pair<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
     std::vector<UnpackToDestModeEntry> unpack_to_dest_mode;
 };
