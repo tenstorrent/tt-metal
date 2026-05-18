@@ -159,18 +159,46 @@ def main():
         print("\n4. Creating test inputs...")
         inputs = create_test_inputs(config, batch_size=BATCH_SIZE)
 
-        # Run PyTorch reference
+        # Build a SHARED initial-noise tensor x_0 so both models start the
+        # flow-matching Euler integration from identical x_t. Without this,
+        # the TTNN model uses noise sampled at __init__ time while torch
+        # samples its own noise inside sample_actions — different starting
+        # points cause flow-matching trajectories to diverge, dragging
+        # single-seed e2e PCC down. Same fix as the multi-seed test.
+        x_0 = torch.randn(BATCH_SIZE, config.action_horizon, config.action_dim, dtype=torch.float32)
+        # Pad to tile-aligned action_horizon for the TTNN side
+        ah = config.action_horizon
+        ah_padded = ((ah + 31) // 32) * 32
+        if ah_padded != ah:
+            x_0_padded = torch.zeros(BATCH_SIZE, ah_padded, config.action_dim, dtype=torch.float32)
+            x_0_padded[:, :ah, :] = x_0
+        else:
+            x_0_padded = x_0
+        model_ttnn.x_t_ttnn = ttnn.from_torch(
+            x_0_padded,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        model_ttnn.resample_noise = False
+
+        # Run PyTorch reference — force its sample_noise to use the same x_0
         print("\n5. Running PyTorch reference...")
-        torch.manual_seed(SEED)
         start = time.time()
         with torch.no_grad():
-            torch_actions = model_torch.sample_actions(
-                images=inputs["images"],
-                img_masks=inputs["img_masks"],
-                lang_tokens=inputs["lang_tokens"],
-                lang_masks=inputs["lang_masks"],
-                state=inputs["state"],
-            )
+            saved_sample_noise = model_torch.denoising.sample_noise
+            model_torch.denoising.sample_noise = lambda bs, device=None, dtype=torch.float32: x_0.clone()
+            try:
+                torch_actions = model_torch.forward_inference(
+                    images=inputs["images"],
+                    img_masks=inputs["img_masks"],
+                    lang_tokens=inputs["lang_tokens"],
+                    lang_masks=inputs["lang_masks"],
+                    state=inputs["state"],
+                )
+            finally:
+                model_torch.denoising.sample_noise = saved_sample_noise
         torch_time = (time.time() - start) * 1000
         print(f"   PyTorch: shape={torch_actions.shape}, time={torch_time:.1f}ms")
 
@@ -218,9 +246,12 @@ def main():
         ttnn_time = (time.time() - start) * 1000
         print(f"   TTNN: time={ttnn_time:.1f}ms")
 
-        # Convert TTNN output to torch
+        # Convert TTNN output to torch and crop to action_horizon (the pre-allocated
+        # x_t was tile-padded to ah_padded; trim the phantom rows here so PCC
+        # compares apples-to-apples with torch's action_horizon-shape output).
         if isinstance(ttnn_actions, ttnn.Tensor):
             ttnn_actions = ttnn.to_torch(ttnn_actions)
+        ttnn_actions = ttnn_actions[:, : config.action_horizon, : config.action_dim]
         print(f"   TTNN output shape: {ttnn_actions.shape}")
 
         # Compute PCC
