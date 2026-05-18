@@ -905,15 +905,23 @@ void Device::configure_fabric(
                 // channels from the same fire-and-forget race).  FIX DY polls for exit from
                 // 0x49706550; FIX EF polls for exit from 0xDEADB07E.
                 //
-                // Poll parameters: same as FIX DY (500 ms max, 5 ms interval).  MMIO reads
-                // are direct PCIe and typically complete in < 1 ms, so the poll itself
-                // adds negligible overhead on the healthy path.  On timeout: log a warning
-                // (no retry needed — the write reached the ERISC directly; if it hasn't
-                // started in 500 ms the ERISC has a firmware problem, not a packet-drop).
+                // Poll parameters: 3000 ms max, 5 ms interval.  MMIO reads are direct PCIe
+                // and typically complete in < 1 ms, so the poll adds negligible overhead on
+                // the healthy path.  3 s gives ample margin for ERISC startup (typically
+                // < 50 ms) while bounding the worst-case stall.
+                //
+                // BLOCKING WAIT (FIX EF upgrade): This poll is now a hard gate.  Routing
+                // table writes from D4-D7 configure_fabric() pass through the D0-D3 relay
+                // ERISCs.  If a D0-D3 relay ERISC is still at 0xDEADB07E when those writes
+                // arrive, they are silently dropped — leaving D4-D7 permanently stuck at
+                // REMOTE_HANDSHAKE_COMPLETE (FIX NX) or producing FIX DT-1 dispatch timeouts.
+                // On timeout: set fabric_relay_path_broken_=true so that compile_and_configure
+                // fabric FIX SB2 propagates the broken flag to dependent non-MMIO devices,
+                // preventing 5 s-per-channel relay-read timeouts from accumulating downstream.
                 static constexpr uint32_t kPreLaunchCanary =
                     static_cast<uint32_t>(EthDiagSentinel::HOST_PRE_LAUNCH_CANARY);
                 static constexpr int kFIX_EF_PollIntervalMs = 5;
-                static constexpr int kFIX_EF_PollMaxMs = 500;
+                static constexpr int kFIX_EF_PollMaxMs = 3000;
                 const int max_iters = kFIX_EF_PollMaxMs / kFIX_EF_PollIntervalMs;
                 bool exited_canary = false;
                 for (int iter = 0; iter < max_iters; ++iter) {
@@ -945,10 +953,16 @@ void Device::configure_fabric(
                     std::this_thread::sleep_for(std::chrono::milliseconds(kFIX_EF_PollIntervalMs));
                 }
                 if (!exited_canary) {
+                    // BLOCKING WAIT TIMED OUT: relay ERISC did not start within 3 s.
+                    // Set fabric_relay_path_broken_ so compile_and_configure_fabric FIX SB2
+                    // propagates the broken state to non-MMIO devices, preventing them from
+                    // issuing routing-table writes through a relay that never became ready.
+                    fabric_relay_path_broken_.store(true);
                     log_warning(
                         tt::LogMetal,
                         "FIX EF: Device {} chan {} (MMIO) still at 0xDEADB07E after {}ms — "
-                        "relay ERISC did not start; D4-D7 routing writes may race. (#42429)",
+                        "relay ERISC did not start. Setting fabric_relay_path_broken_=true "
+                        "to block D4-D7 routing writes through dead relay. (#42429)",
                         this->id_,
                         hoisted_eth_chan,
                         kFIX_EF_PollMaxMs);
