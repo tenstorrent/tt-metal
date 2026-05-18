@@ -101,14 +101,23 @@ class TtMistral4TextModel:
         self.final_norm_w = _load_norm_weight(state_dict, "language_model.model.norm.weight", HIDDEN_SIZE, mesh_device)
 
         lm_head_w = state_dict["language_model.lm_head.weight"].to(torch.bfloat16).T.contiguous()
-        # bfloat8_b: 64 MB per device (vs 128 MB bfloat16) after sharding across 8 devices.
+        # bfloat4_b: ~32 MB per device after sharding across 4 devices (vs 64 MB at bfloat8_b).
+        # Paired with LoFi math (self.lm_head_compute_kernel_config) for ~2x speedup on the
+        # LM head matmul. EXPECTED to regress generation quality — gate behind a PCC test.
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_w,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+        )
+        self.lm_head_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
         )
 
         # RoPE tables — uploaded once via ``cache_rope_tables``. Per-step lookup
@@ -223,7 +232,7 @@ class TtMistral4TextModel:
         logits_tt = ttnn.linear(
             x,
             self.lm_head_weight,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.lm_head_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -252,7 +261,7 @@ class TtMistral4TextModel:
         partial = ttnn.linear(
             x_normed,
             self.lm_head_weight,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.lm_head_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # per device: [1, 1, 1, vocab/num_devices]
@@ -349,7 +358,7 @@ class TtMistral4TextModel:
         logits_tt = ttnn.linear(
             x,
             self.lm_head_weight,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.lm_head_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
