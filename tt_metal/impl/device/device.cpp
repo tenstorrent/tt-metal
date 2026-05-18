@@ -709,6 +709,75 @@ void Device::configure_fabric(
                 go_msg,
                 hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
 
+            // FIX IJ (#42429): For MMIO base-UMD channels (FIX S9 path, skip_soft_reset_channels
+            // && is_mmio_capable), restore fw_launch_addr (LAUNCH_ERISC_APP_FLAG) to
+            // fw_launch_addr_value AFTER write_launch_msg_to_core has loaded the fabric firmware
+            // launch message into L1.
+            //
+            // Previous placement bug (FIX GH): fw_launch_addr_value was written inside
+            // configure_fabric_cores() immediately after the L1 clear — before
+            // ConfigureDeviceWithProgram loaded the firmware binary and before
+            // write_launch_msg_to_core wrote the launch message.  When base-UMD saw
+            // fw_launch_addr=1 at that point it tried to execute from the LAUNCH address in L1,
+            // but that region was still zeroed (L1 clear) or stale.  ERISC crashed / hung,
+            // leaving edm_status at 0xdeadb07e indefinitely → FIX EF poll timed out on all 4
+            // MMIO devices (CI run 26016088997).
+            //
+            // Correct sequence (FIX IJ):
+            //   configure_fabric_cores(): FIX EG zeros fw_launch_addr (prevents stale launch)
+            //   ConfigureDeviceWithProgram(): writes fabric firmware binary to L1
+            //   write_launch_msg_to_core(): writes launch message to L1 LAUNCH address
+            //   FIX IJ (here): sets fw_launch_addr=1 → base-UMD reads the ready launch message
+            //   FIX EF poll: waits for ERISC to exit 0xDEADB07E and enter fabric firmware
+            //
+            // Only MMIO ETH channels in skip_soft_reset_channels reach this path:
+            //   - non-MMIO skip_soft_reset channels `continue`d in configure_fabric_cores (FIX M)
+            //   - non-skip_soft_reset MMIO ETH channels have fw_launch_addr managed elsewhere
+            //   - external_umd_channels have is_skip_reset_chan=true but skip firmware load here
+            if (core_type == CoreType::ETH && this->is_mmio_capable() &&
+                hoisted_eth_chan != kUnresolvedChan &&
+                skip_soft_reset_channels.count(hoisted_eth_chan)) {
+                const auto& hal_ij = env_impl.get_hal();
+                const auto aeth_idx_ij = hal_ij.get_programmable_core_type_index(
+                    HalProgrammableCoreType::ACTIVE_ETH);
+                const auto& jit_cfg_ij = hal_ij.get_jit_build_config(aeth_idx_ij, 0, 0);
+                auto& cluster_ij = env_impl.get_cluster();
+                auto virtual_core_ij = cluster_ij.get_virtual_eth_core_from_channel(this->id(), hoisted_eth_chan);
+                cluster_ij.write_core(
+                    &jit_cfg_ij.fw_launch_addr_value,
+                    sizeof(uint32_t),
+                    tt_cxy_pair(this->id(), virtual_core_ij),
+                    jit_cfg_ij.fw_launch_addr);
+                // FIX GI readback verify: silent PCIe write failure would leave fw_launch_addr=0
+                // and base-UMD stuck at 0xDEADB07E indefinitely.
+                std::vector<uint32_t> ij_verify(1, 0);
+                cluster_ij.read_core(ij_verify, sizeof(uint32_t),
+                    tt_cxy_pair(this->id(), virtual_core_ij),
+                    static_cast<uint64_t>(jit_cfg_ij.fw_launch_addr));
+                if (ij_verify[0] != jit_cfg_ij.fw_launch_addr_value) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX IJ (#42429): fw_launch_addr readback MISMATCH — wrote "
+                        "0x{:08X} to 0x{:08X} on Device {} chan={} but read back 0x{:08X}. "
+                        "Base-UMD may stay at 0xDEADB07E.",
+                        jit_cfg_ij.fw_launch_addr_value,
+                        jit_cfg_ij.fw_launch_addr,
+                        this->id_,
+                        hoisted_eth_chan,
+                        ij_verify[0]);
+                } else {
+                    log_info(
+                        tt::LogMetal,
+                        "FIX IJ (#42429): restored fw_launch_addr_value=0x{:08X} at "
+                        "fw_launch_addr=0x{:08X} for Device {} chan={} after firmware load "
+                        "(readback verified). Base-UMD will now launch fabric firmware.",
+                        jit_cfg_ij.fw_launch_addr_value,
+                        jit_cfg_ij.fw_launch_addr,
+                        this->id_,
+                        hoisted_eth_chan);
+                }
+            }
+
             // FIX DY: For FIX M channels (non-MMIO ETH, skipped soft-reset), verify that the
             // ERISC actually transitioned away from 0x49706550 (base-UMD sentinel).
             //
@@ -1994,6 +2063,68 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                 this->id(),
                 logical_core.x,
                 logical_core.y);
+
+            // FIX IJ (#42429) quiesce path: restore fw_launch_addr for MMIO base-UMD channels.
+            // configure_fabric_cores() with quiesce_skip_reset_chans (all active channels) runs
+            // FIX EG (zeros fw_launch_addr) for MMIO channels.  Without this restore, base-UMD
+            // never sees the launch flag and stays at 0xDEADB07E indefinitely.
+            // Same logic as the initial configure_fabric() FIX IJ above.
+            if (this->is_mmio_capable()) {
+                uint32_t hoisted_eth_chan_q = kUnresolvedChan;
+                try {
+                    hoisted_eth_chan_q = soc_desc_q.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                } catch (...) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX IJ quiesce (#42429): Device {} cannot resolve ETH channel for "
+                        "logical ({},{}) — skipping fw_launch_addr restore",
+                        this->id(),
+                        logical_core.x,
+                        logical_core.y);
+                }
+                if (hoisted_eth_chan_q != kUnresolvedChan) {
+                    const auto& hal_ij_q = env_impl.get_hal();
+                    const auto aeth_idx_ij_q = hal_ij_q.get_programmable_core_type_index(
+                        HalProgrammableCoreType::ACTIVE_ETH);
+                    const auto& jit_cfg_ij_q = hal_ij_q.get_jit_build_config(aeth_idx_ij_q, 0, 0);
+                    auto& cluster_ij_q = env_impl.get_cluster();
+                    auto virtual_core_ij_q =
+                        cluster_ij_q.get_virtual_eth_core_from_channel(this->id(), hoisted_eth_chan_q);
+                    cluster_ij_q.write_core(
+                        &jit_cfg_ij_q.fw_launch_addr_value,
+                        sizeof(uint32_t),
+                        tt_cxy_pair(this->id(), virtual_core_ij_q),
+                        jit_cfg_ij_q.fw_launch_addr);
+                    std::vector<uint32_t> ij_q_verify(1, 0);
+                    cluster_ij_q.read_core(ij_q_verify, sizeof(uint32_t),
+                        tt_cxy_pair(this->id(), virtual_core_ij_q),
+                        static_cast<uint64_t>(jit_cfg_ij_q.fw_launch_addr));
+                    if (ij_q_verify[0] != jit_cfg_ij_q.fw_launch_addr_value) {
+                        log_warning(
+                            tt::LogMetal,
+                            "FIX IJ quiesce (#42429): fw_launch_addr readback MISMATCH — wrote "
+                            "0x{:08X} to 0x{:08X} on Device {} chan={} but read back 0x{:08X}. "
+                            "Base-UMD may stay at 0xDEADB07E.",
+                            jit_cfg_ij_q.fw_launch_addr_value,
+                            jit_cfg_ij_q.fw_launch_addr,
+                            this->id_,
+                            hoisted_eth_chan_q,
+                            ij_q_verify[0]);
+                    } else {
+                        log_info(
+                            tt::LogMetal,
+                            "FIX IJ quiesce (#42429): restored fw_launch_addr_value=0x{:08X} at "
+                            "fw_launch_addr=0x{:08X} for Device {} chan={} after quiesce firmware "
+                            "load (readback verified). Base-UMD will now launch fabric firmware.",
+                            jit_cfg_ij_q.fw_launch_addr_value,
+                            jit_cfg_ij_q.fw_launch_addr,
+                            this->id_,
+                            hoisted_eth_chan_q);
+                    }
+                }
+            }
         }
     }
     // FIX AR (#42429): clear force-reset set after inline ETH launch pass — channels are
@@ -2456,6 +2587,67 @@ void Device::launch_eth_cores_for_quiesce() {
                 this->id(),
                 logical_core.x,
                 logical_core.y);
+
+            // FIX IJ (#42429) deferred-quiesce path: restore fw_launch_addr for MMIO base-UMD
+            // channels.  Same requirement as the inline quiesce path above — configure_fabric_cores()
+            // zeroed fw_launch_addr (FIX EG); without this restore base-UMD never sees the launch
+            // flag and stays at 0xDEADB07E indefinitely.
+            if (this->is_mmio_capable()) {
+                uint32_t hoisted_eth_chan_dq = kUnresolvedChan;
+                try {
+                    hoisted_eth_chan_dq = soc_desc_q.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                } catch (...) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX IJ deferred-quiesce (#42429): Device {} cannot resolve ETH channel for "
+                        "logical ({},{}) — skipping fw_launch_addr restore",
+                        this->id(),
+                        logical_core.x,
+                        logical_core.y);
+                }
+                if (hoisted_eth_chan_dq != kUnresolvedChan) {
+                    const auto& hal_ij_dq = env_impl.get_hal();
+                    const auto aeth_idx_ij_dq = hal_ij_dq.get_programmable_core_type_index(
+                        HalProgrammableCoreType::ACTIVE_ETH);
+                    const auto& jit_cfg_ij_dq = hal_ij_dq.get_jit_build_config(aeth_idx_ij_dq, 0, 0);
+                    auto& cluster_ij_dq = env_impl.get_cluster();
+                    auto virtual_core_ij_dq =
+                        cluster_ij_dq.get_virtual_eth_core_from_channel(this->id(), hoisted_eth_chan_dq);
+                    cluster_ij_dq.write_core(
+                        &jit_cfg_ij_dq.fw_launch_addr_value,
+                        sizeof(uint32_t),
+                        tt_cxy_pair(this->id(), virtual_core_ij_dq),
+                        jit_cfg_ij_dq.fw_launch_addr);
+                    std::vector<uint32_t> ij_dq_verify(1, 0);
+                    cluster_ij_dq.read_core(ij_dq_verify, sizeof(uint32_t),
+                        tt_cxy_pair(this->id(), virtual_core_ij_dq),
+                        static_cast<uint64_t>(jit_cfg_ij_dq.fw_launch_addr));
+                    if (ij_dq_verify[0] != jit_cfg_ij_dq.fw_launch_addr_value) {
+                        log_warning(
+                            tt::LogMetal,
+                            "FIX IJ deferred-quiesce (#42429): fw_launch_addr readback MISMATCH — wrote "
+                            "0x{:08X} to 0x{:08X} on Device {} chan={} but read back 0x{:08X}. "
+                            "Base-UMD may stay at 0xDEADB07E.",
+                            jit_cfg_ij_dq.fw_launch_addr_value,
+                            jit_cfg_ij_dq.fw_launch_addr,
+                            this->id_,
+                            hoisted_eth_chan_dq,
+                            ij_dq_verify[0]);
+                    } else {
+                        log_info(
+                            tt::LogMetal,
+                            "FIX IJ deferred-quiesce (#42429): restored fw_launch_addr_value=0x{:08X} at "
+                            "fw_launch_addr=0x{:08X} for Device {} chan={} after deferred quiesce firmware "
+                            "load (readback verified). Base-UMD will now launch fabric firmware.",
+                            jit_cfg_ij_dq.fw_launch_addr_value,
+                            jit_cfg_ij_dq.fw_launch_addr,
+                            this->id_,
+                            hoisted_eth_chan_dq);
+                    }
+                }
+            }
         }
     }
 
