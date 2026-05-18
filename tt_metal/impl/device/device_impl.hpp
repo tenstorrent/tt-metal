@@ -168,7 +168,12 @@ public:
     void configure_fabric(
         const std::unordered_set<uint32_t>& pre_dead_channels = {},
         const std::unordered_set<uint32_t>& skip_soft_reset_channels = {},
-        const std::unordered_set<uint32_t>& external_umd_channels = {});
+        const std::unordered_set<uint32_t>& external_umd_channels = {},
+        // FIX KL (#42429): MMIO device ETH channels at base-UMD sentinel (FIX EE path).
+        // NOT in skip_soft_reset_channels (soft-reset is safe via PCIe), but fw_launch_addr
+        // is still zeroed by configure_fabric_cores() (FIX EG).  FIX IJ extends its condition
+        // to include these channels so fw_launch_addr is restored after write_launch_msg_to_core.
+        const std::unordered_set<uint32_t>& mmio_base_umd_channels = {});
     // Terminate fabric MUX tensix worker cores and re-launch them fresh.
     // Called during quiesce to ensure MUX channel state is reset between iterations.
     // Phase 1: quiesce_and_restart_fabric_workers() — terminate + reconfigure + relaunch all cores.

@@ -134,6 +134,14 @@ private:
         bool relay_broken;
         std::unordered_set<uint32_t> base_umd_channels;
         std::unordered_set<uint32_t> external_umd_channels;
+        // FIX KL (#42429): MMIO device channels at base-UMD sentinel (0x49706550) with an
+        // in-cluster peer.  Unlike non-MMIO base_umd_channels, these are NOT added to
+        // skip_soft_reset_channels (FIX EE: MMIO ETH is PCIe-direct, soft-reset is safe).
+        // However, configure_fabric_cores() still zeros fw_launch_addr (FIX EG) during the
+        // soft-reset window, so FIX IJ must restore it AFTER write_launch_msg_to_core —
+        // same as the non-MMIO path.  Tracked separately so configure_fabric() can extend
+        // the FIX IJ condition without merging with skip_soft_reset_channels.
+        std::unordered_set<uint32_t> mmio_base_umd_channels;
     };
     TerminateStaleResult terminate_stale_erisc_routers(
         Device* dev, const tt_fabric::FabricBuilderContext& builder_context) const;

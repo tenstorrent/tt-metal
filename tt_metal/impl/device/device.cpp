@@ -404,7 +404,8 @@ bool Device::compile_fabric() {
 void Device::configure_fabric(
     const std::unordered_set<uint32_t>& pre_dead_channels,
     const std::unordered_set<uint32_t>& skip_soft_reset_channels,
-    const std::unordered_set<uint32_t>& external_umd_channels) {
+    const std::unordered_set<uint32_t>& external_umd_channels,
+    const std::unordered_set<uint32_t>& mmio_base_umd_channels) {
     if (fabric_program_ == nullptr) {
         return;
     }
@@ -734,9 +735,25 @@ void Device::configure_fabric(
             //   - non-MMIO skip_soft_reset channels `continue`d in configure_fabric_cores (FIX M)
             //   - non-skip_soft_reset MMIO ETH channels have fw_launch_addr managed elsewhere
             //   - external_umd_channels have is_skip_reset_chan=true but skip firmware load here
+            // FIX KL (#42429): Also restore fw_launch_addr for MMIO base-UMD channels (FIX EE
+            // path).  FIX EE intentionally keeps them out of skip_soft_reset_channels (soft-reset
+            // is safe via PCIe), but configure_fabric_cores() still zeros fw_launch_addr (FIX EG)
+            // during the soft-reset window.  Without FIX KL, fw_launch_addr stays 0 and ERISC
+            // polls indefinitely at 0xDEADB07E after firmware load completes.
             if (core_type == CoreType::ETH && this->is_mmio_capable() &&
                 hoisted_eth_chan != kUnresolvedChan &&
-                skip_soft_reset_channels.count(hoisted_eth_chan)) {
+                (skip_soft_reset_channels.count(hoisted_eth_chan) ||
+                 mmio_base_umd_channels.count(hoisted_eth_chan))) {
+                const bool via_ee_path = !skip_soft_reset_channels.count(hoisted_eth_chan) &&
+                                          mmio_base_umd_channels.count(hoisted_eth_chan);
+                if (via_ee_path) {
+                    log_debug(
+                        tt::LogMetal,
+                        "FIX IJ EE (#42429): restoring fw_launch_addr for MMIO base-UMD "
+                        "chan={} on Device {} (FIX KL path — not in skip_soft_reset_channels).",
+                        hoisted_eth_chan,
+                        this->id_);
+                }
                 const auto& hal_ij = env_impl.get_hal();
                 const auto aeth_idx_ij = hal_ij.get_programmable_core_type_index(
                     HalProgrammableCoreType::ACTIVE_ETH);

@@ -1506,9 +1506,14 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
     // Soft-reset is skipped (preserve relay BRISC) and write_launch_msg_to_core is skipped
     // (FABRIC_1D not loaded — external peer can never complete ETH handshake).
     std::unordered_set<uint32_t> external_umd_channels;
+    // FIX KL (#42429): MMIO device ETH channels at base-UMD sentinel with an in-cluster peer.
+    // Soft-reset is ALLOWED (FIX EE: PCIe-direct, no relay-cascade risk), but fw_launch_addr
+    // is still zeroed by configure_fabric_cores() (FIX EG) during the reset window.
+    // FIX IJ must restore fw_launch_addr AFTER write_launch_msg_to_core for these channels.
+    std::unordered_set<uint32_t> mmio_base_umd_channels;
 
     if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
-        return {probe_dead_channels, false, base_umd_channels, external_umd_channels};
+        return {probe_dead_channels, false, base_umd_channels, external_umd_channels, mmio_base_umd_channels};
     }
 
     const auto router_sync_address = builder_context.get_fabric_router_sync_address_and_status().first;
@@ -1771,12 +1776,22 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                             // devices, so the host polled with the session nonce while the firmware
                             // wrote LOCAL_HANDSHAKE_COMPLETE ^ 0.  Permanent mismatch → all
                             // non-MMIO devices stuck at REMOTE_HANDSHAKE_COMPLETE → FIX NX.
+                            // FIX KL (#42429): track MMIO base-UMD channels separately.
+                            // FIX EE intentionally excludes them from base_umd_channels
+                            // (soft-reset is safe via PCIe), but configure_fabric_cores()
+                            // still zeros fw_launch_addr (FIX EG) during the soft-reset window.
+                            // FIX IJ must restore fw_launch_addr AFTER write_launch_msg_to_core
+                            // or ERISC polls indefinitely at 0xDEADB07E.  Pass through
+                            // mmio_base_umd_channels so configure_fabric() can extend the FIX IJ
+                            // condition without adding to skip_soft_reset_channels.
+                            mmio_base_umd_channels.insert(eth_chan_id);
                             log_warning(
                                 tt::LogMetal,
                                 "terminate_stale_erisc_routers: Device {} chan={} (MMIO) "
                                 "edm_status=0x{:08x} (base-UMD sentinel) — allowing soft-reset "
                                 "via configure_fabric_cores (FIX EE: MMIO ETH is PCIe-accessible, "
-                                "no relay-cascade risk). (#42429)",
+                                "no relay-cascade risk). Added to mmio_base_umd_channels for "
+                                "FIX KL fw_launch_addr restore. (#42429)",
                                 dev->id(),
                                 eth_chan_id,
                                 status_buf[0]);
@@ -2126,7 +2141,11 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
     }
 
     return {
-        std::move(probe_dead_channels), relay_broken, std::move(base_umd_channels), std::move(external_umd_channels)};
+        std::move(probe_dead_channels),
+        relay_broken,
+        std::move(base_umd_channels),
+        std::move(external_umd_channels),
+        std::move(mmio_base_umd_channels)};
 }
 
 // Quiesce/Teardown Phase Protocol
@@ -2336,6 +2355,11 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     // FIX M (#42429): channels with base-UMD relay firmware (0x49706550) — configure_fabric_cores()
     // must skip soft reset for these to avoid killing the ETH relay endpoint.
     std::unordered_map<ChipId, std::unordered_set<uint32_t>> base_umd_channels_map;
+    // FIX KL (#42429): MMIO device ETH channels at base-UMD sentinel (FIX EE path).
+    // Excluded from base_umd_channels_map (soft-reset is safe via PCIe), but fw_launch_addr
+    // is still zeroed by configure_fabric_cores() (FIX EG).  configure_fabric() uses this
+    // to extend the FIX IJ condition so fw_launch_addr is restored after firmware load.
+    std::unordered_map<ChipId, std::unordered_set<uint32_t>> mmio_base_umd_channels_map;
     // relay_broken_mmio_hosts: set of MMIO chip IDs whose relay path is confirmed broken.
     // Non-MMIO devices behind a broken MMIO host are fast-pathed (FIX H) without probing.
     std::unordered_set<ChipId> relay_broken_mmio_hosts;
@@ -2406,6 +2430,8 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                 }
                 // FIX EXT (#42429): collect external channels (no firmware loaded on these).
                 external_umd_channels_map_[dev->id()] = std::move(result.external_umd_channels);
+                // FIX KL (#42429): collect MMIO base-UMD channels for fw_launch_addr restore.
+                mmio_base_umd_channels_map[dev->id()] = std::move(result.mmio_base_umd_channels);
             }
 
             // FIX E2 (#42429): Only mark non-MMIO devices as dead-relay when ETH relay is
@@ -2537,11 +2563,19 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         auto it = external_umd_channels_map_.find(id);
         return it != external_umd_channels_map_.end() ? it->second : kEmptyChannelSet;
     };
+    // FIX KL (#42429): helper to look up mmio_base_umd_channels per device.
+    auto get_mmio_base_umd = [&](ChipId id) -> const std::unordered_set<uint32_t>& {
+        auto it = mmio_base_umd_channels_map.find(id);
+        return it != mmio_base_umd_channels_map.end() ? it->second : kEmptyChannelSet;
+    };
     // Pass 1: non-MMIO devices (relay-dependent — must run before MMIO ETH switches fw)
     for (auto* dev : compiled_devices) {
         if (dev && cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
             dev->configure_fabric(
-                probe_dead_channels_map[dev->id()], base_umd_channels_map[dev->id()], get_external(dev->id()));
+                probe_dead_channels_map[dev->id()],
+                base_umd_channels_map[dev->id()],
+                get_external(dev->id()),
+                get_mmio_base_umd(dev->id()));
             configured_count++;
         }
     }
@@ -2556,8 +2590,10 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                 auto probe_dead = probe_dead_channels_map[dev->id()];
                 auto base_umd  = base_umd_channels_map[dev->id()];
                 auto ext       = get_external(dev->id());
-                mmio_futs.emplace_back(detail::async([dev, probe_dead, base_umd, ext]() mutable {
-                    dev->configure_fabric(probe_dead, base_umd, ext);
+                // FIX KL: capture mmio_base_umd for the async lambda.
+                auto mmio_base_umd = get_mmio_base_umd(dev->id());
+                mmio_futs.emplace_back(detail::async([dev, probe_dead, base_umd, ext, mmio_base_umd]() mutable {
+                    dev->configure_fabric(probe_dead, base_umd, ext, mmio_base_umd);
                 }));
                 configured_count++;
             }
