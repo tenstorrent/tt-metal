@@ -16,6 +16,10 @@
 #include "api/remote_circular_buffer.h"
 #include "experimental/drisc_mode.h"
 
+// DRISC firmware does not define cb_interface (no CB infrastructure on DRAM cores);
+// the remote_cb_* API references cb_interface[cb_id], so define it here.
+CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
+
 void kernel_main() {
     // Compile time
     constexpr uint32_t remote_cb_id = get_compile_time_arg_val(0);
