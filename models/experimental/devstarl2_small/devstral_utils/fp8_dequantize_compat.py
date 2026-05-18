@@ -1,16 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Scalar FP8 / FP4 scale compat for Hugging Face ``Fp8Dequantize`` across ``transformers`` versions.
-
-Devstral checkpoints can ship a **scalar** ``weight_scale_inv`` (0-D tensor). Older ``transformers``
-exposed ``Fp8Dequantize._dequantize_one`` for per-weight dequant; newer releases (e.g. 5.7) removed
-that hook and perform dequant in ``Fp8Dequantize.convert`` with a dict-based API.
-
-Call :func:`apply_fp8_dequantize_compat` once at process startup (before loading weights). The
-patch is idempotent.
-"""
+# Scalar FP8 / FP4 scale compat for Hugging Face ``Fp8Dequantize`` across ``transformers`` versions. Devstral checkpoints can ship a **scalar** ``weight_scale_inv`` (0-D tensor). Older ``transformers`` exposed ``Fp8Dequantize._dequantize_one`` for per-weight dequant; newer releases (e.g. 5.7) removed that hook and perform dequant in ``Fp8Dequantize.convert`` with a dict-based API. Call :func:`apply_fp8_dequantize_compat` once at process startup (before loading weights). The patch is idempotent.
 
 from __future__ import annotations
 

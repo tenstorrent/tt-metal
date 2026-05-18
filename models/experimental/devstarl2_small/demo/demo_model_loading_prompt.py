@@ -1,36 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Demo / smoke test using the **same user prompt** as ``reference/model_loading.py``:
-
-- Multimodal message: one image placeholder + text
-  ``"Describe what you see in this image."``
-
-``--vision-square-pixels S`` resizes to ``S×S`` (LANCZOS) before ``processor`` and overrides
-``--vision-max-edge`` (e.g. ``1540`` for square HF-style sizing).
-
-**HF path** (``--backend hf``, default): ``AutoProcessor`` + ``AutoModelForImageTextToText``; same
-``--vision-max-edge`` / ``--vision-square-pixels`` as TT before ``processor`` (default max-edge ``0`` =
-no PIL resize; use ``--vision-square-pixels`` e.g. ``1540`` for square HF-style sizing).
-Default image ``reference/sample.jpeg``; ``max_new_tokens=100``.
-
-**TT path** (``--backend tt``): loads :class:`TtDevstral2SmallModel` (Pixtral vision + projector +
-``TtMinistral3Model``), runs TT vision/projector, merges features into text embeddings like HF
-``masked_scatter`` on ``image_token_id``, then ``language_model.forward_prefill_from_embeddings``.
-Same ``--vision-max-edge`` / ``--vision-square-pixels`` as HF. Pixtral L1 grows with patch count; ``0``
-max-edge = no thumbnail (fine on HF; may exceed device L1 on TT).
-
-Usage (repo root)::
-
-    python models/experimental/devstarl2_small/demo/demo_model_loading_prompt.py
-
-    python models/experimental/devstarl2_small/demo/demo_model_loading_prompt.py --backend tt --seed 0
-
-    python models/experimental/devstarl2_small/demo/demo_model_loading_prompt.py --backend tt \\
-        --image path/to.jpg --text-layers 1 --max-new-tokens 16 --lm-head-cpu
-"""
+# Demo / smoke test using the **same user prompt** as ``reference/model_loading.py``: - Multimodal message: one image placeholder + text ``"Describe what you see in this image."`` ``--vision-square-pixels S`` resizes to ``S×S`` (LANCZOS) before ``processor`` and overrides ``--vision-max-edge`` (e.g. ``1540`` for square HF-style sizing). **HF path** (``--backend hf``, default): ``AutoProcessor`` + ``AutoModelForImageTextToText``; same ``--vision-max-edge`` / ``--vision-square-pixels`` as TT befo...
 
 from __future__ import annotations
 
@@ -104,12 +75,7 @@ def _prepare_vision_image(
     vision_max_edge: int,
     vision_square_pixels: int | None,
 ) -> Image.Image:
-    """
-    PIL preprocessing before ``processor``: optional exact square resize, otherwise max-edge thumbnail.
-
-    If ``vision_square_pixels`` > 0, resize with LANCZOS to ``S×S`` (ignores ``vision-max-edge``).
-    Else apply :func:`_resize_image_max_edge`.
-    """
+    """PIL preprocessing before ``processor``: optional exact square resize, otherwise max-edge thumbnail. If ``vision_square_pixels`` > 0, resize with LANCZOS to ``S×S`` (ignores ``vision-max-edge``). Else apply :func:`_resize_image_max_edge`."""
     image = image.convert("RGB")
     if vision_square_pixels is not None and vision_square_pixels > 0:
         s = vision_square_pixels
@@ -559,12 +525,7 @@ def run_tt(
         }
 
         def _sample_from_tt_out(tt_out, seq_last_idx):
-            """Sample next token from prefill hidden states at ``seq_last_idx``.
-
-            Returns the sampled ``[1, 1]`` token tensor and accumulates lm-head /
-            sample timings into ``stats``. Used only for the prefill-side
-            first-token sample; decode-loop sampling runs inside the trace.
-            """
+            """Sample next token from prefill hidden states at ``seq_last_idx``. Returns the sampled ``[1, 1]`` token tensor and accumulates lm-head / sample timings into ``stats``. Used only for the prefill-side first-token sample; decode-loop sampling runs inside the trace."""
             if sampling is not None:
                 assert tt_lm_head is not None
                 tok_slot = seq_last_idx % 32

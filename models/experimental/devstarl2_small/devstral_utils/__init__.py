@@ -1,8 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared helpers for Devstral-2 / Ministral3 TT demos (mesh, prefill padding, LM head, FP8 shim)."""
+# Shared helpers for Devstral-2 / Ministral3 TT demos (mesh, prefill padding, LM head, FP8 shim).
 
 from models.experimental.devstarl2_small.devstral_utils.fp8_dequantize_compat import apply_fp8_dequantize_compat
 from models.experimental.devstarl2_small.devstral_utils.multimodal_demo_helpers import (

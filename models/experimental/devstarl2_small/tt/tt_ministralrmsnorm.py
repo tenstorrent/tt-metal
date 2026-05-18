@@ -1,15 +1,6 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""
-Tenstorrent RMSNorm for Hugging Face Ministral3 text (``Ministral3RMSNorm``).
-
-Delegates to :class:`models.common.rmsnorm.RMSNorm` (``ttnn.rms_norm`` / distributed
-variants). Meta checkpoints use ``attention_norm`` / ``ffn_norm`` per layer after
-``map_hf_to_meta_keys`` (HF ``input_layernorm`` / ``post_attention_layernorm``).
-
-Forward uses only ``ttnn`` ops; host tensors appear only when staging weights in ``__init__``.
-"""
+# Tenstorrent RMSNorm for Hugging Face Ministral3 text (``Ministral3RMSNorm``). Delegates to :class:`models.common.rmsnorm.RMSNorm` (``ttnn.rms_norm`` / distributed variants). Meta checkpoints use ``attention_norm`` / ``ffn_norm`` per layer after ``map_hf_to_meta_keys`` (HF ``input_layernorm`` / ``post_attention_layernorm``). Forward uses only ``ttnn`` ops; host tensors appear only when staging weights in ``__init__``.
 
 from __future__ import annotations
 
@@ -19,15 +10,7 @@ from models.common.rmsnorm import RMSNorm
 
 
 class TtMinistralRMSNorm(RMSNorm):
-    """
-    Ministral3 decoder RMSNorm: same implementation as the shared text-stack :class:`RMSNorm`.
-
-    Parameters
-    ----------
-    post_attention
-        If ``False``, normalize after the residual path into attention (``attention_norm``).
-        If ``True``, normalize before the MLP (``ffn_norm``).
-    """
+    # post_attention=False → attention_norm; True → ffn_norm.
 
     def __init__(
         self,

@@ -1,11 +1,6 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""
-Single ``Ministral3DecoderLayer`` block on TT: pre-norm attention, residual, pre-norm SwiGLU MLP, residual.
-
-Submodules are composed from existing Devstral TT modules only (no Torch in ``forward``).
-"""
+# Single ``Ministral3DecoderLayer`` block on TT: pre-norm attention, residual, pre-norm SwiGLU MLP, residual. Submodules are composed from existing Devstral TT modules only (no Torch in ``forward``).
 
 from __future__ import annotations
 
@@ -19,12 +14,7 @@ from models.tt_transformers.tt.common import Mode
 
 
 class TtMinistral3DecoderLayer(LightweightModule):
-    """
-    Mirrors HF ``Ministral3DecoderLayer`` ordering for prefill (``past_key_values=None``).
-
-    Parameters match the constructors of :class:`TtMinistralAttention`, :class:`TtMinistralMLP`,
-    and two :class:`TtMinistralRMSNorm` instances (input vs post-attention).
-    """
+    """Mirrors HF ``Ministral3DecoderLayer`` ordering for prefill (``past_key_values=None``). Parameters match the constructors of :class:`TtMinistralAttention`, :class:`TtMinistralMLP`, and two :class:`TtMinistralRMSNorm` instances (input vs post-attention)."""
 
     def __init__(
         self,
@@ -131,12 +121,7 @@ class TtMinistral3DecoderLayer(LightweightModule):
         user_id: int = 0,
         page_table=None,
     ) -> ttnn.Tensor:
-        """Single-token decode step using the KV cache populated by ``forward_prefill``.
-
-        ``x``: L1 width-sharded tensor in residual memory config (see ``get_residual_mem_config``).
-        ``current_pos``: device ``ttnn.Tensor`` ``[1, batch]`` with the absolute token position.
-        ``rot_mats``: ``[cos, sin]`` sliced for ``current_pos`` from ``TtMinistral3RotaryEmbedding.get_rot_mats``.
-        """
+        """Single-token decode step using the KV cache populated by ``forward_prefill``. ``x``: L1 width-sharded tensor in residual memory config (see ``get_residual_mem_config``). ``current_pos``: device ``ttnn.Tensor`` ``[1, batch]`` with the absolute token position. ``rot_mats``: ``[cos, sin]`` sliced for ``current_pos`` from ``TtMinistral3RotaryEmbedding.get_rot_mats``."""
         args = self.self_attn.args
         num_devices = self.self_attn.num_devices
         residual_mem_cfg = args.get_residual_mem_config(Mode.DECODE, None)

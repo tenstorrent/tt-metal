@@ -1,31 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-PCC test: Hugging Face ``Ministral3Attention`` vs ``TtMinistralAttention`` on Devstral weights.
-
-Loads the **full** multimodal checkpoint via ``ModelArgs.load_state_dict()`` (same conversion path as
-production: ``standardize_hf_keys_multimodal`` + ``convert_vision_hf_to_meta_no_qkv_permute``), so
-TT attention sees keys such as ``layers.0.attention.wq.weight``.
-
-The reference submodule is taken from ``cached_hf_model.model.language_model`` (layer 0 ``self_attn``
-and ``rotary_emb``). Rotary cos/sin are uploaded from HF so TT matches reference rope tables.
-
-Requirements:
-- Enough host RAM / VRAM for ``transformers`` to load Devstral (~24B parameters / FP8→BF16).
-- Sequence length multiple of 128 (TT attention prefill path).
-
-The ``trust_remote_ministral`` fixture monkeypatches ``ModelArgs.get_hf_model_cls`` to use
-``AutoModelForImageTextToText`` from ``modeling_auto`` so this test does not import
-``AutoModelForVision2Seq`` (absent in some ``transformers`` versions). No changes to ``model_config.py``.
-
-At import time this module applies the shared Devstral FP8 scalar-scale compat patch so checkpoints
-load across Hugging Face ``transformers`` versions.
-
-Reference attention is asserted to be Hugging Face ``Ministral3Attention`` from
-``transformers.models.ministral3.modeling_ministral3`` before PCC vs TT.
-"""
+# PCC test: Hugging Face ``Ministral3Attention`` vs ``TtMinistralAttention`` on Devstral weights. Loads the **full** multimodal checkpoint via ``ModelArgs.load_state_dict()`` (same conversion path as production: ``standardize_hf_keys_multimodal`` + ``convert_vision_hf_to_meta_no_qkv_permute``), so TT attention sees keys such as ``layers.0.attention.wq.weight``. The reference submodule is taken from ``cached_hf_model.model.language_model`` (layer 0 ``self_attn`` and ``rotary_emb``). Rotary cos/s...
 
 from __future__ import annotations
 

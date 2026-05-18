@@ -1,12 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC: Hugging Face ``Ministral3Model`` (text path) vs ``TtMinistral3Model`` on Devstral weights.
-
-Importing :class:`~models.experimental.devstarl2_small.tt.tt_ministral3_model.TtMinistral3Model`
-runs ``apply_fp8_dequantize_compat()`` so HF scalar FP8 scales work across ``transformers`` versions.
-"""
+# PCC: Hugging Face ``Ministral3Model`` (text path) vs ``TtMinistral3Model`` on Devstral weights. Importing :class:`~models.experimental.devstarl2_small.tt.tt_ministral3_model.TtMinistral3Model` runs ``apply_fp8_dequantize_compat()`` so HF scalar FP8 scales work across ``transformers`` versions.
 
 from __future__ import annotations
 

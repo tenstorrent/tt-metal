@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 from transformers import (
     Mistral3ForConditionalGeneration,
@@ -10,8 +13,7 @@ _ORIGINAL_DEQUANTIZE_ONE = Fp8Dequantize._dequantize_one
 
 
 def _dequantize_one_compat(self, quantized: torch.Tensor, scales: torch.Tensor) -> torch.Tensor:
-    # Devstral-Small-2 checkpoints can expose scalar FP8 scales for dense linears.
-    # Older/newer HF conversion paths expect a 2D scale grid and crash on shape [].
+    # Scalar FP8 scales (0-D): some HF paths expect a 2-D scale grid and crash without this.
     if scales.ndim == 0:
         fp4_dtype = getattr(torch, "float4_e2m1fn_x2", None)
         if quantized.dtype == torch.int8 or (fp4_dtype is not None and quantized.dtype == fp4_dtype):
