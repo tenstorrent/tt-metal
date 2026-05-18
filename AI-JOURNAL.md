@@ -1,5 +1,46 @@
 
 ---
+## FIX EG RR (2026-05-18) — commit a35bf234f74
+
+### What Failed
+
+CI run 26024194526 (FIX IJ — iteration 9): Device 0 chan=8 (MMIO master router)
+stuck at 0xDEADB07E after soft-reset.  FIX EG fired (pre_val=0x1), FIX DU confirmed
+0x49706550 after 0ms.  But FIX EF poll fired 3000ms later — fw_launch_addr was never
+written back.  Non-MMIO devices 4,5,6,7 could not load firmware, ring sync timeout
+on Device 1, 80 rescue_stuck_dispatch events, 24 hard-BRISC resets.
+
+### Root Cause
+
+Device 0 chan=8 had edm_status=0xDEADB07E (HOST_PRE_LAUNCH_CANARY) from the previous
+session.  terminate_stale_erisc_routers added it to probe_dead_channels.
+configure_fabric_cores took the FIX RR path for MMIO channels — which does assert +
+deassert WITHOUT calling FIX EG (zeroing fw_launch_addr).
+
+After FIX RR deassert, ERISC booted to base-UMD (0x49706550) with fw_launch_addr
+still == 1 (set by active_erisc.cc fabric firmware in the prior session).  base-UMD
+saw fw_launch_addr=1 and immediately tried to execute the stale launch message from
+L1, BEFORE write_launch_msg_to_core ran → ERISC crashed → stuck at 0xDEADB07E.
+
+FIX IJ fires AFTER write_launch_msg_to_core, but by then ERISC was already dead.
+FIX IJ's write was 1→1 (no-op).  FIX MN snapshot showed pre_val=0x00000001 confirming
+fw_launch_addr was already 1 when FIX IJ ran — the ERISC had already crashed.
+
+The normal FIX S9 path zeros fw_launch_addr between assert and deassert (FIX EG).
+The FIX RR path was missing this identical step.
+
+### Fix Applied
+
+`tt_metal/fabric/fabric_init.cpp`: Added FIX EG RR block between
+`assert_risc_reset_at_core` and `deassert_risc_reset_at_core` in the FIX RR block
+(lines ~204-269).  Mirrors the exact FIX EG + FIX MN + FIX GI pattern from the
+normal FIX S9 path.  Ensures fw_launch_addr is zeroed for ALL channels going through
+a PCIe-direct soft reset, including those recovered from the pre-known-dead
+(0xDEADB07E canary) path.
+
+Commit: a35bf234f74
+
+---
 ## FIX UP-2 + FIX TL-2 (2026-05-18)
 
 Root cause: Run 26022229604 iter 8 failure.
