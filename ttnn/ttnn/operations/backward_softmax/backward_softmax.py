@@ -6,14 +6,21 @@ backward_softmax — VJP of softmax.
 
     grad_input = output * (grad_output - sum(output * grad_output, dim))
 
-Phase-0 constraints:
-- Inputs: float32, TILE_LAYOUT, rank-4, H/W tile-aligned (multiple of 32),
-  identical shape and dtype between the two inputs.
+Current constraints (post Refinement 3):
+- Inputs: ``float32`` / ``bfloat16`` / ``bfloat8_b``, TILE_LAYOUT, rank-4,
+  H/W tile-aligned (multiple of 32), identical shape and dtype between the
+  two inputs.
 - Reduce dimension: dim ∈ {-1, -2}.
+- Output dtype matches input dtype.
+- Compute config is dtype-aware (HiFi4 + fp32_dest_acc for fp32; lower-fidelity
+  defaults for bf16/bfp8 since the input precision floor is already coarser
+  than what HiFi4 + fp32-acc can deliver). See ``backward_softmax_program_descriptor.py``.
 """
 
 import ttnn
 from .backward_softmax_program_descriptor import create_program_descriptor
+
+_SUPPORTED_DTYPES = (ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b)
 
 
 def backward_softmax(
@@ -31,8 +38,8 @@ def backward_softmax(
         grad_input = output * (grad_output - sum(output * grad_output, dim))
 
     Args:
-        grad_output: Upstream gradient (dy). float32, TILE_LAYOUT, rank-4,
-            H/W tile-aligned, on-device.
+        grad_output: Upstream gradient (dy). float32 / bfloat16 / bfloat8_b,
+            TILE_LAYOUT, rank-4, H/W tile-aligned, on-device.
         output: Forward softmax output (y). Identical shape & dtype as
             grad_output.
         dim: Reduction dimension. Must be -1 (W) or -2 (H). Defaults to -1.
@@ -65,10 +72,12 @@ def backward_softmax(
 
 def _validate(grad_output: ttnn.Tensor, output: ttnn.Tensor, dim: int) -> None:
     # Dtype.
-    if grad_output.dtype != ttnn.float32:
-        raise ValueError(f"backward_softmax: grad_output dtype must be float32, got {grad_output.dtype}")
-    if output.dtype != ttnn.float32:
-        raise ValueError(f"backward_softmax: output dtype must be float32, got {output.dtype}")
+    if grad_output.dtype not in _SUPPORTED_DTYPES:
+        raise ValueError(
+            f"backward_softmax: grad_output dtype must be one of {_SUPPORTED_DTYPES}, " f"got {grad_output.dtype}"
+        )
+    if output.dtype not in _SUPPORTED_DTYPES:
+        raise ValueError(f"backward_softmax: output dtype must be one of {_SUPPORTED_DTYPES}, " f"got {output.dtype}")
     if grad_output.dtype != output.dtype:
         raise ValueError(
             f"backward_softmax: grad_output dtype ({grad_output.dtype}) and "

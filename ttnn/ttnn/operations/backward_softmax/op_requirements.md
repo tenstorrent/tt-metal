@@ -85,14 +85,28 @@
   - If no in-scope shape triggers strategy 3, that's fine — note in `capabilities.md` that strategy 3 is reachable only at very large reduce dimensions and is not exercised by the test set.
 - **Verifier hint**: the standard TTNN pattern for keeping a CB live across multiple compute passes is to `cb_wait_front(cb, N)` once at the top and only `cb_pop_front(cb, N)` after the last pass that reads it. Compute APIs that take a tile-index argument read at arbitrary offsets within the waited region.
 
-### [ ] Refinement 3 — Compute kernel config
+### [ ] Refinement 3 — Alternative input dtypes (BFLOAT16, BFLOAT8_B)
+
+- Add support for `bfloat16` and `bfloat8_b` inputs/outputs in addition to the current `float32`.
+- Both `grad_output` and `output` inputs must have the same dtype. The returned `grad_input` dtype matches the input dtype.
+- Update CB formats and tile sizes accordingly. The scaler CB is bf16 regardless of input dtype (matmul reduce path accepts mixed `bf16` scaler + any-dtype data).
+- **Dtype-aware default compute config**: pick sensible per-dtype defaults rather than reusing the fp32 settings for bf16/bfp8. The current fp32 defaults (HiFi4 + fp32_dest_acc_en=True) are precision-first; for bf16/bfp8 storage the input is already quantized to ~3 decimal digits, so HiFi4 overhead buys little and a lower-fidelity / approx-mode default is the better trade-off. Pick defaults that match the operation's chosen design point (see how `glu_fused` handled this in its R2). Refinement 4 below will let callers override the chosen defaults explicitly.
+- **Tests**: parametrize the acceptance + extended test set over `{float32, bfloat16, bfloat8_b}`. Expect PCC ≥ 0.999 across dtypes; absolute-error tolerances may need loosening for bf16/bfp8 (document the chosen tolerances per dtype in `capabilities.md`).
+
+### [ ] Refinement 4 — Compute kernel config exposed to caller
 
 - Expose `compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None` on `backward_softmax(...)`.
-- Default to `HiFi4 + fp32_dest_acc_en=True` (current behavior). Forward to `ComputeConfigDescriptor` in `create_program_descriptor`.
-- Allow overriding `math_fidelity`, `fp32_dest_acc_en`, `dst_full_sync_en`. The `unpack_to_dest_mode` field should also be settable per CB.
-- **Note from verifier**: HiFi4 + fp32_dest_acc on Wormhole B0 is reportedly affected by hardware bug #38306. The numerical_stability.md flags this. Empirically on this branch HiFi4 outperformed HiFi3 by ~1.4× on absolute error; the bug's impact in this op is mild but exposing the config gives callers an escape hatch. **`UnpackToDestMode::UnpackToDestFp32` cannot simply be applied to all fp32 CBs** — when set on `cb_prod` it produced `inf` outputs in a verifier probe. The matmul-based REDUCE_ROW SUM path is incompatible with that mode. Apply with care, possibly only to non-matmul-input CBs.
+- Default to the dtype-aware config chosen in Refinement 3 (no behavior change when `None` is passed). Forward to `ComputeConfigDescriptor` in `create_program_descriptor`.
+- Allow overriding **all** of the following `ComputeConfigDescriptor` fields:
+  - `math_fidelity` (HiFi4 / HiFi3 / HiFi2 / LoFi)
+  - `fp32_dest_acc_en` (bool)
+  - `math_approx_mode` (bool — affects SFPU op accuracy)
+  - `dst_full_sync_en` (bool)
+  - `unpack_to_dest_mode` per CB (vector of `UnpackToDestMode`)
+- **Tests**: at least one parametrized config case per dtype (e.g., `HiFi2 + fp32_dest_acc + math_approx=True` on bf16, exercising the perf-first regime callers would pick for throughput-bound workloads).
+- **Note from verifier**: HiFi4 + fp32_dest_acc on Wormhole B0 is reportedly affected by hardware bug #38306 — exposing the config gives callers an escape hatch. **`UnpackToDestMode::UnpackToDestFp32` cannot simply be applied to all fp32 CBs** — when set on `cb_prod` it produced `inf` outputs in a verifier probe. The matmul-based REDUCE_ROW SUM path is incompatible with that mode. Apply with care, possibly only to non-matmul-input CBs.
 
-### [ ] Refinement 4 — Tighten precision baseline / address `(dy − s)` cancellation
+### [ ] Refinement 5 — Tighten precision baseline / address `(dy − s)` cancellation
 
 - Today's PCC is 0.9999 but absolute error reaches ~0.3 at positions where `dy_i ≈ s` because the matmul-based REDUCE_ROW SUM accumulates with worse-than-fp32 effective precision (likely due to the SrcA TF32 path on Wormhole, see numerical_stability.md).
 - Goals: (a) make the spec test pass (`atol=0.01, rtol=0.05`) for all currently-defined shapes; (b) document the achievable precision floor.
@@ -101,13 +115,6 @@
   - Use `transform_in_place` on `cb_sum` to add a small post-pass correction (Kahan-style compensation).
   - Lower-precision pass-2 sub on a re-summed-in-fp32-CPU-by-default path.
 - **Note from verifier**: this is the single biggest gap between what the spec test asserts and what the operation delivers. Without it the operation is "correct in PCC, off by hardware-precision-floor in atol".
-
-### [ ] Refinement 5 — Float32 alternative dtypes (BFLOAT16, BFLOAT8_B)
-
-- Add support for bfloat16 and bfloat8_b inputs/outputs.
-- Both inputs must match dtype. The output dtype matches the input.
-- Update CB formats and tile sizes accordingly.
-- The matmul reduce already accepts mixed scaler (bf16) + fp32 inputs; switching to bf16 inputs will need a bf16 scaler too.
 
 ### [ ] Refinement 6 — Non-tile-aligned shapes (`H` or `W` % 32 ≠ 0)
 

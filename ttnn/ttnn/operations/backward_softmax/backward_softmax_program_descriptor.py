@@ -41,6 +41,25 @@ differ. The kernel branches on a compile-time ``STRATEGY_IS_WHOLE_ROW`` flag
 to choose between the whole-row path (one bulk mul + one bulk reduce + one
 bulk sub + one bulk mul per lane) and the per-tile streaming path (the
 Phase-0 block-loop).
+
+Compute config is dtype-aware (Refinement 3):
+    float32   → HiFi4 + fp32_dest_acc_en=True (Phase-0 lock-in; max precision
+                for the matmul-based REDUCE_ROW SUM path).
+    bfloat16  → HiFi2 + fp32_dest_acc_en=False. bf16 inputs already carry
+                ~7 mantissa bits — HiFi4's 4-phase mantissa expansion and
+                fp32 DEST accumulation buy nothing the input quantisation
+                hasn't already lost. HiFi2 keeps the matmul SrcA path 4x
+                lighter on cycles; non-fp32 DEST regains the full DST tile
+                capacity (8 tiles instead of 4 in half-sync mode).
+    bfloat8_b → LoFi + fp32_dest_acc_en=False. The 8-bit shared-exponent
+                quantisation is the dominant noise source; matmul fidelity
+                below LoFi would cost cycles without measurable accuracy
+                gain. Same DST capacity benefit as bf16.
+
+The kernels themselves are dtype-agnostic — the CB unpack/pack reconfig
+inside the kernel-lib helpers handles each format. All CBs except cb_scaler
+inherit the input dtype; cb_scaler is bf16 regardless (matmul col-0 fill
+convention for SUM/AVG REDUCE_ROW).
 """
 
 from pathlib import Path
@@ -493,15 +512,34 @@ def create_program_descriptor(
         config=ttnn.WriterConfigDescriptor(),
     )
 
+    # ---- Compute config (dtype-aware, Refinement 3) ----
+    # fp32 keeps the Phase-0 max-precision lock-in. bf16/bfp8 inputs are
+    # already coarser than HiFi4+fp32-acc can preserve — drop both knobs so
+    # the matmul SrcA path runs in fewer cycles and the DST tile capacity
+    # doesn't get halved by fp32 DEST. See the module docstring for the full
+    # rationale.
+    if grad_output.dtype == ttnn.float32:
+        compute_config = ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+        )
+    elif grad_output.dtype == ttnn.bfloat16:
+        compute_config = ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc_en=False,
+        )
+    else:  # ttnn.bfloat8_b — validator enforces this is the only remaining option
+        compute_config = ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc_en=False,
+        )
+
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "backward_softmax_compute.cpp"),
         core_ranges=core_grid,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt_args,
-        config=ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            fp32_dest_acc_en=True,
-        ),
+        config=compute_config,
     )
 
     return ttnn.ProgramDescriptor(
