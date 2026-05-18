@@ -25,6 +25,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstral2_large.tests._devstral_weights import (
     load_hf_tensors_for_keys,
     load_text_config,
+    replicated_tt_to_torch,
 )
 from models.experimental.devstral2_large.tt.model_args import (
     DEVSTRAL2_LARGE_L1_SMALL_SIZE,
@@ -115,11 +116,7 @@ def test_attention_prefill_pcc_real_weights(mesh_device, seq_len):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_out = tt_attn(tt_x, mode="prefill", start_pos=0, user_id=0)
-    # After o_proj all-reduce the activation is replicated on every device; read one shard.
-    tt_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
-    if tt_torch.ndim == 4:
-        tt_torch = tt_torch[0:1]
-    tt_torch = tt_torch.reshape(1, seq_len, text_cfg.hidden_size)
+    tt_torch = replicated_tt_to_torch(tt_out, reshape=(1, seq_len, text_cfg.hidden_size))
 
     passing, msg = comp_pcc(ref_out, tt_torch, PCC_REQUIRED)
     logger.info(comp_allclose(ref_out, tt_torch))

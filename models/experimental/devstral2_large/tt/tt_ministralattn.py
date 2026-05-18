@@ -43,6 +43,38 @@ from models.experimental.devstral2_large.tt.tt_ministral_rotary_emb import (
 
 __all__ = ["TtAttention"]
 
+# ``nlp_create_qkv_heads_decode`` + decode RoPE expect height-sharded L1 activations.
+_DECODE_QKV_HEADS_MEM_CONFIG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+
+
+def _decode_height_shard_mem_config(batch_size: int, *, height: int, width: int) -> ttnn.MemoryConfig:
+    grid_size = ttnn.CoreCoord(8, 8)
+    batch_grid = ttnn.num_cores_to_corerangeset(batch_size, grid_size, row_wise=True)
+    return ttnn.create_sharded_memory_config(
+        shape=(height, width),
+        core_grid=batch_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
+def _shard_decode_rope_tables(
+    cos: ttnn.Tensor,
+    sin: ttnn.Tensor,
+    *,
+    batch_size: int,
+    head_dim: int,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Match cos/sin layout to decode Q/K from ``nlp_create_qkv_heads_decode``."""
+    mem_config = _decode_height_shard_mem_config(batch_size, height=ttnn.TILE_SIZE, width=head_dim)
+    return ttnn.interleaved_to_sharded(cos, mem_config), ttnn.interleaved_to_sharded(sin, mem_config)
+
+
+def _shard_decode_trans_mat(trans_mat: ttnn.Tensor, *, batch_size: int) -> ttnn.Tensor:
+    mem_config = _decode_height_shard_mem_config(batch_size, height=ttnn.TILE_SIZE, width=ttnn.TILE_SIZE)
+    return ttnn.interleaved_to_sharded(trans_mat, mem_config)
+
 
 # --- Weight loading ---
 
@@ -291,26 +323,37 @@ class TtAttention:
         x: ttnn.Tensor,
         current_pos_host: torch.Tensor,
     ) -> ttnn.Tensor:
-        """``x``: ``(1, B, 1, hidden_size)``, replicated across TP. ``current_pos_host`` shape ``[B]``."""
+        """``x``: ``(1, 1, 1, hidden_size)`` or ``(1, B, 1, hidden_size)``; ``current_pos_host`` shape ``[B]``."""
         B = self.args.max_batch_size
-        D = self.args.head_dim
         Hq_local = self.args.n_local_heads
         Hkv_local = self.args.n_local_kv_heads
 
+        hidden = int(x.shape[-1])
+        # ``nlp_create_qkv_heads_decode`` expects ``(1, seq_len, batch, fused_qkv_dim)``.
+        x = ttnn.reshape(x, (1, 1, B, hidden))
+
         q, kv = self._project_qkv(x)
-        q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
-            q,
-            kv,
-            num_heads=Hq_local,
-            num_kv_heads=Hkv_local,
-            transpose_k_heads=False,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        fused = ttnn.concat([q, kv], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(q)
         ttnn.deallocate(kv)
+        fused_dim = int(fused.shape[-1])
+        fused = ttnn.reshape(fused, (1, 1, B, fused_dim))
 
+        q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads_decode(
+            fused,
+            num_heads=Hq_local,
+            num_kv_heads=Hkv_local,
+            memory_config=_DECODE_QKV_HEADS_MEM_CONFIG,
+        )
+        ttnn.deallocate(fused)
+
+        batch_size = int(current_pos_host.shape[0])
         cos_q, sin_q, cos_k, sin_k = self.rotary_emb.get_decode_tables(current_pos_host)
-        q_heads, k_heads = self.rotary_emb.apply(q_heads, k_heads, cos_q, sin_q, cos_k, sin_k)
+        cos_q, sin_q = _shard_decode_rope_tables(cos_q, sin_q, batch_size=batch_size, head_dim=self.args.head_dim)
+        cos_k, sin_k = _shard_decode_rope_tables(cos_k, sin_k, batch_size=batch_size, head_dim=self.args.head_dim)
+        trans_mat = _shard_decode_trans_mat(self.rotary_emb.trans_mat, batch_size=batch_size)
+        q_heads = ttnn.experimental.rotary_embedding_llama(q_heads, cos_q, sin_q, trans_mat, is_decode_mode=True)
+        k_heads = ttnn.experimental.rotary_embedding_llama(k_heads, cos_k, sin_k, trans_mat, is_decode_mode=True)
 
         # Update K/V cache at ``current_pos`` for each user.
         pos_tt = ttnn.from_torch(
@@ -326,6 +369,8 @@ class TtAttention:
         ttnn.deallocate(k_heads)
         ttnn.deallocate(v_heads)
 
+        padded_heads = ((Hq_local + 31) // 32) * 32
+        sdpa_mem_config = _decode_height_shard_mem_config(batch_size, height=padded_heads, width=self.args.head_dim)
         attn = ttnn.transformer.scaled_dot_product_attention_decode(
             q_heads,
             self.k_cache,
@@ -336,6 +381,7 @@ class TtAttention:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(q_heads)
+        attn = ttnn.to_memory_config(attn, sdpa_mem_config)
 
         # (1, B, Hq_local, D) -> (1, 1, B, Hq_local*D)
         attn_flat = ttnn.experimental.nlp_concat_heads_decode(attn, num_heads=Hq_local)
