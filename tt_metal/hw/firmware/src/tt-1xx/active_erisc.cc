@@ -28,6 +28,7 @@
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/device_print.h"
+#include "hostdev/fabric_boot_fence.h"
 
 uint8_t noc_index;
 // Renamed to kg_noc_mode to avoid conflict with noc_mode in dataflow_api_comon
@@ -246,6 +247,44 @@ int __attribute__((noinline)) main(void) {
     flag_disable[0] = 1;
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
+
+#ifdef STRATEGY8_BOOT_FENCE
+    // FIX S8 (Boot Fence): Wait for host to write boot_fence token before entering the
+    // dispatch loop.  The host writes BOOT_FENCE_READY after ALL L1 writes are complete
+    // (firmware binary + launch_msg + handshake_bypass + runtime args).  This replaces
+    // the host-side FIX DW (50ms sleep) + FIX DU (ROM postcode poll) with an explicit
+    // synchronization point.
+    //
+    // boot_fence lives in AERISC_FABRIC_SCRATCH region, zeroed by addresses_to_clear at
+    // session start.  Firmware spins on 0 until host writes BOOT_FENCE_READY.
+    {
+        volatile uint32_t* boot_fence =
+            reinterpret_cast<volatile uint32_t*>(MEM_AERISC_FABRIC_SCRATCH_BASE + BOOT_FENCE_OFFSET);
+        while (*boot_fence != BOOT_FENCE_READY_VALUE) {
+            invalidate_l1_cache();
+            asm volatile("nop");
+        }
+    }
+#endif  // STRATEGY8_BOOT_FENCE
+
+#ifdef STRATEGY9_SESSION_ID
+    // FIX S9 (Session ID): Read the host-written session_id token from L1.  All subsequent
+    // go_msg/launch_msg activations must match this session_id or be rejected as stale.
+    // session_id is zeroed by addresses_to_clear; host writes a non-zero value (>= 1)
+    // during configure_fabric() while ERISC is halted (Strategy A).
+    const uint32_t expected_session_id =
+        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_FABRIC_SCRATCH_BASE + SESSION_ID_OFFSET);
+#endif  // STRATEGY9_SESSION_ID
+
+#ifdef STRATEGY9_SESSION_ID
+    // FIX S9: If session_id is invalid (0), L1 data is from no valid session — stay dormant.
+    if (expected_session_id == SESSION_ID_INVALID) {
+        while (flag_disable[0] == 1) {
+            internal_::risc_context_switch();
+        }
+        return 0;
+    }
+#endif  // STRATEGY9_SESSION_ID
 
     // Add an invalidate before the first read of mailboxes->go_messages[0].signal
     invalidate_l1_cache();

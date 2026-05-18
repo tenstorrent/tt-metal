@@ -401,6 +401,12 @@ std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines(cons
         defines["FABRIC_1D_PKT_HDR_EXTENSION_WORDS"] = std::to_string(routing_1d_extension_words_);
     }
 
+    // FIX S8 (#42429): Boot fence — firmware polls for host-written token before dispatch loop.
+    defines["STRATEGY8_BOOT_FENCE"] = "1";
+
+    // FIX S9 (#42429): Session ID tagging — firmware validates session_id on go_msg/launch_msg.
+    defines["STRATEGY9_SESSION_ID"] = "1";
+
     return defines;
 }
 

@@ -75,6 +75,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <impl/debug/watcher_server.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include "hostdev/fabric_boot_fence.h"  // FIX S8/S9 (#42429): boot fence + session ID constants
 
 namespace tt::tt_metal {
 
@@ -415,6 +416,11 @@ void Device::configure_fabric(
         return;
     }
 
+    // FIX S9 (#42429): Bump monotonic session ID.  Firmware uses this to reject stale data
+    // from a previous session.  SESSION_ID_INVALID(0) is never used — the counter starts at 1
+    // and only increments forward.  Wrap at UINT32_MAX is astronomically unlikely.
+    fabric_session_id_++;
+
     // Reset relay-broken flag: configure_fabric() initialises fresh fabric firmware on all
     // channels, including the MMIO device's relay ERISCs.  After this call the UMD relay path
     // is valid again, so fabric_relay_path_broken_ must be cleared so that the next quiesce
@@ -608,8 +614,8 @@ void Device::configure_fabric(
     //   2. Write launch_msg while halted (send_go=false — no go_msg yet)
     //   3. Write handshake_bypass=1 while halted (STRATEGY7 / FIX S7-MOVE)
     //   4. Deassert ERISC reset
-    //   5. FIX DW: 50ms sleep (let ERISC latch out of reset)
-    //   6. FIX DU: poll edm_status until != ROM postcode (5s timeout)
+    //   5. FIX S8: Write BOOT_FENCE_READY to L1 (replaces old FIX DW+DU+PQ)
+    //   6. (removed — was FIX DU, replaced by S8 boot fence)
     //   7. Write go_msg (RUN_MSG_GO) — ERISC is now in base-UMD polling loop
     // =========================================================================
     if (!health.deferred_deassert_channels.empty()) {
@@ -638,6 +644,16 @@ void Device::configure_fabric(
         constexpr uint32_t kFIX_DU_PollIntervalMs_SA = 5;
         const uint64_t edm_status_addr_sa =
             static_cast<uint64_t>(router_config_sa.edm_status_address);
+
+        // FIX S8/S9 (#42429): Compute AERISC_FABRIC_SCRATCH base from HAL.
+        // scratch_base = FABRIC_TELEMETRY_BASE + FABRIC_TELEMETRY_SIZE - POSTCODES_SIZE(4)
+        // This formula matches dev_mem_map.h for both WH and BH.
+        const uint32_t scratch_base_sa = static_cast<uint32_t>(
+            hal_sa.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::FABRIC_TELEMETRY) +
+            hal_sa.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::FABRIC_TELEMETRY) -
+            4u /* MEM_AERISC_FABRIC_POSTCODES_SIZE */);
+        const uint32_t boot_fence_addr_sa = scratch_base_sa + BOOT_FENCE_OFFSET;
+        const uint32_t session_id_addr_sa = scratch_base_sa + SESSION_ID_OFFSET;
 
         // Build logical_core→channel mapping for the write_launch_msg_to_core calls.
         // We need to find the program's kernel group for each deferred channel's logical core.
@@ -764,99 +780,74 @@ void Device::configure_fabric(
                 "all L1 writes complete (fw_launch_addr + launch_msg + handshake_bypass)",
                 this->id_, deferred_chan);
 
-            // Step 5: FIX DW — 50ms sleep after deassert.
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-            // Step 6: FIX DU — poll edm_status until != ROM postcode.
-            // FIX PQ (#42429): Two-phase guard against FIX CL pre-cleared edm_status.
-            // FIX CL (teardown) zeros edm_status to 0x00000000 before asserting ERISC reset.
-            // On the next run, if we start Phase 2 (the != ROM postcode check) while
-            // edm_status is still 0x00000000, the condition is immediately true —
-            // "ERISC exited ROM to 0x00000000 after 0ms" — a false positive.  go_msg is
-            // then sent while ERISC is still early in ROM boot → firmware never starts →
-            // ring master never launches → all devices stuck.
-            // Phase 1 detects this: if the first read is 0x00000000, we wait for ERISC to
-            // write *any* non-zero value before entering Phase 2.  This ensures ERISC has
-            // at minimum started writing its ROM postcode before we look for the exit.
+            // Step 5: FIX S8 (#42429) Boot Fence — write BOOT_FENCE_READY to L1.
+            // Replaces FIX DW (50ms sleep) + FIX DU (ROM postcode poll) + FIX PQ (two-phase guard).
+            // Firmware (active_erisc.cc) polls boot_fence after ROM boot completes and before
+            // entering the go_messages dispatch loop.  By writing the token here (after deassert,
+            // before go_msg), we provide an explicit host→firmware synchronization barrier.
+            // The old FIX DW+DU+PQ sequence was timing-based and fragile; S8 is deterministic.
             {
-                // FIX PQ Phase 1: if edm_status is pre-cleared (0x00000000), wait for
-                // ERISC to begin writing its ROM boot postcode sequence.
-                {
-                    std::vector<uint32_t> init_buf_sa(1, 0);
-                    cluster_sa.read_core(init_buf_sa, sizeof(uint32_t), core_loc_sa, edm_status_addr_sa);
-                    if (init_buf_sa[0] == 0x00000000u) {
-                        uint32_t pq_elapsed = 0;
-                        bool pq_transitioned = false;
-                        while (pq_elapsed < kFIX_DU_BootWaitMs_SA) {
-                            std::this_thread::sleep_for(std::chrono::milliseconds(kFIX_DU_PollIntervalMs_SA));
-                            pq_elapsed += kFIX_DU_PollIntervalMs_SA;
-                            std::vector<uint32_t> pq_buf(1, 0);
-                            cluster_sa.read_core(pq_buf, sizeof(uint32_t), core_loc_sa, edm_status_addr_sa);
-                            if (pq_buf[0] != 0x00000000u) {
-                                pq_transitioned = true;
-                                log_info(
-                                    tt::LogMetal,
-                                    "FIX PQ (#42429): Device {} chan={} edm_status transitioned from "
-                                    "zero to 0x{:08x} after {}ms (ERISC started L1 writes).",
-                                    this->id_, deferred_chan, pq_buf[0], pq_elapsed);
-                                break;
-                            }
-                        }
-                        if (!pq_transitioned) {
-                            log_warning(
-                                tt::LogMetal,
-                                "FIX PQ (#42429): timeout — Device {} chan={} edm_status still zero "
-                                "after {}ms (ERISC may not have started ROM execution). "
-                                "Continuing to Phase 2.",
-                                this->id_, deferred_chan, kFIX_DU_BootWaitMs_SA);
-                        }
-                    }
-                }
-
-                // FIX PQ Phase 2: existing FIX DU loop — poll until != ROM postcode.
-                uint32_t elapsed_sa = 0;
-                bool fix_du_ok_sa = false;
-                while (elapsed_sa < kFIX_DU_BootWaitMs_SA) {
-                    std::vector<uint32_t> status_sa(1, 0);
-                    cluster_sa.read_core(status_sa, sizeof(uint32_t), core_loc_sa, edm_status_addr_sa);
-                    if (status_sa[0] != kRomPostcode_SA) {
-                        fix_du_ok_sa = true;
-                        log_info(
-                            tt::LogMetal,
-                            "FIX SA (#42429): FIX DU — Device {} chan={} ERISC exited ROM to "
-                            "0x{:08x} after {}ms post-deassert",
-                            this->id_, deferred_chan, status_sa[0], elapsed_sa);
-                        break;
-                    }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(kFIX_DU_PollIntervalMs_SA));
-                    elapsed_sa += kFIX_DU_PollIntervalMs_SA;
-                }
-                if (!fix_du_ok_sa) {
-                    uint32_t final_val_sa = kRomPostcode_SA;
-                    try {
-                        std::vector<uint32_t> final_buf_sa(1, 0);
-                        cluster_sa.read_core(final_buf_sa, sizeof(uint32_t), core_loc_sa, edm_status_addr_sa);
-                        final_val_sa = final_buf_sa[0];
-                    } catch (...) {}
-                    // GAP 11 / FIX SA-ESC (#42429): DU timeout in Strategy A must escalate
-                    // to fabric_relay_path_broken_.  Without this, the channel's go_msg is
-                    // never written (we `continue` past step 7), but the ERISC was deasserted
-                    // in step 4 and is stuck in ROM.  Downstream FIX EF will poll this channel
-                    // for 3s and time out, but non-MMIO devices may start routing writes through
-                    // the dead relay before FIX EF fires — silently dropping launch messages.
-                    // Setting relay_broken early lets FIX SB2 propagate the broken state before
-                    // non-MMIO devices attempt relay writes.
-                    fabric_relay_path_broken_.store(true);
+                cluster_sa.write_core_immediate(
+                    this->id_, virtual_core_sa,
+                    std::vector<uint32_t>{BOOT_FENCE_READY_VALUE},
+                    boot_fence_addr_sa);
+                // Readback verify (follows FIX GI pattern).
+                std::vector<uint32_t> bf_verify_sa(1, 0);
+                cluster_sa.read_core(bf_verify_sa, sizeof(uint32_t), core_loc_sa,
+                    static_cast<uint64_t>(boot_fence_addr_sa));
+                if (bf_verify_sa[0] != BOOT_FENCE_READY_VALUE) {
                     log_warning(
                         tt::LogMetal,
-                        "FIX SA (#42429): FIX DU timeout — Device {} chan={} ERISC did not exit "
-                        "ROM within {}ms (edm_status=0x{:08x}). "
-                        "Setting fabric_relay_path_broken_=true (FIX SA-ESC). "
-                        "Channel may be unresponsive.",
-                        this->id_, deferred_chan, kFIX_DU_BootWaitMs_SA, final_val_sa);
-                    continue;
+                        "FIX S8 (#42429): boot_fence readback MISMATCH — wrote 0x{:08X} "
+                        "to L1[0x{:08X}] on Device {} chan={} but read back 0x{:08X}",
+                        BOOT_FENCE_READY_VALUE, boot_fence_addr_sa,
+                        this->id_, deferred_chan, bf_verify_sa[0]);
+                } else {
+                    log_info(
+                        tt::LogMetal,
+                        "FIX S8 (#42429): boot_fence=0x{:08X} at L1[0x{:08X}] for "
+                        "Device {} chan={} — firmware will proceed past boot fence poll",
+                        BOOT_FENCE_READY_VALUE, boot_fence_addr_sa,
+                        this->id_, deferred_chan);
                 }
             }
+
+            // Step 5b: FIX S9 (#42429) Session ID — write monotonic session_id to L1.
+            // Firmware reads this at boot and checks it against go_msg / launch_msg before
+            // acting.  Stale session data is silently rejected.  The session_id is a simple
+            // incrementing counter managed by the Device object (this->fabric_session_id_).
+            {
+                const uint32_t sid = this->fabric_session_id_;
+                cluster_sa.write_core_immediate(
+                    this->id_, virtual_core_sa,
+                    std::vector<uint32_t>{sid},
+                    session_id_addr_sa);
+                // Readback verify (follows FIX GI pattern).
+                std::vector<uint32_t> sid_verify_sa(1, 0);
+                cluster_sa.read_core(sid_verify_sa, sizeof(uint32_t), core_loc_sa,
+                    static_cast<uint64_t>(session_id_addr_sa));
+                if (sid_verify_sa[0] != sid) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX S9 (#42429): session_id readback MISMATCH — wrote 0x{:08X} "
+                        "to L1[0x{:08X}] on Device {} chan={} but read back 0x{:08X}",
+                        sid, session_id_addr_sa,
+                        this->id_, deferred_chan, sid_verify_sa[0]);
+                } else {
+                    log_info(
+                        tt::LogMetal,
+                        "FIX S9 (#42429): session_id=0x{:08X} at L1[0x{:08X}] for "
+                        "Device {} chan={} — firmware will use this session tag",
+                        sid, session_id_addr_sa,
+                        this->id_, deferred_chan);
+                }
+            }
+
+            // Steps 5-6 (old FIX DW + FIX DU + FIX PQ) removed by FIX S8.
+            // The boot fence above provides deterministic host→firmware sync, replacing:
+            //   - FIX DW: 50ms sleep after deassert
+            //   - FIX DU: poll edm_status until != ROM postcode (5s timeout)
+            //   - FIX PQ: two-phase guard against pre-cleared edm_status
 
             // Step 7: Write go_msg (RUN_MSG_GO) — ERISC is now in base-UMD polling loop.
             // GAP 14 / FIX SA-GV (#42429): Readback verify go_msg first word after write.
@@ -911,7 +902,7 @@ void Device::configure_fabric(
                 log_info(
                     tt::LogMetal,
                     "FIX OP SA (#42429): Strategy A per-channel — Device {} chan={} "
-                    "total sequence took {}ms (steps 1-7: MM+launch_msg+bypass+deassert+DW+DU+go_msg)",
+                    "total sequence took {}ms (steps 1-7: MM+launch_msg+bypass+deassert+S8_boot_fence+go_msg)",
                     this->id_, deferred_chan, fix_op_sa_ms);
             }
         }

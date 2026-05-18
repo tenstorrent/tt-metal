@@ -150,6 +150,8 @@ public:
                 defines.push_back("ENABLE_IRAM");
             }
             defines.push_back("COOPERATIVE_ERISC");
+            defines.push_back("STRATEGY8_BOOT_FENCE");
+            defines.push_back("STRATEGY9_SESSION_ID");
         }
         defines.push_back("ARCH_WORMHOLE");
         return defines;

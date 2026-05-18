@@ -13,6 +13,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/hal.hpp>
+#include "hostdev/fabric_boot_fence.h"  // FIX S8/S9 (#42429): boot fence + session ID constants
 
 namespace tt::tt_fabric {
 
@@ -210,6 +212,21 @@ std::vector<size_t> FabricBuilderContext::get_fabric_router_addresses_to_clear()
         addresses_to_clear.push_back(router_config_->to_sender_channel_remote_completion_counters_base_addr);
         addresses_to_clear.push_back(router_config_->receiver_channel_remote_ack_counters_base_addr);
         addresses_to_clear.push_back(router_config_->receiver_channel_remote_completion_counters_base_addr);
+    }
+
+    // FIX S8/S9 (#42429): Clear boot_fence and session_id in AERISC_FABRIC_SCRATCH.
+    // scratch_base = FABRIC_TELEMETRY_BASE + FABRIC_TELEMETRY_SIZE - POSTCODES_SIZE(4)
+    // This formula matches dev_mem_map.h for both WH and BH.
+    {
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        auto scratch_base = static_cast<size_t>(
+            hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH,
+                             tt::tt_metal::HalL1MemAddrType::FABRIC_TELEMETRY) +
+            hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH,
+                             tt::tt_metal::HalL1MemAddrType::FABRIC_TELEMETRY) -
+            4u /* MEM_AERISC_FABRIC_POSTCODES_SIZE */);
+        addresses_to_clear.push_back(scratch_base + BOOT_FENCE_OFFSET);
+        addresses_to_clear.push_back(scratch_base + SESSION_ID_OFFSET);
     }
 
     return addresses_to_clear;

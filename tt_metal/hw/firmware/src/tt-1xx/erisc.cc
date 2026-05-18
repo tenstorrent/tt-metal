@@ -10,6 +10,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/watcher_common.h"
 #include "internal/hw_thread.h"
+#include "hostdev/fabric_boot_fence.h"  // FIX S8/S9 (#42429): boot fence + session ID constants
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -112,6 +113,41 @@ void __attribute__((noinline)) Application(void) {
     WAYPOINT("RED");
 
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
+
+#ifdef STRATEGY8_BOOT_FENCE
+    // FIX S8 (Boot Fence): Wait for host to write boot_fence token before entering the
+    // dispatch loop.  Same logic as active_erisc.cc — host writes BOOT_FENCE_READY after
+    // ALL L1 writes are complete.  Replaces host-side FIX DW (50ms sleep) + FIX DU.
+    {
+        volatile uint32_t* boot_fence =
+            reinterpret_cast<volatile uint32_t*>(MEM_AERISC_FABRIC_SCRATCH_BASE + BOOT_FENCE_OFFSET);
+        while (*boot_fence != BOOT_FENCE_READY_VALUE) {
+            invalidate_l1_cache();
+            asm volatile("nop");
+        }
+    }
+#endif  // STRATEGY8_BOOT_FENCE
+
+#ifdef STRATEGY9_SESSION_ID
+    // FIX S9 (Session ID): Read the host-written session_id token from L1.
+    const uint32_t expected_session_id =
+        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_FABRIC_SCRATCH_BASE + SESSION_ID_OFFSET);
+#endif  // STRATEGY9_SESSION_ID
+
+#ifdef STRATEGY9_SESSION_ID
+    // FIX S9: If session_id is invalid (0), L1 data is from no valid session — stay dormant.
+    // This catches the case where firmware boots before the host has written session data
+    // (e.g., stale boot_fence value in L1 that bypasses S8).
+    if (expected_session_id == SESSION_ID_INVALID) {
+        // Park in context-switch loop until routing is disabled (quiesce).
+        while (routing_info->routing_enabled) {
+            internal_::risc_context_switch();
+        }
+        internal_::disable_erisc_app();
+        return;
+    }
+#endif  // STRATEGY9_SESSION_ID
+
     DeviceProfilerInit();
     while (routing_info->routing_enabled) {
         // FD: assume that no more host -> remote writes are pending

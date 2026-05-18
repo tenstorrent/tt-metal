@@ -282,6 +282,10 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+            defines.push_back("STRATEGY8_BOOT_FENCE");
+            defines.push_back("STRATEGY9_SESSION_ID");
+        }
         return defines;
     }
 

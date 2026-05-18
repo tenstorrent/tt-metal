@@ -341,6 +341,9 @@ private:
 
     // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
+    // FIX S9 (#42429): Monotonic session ID counter.  Incremented on each
+    // configure_fabric() call.  Written to L1 so firmware can reject stale data.
+    uint32_t fabric_session_id_ = 1;
     // SERIALIZATION INVARIANT (non-atomic fabric state fields):
     // The fields below are NOT protected by a mutex and are NOT atomic.  They are safe under
     // the following invariant: the mesh-level caller (MeshDevice / DeviceManager) guarantees

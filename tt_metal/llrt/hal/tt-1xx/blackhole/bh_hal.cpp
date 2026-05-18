@@ -160,6 +160,8 @@ public:
             } else {
                 defines.push_back("PHYSICAL_AERISC_ID=1");
             }
+            defines.push_back("STRATEGY8_BOOT_FENCE");
+            defines.push_back("STRATEGY9_SESSION_ID");
         }
         return defines;
     }
