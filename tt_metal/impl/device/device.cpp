@@ -1444,6 +1444,19 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
     // MUX terminate + ERISC terminate + re-launch phases.  Logged at every exit point.
     const auto quiesce_restart_start = std::chrono::steady_clock::now();
 
+#ifdef STRATEGY9_SESSION_ID
+    // FIX V11-QS89 (#42429): Bump session ID for quiesce restart — parity with
+    // configure_fabric(). Without this, force-reset channels that go through the
+    // S8/S9 boot fence sequence in the quiesce path would reuse the stale session_id
+    // from the previous configure_fabric() call.
+    fabric_session_id_++;
+    log_info(
+        tt::LogMetal,
+        "FIX V11-QS89 (#42429): quiesce_and_restart_fabric_workers Device {} bumped "
+        "fabric_session_id_ to 0x{:08X}",
+        this->id(), fabric_session_id_);
+#endif  // STRATEGY9_SESSION_ID
+
     // Diagnostic: env toggle lets CI / repro runs skip this restart path entirely to isolate
     // whether the Tensix MUX restart is the cause of a post-quiesce hang. When set, we return
     // before any fabric MUX termination. See plan Experiment B.
@@ -2322,93 +2335,182 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                 }
             }
         }
-        // FIX AS (#42429): per-channel poll replacing blind 50ms sleep.
-        // Wait for each deasserted ERISC to reach UMD relay canary (0x49706550) or TERMINATED
-        // before writing launch messages — prevents race with .bss init zeroing edm_status.
-        constexpr uint32_t kForceResetPollIntervalMs_inline = 5;
-        constexpr uint32_t kForceResetPollTimeoutMs_inline = 500;
-        const uint32_t umd_relay_canary_p0 =
-            static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
-        constexpr uint32_t terminated_val_p0 = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
-        const auto erisc_sync_addr_p0 = builder_ctx.get_fabric_router_sync_address_and_status().first;
-        uint32_t total_waited_ms_p0 = 0;
-        bool all_ready_p0 = deasserted_lcs_inline.empty();
-        while (!all_ready_p0 && total_waited_ms_p0 < kForceResetPollTimeoutMs_inline) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kForceResetPollIntervalMs_inline));
-            total_waited_ms_p0 += kForceResetPollIntervalMs_inline;
-            all_ready_p0 = true;
-            for (const auto& lc_poll : deasserted_lcs_inline) {
-                std::vector<uint32_t> poll_buf(1, 0U);
+        // FIX V11-QS89 (#42429): Per-channel FW_READY poll + S7/S8/S9 boot sequence for
+        // force-reset channels.  Replaces the old UMD canary poll (FIX AS) which was polling
+        // for 0x49706550 — a value the ERISC only writes AFTER passing the S8 boot fence.
+        // With S8 active, ERISC blocks at the boot fence poll, so the UMD canary never appears.
+        // Fix: poll FW_READY (written by ERISC before boot fence), then write S7+S8+S9 to
+        // unblock the ERISC, then confirm with a brief UMD canary poll.
+        {
+            const auto& hal_qs89 = env_impl.get_hal();
+            const auto& cluster_qs89 = env_impl.get_cluster();
+            const auto& soc_desc_qs89 = cluster_qs89.get_soc_desc(this->id_);
+            const auto& router_config_qs89 = builder_ctx.get_fabric_router_config();
+
+            // Compute addresses (mirrors SA init path, lines 650-663).
+            const uint32_t handshake_bypass_offset_qs89 = 32;
+            const uint32_t handshake_bypass_l1_addr_qs89 =
+                static_cast<uint32_t>(router_config_qs89.handshake_addr) + handshake_bypass_offset_qs89;
+            const uint32_t scratch_base_qs89 = static_cast<uint32_t>(
+                hal_qs89.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::FABRIC_TELEMETRY) +
+                hal_qs89.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::FABRIC_TELEMETRY) -
+                4u /* MEM_AERISC_FABRIC_POSTCODES_SIZE */);
+            const uint32_t fw_ready_addr_qs89 = scratch_base_qs89 + FW_READY_OFFSET;
+            const uint32_t boot_fence_addr_qs89 = scratch_base_qs89 + BOOT_FENCE_OFFSET;
+            const uint32_t session_id_addr_qs89 = scratch_base_qs89 + SESSION_ID_OFFSET;
+
+            constexpr uint32_t kFwReadyPollMs_qs89 = 5;
+            const auto erisc_sync_addr_p0 = builder_ctx.get_fabric_router_sync_address_and_status().first;
+            const uint32_t umd_relay_canary_p0 =
+                static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
+            constexpr uint32_t terminated_val_p0 = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+
+            for (const auto& lc_qs : deasserted_lcs_inline) {
+                uint32_t eth_chan_qs = 0;
                 try {
-                    detail::ReadFromDeviceL1(this, lc_poll, erisc_sync_addr_p0, 4, poll_buf, CoreType::ETH);
+                    eth_chan_qs = soc_desc_qs89.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(lc_qs.x, lc_qs.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
                 } catch (...) {
-                    log_debug(
+                    log_warning(
                         tt::LogMetal,
-                        "Device {} Phase 3 canary poll read at ETH logical ({},{}) threw non-std exception — treating "
-                        "as not-ready",
-                        this->id(),
-                        lc_poll.x,
-                        lc_poll.y);
-                    poll_buf[0] = 0U;
+                        "FIX V11-QS89 (#42429): Device {} cannot resolve channel for ETH logical ({},{}) — "
+                        "skipping S7/S8/S9",
+                        this->id(), lc_qs.x, lc_qs.y);
+                    continue;
                 }
-                if (poll_buf[0] != umd_relay_canary_p0 && poll_buf[0] != terminated_val_p0) {
-                    all_ready_p0 = false;
+
+                auto phys_core_qs = this->virtual_core_from_logical_core(lc_qs, CoreType::ETH);
+                tt_cxy_pair core_loc_qs(this->id(), phys_core_qs);
+
+#ifdef STRATEGY8_BOOT_FENCE
+                // Step 1: FW_READY poll — wait for ERISC to signal init complete before
+                // writing boot fence token.  Mirrors FIX SA-A in configure_fabric().
+                uint32_t fw_ready_elapsed_qs = 0;
+                bool fw_ready_ok_qs = false;
+                while (fw_ready_elapsed_qs < FW_READY_TIMEOUT_MS) {
+                    std::vector<uint32_t> rb_qs(1, 0);
+                    try {
+                        cluster_qs89.read_core(rb_qs, sizeof(uint32_t), core_loc_qs,
+                            static_cast<uint64_t>(fw_ready_addr_qs89));
+                    } catch (...) {
+                        rb_qs[0] = 0;
+                    }
+                    if (rb_qs[0] == FW_READY_VALUE) {
+                        fw_ready_ok_qs = true;
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(kFwReadyPollMs_qs89));
+                    fw_ready_elapsed_qs += kFwReadyPollMs_qs89;
                 }
-            }
-        }
-        // Report final per-channel state; mark channels still at 0x0 as dead.
-        for (const auto& lc_rpt : deasserted_lcs_inline) {
-            std::vector<uint32_t> final_buf(1, 0U);
-            try {
-                detail::ReadFromDeviceL1(this, lc_rpt, erisc_sync_addr_p0, 4, final_buf, CoreType::ETH);
-            } catch (...) {
-                log_debug(
-                    tt::LogMetal,
-                    "Device {} Phase 3 final report read at ETH logical ({},{}) threw non-std exception — defaulting "
-                    "to 0",
-                    this->id(),
-                    lc_rpt.x,
-                    lc_rpt.y);
-                final_buf[0] = 0U;
-            }
-            const bool ready_p0 = (final_buf[0] == umd_relay_canary_p0 || final_buf[0] == terminated_val_p0);
-            if (ready_p0) {
+                if (!fw_ready_ok_qs) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX V11-QS89 (#42429): Device {} chan={} ETH logical ({},{}) ERISC did not "
+                        "signal FW_READY within {}ms — marking dead, skipping S7/S8/S9.",
+                        this->id(), eth_chan_qs, lc_qs.x, lc_qs.y, FW_READY_TIMEOUT_MS);
+                    pending_quiesce_newly_dead_eth_chans_.insert(eth_chan_qs);
+                    continue;
+                }
                 log_info(
                     tt::LogMetal,
-                    "quiesce_and_restart_fabric_workers: Device {} Pass-0 (FIX AS): "
-                    "ETH logical ({},{}) reached ready state 0x{:08x} after {}ms",
-                    this->id(),
-                    lc_rpt.x,
-                    lc_rpt.y,
-                    final_buf[0],
-                    total_waited_ms_p0);
-            } else {
-                log_warning(
-                    tt::LogMetal,
-                    "quiesce_and_restart_fabric_workers: Device {} Pass-0 (FIX AS): "
-                    "ETH logical ({},{}) NOT ready after {}ms (status=0x{:08x}) — "
-                    "marking channel dead",
-                    this->id(),
-                    lc_rpt.x,
-                    lc_rpt.y,
-                    total_waited_ms_p0,
-                    final_buf[0]);
-                try {
-                    auto dead_chan_inline = soc_desc_q.get_eth_channel_for_core(
-                        tt::umd::CoreCoord(lc_rpt.x, lc_rpt.y, CoreType::ETH, CoordSystem::LOGICAL),
-                        CoordSystem::LOGICAL);
-                    pending_quiesce_newly_dead_eth_chans_.insert(dead_chan_inline);
-                } catch (...) {
+                    "FIX V11-QS89 (#42429): Device {} chan={} ETH logical ({},{}) FW_READY after {}ms.",
+                    this->id(), eth_chan_qs, lc_qs.x, lc_qs.y, fw_ready_elapsed_qs);
+#else
+                // Without S8, fall back to a brief sleep to let .bss init complete.
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+#endif  // STRATEGY8_BOOT_FENCE
+
+#ifdef STRATEGY7_HANDSHAKE_BYPASS
+                // Step 2: FIX V11-QS7 — write handshake_bypass=1.
+                {
+                    std::vector<uint32_t> bypass_qs = {1};
+                    detail::WriteToDeviceL1(
+                        this, CoreCoord(lc_qs.x, lc_qs.y),
+                        handshake_bypass_l1_addr_qs89, bypass_qs, CoreType::ETH);
+                    log_info(
+                        tt::LogMetal,
+                        "FIX V11-QS7 (#42429): handshake_bypass=1 at L1[0x{:08X}] for "
+                        "Device {} chan={} (force-reset, inline quiesce path)",
+                        handshake_bypass_l1_addr_qs89, this->id(), eth_chan_qs);
+                }
+#endif  // STRATEGY7_HANDSHAKE_BYPASS
+
+#ifdef STRATEGY8_BOOT_FENCE
+                // Step 3: FIX V11-QS89 — write BOOT_FENCE_READY to unblock ERISC.
+                {
+                    std::vector<uint32_t> bf_qs = {BOOT_FENCE_READY_VALUE};
+                    detail::WriteToDeviceL1(
+                        this, CoreCoord(lc_qs.x, lc_qs.y),
+                        boot_fence_addr_qs89, bf_qs, CoreType::ETH);
+                    log_info(
+                        tt::LogMetal,
+                        "FIX V11-QS89 (#42429): boot_fence=0x{:08X} at L1[0x{:08X}] for "
+                        "Device {} chan={} (force-reset, inline quiesce path)",
+                        BOOT_FENCE_READY_VALUE, boot_fence_addr_qs89, this->id(), eth_chan_qs);
+                }
+#endif  // STRATEGY8_BOOT_FENCE
+
+#ifdef STRATEGY9_SESSION_ID
+                // Step 4: FIX V11-QS89 — write session_id.
+                {
+                    const uint32_t sid_qs = this->fabric_session_id_;
+                    std::vector<uint32_t> sid_buf_qs = {sid_qs};
+                    detail::WriteToDeviceL1(
+                        this, CoreCoord(lc_qs.x, lc_qs.y),
+                        session_id_addr_qs89, sid_buf_qs, CoreType::ETH);
+                    log_info(
+                        tt::LogMetal,
+                        "FIX V11-QS89 (#42429): session_id=0x{:08X} at L1[0x{:08X}] for "
+                        "Device {} chan={} (force-reset, inline quiesce path)",
+                        sid_qs, session_id_addr_qs89, this->id(), eth_chan_qs);
+                }
+#endif  // STRATEGY9_SESSION_ID
+
+                // Step 5: Brief UMD canary poll as readiness confirmation.
+                // After boot fence write, ERISC passes S8, enters dispatch loop, writes canary.
+                {
+                    constexpr uint32_t kCanaryPollMs_qs = 5;
+                    constexpr uint32_t kCanaryPollTimeout_qs = 500;
+                    uint32_t canary_waited_qs = 0;
+                    bool canary_ok_qs = false;
+                    while (canary_waited_qs < kCanaryPollTimeout_qs) {
+                        std::vector<uint32_t> cpoll(1, 0U);
+                        try {
+                            detail::ReadFromDeviceL1(this, lc_qs, erisc_sync_addr_p0, 4, cpoll, CoreType::ETH);
+                        } catch (...) {
+                            cpoll[0] = 0U;
+                        }
+                        if (cpoll[0] == umd_relay_canary_p0 || cpoll[0] == terminated_val_p0) {
+                            canary_ok_qs = true;
+                            break;
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(kCanaryPollMs_qs));
+                        canary_waited_qs += kCanaryPollMs_qs;
+                    }
+                    if (canary_ok_qs) {
+                        log_info(
+                            tt::LogMetal,
+                            "FIX V11-QS89 (#42429): Device {} chan={} ETH logical ({},{}) UMD canary "
+                            "confirmed after {}ms (inline quiesce path).",
+                            this->id(), eth_chan_qs, lc_qs.x, lc_qs.y, canary_waited_qs);
+                    } else {
+                        log_warning(
+                            tt::LogMetal,
+                            "FIX V11-QS89 (#42429): Device {} chan={} ETH logical ({},{}) UMD canary "
+                            "NOT seen after {}ms — marking dead (inline quiesce path).",
+                            this->id(), eth_chan_qs, lc_qs.x, lc_qs.y, canary_waited_qs);
+                        pending_quiesce_newly_dead_eth_chans_.insert(eth_chan_qs);
+                    }
                 }
             }
         }
         log_info(
             tt::LogMetal,
-            "quiesce_and_restart_fabric_workers: Device {} Pass-0 (FIX AR+AS) complete — "
-            "{} channel(s) deasserted; waited {}ms for UMD firmware boot",
+            "quiesce_and_restart_fabric_workers: Device {} Pass-0 (FIX AR+AS+V11-QS89) complete — "
+            "{} channel(s) deasserted with S7/S8/S9 boot sequence",
             this->id(),
-            deasserted_lcs_inline.size(),
-            total_waited_ms_p0);
+            deasserted_lcs_inline.size());
     }
 
     for (uint32_t pct_idx = 0; pct_idx < logical_cores_used.size(); pct_idx++) {
@@ -2549,6 +2651,27 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     continue;
                 }
             }
+
+#ifdef STRATEGY7_HANDSHAKE_BYPASS
+            // FIX V11-QS7 (#42429): Write handshake_bypass=1 BEFORE launch message for all
+            // non-force-reset ETH channels.  ConfigureDeviceWithProgram loaded firmware BSS
+            // (zeroing handshake_bypass).  Without this, the fabric kernel starts with
+            // bypass=0 and attempts the full ETH handshake on every quiesce cycle.
+            // Force-reset channels already got S7 in the Pass-0 block above.
+            {
+                const auto& router_config_qs7 = builder_ctx.get_fabric_router_config();
+                const uint32_t hs_bypass_addr_qs7 =
+                    static_cast<uint32_t>(router_config_qs7.handshake_addr) + 32;
+                std::vector<uint32_t> bypass_qs7 = {1};
+                detail::WriteToDeviceL1(
+                    this, logical_core, hs_bypass_addr_qs7, bypass_qs7, CoreType::ETH);
+                log_info(
+                    tt::LogMetal,
+                    "FIX V11-QS7 (#42429): handshake_bypass=1 at L1[0x{:08X}] for "
+                    "Device {} ETH logical ({},{}) (inline quiesce Phase 3)",
+                    hs_bypass_addr_qs7, this->id(), logical_core.x, logical_core.y);
+            }
+#endif  // STRATEGY7_HANDSHAKE_BYPASS
 
             tt::llrt::write_launch_msg_to_core(
                 this->id(),
@@ -2845,105 +2968,176 @@ void Device::launch_eth_cores_for_quiesce() {
                 }
             }
         }
-        // FIX AS (#42429): Replace blind 50 ms sleep with per-channel polling for the UMD relay
-        // canary (0x49706550) at erisc_sync_addr. The 50 ms sleep was a heuristic for the time
-        // needed for the ERISC C-runtime .bss init to complete and UMD relay firmware to enter
-        // its polling loop (at which point it writes 0x49706550 to erisc_sync_addr). If .bss init
-        // takes longer than 50 ms, the launch message written in Phase 3 is overwritten by the
-        // .bss zeroing, the ERISC enters UMD mode and never writes STARTED, Phase 5 times out
-        // with status=0x0 and incorrectly marks the relay path broken on an MMIO device.
-        //
-        // Fix: poll each deasserted channel until it shows the UMD canary (0x49706550) or
-        // TERMINATED (0xA4B4C4D4), up to kForceResetPollTimeoutMs. Channels that remain at 0x0
-        // after the timeout are dead/non-booting; mark them in pending_quiesce_newly_dead_eth_chans_
-        // so Phase 5 and subsequent quiesce operations skip them.
-        constexpr uint32_t kForceResetPollIntervalMs = 5;
-        constexpr uint32_t kForceResetPollTimeoutMs = 500;
-        const uint32_t umd_relay_canary_poll =
-            static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
-        constexpr uint32_t terminated_val_poll = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
-        const auto erisc_sync_addr_poll = builder_ctx.get_fabric_router_sync_address_and_status().first;
+        // FIX V11-QS89 (#42429): Per-channel FW_READY poll + S7/S8/S9 boot sequence for
+        // deferred force-reset channels.  Mirrors the inline quiesce path replacement above.
+        {
+            const auto& hal_dqs89 = env_impl.get_hal();
+            const auto& cluster_dqs89 = env_impl.get_cluster();
+            const auto& soc_desc_dqs89 = cluster_dqs89.get_soc_desc(this->id_);
+            const auto& router_config_dqs89 = builder_ctx.get_fabric_router_config();
 
-        uint32_t total_waited_ms = 0;
-        bool all_ready = deasserted_lcs.empty();
-        while (!all_ready && total_waited_ms < kForceResetPollTimeoutMs) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kForceResetPollIntervalMs));
-            total_waited_ms += kForceResetPollIntervalMs;
-            all_ready = true;
-            for (const auto& lc_poll : deasserted_lcs) {
-                std::vector<uint32_t> poll_buf(1, 0U);
+            const uint32_t handshake_bypass_offset_dqs89 = 32;
+            const uint32_t handshake_bypass_l1_addr_dqs89 =
+                static_cast<uint32_t>(router_config_dqs89.handshake_addr) + handshake_bypass_offset_dqs89;
+            const uint32_t scratch_base_dqs89 = static_cast<uint32_t>(
+                hal_dqs89.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::FABRIC_TELEMETRY) +
+                hal_dqs89.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::FABRIC_TELEMETRY) -
+                4u);
+            const uint32_t fw_ready_addr_dqs89 = scratch_base_dqs89 + FW_READY_OFFSET;
+            const uint32_t boot_fence_addr_dqs89 = scratch_base_dqs89 + BOOT_FENCE_OFFSET;
+            const uint32_t session_id_addr_dqs89 = scratch_base_dqs89 + SESSION_ID_OFFSET;
+
+            constexpr uint32_t kFwReadyPollMs_dqs89 = 5;
+            const auto erisc_sync_addr_poll = builder_ctx.get_fabric_router_sync_address_and_status().first;
+            const uint32_t umd_relay_canary_poll =
+                static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
+            constexpr uint32_t terminated_val_poll = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+
+            for (const auto& lc_dqs : deasserted_lcs) {
+                uint32_t eth_chan_dqs = 0;
                 try {
-                    detail::ReadFromDeviceL1(this, lc_poll, erisc_sync_addr_poll, 4, poll_buf, CoreType::ETH);
+                    eth_chan_dqs = soc_desc_dqs89.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(lc_dqs.x, lc_dqs.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
                 } catch (...) {
-                    log_debug(
+                    log_warning(
                         tt::LogMetal,
-                        "Device {} Phase 5 canary poll read at ETH logical ({},{}) threw non-std exception — treating "
-                        "as not-ready",
-                        this->id(),
-                        lc_poll.x,
-                        lc_poll.y);
-                    poll_buf[0] = 0U;
+                        "FIX V11-QS89 (#42429): Device {} cannot resolve channel for ETH logical ({},{}) — "
+                        "skipping S7/S8/S9 (deferred path)",
+                        this->id(), lc_dqs.x, lc_dqs.y);
+                    continue;
                 }
-                if (poll_buf[0] != umd_relay_canary_poll && poll_buf[0] != terminated_val_poll) {
-                    all_ready = false;
-                }
-            }
-        }
 
-        // Report outcome per channel; mark channels still at 0x0 as dead.
-        for (const auto& lc_rpt : deasserted_lcs) {
-            std::vector<uint32_t> rpt_buf(1, 0U);
-            try {
-                detail::ReadFromDeviceL1(this, lc_rpt, erisc_sync_addr_poll, 4, rpt_buf, CoreType::ETH);
-            } catch (...) {
-                log_debug(
-                    tt::LogMetal,
-                    "Device {} Phase 5 final report read at ETH logical ({},{}) threw non-std exception — defaulting "
-                    "to 0",
-                    this->id(),
-                    lc_rpt.x,
-                    lc_rpt.y);
-                rpt_buf[0] = 0U;
-            }
-            const bool ready = (rpt_buf[0] == umd_relay_canary_poll || rpt_buf[0] == terminated_val_poll);
-            if (ready) {
+                auto phys_core_dqs = this->virtual_core_from_logical_core(lc_dqs, CoreType::ETH);
+                tt_cxy_pair core_loc_dqs(this->id(), phys_core_dqs);
+
+#ifdef STRATEGY8_BOOT_FENCE
+                // Step 1: FW_READY poll.
+                uint32_t fw_ready_elapsed_dqs = 0;
+                bool fw_ready_ok_dqs = false;
+                while (fw_ready_elapsed_dqs < FW_READY_TIMEOUT_MS) {
+                    std::vector<uint32_t> rb_dqs(1, 0);
+                    try {
+                        cluster_dqs89.read_core(rb_dqs, sizeof(uint32_t), core_loc_dqs,
+                            static_cast<uint64_t>(fw_ready_addr_dqs89));
+                    } catch (...) {
+                        rb_dqs[0] = 0;
+                    }
+                    if (rb_dqs[0] == FW_READY_VALUE) {
+                        fw_ready_ok_dqs = true;
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(kFwReadyPollMs_dqs89));
+                    fw_ready_elapsed_dqs += kFwReadyPollMs_dqs89;
+                }
+                if (!fw_ready_ok_dqs) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX V11-QS89 (#42429): Device {} chan={} ETH logical ({},{}) ERISC did not "
+                        "signal FW_READY within {}ms — marking dead (deferred path).",
+                        this->id(), eth_chan_dqs, lc_dqs.x, lc_dqs.y, FW_READY_TIMEOUT_MS);
+                    pending_quiesce_newly_dead_eth_chans_.insert(eth_chan_dqs);
+                    continue;
+                }
                 log_info(
                     tt::LogMetal,
-                    "launch_eth_cores_for_quiesce: Device {} Pass-0 (FIX AS): "
-                    "ETH logical ({},{}) UMD ready after {}ms — status=0x{:08x}",
-                    this->id(),
-                    lc_rpt.x,
-                    lc_rpt.y,
-                    total_waited_ms,
-                    rpt_buf[0]);
-            } else {
-                log_warning(
-                    tt::LogMetal,
-                    "launch_eth_cores_for_quiesce: Device {} Pass-0 (FIX AS): "
-                    "ETH logical ({},{}) did NOT reach UMD ready after {}ms (status=0x{:08x}) — "
-                    "marking dead, skipping launch",
-                    this->id(),
-                    lc_rpt.x,
-                    lc_rpt.y,
-                    total_waited_ms,
-                    rpt_buf[0]);
-                try {
-                    auto dead_chan = soc_desc_q.get_eth_channel_for_core(
-                        tt::umd::CoreCoord(lc_rpt.x, lc_rpt.y, CoreType::ETH, CoordSystem::LOGICAL),
-                        CoordSystem::LOGICAL);
-                    pending_quiesce_newly_dead_eth_chans_.insert(dead_chan);
-                } catch (...) {
+                    "FIX V11-QS89 (#42429): Device {} chan={} ETH logical ({},{}) FW_READY after {}ms "
+                    "(deferred path).",
+                    this->id(), eth_chan_dqs, lc_dqs.x, lc_dqs.y, fw_ready_elapsed_dqs);
+#else
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+#endif  // STRATEGY8_BOOT_FENCE
+
+#ifdef STRATEGY7_HANDSHAKE_BYPASS
+                // Step 2: FIX V11-QS7 — write handshake_bypass=1.
+                {
+                    std::vector<uint32_t> bypass_dqs = {1};
+                    detail::WriteToDeviceL1(
+                        this, CoreCoord(lc_dqs.x, lc_dqs.y),
+                        handshake_bypass_l1_addr_dqs89, bypass_dqs, CoreType::ETH);
+                    log_info(
+                        tt::LogMetal,
+                        "FIX V11-QS7 (#42429): handshake_bypass=1 at L1[0x{:08X}] for "
+                        "Device {} chan={} (force-reset, deferred quiesce path)",
+                        handshake_bypass_l1_addr_dqs89, this->id(), eth_chan_dqs);
+                }
+#endif  // STRATEGY7_HANDSHAKE_BYPASS
+
+#ifdef STRATEGY8_BOOT_FENCE
+                // Step 3: Write BOOT_FENCE_READY.
+                {
+                    std::vector<uint32_t> bf_dqs = {BOOT_FENCE_READY_VALUE};
+                    detail::WriteToDeviceL1(
+                        this, CoreCoord(lc_dqs.x, lc_dqs.y),
+                        boot_fence_addr_dqs89, bf_dqs, CoreType::ETH);
+                    log_info(
+                        tt::LogMetal,
+                        "FIX V11-QS89 (#42429): boot_fence=0x{:08X} at L1[0x{:08X}] for "
+                        "Device {} chan={} (force-reset, deferred quiesce path)",
+                        BOOT_FENCE_READY_VALUE, boot_fence_addr_dqs89, this->id(), eth_chan_dqs);
+                }
+#endif  // STRATEGY8_BOOT_FENCE
+
+#ifdef STRATEGY9_SESSION_ID
+                // Step 4: Write session_id.
+                {
+                    const uint32_t sid_dqs = this->fabric_session_id_;
+                    std::vector<uint32_t> sid_buf_dqs = {sid_dqs};
+                    detail::WriteToDeviceL1(
+                        this, CoreCoord(lc_dqs.x, lc_dqs.y),
+                        session_id_addr_dqs89, sid_buf_dqs, CoreType::ETH);
+                    log_info(
+                        tt::LogMetal,
+                        "FIX V11-QS89 (#42429): session_id=0x{:08X} at L1[0x{:08X}] for "
+                        "Device {} chan={} (force-reset, deferred quiesce path)",
+                        sid_dqs, session_id_addr_dqs89, this->id(), eth_chan_dqs);
+                }
+#endif  // STRATEGY9_SESSION_ID
+
+                // Step 5: Brief UMD canary poll as readiness confirmation.
+                {
+                    constexpr uint32_t kCanaryPollMs_dqs = 5;
+                    constexpr uint32_t kCanaryPollTimeout_dqs = 500;
+                    uint32_t canary_waited_dqs = 0;
+                    bool canary_ok_dqs = false;
+                    while (canary_waited_dqs < kCanaryPollTimeout_dqs) {
+                        std::vector<uint32_t> cpoll_d(1, 0U);
+                        try {
+                            detail::ReadFromDeviceL1(this, lc_dqs, erisc_sync_addr_poll, 4, cpoll_d, CoreType::ETH);
+                        } catch (...) {
+                            cpoll_d[0] = 0U;
+                        }
+                        if (cpoll_d[0] == umd_relay_canary_poll || cpoll_d[0] == terminated_val_poll) {
+                            canary_ok_dqs = true;
+                            break;
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(kCanaryPollMs_dqs));
+                        canary_waited_dqs += kCanaryPollMs_dqs;
+                    }
+                    if (canary_ok_dqs) {
+                        log_info(
+                            tt::LogMetal,
+                            "FIX V11-QS89 (#42429): Device {} chan={} ETH logical ({},{}) UMD canary "
+                            "confirmed after {}ms (deferred quiesce path).",
+                            this->id(), eth_chan_dqs, lc_dqs.x, lc_dqs.y, canary_waited_dqs);
+                    } else {
+                        log_warning(
+                            tt::LogMetal,
+                            "FIX V11-QS89 (#42429): Device {} chan={} ETH logical ({},{}) UMD canary "
+                            "NOT seen after {}ms — marking dead (deferred quiesce path).",
+                            this->id(), eth_chan_dqs, lc_dqs.x, lc_dqs.y, canary_waited_dqs);
+                        pending_quiesce_newly_dead_eth_chans_.insert(eth_chan_dqs);
+                    }
                 }
             }
         }
 
         log_info(
             tt::LogMetal,
-            "launch_eth_cores_for_quiesce: Device {} Pass-0 (FIX AR+AS) complete — "
-            "{} force-reset channel(s) deasserted; waited {}ms for base UMD firmware boot",
+            "launch_eth_cores_for_quiesce: Device {} Pass-0 (FIX AR+AS+V11-QS89) complete — "
+            "{} force-reset channel(s) deasserted with S7/S8/S9 boot sequence",
             this->id(),
-            p25_force_reset.size(),
-            total_waited_ms);
+            p25_force_reset.size());
     }
 
     for (uint32_t pct_idx = 0; pct_idx < logical_cores_used.size(); pct_idx++) {
@@ -3091,6 +3285,24 @@ void Device::launch_eth_cores_for_quiesce() {
                     continue;
                 }
             }
+
+#ifdef STRATEGY7_HANDSHAKE_BYPASS
+            // FIX V11-QS7 (#42429): Write handshake_bypass=1 BEFORE launch message for all
+            // non-force-reset ETH channels.  Force-reset channels got S7 in Pass-0 above.
+            {
+                const auto& router_config_dqs7 = builder_ctx.get_fabric_router_config();
+                const uint32_t hs_bypass_addr_dqs7 =
+                    static_cast<uint32_t>(router_config_dqs7.handshake_addr) + 32;
+                std::vector<uint32_t> bypass_dqs7 = {1};
+                detail::WriteToDeviceL1(
+                    this, logical_core, hs_bypass_addr_dqs7, bypass_dqs7, CoreType::ETH);
+                log_info(
+                    tt::LogMetal,
+                    "FIX V11-QS7 (#42429): handshake_bypass=1 at L1[0x{:08X}] for "
+                    "Device {} ETH logical ({},{}) (deferred quiesce Phase 3)",
+                    hs_bypass_addr_dqs7, this->id(), logical_core.x, logical_core.y);
+            }
+#endif  // STRATEGY7_HANDSHAKE_BYPASS
 
             tt::llrt::write_launch_msg_to_core(
                 this->id(),
