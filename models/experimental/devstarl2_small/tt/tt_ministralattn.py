@@ -72,6 +72,13 @@ class TtMinistralAttention(Attention):
         """
         ``scaling = 1 + beta * log(1 + floor(pos / original_max_position_embeddings))`` (float32),
         same as HF ``get_llama_4_attn_scale``, shape matches ``pos_tt``.
+
+        IMPORTANT: avoid ``ttnn.ones_like(pos_f)`` here. ``pos_f`` is ROW_MAJOR (typecast
+        from a ROW_MAJOR uint32 position tensor), and for non-TILE inputs ``ones_like``
+        falls back to ``full_impl`` which builds a host buffer and uploads it via
+        ``to_device``. Inside a ``ttnn.begin_trace_capture`` region that host→device
+        write trips ``TT_FATAL: Writes are not supported during trace capture``. Using
+        ``ttnn.add(scaled, 1.0)`` keeps the ``+1`` as a kernel-arg scalar broadcast.
         """
         orig = float(self.original_max_position_embeddings)
         beta = float(self.llama_4_scaling_beta)
@@ -80,8 +87,7 @@ class TtMinistralAttention(Attention):
         floored = ttnn.floor(ratio)
         log_term = ttnn.log1p(floored)
         scaled = ttnn.mul(log_term, beta)
-        ones = ttnn.ones_like(pos_f)
-        return ttnn.add(ones, scaled)
+        return ttnn.add(scaled, 1.0)
 
     def _reshape_decode_positions(self, current_pos: ttnn.Tensor, batch_dim: int) -> ttnn.Tensor:
         """Return positions with shape ``[1, batch_dim]`` for per-row scale (matches ``q`` batch axis)."""
