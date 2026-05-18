@@ -832,18 +832,14 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
         }
     }
 
-    std::vector<uint32_t> harvested_axis_coord;
-    CoreCoord logical_grid_size = cluster_.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-    uint32_t harvested_noc_coords = umd::CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
-        cluster_.get_soc_desc(device_id).arch, cluster_.get_harvesting_mask(device_id));
-    uint32_t max_along_axis =
-        hal_.get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW ? soc_d.grid_size.y : soc_d.grid_size.x;
-    for (uint32_t idx = 0; idx < max_along_axis; idx++) {
-        bool harvested_axis = (harvested_noc_coords >> idx) & 0x1;
-        if (harvested_axis) {
-            harvested_axis_coord.push_back(idx);
-        }
+    CoreCoord logical_grid_size = soc_d.get_grid_size(CoreType::TENSIX);
+    const bool axis_is_row = hal_.get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW;
+    std::set<uint32_t> unique_axis;
+    for (const auto& core : soc_d.get_harvested_cores(CoreType::TENSIX, CoordSystem::NOC0)) {
+        unique_axis.insert(axis_is_row ? core.y : core.x);
     }
+    std::vector<uint32_t> harvested_axis_coord(unique_axis.begin(), unique_axis.end());
+    uint32_t max_along_axis = axis_is_row ? soc_d.grid_size.y : soc_d.grid_size.x;
     TT_ASSERT(
         harvested_axis_coord.size() <= core_info.harvested_coords().size(),
         "Detected more harvested rows than fit in mailbox.");

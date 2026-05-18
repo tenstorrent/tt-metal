@@ -18,8 +18,6 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-umd/coordinates/coordinate_manager.hpp>
-#include <tt-umd/types/arch.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 
@@ -28,22 +26,18 @@ using namespace tt::test_utils;
 
 namespace unit_tests::basic::soc_desc {
 std::unordered_set<int> get_harvested_rows(ChipId device_id) {
-    uint32_t harvested_rows_mask = tt::umd::CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
-        tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).arch,
-        tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id));
+    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    const bool axis_is_row =
+        tt::tt_metal::MetalContext::instance().hal().get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW;
     std::unordered_set<int> harvested_rows;
-    int row_coordinate = 0;
-    int tmp = harvested_rows_mask;
     std::string delim;
     std::string harvested_row_str;
-    while (tmp) {
-        if (tmp & 1) {
-            harvested_rows.insert(row_coordinate);
-            harvested_row_str += delim + std::to_string(row_coordinate);
+    for (const auto& core : soc_desc.get_harvested_cores(CoreType::TENSIX, CoordSystem::NOC0)) {
+        int axis_coord = axis_is_row ? core.y : core.x;
+        if (harvested_rows.insert(axis_coord).second) {
+            harvested_row_str += delim + std::to_string(axis_coord);
             delim = ", ";
         }
-        tmp = tmp >> 1;
-        row_coordinate++;
     }
     log_info(
         LogTest,
