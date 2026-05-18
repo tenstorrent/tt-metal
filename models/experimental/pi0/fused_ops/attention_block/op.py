@@ -285,6 +285,8 @@ class SigLIPAttentionBlockFused:
             ("sdpa_k_partial_cb", SigLIPAttentionBlockFused.CB["sdpa_k_partial_cb"]),
             ("sdpa_qk_probe_cb", SigLIPAttentionBlockFused.CB["sdpa_qk_probe_cb"]),
             ("sdpa_k_partial_tiles", 3),  # K row 0: 3 head_dim tiles
+            # #11 Commit 7: NCRISC loops over M_KV K-rows to stream each one.
+            ("m_kv_n_tiles", SigLIPAttentionBlockFused.M // SigLIPAttentionBlockFused.TILE),
         ]
         # TRISC needs all CBs + tile counts + eps + QKV matmul shape params.
         trisc_ct = [
@@ -309,6 +311,9 @@ class SigLIPAttentionBlockFused:
             # #11 Commit 6: TRISC QK^T first-tile matmul tile counts.
             ("sdpa_q_tiles_per_worker", sdpa_q_tiles_per_worker),
             ("sdpa_k_partial_tiles", 3),  # head_dim_padded / TILE = 96/32 = 3
+            # #11 Commit 7: TRISC iterates n_out ∈ [0..M_KV_TILES-1] for the
+            # full M-row 0 of QK^T per worker.
+            ("m_kv_n_tiles", SigLIPAttentionBlockFused.M // SigLIPAttentionBlockFused.TILE),
         ]
 
         # Physical NoC coords for the worker grid. BH's logical-to-physical x
@@ -770,12 +775,18 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         memory_config=sdpa_k_partial_mem,
     )
 
-    sdpa_qk_probe_shard = ttnn.ShardSpec(sdpa_core_grid, (TILE, TILE), ttnn.ShardOrientation.ROW_MAJOR)
+    # #11 Commit 7: full M-row 0 of QK^T per worker = (TILE, M_KV) = (32, 256)
+    # bf16 = 8 tiles per worker. TRISC iterates n_out_tile ∈ [0..M_KV_TILES-1],
+    # streaming one K-row (3 tiles) per output tile and matmul'ing it against
+    # the (already-loaded) Q-row 0.
+    m_kv = M  # full attention key/value sequence length = 256
+    m_kv_n_tiles = m_kv // TILE  # 8
+    sdpa_qk_probe_shard = ttnn.ShardSpec(sdpa_core_grid, (TILE, m_kv), ttnn.ShardOrientation.ROW_MAJOR)
     sdpa_qk_probe_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_qk_probe_shard
     )
     sdpa_qk_probe_tt = ttnn.from_torch(
-        torch.zeros(sdpa_num_workers * TILE, TILE, dtype=torch.bfloat16),
+        torch.zeros(sdpa_num_workers * TILE, m_kv, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,

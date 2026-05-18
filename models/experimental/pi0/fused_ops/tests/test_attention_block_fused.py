@@ -272,18 +272,20 @@ def test_attention_block_fused_sdpa_q_probe(device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_attention_block_fused_sdpa_qk_compute_probe(device):
-    """First TRISC SDPA compute: one tile of QK^T per worker.
+    """Streaming QK^T compute: full M-row 0 of QK^T per worker.
 
-    Each of the 32 SDPA workers computes its M-slice's first QK^T output tile
-    (32 rows × 32 cols), using:
+    Each of the 32 SDPA workers computes its M-slice's first 32 rows × full
+    M_KV cols of QK^T (a (32, 256) slice = 8 tiles), using:
       - Q tiles from sdpa_q_cb (M-row 0 of the worker's M-slice).
-      - K tiles streamed in via sdpa_k_partial_cb (K-row 0, all 3 head_dim
-        tiles).
-    TRISC matmul does Q @ K^T with transpose=true on K, accumulating across
-    the 3 head_dim tiles.
+      - K tiles streamed in tile-by-tile via sdpa_k_partial_cb (one K-row
+        per matmul iteration, all 8 K-rows of the head).
+    TRISC iterates n_out_tile ∈ [0..7]: waits on the next K-row from NCRISC,
+    matmuls Q @ K^T (transpose=true), packs the output tile, pops the
+    K-row. NCRISC and TRISC pipeline naturally through sdpa_k_partial_cb.
 
-    Golden: torch Q_padded[h, worker_M_slice[:32], :] @ K_padded[h, :32, :].T
-    where _padded means head_dim_true=72 real data + 24 zero-padded cols.
+    Golden: torch Q_padded[h, worker_M_slice[:32], :] @ K_padded[h, :, :].T
+    = (32, 256), where _padded has head_dim_padded=96 cols with
+    head_dim_true=72 real values + 24 zero cols.
     """
     x, gamma, beta = make_inputs(seed=42)
     w_qkv = make_qkv_weight(seed=7)
@@ -296,8 +298,8 @@ def test_attention_block_fused_sdpa_qk_compute_probe(device):
     q_padded_per_head = torch.zeros(NUM_HEADS, M, HEAD_DIM_PADDED, dtype=torch.bfloat16)
     k_padded_per_head = torch.zeros(NUM_HEADS, M, HEAD_DIM_PADDED, dtype=torch.bfloat16)
     for h in range(NUM_HEADS):
-        q_start = h * HEAD_DIM_TRUE  # Q-region: cols [0..D)
-        k_start = D + h * HEAD_DIM_TRUE  # K-region: cols [D..2D)
+        q_start = h * HEAD_DIM_TRUE
+        k_start = D + h * HEAD_DIM_TRUE
         q_padded_per_head[h, :, :HEAD_DIM_TRUE] = qkv_golden_unpadded[:, q_start : q_start + HEAD_DIM_TRUE]
         k_padded_per_head[h, :, :HEAD_DIM_TRUE] = qkv_golden_unpadded[:, k_start : k_start + HEAD_DIM_TRUE]
 
@@ -314,13 +316,14 @@ def test_attention_block_fused_sdpa_qk_compute_probe(device):
     sdpa_grid_x = SigLIPAttentionBlockFused.SDPA_GRID_X  # 4
     num_workers_per_head = SigLIPAttentionBlockFused.NUM_SDPA_WORKERS_PER_HEAD  # 2
     rows_per_worker = M // num_workers_per_head  # 128
+    m_kv = M  # 256
 
-    # Per-worker probe tile is (32, 32) → tensor shape (32 * num_workers, 32).
-    expected_shape = (sdpa_num_workers * 32, 32)
+    # Per-worker probe is (32, m_kv) → tensor shape (32 * num_workers, m_kv).
+    expected_shape = (sdpa_num_workers * 32, m_kv)
     assert (
         sdpa_qk_probe_torch.shape == expected_shape
     ), f"qk probe shape {tuple(sdpa_qk_probe_torch.shape)} != {expected_shape}"
-    qk_per_worker = sdpa_qk_probe_torch.reshape(sdpa_num_workers, 32, 32)
+    qk_per_worker = sdpa_qk_probe_torch.reshape(sdpa_num_workers, 32, m_kv)
 
     min_pcc = float("inf")
     worst = None
@@ -329,20 +332,18 @@ def test_attention_block_fused_sdpa_qk_compute_probe(device):
         x_rel = worker_linear % sdpa_grid_x
         head_idx = (y // num_workers_per_head) * sdpa_grid_x + x_rel
         worker_idx = y % num_workers_per_head
-        # Worker's M-slice's first 32 rows; K-source's first 32 rows.
         m_start = worker_idx * rows_per_worker
         q_slice = q_padded_per_head[head_idx, m_start : m_start + 32, :].to(torch.float32)
-        k_slice = k_padded_per_head[head_idx, :32, :].to(torch.float32)
-        expected = (q_slice @ k_slice.T).to(torch.bfloat16)
+        k_slice = k_padded_per_head[head_idx, :, :].to(torch.float32)  # full (M_KV, head_dim_padded)
+        expected = (q_slice @ k_slice.T).to(torch.bfloat16)  # (32, M_KV)
         p = pcc(expected, qk_per_worker[worker_linear])
         if p < min_pcc:
             min_pcc = p
             worst = (worker_linear, head_idx, worker_idx)
 
     print(
-        f"\nPCC (SDPA QK^T first-tile compute probe, min/32 workers) = "
+        f"\nPCC (SDPA QK^T full-M-row-0 compute probe, min/32 workers) = "
         f"{min_pcc:.6f} (worst: worker={worst[0]}, head={worst[1]}, w_idx={worst[2]})"
     )
-    # bfp8 weight + HiFi4 + per-tile-only PCC — same precision regime as
-    # other SDPA probes; gate at 0.998.
+    print(f"  per-worker shape={(32, m_kv)}, dtype={qk_per_worker.dtype}")
     assert min_pcc >= 0.998, f"min QK^T probe PCC {min_pcc} below 0.998"
