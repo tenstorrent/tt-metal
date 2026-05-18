@@ -76,22 +76,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const std::uint32_t num_sfpu_iterations = params.TEST_FACE_R_DIM / ckernel::math::SFP_ROWS;
 
-    _llk_math_eltwise_binary_sfpu_init_();
+    _llk_math_eltwise_sfpu_init_();
 
     constexpr int tile_stride = NUM_FACES * FACE_R_DIM; // 4 faces * 16 rows per tile
     const int in0_offset      = params.SRC0_TILE_IDX * tile_stride;
     const int in1_offset      = params.SRC1_TILE_IDX * tile_stride;
     const int out_offset      = params.DST_TILE_IDX * tile_stride;
 
-    _llk_math_eltwise_binary_sfpu_start_(0);
+    _llk_math_eltwise_sfpu_start_(0);
 
     for (std::uint32_t face = 0; face < NUM_FACES; face++)
     {
         _calculate_add_(src_format, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
-        _llk_math_eltwise_binary_sfpu_inc_dst_face_addr_();
+        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
     }
 
-    _llk_math_eltwise_binary_sfpu_done_();
+    _llk_math_eltwise_sfpu_done_();
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 }
