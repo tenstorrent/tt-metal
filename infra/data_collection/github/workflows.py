@@ -101,28 +101,40 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     seen_errors = set()
     error_lines = []
 
+    reset_done = False
+
     for line in block_lines:
         lower = line.lower()
         ts = parse_ts(line)
-        if ts:
+        # Only update end timestamp while reset is still in progress
+        if ts and not reset_done:
             block_end_ts = ts
         if "===== start of output =====" in lower:
             num_smi_attempts += 1
         if "tt-smi reset was successful" in lower:
             final_status = "SUCCESS"
-        if "unable to reset board successfully" in lower or \
-           "runner will now shutdown" in lower or \
-           "the operation was canceled" in lower:
+            if ts:
+                block_end_ts = ts
+            reset_done = True
+        if not reset_done and (
+            "unable to reset board successfully" in lower or
+            "runner will now shutdown" in lower or
+            "the operation was canceled" in lower
+        ):
             final_status = "FAILURE"
-        # Collect unique error lines with timestamps and GH annotation prefixes stripped
-        content = clean_line(line)
-        if content and any(x in lower for x in [
-            "error accessing board", "could not open chip", "failed with:",
-            "enodev", "error when re-initializing", "unable to reset board",
-            "runner will now shutdown", "the operation was canceled",
-        ]) and content not in seen_errors:
-            seen_errors.add(content)
-            error_lines.append(content)
+            if ts:
+                block_end_ts = ts
+            reset_done = True
+        if not reset_done:
+            # Collect unique error lines with timestamps and GH annotation prefixes stripped
+            content = clean_line(line)
+            if content and any(x in lower for x in [
+                "error accessing board", "could not open chip", "failed with:",
+                "enodev", "error when re-initializing", "unable to reset board",
+                "runner will now shutdown", "the operation was canceled",
+            ]) and content not in seen_errors:
+                seen_errors.add(content)
+                error_lines.append(content)
 
     if num_smi_attempts == 0:
         num_smi_attempts = 1
