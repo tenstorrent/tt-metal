@@ -73,6 +73,12 @@ void kernel_main() {
     constexpr uint32_t qkv_grid_y = get_named_compile_time_arg_val("qkv_grid_y");
     constexpr uint32_t qkv_act_tiles_per_core = get_named_compile_time_arg_val("qkv_act_tiles_per_core");
     constexpr uint32_t counter_sem_id = get_named_compile_time_arg_val("counter_sem_id");
+    // SDPA grid bounds — task #11 Commit 2 plumbing. No body yet; the role
+    // flag is computed below but no SDPA work runs on it. Compute commits
+    // (#11 commits 3+) will add NCRISC reader for per-head Q/K/V plus TRISC
+    // QK^T / softmax / Attn@V Op-struct calls under is_sdpa_core_*.
+    constexpr uint32_t sdpa_grid_x = get_named_compile_time_arg_val("sdpa_grid_x");
+    constexpr uint32_t sdpa_grid_y = get_named_compile_time_arg_val("sdpa_grid_y");
     // Commit 3: QKV matmul weight CB lives on the 36-core QKV grid. Pre-loaded
     // bfp8 weight; NCRISC marks all 108 tiles pushed so TRISC matmul's
     // cb_wait_front returns immediately. The matmul Op-struct doesn't pop the
@@ -82,6 +88,12 @@ void kernel_main() {
 
     const bool is_ln1_core_nc = (get_relative_logical_y() == 0) && (get_relative_logical_x() < ln1_num_cores);
     const bool is_qkv_core_nc = (get_relative_logical_y() < qkv_grid_y) && (get_relative_logical_x() < qkv_grid_x);
+    // SDPA role flag — true for every core in the kernel's union grid (the
+    // SDPA grid is the union's bounding rect). Computed but unused this
+    // commit; #11 compute commits gate per-head SDPA work on it. Marked
+    // [[maybe_unused]] to keep -Werror=unused-variable happy until then.
+    [[maybe_unused]] const bool is_sdpa_core_nc =
+        (get_relative_logical_y() < sdpa_grid_y) && (get_relative_logical_x() < sdpa_grid_x);
 
     // setup_sharded_buffer pre-pushes the LN1 row's input CBs so TRISC's
     // cb_wait_front returns immediately. These CBs only exist on the LN1 row;
@@ -235,10 +247,17 @@ void kernel_main() {
     constexpr uint32_t ln1_num_cores_tr = get_named_compile_time_arg_val("ln1_num_cores");
     constexpr uint32_t qkv_grid_x_tr = get_named_compile_time_arg_val("qkv_grid_x");
     constexpr uint32_t qkv_grid_y_tr = get_named_compile_time_arg_val("qkv_grid_y");
+    constexpr uint32_t sdpa_grid_x_tr = get_named_compile_time_arg_val("sdpa_grid_x");
+    constexpr uint32_t sdpa_grid_y_tr = get_named_compile_time_arg_val("sdpa_grid_y");
     const bool is_ln1_core_tr = (get_relative_logical_y() == 0) && (get_relative_logical_x() < ln1_num_cores_tr);
     const bool is_residual_core_tr = is_ln1_core_tr;
     const bool is_qkv_core_tr =
         (get_relative_logical_y() < qkv_grid_y_tr) && (get_relative_logical_x() < qkv_grid_x_tr);
+    // SDPA role flag — unused this commit (#11 Commit 2 is structural).
+    // Compute commits (#11 commits 3+) gate the QK^T / softmax / Attn@V
+    // Op-struct calls on it.
+    [[maybe_unused]] const bool is_sdpa_core_tr =
+        (get_relative_logical_y() < sdpa_grid_y_tr) && (get_relative_logical_x() < sdpa_grid_x_tr);
 
     // =========================================================================
     // PHASE 1: LN1 — y = ((x - mean) / sqrt(var + eps)) * gamma + beta

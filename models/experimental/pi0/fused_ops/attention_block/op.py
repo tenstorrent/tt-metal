@@ -83,6 +83,24 @@ class SigLIPAttentionBlockFused:
     QKV_N_TILES = QKV_N // TILE  # 144
     QKV_N_TILES_PER_CORE = QKV_N_TILES // QKV_NUM_CORES  # 3 (= 1 padded head)
 
+    # SDPA grid (task #11 Commit 2 — structural plumbing only, no compute yet).
+    #   Logical layout: 8 cols × 8 rows = 64 cores, y=0..7, x=0..7.
+    #   Each head h ∈ [0..15] owns 4 workers (M-parallel: M=256 split 4 ways =
+    #   64 rows/worker). Head layout: head_col=h%8, head_row=h/8 (top or
+    #   bottom half). Workers of head h are at:
+    #     x = head_col,  y = head_row*4 + worker_idx  for worker_idx ∈ [0..3].
+    #
+    # Why not the 128-core layout from RESUME_PROMPT (16 heads × 8 workers)?
+    # BH worker grid is 13 cols × 10 rows = 130 cores. 16×8=128 doesn't fit any
+    # rectangle inside that (need ≥16 of one dim). 64 cores (8×8) fits cleanly
+    # and supersets LN1 ∪ QKV — the kernel core_ranges simplifies to one rect.
+    # Workers/head can grow to 8 in a later perf pass if compute is bound;
+    # current per-head matmul work splits cleanly at either 4 or 8 workers.
+    SDPA_GRID_X = 8
+    SDPA_GRID_Y = 8
+    SDPA_NUM_CORES = SDPA_GRID_X * SDPA_GRID_Y  # 64
+    NUM_SDPA_WORKERS_PER_HEAD = SDPA_NUM_CORES // NUM_HEADS  # 4
+
     # CB IDs (must match the kernel's get_named_compile_time_arg_val calls)
     CB = {
         "ln_in_cb": 0,
@@ -194,6 +212,9 @@ class SigLIPAttentionBlockFused:
             # TRISC matmul's cb_wait_front returns immediately.
             ("qkv_w_cb", SigLIPAttentionBlockFused.CB["qkv_w_cb"]),
             ("qkv_weight_tiles", qkv_weight_tiles),
+            # SDPA grid bounds (task #11 Commit 2 — role-flag plumbing only).
+            ("sdpa_grid_x", SigLIPAttentionBlockFused.SDPA_GRID_X),
+            ("sdpa_grid_y", SigLIPAttentionBlockFused.SDPA_GRID_Y),
         ]
         # TRISC needs all CBs + tile counts + eps + QKV matmul shape params.
         trisc_ct = [
@@ -211,6 +232,8 @@ class SigLIPAttentionBlockFused:
             ("ln1_num_cores", SigLIPAttentionBlockFused.LN1_NUM_CORES),
             ("qkv_grid_x", SigLIPAttentionBlockFused.QKV_GRID_X),
             ("qkv_grid_y", SigLIPAttentionBlockFused.QKV_GRID_Y),
+            ("sdpa_grid_x", SigLIPAttentionBlockFused.SDPA_GRID_X),
+            ("sdpa_grid_y", SigLIPAttentionBlockFused.SDPA_GRID_Y),
         ]
 
         # Physical NoC coords for the worker grid. BH's logical-to-physical x
@@ -227,20 +250,22 @@ class SigLIPAttentionBlockFused:
             for lx in range(SigLIPAttentionBlockFused.LN1_NUM_CORES)
         ]
 
-        # Kernel runs on every core in LN1 ∪ QKV (38 distinct). Runtime role
-        # flags inside the kernel gate the LN1 / sender / receiver bodies.
-        ln1_range = ttnn.CoreRange(
-            ttnn.CoreCoord(0, 0),
-            ttnn.CoreCoord(SigLIPAttentionBlockFused.LN1_NUM_CORES - 1, 0),
+        # Kernel runs on every core in LN1 ∪ QKV ∪ SDPA. Since SDPA's logical
+        # layout y=0..7 × x=0..7 is a superset of LN1 (y=0, x=0..7) and QKV
+        # (y=0..7, x=0..5), the union simplifies to one rectangle covering the
+        # SDPA grid. Runtime role flags inside the kernel gate the per-phase
+        # bodies (only SDPA-grid cores see SDPA work, only LN1-row cores see
+        # LN1 + residual, etc.).
+        union_core_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(
+                        SigLIPAttentionBlockFused.SDPA_GRID_X - 1, SigLIPAttentionBlockFused.SDPA_GRID_Y - 1
+                    ),
+                )
+            }
         )
-        # QKV grid is y=0..5, x=0..5; the y=0 row overlaps LN1's x=0..5. Express
-        # the union as the LN1 row plus the strictly-below-y=0 QKV rows so the
-        # two ranges don't overlap (CoreRangeSet requires disjoint ranges).
-        qkv_rows_below = ttnn.CoreRange(
-            ttnn.CoreCoord(0, 1),
-            ttnn.CoreCoord(SigLIPAttentionBlockFused.QKV_GRID_X - 1, SigLIPAttentionBlockFused.QKV_GRID_Y - 1),
-        )
-        union_core_grid = ttnn.CoreRangeSet({ln1_range, qkv_rows_below})
 
         unified_kernel = UnifiedKernelDescriptor(
             kernel_source=SigLIPAttentionBlockFused.KERNEL_SOURCE,
