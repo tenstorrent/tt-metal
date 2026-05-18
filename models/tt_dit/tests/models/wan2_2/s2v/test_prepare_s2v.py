@@ -5,7 +5,7 @@
 
 Both compare on-device output against an inlined CPU reference of the
 upstream Wan-Video/Wan2.2 math, so the tests run without the reference
-repo on disk. Test bar: PCC ≥ 0.99.
+repo on disk. Test bar: PCC >= 0.99.
 """
 
 from __future__ import annotations
@@ -18,33 +18,17 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.wan2_2.s2v.audio_utils import CausalAudioEncoder
-from ....models.transformers.wan2_2.s2v.rope_s2v import rope_precompute
-from ....models.transformers.wan2_2.s2v.transformer_wan_s2v import WanS2VTransformer3DModel
-from ....parallel.config import DiTParallelConfig, ParallelFactor
-from ....parallel.manager import CCLManager
-from ....utils.check import assert_quality
-from ....utils.tensor import local_device_to_torch
-from ....utils.test import line_params
-
-_MESH_PARAMS = [
-    pytest.param(
-        (2, 4),
-        (2, 4),
-        1,
-        0,
-        2,
-        line_params,
-        ttnn.Topology.Linear,
-        False,
-        id="bh_2x4sp1tp0",
-    ),
-]
-_MESH_PARAM_NAMES = "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp"
-
+from .....models.transformers.wan2_2.s2v.audio_utils import CausalAudioEncoder
+from .....models.transformers.wan2_2.s2v.rope_s2v import rope_precompute
+from .....models.transformers.wan2_2.s2v.transformer_wan_s2v import WanS2VTransformer3DModel
+from .....parallel.config import DiTParallelConfig, ParallelFactor
+from .....parallel.manager import CCLManager
+from .....utils.check import assert_quality
+from .....utils.tensor import local_device_to_torch
+from .....utils.test import line_params
 
 # ---------------------------------------------------------------------------
-# test_prepare_audio_emb — CausalAudioEncoder end-to-end
+# test_prepare_audio_emb -- CausalAudioEncoder end-to-end
 # ---------------------------------------------------------------------------
 # Reduced config matches the production shape contract but with smaller
 # out_dim for fast CPU reference. Production: audio_dim=1024, num_layers=25,
@@ -74,7 +58,7 @@ class _RefCausalConv1d(nn.Module):
 
 
 class _RefMotionEncoderTC(nn.Module):
-    """Three causal-conv stages (stride 1, 2, 2) → 4× temporal downsample.
+    """Three causal-conv stages (stride 1, 2, 2) -> 4x temporal downsample.
 
     Inlined from ``wan/modules/s2v/auxi_blocks.py:MotionEncoder_tc`` with
     ``need_global=False``. Output: ``[B, T/4, num_heads + 1, hidden]``
@@ -115,7 +99,7 @@ class _RefMotionEncoderTC(nn.Module):
 
 
 class _RefCausalAudioEncoder(nn.Module):
-    """Per-layer learned weighted sum of wav2vec2 hidden states → MotionEncoder_tc.
+    """Per-layer learned weighted sum of wav2vec2 hidden states -> MotionEncoder_tc.
 
     Inlined from ``wan/modules/s2v/audio_utils.py:CausalAudioEncoder``
     (``need_global=False`` branch).
@@ -135,8 +119,20 @@ class _RefCausalAudioEncoder(nn.Module):
 
 
 @pytest.mark.parametrize(
-    _MESH_PARAM_NAMES,
-    _MESH_PARAMS,
+    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    [
+        pytest.param(
+            (2, 4),
+            (2, 4),
+            1,
+            0,
+            2,
+            line_params,
+            ttnn.Topology.Linear,
+            False,
+            id="bh_2x4sp1tp0",
+        ),
+    ],
     indirect=["mesh_device", "device_params"],
 )
 def test_prepare_audio_emb(
@@ -148,11 +144,7 @@ def test_prepare_audio_emb(
     is_fsdp: bool,
     topology: ttnn.Topology,
 ) -> None:
-    """End-to-end audio path: CausalAudioEncoder + slice off motion_frames[1].
-
-    Catches regressions in audio bucketing / per-frame alignment that
-    surfaced as the lip-sync bug (motion_frames=73 vs 17).
-    """
+    """End-to-end audio path: CausalAudioEncoder + slice off motion_frames[1]."""
     torch.manual_seed(0)
 
     ref = (
@@ -189,11 +181,10 @@ def test_prepare_audio_emb(
 
 
 # ---------------------------------------------------------------------------
-# test_prepare_rope_features — rope cos/sin grid construction
+# test_prepare_rope_features -- rope cos/sin grid construction
 # ---------------------------------------------------------------------------
-# Reduced spatial extent that still exercises the motion 4x bucket's
-# ``lat_h//8`` extent (catches the original bug where motion 4x used
-# ``pph // 8`` and produced rope for only ~20% of the 4x motion tokens).
+# Reduced config matches the production shape contract while still exercising
+# the motion 4x bucket's ``lat_h//8`` extent.
 DIM = 128
 NUM_HEADS = 4
 HEAD_DIM = DIM // NUM_HEADS  # 32
@@ -259,8 +250,20 @@ def _build_ref_grid_sizes(
 
 
 @pytest.mark.parametrize(
-    _MESH_PARAM_NAMES,
-    _MESH_PARAMS,
+    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    [
+        pytest.param(
+            (2, 4),
+            (2, 4),
+            1,
+            0,
+            2,
+            line_params,
+            ttnn.Topology.Linear,
+            False,
+            id="bh_2x4sp1tp0",
+        ),
+    ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("include_motion", [False, True], ids=["noisy_ref", "noisy_ref_motion"])

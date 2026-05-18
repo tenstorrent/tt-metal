@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-
 # SPDX-License-Identifier: Apache-2.0
 
 """PCC test for wav2vec2-large-xlsr-53-english using the weights bundled in
@@ -16,13 +15,13 @@ from transformers import Wav2Vec2Model, Wav2Vec2Processor
 
 import ttnn
 
-from ....encoders.wav2vec2.config_wav2vec2 import Wav2Vec2Config
-from ....encoders.wav2vec2.model_wav2vec2 import Wav2Vec2Encoder
-from ....parallel.config import EncoderParallelConfig, ParallelFactor
-from ....parallel.manager import CCLManager
-from ....utils.check import assert_quality
-from ....utils.tensor import to_torch
-from ....utils.test import line_params
+from .....encoders.wav2vec2.config_wav2vec2 import Wav2Vec2Config
+from .....encoders.wav2vec2.model_wav2vec2 import Wav2Vec2Encoder
+from .....parallel.config import EncoderParallelConfig, ParallelFactor
+from .....parallel.manager import CCLManager
+from .....utils.check import assert_quality
+from .....utils.tensor import to_torch
+from .....utils.test import line_params
 
 
 # Resolve the bundled large-xlsr-53 weights inside the S2V download.

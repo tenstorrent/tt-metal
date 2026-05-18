@@ -21,12 +21,12 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.wan2_2.s2v.motioner import FramePackMotionerWan
-from ....models.transformers.wan2_2.s2v.rope_s2v import rope_params, rope_precompute
-from ....parallel.config import DiTParallelConfig, ParallelFactor
-from ....utils.check import assert_quality
-from ....utils.tensor import to_torch
-from ....utils.test import line_params
+from .....models.transformers.wan2_2.s2v.motioner import FramePackMotionerWan
+from .....models.transformers.wan2_2.s2v.rope_s2v import rope_params, rope_precompute
+from .....parallel.config import DiTParallelConfig, ParallelFactor
+from .....utils.check import assert_quality
+from .....utils.tensor import to_torch
+from .....utils.test import line_params
 
 # Reduced config that still exercises all three buckets and the smallest
 # spatial stride (proj_4x kernel (4, 8, 8)). production: inner_dim=5120,

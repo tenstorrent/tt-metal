@@ -24,13 +24,13 @@ from loguru import logger
 
 import ttnn
 
-from ....layers.normalization import DistributedRMSNorm
-from ....models.transformers.wan2_2.attention_wan import WanAttention
-from ....parallel.config import DiTParallelConfig, ParallelFactor
-from ....parallel.manager import CCLManager
-from ....utils.check import assert_quality
-from ....utils.tensor import bf16_tensor, from_torch, local_device_to_torch
-from ....utils.test import line_params
+from .....layers.normalization import DistributedRMSNorm
+from .....models.transformers.wan2_2.attention_wan import WanAttention
+from .....parallel.config import DiTParallelConfig, ParallelFactor
+from .....parallel.manager import CCLManager
+from .....utils.check import assert_quality
+from .....utils.tensor import bf16_tensor, from_torch, local_device_to_torch
+from .....utils.test import line_params
 
 # Reduced config that exercises the block-diagonal mask machinery.
 DIM = 256
@@ -121,6 +121,7 @@ def test_audio_injector_block_diagonal_vs_per_frame(
     `after_transformer_block` relies on, with the const region zeroed out
     by `_cached_mask_noisy` after the fact).
     """
+
     torch.manual_seed(0)
 
     parallel_config = DiTParallelConfig(
@@ -285,47 +286,12 @@ def test_audio_injector_block_diagonal_vs_per_frame(
     out_flat = local_device_to_torch(out_gather).squeeze(0).float()  # [B, N_noisy, dim]
     logger.info(f"TT block-diagonal output: shape={tuple(out_flat.shape)}")
 
-    # ---- 3-way compare. ----
-    # (a) pyt block-mask vs host per-frame: tests whether the per-frame ≡
-    #     block-diagonal-mask equivalence holds in pure pytorch math.
-    # (b) TT vs pyt block-mask: tests whether the TT implementation matches
-    #     its pure-pytorch equivalent.
-    # If (a) passes and (b) fails, the TT impl is the bug.
-    # If (a) fails, the host per-frame reference has a math bug.
-    logger.info("--- (a) pytorch block-mask vs host per-frame reference ---")
-    try:
-        assert_quality(pyt_flat, ref_flat.float(), pcc=0.99)
-        logger.info("PASS: per-frame ≡ block-diagonal-mask equivalence holds in pure pytorch")
-        a_passed = True
-    except Exception as exc:
-        logger.warning(f"FAIL: per-frame ≢ block-diagonal-mask in pure pytorch — host reference bug. {exc}")
-        a_passed = False
-
-    logger.info("--- (b) TT vs pytorch block-mask ---")
-    try:
-        assert_quality(out_flat, pyt_flat, pcc=0.99)
-        logger.info("PASS: TT block-mask matches pytorch block-mask")
-        b_passed = True
-    except Exception as exc:
-        logger.warning(f"FAIL: TT block-mask differs from pytorch block-mask — TT impl bug. {exc}")
-        b_passed = False
-
-    # The original assertion: TT vs host per-frame. Kept so the test reports
-    # the headline PCC, but the localization signal comes from (a) and (b).
-    assert a_passed and b_passed, (
-        f"3-way mismatch — host_per_frame≡pyt_block_mask: {a_passed}, " f"TT≡pyt_block_mask: {b_passed}"
-    )
+    # ---- Compare ----
+    assert_quality(pyt_flat, ref_flat.float(), pcc=0.99)
+    assert_quality(out_flat, pyt_flat, pcc=0.99)
     assert_quality(out_flat, ref_flat.float(), pcc=0.99)
 
 
-# ----------------------------------------------------------------------
-# Focused localization test: is DistributedRMSNorm with num_heads_per_device
-# the source of the audio_injector PCC gap?
-#
-# WanAttention.forward calls norm_q / norm_k with num_heads_per_device=2 on TP=2.
-# If this op does NOT produce the same numerical result as a single-device,
-# full-embedding-dim RMSNorm, that explains the divergence.
-# ----------------------------------------------------------------------
 @pytest.mark.parametrize(
     ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
@@ -354,10 +320,9 @@ def test_distributed_rms_norm_full_dim_vs_per_head(
 ) -> None:
     """Verifies DistributedRMSNorm(num_heads_per_device=k) ≡ full-embedding-dim RMSNorm.
 
-    Hypothesis: the audio_injector PCC gap (82.76% TT vs pure-pytorch) comes
-    from norm_q/norm_k. The reference (wan/modules/model.py:69 WanRMSNorm)
-    normalizes over the FULL last dim. If our TT op instead normalizes per-head,
-    that's the bug.
+    Reference WanRMSNorm normalizes over the full last (embedding) dim; this
+    test asserts the TT op matches that math when called with the head-split
+    fused in.
     """
     torch.manual_seed(0)
 
@@ -427,56 +392,10 @@ def test_distributed_rms_norm_full_dim_vs_per_head(
     y_host_BND = (x_BND.float() * torch.rsqrt(x_BND.float().pow(2).mean(-1, keepdim=True) + eps) * weight_torch).float()
     logger.info(f"Host full-dim RMSNorm: shape={tuple(y_host_BND.shape)}")
 
-    # ---- Host PER-HEAD RMSNorm reference (the alternative hypothesis) ----
-    x_BNHE = x_BND.view(B, N_noisy, num_heads, head_dim)
-    y_per_head_BNHE = x_BNHE * torch.rsqrt(x_BNHE.pow(2).mean(-1, keepdim=True) + eps)
-    # Apply weight (per-head reshape of full weight).
-    w_HE = weight_torch.view(num_heads, head_dim)
-    y_per_head_BNHE = y_per_head_BNHE * w_HE
-    y_per_head_BND = y_per_head_BNHE.reshape(B, N_noisy, dim)
-
     # ---- Compare ----
-    logger.info("--- TT vs host FULL-DIM RMSNorm ---")
-    try:
-        assert_quality(y_BND_tt, y_host_BND.float(), pcc=0.99)
-        logger.info("PASS: TT matches full-dim RMSNorm")
-        tt_is_full_dim = True
-    except Exception as exc:
-        logger.warning(f"FAIL: TT differs from full-dim RMSNorm: {exc}")
-        tt_is_full_dim = False
-
-    logger.info("--- TT vs host PER-HEAD RMSNorm ---")
-    try:
-        assert_quality(y_BND_tt, y_per_head_BND.float(), pcc=0.99)
-        logger.info("PASS: TT matches per-head RMSNorm")
-        tt_is_per_head = True
-    except Exception as exc:
-        logger.warning(f"FAIL: TT differs from per-head RMSNorm: {exc}")
-        tt_is_per_head = False
-
-    if tt_is_full_dim:
-        logger.info("DistributedRMSNorm is full-dim — NOT the audio_injector bug source.")
-    elif tt_is_per_head:
-        logger.warning(
-            "DistributedRMSNorm computes PER-HEAD RMSNorm — this IS the audio_injector "
-            "bug source (reference WanRMSNorm normalizes over full embedding dim)."
-        )
-    else:
-        logger.warning("TT matches neither full-dim NOR per-head — something else is going on.")
-
-    # Fail the test only if TT matches neither — that's a strict regression.
-    # If it matches per-head, we want the test to flag this clearly without
-    # crashing pytest, so the result is visible.
-    assert tt_is_full_dim or tt_is_per_head, "TT norm matches neither full-dim nor per-head RMSNorm"
+    assert_quality(y_BND_tt, y_host_BND.float(), pcc=0.99)
 
 
-# ----------------------------------------------------------------------
-# Stage-by-stage instrumented audio_injector test.
-#
-# Manually walks through WanAttention.forward's cross-attn flow, capturing
-# the gathered host equivalent at each stage and comparing to the pytorch
-# reference. The first stage that drops below PCC 0.99 localizes the bug.
-# ----------------------------------------------------------------------
 @pytest.mark.parametrize(
     ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
@@ -507,8 +426,6 @@ def test_audio_injector_staged(
 
     Stages: A. post-to_q, B. post-to_kv (k, v), C. post-norm_q, D. post-norm_k,
     E. post-SDPA (after concat_heads + TP-gather), F. post-to_out (final).
-
-    First stage that drops below PCC 0.99 is the bug site.
     """
     import torch.nn.functional as F  # noqa: N812
 
@@ -621,12 +538,7 @@ def test_audio_injector_staged(
     q_full_dev = ccl_manager.all_gather_persistent_buffer(q_1BNF, dim=2, mesh_axis=sp_axis)
     q_full_dev = ccl_manager.all_gather_persistent_buffer(q_full_dev, dim=3, mesh_axis=tp_axis)
     tt_q_BND = local_device_to_torch(q_full_dev).squeeze(0).float()
-    logger.info("--- A. post-to_q ---")
-    try:
-        assert_quality(tt_q_BND, pyt_q.float(), pcc=0.99)
-        logger.info("PASS")
-    except Exception as exc:
-        logger.warning(f"FAIL: {exc}")
+    assert_quality(tt_q_BND, pyt_q.float(), pcc=0.99)
 
     # ---- Stage B: to_kv ----
     k_1BNF, v_1BNF = attn.to_kv(kv_dev, compute_kernel_config=attn.mm_compute_kernel_config)
@@ -635,18 +547,8 @@ def test_audio_injector_staged(
     v_full = ccl_manager.all_gather_persistent_buffer(v_1BNF, dim=3, mesh_axis=tp_axis)
     tt_k_BLD = local_device_to_torch(k_full).squeeze(0).float()
     tt_v_BLD = local_device_to_torch(v_full).squeeze(0).float()
-    logger.info("--- B. post-to_kv (k) ---")
-    try:
-        assert_quality(tt_k_BLD, pyt_k.float(), pcc=0.99)
-        logger.info("PASS")
-    except Exception as exc:
-        logger.warning(f"FAIL: {exc}")
-    logger.info("--- B'. post-to_kv (v) ---")
-    try:
-        assert_quality(tt_v_BLD, pyt_v.float(), pcc=0.99)
-        logger.info("PASS")
-    except Exception as exc:
-        logger.warning(f"FAIL: {exc}")
+    assert_quality(tt_k_BLD, pyt_k.float(), pcc=0.99)
+    assert_quality(tt_v_BLD, pyt_v.float(), pcc=0.99)
 
     # ---- Stage C: norm_q (with head split) ----
     q_BHNE = attn.norm_q(q_1BNF, num_heads_per_device=attn.n_local_heads)
@@ -654,23 +556,13 @@ def test_audio_injector_staged(
     q_BHNE_sp = ccl_manager.all_gather_persistent_buffer(q_BHNE, dim=2, mesh_axis=sp_axis)
     q_BHNE_full = ccl_manager.all_gather_persistent_buffer(q_BHNE_sp, dim=1, mesh_axis=tp_axis)
     tt_q_BHNE = local_device_to_torch(q_BHNE_full).float()  # [B, H, N, E]
-    logger.info("--- C. post-norm_q (head layout) ---")
-    try:
-        assert_quality(tt_q_BHNE, pyt_qh.float(), pcc=0.99)
-        logger.info("PASS")
-    except Exception as exc:
-        logger.warning(f"FAIL: {exc}")
+    assert_quality(tt_q_BHNE, pyt_qh.float(), pcc=0.99)
 
     # ---- Stage D: norm_k ----
     k_BHNE = attn.norm_k(k_1BNF, num_heads_per_device=attn.n_local_heads)
     k_BHNE_full = ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=1, mesh_axis=tp_axis)
     tt_k_BHNE = local_device_to_torch(k_BHNE_full).float()  # [B, H, L, E]
-    logger.info("--- D. post-norm_k (head layout) ---")
-    try:
-        assert_quality(tt_k_BHNE, pyt_kh.float(), pcc=0.99)
-        logger.info("PASS")
-    except Exception as exc:
-        logger.warning(f"FAIL: {exc}")
+    assert_quality(tt_k_BHNE, pyt_kh.float(), pcc=0.99)
 
     # ---- Stage E: SDPA ----
     # v needs head-split too (no norm on v): use create_heads.
@@ -693,12 +585,7 @@ def test_audio_injector_staged(
     sd_sp = ccl_manager.all_gather_persistent_buffer(spatial_BHNE, dim=2, mesh_axis=sp_axis)
     sd_full = ccl_manager.all_gather_persistent_buffer(sd_sp, dim=1, mesh_axis=tp_axis)
     tt_attn_BHNE = local_device_to_torch(sd_full).float()
-    logger.info("--- E. post-SDPA (BHNE) ---")
-    try:
-        assert_quality(tt_attn_BHNE, pyt_attn_BHNE.float(), pcc=0.99)
-        logger.info("PASS")
-    except Exception as exc:
-        logger.warning(f"FAIL: {exc}")
+    assert_quality(tt_attn_BHNE, pyt_attn_BHNE.float(), pcc=0.99)
 
     # ---- Stage F: concat heads + to_out ----
     spatial_BND_dev = ttnn.transformer.concatenate_heads(spatial_BHNE)
@@ -709,9 +596,4 @@ def test_audio_injector_staged(
     out_sp = ccl_manager.all_gather_persistent_buffer(out_dev, dim=2, mesh_axis=sp_axis)
     out_full = ccl_manager.all_gather_persistent_buffer(out_sp, dim=3, mesh_axis=tp_axis)
     tt_out_BND = local_device_to_torch(out_full).squeeze(0).float()
-    logger.info("--- F. post-to_out (final) ---")
-    try:
-        assert_quality(tt_out_BND, pyt_out.float(), pcc=0.99)
-        logger.info("PASS")
-    except Exception as exc:
-        logger.warning(f"FAIL: {exc}")
+    assert_quality(tt_out_BND, pyt_out.float(), pcc=0.99)

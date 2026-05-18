@@ -29,7 +29,7 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_dit.pipelines.wan.pipeline_wan_s2v import WanPipelineS2V
 
-from ....utils.test import line_params
+from .....utils.test import line_params
 
 # Inputs are expected at the repo root (same pattern as test_pipeline_wan_i2v.py).
 # Override with env vars when needed.
@@ -45,11 +45,31 @@ _NEGATIVE_PROMPT = (
 
 @pytest.mark.timeout(3000)
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    (
+        "mesh_device",
+        "mesh_shape",
+        "sp_axis",
+        "tp_axis",
+        "num_links",
+        "dynamic_load",
+        "device_params",
+        "topology",
+        "is_fsdp",
+    ),
     [
-        [(2, 4), (2, 4), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        pytest.param(
+            (2, 4),
+            (2, 4),
+            1,
+            0,
+            2,
+            False,
+            line_params,
+            ttnn.Topology.Linear,
+            False,
+            id="bh_2x4sp1tp0",
+        ),
     ],
-    ids=["bh_2x4sp1tp0"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
