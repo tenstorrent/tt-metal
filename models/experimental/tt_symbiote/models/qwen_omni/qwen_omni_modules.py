@@ -29,6 +29,7 @@ from models.experimental.tt_symbiote.core.module import (
 from models.experimental.tt_symbiote.core.run_config import (
     DistributedConfig,
     DistributedTensorConfig,
+    TracedRun,
     trace_enabled,
 )
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
@@ -3959,6 +3960,7 @@ class TTNNQwen3OmniTalkerResizeMLP(TTNNModule):
         self.linear_fc1 = None
         self.linear_fc2 = None
         self.act_fn = None
+        self._released_prefill_traces = False
 
     @classmethod
     def from_torch(cls, torch_mlp):
@@ -4009,8 +4011,91 @@ class TTNNQwen3OmniTalkerResizeMLP(TTNNModule):
 
         return tree_map(_materialize_one_replica, output_tensors)
 
+    @staticmethod
+    def _safe_deallocate(tensor):
+        try:
+            ttnn.deallocate(tensor)
+        except Exception:
+            pass
+
+    def _materialize_one_replica_torch(self, tensor):
+        mesh_composer = None
+        if self.device is not None and self.device.get_num_devices() > 1:
+            mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
+        pt = ttnn.to_torch(tensor, mesh_composer=mesh_composer)
+        n = int(tensor.shape[0])
+        h = int(self.output_hidden_size)
+        if pt.shape[0] > n:
+            pt = pt[:n]
+        if pt.shape[-1] > h:
+            pt = pt[..., :h]
+        return pt.contiguous()
+
+    def _forward_device_impl(self, hidden_states):
+        hidden_states = self.linear_fc1(hidden_states)
+        if self.act_fn == "gelu":
+            activated = ttnn.gelu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            activated = ttnn.silu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        self._safe_deallocate(hidden_states)
+
+        hidden_states = self.linear_fc2(activated)
+        self._safe_deallocate(activated)
+
+        out_w = int(hidden_states.shape[-1])
+        if out_w > int(self.output_hidden_size):
+            rank = len(hidden_states.shape)
+            starts = [0] * rank
+            ends = [int(s) for s in hidden_states.shape]
+            ends[-1] = int(self.output_hidden_size)
+            sliced = ttnn.slice(hidden_states, starts, ends)
+            self._safe_deallocate(hidden_states)
+            hidden_states = sliced
+
+        return hidden_states
+
+    def _forward_device(self, hidden_states, *, disable_child_trace: bool = False):
+        if not disable_child_trace:
+            return self._forward_device_impl(hidden_states)
+
+        from models.experimental.tt_symbiote.core import run_config as run_config_module
+
+        was_tracing = run_config_module._TRACE_RUNNING
+        run_config_module._TRACE_RUNNING = True
+        try:
+            return self._forward_device_impl(hidden_states)
+        finally:
+            run_config_module._TRACE_RUNNING = was_tracing
+
+    def _forward_chunked_to_torch(self, hidden_states, chunk_size: int):
+        shape = [int(s) for s in hidden_states.shape]
+        seq_dim = len(shape) - 2
+        seq_len = shape[seq_dim]
+        chunks = []
+
+        for start in range(0, seq_len, chunk_size):
+            end = min(start + chunk_size, seq_len)
+            starts = [0] * len(shape)
+            ends = list(shape)
+            starts[seq_dim] = start
+            ends[seq_dim] = end
+
+            chunk = ttnn.slice(hidden_states, starts, ends)
+            out = self._forward_device(chunk, disable_child_trace=True)
+            chunks.append(self._materialize_one_replica_torch(out))
+            self._safe_deallocate(out)
+            self._safe_deallocate(chunk)
+
+        return torch.cat(chunks, dim=seq_dim)
+
     @run_on_devices(DeviceArch.T3K)
     def forward(self, hidden_states):
+        if os.environ.get("TT_SYMBIOTE_RUN_MODE") == "TRACED" and not self._released_prefill_traces:
+            if TracedRun.cache_size() > 0:
+                ttnn.synchronize_device(self.device)
+                TracedRun.release_all()
+            self._released_prefill_traces = True
+
         if not isinstance(hidden_states, ttnn.Tensor):
             hidden_states = ttnn.from_torch(
                 hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
@@ -4032,25 +4117,22 @@ class TTNNQwen3OmniTalkerResizeMLP(TTNNModule):
                 topology=ttnn.Topology.Linear,
             )
 
+        traced_mode = os.environ.get("TT_SYMBIOTE_RUN_MODE") == "TRACED"
+        chunk_size = int(
+            os.environ.get(
+                "TT_SYMBIOTE_QWEN_OMNI_RESIZE_MLP_SEQ_CHUNK",
+                os.environ.get("TT_SYMBIOTE_MOE_SEQ_CHUNK", "512"),
+            )
+        )
+        if traced_mode and len(hidden_states.shape) >= 2:
+            seq_len = int(hidden_states.shape[-2])
+            if chunk_size > 0 and seq_len > chunk_size:
+                return self._forward_chunked_to_torch(hidden_states, chunk_size)
+
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        hidden_states = self.linear_fc1(hidden_states)
-        if self.act_fn == "gelu":
-            hidden_states = ttnn.gelu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        else:
-            hidden_states = ttnn.silu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        hidden_states = self.linear_fc2(hidden_states)
-
-        out_w = int(hidden_states.shape[-1])
-        if out_w > int(self.output_hidden_size):
-            rank = len(hidden_states.shape)
-            starts = [0] * rank
-            ends = [int(s) for s in hidden_states.shape]
-            ends[-1] = int(self.output_hidden_size)
-            hidden_states = ttnn.slice(hidden_states, starts, ends)
-
-        return hidden_states
+        return self._forward_device(hidden_states, disable_child_trace=traced_mode)
 
 
 # ========================================================================

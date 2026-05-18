@@ -987,10 +987,11 @@ class TracedRun(LightweightRun):
 
     @classmethod
     def release_all(cls) -> None:
-        """Release all cached traces."""
+        """Release all cached traces and reset trace warm-up state."""
         for entry in cls._trace_cache.values():
             ttnn.release_trace(entry.device, entry.trace_id)
         cls._trace_cache.clear()
+        cls._warmup_keys.clear()
 
     @classmethod
     def release(cls, module_name: str) -> int:
