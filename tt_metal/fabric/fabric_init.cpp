@@ -202,6 +202,70 @@ FabricCoresHealth configure_fabric_cores(
                     auto virtual_core = cluster.get_virtual_eth_core_from_channel(chip_id, router_chan);
                     tt_cxy_pair core_loc(chip_id, virtual_core);
                     cluster.assert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+
+                    // FIX EG RR (#42429): While ERISC0 is halted, zero fw_launch_addr (0x9004 =
+                    // LAUNCH_ERISC_APP_FLAG) — same fix applied in the normal FIX S9 assert/deassert
+                    // path, but MISSING from FIX RR for pre-known-dead channels.
+                    //
+                    // Root cause of CI run 26024194526 failure:
+                    // Device 0 chan=8 had edm_status=0xDEADB07E (HOST_PRE_LAUNCH_CANARY) from the
+                    // previous session → terminate_stale_erisc_routers added it to probe_dead_channels
+                    // → configure_fabric_cores took the FIX RR path → assert/deassert WITHOUT zeroing
+                    // fw_launch_addr → ERISC booted, saw stale fw_launch_addr=1 (set by
+                    // active_erisc.cc fabric firmware in the prior session) → base-UMD firmware tried
+                    // to execute the stale launch message from L1 BEFORE write_launch_msg_to_core ran
+                    // → ERISC crashed → stuck at 0xDEADB07E → FIX EF 3000ms poll timed out →
+                    // fabric_relay_path_broken_=true → non-MMIO devices (4,5,6,7) could not load
+                    // firmware → ring sync timeout → test failure.
+                    //
+                    // FIX IJ fires AFTER write_launch_msg_to_core, but for the FIX RR path the ERISC
+                    // had already crashed before FIX IJ ran — fw_launch_addr was still 1 from the
+                    // FIX RR deassert.  FIX IJ's write was a no-op (1→1) and did not help.
+                    //
+                    // Fix: mirror FIX EG here — zero fw_launch_addr via PCIe while ERISC0 is halted.
+                    // On deassert, ERISC0 boots from ROM cleanly, sees fw_launch_addr == 0, and does
+                    // NOT prematurely launch any stale firmware.  write_launch_msg_to_core (and FIX IJ)
+                    // then run after configure_fabric_cores returns — same as the normal channel path.
+                    {
+                        const auto& hal_egrr = tt::tt_metal::MetalContext::instance().hal();
+                        const auto aeth_idx_egrr = hal_egrr.get_programmable_core_type_index(
+                            tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+                        const uint32_t fw_launch_addr_egrr =
+                            hal_egrr.get_jit_build_config(aeth_idx_egrr, 0, 0).fw_launch_addr;
+                        // FIX MN RR (#42429): Capture fw_launch_addr BEFORE zeroing it.
+                        std::vector<uint32_t> egrr_pre_val(1, 0xFFFFFFFF);
+                        cluster.read_core(egrr_pre_val, sizeof(uint32_t),
+                            core_loc,
+                            static_cast<uint64_t>(fw_launch_addr_egrr));
+                        log_info(
+                            tt::LogMetal,
+                            "FIX MN RR (#42429): FIX EG RR pre-zero snapshot — Device {} chan={} "
+                            "fw_launch_addr=0x{:08X} pre_val=0x{:08X} (1=stale, 0=clean)",
+                            chip_id, router_chan, fw_launch_addr_egrr, egrr_pre_val[0]);
+                        cluster.write_core_immediate(
+                            chip_id, virtual_core, std::vector<uint32_t>{0}, fw_launch_addr_egrr);
+                        // FIX GI RR (#42429): Readback verify the zero write.
+                        std::vector<uint32_t> egrr_verify(1, 0xFFFFFFFF);
+                        cluster.read_core(egrr_verify, sizeof(uint32_t),
+                            core_loc,
+                            static_cast<uint64_t>(fw_launch_addr_egrr));
+                        if (egrr_verify[0] != 0) {
+                            log_warning(
+                                tt::LogMetal,
+                                "FIX GI RR (#42429): FIX EG RR readback MISMATCH — wrote 0 to "
+                                "fw_launch_addr=0x{:08X} on Device {} chan={} but read back "
+                                "0x{:08X}. ERISC may prematurely launch stale firmware.",
+                                fw_launch_addr_egrr, chip_id, router_chan, egrr_verify[0]);
+                        } else {
+                            log_info(
+                                tt::LogMetal,
+                                "FIX EG RR (#42429): zeroed fw_launch_addr=0x{:08X} on Device {} "
+                                "chan={} (readback verified=0x{:08X}) while ERISC0 halted "
+                                "(pre-known-dead / FIX RR path)",
+                                fw_launch_addr_egrr, chip_id, router_chan, egrr_verify[0]);
+                        }
+                    }
+
                     cluster.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
                     // FIX BH (#42429): Wait for ERISC to boot from ROM phase (0x49705180)
                     // to base-UMD firmware before declaring recovery.  Without this wait,
