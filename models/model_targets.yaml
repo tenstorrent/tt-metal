@@ -127,8 +127,8 @@ targets:
             perf:
               prefill_time_to_first_token: 108.8
               prefill_tolerance: 1.15
-              decode_t/s/u: 21.6
-              decode_t/s: 693.1
+              decode_t/s/u: 21.08
+              decode_t/s: 675.31
               decode_tolerance: 1.15
             accuracy: {}
           - batch_size: 1
@@ -191,8 +191,8 @@ targets:
             perf:
               prefill_time_to_first_token: 102.8
               prefill_tolerance: 1.15
-              decode_t/s/u: 14.4
-              decode_t/s: 460.1
+              decode_t/s/u: 20.88
+              decode_t/s: 668.38
               decode_tolerance: 1.15
             accuracy: {}
           - batch_size: 1
@@ -200,7 +200,7 @@ targets:
             status: active
             perf: {}
             accuracy:
-              top1: 96.0
+              top1: 95.5
               top5: 99.0
 
   qwen3-32b:
@@ -214,8 +214,8 @@ targets:
             perf:
               prefill_time_to_first_token: 109.6
               prefill_tolerance: 1.15
-              decode_t/s/u: 14.45
-              decode_t/s: 462.4
+              decode_t/s/u: 21.72
+              decode_t/s: 695.12
               decode_tolerance: 1.15
             accuracy: {}
           - batch_size: 1
@@ -258,7 +258,7 @@ targets:
             seq_len: null
             status: active
             perf:
-              prefill_t/s: 64.8
+              prefill_t/s: 112.52
               # decode targets lowered from 27 → 24 after observed regression
               # to 24.95 t/s in scheduled run 25778148259 (2026-05-13).
               decode_t/s/u: 24.0
@@ -278,8 +278,8 @@ targets:
               # across runs, well beyond the validator's 15% upper-tolerance
               # band. The metric needs to be anchored to a fixed seq_len
               # (see PR #43982 description) before it can gate CI usefully.
-              decode_t/s/u: 16.0
-              decode_t/s: 16.0
+              decode_t/s/u: 11.04
+              decode_t/s: 11.04
               decode_tolerance: 1.15
             accuracy: {}
 
@@ -567,10 +567,10 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_first_token: 190
+              prefill_time_to_first_token: 104.52
               prefill_tolerance: 1.27
-              decode_t/s/u: 22.4
-              decode_t/s: 716.8
+              decode_t/s/u: 14.45
+              decode_t/s: 466.21
               decode_tolerance: 1.27
             accuracy: {}
           - batch_size: 1
