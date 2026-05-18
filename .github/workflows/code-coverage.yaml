@@ -104,7 +104,7 @@ jobs:
           # Collect instrumented .so files from build artifact
           while IFS= read -r -d '' obj; do
             objects+=("$obj")
-          done < <(find ./build/lib -maxdepth 1 \( -name "libtt_metal.so" -o -name "libtt_stl.so" \) -print0 2>/dev/null)
+          done < <(find ./build/lib -maxdepth 1 -name "*.so" -print0 2>/dev/null)
           # Collect ttnn Python extension .so files from installed wheel
           while IFS= read -r -d '' obj; do
             objects+=("$obj")
