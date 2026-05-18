@@ -149,8 +149,8 @@ inline void tt_assert(
 
 // Unconditionally logs a critical message and calls abort(). Use when an
 // unrecoverable error is detected and throwing an exception is not appropriate
-// (e.g. inside destructors, signal handlers, or when the process must terminate
-// immediately without giving callers a chance to catch).
+// (e.g. inside destructors, or when the process must terminate immediately
+// without giving callers a chance to catch).
 [[noreturn]] inline void tt_abort(const char* file, int line) {
     log_critical(tt::LogAlways, "TT_ABORT @ {}:{}", file, line);
     abort();
@@ -159,7 +159,13 @@ inline void tt_assert(
 template <typename... Args>
 [[noreturn]] void tt_abort(
     const char* file, int line, fmt::format_string<const Args&...> fmt, const Args&... args) {
-    log_critical(tt::LogAlways, "TT_ABORT @ {}:{}: {}", file, line, fmt::format(fmt, args...));
+    // Wrap formatting/logging in try/catch so that a formatter exception or
+    // allocation failure cannot escape — abort() is reached unconditionally.
+    try {
+        log_critical(tt::LogAlways, "TT_ABORT @ {}:{}: {}", file, line, fmt::format(fmt, args...));
+    } catch (...) {
+        log_critical(tt::LogAlways, "TT_ABORT @ {}:{} (message formatting failed)", file, line);
+    }
     abort();
 }
 }  // namespace detail
