@@ -133,9 +133,13 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
                 "error accessing board", "could not open chip", "failed with:",
                 "enodev", "error when re-initializing", "unable to reset board",
                 "runner will now shutdown", "the operation was canceled",
-            ]) and content not in seen_errors:
-                seen_errors.add(content)
-                error_lines.append(content)
+            ]):
+                # Strip unhelpful "Use -ls to see all devices available to reset" suffix
+                if "use -ls to see all devices" in content.lower():
+                    content = content.split("!")[0] + "!"
+                if content not in seen_errors:
+                    seen_errors.add(content)
+                    error_lines.append(content)
 
     if num_smi_attempts == 0:
         num_smi_attempts = 1
