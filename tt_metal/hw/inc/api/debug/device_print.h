@@ -809,7 +809,7 @@ struct device_print_type<char*> {
     static constexpr device_print_type_info value = {'s', sizeof(char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, char* argument) {
         *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
-            reinterpret_cast<std::uintptr_t>(argument);
+                reinterpret_cast<std::uintptr_t>(argument);
     }
 };
 template <>
@@ -817,7 +817,7 @@ struct device_print_type<const char*> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, const char* argument) {
         *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
-            reinterpret_cast<std::uintptr_t>(argument);
+                reinterpret_cast<std::uintptr_t>(argument);
     }
 };
 
@@ -828,7 +828,7 @@ struct device_print_type<ct_string> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, ct_string argument) {
         *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
-            reinterpret_cast<std::uintptr_t>(argument.ptr);
+                reinterpret_cast<std::uintptr_t>(argument.ptr);
     }
 };
 
