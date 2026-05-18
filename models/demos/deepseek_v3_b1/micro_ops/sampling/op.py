@@ -474,10 +474,6 @@ class SamplingOp:
             ("sampling_p_bcast_cb", softmax_sub_cb),
             ("sampling_rand_bcast_cb", sum_cb),
             ("sampling_max_cb", max_cb),
-            # Dedicated TRISC -> BRISC mask channel (final core only). Keeps
-            # softmax_in_cb a one-way BRISC -> TRISC CB so the tiles_received
-            # stream register isn't shared between BRISC's atomic increment and
-            # TRISC's pack-side absolute STOREREG.
             ("sampling_mask_cb", mask_cb),
         ]
 
@@ -993,18 +989,10 @@ class SamplingOp:
                         "sampling_metadata_address",
                         int(metadata_output_tensor.buffer_address()) if metadata_output_tensor is not None else 0,
                     ),
-                    # Trailing slots in sampling.hpp::WriterCTArgs<>. Only the
-                    # final mesh device (stage-2 receiver) actually executes
-                    # the SP-FINALCORE block that uses these broadcast CBs,
-                    # but the template still has to be fully populated on
-                    # every core or BRISC defaults them to 0xFFFFFFFF and
-                    # spins in cb_reserve_back on the first push of `p`.
                     ("sampling_copy_probabilities_to_q", 0),
                     ("sampling_p_bcast_cb", softmax_sub_cb if is_final_mesh_device else 0),
                     ("sampling_rand_bcast_cb", sum_cb if is_final_mesh_device else 0),
                     ("sampling_max_cb", max_cb if is_final_mesh_device else 0),
-                    # Dedicated TRISC -> BRISC mask channel; only the final
-                    # mesh device runs the SP-FINALCORE block that touches it.
                     ("sampling_mask_cb", mask_cb if is_final_mesh_device else 0),
                 ]
 

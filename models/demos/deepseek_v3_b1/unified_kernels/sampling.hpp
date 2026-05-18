@@ -1818,19 +1818,6 @@ struct TopKSampling {
 
                         if constexpr (CTArgs::copy_probabilities) {
                             DeviceZoneScopedN("SP-CPROBS");
-
-                            // Spec / verification scatter into metadata. probs_cb holds
-                            // the *transposed* per-token softmax probabilities (column 0
-                            // of F0+F2 = the 32 bf16 prob lanes), packed by TRISC's
-                            // Block A right after the SCALAR-bcast MUL and before the
-                            // cumsum runs. We gather those strided bf16 lanes into a
-                            // contiguous 32-bf16 buffer, then NOC the buffer + the 32
-                            // winning indices into metadata.{p,q}_{scores,indices}.
-                            //
-                            // probs_cb (NOT softmax_out_cb) is the right source: spec
-                            // decoding's relaxed-acceptance gate compares per-token
-                            // p_scores values directly, which only makes sense for the
-                            // PMF, not the CDF that lives in softmax_out_cb.
                             constexpr auto scores_field = CTArgs::copy_probabilities_to_q
                                                               ? offsetof(deepseek_b1_ops::DeepseekMetadata, q_scores)
                                                               : offsetof(deepseek_b1_ops::DeepseekMetadata, p_scores);
@@ -1861,21 +1848,6 @@ struct TopKSampling {
                                     scratch[ELEMS_PER_FACE_ROW + i] = probs_l1[2 * FACE_ELEMS + i * ELEMS_PER_FACE_ROW];
                                 }
 
-                                // Top-p tail-zero: walk the bf16 cumsum (col 0 of
-                                // softmax_out_cb, packed by TRISC at Step 15) and
-                                // count `(cum_probs < p).sum() + 1`. That matches
-                                // the golden's `num_kept = int((cum_probs < p).sum()) + 1`
-                                // and tells us where the inclusive top-p cutoff
-                                // lies. Everything past it (i >= num_kept) gets
-                                // zeroed in scratch before the metadata scatter,
-                                // so p_scores has the same layout the unit test
-                                // golden expects:
-                                //   p_scores[0, num_kept) = rescaled_kept_probs
-                                //   p_scores[num_kept, K)  = 0.0
-                                // Comparing bf16-as-uint16 is safe here because
-                                // both p and the cumsum are non-negative finite
-                                // values, where uint16 ordering equals numeric
-                                // ordering on bf16.
                                 const auto cum_l1 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
                                     get_read_ptr(CTArgs::softmax_out_cb));
                                 const uint16_t p_bf16 = float_to_bf16_rne(p);
