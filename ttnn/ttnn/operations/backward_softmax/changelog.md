@@ -44,3 +44,37 @@
     - `test_backward_softmax_multicore_lane_decomposition` (4 cases): multi-batch shapes (NC > 1) with multi-block reduce, so cores spanning NC boundaries within their lane range exercise the full `lane → (nc, idx)` decomposition.
     - `test_backward_softmax_multicore_determinism` (2 cases): two invocations on the same inputs return bit-equal output across the 64-lane and 65-lane regimes.
   - Existing suites unchanged: `test_backward_softmax.py` (17/26 — same Phase-0 pass rate, 9 failures still the pre-existing precision-floor issue), `test_backward_softmax_precision_baseline.py` (8/8 pass), `test_backward_softmax_extended.py` (9/9 pass).
+
+## Refinement 2 — Choose input-buffering strategy by shape and L1 budget
+
+- **Date**: 2026-05-18
+- **What was done**: Phase 0 streamed each input tile twice from DRAM (once per pass). Refinement 2 adds a deterministic, shape-aware buffer-strategy picker that caches the whole row in L1 across both passes when budget allows. Three strategies in preference order:
+  1. `WHOLE_ROW_DB` — input CBs sized `2 * reduce_dim_tiles` pages. The reader can prefetch lane N+1 into the second half of the CB while compute is mid-lane on lane N. Each input tile is read from DRAM exactly once per output tile, AND the reader can overlap DRAM latency with compute.
+  2. `WHOLE_ROW_SB` — input CBs sized `reduce_dim_tiles` pages. Each input tile is read from DRAM exactly once per output tile. Reader and compute alternate per lane (no cross-lane overlap), but DRAM traffic is already halved vs Phase 0.
+  3. `PER_TILE_STREAM` (fallback) — Phase-0 behavior. Input CBs sized to a small constant (2 pages double-buffer for cb_grad_output, `2 * BLOCK_SIZE` for cb_output). Each tile is read twice. Used when the reduce dimension is too large to cache in L1 under strategies 1 or 2.
+  - The picker prefers DB → SB → PER_TILE in that order. It is a pure function of shape, dtype, and L1 budget (no runtime probing; no fail path — every shape lands on at least PER_TILE_STREAM, which has a small constant working set).
+  - **L1 CB budget**: 700 KB per core (conservative on Wormhole B0's ~1 MB usable L1). Documented in `capabilities.md`. For float32 inputs the boundaries land at `reduce_dim_tiles ≤ 28 → DB`, `29-42 → SB`, `≥ 43 → PER_TILE_STREAM`.
+  - **Whole-row kernel path**: shared between strategies 1 and 2. Per lane:
+    `mul<WaitUpfrontNoPop, WaitUpfrontNoPop>(dy, y, cb_prod, (1, reduce_dim))` → `reduce<SUM, REDUCE_DIM>(cb_prod, cb_scaler, cb_sum, (1, reduce_dim, 1))` → `sub<COL/ROW, WaitUpfrontPopAtEnd, WaitUpfrontNoPop>(dy, cb_sum, cb_centered, (1, reduce_dim))` → `mul<WaitUpfrontPopAtEnd, WaitAndPopPerTile>(y, cb_centered, cb_grad_input, (1, reduce_dim))` → `cb_pop_front(cb_sum, 1)`. cb_prod and cb_centered need `reduce_dim_tiles` pages each (sequential helpers can't pipeline, so the mul output must fully buffer before reduce starts).
+  - **Per-tile kernel path**: unchanged from Phase 0's block-loop.
+  - **Reader**: collapsed the inner `BLOCK_SIZE × NUM_BLOCKS` nesting to a flat `reduce_dim_tiles` iteration (push order equivalent), and branches on `STRATEGY_IS_WHOLE_ROW` for the pass count (1 vs 2).
+  - **Writer**: unchanged — push order from compute is row-major (dim=-1) or column-major (dim=-2) in both strategies.
+- **Accuracy achieved**: bit-identical to Phase 0 baseline on dim=-1 shapes (PCC ≥ 0.9999 on the precision-baseline 4-shape set). The per-lane numeric path is unchanged — same `mul → reduce → sub → mul` sequence; only the L1 caching layout differs. Per the test set:
+
+  | Strategy | Representative shape | dim | PCC | rel_rms |
+  |---|---|---|---|---|
+  | WHOLE_ROW_DB | (1, 1, 32, 256) | -1 | ≥ 0.999 | ≤ 0.01 |
+  | WHOLE_ROW_DB | (1, 1, 256, 32) | -2 | ≥ 0.999 | ≤ 0.01 |
+  | WHOLE_ROW_SB | (1, 1, 32, 1024) | -1 | ≥ 0.999 | ≤ 0.01 |
+  | WHOLE_ROW_SB | (1, 1, 1024, 32) | -2 | ≥ 0.999 | ≤ 0.01 |
+  | PER_TILE_STREAM | (1, 1, 32, 2048) | -1 | ≥ 0.999 | ≤ 0.01 |
+  | PER_TILE_STREAM | (1, 1, 2048, 32) | -2 | ≥ 0.999 | ≤ 0.01 |
+- **Golden test progress**: N/A — no `eval/golden_tests/backward_softmax/` suite exists for this op.
+- **Issues encountered**: None — the implementation came up first try on the smoke test. Existing unit-test pass rates are unchanged (17/26 acceptance, 8/8 baseline, 9/9 extended, 18/18 multicore — total 52/61, same as Refinement 1).
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/backward_softmax/test_backward_softmax_strategy.py` (17 cases — all passing):
+    - `test_backward_softmax_strategy_selection` (9 cases) — pins the picker boundary for shapes spanning all three strategies. `Wt = 1, 8, 28 → WHOLE_ROW_DB`; `Wt = 32, 42 → WHOLE_ROW_SB`; `Wt = 43, 64 → PER_TILE_STREAM`; mirror for `dim=-2` on Ht. A budget tweak that silently shifts a shape across a boundary breaks CI.
+    - `test_backward_softmax_strategy_correctness` (6 cases) — drives a representative shape through each strategy for both dim=-1 and dim=-2. Locks the strategy first (so a regression reads "strategy X went numerically wrong" rather than mystery PCC drop).
+    - `test_backward_softmax_strategy_2_matches_strategy_1_pcc` — sanity check that SB and DB deliver Phase-0-quality output on their representative shapes.
+    - `test_backward_softmax_multicore_with_per_tile_strategy` — exercises the `PER_TILE_STREAM × multi-core` interaction (`(1, 2, 32, 2048)`, 2 lanes spread across 2 cores).
+  - Existing suites unchanged: `test_backward_softmax.py` (17/26), `test_backward_softmax_precision_baseline.py` (8/8), `test_backward_softmax_extended.py` (9/9), `test_backward_softmax_multicore.py` (18/18).

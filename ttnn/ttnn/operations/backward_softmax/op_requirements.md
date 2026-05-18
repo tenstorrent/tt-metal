@@ -67,7 +67,7 @@
   - Program descriptor pins `core_grid = CoreRange(CoreCoord(0,0))` and passes `total_lanes` as a compile-time arg.
   - To convert: (1) replace `core_grid` with the union of all cores in the grid; (2) move `num_lanes` and `start_lane` from CT to per-core RT args; (3) the CB descriptors already key off `core_ranges = core_grid` so they will fan out automatically once `core_grid` is the union.
 
-### [ ] Refinement 2 — Choose input-buffering strategy by shape and L1 budget
+### [x] Refinement 2 — Choose input-buffering strategy by shape and L1 budget
 
 - **Goal**: minimize DRAM bandwidth by holding `grad_output` and `output` tiles in L1 across both passes when possible. The strategy must be **chosen at program-descriptor time** as a function of shape (dtype × reduce_dim_tiles) and the per-core L1 budget — no runtime probing.
 - **Why it matters**: the current Phase-0 reader fetches each input tile twice per output tile (once for the multiply-then-reduce pass, once for the subtract-then-multiply pass). DRAM bandwidth is the gating resource for memory-bound ops like this one — eliminating the second read is the single biggest perf lever after multi-core.
