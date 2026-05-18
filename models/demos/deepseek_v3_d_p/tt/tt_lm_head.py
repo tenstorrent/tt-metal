@@ -368,8 +368,11 @@ class TtLMHead(LightweightModule):
 
         if self.is_column_parallel:
             # ========================================
-            # Column-parallel: all_gather emb -> matmul (output TP-sharded on vocab)
+            # Column-parallel: All-gather x to get full emb_dim (replicated across TP axis)
             # ========================================
+            # Input x is sharded: (dispatch_group_size/axis0, seq_len_per_chip, emb_dim/axis1)
+            # Both shared_expert and dispatch need full emb_dim, so all-gather first
+            # Only needed if there are multiple devices in TP axis (axis 1)
             if tp_size > 1:
                 x_full = ttnn.all_gather(
                     x,
