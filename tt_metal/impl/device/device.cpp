@@ -356,7 +356,7 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
                 virtual_core,
                 msg.view(),
                 go_msg,
-                hal.get_dev_addr(this->get_programmable_core_type(virtual_core), HalL1MemAddrType::LAUNCH));
+                /* send_go= */ true);  // FIX SENDGO: was hal.get_dev_addr (uint64_t→bool implicit conversion)
         }
     }
 
@@ -713,7 +713,7 @@ void Device::configure_fabric(
                 physical_core,
                 msg,
                 go_msg,
-                hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
+                /* send_go= */ true);  // FIX SENDGO: was hal.get_dev_addr (uint64_t→bool implicit conversion)
 
             // FIX IJ/KL (#42429): DISABLED — now redundant after FIX MM.
             // FIX MM unconditionally restores fw_launch_addr in configure_fabric_cores()
@@ -852,7 +852,7 @@ void Device::configure_fabric(
                         physical_core,
                         msg,
                         go_msg,
-                        hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
+                        /* send_go= */ true);  // FIX SENDGO: was hal.get_dev_addr (uint64_t→bool implicit conversion)
                     if (!fixdy_poll(/*is_retry=*/true)) {
                         log_warning(
                             tt::LogMetal,
@@ -1702,7 +1702,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                 physical_core,
                 msg,
                 go_msg,
-                hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
+                /* send_go= */ true);  // FIX SENDGO: was hal.get_dev_addr (uint64_t→bool implicit conversion)
 
             // Deassert BRISC reset so the new CCL MUX kernel executes.  The BRISC was halted at
             // the end of Phase 2 (after seeing TERMINATED) to prevent the old kernel's
@@ -2093,7 +2093,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                 physical_core,
                 msg,
                 go_msg,
-                hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
+                /* send_go= */ true);  // FIX SENDGO: was hal.get_dev_addr (uint64_t→bool implicit conversion)
 
             log_info(
                 tt::LogMetal,
@@ -2628,7 +2628,7 @@ void Device::launch_eth_cores_for_quiesce() {
                 physical_core,
                 msg,
                 go_msg,
-                hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
+                /* send_go= */ true);  // FIX SENDGO: was hal.get_dev_addr (uint64_t→bool implicit conversion)
 
             log_info(
                 tt::LogMetal,

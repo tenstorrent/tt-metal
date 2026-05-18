@@ -501,7 +501,7 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
                 physical_core,
                 local_launch_msg.view(),
                 kg->go_msg.view(),
-                hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
+                /* send_go= */ true);  // FIX SENDGO: was hal.get_dev_addr (uint64_t→bool implicit conversion)
         }
     }
 }
@@ -923,7 +923,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                         physical_core,
                         kg->launch_msg.view(),
                         kg->go_msg.view(),
-                        hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
+                        /* send_go= */ true);  // FIX SENDGO: was hal.get_dev_addr (uint64_t→bool implicit conversion)
                 }
             }
             if (wait_until_cores_done) {
