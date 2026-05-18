@@ -219,6 +219,7 @@ class TtAttention:
             mesh_device=self.mesh_device,
             tt_ccl=self.tt_ccl,
             dim=3,
+            cluster_axis=self.args.cluster_axis,
             topology=self.args.ccl_topology,
         )
 
