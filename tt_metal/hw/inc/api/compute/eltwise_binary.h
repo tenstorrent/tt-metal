@@ -40,7 +40,7 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint
 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
 #else
     UNPACK((llk_unpack_hw_configure(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));

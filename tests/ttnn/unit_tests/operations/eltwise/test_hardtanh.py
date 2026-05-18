@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
 
@@ -31,7 +31,7 @@ def test_hardtanh_default(device, shapes):
     output_tensor = ttnn.hardtanh(input_tensor_a)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.9999
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -61,4 +61,4 @@ def test_hardtanh_args(device, shapes, min, max):
     output_tensor = ttnn.hardtanh(input_tensor_a, min_val=min, max_val=max)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.9999
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
