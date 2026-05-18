@@ -360,6 +360,12 @@ FabricCoresHealth configure_fabric_cores(
 
                 // Assert ERISC0 (== BRISC) reset — halts only the main ERISC processor.
                 // The subordinate ERISC continues running and maintains the ETH PHY link.
+                // FIX OP (#42429): Time the full FIX S9 assert→deassert window.
+                // The ERISC0 is halted for FIX EG (zero fw_launch_addr) + deassert + FIX DW
+                // 50ms sleep + FIX DU poll.  If the window is unexpectedly long (> 200ms),
+                // ETH PHY link retraining may occur — Strategy 11 should catch that, but
+                // this timing log helps correlate link errors with reset duration.
+                auto fix_s9_start = std::chrono::steady_clock::now();
                 cluster.assert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
 
                 // FIX EG (#42429): While ERISC0 is halted, zero fw_launch_addr (0x9004 =
@@ -431,6 +437,18 @@ FabricCoresHealth configure_fabric_cores(
                 // Immediately deassert so ERISC0 restarts into base UMD firmware.
                 // The window where ERISC0 is halted is limited to the PCIe write round-trip.
                 cluster.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+
+                // FIX OP (#42429): Log how long ERISC0 was held in reset.
+                {
+                    auto fix_s9_end = std::chrono::steady_clock::now();
+                    auto fix_s9_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        fix_s9_end - fix_s9_start).count();
+                    log_info(
+                        tt::LogMetal,
+                        "FIX OP (#42429): FIX S9 assert→deassert window — Device {} chan={} "
+                        "ERISC0 held in reset for {}ms (includes FIX EG zero + readback)",
+                        chip_id, router_chan, fix_s9_ms);
+                }
 
                 // FIX DW (#42429): Brief delay after deassert before FIX DU poll.
                 // ERISC0 needs a few cycles to latch out of reset and begin executing ROM.
@@ -695,19 +713,45 @@ FabricCoresHealth configure_fabric_cores(
     // FIX MN (#42429): Summary log — captures total channel count, dead count, recovered count,
     // and skip-soft-reset count for post-mortem analysis.  Without this, CI logs only show
     // individual channel decisions; there is no single line that summarizes the outcome.
+    //
+    // FIX OP (#42429): Added mmio flag and path breakdown so post-mortem analysis can
+    // immediately tell which path each channel class took (FIX M / FIX S9 / normal).
+    // Without this, you must grep per-channel logs to reconstruct the path — error-prone
+    // when analyzing logs from 8+ devices with 2+ channels each.
+    const bool is_mmio = device->is_mmio_capable();
+    // Count channels that went through each path:
+    // - fix_m_count: non-MMIO base-UMD channels that skipped soft reset (FIX M)
+    // - fix_s9_count: MMIO base-UMD channels that did assert/deassert (FIX S9)
+    // - normal_reset_count: channels that aren't in skip_soft_reset_channels
+    uint32_t fix_m_count = 0, fix_s9_count = 0, normal_reset_count = 0;
+    for (const auto& [rc, _] : router_chans_and_direction) {
+        if (dead_channels.count(rc)) continue;  // don't double-count dead
+        if (skip_soft_reset_channels.count(rc)) {
+            if (is_mmio) {
+                ++fix_s9_count;
+            } else {
+                ++fix_m_count;
+            }
+        } else {
+            ++normal_reset_count;
+        }
+    }
     log_info(
         tt::LogMetal,
-        "FIX MN (#42429): configure_fabric_cores SUMMARY — Device {} "
+        "FIX MN (#42429): configure_fabric_cores SUMMARY — Device {} mmio={} "
         "total_active={} dead={} newly_dead={} recovered={} "
-        "skip_soft_reset={} pre_known_dead={} healthy={}",
+        "skip_soft_reset={} pre_known_dead={} healthy={} "
+        "paths: fix_m={} fix_s9={} normal={}",
         device->id(),
+        is_mmio,
         router_chans_and_direction.size(),
         dead_channels.size(),
         newly_dead_channels.size(),
         recovered_channels.size(),
         skip_soft_reset_channels.size(),
         pre_known_dead_channels.size(),
-        all_channels_healthy ? "true" : "false");
+        all_channels_healthy ? "true" : "false",
+        fix_m_count, fix_s9_count, normal_reset_count);
 
     return FabricCoresHealth{all_channels_healthy, std::move(newly_dead_channels), std::move(recovered_channels)};
 }
