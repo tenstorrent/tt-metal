@@ -529,12 +529,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             }
             return {"le_binary_tile_init();", "le_binary_tile"};
         case EQ:
-            if (dtype == DataType::FLOAT32) {
+            if (dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16) {
                 return {"eq_binary_tile_init();", "eq_binary_tile"};
             }
             TT_THROW("SFPU EQ binary tile is only defined for Float32");
         case NE:
-            if (dtype == DataType::FLOAT32) {
+            if (dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16) {
                 return {"ne_binary_tile_init();", "ne_binary_tile"};
             }
             TT_THROW("SFPU NE binary tile is only defined for Float32");
