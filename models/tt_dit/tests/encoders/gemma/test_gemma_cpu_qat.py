@@ -35,7 +35,12 @@ def pcc(a, b):
 
 @pytest.fixture(scope="module")
 def ref_hidden_states():
-    """Get reference hidden states via ModelLedger → text_encoder (same as FeatureExtractorV2)."""
+    """Get reference hidden states from the LTX-2 Gemma text encoder.
+
+    This needs the per-layer hidden states returned by ``text_encoder.encode()``
+    (before the embeddings processor), so we construct the underlying ``Builder``
+    directly — same pattern the new ``PromptEncoder`` block uses internally.
+    """
     if not os.path.isdir(GEMMA_PATH):
         pytest.skip(f"Gemma not found: {GEMMA_PATH}")
     if not os.path.exists(CKPT):
@@ -45,18 +50,29 @@ def ref_hidden_states():
     sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
     torch.cuda.synchronize = lambda *a, **kw: None
 
-    from ltx_pipelines.utils.model_ledger import ModelLedger
-
-    ledger = ModelLedger(
-        dtype=torch.bfloat16,
-        device=torch.device("cpu"),
-        checkpoint_path=CKPT,
-        gemma_root_path=GEMMA_PATH,
+    from ltx_core.loader.registry import DummyRegistry
+    from ltx_core.loader.single_gpu_model_builder import SingleGPUModelBuilder as Builder
+    from ltx_core.text_encoders.gemma import (
+        GEMMA_LLM_KEY_OPS,
+        GEMMA_MODEL_OPS,
+        GemmaTextEncoderConfigurator,
+        module_ops_from_gemma_root,
     )
-    text_encoder = ledger.text_encoder()
-    text_encoder.eval()
+    from ltx_core.utils import find_matching_file
 
-    logger.info(f"Reference text encoder loaded from ModelLedger")
+    module_ops = module_ops_from_gemma_root(GEMMA_PATH)
+    model_folder = find_matching_file(GEMMA_PATH, "model*.safetensors").parent
+    weight_paths = [str(p) for p in model_folder.rglob("*.safetensors")]
+    text_encoder_builder = Builder(
+        model_path=tuple(weight_paths),
+        model_class_configurator=GemmaTextEncoderConfigurator,
+        model_sd_ops=GEMMA_LLM_KEY_OPS,
+        module_ops=(GEMMA_MODEL_OPS, *module_ops),
+        registry=DummyRegistry(),
+    )
+    text_encoder = text_encoder_builder.build(device=torch.device("cpu"), dtype=torch.bfloat16).eval()
+
+    logger.info("Reference text encoder loaded from LTX-2 Builder")
 
     # Encode prompt — returns (tuple_of_hidden_states, attention_mask)
     with torch.no_grad():
@@ -71,7 +87,7 @@ def ref_hidden_states():
         "n_layers": len(hidden_states),
     }
 
-    del text_encoder, ledger
+    del text_encoder
     gc.collect()
     return result
 

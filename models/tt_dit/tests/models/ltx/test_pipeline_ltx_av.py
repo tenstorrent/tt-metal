@@ -10,14 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_dit.pipelines.ltx.pipeline_ltx_av import LTXAVPipeline
-from models.tt_dit.utils.test import (
-    bh_lb_2x4_id,
-    bh_lb_2x4_params,
-    ring_params,
-    skip_ltx_mesh_config_unless_matching_arch,
-    wh_lb_2x4_id,
-    wh_lb_2x4_params,
-)
+from models.tt_dit.utils.test import line_params, ring_params
 
 
 def _default_checkpoint() -> str | None:
@@ -35,33 +28,46 @@ def _default_gemma() -> str | None:
     return candidates[0].rstrip("/") if candidates else None
 
 
-def _no_prompt_param() -> bool:
-    """One-shot generation by default so pytest does not block on ``input()`` or hit 300s timeout.
-
-    - ``NO_PROMPT=1`` / ``0``: force non-interactive / interactive.
-    - ``INTERACTIVE_LTX_AV=1``: prompt loop (TTY); use when running this test manually.
-    """
-    env = os.environ.get("NO_PROMPT")
-    if env is not None:
-        return {"1": True, "0": False}.get(env, False)
-    if os.environ.get("INTERACTIVE_LTX_AV", "").lower() in ("1", "true", "yes"):
-        return False
-    return True
-
-
-@pytest.mark.timeout(7200)
-@pytest.mark.parametrize("no_prompt", [_no_prompt_param()])
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, mesh_config_id",
+    "no_prompt",
+    [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
+)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [*wh_lb_2x4_params, wh_lb_2x4_id],
-        [*bh_lb_2x4_params, bh_lb_2x4_id],
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False, "bh_glx_4x8sp1tp0"],
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        # BH on 2x4
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
+        # WH (ring) on 4x8
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
+        # BH (linear) on 4x8
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        # BH (ring) on 4x8
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
-    ids=[wh_lb_2x4_id, bh_lb_2x4_id, "bh_glx_4x8sp1tp0"],
+    ids=[
+        "2x2sp0tp1",
+        "2x4sp0tp1",
+        "bh_2x4sp1tp0",
+        "wh_4x8sp1tp0",
+        "bh_4x8sp1tp0_linear",
+        "bh_4x8sp1tp0_ring",
+        "bh_4x32sp1tp0",
+    ],
     indirect=["mesh_device", "device_params"],
 )
-def test_pipeline_av_pro(
+@pytest.mark.parametrize(
+    "width, height",
+    [
+        (768, 512),
+    ],
+    ids=[
+        "resolution_512p",
+    ],
+)
+def test_pipeline_inference(
     mesh_device,
     mesh_shape,
     sp_axis,
@@ -69,12 +75,11 @@ def test_pipeline_av_pro(
     num_links,
     dynamic_load,
     topology,
+    width,
+    height,
     is_fsdp,
-    mesh_config_id,
     no_prompt,
 ):
-    """Full LTX-2.3 Pro AV pipeline (one-stage, CFG+STG+modality guidance)."""
-    skip_ltx_mesh_config_unless_matching_arch(mesh_config_id)
     ckpt = _default_checkpoint()
     gemma = _default_gemma()
     if ckpt is None:
@@ -85,8 +90,11 @@ def test_pipeline_av_pro(
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
+    num_frames = int(os.environ.get("NUM_FRAMES", "121"))
+    num_inference_steps = int(os.environ.get("NUM_STEPS", "30"))
+
     pipeline = LTXAVPipeline.create_pipeline(
-        mesh_device,
+        mesh_device=mesh_device,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         num_links=num_links,
@@ -97,50 +105,34 @@ def test_pipeline_av_pro(
 
     prompt = os.environ.get(
         "PROMPT",
-        ("a cat playing piano"),
+        "a cat playing piano",
     )
-    num_frames = int(os.environ.get("NUM_FRAMES", "121"))
-    height = int(os.environ.get("HEIGHT", "512"))
-    width = int(os.environ.get("WIDTH", "768"))
-    num_steps = int(os.environ.get("NUM_STEPS", "30"))
 
     def run(*, prompt, number, seed):
+        logger.info(f"Running inference with prompt: '{prompt}'")
+        logger.info(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
+
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_pro_{width}x{height}_{number}.mp4")
-        logger.info(f"Running LTX AV Pro: '{prompt[:80]}...'")
-        logger.info(f"Config: {height}x{width}, {num_frames} frames, {num_steps} steps")
 
-        if int(ttnn.distributed_context_get_rank()) != 0:
-            logger.info(f"Skipping generation on rank {ttnn.distributed_context_get_rank()}")
-            return
+        pipeline.generate(
+            prompt,
+            output_path=output_filename,
+            checkpoint_path=ckpt,
+            gemma_path=gemma,
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            num_inference_steps=num_inference_steps,
+            seed=seed,
+        )
 
-        gen_kwargs = {
-            "output_path": output_filename,
-            "checkpoint_path": ckpt,
-            "gemma_path": gemma,
-            "num_frames": num_frames,
-            "height": height,
-            "width": width,
-            "num_inference_steps": num_steps,
-            "seed": seed,
-        }
-        for env_name, kw in (
-            ("VIDEO_CFG_SCALE", "video_cfg_scale"),
-            ("AUDIO_CFG_SCALE", "audio_cfg_scale"),
-            ("VIDEO_STG_SCALE", "video_stg_scale"),
-            ("AUDIO_STG_SCALE", "audio_stg_scale"),
-            ("VIDEO_MODALITY_SCALE", "video_modality_scale"),
-            ("AUDIO_MODALITY_SCALE", "audio_modality_scale"),
-            ("RESCALE_SCALE", "rescale_scale"),
-            ("GE_GAMMA", "ge_gamma"),
-        ):
-            if os.environ.get(env_name) is not None:
-                gen_kwargs[kw] = float(os.environ[env_name])
-
-        pipeline.generate(prompt, **gen_kwargs)
-        logger.info(f"Saved video to: {output_filename}")
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            logger.info(f"Saved video to: {output_filename}")
+        else:
+            logger.info(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
 
     if no_prompt:
-        run(prompt=prompt, number=0, seed=int(os.environ.get("SEED", "10")))
+        run(prompt=prompt, number=0, seed=42)
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")

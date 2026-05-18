@@ -135,18 +135,23 @@ class LTXFastPipeline(LTXAVPipeline):
 
         sys.path.insert(0, "LTX-2/packages/ltx-core/src")
         sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
-        from ltx_pipelines.utils.model_ledger import ModelLedger
+        from ltx_pipelines.utils.blocks import VideoUpsampler
 
-        ledger = ModelLedger(
+        # VideoUpsampler owns both the video encoder (for per-channel
+        # statistics) and the spatial upsampler lifecycle. It performs
+        # un_normalize → upsample → re_normalize internally (see
+        # ltx_core.model.upsampler.upsample_video), which matches what the
+        # production pipelines do — and what the bare `upsampler(latent)`
+        # call previously was missing.
+        upsampler_block = VideoUpsampler(
+            checkpoint_path=checkpoint_path,
+            upsampler_path=upsampler_path,
             dtype=torch.bfloat16,
             device=torch.device("cpu"),
-            checkpoint_path=checkpoint_path,
-            spatial_upsampler_path=upsampler_path,
         )
-        upsampler = ledger.spatial_upsampler()
         with torch.no_grad():
-            upsampled = upsampler(video_latent.bfloat16())
-        del upsampler, ledger
+            upsampled = upsampler_block(video_latent.bfloat16())
+        del upsampler_block
         gc.collect()
         return upsampled.float()
 
