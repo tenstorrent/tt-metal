@@ -13,6 +13,7 @@
 // TODO: Switch to using fast dispatch once the MeshWorkload code paths are added.
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <cstdint>
 #include <vector>
 
