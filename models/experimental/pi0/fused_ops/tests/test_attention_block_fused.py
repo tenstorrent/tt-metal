@@ -818,14 +818,16 @@ def test_attention_block_fused_real_weights(device):
     and runs the full attention block (fused kernel + standalone O-proj) on
     a real patch_embed + pos_embed activation.
 
-    Limitations vs the full SigLIP attention math (after #13/#14):
-      * 1/sqrt(head_dim) softmax scaling: NOW APPLIED by the kernel via
+    Limitations vs the full SigLIP attention math (after #13/#14/#14b):
+      * 1/sqrt(head_dim) softmax scaling: APPLIED by the kernel via
         in-place Q pre-scaling in TRISC SDPA.
-      * QKV bias: NOW APPLIED by the kernel via post-matmul add_tiles +
-        pack_tile<true> in TRISC. Torch reference here includes the QKV
-        bias.
-      * No O-proj bias. The standalone oproj_op.py doesn't currently
-        accept a bias param. Torch reference here zeroes it.
+      * QKV bias: APPLIED on-device by the fused kernel via post-matmul
+        add_tiles + pack_tile<true> in TRISC.
+      * O-proj bias: APPLIED host-side here (oproj_device + o_b) since
+        the standalone O-proj kernel doesn't currently accept a bias.
+        When the truly-fused O-proj lands (in the same kernel as the
+        attention block), O-proj bias will move on-device using the same
+        post-matmul add_tiles pattern as QKV bias.
       * No attention residual. We compare against the bare attention(LN1(x))
         output, not (attention(LN1(x)) + x).
 
@@ -861,7 +863,7 @@ def test_attention_block_fused_real_weights(device):
         scores = (q @ k.T) * SDPA_SCALE  # #13: kernel now applies 1/sqrt(d_k) scaling
         attn = torch.softmax(scores, dim=-1) @ v
         sdpa_concat[:, h * HEAD_DIM_TRUE : (h + 1) * HEAD_DIM_TRUE] = attn.to(torch.bfloat16)
-    oproj_golden = (sdpa_concat.float() @ o_w.float()).to(torch.bfloat16)  # NO O-proj bias
+    oproj_golden = ((sdpa_concat.float() @ o_w.float()) + o_b.float()).to(torch.bfloat16)
 
     # ---- Device pipeline --------------------------------------------------
     tensors = build_tensors_for_fused_attention_block(
@@ -909,10 +911,12 @@ def test_attention_block_fused_real_weights(device):
 
     activation_tt, weight_tt, output_tt = build_tensors_for_oproj_test(device, o_w, assembled_unpadded, num_cores=36)
     SigLIPOprojMatmulOp.op(activation_tt, weight_tt, output_tt, num_cores=36)
-    oproj_device = _ttnn.to_torch(output_tt)
+    oproj_device_raw = _ttnn.to_torch(output_tt)
+    # Apply O-proj bias host-side. Truly-fused O-proj will move this on-device.
+    oproj_device = (oproj_device_raw.float() + o_b.float()).to(torch.bfloat16)
 
     p = pcc(oproj_golden, oproj_device)
-    print(f"\nPCC (fused+O-proj on REAL pi0.5_base layer-0 weights, scale+QKV-bias ON) = {p:.6f}")
+    print(f"\nPCC (fused+O-proj REAL pi0.5_base layer-0, scale+QKV-bias+O-bias ON) = {p:.6f}")
     print(f"  output shape={tuple(oproj_device.shape)}, dtype={oproj_device.dtype}")
     # Real-weight dynamic range vs synthetic. The bfp8 quantization on real
     # weights can be slightly worse than on small random weights (real layer-
