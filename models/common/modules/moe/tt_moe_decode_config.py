@@ -19,9 +19,16 @@ def _is_subconfig(annotation: Any) -> bool:
         return False
 
 
-from ttnn.operations.ccl import MoEActivationFunction
-
 import ttnn
+from models.common.modules.moe.tt_moe_decode_config_schemas import (
+    ActivationFunction,
+    CoreCoord,
+    CoreRangeSet,
+    DispatchAlgorithm,
+    MemoryConfig,
+    Topology,
+    WorkerMode,
+)
 
 
 def _default_fast_reduce_output_memory_config() -> ttnn.MemoryConfig:
@@ -131,9 +138,9 @@ class DispatchConfig(_TTOpKwargs):
     shared_expert_ids: Optional[list[int]] = None
     cluster_axis: int
     num_links: int
-    drain_sync_tilizer_core: Optional[ttnn.CoreCoord] = None
-    worker_mode: ttnn.WorkerMode
-    dispatch_algorithm: ttnn.DispatchAlgorithm
+    drain_sync_tilizer_core: Optional[CoreCoord] = None
+    worker_mode: WorkerMode = ttnn.WorkerMode.DIRECT
+    dispatch_algorithm: DispatchAlgorithm = ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH
 
     @classmethod
     def adopt_fields(cls) -> set[str]:
@@ -143,11 +150,13 @@ class DispatchConfig(_TTOpKwargs):
 class ComputeConfig(_TTOpKwargs):
     """Kwargs spread into `ttnn.experimental.moe_compute`."""
 
-    output_height_shard_dim: int
+    output_height_shard_dim: int = 4
     cluster_axis: int
-    mux_core_range_set: ttnn.CoreRangeSet
+    mux_core_range_set: CoreRangeSet = Field(
+        default_factory=lambda: ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 3))})
+    )
     has_bias: bool
-    activation_type: MoEActivationFunction = MoEActivationFunction.SILU
+    activation_type: ActivationFunction
 
     @classmethod
     def adopt_fields(cls) -> set[str]:
@@ -163,7 +172,7 @@ class PostCombineTilizeConfig(_TTOpKwargs):
     `effective_experts_k`).
     """
 
-    output_memory_config: Optional[ttnn.MemoryConfig] = None
+    output_memory_config: Optional[MemoryConfig] = None
 
 
 class TilizeWithValPaddingConfig(_TTOpKwargs):
@@ -173,22 +182,22 @@ class TilizeWithValPaddingConfig(_TTOpKwargs):
     `memory_config` shares the same default as `PostCombineTilizeConfig.output_memory_config`.
     """
 
-    memory_config: Optional[ttnn.MemoryConfig] = None
+    memory_config: Optional[MemoryConfig] = None
 
 
 class ReduceConfig(_TTOpKwargs):
     """Kwargs spread into `ttnn.experimental.deepseek_moe_fast_reduce_nc_fused`."""
 
-    reduce_dim: int
+    reduce_dim: int = 0
     cluster_axis: int
     split_size: int
-    output_memory_config: ttnn.MemoryConfig = Field(default_factory=_default_fast_reduce_output_memory_config)
+    output_memory_config: MemoryConfig = Field(default_factory=_default_fast_reduce_output_memory_config)
     num_shared_experts: int
     shared_expert_scale: float
 
     @classmethod
     def adopt_fields(cls) -> set[str]:
-        return {"cluster_axis", "split_size"}
+        return {"cluster_axis", "split_size", "num_shared_experts"}
 
 
 class DeepseekMoEReduceScatterConfig(_TTOpKwargs):
@@ -199,10 +208,10 @@ class DeepseekMoEReduceScatterConfig(_TTOpKwargs):
     the replicated axis, not the dispatch axis.
     """
 
-    output_memory_config: ttnn.MemoryConfig = Field(default_factory=lambda: ttnn.DRAM_MEMORY_CONFIG)
-    dim: int
+    output_memory_config: MemoryConfig = Field(default_factory=lambda: ttnn.DRAM_MEMORY_CONFIG)
+    dim: int = -1
     num_links: int
-    topology: ttnn.Topology
+    topology: Topology
     cluster_axis: int = Field(validation_alias="rs_cluster_axis")
 
     @classmethod
@@ -217,19 +226,19 @@ class ReduceScatterConfig(_TTOpKwargs):
     `validation_alias`, same reasoning as the deepseek path.
     """
 
-    dim: int
+    dim: int = -1
     math_op: Any = None
     num_links: int
     cluster_axis: int = Field(validation_alias="rs_cluster_axis")
-    topology: ttnn.Topology
-    memory_config: Optional[ttnn.MemoryConfig] = None
+    topology: Topology
+    memory_config: Optional[MemoryConfig] = None
 
     @classmethod
     def adopt_fields(cls) -> set[str]:
         return {"num_links", "topology", "rs_cluster_axis"}
 
 
-class StateConfig(_TTOpKwargs):
+class ExpertStateConfig(_TTOpKwargs):
     """Routing / weight-prep params for `_TTMoEDecodeState`."""
 
     mesh_shape: tuple[int, int]
@@ -252,7 +261,7 @@ class BuffersConfig(_TTOpKwargs):
     hidden_size: int
     effective_experts_k: int
     shard_dim: int = 0
-    compute_tilize_drain_core: ttnn.CoreCoord = Field(default_factory=lambda: ttnn.CoreCoord(6, 9))
+    compute_tilize_drain_core: CoreCoord = Field(default_factory=lambda: ttnn.CoreCoord(6, 9))
 
     @classmethod
     def adopt_fields(cls) -> set[str]:
@@ -278,15 +287,15 @@ class TTMoEDecodeConfig(BaseModel):
     hidden_size: int
     select_experts_k: int
     num_shared_experts: int
-    has_bias: bool = False
+    has_bias: bool
 
     # Shared ccl kwargs adopted by sub-configs
-    num_links: int
-    topology: ttnn.Topology
+    num_links: int = 4
+    topology: Topology = ttnn.Topology.Ring
 
     # Top-level memory configs
-    dispatch_input_memory_config: ttnn.MemoryConfig = Field(default_factory=lambda: ttnn.L1_MEMORY_CONFIG)
-    dispatch_input_expert_scores_memory_config: Optional[ttnn.MemoryConfig] = None
+    dispatch_input_memory_config: MemoryConfig = Field(default_factory=lambda: ttnn.L1_MEMORY_CONFIG)
+    dispatch_input_expert_scores_memory_config: Optional[MemoryConfig] = None
 
     # Per-op sub-configs
     dispatch: DispatchConfig
@@ -296,7 +305,7 @@ class TTMoEDecodeConfig(BaseModel):
     reduce: ReduceConfig
     deepseek_moe_reduce_scatter: DeepseekMoEReduceScatterConfig
     reduce_scatter: ReduceScatterConfig
-    state: StateConfig
+    state: ExpertStateConfig
     buffers: BuffersConfig
 
     # Top-level fields exposed to sub-configs as-is (passthrough); their values
@@ -316,16 +325,29 @@ class TTMoEDecodeConfig(BaseModel):
 
     @classmethod
     def _adoptable(cls, data: dict[str, Any]) -> dict[str, Any]:
-        """Full lookup of values sub-configs may adopt by name."""
+        """Full lookup of values sub-configs may adopt by name.
+
+        For passthrough fields, fall back to the field's declared default when
+        missing — pydantic only fills defaults *after* this mode='before'
+        validator, so we apply them ourselves so sub-config adoption sees them.
+        """
+        resolved: dict[str, Any] = {}
+        for name in cls._ADOPTABLE_PASSTHROUGH:
+            finfo = cls.model_fields[name]
+            if name in data and data[name] is not None:
+                resolved[name] = data[name]
+            elif finfo.default_factory is not None:
+                resolved[name] = finfo.default_factory()
+            elif not finfo.is_required():
+                resolved[name] = finfo.default
+            # else: required & missing — bail check upstream returned already
+
         return {
-            **{name: data[name] for name in cls._ADOPTABLE_PASSTHROUGH if name in data},
-            # has_bias has a top-level default; pydantic only fills it in *after*
-            # this mode='before' validator, so apply the default ourselves here.
-            "has_bias": data.get("has_bias", False),
+            **resolved,
             # derived
-            "rs_cluster_axis": 1 - data["cluster_axis"],
-            "split_size": data["hidden_size"] // data["mesh_shape"][1 - data["cluster_axis"]],
-            "effective_experts_k": data["select_experts_k"] + data["num_shared_experts"],
+            "rs_cluster_axis": 1 - resolved["cluster_axis"],
+            "split_size": resolved["hidden_size"] // resolved["mesh_shape"][1 - resolved["cluster_axis"]],
+            "effective_experts_k": resolved["select_experts_k"] + resolved["num_shared_experts"],
         }
 
     @model_validator(mode="before")
@@ -334,9 +356,23 @@ class TTMoEDecodeConfig(BaseModel):
         if not isinstance(data, dict):
             return data
 
-        # bail if any field needed to build the adoptable lookup is missing —
-        # let pydantic raise about it instead
-        if any(data.get(name) is None for name in cls._ADOPTABLE_PASSTHROUGH if name != "has_bias"):
+        # Sub-configs whose required fields are entirely either (a) adopted from
+        # the parent or (b) defaulted at the sub-config level can be omitted from
+        # input — slot in an empty dict so the adoption + default-fill logic below
+        # has something to populate.
+        for field_name in (
+            "dispatch",
+            "compute",
+            "post_combine_tilize",
+            "tilize_with_val_padding",
+            "deepseek_moe_reduce_scatter",
+            "reduce_scatter",
+            "buffers",
+        ):
+            data.setdefault(field_name, {})
+
+        # bail if any *truly required* passthrough is missing — let pydantic raise
+        if any(data.get(name) is None for name in cls._ADOPTABLE_PASSTHROUGH if cls.model_fields[name].is_required()):
             return data
 
         adoptable = cls._adoptable(data)
@@ -371,3 +407,31 @@ class TTMoEDecodeConfig(BaseModel):
         _fill_default_if_missing(data, "tilize_with_val_padding", "memory_config", post_combine_default)
 
         return data
+
+    # ---- YAML round-trip ----
+
+    def to_yaml(self, *, exclude_defaults: bool = True, exclude_none: bool = True, **dump_kwargs) -> str:
+        """Serialize to a minimal YAML string.
+
+        Defaults to skipping fields equal to their default and `None` fields, so
+        the output only carries values the user actually configured. ttnn objects
+        (MemoryConfig, CoreCoord, etc.) are serialized via their `to_json`
+        representation; enums by their name.
+        """
+        import yaml
+
+        return yaml.safe_dump(
+            self.model_dump(mode="json", exclude_defaults=exclude_defaults, exclude_none=exclude_none, **dump_kwargs),
+            sort_keys=False,
+        )
+
+    @classmethod
+    def from_yaml(cls, yaml_str: str) -> "TTMoEDecodeConfig":
+        """Load a config from YAML.
+
+        The pre-validators on each field re-hydrate ttnn objects from their dict
+        / string representations via `from_json` (and enums by their name).
+        """
+        import yaml
+
+        return cls.model_validate(yaml.safe_load(yaml_str))
