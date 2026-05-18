@@ -54,10 +54,33 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
             "All senders must have the same receiver count for the DRAM-core prototype");
     }
 
-    // Block sizing: for the prototype, treat each tensor as one block of size shard_bytes /
-    // num_receivers. Per-receiver stripe is what the DRISC kernel pushes through remote_cb. The
-    // worker-core path's block math is more elaborate; we'll match it in a follow-up.
-    constexpr uint32_t kNumBlocks = 1;
+    // Prototype block sizing assumes the downstream matmul uses in0_block_w_tiles=1 (one K-tile
+    // per matmul iteration) — this is the common gather_in0 / 1d-mcast config for prefetcher
+    // tests. Each block delivers 1 K-tile worth of per-receiver weight stripe. num_blocks counts
+    // K-tile chunks across the whole K dimension (per tensor).
+    constexpr uint32_t kInBlockWTiles = 1;
+
+    // Per-tensor block geometry (all tensors are assumed to share the same K split for the
+    // prototype; we pick from the first tensor).
+    auto compute_block_geom = [&](const Tensor& t) {
+        const auto shard_shape = t.buffer()->shard_spec().shape();
+        const uint32_t bytes_per_tile = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.dtype()));
+        const uint32_t k_tiles = shard_shape[0] / tt::constants::TILE_HEIGHT;  // total K tiles in shard
+        const uint32_t n_tiles_per_bank =
+            shard_shape[1] / tt::constants::TILE_WIDTH;  // total N tiles in this bank's shard
+        TT_FATAL(
+            n_tiles_per_bank % num_receivers == 0,
+            "n_tiles_per_bank ({}) must divide num_receivers ({})",
+            n_tiles_per_bank,
+            num_receivers);
+        const uint32_t n_tiles_per_receiver = n_tiles_per_bank / num_receivers;
+        const uint32_t num_blocks = k_tiles / kInBlockWTiles;
+        // Per-block DMA size (read from GDDR): in0_block_w tiles tall * full N width of the bank.
+        const uint32_t dma_block_size = kInBlockWTiles * n_tiles_per_bank * bytes_per_tile;
+        // Per-receiver, per-block push size = in0_block_w * n_tiles_per_receiver tiles.
+        const uint32_t push_page_size = kInBlockWTiles * n_tiles_per_receiver * bytes_per_tile;
+        return std::make_tuple(num_blocks, dma_block_size, push_page_size);
+    };
 
     Program program{};
 
@@ -75,25 +98,22 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
     cursor += 16;
     cursor = align_up(cursor, l1_alignment);
     const uint32_t stage_a_addr = cursor;
-    // Stage buffer size: largest shard per-receiver bytes across tensors.
+    // Stage buffer size: largest per-block DMA size across tensors.
     uint32_t max_block_size = 0;
-    for (const auto* t : data_tensors) {
-        const auto shard_shape = t->buffer()->shard_spec().shape();
-        const uint32_t bytes_per_tile = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t->dtype()));
-        const uint32_t num_tiles_in_shard =
-            (shard_shape[0] / tt::constants::TILE_HEIGHT) * (shard_shape[1] / tt::constants::TILE_WIDTH);
-        const uint32_t shard_bytes = num_tiles_in_shard * bytes_per_tile;
-        TT_FATAL(
-            shard_bytes % num_receivers == 0,
-            "shard bytes ({}) must divide num_receivers ({})",
-            shard_bytes,
-            num_receivers);
-        max_block_size = std::max(max_block_size, shard_bytes / num_receivers);
+    uint32_t first_num_blocks = 0;
+    for (size_t ti = 0; ti < data_tensors.size(); ++ti) {
+        auto [nb, dma_block, push_page] = compute_block_geom(*data_tensors[ti]);
+        if (ti == 0) {
+            first_num_blocks = nb;
+        }
+        TT_FATAL(nb == first_num_blocks, "All tensors must share the same num_blocks for the prototype");
+        max_block_size = std::max(max_block_size, dma_block);
     }
     max_block_size = align_up(max_block_size, l1_alignment);
     cursor += max_block_size;
     cursor = align_up(cursor, l1_alignment);
     const uint32_t stage_b_addr = cursor;
+    const uint32_t kNumBlocks = first_num_blocks;
 
     // Build one kernel per sender DRAM core.
     for (uint32_t s = 0; s < num_senders; ++s) {
@@ -122,8 +142,11 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
             DramConfig{.noc = NOC::NOC_0, .compile_args = compile_args});
 
         // Runtime args:
-        //   bank_id, [tensor_offset]*num_tensors, [block_size]*num_tensors,
-        //   [recv_noc_x, recv_noc_y]*num_receivers
+        //   bank_id,
+        //   [tensor_offset] * num_tensors,
+        //   [dma_block_size] * num_tensors,
+        //   [push_page_size] * num_tensors,
+        //   [recv_noc_x, recv_noc_y] * num_receivers
         std::vector<uint32_t> rt_args;
         const uint32_t bank_id = sender_logical.x;
         rt_args.push_back(bank_id);
@@ -131,12 +154,12 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
             rt_args.push_back(static_cast<uint32_t>(t->buffer()->address()));
         }
         for (const auto* t : data_tensors) {
-            const auto shard_shape = t->buffer()->shard_spec().shape();
-            const uint32_t bytes_per_tile = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t->dtype()));
-            const uint32_t num_tiles_in_shard =
-                (shard_shape[0] / tt::constants::TILE_HEIGHT) * (shard_shape[1] / tt::constants::TILE_WIDTH);
-            const uint32_t shard_bytes = num_tiles_in_shard * bytes_per_tile;
-            rt_args.push_back(shard_bytes / num_receivers);
+            auto [_nb, dma_block, _push] = compute_block_geom(*t);
+            rt_args.push_back(dma_block);
+        }
+        for (const auto* t : data_tensors) {
+            auto [_nb, _dma, push_page] = compute_block_geom(*t);
+            rt_args.push_back(push_page);
         }
         const auto& receiver_phys = gcb.receiver_coords_per_sender().at(s);
         for (const auto& c : receiver_phys) {

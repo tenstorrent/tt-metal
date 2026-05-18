@@ -43,7 +43,8 @@ void kernel_main() {
     // Layout:
     //   [0]                 : bank_id (this DRISC's DRAM bank)
     //   [1..1+num_tensors)  : per-tensor bank-local offsets (uint32, into GDDR)
-    //   [...]               : per-tensor block_size (bytes per block)
+    //   [...]               : per-tensor dma_block_size (bytes read from GDDR per block)
+    //   [...]               : per-tensor push_page_size (bytes pushed to each receiver per block)
     //   [...]               : 2 * num_receivers (noc_x, noc_y per receiver)
     uint32_t rt_idx = 0;
     const uint32_t bank_id = get_arg_val<uint32_t>(rt_idx++);
@@ -51,7 +52,9 @@ void kernel_main() {
 
     const uint32_t tensor_offsets_idx = rt_idx;
     rt_idx += num_tensors;
-    const uint32_t tensor_block_sizes_idx = rt_idx;
+    const uint32_t tensor_dma_sizes_idx = rt_idx;
+    rt_idx += num_tensors;
+    const uint32_t tensor_push_page_sizes_idx = rt_idx;
     rt_idx += num_tensors;
 
     // ---- One-time L1 setup (mirrors gcb_smoke_sender) ----
@@ -89,31 +92,44 @@ void kernel_main() {
 
     // Read tensor metadata into locals.
     const uint32_t* tensor_offsets = reinterpret_cast<uint32_t*>(get_arg_addr(tensor_offsets_idx));
-    const uint32_t* tensor_block_sizes = reinterpret_cast<uint32_t*>(get_arg_addr(tensor_block_sizes_idx));
+    const uint32_t* tensor_dma_sizes = reinterpret_cast<uint32_t*>(get_arg_addr(tensor_dma_sizes_idx));
+    const uint32_t* tensor_push_page_sizes = reinterpret_cast<uint32_t*>(get_arg_addr(tensor_push_page_sizes_idx));
 
     // ---- Main loop ----
     for (uint32_t layer = 0; layer < num_layers; ++layer) {
         for (uint32_t t = 0; t < num_tensors; ++t) {
             const uint32_t bank_local_base = tensor_offsets[t];
-            const uint32_t block_size = tensor_block_sizes[t];
-            experimental::resize_remote_sender_cb_interface<false>(remote_cb_id, block_size, noc_index);
+            const uint32_t dma_block_size = tensor_dma_sizes[t];
+            const uint32_t push_page_size = tensor_push_page_sizes[t];
+            // Receivers expect remote_cb pages of `push_page_size` bytes (= in0_block_w_tiles *
+            // n_tiles_per_receiver * bytes_per_tile). Resize the sender CB to match so the
+            // remote_cb_* page accounting lines up.
+            experimental::resize_remote_sender_cb_interface<false>(remote_cb_id, push_page_size, noc_index);
 
             uint32_t src_off = bank_local_base;
             for (uint32_t b = 0; b < num_blocks; ++b) {
                 const uint32_t stage = b & 1u;
                 const uint32_t stage_buf = (stage == 0) ? stage_buf_addr_a : stage_buf_addr_b;
 
-                // Issue DMA for this stage.
-                experimental::dma_async_read(stage, src_off, stage_buf, block_size);
-                src_off += block_size;
+                // Issue DMA for this stage: read one in0_block_w-tall, full-N-wide chunk of the
+                // local bank's weight stripe.
+                experimental::dma_async_read(stage, src_off, stage_buf, dma_block_size);
+                src_off += dma_block_size;
 
                 // Wait for THIS stage's DMA to drain before NOC-writing from it.
                 experimental::dma_async_read_wait_n(stage, 0);
 
-                // Reserve, write to all receivers, flush.
+                // Reserve, write to all receivers, flush. Each receiver gets `push_page_size`
+                // bytes (its N-tile slice of this K-block) from the stage buffer.
                 experimental::remote_cb_reserve_back(remote_cb_id, 1);
                 experimental::remote_cb_push_back_and_write_pages<false>(
-                    remote_cb_id, stage_buf, 1, 1, 1, block_size, noc_index);
+                    remote_cb_id,
+                    stage_buf,
+                    /*num_pages=*/1,
+                    /*num_rows=*/1,
+                    /*coalesced_num_pages_per_row=*/1,
+                    /*coalesced_page_size=*/push_page_size,
+                    noc_index);
                 noc_async_posted_writes_flushed();
             }
 

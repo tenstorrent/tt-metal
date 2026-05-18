@@ -132,7 +132,13 @@ protected:
             sender_logical,
             DramConfig{.noc = NOC::NOC_0, .compile_args = sender_compile_args});
 
-        std::vector<uint32_t> sender_rt_args = {bank_id, /*tensor_offset[0]=*/dram_addr, /*block_size[0]=*/block_size};
+        // RT args: bank_id, tensor_offsets[], dma_block_sizes[], push_page_sizes[], recv_xy[]
+        std::vector<uint32_t> sender_rt_args = {
+            bank_id,
+            /*tensor_offset[0]=*/dram_addr,
+            /*dma_block_size[0]=*/block_size,
+            /*push_page_size[0]=*/block_size / kNumReceivers,
+        };
         const auto& receiver_phys = gcb.receiver_coords_per_sender().at(0);
         for (const auto& c : receiver_phys) {
             sender_rt_args.push_back(c.x);
