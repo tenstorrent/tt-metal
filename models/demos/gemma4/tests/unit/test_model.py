@@ -14,7 +14,13 @@ import ttnn
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 
-from ...tests.test_factory import TestFactory, compare_tensors, parametrize_mesh_with_fabric
+from ...tests.test_factory import (
+    TestFactory,
+    compare_tensors,
+    get_pcc_threshold,
+    num_layers_for_full_attention_group,
+    parametrize_mesh_with_fabric,
+)
 
 # ── Config Tests ───────────────────────────────────────────────────────────
 
@@ -58,7 +64,7 @@ def test_model_instantiation():
     assert hf_config.num_hidden_layers > 0
 
 
-def test_softcapping():
+def test_softcapping(reset_seeds):
     """Test logit softcapping matches tanh(x/cap)*cap."""
     cap = 30.0
     x = torch.randn(1, 1, 32, 100, dtype=torch.float32) * 100
@@ -184,22 +190,39 @@ def _hf_model_state_to_tt_state(hf_model):
 
 
 @parametrize_mesh_with_fabric()
-@pytest.mark.parametrize("num_layers", [1, 5, 6], ids=["1layer", "5layers", "6layers"])
-def test_single_layer_model(mesh_device, num_layers):
+@pytest.mark.parametrize("layer_group", ["sliding_only", "full_group"])
+def test_single_layer_model(mesh_device, layer_group, reset_seeds, request):
     """Test few-layer model with random weights against HF reference.
 
-    1 layer = sliding only, 5 layers = all sliding, 6 layers = includes first global.
+    layer_group:
+      - "sliding_only": 1 layer — exercises just the first (sliding) layer.
+      - "full_group":   smallest prefix that includes one full-attention layer.
+                        Resolved at runtime from the model's layer_types: E2B
+                        repeats (sliding x4, full x1) so it needs 5 layers;
+                        the larger variants repeat (sliding x5, full x1) so
+                        they need 6.
+
     Uses small vocab (256) and random weights for fast execution.
 
-        pytest -k "1x1 and 1layer"    # single card, 1 layer
-        pytest -k "1x8 and 6layers"   # T3K, through first global layer
+        pytest -k "1x1 and sliding_only"   # single card, sliding only
+        pytest -k "1x8 and full_group"     # T3K, through first full-attn layer
     """
     from models.demos.gemma4.config import MeshConfig, ModeConfig
     from models.demos.gemma4.tt.ccl import CCLManager
 
-    # 6-layer test includes global attention — skip on single device if head_dim=512 overflows L1
+    # Resolve layer count from the model — see helper docstring for why this
+    # depends on the variant. Doing it inside the test (vs at parametrize time)
+    # avoids loading the HF config during pytest collection.
+    base_config = _create_hf_text_config(vocab_size=256, num_layers=1)
+    if layer_group == "sliding_only":
+        num_layers = 1
+    else:
+        num_layers = num_layers_for_full_attention_group(base_config)
+
+    # full_group includes a full-attention layer (head_dim=512) — skip on single
+    # device if that overflows L1 on this model.
     tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
-    if num_layers >= 6 and tp == 1:
+    if layer_group == "full_group" and tp == 1:
         hf_config_check = TestFactory.create_hf_config()
         if hf_config_check.hidden_size > 4096:
             pytest.skip("Global attention head_dim=512 overflows L1 on single device for large models")
@@ -262,16 +285,16 @@ def test_single_layer_model(mesh_device, num_layers):
         .float()
     )
 
-    passing, pcc_msg = compare_tensors(tt_logits_torch, hf_logits, pcc_threshold=0.90)
-    logger.info(f"TP={tp} {num_layers}-layer PCC: {pcc_msg}")
-    assert passing, f"Single-layer model (layers={num_layers}, tp={tp}) PCC too low: {pcc_msg}"
+    passing, pcc_msg = compare_tensors(tt_logits_torch, hf_logits, pcc_threshold=get_pcc_threshold(request))
+    logger.info(f"TP={tp} group={layer_group} ({num_layers}-layer) PCC: {pcc_msg}")
+    assert passing, f"Single-layer model (group={layer_group}, layers={num_layers}, tp={tp}) PCC too low: {pcc_msg}"
 
 
 # ── Full Model PCC Test ─────────────────────────────────────────────────
 
 
 @parametrize_mesh_with_fabric()
-def test_full_model(mesh_device):
+def test_full_model(mesh_device, reset_seeds, request):
     """Test full model (all layers, real weights) against HuggingFace reference.
 
     Runs on any mesh where the model fits in DRAM. Smaller models (E2B, E4B)
@@ -396,7 +419,7 @@ def test_full_model(mesh_device):
     hf_compare = hf_logits[:, :seq_len, :]
     tt_compare = tt_logits_torch[:, :seq_len, :]
 
-    passing, pcc_msg = compare_tensors(tt_compare, hf_compare, pcc_threshold=0.90)
+    passing, pcc_msg = compare_tensors(tt_compare, hf_compare, pcc_threshold=get_pcc_threshold(request))
     logger.info(f"Full model PCC (seq_len={seq_len}): {pcc_msg}")
 
     # Also check that argmax tokens match for the last position

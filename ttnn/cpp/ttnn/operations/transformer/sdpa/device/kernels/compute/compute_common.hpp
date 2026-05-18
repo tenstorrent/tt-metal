@@ -31,12 +31,11 @@ ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transp
         transpose, true /*transpose within 16x16 face*/, cbid)));
 
     MATH((llk_math_eltwise_unary_datacopy_init<
-          A2D,
+          DataCopyType::A2D,
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false,  // is_int_fpu_en
-          false   // tilize
-          >(cbid)));
+          PackMode::Default>(cbid)));
 }
 
 /**
@@ -234,28 +233,26 @@ void calculate_recip_first_column() {
             //     out = -out;
             // }
             // v_endif;
-            if constexpr (DST_ACCUM_MODE || APPROX) {
-                sfpi::dst_reg[0] = out;
-            } else {
-                sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, RoundMode::NearestEven));
+            if constexpr (!(DST_ACCUM_MODE || APPROX)) {
+                out = sfpi::convert<sfpi::vFloat16b>(out, RoundMode::NearestEven);
             }
+            sfpi::dst_reg[0] = out;
             sfpi::dst_reg += 2;
         }
     } else {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
+            sfpi::vFloat out;
 
             if constexpr (APPROX) {
-                sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
+                out = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
+            } else if constexpr (DST_ACCUM_MODE) {
+                out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
             } else {
-                if constexpr (DST_ACCUM_MODE) {
-                    sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
-                } else {
-                    sfpi::vFloat out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-                    sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, RoundMode::NearestEven));
-                }
+                out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
+                out = sfpi::convert<sfpi::vFloat16b>(out, RoundMode::NearestEven);
             }
-
+            sfpi::dst_reg[0] = out;
             sfpi::dst_reg += 2;
         }
     }
@@ -1758,7 +1755,11 @@ void sdpa_inner_loop(
             }
             q_start_tile = q_chunk * Sq_chunk_t;
             if (is_causal) {
-                q_high_tile = q_start_tile + Sq_chunk_t;
+                // Clamp to total K-tile extent. Mirrors reader_interleaved's clamp; without
+                // both, the reader and compute disagree on K-chunk count when Q-chunk extends
+                // past total K (Sq_chunk_t > Skt) → CB deadlock.
+                const uint32_t q_high_unclamped = q_start_tile + Sq_chunk_t;
+                q_high_tile = q_high_unclamped < Skt ? q_high_unclamped : Skt;
             } else {
                 q_high_tile = Skt;
             }

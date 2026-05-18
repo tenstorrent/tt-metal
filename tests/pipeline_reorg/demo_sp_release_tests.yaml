@@ -73,7 +73,7 @@
   team: models
 
 # ============================================================================
-# DeepSeek V3 B1 Decode Tests (Blitz) - Blackhole P300
+# DeepSeek V3 B1 Host IO Tests (Blitz) - Blackhole P300
 # ============================================================================
 
 - name: bh_p300_DeepSeek_B1_HostIO
@@ -87,27 +87,79 @@
   team: models
 
 # ============================================================================
-# DeepSeek V3 B1 Decode Tests (Blitz) - Blackhole Single Card
+# DeepSeek V3 B1 Unit Tests (Blitz) - Blackhole Galaxy
 # ============================================================================
 
-- name: bh_p150b_civ2_viommu_DeepSeek_B1_Full_Unit_Tests_SlowDispatch
+- name: bh_galaxy_DeepSeek_B1_Unit_Tests_DecoderIntegration
   cmd: |
-    TT_METAL_SLOW_DISPATCH_MODE=1 pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
+    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
+      --bucket decoder_integration
   model: deepseek_decode
   skus:
-    bh_p150b_civ2_viommu:
-      timeout: 20
-  owner_id: U03HY7MK4BT
+    bh_galaxy:
+      timeout: 35
+  owner_id: U087S3K319A # Austin Ho
   team: models
 
-- name: bh_p150b_civ2_viommu_DeepSeek_B1_Full_Unit_Tests_FastDispatch
+- name: bh_galaxy_DeepSeek_B1_Unit_Tests_PureLocalMatmulExpert
   cmd: |
-    pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
+    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
+      --bucket pure_local_matmul_expert
   model: deepseek_decode
   skus:
-    bh_p150b_civ2_viommu:
-      timeout: 20
-  owner_id: U03HY7MK4BT
+    bh_galaxy:
+      timeout: 75
+  owner_id: U06MJ6CVCGZ # Yu Gao
+  team: models
+
+- name: bh_galaxy_DeepSeek_B1_Unit_Tests_PureLocalSingleDeviceRemainder
+  cmd: |
+    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
+      --bucket pure_local_single_device_remainder
+  model: deepseek_decode
+  skus:
+    bh_galaxy:
+      timeout: 15
+  owner_id: U07D5N7QL4U # Joseph Chu
+  team: models
+
+- name: bh_galaxy_DeepSeek_B1_Unit_Tests_SpecialModes
+  cmd: |
+    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
+      --bucket fast_dispatch \
+      --bucket lm_head_sampling_perf
+  model: deepseek_decode
+  skus:
+    bh_galaxy:
+      timeout: 15
+  owner_id: U08FXFFH7L0 # Abhishek Agarwal
+  team: models
+
+- name: bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostIO
+  cmd: |
+    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
+      --bucket fabric_2d \
+      --bucket prepare_weights_hybrid_allocator \
+      --bucket host_io_risk
+  model: deepseek_decode
+  skus:
+    bh_galaxy:
+      timeout: 65
+  owner_id: U088DBNUKGR # Evan Smal
+  team: models
+
+- name: bh_galaxy_DeepSeek_B1_Unit_Tests_MoreFabric
+  cmd: |
+    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
+      --bucket fabric_2d_torus_x \
+      --bucket fabric_2d_torus_y \
+      --bucket fabric_2d_torus_y_xy_skip_only \
+      --bucket fabric_1d
+  model: deepseek_decode
+  skus:
+    bh_galaxy:
+      timeout: 15
+  owner_id: U081GCJ8NDN # Nour Ardo
   team: models
 
 # ============================================================================

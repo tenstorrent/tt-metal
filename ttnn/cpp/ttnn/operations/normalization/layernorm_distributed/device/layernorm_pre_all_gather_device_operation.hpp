@@ -6,13 +6,38 @@
 
 #include <functional>
 #include <optional>
+#include <variant>
 
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "layernorm_pre_all_gather_program_factory.hpp"
 
 #include "layernorm_pre_all_gather_device_operation_types.hpp"
 
 namespace ttnn::prim {
+
+// Program factory for normal (non-Welford, non-2D) operation
+struct LayerNormPreAllGatherProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const LayerNormPreAllGatherParams& operation_attributes,
+        const LayerNormPreAllGatherInputs& tensor_args,
+        Tensor& output);
+};
+
+// Program factory for 2D core grid operation
+struct LayerNormPreAllGather2DProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const LayerNormPreAllGatherParams& operation_attributes,
+        const LayerNormPreAllGatherInputs& tensor_args,
+        Tensor& output);
+};
+
+// Program factory for Welford algorithm (layernorm only)
+struct LayerNormPreAllGatherWelfordProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const LayerNormPreAllGatherParams& operation_attributes,
+        const LayerNormPreAllGatherInputs& tensor_args,
+        Tensor& output);
+};
 
 struct LayerNormPreAllGatherDeviceOperation {
     using operation_attributes_t = LayerNormPreAllGatherParams;
@@ -39,6 +64,7 @@ namespace ttnn::prim {
 
 Tensor layer_norm_pre_all_gather(
     const Tensor& input,
+    const std::optional<Tensor>& residual_input_tensor,
     const std::optional<Tensor>& recip_tensor,
     LayerNormDistributedType norm_type,
     const std::optional<tt::tt_metal::DataType>& dtype,

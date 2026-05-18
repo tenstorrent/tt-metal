@@ -216,6 +216,7 @@ class WhisperGenerator:
         cross_attn_cache_per_batch_size=None,
         max_batch_size=2,
         enable_encoder_trace: bool = True,
+        use_2cq: bool = False,
     ):
         """
         Initialize the WhisperGenerator.
@@ -236,6 +237,8 @@ class WhisperGenerator:
             max_batch_size: Maximum supported global batch size for pre-allocated tensors (default 2)
             enable_encoder_trace: If True (default), capture/replay ``encoder()`` per ``batch_size_per_device``
                 after the first occurrence; set False to always run eager encoder.
+            use_2cq: If True, run decode traces and sampled-token reads on CQ 0 while CQ 1
+                handles forced-token writes (input).
         """
         self.config = config
         self.mesh_device = mesh_device
@@ -251,6 +254,16 @@ class WhisperGenerator:
         self.cross_attn_cache_per_batch_size = cross_attn_cache_per_batch_size
         self.max_batch_size = max_batch_size
         self.enable_encoder_trace = enable_encoder_trace
+        self.use_2cq = use_2cq
+        self._op_event = None
+        self._read_event = None
+        self._write_event = None
+        # 2CQ lookahead: the previous loop iteration's prefetched decode step leaves either
+        # an async-read host tensor or a pre-known forced-token value here, to be consumed
+        # at the start of the next iteration. Exactly one of these is non-None between an
+        # enqueue and its matching consume.
+        self._pending_token_host = None
+        self._pending_forced_tokens = None
 
         # Cross-attention cache validity flag
         self.cross_attn_cache_valid = False
@@ -383,17 +396,18 @@ class WhisperGenerator:
             trace_state=self.encoder_trace_state,
         )
 
-    def _reset_decode_pos(self, value, global_batch_size):
+    def _reset_decode_pos(self, value, global_batch_size, cq_id=None):
         """Reset current_decode_pos to a specific value in-place
 
         Args:
             value: The position value to set (integer)
             global_batch_size: Total batch size across all devices
+            cq_id: Optional command queue to use for host-to-device position writes
         """
         pos_host = torch.full((global_batch_size,), value, dtype=torch.int32)
         pos_tensor_host = ttnn.from_torch(pos_host, dtype=ttnn.int32, mesh_mapper=self.input_mesh_mapper)
         trace_key = self._get_batch_size_per_device(global_batch_size)
-        ttnn.copy_host_to_device_tensor(pos_tensor_host, self.current_decode_pos_per_size[trace_key])
+        ttnn.copy_host_to_device_tensor(pos_tensor_host, self.current_decode_pos_per_size[trace_key], cq_id)
         # Also reset the uint32 position embedding tensor
         if self.decode_pos_embed[trace_key] is not None:
             pos_replicate_mapper = (
@@ -405,7 +419,7 @@ class WhisperGenerator:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=pos_replicate_mapper,
             )
-            ttnn.copy_host_to_device_tensor(pos_embed_host, self.decode_pos_embed[trace_key])
+            ttnn.copy_host_to_device_tensor(pos_embed_host, self.decode_pos_embed[trace_key], cq_id)
 
     def _release_all_traces(self):
         """Release captured encoder and decode traces, and reset decode-side staging (token buffers)."""
@@ -511,20 +525,27 @@ class WhisperGenerator:
 
         logger.info(f"On-device sampling trace capture complete for batch size per device {trace_key}")
 
-    def _execute_decode_trace(self, trace_key):
+    def _execute_decode_trace(self, trace_key, blocking: bool = True):
         """
-        Execute the on-device sampling trace.
+        Execute the on-device sampling trace on CQ 0.
 
         Args:
             trace_key: Batch size per device key for trace lookup
+            blocking: If True, wait for trace completion and return the sampled token.
+                If False, enqueue the trace on CQ 0 and record an event so that
+                CQ 1 forced-token writes can fence against the trace's argmax output.
 
         Returns:
-            The sampled token as a torch tensor (read from device).
+            The sampled token as a torch tensor for blocking execution; otherwise ``None``.
         """
         if self.trace_id_decode[trace_key] is None:
             raise RuntimeError("Decode trace not captured. Call _capture_decode_trace first.")
 
-        ttnn.execute_trace(self.mesh_device, self.trace_id_decode[trace_key], cq_id=0, blocking=True)
+        ttnn.execute_trace(self.mesh_device, self.trace_id_decode[trace_key], cq_id=0, blocking=blocking)
+
+        if not blocking:
+            self._op_event = ttnn.record_event(self.mesh_device, 0)
+            return None
 
         # Read back the tiny token tensor
         sampled_token = ttnn.to_torch(
@@ -533,6 +554,86 @@ class WhisperGenerator:
         )
 
         return sampled_token
+
+    def _read_token_async(self, trace_key):
+        """Read the sampled token from device on CQ 0 (same queue as the trace).
+
+        No cross-CQ fence is needed because the read is enqueued on the compute CQ
+        and is therefore automatically ordered after the trace's argmax write.
+        """
+        token_host = ttnn.from_device(self.token_id_device[trace_key], blocking=False, cq_id=0)
+        self._read_event = ttnn.record_event(self.mesh_device, 0)
+        return token_host, self._read_event
+
+    def _write_forced_token_async(self, trace_key, forced_host, op_event):
+        """Write a forced token on CQ 1 after the CQ 0 trace finishes producing the
+        argmax output it would otherwise overwrite."""
+        ttnn.wait_for_event(1, op_event)
+        ttnn.copy_host_to_device_tensor(forced_host, self.token_id_device[trace_key], 1)
+        self._write_event = ttnn.record_event(self.mesh_device, 1)
+
+    def _enqueue_traced_decode_step(self, trace_key, iter_idx, forced_tokens_dict, batch_size):
+        """
+        Launch one on-device decode step on CQ 0 and enqueue the matching async I/O
+        (CQ 0 read of the sampled token, or CQ 1 write of a forced token) without
+        blocking the host.
+
+        Cross-CQ fences ensure ``token_id_device`` is not raced: the next trace on
+        CQ 0 waits on any in-flight CQ 1 forced write before reading the previous
+        token as input. The previous CQ 0 read (if any) needs no fence — it shares
+        a queue with the next trace and is therefore implicitly ordered. The pending
+        result is stashed in ``self._pending_token_host`` (async-read path) or
+        ``self._pending_forced_tokens`` (forced path) for later consumption via
+        ``_consume_pending_decode_token``.
+        """
+        assert (
+            self._pending_token_host is None and self._pending_forced_tokens is None
+        ), "Pending decode token must be consumed before enqueuing the next step"
+
+        # Fence CQ 0 on the previous CQ 1 forced write so the next trace doesn't
+        # read stale input while the host-to-device copy is still in flight.
+        if self._write_event is not None:
+            ttnn.wait_for_event(0, self._write_event)
+            self._write_event = None
+
+        self._execute_decode_trace(trace_key, blocking=False)
+        op_event = self._op_event
+
+        if iter_idx in forced_tokens_dict:
+            forced_val = torch.tensor([forced_tokens_dict[iter_idx]]).repeat(batch_size)
+            forced_host = ttnn.from_torch(
+                forced_val[:, None].int(),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self.input_mesh_mapper,
+            )
+            self._write_forced_token_async(trace_key, forced_host, op_event)
+            self._pending_forced_tokens = forced_val
+        else:
+            token_host, _ = self._read_token_async(trace_key)
+            self._pending_token_host = token_host
+
+    def _consume_pending_decode_token(self):
+        """
+        Consume the token result launched by ``_enqueue_traced_decode_step``.
+
+        For the forced path the token value is already known on host and is returned
+        directly. For the async-read path this host-synchronizes on the CQ 0 read event
+        that was recorded at enqueue time, then pulls the token to torch. When the
+        lookahead prefetch happened at the end of the previous iteration, the read has
+        typically already completed by the time this runs (CQ 0 trace + CQ 0 read were
+        overlapping with the host post-processing of the previous token), so the
+        host-side synchronize is ~0 cost.
+        """
+        if self._pending_forced_tokens is not None:
+            next_tokens = self._pending_forced_tokens
+            self._pending_forced_tokens = None
+            return next_tokens
+        assert self._pending_token_host is not None, "No pending decode token to consume"
+        ttnn.event_synchronize(self._read_event)
+        sampled = ttnn.to_torch(self._pending_token_host, mesh_composer=self.output_mesh_composer)
+        self._pending_token_host = None
+        return sampled.reshape(-1).long()
 
     def generate(
         self,
@@ -646,7 +747,6 @@ class WhisperGenerator:
             return self._generate_with_temperature(
                 temperature=temperature,
                 start_encode=start_encode,
-                input_features=input_features.unsqueeze(1),
                 unpadded_batch_size=unpadded_batch_size,
                 return_perf_metrics=return_perf_metrics,
                 return_timestamps=return_timestamps,
@@ -668,7 +768,6 @@ class WhisperGenerator:
                 output = self._generate_with_temperature(
                     temperature=temperature,
                     start_encode=start_encode,
-                    input_features=input_features.unsqueeze(1),
                     unpadded_batch_size=unpadded_batch_size,
                     return_perf_metrics=return_perf_metrics,
                     return_timestamps=return_timestamps,
@@ -783,7 +882,6 @@ class WhisperGenerator:
         self,
         temperature,
         start_encode,
-        input_features,
         unpadded_batch_size,
         return_perf_metrics=False,
         return_timestamps=False,
@@ -798,6 +896,22 @@ class WhisperGenerator:
 
         Uses pre-allocated self.encoder_hidden_states instead of a passed encoder_hidden_states parameter.
         """
+        # Defensive cleanup in case a previous temperature attempt raised mid-loop before
+        # draining 2CQ state. _release_captured_traces_before_new_generation is only called
+        # at the start of each generate() call, not between temperature attempts, so we
+        # re-synchronize here to make sure CQ 1 is idle before we start enqueuing again.
+        if (
+            self._pending_token_host is not None
+            or self._pending_forced_tokens is not None
+            or self._read_event is not None
+            or self._write_event is not None
+        ):
+            ttnn.synchronize_device(self.mesh_device)
+            self._pending_token_host = None
+            self._pending_forced_tokens = None
+            self._read_event = None
+            self._write_event = None
+
         return_timestamps_for_prefix = (
             any(return_timestamps) if isinstance(return_timestamps, list) else return_timestamps
         )
@@ -821,7 +935,6 @@ class WhisperGenerator:
 
         # When prompt is provided, the sequence becomes:
         # <|startofprev|> -> [prompt tokens] -> <|startoftranscript|> -> <|language|> -> <|task|> -> ...
-        prompt_offset = 0
         if prompt is not None:
             # Tokenize the prompt
             prompt_tokens = self.processor.tokenizer.encode(prompt, add_special_tokens=False)
@@ -859,7 +972,7 @@ class WhisperGenerator:
         prefix_len = len(prefix_sequence)
 
         # Initialize input_ids with the full prefix sequence for proper conditioning
-        input_ids = torch.tensor([prefix_sequence]).repeat(input_features.shape[0], 1).to(torch.long)
+        input_ids = torch.tensor([prefix_sequence]).repeat(unpadded_batch_size, 1).to(torch.long)
         logits_processor = get_logits_processor(input_ids, self.config)
 
         if not self.kv_cache_per_batch_size[trace_key]:
@@ -867,6 +980,7 @@ class WhisperGenerator:
             decoder_start_values = self.generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
 
         MAX_GEN_LEN = self.config.max_length
+        collect_output_ids = streaming and not return_timestamps_for_prefix
         output_ids = []
         total_decode_time = 0
         prompt_is_done = [False for _ in range(unpadded_batch_size)]
@@ -878,7 +992,7 @@ class WhisperGenerator:
 
         # Non-streaming mode: collect all results in a list
         if not streaming:
-            output = [[] for _ in range(input_features.shape[0])]
+            output = [[] for _ in range(unpadded_batch_size)]
         ttft = 0.0
         avg_decode_throughput = 0.0
 
@@ -886,7 +1000,6 @@ class WhisperGenerator:
         # Batched path: one preprocess over full prefix (decode_pos=None) + one decoder(decoder_prefill=True).
         if self.kv_cache_per_batch_size[trace_key] and prefix_len > 1:
             logger.debug(f"Running prefill pass for {prefix_len} prefix tokens")
-            first_transcription_token = None
 
             # Full-prefix hidden states: same embedding path as multi-token decode_pos=None.
             self._reset_decode_pos(0, unpadded_batch_size)
@@ -936,7 +1049,8 @@ class WhisperGenerator:
                     .squeeze(1)
                 )
 
-            output_ids.append(first_transcription_token)
+            if collect_output_ids:
+                output_ids.append(first_transcription_token)
 
             if return_timestamps_for_prefix:
                 for batch_idx in range(unpadded_batch_size):
@@ -950,9 +1064,7 @@ class WhisperGenerator:
                 ttnn_transcription = self.processor.batch_decode(
                     first_transcription_token.unsqueeze(dim=1), skip_special_tokens=True
                 )
-                current_avg_logprob = log_probs[0].unsqueeze(0) if log_probs else torch.zeros(input_features.shape[0])
-                if len(log_probs) > 1:
-                    current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
+                current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
 
                 if return_perf_metrics:
                     yield ttnn_transcription, current_avg_logprob, no_speech_probs, ttft, 0.0, False
@@ -962,7 +1074,7 @@ class WhisperGenerator:
                 ttnn_transcription = self.processor.batch_decode(
                     first_transcription_token.unsqueeze(dim=1), skip_special_tokens=True
                 )
-                for idx in range(input_features.shape[0]):
+                for idx in range(unpadded_batch_size):
                     output[idx].append(ttnn_transcription[idx])
 
             # Set decode position to prefix_len for generation to continue
@@ -1015,20 +1127,32 @@ class WhisperGenerator:
                 and self.cross_attn_cache_valid
                 and i > generation_start
             ):
-                sampled_tokens_torch = self._execute_decode_trace(trace_key)
+                if self.use_2cq:
+                    # One-iteration-ahead pipeline. By the time we get here, the previous
+                    # iteration's end-of-loop prefetch (see below) has already issued trace N
+                    # plus its sampled-token read on CQ 0 (or its forced-token write on CQ 1),
+                    # overlapped with the previous iteration's host post-processing (EOS check,
+                    # tokenizer decode, streaming yield). The very first traced-2CQ iteration
+                    # has no pending state yet, so we enqueue synchronously here to seed the pipeline.
+                    if self._pending_token_host is None and self._pending_forced_tokens is None:
+                        self._enqueue_traced_decode_step(trace_key, i, forced_tokens_dict, unpadded_batch_size)
 
-                # Handle forced tokens: overwrite on-device argmax result if needed
-                if i in forced_tokens_dict:
-                    next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(input_features.shape[0])
-                    forced_host = ttnn.from_torch(
-                        next_tokens[:, None].int(),
-                        dtype=ttnn.uint32,
-                        layout=ttnn.ROW_MAJOR_LAYOUT,
-                        mesh_mapper=self.input_mesh_mapper,
-                    )
-                    ttnn.copy_host_to_device_tensor(forced_host, self.token_id_device[trace_key])
+                    next_tokens = self._consume_pending_decode_token()
                 else:
-                    next_tokens = sampled_tokens_torch.reshape(-1).long()
+                    sampled_tokens_torch = self._execute_decode_trace(trace_key)
+
+                    # Handle forced tokens: overwrite on-device argmax result if needed
+                    if i in forced_tokens_dict:
+                        next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(unpadded_batch_size)
+                        forced_host = ttnn.from_torch(
+                            next_tokens[:, None].int(),
+                            dtype=ttnn.uint32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            mesh_mapper=self.input_mesh_mapper,
+                        )
+                        ttnn.copy_host_to_device_tensor(forced_host, self.token_id_device[trace_key])
+                    else:
+                        next_tokens = sampled_tokens_torch.reshape(-1).long()
 
                 # Note: decode_pos already incremented inside trace (plus_one)
                 input_ids = next_tokens[:, None]
@@ -1080,7 +1204,7 @@ class WhisperGenerator:
                 next_tokens_scores = logits_processor(input_ids, next_token_logits)
 
                 if i in forced_tokens_dict:
-                    next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(input_features.shape[0])
+                    next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(unpadded_batch_size)
                 else:
                     next_tokens = self._sample_token(next_tokens_scores, temperature)
 
@@ -1142,7 +1266,8 @@ class WhisperGenerator:
                             torch.log_softmax(next_tokens_scores, dim=-1).gather(1, next_tokens.unsqueeze(1)).squeeze(1)
                         )
 
-                output_ids.append(next_tokens)
+                if collect_output_ids:
+                    output_ids.append(next_tokens)
 
                 if return_timestamps_for_prefix:
                     for batch_idx in range(unpadded_batch_size):
@@ -1169,6 +1294,26 @@ class WhisperGenerator:
                 if prompt_is_done[user_id]:
                     next_tokens[user_id] = self.config.eos_token_id
 
+            # 2CQ lookahead prefetch: launch the next iteration's trace + sampled-token
+            # read on CQ 0 (or forced-token write on CQ 1) now, so that they execute
+            # concurrently with the host-side tokenizer decode and streaming yield below.
+            # The next iteration will consume the result at the top of its loop body,
+            # where the host-side event_synchronize is expected to be a no-op in the
+            # steady state.
+            # Guards: only prefetch when the traced branch would otherwise run (trace
+            # captured, cross-attn cache valid), when there is at least one more decode
+            # iteration to consume it, and when EOS has not yet terminated the batch
+            # (so we never enqueue a trace whose result would be thrown away).
+            if (
+                self.use_2cq
+                and self.kv_cache_per_batch_size[trace_key]
+                and self.trace_id_decode[trace_key]
+                and self.cross_attn_cache_valid
+                and i + 1 < MAX_GEN_LEN
+                and not all(prompt_is_done)
+            ):
+                self._enqueue_traced_decode_step(trace_key, i + 1, forced_tokens_dict, unpadded_batch_size)
+
             # Only output transcription tokens (skip prompt and forced prefix tokens)
             if i >= transcription_start_pos:
                 ttnn_transcription = self.processor.batch_decode(next_tokens.unsqueeze(dim=1), skip_special_tokens=True)
@@ -1179,11 +1324,11 @@ class WhisperGenerator:
                     if log_probs:
                         current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
                     else:
-                        current_avg_logprob = torch.zeros(input_features.shape[0])
+                        current_avg_logprob = torch.zeros(unpadded_batch_size)
 
                     # Use zeros for no_speech_probs if not yet calculated
                     if no_speech_probs is None:
-                        current_no_speech_probs = torch.zeros(input_features.shape[0])
+                        current_no_speech_probs = torch.zeros(unpadded_batch_size)
                     else:
                         current_no_speech_probs = no_speech_probs
 
@@ -1196,11 +1341,24 @@ class WhisperGenerator:
                         yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, False
                 else:
                     # Non-streaming mode: collect results
-                    for idx in range(input_features.shape[0]):
+                    for idx in range(unpadded_batch_size):
                         output[idx].append(ttnn_transcription[idx])
 
             if all(prompt_is_done):
                 break
+
+        # Drain any lookahead state left by the decode loop. Under the normal invariants
+        # the end-of-loop prefetch guard prevents us from breaking out with an unconsumed
+        # pending, but we defensively drain here so that an early break (EOS) cannot leak
+        # in-flight CQ 0 reads or CQ 1 writes into the next temperature attempt or generate() call.
+        if self._pending_token_host is not None or self._pending_forced_tokens is not None:
+            self._consume_pending_decode_token()
+        if self._read_event is not None:
+            ttnn.event_synchronize(self._read_event)
+            self._read_event = None
+        if self._write_event is not None:
+            ttnn.event_synchronize(self._write_event)
+            self._write_event = None
 
         total_generate_time = time.time() - start_encode
         logger.info(f"Time to first token: {(ttft*1000):.3f}ms")
@@ -1213,11 +1371,11 @@ class WhisperGenerator:
         if log_probs:
             avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
         else:
-            avg_logprob = torch.zeros(input_features.shape[0])
+            avg_logprob = torch.zeros(unpadded_batch_size)
 
         # Use zeros for no_speech_probs if not calculated
         if no_speech_probs is None:
-            no_speech_probs = torch.zeros(input_features.shape[0])
+            no_speech_probs = torch.zeros(unpadded_batch_size)
 
         # Process timestamps if requested
         if return_timestamps_for_prefix and full_token_sequences:

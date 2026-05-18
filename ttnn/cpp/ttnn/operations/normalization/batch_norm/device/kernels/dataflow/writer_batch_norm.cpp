@@ -6,9 +6,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);        // batch_mean
@@ -61,12 +61,12 @@ void kernel_main() {
     const uint32_t bias_tile_bytes = get_tile_size(cb_id_bias);
     const auto bias = TensorAccessor(bias_args, bias_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_id_src_obj(cb_id_src);
-    experimental::CircularBuffer cb_id_dst_obj(cb_id_dst);
-    experimental::CircularBuffer cb_id_batch_var_obj(cb_id_batch_var);
-    experimental::CircularBuffer cb_id_weight_obj(cb_id_weight);
-    experimental::CircularBuffer cb_id_bias_obj(cb_id_bias);
+    Noc noc;
+    CircularBuffer cb_id_src_obj(cb_id_src);
+    CircularBuffer cb_id_dst_obj(cb_id_dst);
+    CircularBuffer cb_id_batch_var_obj(cb_id_batch_var);
+    CircularBuffer cb_id_weight_obj(cb_id_weight);
+    CircularBuffer cb_id_bias_obj(cb_id_bias);
 
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;

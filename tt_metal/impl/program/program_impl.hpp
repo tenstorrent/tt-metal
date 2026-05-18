@@ -17,6 +17,7 @@
 #include "program_device_map.hpp"        // ProgramTransferInfo
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
+#include "tt-metalium/experimental/tensor/spec/tensor_spec.hpp"  // Metal 2.0 TensorParameter registry
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>        // CoreType
@@ -336,11 +337,15 @@ public:
     void register_kernel_spec_name(const KernelSpecName& name, KernelHandle handle);
     void register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id);
     void register_semaphore_spec_name(const SemaphoreSpecName& name, uint32_t sem_id);
+    void register_tensor_parameter(const std::string& name, const TensorSpec& spec);
 
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
     KernelHandle get_kernel_handle(const KernelSpecName& name) const;
     uint32_t get_dfb_handle(const DFBSpecName& name) const;
     uint32_t get_semaphore_handle(const SemaphoreSpecName& name) const;
+    // Returns nullptr if name is not registered (caller validates).
+    const TensorSpec* get_tensor_parameter_layout(const std::string& name) const;
+    std::vector<std::string> get_registered_tensor_parameter_names() const;
 
     // Metal 2.0: Get kernel by name (TT_FATAL if not found)
     std::shared_ptr<Kernel> get_kernel_by_spec_name(const KernelSpecName& name) const {
@@ -449,6 +454,10 @@ private:
         std::unordered_map<DFBSpecName, uint32_t> dfb_handles;
         std::unordered_map<SemaphoreSpecName, uint32_t> semaphore_handles;
         std::unordered_map<KernelSpecName, KernelRTASchema> kernel_rta_schemas;
+        // TensorParameter name -> the parameter's declared single-device TensorSpec.
+        // Used by ValidateProgramRunParams to check that the supplied MeshTensor's spec matches
+        // the parameter's declared layout, and as the per-parameter lookup for completeness checks.
+        std::unordered_map<std::string, TensorSpec> tensor_parameter_layouts;
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
 
@@ -482,13 +491,12 @@ private:
 
     void set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const;
 
-    void set_cb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+    // Set data format and tile metadata in `build_options` for every circular buffer
+    // intersecting `crs`.
+    void set_cb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
 
-    void set_dfb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
-
-    void set_cb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
-
-    void set_dfb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+    // Same as `set_cb_data_fmt_and_tile`, but for dataflow buffers.
+    void set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
 
     void update_kernel_groups(uint32_t programmable_core_type_index);
 

@@ -840,6 +840,7 @@ def run_rms_fuse_impl_deepseek(
     epsilon=1e-05,
     atol_threshold=None,
     rtol_threshold=None,
+    compute_kernel_config=None,
 ):
     ccl_sub_device_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))})
     worker_sub_device = ttnn.SubDevice(
@@ -895,13 +896,20 @@ def run_rms_fuse_impl_deepseek(
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+    # cb_stats CB uses cb_data_format = Float32 when fp32_dest_acc_en=True
+    stats_dtype = (
+        ttnn.float32
+        if compute_kernel_config is not None and getattr(compute_kernel_config, "fp32_dest_acc_en", False)
+        else ttnn.bfloat16
+    )
+    stats_torch_dtype = torch.float32 if stats_dtype == ttnn.float32 else torch.bfloat16
     ag_shape = [1, 1, 32, num_devices]
-    stats_tensor = torch.ones(ag_shape, dtype=torch.bfloat16)
+    stats_tensor = torch.ones(ag_shape, dtype=stats_torch_dtype)
     tt_stats = ttnn.from_torch(
         stats_tensor,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
+        dtype=stats_dtype,
         memory_config=ag_memory_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device, dims=(3, None), mesh_shape=list(ttnn.MeshShape(num_devices, 1))
@@ -978,12 +986,7 @@ def run_rms_fuse_impl_deepseek(
             )
         )
     for i in range(num_iters):
-        tt_out = ttnn.fused_rms_minimal(
-            input_tensor[i],
-            layer_norm_config,
-            0,
-            mesh_device,
-            ccl_semaphore_handles[i],
+        kwargs = dict(
             topology=all_gather_topology,
             memory_config=output_memory_config,
             epsilon=epsilon,
@@ -992,6 +995,16 @@ def run_rms_fuse_impl_deepseek(
             residual_input_tensor=residual_tensor[i],
             stats=tt_stats,
             use_noc1_only=use_noc1_only,
+        )
+        if compute_kernel_config is not None:
+            kwargs["compute_kernel_config"] = compute_kernel_config
+        tt_out = ttnn.fused_rms_minimal(
+            input_tensor[i],
+            layer_norm_config,
+            0,
+            mesh_device,
+            ccl_semaphore_handles[i],
+            **kwargs,
         )
         tt_out_array.append(tt_out)
     for i in range(num_iters):

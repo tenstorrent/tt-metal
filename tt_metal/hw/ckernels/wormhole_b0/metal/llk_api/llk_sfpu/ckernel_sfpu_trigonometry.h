@@ -47,7 +47,7 @@ sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
         // Compensated residual for the reciprocal-correction branch.
         // This preserves precision when tan(x) is near its poles.
         s = sfpi::vConstNeg1 * r + a;
-        sfpi::vFloat negative_x = sfpi::setman(sfpi::vConstNeg1, sfpi::reinterpret<sfpi::vInt>(r));
+        sfpi::vFloat negative_x = sfpi::setman(sfpi::vConstNeg1, r);
         s = t * a + s;
 
         // Approximate reciprocal of -r using quadratic initial estimate.
@@ -94,7 +94,7 @@ sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat a, sfpi::vInt i) {
         const float k1 = 1.4545459747314453125f;
         const float k2 = 2.121212482452392578125f;
 
-        sfpi::vFloat negative_x = sfpi::setman(sfpi::vConstNeg1, sfpi::reinterpret<sfpi::vInt>(r));
+        sfpi::vFloat negative_x = sfpi::setman(sfpi::vConstNeg1, r);
         t = k1 + k0 * negative_x;
         sfpi::vInt scale_bits = ~sfpi::reinterpret<sfpi::vUInt>(r);
         t = k2 + t * negative_x;
@@ -148,11 +148,10 @@ inline void calculate_tangent() {
 
         a = sfpu_tan<is_fp32_dest_acc_en>(a, i);
 
-        if constexpr (is_fp32_dest_acc_en) {
-            sfpi::dst_reg[0] = a;
-        } else {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(a, sfpi::RoundMode::NearestEven));
+        if constexpr (!is_fp32_dest_acc_en) {
+            a = sfpi::convert<sfpi::vFloat16b>(a, sfpi::RoundMode::NearestEven);
         }
+        sfpi::dst_reg[0] = a;
         sfpi::dst_reg++;
     }
 }
@@ -217,15 +216,14 @@ inline void calculate_sine() {
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
-            sfpi::dst_reg[0] = r;
         } else {
             r = C2 * s + C1;
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(r, sfpi::RoundMode::NearestEven));
+            r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::NearestEven);
         }
-
+        sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
     }
 }
@@ -297,21 +295,22 @@ inline void calculate_cosine() {
         sfpi::vFloat s = a * a;
         a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) ^ q);
 
+        sfpi::vFloat r;
         if constexpr (is_fp32_dest_acc_en) {
-            sfpi::vFloat r = C3 * s + C2;
+            r = C3 * s + C2;
             r = r * s + C1;
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
-            sfpi::dst_reg[0] = r;
         } else {
-            sfpi::vFloat r = C2 * s + C1;
+            r = C2 * s + C1;
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(r, sfpi::RoundMode::NearestEven));
+            r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::NearestEven);
         }
 
+        sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
     }
 }
@@ -322,8 +321,8 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
     sfpi::vFloat result = sfpi::vConst0;
 
     // If input is NaN then output must be NaN as well
-    sfpi::vInt exponent = sfpi::exexp_nodebias(val);
-    sfpi::vInt mantissa = sfpi::exman9(val);
+    sfpi::vInt exponent = sfpi::exexp(val, sfpi::ExponentMode::NoDebias);
+    sfpi::vInt mantissa = sfpi::exman(val);
     v_if(exponent == 255 && mantissa != 0) { result = std::numeric_limits<float>::quiet_NaN(); }
     v_else {
         sfpi::vFloat absval_minus_1 = t0 - sfpi::vConst1;
@@ -363,7 +362,7 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
         v_if(absval_minus_1 > 0.0f) { t1 = PI_2 - t1; }
         v_endif;
 
-        result = sfpi::setsgn(t1, val);
+        result = sfpi::copysgn(t1, val);
     }
     v_endif;
 
@@ -377,7 +376,7 @@ inline void calculate_atan() {
         sfpi::vFloat result = sfpu_atan<APPROXIMATION_MODE, is_fp32_dest_acc_en>(in);
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
 
         sfpi::dst_reg[0] = result;
@@ -436,7 +435,7 @@ sfpi_inline sfpi::vFloat sfpu_asin_range_reduced(sfpi::vFloat val) {
     }
     v_endif;
 
-    return sfpi::setsgn(asin_abs, val);
+    return sfpi::copysgn(asin_abs, val);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool IS_ACOS, int ITERATIONS = 8>
@@ -456,7 +455,7 @@ inline void calculate_asin_acos_impl() {
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
 
         sfpi::dst_reg[0] = result;

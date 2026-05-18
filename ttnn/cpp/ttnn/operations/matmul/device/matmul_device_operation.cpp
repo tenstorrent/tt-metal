@@ -67,13 +67,17 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
         [](const auto& c) -> program_factory_t {
             using T = std::decay_t<decltype(c)>;
             if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreFactory{};
+                return MatmulMultiCoreProgramFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory{};
+                return MatmulMultiCoreReuseOptimizedProgramFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory{};
+                return MatmulMultiCoreReuseMcast2DProgramFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory{};
+                // gather_in0 uses the legacy MeshWorkload path (create_descriptor not yet supported)
+                if (c.gather_in0) {
+                    return MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory{};
+                }
+                return MatmulMultiCoreReuseMcast1DProgramFactory{};
             } else if constexpr (std::is_same_v<
                                      T,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
@@ -283,6 +287,38 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
+    // matmul_multicore_reuse_mcast_1d (both program- and descriptor-based) targets a single
+    // bounding-box rectangle for the in0/in1 multicast and expects the sub-device's worker
+    // cores to form one contiguous row-major rectangle. Reject non-rectangular sub-device
+    // grids early with a clear message.
+    if (std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+            chosen_program_config) &&
+        attributes.sub_device_id.has_value()) {
+        const auto& program_config_1d =
+            std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
+        if (!program_config_1d.gather_in0) {
+            auto* device = input_tensor_a.device();
+            auto sub_device_cores =
+                device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, attributes.sub_device_id.value());
+            auto bbox = sub_device_cores.bounding_box();
+            TT_FATAL(
+                sub_device_cores.num_cores() == bbox.size(),
+                "matmul_multicore_reuse_mcast_1d only supports rectangular sub-device worker grids. "
+                "Got sub-device worker cores: {} (bounding box: {})",
+                sub_device_cores,
+                bbox);
+            auto grid_size_1d = program_config_1d.allowed_worker_cores.value().bounding_box().grid_size();
+            TT_FATAL(
+                bbox.start_coord.x + grid_size_1d.x - 1 <= bbox.end_coord.x &&
+                    bbox.start_coord.y + grid_size_1d.y - 1 <= bbox.end_coord.y,
+                "matmul grid_size {} anchored at sub-device start {} "
+                "extends past the sub-device's worker bounding box {}",
+                grid_size_1d,
+                bbox.start_coord,
+                bbox);
+        }
+    }
+
     if (std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
             chosen_program_config) &&
         attributes.global_cb.has_value() && input_tensor_b.is_sharded() && input_tensor_b.buffer()->is_dram()) {
@@ -319,30 +355,13 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
     if (optional_bias.has_value()) {
         const auto& bias = optional_bias.value();
-        const auto& out_shape = output_tensor_spec.logical_shape();
-        const auto& bias_shape = bias.logical_shape();
-        const int rank_out = static_cast<int>(out_shape.rank());
-        const int rank_bias = static_cast<int>(bias_shape.rank());
-        const int largest_rank = std::max(rank_out, rank_bias);
-        for (int i = -1; i >= -largest_rank; --i) {
-            const uint32_t dim_out = (i >= -rank_out) ? out_shape[i] : 1;
-            const uint32_t dim_bias = (i >= -rank_bias) ? bias_shape[i] : 1;
-            TT_FATAL(
-                dim_bias == 1 || dim_bias == dim_out,
-                "Fused matmul bias is not broadcastable to matmul output at aligned dimension index {} "
-                "(output logical dim {}, bias logical dim {}). output_shape={}, bias_shape={}",
-                i,
-                dim_out,
-                dim_bias,
-                out_shape,
-                bias_shape);
-        }
         auto bias_tile_shape = bias.tensor_spec().tile().get_tile_shape();
         TT_FATAL(
             (bias_tile_shape[0] == in0_tile.get_height() && bias_tile_shape[1] == in1_tile.get_width()),
             "Input tile dims must have inner dim equal to 32 due to llk "
             "constraints");
         TT_FATAL(bias.layout() == Layout::TILE, "Unsupported input layout");
+        const auto& bias_shape = bias.logical_shape();
         const auto& bias_shape_padded = bias.padded_shape();
         uint32_t bias_batch_size = get_batch_size(bias_shape);
         TT_FATAL(bias_batch_size == 1, "Unsupported bias shape: batch size not equal to 1.");
@@ -501,9 +520,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
                     TT_FATAL(!optional_bias.has_value(), "Bias is not supported when using gather_in0.");
                 } else {
-                    // Checks specific to non-gather configs
-                    check_tensor_in_grid(input_tensor_a, program_config.compute_with_storage_grid_size);
-                    check_tensor_in_grid(input_tensor_b, program_config.compute_with_storage_grid_size);
+                    auto grid_1d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
+                    check_tensor_in_grid(input_tensor_a, grid_1d);
+                    check_tensor_in_grid(input_tensor_b, grid_1d);
                 }
                 if (program_config.mcast_in0 || program_config.gather_in0) {
                     if (input_tensor_a.is_sharded()) {
@@ -767,8 +786,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                check_tensor_in_grid(input_tensor_a, program_config.compute_with_storage_grid_size);
-                check_tensor_in_grid(input_tensor_b, program_config.compute_with_storage_grid_size);
+                auto grid_2d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
+                check_tensor_in_grid(input_tensor_a, grid_2d);
+                check_tensor_in_grid(input_tensor_b, grid_2d);
                 TT_FATAL(
                     program_config.per_core_M % program_config.out_block_h == 0,
                     "Error: incompatible values {} and {}",
@@ -1231,8 +1251,8 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                             uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                             uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                             uint32_t num_cores = num_blocks_x * num_blocks_y;
-                            CoreRangeSet all_cores = num_cores_to_corerangeset(
-                                num_cores, program_config.compute_with_storage_grid_size, true);
+                            auto cwsg_1d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
+                            CoreRangeSet all_cores = num_cores_to_corerangeset(num_cores, cwsg_1d, true);
                             tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
                                 all_cores,
                                 {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
@@ -1365,10 +1385,9 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         shard_orientation = input_tensor_b.shard_spec().value().orientation;
                     }
 
-                    CoreRangeSet all_cores = num_cores_to_corerangeset(
-                        num_cores,
-                        program_config.compute_with_storage_grid_size,
-                        shard_orientation == ShardOrientation::ROW_MAJOR);
+                    auto cwsg_2d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
+                    CoreRangeSet all_cores =
+                        num_cores_to_corerangeset(num_cores, cwsg_2d, shard_orientation == ShardOrientation::ROW_MAJOR);
                     tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
                         all_cores,
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
@@ -1488,7 +1507,7 @@ MatmulDeviceOperation::create_op_performance_model(
     uint32_t batch_size = get_batch_size(out_shape);
     int64_t num_mul_adds = num_mul_adds_per_elem * out_shape[-2] * out_shape[-1] * batch_size;
 
-    tt::tt_metal::MathFidelity math_fidelity = ttnn::get_math_fidelity(operation_attributes.compute_kernel_config);
+    MathFidelity math_fidelity = ttnn::get_math_fidelity(operation_attributes.compute_kernel_config);
 
     int ideal_dev_clock_cycles = std::ceil(
         ((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi)) *
@@ -1514,12 +1533,12 @@ MatmulParams create_matmul_attributes(
         ((input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B) &&
          (input_tensor_b.dtype() == DataType::BFLOAT8_B || input_tensor_b.dtype() == DataType::BFLOAT4_B));
     const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
-    auto math_fidelity = increase_fidelity ? tt::tt_metal::MathFidelity::HiFi2 : tt::tt_metal::MathFidelity::LoFi;
+    auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
     bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // When inputs are FLOAT32 (which drives fp32_dest_acc_en=True by default), use HiFi3 on Wormhole B0.
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    math_fidelity = are_inputs_32F ? (is_wormhole ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4) : math_fidelity;
+    math_fidelity = are_inputs_32F ? (is_wormhole ? MathFidelity::HiFi3 : MathFidelity::HiFi4) : math_fidelity;
 
     bool broadcast_batch = parameters.bcast_batch.value_or(get_broadcast_batch(
         input_tensor_a, input_tensor_b, parameters.transpose_a, parameters.transpose_b, parameters.program_config));
@@ -1599,51 +1618,48 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     const std::optional<Tensor>& bias,
     const std::optional<Tensor>& optional_output_tensor,
     const MatmulParams& attributes) {
-    if (!attributes.program_config.has_value()) {
+    MatmulParams normalized_attributes = attributes;
+    if (!normalized_attributes.program_config.has_value()) {
         uint32_t bias_single_tile_size = 0;
         if (bias.has_value()) {
             auto bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(bias.value().dtype());
             bias_single_tile_size = tt::tile_size(bias_data_format);
         }
 
-        MatmulParams attributes_with_program_config = attributes;
-        attributes_with_program_config.program_config = operations::matmul::get_program_config(
+        normalized_attributes.program_config = operations::matmul::get_program_config(
             input_tensor_a,
             input_tensor_b,
-            attributes.transpose_a,
-            attributes.transpose_b,
+            normalized_attributes.transpose_a,
+            normalized_attributes.transpose_b,
             bias_single_tile_size,
-            attributes);
-
-        return ttnn::device_operation::launch<MatmulDeviceOperation>(
-            attributes_with_program_config, {{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}});
+            normalized_attributes);
     }
+    operations::matmul::normalize_program_config(
+        normalized_attributes.program_config.value(), input_tensor_a.device()->compute_with_storage_grid_size());
     return ttnn::device_operation::launch<MatmulDeviceOperation>(
-        attributes, {{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}});
+        normalized_attributes, {{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}});
 }
 
 MatmulDeviceOperation::tensor_return_value_t matmul(
     const std::vector<Tensor>& input_tensors,
     const std::optional<Tensor>& optional_output_tensor,
     const MatmulParams& attributes) {
-    if (!attributes.program_config.has_value()) {
+    MatmulParams normalized_attributes = attributes;
+    if (!normalized_attributes.program_config.has_value()) {
         uint32_t bias_single_tile_size = 0;
 
-        MatmulParams attributes_with_program_config = attributes;
-        attributes_with_program_config.program_config = operations::matmul::get_program_config(
+        normalized_attributes.program_config = operations::matmul::get_program_config(
             input_tensors.at(0),
             input_tensors.at(1),
-            attributes.transpose_a,
-            attributes.transpose_b,
+            normalized_attributes.transpose_a,
+            normalized_attributes.transpose_b,
             bias_single_tile_size,
-            attributes);
-
-        return ttnn::device_operation::launch<MatmulDeviceOperation>(
-            attributes_with_program_config, {input_tensors, {}, {optional_output_tensor}});
+            normalized_attributes);
     }
-
+    operations::matmul::normalize_program_config(
+        normalized_attributes.program_config.value(), input_tensors.at(0).device()->compute_with_storage_grid_size());
     return ttnn::device_operation::launch<MatmulDeviceOperation>(
-        attributes, {input_tensors, {}, {optional_output_tensor}});
+        normalized_attributes, {input_tensors, {}, {optional_output_tensor}});
 }
 
 }  // namespace ttnn::prim

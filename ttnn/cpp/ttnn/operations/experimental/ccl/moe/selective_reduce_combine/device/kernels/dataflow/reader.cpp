@@ -81,6 +81,7 @@ void kernel_main() {
     constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
     constexpr uint32_t noc_x_end = get_named_compile_time_arg_val("noc_x_end");
     constexpr uint32_t noc_y_end = get_named_compile_time_arg_val("noc_y_end");
+    constexpr uint32_t worker_bounding_box_size = get_named_compile_time_arg_val("worker_bounding_box_size");
 
     constexpr uint32_t aligned_activations_page_size = aligned_token_activations_page_size_bytes / sizeof(uint32_t);
 
@@ -112,7 +113,7 @@ void kernel_main() {
         noc_semaphore_set_multicast(
             sync_semaphore_addr,
             semaphore_mc_addr,
-            num_token_parallel_cores * num_data_parallel_cores - 1,
+            worker_bounding_box_size - 1,
             /*linked=*/false,
             /*noc=*/1);
         noc_async_writes_flushed(/*noc=*/1);

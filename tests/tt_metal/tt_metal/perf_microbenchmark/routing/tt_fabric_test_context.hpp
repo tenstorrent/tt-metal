@@ -58,9 +58,14 @@ using TestWorkerType = tt::tt_fabric::fabric_tests::TestWorkerType;
 using CommonMemoryMap = tt::tt_fabric::fabric_tests::CommonMemoryMap;
 using ProgressMonitorConfig = tt::tt_fabric::fabric_tests::ProgressMonitorConfig;
 using TestProgressMonitor = tt::tt_fabric::fabric_tests::TestProgressMonitor;
+using MonitorResult = tt::tt_fabric::fabric_tests::MonitorResult;
+using HungEndpointRecord = tt::tt_fabric::fabric_tests::HungEndpointRecord;
+using HungEndpointWireRecord = tt::tt_fabric::fabric_tests::HungEndpointWireRecord;
 using SenderMemoryMap = tt::tt_fabric::fabric_tests::SenderMemoryMap;
 using IDeviceInfoProvider = tt::tt_fabric::fabric_tests::IDeviceInfoProvider;
 using TrafficPatternConfig = tt::tt_fabric::fabric_tests::TrafficPatternConfig;
+using FlowDescriptor = tt::tt_fabric::fabric_tests::FlowDescriptor;
+using FlowUid = tt::tt_fabric::fabric_tests::FlowUid;
 
 using ChipSendType = tt::tt_fabric::ChipSendType;
 using NocSendType = tt::tt_fabric::NocSendType;
@@ -149,6 +154,12 @@ public:
     const SenderMemoryMap& get_sender_memory_map() const { return sender_memory_map_; }
 
     IDeviceInfoProvider* get_device_info_provider() const { return fixture_.get(); }
+
+    const TestFixture* get_fixture() const { return fixture_.get(); }
+
+    // Flow registry accessors
+    const FlowDescriptor& get_flow_descriptor(FlowUid uid) const { return flow_descriptors_.at(uid); }
+    const std::vector<FlowDescriptor>& get_flow_descriptors() const { return flow_descriptors_; }
 
     void process_telemetry_data(TestConfig& built_test_config);
 
@@ -271,6 +282,9 @@ private:
     bool code_profiling_enabled_ = false;
 
     bool show_workers_ = false;
+
+    // Flow registry: deterministic per-test, cleared on reset_devices()
+    std::vector<FlowDescriptor> flow_descriptors_;
 
     // Progress monitoring
     ProgressMonitorConfig progress_config_;

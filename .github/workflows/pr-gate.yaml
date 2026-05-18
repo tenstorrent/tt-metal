@@ -153,7 +153,7 @@ jobs:
       llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 1
           sparse-checkout: .github
@@ -293,7 +293,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repo
-      uses: actions/checkout@v4
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -318,7 +318,7 @@ jobs:
       pull-requests: write
       contents: write  # to allow auto-closing conversations
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
         ref: ${{ github.event.pull_request.head.sha }}
         fetch-depth: 1
@@ -523,13 +523,12 @@ jobs:
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
-    uses: ./.github/workflows/llk-setup-and-test.yaml
+    uses: ./.github/workflows/llk-smoke-impl.yaml
     secrets: inherit
     with:
-      docker_image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
-      runs_on: tt-ubuntu-2204-n150-stable
-      test_splits: 2
-      pytest_markers: "not perf and not nightly and not quasar"
+      docker-image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+      enabled-skus: wh_n150_civ2
+      pytest-markers: "not perf and not nightly and not quasar"
 
   # LLK Functional Unit Tests on Blackhole (PR gate - runs on blackhole/common/sfpi/test/ci changes)
   llk-test-blackhole:
@@ -544,13 +543,12 @@ jobs:
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
-    uses: ./.github/workflows/llk-setup-and-test.yaml
+    uses: ./.github/workflows/llk-smoke-impl.yaml
     secrets: inherit
     with:
-      docker_image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
-      runs_on: tt-ubuntu-2204-p150b-stable
-      test_splits: 2
-      pytest_markers: "not perf and not nightly and not quasar"
+      docker-image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+      enabled-skus: bh_p150b_civ2
+      pytest-markers: "not perf and not nightly and not quasar"
 
   # LLK Quasar Build Check (compile-only, no hardware needed)
   llk-build-quasar:

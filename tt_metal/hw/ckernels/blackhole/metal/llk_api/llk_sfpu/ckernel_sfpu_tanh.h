@@ -83,7 +83,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
     sfpi::vFloat threshold_value = sfpi::vConst1;
     sfpi::vec_min_max(result, threshold_value);
 
-    result = sfpi::setsgn(result, val);  // restore sign (i.e. tanh(-x) = -tanh(x))
+    result = sfpi::copysgn(result, val);  // restore sign (i.e. tanh(-x) = -tanh(x))
 
     return result;
 }
@@ -112,7 +112,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     sfpi::vFloat threshold_value = sfpi::vConst1;
     sfpi::vec_min_max(result, threshold_value);
 
-    result = sfpi::setsgn(result, x);  // restore sign (i.e. tanh(-x) = -tanh(x))
+    result = sfpi::copysgn(result, x);  // restore sign (i.e. tanh(-x) = -tanh(x))
 
     return result;
 }
@@ -149,7 +149,7 @@ inline void calculate_tanh() {
                 result = _sfpu_tanh_fp32_accurate_<is_fp32_dest_acc_en>(val);
             } else {
                 result = _sfpu_tanh_polynomial_<is_fp32_dest_acc_en>(val);
-                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
+                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
             }
 
             sfpi::dst_reg[0] = result;
