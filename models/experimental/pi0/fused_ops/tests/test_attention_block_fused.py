@@ -76,6 +76,26 @@ def make_qkv_weight(seed: int = 7):
     return torch.randn(D, N_QKV_UNPADDED, generator=g, dtype=torch.bfloat16) * 0.05
 
 
+def unpad_sdpa_assembled(assembled_padded):
+    """Strip 24 zero cols per head from a (M, 16 * HEAD_DIM_PADDED = 1536)
+    SDPA assembled output to (M, D = 16 * HEAD_DIM_TRUE = 1152). Mirror of
+    unpad_qkv_output but for the LN1-row assembled SDPA representation."""
+    assert assembled_padded.shape == (M, NUM_HEADS * HEAD_DIM_PADDED)
+    out = torch.zeros(M, D, dtype=assembled_padded.dtype)
+    for h in range(NUM_HEADS):
+        src_start = h * HEAD_DIM_PADDED
+        dst_start = h * HEAD_DIM_TRUE
+        out[:, dst_start : dst_start + HEAD_DIM_TRUE] = assembled_padded[:, src_start : src_start + HEAD_DIM_TRUE]
+    return out
+
+
+def make_oproj_weight(seed: int = 11):
+    """Deterministic (D=1152, D=1152) O-proj weight for the fused+oproj
+    composition test."""
+    g = torch.Generator().manual_seed(seed)
+    return torch.randn(D, D, generator=g, dtype=torch.bfloat16) * 0.04
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_attention_block_fused_ln_plus_residual(device):
     x, gamma, beta = make_inputs(seed=42)
@@ -613,3 +633,108 @@ def test_attention_block_fused_sdpa_assembled_probe(device):
     # Assembly is a pure NoC copy of Attn @ V's output — no new compute, so
     # PCC should match Commit 10's gate.
     assert min_pcc >= 0.996, f"min assembled probe PCC {min_pcc} below 0.996"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_attention_block_fused_with_oproj(device):
+    """Full attention block: fused (LN1+QKV+SDPA+assembly) → O-proj (Commit 12).
+
+    Pi0 fused attention block doesn't have spare L1 to host O-proj's
+    (1536, 1536) weight as one more in-kernel stage. Instead this commit
+    composes the fused-kernel output with the standalone SigLIPOprojMatmulOp
+    (separate dispatch on a 36-core grid, K=1152 unpadded).
+
+    Pipeline:
+      1. Run SigLIPAttentionBlockFused.op(). Read assembled_out from
+         fused_scratch on LN1 row → (256, 1536) padded.
+      2. Strip head_dim padding → (256, 1152) unpadded.
+      3. Deallocate fused tensors to free L1 for O-proj.
+      4. Run SigLIPOprojMatmulOp.op() with W_o (1152, 1152) bfp8.
+      5. PCC against full torch golden: assembled @ W_o.
+    """
+    import importlib.util
+
+    # Lazy-import standalone oproj op (lives under tests/perf, no proper module
+    # path). We sys.path-injected the dir earlier for golden_fc1.
+    spec_path = Path(__file__).resolve().parents[2] / "tests" / "perf" / "oproj_op.py"
+    spec = importlib.util.spec_from_file_location("oproj_op", spec_path)
+    oproj_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(oproj_module)
+    SigLIPOprojMatmulOp = oproj_module.SigLIPOprojMatmulOp
+    build_tensors_for_oproj_test = oproj_module.build_tensors_for_oproj_test
+
+    import ttnn as _ttnn
+
+    x, gamma, beta = make_inputs(seed=42)
+    w_qkv = make_qkv_weight(seed=7)
+    w_oproj = make_oproj_weight(seed=11)
+
+    # Full torch golden.
+    ln_out_golden = F.layer_norm(x.float(), (D,), gamma.float(), beta.float(), eps=EPS)
+    qkv_golden_unpadded = (ln_out_golden.to(torch.float32) @ w_qkv.to(torch.float32)).to(torch.bfloat16)
+    sdpa_concat_unpadded = torch.zeros(M, D, dtype=torch.bfloat16)
+    for h in range(NUM_HEADS):
+        q = qkv_golden_unpadded[:, h * HEAD_DIM_TRUE : (h + 1) * HEAD_DIM_TRUE].to(torch.float32)
+        k = qkv_golden_unpadded[:, D + h * HEAD_DIM_TRUE : D + (h + 1) * HEAD_DIM_TRUE].to(torch.float32)
+        v = qkv_golden_unpadded[:, 2 * D + h * HEAD_DIM_TRUE : 2 * D + (h + 1) * HEAD_DIM_TRUE].to(torch.float32)
+        scores = q @ k.T
+        attn = torch.softmax(scores, dim=-1) @ v
+        sdpa_concat_unpadded[:, h * HEAD_DIM_TRUE : (h + 1) * HEAD_DIM_TRUE] = attn.to(torch.bfloat16)
+    oproj_golden = (sdpa_concat_unpadded.to(torch.float32) @ w_oproj.to(torch.float32)).to(torch.bfloat16)
+
+    # ---- Step 1+2: run fused, read assembled, strip padding -----------------
+    tensors = build_tensors_for_fused_attention_block(device, x, gamma, beta, w_qkv_torch=w_qkv)
+    SigLIPAttentionBlockFused.op(*tensors, eps=EPS)
+
+    fused_scratch_tt = tensors[6]
+    fused_scratch_torch = _ttnn.to_torch(fused_scratch_tt)
+
+    ln1_num_cores = SigLIPAttentionBlockFused.LN1_NUM_CORES
+    head_dim_n_tiles = SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE
+    shard_h = 2 * SigLIPAttentionBlockFused.D_TILES * SigLIPAttentionBlockFused.TILE  # 2304
+    assembled_tiles_per_core = NUM_HEADS * head_dim_n_tiles  # 48
+    assembled_rows_per_core = assembled_tiles_per_core * SigLIPAttentionBlockFused.TILE  # 1536
+    m_per_ln1_core = M // ln1_num_cores  # 32
+    D_padded = NUM_HEADS * HEAD_DIM_PADDED  # 1536
+
+    # Re-assemble (256, 1536) from the 8 LN1 cores' 48-tile blocks.
+    assembled_padded = torch.zeros(M, D_padded, dtype=fused_scratch_torch.dtype)
+    for c in range(ln1_num_cores):
+        shard_start = c * shard_h
+        region = fused_scratch_torch[shard_start : shard_start + assembled_rows_per_core, :]
+        tile_stack = region.reshape(
+            assembled_tiles_per_core, SigLIPAttentionBlockFused.TILE, SigLIPAttentionBlockFused.TILE
+        )
+        per_core = torch.zeros(m_per_ln1_core, D_padded, dtype=region.dtype)
+        for h in range(NUM_HEADS):
+            for d in range(head_dim_n_tiles):
+                tile_idx = h * head_dim_n_tiles + d
+                col_start = h * HEAD_DIM_PADDED + d * SigLIPAttentionBlockFused.TILE
+                per_core[:, col_start : col_start + SigLIPAttentionBlockFused.TILE] = tile_stack[tile_idx]
+        assembled_padded[c * m_per_ln1_core : (c + 1) * m_per_ln1_core, :] = per_core
+
+    # Strip per-head padding.
+    assembled_unpadded = unpad_sdpa_assembled(assembled_padded)
+    assert assembled_unpadded.shape == (M, D)
+
+    # ---- Step 3: deallocate fused tensors to free L1 for O-proj ----------
+    for tt_tensor in tensors:
+        _ttnn.deallocate(tt_tensor)
+
+    # ---- Step 4: run standalone O-proj -----------------------------------
+    activation_tt, weight_tt, output_tt = build_tensors_for_oproj_test(
+        device, w_oproj, assembled_unpadded, num_cores=36
+    )
+    SigLIPOprojMatmulOp.op(activation_tt, weight_tt, output_tt, num_cores=36)
+
+    # O-proj output is (M=256, N=1152) width-sharded on 36 cores. to_torch
+    # returns the un-sharded (M, N) view.
+    oproj_device = _ttnn.to_torch(output_tt)
+    assert oproj_device.shape == (M, D), f"O-proj output shape {tuple(oproj_device.shape)} != {(M, D)}"
+
+    p = pcc(oproj_golden, oproj_device)
+    print(f"\nPCC (fused attention block + O-proj, vs full torch) = {p:.6f}")
+    print(f"  output shape={tuple(oproj_device.shape)}, dtype={oproj_device.dtype}")
+    # O-proj stacks another bfp8/HiFi2 matmul on top of softmax + Attn @ V.
+    # Same precision regime as the underlying probes; gate stays at 0.996.
+    assert p >= 0.996, f"fused+O-proj PCC {p} below 0.996"
