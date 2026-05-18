@@ -21,10 +21,10 @@ using namespace ckernel::math;
 inline void _llk_math_dbg_feature_disable_()
 {
     tensix_sync();
-    while (semaphore_read(semaphore::MATH_PACK) > 0)
-    {
-        asm volatile("nop");
-    };
+    // while (semaphore_read(semaphore::MATH_PACK) > 0)
+    // {
+    //     asm volatile("nop");
+    // };
     reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11);
 }
 
@@ -33,10 +33,10 @@ inline void _llk_math_dbg_feature_disable_()
 inline void _llk_math_dbg_feature_enable_()
 {
     tensix_sync();
-    while (semaphore_read(semaphore::MATH_PACK) > 0)
-    {
-        asm volatile("nop");
-    };
+    // while (semaphore_read(semaphore::MATH_PACK) > 0)
+    // {
+    //     asm volatile("nop");
+    // };
     reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
 }
 
