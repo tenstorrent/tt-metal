@@ -124,6 +124,7 @@ protected:
             config_addr,
             gcb_size,
             static_cast<uint32_t>(gcb.buffer_address()),
+            static_cast<uint32_t>(gcb.pages_sent_worker_l1_base()),
         };
         KernelHandle sender_kernel_id = CreateKernel(
             program,

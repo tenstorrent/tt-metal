@@ -121,8 +121,10 @@ void DramSenderGlobalCircularBuffer::setup_receiver_buffers(
     cb_buffer_ = distributed::AnyBuffer::create(cb_buffer_shard_config);
 
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    // is_sender, num_receivers, fifo_start_addr, fifo_size, fifo_ptr, noc_xy_addr, pages_sent_addr
-    constexpr uint32_t num_config_elements = 7;
+    // [0..6] config + [7] remote_pages_addr_override (DRISC L1 pages_acked base). The
+    // receiver's local pages_sent lives in this config buffer (worker L1); the receiver
+    // NOC-incs pages_acked to DRISC L1 via [7].
+    constexpr uint32_t num_config_elements = 8;
     const uint32_t num_noc_xy_words = 2 * max_num_receivers_per_sender;
     auto cb_config_page_size = tt::align((num_config_elements + num_noc_xy_words) * sizeof(uint32_t), l1_alignment) +
                                (2 * max_num_receivers_per_sender * l1_alignment);
@@ -141,13 +143,17 @@ void DramSenderGlobalCircularBuffer::setup_receiver_buffers(
     const auto& core_to_core_id = cb_config_buffer_.get_buffer()->get_buffer_page_mapping()->core_to_core_id;
     std::vector<uint32_t> cb_config_host_buffer(cb_config_size / sizeof(uint32_t), 0);
     const uint32_t noc_xy_address = config_buffer_address + (num_config_elements * sizeof(uint32_t));
+    const uint32_t pages_sent_worker_l1_addr =
+        tt::align(noc_xy_address + (num_noc_xy_words * sizeof(uint32_t)), l1_alignment);
     const auto buffer_address = cb_buffer().address();
 
-    // Receiver acks (`pages_acked`) and sender's view of `pages_sent` live in DRISC L1, not the
-    // receiver L1, because we deliberately don't shard a buffer onto DRAM cores. Use DRISC L1
-    // UNRESERVED as the agreed base — the DRISC kernel reserves the same region.
+    // Where the DRISC sender's local pages_sent/acked counters live, agreed between host and the
+    // DRISC kernel. Used as the receiver's remote_pages_acked_addr override so the receiver's
+    // NOC inc lands in DRISC L1 instead of a phantom worker L1 offset.
     const auto& hal_inst = MetalContext::instance().hal();
     pages_sent_drisc_l1_base_ = hal_inst.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    // Expose the worker-local pages_sent base so the DRISC kernel can NOC-inc pages_sent to it.
+    pages_sent_worker_l1_base_ = pages_sent_worker_l1_addr;
 
     for (const auto& [sender_core, receiver_cores] : sender_receiver_core_mapping_) {
         const auto& receiver_cores_vec = corerange_to_cores(receiver_cores);
@@ -162,7 +168,12 @@ void DramSenderGlobalCircularBuffer::setup_receiver_buffers(
             cb_config_host_buffer[receiver_idx++] = size_;
             cb_config_host_buffer[receiver_idx++] = buffer_address;
             cb_config_host_buffer[receiver_idx++] = noc_xy_address;
-            cb_config_host_buffer[receiver_idx++] = pages_sent_drisc_l1_base_ + 2 * i * l1_alignment;
+            // Local pages_sent for receiver i lives in this receiver's own config buffer page
+            // (worker L1); the sender NOC-incs pages_sent here.
+            cb_config_host_buffer[receiver_idx++] = pages_sent_worker_l1_addr + 2 * i * l1_alignment;
+            // Remote pages_acked target on the sender (DRISC L1). The receiver-side update_pages_acked
+            // path picks this up via remote_pages_acked_ptr.
+            cb_config_host_buffer[receiver_idx++] = pages_sent_drisc_l1_base_ + 2 * i * l1_alignment + l1_alignment;
             cb_config_host_buffer[receiver_idx++] = sender_physical_coord.x;
             cb_config_host_buffer[receiver_idx++] = sender_physical_coord.y;
         }
@@ -186,6 +197,7 @@ const std::vector<std::vector<CoreCoord>>& DramSenderGlobalCircularBuffer::recei
     return receiver_coords_per_sender_;
 }
 DeviceAddr DramSenderGlobalCircularBuffer::pages_sent_drisc_l1_base() const { return pages_sent_drisc_l1_base_; }
+DeviceAddr DramSenderGlobalCircularBuffer::pages_sent_worker_l1_base() const { return pages_sent_worker_l1_base_; }
 
 DramSenderGlobalCircularBuffer CreateDramSenderGlobalCircularBuffer(
     IDevice* device,

@@ -32,6 +32,9 @@ void kernel_main() {
     constexpr uint32_t data_drisc_l1_base = get_compile_time_arg_val(7);
     constexpr uint32_t fifo_size_per_receiver = get_compile_time_arg_val(8);
     constexpr uint32_t receiver_buffer_address = get_compile_time_arg_val(9);
+    // Worker L1 address where each receiver reads its own pages_sent counter. The DRISC
+    // sender NOC-incs pages_sent here so the receiver sees it locally.
+    constexpr uint32_t remote_pages_sent_worker_l1_addr = get_compile_time_arg_val(10);
 
     // Runtime: 2*num_receivers entries (x, y per receiver)
     uint32_t rt_idx = 0;
@@ -66,6 +69,10 @@ void kernel_main() {
     iface.receiver_noc_xy_ptr = noc_xy_drisc_l1_base;
     iface.aligned_pages_sent_ptr = pages_sent_drisc_l1_base;
     iface.num_receivers = num_receivers;
+    // Sender pages_sent counters live in DRISC L1 (pages_sent_drisc_l1_base), but the NOC inc
+    // target lives in worker L1 (where receivers read their local pages_sent). Different L1
+    // address spaces -- use the override.
+    iface.remote_pages_sent_ptr = remote_pages_sent_worker_l1_addr;
 
     // DRISC needs stream mode for NIU-initiated NoC traffic.
     experimental::drisc_set_stream_mode();

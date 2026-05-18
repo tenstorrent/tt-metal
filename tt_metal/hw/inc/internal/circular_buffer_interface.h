@@ -28,6 +28,13 @@ struct RemoteSenderCBInterface {
     // Each entry is L1 aligned
     uint32_t aligned_pages_sent_ptr;
     uint32_t num_receivers;
+
+    // Address ON the RECEIVER's L1 where the sender's NOC inc lands for pages_sent.
+    // For a sharded GCB this equals `aligned_pages_sent_ptr` (same L1 offset on both
+    // ends), so the fallback below preserves OG behavior. For the DRAM-sender GCB
+    // the sender's local counter is in DRISC L1 but the NOC target is in worker L1,
+    // so the kernel sets this to the receiver's worker-local pages_sent base.
+    uint32_t remote_pages_sent_ptr;
 };
 
 struct RemoteReceiverCBInterface {
@@ -44,6 +51,13 @@ struct RemoteReceiverCBInterface {
     // These point to a single entry corresponding to receiver index
     // Each entry is L1 aligned
     uint32_t aligned_pages_acked_ptr;
+
+    // Address ON the SENDER's L1 where the receiver's NOC inc lands for pages_acked.
+    // For a sharded GCB this equals `aligned_pages_acked_ptr`. For the DRAM-sender
+    // GCB it points into DRISC L1 (separate address space from the receiver's local
+    // pages_acked). Setup_remote_cb_interfaces falls back to aligned_pages_acked_ptr
+    // when this is zero.
+    uint32_t remote_pages_acked_ptr;
 };
 
 // Required for update_remote_cb_config

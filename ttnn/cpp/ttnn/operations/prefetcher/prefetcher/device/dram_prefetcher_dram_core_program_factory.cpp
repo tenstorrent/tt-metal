@@ -112,6 +112,7 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
             config_addr,
             gcb.size(),
             static_cast<uint32_t>(gcb.buffer_address()),
+            static_cast<uint32_t>(gcb.pages_sent_worker_l1_base()),
         };
 
         KernelHandle kernel_id = CreateKernel(

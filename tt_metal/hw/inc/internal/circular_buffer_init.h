@@ -189,6 +189,9 @@ inline void setup_remote_cb_interfaces(
         uint32_t fifo_ptr = l1_remote_cb_config_addr[4];
         uint32_t remote_noc_xy_addr = l1_remote_cb_config_addr[5];
         uint32_t aligned_pages_sent_addr = l1_remote_cb_config_addr[6];
+        // Optional: remote address override for DRAM-sender GCB (split sender/receiver L1).
+        // Zero falls back to the sharded-GCB assumption that local == remote addr.
+        uint32_t remote_pages_addr_override = l1_remote_cb_config_addr[7];
         if (is_sender) {
             RemoteSenderCBInterface& sender_cb_interface = get_remote_sender_cb_interface(cb_id);
             sender_cb_interface.config_ptr = config_addr;
@@ -197,6 +200,7 @@ inline void setup_remote_cb_interfaces(
             sender_cb_interface.receiver_noc_xy_ptr = remote_noc_xy_addr;
             sender_cb_interface.aligned_pages_sent_ptr = aligned_pages_sent_addr;
             sender_cb_interface.num_receivers = num_receivers;
+            sender_cb_interface.remote_pages_sent_ptr = remote_pages_addr_override;
             // Using posted semaphore inc
             resize_remote_sender_cb_interface<update_remote_over_noc>(cb_id, page_size, noc, nm, posted, cmd_buf);
         } else {
@@ -210,6 +214,7 @@ inline void setup_remote_cb_interfaces(
             receiver_cb_interface.sender_noc_x = sender_noc_x;
             receiver_cb_interface.sender_noc_y = sender_noc_y;
             receiver_cb_interface.aligned_pages_acked_ptr = aligned_pages_acked_addr;
+            receiver_cb_interface.remote_pages_acked_ptr = remote_pages_addr_override;
             // Using posted semaphore inc
             resize_remote_receiver_cb_interface<update_remote_over_noc>(cb_id, page_size, noc, nm, posted, cmd_buf);
         }

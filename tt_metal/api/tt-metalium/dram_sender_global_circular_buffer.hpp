@@ -53,10 +53,14 @@ public:
     // Physical worker NOC XY of each sender's receivers, ordered to match the receiver config.
     // Used by the DRISC kernel runtime args.
     const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender() const;
-    // L1 address (in DRISC unreserved space) where the per-sender pages_sent/pages_acked semaphores
-    // are agreed to live. The DRISC kernel must reserve this region; receivers' ack semaphores
-    // are programmed to write here.
+    // L1 address (in DRISC unreserved space) where the DRISC sender's local pages_sent/pages_acked
+    // counters live. The receivers' ack NOC-incs land here. The DRISC kernel uses this as the
+    // base for its own pages_sent counters.
     DeviceAddr pages_sent_drisc_l1_base() const;
+    // L1 address (in receiver worker L1, inside the GCB config buffer page) where each receiver's
+    // local pages_sent counter lives. The DRISC kernel uses this as the NOC-inc target when it
+    // pushes pages — receivers read pages_sent from here locally.
+    DeviceAddr pages_sent_worker_l1_base() const;
     IDevice* get_device() const { return device_; }
 
     static constexpr auto attribute_names =
@@ -76,6 +80,7 @@ private:
     CoreRangeSet receiver_cores_;                                     // logical worker
     std::vector<std::vector<CoreCoord>> receiver_coords_per_sender_;  // translated worker NOC XY
     DeviceAddr pages_sent_drisc_l1_base_ = 0;
+    DeviceAddr pages_sent_worker_l1_base_ = 0;
     uint32_t size_ = 0;
 };
 

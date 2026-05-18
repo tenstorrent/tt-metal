@@ -37,6 +37,7 @@ void kernel_main() {
     constexpr uint32_t config_l1_addr = get_compile_time_arg_val(10);
     constexpr uint32_t fifo_size_per_receiver = get_compile_time_arg_val(11);
     constexpr uint32_t receiver_buffer_address = get_compile_time_arg_val(12);
+    constexpr uint32_t remote_pages_sent_worker_l1_addr = get_compile_time_arg_val(13);
 
     // ---- Runtime args ----
     // Layout:
@@ -81,6 +82,8 @@ void kernel_main() {
     iface.receiver_noc_xy_ptr = noc_xy_l1_addr;
     iface.aligned_pages_sent_ptr = pages_sent_l1_addr;
     iface.num_receivers = num_receivers;
+    // DRAM-sender GCB: NOC inc target for pages_sent lives in worker L1, not DRISC L1.
+    iface.remote_pages_sent_ptr = remote_pages_sent_worker_l1_addr;
 
     experimental::drisc_set_stream_mode();
 

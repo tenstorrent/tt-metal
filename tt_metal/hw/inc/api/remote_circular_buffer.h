@@ -74,7 +74,13 @@ FORCE_INLINE void update_pages_acked(
     volatile tt_l1_ptr uint32_t* pages_acked_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(aligned_pages_acked_addr);
     *pages_acked_ptr += aligned_page_adjustment;
-    uint64_t remote_ack_ptr_addr = get_noc_addr(sender_noc_x, sender_noc_y, (uintptr_t)pages_acked_ptr, noc);
+    // For sharded GCB the local and remote pages_acked addresses are the same L1 offset on
+    // both sides. For the DRAM-sender GCB (DRISC <-> worker) they differ; remote_pages_acked_ptr
+    // overrides when non-zero.
+    uint32_t remote_acked_addr = receiver_cb_interface.remote_pages_acked_ptr != 0
+                                     ? receiver_cb_interface.remote_pages_acked_ptr
+                                     : aligned_pages_acked_addr;
+    uint64_t remote_ack_ptr_addr = get_noc_addr(sender_noc_x, sender_noc_y, remote_acked_addr, noc);
     noc_fast_atomic_increment<nm>(
         noc,
         cmd_buf,
@@ -342,6 +348,11 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
     uint32_t next_receiver_start_addr_offset = 0;
     volatile tt_l1_ptr uint32_t* pages_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr);
+    // For sharded GCB the local and remote pages_sent addresses are the same L1 offset on
+    // both sides. For the DRAM-sender GCB they differ; remote_pages_sent_ptr overrides when
+    // non-zero (kernel sets this manually from runtime args).
+    uint32_t remote_sent_base = remote_cb.remote_pages_sent_ptr != 0 ? remote_cb.remote_pages_sent_ptr
+                                                                     : (uint32_t)remote_cb.aligned_pages_sent_ptr;
     volatile tt_l1_ptr uint32_t* remote_noc_xy_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.receiver_noc_xy_ptr);
     for (uint32_t i = 0; i < num_receivers; ++i) {
@@ -369,9 +380,10 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
         next_receiver_start_addr_offset += next_receiver_start_addr_stride;
         *pages_sent_ptr += pages_sent;
 
-        uint64_t remote_sent_ptr_addr = get_noc_addr_helper(remote_noc_xy, (uint32_t)pages_sent_ptr);
+        uint64_t remote_sent_ptr_addr = get_noc_addr_helper(remote_noc_xy, remote_sent_base);
         noc_semaphore_inc<posted>(remote_sent_ptr_addr, pages_sent, noc);
         pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
+        remote_sent_base += 2 * L1_ALIGNMENT;
         remote_noc_xy_ptr += 2;
     }
 

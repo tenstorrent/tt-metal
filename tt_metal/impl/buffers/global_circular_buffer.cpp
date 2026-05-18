@@ -77,8 +77,10 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
     cb_buffer_ = distributed::AnyBuffer::create(cb_buffer_shard_config);
 
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    // is_sender, receiver_val, fifo_start_addr, fifo_size, fifo_ptr, noc_xy coords, and pages_sent
-    constexpr uint32_t num_config_elements = 7;
+    // [0] is_sender, [1] num_receivers, [2] fifo_start_addr, [3] fifo_size, [4] fifo_ptr,
+    // [5] noc_xy_addr, [6] aligned_pages_sent_addr (local), [7] remote_pages_addr_override
+    // (0 means "no override; local == remote", which is true for sharded GCBs).
+    constexpr uint32_t num_config_elements = 8;
     uint32_t num_noc_xy_words = 2 * max_num_receivers_per_sender;
     auto cb_config_page_size = tt::align((num_config_elements + num_noc_xy_words) * sizeof(uint32_t), l1_alignment) +
                                (2 * max_num_receivers_per_sender * l1_alignment);
@@ -112,6 +114,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         cb_config_host_buffer[sender_idx++] = buffer_address;
         cb_config_host_buffer[sender_idx++] = noc_xy_address;
         cb_config_host_buffer[sender_idx++] = pages_sent_address;
+        cb_config_host_buffer[sender_idx++] = 0;  // remote_pages_addr_override: 0 = fallback to local (sharded GCB)
 
         auto sender_physical_coord = device_->worker_core_from_logical_core(sender_core);
         for (uint32_t i = 0; i < receiver_cores_vec.size(); i++) {
@@ -127,6 +130,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
             cb_config_host_buffer[receiver_idx++] = buffer_address;
             cb_config_host_buffer[receiver_idx++] = noc_xy_address;
             cb_config_host_buffer[receiver_idx++] = pages_sent_address + 2 * i * l1_alignment;
+            cb_config_host_buffer[receiver_idx++] = 0;  // remote_pages_addr_override: 0 = fallback (sharded GCB)
             cb_config_host_buffer[receiver_idx++] = sender_physical_coord.x;
             cb_config_host_buffer[receiver_idx++] = sender_physical_coord.y;
         }

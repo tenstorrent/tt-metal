@@ -25,6 +25,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
+#include <tt-metalium/experimental/dispatch_context.hpp>
+
 #include "device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
@@ -128,6 +130,7 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
         data_addr,
         kGcbSize,
         static_cast<uint32_t>(gcb.buffer_address()),
+        static_cast<uint32_t>(gcb.pages_sent_worker_l1_base()),
     };
     KernelHandle sender_kernel_id = CreateKernel(
         program,
@@ -189,6 +192,125 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
         EXPECT_EQ(sent, acked) << "Pages sent/acked mismatch for receiver " << r << " (sent=" << sent
                                << ", acked=" << acked << ")";
         EXPECT_GT(sent, 0u) << "Sender did not push any pages to receiver " << r;
+    }
+}
+
+// Same data flow as SmokeOneSenderFourReceivers, but the sender (DRISC) and receiver
+// (workers) live in TWO SEPARATE Programs and we rely on async slow dispatch to launch
+// them concurrently. This mirrors how the ttnn prefetcher op + matmul op flow works
+// (each op enqueues its own Program). If this passes, async SD is a viable substitute
+// for fast dispatch for the DRAM-core mode.
+TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
+    constexpr uint32_t kNumReceivers = 4;
+    constexpr uint32_t kPageSize = 64;
+    constexpr uint32_t kNumPages = 1;
+    constexpr uint32_t kRemoteCBId = 31;
+    constexpr uint32_t kGcbSize = 1024;
+
+    const uint32_t bank_id = 0;
+    const uint32_t unused_sub = experimental::pick_unused_dram_subchannel(device_, bank_id);
+    CoreCoord sender_logical{bank_id, unused_sub};
+    CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_logical, receiver_cores}};
+    auto gcb = experimental::CreateDramSenderGlobalCircularBuffer(mesh_device_, mapping, kGcbSize, BufferType::L1);
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t drisc_l1_unreserved = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+    auto align_up = [&](uint32_t a) { return (a + l1_alignment - 1) & ~(l1_alignment - 1); };
+
+    const uint32_t pages_sent_addr = drisc_l1_unreserved;
+    uint32_t cursor = pages_sent_addr + 2 * l1_alignment * kNumReceivers;
+    cursor = align_up(cursor);
+    const uint32_t noc_xy_addr = cursor;
+    cursor += 2 * sizeof(uint32_t) * kNumReceivers;
+    cursor = align_up(cursor);
+    const uint32_t config_addr = cursor;
+    cursor += 16;
+    cursor = align_up(cursor);
+    const uint32_t data_addr = cursor;
+
+    // Pre-load DRISC L1 with a per-receiver pattern.
+    std::vector<uint32_t> pattern(kNumReceivers * kPageSize / sizeof(uint32_t));
+    for (uint32_t r = 0; r < kNumReceivers; ++r) {
+        for (uint32_t w = 0; w < kPageSize / sizeof(uint32_t); ++w) {
+            pattern[r * kPageSize / sizeof(uint32_t) + w] = 0x55AA0000u + r * 0x100u + w;
+        }
+    }
+    auto sender_virtual = device_->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
+    const uint64_t drisc_l1_noc_addr_base =
+        hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    MetalContext::instance().get_cluster().write_core(
+        pattern.data(),
+        pattern.size() * sizeof(uint32_t),
+        tt_cxy_pair(mesh_device_->build_id(), sender_virtual),
+        drisc_l1_noc_addr_base + (data_addr - drisc_l1_unreserved));
+
+    // --- Sender program: DRISC kernel only ---
+    Program sender_program = CreateProgram();
+    std::vector<uint32_t> sender_compile_args = {
+        kRemoteCBId,
+        kNumPages,
+        kPageSize,
+        kNumReceivers,
+        pages_sent_addr,
+        noc_xy_addr,
+        config_addr,
+        data_addr,
+        kGcbSize,
+        static_cast<uint32_t>(gcb.buffer_address()),
+        static_cast<uint32_t>(gcb.pages_sent_worker_l1_base()),
+    };
+    KernelHandle sender_kernel_id = CreateKernel(
+        sender_program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/gcb_smoke_sender.cpp",
+        sender_logical,
+        DramConfig{.noc = NOC::NOC_0, .compile_args = sender_compile_args});
+    std::vector<uint32_t> sender_rt_args;
+    const auto& receiver_phys = gcb.receiver_coords_per_sender().at(0);
+    for (const auto& c : receiver_phys) {
+        sender_rt_args.push_back(c.x);
+        sender_rt_args.push_back(c.y);
+    }
+    SetRuntimeArgs(sender_program, sender_kernel_id, sender_logical, sender_rt_args);
+
+    // --- Receiver program: worker kernel only, with c_31 attached to the GCB ---
+    Program receiver_program = CreateProgram();
+    CircularBufferConfig cb_config(kPageSize);
+    cb_config.remote_index(kRemoteCBId).set_page_size(kPageSize).set_data_format(tt::DataFormat::Float16_b);
+    experimental::CreateCircularBuffer(receiver_program, receiver_cores, cb_config, gcb);
+    std::vector<uint32_t> receiver_compile_args = {kRemoteCBId, kNumPages};
+    CreateKernel(
+        receiver_program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/gcb_smoke_receiver.cpp",
+        receiver_cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0, .compile_args = receiver_compile_args});
+
+    // Enable async SD and enqueue the two programs as separate workloads.
+    experimental::DispatchContext::get().enable_asynchronous_slow_dispatch(mesh_device_);
+    distributed::MeshCoordinateRange device_range(distributed::MeshCoordinate(0, 0));
+    {
+        distributed::MeshWorkload sender_workload;
+        sender_workload.add_program(device_range, std::move(sender_program));
+        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), sender_workload, /*blocking=*/false);
+        distributed::MeshWorkload receiver_workload;
+        receiver_workload.add_program(device_range, std::move(receiver_program));
+        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), receiver_workload, /*blocking=*/false);
+        distributed::Finish(mesh_device_->mesh_command_queue());
+    }
+    experimental::DispatchContext::get().disable_asynchronous_slow_dispatch(mesh_device_);
+
+    // Verify each receiver's L1 slice matches the per-receiver expected stripe.
+    auto receivers_vec = corerange_to_cores(receiver_cores);
+    for (uint32_t r = 0; r < receivers_vec.size(); ++r) {
+        std::vector<uint32_t> result;
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            device_, receivers_vec[r], gcb.buffer_address(), kPageSize, result, CoreType::WORKER);
+        for (uint32_t w = 0; w < kPageSize / sizeof(uint32_t); ++w) {
+            uint32_t expected = 0x55AA0000u + r * 0x100u + w;
+            EXPECT_EQ(result[w], expected) << "Receiver " << r << " word " << w;
+        }
     }
 }
 
