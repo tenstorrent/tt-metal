@@ -15,6 +15,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include <tt-metalium/buffer.hpp>
 
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 
@@ -76,6 +77,10 @@ struct DataflowBufferImpl {
     bool configs_finalized = false;
     // Flag to track if this DFB uses remapper (set during finalization)
     bool use_remapper = false;
+
+    // When non-null, the DFB borrows L1 memory from this buffer instead of allocating its own.
+    const tt::tt_metal::Buffer* borrowed_buffer = nullptr;
+    bool borrows_memory() const { return borrowed_buffer != nullptr; }
 
     uint32_t total_size() const { return config.entry_size * config.num_entries; }
     uint32_t serialized_size() const;
