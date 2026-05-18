@@ -122,6 +122,7 @@ jobs:
             --format=html \
             --instr-profile=/work/coverage/coverage.profdata \
             "${obj_flags[@]}" \
+            --ignore-filename-regex='(/work/build/|/work/.cpmcache/|/work/tt_metal/llrt/hal/generated/)' \
             --output-dir=/work/coverage_html
           echo "HTML report: $(du -sh /work/coverage_html | cut -f1)"
 
@@ -130,6 +131,7 @@ jobs:
             --format=json \
             --instr-profile=/work/coverage/coverage.profdata \
             "${obj_flags[@]}" \
+            --ignore-filename-regex='(/work/build/|/work/.cpmcache/|/work/tt_metal/llrt/hal/generated/)' \
             --summary-only > /work/coverage/summary.json
 
           # Step summary
