@@ -169,8 +169,15 @@ def test_dispatch_combine_replay(mesh_device, num_links, topology, capture_file,
     # --- 2. Compute offsets/counts/region_offsets from indices + col-k table.
     #        Routings to experts with table entry == -1 contribute 0 to counts/offsets,
     #        so buffer layout exactly matches what Galaxy col k saw.
+    #
+    # Shape note: get_gate_outputs ALWAYS returns shape (num_dg, dgs, nre) where num_dg is
+    # internally derived as num_routed_experts // experts_per_chip // dispatch_group_size = 4.
+    # All 4 dim-0 slots contain IDENTICAL col-k data because our (1, 256) col_table broadcasts
+    # the same mask across all 4 slots. We slice [0:1] → (1, dgs, nre), which on LB 8x1 shards
+    # cleanly to per-device (1, 1, nre) — matching what production Galaxy 8x4 gets per device
+    # (Galaxy host has (4, 8, 256), sharded dim 0 across mesh axis 1 = 4, per device (1, 1, 256)).
     logger.info(f"[replay] computing gate outputs (col{galaxy_col})...")
-    col_offsets, col_counts, col_region_offsets, _ = get_gate_outputs(
+    col_offsets_full, col_counts_full, col_region_offsets_full, _ = get_gate_outputs(
         indices=indices,
         dispatch_group_size=dgs,
         num_routed_experts=nre,
@@ -178,12 +185,19 @@ def test_dispatch_combine_replay(mesh_device, num_links, topology, capture_file,
         seq_len_per_chip=sl,
         num_experts_per_tok=nept,
         expert_dispatch_table=col_table,
-    )  # each (1, dgs, nre)
+    )  # each (4, dgs, nre) — all 4 dim-0 slots identical (col-k mask broadcast)
+    col_offsets = col_offsets_full[0:1].contiguous()  # (1, dgs, nre)
+    col_counts = col_counts_full[0:1].contiguous()  # (1, dgs, nre)
+    col_region_offsets = col_region_offsets_full[0:1].contiguous()  # (1, dgs, nre)
     col_routings = int(col_counts.sum().item()) // dgs
     total_topk_slots = indices.numel()
     logger.info(
         f"[replay] col{galaxy_col} actual routings = {col_routings} / {total_topk_slots} topk slots "
         f"({100.0 * col_routings / total_topk_slots:.1f}% — matches Galaxy col {galaxy_col} 1:1)"
+    )
+    logger.info(
+        f"[replay] sliced host shapes: offsets={tuple(col_offsets.shape)} counts={tuple(col_counts.shape)} "
+        f"region_offsets={tuple(col_region_offsets.shape)} (each will shard to per-device (1, 1, {nre}))"
     )
 
     # --- 3. Synthesize x and weights (values don't drive kernel cycle count) ---
