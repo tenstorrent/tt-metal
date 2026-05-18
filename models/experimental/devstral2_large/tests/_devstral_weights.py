@@ -7,8 +7,7 @@
 The Devstral-2-123B checkpoint on the Hub is stored in FineGrained FP8 with per-block weight
 scales. The TT path expects ``bf16`` host tensors. Loading the full checkpoint is out of scope
 for unit tests, so each test downloads only the safetensor shards it needs via the index file
-and casts FP8 dtypes directly to ``bf16`` — both the HF reference module *and* the TT module
-see the same crude-dequantized weights, so the PCC comparison still measures TT-vs-HF parity.
+and dequantizes FP8 weights with their ``weight_scale_inv`` tensors when present.
 
 If Hub access fails (gated repo, offline CI, etc.) the helpers raise; tests are expected to
 ``pytest.skip`` on that signal.
@@ -24,6 +23,10 @@ from transformers import AutoConfig
 from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
 
 DEVSTRAL2_LARGE_REPO_ID = "mistralai/Devstral-2-123B-Instruct-2512"
+
+_FP8_DTYPES = tuple(
+    dt for name in ("float8_e4m3fn", "float8_e5m2", "float8_e4m3fnuz") if (dt := getattr(torch, name, None)) is not None
+)
 
 
 def load_text_config() -> Ministral3Config:
@@ -44,8 +47,41 @@ def load_text_config() -> Ministral3Config:
     return text
 
 
+def dequantize_fp8_weight(weight: torch.Tensor, scale_inv: torch.Tensor) -> torch.Tensor:
+    """Dequant matching HF ``Fp8Dequantize._dequantize_one`` (scalar or per-block ``weight_scale_inv``)."""
+    if scale_inv.numel() == 1:
+        out_dtype = (
+            scale_inv.dtype if scale_inv.dtype.is_floating_point and scale_inv.element_size() >= 2 else torch.bfloat16
+        )
+        return (weight.to(torch.float32) * scale_inv.to(torch.float32)).to(out_dtype)
+
+    quantized_fp32 = weight.to(torch.float32)
+    rows, cols = quantized_fp32.shape[-2:]
+    scale_rows, scale_cols = scale_inv.shape[-2:]
+    if rows % scale_rows or cols % scale_cols:
+        raise ValueError(f"Weight shape ({rows}, {cols}) not divisible by scale grid ({scale_rows}, {scale_cols}).")
+    block_m = rows // scale_rows
+    block_n = cols // scale_cols
+    out_dtype = (
+        scale_inv.dtype if scale_inv.dtype.is_floating_point and scale_inv.element_size() >= 2 else torch.bfloat16
+    )
+    original_shape = quantized_fp32.shape
+    q = quantized_fp32.reshape(-1, scale_rows, block_m, scale_cols, block_n)
+    s = scale_inv.to(torch.float32).reshape(-1, scale_rows, scale_cols).unsqueeze(-1).unsqueeze(2)
+    return (q * s).to(out_dtype).reshape(original_shape)
+
+
+def to_bf16_host_if_fp8(t: torch.Tensor, scale_inv: torch.Tensor | None = None) -> torch.Tensor:
+    """FP8 → bf16 on host. Uses block scales when ``scale_inv`` is provided."""
+    if scale_inv is not None and _FP8_DTYPES and t.dtype in _FP8_DTYPES:
+        return dequantize_fp8_weight(t, scale_inv).to(torch.bfloat16)
+    if _FP8_DTYPES and t.dtype in _FP8_DTYPES:
+        return t.to(torch.bfloat16)
+    return t
+
+
 def load_hf_tensors_for_keys(keys: list[str]) -> dict[str, torch.Tensor]:
-    """Download only the safetensor shards that contain ``keys`` and return them on host."""
+    """Download shards for ``keys`` and return host tensors (weights dequantized to bf16 when FP8)."""
     from huggingface_hub import hf_hub_download
     from safetensors.torch import safe_open as safetensors_safe_open
 
@@ -57,10 +93,19 @@ def load_hf_tensors_for_keys(keys: list[str]) -> dict[str, torch.Tensor]:
     with open(index_path, encoding="utf-8") as f:
         weight_map = json.load(f)["weight_map"]
 
-    out: dict[str, torch.Tensor] = {}
+    fetch_keys: set[str] = set(keys)
     for key in keys:
+        if key.endswith(".weight"):
+            scale_key = key[: -len(".weight")] + ".weight_scale_inv"
+            if scale_key in weight_map:
+                fetch_keys.add(scale_key)
+
+    raw: dict[str, torch.Tensor] = {}
+    for key in fetch_keys:
         if key not in weight_map:
-            raise KeyError(f"Key {key!r} not in weight_map for {DEVSTRAL2_LARGE_REPO_ID}")
+            if key in keys:
+                raise KeyError(f"Key {key!r} not in weight_map for {DEVSTRAL2_LARGE_REPO_ID}")
+            continue
         shard_path = hf_hub_download(
             repo_id=DEVSTRAL2_LARGE_REPO_ID,
             filename=weight_map[key],
@@ -69,23 +114,15 @@ def load_hf_tensors_for_keys(keys: list[str]) -> dict[str, torch.Tensor]:
         with safetensors_safe_open(shard_path, framework="pt", device="cpu") as sf:
             if key not in sf.keys():
                 raise KeyError(f"Key {key!r} missing from shard {weight_map[key]}")
-            out[key] = sf.get_tensor(key).clone()
+            raw[key] = sf.get_tensor(key).clone()
+
+    out: dict[str, torch.Tensor] = {}
+    for key in keys:
+        t = raw[key]
+        if key.endswith(".weight"):
+            scale_key = key[: -len(".weight")] + ".weight_scale_inv"
+            scale = raw.get(scale_key)
+            out[key] = to_bf16_host_if_fp8(t, scale).to(torch.bfloat16)
+        else:
+            out[key] = t
     return out
-
-
-def to_bf16_host_if_fp8(t: torch.Tensor) -> torch.Tensor:
-    """Crude FP8 → bf16 cast (no scale application).
-
-    HF stores Devstral-2-123B linear weights in ``float8_e4m3fn`` with companion per-block scale
-    tensors. Real inference dequantizes via those scales; for parity testing we cast directly
-    (both HF ref and TT module see the same numerically-degraded weights, so PCC still
-    isolates TT-vs-HF disagreement from dequantization fidelity).
-    """
-    fp8_dtypes = tuple(
-        dt
-        for name in ("float8_e4m3fn", "float8_e5m2", "float8_e4m3fnuz")
-        if (dt := getattr(torch, name, None)) is not None
-    )
-    if fp8_dtypes and t.dtype in fp8_dtypes:
-        return t.to(torch.bfloat16)
-    return t

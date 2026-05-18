@@ -25,29 +25,34 @@ def all_reduce_replicate(
     mesh_device,
     tt_ccl,
     dim: int,
+    cluster_axis: int = 1,
     topology: ttnn.Topology = ttnn.Topology.Linear,
 ) -> ttnn.Tensor:
     """Sum ``tensor`` across all mesh devices and leave the result replicated.
 
     Implementation = ``reduce_scatter`` (across all devices, along ``dim``) followed by
     ``all_gather`` (along ``dim``). On a single-device mesh this is a no-op.
+
+    ``cluster_axis`` must match the tensor-parallel mesh axis (``Devstral2Args.cluster_axis``,
+    typically ``1`` on a 1×N Quietbox mesh).
     """
     mesh_shape = list(mesh_device.shape)
     if mesh_shape[0] * mesh_shape[1] <= 1:
         return tensor
 
-    num_links = tt_ccl.get_num_links()
+    num_links = tt_ccl.get_num_links(cluster_axis)
 
     scattered = ttnn.experimental.reduce_scatter_minimal_async(
         tensor,
         persistent_output_buffers=None,
         dim=dim,
-        multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
-        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
         num_links=num_links,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         topology=topology,
+        cluster_axis=cluster_axis,
         chunks_per_sync=10,
         num_workers_per_link=2,
         num_buffers_per_channel=2,
@@ -58,11 +63,12 @@ def all_reduce_replicate(
         scattered,
         persistent_output_buffer=None,
         dim=dim,
-        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
         num_links=num_links,
         topology=topology,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+        cluster_axis=cluster_axis,
         chunks_per_sync=10,
         num_workers_per_link=2,
         num_buffers_per_channel=2,
