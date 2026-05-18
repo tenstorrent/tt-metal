@@ -4623,3 +4623,16 @@ detection and readback mismatch warnings.
 - `tt_metal/impl/device/device.cpp` — GAP 6: FIX QR escalation
 - `tt_metal/fabric/fabric_init.cpp` — GAP 7: FIX OP RR timing
 - `scripts/analyze_fabric_hang_log.sh` — GAPs 8-10: new counters + summary lines
+
+---
+
+## FIX KM — Suppress -Wunused-parameter for mmio_base_umd_channels (2026-05-18)
+
+**CI Run**: 26038567598 — build failure, no tests ran
+**Error**: `device.cpp:408:41: error: unused parameter 'mmio_base_umd_channels' [-Werror,-Wunused-parameter]`
+
+**Root cause**: The only uses of `mmio_base_umd_channels` inside `configure_fabric()` are within a `#ifdef FIXIJ_REDUNDANT_AFTER_FIX_MM` block that was disabled when FIX MM landed (FIX IJ/KL made redundant). The parameter was kept in the signature to avoid call-site churn, but with the ifdef disabled the compiler correctly flags it as unused.
+
+**Fix**: Added `(void)mmio_base_umd_channels;` at the top of the function body with an explanatory comment. No logic change; no callers modified.
+
+**Commit**: 77c03714d70
