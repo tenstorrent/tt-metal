@@ -1,0 +1,24 @@
+# Minimal 2-rank single-galaxy rank binding for the cross-mesh socket smoke.
+#
+# rank 0 -> mesh_id=0, TT_VISIBLE_DEVICES=0,1 (tray 1, first 2 chips)
+# rank 1 -> mesh_id=1, TT_VISIBLE_DEVICES=8,9 (tray 2, first 2 chips)
+#
+# Each rank opens a (2, 1) MeshDevice with its 2 visible chips. The intermesh
+# fabric channel runs between tray 1 and tray 2 (adjacent UBB trays on the
+# galaxy backplane). Pairs with bh_galaxy_dual_2x1_minimal.textproto.
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1"
+      TT_METAL_SLOW_DISPATCH_MODE: "1"
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "8,9"
+      TT_METAL_SLOW_DISPATCH_MODE: "1"
+
+mesh_graph_desc_path: "models/demos/deepseek_v3_d_p/tests/pipeline/bh_galaxy_dual_2x1_minimal.textproto"
