@@ -28,58 +28,6 @@ NUM_MEASURE = 50
 
 _TTL_WORKER_L1_RESERVE_BYTES = 77824
 
-_TTML_SOURCES = Path(__file__).resolve().parents[1]
-_TTLANG = _TTML_SOURCES / "ttlang"
-for _p in (_TTML_SOURCES, _TTLANG):
-    if _p.is_dir() and str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
-
-
-def _ensure_ttl_package_path() -> None:
-    """Put the nanobind ``ttl`` package on ``sys.path``."""
-    candidates: list[Path] = []
-    env = os.environ.get("TTL_PYTHON_PACKAGES", "").strip()
-    if env:
-        candidates.append(Path(env).expanduser())
-    candidates.append(Path("/opt/ttlang-toolchain/python_packages"))
-    exe_parent = Path(sys.executable).resolve().parent.parent
-    if (exe_parent / "python_packages").is_dir():
-        candidates.append(exe_parent / "python_packages")
-    for p in candidates:
-        if p.is_dir() and (p / "ttl").is_dir() and str(p) not in sys.path:
-            sys.path.insert(0, str(p))
-            return
-
-
-def _import_ttl_polynorm3_bw():
-    """Import ``ttl_polynorm3_bw`` (needs ``ttl`` + this repo's ``ttlang`` on ``sys.path``)."""
-    _ensure_ttl_package_path()
-    import ttl_polynorm3_bw  # noqa: PLC0415
-
-    return ttl_polynorm3_bw
-
-
-import ttml
-from ttml.autograd import AutoContext, Tensor, create_tensor
-
-
-def _open_mesh_for_kernel_bw(ctx: AutoContext, bw_kernel: str) -> None:
-    """Open a single-device mesh ``(1, 1)``; TTL reserves worker L1 for large kernel configs."""
-    if bw_kernel != "ttl":
-        ctx.open_device((1, 1))
-        return
-    max_l1 = ttnn.device.get_max_worker_l1_unreserved_size()
-    if _TTL_WORKER_L1_RESERVE_BYTES >= max_l1:
-        raise RuntimeError(
-            f"_TTL_WORKER_L1_RESERVE_BYTES ({_TTL_WORKER_L1_RESERVE_BYTES}) must be less than "
-            f"max worker L1 unreserved size ({max_l1}); not enough L1 to reserve headroom for TTL kernel configs."
-        )
-    worker_l1 = max_l1 - _TTL_WORKER_L1_RESERVE_BYTES
-    try:
-        ctx.open_device((1, 1), None, worker_l1)
-    except TypeError:
-        ctx.open_device((1, 1))
-
 
 SHAPES = (
     ([1, 1, 256, 384], "256x384"),
@@ -95,6 +43,30 @@ SHAPES = (
     ([8, 1, 4096, 4096], "32768x4096"),
     ([16, 1, 4096, 4096], "65536x4096"),
 )
+
+
+import ttl_polynorm3_bw  # noqa: PLC0415
+import ttml
+from ttml.autograd import AutoContext, Tensor, create_tensor
+
+
+def _open_mesh_for_kernel_bw(ctx: AutoContext, kernel: str) -> None:
+    """Open a single-device mesh ``(1, 1)``; TTL reserves worker L1 for large kernel configs."""
+    if kernel != "ttl":
+        ctx.open_device((1, 1))
+        return
+    max_l1 = ttnn.device.get_max_worker_l1_unreserved_size()
+    if _TTL_WORKER_L1_RESERVE_BYTES >= max_l1:
+        raise RuntimeError(
+            f"_TTL_WORKER_L1_RESERVE_BYTES ({_TTL_WORKER_L1_RESERVE_BYTES}) must be less than "
+            f"max worker L1 unreserved size ({max_l1}); not enough L1 to reserve headroom for TTL kernel configs."
+        )
+    worker_l1 = max_l1 - _TTL_WORKER_L1_RESERVE_BYTES
+    try:
+        ctx.open_device((1, 1), None, worker_l1)
+    except TypeError:
+        ctx.open_device((1, 1))
+
 
 
 def _seed_for_name(name: str) -> int:
@@ -152,18 +124,20 @@ def _ttl_polynorm_bw_tensors_to_device(
     return x_tt, dout_tt, w_tt, ep_tt, gx_tt, gp_tt
 
 
-def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
+def _run_kernel(kernel: str = "metal") -> None:
     """Benchmark PolyNorm3 backward kernel only (random upstream grad on host)."""
 
-    ttl_mod = _import_ttl_polynorm3_bw() if bw_kernel == "ttl" else None
+    ttl_mod = None
+    if kernel == "ttl":
+        ttl_mod = ttl_polynorm3_bw
 
     ctx = AutoContext.get_instance()
-    _open_mesh_for_kernel_bw(ctx, bw_kernel)
+    _open_mesh_for_kernel_bw(ctx, kernel)
     try:
         mesh = ctx.get_device()
         mesh.enable_program_cache()
 
-        tag = "TTL" if bw_kernel == "ttl" else "Metal"
+        tag = "TTL" if kernel == "ttl" else "Metal"
         print(f"Mode: KernelBw / {tag} (backward-only, random dL_dout on host)\n")
 
         w_np = _weight_numpy()
@@ -175,13 +149,13 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
             x_np = rng.uniform(-1.0, 1.0, (b, 1, s_len, c)).astype(np.float32)
             d_np = rng.uniform(-1.0, 1.0, (b, 1, s_len, c)).astype(np.float32)
 
-            if bw_kernel == "metal":
+            if kernel == "metal":
                 x_t, dL_t, w_t = _metal_polynorm_bw_tensors_from_numpy(x_np, d_np, w_np)
 
                 def run_step() -> None:
                     ttml.ops.polynorm.polynorm3_bw(x_t, dL_t, w_t, POLYNORM_EPS)
 
-            elif bw_kernel == "ttl":
+            elif kernel == "ttl":
                 assert ttl_mod is not None
                 rows = b * s_len
                 columns = c
@@ -204,7 +178,7 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
                     ttl_mod.polynorm3_bw(x_tt, dout_tt, w_tt, ep_tt, gx_tt, gp_tt)
 
             else:
-                raise ValueError(f"unknown bw_kernel: {bw_kernel}")
+                raise ValueError(f"unknown kernel: {kernel}")
 
             for _ in range(NUM_WARMUP):
                 run_step()
@@ -216,7 +190,7 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
                 ttnn.synchronize_device(mesh)
                 total += time.perf_counter() - t0
             avg_s = total / NUM_MEASURE
-            suffix = "KernelBw_TTL" if bw_kernel == "ttl" else "KernelBw_Metal"
+            suffix = "Kernel_TTL" if kernel == "ttl" else "Kernel_Metal"
             row = f"{name}_{suffix}"
             print(f"  {row:28}  Time_us={avg_s * 1e6:10.2f}")
     finally:
@@ -227,7 +201,7 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
-        "--bw-kernel",
+        "--kernel",
         choices=("metal", "ttl"),
         default="metal",
         help=(
@@ -237,9 +211,9 @@ def main() -> int:
     )
     args = p.parse_args()
 
-    print(f"warmup={NUM_WARMUP}  measure={NUM_MEASURE}  epsilon={POLYNORM_EPS}  " f"--bw-kernel={args.bw_kernel}\n")
+    print(f"warmup={NUM_WARMUP}  measure={NUM_MEASURE}  epsilon={POLYNORM_EPS}  " f"--kernel={args.kernel}\n")
 
-    _run_kernel_bw_only(args.bw_kernel)
+    _run_kernel(args.kernel)
     print()
 
     return 0

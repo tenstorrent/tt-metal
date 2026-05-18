@@ -62,7 +62,7 @@ def _torch_polynorm_bw_packed_row_refs(
     """Analytic row-partial refs for ``grad_packed``, each block shape ``(H, TILE)``.
 
     Each row scalar (``dL/db``, ``dL/dw_k``) is expanded across TILE lanes to match the tile
-    faces the kernel writes. Closed-form ``Σ dout·RmsNorm(t)`` per row — not taken from
+    faces the kernel writes. Closed-form ``Sum dout·RmsNorm(t)`` per row - not taken from
     autograd weight ``.grad`` scalars, which would be global sums.
     """
     xf = x_t.float()
