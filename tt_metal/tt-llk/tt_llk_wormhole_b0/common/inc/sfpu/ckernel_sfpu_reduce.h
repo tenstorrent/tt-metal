@@ -813,10 +813,10 @@ template <PoolType pool_type, ReduceDim reduce_dim, InstrModLoadStore INSTRUCTIO
 inline void calculate_reduce_max_min(const std::uint32_t block_ct_dim = 1, const std::uint32_t block_rt_dim = 1)
 {
     static_assert(
-        reduce_dim == REDUCE_COL || (pool_type == PoolType::MAX && reduce_dim == REDUCE_ROW),
+        reduce_dim == ReduceDim::REDUCE_COL || (pool_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW),
         "Only column reduction (REDUCE_COL) and row MAX reduction (REDUCE_ROW with MAX) are supported");
 
-    if constexpr (reduce_dim == REDUCE_ROW)
+    if constexpr (reduce_dim == ReduceDim::REDUCE_ROW)
     {
         static_assert(pool_type == PoolType::MAX || pool_type == PoolType::SUM, "Row reduction (REDUCE_ROW) currently only supports MAX and SUM pool types");
         perform_reduce_row_max<INSTRUCTION_MODE>(block_ct_dim, block_rt_dim);
@@ -895,7 +895,7 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
 {
     // Compile-time assertions to restrict to currently supported operations
     static_assert(
-        reduce_dim == REDUCE_COL || (pool_type == PoolType::SUM && reduce_dim == REDUCE_ROW),
+        reduce_dim == ReduceDim::REDUCE_COL || (pool_type == PoolType::SUM && reduce_dim == ReduceDim::REDUCE_ROW),
         "Only column reduction (REDUCE_COL) is supported, except row reduction (REDUCE_ROW) is allowed only for SUM");
     static_assert(pool_type == PoolType::SUM || pool_type == PoolType::AVG, "Only SUM and AVG pool types are currently supported on SFPU");
 
@@ -905,7 +905,7 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
          INSTRUCTION_MODE == InstrModLoadStore::DEFAULT || INSTRUCTION_MODE == InstrModLoadStore::FP32 || INSTRUCTION_MODE == InstrModLoadStore::FP16B);
     static_assert(is_supported_reduce_instr_mode, "INSTRUCTION_MODE must be one of: INT32, INT32_2S_COMP, LO16, DEFAULT, FP32, FP16B");
 
-    if constexpr (reduce_dim == REDUCE_COL)
+    if constexpr (reduce_dim == ReduceDim::REDUCE_COL)
     {
         perform_reduce_col_sum_avg<pool_type, INSTRUCTION_MODE>();
     }
@@ -972,7 +972,8 @@ template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format>
 inline void _calculate_reduce_(std::uint32_t block_ct_dim = 1, std::uint32_t block_rt_dim = 1)
 {
     static_assert(
-        reduce_dim == REDUCE_COL || (pool_type == PoolType::SUM && reduce_dim == REDUCE_ROW) || (pool_type == PoolType::MAX && reduce_dim == REDUCE_ROW),
+        reduce_dim == ReduceDim::REDUCE_COL || (pool_type == PoolType::SUM && reduce_dim == ReduceDim::REDUCE_ROW) ||
+            (pool_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW),
         "Row reduction (REDUCE_ROW) is supported for SUM and MAX pool types");
     static_assert(is_supported_reduce_format(format), "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
@@ -982,7 +983,7 @@ inline void _calculate_reduce_(std::uint32_t block_ct_dim = 1, std::uint32_t blo
     // integers in sign-magnitude format, and SFPSWAP(mod1=VEC_MIN_MAX) compares sign-magnitude
     // values correctly without two's-complement conversion.
     constexpr InstrModLoadStore INSTRUCTION_MODE =
-        (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN) && reduce_dim == REDUCE_COL)
+        (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN) && reduce_dim == ReduceDim::REDUCE_COL)
             ? InstrModLoadStore::INT32_2S_COMP
             : GetSfpLoadStoreInstrMod<format>();
 

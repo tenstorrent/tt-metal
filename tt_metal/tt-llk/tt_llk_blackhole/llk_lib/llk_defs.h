@@ -21,7 +21,7 @@ enum VectorMode
     Invalid   = 0xFF,
 };
 
-enum ReduceDim
+enum class ReduceDim : std::uint8_t
 {
     REDUCE_ROW,
     REDUCE_COL,
