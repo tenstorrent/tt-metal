@@ -760,6 +760,17 @@ void Device::configure_fabric(
                 const auto& jit_cfg_ij = hal_ij.get_jit_build_config(aeth_idx_ij, 0, 0);
                 auto& cluster_ij = env_impl.get_cluster();
                 auto virtual_core_ij = cluster_ij.get_virtual_eth_core_from_channel(this->id(), hoisted_eth_chan);
+                // FIX MN (#42429): Pre-restore snapshot of fw_launch_addr (initial path).
+                std::vector<uint32_t> ij_pre(1, 0xFFFFFFFF);
+                cluster_ij.read_core(ij_pre, sizeof(uint32_t),
+                    tt_cxy_pair(this->id(), virtual_core_ij),
+                    static_cast<uint64_t>(jit_cfg_ij.fw_launch_addr));
+                log_info(
+                    tt::LogMetal,
+                    "FIX MN (#42429): FIX IJ initial pre-restore — Device {} chan={} "
+                    "fw_launch_addr=0x{:08X} pre_val=0x{:08X} (expect 0 from FIX EG)",
+                    this->id(), hoisted_eth_chan,
+                    jit_cfg_ij.fw_launch_addr, ij_pre[0]);
                 cluster_ij.write_core(
                     &jit_cfg_ij.fw_launch_addr_value,
                     sizeof(uint32_t),
@@ -2110,6 +2121,19 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     auto& cluster_ij_q = env_impl.get_cluster();
                     auto virtual_core_ij_q =
                         cluster_ij_q.get_virtual_eth_core_from_channel(this->id(), hoisted_eth_chan_q);
+                    // FIX MN (#42429): Pre-restore snapshot of fw_launch_addr.
+                    // Expected: 0 (FIX EG zeroed it).  If non-zero, FIX EG may not have
+                    // fired for this channel — anomalous and worth investigating.
+                    std::vector<uint32_t> ij_q_pre(1, 0xFFFFFFFF);
+                    cluster_ij_q.read_core(ij_q_pre, sizeof(uint32_t),
+                        tt_cxy_pair(this->id(), virtual_core_ij_q),
+                        static_cast<uint64_t>(jit_cfg_ij_q.fw_launch_addr));
+                    log_info(
+                        tt::LogMetal,
+                        "FIX MN (#42429): FIX IJ quiesce pre-restore — Device {} chan={} "
+                        "fw_launch_addr=0x{:08X} pre_val=0x{:08X} (expect 0 from FIX EG)",
+                        this->id(), hoisted_eth_chan_q,
+                        jit_cfg_ij_q.fw_launch_addr, ij_q_pre[0]);
                     cluster_ij_q.write_core(
                         &jit_cfg_ij_q.fw_launch_addr_value,
                         sizeof(uint32_t),
@@ -2634,6 +2658,17 @@ void Device::launch_eth_cores_for_quiesce() {
                     auto& cluster_ij_dq = env_impl.get_cluster();
                     auto virtual_core_ij_dq =
                         cluster_ij_dq.get_virtual_eth_core_from_channel(this->id(), hoisted_eth_chan_dq);
+                    // FIX MN (#42429): Pre-restore snapshot of fw_launch_addr (deferred path).
+                    std::vector<uint32_t> ij_dq_pre(1, 0xFFFFFFFF);
+                    cluster_ij_dq.read_core(ij_dq_pre, sizeof(uint32_t),
+                        tt_cxy_pair(this->id(), virtual_core_ij_dq),
+                        static_cast<uint64_t>(jit_cfg_ij_dq.fw_launch_addr));
+                    log_info(
+                        tt::LogMetal,
+                        "FIX MN (#42429): FIX IJ deferred-quiesce pre-restore — Device {} chan={} "
+                        "fw_launch_addr=0x{:08X} pre_val=0x{:08X} (expect 0 from FIX EG)",
+                        this->id(), hoisted_eth_chan_dq,
+                        jit_cfg_ij_dq.fw_launch_addr, ij_dq_pre[0]);
                     cluster_ij_dq.write_core(
                         &jit_cfg_ij_dq.fw_launch_addr_value,
                         sizeof(uint32_t),

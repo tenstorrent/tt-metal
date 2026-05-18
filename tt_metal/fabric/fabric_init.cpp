@@ -389,6 +389,19 @@ FabricCoresHealth configure_fabric_cores(
                         tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
                     const uint32_t fw_launch_addr_eg =
                         hal_eg.get_jit_build_config(aeth_idx_eg, 0, 0).fw_launch_addr;
+                    // FIX MN (#42429): Capture fw_launch_addr BEFORE zeroing it.
+                    // If pre_val == 1, FIX EG caught genuinely stale state (prior session
+                    // left launch flag set).  If pre_val == 0, the zero-write is harmless
+                    // but confirms no stale state existed.  Any other value is anomalous.
+                    std::vector<uint32_t> eg_pre_val(1, 0xFFFFFFFF);
+                    cluster.read_core(eg_pre_val, sizeof(uint32_t),
+                        tt_cxy_pair(chip_id, virtual_core),
+                        static_cast<uint64_t>(fw_launch_addr_eg));
+                    log_info(
+                        tt::LogMetal,
+                        "FIX MN (#42429): FIX EG pre-zero snapshot — Device {} chan={} "
+                        "fw_launch_addr=0x{:08X} pre_val=0x{:08X} (1=stale, 0=clean)",
+                        chip_id, router_chan, fw_launch_addr_eg, eg_pre_val[0]);
                     cluster.write_core_immediate(
                         chip_id, virtual_core, std::vector<uint32_t>{0}, fw_launch_addr_eg);
                     // FIX GI (#42429): Log + readback verify the FIX EG zero write.
@@ -447,6 +460,16 @@ FabricCoresHealth configure_fabric_cores(
                     constexpr uint32_t kFIX_DU_PollIntervalMs = 5;
                     const uint64_t edm_addr =
                         static_cast<uint64_t>(router_config.edm_status_address);
+                    // FIX MN (#42429): Snapshot edm_status at FIX DU poll entry.
+                    // If ERISC already exited ROM (elapsed=0ms), this tells us what
+                    // state it reached before we started polling.
+                    std::vector<uint32_t> du_initial(1, 0);
+                    cluster.read_core(du_initial, sizeof(uint32_t), core_loc, edm_addr);
+                    log_info(
+                        tt::LogMetal,
+                        "FIX MN (#42429): FIX DU poll entry — Device {} chan={} "
+                        "edm_status=0x{:08X} at poll start (ROM=0x49705180)",
+                        chip_id, router_chan, du_initial[0]);
                     uint32_t elapsed_du_ms = 0;
                     bool fix_du_ok = false;
                     while (elapsed_du_ms < kFIX_DU_BootWaitMs) {
@@ -668,6 +691,24 @@ FabricCoresHealth configure_fabric_cores(
     // pre_known_dead channels.  If all pre-known dead channels were recovered (dead_channels
     // is now empty) and no new failures occurred, all channels are healthy.
     const bool all_channels_healthy = dead_channels.empty() && newly_dead_channels.empty();
+
+    // FIX MN (#42429): Summary log — captures total channel count, dead count, recovered count,
+    // and skip-soft-reset count for post-mortem analysis.  Without this, CI logs only show
+    // individual channel decisions; there is no single line that summarizes the outcome.
+    log_info(
+        tt::LogMetal,
+        "FIX MN (#42429): configure_fabric_cores SUMMARY — Device {} "
+        "total_active={} dead={} newly_dead={} recovered={} "
+        "skip_soft_reset={} pre_known_dead={} healthy={}",
+        device->id(),
+        router_chans_and_direction.size(),
+        dead_channels.size(),
+        newly_dead_channels.size(),
+        recovered_channels.size(),
+        skip_soft_reset_channels.size(),
+        pre_known_dead_channels.size(),
+        all_channels_healthy ? "true" : "false");
+
     return FabricCoresHealth{all_channels_healthy, std::move(newly_dead_channels), std::move(recovered_channels)};
 }
 
