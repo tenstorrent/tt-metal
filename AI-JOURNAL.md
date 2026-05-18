@@ -1,5 +1,48 @@
 
 ---
+## 2026-05-18 — Strategy Report v9 Implementation (SA-A + SA-B + SA-S)
+
+### Implemented
+
+Three new strategies from strategy_20260518_1732.txt:
+
+**FIX SA-A: Firmware-Side Ready Gate** (dbde32c9b79)
+- Two-way handshake: ERISC writes FW_READY_VALUE (0xFEED1AB5) to AERISC_FABRIC_SCRATCH+0x08
+  after completing init (flag_disable, go_messages, launch_msg_rd_ptr)
+- Host polls FW_READY_OFFSET (up to 10s) before writing boot fence token
+- Eliminates timing assumptions about ROM link training duration
+- If timeout: channel marked dead, boot fence + go_msg skipped
+- Files: fabric_boot_fence.h, active_erisc.cc, device.cpp, fabric_builder_context.cpp,
+  fabric_context.cpp, wh_hal.cpp, bh_hal.cpp, qa_hal.cpp
+
+**FIX SA-B: Unified Channel Recovery** (5896df808a3)
+- Merged pre-dead FIX RR path into FIX SA deferred deassert path
+- Removed FIX BH 5000ms ROM postcode poll from fabric_init.cpp (-80 LOC)
+- Pre-dead MMIO channels now: assert + FIX EG + defer (same as base-UMD)
+- device.cpp: deferred channels removed from all_dead_channels + effective_pre_dead
+  so ConfigureDeviceWithProgram loads firmware on them
+- Root cause fix for CI run 26046712504 universal timeout
+
+**FIX SA-S: Stagger MMIO Deasserts** (9204697aff2)
+- Each device sleeps (chip_id * 100ms) before first deassert in FIX SA loop
+- Prevents simultaneous cross-chip ETH link training loops
+- T3K: Device 0 at 0ms, Device 1 at 100ms, Device 2 at 200ms, Device 3 at 300ms
+- Adds at most 300ms to total init time (parallel, not serial)
+
+### Architecture After These Changes
+
+MMIO channel recovery flow (unified):
+1. configure_fabric_cores: assert + FIX EG → deferred_deassert_channels
+2. ConfigureDeviceWithProgram: firmware binary loaded (not skipped)
+3. FIX SA Step 1-3: fw_launch_addr + launch_msg + handshake_bypass while halted
+4. FIX SA-S: stagger delay (chip_id * 100ms)
+5. FIX SA Step 4: deassert ERISC
+6. FIX SA-A Step 4b: poll FW_READY_VALUE (up to 10s)
+7. FIX SA Step 5: write BOOT_FENCE_READY
+8. FIX SA Step 5b: write session_id
+9. FIX SA Step 7: write go_msg (RUN_MSG_GO)
+
+---
 ## 2026-05-18 — CI Run 26046712504 Analysis (FIX S8/S9 already covers root cause)
 
 ### What Failed (run 26046712504 — FIX PQ era, iteration 17)
