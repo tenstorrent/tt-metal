@@ -19,15 +19,18 @@ using namespace ckernel::packer;
 
 inline void _llk_pack_untilize_configure_addrmod_()
 {
-    // ADDR_MOD_0: used by every inner-loop PACR. y_src stays put (W advances via INCADCZW).
+    // In DST_STRIDED_MODE, y_src tracks the row within each Dest face and W tracks
+    // the tile within Dest.
+    // ADDR_MOD_0: used by every inner-loop PACR. y_src stays on the current row;
+    // W advances via INCADCZW between tiles.
     addr_mod_pack_t {
         .y_src = {.incr = 0, .clr = 0},
     }
         .set(ADDR_MOD_0);
 
     // ADDR_MOD_1: used by the row-closing PACR (set_last_inner_loop_instr).
-    // y_src.incr=1 folds the per-row "advance Dst face-row" into the PACR itself,
-    // replacing the explicit INCADCXY that previously ran as end_op0.
+    // y_src.incr=1 advances to the next Dest face-row after packing, folding the
+    // explicit INCADCXY end_op into the PACR itself.
     addr_mod_pack_t {
         .y_src = {.incr = 1, .clr = 0},
     }
