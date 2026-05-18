@@ -3,7 +3,18 @@ name: "(triage) Hourly triage kickoff"
 on:
   schedule:
     - cron: "0 * * * *"   # every hour
-  workflow_dispatch:       # manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      full-lifecycle:
+        description: "Run full AI-powered lifecycle (slow, burns LLM quota). Default: false = fast check-passing-only mode."
+        required: false
+        default: "false"
+        type: string
+      skip-lifecycle:
+        description: "Skip the lifecycle run entirely. Default: false."
+        required: false
+        default: "false"
+        type: string
 
 jobs:
   ping-brain:
@@ -13,17 +24,28 @@ jobs:
       - name: Send triage instructions to BrAIn
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          FULL_LIFECYCLE:  ${{ inputs.full-lifecycle || 'false' }}
+          SKIP_LIFECYCLE:  ${{ inputs.skip-lifecycle || 'false' }}
         run: |
           python3 << 'PYEOF'
           import json, os, urllib.request
 
-          SLACK_TOKEN = os.environ["SLACK_BOT_TOKEN"]
-          BRAIN_UID   = "U0AK4BVCFM0"
-          CHANNEL     = "C0B1F8Z7GQM"
+          SLACK_TOKEN    = os.environ["SLACK_BOT_TOKEN"]
+          BRAIN_UID      = "U0AK4BVCFM0"
+          CHANNEL        = "C0B1F8Z7GQM"
+          full_lifecycle = os.environ.get("FULL_LIFECYCLE", "false").lower() == "true"
+          skip_lifecycle = os.environ.get("SKIP_LIFECYCLE", "false").lower() == "true"
+
+          if skip_lifecycle:
+              lifecycle_line = "1. ~~`/run-lifecycle`~~ _(skipped this run)_\n"
+          elif full_lifecycle:
+              lifecycle_line = "1. `/run-lifecycle false true copilot` _(full AI-powered lifecycle — slow)_\n"
+          else:
+              lifecycle_line = "1. `/run-lifecycle true true copilot` _(fast: close only jobs now passing)_\n"
 
           text = (
               f"<@{BRAIN_UID}> Run the full triage pipeline in order:\n\n"
-              "1. `/run-lifecycle false true copilot`\n"
+              + lifecycle_line +
               "2. `/make-new-issues 1`\n"
               "3. `/check-for-existing-issues` on the issue you just made\n\n"
               "If the issue does *not* already exist in tt-metal:\n"
