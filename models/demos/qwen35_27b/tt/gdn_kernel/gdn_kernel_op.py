@@ -82,6 +82,9 @@ def _compute_kernel_hash():
 
 _KERNEL_CONTENT_HASH = _compute_kernel_hash()
 
+# Reuse ProgramDescriptor when tensor buffer addresses are stable (decode hot path).
+_full_fused_program_cache = {}
+
 
 def _make_cb(cb_index, num_tiles, core_range_set, data_format=ttnn.bfloat16):
     """Create a CBDescriptor."""
@@ -349,8 +352,114 @@ def _gdn_recurrence_ttnn(q, k_row, k_col, v, g, beta, state):
 
 
 # ---------------------------------------------------------------------------
-# Full fused kernel (Phase A): L2 norm + gates + recurrence + RMS norm + SiLU
+# Full fused kernel (Phase A): L2 norm + gates + recurrence
 # ---------------------------------------------------------------------------
+
+
+def _full_fused_program_cache_key(
+    conv_out_dev,
+    a_dev,
+    b_dev,
+    neg_exp_A_dev,
+    dt_bias_dev,
+    scale_dev,
+    state_dev,
+    output_dev,
+    num_pairs_total,
+    num_cores,
+    grid,
+    state_in_l1,
+    state_is_sharded,
+    Nv_TP,
+    Nk_TP,
+    repeat_factor,
+    key_dim_tp,
+):
+    return (
+        _KERNEL_CONTENT_HASH,
+        num_pairs_total,
+        num_cores,
+        state_in_l1,
+        state_is_sharded,
+        Nv_TP,
+        Nk_TP,
+        repeat_factor,
+        key_dim_tp,
+        grid.x,
+        grid.y,
+        conv_out_dev.buffer_address(),
+        a_dev.buffer_address(),
+        b_dev.buffer_address(),
+        neg_exp_A_dev.buffer_address(),
+        dt_bias_dev.buffer_address(),
+        scale_dev.buffer_address(),
+        state_dev.buffer_address(),
+        output_dev.buffer_address(),
+    )
+
+
+def _get_or_build_full_fused_program(
+    conv_out_dev,
+    a_dev,
+    b_dev,
+    neg_exp_A_dev,
+    dt_bias_dev,
+    scale_dev,
+    state_dev,
+    output_dev,
+    num_pairs_total,
+    num_cores,
+    grid,
+    state_in_l1=False,
+    state_is_sharded=False,
+    Nv_TP=12,
+    Nk_TP=4,
+    repeat_factor=3,
+    key_dim_tp=512,
+):
+    cache_key = _full_fused_program_cache_key(
+        conv_out_dev,
+        a_dev,
+        b_dev,
+        neg_exp_A_dev,
+        dt_bias_dev,
+        scale_dev,
+        state_dev,
+        output_dev,
+        num_pairs_total,
+        num_cores,
+        grid,
+        state_in_l1,
+        state_is_sharded,
+        Nv_TP,
+        Nk_TP,
+        repeat_factor,
+        key_dim_tp,
+    )
+    program = _full_fused_program_cache.get(cache_key)
+    if program is not None:
+        return program
+    program = _build_full_fused_device_program(
+        conv_out_dev,
+        a_dev,
+        b_dev,
+        neg_exp_A_dev,
+        dt_bias_dev,
+        scale_dev,
+        state_dev,
+        output_dev,
+        num_pairs_total,
+        num_cores,
+        grid,
+        state_in_l1=state_in_l1,
+        state_is_sharded=state_is_sharded,
+        Nv_TP=Nv_TP,
+        Nk_TP=Nk_TP,
+        repeat_factor=repeat_factor,
+        key_dim_tp=key_dim_tp,
+    )
+    _full_fused_program_cache[cache_key] = program
+    return program
 
 
 def _build_full_fused_device_program(
@@ -359,10 +468,7 @@ def _build_full_fused_device_program(
     b_dev,
     neg_exp_A_dev,
     dt_bias_dev,
-    norm_w_dev,
     scale_dev,
-    rms_scale_dev,
-    rms_eps_dev,
     state_dev,
     output_dev,
     num_pairs_total,
@@ -380,6 +486,7 @@ def _build_full_fused_device_program(
     Reads Q/K/V directly from conv_out via sub-tile row extraction.
     Scalar inputs (a, b) read from batched [1, B, Nv_TP] in the reader.
     Constants (neg_exp_A, dt_bias) read from [1, 1, Nv_TP] in the reader.
+    norm_w / rms_scale / rms_eps are applied in Python after the kernel (not loaded here).
     z is NOT passed — handled by Python POST via ttnn.silu().
     """
     max_cores = grid.x * grid.y
@@ -408,13 +515,10 @@ def _build_full_fused_device_program(
             b_dev.buffer_address(),  # 2
             neg_exp_A_dev.buffer_address(),  # 3
             dt_bias_dev.buffer_address(),  # 4
-            norm_w_dev.buffer_address(),  # 5
-            scale_dev.buffer_address(),  # 6
-            rms_scale_dev.buffer_address(),  # 7
-            state_dev.buffer_address(),  # 8
-            rms_eps_dev.buffer_address(),  # 9
-            pair_offset,  # 10
-            n,  # 11
+            scale_dev.buffer_address(),  # 5
+            state_dev.buffer_address(),  # 6
+            pair_offset,  # 7
+            n,  # 8
         ]
         writer_rt_args[cc.x][cc.y] = [
             output_dev.buffer_address(),
@@ -443,7 +547,6 @@ def _build_full_fused_device_program(
         _make_cb(10, 1, core_ranges),  # cb_b
         _make_cb(12, 1, core_ranges),  # cb_neg_exp_A
         _make_cb(13, 1, core_ranges),  # cb_dt_bias
-        _make_cb(14, Vt, core_ranges),  # cb_norm_w (persistent)
         _make_cb(15, 1, core_ranges),  # cb_scale (persistent)
         _make_cb(16, Vt, core_ranges),  # cb_out
         _make_cb(17, Kt, core_ranges),  # cb_q (normed)
@@ -456,9 +559,6 @@ def _build_full_fused_device_program(
         _make_cb(28, Kt, core_ranges),  # cb_sq_acc
         _make_cb(29, 1, core_ranges),  # cb_tmp
         # cb_rec_out (c_30) removed — rec_out written directly to cb_out
-        _make_cb(31, 1, core_ranges),  # cb_rms_scale (persistent)
-        _make_cb(19, 1, core_ranges),  # cb_reduce_scaler (persistent)
-        _make_cb(20, 1, core_ranges),  # cb_rms_eps (persistent)
     ]
 
     state_l1_flag = 1 if state_in_l1 else 0
@@ -482,8 +582,6 @@ def _build_full_fused_device_program(
             group_reader_rt[c.x][c.y] = list(reader_rt_args[c.x][c.y])
             group_writer_rt[c.x][c.y] = list(writer_rt_args[c.x][c.y])
 
-        packed_reduce_scaler = 0x3F803F80
-
         sharded_flag = 1 if state_is_sharded else 0
 
         reader_ct = [
@@ -491,7 +589,6 @@ def _build_full_fused_device_program(
             Vt,
             BF16_TILE_BYTES,
             state_l1_flag,
-            packed_reduce_scaler,
             Nv_TP,
             Nk_TP,
             repeat_factor,
@@ -535,9 +632,9 @@ def _build_full_fused_device_program(
             compile_time_args=[Kt, Vt, n_pairs],
             runtime_args=[],
             config=ttnn.ComputeConfigDescriptor(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
-                fp32_dest_acc_en=True,
+                fp32_dest_acc_en=False,
                 dst_full_sync_en=False,
             ),
         )
@@ -603,11 +700,25 @@ def _gdn_full_fused(
     ]
 
     if num_devices == 1:
-        devs = [ttnn.get_device_tensors(t)[0] for t in all_tensors]
-        grid = devs[0].device().compute_with_storage_grid_size()
+        conv_out_dev = ttnn.get_device_tensors(conv_out)[0]
+        a_dev = ttnn.get_device_tensors(a_fused)[0]
+        b_dev = ttnn.get_device_tensors(b_fused)[0]
+        neg_exp_A_dev = ttnn.get_device_tensors(neg_exp_A)[0]
+        dt_bias_dev = ttnn.get_device_tensors(dt_bias)[0]
+        scale_dev = ttnn.get_device_tensors(scale_tt)[0]
+        state_dev = ttnn.get_device_tensors(state)[0]
+        output_dev = ttnn.get_device_tensors(output)[0]
+        grid = conv_out_dev.device().compute_with_storage_grid_size()
         logger.debug(f"GDN: single device, grid={grid.x}x{grid.y}, building program...")
-        program = _build_full_fused_device_program(
-            *devs,
+        program = _get_or_build_full_fused_program(
+            conv_out_dev,
+            a_dev,
+            b_dev,
+            neg_exp_A_dev,
+            dt_bias_dev,
+            scale_dev,
+            state_dev,
+            output_dev,
             num_pairs_total,
             num_cores,
             grid,
@@ -624,18 +735,41 @@ def _gdn_full_fused(
         return result
 
     # Multi-device
-    per_device = [ttnn.get_device_tensors(t) for t in all_tensors]
+    per_device = {
+        "conv_out": ttnn.get_device_tensors(conv_out),
+        "a": ttnn.get_device_tensors(a_fused),
+        "b": ttnn.get_device_tensors(b_fused),
+        "neg_exp_A": ttnn.get_device_tensors(neg_exp_A),
+        "dt_bias": ttnn.get_device_tensors(dt_bias),
+        "scale": ttnn.get_device_tensors(scale_tt),
+        "state": ttnn.get_device_tensors(state),
+        "output": ttnn.get_device_tensors(output),
+    }
     mesh_program = ttnn.MeshProgramDescriptor()
 
     for row in range(mesh_shape[0]):
         for col in range(mesh_shape[1]):
             device_idx = row * mesh_shape[1] + col
             coord = ttnn.MeshCoordinate(row, col)
-            devs = [per_device[i][device_idx] for i in range(len(all_tensors))]
-            grid = devs[0].device().compute_with_storage_grid_size()
+            conv_out_dev = per_device["conv_out"][device_idx]
+            a_dev = per_device["a"][device_idx]
+            b_dev = per_device["b"][device_idx]
+            neg_exp_A_dev = per_device["neg_exp_A"][device_idx]
+            dt_bias_dev = per_device["dt_bias"][device_idx]
+            scale_dev = per_device["scale"][device_idx]
+            state_dev = per_device["state"][device_idx]
+            output_dev = per_device["output"][device_idx]
+            grid = conv_out_dev.device().compute_with_storage_grid_size()
 
-            program = _build_full_fused_device_program(
-                *devs,
+            program = _get_or_build_full_fused_program(
+                conv_out_dev,
+                a_dev,
+                b_dev,
+                neg_exp_A_dev,
+                dt_bias_dev,
+                scale_dev,
+                state_dev,
+                output_dev,
                 num_pairs_total,
                 num_cores,
                 grid,
@@ -663,6 +797,7 @@ def gdn_recurrence_fused_inplace(q, k_row, k_col, v, g, beta, state, output, num
     kernel is disabled or fails.
     """
     global _fused_available
+    # _fused_available = False
 
     if _fused_available:
         try:
@@ -716,10 +851,10 @@ def gdn_full_fused_inplace(
         b_fused: [1, B, Nv_TP] gate input b (batched)
         neg_exp_A: [1, 1, Nv_TP] precomputed -exp(A)
         dt_bias: [1, 1, Nv_TP] dt_bias constant
-        norm_w: [1, 1, Dv] RMS norm weight
+        norm_w: [1, 1, Dv] RMS norm weight (Python POST only; not loaded by kernel)
         scale_tt: [1, 1, 1] Q scale (Dk^-0.5)
-        rms_scale_tt: [1, 1, 1] sqrt(Dv)
-        rms_eps_tt: [1, 1, 1] Dv * eps
+        rms_scale_tt: [1, 1, 1] sqrt(Dv) (API compat; unused by kernel)
+        rms_eps_tt: [1, 1, 1] Dv * eps (API compat; unused by kernel)
         state: [num_pairs, Dk, Dv] recurrence state
         output: [num_pairs, 1, Dv] pre-allocated output buffer
         num_pairs: total pair count (B * Nv_TP)

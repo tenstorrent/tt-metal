@@ -109,6 +109,7 @@ def ref_full_fused_step(
 )
 @pytest.mark.parametrize("device_params", [{}], indirect=True)
 @pytest.mark.parametrize("B", [1])
+# @pytest.mark.parametrize("B", [32])
 # batch is pair, no of head is kept at 1, k dimension is 128, v dimension is 128
 def test_gdn_full_fused_correctness(mesh_device, reset_seeds, ensure_gc, B):
     """Test full fused GDN kernel with batched conv_out reader."""

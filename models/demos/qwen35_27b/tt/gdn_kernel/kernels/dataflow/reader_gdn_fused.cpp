@@ -20,7 +20,6 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 
 // ---- NOC read helpers (issue only, no barrier) ----
 
@@ -103,26 +102,22 @@ void kernel_main() {
     uint32_t b_addr = get_arg_val<uint32_t>(2);          // [1, B, Nv_TP] batched
     uint32_t neg_exp_A_addr = get_arg_val<uint32_t>(3);  // [1, 1, Nv_TP] constant
     uint32_t dt_bias_addr = get_arg_val<uint32_t>(4);    // [1, 1, Nv_TP] constant
-    uint32_t norm_w_addr = get_arg_val<uint32_t>(5);     // [1, 1, Dv]
-    uint32_t scale_addr = get_arg_val<uint32_t>(6);      // [1 tile]
-    uint32_t rms_scale_addr = get_arg_val<uint32_t>(7);  // [1 tile]
-    uint32_t state_addr = get_arg_val<uint32_t>(8);      // [num_pairs, Dk, Dv]
-    uint32_t rms_eps_addr = get_arg_val<uint32_t>(9);    // [1 tile]
-    uint32_t pair_start = get_arg_val<uint32_t>(10);
-    uint32_t num_pairs = get_arg_val<uint32_t>(11);
+    uint32_t scale_addr = get_arg_val<uint32_t>(5);      // [1 tile] Q scale
+    uint32_t state_addr = get_arg_val<uint32_t>(6);      // [num_pairs, Dk, Dv]
+    uint32_t pair_start = get_arg_val<uint32_t>(7);
+    uint32_t num_pairs = get_arg_val<uint32_t>(8);
 
     // Compile-time args
     constexpr uint32_t Kt = get_compile_time_arg_val(0);          // 4
     constexpr uint32_t Vt = get_compile_time_arg_val(1);          // 4
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);  // 2048
     constexpr uint32_t STATE_IN_L1 = get_compile_time_arg_val(3);
-    constexpr uint32_t reduce_scaler = get_compile_time_arg_val(4);      // packed BF16 1.0
-    constexpr uint32_t Nv_TP = get_compile_time_arg_val(5);              // 12
-    constexpr uint32_t Nk_TP = get_compile_time_arg_val(6);              // 4
-    constexpr uint32_t repeat_factor = get_compile_time_arg_val(7);      // 3
-    constexpr uint32_t key_tile_offset = get_compile_time_arg_val(8);    // 16
-    constexpr uint32_t v_tile_offset = get_compile_time_arg_val(9);      // 32
-    constexpr uint32_t STATE_IS_SHARDED = get_compile_time_arg_val(10);  // 1 = HEIGHT_SHARDED local
+    constexpr uint32_t Nv_TP = get_compile_time_arg_val(4);              // 12
+    constexpr uint32_t Nk_TP = get_compile_time_arg_val(5);              // 4
+    constexpr uint32_t repeat_factor = get_compile_time_arg_val(6);      // 3
+    constexpr uint32_t key_tile_offset = get_compile_time_arg_val(7);    // 16
+    constexpr uint32_t v_tile_offset = get_compile_time_arg_val(8);      // 32
+    constexpr uint32_t STATE_IS_SHARDED = get_compile_time_arg_val(9);   // 1 = HEIGHT_SHARDED local
     constexpr uint32_t state_tiles = Kt * Vt;                            // 16
 
     // Scratch layout offsets
@@ -140,12 +135,8 @@ void kernel_main() {
     constexpr uint32_t cb_b = tt::CBIndex::c_10;
     constexpr uint32_t cb_neg_exp_A = tt::CBIndex::c_12;
     constexpr uint32_t cb_dt_bias = tt::CBIndex::c_13;
-    constexpr uint32_t cb_norm_w = tt::CBIndex::c_14;
     constexpr uint32_t cb_scale = tt::CBIndex::c_15;
     constexpr uint32_t cb_state = tt::CBIndex::c_6;
-    constexpr uint32_t cb_rms_scale = tt::CBIndex::c_31;
-    constexpr uint32_t cb_reduce_scaler = tt::CBIndex::c_19;
-    constexpr uint32_t cb_rms_eps = tt::CBIndex::c_20;
     constexpr uint32_t cb_scratch = tt::CBIndex::c_21;
 
     constexpr bool is_dram = true;
@@ -161,14 +152,8 @@ void kernel_main() {
         .bank_base_address = neg_exp_A_addr, .page_size = tile_bytes, .data_format = DataFormat::Float16_b};
     const InterleavedAddrGenFast<is_dram> dt_bias_rd = {
         .bank_base_address = dt_bias_addr, .page_size = tile_bytes, .data_format = DataFormat::Float16_b};
-    const InterleavedAddrGenFast<is_dram> norm_w_rd = {
-        .bank_base_address = norm_w_addr, .page_size = tile_bytes, .data_format = DataFormat::Float16_b};
     const InterleavedAddrGenFast<is_dram> scale_rd = {
         .bank_base_address = scale_addr, .page_size = tile_bytes, .data_format = DataFormat::Float16_b};
-    const InterleavedAddrGenFast<is_dram> rms_scale_rd = {
-        .bank_base_address = rms_scale_addr, .page_size = tile_bytes, .data_format = DataFormat::Float16_b};
-    const InterleavedAddrGenFast<is_dram> rms_eps_rd = {
-        .bank_base_address = rms_eps_addr, .page_size = tile_bytes, .data_format = DataFormat::Float16_b};
 
     constexpr bool state_is_dram = (STATE_IN_L1 == 0) && (STATE_IS_SHARDED == 0);
     const InterleavedAddrGenFast<state_is_dram> state_rd = {
@@ -178,31 +163,12 @@ void kernel_main() {
     cb_reserve_back(cb_scratch, 1);
     uint32_t scratch_l1 = get_write_ptr(cb_scratch);
 
-    // ---- Read constants (once, persistent) — batched into single barrier ----
+    // ---- Read Q scale constant (once, persistent) ----
 
-    cb_reserve_back(cb_norm_w, Vt);
     cb_reserve_back(cb_scale, 1);
-    cb_reserve_back(cb_rms_scale, 1);
-    cb_reserve_back(cb_rms_eps, 1);
-
-    uint32_t wp = get_write_ptr(cb_norm_w);
-    for (uint32_t vt = 0; vt < Vt; vt++) {
-        noc_async_read_tile(vt, norm_w_rd, wp);
-        wp += tile_bytes;
-    }
     noc_async_read_tile(0, scale_rd, get_write_ptr(cb_scale));
-    noc_async_read_tile(0, rms_scale_rd, get_write_ptr(cb_rms_scale));
-    noc_async_read_tile(0, rms_eps_rd, get_write_ptr(cb_rms_eps));
-
-    noc_async_read_barrier();  // Single barrier for all 7 constant tile reads
-
-    cb_push_back(cb_norm_w, Vt);
+    noc_async_read_barrier();
     cb_push_back(cb_scale, 1);
-    cb_push_back(cb_rms_scale, 1);
-    cb_push_back(cb_rms_eps, 1);
-
-    // reduce_scaler (generated locally, no NOC)
-    generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
 
     // ---- Per-pair reads ----
 
