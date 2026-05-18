@@ -177,11 +177,32 @@ class FramePackMotionerWan(Module):
         assert B == 1, "FramePackMotionerWan is single-batch in v1"
         assert C == self.in_channels, f"expected {self.in_channels} channels, got {C}"
 
+        # Build padd_lat by concat instead of zero-alloc + slice-overwrite.
+        # In the production multi-clip path, T_motion == total_T == 19, so the
+        # full zero buffer was being allocated and then completely overwritten —
+        # ~7.6 MB of pointless alloc + memset per clip. Concat skips that.
         total_T = sum(self.zip_frame_buckets)
-        padd_lat = torch.zeros(B, C, total_T, lat_h, lat_w, dtype=x.dtype, device=x.device)
         overlap = min(total_T, T_motion)
-        if overlap > 0:
-            padd_lat[:, :, -overlap:] = x[:, :, -overlap:]
+        zero_lead = total_T - overlap
+        if zero_lead == 0:
+            padd_lat = x[:, :, -overlap:]
+        elif overlap == 0:
+            padd_lat = torch.zeros(B, C, total_T, lat_h, lat_w, dtype=x.dtype, device=x.device)
+        else:
+            padd_lat = torch.cat(
+                [
+                    torch.zeros(B, C, zero_lead, lat_h, lat_w, dtype=x.dtype, device=x.device),
+                    x[:, :, -overlap:],
+                ],
+                dim=2,
+            )
+
+        # Future optimization: replace the host-side `_patchify_for_unfolded_conv`
+        # + `bf16_tensor` upload per bucket with `ttnn.experimental.conv3d` using
+        # stride=kernel=patch_size. That requires a conv3d sweep on the three
+        # motioner shapes ((16, 5120, (1,2,2)), (16, 5120, (2,4,4)),
+        # (16, 5120, (4,8,8))) so they don't hit the `(in_c, 32, 1, 1, 1)`
+        # hardcoded fallback. Tracked under WAN_S2V_PERF_CLEANUP.md item 4.
 
         # Split the temporal axis as the reference does — bucket order is
         # [4x, 2x, post] (reverse of self.zip_frame_buckets).
