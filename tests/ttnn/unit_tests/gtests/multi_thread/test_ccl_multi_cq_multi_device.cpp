@@ -164,7 +164,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
         auto gathered_tensors = output_tensors;
 
         log_info(LogTest, "Enqueue dummy ops");
-        for (int dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
+        for (size_t dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
             auto promise = std::make_shared<std::promise<void>>();
             futures.push_back(promise->get_future());
             boost::asio::post(pool, [&, dev_idx, promise]() mutable {
