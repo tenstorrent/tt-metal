@@ -29,6 +29,7 @@ class TtDevstral2SmallModel(LightweightModule):
         configuration,
         vision_config,
         vision_n_layers: int | None = None,
+        embed_dtype=None,
     ):
         super().__init__()
         text_cfg = model_args.hf_config.text_config
@@ -66,6 +67,7 @@ class TtDevstral2SmallModel(LightweightModule):
             configuration=configuration,
             llama_4_scaling_beta=rope_params.get("llama_4_scaling_beta"),
             original_max_position_embeddings=rope_params.get("original_max_position_embeddings"),
+            embed_dtype=embed_dtype,
         )
         if isinstance(text_cfg, Ministral3Config):
             lm_kwargs["ministral_text_config"] = text_cfg

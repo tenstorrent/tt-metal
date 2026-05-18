@@ -1,7 +1,36 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+#
 # SPDX-License-Identifier: Apache-2.0
 
-# Demo / smoke test using the **same user prompt** as ``reference/model_loading.py``: - Multimodal message: one image placeholder + text ``"Describe what you see in this image."`` ``--vision-square-pixels S`` resizes to ``S×S`` (LANCZOS) before ``processor`` and overrides ``--vision-max-edge`` (e.g. ``1540`` for square HF-style sizing). **HF path** (``--backend hf``, default): ``AutoProcessor`` + ``AutoModelForImageTextToText``; same ``--vision-max-edge`` / ``--vision-square-pixels`` as TT befo...
+"""
+Demo / smoke test using the **same user prompt** as ``reference/model_loading.py``:
+
+- Multimodal message: one image placeholder + text
+  ``"Describe what you see in this image."``
+
+``--vision-square-pixels S`` resizes to ``S×S`` (LANCZOS) before ``processor`` and overrides
+``--vision-max-edge`` (e.g. ``1540`` for square HF-style sizing).
+
+**HF path** (``--backend hf``, default): ``AutoProcessor`` + ``AutoModelForImageTextToText``; same
+``--vision-max-edge`` / ``--vision-square-pixels`` as TT before ``processor`` (default max-edge ``0`` =
+no PIL resize; use ``--vision-square-pixels`` e.g. ``1540`` for square HF-style sizing).
+Default image ``reference/sample.jpeg``; ``max_new_tokens=100``.
+
+**TT path** (``--backend tt``): loads :class:`TtDevstral2SmallModel` (Pixtral vision + projector +
+``TtMinistral3Model``), runs TT vision/projector, merges features into text embeddings like HF
+``masked_scatter`` on ``image_token_id``, then ``language_model.forward_prefill_from_embeddings``.
+Same ``--vision-max-edge`` / ``--vision-square-pixels`` as HF. Pixtral L1 grows with patch count; ``0``
+max-edge = no thumbnail (fine on HF; may exceed device L1 on TT).
+
+Usage (repo root)::
+
+    python models/experimental/devstarl2_small/demo/demo_model_loading_prompt.py
+
+    python models/experimental/devstarl2_small/demo/demo_model_loading_prompt.py --backend tt --seed 0
+
+    python models/experimental/devstarl2_small/demo/demo_model_loading_prompt.py --backend tt \\
+        --image path/to.jpg --text-layers 1 --max-new-tokens 16 --lm-head-cpu
+"""
 
 from __future__ import annotations
 
@@ -41,7 +70,15 @@ from models.experimental.devstarl2_small.tt.tt_devstral2_small_model import TtDe
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.lm_head import LMHead
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import (
+    DecodersPrecision,
+    MathFidelitySetting,
+    ModelArgs,
+    ModelOptimizations,
+    OpGroup,
+    PrecisionSetting,
+    TensorGroup,
+)
 
 _DEFAULT_MODEL_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 _DEMO_DIR = Path(__file__).resolve().parent
@@ -75,7 +112,12 @@ def _prepare_vision_image(
     vision_max_edge: int,
     vision_square_pixels: int | None,
 ) -> Image.Image:
-    """PIL preprocessing before ``processor``: optional exact square resize, otherwise max-edge thumbnail. If ``vision_square_pixels`` > 0, resize with LANCZOS to ``S×S`` (ignores ``vision-max-edge``). Else apply :func:`_resize_image_max_edge`."""
+    """
+    PIL preprocessing before ``processor``: optional exact square resize, otherwise max-edge thumbnail.
+
+    If ``vision_square_pixels`` > 0, resize with LANCZOS to ``S×S`` (ignores ``vision-max-edge``).
+    Else apply :func:`_resize_image_max_edge`.
+    """
     image = image.convert("RGB")
     if vision_square_pixels is not None and vision_square_pixels > 0:
         s = vision_square_pixels
@@ -256,6 +298,44 @@ def run_hf(
     logger.info(f"HF output:\n{output_text}")
 
 
+def _devstral_bh_qb_decoders_precision(args):
+    """BH-QB tuned per-decoder precision recipe for Devstral-Small-2.
+
+    Builds on `_default_settings` (BFP8 everywhere, HIFI2 for attention decode)
+    and overrides only what makes a measurable difference at decode batch=1
+    on a 4-chip Blackhole Quiet Box:
+
+    * MLP FF1/FF3 → BFP4 + LoFi   (largest weight surface; SwiGLU is robust)
+    * MLP FF2     → BFP8 + HIFI2_FP16
+    * WQKV / WO   → BFP8 + HIFI2  (vs. accuracy template's BF16 + HIFI4)
+    * KV cache    → BFP8          (halves SDPA-decode bandwidth)
+    * SDPA decode → HIFI2_NA      (drops packer_l1_acc + fp32 accum, fine at decode)
+
+    Returned object is a callable consumed by ``ModelArgs(..., optimizations=...)``.
+    """
+    settings = {
+        "TensorPrecision": {
+            TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
+            TensorGroup.FF2: PrecisionSetting.BFP8,
+            TensorGroup.WQKV: PrecisionSetting.BFP8,
+            TensorGroup.WO: PrecisionSetting.BFP8,
+            TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+        },
+        "OpFidelity": {
+            OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+            OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
+            OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
+            OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
+            OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
+        },
+    }
+    conf = ModelOptimizations(settings)
+    conf.__name__ = "devstral_bh_qb_perf"
+    inst = DecodersPrecision(num_decoders=args.n_layers, model_name=args.model_name, decoder_conf=conf)
+    inst.__name__ = "devstral_bh_qb_perf"
+    return inst
+
+
 def run_tt(
     model_id: str,
     image_path: Path,
@@ -270,9 +350,40 @@ def run_tt(
     vision_max_edge: int,
     vision_square_pixels: int | None,
     cpu_sampling: bool,
+    clear_weight_cache: bool = False,
 ) -> None:
     if not image_path.is_file():
         raise FileNotFoundError(f"TT multimodal path requires an image file; missing {image_path}.")
+
+    if clear_weight_cache:
+        # SAFETY: this flag refuses to run unless ``TT_CACHE_PATH`` is set to an
+        # explicit, fully-resolved path that is NOT the project root, the user
+        # home, or the filesystem root. A previous version of this block fell
+        # back to ``Path("")`` (which resolves to ``PosixPath('.')`` — the CWD)
+        # and ran ``shutil.rmtree('.', ignore_errors=True)``, silently wiping
+        # the project tree. We do not repeat that mistake; manual deletion is
+        # safer than any fallback we could pick automatically here.
+        import shutil
+
+        raw = os.environ.get("TT_CACHE_PATH", "").strip()
+        if not raw:
+            raise RuntimeError(
+                "--clear-weight-cache requires TT_CACHE_PATH to be set explicitly. "
+                "Refusing to guess a cache directory: a wrong guess can delete the "
+                "project tree. To clear the cache manually run: rm -rf $TT_CACHE_PATH"
+            )
+        cache_root = Path(raw).expanduser().resolve()
+        forbidden = {Path("/").resolve(), Path.home().resolve(), Path.cwd().resolve()}
+        if cache_root in forbidden or cache_root.parent == cache_root:
+            raise RuntimeError(
+                f"--clear-weight-cache refusing to delete {cache_root}: " "matches a system / home / CWD path."
+            )
+        if not cache_root.exists():
+            logger.info(f"--clear-weight-cache: {cache_root} does not exist; nothing to do.")
+        else:
+            logger.warning(f"--clear-weight-cache: removing {cache_root}")
+            # NOT ``ignore_errors=True`` — surface real failures instead of silent partial wipes.
+            shutil.rmtree(cache_root)
 
     os.environ["HF_MODEL"] = model_id
     _tt_demo.apply_devstral_hf_trust_patches()
@@ -323,6 +434,17 @@ def run_tt(
     mesh_device = _tt_demo.open_devstral_demo_mesh(max(1, min(mesh_width, ttnn.get_num_devices())))
     try:
         dtype_tt = ttnn.bfloat16
+        # LM head matmul fires every decode token and is the largest single weight
+        # read per step (vocab × hidden). BFP8 storage halves DRAM traffic with no
+        # measurable quality loss on LM heads of this size.
+        #
+        # NOTE: embedding *cannot* use BFP8 — ``ttnn.embedding`` requires a
+        # ROW_MAJOR_LAYOUT weights table, while bfloat8_b / bfloat4_b are only
+        # legal in TILE_LAYOUT (asserts in py_to_tt_tensor.cpp). The embedding
+        # row read is also a per-token cost of just ~10 KB, so storing the table
+        # in BFP8 wouldn't move the needle even if it were allowed.
+        lm_head_dtype = ttnn.bfloat8_b
+        embed_dtype = ttnn.bfloat16
 
         logger.info("Loading checkpoint via ModelArgs.load_state_dict() …")
         model_args = ModelArgs(
@@ -332,7 +454,55 @@ def run_tt(
             dummy_weights=False,
             use_hf_rope=True,
             cache_hf=True,
+            optimizations=_devstral_bh_qb_decoders_precision,
         )
+        # Confirm the precision recipe survives ``ModelArgs`` construction.
+        # If this prints `accuracy` or `performance`, the recipe never reached
+        # ``decoders_optimizations`` and every weight will load at default
+        # (usually BF16 for attention) — that's the most common cause of
+        # "I switched to BFP8 but tok/s didn't move".
+        _opt = model_args.optimizations
+        logger.info(f"Active precision recipe: {getattr(_opt, '__name__', repr(_opt))}")
+        # Print the per-layer-0 ``ModelOptimizations`` map so we can see exactly
+        # which tensor groups are BFP4/BFP8/BF16 and which math fidelity each
+        # decode op uses. Look for ``wqkv: BFP8`` / ``kv_cache: BFP8`` /
+        # ``ff1_ff3: BFP4`` here — if any of those are ``bf16`` then the recipe
+        # didn't apply.
+        try:
+            layer0_opt = _opt.decoder_optimizations[0]
+            logger.info(f"Layer 0 tensor precisions:  {layer0_opt._names['TensorPrecision']}")
+            logger.info(f"Layer 0 op fidelities:      {layer0_opt._names['OpFidelity']}")
+        except (AttributeError, KeyError, IndexError) as e:
+            logger.warning(f"Could not introspect layer 0 optimizations: {e}")
+        # Confirm we're really on 4 chips. A common pitfall is launching with
+        # ``--mesh-width 4`` while only 1 chip is visible (no env / probe);
+        # ``open_devstral_demo_mesh`` then clamps to 1 and you get a fully
+        # serial single-chip run masquerading as 4-chip TP.
+        _mesh_shape = list(mesh_device.shape)
+        _num_devices = int(mesh_device.get_num_devices())
+        logger.info(
+            f"Mesh shape: {_mesh_shape}, num devices: {_num_devices}, num_devices(model_args): {model_args.num_devices}"
+        )
+        # Surface the actual ethernet link count the fabric exposes for this
+        # mesh shape, so we can tell whether the ``num_links=self.tt_ccl.get_num_links()``
+        # bump in ``tt_ministral3_decoder_layer.forward_decode`` (5x per token
+        # in DECODE, 2x per token in PREFILL) actually picked up >1 links. If
+        # this prints ``1`` everywhere then the BH-QB submesh only exposes a
+        # single link in this configuration and option B was a no-op; the
+        # decode-time CCL bottleneck must then be attacked via reduce-scatter
+        # / async overlap instead.
+        try:
+            from models.tt_transformers.tt.ccl import get_num_links as _get_num_links
+
+            _nl_any = _get_num_links(mesh_device, None)
+            _nl_ax0 = _get_num_links(mesh_device, 0)
+            _nl_ax1 = _get_num_links(mesh_device, 1)
+            logger.info(
+                f"Fabric links: cluster_axis=None -> {_nl_any}, "
+                f"cluster_axis=0 (NS) -> {_nl_ax0}, cluster_axis=1 (EW) -> {_nl_ax1}"
+            )
+        except Exception as _e:  # pragma: no cover - diagnostic only
+            logger.warning(f"Could not query fabric link count: {_e}")
         # The two model paths use different multi-chip tensor conventions at the
         # norm boundary:
         #   * PREFILL: ``forward_prefill`` in ``tt_ministral3_decoder_layer.py``
@@ -385,7 +555,30 @@ def run_tt(
             configuration=model_args,
             vision_config=vision_cfg,
             vision_n_layers=None,
+            embed_dtype=embed_dtype,
         )
+        logger.info(f"TT embedding weight dtype: {embed_dtype} (BFP8 unsupported for ROW_MAJOR embedding tables).")
+
+        # ── Ground-truth: what dtype did the layer-0 weights actually load with? ──
+        # This is the definitive check. If you see ``bfloat16`` for w1/wqkv after
+        # asking for BFP4/BFP8 in the recipe, the recipe never reached the layer
+        # constructors. If you see the expected narrower dtypes, the recipe is
+        # active and any tok/s shortfall is somewhere else (CCL, sampling, etc.).
+        try:
+            l0 = tt_devstral.language_model.layers[0]
+            mlp = getattr(l0, "feed_forward", None) or getattr(l0, "mlp", None)
+            attn = getattr(l0, "attention", None) or getattr(l0, "attn", None)
+            logger.info(
+                "Layer 0 actual weight dtypes:  "
+                f"w1={getattr(getattr(mlp, 'w1', None), 'dtype', '?')}  "
+                f"w2={getattr(getattr(mlp, 'w2', None), 'dtype', '?')}  "
+                f"w3={getattr(getattr(mlp, 'w3', None), 'dtype', '?')}  "
+                f"wqkv={getattr(getattr(attn, 'wqkv', None), 'dtype', '?')}  "
+                f"wo={getattr(getattr(attn, 'wo', None), 'dtype', '?')}  "
+                f"kv_cache={getattr(getattr(attn, 'layer_past', [None])[0], 'dtype', '?')}"
+            )
+        except Exception as e:  # pragma: no cover - diagnostic only
+            logger.warning(f"Could not introspect layer 0 actual weight dtypes: {e}")
 
         pos_vision = _vision_position_ids_tt(hf_inner, pixel_values, image_sizes_list, mesh_device)
         img_tt = tt_devstral.get_projected_image_features(pixel_values, image_sizes_list, pos_vision)
@@ -419,12 +612,13 @@ def run_tt(
                 args=model_args,
                 mesh_device=mesh_device,
                 tt_ccl=TT_CCL(mesh_device),
-                dtype=dtype_tt,
+                dtype=lm_head_dtype,
                 state_dict=meta_state_dict,
                 state_dict_prefix=sd_prefix,
-                weight_cache_path=model_args.weight_cache_path(dtype_tt),
+                weight_cache_path=model_args.weight_cache_path(lm_head_dtype),
                 max_columns_per_device=lm_head_max_cols,
             )
+            logger.info(f"TT LM head weight dtype: {lm_head_dtype}.")
 
         use_device_sampling = (
             not lm_head_cpu
@@ -525,7 +719,12 @@ def run_tt(
         }
 
         def _sample_from_tt_out(tt_out, seq_last_idx):
-            """Sample next token from prefill hidden states at ``seq_last_idx``. Returns the sampled ``[1, 1]`` token tensor and accumulates lm-head / sample timings into ``stats``. Used only for the prefill-side first-token sample; decode-loop sampling runs inside the trace."""
+            """Sample next token from prefill hidden states at ``seq_last_idx``.
+
+            Returns the sampled ``[1, 1]`` token tensor and accumulates lm-head /
+            sample timings into ``stats``. Used only for the prefill-side
+            first-token sample; decode-loop sampling runs inside the trace.
+            """
             if sampling is not None:
                 assert tt_lm_head is not None
                 tok_slot = seq_last_idx % 32
@@ -601,19 +800,22 @@ def run_tt(
         # TTFT = wall time from start of prefill to first new token on host.
         stats["ttft_s"] = time.perf_counter() - run_t0
         stats["steps"] = 1  # first token comes from sampling the prefill output
-        current_ids = torch.cat([current_ids, next_id], dim=1)
+
+        # ── Per-step state kept entirely in Python primitives ────────────────
+        # ``next_id_scalar`` is the only host-side representation of the most
+        # recent token. We append generated tokens into ``generated_ids`` once
+        # at the end (single ``torch.cat``) so the hot path doesn't pay for an
+        # O(prompt_len + steps) tensor reallocation on every step.
+        eos_set = set(eos_ids) if eos_ids else set()
+        next_id_scalar = int(next_id.item())
+        generated_ids: list[int] = [next_id_scalar]
+        decode_pos = int(current_ids.shape[1])  # position of THIS first generated token
 
         # ── Capture decode trace (warmup is done inside; not counted as a step).
         decode_trace_ctx = None
-        if max_new_tokens > 1 and (eos_ids is None or int(next_id.item()) not in eos_ids):
+        if max_new_tokens > 1 and next_id_scalar not in eos_set:
             decode_buffers = tt_alloc_decode_input_buffers(mesh_device)
-            decode_pos_init = int(current_ids.shape[1]) - 1
-            tt_update_decode_input_buffers(
-                mesh_device,
-                decode_buffers,
-                int(next_id.item()),
-                decode_pos_init,
-            )
+            tt_update_decode_input_buffers(mesh_device, decode_buffers, next_id_scalar, decode_pos)
             logger.info("Capturing decode trace (warmup + capture)…")
             _profiler_signpost("trace-capture-start")
             t_capture = time.perf_counter()
@@ -635,10 +837,8 @@ def run_tt(
         try:
             _profiler_signpost("decode-loop-start")
             for _step in range(1, max_new_tokens):
-                if eos_ids and int(next_id.item()) in eos_ids:
+                if next_id_scalar in eos_set:
                     break
-
-                decode_pos = int(current_ids.shape[1]) - 1  # position of token we just appended
 
                 if sampling is not None:
                     # Advance host-side RNG / push fresh seeds outside the trace each step,
@@ -648,7 +848,7 @@ def run_tt(
 
                 step_t0 = time.perf_counter()
                 t0 = time.perf_counter()
-                tt_update_decode_input_buffers(mesh_device, decode_trace_ctx.buffers, int(next_id.item()), decode_pos)
+                tt_update_decode_input_buffers(mesh_device, decode_trace_ctx.buffers, next_id_scalar, decode_pos)
                 tt_execute_decode_trace(mesh_device, decode_trace_ctx)
                 stats["decode_s"] += time.perf_counter() - t0
 
@@ -656,8 +856,7 @@ def run_tt(
                 # observe the token, so this charge is dominated by device latency.
                 t0 = time.perf_counter()
                 if decode_trace_ctx.output_tokens is not None:
-                    next_scalar = tt_read_decode_traced_token(decode_trace_ctx, batch_slot=0)
-                    nid = torch.tensor([[next_scalar]], device=id_device, dtype=torch.long)
+                    next_id_scalar = tt_read_decode_traced_token(decode_trace_ctx, batch_slot=0)
                     stats["sample_post_s"] += time.perf_counter() - t0
                 elif decode_trace_ctx.output_logits is not None:
                     logits_row = tt_read_decode_traced_logits(decode_trace_ctx, mesh_device, model_args, batch_slot=0)
@@ -665,28 +864,31 @@ def run_tt(
                     t0 = time.perf_counter()
                     if do_sample:
                         probs = torch.softmax(logits_row.float().squeeze(0) / max(gen_temperature, 1e-6), dim=-1)
-                        nid = torch.multinomial(probs, num_samples=1).view(1, 1)
+                        next_id_scalar = int(torch.multinomial(probs, num_samples=1).item())
                     else:
-                        nid = logits_row.argmax(dim=-1, keepdim=True)
-                    nid = nid.to(id_device)
+                        next_id_scalar = int(logits_row.argmax(dim=-1).item())
                     stats["sample_post_s"] += time.perf_counter() - t0
                 else:
                     # CPU LM head: clone trace hidden block, run host LM head + sample.
                     h_clone = tt_read_decode_traced_hidden(decode_trace_ctx, mesh_device, batch_slot=0)
                     nid = _sample_from_tt_out(h_clone, 0)
+                    next_id_scalar = int(nid.item())
 
                 if stats["first_traced_step_s"] is None:
                     stats["first_traced_step_s"] = time.perf_counter() - step_t0
 
-                next_id = nid
+                generated_ids.append(next_id_scalar)
+                decode_pos += 1
                 stats["steps"] += 1
-                if eos_ids and int(next_id.item()) in eos_ids:
-                    break
-                current_ids = torch.cat([current_ids, next_id], dim=1)
             _profiler_signpost("decode-loop-end")
         finally:
             if decode_trace_ctx is not None:
                 tt_release_decode_trace(mesh_device, decode_trace_ctx)
+
+        # Materialize the final token sequence once, outside the hot loop.
+        if generated_ids:
+            tail = torch.tensor([generated_ids], dtype=current_ids.dtype, device=id_device)
+            current_ids = torch.cat([current_ids, tail], dim=1)
 
         stats["wall_s"] = time.perf_counter() - run_t0
 
@@ -783,6 +985,12 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--mesh-width", type=int, default=1)
     parser.add_argument("--text-layers", type=int, default=None)
+    parser.add_argument(
+        "--clear-weight-cache",
+        action="store_true",
+        help="Delete the TT weight cache before loading. Use after changing the precision recipe "
+        "(BFP4/BFP8/BF16) so stale tile files don't bypass re-quantization.",
+    )
     parser.add_argument("--greedy", action="store_true")
     parser.add_argument("--temperature", type=float, default=float(REFERENCE_GENERATE_KWARGS["temperature"]))
     parser.add_argument("--lm-head-cpu", action="store_true")
@@ -837,6 +1045,7 @@ def main() -> None:
             vision_max_edge=args.vision_max_edge,
             vision_square_pixels=args.vision_square_pixels,
             cpu_sampling=args.cpu_sampling,
+            clear_weight_cache=args.clear_weight_cache,
         )
 
 

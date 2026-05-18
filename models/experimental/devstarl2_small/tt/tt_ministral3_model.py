@@ -56,11 +56,23 @@ class TtMinistral3Model(LightweightModule):
         original_max_position_embeddings=None,
         ministral_text_config: Optional["Ministral3Config"] = None,
         tt_rotary_embedding: Optional[TtMinistral3RotaryEmbedding] = None,
+        embed_dtype=None,
     ):
         super().__init__()
         self.args = model_args
         self.mesh_device = mesh_device
+        # Cached for ``forward_decode_from_device_tensors`` so the final
+        # post-norm ``ttnn.all_gather`` (LM head needs full hidden width on
+        # every chip) auto-sizes ``num_links`` from the fabric instead of
+        # hardcoding ``num_links=1``.
+        self.tt_ccl = tt_ccl
         self.n_layers = int(model_args.n_layers)
+        # Embedding storage dtype. Defaults to ``ttnn.bfloat16`` so existing
+        # callers / tests are unaffected. Latency-sensitive demos (e.g. the
+        # BH-QB Devstral2 demo) may pass a different dtype here; note that
+        # ttnn.embedding currently requires ROW_MAJOR_LAYOUT, which excludes
+        # bfloat8_b / bfloat4_b — keep this float-typed.
+        embed_dtype = embed_dtype if embed_dtype is not None else ttnn.bfloat16
 
         if tt_rotary_embedding is not None and ministral_text_config is not None:
             raise ValueError("Pass at most one of tt_rotary_embedding and ministral_text_config.")
@@ -84,7 +96,7 @@ class TtMinistral3Model(LightweightModule):
             args=model_args,
             weight_cache_path=weight_cache_path,
             state_dict=meta_state_dict,
-            dtype=ttnn.bfloat16,
+            dtype=embed_dtype,
         )
 
         self.layers = [
@@ -186,7 +198,7 @@ class TtMinistral3Model(LightweightModule):
             out = ttnn.all_gather(
                 out,
                 dim=3,
-                num_links=1,
+                num_links=self.tt_ccl.get_num_links(),
                 topology=self.args.ccl_topology(),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
