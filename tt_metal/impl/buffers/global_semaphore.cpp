@@ -85,11 +85,16 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
     // lost due to device skew.
     std::vector<uint32_t> host_buffer(cores_.num_cores(), reset_value);
     auto mesh_buffer = buffer_.get_mesh_buffer();
-    bool using_fast_dispatch = MetalContext::instance().rtoptions().get_fast_dispatch();
-    if (using_fast_dispatch) {
+    const auto& rtoptions = MetalContext::instance().rtoptions();
+    bool using_fast_dispatch = rtoptions.get_fast_dispatch();
+    bool simulator_direct_write = rtoptions.get_simulator_enabled();
+    if (using_fast_dispatch && !simulator_direct_write) {
         distributed::EnqueueWriteMeshBuffer(
             mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer, true);
     } else {
+        // Simulator fast-dispatch global-semaphore initialization is functionally
+        // just a blocking L1 write, and running it through DRAM-backed CQs is
+        // prohibitively slow for fused programs that allocate many semaphores.
         for (const auto& coord : distributed::MeshCoordinateRange(mesh_buffer->device()->shape())) {
             tt::tt_metal::detail::WriteToBuffer(*mesh_buffer->get_device_buffer(coord), host_buffer);
         }
