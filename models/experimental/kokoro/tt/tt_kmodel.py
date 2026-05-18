@@ -20,9 +20,8 @@ tensor) to construct the alignment matrix, which is then immediately pushed back
 device.  This mirrors the existing precedent in :class:`TTProsodyPredictor` and
 :class:`TTTextEncoder` which already read ``sequence_lengths`` from the host.
 
-Generator fallbacks (``use_torch_stft_fallback`` / ``use_torch_phase_fallback``) are
-propagated to :class:`TTDecoder` and are intended for testing / hardware-limitation
-workarounds only.
+Generator fallbacks are propagated to :class:`TTDecoder` and are intended for
+testing / hardware-limitation workarounds only.
 """
 
 from __future__ import annotations
@@ -192,6 +191,8 @@ class TTKModel:
             Required together with ``use_torch_phase_fallback`` to reach PCC > 0.99
             on BH hardware (see :class:`TTGenerator` docstring).
         use_torch_phase_fallback: Route SineGen phase chain through CPU float32.
+        use_torch_linear_fallback: Route source-module linear through CPU float32.
+        use_torch_tanh_fallback: Route source-module tanh through CPU float32.
     """
 
     @dataclass
@@ -207,6 +208,8 @@ class TTKModel:
         *,
         use_torch_stft_fallback: bool = False,
         use_torch_phase_fallback: bool = False,
+        use_torch_linear_fallback: bool = False,
+        use_torch_tanh_fallback: bool = False,
     ) -> None:
         self.device = device
         self.vocab = ref.vocab
@@ -215,6 +218,8 @@ class TTKModel:
         self._ref_decoder = ref.decoder  # kept for lazy preprocess_tt_decoder calls
         self._use_stft_fallback = use_torch_stft_fallback
         self._use_phase_fallback = use_torch_phase_fallback
+        self._use_linear_fallback = use_torch_linear_fallback
+        self._use_tanh_fallback = use_torch_tanh_fallback
 
         self._bert = TTCustomAlbert(device, params.bert)
         self._predictor = TTProsodyPredictor(device, params.predictor)
@@ -240,6 +245,8 @@ class TTKModel:
                 dec_params,
                 use_torch_stft_fallback=self._use_stft_fallback,
                 use_torch_phase_fallback=self._use_phase_fallback,
+                use_torch_linear_fallback=self._use_linear_fallback,
+                use_torch_tanh_fallback=self._use_tanh_fallback,
             )
         return self._decoder_cache[t_mel]
 

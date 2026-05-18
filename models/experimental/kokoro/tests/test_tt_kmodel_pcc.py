@@ -131,6 +131,8 @@ def _tt_audio(
     *,
     use_torch_stft_fallback: bool,
     use_torch_phase_fallback: bool,
+    use_torch_linear_fallback: bool = False,
+    use_torch_tanh_fallback: bool = False,
 ) -> torch.Tensor:
     """Run one TTKModel variant and return 1-D audio."""
     tt_model = TTKModel(
@@ -139,8 +141,10 @@ def _tt_audio(
         params,
         use_torch_stft_fallback=use_torch_stft_fallback,
         use_torch_phase_fallback=use_torch_phase_fallback,
+        use_torch_linear_fallback=use_torch_linear_fallback,
+        use_torch_tanh_fallback=use_torch_tanh_fallback,
     )
-    out = tt_model(phonemes=phonemes, ref_s=ref_s, speed=1.0)
+    out = tt_model(phonemes=phonemes, ref_s=ref_s, speed=1.0, deterministic=True)
     return out.audio.detach().float().squeeze()
 
 
@@ -197,9 +201,11 @@ def test_tt_kmodel_generator_no_torch_fallback_pcc(device):
     assert pcc > 0.25, f"PCC {pcc:.6f} is below the no-fallback minimum floor"
 
     debug_mode = os.getenv("KOKORO_PCC_DEBUG_MODE", "").strip().lower()
-    if debug_mode in {"stft", "phase", "both"}:
-        use_stft = debug_mode in {"stft", "both"}
-        use_phase = debug_mode in {"phase", "both"}
+    if debug_mode in {"stft", "phase", "both", "full"}:
+        use_stft = debug_mode in {"stft", "both", "full"}
+        use_phase = debug_mode in {"phase", "both", "full"}
+        use_linear = debug_mode == "full"
+        use_tanh = debug_mode == "full"
         y_debug = _tt_audio(
             device,
             ref,
@@ -208,6 +214,8 @@ def test_tt_kmodel_generator_no_torch_fallback_pcc(device):
             ref_s,
             use_torch_stft_fallback=use_stft,
             use_torch_phase_fallback=use_phase,
+            use_torch_linear_fallback=use_linear,
+            use_torch_tanh_fallback=use_tanh,
         )
         _, pcc_debug = comp_pcc(y_ref.unsqueeze(0), y_debug.unsqueeze(0), pcc=0.0)
         print("TTKModel PCC debug: " f"mode={debug_mode}, no_fallback={pcc:.6f}, debug_mode_pcc={pcc_debug:.6f}")
