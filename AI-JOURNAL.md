@@ -1,5 +1,13 @@
 
 ---
+## FIX UP-2 + FIX TL-2 (2026-05-18)
+
+Root cause: Run 26022229604 iter 8 failure.
+- FIX UP-2: Strip ANSI/CR from WARM_OUTPUT before grep — FIX TK was present but grep returned 0 (ANSI corruption). Applied to all 8 warm-up grep patterns across both functions in run_t3000_unit_tests.sh.
+- FIX TL-2: tt-smi fallback when GetNumAvailableDevices() crashes silently → was misread as 0 chips. Changed 2>/dev/null to 2>&1 so crash output is visible; added tt-smi -ls fallback to count Wormhole chips when Python returns empty.
+Commits: TBD
+
+---
 ## 2026-05-18 — FIX EF: Blocking poll upgrade (commit 9f7f59a9404)
 
 ### What Failed

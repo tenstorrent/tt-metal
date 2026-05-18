@@ -141,7 +141,10 @@ except Exception as e:
   #   "rescue of stuck dispatch cores" — Metal hard-reset ERISCs, leaving go_msg=0x02 stale
   # When detected, flag that the hardware is NOT ready for traffic.
   WARM_RING_TIMEOUT=0
-  if echo "$WARM_OUTPUT" | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
+  # [FIX UP-2]: Strip ANSI escape codes and CR before grepping — ANSI codes embedded in
+  # WARM_OUTPUT (e.g. from Metal's coloured log output) corrupt grep pattern matching and
+  # cause false negatives even when "FIX TK" is present in the raw output (run 26022229604).
+  if echo "$WARM_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
     echo "LOG_METAL: [FIX UP] ring-sync timeout marker detected in warm-up output — hardware not ready for traffic despite open/close exit 0." >&2
     WARM_RING_TIMEOUT=1
   fi
@@ -157,19 +160,24 @@ except Exception as e:
   # This pre-check catches the degraded state before any test runs so CI reports a
   # real failure and the on-call engineer knows hardware needs attention.
   local n_chips raw_output
-  # Use 2>/dev/null to discard UMD C++ stderr log messages.
-  # On some runners, ttnn Python bindings also emit UMD log lines to STDOUT (via
-  # loguru Python→C++ bridge). Filter those out with grep to get only the numeric
-  # device count printed by the Python script itself.
+  # Use 2>&1 to capture UMD C++ stderr log messages — needed so that if Python crashes
+  # its error output appears in raw_output and we can detect the crash rather than
+  # silently treating empty output as 0 chips.  The numeric grep filters out non-numeric
+  # lines (UMD log lines) from stdout+stderr.
   # Python crashes produce non-zero exit → with set -eo pipefail, the assignment itself
-  # would abort the shell before reaching the n_chips="ERROR" guard below.  The || true
-  # prevents that: a crash leaves raw_output empty → n_chips="ERROR" → handled below.
+  # would abort the shell before reaching the n_chips guard below.  The || true
+  # prevents that: a crash leaves raw_output with only error text → n_chips="" → handled below.
   # -u: unbuffered stdout so print(8) flushes immediately even if process aborts during teardown.
   # tr -d '\r': UMD loguru on some runners emits CRLF; grep '^[0-9]+$' fails on '8\r'.
-  raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>/dev/null) || true
+  raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>&1) || true
   n_chips=$(echo "$raw_output" | tr -d '\r' | grep -E '^[0-9]+$' | tail -1) || true
   if [[ -z "$n_chips" ]]; then
-    n_chips="0"
+    # [FIX TL-2]: Python crashed or produced no numeric output — try tt-smi as fallback
+    # to count visible Wormhole chips.  This prevents a silent Python crash (e.g. stale
+    # go_msg=0x02 from dispatch ERISC rescue) from being misread as 0 chips and
+    # incorrectly triggering FIX TL topology recovery (run 26022229604).
+    n_chips=$(tt-smi -ls 2>/dev/null | grep -c "Wormhole" || echo "0") || n_chips="0"
+    echo "LOG_METAL: [FIX TL-2] GetNumAvailableDevices() returned empty (Python crashed?); tt-smi sees ${n_chips}/8 chips" >&2
   fi
   if ! [[ "$n_chips" =~ ^[0-9]+$ ]]; then
     echo "LOG_METAL: [FIX TL-0] T3K topology check returned non-numeric (${n_chips}); treating as 0 chips for recovery attempt" >&2
@@ -203,11 +211,11 @@ except Exception as e:
 " 2>&1 || true)
     echo "$TM_WARM_OUTPUT"
     TM_RING_TIMEOUT=0
-    if echo "$TM_WARM_OUTPUT" | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
+    if echo "$TM_WARM_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
       echo "LOG_METAL: [FIX TM2] ring-sync timeout detected in post-TL warm-up — hardware may not be ready for traffic." >&2
       TM_RING_TIMEOUT=1
     fi
-    raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>/dev/null) || true
+    raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>&1) || true
     n_chips=$(echo "$raw_output" | tr -d '\r' | grep -E '^[0-9]+$' | tail -1) || true
     if [[ -z "$n_chips" ]]; then n_chips="0"; fi
     if [[ "$n_chips" -lt 8 ]]; then
@@ -241,7 +249,7 @@ except Exception as e:
 " 2>&1 || true)
     echo "$UP2_WARM_OUTPUT"
     UP2_RING_TIMEOUT=0
-    if echo "$UP2_WARM_OUTPUT" | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
+    if echo "$UP2_WARM_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
       UP2_RING_TIMEOUT=1
     fi
     if [[ $UP2_RING_TIMEOUT -eq 1 ]]; then
@@ -312,7 +320,7 @@ except Exception as e:
       # Increment consecutive_ring_timeout; after 3 in a row abort with INFRA_ERROR
       # so CI marks the job failed rather than looping indefinitely.
       post_ring_timeout=0
-      if echo "$post_warm_output" | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
+      if echo "$post_warm_output" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
         post_ring_timeout=1
       fi
       if [[ $post_ring_timeout -eq 1 ]]; then
@@ -598,7 +606,10 @@ except Exception as e:
   WARM_END=$(date +%s)
   WARM_DURATION=$((WARM_END - WARM_START))
   WARM_RING_TIMEOUT=0
-  if echo "$WARM_OUTPUT" | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
+  # [FIX UP-2]: Strip ANSI escape codes and CR before grepping — ANSI codes embedded in
+  # WARM_OUTPUT (e.g. from Metal's coloured log output) corrupt grep pattern matching and
+  # cause false negatives even when "FIX TK" is present in the raw output (run 26022229604).
+  if echo "$WARM_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
     echo "LOG_METAL: [FIX UP] ring-sync timeout marker detected in warm-up output — hardware not ready for traffic despite open/close exit 0." >&2
     WARM_RING_TIMEOUT=1
   fi
@@ -608,9 +619,16 @@ except Exception as e:
   fi
 
   local n_chips raw_output
-  raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>/dev/null) || true
+  raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>&1) || true
   n_chips=$(echo "$raw_output" | tr -d '\r' | grep -E '^[0-9]+$' | tail -1) || true
-  if [[ -z "$n_chips" ]]; then n_chips="0"; fi
+  if [[ -z "$n_chips" ]]; then
+    # [FIX TL-2]: Python crashed or produced no numeric output — try tt-smi as fallback
+    # to count visible Wormhole chips.  This prevents a silent Python crash (e.g. stale
+    # go_msg=0x02 from dispatch ERISC rescue) from being misread as 0 chips and
+    # incorrectly triggering FIX TL topology recovery (run 26022229604).
+    n_chips=$(tt-smi -ls 2>/dev/null | grep -c "Wormhole" || echo "0") || n_chips="0"
+    echo "LOG_METAL: [FIX TL-2] GetNumAvailableDevices() returned empty (Python crashed?); tt-smi sees ${n_chips}/8 chips" >&2
+  fi
   if ! [[ "$n_chips" =~ ^[0-9]+$ ]]; then
     echo "LOG_METAL: [FIX TL-0] T3K topology check returned non-numeric (${n_chips}); treating as 0 chips for recovery attempt" >&2
     n_chips="0"
@@ -631,11 +649,11 @@ except Exception as e:
 " 2>&1 || true)
     echo "$TM_WARM_OUTPUT"
     TM_RING_TIMEOUT=0
-    if echo "$TM_WARM_OUTPUT" | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
+    if echo "$TM_WARM_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
       echo "LOG_METAL: [FIX TM2] ring-sync timeout detected in post-TL warm-up — hardware may not be ready for traffic." >&2
       TM_RING_TIMEOUT=1
     fi
-    raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>/dev/null) || true
+    raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>&1) || true
     n_chips=$(echo "$raw_output" | tr -d '\r' | grep -E '^[0-9]+$' | tail -1) || true
     if [[ -z "$n_chips" ]]; then n_chips="0"; fi
     if [[ "$n_chips" -lt 8 ]]; then
@@ -663,7 +681,7 @@ except Exception as e:
 " 2>&1 || true)
     echo "$UP2_WARM_OUTPUT"
     UP2_RING_TIMEOUT=0
-    if echo "$UP2_WARM_OUTPUT" | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
+    if echo "$UP2_WARM_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
       UP2_RING_TIMEOUT=1
     fi
     if [[ $UP2_RING_TIMEOUT -eq 1 ]]; then
@@ -704,7 +722,7 @@ except Exception as e:
 " 2>&1 || true)
       echo "$post_warm_output"
       post_ring_timeout=0
-      if echo "$post_warm_output" | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
+      if echo "$post_warm_output" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX TK|FIX DT-1|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores|rescue_stuck_dispatch_cores)"; then
         post_ring_timeout=1
       fi
       if [[ $post_ring_timeout -eq 1 ]]; then
