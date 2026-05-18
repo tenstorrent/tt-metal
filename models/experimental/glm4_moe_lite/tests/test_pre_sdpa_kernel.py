@@ -33,19 +33,20 @@ def main():
     from pathlib import Path
     from types import SimpleNamespace
 
-    # Open mesh device
+    # Open mesh device (1x4 matches typical 4-chip bring-up boxes; docker/vLLM used 1x8).
     print("[TEST] Opening mesh device...")
     mesh = ttnn.open_mesh_device(
-        ttnn.MeshShape(1, 8),
+        ttnn.MeshShape(1, 4),
         dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER),
     )
     mesh.enable_program_cache()
     print(f"[TEST] Mesh device opened: {mesh.get_num_devices()} devices")
 
     try:
-        # Load HF config and create hparams
-        snapshot_dir = Path(
-            "/cache/huggingface/hub/models--zai-org--GLM-4.7-Flash/snapshots/7dd20894a642a0aa287e9827cb1a1f7f91386b67"
+        # Host HF cache (~/.cache/huggingface); /cache/huggingface exists only in the vLLM dev container.
+        snapshot_dir = (
+            Path.home() / ".cache/huggingface/hub/models--zai-org--GLM-4.7-Flash/snapshots/"
+            "7dd20894a642a0aa287e9827cb1a1f7f91386b67"
         )
         with open(snapshot_dir / "config.json") as f:
             raw = json.load(f)
