@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Demo / smoke test using the **same user prompt** as ``reference/model_loading.py``:
+Multimodal image+text demo: default prompt ``Describe what you see in this image.`` with optional
+``resource/sample.jpeg``.
 
 - Multimodal message: one image placeholder + text
   ``"Describe what you see in this image."``
@@ -13,22 +14,21 @@ Demo / smoke test using the **same user prompt** as ``reference/model_loading.py
 
 **HF path** (``--backend hf``, default): ``AutoProcessor`` + ``AutoModelForImageTextToText``; same
 ``--vision-max-edge`` / ``--vision-square-pixels`` as TT before ``processor`` (default max-edge ``0`` =
-no PIL resize; use ``--vision-square-pixels`` e.g. ``1540`` for square HF-style sizing).
-Default image ``reference/sample.jpeg``; ``max_new_tokens=100``.
+no PIL resize). Default image ``resource/sample.jpeg``; ``max_new_tokens=100``.
 
 **TT path** (``--backend tt``): loads :class:`TtDevstral2SmallModel` (Pixtral vision + projector +
 ``TtMinistral3Model``), runs TT vision/projector, merges features into text embeddings like HF
 ``masked_scatter`` on ``image_token_id``, then ``language_model.forward_prefill_from_embeddings``.
-Same ``--vision-max-edge`` / ``--vision-square-pixels`` as HF. Pixtral L1 grows with patch count; ``0``
-max-edge = no thumbnail (fine on HF; may exceed device L1 on TT).
+Generation knobs align with ``devstral_utils.chat_reference`` where relevant. Pixtral L1 grows with
+patch count; ``0`` max-edge = no thumbnail (fine on HF; may exceed device L1 on TT).
 
 Usage (repo root)::
 
-    python models/experimental/devstarl2_small/demo/demo_model_loading_prompt.py
+    python -m models.experimental.devstarl2_small.demo.tt_image_demo
 
-    python models/experimental/devstarl2_small/demo/demo_model_loading_prompt.py --backend tt --seed 0
+    python -m models.experimental.devstarl2_small.demo.tt_image_demo --backend tt --seed 0
 
-    python models/experimental/devstarl2_small/demo/demo_model_loading_prompt.py --backend tt \\
+    python -m models.experimental.devstarl2_small.demo.tt_image_demo --backend tt \\
         --image path/to.jpg --text-layers 1 --max-new-tokens 16 --lm-head-cpu
 """
 
@@ -50,7 +50,7 @@ from transformers.models.pixtral.modeling_pixtral import position_ids_in_meshgri
 
 import ttnn
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
-from models.experimental.devstarl2_small.demo import demo_devstral2_tt_multimodal as _tt_demo
+from models.experimental.devstarl2_small.demo import tt_text_demo as _tt_demo
 from models.experimental.devstarl2_small.devstral_utils import (
     devstral_supports_on_device_sampling,
     pad_input_ids_and_positions_for_tt_prefill,
@@ -65,7 +65,7 @@ from models.experimental.devstarl2_small.devstral_utils import (
     tt_sampling_output_token_id,
     tt_update_decode_input_buffers,
 )
-from models.experimental.devstarl2_small.reference.inference_fixtures import REFERENCE_GENERATE_KWARGS
+from models.experimental.devstarl2_small.devstral_utils.chat_reference import REFERENCE_GENERATE_KWARGS
 from models.experimental.devstarl2_small.tt.tt_devstral2_small_model import TtDevstral2SmallModel
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
@@ -82,7 +82,7 @@ from models.tt_transformers.tt.model_config import (
 
 _DEFAULT_MODEL_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 _DEMO_DIR = Path(__file__).resolve().parent
-_REF_DIR = _DEMO_DIR.parent / "reference"
+_RES_DIR = _DEMO_DIR.parent / "resource"
 
 MODEL_LOADING_MESSAGES = [
     {
@@ -126,7 +126,7 @@ def _prepare_vision_image(
 
 
 def _sample_image_path() -> Path:
-    return _REF_DIR / "sample.jpeg"
+    return _RES_DIR / "sample.jpeg"
 
 
 def _max_patch_grid_side(vision_cfg) -> int:
@@ -197,7 +197,9 @@ def _tt_prefill_from_merged_embeds(
     model_args,
     seq_len_keep: int,
 ) -> ttnn.Tensor:
-    """Pad merged [1, sl, D] at the end to TT prefill length, upload, ``forward_prefill_from_embeddings``."""
+    """Pad merged embeddings to TT prefill length and call ``forward_prefill_from_embeddings``.
+
+    Uploads ``[1,1,S,D]`` TILE tensors matching embed path rank."""
     sl = merged_embeds_bsh.shape[1]
     if int(current_ids.shape[1]) != sl or seq_len_keep != sl:
         raise RuntimeError("current_ids / merged_embeds / seq_len_keep length mismatch.")
@@ -252,8 +254,8 @@ def run_hf(
 ) -> None:
     if not image_path.is_file():
         raise FileNotFoundError(
-            f"Image not found at {image_path} (same path as reference/model_loading.py). "
-            "Add sample.jpeg under models/experimental/devstarl2_small/reference/."
+            f"Image not found at {image_path} (default is resource/sample.jpeg). "
+            "Add sample.jpeg under models/experimental/devstarl2_small/resource/."
         )
 
     processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
@@ -267,16 +269,7 @@ def run_hf(
     device = next(model.parameters()).device
 
     image = Image.open(image_path).convert("RGB")
-    orig_sz = image.size
     image = _prepare_vision_image(image, vision_max_edge, vision_square_pixels)
-    if vision_square_pixels is not None and vision_square_pixels > 0:
-        logger.info(f"HF: PIL square resize {orig_sz} -> {image.size} (--vision-square-pixels {vision_square_pixels}).")
-    elif vision_max_edge <= 0:
-        logger.info("HF: vision-max-edge 0 — no PIL thumbnail before processor.")
-    elif image.size != orig_sz:
-        logger.info(f"HF: PIL resize {orig_sz} -> {image.size} (vision-max-edge={vision_max_edge}).")
-    else:
-        logger.info(f"HF: image within vision-max-edge={vision_max_edge} ({image.size}), no thumbnail.")
 
     prompt = processor.apply_chat_template(
         MODEL_LOADING_MESSAGES,
@@ -291,11 +284,9 @@ def run_hf(
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
 
-    logger.info(f"HF multimodal generate (max_new_tokens={max_new_tokens}) on {device} …")
     with torch.inference_mode():
         output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
     output_text = processor.batch_decode(output_ids, skip_special_tokens=True)[0]
-    logger.info(f"HF output:\n{output_text}")
 
 
 def _devstral_bh_qb_decoders_precision(args):
@@ -394,21 +385,7 @@ def run_tt(
 
     processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
     image = Image.open(image_path).convert("RGB")
-    orig_sz = image.size
     image = _prepare_vision_image(image, vision_max_edge, vision_square_pixels)
-    if vision_square_pixels is not None and vision_square_pixels > 0:
-        logger.info(
-            f"TT vision: PIL square resize {orig_sz} -> {image.size} "
-            f"(--vision-square-pixels {vision_square_pixels}); many patches may exceed L1 on device."
-        )
-    elif image.size != orig_sz:
-        logger.info(
-            f"TT vision: thumbnail {orig_sz} -> {image.size} "
-            f"(vision-max-edge={vision_max_edge}). "
-            "Use --vision-square-pixels or --vision-max-edge 0 for other sizing."
-        )
-    elif vision_max_edge > 0:
-        logger.info(f"TT vision: image within vision-max-edge={vision_max_edge} ({image.size}), no thumbnail.")
     prompt = processor.apply_chat_template(
         MODEL_LOADING_MESSAGES,
         add_generation_prompt=True,
@@ -426,9 +403,7 @@ def run_tt(
     extra_tokens = max(0, max_new_tokens)
     need = prompt_len + extra_tokens + 2048
     max_seq = max(4096, need)
-    # SDPA decode requires k_chunk_size = get_chunk_size(max_seq_len) to be a multiple of 32.
-    # get_chunk_size returns the largest power-of-2 divisor of s, capped at 512.
-    # Rounding up to the nearest multiple of 512 guarantees k_chunk_size >= 512.
+    # Round max_seq so SDPA decode k_chunk_size (pow2 divisor of seq, cap 512) stays ≥512.
     max_seq = ((max_seq + 511) // 512) * 512
 
     mesh_device = _tt_demo.open_devstral_demo_mesh(max(1, min(mesh_width, ttnn.get_num_devices())))
@@ -446,7 +421,6 @@ def run_tt(
         lm_head_dtype = ttnn.bfloat8_b
         embed_dtype = ttnn.bfloat16
 
-        logger.info("Loading checkpoint via ModelArgs.load_state_dict() …")
         model_args = ModelArgs(
             mesh_device,
             max_batch_size=1,
@@ -599,15 +573,8 @@ def run_tt(
         tt_lm_head: LMHead | None = None
         if lm_head_cpu:
             lm_head_weight_cpu = meta_state_dict[out_key].detach().to(torch.bfloat16).cpu().contiguous()
-            logger.info(
-                f"CPU LM head: chunked torch matmul; weight {tuple(lm_head_weight_cpu.shape)} {lm_head_weight_cpu.dtype}."
-            )
         else:
             lm_head_max_cols = _tt_demo.demo_lm_head_max_columns_per_device(model_args, cli_cap=lm_head_max_device_cols)
-            logger.info(
-                f"On-device LMHead max columns per shard: {lm_head_max_cols} "
-                f"(ModelArgs value {model_args.max_columns_per_device_lm_head})."
-            )
             tt_lm_head = LMHead(
                 args=model_args,
                 mesh_device=mesh_device,
@@ -680,17 +647,6 @@ def run_tt(
         id_device = input_ids.device
         eos_ids = _tt_demo.eos_token_ids(hf_full.config, tokenizer)
         current_ids = input_ids.clone()
-        mode = "greedy" if greedy else f"sample (T={gen_temperature})"
-        lm_mode = "CPU lm_head (chunked torch)" if lm_head_cpu else "TT lm_head"
-        samp_mode = (
-            "on-device SamplingGenerator"
-            if sampling is not None
-            else "PyTorch softmax / multinomial / argmax on TT logits (host)"
-        )
-        logger.info(
-            f"TT TtDevstral2SmallModel: up to {max_new_tokens} new tokens, {mode}; {lm_mode}; {samp_mode}; "
-            f"image {image_path} + describe prompt."
-        )
 
         emb_layer = hf_inner.get_input_embeddings()
         pad_row = emb_layer(torch.tensor([[pad_token_id]], device=emb_layer.weight.device, dtype=torch.long))[
@@ -699,11 +655,7 @@ def run_tt(
 
         tt_lm = tt_devstral.language_model
 
-        # ── Generation timing accumulators ────────────────────────────────────────
-        # The demo runs the prompt through prefill + traced-decode exactly once.
-        # ``ttft_s`` is the standard LLM TTFT (wall time from start of prefill to
-        # the first new token on host); ``first_traced_step_s`` exposes any
-        # cold-cache overhead on the very first ``execute_trace`` replay.
+        # Timing: TTFT = wall prefill→first token; first_traced_step_s shows first execute_trace overhead.
         stats = {
             "merge_s": 0.0,
             "prefill_s": 0.0,
@@ -764,11 +716,7 @@ def run_tt(
                 stats["sample_post_s"] += time.perf_counter() - t0
             return nid
 
-        # Optional Tracy profiler signposts: when this demo is launched under
-        # ``python3 -m tracy -r ...`` the signposts let post-processing scripts
-        # isolate the decode-loop ops from the prefill / trace-capture noise.
-        # The import is best-effort so this still runs cleanly when Tracy is
-        # not available (release builds without ENABLE_TRACY).
+        # Optional Tracy signposts (best-effort import; skip when Tracy unavailable).
         try:
             from tracy import signpost as _profiler_signpost  # type: ignore
         except Exception:  # pragma: no cover - optional dependency
@@ -776,7 +724,7 @@ def run_tt(
             def _profiler_signpost(_name: str) -> None:
                 return None
 
-        # ── Prefill: merge image + text embeddings, fill KV cache, sample 1st tok.
+        # Prefill path: merge embeddings, KV fill, first-token sample.
         run_t0 = time.perf_counter()
         sl = int(current_ids.shape[1])
 
@@ -811,7 +759,7 @@ def run_tt(
         generated_ids: list[int] = [next_id_scalar]
         decode_pos = int(current_ids.shape[1])  # position of THIS first generated token
 
-        # ── Capture decode trace (warmup is done inside; not counted as a step).
+        # Decode trace capture (warmup inside helper).
         decode_trace_ctx = None
         if max_new_tokens > 1 and next_id_scalar not in eos_set:
             decode_buffers = tt_alloc_decode_input_buffers(mesh_device)
@@ -833,7 +781,7 @@ def run_tt(
                 f"Decode trace captured in {stats['trace_capture_s']*1000:.1f} ms (warmup + decode + sampling)."
             )
 
-        # ── Single decode loop using the captured trace ────────────────────────
+        # Traced decode loop for remaining tokens.
         try:
             _profiler_signpost("decode-loop-start")
             for _step in range(1, max_new_tokens):
@@ -841,9 +789,7 @@ def run_tt(
                     break
 
                 if sampling is not None:
-                    # Advance host-side RNG / push fresh seeds outside the trace each step,
-                    # otherwise stochastic sampling would replay the captured RNG and emit
-                    # the same token every iteration.
+                    # Refresh RNG seeds each step so traced sampling does not repeat one token.
                     sampling.seed_manager.get_new_values()
 
                 step_t0 = time.perf_counter()
@@ -852,8 +798,7 @@ def run_tt(
                 tt_execute_decode_trace(mesh_device, decode_trace_ctx)
                 stats["decode_s"] += time.perf_counter() - t0
 
-                # Blocking read forces device-side trace completion before we
-                # observe the token, so this charge is dominated by device latency.
+                # Blocking read syncs device before observing the sampled token (latency-dominated).
                 t0 = time.perf_counter()
                 if decode_trace_ctx.output_tokens is not None:
                     next_id_scalar = tt_read_decode_traced_token(decode_trace_ctx, batch_slot=0)
@@ -892,7 +837,7 @@ def run_tt(
 
         stats["wall_s"] = time.perf_counter() - run_t0
 
-        # ── Report ────────────────────────────────────────────────────────────
+        # Printed timing breakdown for prefill vs traced decode.
         wall_s = stats["wall_s"]
         steps = stats["steps"]
         decode_steps = max(steps - 1, 0)
@@ -979,7 +924,7 @@ def main() -> None:
         "--image",
         type=Path,
         default=_sample_image_path(),
-        help="Image path (default: reference/sample.jpeg).",
+        help="Image path (default: resource/sample.jpeg).",
     )
     parser.add_argument("--max-new-tokens", type=int, default=100)
     parser.add_argument("--seed", type=int, default=None)

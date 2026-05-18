@@ -14,7 +14,9 @@ from models.tt_transformers.tt.common import Mode
 
 
 class TtMinistral3DecoderLayer(LightweightModule):
-    """Mirrors HF ``Ministral3DecoderLayer`` ordering for prefill (``past_key_values=None``). Parameters match the constructors of :class:`TtMinistralAttention`, :class:`TtMinistralMLP`, and two :class:`TtMinistralRMSNorm` instances (input vs post-attention)."""
+    """HF ``Ministral3DecoderLayer`` order: pre-norm attention + residual, pre-norm MLP + residual.
+
+    Submodule ctor args match :class:`TtMinistralAttention`, :class:`TtMinistralMLP`, and the two norms."""
 
     def __init__(
         self,
@@ -91,8 +93,7 @@ class TtMinistral3DecoderLayer(LightweightModule):
         residual = x_11SH
         h = self.input_layernorm(x_11SH, Mode.PREFILL)
         attn_out = self.self_attn.forward_prefill(h, rot_mats, position_ids=position_ids)
-        # Attention may return width-fractured output on multi-device; gather to full hidden width
-        # so layernorm gamma (full width) remains valid for this isolated decoder-layer PCC path.
+        # Multi-chip PCC path: gather fractured attn output before adding residual so RMSNorm sees full width.
         if self.self_attn.num_devices > 1:
             attn_out = ttnn.all_gather(
                 attn_out,
@@ -127,22 +128,19 @@ class TtMinistral3DecoderLayer(LightweightModule):
         user_id: int = 0,
         page_table=None,
     ) -> ttnn.Tensor:
-        """Single-token decode step using the KV cache populated by ``forward_prefill``. ``x``: L1 width-sharded tensor in residual memory config (see ``get_residual_mem_config``). ``current_pos``: device ``ttnn.Tensor`` ``[1, batch]`` with the absolute token position. ``rot_mats``: ``[cos, sin]`` sliced for ``current_pos`` from ``TtMinistral3RotaryEmbedding.get_rot_mats``."""
+        """Decode one token using KV from ``forward_prefill``.
+
+        ``x``: residual-mem width-sharded tensor; ``current_pos`` ``[1,batch]``; ``rot_mats`` from ``get_rot_mats``."""
         args = self.self_attn.args
         num_devices = self.self_attn.num_devices
         residual_mem_cfg = args.get_residual_mem_config(Mode.DECODE, None)
         attn_input_mem_cfg = args.get_attn_input_mem_config(Mode.DECODE, None)
         mlp_input_mem_cfg = args.get_mlp_input_mem_config(Mode.DECODE, None)
 
-        # ``x`` (residual) is width-fractured across chips on multi-chip
-        # (``residual_mem_cfg`` shards by ``dim / num_devices``). The
-        # downstream QKV / FF1 matmuls expect **full** ``dim`` per chip, so we
-        # must all-gather the post-norm tensor before resharding for them.
-        # On single chip this is a no-op (``num_devices == 1``).
+        # Decode residual is width-fractured on multi-chip; all_gather post-norm before QKV/FF1 need full dim per chip.
         x = ttnn.to_memory_config(x, residual_mem_cfg)
 
-        # Attention sub-block: norm on DRAM (distributed on multi-chip),
-        # gather to full dim per chip, then shard for the DRAM-sharded QKV.
+        # Attention: DRAM norm → gather → shard into DRAM-sharded QKV matmuls.
         x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         h_normed = self.input_layernorm(x_dram, Mode.DECODE)
         ttnn.deallocate(x_dram)
@@ -169,8 +167,7 @@ class TtMinistral3DecoderLayer(LightweightModule):
         skip1 = ttnn.add(x, attn_out, memory_config=residual_mem_cfg)
         ttnn.deallocate(attn_out)
 
-        # MLP sub-block: norm on DRAM, gather, then shard for the DRAM-sharded
-        # FF matmuls (same multi-chip rationale as above).
+        # MLP: same DRAM norm → gather → shard pattern as attention path.
         skip1_dram = ttnn.to_memory_config(skip1, ttnn.DRAM_MEMORY_CONFIG)
         h2_normed = self.post_attention_layernorm(skip1_dram, Mode.DECODE)
         ttnn.deallocate(skip1_dram)

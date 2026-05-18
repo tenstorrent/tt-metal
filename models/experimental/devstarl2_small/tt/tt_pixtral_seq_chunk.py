@@ -11,7 +11,10 @@ from models.common.utility_functions import nearest_32
 
 
 def pixtral_vision_seq_chunk_len(configuration) -> int:
-    """Tokens per chunk along the vision sequence axis for TT ops whose matmul programs grow L1 CB with ``m``. - **PIXTRAL_VISION_MM_SEQ_CHUNK**: if set, use only this (tile-rounded). Ignores ``VISION_MAX_MM_SEQ``. - Else: ``min(VISION_MAX_MM_SEQ, PIXTRAL_VISION_MM_SEQ_CHUNK_CAP)`` (default cap 448). **PIXTRAL_VISION_SEQ_CHUNK_DEBUG=1**: print resolved chunk (once per distinct value)."""
+    """Vision sequence chunk length for L1-heavy matmuls (attention / MLP).
+
+    Env ``PIXTRAL_VISION_MM_SEQ_CHUNK`` forces a value; else ``min(VISION_MAX_MM_SEQ, cap)`` with cap from ``PIXTRAL_VISION_MM_SEQ_CHUNK_CAP`` (default 448).
+    """
     force = os.environ.get("PIXTRAL_VISION_MM_SEQ_CHUNK")
     if force is not None and str(force).strip() != "":
         chunk = max(32, nearest_32(int(force)))
@@ -22,15 +25,5 @@ def pixtral_vision_seq_chunk_len(configuration) -> int:
         if cfg_chunk is None:
             cfg_chunk = cap
         chunk = max(32, min(int(cfg_chunk), int(cap)))
-
-    if os.environ.get("PIXTRAL_VISION_SEQ_CHUNK_DEBUG", "").strip() in ("1", "true", "yes"):
-        if getattr(pixtral_vision_seq_chunk_len, "_debug_chunk_announced", None) != chunk:
-            print(
-                f"[pixtral] vision seq_chunk_len={chunk} "
-                f"(PIXTRAL_VISION_MM_SEQ_CHUNK={os.environ.get('PIXTRAL_VISION_MM_SEQ_CHUNK')!r}, "
-                f"CAP={os.environ.get('PIXTRAL_VISION_MM_SEQ_CHUNK_CAP')!r})",
-                flush=True,
-            )
-            pixtral_vision_seq_chunk_len._debug_chunk_announced = chunk
 
     return chunk

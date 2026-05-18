@@ -13,7 +13,10 @@ from models.tt_transformers.tt.common import Mode
 
 
 class TtMinistralAttention(Attention):
-    """Ministral3 attention: same TT path as :class:`Attention`, plus post-RoPE Q scaling. Parameters ---------- llama_4_scaling_beta, original_max_position_embeddings From HF ``config.rope_parameters`` (e.g. ``llama_4_scaling_beta``, ``original_max_position_embeddings``). If either is ``None``, scaling is a no-op (not numerically equal to HF)."""
+    """TT Ministral attention like base :class:`Attention` with Llama-4 post-RoPE Q scaling.
+
+    HF ``rope_parameters`` supply ``llama_4_scaling_beta`` and ``original_max_position_embeddings``; missing → no scaling.
+    """
 
     def __init__(
         self,
@@ -44,7 +47,9 @@ class TtMinistralAttention(Attention):
         return self.llama_4_scaling_beta is not None and self.original_max_position_embeddings is not None
 
     def _llama4_scale_factor_from_positions_ttnn(self, pos_tt: ttnn.Tensor) -> ttnn.Tensor:
-        """``scaling = 1 + beta * log(1 + floor(pos / original_max_position_embeddings))`` (float32), same as HF ``get_llama_4_attn_scale``, shape matches ``pos_tt``. IMPORTANT: avoid ``ttnn.ones_like(pos_f)`` here. ``pos_f`` is ROW_MAJOR (typecast from a ROW_MAJOR uint32 position tensor), and for non-TILE inputs ``ones_like`` falls back to ``full_impl`` which builds a host buffer and uploads it via ``to_device``. Inside a ``ttnn.begin_trace_capture`` region that host→device write trips ``TT_FATAL: Writes are not supported during trace capture``. Using ``ttnn.add(scaled, 1.0)`` keeps the ``+1`` as a kernel-arg scalar broadcast."""
+        """HF Llama-4 scale in TT float32 (shape matches ``pos_tt``).
+
+        Use ``ttnn.add(..., 1.0)`` not ``ones_like``—ROW_MAJOR ``ones_like`` can host-upload inside trace capture."""
         orig = float(self.original_max_position_embeddings)
         beta = float(self.llama_4_scaling_beta)
         pos_f = ttnn.typecast(pos_tt, ttnn.float32)
@@ -126,7 +131,9 @@ class TtMinistralAttention(Attention):
         kv_cache=None,
         position_ids: ttnn.Tensor | None = None,
     ):
-        """Optional ``position_ids``: device ``ttnn.Tensor`` of integer positions, shape ``[batch, seq]`` (or ``[seq]`` when ``batch == 1``), dtype typically ``uint32`` / ``int32``. Required for Llama-4 Q scaling on prefill when scaling is enabled."""
+        """Optional device ``position_ids`` ``[batch,seq]`` or ``[seq]`` for Llama-4 prefill Q scaling.
+
+        Ignored when Llama-4 scaling params are absent."""
         self._ministral_prefill_position_ids_tt = position_ids
         try:
             return super().forward_prefill(
