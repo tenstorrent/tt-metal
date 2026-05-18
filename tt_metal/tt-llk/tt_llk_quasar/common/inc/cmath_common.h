@@ -63,6 +63,14 @@ typedef union
     alu_config_t f;
 } alu_config_u;
 
+// List of possible data format config states
+enum class DataFormatConfigSet : std::uint8_t
+{
+    UNCONFIGURED          = 0,
+    DEFAULT               = 1,
+    MOV_SRC2DST_32BIT_OPS = 2
+};
+
 // /**
 // * @brief Helper function to calculate log2,
 // * only works for 32 bit unsigned inputs
