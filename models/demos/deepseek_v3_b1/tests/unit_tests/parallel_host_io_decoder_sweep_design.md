@@ -130,8 +130,7 @@ Single-layer defaults are still useful for local determinism checks:
 - `--validate-kv-cache-cross-slot` defaults to on.
 - `--validate-hidden-states-cross-trace` defaults to off.
 
-For cross-trace correctness against one GPU reference, `--num-replication-slots
-1` is usually enough.
+For cross-trace correctness against one GPU reference, `--num-replication-slots 1` is usually enough.
 
 ## Chained Multi-Layer Pass
 
