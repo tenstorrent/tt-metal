@@ -721,17 +721,71 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
-    // Validate compute kernel unpack_to_dest_mode references
+    // Validate compute kernel unpack_to_dest_mode entries.
+    // Policy:
+    //   - Each entry must reference a DFB the kernel actually binds.
+    //   - For non-FP32 DFBs, the only meaningful mode is Default — UnpackToDestFp32
+    //     is specifically for unpacking Float32 data with full precision, and makes
+    //     no sense for other formats. We allow entries for non-FP32 DFBs only if
+    //     the value is Default (so existing code that spells it out keeps working;
+    //     pure-busywork specifications get flagged if they specify the wrong value).
+    //   - For FP32 DFBs, an entry is REQUIRED. The choice between Default and
+    //     UnpackToDestFp32 matters for FP32 data (precision vs SRCA/B compatibility),
+    //     so the user must make it explicitly.
     for (const auto& kernel : spec.kernels) {
-        if (kernel.is_compute_kernel()) {
-            const auto& compute_config = std::get<ComputeConfiguration>(kernel.config_spec);
-            for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
-                TT_FATAL(
-                    collected.dfb_by_name.contains(dfb_name),
-                    "Kernel '{}' unpack_to_dest_mode references unknown DFB '{}'",
-                    kernel.unique_id,
-                    dfb_name);
+        if (!kernel.is_compute_kernel()) {
+            continue;
+        }
+        const auto& compute_config = std::get<ComputeConfiguration>(kernel.config_spec);
+
+        // Quick lookup of DFBs this kernel binds.
+        std::unordered_set<DFBSpecName> bound_dfbs;
+        for (const auto& binding : kernel.dfb_bindings) {
+            bound_dfbs.insert(binding.dfb_spec_name);
+        }
+
+        // Check each user-supplied entry against the policy.
+        std::unordered_set<DFBSpecName> entries_seen;
+        for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
+            TT_FATAL(
+                bound_dfbs.contains(dfb_name),
+                "Kernel '{}' unpack_to_dest_mode entry references DFB '{}', which the kernel does not bind",
+                kernel.unique_id,
+                dfb_name);
+            entries_seen.insert(dfb_name);
+
+            const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
+            // If data_format_metadata isn't set, the separate "compute endpoint requires
+            // data_format_metadata" check (below) will fail. Defer to that check.
+            if (!dfb_spec->data_format_metadata.has_value()) {
+                continue;
             }
+            const bool is_fp32 = (dfb_spec->data_format_metadata.value() == tt::DataFormat::Float32);
+            TT_FATAL(
+                is_fp32 || mode == UnpackToDestMode::Default,
+                "Kernel '{}' unpack_to_dest_mode entry for non-FP32 DFB '{}' specifies UnpackToDestFp32. "
+                "UnpackToDestFp32 is only meaningful for FP32 data; non-FP32 DFBs must use Default "
+                "(or omit the entry — Default is the implicit value).",
+                kernel.unique_id,
+                dfb_name);
+        }
+
+        // Every FP32 DFB the kernel binds must have an explicit entry.
+        for (const auto& binding : kernel.dfb_bindings) {
+            const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(binding.dfb_spec_name);
+            if (!dfb_spec->data_format_metadata.has_value()) {
+                continue;  // Will be caught by the data_format-required check.
+            }
+            if (dfb_spec->data_format_metadata.value() != tt::DataFormat::Float32) {
+                continue;
+            }
+            TT_FATAL(
+                entries_seen.contains(binding.dfb_spec_name),
+                "Kernel '{}' binds FP32 DFB '{}' but has no unpack_to_dest_mode entry for it. "
+                "FP32 DFBs require an explicit choice between UnpackToDestMode::Default and "
+                "UnpackToDestMode::UnpackToDestFp32.",
+                kernel.unique_id,
+                binding.dfb_spec_name);
         }
     }
 
