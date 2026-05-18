@@ -257,6 +257,7 @@ struct CopyTile : CopyTileTag {
     static constexpr CopyTilePolicy a_policy()      { return Policy; }
     static constexpr CopyTilePolicy b_policy()      { return CopyTilePolicy::NoWaitNoPop; }
     static constexpr bool           is_upfront      = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
+                                                      (Policy == CopyTilePolicy::WaitUpfrontNoPop) ||
                                                       (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd);
     static constexpr bool           clashes_with_fpu= true;   // copy_tile uses unpacker MOP
 
@@ -294,7 +295,8 @@ struct CopyTile : CopyTileTag {
     }
 
     ALWI void wait_upfront(uint32_t n) const {
-        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) {
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::WaitUpfrontNoPop) {
             cb_wait_front(Cb, n);
         }
     }
@@ -313,7 +315,8 @@ struct CopyTile : CopyTileTag {
     // (just routes through `idx_2d` and `window_2d`), and adds RowBcast/ColBcast support.
     // Streaming policies handled by the same `wait_per_tile` / `pop_per_tile` as 1D.
     ALWI void wait_upfront_2d(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) {
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::WaitUpfrontNoPop) {
             cb_wait_front(Cb, detail::window_2d<IndexMode>(Ht, Wt));
         }
     }
@@ -589,8 +592,10 @@ struct BinaryFpu : BinaryFpuTag {
     static constexpr CopyTilePolicy b_policy(){ return BPolicy; }
     static constexpr Dst           dst_slot   = DstSlot;
     static constexpr bool          is_upfront = (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
+                                                (APolicy == CopyTilePolicy::WaitUpfrontNoPop) ||
                                                 (APolicy == CopyTilePolicy::CumulativeWaitPopAtEnd) ||
                                                 (BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
+                                                (BPolicy == CopyTilePolicy::WaitUpfrontNoPop) ||
                                                 (BPolicy == CopyTilePolicy::CumulativeWaitPopAtEnd);
     static constexpr bool          clashes_with_fpu = true;
     static constexpr bool          same_cb    = (CbA == CbB);
@@ -660,17 +665,25 @@ struct BinaryFpu : BinaryFpuTag {
     }
 
     ALWI void wait_upfront(uint32_t n) const {
-        if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_wait_front(CbA, n);
-        if constexpr (!same_cb && BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_wait_front(CbB, n);
+        if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      APolicy == CopyTilePolicy::WaitUpfrontNoPop) {
+            cb_wait_front(CbA, n);
+        }
+        if constexpr (!same_cb && (BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                                   BPolicy == CopyTilePolicy::WaitUpfrontNoPop)) {
+            cb_wait_front(CbB, n);
+        }
     }
 
     // 2D: per-side upfront wait — A uses AIndex's window, B uses BIndex's window.
     // Same `same_cb` dedup as 1D (skip B side when CbA == CbB).
     ALWI void wait_upfront_2d(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) {
+        if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      APolicy == CopyTilePolicy::WaitUpfrontNoPop) {
             cb_wait_front(CbA, detail::window_2d<AIndex>(Ht, Wt));
         }
-        if constexpr (!same_cb && BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) {
+        if constexpr (!same_cb && (BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                                   BPolicy == CopyTilePolicy::WaitUpfrontNoPop)) {
             cb_wait_front(CbB, detail::window_2d<BIndex>(Ht, Wt));
         }
     }
@@ -792,6 +805,7 @@ struct DestReuseBinary : DestReuseBinaryTag {
     static constexpr CopyTilePolicy b_policy()        { return CopyTilePolicy::NoWaitNoPop; }
     static constexpr Dst            dst_slot          = DstOut;
     static constexpr bool           is_upfront        = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
+                                                        (Policy == CopyTilePolicy::WaitUpfrontNoPop) ||
                                                         (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd);
     static constexpr bool           clashes_with_fpu  = true;
 
@@ -827,7 +841,10 @@ struct DestReuseBinary : DestReuseBinaryTag {
         }
     }
     ALWI void wait_upfront(uint32_t n) const {
-        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_wait_front(Cb, n);
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::WaitUpfrontNoPop) {
+            cb_wait_front(Cb, n);
+        }
     }
     ALWI void exec(uint32_t i, uint32_t slot_offset) const {
         constexpr auto et = (Op == BinaryFpuOp::Add) ? ckernel::EltwiseBinaryType::ELWADD :
@@ -847,7 +864,8 @@ struct DestReuseBinary : DestReuseBinaryTag {
 
     // 2D variants
     ALWI void wait_upfront_2d(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) {
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::WaitUpfrontNoPop) {
             cb_wait_front(Cb, detail::window_2d<IndexMode>(Ht, Wt));
         }
     }
@@ -907,6 +925,7 @@ struct UnaryBcast : UnaryBcastTag {
     static constexpr CopyTilePolicy b_policy()        { return CopyTilePolicy::NoWaitNoPop; }
     static constexpr Dst            dst_slot          = DstSlot;
     static constexpr bool           is_upfront        = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
+                                                        (Policy == CopyTilePolicy::WaitUpfrontNoPop) ||
                                                         (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd);
     static constexpr bool           clashes_with_fpu  = true;
 
@@ -934,7 +953,10 @@ struct UnaryBcast : UnaryBcastTag {
         }
     }
     ALWI void wait_upfront(uint32_t n) const {
-        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_wait_front(Cb, n);
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::WaitUpfrontNoPop) {
+            cb_wait_front(Cb, n);
+        }
     }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
         constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
@@ -944,7 +966,8 @@ struct UnaryBcast : UnaryBcastTag {
     // 2D variants — UnaryBcast always reads tile 0 (intra-tile bcast LLK), no per-iter
     // tile index. Upfront window in 2D = Ht * Wt (every (ht, wt) iter consumes one tile).
     ALWI void wait_upfront_2d(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) {
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::WaitUpfrontNoPop) {
             cb_wait_front(Cb, Ht * Wt);
         }
     }
@@ -1101,6 +1124,7 @@ inline constexpr uint32_t chain_lane_width_v = chain_lane_width<Chain>::value;
 namespace detail {
 constexpr bool policy_supports_block(CopyTilePolicy p) {
     return p == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+           p == CopyTilePolicy::WaitUpfrontNoPop ||
            p == CopyTilePolicy::CumulativeWaitPopAtEnd ||
            p == CopyTilePolicy::CumulativeWaitNoPop ||
            p == CopyTilePolicy::NoWaitNoPop;

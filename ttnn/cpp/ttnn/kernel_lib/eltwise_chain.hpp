@@ -363,6 +363,12 @@ enum class CopyTilePolicy : uint8_t {
     NoWaitPop,               // no wait     + per-tile pop    (fan-out last / pre-waited single)
     NoWaitNoPop,             // no wait     + no pop          (caller owns lifecycle / sharded)
     WaitUpfrontPopAtEnd,     // upfront wait + upfront pop    (block access — BlockIter / Absolute legal)
+    WaitUpfrontNoPop,        // upfront wait + NO pop. Same wait shape as WaitUpfrontPopAtEnd but
+                             // caller keeps the tiles alive past chain exit — used when a
+                             // downstream stage (another chain, a reduce, raw LLK) still needs
+                             // the same CB. Caller is responsible for the final pop. Symmetric
+                             // with CumulativeWaitNoPop but pays the full N wait once at entry
+                             // instead of growing per iter.
     CumulativeWaitPopAtEnd,  // per-iter cumulative wait (cb_wait_front(cb, i+1)) + bulk pop at end
                              // (block access with producer streaming: consumer iter i starts as
                              // soon as producer has pushed i+1 tiles, vs WaitUpfrontPopAtEnd which
