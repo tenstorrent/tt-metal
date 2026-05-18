@@ -75,6 +75,7 @@
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 #include "test_common.hpp"
 
@@ -263,9 +264,53 @@ struct RealtimeProfilerDrainGuard {
     }
 };
 
+struct BuiltProgram {
+    Program program;
+    KernelHandle compute_kernel = 0;
+};
+
+// Set compute runtime arg 1 (program_id) on every core. program_id 0 marks
+// pre-compile / warmup rows in the device CSV; timed launches use 1..N.
+void set_compute_program_id(
+    Program& program,
+    KernelHandle compute_kernel,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t total_num_tiles,
+    uint32_t program_id) {
+    const auto grid = mesh_device->compute_with_storage_grid_size();
+    constexpr bool kRowMajor = true;
+    auto [_num_cores, _all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+        split_work_to_cores(grid, total_num_tiles, kRowMajor);
+    const auto work_groups = {
+        std::make_pair(core_group_1, num_tiles_per_core_group_1),
+        std::make_pair(core_group_2, num_tiles_per_core_group_2)};
+    for (const auto& [group, tiles_per_core] : work_groups) {
+        if (tiles_per_core == 0) {
+            continue;
+        }
+        for (const auto& range : group.ranges()) {
+            for (const auto& core : range) {
+                SetRuntimeArgs(program, compute_kernel, core, {tiles_per_core, program_id});
+            }
+        }
+    }
+}
+
+// Configure host runtime id (RT profiler) and device CSV program_id before each launch.
+void configure_program_launch(
+    Program& program,
+    KernelHandle compute_kernel,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t total_num_tiles,
+    uint32_t profiler_program_id,
+    uint32_t host_runtime_id) {
+    set_compute_program_id(program, compute_kernel, mesh_device, total_num_tiles, profiler_program_id);
+    program.set_runtime_id(host_runtime_id);
+}
+
 // Build the reader -> compute -> writer program covering every Tensix core,
 // with the per-core tile slice assigned via runtime args.
-Program build_program(
+BuiltProgram build_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const BenchmarkConfig& cfg,
     const std::shared_ptr<distributed::MeshBuffer>& input_buffer,
@@ -351,7 +396,7 @@ Program build_program(
             for (const auto& core : range) {
                 SetRuntimeArgs(program, reader_kernel, core, {input_buffer->address(), tiles_per_core, start_tile_id});
                 SetRuntimeArgs(program, writer_kernel, core, {output_buffer->address(), tiles_per_core, start_tile_id});
-                SetRuntimeArgs(program, compute_kernel, core, {tiles_per_core});
+                SetRuntimeArgs(program, compute_kernel, core, {tiles_per_core, /*program_id=*/0});
                 start_tile_id += tiles_per_core;
             }
         }
@@ -362,7 +407,7 @@ Program build_program(
         start_tile_id,
         total_num_tiles);
 
-    return program;
+    return BuiltProgram{std::move(program), compute_kernel};
 }
 
 }  // namespace
@@ -387,6 +432,7 @@ int main(int argc, char** argv) {
             cfg.use_realtime_profiler,
             cfg.trace_region_size);
         TT_FATAL(cfg.num_programs >= 1, "--num-programs must be >= 1");
+        TT_FATAL(cfg.num_pages_per_core >= 1, "--num-pages-per-core must be >= 1");
 
         // If the user asked for a CSV dump, make sure the runtime profiler is
         // actually enabled (Tracy-enabled build + TT_METAL_DEVICE_PROFILER=1
@@ -411,6 +457,8 @@ int main(int argc, char** argv) {
         auto mesh_device =
             distributed::MeshDevice::create_unit_mesh(cfg.device_id, DEFAULT_L1_SMALL_SIZE, trace_region_size);
 
+        log_info(LogTest, "Clock: {} MHz", get_tt_npu_clock(mesh_device->get_devices()[0]));
+
         const auto grid = mesh_device->compute_with_storage_grid_size();
         const uint32_t num_cores = grid.x * grid.y;
         const uint32_t total_num_tiles = num_cores * cfg.num_pages_per_core;
@@ -433,28 +481,38 @@ int main(int argc, char** argv) {
 
         // Random bf16 input data, packed two values per uint32_t.
         const auto seed = static_cast<int>(std::chrono::system_clock::now().time_since_epoch().count());
-        std::vector<uint32_t> input_data = create_random_vector_of_bfloat16(buffer_size_bytes, /*rand_max=*/100, seed);
+        std::vector<uint32_t> input_data =
+            create_random_vector_of_bfloat16(buffer_size_bytes, /*rand_max_float=*/100, seed);
 
         auto& cq = mesh_device->mesh_command_queue();
         distributed::EnqueueWriteMeshBuffer(cq, input_buffer, input_data, /*blocking=*/false);
+        // Drain the input upload before trace capture: host writes are not allowed while
+        // a trace is being recorded (see FDMeshCommandQueue "Writes are not supported
+        // during trace capture"). Warmup's Finish used to hide this; --no-warmup needs
+        // an explicit Finish here.
+        distributed::Finish(cq);
 
-        Program program =
+        BuiltProgram built =
             build_program(mesh_device, cfg, input_buffer, output_buffer, total_num_tiles, single_tile_size_bytes);
-
-        // Real-time profiler: D2H pages use the program's host runtime id as start_id.
-        // The receiver drops id==0 (non-GO housekeeping); Program defaults runtime_id to 0
-        // (program_impl.hpp), so without this line every record is filtered and callbacks
-        // never fire (RealtimeProfilerManager::process_one_page).
-        program.set_runtime_id(1);
 
         distributed::MeshWorkload workload;
         const distributed::MeshCoordinateRange device_range(mesh_device->shape());
-        workload.add_program(device_range, std::move(program));
+        workload.add_program(device_range, std::move(built.program));
+        Program& program = workload.get_programs().begin()->second;
+
+        // Real-time profiler drops id==0; timed launches use host_runtime_id 1..N.
+        constexpr uint32_t kPrecompileProfilerProgramId = 0;
+
+        auto launch = [&](uint32_t profiler_program_id, uint32_t host_runtime_id) {
+            configure_program_launch(
+                program, built.compute_kernel, mesh_device, total_num_tiles, profiler_program_id, host_runtime_id);
+        };
 
         // Warmup (untimed): one eager enqueue absorbs the JIT-load /
         // dispatcher prefetch cost so they do not pollute either the FD timing
         // loop or the trace-capture step.
         if (cfg.warmup) {
+            launch(kPrecompileProfilerProgramId, 1);
             distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
             distributed::Finish(cq);
         }
@@ -466,6 +524,16 @@ int main(int argc, char** argv) {
         const char* mode_label = nullptr;
 
         if (cfg.use_trace) {
+            // First enqueue inside trace capture triggers JIT / host-side setup, which
+            // is not allowed while recording ("Writes are not supported during trace
+            // capture"). Warmup already pre-compiles; with --no-warmup do it here.
+            if (!cfg.warmup) {
+                log_info(LogTest, "Trace mode: pre-compiling kernels before capture (PROG_ID=0).");
+                launch(kPrecompileProfilerProgramId, 1);
+                distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+                distributed::Finish(cq);
+            }
+
             // Step 3: capture one trace containing all N back-to-back enqueues,
             // then time a single replay + Finish. Capture itself is untimed --
             // it's a one-time setup cost that is amortised when the same
@@ -476,6 +544,8 @@ int main(int argc, char** argv) {
             // member methods.
             const distributed::MeshTraceId tid = distributed::BeginTraceCapture(mesh_device.get(), kCqId);
             for (uint32_t i = 0; i < cfg.num_programs; ++i) {
+                const uint32_t program_index = i + 1;
+                launch(program_index, program_index);
                 distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
             }
             mesh_device->end_mesh_trace(kCqId, tid);
@@ -499,6 +569,8 @@ int main(int argc, char** argv) {
                 // times under one Finish.
                 const auto t_begin = std::chrono::steady_clock::now();
                 for (uint32_t i = 0; i < cfg.num_programs; ++i) {
+                    const uint32_t program_index = i + 1;
+                    launch(program_index, program_index);
                     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
                 }
                 distributed::Finish(cq);
@@ -530,7 +602,7 @@ int main(int argc, char** argv) {
                 LogTest,
                 "Device profiler results dumped. Inspect "
                 "$TT_METAL_HOME/generated/profiler/.logs/profile_log_device.csv "
-                "(per-tile MATH / TRISC-KERNEL zones; program gaps: --use-realtime-profiler).");
+                "(PROG_ID, TRISC_0 TILE_IDX, TRISC_2 FINISH_LAST_PUSH; chip gaps: --use-realtime-profiler).");
         }
 
         std::vector<uint32_t> output_data;
