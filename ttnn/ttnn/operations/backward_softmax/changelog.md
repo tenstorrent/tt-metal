@@ -78,3 +78,37 @@
     - `test_backward_softmax_strategy_2_matches_strategy_1_pcc` — sanity check that SB and DB deliver Phase-0-quality output on their representative shapes.
     - `test_backward_softmax_multicore_with_per_tile_strategy` — exercises the `PER_TILE_STREAM × multi-core` interaction (`(1, 2, 32, 2048)`, 2 lanes spread across 2 cores).
   - Existing suites unchanged: `test_backward_softmax.py` (17/26), `test_backward_softmax_precision_baseline.py` (8/8), `test_backward_softmax_extended.py` (9/9), `test_backward_softmax_multicore.py` (18/18).
+
+## Refinement 3 — Alternative input dtypes (BFLOAT16, BFLOAT8_B)
+
+- **Date**: 2026-05-18
+- **What was done**: relaxed the dtype validator in `backward_softmax.py` to accept `{float32, bfloat16, bfloat8_b}` (still requiring matching dtypes on the two inputs). The output dtype matches the input dtype via the unchanged `allocate_tensor_on_device(grad_output.dtype, ...)` call. The program descriptor (`backward_softmax_program_descriptor.py`) now picks a dtype-aware `ComputeConfigDescriptor`:
+  - **float32** → `HiFi4 + fp32_dest_acc_en=True` (Phase-0 lock-in, unchanged).
+  - **bfloat16** → `HiFi2 + fp32_dest_acc_en=False`. bf16 carries ~7 mantissa bits; HiFi4's 4-phase matmul expansion + fp32 DEST buy nothing the input quantisation hasn't already lost. HiFi2 keeps the matmul SrcA path 4× lighter, and bf16 DEST regains the full 8-tile DST capacity (vs 4 in fp32-acc half-sync).
+  - **bfloat8_b** → `LoFi + fp32_dest_acc_en=False`. The shared-exponent compression dominates the noise budget; matmul fidelity below LoFi would burn cycles without measurable benefit.
+  - The kernel sources are **dtype-agnostic** — no `.cpp` files changed. The existing CB descriptors already key off `grad_output.dtype` / `.buffer_page_size()`, so the format reconfig inside the kernel-lib helpers handles each dtype.
+  - `cb_scaler` remains bf16 regardless (matmul col-0 fill convention for SUM/AVG REDUCE_ROW, per the verifier note in `op_requirements.md`).
+- **Accuracy achieved**:
+
+  | Dtype | Compute config | PCC threshold | rms_rel threshold | Empirical worst rms_rel (5 shapes × 2 dims) |
+  |---|---|---|---|---|
+  | float32 | HiFi4 + fp32_dest_acc_en=True | ≥ 0.999 | ≤ 0.01 | ≤ 0.005 (unchanged from R2) |
+  | bfloat16 | HiFi2 + fp32_dest_acc_en=False | ≥ 0.999 | ≤ 0.05 | ~0.01-0.02 |
+  | bfloat8_b | LoFi + fp32_dest_acc_en=False | ≥ 0.95 | ≤ 0.15 | ~0.04-0.10 |
+
+  Tolerances documented in `capabilities.md`. The bf16 / bfp8 floors are dominated by input quantisation — the matmul SrcA path unpacks the dtype into fp32 DEST (when `fp32_dest_acc_en=True`) or bf16 DEST (when `False`), and our chosen non-fp32 DEST for bf16/bfp8 stays well inside both PCC bounds because the input itself has already lost the precision fp32 DEST would have preserved.
+
+- **Golden test progress**: N/A — no `eval/golden_tests/backward_softmax/` suite exists for this op.
+
+- **Issues encountered**: None. The change was clean — validator + compute-config split + new test file, no kernel changes. First-run pass on all 41 dtype tests.
+
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/backward_softmax/test_backward_softmax_dtype.py` (41 tests — all passing):
+    - `test_backward_softmax_dtype_correctness` (30 cases): full Cartesian `{fp32, bf16, bfp8_b} × {dim=-1, dim=-2} × 5 shapes` (single_tile, multi_tile_W, multi_tile_H, non_square_64x128, multi_batch).
+    - `test_backward_softmax_dtype_against_real_softmax` (2 cases): bf16 / bfp8 against `torch.autograd` softmax-backward.
+    - `test_backward_softmax_dtype_zero_input_invariant` (3 cases): `dy == 0 ⇒ grad_input == 0` across every dtype.
+    - `test_backward_softmax_dtype_determinism` (2 cases): bf16 / bfp8 bit-equal across two invocations.
+    - `test_backward_softmax_dtype_rejects_unsupported_dtypes` (1 case): uint32 still rejected.
+    - `test_backward_softmax_dtype_rejects_dtype_mismatch_across_supported` (3 cases): every supported-dtype pair `(fp32, bf16), (bf16, bfp8), (fp32, bfp8)` raises on mismatch.
+  - Existing suites unchanged: `test_backward_softmax.py` (17/26 — same pre-R3 baseline; the 9 failures are the documented `atol=0.01` precision-floor issue), `test_backward_softmax_precision_baseline.py` (8/8), `test_backward_softmax_extended.py` (9/9), `test_backward_softmax_multicore.py` (18/18), `test_backward_softmax_strategy.py` (17/17).
+  - Total: 110/119 across the whole `backward_softmax/` suite — bit-identical pass/fail split to pre-R3 plus the new 41 dtype tests on top.

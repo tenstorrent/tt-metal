@@ -85,7 +85,7 @@
   - If no in-scope shape triggers strategy 3, that's fine — note in `capabilities.md` that strategy 3 is reachable only at very large reduce dimensions and is not exercised by the test set.
 - **Verifier hint**: the standard TTNN pattern for keeping a CB live across multiple compute passes is to `cb_wait_front(cb, N)` once at the top and only `cb_pop_front(cb, N)` after the last pass that reads it. Compute APIs that take a tile-index argument read at arbitrary offsets within the waited region.
 
-### [ ] Refinement 3 — Alternative input dtypes (BFLOAT16, BFLOAT8_B)
+### [x] Refinement 3 — Alternative input dtypes (BFLOAT16, BFLOAT8_B)
 
 - Add support for `bfloat16` and `bfloat8_b` inputs/outputs in addition to the current `float32`.
 - Both `grad_output` and `output` inputs must have the same dtype. The returned `grad_input` dtype matches the input dtype.
