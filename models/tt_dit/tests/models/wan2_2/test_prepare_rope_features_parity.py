@@ -7,7 +7,7 @@ Compares our per-token (cos, sin) rope tensors against the reference's
 grid construction in ``WanModel_S2V.forward`` plus
 ``FramePackMotioner.forward``'s motion-bucket grid. The vendored
 :func:`rope_precompute` is already byte-for-byte vs the reference (see
-``s2v_rope.py`` cleanup) — this test verifies our **grid_sizes construction**.
+``rope_s2v.py`` cleanup) — this test verifies our **grid_sizes construction**.
 
 Test bar: PCC ≥ 0.99.
 """
@@ -20,7 +20,7 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.wan2_2.s2v_rope import rope_precompute
+from ....models.transformers.wan2_2.rope_s2v import rope_precompute
 from ....models.transformers.wan2_2.transformer_wan_s2v import WanS2VTransformer3DModel
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager

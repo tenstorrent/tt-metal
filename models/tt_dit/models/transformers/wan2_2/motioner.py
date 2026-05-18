@@ -18,7 +18,7 @@ an unfold + matmul — same pattern as :class:`WanPatchEmbed`.
 
 The forward takes a motion-latent tensor, pads/zips into the three buckets,
 runs each projection, and concatenates the token sequences. Rope-precompute
-runs on host via :func:`s2v_rope.rope_precompute` and is uploaded once per
+runs on host via :func:`rope_s2v.rope_precompute` and is uploaded once per
 clip.
 
 The alternative ``MotionerTransformers`` path (``enable_motioner=True``) is
@@ -37,7 +37,7 @@ from ....layers.embeddings import WanPatchEmbed
 from ....layers.module import Module
 from ....parallel.config import DiTParallelConfig
 from ....utils.tensor import bf16_tensor
-from .s2v_rope import rope_params, rope_precompute
+from .rope_s2v import rope_params, rope_precompute
 
 
 def _patchify_for_unfolded_conv(x_BCTHW: torch.Tensor, patch_size: tuple[int, int, int]) -> torch.Tensor:
