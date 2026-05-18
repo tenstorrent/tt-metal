@@ -979,6 +979,9 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // All self-loop participants must agree on the tensix-scope for this DFB —
             // MakeDataflowBufferConfig writes a single tensix_scope into the DFB config, and the
             // self-loop participants alternate per node, so a disagreement is unresolvable.
+            // Iterate endpoints.producers (a vector) rather than producer_kernels (an
+            // unordered_set), so iteration order — and any resulting error message — is
+            // deterministic across runs.
             auto scope_for_kernel = [&](const KernelSpec* k) {
                 for (const auto& entry : k->dfb_compute_self_loop_scopes) {
                     if (entry.dfb_spec_name == dfb.unique_id) {
@@ -987,16 +990,20 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 }
                 return KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA;
             };
-            const auto* first_kernel = *producer_kernels.begin();
+            const KernelSpec* first_kernel = endpoints.producers.front().kernel;
             const auto first_scope = scope_for_kernel(first_kernel);
-            for (const KernelSpec* k : producer_kernels) {
+            std::unordered_set<const KernelSpec*> seen;
+            for (const auto& rec : endpoints.producers) {
+                if (!seen.insert(rec.kernel).second) {
+                    continue;
+                }
                 TT_FATAL(
-                    scope_for_kernel(k) == first_scope,
+                    scope_for_kernel(rec.kernel) == first_scope,
                     "DFB '{}' is self-looped; all self-loop participants must agree on "
                     "DFBComputeSelfLoopScope::Scope, but kernel '{}' specifies a different scope "
                     "than kernel '{}'.",
                     dfb.unique_id,
-                    k->unique_id,
+                    rec.kernel->unique_id,
                     first_kernel->unique_id);
             }
         }
@@ -1706,10 +1713,11 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
     const CollectedSpecData::DFBEndpointInfo& dfb_endpoint_info,
     const KernelRiscMaskMap& kernel_to_risc_mask) {
-    // With multi-binding, all producer KernelSpecs share the same access_pattern and num_threads
-    // (enforced in ValidateProgramSpec), so any representative producer/consumer gives the
-    // correct DFB config. For risc_mask, same-source KernelSpecs (the canonical multi-binding
-    // case) have identical processor placement and therefore the same mask; we take the first.
+    // With multi-binding, all producer KernelSpecs share the same access_pattern, num_threads,
+    // AND risc_mask: the first two are enforced in ValidateProgramSpec; the third is checked
+    // in MakeProgramFromSpec right after the risc-mask solver runs (see the
+    // "check_uniform_mask" loop). So any representative producer/consumer gives the correct
+    // DFB config — we take the first.
     const KernelSpec* producer = dfb_endpoint_info.producers.front().kernel;
     const KernelSpec* consumer = dfb_endpoint_info.consumers.front().kernel;
     const KernelSpec::DFBBinding* producer_binding = dfb_endpoint_info.producers.front().binding;
@@ -2011,6 +2019,77 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     //  - Gen1: processor is user-specified in Gen1DataMovementConfig
     KernelRiscMaskMap kernel_to_risc_mask =
         is_gen2_arch() ? SolveGen2KernelRiscMasks(spec, collected) : BuildGen1KernelRiscMasks(spec);
+
+    // Step 2a-bis: For multi-binding DFBs, all KernelSpecs on the same role must end up with
+    // identical risc_masks. The DFB has a single producer_risc_mask / consumer_risc_mask in
+    // its hardware config; per-node mask variation would require splitting the DFB at lowering
+    // time (deliberately not done here).
+    //
+    // Gen1: the mask is a deterministic function of the user's KernelSpec config_spec (compute
+    //   placement is fixed; DM processor is user-specified via Gen1DataMovementConfig). A
+    //   mismatch is therefore a user error — the user supplied multi-binding KernelSpecs with
+    //   incompatible processor placement.
+    // Gen2 (Quasar): the mask is solver-assigned. The solver currently doesn't know about
+    //   multi-binding equivalence classes, so even when the user's intent is compatible the
+    //   solver may produce a mismatch. The proper fix is to extend the DM/compute solver to
+    //   constrain same-role multi-binding kernels to identical placements; this is intentionally
+    //   deferred. For now, on Gen2 we surface the mismatch as an internal error so a real
+    //   workload exercising the case can find us; the user can't act on it directly.
+    //
+    // TODO(quasar-multi-binding-solver): extend SolveGen2KernelRiscMasks to take the
+    // multi-binding equivalence classes (derived from collected.dfb_endpoints) and constrain
+    // same-class kernels to the same risc_mask. Then this check downgrades to a defensive
+    // assertion on both arches.
+    for (const auto& dfb : spec.dataflow_buffers) {
+        const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
+        auto check_uniform_mask = [&](const auto& records, std::string_view role) {
+            if (records.size() < 2) {
+                return;
+            }
+            const uint16_t first_mask = kernel_to_risc_mask.at(records[0].kernel);
+            const auto* first_kernel = records[0].kernel;
+            for (size_t i = 1; i < records.size(); ++i) {
+                const uint16_t mask = kernel_to_risc_mask.at(records[i].kernel);
+                if (mask == first_mask) {
+                    continue;
+                }
+                if (is_gen2_arch()) {
+                    TT_FATAL(
+                        false,
+                        "Internal error: Inconsistent RISC mask solution failure. DFB '{}' has "
+                        "multiple {} KernelSpecs ('{}', '{}') that the Gen2 (Quasar) solver "
+                        "placed on different processor lanes (mask 0x{:x} vs 0x{:x}). The DFB's "
+                        "hardware config carries a single mask per role; multi-binding requires "
+                        "all same-role kernels to share a mask. The Quasar solver does not yet "
+                        "enforce this constraint; this is a known framework limitation. "
+                        "TODO(quasar-multi-binding-solver): extend the solver to constrain "
+                        "multi-binding equivalence classes.",
+                        dfb.unique_id,
+                        role,
+                        first_kernel->unique_id,
+                        records[i].kernel->unique_id,
+                        first_mask,
+                        mask);
+                } else {
+                    TT_FATAL(
+                        false,
+                        "DFB '{}' has multiple {} KernelSpecs ('{}', '{}') with mismatched "
+                        "processor placement (risc_mask 0x{:x} vs 0x{:x}). Multi-binding "
+                        "requires all same-role kernels to share processor placement (for DM "
+                        "kernels, check Gen1DataMovementConfig::processor; for compute, the "
+                        "placement is determined by the KernelSpec's config_spec type).",
+                        dfb.unique_id,
+                        role,
+                        first_kernel->unique_id,
+                        records[i].kernel->unique_id,
+                        first_mask,
+                        mask);
+                }
+            }
+        };
+        check_uniform_mask(endpoints.producers, "PRODUCER");
+        check_uniform_mask(endpoints.consumers, "CONSUMER");
+    }
 
     // Step 2b: Resolve TensorParameters against the MeshDevice into static CTA payloads.
     //
