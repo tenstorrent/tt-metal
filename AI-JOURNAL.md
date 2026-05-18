@@ -1,5 +1,81 @@
 
 ---
+## 2026-05-18 — Testing Gaps Audit Round 3 (FIX NO, FIX NP)
+
+### Audit Scope
+
+Systematic review of all FIX/STRATEGY code paths for: missing readback
+verification, untested error branches, log patterns not captured by
+analyze_fabric_hang_log.sh, and state that isn't logged.
+
+### Gaps Found and Fixed
+
+**GAP 1 — STRATEGY7 handshake_bypass write has no readback verification**
+- Problem: STRATEGY7 writes `handshake_bypass=1` to L1 but never reads it back.
+  If the PCIe write is silently dropped (contention, relay failure), firmware
+  never sees bypass=1, enters full ETH DMA handshake loop, and all handshake
+  race conditions return. Every other L1 write in the codebase (FIX EG, FIX MM,
+  FIX IJ) has FIX GI readback verification — STRATEGY7 was the only one missing it.
+- Fix (FIX NO): Added ReadFromDeviceL1 readback after the WriteToDeviceL1 call
+  in configure_fabric_cores(). Logs warning on mismatch. fabric_init.cpp ~line 826.
+- Log: `FIX NO (#42429): STRATEGY7 handshake_bypass readback MISMATCH`
+- Log: `STRATEGY7 (#42429): wrote handshake_bypass=1 ... FIX NO readback verified`
+
+**GAP 2 — FIX EF / FIX QR timeout path logs assumed edm_status value**
+- Problem: When FIX EF or FIX QR times out after 3000ms, the log says "still at
+  0xDEADB07E" but never re-reads the actual edm_status. If ERISC transitioned to
+  a different bad state (0x00000000, 0xA0A0A0A0, or a partial handshake value),
+  the log is misleading and post-mortem analysis follows wrong hypothesis.
+- Fix (FIX NP): Added actual edm_status read at both timeout paths (device.cpp).
+  FIX EF timeout: ~line 942. FIX QR timeout: ~line 2773. Best-effort read with
+  catch-all for PCIe failures.
+- Log: `FIX EF: ... actual edm_status=0x... FIX NP (#42429): timeout snapshot.`
+- Log: `FIX QR: ... actual edm_status=0x... FIX NP (#42429): timeout snapshot.`
+
+**GAP 3 — FIX MM counter missing from analyze script**
+- Problem: FIX MM fires were captured in timeline grep but had no dedicated counter
+  or interpretation block. Post-mortem couldn't tell how many channels got restored.
+- Fix: Added FIX_MM_FIRES, FIX_MM_MISMATCH, FIX_MM_PRE_ZERO/NONZERO counters.
+
+**GAP 4 — STRATEGY7/STRATEGY3 patterns missing from analyze script**
+- Problem: "STRATEGY7" and "STRATEGY3" log lines were invisible to the analyzer.
+  The analyze script had Strategy 11 but not STRATEGY7 or STRATEGY3.
+- Fix: Added STRATEGY7_FIRES, STRATEGY7_VERIFIED, STRATEGY3_FIRES counters.
+  Added "STRATEGY7|STRATEGY3|handshake_bypass" to both TIMELINE and PHASES grep.
+
+**GAP 5 — 5 FIX tags missing from analyze grep patterns**
+- Problem: FIX DW, FIX DO, FIX DQ, FIX DZ3, FIX MM were in source code but not
+  in the analyze script's TIMELINE or PHASES grep patterns.
+- Fix: Added FIX MM to grep patterns (others are comments-only, no log output).
+
+### Files Changed
+
+- `tt_metal/fabric/fabric_init.cpp`: FIX NO readback for STRATEGY7 handshake_bypass
+- `tt_metal/impl/device/device.cpp`: FIX NP timeout snapshots in FIX EF + FIX QR
+- `scripts/analyze_fabric_hang_log.sh`: FIX MM/NO/NP/STRATEGY7/STRATEGY3 counters
+
+### What Was NOT Changed
+
+- No test tolerance changes
+- No test disablements
+- No device-number hardcoding
+- All changes are diagnostic only (no control-flow changes)
+
+### What to Watch in Next CI Run
+
+1. FIX NO mismatch count — if > 0, STRATEGY7 writes are being lost on some channels
+2. FIX NP actual edm_status at timeout — if NOT 0xDEADB07E, ERISC transitioned to
+   an unexpected state that the existing poll missed
+3. FIX MM pre_val audit — if FIX MM pre_val is non-zero, FIX EG did not fire for
+   that channel (path mismatch between FIX EG and FIX MM)
+4. STRATEGY7 verified count should equal STRATEGY7 fire count (all writes verified)
+
+### Commits
+
+- `f8256a74b12` — FIX NO/NP diagnostics (fabric_init.cpp, device.cpp)
+- `90468ea8bef` — analyze script update (FIX MM/NO/NP/STRATEGY7/STRATEGY3)
+
+---
 ## STRATEGY7: handshake bypass flag (2026-05-18)
 
 ### What It Does
