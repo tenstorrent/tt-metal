@@ -4222,8 +4222,89 @@ MEDIUM    Verify: after FIX EF, confirm D0-D3 chan=8 relay firmware DOES complet
 
 ```
 FIX EE    ✅ Working  MMIO chan=8 correctly bypasses FIX M
-FIX DY    ✅ Working  Non-MMIO relay transition detected 0ms  
+FIX DY    ✅ Working  Non-MMIO relay transition detected 0ms
 FIX M     ✅ Working  D4-D7 chan=0,7 preserved (no soft reset)
 FIX NX    ⚠️ Still firing  ROOT = race vs D0-D3 chan=8 startup → FIX EF needed
 FIX DT-1  ⚠️ Still firing  SECONDARY to FIX NX → should clear after FIX EF
 ```
+
+---
+
+## 2026-05-18: Testing Gaps Audit
+
+### Methodology
+
+Systematic audit of all FIX tag paths in fabric_init.cpp, device.cpp,
+and firmware_initializer.cpp. Cross-referenced with analyze script detection
+patterns and existing test coverage in tests/nightly/t3000/ccl/.
+
+### Gaps Found
+
+**Gap 1 — FIX S9 assert→deassert window has no timing (FIXED: FIX OP)**
+
+The FIX S9 window (where ERISC0 is held in reset for FIX EG zero +
+readback) had zero instrumentation. If PCIe contention or slow readback
+causes the window to stretch, there was no way to detect it from CI logs.
+
+Fix: `fabric_init.cpp` — steady_clock before assert, log duration after
+deassert. Analyze script captures FIX_OP_MAX_MS for worst-case.
+
+**Gap 2 — configure_fabric_cores SUMMARY lacks path breakdown (FIXED: FIX MN enhance)**
+
+FIX MN SUMMARY only reported aggregate counts. Missing: MMIO status,
+per-path breakdown (fix_m vs fix_s9 vs normal_reset). Made it impossible
+to correlate dead channels with the correct reset path.
+
+Fix: `fabric_init.cpp` — enhanced SUMMARY adds `mmio=`, `paths: fix_m=N
+fix_s9=N normal=N`.
+
+**Gap 3 — Quiesce path missing FIX EF poll (CRITICAL RACE — FIXED: FIX QR)**
+
+In `quiesce_internal()`:
+- Pass 1b launches MMIO ETH cores
+- Pass 1c immediately launches non-MMIO devices
+
+Non-MMIO `write_launch_msg_to_core` routes through MMIO relay ERISCs.
+If relay still at 0xDEADB07E (hasn't started yet), the non-MMIO launch
+is **silently dropped** — no error, no log, just ring-sync timeout 120s later.
+
+FIX EF already covers the initial `configure_fabric()` path but the quiesce
+restart path (`launch_eth_cores_for_quiesce`) had no equivalent poll.
+
+Fix: `device.cpp` — FIX QR adds blocking poll (3s timeout, 5ms interval)
+after FIX IJ restore in the quiesce path. Confirms MMIO relay ERISCs
+exited 0xDEADB07E before returning control.
+
+**Gap 4 — FIX UP-2/TL-2 missing from analyze script (FIXED)**
+
+New tags from recent commits not captured in timeline or phases greps.
+
+Fix: `analyze_fabric_hang_log.sh` — added to both grep patterns.
+
+**Gap 5 — No test covers FIX EE/EF/IJ sequence (NOTED — not addressed)**
+
+All 25+ gap test files in `tests/nightly/t3000/ccl/` test individual
+behaviors. No integration test exercises the full MMIO base-UMD path:
+FIX EE skip → FIX S9 reset → FIX EG zero → FIX IJ restore → FIX EF poll.
+This would require C++ gtest with mock cluster, not a Python ttnn test.
+
+**Gap 6 — Analyze script missing FIX OP/QR counters (FIXED)**
+
+New FIX tags need counter variables and summary/insights display.
+
+Fix: `analyze_fabric_hang_log.sh` — added FIX_OP_FIRES, FIX_OP_MAX_MS,
+FIX_QR_FIRES, FIX_QR_TIMEOUT counters + display + insights.
+
+### Commits
+
+```
+8c5a779fe2c  FIX OP: time FIX S9 assert→deassert window + enhance SUMMARY (#42429)
+518cef3cf3a  FIX QR: quiesce path FIX EF analogue — poll MMIO relay ERISCs (#42429)
+2b5f073464b  Update analyze script: FIX OP/QR counters + new grep patterns (#42429)
+```
+
+### Files Changed
+
+- `tt_metal/fabric/fabric_init.cpp` — FIX OP timing, enhanced FIX MN SUMMARY
+- `tt_metal/impl/device/device.cpp` — FIX QR quiesce poll
+- `scripts/analyze_fabric_hang_log.sh` — FIX OP/QR counters + grep patterns
