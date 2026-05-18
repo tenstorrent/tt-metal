@@ -33,6 +33,8 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     ts_pattern = re.compile(
         r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z\s*"
     )
+    # Strip GitHub Actions annotation prefixes like ##[error], ##[warning]
+    gh_annotation_pattern = re.compile(r"^##\[[a-z]+\]", re.IGNORECASE)
 
     def strip_ansi(text):
         return re.sub(r"\x1B[@-_][0-?]*[ -/]*[@-~]", "", text)
@@ -50,39 +52,50 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
         except Exception:
             return None
 
-    def strip_ts(line):
-        m = ts_pattern.match(line.strip())
+    def clean_line(line):
+        """Strip ISO timestamp prefix and GitHub annotation prefix, return clean content."""
+        s = line.strip()
+        # Strip ISO timestamp
+        m = ts_pattern.match(s)
         if m:
-            return line.strip()[m.end():]
-        return line.strip()
+            s = s[m.end():]
+        # Strip ##[error] / ##[warning] / ##[group] etc.
+        s = gh_annotation_pattern.sub("", s).strip()
+        return s
 
     with open(log_file, "r") as f:
         log = strip_ansi(f.read())
 
     lines = log.splitlines()
 
-    # Find reset block start: reset.sh invocation or "Starting tt-smi reset"
+    # Check if there is any tt-smi reset activity in this log at all
+    has_reset = any(
+        "tt-smi reset" in line.lower() or
+        ("reset.sh" in line.lower() and "tt_metal_infra" in line.lower())
+        for line in lines
+    )
+
+    if not has_reset:
+        return [{"attempt": 1, "final_status": "UNKNOWN",
+                 "total_reset_time_sec": None, "error_summary": "No tt-smi reset found"}]
+
+    # Find where the reset section starts
     reset_start_idx = None
     for i, line in enumerate(lines):
         lower = line.lower()
-        if ("run '/opt/tt_metal_infra/scripts/ci/" in lower and "reset.sh'" in lower) or \
+        if ("tt_metal_infra" in lower and "reset.sh" in lower) or \
            "starting tt-smi reset" in lower:
             reset_start_idx = i
             break
 
-    # WH simple case: no explicit start marker found, check for success message directly
+    # If no explicit start found, scan from beginning (e.g. WH simple case)
     if reset_start_idx is None:
-        for line in lines:
-            if "tt-smi reset was successful" in line.lower():
-                return [{"attempt": 1, "final_status": "SUCCESS",
-                         "total_reset_time_sec": None, "error_summary": None}]
-        return [{"attempt": 1, "final_status": "UNKNOWN",
-                 "total_reset_time_sec": None, "error_summary": "No tt-smi reset found"}]
+        reset_start_idx = 0
 
     block_lines = lines[reset_start_idx:]
     block_start_ts = parse_ts(lines[reset_start_idx])
     block_end_ts = None
-    # Count internal tt-smi retry attempts (each "===== START of output =====" = one attempt)
+    # Count internal tt-smi retry attempts via "===== START of output =====" occurrences
     num_smi_attempts = 0
     final_status = "UNKNOWN"
     seen_errors = set()
@@ -101,15 +114,15 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
            "runner will now shutdown" in lower or \
            "the operation was canceled" in lower:
             final_status = "FAILURE"
-        # Collect deduplicated error lines with timestamps stripped
-        clean = strip_ts(line)
-        if clean and any(x in lower for x in [
+        # Collect unique error lines with timestamps and GH annotation prefixes stripped
+        content = clean_line(line)
+        if content and any(x in lower for x in [
             "error accessing board", "could not open chip", "failed with:",
             "enodev", "error when re-initializing", "unable to reset board",
             "runner will now shutdown", "the operation was canceled",
-        ]) and clean not in seen_errors:
-            seen_errors.add(clean)
-            error_lines.append(clean)
+        ]) and content not in seen_errors:
+            seen_errors.add(content)
+            error_lines.append(content)
 
     if num_smi_attempts == 0:
         num_smi_attempts = 1
@@ -118,7 +131,7 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     if block_start_ts and block_end_ts:
         duration = (block_end_ts - block_start_ts).total_seconds()
 
-    error_summary = "\n".join(error_lines) if error_lines else None
+    error_summary = " | ".join(error_lines) if error_lines else None
 
     return [{"attempt": num_smi_attempts, "final_status": final_status,
              "total_reset_time_sec": duration, "error_summary": error_summary}]
