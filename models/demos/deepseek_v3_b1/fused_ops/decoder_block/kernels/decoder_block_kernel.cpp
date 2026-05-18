@@ -2166,9 +2166,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_residual_mcast_src_cb"),
                 get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages"));
 
-            unified_kernels::setup_sharded_buffer(
-                get_named_compile_time_arg_val("moe_rmsnorm_gamma_cb"),
-                get_named_compile_time_arg_val("moe_rmsnorm_gamma_num_pages"));
+            // moe_rmsnorm gamma not loaded (DoGamma=false, gamma folded into weights)
 #ifdef ENABLE_ROUTING
             unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("gate_bias_cb"), 1);
             unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("gate_input_indices_cb"), 1);

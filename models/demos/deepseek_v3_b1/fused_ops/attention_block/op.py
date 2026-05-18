@@ -1103,10 +1103,12 @@ class AttentionBlock:
         rmsnorm2_tile_descriptor = ttnn.TileDescriptor(TILE_16x32)
         rmsnorm2_page_size = TILE_16x32.get_tile_size(data_format)
 
-        # RMSNorm reader compile-time args (named args for NCRISC)
+        # RMSNorm reader compile-time args (named args for NCRISC).
+        # rmsnorm_gamma_cb omitted: input_layernorm γ is folded into q_a_proj /
+        # kv_a_proj_with_mqa at weight-prep time, so the kernel runs DoGamma=false
+        # and never reads gamma_cb.
         rmsnorm_reader_named_compile_time_args = [
             ("rmsnorm_input_cb", input_cb),
-            ("rmsnorm_gamma_cb", gamma_cb),
             ("rmsnorm_num_tiles", num_tiles),
         ]
 
@@ -1338,27 +1340,25 @@ class AttentionBlock:
             ("cqh_rope_tiles", rope_tiles),
         ]
 
-        # RMSNorm compute compile-time args (named args for TRISC)
+        # RMSNorm compute compile-time args (named args for TRISC).
+        # rmsnorm_gamma_cb omitted (DoGamma=false, γ folded into q_a/kv_a weights).
         rmsnorm_compute_named_compile_time_args = [
             ("rmsnorm_input_cb", input_cb),
-            ("rmsnorm_gamma_cb", gamma_cb),
             ("rmsnorm_output_cb", rmsnorm_output_cb),
             ("rmsnorm_fp32_acc", 1 if fp32_dest_acc_en else 0),
             ("rmsnorm_num_tiles", num_tiles),
             ("rmsnorm_rsqrt_fast_approx", 0),
         ]
 
-        # RMSNorm2 compile-time args (for second RMSNorm on gathered data)
-        # Uses separate CBs with exact sizes for testing
+        # RMSNorm2 compile-time args (for second RMSNorm on gathered data).
+        # rmsnorm2_gamma_cb omitted (DoGamma=false, q_a_layernorm γ folded into q_b).
         rmsnorm2_ncrisc_named_compile_time_args = [
             ("rmsnorm2_input_cb", rmsnorm2_input_cb),
-            ("rmsnorm2_gamma_cb", rmsnorm2_gamma_cb),
             ("rmsnorm2_output_cb", rmsnorm2_output_cb),
             ("rmsnorm2_num_tiles", rmsnorm2_num_tiles),
         ]
         rmsnorm2_trisc_named_compile_time_args = [
             ("rmsnorm2_input_cb", rmsnorm2_input_cb),
-            ("rmsnorm2_gamma_cb", rmsnorm2_gamma_cb),
             ("rmsnorm2_output_cb", rmsnorm2_output_cb),
             ("rmsnorm2_num_tiles", rmsnorm2_num_tiles),
         ]
