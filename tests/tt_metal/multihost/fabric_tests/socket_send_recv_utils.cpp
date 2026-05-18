@@ -130,12 +130,12 @@ bool test_socket_send_recv(
     src_vec.reserve(data_size * sender_core_range_set.num_cores() / sizeof(uint32_t));
 
     // duplicate data for all cores; this is non-ideal but there is no elegant way to not do this with current APIs
-    for (int i = 0; i < sender_core_range_set.num_cores(); i++) {
+    for (uint32_t i = 0; i < sender_core_range_set.num_cores(); i++) {
         src_vec.insert(src_vec.end(), src_vec_per_core.begin(), src_vec_per_core.end());
     }
     const auto reserved_packet_header_CB_index = tt::CB::c_in0;
 
-    for (int i = 0; i < num_txns; i++) {
+    for (uint32_t i = 0; i < num_txns; i++) {
         if (my_mesh_id == socket.get_config().sender_mesh_id.value()) {
             auto sender_data_shard_params = ShardSpecBuffer(
                 sender_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sender_core_range_set.num_cores(), 1});
@@ -334,7 +334,7 @@ void test_multi_mesh_single_conn_bwd(
             sockets.emplace(recv_mesh_id, MeshSocket(mesh_device, socket_config));
         }
 
-        for (int i = 0; i < num_iterations; i++) {
+        for (uint32_t i = 0; i < num_iterations; i++) {
             for (auto& [recv_mesh_id, socket] : sockets) {
                 test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
             }
@@ -344,7 +344,7 @@ void test_multi_mesh_single_conn_bwd(
         SocketConfig socket_config =
             SocketConfig({socket_connection}, socket_mem_config, sender_mesh_id, local_mesh_id);
         auto socket = MeshSocket(mesh_device, socket_config);
-        for (int i = 0; i < num_iterations; i++) {
+        for (uint32_t i = 0; i < num_iterations; i++) {
             test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
         }
     }
@@ -384,7 +384,7 @@ void test_multi_mesh_single_conn_fwd(
                 SocketConfig({socket_connection}, socket_mem_config, sender_mesh_id, local_mesh_id);
             sockets.emplace(sender_mesh_id, MeshSocket(mesh_device, socket_config));
         }
-        for (int i = 0; i < num_iterations; i++) {
+        for (uint32_t i = 0; i < num_iterations; i++) {
             for (auto& [sender_node, socket] : sockets) {
                 test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
             }
@@ -392,7 +392,7 @@ void test_multi_mesh_single_conn_fwd(
     } else {
         SocketConfig socket_config = SocketConfig({socket_connection}, socket_mem_config, local_mesh_id, recv_mesh_id);
         auto socket = MeshSocket(mesh_device, socket_config);
-        for (int i = 0; i < num_iterations; i++) {
+        for (uint32_t i = 0; i < num_iterations; i++) {
             test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
         }
     }
@@ -433,7 +433,7 @@ void test_multi_mesh_multi_conn_fwd(
                 SocketConfig({socket_connections}, socket_mem_config, sender_mesh_id, local_mesh_id);
             sockets.emplace(sender_mesh_id, MeshSocket(mesh_device, socket_config));
         }
-        for (int i = 0; i < num_iterations; i++) {
+        for (uint32_t i = 0; i < num_iterations; i++) {
             for (auto& [sender_node, socket] : sockets) {
                 test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
             }
@@ -441,7 +441,7 @@ void test_multi_mesh_multi_conn_fwd(
     } else {
         SocketConfig socket_config = SocketConfig({socket_connections}, socket_mem_config, local_mesh_id, recv_mesh_id);
         auto socket = MeshSocket(mesh_device, socket_config);
-        for (int i = 0; i < num_iterations; i++) {
+        for (uint32_t i = 0; i < num_iterations; i++) {
             test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
         }
     }
@@ -489,7 +489,7 @@ void test_multi_mesh_multi_conn_bidirectional(
                 SocketConfig({socket_connections}, socket_mem_config, local_mesh_id, compute_mesh_id);
             backward_sockets.emplace(compute_mesh_id, MeshSocket(mesh_device, backward_socket_config));
         }
-        for (int i = 0; i < num_iterations; i++) {
+        for (uint32_t i = 0; i < num_iterations; i++) {
             for (auto& [compute_node, forward_socket] : forward_sockets) {
                 test_socket_send_recv(mesh_device, forward_socket, data_size, socket_page_size);
             }
@@ -497,12 +497,12 @@ void test_multi_mesh_multi_conn_bidirectional(
                 test_socket_send_recv(mesh_device, backward_socket, data_size, socket_page_size);
             }
         }
-        for (int i = 0; i < num_iterations; i++) {
+        for (uint32_t i = 0; i < num_iterations; i++) {
             for (auto& [compute_node, forward_socket] : forward_sockets) {
                 test_socket_send_recv(mesh_device, forward_socket, data_size, socket_page_size);
             }
         }
-        for (int i = 0; i < num_iterations; i++) {
+        for (uint32_t i = 0; i < num_iterations; i++) {
             for (auto& [compute_node, backward_socket] : backward_sockets) {
                 test_socket_send_recv(mesh_device, backward_socket, data_size, socket_page_size);
             }
@@ -515,15 +515,15 @@ void test_multi_mesh_multi_conn_bidirectional(
         SocketConfig backward_socket_config =
             SocketConfig({socket_connections}, socket_mem_config, aggregator_mesh_id, local_mesh_id);
         auto backward_socket = MeshSocket(mesh_device, backward_socket_config);
-        for (int i = 0; i < num_iterations; i++) {
+        for (uint32_t i = 0; i < num_iterations; i++) {
             test_socket_send_recv(mesh_device, forward_socket, data_size, socket_page_size);
             test_socket_send_recv(mesh_device, backward_socket, data_size, socket_page_size);
         }
 
-        for (int i = 0; i < num_iterations; i++) {
+        for (uint32_t i = 0; i < num_iterations; i++) {
             test_socket_send_recv(mesh_device, forward_socket, data_size, socket_page_size);
         }
-        for (int i = 0; i < num_iterations; i++) {
+        for (uint32_t i = 0; i < num_iterations; i++) {
             test_socket_send_recv(mesh_device, backward_socket, data_size, socket_page_size);
         }
     }
