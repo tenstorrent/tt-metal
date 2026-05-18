@@ -100,11 +100,11 @@ def create_cicd_json_for_data_analysis(
         reset_data = github_job_id_to_smi_resets.get((workflow_attempt, github_job_id))
 
         if reset_data:
-            for smi_reset in reset_data:
-                smi_reset = dict(smi_reset)
-                smi_reset["github_job_id"] = github_job_id
-                smi_reset["workflow_attempt"] = workflow_attempt
-                tt_smi_resets.append(TtSmiReset(**smi_reset))
+            for tt_smi_reset_attempt in reset_data:
+                tt_smi_reset_attempt = dict(tt_smi_reset_attempt)
+                tt_smi_reset_attempt["github_job_id"] = github_job_id
+                tt_smi_reset_attempt["workflow_attempt"] = workflow_attempt
+                tt_smi_resets.append(TtSmiReset(**tt_smi_reset_attempt))
 
         job = pydantic_models.Job(
             **raw_job,
@@ -122,11 +122,11 @@ def create_cicd_json_for_data_analysis(
     for (attempt_num, job_id), reset_entries in github_job_id_to_smi_resets.items():
         if attempt_num == workflow_attempt:
             continue  # Already handled in the job loop above
-        for smi_reset in reset_entries:
-            smi_reset = dict(smi_reset)
-            smi_reset["github_job_id"] = job_id
-            smi_reset["workflow_attempt"] = attempt_num
-            tt_smi_resets.append(TtSmiReset(**smi_reset))
+        for tt_smi_reset_attempt in reset_entries:
+            tt_smi_reset_attempt = dict(tt_smi_reset_attempt)
+            tt_smi_reset_attempt["github_job_id"] = job_id
+            tt_smi_reset_attempt["workflow_attempt"] = attempt_num
+            tt_smi_resets.append(TtSmiReset(**tt_smi_reset_attempt))
 
     pipeline = pydantic_models.Pipeline(
         **raw_pipeline,
