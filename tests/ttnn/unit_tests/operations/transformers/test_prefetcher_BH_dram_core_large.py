@@ -5,19 +5,24 @@
 """Parameterized end-to-end matmul tests for the DRAM-core prefetcher path, modeled after
 test_prefetcher_BH (single Blackhole, simplified single-rank).
 
+Topology: 8 DRAM banks * 1 receiver/bank -> ring of 8 (full Blackhole DRAM-channel count).
+
 Each parameterized case:
 - Builds a fresh DramSenderGlobalCircularBuffer for one matmul.
 - Pushes the weight via ttnn.dram_prefetcher(run_on_dram_cores=True).
 - Runs ttnn.linear with the matching dram_sender_global_cb.
 - PCC against torch.matmul.
 
+Shape constraint: K_tiles_per_shard must be >= ring_size, otherwise the matmul's gather_in0
+path pads K up to ring_size * TILE and waits for `Kt_pad/in0_block_w` GCB pages while the
+DRISC pushes only the real K-tile count -> deadlock.
+
 Known prototype limits (each is a follow-up):
 - Multi-tensor or multi-layer in a single dram_prefetcher call leaves the DRISC cores in reset
   state (tt-triage: "Core is in reset"); root cause not yet identified. We work around by
   running one (prefetcher, matmul) pair per test case.
-- > 2 DRAM banks reproducibly hangs all 8 DRISC kernels in reset on launch; cap is 2 banks.
-- > 2 receivers/bank produces wrong values (gather_in0 ring traversal doesn't match the
-  (bank, recv_in_bank) layout we use here). Cap is 2 receivers/bank.
+- > 1 receiver/bank with the (bank, recv_in_bank) layout produces wrong values (gather_in0
+  ring traversal doesn't match this layout). Until that's fixed, recv_per_bank = 1.
 - in0_block_w_tiles is hard-coded to 1 in the program factory.
 """
 
@@ -45,15 +50,18 @@ def _round_up(n, m):
 @pytest.mark.skipif(
     not _dram_programmable_enabled(), reason="TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES not set"
 )
+# K_tiles_per_shard must be >= ring_size; otherwise the matmul pads K up to a multiple of
+# ring_size*TILE and waits for `Kt_pad/in0_block_w` GCB pages, while the DRISC pushes only
+# the real K_tile count.
 @pytest.mark.parametrize(
     "name,k_tiles_per_shard,n_tiles_per_receiver",
     [
         # name             K_tiles_per_shard   N_tiles_per_receiver
-        ("qkv_small", 4, 1),  # K=128, N=128
-        ("qkv_med", 16, 1),  # K=512, N=128
-        ("qkv_large", 32, 1),  # K=1024, N=128
-        ("ff_wide", 4, 2),  # K=128, N=256
-        ("ff_widest", 8, 4),  # K=256, N=512
+        ("qkv_small", 8, 1),  # K=256, N=8*32  (ring=8: 1 tile per K per recv)
+        ("qkv_med", 16, 1),  # K=512, N=8*32
+        ("qkv_large", 32, 1),  # K=1024, N=8*32
+        ("ff_wide", 8, 2),  # K=256, N=8*2*32
+        ("ff_widest", 16, 4),  # K=512, N=8*4*32
     ],
 )
 def test_dram_core_prefetcher_BH_param(device, name, k_tiles_per_shard, n_tiles_per_receiver):
@@ -63,10 +71,10 @@ def test_dram_core_prefetcher_BH_param(device, name, k_tiles_per_shard, n_tiles_
 
     ttnn.device.enable_asynchronous_slow_dispatch(device)
 
-    # ---- Topology: 2 DRAM banks * 2 receivers/bank → ring of 4 (proven-working subset) ----
-    num_dram_banks = 2
-    num_receivers_per_bank = 2
-    ring_size = num_dram_banks * num_receivers_per_bank  # 4
+    # ---- Topology: 8 DRAM banks * 1 receiver/bank → ring of 8 ----
+    num_dram_banks = 8
+    num_receivers_per_bank = 1
+    ring_size = num_dram_banks * num_receivers_per_bank  # 8
 
     receiver_core_range_set = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_size - 1, 0))}
