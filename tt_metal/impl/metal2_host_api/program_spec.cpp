@@ -943,9 +943,12 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             "a RemoteDataflowBufferSpec.",
             dfb.unique_id);
 
-        // Self-loop interplay with multi-binding: a kernel that self-loops a DFB (appears in
-        // both producers and consumers) must be the only binding on each side. Mixing self-loop
-        // with non-self-loop bindings on the same DFB is not currently supported.
+        // Self-loop interplay with multi-binding: when ANY kernel self-loops a DFB (appears in
+        // both producers and consumers), the producer set must equal the consumer set as sets
+        // of KernelSpec*. This permits the natural pattern of multiple same-source KernelSpecs
+        // each self-looping the DFB on their disjoint node ranges, while rejecting the case
+        // where a self-looping kernel shares the DFB with an unrelated kernel (which would
+        // make per-instance tensix-scope semantics ambiguous).
         const bool has_self_loop = [&] {
             for (const auto& p : endpoints.producers) {
                 for (const auto& c : endpoints.consumers) {
@@ -957,12 +960,45 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             return false;
         }();
         if (has_self_loop) {
+            std::unordered_set<const KernelSpec*> producer_kernels;
+            std::unordered_set<const KernelSpec*> consumer_kernels;
+            for (const auto& p : endpoints.producers) {
+                producer_kernels.insert(p.kernel);
+            }
+            for (const auto& c : endpoints.consumers) {
+                consumer_kernels.insert(c.kernel);
+            }
             TT_FATAL(
-                endpoints.producers.size() == 1 && endpoints.consumers.size() == 1,
-                "DFB '{}' is self-looped (bound by a kernel as both producer and consumer) and also "
-                "has additional bindings. Self-loop is currently restricted to a single producer "
-                "KernelSpec and a single consumer KernelSpec.",
+                producer_kernels == consumer_kernels,
+                "DFB '{}' is self-looped (some kernel appears as both producer and consumer), but "
+                "the set of producer KernelSpecs differs from the set of consumer KernelSpecs. "
+                "When a DFB is self-looped, every same-side binding must come from a self-loop "
+                "participant (i.e. a kernel that appears on both sides).",
                 dfb.unique_id);
+
+            // All self-loop participants must agree on the tensix-scope for this DFB —
+            // MakeDataflowBufferConfig writes a single tensix_scope into the DFB config, and the
+            // self-loop participants alternate per node, so a disagreement is unresolvable.
+            auto scope_for_kernel = [&](const KernelSpec* k) {
+                for (const auto& entry : k->dfb_compute_self_loop_scopes) {
+                    if (entry.dfb_spec_name == dfb.unique_id) {
+                        return entry.scope;
+                    }
+                }
+                return KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA;
+            };
+            const auto* first_kernel = *producer_kernels.begin();
+            const auto first_scope = scope_for_kernel(first_kernel);
+            for (const KernelSpec* k : producer_kernels) {
+                TT_FATAL(
+                    scope_for_kernel(k) == first_scope,
+                    "DFB '{}' is self-looped; all self-loop participants must agree on "
+                    "DFBComputeSelfLoopScope::Scope, but kernel '{}' specifies a different scope "
+                    "than kernel '{}'.",
+                    dfb.unique_id,
+                    k->unique_id,
+                    first_kernel->unique_id);
+            }
         }
     }
 
@@ -1696,15 +1732,28 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     auto consumer_access_pattern = to_hw_access_pattern(consumer_binding->access_pattern);
 
     // For a compute kernel that self-loops a DFB (binds it as both producer and consumer), the
-    // lower-layer DFB API requires an explicit scope. Self-loop is restricted to
-    // single-producer-single-consumer (validated upstream), so the producer/consumer check is
-    // pointer equality on the representative records.
+    // lower-layer DFB API requires an explicit scope. Self-loop is detected as any overlap
+    // between the producer and consumer kernel sets — under the multi-binding regime, the
+    // first-record pointers may differ even when the kernel sets are identical (the overlap is
+    // what matters, not vector ordering). Upstream validation guarantees producer set ==
+    // consumer set whenever any overlap exists, and that all self-loop participants agree on
+    // the tensix scope; reading from the first producer is therefore safe and representative.
     // The user can declare scope via KernelSpec::dfb_compute_self_loop_scopes:
     //  - absence of an entry means we infer INTRA (the common case)
     //  - user-specified INTRA is also fine
     //  - user-specified INTER is not currently supported. This will have already failed validation.
+    const bool is_self_loop = [&] {
+        for (const auto& p : dfb_endpoint_info.producers) {
+            for (const auto& c : dfb_endpoint_info.consumers) {
+                if (p.kernel == c.kernel) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }();
     std::optional<experimental::dfb::TensixScope> tensix_scope;
-    if (producer == consumer && producer->is_compute_kernel()) {
+    if (is_self_loop && producer->is_compute_kernel()) {
         auto user_scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA;
         for (const auto& entry : producer->dfb_compute_self_loop_scopes) {
             if (entry.dfb_spec_name == dfb_spec->unique_id) {

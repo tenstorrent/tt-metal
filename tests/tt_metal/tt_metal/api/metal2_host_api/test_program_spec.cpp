@@ -564,21 +564,25 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingNumThreadsMismatchFails) {
             ::testing::HasSubstr("DFB 'dfb' has multiple CONSUMER KernelSpecs with mismatched num_threads")));
 }
 
-TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithMultiBindingFails) {
+TEST_F(ProgramSpecTestQuasar, DFBMultiBindingSelfLoopWithMatchingSidesSucceeds) {
     NodeCoord node0{0, 0};
     NodeCoord node1{1, 0};
 
     ProgramSpec spec;
     spec.program_id = "test_program";
 
-    // Two self-looping kernels on disjoint WUs. Each binds "dfb" as both producer and consumer.
-    // Coverage matches (both unions = {wu_g1, wu_g2}); per-role uniformity passes; but the
-    // self-loop multi-binding rule rejects this case.
+    // Two self-looping kernels on disjoint WUs. Each binds "dfb" as both producer and
+    // consumer; producer set equals consumer set = {self_loop_1, self_loop_2}. At each node,
+    // exactly one kernel runs and self-loops the DFB — the local invariant holds.
     auto self_loop_1 = MakeMinimalComputeKernel("self_loop_1");
     auto self_loop_2 = MakeMinimalComputeKernel("self_loop_2");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    // INTRA-tensix self-loop DFBs require implicit_sync disabled (a lower-layer constraint
+    // enforced in dataflow_buffer.cpp). This matches the pattern real self-loop DFBs use
+    // (e.g. ACC_DFB / INEG_DFB in the reduction op factory's negate path).
+    dfb.disable_implicit_sync = true;
 
     BindDFBToKernel(self_loop_1, "dfb", "p", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(self_loop_1, "dfb", "c", KernelSpec::DFBEndpointType::CONSUMER);
@@ -592,10 +596,51 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithMultiBindingFails) {
         MakeMinimalWorkUnit("wu_g2", node1, {"self_loop_2"}),
     };
 
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    // self_loop_1 binds "dfb" as BOTH producer and consumer (self-loop). On the other WU,
+    // an unrelated producer-only kernel is bound, while extra_consumer covers the consume side.
+    // Producer set = {self_loop_1, extra_producer}; consumer set = {self_loop_1, extra_consumer}.
+    // The sets are not equal — the self-loop multi-binding rule rejects this mix.
+    auto self_loop_1 = MakeMinimalComputeKernel("self_loop_1");
+    auto extra_producer = MakeMinimalDMKernel("extra_producer");
+    auto extra_consumer = MakeMinimalComputeKernel("extra_consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(self_loop_1, "dfb", "p", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(self_loop_1, "dfb", "c", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(extra_producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(extra_consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {self_loop_1, extra_producer, extra_consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"self_loop_1"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"extra_producer", "extra_consumer"}),
+    };
+
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' is self-looped")));
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB 'dfb' is self-looped (some kernel appears as both producer and consumer), but "
+                                 "the set of producer KernelSpecs differs from the set of consumer KernelSpecs")));
 }
+
+// NOTE: A "scope-disagreement" test case is not currently expressible: the only valid scope
+// value today is INTRA (INTER is rejected upstream as not-yet-supported), so two
+// self-loop participants can't meaningfully disagree on scope. When INTER support lands,
+// add a positive scope-disagreement test that exercises the
+// "must agree on DFBComputeSelfLoopScope::Scope" TT_FATAL.
 
 // ============================================================================
 // SECTION 2: Semantic Validation Tests (ValidateProgramSpec)
