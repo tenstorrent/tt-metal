@@ -332,11 +332,11 @@ class TtPrefillTransformer(LightweightModule):
 
         logits, (device_id, token_offset) = self.lm_head(h, global_token_id)
 
-        logits_host = self.lm_head.logit_to_host(logits)
+        logits_host = self.lm_head.logit_to_host(logits, device_id)
         assert (
             logits_host.shape[-1] == self.lm_head.vocab_size
         ), f"Expected full vocab {self.lm_head.vocab_size}, got {logits_host.shape[-1]} — TP concat may be broken"
-        first_token_logits = self.lm_head.select_first_token(logits_host, device_id, token_offset)
+        first_token_logits = self.lm_head.select_first_token(logits_host, token_offset)
 
         logger.debug(f"[TtPrefillTransformer._extract] {logits.shape}")
         logger.debug(f"[TtPrefillTransformer._extract] {logits_host.shape}")

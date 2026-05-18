@@ -180,7 +180,7 @@ def test_lm_head(
 
     logger.debug("Running ttnn forward pass")
     global_token_id = batch_seq_len * dispatch_group_size - 1
-    tt_output, token_offset = tt_model(tt_input, global_token_id=global_token_id)
+    tt_output, (device_id, token_offset) = tt_model(tt_input, global_token_id=global_token_id)
     logger.debug(f"TTNN output shape (sharded): {tt_output.shape}")
 
     # For now, we only run the full PCC check on input tensors with seq_len == TILE_SIZE to avoid slicing
@@ -190,20 +190,20 @@ def test_lm_head(
         logger.debug("run_full_pcc_check=False, skipping full PCC validation")
         return
 
-    # Convert and compare — use the production helper so column/row are handled correctly.
-    # Inline ConcatMesh2dToTensor(dims=(0, -1)) only works for column mode; in row mode
-    # the TP-replicated slices would be concat'd on vocab and produce a 4× too-wide tensor.
+    # Convert and compare
     logger.debug("Converting TTNN output to torch for comparison")
-    tt_output_torch = tt_model.logit_to_host(tt_output)
+    tt_output_torch = tt_model.logit_to_host(tt_output, device_id)
     logger.debug(f"TTNN output converted to torch: {tt_output_torch.shape}")
     assert (
         tt_output_torch.shape[-1] == vocab_size
     ), f"Expected full vocab on last dim ({vocab_size}), got {tt_output_torch.shape[-1]}"
 
     logger.debug("Comparing outputs with PCC")
+    expected = torch_output[device_id]
+    actual = tt_output_torch.squeeze(0)
     pcc_passed, pcc_message = assert_with_pcc(
-        torch_output.to(torch.float32),
-        tt_output_torch.to(torch.float32),
+        expected.to(torch.float32),
+        actual.to(torch.float32),
         pcc=0.9999,
     )
 

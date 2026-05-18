@@ -406,25 +406,28 @@ class TtLMHead(LightweightModule):
         # The target token is on SP rank device_id at row token_offset within the tile.
         return output, (device_id, token_offset)
 
-    def logit_to_host(self, tt_logit: ttnn.Tensor) -> torch.Tensor:
-        ttnn.synchronize_device(self.mesh_device)  # ensure all computation is done before copying to host
-        if self.mode == "column":
-            # SP fracture on torch dim 0, TP concat on vocab (-1) to reassemble full vocab.
-            composer = ttnn.create_mesh_composer(
-                self.mesh_device,
-                config=ttnn.MeshComposerConfig(
-                    dims=(0, -1),
-                    mesh_shape_override=ttnn.MeshShape(self.mesh_device.shape[0], self.mesh_device.shape[1]),
-                ),
-            )
-            return ttnn.to_torch(tt_logit, mesh_composer=composer).to(torch.bfloat16)
+    def logit_to_host(self, tt_logit: ttnn.Tensor, device_id: int) -> torch.Tensor:
+        """Pull only the SP rank that holds the target token's logits.
 
-        # Row mode: output is TP-replicated by the all-reduce, so the 4 TP slices
-        # of each SP row are identical
+        - row mode: TP slices are replicated, so 1 DMA suffices (the full vocab
+                    sits on every TP rank).
+        - column mode: TP slices are vocab/tp shards, so 4 DMAs are issued and
+                       concatenated on host to assemble the full vocab.
+        """
+        ttnn.synchronize_device(self.mesh_device)
+        tp = self.mesh_device.shape[1]
         shards = ttnn.get_device_tensors(tt_logit)
-        tp0_handles = [shards[sp_i * self.dp_factor + 0] for sp_i in range(self.sp_factor)]
-        host_pieces = [ttnn.to_torch(h).to(torch.bfloat16) for h in tp0_handles]
-        return torch.stack([p.squeeze(0) for p in host_pieces], dim=0)
+        # Mesh row-major flat index: sp_i * tp + tp_j
+        base_idx = device_id * tp
 
-    def select_first_token(self, logit_host: torch.Tensor, device_id: int, token_offset: int) -> torch.Tensor:
-        return logit_host[device_id, 0, token_offset, :].unsqueeze(0).unsqueeze(0)
+        if self.mode == "row":
+            # All TP slices on this SP row are identical (TP-replicated by
+            # all-reduce). Take TP=0.
+            return ttnn.to_torch(shards[base_idx + 0]).to(torch.bfloat16)
+
+        # column: 4 TP slices, each holds vocab/tp; concat on vocab dim to assemble the full vocab on host.
+        host_pieces = [ttnn.to_torch(shards[base_idx + j]).to(torch.bfloat16) for j in range(tp)]
+        return torch.cat(host_pieces, dim=-1)
+
+    def select_first_token(self, logit_host: torch.Tensor, token_offset: int) -> torch.Tensor:
+        return logit_host[..., token_offset, :].unsqueeze(0).unsqueeze(0)
