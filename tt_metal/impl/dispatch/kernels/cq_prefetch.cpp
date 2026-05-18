@@ -577,7 +577,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
     // constant-expressions, and sadly the compiler doesn't convert the
     // dynamic init to a static init. The assembler permits multiple .equ
     // of the same symbol.
-    asm(".equ prefetch_q_base_, %0" ::"n"(prefetch_q_base));
+    asm(".equ prefetch_q_base_, %0" ::"n"(l1_uncached_addr(prefetch_q_base)));
     extern volatile tt_l1_ptr prefetch_q_entry_type prefetch_q_base_[];  // See the asm above
     static constinit volatile tt_l1_ptr prefetch_q_entry_type* prefetch_q_rd_ptr = prefetch_q_base_;
     constexpr uint32_t prefetch_q_msb_mask = 1u << (sizeof(prefetch_q_entry_type) * CHAR_BIT - 1U);
