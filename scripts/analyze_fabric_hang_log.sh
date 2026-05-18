@@ -1435,6 +1435,20 @@ GAP_B_FIRES=$(grep -cE 'FIX PD \(GAP-B\).*MMIO device' "$CLEAN" 2>/dev/null; :)
 # Log: "GAP-C: Fabric degraded on non-MMIO device"
 GAP_C_FIRES=$(grep -cE 'GAP-C.*Fabric degraded on non-MMIO device' "$CLEAN" 2>/dev/null; :)
 
+# GAP-R5 (#42429): configure_fabric total elapsed timer.
+# Log: "configure_fabric: Device N complete — total elapsed NNNms (session_id=0xNNNNNNNN)"
+GAP_R5_FIRES=$(grep -cE 'configure_fabric: Device [0-9]+ complete.*total elapsed' "$CLEAN" 2>/dev/null; :)
+GAP_R5_MAX_MS=$(grep -oP 'configure_fabric: Device [0-9]+ complete.*total elapsed \K[0-9]+' "$CLEAN" 2>/dev/null | sort -rn | head -1)
+# GAP-R6 (#42429): quiesce_and_restart_fabric_workers total elapsed timer.
+# Log: "quiesce_and_restart_fabric_workers: Device N SUMMARY — ... total_elapsed=NNNms"
+# Also early-return logs with "elapsed NNNms"
+GAP_R6_FIRES=$(grep -cE 'quiesce_and_restart_fabric_workers: Device [0-9]+ (SUMMARY.*total_elapsed=|early-return.*elapsed)' "$CLEAN" 2>/dev/null; :)
+GAP_R6_MAX_MS=$(grep -oP 'quiesce_and_restart_fabric_workers:.*total_elapsed=\K[0-9]+' "$CLEAN" 2>/dev/null | sort -rn | head -1)
+# GAP-R8 (#42429): Phase 2.5 force-reset summary — force_reset_count/active_channels.
+# Log: "Phase 2.5 summary: force_reset_count=N/M active_channels"
+GAP_R8_FIRES=$(grep -cE 'Phase 2\.5 summary: force_reset_count=' "$CLEAN" 2>/dev/null; :)
+GAP_R8_ANY_FORCED=$(grep -oP 'force_reset_count=\K[0-9]+' "$CLEAN" 2>/dev/null | awk '$1>0{c++}END{print c+0}')
+
 if [[ "${HAS_DISPATCH_CASCADE:-0}" -gt 0 ]]; then
     DIAGNOSIS="500ms dispatch cascade (FIX PA/PB/PC pattern): ${HAS_DISPATCH_CASCADE} Timeout(500ms)
 events on ETH dispatch cores. Root cause: fw_launch_addr not cleared after fabric teardown
@@ -2174,6 +2188,12 @@ echo "  FIX_XX_FIRES:              ${FIX_XX_FIRES:-0}  (deassert guard — preve
 echo "  GAP_A_FIRES:               ${GAP_A_FIRES:-0}  (extended FIX Z guard — read_completion_queue_event rejected degraded non-MMIO)"
 echo "  GAP_B_FIRES:               ${GAP_B_FIRES:-0}  (FIX PD catch logged MMIO PCIe write failure — was silently swallowed)"
 echo "  GAP_C_FIRES:               ${GAP_C_FIRES:-0}  (copy_buffer_data relay guard — buffer read rejected on degraded non-MMIO)"
+echo "  GAP_R5_FIRES:              ${GAP_R5_FIRES:-0}  (configure_fabric elapsed logged)"
+echo "  GAP_R5_MAX_MS:             ${GAP_R5_MAX_MS:-n/a}ms  (longest configure_fabric)"
+echo "  GAP_R6_FIRES:              ${GAP_R6_FIRES:-0}  (quiesce_and_restart elapsed logged)"
+echo "  GAP_R6_MAX_MS:             ${GAP_R6_MAX_MS:-n/a}ms  (longest quiesce_and_restart)"
+echo "  GAP_R8_FIRES:              ${GAP_R8_FIRES:-0}  (Phase 2.5 force-reset summaries)"
+echo "  GAP_R8_ANY_FORCED:         ${GAP_R8_ANY_FORCED:-0}  (summaries with force_reset_count>0)"
 echo "  FIX_GH_FIRES:              ${FIX_GH_FIRES:-0}  (fw_launch_addr restored after FIX EG zero — MMIO chan=8)"
 echo "  FIX_EG_FIRES:              ${FIX_EG_FIRES:-0}  (fw_launch_addr zeroed while ERISC0 halted — stale launch prevention)"
 echo "  FIX_MN_PRE_ZERO:           ${FIX_MN_PRE_ZERO:-0}  (FIX EG pre-zero snapshots captured)"
@@ -2556,6 +2576,22 @@ if [ "${GAP_C_FIRES:-0}" -gt 0 ]; then
     echo "  => [GAP-C] copy_buffer_data_to_user_space relay guard fired (${GAP_C_FIRES} occurrence(s))."
     echo "     Buffer read rejected for non-MMIO device with degraded fabric."
     echo "     Without GAP-C: UMD relay timeout (~5s) hangs the buffer read path."
+fi
+if [ "${GAP_R5_FIRES:-0}" -gt 0 ]; then
+    echo "  => [GAP-R5] configure_fabric elapsed: ${GAP_R5_FIRES} completions, max ${GAP_R5_MAX_MS:-n/a}ms."
+    if [ "${GAP_R5_MAX_MS:-0}" -gt 30000 ]; then
+        echo "     *** configure_fabric took >30s — investigate FW_READY or handshake bottleneck ***"
+    fi
+fi
+if [ "${GAP_R6_FIRES:-0}" -gt 0 ]; then
+    echo "  => [GAP-R6] quiesce_and_restart elapsed: ${GAP_R6_FIRES} completions, max ${GAP_R6_MAX_MS:-n/a}ms."
+    if [ "${GAP_R6_MAX_MS:-0}" -gt 60000 ]; then
+        echo "     *** quiesce_and_restart took >60s — investigate Phase 2.5 timeouts or relay path ***"
+    fi
+fi
+if [ "${GAP_R8_ANY_FORCED:-0}" -gt 0 ]; then
+    echo "  => [GAP-R8] Phase 2.5 force-resets detected in ${GAP_R8_ANY_FORCED} device(s)."
+    echo "     ERISCs failed to self-terminate within 2000ms budget. Check if this is routine or regression."
 fi
 
 # ─── FIX TF (test_tt_fabric degraded skip) ───
