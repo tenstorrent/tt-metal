@@ -26,10 +26,10 @@ inline void llk_math_eltwise_binary_sfpu_binary_bcast_init() {
 template <ckernel::BinaryOp BINOP, ckernel::BroadcastType BCAST_DIM>
 inline void llk_math_eltwise_binary_sfpu_binary_bcast(
     uint32_t dst_index_data, uint32_t dst_index_bcast, uint32_t dst_index_out) {
-    _llk_math_eltwise_binary_sfpu_start_(0);
+    _llk_math_eltwise_sfpu_start_(0);
     ckernel::sfpu::_calculate_sfpu_binary_bcast_full_tile_<BINOP, BCAST_DIM>(
         dst_index_data, dst_index_bcast, dst_index_out);
-    _llk_math_eltwise_binary_sfpu_done_();
+    _llk_math_eltwise_sfpu_done_();
 }
 
 // ---------------------------------------------------------------------------
