@@ -608,15 +608,41 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("kv_cache: not pulled (no KV-cache validation, no KV-cache dump)")
     # Per-validation-gate summary so the CLI tail makes it obvious which gates
     # actually ran and (where applicable) what threshold they used.
+    hidden_states_cross_slot_status = (
+        "disabled"
+        if not config.validate_hidden_states_cross_slot
+        else (
+            "enabled"
+            if config.num_replication_slots > 1
+            else "skipped/no-op (num_replication_slots=1)"
+        )
+    )
+    hidden_states_cross_trace_status = (
+        f"enabled (threshold={config.pcc_threshold})"
+        if config.validate_hidden_states_cross_trace
+        else "disabled"
+    )
+    kv_cache_cross_slot_status = (
+        "disabled"
+        if not config.validate_kv_cache_cross_slot
+        else (
+            "enabled"
+            if config.num_replication_slots > 1
+            else "skipped/no-op (num_replication_slots=1)"
+        )
+    )
+    kv_cache_cross_trace_status = (
+        f"enabled (threshold={config.kv_cache_pcc_threshold})"
+        if config.validate_kv_cache_cross_trace
+        else "disabled"
+    )
     logger.info(
         f"validation gates: "
-        f"metadata_roundtrip={config.validate_metadata_roundtrip}, "
-        f"hidden_states_cross_slot={config.validate_hidden_states_cross_slot}, "
-        f"hidden_states_cross_trace={config.validate_hidden_states_cross_trace}"
-        f"{f' (threshold={config.pcc_threshold})' if config.validate_hidden_states_cross_trace else ''}, "
-        f"kv_cache_cross_slot={config.validate_kv_cache_cross_slot}, "
-        f"kv_cache_cross_trace={config.validate_kv_cache_cross_trace}"
-        f"{f' (threshold={config.kv_cache_pcc_threshold})' if config.validate_kv_cache_cross_trace else ''}"
+        f"metadata_roundtrip={'enabled' if config.validate_metadata_roundtrip else 'disabled'}, "
+        f"hidden_states_cross_slot={hidden_states_cross_slot_status}, "
+        f"hidden_states_cross_trace={hidden_states_cross_trace_status}, "
+        f"kv_cache_cross_slot={kv_cache_cross_slot_status}, "
+        f"kv_cache_cross_trace={kv_cache_cross_trace_status}"
     )
     if result.kv_cache_references is not None:
         logger.info(

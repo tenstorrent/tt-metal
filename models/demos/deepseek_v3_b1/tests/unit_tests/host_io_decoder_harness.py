@@ -265,7 +265,7 @@ class HostIoDecoderSweepConfig:
     validate_kv_cache_cross_slot: bool = True
     validate_hidden_states_cross_trace: bool = False
     pcc_threshold: float = 0.97  # only consulted when validate_hidden_states_cross_trace is True
-    # New: per-(prompt, slot) PCC of the device KV-cache slice against a
+    # Per-(prompt, slot) PCC of the device KV-cache slice against a
     # ``kv_cache_reference_{prompt}.pt`` sibling file in ``hidden_states_dir``.
     # Independent of cross-slot equality; both can be enabled together.
     validate_kv_cache_cross_trace: bool = False
