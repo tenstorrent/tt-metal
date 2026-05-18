@@ -821,10 +821,13 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
         atol = 0.002
         rtol = 0.003
         pcc = 0.9999
+        frobenius_threshold = 0.001
     else:
         atol = 0.01
         rtol = 0.01
         pcc = 0.999
+        frobenius_threshold = 0.004
+
     # Run every check independently and collect results, so a single test report identifies
     # all failing comparisons instead of stopping at the first one. Each entry is
     # (label, expected, actual). Labels describe what the comparison covers.
@@ -847,7 +850,13 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
     failures = []
     for label, expected, actual in checks:
         passed, message = assert_numeric_metrics(
-            expected, actual, rtol=rtol, atol=atol, pcc_threshold=pcc, assert_on_fail=False
+            expected,
+            actual,
+            rtol=rtol,
+            atol=atol,
+            pcc_threshold=pcc,
+            frobenius_threshold=frobenius_threshold,
+            assert_on_fail=False,
         )
         if not passed:
             failures.append(f"[{label}] {message}")

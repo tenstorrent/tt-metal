@@ -221,13 +221,23 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
         "compute kernel config; otherwise precision is silently lost in the unpacker format "
         "conversion.");
 
-    // For Float32 input with fp32_dest_acc_en, force unpack-to-dest in fp32 mode so the
-    // unpacker writes full fp32 to DEST instead of routing through SrcA which would downcast
-    // to TF32 (10 mantissa bits). Without this, the Welford recurrence sees TF32-truncated
-    // inputs and catastrophically loses precision when |mean| >> std.
+    // For Float32 input with fp32_dest_acc_en in the non-FUSE path, force unpack-to-dest in
+    // fp32 mode on c_0 so the unpacker writes full fp32 to DEST instead of routing through
+    // SrcA (which would downcast to TF32, ~10 mantissa bits). Without this the Welford
+    // recurrence sees TF32-truncated inputs and catastrophically loses precision when
+    // |mean| >> std. The non-FUSE kernel branch re-establishes Welford SFPU state via
+    // welford_reinit / sfpu_init after each transpose_wh_tile, so it tolerates the transpose
+    // taking the llk_math_transpose_dest path that this mode forces.
+    //
+    // The FUSE_PRE_ADD path is different. c_0 is consumed by add_tiles which reads via
+    // SrcA/SrcB, and per UnpackToDestMode's contract setting UnpackToDestFp32 on a CB makes
+    // it incompatible with SrcA/B unpacking. Moving the mode to the post-add CB (c_3)
+    // instead would not help either: add_tiles already truncated the inputs to TF32 on the
+    // way into c_3, so preserving fp32 precision through the subsequent transpose has
+    // nothing left to preserve. Leave all CBs in Default mode when fusing.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en) {
+    if (in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en && !fuse_pre_add) {
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
@@ -238,6 +248,17 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     // anyway, so unpacking to fp32 would not be useful.
     if (out_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en) {
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_1)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
+    // Welford spill CBs (c_4 = running mean, c_6 = running M2) hold the fp32 accumulator
+    // between block iterations and are reloaded into DEST via copy_tile. In Default
+    // unpack-to-dest mode that round-trip routes through SrcA, which truncates fp32 to
+    // TF32 (10 mantissa bits) on every block iteration and accumulates error in the
+    // running statistics. Force fp32 unpack on these CBs so the accumulator survives the
+    // spill cycle.
+    if (fuse_pre_add && fp32_dest_acc_en) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_4)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_6)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     // Compute kernel
