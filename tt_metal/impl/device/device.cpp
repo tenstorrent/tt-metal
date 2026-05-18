@@ -2404,11 +2404,25 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     fw_ready_elapsed_qs += kFwReadyPollMs_qs89;
                 }
                 if (!fw_ready_ok_qs) {
+                    // FIX QQ-V (#42429): Read actual fw_ready value at timeout for diagnostics —
+                    // mirrors FIX QQ on the FIX SA-A path.  Without this, post-mortem can't
+                    // distinguish dormant (0xD0DEAD09) vs stuck-in-ROM (0x00000000) vs PCIe fail.
+                    uint32_t fw_ready_actual_qs = 0;
+                    try {
+                        std::vector<uint32_t> rb_timeout_qs(1, 0);
+                        cluster_qs89.read_core(rb_timeout_qs, sizeof(uint32_t), core_loc_qs,
+                            static_cast<uint64_t>(fw_ready_addr_qs89));
+                        fw_ready_actual_qs = rb_timeout_qs[0];
+                    } catch (...) {
+                        fw_ready_actual_qs = 0xDEADDEAD;  // PCIe read failed
+                    }
                     log_warning(
                         tt::LogMetal,
                         "FIX V11-QS89 (#42429): Device {} chan={} ETH logical ({},{}) ERISC did not "
-                        "signal FW_READY within {}ms — marking dead, skipping S7/S8/S9.",
-                        this->id(), eth_chan_qs, lc_qs.x, lc_qs.y, FW_READY_TIMEOUT_MS);
+                        "signal FW_READY within {}ms — actual fw_ready=0x{:08X} (expected 0x{:08X}). "
+                        "Marking dead, skipping S7/S8/S9. FIX QQ-V (#42429): timeout snapshot.",
+                        this->id(), eth_chan_qs, lc_qs.x, lc_qs.y, FW_READY_TIMEOUT_MS,
+                        fw_ready_actual_qs, static_cast<uint32_t>(FW_READY_VALUE));
                     pending_quiesce_newly_dead_eth_chans_.insert(eth_chan_qs);
                     continue;
                 }
@@ -3031,11 +3045,23 @@ void Device::launch_eth_cores_for_quiesce() {
                     fw_ready_elapsed_dqs += kFwReadyPollMs_dqs89;
                 }
                 if (!fw_ready_ok_dqs) {
+                    // FIX QQ-V (#42429): Read actual fw_ready value at timeout (deferred path).
+                    uint32_t fw_ready_actual_dqs = 0;
+                    try {
+                        std::vector<uint32_t> rb_timeout_dqs(1, 0);
+                        cluster_dqs89.read_core(rb_timeout_dqs, sizeof(uint32_t), core_loc_dqs,
+                            static_cast<uint64_t>(fw_ready_addr_dqs89));
+                        fw_ready_actual_dqs = rb_timeout_dqs[0];
+                    } catch (...) {
+                        fw_ready_actual_dqs = 0xDEADDEAD;  // PCIe read failed
+                    }
                     log_warning(
                         tt::LogMetal,
                         "FIX V11-QS89 (#42429): Device {} chan={} ETH logical ({},{}) ERISC did not "
-                        "signal FW_READY within {}ms — marking dead (deferred path).",
-                        this->id(), eth_chan_dqs, lc_dqs.x, lc_dqs.y, FW_READY_TIMEOUT_MS);
+                        "signal FW_READY within {}ms — actual fw_ready=0x{:08X} (expected 0x{:08X}). "
+                        "Marking dead (deferred path). FIX QQ-V (#42429): timeout snapshot.",
+                        this->id(), eth_chan_dqs, lc_dqs.x, lc_dqs.y, FW_READY_TIMEOUT_MS,
+                        fw_ready_actual_dqs, static_cast<uint32_t>(FW_READY_VALUE));
                     pending_quiesce_newly_dead_eth_chans_.insert(eth_chan_dqs);
                     continue;
                 }
