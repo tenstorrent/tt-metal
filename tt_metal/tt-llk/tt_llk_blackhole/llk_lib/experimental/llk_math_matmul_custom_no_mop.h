@@ -347,6 +347,24 @@ inline void _llk_math_matmul_uninit_no_mop_()
     // No state to restore - all states are transient or default
 }
 
+template <MathFidelity math_fidelity>
+inline void matmul_set_dst_write_addr_for_replay_no_mop(const std::uint32_t tile_index)
+{
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(tile_index);
+    if constexpr (math_fidelity == MathFidelity::HiFi4)
+    {
+        // Resolves a HiFi4 race with issuing REPLAY; address properly under tt-metal#44693.
+        TTI_NOP;
+        TTI_NOP;
+        TTI_NOP;
+        TTI_NOP;
+        TTI_NOP;
+        TTI_NOP;
+        TTI_NOP;
+        TTI_NOP;
+    }
+}
+
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_no_mop_(std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
 {
@@ -371,7 +389,7 @@ inline void _llk_math_matmul_no_mop_(std::uint32_t dst_index, const std::uint32_
     {
         for (std::uint32_t rut = 0; rut < rut_dim; rut++)
         {
-            math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + (reuse_a ? ct_dim * t + rut : t + rut * ct_dim));
+            matmul_set_dst_write_addr_for_replay_no_mop<math_fidelity>(dst_index + (reuse_a ? ct_dim * t + rut : t + rut * ct_dim));
 
             if constexpr (THROTTLE_LEVEL > 0)
             {
