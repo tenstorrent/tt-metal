@@ -21,20 +21,20 @@ from loguru import logger
 import ttnn
 from models.tt_dit.models.vae.vae_ltx import LTXVideoDecoder
 from models.tt_dit.pipelines.ltx.pipeline_ltx import compute_sigmas, euler_step
+from models.tt_dit.utils.test import line_params
 
 sys.path.insert(0, "LTX-2/packages/ltx-core/src")
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
+    "mesh_device, sp_axis, tp_axis, device_params",
     [
-        [(1, 1), 0, 1],
-        [(2, 4), 0, 1],
+        ((1, 1), 0, 1, {}),
+        ((2, 4), 0, 1, line_params),
     ],
     ids=["1x1sp0tp1", "2x4sp0tp1"],
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_e2e_audio_video(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
     """
     End-to-end AudioVideo generation test.

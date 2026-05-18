@@ -2,6 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+LTX transformer unit tests. Mesh / fabric / topology rows mirror
+``test_transformer_wan.py`` (Wan2_2) block parametrization: ``line_params`` /
+``ring_params``, ``num_links``, ``Topology.Linear`` vs ``Ring``, and ``is_fsdp``.
+
+Omitted vs Wan: ``2x2`` and ``4x32`` submesh cases (LTX coverage uses ``1x1``
+through ``4x8`` only).
+"""
+
 import sys
 
 import pytest
@@ -16,10 +25,21 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from models.tt_dit.utils.test import line_params, ring_params
 
 sys.path.insert(0, "LTX-2/packages/ltx-core/src")
 
 from models.tt_dit.models.transformers.ltx.ltx_transformer import LTXTransformerModel
+
+# Subset of Wan ``test_wan_transformer_block`` mesh rows + LTX ``1x1``.
+_LTX_TRANSFORMER_MESH_PARAMS = [
+    pytest.param((1, 1), 0, 1, 1, {}, ttnn.Topology.Linear, False, id="1x1sp0tp1"),
+    pytest.param((2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
+    pytest.param((2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
+    pytest.param((4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
+    pytest.param((4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"),
+    pytest.param((4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
+]
 
 
 def _make_parallel_config(mesh_device, sp_axis, tp_axis):
@@ -31,17 +51,18 @@ def _make_parallel_config(mesh_device, sp_axis, tp_axis):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
-    [
-        [(1, 1), 0, 1],
-        [(2, 4), 0, 1],
-        [(4, 8), 1, 0],
-    ],
-    ids=["1x1sp0tp1", "2x4sp0tp1", "4x8sp1tp0"],
-    indirect=["mesh_device"],
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    _LTX_TRANSFORMER_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-def test_ltx_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
+def test_ltx_transformer_block(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    topology: ttnn.Topology,
+    is_fsdp: bool,
+) -> None:
     """
     Test LTXTransformerBlock: compare TT vs LTX-2 PyTorch BasicAVTransformerBlock.
     """
@@ -66,9 +87,7 @@ def test_ltx_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
     torch_block.eval()
     torch_state = torch_block.state_dict()
 
-    # Create TT model
-    topology = ttnn.Topology.Ring if mesh_device.get_num_devices() > 8 else ttnn.Topology.Linear
-    ccl_manager = CCLManager(mesh_device, topology=topology)
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
 
     tt_block = LTXTransformerBlock(
@@ -80,6 +99,7 @@ def test_ltx_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
         has_audio=False,
     )
     tt_block.load_torch_state_dict(torch_state)
@@ -182,17 +202,18 @@ def test_ltx_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
-    [
-        [(1, 1), 0, 1],
-        [(2, 4), 0, 1],
-        [(4, 8), 1, 0],
-    ],
-    ids=["1x1sp0tp1", "2x4sp0tp1", "4x8sp1tp0"],
-    indirect=["mesh_device"],
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    _LTX_TRANSFORMER_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-def test_ltx_transformer_model(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
+def test_ltx_transformer_model(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    topology: ttnn.Topology,
+    is_fsdp: bool,
+) -> None:
     """
     Test LTXTransformerModel: compare 1-layer TT model vs LTX-2 PyTorch LTXModel.
     """
@@ -227,8 +248,7 @@ def test_ltx_transformer_model(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
     torch_state = torch_model.state_dict()
     logger.info(f"PyTorch model: {len(torch_state)} keys, {sum(p.numel() for p in torch_model.parameters()):,} params")
 
-    # Create TT model
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
 
     tt_model = LTXTransformerModel(
@@ -241,6 +261,7 @@ def test_ltx_transformer_model(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
     )
     tt_model.load_torch_state_dict(torch_state)
 
@@ -331,17 +352,18 @@ def test_ltx_transformer_model(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
-    [
-        [(1, 1), 0, 1],
-        [(2, 4), 0, 1],
-        [(4, 8), 1, 0],
-    ],
-    ids=["1x1sp0tp1", "2x4sp0tp1", "4x8sp1tp0"],
-    indirect=["mesh_device"],
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    _LTX_TRANSFORMER_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-def test_ltx_transformer_inner_step(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
+def test_ltx_transformer_inner_step(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    topology: ttnn.Topology,
+    is_fsdp: bool,
+) -> None:
     """
     Test LTXTransformerModel.inner_step: validates the pipeline denoising loop path.
     Caches prompt/RoPE on device, then calls inner_step with torch spatial input.
@@ -377,7 +399,7 @@ def test_ltx_transformer_inner_step(mesh_device: ttnn.MeshDevice, sp_axis: int, 
     torch_state = torch_model.state_dict()
 
     # TT model
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
 
     tt_model = LTXTransformerModel(
@@ -390,6 +412,7 @@ def test_ltx_transformer_inner_step(mesh_device: ttnn.MeshDevice, sp_axis: int, 
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
     )
     tt_model.load_torch_state_dict(torch_state)
 

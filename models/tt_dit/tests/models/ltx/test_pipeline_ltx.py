@@ -124,8 +124,12 @@ def _make_pipeline_with_random_weights(
     return pipeline
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [((1, 1), {})],
+    ids=["1x1"],
+    indirect=["mesh_device", "device_params"],
+)
 def test_pipeline_denoising_loop(mesh_device: ttnn.MeshDevice):
     """Test the full pipeline denoising loop with a 1-layer model."""
     num_layers = 1
@@ -160,8 +164,12 @@ def test_pipeline_denoising_loop(mesh_device: ttnn.MeshDevice):
     logger.info("PASSED: Pipeline denoising loop works end-to-end")
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [((1, 1), {})],
+    ids=["1x1"],
+    indirect=["mesh_device", "device_params"],
+)
 def test_pipeline_with_vae_decode(mesh_device: ttnn.MeshDevice):
     """Test pipeline with TTNN VAE decoder: denoise → decode to video."""
     from models.tt_dit.utils.vae_reference import VideoDecoder as TorchVideoDecoder

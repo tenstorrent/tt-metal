@@ -10,9 +10,14 @@ from loguru import logger
 
 import ttnn
 from models.tt_dit.pipelines.ltx.pipeline_ltx_fast import LTXFastPipeline
-from models.tt_dit.utils.test import line_params
-
-wh_lb_params = {**line_params, "l1_small_size": 16384}
+from models.tt_dit.utils.test import (
+    bh_lb_2x4_id,
+    bh_lb_2x4_params,
+    ring_params,
+    skip_ltx_mesh_config_unless_matching_arch,
+    wh_lb_2x4_id,
+    wh_lb_2x4_params,
+)
 
 
 def _default_checkpoint() -> str | None:
@@ -46,12 +51,13 @@ def _default_gemma() -> str | None:
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
 )
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, mesh_config_id",
     [
-        [(2, 4), (2, 4), 0, 1, 2, wh_lb_params, ttnn.Topology.Linear],
-        [(4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Ring],
+        [*wh_lb_2x4_params, wh_lb_2x4_id],
+        [*bh_lb_2x4_params, bh_lb_2x4_id],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False, "bh_glx_4x8sp1tp0"],
     ],
-    ids=["wh_lb_2x4sp0tp1", "bh_glx_4x8sp1tp0"],
+    ids=[wh_lb_2x4_id, bh_lb_2x4_id, "bh_glx_4x8sp1tp0"],
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_av_fast(
@@ -60,10 +66,14 @@ def test_pipeline_av_fast(
     sp_axis,
     tp_axis,
     num_links,
+    dynamic_load,
     topology,
+    is_fsdp,
+    mesh_config_id,
     no_prompt,
 ):
     """LTX-2.3 Fast distilled 2-stage AV pipeline."""
+    skip_ltx_mesh_config_unless_matching_arch(mesh_config_id)
     ckpt = _default_checkpoint()
     upsampler = _default_upsampler()
     gemma = _default_gemma()
@@ -82,23 +92,14 @@ def test_pipeline_av_fast(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         num_links=num_links,
+        dynamic_load=dynamic_load,
         topology=topology,
+        is_fsdp=is_fsdp,
     )
 
     prompt = os.environ.get(
         "PROMPT",
-        (
-            "Medium shot in a quiet sunlit parlor: an orange tabby cat sits on a piano bench with "
-            "its front paws on the white keys, pressing them in a slow, uneven rhythm while dust "
-            "motes hang in a bright shaft of late-morning sunlight. Warm natural light rakes across "
-            "honey-toned floorboards and the lacquered piano lid; shallow depth of field keeps the "
-            "cat's whiskers and fur sharp as the far wall softens into a gentle blur. The camera "
-            "slowly dollies in toward the keyboard as the cat shifts its weight and lifts one paw "
-            "to swipe another cluster of keys, ears swiveling toward the bright plink of each note. "
-            "Audio: close, dry piano taps and short resonant chords, a faint bench creak, and soft "
-            "room tone with no speech—just the small acoustic of a single sunlit room for a brief "
-            "five-second moment."
-        ),
+        ("a cat playing piano"),
     )
     num_frames = int(os.environ.get("NUM_FRAMES", "121"))
     height = int(os.environ.get("HEIGHT", "512"))

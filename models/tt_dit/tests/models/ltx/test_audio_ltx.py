@@ -29,6 +29,7 @@ from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from models.tt_dit.utils.test import line_params
 
 sys.path.insert(0, "LTX-2/packages/ltx-core/src")
 
@@ -38,15 +39,12 @@ sys.path.insert(0, "LTX-2/packages/ltx-core/src")
 # ============================================================================
 
 
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(1, 1)],
-    ids=["1x1"],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_audio_rope_1d(mesh_device: ttnn.MeshDevice):
-    """Test that audio RoPE uses 1D temporal positions (not 3D like video)."""
+def test_audio_rope_1d():
+    """Test that audio RoPE uses 1D temporal positions (not 3D like video).
+
+    Host-only (no mesh): opening fabric on a 1-chip mesh for a torch-only check
+    can hang on Blackhole when other PCIe peers exist but are not opened.
+    """
     audio_N = 64
     audio_dim = 2048
     num_heads = 32
@@ -78,15 +76,8 @@ def test_audio_rope_1d(mesh_device: ttnn.MeshDevice):
     logger.info("PASSED: Audio RoPE 1D positions")
 
 
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(1, 1)],
-    ids=["1x1"],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_audio_rope_vs_video_rope(mesh_device: ttnn.MeshDevice):
-    """Verify audio RoPE (1D) and video RoPE (3D) produce different frequencies."""
+def test_audio_rope_vs_video_rope():
+    """Verify audio RoPE (1D) and video RoPE (3D) produce different frequencies. Host-only."""
     num_heads = 32
 
     # Video: 3D positions
@@ -121,15 +112,14 @@ def test_audio_rope_vs_video_rope(mesh_device: ttnn.MeshDevice):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
+    "mesh_device, sp_axis, tp_axis, device_params",
     [
-        [(1, 1), 0, 1],
-        [(2, 4), 0, 1],
+        ((1, 1), 0, 1, {}),
+        ((2, 4), 0, 1, line_params),
     ],
     ids=["1x1sp0tp1", "2x4sp0tp1"],
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_audio_self_attention(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
     """Test audio self-attention (dim=2048, 32 heads, head_dim=64)."""
     B = 1
@@ -216,15 +206,14 @@ def test_audio_self_attention(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axi
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
+    "mesh_device, sp_axis, tp_axis, device_params",
     [
-        [(1, 1), 0, 1],
-        [(2, 4), 0, 1],
+        ((1, 1), 0, 1, {}),
+        ((2, 4), 0, 1, line_params),
     ],
     ids=["1x1sp0tp1", "2x4sp0tp1"],
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_cross_modal_attention_a2v(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
     """Test A→V cross-attention: video queries (4096), audio keys/values (2048).
 
@@ -301,15 +290,14 @@ def test_cross_modal_attention_a2v(mesh_device: ttnn.MeshDevice, sp_axis: int, t
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
+    "mesh_device, sp_axis, tp_axis, device_params",
     [
-        [(1, 1), 0, 1],
-        [(2, 4), 0, 1],
+        ((1, 1), 0, 1, {}),
+        ((2, 4), 0, 1, line_params),
     ],
     ids=["1x1sp0tp1", "2x4sp0tp1"],
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_av_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
     """Test AudioVideo transformer block with real 22B weights."""
     import os
@@ -428,14 +416,13 @@ def test_av_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axi
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
+    "mesh_device, sp_axis, tp_axis, device_params",
     [
-        [(2, 4), 0, 1],
+        ((2, 4), 0, 1, line_params),
     ],
     ids=["2x4sp0tp1"],
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_av_model_with_real_weights(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
     """Test full AudioVideo model with 22B checkpoint weights (1 layer).
 
@@ -541,14 +528,13 @@ def _compute_pcc(tt_out: torch.Tensor, ref_out: torch.Tensor) -> float:
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
+    "mesh_device, sp_axis, tp_axis, device_params",
     [
-        [(1, 1), 0, 1],
+        ((1, 1), 0, 1, {}),
     ],
     ids=["1x1sp0tp1"],
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_av_model_pcc_vs_reference(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
     """Test TTNN AV model PCC against PyTorch LTXModel reference (1 layer, 22B weights).
 
