@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
+import os
 
 import numpy as np
 import PIL
@@ -15,30 +15,10 @@ from models.tt_dit.pipelines.wan.pipeline_wan_s2v import WanPipelineS2V
 
 from ....utils.test import line_params
 
-# Canonical example inputs (the portrait + speech clip used in the
-# Wan-Video repo's README for audio-driven talking-head generation).
-#
-# The files are too large for the repo's 500 KB pre-commit cap, so they
-# aren't tracked. Resolution order:
-#   1. ``models/tt_dit/tests/models/wan2_2/assets/{pose.png,talk.wav}``
-#      if a contributor populated that directory locally (e.g. ``cp``
-#      from the reference repo's ``examples/``).
-#   2. ``/home/kevinmi/wan2_2_ref/examples/{pose.png,talk.wav}`` —
-#      bringup-box default.
-# If neither resolves, the test ``pytest.skip``s with a pointer.
-_LOCAL_ASSETS_DIR = Path(__file__).resolve().parent / "assets"
-_REF_REPO_EXAMPLES = Path("/home/kevinmi/wan2_2_ref/examples")
-
-
-def _resolve_asset(name: str) -> str | None:
-    for candidate in (_LOCAL_ASSETS_DIR / name, _REF_REPO_EXAMPLES / name):
-        if candidate.exists():
-            return str(candidate)
-    return None
-
-
-_REF_IMAGE_PATH = _resolve_asset("pose.png")
-_AUDIO_PATH = _resolve_asset("talk.wav")
+# Inputs are expected at the repo root (same pattern as test_pipeline_wan_i2v.py).
+# Override with env vars when needed.
+_REF_IMAGE_PATH = os.environ.get("S2V_REF_IMAGE", "./prompt_image.png")
+_AUDIO_PATH = os.environ.get("S2V_AUDIO", "./prompt_audio.wav")
 _NEGATIVE_PROMPT = (
     # s2v_14B-specific negative prompt from wan_s2v_14B.py:55 (overrides
     # the shared_config default used by T2V/I2V).
@@ -81,13 +61,6 @@ def test_pipeline_inference(
     is_fsdp,
     sdpa_t_fracture_w_only,
 ):
-    if _REF_IMAGE_PATH is None or _AUDIO_PATH is None:
-        pytest.skip(
-            f"Reference inputs (pose.png, talk.wav) not found. Copy from "
-            f"{_REF_REPO_EXAMPLES} into {_LOCAL_ASSETS_DIR} or make the "
-            f"reference repo available at {_REF_REPO_EXAMPLES}."
-        )
-
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
