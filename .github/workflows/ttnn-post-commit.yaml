@@ -41,6 +41,11 @@ on:
         type: number
         default: 0
         description: "If > 0, skip time budget verification and use this as job timeout (e.g. 240 for APC watcher, 120 for BHPC watcher)."
+      skip-flaky-tests:
+        required: false
+        type: boolean
+        default: false
+        description: "When true, deselect known-flaky tests (from flaky-tests.yaml) so they cannot eject the run. Enable for merge gate calls."
 
 jobs:
   load-test-matrix:
@@ -85,7 +90,11 @@ jobs:
         run: |
           merge_gate="${{ inputs.merge-gate-call }}"
           matrix='${{ steps.build-matrix.outputs.matrix }}'
-          filtered=$(echo "$matrix" | jq -c --argjson mg "$merge_gate" 'map(select((.merge_gate // false) == $mg))')
+          if [ "$merge_gate" = "true" ]; then
+            filtered=$(echo "$matrix" | jq -c 'map(select(.merge_gate == true))')
+          else
+            filtered=$(echo "$matrix" | jq -c 'map(select(.merge_gate == false))')
+          fi
           len=$(echo "$filtered" | jq 'length')
           if [ "$len" -eq 0 ]; then
             echo "::error::No tests left after filtering for merge_gate=$merge_gate"
@@ -144,10 +153,25 @@ jobs:
         run: |
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
 
+      - name: Build flaky-test deselect args
+        id: flaky-list
+        if: ${{ inputs.skip-flaky-tests }}
+        run: |
+          SKU="${{ matrix.test-group.sku }}"
+          case "$SKU" in
+            wh_*) ARCH="wormhole_b0" ;;
+            bh_*) ARCH="blackhole" ;;
+            *)    ARCH="wormhole_b0" ;;
+          esac
+          FLAKY_YAML="tests/pipeline_reorg/flaky-tests.yaml"
+          DESELECT_ARGS=$(yq -r ".${ARCH}[]?" "$FLAKY_YAML" | sed 's/^/--deselect=/' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+          echo "[info] Flaky deselect args for arch=${ARCH}: ${DESELECT_ARGS:-<none>}"
+          echo "deselect_args=${DESELECT_ARGS}" >> "$GITHUB_OUTPUT"
+
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         run: |
-          ${{ matrix.test-group.cmd }}
+          ${{ matrix.test-group.cmd }} ${{ steps.flaky-list.outputs.deselect_args }}
 
       - name: 📊 CCache Report
         if: ${{ !cancelled() }}

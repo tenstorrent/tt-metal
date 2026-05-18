@@ -1,0 +1,50 @@
+# Flaky Test Skip List
+# Tests that intermittently fail on real hardware and are excluded from regular
+# CI runs to prevent spurious merge queue ejections.
+#
+# Tests in this list are:
+#   - SKIPPED in all regular ttnn test group runs (via --deselect)
+#   - RUN EXCLUSIVELY in the dedicated "ttnn flaky tests" sanity job
+#
+# To add a test: open a GitHub issue with label "Flaky Test", document the
+# failure evidence, then add the test here with a link to the issue.
+# To graduate a test back: remove it here once it passes consistently.
+#
+# Structure mirrors ttsim-skip-list.yaml: arch-keyed lists of test node IDs.
+
+wormhole_b0:
+  # Eltwise — intermittent failures on WH N300
+  # https://github.com/tenstorrent/tt-metal/issues/44353
+  - tests/ttnn/unit_tests/operations/eltwise/test_math.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_activation.py::test_gelu_accurate_allclose
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py::test_binary_add_uint16_bcast
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py::test_binary_sharded_bcast_w_block
+  - tests/ttnn/unit_tests/operations/eltwise/test_remainder.py::test_remainder_scalar
+  - tests/ttnn/unit_tests/operations/eltwise/test_relational.py::test_binary_relational_scalar_ttnn
+
+  # Matmul / Fused / Reduce — intermittent failures on WH N300
+  # https://github.com/tenstorrent/tt-metal/issues/44354
+  - tests/ttnn/unit_tests/operations/fused/test_group_norm.py::test_group_norm_with_block_sharded_v2_8x4_grid
+  - tests/ttnn/unit_tests/operations/fused/test_group_norm.py::test_group_norm_with_block_sharded_v2_8x8_grid
+  - tests/ttnn/unit_tests/operations/fused/test_batch_norm.py::test_batch_norm_tests
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_with_transpose_a_or_b
+  - tests/ttnn/unit_tests/operations/matmul/test_addmm.py::test_addmm_square_matrices
+  - tests/ttnn/unit_tests/operations/reduce/test_cumprod.py::test_cumprod_normal
+
+  # Convolutions / Pool — intermittent failures on WH N300
+  # https://github.com/tenstorrent/tt-metal/issues/44355
+  - models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_conv2d_block_sharded_sdxl_performance
+  - tests/ttnn/unit_tests/operations/conv/data_movement/test_convert_to_chw.py::test_convert_to_chw
+  - tests/ttnn/unit_tests/operations/pool/test_adaptive_pool2d.py::test_adaptive_pool2d
+  - tests/ttnn/unit_tests/operations/pool/test_adaptive_pool2d.py::test_adaptive_dram_pool2d
+
+  # TMs & CCLs — intermittent failure on WH N300
+  # https://github.com/tenstorrent/tt-metal/issues/44356
+  - tests/ttnn/unit_tests/operations/data_movement/test_repeat.py::test_pc_with_different_shapes_in_sequence
+
+  # Misc / DX — intermittent failures on WH N300
+  # https://github.com/tenstorrent/tt-metal/issues/44357
+  - tests/ttnn/unit_tests/base_functionality/test_copy.py::test_copy_tilized_interleaved_to_nd_sharded_dtype_conversion
+  - tests/ttnn/unit_tests/base_functionality/test_to_layout.py::test_to_layout_wide_tensor
+
+blackhole: []
