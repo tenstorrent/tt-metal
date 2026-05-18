@@ -32,6 +32,12 @@ class TtMinistral3DecoderLayer(LightweightModule):
     ):
         super().__init__()
         self.layer_num = layer_num
+        # Cached for ``forward_prefill`` / ``forward_decode`` so the two
+        # per-layer ``ttnn.all_gather`` calls can size ``num_links`` from the
+        # actual fabric (e.g. 2 on BH-QB P150x4, 1 on single chip / T3K 1x4
+        # submesh) instead of being hard-pinned to ``num_links=1`` which under-
+        # uses ethernet bandwidth.
+        self.tt_ccl = tt_ccl
 
         self.input_layernorm = TtMinistralRMSNorm(
             mesh_device,
@@ -91,7 +97,7 @@ class TtMinistral3DecoderLayer(LightweightModule):
             attn_out = ttnn.all_gather(
                 attn_out,
                 dim=3,
-                num_links=1,
+                num_links=self.tt_ccl.get_num_links(),
                 topology=self.self_attn.args.ccl_topology(),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -106,7 +112,7 @@ class TtMinistral3DecoderLayer(LightweightModule):
             ff_out = ttnn.all_gather(
                 ff_out,
                 dim=3,
-                num_links=1,
+                num_links=self.tt_ccl.get_num_links(),
                 topology=self.self_attn.args.ccl_topology(),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -144,7 +150,7 @@ class TtMinistral3DecoderLayer(LightweightModule):
             h_normed = ttnn.all_gather(
                 h_normed,
                 dim=3,
-                num_links=1,
+                num_links=self.tt_ccl.get_num_links(),
                 topology=args.ccl_topology(),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -172,7 +178,7 @@ class TtMinistral3DecoderLayer(LightweightModule):
             h2_normed = ttnn.all_gather(
                 h2_normed,
                 dim=3,
-                num_links=1,
+                num_links=self.tt_ccl.get_num_links(),
                 topology=args.ccl_topology(),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )

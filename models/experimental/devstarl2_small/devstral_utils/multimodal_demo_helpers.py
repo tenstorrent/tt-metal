@@ -443,30 +443,52 @@ def tt_alloc_decode_input_buffers(mesh_device) -> TtDecodeInputBuffers:
     )
 
 
+# Per-process scratch torch tensors for ``tt_update_decode_input_buffers``.
+#
+# Allocating a fresh ``torch.tensor([[v]], ...)`` on every decode step wastes
+# ~0.5-1 ms / token at small grids (Python + libtorch malloc). We reuse one
+# scratch ``int32 [1, 1]`` per dtype and only rewrite the single scalar slot
+# before each ``ttnn.from_torch`` call. ``from_torch`` (without ``device=``)
+# still wraps host memory into a TT host tensor each time but avoids the
+# torch allocator / GC churn.
+_DECODE_STAGING_TOK = torch.zeros((1, 1), dtype=torch.int32)
+_DECODE_STAGING_POS = torch.zeros((1, 1), dtype=torch.int32)
+
+
 def tt_update_decode_input_buffers(
     mesh_device,
     buffers: TtDecodeInputBuffers,
     token_id: int,
     decode_pos: int,
 ) -> None:
-    """Copy ``(token_id, decode_pos)`` into the pre-allocated decode buffers. Uses ``ttnn.copy_host_to_device_tensor`` so the device-side buffer addresses captured by the trace remain valid (no re-allocation, no torch CPU ops on the trace fast path)."""
+    """Copy ``(token_id, decode_pos)`` into the pre-allocated decode buffers.
+
+    Uses ``ttnn.copy_host_to_device_tensor`` so the device-side buffer addresses
+    captured by the trace remain valid (no re-allocation). Reuses module-level
+    torch staging buffers (:data:`_DECODE_STAGING_TOK`, :data:`_DECODE_STAGING_POS`)
+    so the only per-step host alloc is the lightweight TT host tensor returned by
+    ``from_torch``.
+    """
+    _DECODE_STAGING_TOK[0, 0] = int(token_id)
+    _DECODE_STAGING_POS[0, 0] = int(decode_pos)
+    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     tok_host = ttnn.from_torch(
-        torch.tensor([[int(token_id)]], dtype=torch.int32),
+        _DECODE_STAGING_TOK,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=mesh_mapper,
     )
     pos_u32_host = ttnn.from_torch(
-        torch.tensor([[int(decode_pos)]], dtype=torch.int32),
+        _DECODE_STAGING_POS,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=mesh_mapper,
     )
     pos_i32_host = ttnn.from_torch(
-        torch.tensor([[int(decode_pos)]], dtype=torch.int32),
+        _DECODE_STAGING_POS,
         dtype=ttnn.int32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=mesh_mapper,
     )
     ttnn.copy_host_to_device_tensor(tok_host, buffers.token_ids)
     ttnn.copy_host_to_device_tensor(pos_u32_host, buffers.pos_uint32)
