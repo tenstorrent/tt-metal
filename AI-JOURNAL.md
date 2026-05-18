@@ -4994,3 +4994,22 @@ write. On mismatch, logs a warning with the expected and actual values.
 - `tt_metal/impl/device/device.cpp` — GAPs 11, 12, 14: FIX SA-ESC, FIX OP SA, FIX SA-GV
 - `scripts/analyze_fabric_hang_log.sh` — GAP 13: Strategy A counters + insights
 
+
+## FIX KL — Build failure: unused FIX DU constants (2026-05-18)
+
+**Run**: 26049210171 — build failed, all tests skipped.
+
+**Root cause**: 4 unused variables left over from FIX DU/IJ rewrite in
+`tt_metal/impl/device/device.cpp`:
+- `kRomPostcode_SA`
+- `kFIX_DU_BootWaitMs_SA`
+- `kFIX_DU_PollIntervalMs_SA`
+- `edm_status_addr_sa`
+
+`-Werror,-Wunused-variable` treats them as errors. The variables were
+defined in a "FIX DU constants" block but the FIX IJ rewrite replaced
+the boot-polling logic that used them with a boot-fence approach.
+
+**Fix**: Delete the entire block (7 lines). No logic change.
+
+**Commit**: d1ab227e46f
