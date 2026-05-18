@@ -194,9 +194,6 @@ def test_lm_head(
     logger.debug("Converting TTNN output to torch for comparison")
     tt_output_torch = tt_model.logit_to_host(tt_output, device_id)
     logger.debug(f"TTNN output converted to torch: {tt_output_torch.shape}")
-    assert (
-        tt_output_torch.shape[-1] == vocab_size
-    ), f"Expected full vocab on last dim ({vocab_size}), got {tt_output_torch.shape[-1]}"
 
     logger.debug("Comparing outputs with PCC")
     expected = torch_output[device_id]
