@@ -57,13 +57,19 @@ struct handshake_info_t {
     uint8_t padding0;            // Byte 7: Explicit padding for alignment
     uint32_t padding[2];         // Bytes 8-15: Ensures 16B alignment for scratch register
     uint32_t scratch[4];         // Bytes 16-31: TODO: Can be removed if we use a stream register for handshaking.
-    // --- Diagnostic fields (bytes 32-63): NOT part of the handshake protocol. ---
+    // --- Strategy 7 bypass flag (byte 32): written by host, read by firmware. ---
+    // FIX S7 (#42429): If non-zero, firmware skips the ETH DMA handshake loop entirely.
+    // Host writes 1 here after confirming all ERISCs reached STARTED (alive) via edm_status
+    // poll. The ETH handshake is redundant with the host barrier — bypassing it eliminates
+    // all handshake-related race conditions (TXQ races, STARTED deadlocks, etc.).
+    uint32_t handshake_bypass;        // Byte 32: non-zero = skip symmetric_handshake()
+    // --- Diagnostic fields (bytes 36-63): NOT part of the handshake protocol. ---
     // Written by firmware for host readback when Phase 5b hangs. Strategy 11 (#42429).
-    uint32_t diag_txq_busy_at_init;   // Byte 32: 1 if ETH_TXQ_CMD != 0 when init ran (FIX AH taken?)
-    uint32_t diag_local_val_at_init;  // Byte 36: local_value before FIX HX guard (was MAGIC already written?)
-    uint32_t diag_send_count;         // Byte 40: eth_send_packet call count in handshake loop (sender only)
-    uint32_t diag_eth_link_reg;       // Byte 44: ETH_LINK_ERR_STATUS_ADDR (0x1440) value at init time
-    uint32_t diag_reserved[4];        // Bytes 48-63: Reserved for future diagnostics
+    uint32_t diag_txq_busy_at_init;   // Byte 36: 1 if ETH_TXQ_CMD != 0 when init ran (FIX AH taken?)
+    uint32_t diag_local_val_at_init;  // Byte 40: local_value before FIX HX guard (was MAGIC already written?)
+    uint32_t diag_send_count;         // Byte 44: eth_send_packet call count in handshake loop (sender only)
+    uint32_t diag_eth_link_reg;       // Byte 48: ETH_LINK_ERR_STATUS_ADDR (0x1440) value at init time
+    uint32_t diag_reserved[3];        // Bytes 52-63: Reserved for future diagnostics
 };
 
 // FIX AD (#42429): prepare_handshake_state — called during Object Setup (before edm_status = STARTED)
@@ -141,6 +147,14 @@ FORCE_INLINE void symmetric_handshake(
     size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     volatile tt_l1_ptr handshake_info_t* handshake_info =
         reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_register_address);
+
+#if defined(STRATEGY7_HANDSHAKE_BYPASS) && STRATEGY7_HANDSHAKE_BYPASS
+    // FIX S7 (#42429): Bypass — see fabric_router_eth_handshake.hpp for full rationale.
+    if (handshake_info->handshake_bypass != 0) {
+        return;
+    }
+#endif  // STRATEGY7_HANDSHAKE_BYPASS
+
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;

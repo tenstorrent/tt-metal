@@ -29,6 +29,19 @@ FORCE_INLINE void fabric_symmetric_handshake(
     size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     volatile tt_l1_ptr handshake_info_t* handshake_info =
         reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_register_address);
+
+#if STRATEGY7_HANDSHAKE_BYPASS
+    // FIX S7 (#42429): Host confirmed all ERISCs are alive via STARTED poll and wrote
+    // handshake_bypass=1 to each ERISC's L1 handshake_info during configure_fabric_cores().
+    // The ETH DMA handshake loop is redundant with the host barrier — skip it entirely.
+    // This eliminates all handshake-related race conditions: TXQ races, STARTED deadlocks,
+    // lost MAGIC overwrites, and the SENDER↔SENDER deadlock class.
+    // Old handshake code preserved below (unreachable when bypass active) for rollback.
+    if (handshake_info->handshake_bypass != 0) {
+        return;
+    }
+#endif  // STRATEGY7_HANDSHAKE_BYPASS
+
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;

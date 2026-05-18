@@ -3616,6 +3616,27 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
     if constexpr (enable_ethernet_handshake) {
+#if STRATEGY7_HANDSHAKE_BYPASS
+        // STRATEGY7 (#42429): Check handshake_bypass flag written by host in configure_fabric_cores().
+        // If set, skip the entire ETH DMA handshake — Strategy 3 stagger, symmetric_handshake(),
+        // and neighbor identity exchange. The host already confirmed all ERISCs are alive via
+        // STARTED poll; the handshake is redundant. Neighbor identity stays at sentinel values
+        // (0xFFFF/0xFF) in telemetry — acceptable for telemetry-only fields.
+        {
+            volatile tt_l1_ptr auto* handshake_info_s7 =
+                reinterpret_cast<volatile tt_l1_ptr erisc::datamover::handshake::handshake_info_t*>(handshake_addr);
+            if (handshake_info_s7->handshake_bypass != 0) {
+                // Populate telemetry with sentinel values (no peer identity without handshake).
+                volatile tt_l1_ptr FabricTelemetry* fabric_telemetry =
+                    reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(
+                        eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
+                fabric_telemetry->static_info.neighbor_mesh_id = 0xFFFF;   // sentinel: bypass active
+                fabric_telemetry->static_info.neighbor_device_id = 0xFF;   // sentinel: bypass active
+                goto strategy7_handshake_done;
+            }
+        }
+#endif  // STRATEGY7_HANDSHAKE_BYPASS
+
 #if STRATEGY3_NO_PREPING
         // STRATEGY3 (#42429): Stagger handshake entry using edm_status.
         //
@@ -3677,6 +3698,10 @@ void kernel_main() {
             fabric_telemetry->static_info.neighbor_mesh_id = handshake_info->neighbor_mesh_id;
             fabric_telemetry->static_info.neighbor_device_id = handshake_info->neighbor_device_id;
         }
+
+#if STRATEGY7_HANDSHAKE_BYPASS
+    strategy7_handshake_done:
+#endif  // STRATEGY7_HANDSHAKE_BYPASS
 
         *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
         asm volatile("nop");

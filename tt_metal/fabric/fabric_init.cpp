@@ -793,6 +793,44 @@ FabricCoresHealth configure_fabric_cores(
         // FIX IJ/KL in device.cpp are disabled (#ifdef FIXIJ_REDUNDANT_AFTER_FIX_MM).
     }
 
+    // STRATEGY7 (#42429): Write handshake_bypass=1 to each ERISC's L1 handshake_info.
+    // This flag tells firmware to skip the ETH DMA handshake loop entirely at
+    // fabric_symmetric_handshake() entry (see fabric_router_eth_handshake.hpp).
+    // The handshake's only functional purpose is ETH link liveness confirmation, which the
+    // host already provides via STARTED status poll + firmware write relay during configure_fabric.
+    // Bypassing eliminates all handshake-related race conditions: TXQ races, STARTED deadlocks,
+    // lost MAGIC overwrites.
+    //
+    // The bypass field is at handshake_addr + 32 (offsetof(handshake_info_t, handshake_bypass)).
+    // This write fires AFTER the L1 clear loop (which does not touch the handshake region)
+    // and BEFORE ConfigureDeviceWithProgram writes the firmware binary to L1.
+    // prepare_handshake_state() (firmware Object Setup) does NOT overwrite handshake_bypass,
+    // so the flag persists from this host write through to fabric_symmetric_handshake() entry.
+    {
+        const uint32_t handshake_bypass_offset = 32;  // offsetof(handshake_info_t, handshake_bypass)
+        const uint32_t handshake_bypass_l1_addr =
+            static_cast<uint32_t>(router_config.handshake_addr) + handshake_bypass_offset;
+        const uint32_t chip_id_s7 = device->id();
+
+        for (const auto& [router_chan_s7, _] : router_chans_and_direction) {
+            if (dead_channels.count(router_chan_s7)) {
+                continue;  // Dead channels — no firmware will run.
+            }
+            auto router_logical_core_s7 = soc_desc.get_eth_core_for_channel(router_chan_s7, CoordSystem::LOGICAL);
+            // Use WriteToDeviceL1 — works for both MMIO (PCIe-direct) and non-MMIO (relay).
+            // Same API used by the addresses_to_clear loop above.
+            std::vector<uint32_t> bypass_buf = {1};
+            tt::tt_metal::detail::WriteToDeviceL1(
+                device, router_logical_core_s7, handshake_bypass_l1_addr, bypass_buf, CoreType::ETH);
+            log_info(
+                tt::LogMetal,
+                "STRATEGY7 (#42429): wrote handshake_bypass=1 at L1[0x{:08X}] for Device {} chan={} "
+                "(handshake_addr=0x{:08X} + offset={})",
+                handshake_bypass_l1_addr, chip_id_s7, router_chan_s7,
+                static_cast<uint32_t>(router_config.handshake_addr), handshake_bypass_offset);
+        }
+    }
+
     // FIX MM (#42429): Unconditional fw_launch_addr restore after L1 clear.
     // FIX EG (in the reset window above) zeroed fw_launch_addr to prevent
     // premature stale-firmware launch. Now that the L1 clear is complete,
