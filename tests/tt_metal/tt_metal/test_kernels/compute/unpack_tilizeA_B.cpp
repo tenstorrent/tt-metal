@@ -23,7 +23,7 @@ inline void add_tiles_math(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32
           BroadcastType::NONE,
           DST_ACCUM_MODE,
           MathFidelity::LoFi,
-          EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
+          EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /*clear_fp32_dst_acc*/)));
 }
 
 void kernel_main() {
