@@ -654,6 +654,12 @@ void Device::configure_fabric(
                 continue;  // Became dead during configure_fabric_cores — skip.
             }
 
+            // GAP 12 / FIX OP SA (#42429): Time the entire Strategy A per-channel sequence
+            // (steps 1-7).  Mirrors FIX OP on the normal FIX S9 path and FIX OP RR on the
+            // recovery path.  Without this, CI logs show no timing data for Strategy A —
+            // impossible to tell if one channel took 50ms vs 5000ms.
+            auto fix_op_sa_start = std::chrono::steady_clock::now();
+
             auto virtual_core_sa = cluster_sa.get_virtual_eth_core_from_channel(this->id_, deferred_chan);
             tt_cxy_pair core_loc_sa(this->id_, virtual_core_sa);
             auto logical_core_sa = soc_desc_sa.get_eth_core_for_channel(deferred_chan, CoordSystem::LOGICAL);
@@ -787,18 +793,31 @@ void Device::configure_fabric(
                         cluster_sa.read_core(final_buf_sa, sizeof(uint32_t), core_loc_sa, edm_status_addr_sa);
                         final_val_sa = final_buf_sa[0];
                     } catch (...) {}
+                    // GAP 11 / FIX SA-ESC (#42429): DU timeout in Strategy A must escalate
+                    // to fabric_relay_path_broken_.  Without this, the channel's go_msg is
+                    // never written (we `continue` past step 7), but the ERISC was deasserted
+                    // in step 4 and is stuck in ROM.  Downstream FIX EF will poll this channel
+                    // for 3s and time out, but non-MMIO devices may start routing writes through
+                    // the dead relay before FIX EF fires — silently dropping launch messages.
+                    // Setting relay_broken early lets FIX SB2 propagate the broken state before
+                    // non-MMIO devices attempt relay writes.
+                    fabric_relay_path_broken_.store(true);
                     log_warning(
                         tt::LogMetal,
                         "FIX SA (#42429): FIX DU timeout — Device {} chan={} ERISC did not exit "
-                        "ROM within {}ms (edm_status=0x{:08x}). Channel may be unresponsive.",
+                        "ROM within {}ms (edm_status=0x{:08x}). "
+                        "Setting fabric_relay_path_broken_=true (FIX SA-ESC). "
+                        "Channel may be unresponsive.",
                         this->id_, deferred_chan, kFIX_DU_BootWaitMs_SA, final_val_sa);
-                    // Don't add to dead_channels here — the write_launch_msg_to_core loop will
-                    // handle this channel normally (it's already in the program).
                     continue;
                 }
             }
 
             // Step 7: Write go_msg (RUN_MSG_GO) — ERISC is now in base-UMD polling loop.
+            // GAP 14 / FIX SA-GV (#42429): Readback verify go_msg first word after write.
+            // Steps 1 and 3 have readback verify, but go_msg did not.  If go_msg write
+            // silently fails (PCIe error, wrong address), ERISC stays in base-UMD loop
+            // forever — no fabric firmware launches, FIX EF times out.
             {
                 auto go_msg_view_sa = kg_sa_ptr->go_msg.view();
                 auto physical_core_go = this->virtual_core_from_logical_core(
@@ -808,11 +827,47 @@ void Device::configure_fabric(
                 cluster_sa.write_core_immediate(
                     go_msg_view_sa.data(), go_msg_view_sa.size(),
                     {static_cast<size_t>(this->id_), physical_core_go}, go_addr_sa);
+                // FIX SA-GV: readback verify first word of go_msg.
+                uint32_t expected_go_word = 0;
+                if (go_msg_view_sa.size() >= sizeof(uint32_t)) {
+                    std::memcpy(&expected_go_word, go_msg_view_sa.data(), sizeof(uint32_t));
+                    std::vector<uint32_t> go_verify_sa(1, 0xFFFFFFFF);
+                    cluster_sa.read_core(go_verify_sa, sizeof(uint32_t), core_loc_sa, go_addr_sa);
+                    if (go_verify_sa[0] != expected_go_word) {
+                        log_warning(
+                            tt::LogMetal,
+                            "FIX SA (#42429): FIX SA-GV go_msg readback MISMATCH — wrote 0x{:08X} "
+                            "to go_addr=0x{:08X} on Device {} chan={} but read back 0x{:08X}",
+                            expected_go_word, static_cast<uint32_t>(go_addr_sa),
+                            this->id_, deferred_chan, go_verify_sa[0]);
+                    } else {
+                        log_info(
+                            tt::LogMetal,
+                            "FIX SA (#42429): wrote go_msg (RUN_MSG_GO) for Device {} chan={} — "
+                            "readback verified (first word=0x{:08X}). "
+                            "ERISC should now launch fabric firmware. [FIX SA-GV]",
+                            this->id_, deferred_chan, expected_go_word);
+                    }
+                } else {
+                    log_info(
+                        tt::LogMetal,
+                        "FIX SA (#42429): wrote go_msg (RUN_MSG_GO) for Device {} chan={} — "
+                        "ERISC should now launch fabric firmware (go_msg too small for readback verify)",
+                        this->id_, deferred_chan);
+                }
+            }
+
+            // GAP 12 / FIX OP SA (#42429): Log elapsed time for this channel's full
+            // Strategy A sequence (steps 1-7).  Mirrors FIX OP on the normal FIX S9 path.
+            {
+                auto fix_op_sa_end = std::chrono::steady_clock::now();
+                auto fix_op_sa_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    fix_op_sa_end - fix_op_sa_start).count();
                 log_info(
                     tt::LogMetal,
-                    "FIX SA (#42429): wrote go_msg (RUN_MSG_GO) for Device {} chan={} — "
-                    "ERISC should now launch fabric firmware",
-                    this->id_, deferred_chan);
+                    "FIX OP SA (#42429): Strategy A per-channel — Device {} chan={} "
+                    "total sequence took {}ms (steps 1-7: MM+launch_msg+bypass+deassert+DW+DU+go_msg)",
+                    this->id_, deferred_chan, fix_op_sa_ms);
             }
         }
 
