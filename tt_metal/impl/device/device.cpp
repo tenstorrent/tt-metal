@@ -648,13 +648,6 @@ void Device::configure_fabric(
         const uint32_t handshake_bypass_l1_addr_sa =
             static_cast<uint32_t>(router_config_sa.handshake_addr) + handshake_bypass_offset_sa;
 
-        // FIX DU constants.
-        constexpr uint32_t kRomPostcode_SA = 0x49705180u;
-        constexpr uint32_t kFIX_DU_BootWaitMs_SA = 5000;
-        constexpr uint32_t kFIX_DU_PollIntervalMs_SA = 5;
-        const uint64_t edm_status_addr_sa =
-            static_cast<uint64_t>(router_config_sa.edm_status_address);
-
         // FIX S8/S9 (#42429): Compute AERISC_FABRIC_SCRATCH base from HAL.
         // scratch_base = FABRIC_TELEMETRY_BASE + FABRIC_TELEMETRY_SIZE - POSTCODES_SIZE(4)
         // This formula matches dev_mem_map.h for both WH and BH.
