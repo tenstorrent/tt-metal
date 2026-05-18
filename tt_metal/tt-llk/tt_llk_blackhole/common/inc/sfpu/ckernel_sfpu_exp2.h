@@ -107,6 +107,12 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x)
 // skipping the `* (1/ln2)` multiply (we are already in base-2). vec_min_max clamps
 // xlog2 to [0, 255], so the natural saturation of setexp + the final bf16 round
 // give the correct overflow → +inf and underflow → 0 boundary encodings for free.
+//
+// NaN inputs need an explicit override: vec_min_max (SFPMAX/SFPMIN) treats NaN as
+// unordered and typically picks the non-NaN side, collapsing NaN → ±boundary →
+// ±inf / 0. We re-detect NaN on the *original* x using the unbiased-exponent test
+// (exp == 128, mantissa != 0) and force the result to NaN before the final bf16
+// round so the encoding survives SFPSTORE truncation.
 sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x)
 {
     // Map x → xlog2 such that 2^x has biased exponent floor(xlog2) and the
@@ -114,7 +120,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x)
     sfpi::vFloat xlog2 = x + 127.f;
 
     // Clamp to [0, 255]. Boundary inputs land on the +inf / +0 encodings after
-    // setexp + bf16 round, NaN propagates through as a bf16 NaN-class pattern.
+    // setexp + bf16 round.
     sfpi::vFloat threshold_low  = 0.f;
     sfpi::vFloat threshold_high = sfpi::vFloat(255.f);
     sfpi::vec_min_max(threshold_low, xlog2);
@@ -136,6 +142,17 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x)
 
     // Recombine: 2^x = (1.frac_mantissa) * 2^(exponential_part - 127).
     sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
+
+    // NaN override on the *original* x (clamping collapses NaN → boundary).
+    // Default exexp returns the unbiased exponent: 128 = biased 255 = inf-or-NaN,
+    // and a non-zero mantissa distinguishes NaN from ±inf.
+    sfpi::vInt nan_exp = sfpi::exexp(x);
+    sfpi::vInt nan_man = sfpi::exman(x);
+    v_if (nan_exp == 128 && nan_man != 0)
+    {
+        y = std::numeric_limits<float>::quiet_NaN();
+    }
+    v_endif;
 
     // SFPSTORE truncates fp32→bf16; round explicitly so the bf16 result matches
     // a faithful nearest-even rounding of the fp32 mathematical value, and so
