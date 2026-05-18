@@ -71,7 +71,7 @@ void BM_AdamW(benchmark::State& state) {
     const float weight_decay = 0.01f;
 
     // Warmup
-    ttml::benchmark_utils::run_iterations(static_cast<uint32_t>(test_config.num_warmup_iterations), [&]() {
+    for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
         auto result = ttml::metal::adamw(
             param,
             grad,
@@ -87,7 +87,7 @@ void BM_AdamW(benchmark::State& state) {
             weight_decay);
         tt::tt_metal::distributed::Synchronize(device.get(), std::nullopt);
         result.deallocate();
-    });
+    }
 
     for ([[maybe_unused]] auto _ : state) {
         const double avg_time_s =

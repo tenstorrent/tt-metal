@@ -147,8 +147,12 @@ CaseResult run_case(const Case& c, uint32_t num_warmup, uint32_t num_measure) {
         return std::chrono::duration<double, std::micro>(t1 - t0).count();
     };
 
-    ttml::benchmark_utils::run_iterations(num_warmup, [&]() { (void)run_forward(); });
-    ttml::benchmark_utils::run_iterations(num_measure, [&]() { fwd_times.push_back(run_forward()); });
+    for (uint32_t i = 0; i < num_warmup; ++i) {
+        (void)run_forward();
+    }
+    for (uint32_t i = 0; i < num_measure; ++i) {
+        fwd_times.push_back(run_forward());
+    }
 
     // Forward+backward timing pass.
     std::vector<double> fb_times;
@@ -166,8 +170,12 @@ CaseResult run_case(const Case& c, uint32_t num_warmup, uint32_t num_measure) {
         return std::chrono::duration<double, std::micro>(t1 - t0).count();
     };
 
-    ttml::benchmark_utils::run_iterations(num_warmup, [&]() { (void)run_fwd_bwd(); });
-    ttml::benchmark_utils::run_iterations(num_measure, [&]() { fb_times.push_back(run_fwd_bwd()); });
+    for (uint32_t i = 0; i < num_warmup; ++i) {
+        (void)run_fwd_bwd();
+    }
+    for (uint32_t i = 0; i < num_measure; ++i) {
+        fb_times.push_back(run_fwd_bwd());
+    }
 
     CaseResult r;
     r.forward = summarize(fwd_times);

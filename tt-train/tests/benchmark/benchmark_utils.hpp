@@ -155,13 +155,6 @@ inline double average(const std::vector<double>& values) {
 }
 
 template <typename Fn>
-inline void run_iterations(const uint32_t num_iterations, Fn&& fn) {
-    for (uint32_t i = 0; i < num_iterations; ++i) {
-        fn();
-    }
-}
-
-template <typename Fn>
 inline double measure_average_iteration_time_s(const int num_iterations, Fn&& fn) {
     if (num_iterations <= 0) {
         return 0.0;

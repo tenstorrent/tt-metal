@@ -150,7 +150,7 @@ BenchmarkResult RunSingleMatmulBenchmark(
     ttnn::Tensor output_tensor;
 
     // Warmup iterations
-    ttml::benchmark_utils::run_iterations(static_cast<uint32_t>(num_warmup_iterations), [&]() {
+    for (int iter = 0; iter < num_warmup_iterations; ++iter) {
         output_tensor = ttnn::matmul(
             input_tensor_a,
             input_tensor_b,
@@ -165,7 +165,7 @@ BenchmarkResult RunSingleMatmulBenchmark(
             /*output_tile=*/std::nullopt);
         tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
         output_tensor.deallocate();
-    });
+    }
 
     std::chrono::duration<double> total_time = std::chrono::duration<double>::zero();
 

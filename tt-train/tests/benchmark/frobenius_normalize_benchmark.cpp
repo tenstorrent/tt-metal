@@ -55,11 +55,11 @@ void BM_FrobeniusNormalize_Fused(benchmark::State& state) {
     const auto data = ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.0f, 1.0f, seed);
     auto input = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(data, shape, device.get());
 
-    ttml::benchmark_utils::run_iterations(static_cast<uint32_t>(test_config.num_warmup_iterations), [&]() {
+    for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
         auto result = ttml::metal::frobenius_normalize(input, kEps);
         tt::tt_metal::distributed::Synchronize(device.get(), std::nullopt);
         result.deallocate();
-    });
+    }
 
     for ([[maybe_unused]] auto _ : state) {
         const double avg_time_s =
@@ -91,11 +91,11 @@ void BM_FrobeniusNormalize_Composite(benchmark::State& state) {
     const auto data = ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.0f, 1.0f, seed);
     auto input = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(data, shape, device.get());
 
-    ttml::benchmark_utils::run_iterations(static_cast<uint32_t>(test_config.num_warmup_iterations), [&]() {
+    for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
         auto result = composite_frobenius_normalize(input, kEps);
         tt::tt_metal::distributed::Synchronize(device.get(), std::nullopt);
         result.deallocate();
-    });
+    }
 
     for ([[maybe_unused]] auto _ : state) {
         const double avg_time_s =
