@@ -306,7 +306,7 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
             self._scatter_zero_row = ttnn.from_torch(
                 torch.zeros(1, H, dtype=torch.bfloat16),
                 dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                layout=ttnn.TILE_LAYOUT,
                 device=device,
                 mesh_mapper=zero_row_mapper,
             )
@@ -324,13 +324,11 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         N_vision = int(vision_tt.shape[2])
         H_per_device = int(vision_tt.shape[3])
 
-        vision_rm = ttnn.to_layout(vision_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(vision_tt)
-
-        vision_2d = ttnn.reshape(vision_rm, (N_vision, H_per_device))
+        vision_2d = ttnn.reshape(vision_tt, (N_vision, H_per_device))
 
         self._ensure_scatter_zero_row(num_devices, self._hidden_size, H_per_device)
         vision_table = ttnn.concat([self._scatter_zero_row, vision_2d], dim=0)
+        ttnn.deallocate(vision_tt)
         ttnn.deallocate(vision_2d)
 
         full_vision_col_sharded = ttnn.embedding(tt_idx, vision_table, layout=ttnn.TILE_LAYOUT)
@@ -355,8 +353,9 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         else:
             text_e = h0
 
-        if len(mm_args) == 4:
-            tt_px, tt_grid, tt_idx, tt_mask = mm_args
+        if len(mm_args) in (4, 5):
+            tt_px, tt_grid, tt_idx, tt_mask = mm_args[:4]
+            vision_attention_mask = mm_args[4] if len(mm_args) == 5 else None
             if self._p_vision is None:
                 raise RuntimeError("Vision tensors passed to prefill graph but vision_tower is not set")
             x_patch = tt_px
@@ -369,7 +368,11 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
                 else:
                     grid_torch = ttnn.to_torch(tt_grid)
                 grid_torch = _normalize_image_grid_thw_torch(grid_torch)
-            vision_tt = self._p_vision.forward_post_patch_embed(x_patch, grid_torch)
+            vision_tt = self._p_vision.forward_post_patch_embed(
+                x_patch,
+                grid_torch,
+                attention_mask=vision_attention_mask,
+            )
             text_e = self._scatter_fuse_text_and_vision(text_e, vision_tt, tt_idx, tt_mask)
 
         h = self._p_stack.forward(text_e, past_key_value=past_key_value, cache_position=cache_position)
@@ -834,6 +837,23 @@ class TTNNDotsOCRPipeline(TTNNModule):
                     )
                 if len(x_patch.shape) == 3:
                     x_patch = ttnn.reshape(x_patch, (1, 1, int(x_patch.shape[1]), int(x_patch.shape[2])))
+                actual_vision_seq_len = int(x_patch.shape[2])
+                vision_bucket = (
+                    self.vision_tower.block_stack.nearest_bucket(actual_vision_seq_len)
+                    if self.vision_tower.block_stack is not None and self.vision_tower._trace_enabled
+                    else -1
+                )
+                use_vision_sdpa_mask = os.environ.get("DOTS_OCR_USE_FULL_SDPA_MASK", "").lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }
+                vision_attention_mask = (
+                    self.vision_tower.build_padded_attention_mask(actual_vision_seq_len, vision_bucket)
+                    if use_vision_sdpa_mask and vision_bucket != -1
+                    else None
+                )
             n_vis = self.vision_tower.merged_vision_sequence_length(image_grid_thw, pixel_values)
             tt_idx, tt_mask = self.graph_prefill.get_or_build_scatter_tensors(input_ids, n_vis, id_mapper, num_devices)
             grid_cpu = image_grid_thw.detach().cpu()
@@ -888,13 +908,13 @@ class TTNNDotsOCRPipeline(TTNNModule):
         # Traced prefill graph (text-only: ids+embed inside graph; multimodal: +vision trunk + scatter fuse).
         with _profile_stage(self.device, "prefill.graph_prefill_sync"):
             if pixel_values is not None:
+                mm_args = (x_patch, tt_grid, tt_idx, tt_mask)
+                if vision_attention_mask is not None:
+                    mm_args = (*mm_args, vision_attention_mask)
                 token_id_tt = self.graph_prefill(
                     hidden_states,
                     tt_cache_position,
-                    x_patch,
-                    tt_grid,
-                    tt_idx,
-                    tt_mask,
+                    *mm_args,
                     past_key_value=self.paged_cache,
                     mm_grid_thw=mm_grid_thw,
                 )

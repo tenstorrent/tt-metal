@@ -292,13 +292,11 @@ class TTNNDotsOCRAttention(TTNNModule):
             dropout=0.0,
             scaling=self.scaling,
             is_causal=self.is_causal,
-            transpose_output=True,
+            transpose_output=False,
         )
 
-        attn_shape = list(attn_output.shape)
-        attn_output = ttnn.reshape(
-            attn_output, (attn_shape[0], attn_shape[1], self.num_attention_heads * self.head_dim)
-        )
+        attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_output = ttnn.squeeze(attn_output, 1)
 
         attn_output = self.o_proj(attn_output)
         return attn_output, None
@@ -392,11 +390,24 @@ class TTNNDotsOCRAttention(TTNNModule):
             compute_kernel_config=getattr(self.sdpa, "decode_compute_kernel_config", self.sdpa.compute_kernel_config),
         )
 
-        attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
-        attn_output = ttnn.permute(attn_output, (1, 0, 2, 3))
-        attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self.num_attention_heads * self.head_dim))
+        sdpa_output_memcfg = ttnn.create_sharded_memory_config(
+            shape=(32, self.head_dim),
+            core_grid=ttnn.CoreGrid(y=1, x=batch_size),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        attn_output = ttnn.to_memory_config(attn_output, sdpa_output_memcfg)
+        attn_output = ttnn.experimental.nlp_concat_heads_decode(
+            attn_output,
+            num_heads=self.num_attention_heads,
+        )
+        if batch_size < 32:
+            attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
+            attn_output = ttnn.slice(attn_output, [0, 0, 0, 0], [1, 1, batch_size, int(attn_output.shape[-1])])
 
         attn_output = self.o_proj(attn_output)
+        attn_output = ttnn.squeeze(attn_output, 1)
         return attn_output, None
 
     def forward(

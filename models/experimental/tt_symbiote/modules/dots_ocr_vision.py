@@ -826,7 +826,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
         if pixel_values.dim() == 2:
-            x = pixel_values.to(torch.bfloat16).unsqueeze(0)
+            x = pixel_values.to(torch.bfloat16).unsqueeze(0).unsqueeze(0)
             x_tt = ttnn.from_torch(
                 x,
                 device=self.device,
@@ -835,8 +835,6 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
                 memory_config=mem,
                 mesh_mapper=mapper,
             )
-            if len(x_tt.shape) == 3:
-                x_tt = ttnn.reshape(x_tt, (1, 1, x_tt.shape[1], x_tt.shape[2]))
 
             out = ttnn.linear(
                 x_tt,
@@ -877,7 +875,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         temporal_patch_size = temporal
         x = pixel_values.view(-1, C, temporal_patch_size, self.patch_size, self.patch_size)
         x = x[:, :, 0]
-        x = x.reshape(1, num_patches, C * self.patch_size * self.patch_size)
+        x = x.reshape(1, 1, num_patches, C * self.patch_size * self.patch_size)
 
         x_tt = ttnn.from_torch(
             x.to(torch.bfloat16),
@@ -887,8 +885,6 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
             memory_config=mem,
             mesh_mapper=mapper,
         )
-        if len(x_tt.shape) == 3:
-            x_tt = ttnn.reshape(x_tt, (1, 1, x_tt.shape[1], x_tt.shape[2]))
 
         out = ttnn.linear(
             x_tt,
@@ -1089,14 +1085,16 @@ class TTNNDotsVisionAttention(TTNNModule):
         k: ttnn.Tensor,
         v: ttnn.Tensor,
         logical_seq_len: int,
+        attn_mask: ttnn.Tensor | None = None,
+        slice_to_logical: bool = True,
     ) -> ttnn.Tensor:
         """Run SDPA on ``[1,H,S_pad,D]`` Q/K/V with trailing key padding masked out."""
         logical_seq_len = int(logical_seq_len)
         h = int(q.shape[1])
         d = int(q.shape[3])
-        s_pad = _align_vision_sdpa_seq_len(logical_seq_len)
+        s_pad = int(q.shape[2]) if attn_mask is not None else _align_vision_sdpa_seq_len(logical_seq_len)
         pad = s_pad - logical_seq_len
-        if pad > 0:
+        if attn_mask is None and pad > 0:
             q_old, k_old, v_old = q, k, v
             q = ttnn.pad(q_old, ((0, 0), (0, 0), (0, pad), (0, 0)), value=0.0)
             k = ttnn.pad(k_old, ((0, 0), (0, 0), (0, pad), (0, 0)), value=0.0)
@@ -1105,8 +1103,8 @@ class TTNNDotsVisionAttention(TTNNModule):
             ttnn.deallocate(k_old)
             ttnn.deallocate(v_old)
 
-        attn_mask = None
-        if pad > 0:
+        owns_attn_mask = False
+        if attn_mask is None and pad > 0:
             m = torch.zeros((1, 1, 1, s_pad), dtype=torch.float32)
             m[..., logical_seq_len:] = -1e9
             num_dev = int(self.device.get_num_devices()) if hasattr(self.device, "get_num_devices") else 1
@@ -1120,6 +1118,7 @@ class TTNNDotsVisionAttention(TTNNModule):
             )
             if attn_mask.dtype != q.dtype:
                 attn_mask = ttnn.typecast(attn_mask, q.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            owns_attn_mask = True
 
         program_config = self._get_sdpa_program_config(s_pad)
         ctx = ttnn.transformer.scaled_dot_product_attention(
@@ -1132,9 +1131,9 @@ class TTNNDotsVisionAttention(TTNNModule):
             compute_kernel_config=self.sdpa_compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        if attn_mask is not None:
+        if owns_attn_mask:
             ttnn.deallocate(attn_mask)
-        if pad > 0:
+        if slice_to_logical and pad > 0:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (1, h, logical_seq_len, d))
         return ctx
 
@@ -1143,6 +1142,8 @@ class TTNNDotsVisionAttention(TTNNModule):
         hidden_states: ttnn.Tensor,
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         cu_seqlens: ttnn.Tensor | torch.Tensor | list | None = None,
+        attention_mask: ttnn.Tensor | None = None,
+        attention_logical_seq_len: int | None = None,
     ) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1212,7 +1213,15 @@ class TTNNDotsVisionAttention(TTNNModule):
         # keep these tensors on DRAM.
 
         if cu_seqlens is None:
-            ctx = self._sdpa_padded_with_key_mask(q, k, v, s)
+            logical_s = int(attention_logical_seq_len) if attention_mask is not None else s
+            ctx = self._sdpa_padded_with_key_mask(
+                q,
+                k,
+                v,
+                logical_s,
+                attn_mask=attention_mask,
+                slice_to_logical=attention_mask is None,
+            )
             ctx = self._concat_heads(ctx)
             o_m = int(ctx.shape[0]) * int(ctx.shape[1]) * int(ctx.shape[2])
             o_k = int(self.tt_o_proj_weight.shape[-2])
@@ -1333,13 +1342,21 @@ class TTNNDotsVisionBlock(TTNNModule):
         hidden_states: ttnn.Tensor,
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         cu_seqlens=None,
+        attention_mask: ttnn.Tensor | None = None,
+        attention_logical_seq_len: int | None = None,
     ) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         residual = hidden_states
         hidden_states = self.norm1(hidden_states)
-        hidden_states = self.attn(hidden_states, rot_mats=rot_mats, cu_seqlens=cu_seqlens)
+        hidden_states = self.attn(
+            hidden_states,
+            rot_mats=rot_mats,
+            cu_seqlens=cu_seqlens,
+            attention_mask=attention_mask,
+            attention_logical_seq_len=attention_logical_seq_len,
+        )
         hidden_states = ttnn.add(residual, hidden_states)
 
         residual = hidden_states
@@ -1641,12 +1658,16 @@ class TTNNDotsVisionBlockStack(TTNNLayerStack):
     def forward(self, hidden_states, **kwargs):
         rot_mats = kwargs.get("rot_mats")
         cu_seqlens = kwargs.get("cu_seqlens")
+        attention_mask = kwargs.get("attention_mask")
+        attention_logical_seq_len = kwargs.get("attention_logical_seq_len")
 
         for layer in self.layers:
             hidden_states = layer.forward(
                 hidden_states,
                 rot_mats=rot_mats,
                 cu_seqlens=cu_seqlens,
+                attention_mask=attention_mask,
+                attention_logical_seq_len=attention_logical_seq_len,
             )
 
         if self.post_trunk_norm is not None:
@@ -1828,7 +1849,31 @@ class TTNNDotsOCRVisionTower(TTNNModule):
             return num_patches // (self.spatial_merge_size**2)
         return num_patches
 
-    def forward_post_patch_embed(self, x: ttnn.Tensor, grid_thw: torch.Tensor) -> ttnn.Tensor:
+    def build_padded_attention_mask(self, actual_seq_len: int, bucket: int) -> ttnn.Tensor | None:
+        """Build the SDPA key mask for bucket-padded vision input outside trace capture."""
+        actual_seq_len = int(actual_seq_len)
+        bucket = int(bucket)
+        if bucket <= actual_seq_len:
+            return None
+
+        mask = torch.zeros((1, 1, bucket, bucket), dtype=torch.float32)
+        mask[..., actual_seq_len:] = -1e9
+        mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+        return ttnn.from_torch(
+            mask,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            mesh_mapper=mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def forward_post_patch_embed(
+        self,
+        x: ttnn.Tensor,
+        grid_thw: torch.Tensor,
+        attention_mask: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
         """Vision blocks + post-trunk norm + patch merger (``patch_embed`` already applied)."""
         if grid_thw is None:
             raise ValueError("grid_thw is required for Dots vision")
@@ -1877,7 +1922,13 @@ class TTNNDotsOCRVisionTower(TTNNModule):
 
             rot_mats, _ = self.rope.build_padded(grid_thw, actual_seq_len, bucket)
 
-            x = self.block_stack(x, rot_mats=rot_mats, cu_seqlens=None)
+            x = self.block_stack(
+                x,
+                rot_mats=rot_mats,
+                cu_seqlens=None,
+                attention_mask=attention_mask,
+                attention_logical_seq_len=actual_seq_len,
+            )
 
             merged_seq_len = actual_seq_len // (self.spatial_merge_size**2)
             if int(x.shape[2]) > merged_seq_len:
