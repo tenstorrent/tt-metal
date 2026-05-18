@@ -121,7 +121,7 @@ public:
     bool system_supported() {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& eth_coord_mapping = this->get_eth_coord_mapping();
-        return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
+        return static_cast<size_t>(*(tt::tt_metal::MetalContext::instance().global_distributed_context().size())) ==
                    eth_coord_mapping.size() &&
                cluster.user_exposed_chip_ids().size() == eth_coord_mapping[0].size();
     }
@@ -152,7 +152,7 @@ public:
     bool system_supported() {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& eth_coord_mapping = this->get_eth_coord_mapping();
-        return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
+        return static_cast<size_t>(*(tt::tt_metal::MetalContext::instance().global_distributed_context().size())) ==
                    eth_coord_mapping.size() &&
                cluster.user_exposed_chip_ids().size() == eth_coord_mapping[0].size();
     }
@@ -309,7 +309,7 @@ public:
     bool system_supported() {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
-        return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
+        return static_cast<size_t>(*(tt::tt_metal::MetalContext::instance().global_distributed_context().size())) ==
                    mesh_graph.get_mesh_ids().size() &&
                cluster.get_board_type(0) == BoardType::UBB;
     }
@@ -334,7 +334,7 @@ public:
     bool system_supported() {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
-        return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
+        return static_cast<size_t>(*(tt::tt_metal::MetalContext::instance().global_distributed_context().size())) ==
                    mesh_graph.get_mesh_ids().size() &&
                cluster.is_ubb_galaxy();
     }

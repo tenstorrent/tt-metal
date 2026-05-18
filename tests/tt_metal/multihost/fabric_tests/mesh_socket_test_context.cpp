@@ -252,7 +252,7 @@ bool MeshSocketTestContext::should_participate_in_test(const ParsedTestConfig& t
     know the number of devices per host.
 */
 std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketTestContext::create_rank_to_mesh_mapping() {
-    auto world_size = *distributed_context_->size();
+    uint32_t world_size = static_cast<uint32_t>(*distributed_context_->size());
 
     std::vector<std::byte> recv_buffer(sizeof(uint32_t) * world_size);
     distributed_context_->all_gather(
@@ -286,7 +286,7 @@ void MeshSocketTestContext::share_seed() {
         log_info(tt::LogTest, "Rank 0 generated seed: {}", seed);
 
         // Send seed to all other ranks
-        for (uint32_t rank = 1; rank < *distributed_context_->size(); ++rank) {
+        for (uint32_t rank = 1; rank < static_cast<uint32_t>(*distributed_context_->size()); ++rank) {
             distributed_context_->send(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
                 tt::tt_metal::distributed::multihost::Rank{rank},

@@ -89,9 +89,9 @@ TEST_F(InterMeshSplit1x2FabricFixture, MultiHopUnicast) {
     constexpr uint32_t num_iterations = 20;
     auto run_send_recv = [&](uint32_t sender_rank, uint32_t recv_rank) {
         for (uint32_t i = 0; i < num_iterations; i++) {
-            if (*(distributed_context->rank()) == sender_rank) {
+            if (static_cast<uint32_t>(*(distributed_context->rank())) == sender_rank) {
                 multihost_utils::run_unicast_sender_step(this, tt::tt_metal::distributed::multihost::Rank{recv_rank});
-            } else if (*(distributed_context->rank()) == recv_rank) {
+            } else if (static_cast<uint32_t>(*(distributed_context->rank())) == recv_rank) {
                 multihost_utils::run_unicast_recv_step(this, tt::tt_metal::distributed::multihost::Rank{sender_rank});
             }
         }

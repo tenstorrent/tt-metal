@@ -164,11 +164,11 @@ INSTANTIATE_TEST_SUITE_P(
 
 TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     std::vector<int> sender_node_ranks_ctx0 = {0, 2, 3, 4};
-    uint32_t recv_rank_ctx0 = 1;
+    int recv_rank_ctx0 = 1;
 
     std::vector<int> ctx1_ranks = sender_node_ranks_ctx0;
     std::vector<int> sender_node_ranks_ctx1 = {0, 2, 3};
-    uint32_t recv_rank_ctx1 = 1;
+    int recv_rank_ctx1 = 1;
 
     const auto& distributed_ctx0 = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
