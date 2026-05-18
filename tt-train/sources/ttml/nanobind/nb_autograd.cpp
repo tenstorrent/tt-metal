@@ -86,6 +86,7 @@ void py_module(nb::module_& m) {
             "get_value",
             &Tensor::get_value,
             nb::arg("precision") = PreferredPrecision::HALF,
+            nb::arg("autocast") = true,
             "Get underlying tensor value");
         py_tensor.def("get_grad", nb::overload_cast<>(&Tensor::get_grad, nb::const_), "Get gradient");
         py_tensor.def("get_grad_rw", nb::overload_cast<>(&Tensor::get_grad), "Get/set gradient");
@@ -144,12 +145,19 @@ void py_module(nb::module_& m) {
             "to_numpy",
             [](const Tensor& tensor,
                std::optional<tt::tt_metal::DataType> new_type,
-               ttnn::distributed::MeshToTensor* composer) {
+               ttnn::distributed::MeshToTensor* composer,
+               bool cast_on_device) {
+                // cast_on_device=False fetches the bf16 storage directly without triggering a
+                // device-side typecast or caching a float32 copy in AutocastTensor. Any dtype
+                // conversion is then done on the CPU via new_type. Use this for checkpointing
+                // bf16 models to avoid OOM from float32 copies of every parameter accumulating
+                // on device simultaneously. TT_FATAL if the requested precision is not cached.
                 return ttml::nanobind::util::make_numpy_tensor(
-                    tensor.get_value(PreferredPrecision::FULL), new_type, composer);
+                    tensor.get_value(PreferredPrecision::FULL, /*autocast=*/cast_on_device), new_type, composer);
             },
             nb::arg("new_type") = std::nullopt,
             nb::arg("composer") = nullptr,
+            nb::arg("cast_on_device") = true,
             "Construct a numpy tensor from a Tensor");
         py_tensor.def(
             "to_string",

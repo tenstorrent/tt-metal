@@ -1,0 +1,47 @@
+training_config:
+  project_name: "tt_train_tinyllama_slimpajama"
+  seed: 5489
+  # Smoke-test cadence: checkpoint at step 10 (and 20), eval every step,
+  # only 10 eval batches per pass so 20 steps still finish quickly.
+  model_save_interval: 10
+  # Recipe A (paper-exact global batch 512, see prod yaml for math):
+  # batch_size = 4 * 32 chips = 128 global per microstep, then grad_accum=4
+  # microsteps per optimizer step => effective global batch = 128 * 4 = 512.
+  # The dp axis_mapper shards 128 sequences across 32 chips so each chip
+  # processes 4 sequences per microstep.
+  batch_size: 128
+  gradient_accumulation_steps: 4
+  num_epochs: 1
+  max_steps: 20
+  scheduler_type: warmup_linear
+  use_clip_grad_norm: true
+  clip_grad_norm_max_norm: 1.0
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama.yaml"
+
+  tokenized_data_dir: "/data/awliu/datasets/SlimPajama-6B-tokenized"
+  train_split: "train"
+  val_split: "validation"
+  n_chunks: 8
+
+  eval_interval: 1
+  eval_iters: 10
+
+  optimizer:
+    type: AdamW
+    lr: 0.0004
+    beta1: 0.9
+    beta2: 0.95
+    epsilon: 1.0e-8
+    weight_decay: 0.1
+    amsgrad: false
+    stochastic_rounding: false
+
+device_config:
+  enable_ddp: true
+  mesh_shape: [32, 1]
+
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.7
+  top_k: 50
+  top_p: 1.0

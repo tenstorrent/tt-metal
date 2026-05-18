@@ -1,0 +1,59 @@
+training_config:
+  project_name: "tt_train_tinyllama_slimpajama-6B"
+  seed: 5489
+  # model_save_interval: 1000
+  model_save_interval: 10
+  # Global batch per optimizer step. The data path follows train_nanogpt.py:
+  # ``batch_size`` is the GLOBAL count of sequences pulled from the host per
+  # microstep, and the dp axis_mapper inside ``collate_packed`` shards it
+  # across the 32 DP chips so each chip processes ``batch_size / dp_size``
+  # = 160 / 32 = 5 sequences (the per-chip micro batch). At per-chip = 5,
+  # SwiGLU activation [5, 2048, 5632] bf16 ~= 115 MiB which fits comfortably;
+  # higher per-chip values hit DRAM OOM at this seq_len.
+  batch_size: 160
+  gradient_accumulation_steps: 1
+  num_epochs: 1
+  # ~1 epoch through SlimPajama-6B-tokenized train split (6,405,226,567 tokens
+  # per train/meta.json). Tokens / opt step = batch_size * seq_len = 160 * 2048
+  # = 327,680. 6.41B / 327,680 ~= 19,547 opt steps; rounded to 19,550.
+  # max_steps: 19550
+  max_steps: 20
+  scheduler_type: warmup_linear
+  use_clip_grad_norm: true
+  clip_grad_norm_max_norm: 1.0
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama_bpe.yaml"
+
+  # Pre-tokenized SlimPajama-6B (uint16 .bin shards produced by
+  # tt-train/sources/examples/nano_gpt/pretraining/dataset_preprocessing.py).
+  # Activates the TinyLlama / lit_gpt PackedDataset-style data path.
+  tokenized_data_dir: "/data/awliu/datasets/SlimPajama-6B-tokenized"
+  train_split: "train"
+  val_split: "validation"
+  n_chunks: 8
+
+  # Periodic validation loss eval (matches TinyLlama paper:
+  # eval_step_interval=5000 / eval_iters=100). Scaled to this 3000-step run.
+  eval_interval: 500
+  eval_iters: 100
+
+  # Optimizer hyperparameters lifted from the TinyLlama paper (arxiv 2401.02385,
+  # pretrain/tinyllama.py): lr=4e-4, beta1=0.9, beta2=0.95, weight_decay=0.1.
+  optimizer:
+    type: AdamW
+    lr: 0.0004
+    beta1: 0.9
+    beta2: 0.95
+    epsilon: 1.0e-8
+    weight_decay: 0.1
+    amsgrad: false
+    stochastic_rounding: false
+
+device_config:
+  enable_ddp: true
+  mesh_shape: [32, 1]
+
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.7
+  top_k: 50
+  top_p: 1.0

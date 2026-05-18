@@ -4,6 +4,8 @@
 
 #include "autocast_tensor.hpp"
 
+#include <tt-logger/tt-logger.hpp>
+
 #include "core/tt_tensor_utils.hpp"
 
 namespace ttml::autograd {
@@ -36,10 +38,34 @@ bool AutocastTensor::has_full() const {
     return core::is_tensor_initialized(m_full_precision_tensor);
 }
 
-const tt::tt_metal::Tensor &AutocastTensor::get_tensor(PreferredPrecision preferred_precision) const {
+const tt::tt_metal::Tensor &AutocastTensor::get_tensor(PreferredPrecision preferred_precision, bool autocast) const {
+    TT_FATAL(has_half() || has_full(), "AutocastTensor has neither half nor full precision tensor initialized");
     // Non-float tensors (e.g. UINT32 embedding indices) are stored in the full-precision
     // slot and returned unchanged — they cannot be typecast to half/full float precision.
     if (has_full() && !is_float_dtype(m_full_precision_tensor.dtype())) {
+        return m_full_precision_tensor;
+    }
+
+    if (!autocast) {
+        if (preferred_precision == PreferredPrecision::HALF) {
+            if (!has_half()) {
+                log_warning(
+                    tt::LogAlways,
+                    "Requested half precision tensor but AutocastTensor has no half precision tensor initialized. "
+                    "Since autocast=false, returning full precision tensor instead. To create a half precision tensor, "
+                    "set autocast=true.");
+                return m_full_precision_tensor;
+            }
+            return m_half_precision_tensor;
+        }
+        if (!has_full()) {
+            log_warning(
+                tt::LogAlways,
+                "Requested full precision tensor but AutocastTensor has no full precision tensor initialized. Since "
+                "autocast=false, returning half precision tensor instead. To create a full precision tensor, set "
+                "autocast=true.");
+            return m_half_precision_tensor;
+        }
         return m_full_precision_tensor;
     }
 

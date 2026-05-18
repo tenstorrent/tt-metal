@@ -90,6 +90,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/cosine_annealing_scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/lambda_scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/linear_scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/scheduler_base.cpp
