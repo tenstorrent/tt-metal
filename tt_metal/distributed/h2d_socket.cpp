@@ -257,10 +257,13 @@ H2DSocket::H2DSocket(
     config_buffer_address_ = config_buffer_->address();
 
     // Initialize the persistent connector-state struct living in SHM.
-    // NamedShm::create zero-initialized the region; we only stamp the version.
+    // NamedShm::create zero-initialized the region; we stamp the version and
+    // mark clean_shutdown=1 so the first connect() sees "no prior crash" (the
+    // owner side has nothing to recover from).
     connector_state_ =
         reinterpret_cast<HDSocketConnectorState*>(static_cast<uint8_t*>(shm_->ptr()) + connector_state_offset_);
     connector_state_->version = kHDSocketConnectorStateVersion;
+    connector_state_->clean_shutdown = 1;
 }
 
 H2DSocket::~H2DSocket() noexcept {
@@ -272,6 +275,12 @@ H2DSocket::~H2DSocket() noexcept {
         log_warning(LogMetal, "H2DSocket destructor: barrier failed with exception: {}", e.what());
     } catch (...) {
         log_warning(LogMetal, "H2DSocket destructor: barrier failed with unknown exception");
+    }
+    // Mark a clean shutdown so the next connector sees clean_shutdown=1. A process
+    // that exits without running this destructor (crash, _exit, kill) leaves the
+    // 0 written by connect()/owner-construct in place, signalling unclean exit.
+    if (connector_state_) {
+        connector_state_->clean_shutdown = 1;
     }
     if (is_owner_) {
         pinned_memory_.reset();
@@ -441,6 +450,18 @@ std::unique_ptr<H2DSocket> H2DSocket::connect(const std::string& socket_id, std:
         "HDSocketConnectorState version mismatch: got {}, expected {}.",
         socket->connector_state_->version,
         kHDSocketConnectorStateVersion);
+    // Capture the prior process's clean_shutdown before overwriting it. A 0 here
+    // means the previous connector exited without running its destructor (crash,
+    // _exit, kill); callers can query had_clean_prior_shutdown() to react.
+    socket->prior_clean_shutdown_ = (socket->connector_state_->clean_shutdown != 0);
+    if (!socket->prior_clean_shutdown_) {
+        log_warning(
+            LogMetal,
+            "H2DSocket::connect: prior connector process exited without running its destructor. State has been "
+            "recovered from SHM, but downstream effects (in-flight writes, device-side counters) may need manual "
+            "inspection.");
+    }
+    socket->connector_state_->clean_shutdown = 0;
     socket->page_size_ = socket->connector_state_->page_size;
     socket->fifo_curr_size_ = socket->connector_state_->fifo_curr_size;
     socket->bytes_sent_ = socket->connector_state_->bytes_sent;

@@ -184,6 +184,14 @@ void run_sequential_connectors(
         auto h2d_socket = H2DSocket::connect(h2d_socket_id, 30000);
         auto d2h_socket = D2HSocket::connect(d2h_socket_id, 30000);
 
+        // Every prior connector destructed cleanly (owner stamps clean_shutdown=1
+        // on construct; each iteration's destructor reasserts it), so each
+        // attach here must observe clean_shutdown == 1.
+        EXPECT_TRUE(h2d_socket->had_clean_prior_shutdown())
+            << "H2D connector saw unclean prior shutdown after clean destructor";
+        EXPECT_TRUE(d2h_socket->had_clean_prior_shutdown())
+            << "D2H connector saw unclean prior shutdown after clean destructor";
+
         // set_page_size is idempotent and exercises the page_size_/fifo_curr_size_
         // flush path on every attach.
         h2d_socket->set_page_size(cfg.page_size);
@@ -263,6 +271,14 @@ void run_crash_safe_connector(
     {
         auto h2d_socket = H2DSocket::connect(h2d_socket_id, 30000);
         auto d2h_socket = D2HSocket::connect(d2h_socket_id, 30000);
+
+        // Child _exit()'d without running destructors, so the SHM clean_shutdown
+        // flag must still be 0 here — the resumed connectors should report the
+        // prior shutdown as unclean.
+        EXPECT_FALSE(h2d_socket->had_clean_prior_shutdown())
+            << "H2D connector failed to detect crashed child's unclean shutdown";
+        EXPECT_FALSE(d2h_socket->had_clean_prior_shutdown())
+            << "D2H connector failed to detect crashed child's unclean shutdown";
 
         // The parent intentionally does NOT call set_page_size — it must be
         // inherited from the child's flushed SHM state, alongside the byte and

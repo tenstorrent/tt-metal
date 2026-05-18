@@ -226,12 +226,15 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
         bytes_sent_info.addr_hi = static_cast<uint32_t>(bytes_sent_addr >> 32);
 
         // Map the persistent connector-state struct living past the pinned region.
-        // NamedShm::create zero-initialized the page; we only stamp the version.
-        // Hugepage fallback does not create an SHM region and cannot be exported,
-        // so connector_state_ stays null in that path.
+        // NamedShm::create zero-initialized the page; we stamp the version and set
+        // clean_shutdown=1 so the first connect() sees "no prior crash" (the owner
+        // side has nothing to recover from). Hugepage fallback does not create an
+        // SHM region and cannot be exported, so connector_state_ stays null in
+        // that path.
         connector_state_ =
             reinterpret_cast<HDSocketConnectorState*>(static_cast<uint8_t*>(shm_->ptr()) + connector_state_offset_);
         connector_state_->version = kHDSocketConnectorStateVersion;
+        connector_state_->clean_shutdown = 1;
     } else {
         data_info = init_host_buffer_hugepage(mesh_device);
 
@@ -297,6 +300,13 @@ D2HSocket::~D2HSocket() noexcept {
         log_warning(LogMetal, "D2HSocket destructor: barrier failed with exception: {}", e.what());
     } catch (...) {
         log_warning(LogMetal, "D2HSocket destructor: barrier failed with unknown exception");
+    }
+    // Mark a clean shutdown so the next connector sees clean_shutdown=1. A process
+    // that exits without running this destructor (crash, _exit, kill) leaves the
+    // 0 written by connect()/owner-construct in place, signalling unclean exit.
+    // connector_state_ is null in hugepage fallback mode (no SHM region).
+    if (connector_state_) {
+        connector_state_->clean_shutdown = 1;
     }
     if (is_owner_ && !using_hugepage_) {
         pinned_memory_.reset();
@@ -556,6 +566,18 @@ std::unique_ptr<D2HSocket> D2HSocket::connect(const std::string& socket_id, std:
         "HDSocketConnectorState version mismatch: got {}, expected {}.",
         socket->connector_state_->version,
         kHDSocketConnectorStateVersion);
+    // Capture the prior process's clean_shutdown before overwriting it. A 0 here
+    // means the previous connector exited without running its destructor (crash,
+    // _exit, kill); callers can query had_clean_prior_shutdown() to react (e.g.
+    // call discard_pending_pages() to drop stale data).
+    socket->prior_clean_shutdown_ = (socket->connector_state_->clean_shutdown != 0);
+    if (!socket->prior_clean_shutdown_) {
+        log_warning(
+            LogMetal,
+            "D2HSocket::connect: prior connector process exited without running its destructor. State has been "
+            "recovered from SHM, but stale pages may be pending in the FIFO; consider discard_pending_pages().");
+    }
+    socket->connector_state_->clean_shutdown = 0;
     socket->page_size_ = socket->connector_state_->page_size;
     socket->fifo_curr_size_ = socket->connector_state_->fifo_curr_size;
     socket->bytes_acked_ = socket->connector_state_->bytes_acked;

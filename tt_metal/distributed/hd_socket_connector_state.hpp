@@ -27,7 +27,12 @@ struct alignas(64) HDSocketConnectorState {
     uint32_t bytes_acked;     // D2H: live counter; H2D: unused
     uint32_t write_ptr;       // H2D only
     uint32_t read_ptr;        // D2H only
-    uint32_t _pad[9];
+    // Set to 0 on open (owner construct stamps 1 since no connector is yet attached;
+    // connect() writes 0 after reading the prior value); set to 1 in the destructor.
+    // A connector that reads 0 here knows the previous process exited without running
+    // its destructor (crash, _exit, kill).
+    uint32_t clean_shutdown;
+    uint32_t _pad[8];
 };
 static_assert(sizeof(HDSocketConnectorState) == 64, "HDSocketConnectorState must be 64 bytes");
 static_assert(alignof(HDSocketConnectorState) == 64, "HDSocketConnectorState must be cache-line aligned");
