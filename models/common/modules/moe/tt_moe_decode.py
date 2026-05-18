@@ -18,7 +18,7 @@ def _tt_to_torch_dtype(tt_dtype):
     raise ValueError(f"Unsupported tt dtype: {tt_dtype}")
 
 
-class _TTMoEDecodeState:
+class _TTMoEDecodeExpertState:
     def _load_weights():
         # TODO eventually support caching and loading weights
         pass
@@ -325,7 +325,7 @@ class TTMoEDecode:
         torch_b2: torch.Tensor | None = None,
     ):
         self.config = config
-        self.state = _TTMoEDecodeState(
+        self.state = _TTMoEDecodeExpertState(
             mesh_device,
             torch_w0,
             torch_w1,
