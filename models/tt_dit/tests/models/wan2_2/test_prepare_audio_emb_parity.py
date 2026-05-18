@@ -21,7 +21,7 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.wan2_2.audio_utils_wan import CausalAudioEncoder
+from ....models.transformers.wan2_2.audio_utils import CausalAudioEncoder
 from ....utils.check import assert_quality
 from ....utils.tensor import local_device_to_torch
 from ....utils.test import line_params

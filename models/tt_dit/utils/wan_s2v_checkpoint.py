@@ -2,40 +2,144 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Translate a Wan2.2-S2V-14B native state_dict into tt_dit's hierarchy.
+"""Wan2.2-S2V-14B checkpoint loading + naming translation.
 
-The reference checkpoint (``Wan-AI/Wan2.2-S2V-14B``) is published with the
-``WanModel_S2V`` module names from ``wan/modules/s2v/model_s2v.py``, NOT in
-Diffusers' ``WanTransformer3DModel`` layout. tt_dit's
-``WanS2VTransformer3DModel`` is built on top of the Diffusers layout, so we
-need a key rename pass before ``load_torch_state_dict`` will accept the
-checkpoint.
+The reference checkpoint at ``Wan-AI/Wan2.2-S2V-14B`` is **not** published as
+a Diffusers wrapper — there's no ``transformer/`` subfolder with the standard
+Diffusers config + per-module weight layout. Instead, the repo ships:
 
-Only key names change here — tensor shapes are left as-is. The receiving
-tt_dit modules' ``_prepare_torch_state`` methods handle:
+  * ``config.json`` — the ``WanModel_S2V`` constructor kwargs.
+  * ``diffusion_pytorch_model.safetensors.index.json`` + 4 safetensors shards
+    holding all 1260 weight keys in the reference repo's native naming
+    convention (``blocks.0.self_attn.q.weight``, ``head.head.weight``, etc.).
 
-  * splitting / TP-aware head-interleaved fusing of q/k/v into ``to_qkv``
-    (or ``k/v`` into ``to_kv``) — done by ``WanAttention._prepare_torch_state``,
-  * transposing Linear weights from HF ``[out, in]`` to ttnn ``[in, out]`` —
-    done by ``Linear._prepare_torch_state`` (and friends),
-  * reshaping ``Conv1d`` weight to the 5-D form ``ttnn.experimental.conv3d``
-    expects — done by ``CausalConv1d._prepare_torch_state``,
-  * permuting/reshaping ``LayerNorm`` weight for distributed sharding —
-    done by ``DistributedLayerNorm._prepare_torch_state``,
-  * the ``ffn.0 → ffn.net.0.proj`` / ``ffn.2 → ffn.net.2`` Diffusers ↔ raw
-    layout dance — done by ``WanTransformerBlock._prepare_torch_state``.
+Two pieces are needed to feed this into ``WanS2VTransformer3DModel``:
 
-So this mapper's only job is to produce keys in the *Diffusers* naming
-convention (e.g. ``blocks.{i}.attn1.to_q.weight``, ``ffn.net.0.proj.weight``,
-``condition_embedder.time_embedder.linear_1.weight``). Every reference
-module is loaded into an on-device tt_dit module — no keys are excluded.
+1. **Snapshot + state-dict loading** (this file, top section) — locate the HF
+   cache snapshot, parse ``config.json``, merge the 4 safetensors shards into
+   one flat CPU ``state_dict``.
+2. **HF → tt-dit name translation** (this file, bottom section) — rename keys
+   from the reference's native scheme to tt_dit's Diffusers-style hierarchy.
+   Tensor shapes are left as-is; the receiving tt_dit modules'
+   ``_prepare_torch_state`` methods handle splitting / fusing q/k/v, weight
+   transposes, Conv1d→Conv3d reshapes, etc.
+
+Only key names change here. Every reference module is loaded into an
+on-device tt_dit module — no keys are excluded.
 """
 
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
+from typing import Any
 
 import torch
+
+try:
+    from safetensors.torch import load_file as _load_safetensors_file
+except ImportError:  # pragma: no cover - safetensors should be available with diffusers
+    _load_safetensors_file = None
+
+
+# ---------------------------------------------------------------------------
+# Snapshot + state-dict loading
+# ---------------------------------------------------------------------------
+
+
+def find_s2v_snapshot(model_id: str = "Wan-AI/Wan2.2-S2V-14B") -> Path:
+    """Locate the latest HF cache snapshot for the S2V model.
+
+    Raises ``FileNotFoundError`` if the model isn't on disk. Download with:
+
+        huggingface-cli download Wan-AI/Wan2.2-S2V-14B
+    """
+    cache_root = Path.home() / ".cache" / "huggingface" / "hub"
+    repo_dir = cache_root / f"models--{model_id.replace('/', '--')}" / "snapshots"
+    if not repo_dir.exists():
+        raise FileNotFoundError(f"HF snapshot dir not found: {repo_dir}")
+    snaps = sorted(repo_dir.iterdir())
+    if not snaps:
+        raise FileNotFoundError(f"No snapshots under {repo_dir}")
+    return snaps[-1]
+
+
+def load_s2v_config(snapshot_dir: Path | str) -> dict[str, Any]:
+    """Parse the S2V model's ``config.json`` into a plain dict."""
+    cfg_path = Path(snapshot_dir) / "config.json"
+    with cfg_path.open() as f:
+        return json.load(f)
+
+
+def load_s2v_state_dict(snapshot_dir: Path | str) -> dict[str, torch.Tensor]:
+    """Merge the 4 safetensors shards into a single CPU ``state_dict``.
+
+    The resulting dict is keyed by the reference repo's native module names
+    (e.g. ``blocks.0.self_attn.q.weight``, ``head.modulation``,
+    ``casual_audio_encoder.encoder.conv1_local.conv.weight``,
+    ``audio_injector.injector.0.norm_q.weight``).
+
+    Pass the result through :func:`translate_s2v_state_dict` to convert to
+    tt_dit's naming before calling ``load_torch_state_dict``.
+    """
+    if _load_safetensors_file is None:
+        raise ImportError("safetensors is required to load Wan2.2-S2V-14B weights")
+
+    snapshot_dir = Path(snapshot_dir)
+    index_path = snapshot_dir / "diffusion_pytorch_model.safetensors.index.json"
+    with index_path.open() as f:
+        index = json.load(f)
+
+    weight_map = index["weight_map"]
+    shard_to_keys: dict[str, list[str]] = {}
+    for key, shard in weight_map.items():
+        shard_to_keys.setdefault(shard, []).append(key)
+
+    merged: dict[str, torch.Tensor] = {}
+    for shard, _keys in sorted(shard_to_keys.items()):
+        shard_path = snapshot_dir / shard
+        shard_dict = _load_safetensors_file(str(shard_path))
+        # Only keep the keys the index says belong to this shard (the
+        # safetensors files may contain extras for sharing/dedup).
+        for k in _keys:
+            merged[k] = shard_dict[k]
+
+    if len(merged) != len(weight_map):
+        missing = set(weight_map) - set(merged)
+        raise RuntimeError(
+            f"Loaded {len(merged)} keys but expected {len(weight_map)}; "
+            f"missing {len(missing)} (first few: {sorted(missing)[:5]})"
+        )
+
+    return merged
+
+
+# ---------------------------------------------------------------------------
+# HF → tt-dit name translation
+# ---------------------------------------------------------------------------
+#
+# The reference checkpoint is published with the ``WanModel_S2V`` module names
+# from ``wan/modules/s2v/model_s2v.py``, NOT in Diffusers' ``WanTransformer3DModel``
+# layout. tt_dit's ``WanS2VTransformer3DModel`` is built on top of the Diffusers
+# layout, so we need a key rename pass before ``load_torch_state_dict`` will
+# accept the checkpoint.
+#
+# This mapper's only job is to produce keys in the *Diffusers* naming convention
+# (e.g. ``blocks.{i}.attn1.to_q.weight``, ``ffn.net.0.proj.weight``,
+# ``condition_embedder.time_embedder.linear_1.weight``). The receiving tt_dit
+# modules' ``_prepare_torch_state`` methods handle the tensor-side work:
+#   * splitting / TP-aware head-interleaved fusing of q/k/v into ``to_qkv``
+#     (or ``k/v`` into ``to_kv``) — done by ``WanAttention._prepare_torch_state``,
+#   * transposing Linear weights from HF ``[out, in]`` to ttnn ``[in, out]`` —
+#     done by ``Linear._prepare_torch_state`` (and friends),
+#   * reshaping ``Conv1d`` weight to the 5-D form ``ttnn.experimental.conv3d``
+#     expects — done by ``CausalConv1d._prepare_torch_state``,
+#   * permuting/reshaping ``LayerNorm`` weight for distributed sharding —
+#     done by ``DistributedLayerNorm._prepare_torch_state``,
+#   * the ``ffn.0 → ffn.net.0.proj`` / ``ffn.2 → ffn.net.2`` Diffusers ↔ raw
+#     layout dance — done by ``WanTransformerBlock._prepare_torch_state``.
+
 
 # Top-level renames that don't depend on a block index.
 _FLAT_RENAMES: dict[str, str] = {

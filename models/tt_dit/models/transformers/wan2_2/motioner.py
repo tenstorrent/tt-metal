@@ -22,8 +22,7 @@ runs on host via :func:`s2v_rope.rope_precompute` and is uploaded once per
 clip.
 
 The alternative ``MotionerTransformers`` path (``enable_motioner=True``) is
-not in scope; :class:`MotionerTransformersWan` is a placeholder that raises
-on instantiation so the class hierarchy stays parallel to the reference.
+rejected by :class:`WanS2VTransformer3DModel.__init__` and is not in scope.
 """
 
 from __future__ import annotations
@@ -247,16 +246,3 @@ class FramePackMotionerWan(Module):
         rope_input = torch.zeros(B, N_motion, self.num_heads, self.head_dim, dtype=torch.float32)
         motion_rope = rope_precompute(rope_input, grid_sizes, self.freqs, start=None)
         return motion_tokens, motion_rope
-
-
-class MotionerTransformersWan(Module):
-    """Placeholder for the alternative ``MotionerTransformers`` path.
-
-    Kept so the class hierarchy parallels ``wan/modules/s2v/motioner.py``,
-    but ``enable_motioner=True`` is rejected by
-    :class:`WanS2VTransformer3DModel.__init__`, so instantiation is never
-    expected.
-    """
-
-    def __init__(self, *_args, **_kwargs) -> None:
-        raise NotImplementedError("MotionerTransformersWan is not implemented; production uses FramePackMotionerWan")

@@ -18,8 +18,8 @@ load this checkpoint directly. This pipeline:
     for the UMT5 tokenizer + text encoder and the VAE decoder/encoder
     (these components are weight-compatible across T2V / I2V / S2V).
   * **Loads** the S2V DiT transformer weights from the native S2V snapshot
-    via :func:`wan_s2v_loader.load_s2v_state_dict` and the name translator at
-    :func:`wan_s2v_weight_map.translate_s2v_state_dict`.
+    via :func:`wan_s2v_checkpoint.load_s2v_state_dict` and the name translator
+    at :func:`wan_s2v_checkpoint.translate_s2v_state_dict`.
   * **Loads** the wav2vec2-large-xlsr-53 audio encoder from the bundled copy
     inside the S2V snapshot.
   * **Builds** ``UniPCMultistepScheduler`` from scratch with the WAN default
@@ -97,10 +97,14 @@ from ...utils.tensor import (
     typed_tensor_2dshard,
 )
 from ...utils.video import export_to_video, export_to_video_with_audio
+from ...utils.wan_s2v_checkpoint import (
+    find_s2v_snapshot,
+    load_s2v_config,
+    load_s2v_state_dict,
+    translate_s2v_state_dict,
+)
 from .fm_solvers_unipc import FlowUniPCMultistepScheduler
 from .pipeline_wan import TransformerState, WanPipeline
-from .wan_s2v_loader import find_s2v_snapshot, load_s2v_config, load_s2v_state_dict
-from .wan_s2v_weight_map import translate_s2v_state_dict
 
 # Production S2V repo (native naming, safetensors at root).
 _DEFAULT_S2V_CHECKPOINT = "Wan-AI/Wan2.2-S2V-14B"

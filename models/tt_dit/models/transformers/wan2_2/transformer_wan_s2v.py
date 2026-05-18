@@ -38,8 +38,8 @@ from ....layers.module import Parameter
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.padding import get_padded_vision_seq_len, pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch, local_device_to_torch
-from .audio_utils_wan import AudioInjector_WAN, CausalAudioEncoder
-from .motioner_wan import FramePackMotionerWan
+from .audio_utils import AudioInjector_WAN, CausalAudioEncoder
+from .motioner import FramePackMotionerWan
 from .s2v_rope import rope_precompute
 from .transformer_wan import WanTransformer3DModel
 

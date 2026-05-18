@@ -21,7 +21,7 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.wan2_2.motioner_wan import FramePackMotionerWan
+from ....models.transformers.wan2_2.motioner import FramePackMotionerWan
 from ....models.transformers.wan2_2.s2v_rope import rope_params, rope_precompute
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....utils.check import assert_quality
