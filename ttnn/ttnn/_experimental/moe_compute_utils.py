@@ -17,8 +17,8 @@ that contain **three logical expert weight matrices**:
 
 The layout is highly specific to the MoE ring-all-to-all kernel implementation
 and is derived from the ``(hidden_size, intermediate_size)`` pair.  Per-core
-tile counts are computed by ``shard_tiles()`` (Euclidean-rhythm / Bresenham
-distribution) and ``w2_shard_tiles()`` (complementary pattern for load
+tile counts are computed by ``_shard_tiles()`` (Euclidean-rhythm / Bresenham
+distribution) and ``_w2_shard_tiles()`` (complementary pattern for load
 balancing). These formulas must stay in sync with the constexpr equivalents
 in ``moe_ring_common.h``.
 
@@ -63,7 +63,7 @@ memory configs, or see ``test_moe_compute_6U.py`` for the full flow.
 
 **Available functions**
 
-- Shard formulas: ``shard_tiles``, ``w2_shard_tiles``, ``auto_output_width_shard_dim``
+- Shard formulas: ``_shard_tiles``, ``_w2_shard_tiles``, ``auto_output_width_shard_dim``
 - Shard maps: ``get_weight_core_shard_maps(mesh_device, hidden_size, intermediate_size)``
 - Memory configs: ``get_weight_mem_configs(...)``
 - Non-bias: ``prepare_w0_w1_tensor_for_moe_compute``, ``prepare_w2_tensor_for_moe_compute``
@@ -320,7 +320,7 @@ BLOCK_TILES_W = 4
 BLOCK_TILES_H = 7
 
 # Historical model-specific shard constants — superseded by the generalized
-# shard_tiles() / w2_shard_tiles() formulas below.  Kept as commented-out
+# _shard_tiles() / _w2_shard_tiles() formulas below.  Kept as commented-out
 # reference so reviewers can compare old vs new distributions.
 #
 # DeepSeek (hidden=7168, intermediate=2048): the generalized formulas produce
@@ -347,7 +347,7 @@ BLOCK_TILES_H = 7
 ####################################################################################################
 
 
-def shard_tiles(n_tiles: int, core_id: int, n_cores: int) -> int:
+def _shard_tiles(n_tiles: int, core_id: int, n_cores: int) -> int:
     """Euclidean rhythm (Bresenham) distribution: tiles owned by ring position core_id."""
     n_big = n_tiles % n_cores
     small = n_tiles // n_cores
@@ -355,12 +355,12 @@ def shard_tiles(n_tiles: int, core_id: int, n_cores: int) -> int:
     return small + (1 if is_big else 0)
 
 
-def w2_shard_tiles(Ht: int, core_id: int, Nt: int, n_cores: int) -> int:
+def _w2_shard_tiles(Ht: int, core_id: int, Nt: int, n_cores: int) -> int:
     """W2 hidden-tile distribution per ring position.
 
     Uses complementary pattern when Nt%n_cores + Ht%n_cores == n_cores:
     big W2 cores = small W0/W1 cores (balances DRAM load).
-    Otherwise falls back to shard_tiles(Ht, core_id, n_cores).
+    Otherwise falls back to _shard_tiles(Ht, core_id, n_cores).
     """
     n_big_nt = Nt % n_cores
     n_big_ht = Ht % n_cores
@@ -368,7 +368,7 @@ def w2_shard_tiles(Ht: int, core_id: int, Nt: int, n_cores: int) -> int:
     if n_big_nt + n_big_ht == n_cores:
         is_big_nt = n_big_nt > 0 and (core_id * n_big_nt) % n_cores < n_big_nt
         return small_ht if is_big_nt else small_ht + 1
-    return shard_tiles(Ht, core_id, n_cores)
+    return _shard_tiles(Ht, core_id, n_cores)
 
 
 def auto_output_width_shard_dim(hidden_size: int, tile_size: int = 32, max_dim: int = 4) -> int:
@@ -774,7 +774,7 @@ def prepare_w2_tensor_with_bias(
 def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size: int):
     """Compute per-ring-position shard maps for W0/W1 and W2 weight tensors.
 
-    Uses shard_tiles() (Euclidean rhythm) for W0/W1 and w2_shard_tiles()
+    Uses _shard_tiles() (Euclidean rhythm) for W0/W1 and _w2_shard_tiles()
     (complementary when Nt%n_cores + Ht%n_cores == n_cores) for W2.
     Ring ordering: DRAM bank logical coords sorted by (y, x) descending.
     """
@@ -796,10 +796,10 @@ def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size:
     for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
         sorted_dram_core_coords.append(core2dram[core_coord])
 
-        w0_w1_tiles = shard_tiles(Nt, ring_pos, n_cores)
+        w0_w1_tiles = _shard_tiles(Nt, ring_pos, n_cores)
         w0_w1_shard_map.append(w0_w1_tiles)
 
-        w2_tiles = w2_shard_tiles(Ht, ring_pos, Nt, n_cores)
+        w2_tiles = _w2_shard_tiles(Ht, ring_pos, Nt, n_cores)
         last_group_tiles = w2_tiles - (groups_per_core - 1) * BLOCK_TILES_W
         last_group_pad_tiles = groups_per_core * BLOCK_TILES_W - w2_tiles
         w2_shard_map_list.append((last_group_tiles, last_group_pad_tiles))
