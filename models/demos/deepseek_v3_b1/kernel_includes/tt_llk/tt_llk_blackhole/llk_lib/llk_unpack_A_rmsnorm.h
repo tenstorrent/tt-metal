@@ -107,10 +107,48 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
         TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001);  // set srcB ch0_z = 2
     static constexpr std::uint32_t srcb_clear_z =
         TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001);  // set srcB ch0_z = 0
+
     if (num_faces == 1) {
         constexpr std::uint32_t outerloop = 1;
         constexpr std::uint32_t innerloop = num_tiles;
         ckernel_template tmp(outerloop, innerloop, unpack_srca);
+        tmp.set_start_op(unpack_srcb_set_dvalid);
+        tmp.program();
+    } else if (transpose_of_faces) {
+        // Full-tile transpose path. Combined with the within-face 16x16
+        // transpose (set via Haloize_mode at init), this produces a 32x32
+        // transpose into SrcA. The structure mirrors the standard (non-rmsnorm)
+        // `_llk_unpack_A_mop_config_` transpose branch, but folds SrcB DVALID
+        // into the MOP start_op (fires ONCE) instead of pairing it with every
+        // SrcA UNPACR -- which is the property that keeps the handshake
+        // aligned with `_llk_math_rmsnorm_bcast_scalar_dest_reuse_` (single
+        // MOVD2B + STALLWAIT(SRCB_VLD), then final SETRWC(CLR_B)).
+        //
+        // Narrowed to the only configuration sampling needs today: a single
+        // 32x32 tile (num_tiles==1, num_faces==4). Extending to multi-tile
+        // would require start_op to fire once for the whole MOP, but it fires
+        // per outer loop iteration; with outer==1 we preserve that property.
+        LLK_ASSERT(num_tiles == 1, "rmsnorm-style transpose path supports num_tiles==1 only");
+        LLK_ASSERT(num_faces == 4, "rmsnorm-style transpose path supports num_faces==4 only");
+
+        // Replay buffer streams the 4 face reads in transposed input order
+        // (0, 2, 1, 3), with one mid-sequence SETADCZW to roll srcA ch0_z
+        // from 4 back to 1 before reading the second pair. The body of the
+        // MOP is a single replay_insn so outerloop==innerloop==1 and the
+        // start_op fires exactly once.
+        constexpr std::uint32_t replay_buf_len = 5;
+        load_replay_buf(0, replay_buf_len, [] {
+            TTI_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);  // face 0 (z=0->2)
+            TTI_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);  // face 2 (z=2->4)
+            TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);                                // srcA ch0_z = 1
+            TTI_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);  // face 1 (z=1->3)
+            TTI_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);  // face 3 (z=3->5)
+        });
+        // `_llk_unpack_A_` clears srcA ch0_z to 0 before each MOP run, so we
+        // don't need a trailing SETADCZW cleanup inside the replay buffer.
+        constexpr std::uint32_t outerloop = 1;
+        constexpr std::uint32_t innerloop = 1;
+        ckernel_template tmp(outerloop, innerloop, lltt::replay_insn(0, replay_buf_len));
         tmp.set_start_op(unpack_srcb_set_dvalid);
         tmp.program();
     } else {
