@@ -37,6 +37,10 @@ inline void llk_math_eltwise_binary_init(
     const std::uint32_t operand_id = get_operand_id(operand_A);
     const ckernel::TensorShape tensor_shape_A = get_operand_tensor_shape(operand_id);
 
+    static_assert(
+        eltwise_binary_type == EltwiseBinaryType::ELWMUL || math_fidelity == MathFidelity::LoFi,
+        "Math fidelity must be LoFi for non-ELWMUL ops");
+
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
         _llk_math_eltwise_binary_init_<eltwise_binary_type, math_fidelity, binary_reuse_dest>(
             tensor_shape_A, acc_to_dest);
@@ -72,6 +76,10 @@ template <
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true) {
+    static_assert(
+        eltwise_binary_type == EltwiseBinaryType::ELWMUL || math_fidelity == MathFidelity::LoFi,
+        "Math fidelity must be LoFi for non-ELWMUL ops");
+
     WAYPOINT("MBIW");
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
         const bool clear_in_fp32_mode = is_fp32_dest_acc_en && clear_fp32_dst_acc;
