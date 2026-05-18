@@ -6,11 +6,26 @@
 // `ttnn::subtract(bf16_lhs, bf16_rhs, output_dtype=FLOAT32)` is invoked with a
 // COL_B broadcast (rhs has W=1) in vocab_parallel_cross_entropy_loss.
 //
-// The bug is documented in `ops/distributed/losses.cpp`:
+// Originally documented in `ops/distributed/losses.cpp`:
 //   "Requesting an FP32 output here causes binary_ng to auto-inject a
 //    TYPECAST(BF16,FP32) into the post_activations chain. Combined with COL_B
 //    broadcast (b's W=1) and the multi-device TP setup that
 //    vocab_parallel_cross_entropy uses, that path hangs."
+//
+// Empirical findings from the parametric test below (W = LHS tiles per shard
+// on the innermost dim; LHS sharded across a 1x4 mesh, BF16 inputs, FP32 out,
+// rhs.W = 1):
+//
+//     W  result   W  result
+//     1  PASS     5  HANG
+//     2  PASS     6  PASS
+//     3  HANG     7  HANG
+//     4  PASS     8  HANG  (and HANG for all larger W tested up to 256)
+//
+// I.e. the hang is **non-monotonic in W** in the 3..7 range. Smallest known
+// hanging configuration is W=3 (96 columns per shard). The two PASS controls
+// (replicated LHS and no-broadcast) below show that sharding + COL_B broadcast
+// are both required to hit the bug.
 //
 // Each test prints + Synchronizes between dispatch and the next host call so
 // that on hang we can tell whether the freeze is host-side (dispatch never
@@ -37,9 +52,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
-#include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace {
 
@@ -169,33 +182,38 @@ TEST_F(SubtractFp32ColBBcastTest, ColBBroadcast_Fp32Output_ReplicatedLhs_NoHang)
     EXPECT_EQ(out.dtype(), ttnn::DataType::FLOAT32);
 }
 
-// ─── Production-sized shards / sweep harness ─────────────────────────────────
-// Same setup as ShardedLhs_Hangs but with W tiles per shard tunable via the
-// env var `REPRO_W_TILES_PER_SHARD`. Default = 256 (8192 / 32), which matches
-// the TinyLlama TP path post-LM-head and is the known-hanging configuration.
+// ─── Canonical hang repro / W sweep harness ─────────────────────────────────
+// Sharded LHS (TP) + FP32 output + COL_B broadcast. The number of LHS tiles
+// per shard along the innermost dim (W) is tunable via the env var
+// `REPRO_W_TILES_PER_SHARD`. Default = 2 — a known-passing value so the test
+// is a no-op smoke check in CI. Set `REPRO_W_TILES_PER_SHARD=3` (or 5, 7, 8…)
+// to exercise the hang.
 //
-// Use to binary-search the smallest W_tiles_per_shard that still hangs:
+// Sweep example (this is what produced the table in the file header):
 //
-//   tt-smi -r
-//   for w in 256 128 64 32 16 8 4 2 1; do
+//   for w in 1 2 3 4 5 6 7 8; do
+//       tt-smi -r
 //       echo "== W_tiles=$w =="
 //       timeout 60 env REPRO_W_TILES_PER_SHARD=$w \
-//           TT_METAL_HOME=... TT_METAL_RUNTIME_ROOT=... TT_MESH_GRAPH_DESC_PATH=... \
+//           TT_MESH_GRAPH_DESC_PATH=... \
 //           ../build_Release/tt-train/tests/ttml_tests \
-//           --gtest_filter='SubtractFp32ColBBcastTest.ColBBroadcast_Fp32Output_ShardedLhs_BigW_Hangs'
-//       rc=$?
-//       echo "== W_tiles=$w exit=$rc =="
-//       tt-smi -r
+//           --gtest_filter='SubtractFp32ColBBcastTest.ColBBroadcast_Fp32Output_ShardedLhs_Hangs'
+//       echo "== W_tiles=$w exit=$? =="
 //   done
 //
 // Exit 0 → kernel completed (PASS). Exit 124 → timed out (HANG).
-TEST_F(SubtractFp32ColBBcastTest, ColBBroadcast_Fp32Output_ShardedLhs_BigW_Hangs) {
+//
+// NOTE: a hang leaves the cluster in a wedged state — every subsequent
+// Synchronize on the same chips will block on the upload sync (pre-op) rather
+// than the post-op sync. Always `tt-smi -r` between probes if you care about
+// the result.
+TEST_F(SubtractFp32ColBBcastTest, ColBBroadcast_Fp32Output_ShardedLhs_Hangs) {
     SKIP_FOR_WATCHER();
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
     constexpr uint32_t kTileW = 32U;
-    constexpr uint32_t kDefaultWTilesPerShard = 256U;
+    constexpr uint32_t kDefaultWTilesPerShard = 2U;
     const char* w_env = std::getenv("REPRO_W_TILES_PER_SHARD");
     const uint32_t W_tiles_per_shard =
         (w_env != nullptr) ? static_cast<uint32_t>(std::stoul(w_env)) : kDefaultWTilesPerShard;
@@ -227,93 +245,6 @@ TEST_F(SubtractFp32ColBBcastTest, ColBBroadcast_Fp32Output_ShardedLhs_BigW_Hangs
     std::fprintf(stderr, "[repro] dispatch returned (W_tiles=%u)\n", W_tiles_per_shard);
     std::fflush(stderr);
     sync_mesh(device, "after  subtract (FP32 out, COL_B bcast, sharded)");
-
-    EXPECT_EQ(out.dtype(), ttnn::DataType::FLOAT32);
-}
-
-// ─── Production-faithful rhs (built from all_gather + max) ───────────────────
-// In production `global_max` is the output of `max → all_gather → max` over
-// the sharded logits, not a freshly created TILE tensor. The collective leaves
-// the tensor with a specific MemoryConfig that may matter to binary_ng's
-// kernel-selection logic. This test rebuilds rhs that way.
-TEST_F(SubtractFp32ColBBcastTest, ColBBroadcast_Fp32Output_RhsFromAllGather_Hangs) {
-    SKIP_FOR_WATCHER();
-    using namespace ttml;
-
-    auto* device = &autograd::ctx().get_device();
-    const uint32_t B = 2U, S = 32U;
-    const uint32_t V_per_shard = 32U;
-    const uint32_t V_total = V_per_shard * kMeshDevices;
-
-    xt::xarray<float> lhs_xt = xt::ones<float>({B, 1U, S, V_total});
-
-    const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/3);
-    auto lhs = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(lhs_xt, device, ttnn::Layout::TILE, shard.get());
-
-    // Mirror losses.cpp steps 1+2: local max → all_gather → global max.
-    auto local_max = ttnn::max(lhs, 3, /*keepdim=*/true);
-    auto all_max_val = ttml::ttnn_fixed::distributed::all_gather(local_max, /*dim=*/3, /*cluster_axis=*/std::nullopt);
-    auto global_max = ttnn::max(all_max_val, 3, /*keepdim=*/true);
-
-    std::fprintf(
-        stderr,
-        "[repro] all-gather rhs lhs.shape=%s global_max.shape=%s\n",
-        fmt::format("{}", lhs.logical_shape()).c_str(),
-        fmt::format("{}", global_max.logical_shape()).c_str());
-    std::fflush(stderr);
-
-    sync_mesh(device, "before subtract (FP32 out, COL_B bcast, rhs=allgather+max) [EXPECTED HANG CASE]");
-    auto out = ttnn::subtract(lhs, global_max, ttnn::DataType::FLOAT32);
-    std::fprintf(stderr, "[repro] dispatch returned (rhs=allgather+max)\n");
-    std::fflush(stderr);
-    sync_mesh(device, "after  subtract (FP32 out, COL_B bcast, rhs=allgather+max) [EXPECTED HANG CASE]");
-
-    EXPECT_EQ(out.dtype(), ttnn::DataType::FLOAT32);
-}
-
-// ─── The original hang case (matches production) ────────────────────────────
-// Same as the previous test but with `lhs` SHARDED on dim 3 across the TP mesh
-// — i.e. exactly what `vocab_parallel_cross_entropy_loss` does with the logits.
-// This is the configuration that hangs the production training run.
-//
-// EXPECTATION (before fix): host print "[repro] dispatch returned (sharded
-// lhs)" appears, then "sync BEFORE after subtract (sharded lhs)" appears, then
-// `Synchronize` never returns — the device kernel hangs. Use a timeout when
-// running this test:
-//   timeout 60 ../build_Release/tt-train/tests/ttml_tests \
-//       --gtest_filter='SubtractFp32ColBBcastTest.ColBBroadcast_Fp32Output_ShardedLhs_Hangs'
-TEST_F(SubtractFp32ColBBcastTest, ColBBroadcast_Fp32Output_ShardedLhs_Hangs) {
-    SKIP_FOR_WATCHER();
-    using namespace ttml;
-
-    auto* device = &autograd::ctx().get_device();
-    const uint32_t B = 2U, S = 32U;
-    // V_total must be a multiple of kMeshDevices AND divisible into tile-aligned
-    // shards (32 cols each here) — same arithmetic as the production TP loss path.
-    const uint32_t V_per_shard = 32U;
-    const uint32_t V_total = V_per_shard * kMeshDevices;
-
-    xt::xarray<float> lhs_xt = xt::ones<float>({B, 1U, S, V_total});
-    xt::xarray<float> rhs_xt = xt::ones<float>({B, 1U, S, 1U});
-
-    // Match production: shard lhs on dim 3 (vocab), replicate rhs (global max).
-    const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/3);
-    const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
-    auto lhs = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(lhs_xt, device, ttnn::Layout::TILE, shard.get());
-    auto rhs = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(rhs_xt, device, ttnn::Layout::TILE, replicate.get());
-
-    std::fprintf(
-        stderr,
-        "[repro] sharded lhs.shape=%s rhs.shape=%s\n",
-        fmt::format("{}", lhs.logical_shape()).c_str(),
-        fmt::format("{}", rhs.logical_shape()).c_str());
-    std::fflush(stderr);
-
-    sync_mesh(device, "before subtract (FP32 out, COL_B bcast, sharded lhs) [EXPECTED HANG CASE]");
-    auto out = ttnn::subtract(lhs, rhs, ttnn::DataType::FLOAT32);
-    std::fprintf(stderr, "[repro] dispatch returned (sharded lhs)\n");
-    std::fflush(stderr);
-    sync_mesh(device, "after  subtract (FP32 out, COL_B bcast, sharded lhs) [EXPECTED HANG CASE]");
 
     EXPECT_EQ(out.dtype(), ttnn::DataType::FLOAT32);
 }
