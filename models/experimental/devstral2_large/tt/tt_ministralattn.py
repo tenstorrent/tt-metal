@@ -1,737 +1,366 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: Apache-2.0
-"""
-TT self-attention for Devstral-2 123B (Hugging Face ``Ministral3Attention``).
 
-Per ``reference/model_structure.txt``, each decoder layer has::
+"""Self-attention for Devstral-2 / Ministral3.
 
-    self_attn: Ministral3Attention(
-        q_proj: Linear(12288 -> 12288, bias=False)
-        k_proj: Linear(12288 -> 1024, bias=False)
-        v_proj: Linear(12288 -> 1024, bias=False)
-        o_proj: Linear(12288 -> 12288, bias=False)
-    )
+HF reference (``Ministral3Attention``)::
 
-That is the same *pattern* as Devstral-Small-2 / Ministral3 (GQA, separate Q/K/V/O linears). HF
-``forward`` applies RoPE to Q/K, then multiplies Q by ``get_llama_4_attn_scale`` from
-``rope_parameters`` (``llama_4_scaling_beta``, ``original_max_position_embeddings``), then
-standard grouped attention and ``o_proj`` — see
-``transformers.models.ministral3.modeling_ministral3.Ministral3Attention``.
+    q = q_proj(x); k = k_proj(x); v = v_proj(x)           # (B, S, Hq*D), (B, S, Hkv*D), (B, S, Hkv*D)
+    q, k = reshape_to_heads(q, k)                          # (B, Hq, S, D), (B, Hkv, S, D)
+    q, k = apply_rotary_pos_emb(q, k, cos, sin)
+    q = q * llama4_scale(position_ids)                     # post-RoPE query rescale
+    attn = SDPA(q, repeat_kv(k), repeat_kv(v))             # GQA via repeat-along-heads
+    out = o_proj(reshape(attn))
 
-Llama-4-style **query scaling after RoPE** is implemented here on top of
-:class:`~models.tt_transformers.tt.attention.Attention` (same device-side path as the small
-Ministral3 stack: post-RoPE Q scaling, ``position_ids`` on prefill). This module keeps the **runtime
-class name** ``Attention`` so meta / ``layers.{i}.attention.*`` weight keys resolve like production
-Llama-family attention.
+TP plan (matches ``Ministral3Config.base_model_tp_plan``):
+  - ``q_proj``, ``k_proj``, ``v_proj``: **column-parallel** (each device owns
+    ``n_local_heads`` queries and ``n_local_kv_heads`` KV heads).
+  - ``o_proj``: **row-parallel** + all-reduce along the TP axis.
 
-On **multi-device** meshes (non-Galaxy) with ~12k hidden, width-sharded DRAM ``TilizeDeviceOperation``
-for ``wqkv`` / ``wo`` can exceed static L1 circular-buffer limits on **Blackhole** and **Wormhole T3K**.
-:class:`TtDevstral2LargeAttention` forces **interleaved DRAM** for those uploads (same mitigation as
-:class:`~models.experimental.devstral2_large.tt.tt_ministralmlp.TtDevstral2LargeMLP` weight tilize).
+Llama-4 query scaling is folded into the cos/sin tables of ``TtRotaryEmbedding`` so the device-side
+RoPE op produces the rescaled query directly — no extra multiply.
 
-Decode QKV defaults to DRAM-sharded matmuls, which require width-sharded weights; that conflicts
-with interleaved uploads and with ``interleaved_to_sharded`` on full weights (huge L1 CBs). When the
-same mitigation applies, decode reuses the **short-sequence prefill** multicast QKV program and
-**DRAM** QKV output mem configs. **WO decode** for that setup is handled by a dedicated
-:meth:`TtDevstral2LargeAttention.forward_decode` (not the generic ``Attention.forward_decode`` tail):
-concat output is moved to **L1 interleaved**, a single multicast ``ttnn.linear`` with
-:func:`_decode_wo_interleaved_multicast_prog_cfg` and interleaved I/O, then **width-sharded** for
-``tt_all_reduce`` — no DRAM-sharded WO matmul and no ``tt_all_gather`` + width-sharded activation
-path that conflicts with interleaved ``wo``.
-
-Prefill ``wo`` (:meth:`~models.tt_transformers.tt.attention.Attention.forward_prefill` ``ttnn.linear``)
-uses ``ModelArgs.get_attn_wo_program_config``. For ``MatmulMultiCoreReuseMultiCastProgramConfig``, the
-TTNN constructor defaults **omitted** ``out_block_h`` / ``out_block_w`` to ``per_core_M`` /
-``per_core_N`` (see ``matmul_nanobind.cpp``). For wide 12k ``wo`` that makes ``out_block_w`` ≈ 48
-tiles and overflows L1 for circular buffers on wide multi-device paths — unrelated to weight
-**sharding** (DRAM width shard is already correct; the issue is per-op **output block** sizing). This
-class wraps ``get_attn_wo_program_config`` and supplies minimal ``out_block_*`` and ``out_subblock_w``
-for **prefill** when
-:func:`~models.experimental.devstral2_large.tt.device_dram_mitigation.devstral2_large_multi_device_dram_mitigation`
-is active (conceptually similar to :class:`TtDevstral2LargeRMSNorm` using a tight multicore norm config).
-
-Activation row count for ``program_config`` still comes from shared ``Attention.forward_prefill``.
-Decode on multi-device meshes with DRAM tilize mitigation uses :meth:`forward_decode` below instead
-of the generic ``Attention.forward_decode`` gather + DRAM-sharded WO tail.
+KV cache layout: ``[batch, n_local_kv_heads, max_seq_len, head_dim]`` on each device, DRAM, no
+paging in this baseline implementation. SDPA decode uses
+``ttnn.transformer.scaled_dot_product_attention_decode``; prefill uses
+``ttnn.transformer.scaled_dot_product_attention``.
 """
 
 from __future__ import annotations
 
-import math
+from typing import Optional
 
+import torch
 import ttnn
 
-from models.experimental.devstral2_large.tt.model_utils import (
-    devstral2_large_multi_device_dram_mitigation,
+from models.experimental.devstral2_large.tt.ccl_helpers import all_reduce_replicate
+from models.experimental.devstral2_large.tt.model_args import Devstral2Args
+from models.experimental.devstral2_large.tt.tt_ministral_rotary_emb import (
+    TtRotaryEmbedding,
+    permute_split_half_to_interleaved,
 )
-from models.tt_transformers.tt.attention import Attention
-from models.tt_transformers.tt.ccl import tt_all_reduce
-from models.tt_transformers.tt.common import Mode
+
+__all__ = ["TtAttention"]
 
 
-def _tighten_wo_prefill_prog_cfg(cfg, *, per_core_K_tiles: int | None = None):
-    """Tighten WO matmul output blocks on wide multi-device paths (prefill + decode interleaved WO).
+# --- Weight loading ---
 
-    Default TTNN behavior sets ``out_block_w`` to ``per_core_N`` (~48 tiles), which overflows static
-    L1 CBs for ~12k-wide WO. Pinning to **tiny** blocks fixes that; pinning to **1×1** only left
-    ``out_subblock_w=1`` (``out_block_w=1`` forbids ``out_subblock_w=2`` per
-    ``out_block_w % out_subblock_w == 0``), which the perf report flags as under-powered.
 
-    Output subblock product is capped at 4 (DST tile budget); when ``per_core_M == 1`` we can spend
-    that budget entirely on ``out_subblock_w`` (1×4) instead of 1×2. When ``per_core_N`` is even, use
-    ``out_block_w/out_subblock_w`` that match the largest divisor of ``per_core_N`` ≤ 4 (so out subblocks
-    pack the full DST budget). When ``per_core_N`` is odd (some decode shardings), fall back to ``1×1``.
+def _to_tt_weight(
+    w_hf: torch.Tensor,
+    mesh_device,
+    args: Devstral2Args,
+    dtype: ttnn.DataType,
+    *,
+    shard_dim: Optional[int],
+) -> ttnn.Tensor:
+    """Upload HF Linear weight ``(out, in)`` as TTNN ``(in, out)``, optionally TP-sharded.
 
-    When ``per_core_K_tiles`` is provided, widen ``in0_block_w`` up to the full per-core K (one inner
-    iteration). With ``out_block_w`` then picked under an L1-budget cap, ``in1_cb`` stays bounded.
+    ``shard_dim`` is in the TTNN ``(in, out)`` orientation:
+      - ``shard_dim = -1`` → column-parallel (split the output dim ``out``).
+      - ``shard_dim = -2`` → row-parallel (split the input dim ``in``).
+      - ``shard_dim = None`` → replicate.
     """
-    if cfg is None:
-        return cfg
-    mc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
-    if not isinstance(cfg, mc):
-        return cfg
-    per_core_N = int(cfg.per_core_N)
-    per_core_M = int(cfg.per_core_M)
-    # DST tile budget: subblock_h * subblock_w ≤ 4 for HiFi.
-    max_sub_h = min(per_core_M, 4)
-    out_subblock_h = 1
-    if max_sub_h >= 2 and per_core_M % 2 == 0:
-        out_subblock_h = 2
-
-    # Widen ``in0_block_w`` to per-core K first so the L1 budget for ``out_block_w`` reflects the
-    # actual ``in1_cb`` cost (which scales as in0_block_w * out_block_w * 2 BF16 tiles).
-    in0_bw = int(cfg.in0_block_w)
-    if per_core_K_tiles is not None:
-        target = int(per_core_K_tiles)
-        if target > 0 and target >= in0_bw and target <= 16:
-            for cand in range(target, in0_bw - 1, -1):
-                if target % cand == 0:
-                    in0_bw = cand
-                    break
-
-    if per_core_N % 2 == 0:
-        # Choose largest legal ``out_subblock_w`` so subblock product (DST tiles) is maximized.
-        cap_w = max(1, 4 // out_subblock_h)
-        out_subblock_w = 1
-        for cand in (4, 2):
-            if cand <= cap_w and per_core_N % cand == 0:
-                out_subblock_w = cand
-                break
-        # Pick the largest legal ``out_block_w`` (multiple of ``out_subblock_w``, divides
-        # ``per_core_N``) capped so ``in1_cb = in0_block_w * out_block_w * 2`` BF16 tiles stays
-        # under ~512 KiB per core (≈256 BF16 tiles). Wider ``out_block_w`` halves the inner-loop
-        # iteration count (output-block iters drop from ``per_core_N/out_block_w``).
-        max_obw_l1_tiles = max(2, 256 // max(1, in0_bw))
-        out_block_w = out_subblock_w
-        for cand in range(min(per_core_N, max_obw_l1_tiles), out_subblock_w - 1, -1):
-            if cand % out_subblock_w == 0 and per_core_N % cand == 0:
-                out_block_w = cand
-                break
-        out_block_w = max(out_block_w, max(2, out_subblock_w))
+    w = w_hf.to(torch.bfloat16).T.contiguous()  # (in, out)
+    if shard_dim is None:
+        mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     else:
-        out_subblock_w = 1
-        out_block_w = 1
-    return mc(
-        compute_with_storage_grid_size=cfg.compute_with_storage_grid_size,
-        in0_block_w=in0_bw,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
-        out_block_h=max(1, out_subblock_h),
-        out_block_w=out_block_w,
-        per_core_M=cfg.per_core_M,
-        per_core_N=cfg.per_core_N,
-        transpose_mcast=cfg.transpose_mcast,
-        fused_activation=cfg.fused_activation,
-        fuse_batch=cfg.fuse_batch,
+        if args.cluster_axis == 1:
+            dims = (None, shard_dim)
+        else:
+            dims = (shard_dim, None)
+        mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=args.mesh_shape)
+    return ttnn.from_torch(
+        w,
+        device=mesh_device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mapper,
     )
 
 
-def _decode_wo_interleaved_multicast_prog_cfg(args):
-    """Multicast decode WO matmul: interleaved ``wo`` is incompatible with ``dram_matmul_config``.
+def _interleave_kv_for_tp(k_w: torch.Tensor, v_w: torch.Tensor, tp: int) -> torch.Tensor:
+    """Arrange ``[K | V]`` HF rows so a contiguous TP-chunk slice puts ``(K_local, V_local)``
+    on each device.
 
-    ``nlp_concat_heads_decode`` lays out width-sharded activations with
-    ``num_cores_to_corerangeset(n_local_heads, device.compute_with_storage_grid_size(), …)``
-    (``nlp_concat_heads_decode_device_operation.cpp``), so the WO input shard grid can span **many
-    cores in X**.
-
-    ``ModelArgs.matmul_config`` forwards ``grid_size`` to C++ as
-    ``CoreCoord(x=grid_size[0], y=grid_size[1])`` — **not** ``(rows, cols)`` like
-    ``find_prefill_grid`` returns. Passing ``(rows, cols)`` therefore shrinks **X** (the width
-    core axis) and trips ``check_tensor_in_grid`` even when ``rows``/``cols`` values are individually
-    sensible.
-
-    We pass ``grid_size=(cols, rows)`` so **X** / **Y** match ``CoreCoord(x=cols, y=rows)`` in
-    ``matmul_config`` (not ``(rows, cols)`` from ``find_prefill_grid``). ``per_core_N`` uses
-    ``grid_size[0]`` (= ``cols``); ``k`` divisible by ``32 * grid_size[1]`` uses ``grid_size[1]`` (=
-    ``rows``), so only **rows** must divide ``k_WO / 32`` (tile units). Width ``cols`` is chosen to cover
-    the concat footprint: ``min(n_local_heads, grid_w)`` cores in the first row when
-    ``n_local_heads <= grid_w``, else full row width ``grid_w`` (see
-    ``num_cores_to_corerangeset`` with ``row_wise`` in ``work_split.cpp``).
-
-    When ``grid_w`` leaves room, **cols** may be widened past ``min(n_local_heads, grid_w)`` so
-    ``ceil(dim/TILE/cols)`` is even, keeping legal 2×2 output subblocks in
-    :func:`_tighten_wo_prefill_prog_cfg`. If ``grid_w == req_cols`` and that value is odd, no
-    widening is possible.
+    Naive ``cat([k_w, v_w], dim=0)`` keeps all of K in the first half and all of V in the second
+    half — strip-sharding that along dim 0 gives some devices all-K and others all-V. Instead,
+    split each of K and V into ``tp`` row-chunks and zip them: contiguous chunk ``i`` of the
+    result is exactly device ``i``'s ``(K_local rows ; V_local rows)``.
     """
-    k_dim = (args.n_heads * args.head_dim) // args.num_devices
-    n_dim = args.dim
-    m = args.tile_padded_batch_rows
-    mg = args.max_grid_size
-    gw, gh = int(mg.x), int(mg.y)
-    k_tiles = k_dim // ttnn.TILE_SIZE
-    n_pack = int(args.n_local_heads)
-
-    num_x = min(n_pack, gw)
-    num_y = (n_pack + num_x - 1) // num_x
-    req_cols = num_x
-    req_rows = min(max(num_y, 1), gh)
-
-    # ``per_core_N = ceil(n / (TILE * cols))`` uses only **cols** (``grid_size[0]``). When
-    # ``req_cols`` is e.g. 11, ``ceil(384/11)=35`` is odd and :func:`_tighten_wo_prefill_prog_cfg`
-    # falls back to 1×1 subblocks (perf report: decode WO under-powered, ~482μs / 16% FLOPs on BH).
-    # Activation is L1 interleaved here (caller's ``to_memory_config(L1_INTERLEAVED)`` before the
-    # matmul) so the matmul grid is decoupled from ``nlp_concat_heads_decode`` shard placement; pick
-    # the largest ``cols`` ≤ ``gw`` whose ``per_core_N`` admits a 1×4 (or 1×2) output subblock, then
-    # fall back to ``req_cols`` if no choice gives an even ``per_core_N``. Larger ``out_subblock_w``
-    # increases compute per inner-loop iteration far more than extra output cores; matching QKV/FF1
-    # decode's compute density beats spreading work across odd ``cols`` with 1×1 fallback.
-    n_n_tiles = (n_dim + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-    cols = min(max(req_cols, 1), gw)
-    best_pcn_density = 0
-    for c in range(1, gw + 1):
-        pcn = math.ceil(n_n_tiles / c)
-        if pcn % 2 != 0:
-            continue
-        density = 4 if pcn % 4 == 0 else 2
-        if density > best_pcn_density or (density == best_pcn_density and c > cols):
-            best_pcn_density = density
-            cols = c
-
-    row_candidates = [r for r in range(req_rows, gh + 1) if k_tiles % r == 0]
-    if not row_candidates:
-        row_candidates = [r for r in range(1, gh + 1) if k_tiles % r == 0]
-    # Prefer the largest Y grid divisor so WO decode uses more cores (``min`` was 1 row → 11 cores on BH).
-    rows = max(row_candidates) if row_candidates else 1
-
-    # (x, y) for compute_with_storage_grid_size — see docstring; NOT find_prefill (rows, cols) order.
-    grid_size = (cols, rows)
-
-    cfg = args.matmul_config(
-        m=m,
-        k=k_dim,
-        n=n_dim,
-        grid_size=grid_size,
-        fuse_batch=True,
-    )
-    per_core_K_tiles = max(1, k_tiles // max(1, rows))
-    return _tighten_wo_prefill_prog_cfg(cfg, per_core_K_tiles=per_core_K_tiles)
+    if tp <= 1:
+        return torch.cat([k_w, v_w], dim=0)
+    k_chunks = torch.chunk(k_w, tp, dim=0)
+    v_chunks = torch.chunk(v_w, tp, dim=0)
+    pieces: list[torch.Tensor] = []
+    for kc, vc in zip(k_chunks, v_chunks):
+        pieces.append(kc)
+        pieces.append(vc)
+    return torch.cat(pieces, dim=0)
 
 
-def _widen_qkv_prefill_in0_block_w(cfg, in0_block_w: int = 4):
-    """Increase in0_block_w for QKV prefill matmul on Devstral-2-123B.
-
-    The shared config defaults to in0_block_w=1 for seq_len<=128. For K=12288 that is
-    384 inner-loop tile steps per core at block width 1. A default of 4 cuts that to 96 steps
-    (Tracy: ~0.43% lower summed device FW vs in0_block_w=2 on P150x4 PCC tests). in0_block_w=8
-    was only marginally better (~0.03% over 4) in the same run. Only touches
-    MatmulMultiCoreReuseMultiCastProgramConfig (seq_len<=128 path); MinimalMatmulConfig
-    (seq_len>128) is returned unchanged.
-    """
-    mc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
-    if not isinstance(cfg, mc):
-        return cfg
-    # TTNN requires ``out_block_w % out_subblock_w == 0``. Default ``out_block_w`` is ``per_core_N``
-    # when omitted at construction; only widen subblock width when that width is even.
-    obw = cfg.out_block_w
-    # Perf: avoid ``out_block_w=1`` with ``out_subblock_w=2`` (invalid). Lift block width when even.
-    if obw == 1 and cfg.per_core_N % 2 == 0:
-        obw = 2
-    out_w = 2 if cfg.per_core_N % 2 == 0 and cfg.out_subblock_w == 1 and obw % 2 == 0 else cfg.out_subblock_w
-    return mc(
-        compute_with_storage_grid_size=cfg.compute_with_storage_grid_size,
-        in0_block_w=in0_block_w,
-        out_subblock_h=cfg.out_subblock_h,
-        out_subblock_w=out_w,
-        out_block_h=cfg.out_block_h,
-        out_block_w=obw,
-        per_core_M=cfg.per_core_M,
-        per_core_N=cfg.per_core_N,
-        transpose_mcast=cfg.transpose_mcast,
-        fused_activation=cfg.fused_activation,
-        fuse_batch=cfg.fuse_batch,
-    )
+# --- Attention module ---
 
 
-def _multi_device_dram_weight_tilize(mesh_device, configuration) -> bool:
-    return configuration is not None and devstral2_large_multi_device_dram_mitigation(mesh_device, configuration)
+class TtAttention:
+    """Inline self-attention with optional KV cache.
 
-
-class TtDevstral2LargeAttention(Attention):
-    """
-    Ministral3-style attention for Devstral-2 123B on Tenstorrent.
-
-    Pass ``llama_4_scaling_beta`` and ``original_max_position_embeddings`` from
-    ``Ministral3Config.rope_parameters`` (same kwargs as the small Ministral3 ``TtMinistralAttention``).
+    Activations entering / leaving are **replicated** along the TP axis (full ``hidden_size``).
+    Internally, QKV outputs are sharded across heads along the TP axis; the o_proj all-reduce
+    restores replication.
     """
 
     def __init__(
         self,
-        *args,
-        llama_4_scaling_beta: float | None = None,
-        original_max_position_embeddings: int | None = None,
-        **kwargs,
-    ):
-        mesh_device = args[0] if len(args) > 0 else kwargs.get("mesh_device")
-        configuration = kwargs.get("configuration")
-        orig_create_dram_sharded = None
-        patch_dram_tilize = _multi_device_dram_weight_tilize(mesh_device, configuration)
-        if patch_dram_tilize:
-            orig_create_dram_sharded = configuration.create_dram_sharded_mem_config
+        args: Devstral2Args,
+        mesh_device,
+        state_dict: dict,
+        layer_idx: int,
+        tt_ccl,
+        rotary_emb: TtRotaryEmbedding,
+        *,
+        dtype: Optional[ttnn.DataType] = None,
+        weight_cache_path: Optional[str] = None,  # noqa: ARG002  (reserved for cache hookup)
+    ) -> None:
+        self.args = args
+        self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
+        self.rotary_emb = rotary_emb
+        self.layer_idx = layer_idx
+        self.dtype = dtype or args.weight_dtype
 
-            def _interleaved_dram_for_tilize(_m, _n):
-                return ttnn.DRAM_MEMORY_CONFIG
+        prefix = args.state_dict_prefix("self_attn", layer_idx)
+        q_w = state_dict[prefix + "q_proj.weight"]
+        k_w = state_dict[prefix + "k_proj.weight"]
+        v_w = state_dict[prefix + "v_proj.weight"]
+        o_w = state_dict[prefix + "o_proj.weight"]
 
-            configuration.create_dram_sharded_mem_config = _interleaved_dram_for_tilize  # type: ignore[method-assign]
-        try:
-            self.llama_4_scaling_beta = llama_4_scaling_beta
-            self.original_max_position_embeddings = original_max_position_embeddings
-            super().__init__(*args, **kwargs)
-            self._use_devstral_custom_forward_decode = bool(patch_dram_tilize) and bool(
-                devstral2_large_multi_device_dram_mitigation(mesh_device, getattr(self, "args", None))
-            )
-            _decode_rope = self.rotary_embedding_decode
-            _prefill_rope = self.rotary_embedding_prefill
+        # (1) Permute Q / K head_dim from HF split-half to pairwise-interleaved so the device-side
+        # RoPE op (``ttnn.experimental.rotary_embedding_llama``) sees the layout it expects.
+        # V is **not** permuted — it never enters RoPE, and SDPA output flows into o_proj in V's
+        # native layout.
+        q_w = permute_split_half_to_interleaved(q_w, args.head_dim)
+        k_w = permute_split_half_to_interleaved(k_w, args.head_dim)
 
-            def rotary_embedding_decode_wrapped(q, k, rot_mats, current_pos):
-                q, k = _decode_rope(q, k, rot_mats, current_pos)
-                return self._apply_llama4_query_scale_decode(q, current_pos), k
+        # (2) Fuse K and V into a single column-parallel matmul, with rows interleaved per
+        # TP chunk so a contiguous TP strip-shard puts ``(K_local | V_local)`` on each device.
+        # The naive ``cat([k_w, v_w], dim=0)`` would give device 0 all-K and device N-1 all-V.
+        kv_w = _interleave_kv_for_tp(k_w, v_w, args.tp)
 
-            def rotary_embedding_prefill_wrapped(q, k, rot_mats):
-                q, k = _prefill_rope(q, k, rot_mats)
-                return self._apply_llama4_query_scale_prefill(q), k
+        self.q_proj = _to_tt_weight(q_w, mesh_device, args, self.dtype, shard_dim=-1)
+        self.kv_proj = _to_tt_weight(kv_w, mesh_device, args, self.dtype, shard_dim=-1)
+        self.o_proj = _to_tt_weight(o_w, mesh_device, args, self.dtype, shard_dim=-2)
 
-            self.rotary_embedding_decode = rotary_embedding_decode_wrapped
-            self.rotary_embedding_prefill = rotary_embedding_prefill_wrapped
-        finally:
-            if patch_dram_tilize and orig_create_dram_sharded is not None:
-                configuration.create_dram_sharded_mem_config = orig_create_dram_sharded  # type: ignore[method-assign]
+        # Per-device KV cache: [batch, n_local_kv_heads, max_seq_len, head_dim], DRAM, zero-init.
+        cache_shape = (
+            args.max_batch_size,
+            args.n_local_kv_heads,
+            args.max_seq_len,
+            args.head_dim,
+        )
+        zeros = torch.zeros(cache_shape, dtype=torch.bfloat16)
+        self.k_cache = ttnn.from_torch(
+            zeros,
+            device=mesh_device,
+            dtype=args.kv_cache_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        self.v_cache = ttnn.from_torch(
+            zeros,
+            device=mesh_device,
+            dtype=args.kv_cache_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
-        # Without this patch, prefill WO keeps TTNN defaults: out_block_h=per_core_M (often 1),
-        # out_block_w=per_core_N (~48) → L1 CB clash on wide multi-device (BH or WH T3K).
-        if devstral2_large_multi_device_dram_mitigation(mesh_device, getattr(self, "args", None)):
-            _base_get_attn_wo = self.args.get_attn_wo_program_config
+        self._compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
-            def _get_attn_wo_wide_prefill(mode, seq_len=1, prefetcher=None):
-                cfg = _base_get_attn_wo(mode, seq_len, prefetcher)
-                if mode != Mode.PREFILL:
-                    return cfg
-                # Compute per-core K so the tightener can also widen ``in0_block_w`` for prefill.
-                grid_size = cfg.compute_with_storage_grid_size if cfg is not None else None
-                if grid_size is None:
-                    return _tighten_wo_prefill_prog_cfg(cfg)
-                grid_y = int(getattr(grid_size, "y", grid_size[1] if isinstance(grid_size, (list, tuple)) else 1))
-                k_dim = (self.args.n_heads * self.args.head_dim) // self.args.num_devices
-                per_core_K_tiles = max(1, (k_dim // ttnn.TILE_SIZE) // max(1, grid_y))
-                return _tighten_wo_prefill_prog_cfg(cfg, per_core_K_tiles=per_core_K_tiles)
+    # --- Projections (shared by prefill / decode) ---
 
-            self.args.get_attn_wo_program_config = _get_attn_wo_wide_prefill  # type: ignore[method-assign]
+    def _project_qkv(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Return ``(q, kv_fused)`` so callers can pass them to ``nlp_create_qkv_heads`` directly."""
+        q = ttnn.linear(
+            x,
+            self.q_proj,
+            dtype=self.args.activation_dtype,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self._compute_kernel_config,
+        )
+        kv = ttnn.linear(
+            x,
+            self.kv_proj,
+            dtype=self.args.activation_dtype,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self._compute_kernel_config,
+        )
+        return q, kv
 
-        # Widen in0_block_w for QKV prefill: shared config defaults to 1 (K=12288 → 384 inner steps
-        # at width 1). Devstral-specific block width improves QKV prefill / decode-reuse matmul.
-        # Bind the real ModelArgs method before reassignment; use a distinct closure cell name so
-        # we never recurse if this block is edited alongside other get_* patches.
-        _base_get_attn_qkv = self.args.get_attn_qkv_program_config
+    def _project_o(self, attn_out_flat: ttnn.Tensor) -> ttnn.Tensor:
+        dense = ttnn.linear(
+            attn_out_flat,
+            self.o_proj,
+            dtype=self.args.activation_dtype,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self._compute_kernel_config,
+        )
+        # Each device produced a partial sum (rowwise TP); reduce + replicate.
+        return all_reduce_replicate(
+            dense,
+            mesh_device=self.mesh_device,
+            tt_ccl=self.tt_ccl,
+            dim=3,
+            topology=self.args.ccl_topology,
+        )
 
-        def _get_attn_qkv_wide_prefill(mode, seq_len=1, prefetcher=None):
-            if patch_dram_tilize and mode == Mode.DECODE and prefetcher is None:
-                cfg = _base_get_attn_qkv(Mode.PREFILL, self.args.tile_padded_batch_rows, prefetcher)
-                return _widen_qkv_prefill_in0_block_w(cfg)
-            cfg = _base_get_attn_qkv(mode, seq_len, prefetcher)
-            if mode != Mode.PREFILL:
-                return cfg
-            return _widen_qkv_prefill_in0_block_w(cfg)
+    # --- Prefill: full sequence, populates KV cache from ``start_pos`` ---
 
-        self.args.get_attn_qkv_program_config = _get_attn_qkv_wide_prefill  # type: ignore[method-assign]
+    def forward_prefill(
+        self,
+        x: ttnn.Tensor,
+        *,
+        start_pos: int = 0,
+        user_id: int = 0,
+    ) -> ttnn.Tensor:
+        """``x``: ``(1, 1, S, hidden_size)``, replicated across TP. Returns same shape."""
+        B = 1
+        S = int(x.shape[-2])
+        D = self.args.head_dim
+        Hq_local = self.args.n_local_heads
+        Hkv_local = self.args.n_local_kv_heads
 
-        if patch_dram_tilize:
-            _base_get_attn_qkv_mm = self.args.get_attn_qkv_mm_mem_config
+        q, kv = self._project_qkv(x)
+        # Split into heads. ``input`` = Q (..., Hq_local*D); ``input_kv`` = fused [K|V] (..., 2*Hkv_local*D).
+        q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
+            q,
+            kv,
+            num_heads=Hq_local,
+            num_kv_heads=Hkv_local,
+            transpose_k_heads=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(q)
+        ttnn.deallocate(kv)
 
-            def _get_attn_qkv_mm_interleaved_decode(mode, prefetcher=None):
-                if mode == Mode.DECODE and prefetcher is None:
-                    return ttnn.DRAM_MEMORY_CONFIG
-                return _base_get_attn_qkv_mm(mode, prefetcher)
+        cos_q, sin_q, cos_k, sin_k = self.rotary_emb.get_prefill_tables(start_pos, S)
+        q_heads, k_heads = self.rotary_emb.apply(q_heads, k_heads, cos_q, sin_q, cos_k, sin_k)
 
-            self.args.get_attn_qkv_mm_mem_config = _get_attn_qkv_mm_interleaved_decode  # type: ignore[method-assign]
+        # Write K/V into the cache for future decode steps. ``ttnn.fill_cache`` writes the entire
+        # ``src`` tensor into the cache's ``user_id`` batch slot starting at position 0. Chunked
+        # prefill (start_pos > 0) would need ``paged_update_cache`` with a position vector; not
+        # supported in this baseline.
+        if start_pos != 0:
+            raise NotImplementedError("Chunked prefill (start_pos > 0) is not implemented in this baseline.")
+        ttnn.fill_cache(self.k_cache, k_heads, user_id)
+        ttnn.fill_cache(self.v_cache, v_heads, user_id)
 
-    def _llama4_scaling_enabled(self) -> bool:
-        # beta == 0.0 makes the scale a constant 1.0 (1 + 0 * log1p(...)); skip the FP32 chain.
-        # Devstral-2-123B's HF config sets beta=0, so this path runs every decode/prefill for no effect.
-        if self.llama_4_scaling_beta is None or self.original_max_position_embeddings is None:
-            return False
-        return float(self.llama_4_scaling_beta) != 0.0
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q_heads,
+            k_heads,
+            v_heads,
+            is_causal=True,
+            scale=self.args.attn_scale,
+            compute_kernel_config=self._compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(q_heads)
+        ttnn.deallocate(k_heads)
+        ttnn.deallocate(v_heads)
 
-    def _llama4_scale_factor_from_positions_ttnn(self, pos_tt: ttnn.Tensor) -> ttnn.Tensor:
-        """
-        ``scaling = 1 + beta * log(1 + floor(pos / original_max_position_embeddings))`` (float32),
-        same as HF ``get_llama_4_attn_scale``, shape matches ``pos_tt``.
-        """
-        orig = float(self.original_max_position_embeddings)
-        beta = float(self.llama_4_scaling_beta)
-        pos_f = ttnn.typecast(pos_tt, ttnn.float32)
-        ratio = ttnn.divide(pos_f, orig)
-        floored = ttnn.floor(ratio)
-        log_term = ttnn.log1p(floored)
-        scaled = ttnn.mul(log_term, beta)
-        ones = ttnn.ones_like(pos_f)
-        return ttnn.add(ones, scaled)
-
-    def _reshape_decode_positions(self, current_pos: ttnn.Tensor, batch_dim: int) -> ttnn.Tensor:
-        """Return positions with shape ``[1, batch_dim]`` for per-row scale (matches ``q`` batch axis)."""
-        sh = tuple(current_pos.shape)
-        numel = math.prod(sh) if sh else 0
-        if numel == batch_dim:
-            return ttnn.reshape(current_pos, (1, batch_dim))
-        if numel > batch_dim:
-            flat = ttnn.reshape(current_pos, (1, 1, 1, numel))
-            sliced = flat[:, :, :, :batch_dim]
-            return ttnn.reshape(sliced, (1, batch_dim))
-        raise ValueError(f"Ministral Llama-4 scale: current_pos has {numel} elements but q_heads batch is {batch_dim}")
-
-    def _apply_llama4_query_scale_decode(self, q_heads, current_pos):
-        if not self._llama4_scaling_enabled():
-            return q_heads
-        b = int(q_heads.shape[1])
-        pos_row = self._reshape_decode_positions(current_pos, b)
-        scale_f = self._llama4_scale_factor_from_positions_ttnn(pos_row)
-        scale_4d = ttnn.reshape(scale_f, (1, b, 1, 1))
-        scale_tt = ttnn.typecast(scale_4d, ttnn.bfloat16)
-
-        q_bf16 = q_heads if q_heads.dtype == ttnn.bfloat16 else ttnn.typecast(q_heads, dtype=ttnn.bfloat16)
-        out = ttnn.mul(q_bf16, scale_tt, dtype=ttnn.bfloat16)
-        if q_heads.dtype != ttnn.bfloat16:
-            out = ttnn.typecast(out, dtype=q_heads.dtype)
-        ttnn.deallocate(scale_tt)
-        if q_bf16 is not q_heads:
-            ttnn.deallocate(q_bf16)
+        # (B, Hq_local, S, D) -> (1, 1, S, Hq_local*D)
+        attn_flat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(attn)
+        out = self._project_o(attn_flat)
+        ttnn.deallocate(attn_flat)
         return out
 
-    def _apply_llama4_query_scale_prefill(self, q_heads):
-        if not self._llama4_scaling_enabled():
-            return q_heads
-        pos_tt = getattr(self, "_ministral_prefill_position_ids_tt", None)
-        if pos_tt is None:
-            return q_heads
-
-        sh = tuple(q_heads.shape)
-        if len(sh) != 4:
-            return q_heads
-        batch_dim, seq_dim = sh[0], sh[2]
-        shp = tuple(pos_tt.shape)
-        if len(shp) == 2 and shp[0] == batch_dim and shp[1] == seq_dim:
-            scale_f = self._llama4_scale_factor_from_positions_ttnn(pos_tt)
-        elif len(shp) == 1 and shp[0] == seq_dim and batch_dim == 1:
-            scale_f = self._llama4_scale_factor_from_positions_ttnn(ttnn.reshape(pos_tt, (1, seq_dim)))
-        else:
-            return q_heads
-
-        scale_4d = ttnn.reshape(scale_f, (batch_dim, 1, seq_dim, 1))
-        scale_tt = ttnn.typecast(scale_4d, ttnn.bfloat16)
-
-        q_bf16 = q_heads if q_heads.dtype == ttnn.bfloat16 else ttnn.typecast(q_heads, dtype=ttnn.bfloat16)
-        out = ttnn.mul(q_bf16, scale_tt, dtype=ttnn.bfloat16)
-        if q_heads.dtype != ttnn.bfloat16:
-            out = ttnn.typecast(out, dtype=q_heads.dtype)
-        ttnn.deallocate(scale_tt)
-        if q_bf16 is not q_heads:
-            ttnn.deallocate(q_bf16)
-        return out
+    # --- Decode: single token per user, reads + updates KV cache ---
 
     def forward_decode(
         self,
         x: ttnn.Tensor,
-        current_pos,
-        rot_mats=None,
-        page_table=None,
-        kv_cache=None,
+        current_pos_host: torch.Tensor,
     ) -> ttnn.Tensor:
-        """Decode path: TG, prefetcher, and fused AG+MM defer to :meth:`Attention.forward_decode`."""
-        if (
-            self.prefetcher is not None
-            or self.use_fused_all_gather_matmul
-            or self.TG
-            or not getattr(self, "_use_devstral_custom_forward_decode", False)
-        ):
-            return super().forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
-        return self._forward_decode_devstral_optimized(x, current_pos, rot_mats, page_table, kv_cache)
+        """``x``: ``(1, B, 1, hidden_size)``, replicated across TP. ``current_pos_host`` shape ``[B]``."""
+        B = self.args.max_batch_size
+        D = self.args.head_dim
+        Hq_local = self.args.n_local_heads
+        Hkv_local = self.args.n_local_kv_heads
 
-    def _forward_decode_devstral_optimized(
+        q, kv = self._project_qkv(x)
+        q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
+            q,
+            kv,
+            num_heads=Hq_local,
+            num_kv_heads=Hkv_local,
+            transpose_k_heads=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(q)
+        ttnn.deallocate(kv)
+
+        cos_q, sin_q, cos_k, sin_k = self.rotary_emb.get_decode_tables(current_pos_host)
+        q_heads, k_heads = self.rotary_emb.apply(q_heads, k_heads, cos_q, sin_q, cos_k, sin_k)
+
+        # Update K/V cache at ``current_pos`` for each user.
+        pos_tt = ttnn.from_torch(
+            current_pos_host.to(torch.int32),
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        ttnn.experimental.paged_update_cache(self.k_cache, k_heads, update_idxs_tensor=pos_tt, page_table=None)
+        ttnn.experimental.paged_update_cache(self.v_cache, v_heads, update_idxs_tensor=pos_tt, page_table=None)
+        ttnn.deallocate(k_heads)
+        ttnn.deallocate(v_heads)
+
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+            q_heads,
+            self.k_cache,
+            self.v_cache,
+            cur_pos_tensor=pos_tt,
+            scale=self.args.attn_scale,
+            compute_kernel_config=self._compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(q_heads)
+
+        # (1, B, Hq_local, D) -> (1, 1, B, Hq_local*D)
+        attn_flat = ttnn.experimental.nlp_concat_heads_decode(attn, num_heads=Hq_local)
+        ttnn.deallocate(attn)
+        out = self._project_o(attn_flat)
+        ttnn.deallocate(attn_flat)
+        return out
+
+    # --- Public dispatch ---
+
+    def __call__(
         self,
         x: ttnn.Tensor,
-        current_pos,
-        rot_mats,
-        page_table,
-        kv_cache,
-    ) -> ttnn.Tensor:
-        """Same pipeline as ``Attention.forward_decode`` through head concat; tailored WO + reduce tail.
-
-        QKV still uses patched ``get_attn_*`` (prefill-style multicast + DRAM MM) from ``__init__``.
-        After ``nlp_concat_heads_decode`` we avoid ``tt_all_gather`` + DRAM-sharded WO: L1 interleaved
-        activations, one multicast ``ttnn.linear`` with interleaved ``wo``, then width-shard for
-        ``tt_all_reduce`` (matches the generic path's layout for the reduce).
-        """
-        xqkv_fused_sharded = ttnn.linear(
-            x,
-            self.wqkv,
-            memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
-            program_config=self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher),
-            compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
-            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
-        )
-        if self.wqkv_bias_decode:
-            num_tiles = int(math.ceil(xqkv_fused_sharded.shape[-2] / self.tile_size))
-            xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
-
-        ttnn.deallocate(x)
-        qkv_all_reduce_mem_cfg = self.args.get_attn_qkv_all_reduce_output_mem_config(
-            Mode.DECODE, list(self.mesh_device.shape)[1], self.prefetcher
-        )
-        xqkv_fused = tt_all_reduce(
-            xqkv_fused_sharded,
-            self.mesh_device,
-            self.tt_ccl,
-            cluster_axis=1,
-            memory_config=qkv_all_reduce_mem_cfg
-            if qkv_all_reduce_mem_cfg is not None
-            else xqkv_fused_sharded.memory_config(),
-            sharded=True,
-            dtype=self.ccl_dtype,
-            topology=self.ccl_topology,
-            subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
-        )
-        if self.TG:
-            xqkv_fused = ttnn.matmul(
-                self.slice_mat,
-                xqkv_fused,
-                dtype=ttnn.bfloat16,
-                memory_config=self.args.get_attn_create_head_input_mem_config(Mode.DECODE),
-            )
-        else:
-            if self.prefetcher is None:
-                # QKV matmul may be DRAM interleaved (Devstral DRAM-tilize mitigation); only sharded tensors
-                # may use sharded_to_interleaved — otherwise the op can leave an unallocated shell tensor.
-                reduced = xqkv_fused
-                if reduced.is_sharded():
-                    xqkv_fused = ttnn.sharded_to_interleaved(reduced, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
-                    ttnn.deallocate(xqkv_fused_sharded)
-                else:
-                    xqkv_fused = ttnn.to_memory_config(reduced, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-                    ttnn.deallocate(xqkv_fused_sharded)
-            else:
-                xqkv_fused = xqkv_fused_sharded
-        fqkv_shape = xqkv_fused.shape
-        xqkv_fused = ttnn.reshape(
-            xqkv_fused, (1, 1, self.batch_size_per_device_group, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3])
-        )
-
-        (
-            q_heads_pre_rot_1BQD,
-            k_heads_pre_rot_1BKD,
-            v_heads_1BKD,
-        ) = ttnn.experimental.nlp_create_qkv_heads_decode(
-            xqkv_fused,
-            num_heads=self.n_local_heads,
-            num_kv_heads=self.n_local_kv_heads,
-            memory_config=self.args.get_attn_create_head_output_mem_config(Mode.DECODE, self.prefetcher),
-        )
-        norm_config = self.args.get_norm_config("attn", Mode.DECODE, None)
-        q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode=Mode.DECODE, norm_config=norm_config)
-        k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode=Mode.DECODE, norm_config=norm_config)
-        ttnn.deallocate(xqkv_fused)
-
-        q_heads_1BQD, k_heads_1BKD = self.rotary_embedding_decode(
-            q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos
-        )
-
-        ttnn.deallocate(q_heads_pre_rot_1BQD)
-        ttnn.deallocate(k_heads_pre_rot_1BKD)
-        if kv_cache:
-            keys = kv_cache[0]
-            values = kv_cache[1]
-        else:
-            keys = self.layer_past[0]
-            values = self.layer_past[1]
-
-        if self.use_qk_fused:
-            ttnn.experimental.paged_fused_update_cache(
-                keys, k_heads_1BKD, values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
-            )
-        else:
-            ttnn.experimental.paged_update_cache(
-                keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
-            )
-            ttnn.experimental.paged_update_cache(
-                values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
-            )
-        ttnn.deallocate(k_heads_1BKD)
-        ttnn.deallocate(v_heads_1BKD)
-        sdpa_decode_prog_cfg = self.args.get_attn_sdpa_decode_program_config(self.prefetcher)
-        if page_table is not None:
-            attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                q_heads_1BQD,
-                keys,
-                values,
-                page_table_tensor=page_table,
-                cur_pos_tensor=current_pos,
-                scale=self.scale,
-                sliding_window_size=self.sliding_window,
-                program_config=sdpa_decode_prog_cfg,
-                compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        else:
-            attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
-                q_heads_1BQD,
-                keys,
-                values,
-                cur_pos_tensor=current_pos,
-                scale=self.scale,
-                sliding_window_size=self.sliding_window,
-                program_config=sdpa_decode_prog_cfg,
-                compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-        ttnn.deallocate(q_heads_1BQD)
-        attn_output_11BH = ttnn.to_memory_config(
-            attn_output_1G4D,
-            memory_config=self.args.get_attn_sdpa_output_mem_config(
-                Mode.DECODE, self.batch_size_per_device_group, self.prefetcher
-            ),
-        )
-
-        attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(
-            attn_output_11BH,
-            num_heads=self.n_local_heads,
-            sub_core_grids=self.prefetcher.all_worker_cores_range_set if self.prefetcher is not None else None,
-        )
-        ttnn.deallocate(attn_output_11BH)
-        ttnn.deallocate(attn_output_1G4D)
-
-        attn_l1 = ttnn.to_memory_config(attn_output_cat, ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(attn_output_cat)
-
-        wo_pc = _decode_wo_interleaved_multicast_prog_cfg(self.args)
-        # Interleaved L1: do not ``to_memory_config`` into ``get_residual_mem_config(DECODE)`` here —
-        # that spec shards **per-device** hidden width; WO output is full ``dim`` and triggers
-        # ``shard_grid_fit_error`` (e.g. 128 width shards vs 32 cores).
-        dense_out = ttnn.linear(
-            attn_l1,
-            self.wo,
-            program_config=wo_pc,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
-        )
-        ttnn.deallocate(attn_l1)
-
-        dense_out_reduced = tt_all_reduce(
-            dense_out,
-            self.mesh_device,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=0 if (self.TG and self.hidden_size < 8192) else 3,
-            topology=self.ccl_topology,
-            memory_config=self.args.get_attn_all_reduce_output_mem_config(
-                Mode.DECODE, self.hidden_size, list(self.mesh_device.shape)[0], self.prefetcher
-            ),
-            sharded=False,
-            dtype=self.ccl_dtype,
-            use_composite=True if self.hidden_size == 8192 else False,
-            subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
-        )
-
-        if not self.TG:
-            # Same reason as above: avoid residual width-shard on full-width tensor; decoder will
-            # ``to_memory_config`` via ``tt_ministral3_decode_mem_config`` when needed.
-            dense_out_reduced = ttnn.to_memory_config(dense_out_reduced, ttnn.L1_MEMORY_CONFIG)
-
-        return dense_out_reduced
-
-    def forward_prefill(
-        self,
-        x_11SH,
-        rot_mats,
+        *,
+        mode: str = "decode",
+        start_pos: int = 0,
+        current_pos_host: Optional[torch.Tensor] = None,
         user_id: int = 0,
-        page_table=None,
-        chunk_page_table=None,
-        chunk_start_idx=None,
-        kv_cache=None,
-        position_ids: ttnn.Tensor | None = None,
-    ):
-        """
-        Optional ``position_ids``: device ``ttnn.Tensor`` of integer positions, shape ``[batch, seq]``
-        (or ``[seq]`` when ``batch == 1``), dtype typically ``uint32`` / ``int32``. Required for
-        Llama-4 Q scaling on prefill when scaling is enabled.
-        """
-        self._ministral_prefill_position_ids_tt = position_ids
-        try:
-            return super().forward_prefill(
-                x_11SH,
-                rot_mats,
-                user_id=user_id,
-                page_table=page_table,
-                chunk_page_table=chunk_page_table,
-                chunk_start_idx=chunk_start_idx,
-                kv_cache=kv_cache,
-            )
-        finally:
-            self._ministral_prefill_position_ids_tt = None
+    ) -> ttnn.Tensor:
+        if mode == "prefill":
+            return self.forward_prefill(x, start_pos=start_pos, user_id=user_id)
+        if mode == "decode":
+            if current_pos_host is None:
+                raise ValueError("decode mode requires current_pos_host")
+            return self.forward_decode(x, current_pos_host)
+        raise ValueError(f"Unknown mode {mode!r}")
 
-    def forward(
-        self,
-        x,
-        current_pos,
-        rot_mats=None,
-        user_id=0,
-        mode=Mode.DECODE,
-        page_table=None,
-        chunk_page_table=None,
-        chunk_start_idx=None,
-        kv_cache=None,
-        position_ids=None,
-    ):
-        if mode == Mode.PREFILL:
-            return self.forward_prefill(
-                x,
-                rot_mats,
-                user_id,
-                page_table=page_table,
-                chunk_page_table=chunk_page_table,
-                chunk_start_idx=chunk_start_idx,
-                kv_cache=kv_cache,
-                position_ids=position_ids,
-            )
-        return super().forward(
-            x,
-            current_pos,
-            rot_mats,
-            user_id=user_id,
-            mode=mode,
-            page_table=page_table,
-            chunk_page_table=chunk_page_table,
-            chunk_start_idx=chunk_start_idx,
-            kv_cache=kv_cache,
-        )
-
-
-TtDevstral2LargeAttention.__name__ = "Attention"
-TtDevstral2LargeAttention.__qualname__ = "Attention"
-
-TtMinistralAttention = TtDevstral2LargeAttention
-
-__all__ = [
-    "TtDevstral2LargeAttention",
-    "TtMinistralAttention",
-]
+    def forward(self, *args, **kwargs):
+        return self(*args, **kwargs)

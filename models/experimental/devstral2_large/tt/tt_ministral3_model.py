@@ -1,313 +1,161 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: Apache-2.0
-"""
-Tenstorrent stack for Hugging Face ``Ministral3Model`` (no ``lm_head``).
 
-Mirrors ``transformers.models.ministral3.modeling_ministral3.Ministral3Model`` and
-``models/experimental/devstral2_large/reference/model_structure.txt``:
+"""Top-level Devstral-2 / Ministral3 model.
 
-- ``embed_tokens`` → :class:`~models.tt_transformers.tt.embedding.Embedding` (meta key ``tok_embeddings.weight``);
-  on multi-device meshes the embedding output can be **width-sharded** on dim 3, so we **all-gather**
-  concatenate to full ``args.dim`` before the first RMSNorm (same helper as ``TtMinistral3DecoderLayer``).
-- ``layers`` → list of :class:`~models.experimental.devstral2_large.tt.tt_ministral3_decoder_layer.TtMinistral3DecoderLayer`
-- ``norm`` → :class:`~models.experimental.devstral2_large.tt.tt_ministralrmsnorm.TtDevstral2LargeRMSNorm`
-  (``model_final_norm=True``, meta key ``norm.weight``; BH-wide prefill uses the same workaround as layer norms)
-- ``rotary_emb`` → :class:`~models.experimental.devstral2_large.tt.tt_ministral_rotary_emb.TtDevstral2LargeRotaryEmbedding`
-  (HF-aligned cos/sin on device via NumPy tables + slice, same as ``prepare_inputs_prefill`` in ``Transformer``).
+HF reference (``Ministral3Model`` + ``Ministral3ForCausalLM``)::
 
-``state_dict`` must follow meta naming from :func:`~models.tt_transformers.tt.load_checkpoints.map_hf_to_meta_keys`
-(``layers.N.*``, ``tok_embeddings.weight``, ``norm.weight``). ``attention_mask`` is accepted for API parity with HF
-but ignored (TT attention is causal on device). ``use_cache`` / ``past_key_values`` are not implemented yet.
+    h = embed_tokens(input_ids)
+    for layer in layers:
+        h = layer(h, ...)
+    h = norm(h)
+    # CausalLM-only:
+    logits = lm_head(h)
 
-Forward uses **ttnn only** for position indices and RoPE slicing (no PyTorch in the hot path).
-Decode applies the same height-sharding to cos/sin as :class:`~models.tt_transformers.tt.rope.HfRotarySetup`
-so ``rotary_embedding_hf`` decode validation is satisfied.
+Embedding is run on the host (cheap, vocab-bound; avoids embed-vocab-sized device weight on every
+chip). Final norm runs on device. ``lm_head`` is optional and column-parallel.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Optional
 
+import torch
 import ttnn
 
-from models.common.lightweightmodule import LightweightModule
-from models.experimental.devstral2_large.tt.model_utils import (
-    devstral_to_memory_if_needed,
-    get_decode_mem_config_after_hidden_dim_concat,
-)
-from models.experimental.devstral2_large.tt.tt_ministral3_decoder_layer import (
-    TtMinistral3DecoderLayer,
-    _all_gather_concat_hidden_dim,
-)
-from models.experimental.devstral2_large.tt.tt_ministralrmsnorm import TtDevstral2LargeRMSNorm
-from models.experimental.devstral2_large.tt.tt_ministral_rotary_emb import TtDevstral2LargeRotaryEmbedding
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.embedding import Embedding
+from models.experimental.devstral2_large.tt.model_args import Devstral2Args
+from models.experimental.devstral2_large.tt.tt_ministral3_decoder_layer import TtDecoderLayer
+from models.experimental.devstral2_large.tt.tt_ministral_rotary_emb import TtRotaryEmbedding
+from models.experimental.devstral2_large.tt.tt_ministralrmsnorm import TtRMSNorm
+
+__all__ = ["TtMinistral3Model", "TtMinistral3ForCausalLM"]
 
 
-@dataclass
-class TtMinistral3ModelOutput:
-    """TTNN analogue of ``transformers.modeling_outputs.BaseModelOutputWithPast`` (subset)."""
+def _embed_host(
+    input_ids: torch.Tensor,
+    state_dict: dict,
+    args: Devstral2Args,
+    mesh_device,
+    *,
+    dtype: ttnn.DataType,
+) -> ttnn.Tensor:
+    """Look up ``embed_tokens.weight`` host-side and upload the resulting activation (replicated)."""
+    embed_w = state_dict["model.embed_tokens.weight"].to(torch.bfloat16)
+    h = torch.nn.functional.embedding(input_ids, embed_w)  # (B, S, dim)
+    h = h.reshape(1, 1, -1, args.hidden_size)
+    return ttnn.from_torch(
+        h,
+        device=mesh_device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
-    last_hidden_state: ttnn.Tensor
-    past_key_values: Optional[Any] = None
 
-
-def _text_config_from_model_args(args) -> Any:
-    cfg = getattr(args, "hf_config", None)
-    if cfg is None:
-        raise ValueError("ModelArgs.hf_config is required for TtDevstral2LargeRotaryEmbedding / Ministral3Config")
-    return getattr(cfg, "text_config", None) or cfg
-
-
-class TtMinistral3Model(LightweightModule):
-    """
-    TTNN ``Ministral3Model``: embedding, decoder stack, final RMSNorm, TT HF-format rotary tables.
-
-    Forward order matches HF: build ``inputs_embeds`` if needed, compute ``position_embeddings`` once,
-    run each ``Ministral3DecoderLayer``-equivalent block, apply final ``norm``.
-    """
+class TtMinistral3Model:
+    """The Ministral3 decoder stack: embed → layers → final norm."""
 
     def __init__(
         self,
-        args,
+        args: Devstral2Args,
         mesh_device,
+        state_dict: dict,
         tt_ccl,
-        dtype,
-        state_dict,
-        weight_cache_path,
-        transformation_mats,
-        paged_attention_config=None,
-        use_paged_kv_cache=False,
-        prefetcher=None,
-    ):
-        super().__init__()
-
+        *,
+        dtype: Optional[ttnn.DataType] = None,
+        weight_cache_path: Optional[str] = None,
+        num_layers: Optional[int] = None,
+    ) -> None:
         self.args = args
         self.mesh_device = mesh_device
+        self.state_dict = state_dict
         self.tt_ccl = tt_ccl
-        self.prefetcher = prefetcher
+        self.dtype = dtype or args.weight_dtype
+        self.num_layers = int(num_layers if num_layers is not None else args.num_hidden_layers)
 
-        text_cfg = _text_config_from_model_args(args)
-        head_dim = int(getattr(text_cfg, "head_dim", None) or text_cfg.hidden_size // text_cfg.num_attention_heads)
-        rope_params = getattr(text_cfg, "rope_parameters", None) or {}
-        if not isinstance(rope_params, dict):
-            rope_params = dict(rope_params)
-        self._llama_4_scaling_beta = rope_params.get("llama_4_scaling_beta")
-        self._original_max_position_embeddings = rope_params.get("original_max_position_embeddings")
-
-        self.embed_tokens = Embedding(mesh_device, args, weight_cache_path, state_dict, dtype)
+        self.rotary_emb = TtRotaryEmbedding(args, mesh_device, dtype=self.dtype)
         self.layers = [
-            TtMinistral3DecoderLayer(
+            TtDecoderLayer(
                 args,
                 mesh_device,
-                tt_ccl,
-                dtype,
                 state_dict,
-                layer_num=i,
+                layer_idx=i,
+                tt_ccl=tt_ccl,
+                rotary_emb=self.rotary_emb,
+                dtype=self.dtype,
                 weight_cache_path=weight_cache_path,
-                transformation_mats=transformation_mats,
-                paged_attention_config=paged_attention_config,
-                use_paged_kv_cache=use_paged_kv_cache,
-                prefetcher=prefetcher,
-                llama_4_scaling_beta=self._llama_4_scaling_beta,
-                original_max_position_embeddings=self._original_max_position_embeddings,
             )
-            for i in range(args.n_layers)
+            for i in range(self.num_layers)
         ]
-        self.norm = TtDevstral2LargeRMSNorm(
-            mesh_device,
-            args,
-            state_dict,
-            weight_cache_path,
-            0,
-            tt_ccl,
-            model_final_norm=True,
-        )
-        self.rotary_emb = TtDevstral2LargeRotaryEmbedding(
-            mesh_device,
-            batch_size=args.max_batch_size,
-            head_dim=head_dim,
-            max_seq_len=args.max_seq_len,
-            config=text_cfg,
-            datatype=dtype,
-            prefetcher=prefetcher,
-        )
+        self.norm = TtRMSNorm(args, mesh_device, state_dict, "model.norm.weight", dtype=self.dtype)
 
-    def _embed_input_ids(self, input_ids: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
-        skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher)
-        embd_out = self.embed_tokens(
-            input_ids,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.prefetcher is None else skip_mem_cfg,
-        )
-        out = ttnn.unsqueeze_to_4D(embd_out)
-        return devstral_to_memory_if_needed(out, skip_mem_cfg)
-
-    def _default_position_ids_tt(self, batch_size: int, seq_len: int, *, past_seen_tokens: int = 0) -> ttnn.Tensor:
-        """Contiguous indices ``past_seen_tokens .. past_seen_tokens+seq_len-1`` per row (uint32, ROW_MAJOR)."""
-        row = ttnn.arange(
-            past_seen_tokens,
-            past_seen_tokens + seq_len,
-            1,
-            dtype=ttnn.uint32,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        row = ttnn.reshape(row, (1, seq_len))
-        if batch_size == 1:
-            return row
-        return ttnn.repeat(row, (batch_size, 1))
-
-    def _ensure_position_ids_bs_row_major_uint32(
-        self, pos_tt: ttnn.Tensor, batch_size: int, seq_len: int
-    ) -> ttnn.Tensor:
-        if tuple(int(x) for x in pos_tt.shape) != (batch_size, seq_len):
-            raise ValueError(
-                f"position_ids shape {tuple(pos_tt.shape)} does not match activations (batch={batch_size}, seq={seq_len})"
-            )
-        out = pos_tt
-        if out.layout != ttnn.ROW_MAJOR_LAYOUT:
-            out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
-        if out.dtype != ttnn.uint32:
-            out = ttnn.typecast(out, ttnn.uint32)
-        return out
-
-    def _expand_rot_mats_batch_if_needed(self, rot_mats, batch_dim: int):
-        if rot_mats is None or batch_dim <= 1:
-            return rot_mats
-        c0 = rot_mats[0]
-        if int(c0.shape[1]) >= batch_dim:
-            return rot_mats
-        return [
-            ttnn.repeat(c0, (1, batch_dim, 1, 1)),
-            ttnn.repeat(rot_mats[1], (1, batch_dim, 1, 1)),
-        ]
-
-    def _prepare_rot_mats_prefill(
+    def __call__(
         self,
-        rot_mats,
-        rope_start_pos: int,
-        batch_dim: int,
-        seq_len: int,
-    ):
-        if rot_mats is not None:
-            return self._expand_rot_mats_batch_if_needed(rot_mats, batch_dim)
-        rot_mats = self.rotary_emb.slice_rot_mats_prefill(rope_start_pos, seq_len)
-        return self._expand_rot_mats_batch_if_needed(rot_mats, batch_dim)
-
-    def forward(
-        self,
-        input_ids: Optional[ttnn.Tensor] = None,
-        attention_mask: Any = None,
-        position_ids: Optional[ttnn.Tensor] = None,
-        past_key_values: Any = None,
-        inputs_embeds: Optional[ttnn.Tensor] = None,
-        use_cache: Optional[bool] = None,
+        input_ids: torch.Tensor,
         *,
-        mode: Mode | str = Mode.PREFILL,
-        current_pos=None,
-        rot_mats_global: Optional[list[ttnn.Tensor]] = None,
-        rot_mats_local: Optional[list[ttnn.Tensor]] = None,
+        mode: str = "prefill",
+        start_pos: int = 0,
+        current_pos_host: Optional[torch.Tensor] = None,
         user_id: int = 0,
-        page_table=None,
-        chunk_page_table=None,
-        chunk_start_idx=None,
-        kv_cache=None,
-        batch_size: int = 1,
-        rope_start_pos: int = 0,
-        **_kwargs: Any,
-    ) -> TtMinistral3ModelOutput:
-        if isinstance(mode, str):
-            mode = Mode(mode)
-
-        if use_cache:
-            raise NotImplementedError("TtMinistral3Model does not implement use_cache yet.")
-        if past_key_values is not None:
-            raise NotImplementedError("TtMinistral3Model does not implement past_key_values yet.")
-
-        if (input_ids is None) == (inputs_embeds is None):
-            raise ValueError("Specify exactly one of input_ids or inputs_embeds (Hugging Face Ministral3Model rule).")
-
-        if attention_mask is not None:
-            pass  # API parity with HF; causal masking is implicit on device.
-
-        if inputs_embeds is None:
-            assert input_ids is not None
-            hidden_states = self._embed_input_ids(input_ids, mode)
-        else:
-            hidden_states = inputs_embeds
-
-        skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher)
-        assert (
-            hidden_states.memory_config() == skip_mem_cfg
-        ), f"hidden_states memcfg {hidden_states.memory_config()} != {skip_mem_cfg}"
-
-        if int(hidden_states.shape[-1]) != self.args.dim:
-            hidden_states = _all_gather_concat_hidden_dim(
-                self.mesh_device,
-                self.tt_ccl,
-                hidden_states,
-                topology=self.args.ccl_topology(),
-                dtype=self.args.ccl_dtype,
-            )
-            # Full ``dim`` on dim 3: decode needs MLP-style full-width shard (see
-            # ``get_decode_mem_config_after_hidden_dim_concat`` in ``tt_ministral3_decode_mem_config``).
-            post_hidden_concat = (
-                get_decode_mem_config_after_hidden_dim_concat(self.args, mode, self.prefetcher)
-                if self.prefetcher is None and not self.args.is_galaxy
-                else skip_mem_cfg
-            )
-            hidden_states = devstral_to_memory_if_needed(hidden_states, post_hidden_concat)
-
-        b = int(hidden_states.shape[0])
-        s = int(hidden_states.shape[2])
-
-        if position_ids is None:
-            pos_tt = self._default_position_ids_tt(b, s, past_seen_tokens=0)
-        else:
-            pid = position_ids
-            if len(pid.shape) == 1:
-                if int(pid.shape[0]) != s:
-                    raise ValueError(f"1D position_ids length {int(pid.shape[0])} does not match sequence length {s}")
-                pid = ttnn.reshape(pid, (1, s))
-                if b > 1:
-                    pid = ttnn.repeat(pid, (b, 1))
-            pos_tt = self._ensure_position_ids_bs_row_major_uint32(pid, b, s)
-
-        rot_mats_global = self._prepare_rot_mats_prefill(rot_mats_global, rope_start_pos, b, s)
-        if mode == Mode.DECODE:
-            cg, cs = rot_mats_global
-            rot_mats_global = self.rotary_emb.shard_decode_rot_mats_hf(cg, cs)
-            if rot_mats_local is not None:
-                cl, sl = rot_mats_local
-                rot_mats_local = self.rotary_emb.shard_decode_rot_mats_hf(cl, sl)
-
+    ) -> ttnn.Tensor:
+        h = _embed_host(input_ids, self.state_dict, self.args, self.mesh_device, dtype=self.args.activation_dtype)
         for layer in self.layers:
-            hidden_states = layer(
-                hidden_states,
-                current_pos=current_pos,
-                rot_mats_global=rot_mats_global,
-                rot_mats_local=rot_mats_local,
-                user_id=user_id,
+            h = layer(
+                h,
                 mode=mode,
-                page_table=page_table,
-                chunk_page_table=chunk_page_table,
-                chunk_start_idx=chunk_start_idx,
-                kv_cache=kv_cache,
-                batch_size=batch_size,
-                position_ids=pos_tt,
+                start_pos=start_pos,
+                current_pos_host=current_pos_host,
+                user_id=user_id,
             )
+        h = self.norm(h)
+        return h
 
-        norm_cfg = self.args.get_norm_config("lm_head", mode, self.prefetcher)
-        hidden_states = self.norm(hidden_states, mode=mode, norm_config=norm_cfg)
-
-        return TtMinistral3ModelOutput(last_hidden_state=hidden_states, past_key_values=None)
+    def forward(self, *args, **kwargs):
+        return self(*args, **kwargs)
 
 
-__all__ = [
-    "TtMinistral3Model",
-    "TtMinistral3ModelOutput",
-]
+class TtMinistral3ForCausalLM:
+    """Causal LM: shares the base model and adds an optional column-parallel ``lm_head``."""
+
+    def __init__(
+        self,
+        args: Devstral2Args,
+        mesh_device,
+        state_dict: dict,
+        tt_ccl,
+        **kwargs,
+    ) -> None:
+        self.model = TtMinistral3Model(args, mesh_device, state_dict, tt_ccl, **kwargs)
+        self.args = args
+        self.mesh_device = mesh_device
+
+        # lm_head: ``(vocab_size, hidden_size)`` HF → ``(hidden_size, vocab_size)`` TT, colwise TP on out.
+        lm_w_key = "lm_head.weight" if "lm_head.weight" in state_dict else "model.embed_tokens.weight"
+        lm_w = state_dict[lm_w_key].to(torch.bfloat16).T.contiguous()  # (hidden, vocab)
+        if args.cluster_axis == 1:
+            dims = (None, -1)
+        else:
+            dims = (-1, None)
+        self.lm_head = ttnn.from_torch(
+            lm_w,
+            device=mesh_device,
+            dtype=args.weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=args.mesh_shape),
+        )
+
+    def __call__(self, *fwd_args, **fwd_kwargs) -> ttnn.Tensor:
+        h = self.model(*fwd_args, **fwd_kwargs)
+        logits = ttnn.linear(
+            h,
+            self.lm_head,
+            dtype=self.args.activation_dtype,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        return logits
+
+    def forward(self, *args, **kwargs):
+        return self(*args, **kwargs)

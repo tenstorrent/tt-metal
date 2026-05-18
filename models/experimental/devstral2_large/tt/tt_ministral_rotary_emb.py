@@ -1,298 +1,301 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-#
-# SPDX-License-Identifier: Apache-2.0
-"""
-TTNN rotary tables for Devstral-2 (123B) text models.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-The architecture matches Hugging Face ``Ministral3RotaryEmbedding``. Host-side frequencies use **NumPy
-only** (no PyTorch in this module): ``inv_freq`` and ``attention_scaling`` match ``transformers``
-defaults / YaRN logic, then tables are uploaded with ``ttnn.from_torch`` (which accepts NumPy arrays).
-Device behavior inherits :class:`HfRotarySetup`.
+# SPDX-License-Identifier: Apache-2.0
+
+"""RoPE for Devstral-2 / Ministral3.
+
+The HF reference (``Ministral3RotaryEmbedding``) computes per-token (cos, sin) with optional YaRN
+scaling, then ``apply_rotary_pos_emb`` does::
+
+    q_emb = q * cos + rotate_half(q) * sin
+    k_emb = k * cos + rotate_half(k) * sin
+
+After RoPE, the query is additionally multiplied by a position-dependent Llama-4 scale::
+
+    s = 1 + beta * log1p(floor(pos / original_max_position_embeddings))
+    q_emb = q_emb * s
+
+This module:
+  1) Pre-computes ``cos`` / ``sin`` and the Llama-4 ``s`` table on the host with YaRN scaling.
+  2) Builds the transformation matrix used by ``ttnn.experimental.rotary_embedding_llama`` so we
+     can apply RoPE on-device with the same numerics.
+  3) Exposes slicing helpers for prefill (``[start_pos:start_pos+seq_len]``) and decode
+     (``[current_pos]``).
+
+Llama-4 query scaling is **baked into cos/sin** for the query path so the on-device RoPE op
+multiplies through with no extra ops. See the ``cos_q`` / ``sin_q`` upload below.
 """
 
 from __future__ import annotations
 
 import math
-from typing import Any, Optional, Tuple
+from typing import Optional
 
-import numpy as np
+import torch
 import ttnn
 
-from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.prefetcher import Prefetcher
-from models.tt_transformers.tt.rope import HfRotarySetup
-from ttnn import replicate_tensor_to_mesh_mapper
+from models.experimental.devstral2_large.tt.model_args import Devstral2Args, RopeParameters
+
+__all__ = ["TtRotaryEmbedding", "precompute_cos_sin", "compute_llama4_scale", "get_rot_transformation_mat"]
 
 
-def _compute_default_inv_freq_numpy(config: Any) -> Tuple[np.ndarray, float]:
-    """Match ``Ministral3RotaryEmbedding.compute_default_rope_parameters`` (HF)."""
-    base = float(config.rope_parameters["rope_theta"])
-    dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
-    dim = int(dim)
-    idx = np.arange(0, dim, 2, dtype=np.float64)
-    inv_freq = 1.0 / (base ** (idx / dim))
-    return inv_freq.astype(np.float32), 1.0
+# --- Pure-host RoPE table computation (mirrors HF ``Ministral3RotaryEmbedding``) ---
 
 
-def _compute_yarn_inv_freq_numpy(config: Any) -> Tuple[np.ndarray, float]:
-    """Match ``transformers.modeling_rope_utils._compute_yarn_parameters`` (HF)."""
-    rope_parameters_dict = config.rope_parameters
+def _yarn_inv_freq(head_dim: int, rope: RopeParameters) -> tuple[torch.Tensor, float]:
+    """Compute YaRN-scaled inverse frequencies and the attention-scaling multiplier.
 
-    base = float(rope_parameters_dict["rope_theta"])
-    partial_rotary_factor = float(rope_parameters_dict.get("partial_rotary_factor", 1.0))
-    head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
-    dim = int(head_dim * partial_rotary_factor)
+    Replicates HF's ``ROPE_INIT_FUNCTIONS["yarn"]``. For ``rope_type == "default"`` only the base
+    geometric inv_freq is returned and ``attention_factor == 1.0``.
+    """
+    base = rope.rope_theta
+    dim = head_dim
+    inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
 
-    factor = rope_parameters_dict.get("factor")
-    attention_factor = rope_parameters_dict.get("attention_factor")
-    mscale = rope_parameters_dict.get("mscale")
-    mscale_all_dim = rope_parameters_dict.get("mscale_all_dim")
-    original_max_position_embeddings = int(rope_parameters_dict["original_max_position_embeddings"])
+    if rope.rope_type == "default":
+        return inv_freq, 1.0
+    if rope.rope_type != "yarn":
+        raise ValueError(f"Unsupported rope_type {rope.rope_type!r}; expected 'yarn' or 'default'.")
 
-    if factor is None:
-        factor = float(config.max_position_embeddings / original_max_position_embeddings)
-    else:
-        factor = float(factor)
+    factor = rope.factor
+    beta_fast = rope.beta_fast
+    beta_slow = rope.beta_slow
+    orig = rope.original_max_position_embeddings
+    mscale = rope.mscale
+    mscale_all_dim = rope.mscale_all_dim
 
-    def get_mscale(scale: float, ms: float = 1.0) -> float:
+    def _find_correction_dim(num_rotations, dim_, base_, max_pos_):
+        return (dim_ * math.log(max_pos_ / (num_rotations * 2 * math.pi))) / (2 * math.log(base_))
+
+    def _find_correction_range(low_rot, high_rot, dim_, base_, max_pos_):
+        low = math.floor(_find_correction_dim(low_rot, dim_, base_, max_pos_))
+        high = math.ceil(_find_correction_dim(high_rot, dim_, base_, max_pos_))
+        return max(low, 0), min(high, dim_ - 1)
+
+    def _linear_ramp_mask(low, high, dim_):
+        if low == high:
+            high = high + 0.001
+        linear = (torch.arange(dim_, dtype=torch.float32) - low) / (high - low)
+        return torch.clamp(linear, 0.0, 1.0)
+
+    def _get_mscale(scale, m_scale):
         if scale <= 1:
             return 1.0
-        return 0.1 * ms * math.log(scale) + 1.0
+        return 0.1 * m_scale * math.log(scale) + 1.0
 
-    if attention_factor is None:
-        if mscale is not None and mscale_all_dim is not None:
-            attention_factor = float(get_mscale(factor, float(mscale)) / get_mscale(factor, float(mscale_all_dim)))
-        else:
-            attention_factor = float(get_mscale(factor))
-
-    beta_fast = float(rope_parameters_dict.get("beta_fast") or 32)
-    beta_slow = float(rope_parameters_dict.get("beta_slow") or 1)
-
-    def find_correction_dim(num_rotations: float, dim_v: int, base_v: float, max_position_embeddings: int) -> float:
-        return (dim_v * math.log(max_position_embeddings / (num_rotations * 2 * math.pi))) / (2 * math.log(base_v))
-
-    def find_correction_range(
-        low_rot: float, high_rot: float, dim_v: int, base_v: float, max_position_embeddings: int, truncate: bool
-    ) -> Tuple[float, float]:
-        low = find_correction_dim(low_rot, dim_v, base_v, max_position_embeddings)
-        high = find_correction_dim(high_rot, dim_v, base_v, max_position_embeddings)
-        if truncate:
-            low = math.floor(low)
-            high = math.ceil(high)
-        return max(low, 0), min(high, dim_v - 1)
-
-    def linear_ramp_factor(min_v: float, max_v: float, dim_half: int) -> np.ndarray:
-        if min_v == max_v:
-            max_v += 0.001
-        linear_func = (np.arange(dim_half, dtype=np.float64) - min_v) / (max_v - min_v)
-        return np.clip(linear_func, 0, 1).astype(np.float64)
-
-    pos_freqs = base ** (np.arange(0, dim, 2, dtype=np.float64) / dim)
+    pos_freqs = base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim)
     inv_freq_extrapolation = 1.0 / pos_freqs
     inv_freq_interpolation = 1.0 / (factor * pos_freqs)
-
-    truncate = bool(config.rope_parameters.get("truncate", True))
-    low, high = find_correction_range(beta_fast, beta_slow, dim, base, original_max_position_embeddings, truncate)
-
-    ramp = linear_ramp_factor(low, high, dim // 2)
-    inv_freq_extrapolation_factor = 1.0 - ramp
-    inv_freq = inv_freq_interpolation * (1.0 - inv_freq_extrapolation_factor) + inv_freq_extrapolation * (
-        inv_freq_extrapolation_factor
-    )
-    return inv_freq.astype(np.float32), float(attention_factor)
+    low, high = _find_correction_range(beta_fast, beta_slow, dim, base, orig)
+    inv_freq_mask = 1.0 - _linear_ramp_mask(low, high, dim // 2).to(dtype=torch.float32)
+    inv_freq = inv_freq_interpolation * (1 - inv_freq_mask) + inv_freq_extrapolation * inv_freq_mask
+    attention_factor = float(_get_mscale(factor, mscale) / _get_mscale(factor, mscale_all_dim))
+    return inv_freq, attention_factor
 
 
-def ministral3_inv_freq_and_attention_scaling(config: Any) -> Tuple[np.ndarray, float]:
-    """
-    ``inv_freq`` (length ``head_dim/2``) and scalar ``attention_scaling`` for Ministral3 / HF-compatible rope.
-    """
-    from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
-
-    if not isinstance(config, Ministral3Config):
-        raise TypeError(f"Expected Ministral3Config, got {type(config)!r}")
-
-    if hasattr(config, "standardize_rope_params"):
-        config.standardize_rope_params()
-
-    rope_type = config.rope_parameters["rope_type"]
-    if rope_type == "default":
-        return _compute_default_inv_freq_numpy(config)
-    if rope_type == "yarn":
-        return _compute_yarn_inv_freq_numpy(config)
-    raise NotImplementedError(
-        f"rope_type={rope_type!r} is not ported to NumPy in this module; extend tt_ministral_rotary_emb or use HF."
-    )
-
-
-def ministral3_hf_cos_sin_tables(
+def precompute_cos_sin(
     head_dim: int,
-    max_seq_len: int,
-    config: Any,
-    *,
-    table_dtype: np.dtype = np.float32,
-) -> Tuple[np.ndarray, np.ndarray]:
+    max_position_embeddings: int,
+    rope: RopeParameters,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute ``cos``/``sin`` tables of shape ``[max_position_embeddings, head_dim]`` (float32).
+
+    Layout is **pairwise-interleaved** — each frequency ``f_k`` is duplicated at positions
+    ``2k`` and ``2k+1``. This is the layout ``ttnn.experimental.rotary_embedding_llama`` expects
+    (cf. ``models/tt_transformers/tt/common.py::gather_cos_sin``). The math result is identical to
+    HF's split-half RoPE when the Q/K tensors are likewise pre-permuted into interleaved layout
+    (see ``permute_split_half_to_interleaved`` below; the attention module bakes that into the
+    Q/K projection weights at load time).
     """
-    Host cos/sin tables ``[max_seq_len, head_dim]`` matching HF ``Ministral3RotaryEmbedding.forward``
-    for positions ``0 .. max_seq_len - 1``. Computed with NumPy only.
+    inv_freq, attention_factor = _yarn_inv_freq(head_dim, rope)
+    positions = torch.arange(max_position_embeddings, dtype=torch.float32)
+    freqs = torch.einsum("i,j->ij", positions, inv_freq)  # [pos, dim/2]
+    # Interleave: cos'[pos, 2k] = cos'[pos, 2k+1] = cos(freqs[pos, k]).
+    emb = torch.stack((freqs, freqs), dim=-1).flatten(-2)
+    cos = emb.cos() * attention_factor
+    sin = emb.sin() * attention_factor
+    return cos.to(torch.float32), sin.to(torch.float32)
+
+
+def permute_split_half_to_interleaved(weight: torch.Tensor, head_dim: int) -> torch.Tensor:
+    """Permute a (Hq*head_dim, in) weight so each head's ``head_dim`` rows go from HF's
+    split-half ``[a_0, ..., a_{D/2-1}, b_0, ..., b_{D/2-1}]`` to pairwise-interleaved
+    ``[a_0, b_0, a_1, b_1, ..., a_{D/2-1}, b_{D/2-1}]``.
+
+    Applied to ``q_proj`` and ``k_proj`` weights so the device-side RoPE op
+    (``ttnn.experimental.rotary_embedding_llama``) — which expects interleaved layout — gets
+    matching activations without a per-forward permute. V is **not** permuted: it never enters
+    RoPE, and the SDPA output stays in V's layout to match what ``o_proj`` expects.
     """
-    from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
-
-    if not isinstance(config, Ministral3Config):
-        raise TypeError(f"Expected Ministral3Config, got {type(config)!r}")
-
-    cfg_hd = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
-    if int(cfg_hd) != int(head_dim):
-        raise ValueError(f"head_dim={head_dim} does not match config head dim ({cfg_hd}).")
-
-    inv_freq, attention_scaling = ministral3_inv_freq_and_attention_scaling(config)
-    t = np.arange(max_seq_len, dtype=np.float64)
-    freqs = np.outer(t, inv_freq.astype(np.float64))
-    emb = np.concatenate((freqs, freqs), axis=-1)
-    cos_hf = (np.cos(emb) * attention_scaling).astype(table_dtype)
-    sin_hf = (np.sin(emb) * attention_scaling).astype(table_dtype)
-    return cos_hf, sin_hf
+    out, in_ = weight.shape
+    if out % head_dim != 0:
+        raise ValueError(f"weight out={out} not divisible by head_dim={head_dim}")
+    n_heads = out // head_dim
+    # (Hq, head_dim, in) -> reorder head_dim from split-half to interleaved -> flatten.
+    w = weight.reshape(n_heads, head_dim, in_)
+    half = head_dim // 2
+    idx = torch.empty(head_dim, dtype=torch.long)
+    idx[0::2] = torch.arange(half)
+    idx[1::2] = torch.arange(half, head_dim)
+    return w[:, idx, :].reshape(out, in_).contiguous()
 
 
-def _upload_hf_cos_sin_4d(
-    cos_hf: np.ndarray,
-    sin_hf: np.ndarray,
-    device: Any,
-    datatype: ttnn.DataType,
-) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-    cos_4d = cos_hf[np.newaxis, np.newaxis, ...]
-    sin_4d = sin_hf[np.newaxis, np.newaxis, ...]
-    mapper = replicate_tensor_to_mesh_mapper(device)
-    cos_tt = ttnn.from_torch(
-        cos_4d,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=datatype,
-        mesh_mapper=mapper,
-    )
-    sin_tt = ttnn.from_torch(
-        sin_4d,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=datatype,
-        mesh_mapper=mapper,
-    )
-    return cos_tt, sin_tt
+def compute_llama4_scale(
+    max_position_embeddings: int,
+    original_max_position_embeddings: int,
+    beta: float,
+) -> torch.Tensor:
+    """``s[p] = 1 + beta * log1p(floor(p / orig))``; shape ``[max_position_embeddings]``."""
+    if beta == 0.0 or original_max_position_embeddings <= 0:
+        return torch.ones(max_position_embeddings, dtype=torch.float32)
+    p = torch.arange(max_position_embeddings, dtype=torch.float32)
+    floored = torch.floor(p / float(original_max_position_embeddings))
+    return 1.0 + float(beta) * torch.log1p(floored)
 
 
-class TtMinistral3RotaryEmbedding(HfRotarySetup):
+def get_rot_transformation_mat() -> torch.Tensor:
+    """Canonical 32x32 trans-mat for ``ttnn.experimental.rotary_embedding_llama``.
+
+    Pairwise/interleaved RoPE: each adjacent pair ``(2k, 2k+1)`` swaps with signs ``(+1, -1)``,
+    so ``(x @ M)[2k] = -x[2k+1]`` and ``(x @ M)[2k+1] = x[2k]``. Combined with cos/sin tables in
+    pairwise layout, this yields the standard 2D rotation per pair.
+
+    Matches ``models/common/tensor_utils.py::get_rot_transformation_mat``.
     """
-    HF-aligned Ministral3 RoPE caches on device via NumPy table build + :class:`HfRotarySetup` lookup.
+    mat = torch.zeros((32, 32), dtype=torch.bfloat16)
+    mat[torch.arange(0, 32, 2), torch.arange(1, 32, 2)] = 1.0
+    mat[torch.arange(1, 32, 2), torch.arange(0, 32, 2)] = -1.0
+    return mat.reshape(1, 1, 32, 32)
+
+
+# --- TT-side wrapper ---
+
+
+class TtRotaryEmbedding:
+    """Owns the device-resident cos/sin/scale tables and exposes prefill/decode getters.
+
+    Tables are replicated across the mesh (RoPE is a per-head pointwise op, so each TP shard sees
+    the same cos/sin values for its slice of heads).
     """
 
     def __init__(
         self,
-        device: Any,
-        batch_size: int,
-        head_dim: int,
-        max_seq_len: int,
-        config: Any,
-        use_qk_fused: bool = False,
-        datatype: ttnn.DataType = ttnn.bfloat16,
-        shard_batch_to_mesh_dim: Optional[int] = 1,
-        prefetcher: Optional[Prefetcher] = None,
+        args: Devstral2Args,
+        mesh_device,
+        *,
+        max_position_embeddings: Optional[int] = None,
+        dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
-        LightweightModule.__init__(self)
-        if use_qk_fused:
-            raise NotImplementedError("use_qk_fused")
-        self.batch_size = batch_size
-        self.head_dim = head_dim
-        self.max_seq_len = max_seq_len
-        self.device = device
+        self.args = args
+        self.mesh_device = mesh_device
+        self.dtype = dtype
+        max_pos = int(max_position_embeddings or args.max_seq_len)
+        self._max_pos = max_pos
 
-        table_np = np.float32 if datatype == ttnn.bfloat16 else np.float64
-        cos_hf, sin_hf = ministral3_hf_cos_sin_tables(head_dim, max_seq_len, config, table_dtype=table_np)
-
-        self.cos_matrix, self.sin_matrix = _upload_hf_cos_sin_4d(cos_hf, sin_hf, device, datatype)
-        self.cos_matrix_prefill, self.sin_matrix_prefill = _upload_hf_cos_sin_4d(cos_hf, sin_hf, device, datatype)
-
-        self.cos_matrix_2d = ttnn.reshape(self.cos_matrix, (max_seq_len, head_dim))
-        self.sin_matrix_2d = ttnn.reshape(self.sin_matrix, (max_seq_len, head_dim))
-
-        self.transformation_mat = None
-        self.transformation_mat_prefill = None
-
-        self._ministral3_config = config
-
-        # Same as :class:`~models.tt_transformers.tt.rope.HfRotarySetup` (``get_rot_mats`` tail):
-        # ``rotary_embedding_hf`` decode requires HEIGHT_SHARDED cos/sin.
-        self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
-        self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
-        if self.num_devices == 32:
-            self.batch_size_per_device_group = max(self.batch_size // list(device.shape)[shard_batch_to_mesh_dim], 1)
-        else:
-            self.batch_size_per_device_group = self.batch_size
-        self.core_grid = (
-            device.compute_with_storage_grid_size() if ttnn.get_arch_name() == "blackhole" else ttnn.CoreCoord(8, 8)
+        cos, sin = precompute_cos_sin(args.head_dim, max_pos, args.rope)
+        scale = compute_llama4_scale(
+            max_pos,
+            args.rope.original_max_position_embeddings,
+            args.rope.llama_4_scaling_beta,
         )
 
-    def shard_decode_rot_mats_hf(self, cos: ttnn.Tensor, sin: ttnn.Tensor) -> list:
-        """Height-shard interleaved cos/sin for ``ttnn.experimental.rotary_embedding_hf`` decode.
+        # Bake Llama-4 query scaling into the Q tables so device RoPE produces a scaled Q directly.
+        cos_q = cos * scale.unsqueeze(-1)
+        sin_q = sin * scale.unsqueeze(-1)
 
-        Prefill passes interleaved slices from :meth:`slice_rot_mats_prefill`; the HF decode kernel
-        requires sharded caches (see ``HfRotarySetup.get_rot_mats`` in ``rope.py``).
-        """
-        if cos.is_sharded() and sin.is_sharded():
-            return [cos, sin]
+        self._cos_host = cos
+        self._sin_host = sin
+        self._cos_q_host = cos_q
+        self._sin_q_host = sin_q
+        self._scale_host = scale
 
-        batch_decode = self.batch_size_per_device_group
-        num_cores = min(batch_decode, self.core_grid.x * self.core_grid.y)
-        batch_grid = ttnn.num_cores_to_corerangeset(num_cores, self.core_grid, row_wise=True)
-        mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, self.head_dim),
-            core_grid=batch_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        cos_out, sin_out = cos, sin
-        if batch_decode % ttnn.TILE_SIZE != 0:
-            cos_out = cos_out[:, :batch_decode, :, :]
-            sin_out = sin_out[:, :batch_decode, :, :]
-        return [
-            ttnn.interleaved_to_sharded(cos_out, mem_config),
-            ttnn.interleaved_to_sharded(sin_out, mem_config),
-        ]
-
-    def slice_rot_mats_prefill(self, start_pos: int, seq_len: int) -> list:
-        """
-        Cos/sin slices ``[1, 1, seq_len, head_dim]`` on device for full prefill starting at ``start_pos``.
-
-        Matches the slicing policy used in ``Transformer.prepare_inputs_prefill`` (pad dim 2 if needed).
-        """
-        mat_len = self.cos_matrix_prefill.shape[2]
-        required_end = start_pos + seq_len
-        if mat_len < required_end:
-            raise RuntimeError(
-                f"RoPE prefill needs positions through {required_end} but cos_matrix_prefill length is {mat_len}; "
-                "build TtMinistral3RotaryEmbedding with a larger max_seq_len."
+        def _upload(t: torch.Tensor) -> ttnn.Tensor:
+            tt = t.to(torch.bfloat16).reshape(1, 1, max_pos, args.head_dim)
+            return ttnn.from_torch(
+                tt,
+                device=mesh_device,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
-        prefill_start_pos = start_pos
-        slice_end = min(mat_len, required_end)
-        cos_slice = self.cos_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
-        sin_slice = self.sin_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
-        pad_len = max(0, required_end - mat_len)
-        if pad_len > 0:
-            padding = [(0, 0)] * 4
-            padding[2] = (0, pad_len)
-            cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
-            sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
-        return [cos_slice, sin_slice]
 
-    @property
-    def ministral3_config(self) -> Any:
-        return self._ministral3_config
+        self.cos_q = _upload(cos_q)
+        self.sin_q = _upload(sin_q)
+        self.cos_k = _upload(cos)
+        self.sin_k = _upload(sin)
 
+        self.trans_mat = ttnn.from_torch(
+            get_rot_transformation_mat(),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
-TtDevstral2LargeRotaryEmbedding = TtMinistral3RotaryEmbedding
+    # --- Prefill: returns (cos_q, sin_q, cos_k, sin_k) sliced to ``[start:start+seq_len]`` ---
 
-__all__ = [
-    "TtDevstral2LargeRotaryEmbedding",
-    "TtMinistral3RotaryEmbedding",
-    "ministral3_hf_cos_sin_tables",
-    "ministral3_inv_freq_and_attention_scaling",
-]
+    def get_prefill_tables(
+        self, start_pos: int, seq_len: int
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        end = start_pos + seq_len
+        if end > self._max_pos:
+            raise ValueError(f"Prefill end {end} exceeds precomputed max_position {self._max_pos}")
+
+        def _slice(t: ttnn.Tensor) -> ttnn.Tensor:
+            return ttnn.slice(t, [0, 0, start_pos, 0], [1, 1, end, self.args.head_dim])
+
+        return _slice(self.cos_q), _slice(self.sin_q), _slice(self.cos_k), _slice(self.sin_k)
+
+    # --- Decode: returns per-position rows uploaded fresh each step ---
+
+    def get_decode_tables(
+        self,
+        current_pos_host: torch.Tensor,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """``current_pos_host`` is a host int tensor of shape ``[batch]``.
+
+        Indexed on the host and uploaded fresh; mirrors HF semantics (``forward(x, position_ids)``
+        rebuilds the table for given positions) and avoids on-device gather.
+        """
+        positions = current_pos_host.long()
+        batch = int(positions.shape[0])
+        head_dim = self.args.head_dim
+
+        def _gather(t: torch.Tensor) -> ttnn.Tensor:
+            rows = t[positions].to(torch.bfloat16).reshape(1, batch, 1, head_dim)
+            # Pad seq dim to a tile so ``ttnn.experimental.rotary_embedding_llama`` is happy.
+            pad_to = ttnn.TILE_SIZE
+            padded = torch.zeros((1, batch, pad_to, head_dim), dtype=torch.bfloat16)
+            padded[:, :, 0:1, :] = rows
+            return ttnn.from_torch(
+                padded,
+                device=self.mesh_device,
+                dtype=self.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+        return (
+            _gather(self._cos_q_host),
+            _gather(self._sin_q_host),
+            _gather(self._cos_host),
+            _gather(self._sin_host),
+        )
+
+    # --- Convenience: apply RoPE on device. ---
+
+    def apply(
+        self,
+        q: ttnn.Tensor,
+        k: ttnn.Tensor,
+        cos_q: ttnn.Tensor,
+        sin_q: ttnn.Tensor,
+        cos_k: ttnn.Tensor,
+        sin_k: ttnn.Tensor,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        q_out = ttnn.experimental.rotary_embedding_llama(q, cos_q, sin_q, self.trans_mat)
+        k_out = ttnn.experimental.rotary_embedding_llama(k, cos_k, sin_k, self.trans_mat)
+        return q_out, k_out
