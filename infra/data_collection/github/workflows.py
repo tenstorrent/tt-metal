@@ -131,7 +131,12 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     if block_start_ts and block_end_ts:
         duration = (block_end_ts - block_start_ts).total_seconds()
 
-    error_summary = " | ".join(error_lines) if error_lines else None
+    if final_status == "SUCCESS":
+        error_summary = "tt-smi reset was successful"
+    elif error_lines:
+        error_summary = " | ".join(error_lines)
+    else:
+        error_summary = None
 
     return [{"attempt": num_smi_attempts, "final_status": final_status,
              "total_reset_time_sec": duration, "error_summary": error_summary}]
