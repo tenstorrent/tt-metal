@@ -1,0 +1,105 @@
+# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""
+Text encoder correctness test — compare TTNN forward pass against
+the PyTorch reference (HuggingFace Qwen3Model).
+"""
+
+import pytest
+import torch
+from transformers import AutoModel, AutoTokenizer
+
+import ttnn
+from models.demos.z_image_turbo.tt.text_encoder.model_ttnn import TextEncoderTTNN
+
+MODEL_ID = "Tongyi-MAI/Z-Image-Turbo"
+CAP_TOKENS = 128
+DRAM_RM = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)
+
+
+def _to_device_int32(pt, mesh_device):
+    return ttnn.from_torch(
+        pt.to(torch.int32),
+        dtype=ttnn.DataType.INT32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        device=mesh_device,
+        memory_config=DRAM_RM,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _tt_to_torch(tt_tensor, mesh_device):
+    host = ttnn.to_torch(
+        ttnn.from_device(tt_tensor),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+    )
+    return host[: host.shape[0] // 4].float()
+
+
+def pcc(a, b):
+    a_flat = a.flatten().double()
+    b_flat = b.flatten().double()
+    a_centered = a_flat - a_flat.mean()
+    b_centered = b_flat - b_flat.mean()
+    num = (a_centered * b_centered).sum()
+    den = a_centered.norm() * b_centered.norm()
+    return (num / den).item() if den > 0 else 0.0
+
+
+def _tokenize_prompt(prompt):
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, subfolder="tokenizer")
+    messages = [{"role": "user", "content": prompt}]
+    try:
+        formatted = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=True
+        )
+    except TypeError:
+        formatted = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    return tokenizer(formatted, padding="max_length", truncation=True, max_length=CAP_TOKENS, return_tensors="pt")[
+        "input_ids"
+    ]
+
+
+@pytest.fixture(scope="function")
+def device_params(request):
+    return {"l1_small_size": 1 << 15, "trace_region_size": 70_000_000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+def test_text_encoder_vs_pytorch(mesh_device):
+    mesh_device.enable_program_cache()
+
+    prompt = "a beautiful sunset over the ocean"
+    input_ids = _tokenize_prompt(prompt)
+
+    # --- PyTorch reference ---
+    pt_model = AutoModel.from_pretrained(
+        MODEL_ID, subfolder="text_encoder", torch_dtype=torch.bfloat16, use_cache=False
+    ).eval()
+    with torch.no_grad():
+        pt_out = pt_model(input_ids, output_hidden_states=True).hidden_states[-2]
+    pt_result = pt_out.squeeze(0).float()  # [seq_len, 2560]
+    del pt_model
+
+    # --- TTNN ---
+    tt_model = TextEncoderTTNN(mesh_device, seq_len=CAP_TOKENS)
+
+    # Compile run
+    tt_ids = _to_device_int32(input_ids, mesh_device)
+    tt_out = tt_model(tt_ids)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(tt_out, True)
+    ttnn.deallocate(tt_ids, True)
+
+    # Second run (from cache)
+    tt_ids = _to_device_int32(input_ids, mesh_device)
+    tt_out = tt_model(tt_ids)
+    ttnn.synchronize_device(mesh_device)
+    tt_result = _tt_to_torch(tt_out, mesh_device)
+
+    correlation = pcc(pt_result, tt_result)
+    print(f"\nText encoder PyTorch vs TTNN: PCC={correlation:.6f}")
+    print(f"  PT  output: shape={pt_result.shape}, range=[{pt_result.min():.4f}, {pt_result.max():.4f}]")
+    print(f"  TT  output: shape={tt_result.shape}, range=[{tt_result.min():.4f}, {tt_result.max():.4f}]")
+    assert correlation > 0.986, f"PyTorch vs TTNN PCC too low: {correlation:.6f}"
