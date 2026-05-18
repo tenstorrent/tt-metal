@@ -16,9 +16,11 @@
 #include "api/compute/common.h"
 #endif
 
-#if defined(ARCH_QUASAR)
 #include "experimental/kernel_args.h"
+
+#if defined(ARCH_QUASAR)
 #include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
+// Quasar uses 64-bit atomics; Gen1 (BH) uses 32-bit — arch-intrinsic atomic width.
 typedef uint64_t atomic_type;
 // TODO: Remove this once cache invalidation functionality for Quasar is added
 inline __attribute__((always_inline)) void flush_l2_cache_line(atomic_type* addr) {
@@ -91,14 +93,9 @@ void test_compare_and_swap_atomic(atomic_type* l1_counter_ptr, const uint32_t in
 
 void kernel_main() {
     // Base L1 address shared by all DMs: used as a counter (add/CAS) or value + result slots (load/store)
-#ifdef ARCH_QUASAR
     atomic_type* l1_counter_ptr =
         reinterpret_cast<atomic_type*>(static_cast<uintptr_t>(get_arg(args::l1_counter_addr)));
     const uint32_t increment_times = get_arg(args::increment_times);
-#else
-    atomic_type* l1_counter_ptr = reinterpret_cast<atomic_type*>(get_arg_val<uint32_t>(0));
-    const uint32_t increment_times = get_arg_val<uint32_t>(1);
-#endif
 
 #if TEST_ATOMIC_LOAD_STORE
     atomic_type* shared_value_ptr = l1_counter_ptr;
