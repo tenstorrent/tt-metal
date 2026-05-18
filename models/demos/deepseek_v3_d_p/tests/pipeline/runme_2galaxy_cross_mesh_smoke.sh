@@ -53,4 +53,4 @@ tt-run \
     --tcp-interface "${TCP_INTERFACE}" \
     --rank-binding "${RANK_BINDING}" \
     --mpi-args "--host ${HOSTSP} --tag-output --allow-run-as-root --mca btl tcp,self --mca btl_tcp_if_include ${TCP_INTERFACE}" \
-    python -m pytest "${TEST_FILE}" -svv --no-header -k "4-8"
+    python -m pytest "${TEST_FILE}" -svv --no-header -k 2galaxy

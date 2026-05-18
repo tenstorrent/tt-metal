@@ -41,4 +41,4 @@ tt-run \
     --bare \
     --rank-binding "${RANK_BINDING}" \
     --mpi-args "--oversubscribe" \
-    python -m pytest "${TEST_FILE}" -svv --no-header
+    python -m pytest "${TEST_FILE}" -svv --no-header -k 1galaxy

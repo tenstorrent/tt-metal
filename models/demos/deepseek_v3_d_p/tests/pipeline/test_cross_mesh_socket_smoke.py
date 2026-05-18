@@ -37,6 +37,8 @@ The rank-binding YAML pins:
 """
 
 
+import time
+
 import pytest
 import torch
 from loguru import logger
@@ -77,6 +79,7 @@ _FABRIC_ROUTER_MAX_PAYLOAD_BYTES = 2048
         # Pairs with dual_galaxy_rank_bindings.yaml + runme_2galaxy_cross_mesh_smoke.sh.
         (4, 8),
     ],
+    ids=["1galaxy", "2galaxy"],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -262,3 +265,240 @@ def test_cross_mesh_socket_smoke(mesh_device, tensor_size_bytes, fifo_size, num_
         entry_socket.terminate(True)
 
     logger.info(f"[rank with mesh_id={my_mesh_id}] smoke OK")
+
+
+# ---------------------------------------------------------------------------
+# Perf variant — measures end-to-end wall time + bandwidth for shipping a
+# logical (rows × cols) bf16 tensor across the cross-mesh socket.
+#
+# The logical tensor is chunked into ``page_size_bytes``-sized H2D pages
+# because the H2D/D2H sockets transfer one page per ``write_tensor`` /
+# ``read_tensor`` call. fifo_size must be >= page_size; we set it 4×
+# page_size to allow pipelining (sender can buffer a few pages ahead while
+# the receiver is still draining).
+#
+# Two timing modes are measured for each (logical tensor shape, page_size):
+#   - Bit-exact pass (one iteration): asserts the bytes round-trip identically.
+#   - Hot loop (``num_logical_tensors`` iterations): no per-iter assertions,
+#     just write/read in a tight loop, timed across MPI barriers. Reports
+#     ms per logical-tensor transfer + GB/s.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    # (logical_rows, logical_cols, page_size_bytes, num_logical_tensors)
+    # 640 × 1792 bf16 = 2,293,760 bytes; page=4096 → 560 pages per logical tensor.
+    "logical_rows, logical_cols, page_size_bytes, num_logical_tensors",
+    [
+        (640, 1792, 4096, 20),
+    ],
+)
+@pytest.mark.parametrize("h2d_mode", [ttnn.H2DMode.HOST_PUSH])
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (2, 4),
+        (4, 8),
+    ],
+    ids=["1galaxy", "2galaxy"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": _FABRIC_CONFIG,
+            "fabric_router_config": create_fabric_router_config(_FABRIC_ROUTER_MAX_PAYLOAD_BYTES),
+        }
+    ],
+    indirect=True,
+)
+def test_cross_mesh_socket_perf(
+    mesh_device, logical_rows, logical_cols, page_size_bytes, num_logical_tensors, h2d_mode
+):
+    """End-to-end perf of cross-mesh H2D→D2D→D2H for a (logical_rows, logical_cols) bf16 tensor.
+
+    Reports ms per logical-tensor transfer + effective bandwidth. The logical
+    tensor is chunked into ``page_size_bytes``-byte pages (one per write_tensor
+    call). Wall time is measured across MPI barriers so both ranks include the
+    same start/end points.
+    """
+    if not is_slow_dispatch():
+        pytest.skip("Sockets require slow dispatch (set TT_METAL_SLOW_DISPATCH_MODE=1).")
+
+    num_procs = int(ttnn.distributed_context_get_size())
+    if num_procs != 2:
+        pytest.skip(f"This test runs with exactly 2 ranks; got num_procs={num_procs}")
+
+    BF16_BYTES = 2
+    logical_tensor_bytes = logical_rows * logical_cols * BF16_BYTES
+    assert (
+        logical_tensor_bytes % page_size_bytes == 0
+    ), f"logical_tensor_bytes ({logical_tensor_bytes}) must be a multiple of page_size_bytes ({page_size_bytes})"
+    pages_per_logical_tensor = logical_tensor_bytes // page_size_bytes
+
+    # FIFO must be ≥ page_size; 4× pages of pipelining headroom.
+    fifo_size = page_size_bytes * 4
+    # Page size in uint32 datums (write_tensor takes a uint32 tensor).
+    page_size_datums = page_size_bytes // 4
+
+    my_mesh_id = mesh_device.get_system_mesh_id()
+    logger.info(
+        f"[mesh_id={my_mesh_id}] PERF setup: logical={logical_rows}x{logical_cols} bf16 "
+        f"({logical_tensor_bytes} bytes), page={page_size_bytes} B "
+        f"({pages_per_logical_tensor} pages/tensor), fifo={fifo_size} B, "
+        f"hot-loop iters={num_logical_tensors}"
+    )
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+
+    entry_node_coord = ttnn.MeshCoordinate((0, 0))
+    exit_node_coord = ttnn.MeshCoordinate((1, 0))
+    pipeline_core_coord = ttnn.CoreCoord(0, 0)
+
+    # Build sender or receiver side identically to the smoke test.
+    if my_mesh_id == 0:
+        h2d_socket = ttnn.H2DSocket(
+            mesh_device,
+            ttnn.MeshCoreCoord(entry_node_coord, pipeline_core_coord),
+            ttnn.BufferType.L1,
+            fifo_size,
+            h2d_mode,
+        )
+        host_io = HostInterface(
+            h2d_socket=h2d_socket,
+            d2h_socket=None,
+            h2d_page_size=page_size_bytes,
+            d2h_page_size=page_size_bytes,
+            core_to_core_socket_buffer_size=fifo_size,
+            h2d_downstream_core=ttnn.MeshCoreCoord(exit_node_coord, pipeline_core_coord),
+        )
+        exit_socket = SocketInterface(
+            page_size=page_size_bytes,
+            socket_fifo_size=fifo_size,
+            data_size_per_transfer=page_size_bytes,
+            send_core_coord=ttnn.MeshCoreCoord(exit_node_coord, pipeline_core_coord),
+            recv_core_coord=ttnn.MeshCoreCoord(entry_node_coord, pipeline_core_coord),
+            upstream_socket=host_io.get_downstream_socket(),
+            sender_mesh=MeshWrapper(mesh_device),
+            receiver_mesh=MeshWrapper(mesh_id=1),
+        )
+        host_io.run()
+        exit_socket.run()
+
+        # Pre-build one full logical tensor of input pages. Bytes are arbitrary but
+        # deterministic so the receiver can verify the first iteration bit-exactly.
+        # Reused across the hot loop to keep the hot path free of per-iter alloc.
+        input_pages = [
+            ttnn.from_torch(
+                torch.arange(p * page_size_datums, (p + 1) * page_size_datums, dtype=torch.int32).reshape(
+                    1, page_size_datums
+                ),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            for p in range(pages_per_logical_tensor)
+        ]
+
+        logger.info("[mesh_id=0] PERF: pre-built input pages; barrier before hot loop")
+        ttnn.distributed_context_barrier()
+
+        # --- hot loop (timed) ---
+        t0 = time.perf_counter()
+        for _t in range(num_logical_tensors):
+            for p in range(pages_per_logical_tensor):
+                h2d_socket.write_tensor(input_pages[p])
+        ttnn.distributed_context_barrier()
+        t1 = time.perf_counter()
+        # ---
+
+        elapsed_s = t1 - t0
+        total_bytes = num_logical_tensors * logical_tensor_bytes
+        ms_per_tensor = (elapsed_s / num_logical_tensors) * 1000.0
+        gbps = total_bytes / elapsed_s / 1e9
+        logger.info(
+            f"[mesh_id=0] PERF RESULT: shape={logical_rows}x{logical_cols} bf16  "
+            f"page={page_size_bytes}B  iters={num_logical_tensors}  "
+            f"total={total_bytes/1e6:.2f} MB  elapsed={elapsed_s:.3f}s  "
+            f"per-tensor={ms_per_tensor:.3f} ms  bw={gbps:.3f} GB/s"
+        )
+
+        host_io.terminate(False)
+        exit_socket.terminate(True)
+
+    else:
+        d2h_socket = ttnn.D2HSocket(
+            mesh_device,
+            ttnn.MeshCoreCoord(exit_node_coord, pipeline_core_coord),
+            fifo_size,
+        )
+        host_io = HostInterface(
+            h2d_socket=None,
+            d2h_socket=d2h_socket,
+            h2d_page_size=page_size_bytes,
+            d2h_page_size=page_size_bytes,
+            core_to_core_socket_buffer_size=fifo_size,
+            d2h_upstream_core=ttnn.MeshCoreCoord(entry_node_coord, pipeline_core_coord),
+        )
+        entry_socket = SocketInterface(
+            page_size=page_size_bytes,
+            socket_fifo_size=fifo_size,
+            data_size_per_transfer=page_size_bytes,
+            send_core_coord=ttnn.MeshCoreCoord(exit_node_coord, pipeline_core_coord),
+            recv_core_coord=ttnn.MeshCoreCoord(entry_node_coord, pipeline_core_coord),
+            downstream_socket=host_io.get_upstream_socket(),
+            sender_mesh=MeshWrapper(mesh_id=0),
+            receiver_mesh=MeshWrapper(mesh_device),
+        )
+        host_io.run()
+        entry_socket.run()
+
+        # One reusable output buffer; read_tensor overwrites it each call.
+        output_tensor = ttnn.from_torch(
+            torch.zeros(1, page_size_datums, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+        logger.info("[mesh_id=1] PERF: ready; barrier before hot loop")
+        ttnn.distributed_context_barrier()
+
+        # --- hot loop (timed) ---
+        t0 = time.perf_counter()
+        verified_first = False
+        for _t in range(num_logical_tensors):
+            for p in range(pages_per_logical_tensor):
+                d2h_socket.read_tensor(output_tensor)
+                if not verified_first:
+                    # Bit-exact verify only the very first page to confirm the path
+                    # is healthy without slowing the hot loop on every iter.
+                    got = ttnn.to_torch(output_tensor).to(torch.int32)
+                    expected = torch.arange(
+                        p * page_size_datums, (p + 1) * page_size_datums, dtype=torch.int32
+                    ).reshape(1, page_size_datums)
+                    assert torch.equal(expected, got), (
+                        f"[mesh_id=1] first-page bit-exact check failed.\n"
+                        f"Expected: {expected[:, :8]}...\n"
+                        f"Got:      {got[:, :8]}..."
+                    )
+                    logger.info("[mesh_id=1] first page bit-exact OK; entering hot loop")
+                    verified_first = True
+        ttnn.distributed_context_barrier()
+        t1 = time.perf_counter()
+        # ---
+
+        elapsed_s = t1 - t0
+        total_bytes = num_logical_tensors * logical_tensor_bytes
+        ms_per_tensor = (elapsed_s / num_logical_tensors) * 1000.0
+        gbps = total_bytes / elapsed_s / 1e9
+        logger.info(
+            f"[mesh_id=1] PERF RESULT: shape={logical_rows}x{logical_cols} bf16  "
+            f"page={page_size_bytes}B  iters={num_logical_tensors}  "
+            f"total={total_bytes/1e6:.2f} MB  elapsed={elapsed_s:.3f}s  "
+            f"per-tensor={ms_per_tensor:.3f} ms  bw={gbps:.3f} GB/s"
+        )
+
+        host_io.terminate(False)
+        entry_socket.terminate(True)
+
+    logger.info(f"[rank with mesh_id={my_mesh_id}] PERF done")
