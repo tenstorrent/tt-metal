@@ -261,7 +261,9 @@ If `--dump-dir` has no format fields in parallel mode, each rank writes under
   `--hidden-states-dir-template` for that rank's layer id.
 - If PCC is low but not random, verify `--decoder-layer-idx` matches the layer
   used when converting the trace.
-- If KV-cache validation fails while hidden-state validation passes, check the
-  RoPE layout details in `BIT_SCULPT_CONVERSION.md`.
+- If KV-cache validation fails while hidden-state validation passes, verify the
+  converted trace used the same RoPE layout and tensor ordering expected by this
+  sweep; a mismatch in RoPE application can leave hidden states close while
+  causing KV-cache comparisons to fail.
 - If `tt-run` is not on `PATH`, load the usual TT runtime environment before
   launching the 4-layer command.
