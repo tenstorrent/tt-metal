@@ -4,64 +4,13 @@
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Optional, Tuple
+from fractions import Fraction
+from typing import List, Optional, Tuple, Union
 
 import ml_dtypes
 import numpy as np
 
 from .tile_constants import SRCS_SLICE_32B_ELEMENT_COUNT, SRCS_SLICE_ELEMENT_COUNT
-
-# ============================================================================
-# MX (Microscaling) Format Constants - OCP Specification
-# ============================================================================
-
-MXFP8_BLOCK_SIZE = 32  # Fixed block size per OCP MX specification
-MXFP8_E5M2_MAX_NORMAL = float(
-    ml_dtypes.finfo(ml_dtypes.float8_e5m2).max
-)  # 57344.0 from dtype
-MXFP8_E4M3_MAX_NORMAL = float(
-    ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).max
-)  # 448.0 from dtype
-
-# Safe minimum magnitudes for stimulus generation.
-# These sit well above the subnormal boundary so that quantised golden
-# values stay in the normal range of each FP8 element type.
-MXFP8_E4M3_MIN_MAGNITUDE = 0.0625  # 2^-4  (E4M3 min normal = 2^-6)
-MXFP8_E5M2_MIN_MAGNITUDE = 2.44e-4  # 2^-12 (E5M2 min normal = 2^-14)
-
-# ============================================================================
-# MX SrcS Slice L1 Layout
-# ============================================================================
-# Each SrcS slice is 8×16 = 128 elements.  In L1 a slice is stored as
-# [scales padded to 16 B][elements padded to 16 B].
-
-
-def l1_align(size: int) -> int:
-    """Align *size* to the next 16B boundary."""
-    l1_alignment = 16
-    return (size + l1_alignment - 1) // l1_alignment * l1_alignment
-
-
-# Per SrcS slice (8×16 = 128 elements, each 8-bit in L1):
-#   scales:   128 / 32 = 4 bytes   → padded to 16 B
-#   elements: 128 × 1 = 128 bytes  → already 16 B-aligned
-#   total: 16 + 128 = 144 bytes per slice
-MXFP8_SLICE_SCALE_BYTES = SRCS_SLICE_ELEMENT_COUNT // MXFP8_BLOCK_SIZE  # 4
-MXFP8_SLICE_ELEMENT_BYTES = SRCS_SLICE_ELEMENT_COUNT  # 128
-MXFP8_SRCS_SLICE_PACKED_BYTE_LEN = l1_align(MXFP8_SLICE_SCALE_BYTES) + l1_align(
-    MXFP8_SLICE_ELEMENT_BYTES
-)
-
-# 32-bit SrcS mode (dest_acc): 4x16 = 64 elements per slice
-#   scales:   64 / 32 = 2 bytes   -> padded to 16 B
-#   elements: 64 x 1  = 64 bytes  -> already 16 B-aligned
-#   total: 16 + 64 = 80 bytes per slice
-MXFP8_SLICE_32B_SCALE_BYTES = SRCS_SLICE_32B_ELEMENT_COUNT // MXFP8_BLOCK_SIZE  # 2
-MXFP8_SLICE_32B_ELEMENT_BYTES = SRCS_SLICE_32B_ELEMENT_COUNT  # 64
-MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN = l1_align(MXFP8_SLICE_32B_SCALE_BYTES) + l1_align(
-    MXFP8_SLICE_32B_ELEMENT_BYTES
-)  # 80
-
 
 # ============================================================================
 # Data Format Classes
@@ -74,16 +23,23 @@ class DataFormatInfo:
 
     Attributes:
         name (str): A human-readable name for the data format.
-        byte_size (int): The size in bytes of one unit of the data format.
+        byte_size (Fraction): The size in bytes of one unit of the data format.
     """
 
-    def __init__(self, name: str, byte_size: int):
+    def __init__(self, name: str, byte_size: Union[int, float, Fraction]):
         self.name = name
-        self.byte_size = byte_size
+        self.byte_size = (
+            byte_size if isinstance(byte_size, Fraction) else Fraction(byte_size)
+        )
+
+    def _byte_size_str(self) -> str:
+        if self.byte_size.denominator == 1:
+            return str(self.byte_size.numerator)
+        return str(float(self.byte_size))
 
     def __str__(self) -> str:
         """Returns the string representation of the data format info."""
-        return f"{self.name}/{self.byte_size}B"
+        return f"{self.name}/{self._byte_size_str()}B"
 
     def __repr__(self) -> str:
         """Returns the representation of the data format info."""
@@ -111,10 +67,13 @@ class DataFormat(Enum):
     UInt8 = DataFormatInfo("UInt8", 1)
     MxFp8R = DataFormatInfo("MxFp8R", 1)  # QSR specific
     MxFp8P = DataFormatInfo("MxFp8P", 1)  # QSR specific
+    MxFp4 = DataFormatInfo(
+        "MxFp4", Fraction(1, 2)
+    )  # QSR specific - 4 bits (0.5 bytes) per element
     Fp8_e4m3 = DataFormatInfo("Fp8_e4m3", 1)
 
     @property
-    def size(self) -> int:
+    def size(self) -> Fraction:
         """Returns the byte size of the data format."""
         return self.value.byte_size
 
@@ -165,9 +124,12 @@ class DataFormat(Enum):
             return (num_datums // 2) + num_exponents
         elif self.is_mx_format():
             # MX formats: 1 scale (E8M0, 8 bits) per 32 elements
-            num_scales = num_datums // MXFP8_BLOCK_SIZE
-            return l1_align(num_scales) + l1_align(self.size * num_datums)
-        return (self.size * num_datums) + num_exponents
+            num_scales = num_datums // MX_FORMAT_BLOCK_SIZE
+            # For MxFp4, self.size = 0.5, so convert to int to avoid float in l1_align
+            element_bytes = int(self.size * num_datums)
+            return l1_align(num_scales) + l1_align(element_bytes)
+        # For formats with fractional byte sizes (e.g., hypothetically), ensure int result
+        return int(self.size * num_datums) + num_exponents
 
     def is_float32(self) -> bool:
         """Checks if the data format is a Float32 type."""
@@ -178,6 +140,7 @@ class DataFormat(Enum):
         return self in {
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
+            DataFormat.MxFp4,
         }
 
     def supports_l1_accumulation(self) -> bool:
@@ -189,6 +152,114 @@ class DataFormat(Enum):
             DataFormat.Float16_b,
         }
 
+
+# ============================================================================
+# MX (Microscaling) Format Value Maps
+# ============================================================================
+
+# Map of MX formats to their block sizes (all use 32-element blocks per OCP spec)
+# This is a size of a basic block with one scale factor in MX formats.
+# Bare in mind that MX formats can have multiple contiguous scales with corresponding values after.
+MX_FORMAT_BLOCK_SIZE = 32
+
+# Map of MX formats to their maximum normal values
+# Per OCP MX Specification:
+# - E5M2 (MxFp8R): Max normal = ± 2^15 × 1.75 = ± 57,344
+# - E4M3 (MxFp8P): Max normal = ± 2^8 × 1.75 = ± 448
+# - E2M1 (MxFp4):  Max normal = ± 2^2 × 1.5 = ± 6.0
+MX_FORMAT_MAX_NORMAL = {
+    DataFormat.MxFp8R: float(
+        ml_dtypes.finfo(ml_dtypes.float8_e5m2).max
+    ),  # 57344.0 from dtype
+    DataFormat.MxFp8P: float(
+        ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).max
+    ),  # 448.0 from dtype,
+    DataFormat.MxFp4: float(
+        ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).max
+    ),  # 6.0 from dtype,
+}
+
+# Map of MX formats to their minimum normal values
+# Per OCP MX Specification:
+# - E5M2 (MxFp8R): Min normal = ± 2^-14
+# - E4M3 (MxFp8P): Min normal = ± 2^-6
+# - E2M1 (MxFp4):  Min normal = ± 2^0 × 1.0 = ± 1.0
+MX_FORMAT_MIN_NORMAL = {
+    DataFormat.MxFp8R: float(ml_dtypes.finfo(ml_dtypes.float8_e5m2).smallest_normal),
+    DataFormat.MxFp8P: float(ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_normal),
+    DataFormat.MxFp4: float(
+        ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_normal
+    ),  # 1.0 from dtype
+}
+
+# Map of MX formats to their maximum subnormal values
+# Per OCP MX Specification:
+# - E5M2 (MxFp8R): Max subnormal = ± 2^-14 × 0.75
+# - E4M3 (MxFp8P): Max subnormal = ± 2^-6 × 0.875
+# - E2M1 (MxFp4):  Max subnormal = ± 2^0 × 0.5 = ± 0.5
+MX_FORMAT_MAX_SUBNORMAL = {
+    DataFormat.MxFp8R: float(ml_dtypes.finfo(ml_dtypes.float8_e5m2).smallest_normal)
+    * 0.75,
+    DataFormat.MxFp8P: float(ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_normal)
+    * 0.875,
+    DataFormat.MxFp4: float(ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_normal)
+    * 0.5,
+}
+
+# Map of MX formats to their minimum subnormal values
+# Per OCP MX Specification:
+# - E5M2 (MxFp8R): Min subnormal = ± 2^-16
+# - E4M3 (MxFp8P): Min subnormal = ± 2^-9
+# - E2M1 (MxFp4):  Min subnormal = ± 2^0 × 0.5 = ± 0.5 (same as max)
+MX_FORMAT_MIN_SUBNORMAL = {
+    DataFormat.MxFp8R: float(ml_dtypes.finfo(ml_dtypes.float8_e5m2).smallest_subnormal),
+    DataFormat.MxFp8P: float(
+        ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_subnormal
+    ),
+    DataFormat.MxFp4: float(
+        ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_subnormal
+    ),
+}
+
+# Map of MX formats to safe minimum magnitudes for stimulus generation.
+MX_FORMAT_MIN_MAGNITUDE = {
+    DataFormat.MxFp8R: 2.44e-4,
+    DataFormat.MxFp8P: 0.0625,
+    DataFormat.MxFp4: 1.0,
+}
+
+# ============================================================================
+# MX SrcS Slice L1 Layout
+# ============================================================================
+# Each SrcS slice is 8×16 = 128 elements.  In L1 a slice is stored as
+# [scales padded to 16 B][elements padded to 16 B].
+
+
+def l1_align(size: int) -> int:
+    """Align *size* to the next 16B boundary."""
+    l1_alignment = 16
+    return (size + l1_alignment - 1) // l1_alignment * l1_alignment
+
+
+# Per SrcS slice (8×16 = 128 elements, each 8-bit in L1):
+#   scales:   128 / 32 = 4 bytes   → padded to 16 B
+#   elements: 128 × 1 = 128 bytes  → already 16 B-aligned
+#   total: 16 + 128 = 144 bytes per slice
+MXFP8_SLICE_SCALE_BYTES = SRCS_SLICE_ELEMENT_COUNT // MX_FORMAT_BLOCK_SIZE  # 4
+MXFP8_SLICE_ELEMENT_BYTES = SRCS_SLICE_ELEMENT_COUNT  # 128
+MXFP8_SRCS_SLICE_PACKED_BYTE_LEN = l1_align(MXFP8_SLICE_SCALE_BYTES) + l1_align(
+    MXFP8_SLICE_ELEMENT_BYTES
+)
+
+# 32-bit SrcS mode (dest_acc): 4x16 = 64 elements per slice
+#   scales:   64 / 32 = 2 bytes   -> padded to 16 B
+#   elements: 64 x 1  = 64 bytes  -> already 16 B-aligned
+#   total: 16 + 64 = 80 bytes per slice
+MXFP8_SLICE_32B_SCALE_BYTES = SRCS_SLICE_32B_ELEMENT_COUNT // MX_FORMAT_BLOCK_SIZE  # 2
+MXFP8_SLICE_32B_ELEMENT_BYTES = SRCS_SLICE_32B_ELEMENT_COUNT  # 64
+MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN = l1_align(MXFP8_SLICE_32B_SCALE_BYTES) + l1_align(
+    MXFP8_SLICE_32B_ELEMENT_BYTES
+)  # 80
 
 # ============================================================================
 # MX (Microscaling) Format Utilities
@@ -455,6 +526,7 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.Float16_b: 5,
     DataFormat.MxFp8R: 18,
     DataFormat.MxFp8P: 20,
+    DataFormat.MxFp4: 22,
     DataFormat.Int32: 8,
     DataFormat.Int8: 14,
     DataFormat.UInt8: 17,

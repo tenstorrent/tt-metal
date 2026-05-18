@@ -58,11 +58,14 @@ inline void _llk_pack_dest_section_done_()
     }
 }
 
-template <DstSync Dst, bool untilize = false, bool diagonal = false>
+template <DstSync Dst, PackMode pack_mode = PackMode::Default, bool diagonal = false>
 inline void _llk_init_packer_dest_offset_registers_(const std::uint32_t face_r_dim = FACE_R_DIM, const bool narrow_tile = false)
 {
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
+        "Wormhole B0 pack dest offset setup supports only PackMode::Default and PackMode::Untilize");
     TTI_STALLWAIT(p_stall::STALL_TDMA | p_stall::STALL_THCON, p_stall::PACK); // wait for pack to finish
-    if constexpr (untilize)
+    if constexpr (pack_mode == PackMode::Untilize)
     {
         const std::uint32_t face_r_offset = ((face_r_dim == 1) || narrow_tile || diagonal) ? FACE_R_DIM : (face_r_dim >> 1);
         if constexpr (diagonal)
@@ -115,12 +118,14 @@ inline void _llk_init_packer_dest_offset_registers_(const std::uint32_t face_r_d
     select_packer_dest_registers<Dst>();
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en, bool untilize = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_dest_init_(const std::uint32_t face_r_dim = FACE_R_DIM, const bool narrow_tile = false)
 {
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0 pack dest init supports only PackMode::Default and PackMode::Untilize");
     tensix_sync();
     reset_dest_offset_id();
-    _llk_init_packer_dest_offset_registers_<Dst, untilize>(face_r_dim, narrow_tile);
+    _llk_init_packer_dest_offset_registers_<Dst, pack_mode>(face_r_dim, narrow_tile);
     packer_addr_counter_init();
     pack_sync_tile_dst_ptr = 0;
 }
@@ -128,16 +133,6 @@ inline void _llk_pack_dest_init_(const std::uint32_t face_r_dim = FACE_R_DIM, co
 inline void set_dst_write_addr(const std::uint32_t tile_index)
 {
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);
-}
-
-inline void _llk_pack_debug_dump_(std::uint8_t *data, std::uint32_t byte_size)
-{
-    debug_dump(data, byte_size);
-}
-
-inline void _llk_pack_debug_dump_seek_(std::uint8_t offset)
-{
-    debug_dump_seek(offset);
 }
 
 TT_ALWAYS_INLINE void _llk_pack_relu_config_(const std::uint32_t config)
@@ -157,9 +152,12 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
     reconfigure_packer_l1_acc(enable);
 }
 
-template <bool untilize = false, ReduceDim dim>
+template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_reduce_mask_config_()
 {
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
+        "Wormhole B0 pack reduce-mask config supports only PackMode::Default and PackMode::Untilize");
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
 
     // We initialize PCK_EDGE_OFFSET_SEC0 mask to clear out all the datums in the row
@@ -179,7 +177,7 @@ inline void _llk_pack_reduce_mask_config_()
         pack_edge_offset.f.tile_row_set_select_pack3 = 1;
 
         edge_offset_sec1_mask = 0x0001;
-        if constexpr (untilize)
+        if constexpr (pack_mode == PackMode::Untilize)
         {
             row_set_mapping_1 = 0x11111111; // each packer packs 1x32 row
         }
@@ -199,7 +197,7 @@ inline void _llk_pack_reduce_mask_config_()
         pack_edge_offset.f.tile_row_set_select_pack0 = 1;
         pack_edge_offset.f.tile_row_set_select_pack1 = 1;
 
-        if constexpr (untilize)
+        if constexpr (pack_mode == PackMode::Untilize)
         {
             row_set_mapping_1 = 0x00000005; // each packer packs 1x32 row
         }

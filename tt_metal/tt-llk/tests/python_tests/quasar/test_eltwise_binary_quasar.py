@@ -22,7 +22,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
@@ -57,7 +57,8 @@ def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
         [
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
-            # DataFormat.Float16_b,
+            DataFormat.MxFp4,
+            DataFormat.Float16_b,
             DataFormat.Float16,
         ],
     ),
@@ -117,7 +118,7 @@ def test_eltwise_binary(
     ) or total_tiles % num_tiles_per_accumulation != 0:
         pytest.skip("Not enough tiles for dest accumulation")
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -192,5 +193,9 @@ def test_eltwise_binary(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        print_errors=True,
+        print_pcc=True,
     ), "Assert against golden failed"

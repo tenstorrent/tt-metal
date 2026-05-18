@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 // Make n reads defined by num_reads
 // Writes to Specified Circular Buffers in L1
@@ -39,7 +39,7 @@ void kernel_main() {
         tile_id_per_tensor[i] = arg_ptr[tile_id_per_tensor_offset + i];
     }
 
-    experimental::CircularBuffer cb_in(cb_id_in);
+    CircularBuffer cb_in(cb_id_in);
 
     uint32_t curr_tensor = start_tensor;
     uint32_t curr_tensor_id = start_tensor_id;

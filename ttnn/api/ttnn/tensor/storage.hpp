@@ -79,9 +79,12 @@ struct DeviceStorage {
 
     // Creates a copy of the DeviceStorage that shares the underlying device memory
     DeviceStorage(const DeviceStorage&) = default;
-    DeviceStorage(DeviceStorage&&) noexcept = default;
     DeviceStorage& operator=(const DeviceStorage&) = default;
-    DeviceStorage& operator=(DeviceStorage&&) noexcept = default;
+
+    // Moves the ownership of the underlying device memory to the new DeviceStorage.
+    // The moved-from DeviceStorage is in a deallocated state.
+    DeviceStorage(DeviceStorage&&) noexcept;
+    DeviceStorage& operator=(DeviceStorage&&) noexcept;
 
     // Creates a copy of the DeviceStorage that shares the underlying device memory,
     // but with a different set of coords.
@@ -205,6 +208,7 @@ private:
         std::vector<distributed::MeshCoordinate> coords,
         std::shared_ptr<MeshTensorHolder> root_mesh_tensor_holder);
 
+    // Invariant: should never be nullptr.
     std::shared_ptr<MeshTensorHolder> mesh_tensor_holder_;
     std::vector<distributed::MeshCoordinate> coords_;
 

@@ -26,5 +26,5 @@ void kernel_main() {
     cb_push_back(tilize_output_cb_id, num_tiles);
     cb_pop_front(tilize_input_cb_id, tile_height);
 
-    fast_tilize_uninit(tilize_input_cb_id, tilize_output_cb_id);
+    fast_tilize_uninit(tilize_input_cb_id, tilize_output_cb_id, num_tiles);
 }
