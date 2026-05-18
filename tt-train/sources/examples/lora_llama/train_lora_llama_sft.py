@@ -264,6 +264,11 @@ def parse_args():
         default=0,
         help="Number of initial steps to exclude from profiling signposts (default: 0).",
     )
+    parser.add_argument(
+        "--no_lora",
+        action="store_true",
+        help="Disable LoRA and train all parameters (full fine-tune).",
+    )
     return parser.parse_args()
 
 
@@ -396,12 +401,16 @@ def main():
 
     # ── LoRA + SFTTrainer ─────────────────────────────────────────────────────
 
-    peft_config = LoraConfig(
-        rank=LORA_RANK,
-        alpha=LORA_ALPHA,
-        target_modules=LORA_TARGET_MODULES,
-        lora_dropout=LORA_DROPOUT,
-    )
+    if args.no_lora:
+        peft_config = None
+        print("LoRA disabled — full-parameter fine-tune.")
+    else:
+        peft_config = LoraConfig(
+            rank=LORA_RANK,
+            alpha=LORA_ALPHA,
+            target_modules=LORA_TARGET_MODULES,
+            lora_dropout=LORA_DROPOUT,
+        )
 
     sft_config = SFTConfig(
         max_steps=args.steps,
