@@ -1,13 +1,6 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""
-Tenstorrent rotary tables aligned with Hugging Face ``Ministral3RotaryEmbedding``.
-
-Host-side frequencies use **NumPy only** (no PyTorch in this module): ``inv_freq`` and
-``attention_scaling`` match ``transformers`` defaults / YaRN logic, then tables are uploaded with
-``ttnn.from_torch`` (which accepts NumPy arrays). Device behavior inherits :class:`HfRotarySetup`.
-"""
+# Tenstorrent rotary tables aligned with Hugging Face ``Ministral3RotaryEmbedding``. Host-side frequencies use **NumPy only** (no PyTorch in this module): ``inv_freq`` and ``attention_scaling`` match ``transformers`` defaults / YaRN logic, then tables are uploaded with ``ttnn.from_torch`` (which accepts NumPy arrays). Device behavior inherits :class:`HfRotarySetup`.
 
 from __future__ import annotations
 
@@ -102,9 +95,7 @@ def _compute_yarn_inv_freq_numpy(config: Any) -> Tuple[np.ndarray, float]:
 
 
 def ministral3_inv_freq_and_attention_scaling(config: Any) -> Tuple[np.ndarray, float]:
-    """
-    ``inv_freq`` (length ``head_dim/2``) and scalar ``attention_scaling`` for Ministral3 / HF-compatible rope.
-    """
+    """``inv_freq`` (length ``head_dim/2``) and scalar ``attention_scaling`` for Ministral3 / HF-compatible rope."""
     from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
 
     if not isinstance(config, Ministral3Config):
@@ -130,10 +121,7 @@ def ministral3_hf_cos_sin_tables(
     *,
     table_dtype: np.dtype = np.float32,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Host cos/sin tables ``[max_seq_len, head_dim]`` matching HF ``Ministral3RotaryEmbedding.forward``
-    for positions ``0 .. max_seq_len - 1``. Computed with NumPy only.
-    """
+    """Host cos/sin tables ``[max_seq_len, head_dim]`` matching HF ``Ministral3RotaryEmbedding.forward`` for positions ``0 .. max_seq_len - 1``. Computed with NumPy only."""
     from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
 
     if not isinstance(config, Ministral3Config):
@@ -179,9 +167,7 @@ def _upload_hf_cos_sin_4d(
 
 
 class TtMinistral3RotaryEmbedding(HfRotarySetup):
-    """
-    HF-aligned Ministral3 RoPE caches on device via NumPy table build + :class:`HfRotarySetup` lookup.
-    """
+    """HF-aligned Ministral3 RoPE caches on device via NumPy table build + :class:`HfRotarySetup` lookup."""
 
     def __init__(
         self,
@@ -218,11 +204,7 @@ class TtMinistral3RotaryEmbedding(HfRotarySetup):
         self._ministral3_config = config
 
     def slice_rot_mats_prefill(self, start_pos: int, seq_len: int) -> list:
-        """
-        Cos/sin slices ``[1, 1, seq_len, head_dim]`` on device for full prefill starting at ``start_pos``.
-
-        Matches the slicing policy used in ``Transformer.prepare_inputs_prefill`` (pad dim 2 if needed).
-        """
+        """Cos/sin slices ``[1, 1, seq_len, head_dim]`` on device for full prefill starting at ``start_pos``. Matches the slicing policy used in ``Transformer.prepare_inputs_prefill`` (pad dim 2 if needed)."""
         mat_len = self.cos_matrix_prefill.shape[2]
         required_end = start_pos + seq_len
         if mat_len < required_end:

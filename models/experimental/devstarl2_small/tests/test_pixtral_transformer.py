@@ -1,8 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC: HF ``PixtralTransformer`` (first N layers) vs ``TtPixtralTransformer``."""
+# PCC: HF ``PixtralTransformer`` (first N layers) vs ``TtPixtralTransformer``.
 
 from __future__ import annotations
 

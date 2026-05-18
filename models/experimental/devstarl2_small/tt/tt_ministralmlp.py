@@ -1,14 +1,6 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""
-Tenstorrent SwiGLU FFN for Hugging Face Ministral3 (``Ministral3MLP``).
-
-Implementation follows ``models.tt_transformers.tt.mlp.MLP`` (same ``w1``/``w3``/``w2``
-mapping and forward schedule) so Devstral text checkpoints continue to use
-``layers.{i}.feed_forward.*`` meta keys without importing that class.
-"""
+# Tenstorrent SwiGLU FFN for Hugging Face Ministral3 (``Ministral3MLP``). Implementation follows ``models.tt_transformers.tt.mlp.MLP`` (same ``w1``/``w3``/``w2`` mapping and forward schedule) so Devstral text checkpoints continue to use ``layers.{i}.feed_forward.*`` meta keys without importing that class.
 
 from __future__ import annotations
 
@@ -22,8 +14,7 @@ from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
 class TtMinistralMLP(LightweightModule):
-    # Prefill FF1/FF3: factory ``ttnn.linear`` + reuse-mcast program blows L1 on 5k×32k-class matmuls.
-    # Chunk activations (cap below) and run **minimal_matmul** on non-Galaxy (same idea as FF2 for long seq).
+    # Wide prefill FF1/FF3: use minimal_matmul + chunked M on non-Galaxy (L1); cap chunk below.
     _PREFILL_MLP_M_CAP = 128
 
     def __init__(
@@ -115,12 +106,7 @@ class TtMinistralMLP(LightweightModule):
             self.prefetcher.register_callback(register_weights)
 
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
-        """
-        w1 -> gate_proj
-        w2 -> down_proj
-        w3 -> up_proj
-        HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
-        """
+        # HF SwiGLU: down(act(gate(x)) * up(x)); w1/w2/w3 map to gate/down/up.
         full_seq_len = int(x.shape[-2])
         TG = self.args.is_galaxy
         layer_num = max(self.layer_num, 0)
@@ -145,11 +131,8 @@ class TtMinistralMLP(LightweightModule):
 
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, cfg_seq, self.prefetcher)
 
-        # ``ttnn.linear`` + reuse-mcast program config blows L1 on wide (~5k × ~32k) prefill matmuls.
-        # Use the same minimal matmul path as FF2 for long prefills (smaller static CBs); Galaxy keeps linear.
+        # Non-Galaxy wide prefill/decode: minimal_matmul avoids L1 blow-up from ttnn.linear + reuse-mcast.
         x_to_deallocate_after_ff13 = None
-        # Non-Galaxy PREFILL: use ``mlp1_3_grid`` and DRAM activations only (same as slab fragments).
-        # A ~full-chip grid + L1 input activations overflows per-bank L1 on Wormhole for wide FF1/FF3.
         if mode == Mode.PREFILL and not TG:
             grid = self.args.mlp1_3_grid(cfg_seq)
             mmc_ff13 = ttnn.MinimalMatmulConfig(
@@ -175,9 +158,7 @@ class TtMinistralMLP(LightweightModule):
             if x_to_deallocate_after_ff13 is not None:
                 ttnn.deallocate(x_to_deallocate_after_ff13)
         elif mode == Mode.DECODE and not TG and self.prefetcher is None:
-            # DRAM-sharded ttnn.linear (per_core_N=32 tiles for dim=5120→hidden=32768) overflows L1
-            # because TTNN overrides the output MemoryConfig with a computed 80-core layout.
-            # Use minimal_matmul with DRAM activations instead — same fix as the prefill path above.
+            # DRAM inputs + minimal_matmul: decode FF1/FF3 avoids L1 overflow from dram-sharded linear layout.
             x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
             grid = self.args.mlp1_3_grid(cfg_seq)
             mmc_ff13 = ttnn.MinimalMatmulConfig(

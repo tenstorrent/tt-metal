@@ -1,11 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC: Hugging Face ``Ministral3MLP`` vs ``TtMinistralMLP`` on Devstral text weights.
-
-Applies the shared Devstral FP8 scalar-scale compat patch at import.
-"""
+# PCC: Hugging Face ``Ministral3MLP`` vs ``TtMinistralMLP`` on Devstral text weights. Applies the shared Devstral FP8 scalar-scale compat patch at import.
 
 from __future__ import annotations
 

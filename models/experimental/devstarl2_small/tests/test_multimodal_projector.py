@@ -1,8 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC: Hugging Face ``Mistral3MultiModalProjector`` vs TT projector on Devstral weights."""
+# PCC: Hugging Face ``Mistral3MultiModalProjector`` vs TT projector on Devstral weights.
 
 from __future__ import annotations
 

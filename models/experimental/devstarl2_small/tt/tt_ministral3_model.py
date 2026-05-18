@@ -1,15 +1,6 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""
-Minimal TT ``Ministral3Model`` (text stack): embeddings -> decoder layers -> final RMSNorm.
-
-Optionally owns :class:`TtMinistral3RotaryEmbedding` (device cos/sin from ``Ministral3Config`` via
-``ministral_text_config``). If configured, ``forward_prefill`` / ``forward_prefill_from_embeddings`` may
-omit ``rot_mats`` (``None``) and slice tables in-model; otherwise pass ``rot_mats`` as before.
-
-Composes existing TT submodules from this experimental folder; no Torch fallback in forward.
-"""
+# Minimal TT ``Ministral3Model`` (text stack): embeddings -> decoder layers -> final RMSNorm. Optionally owns :class:`TtMinistral3RotaryEmbedding` (device cos/sin from ``Ministral3Config`` via ``ministral_text_config``). If configured, ``forward_prefill`` / ``forward_prefill_from_embeddings`` may omit ``rot_mats`` (``None``) and slice tables in-model; otherwise pass ``rot_mats`` as before. Composes existing TT submodules from this experimental folder; no Torch fallback in forward.
 
 from __future__ import annotations
 
@@ -19,8 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 
-# Load ``fp8_dequantize_compat`` by path so we do not import ``devstral_utils`` package ``__init__``
-# (which pulls ``multimodal_demo_helpers`` and would circular-import this module).
+# Load fp8_dequantize_compat by file path to avoid importing devstral_utils __init__ (circular import).
 def _ensure_fp8_scalar_compat() -> None:
     _mod_name = "_devstarl2_fp8_dequantize_compat_exec"
     if _mod_name in sys.modules:
@@ -174,21 +164,7 @@ class TtMinistral3Model(LightweightModule):
         pos_uint32: ttnn.Tensor,
         pos_int32: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        """Trace-safe single-token decode using **pre-allocated** device position tensors.
-
-        All inputs must already live on device. No torch tensors are constructed here, so this
-        method can be called from inside a ``ttnn.begin_trace_capture`` / ``end_trace_capture``
-        region (see :func:`tt_capture_decode_trace` in ``devstral_utils``).
-
-        ``token_ids_tt``: ``[1, 1]`` uint32 device tensor for the last generated token id.
-        ``pos_uint32``: ``[1, 1]`` uint32 device tensor with the absolute 0-based token position
-            (consumed by RoPE table lookup via ``ttnn.embedding``).
-        ``pos_int32``: ``[1, 1]`` int32 device tensor with the same value (consumed by the KV
-            cache ``paged_update_cache`` op, which requires int32).
-
-        Returns hidden states ``[1, 1, 32, hidden_dim]`` (decode batch padded to 32) after the
-        final RMSNorm.
-        """
+        # Trace-safe decode: device-only ids/positions; suitable inside trace capture.
         if self.tt_rotary_embedding is None:
             raise ValueError(
                 "forward_decode_from_device_tensors requires tt_rotary_embedding "
@@ -199,17 +175,13 @@ class TtMinistral3Model(LightweightModule):
 
         h = self.embed_tokens(token_ids_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         h = ttnn.unsqueeze_to_4D(h)
-        # Shard to residual mem config so each layer's DRAM-sharded matmuls get L1-sharded input.
         residual_mem_cfg = self.args.get_residual_mem_config(Mode.DECODE, None)
         h = ttnn.to_memory_config(h, residual_mem_cfg)
         for layer in self.layers:
             h = layer.forward_decode(h, pos_int32, rot_mats)
-        # Convert back to DRAM for the final RMSNorm.
         h_dram = ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG)
         out = self.norm(h_dram, Mode.DECODE)
-        # On multi-chip the final norm uses the distributed path and leaves
-        # the output width-fractured (``dim/num_devices`` per chip). The LM
-        # head linear expects the full hidden dim per chip, so gather here.
+        # Multi-chip: distributed norm shards width; LM head needs full dim — all_gather on dim 3.
         if self.args.is_multichip:
             out = ttnn.all_gather(
                 out,
@@ -225,18 +197,7 @@ class TtMinistral3Model(LightweightModule):
         token_ids_tt: ttnn.Tensor,
         decode_pos: int,
     ) -> ttnn.Tensor:
-        """Single-token decode using the KV cache filled by the preceding ``forward_prefill`` call.
-
-        Convenience wrapper that allocates throwaway position tensors from a Python ``int``.
-        This path is **not** trace-safe (each call creates new device tensors); for traced
-        decode use :meth:`forward_decode_from_device_tensors` together with pre-allocated
-        position buffers (see ``tt_alloc_decode_input_buffers`` in ``devstral_utils``).
-
-        ``token_ids_tt``: device uint32 tensor ``[1, 1]`` holding the last generated token id.
-        ``decode_pos``: absolute 0-based position of this token in the sequence (= prompt length + step).
-
-        Returns hidden states ``[1, 1, 32, hidden_dim]`` after the final RMSNorm.
-        """
+        # Decode one step from int position (allocates device tensors; not trace-safe — use forward_decode_from_device_tensors).
         if self.tt_rotary_embedding is None:
             raise ValueError("forward_decode requires tt_rotary_embedding (pass ministral_text_config to __init__).")
 
@@ -248,7 +209,6 @@ class TtMinistral3Model(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        # ttnn.embedding (get_rot_mats) requires UINT32; paged_update_cache requires INT32.
         pos_uint32 = ttnn.from_torch(_pos_torch, dtype=ttnn.uint32, **_common_kwargs)
         pos_int32 = ttnn.from_torch(_pos_torch, dtype=ttnn.int32, **_common_kwargs)
         try:

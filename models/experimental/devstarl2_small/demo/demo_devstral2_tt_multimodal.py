@@ -1,49 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Tenstorrent demo: Devstral Small 2 (Mistral3) **text** LM on TT, with **autoregressive generation**
-using **TT** ``embed_tokens`` and **TT** ``TtMinistral3RotaryEmbedding`` inside ``TtMinistral3Model`` (via
-``forward_prefill``), **TT** ``LMHead`` or ``--lm-head-cpu`` chunked torch logits, and sampling either via
-**SamplingGenerator** on device (mirroring ``Transformer`` + ``format_sampling_params`` / ``seed_manager``) or
-PyTorch softmax/multinomial on the host when ``--cpu-sampling`` is set or the vocab/mesh layout is unsupported.
-
-``--verify`` still builds an HF reference with **HF** embeddings for layer-wise PCC; TT side is full TT prefill.
-
-**Prompting** defaults to the **same** chat template as ``reference/inference.py`` (``inference_fixtures``:
-system prompt, user fibonacci/tools task, and tool schemas). Use ``--simple-chat`` for a single user turn
-from ``--prompt`` only.
-
-**Generation** is **one TT prefill** of the full prompt (fills KV cache) followed by **traced TT decode**
-for each new token. The decode trace covers ``forward_decode → LM head → SamplingGenerator`` when
-on-device sampling is supported, ``forward_decode → LM head`` when sampling falls back to host, or
-``forward_decode`` alone when ``--lm-head-cpu`` is set. A one-shot warmup compiles the kernels before
-``ttnn.begin_trace_capture`` so the very first replayed iteration already runs at steady-state cost.
-Prompt token ids stay on device (**``ttnn.concat``** to extend, **``ttnn.pad``** / **``ttnn.arange``**
-inside prefill). Only ``tokenizer.decode`` pulls ids to host. Matching ``inference.py`` setup requires
-**full** ``--text-layers`` (omit the flag) and ``--cpu-sampling`` if you need host-side sampling to match
-reference RNG exactly.
-
-Usage (from repo root)::
-
-    export HF_MODEL=mistralai/Devstral-Small-2-24B-Instruct-2512
-    python models/experimental/devstarl2_small/demo/demo_devstral2_tt_multimodal.py --seed 0
-
-    # Bring-up: fewer layers + PCC check
-    python models/experimental/devstarl2_small/demo/demo_devstral2_tt_multimodal.py \\
-        --text-layers 1 --verify --max-new-tokens 20
-
-    # Optional: pure HF ``generate()`` baseline (not TT)
-    python models/experimental/devstarl2_small/demo/demo_devstral2_tt_multimodal.py --hf-generate --seed 0
-
-Embeddings are padded so sequence length is **128**-divisible, **KV-shard tile**-aligned, and (when
-``L > 1024``) a multiple of **1024** for the attention ``wo`` chunk reshape; hidden states are sliced
-back to the real length for PCC. Logits use **TT** ``LMHead`` on the last-token 32-row block.
-
-If the LM head hits Wormhole L1 circular-buffer limits, use ``--lm-head-cpu`` (chunked torch matmul),
-lower shards via ``--lm-head-max-device-cols``, or env ``DEVSTRAL2_LM_HEAD_MAX_COLUMNS_PER_DEVICE``.
-"""
+# Tenstorrent demo: Devstral Small 2 (Mistral3) **text** LM on TT, with **autoregressive generation** using **TT** ``embed_tokens`` and **TT** ``TtMinistral3RotaryEmbedding`` inside ``TtMinistral3Model`` (via ``forward_prefill``), **TT** ``LMHead`` or ``--lm-head-cpu`` chunked torch logits, and sampling either via **SamplingGenerator** on device (mirroring ``Transformer`` + ``format_sampling_params`` / ``seed_manager``) or PyTorch softmax/multinomial on the host when ``--cpu-sampling`` is set o...
 
 from __future__ import annotations
 
@@ -74,7 +32,6 @@ from models.experimental.devstarl2_small.devstral_utils import (
     open_devstral_demo_mesh,
     text_model_root,
     tt_alloc_decode_input_buffers,
-    tt_append_uint32_token,
     tt_capture_decode_trace,
     tt_execute_decode_trace,
     tt_forward_prefill_from_device_ids,
@@ -86,7 +43,6 @@ from models.experimental.devstarl2_small.devstral_utils import (
     tt_read_decode_traced_logits,
     tt_read_decode_traced_token,
     tt_release_decode_trace,
-    tt_replicated_ids_to_torch_long,
     tt_sampling_output_token_id,
     tt_update_decode_input_buffers,
 )
@@ -475,6 +431,12 @@ def main():
                 )
             gen_sl = seq_len_lm
             ids_tt_gen = host_input_ids_to_tt_replicated(mesh_device, input_ids)
+            # Collect generated token IDs on the host to avoid DRAM allocations inside the
+            # traced decode loop.  Growing ids_tt_gen via tt_append_uint32_token while the
+            # trace is captured triggers TT's "unsafe allocation" warning: the allocator can
+            # reuse addresses that the trace's output buffers already occupy, corrupting the
+            # token ID sequence on the next trace replay.
+            generated_token_ids: list[int] = []
 
             mode = "greedy" if not prefer_stochastic_sampling else f"sample (T={args.temperature})"
             lm_mode = "CPU lm_head (chunked torch)" if args.lm_head_cpu else "TT lm_head"
@@ -525,10 +487,10 @@ def main():
 
                 if next_scalar in eos_ids or args.max_new_tokens <= 1:
                     if next_scalar not in eos_ids:
-                        ids_tt_gen = tt_append_uint32_token(ids_tt_gen, next_scalar, mesh_device)
+                        generated_token_ids.append(next_scalar)
                         gen_sl += 1
                 else:
-                    ids_tt_gen = tt_append_uint32_token(ids_tt_gen, next_scalar, mesh_device)
+                    generated_token_ids.append(next_scalar)
                     gen_sl += 1
 
                     decode_buffers = tt_alloc_decode_input_buffers(mesh_device)
@@ -575,11 +537,10 @@ def main():
 
                         if next_scalar in eos_ids:
                             break
-                        ids_tt_gen = tt_append_uint32_token(ids_tt_gen, next_scalar, mesh_device)
+                        generated_token_ids.append(next_scalar)
                         gen_sl += 1
 
-                ids_host = tt_replicated_ids_to_torch_long(mesh_device, ids_tt_gen, gen_sl)
-                answer_ids = ids_host[prompt_len:]
+                answer_ids = torch.tensor(generated_token_ids, dtype=torch.long)
                 answer_text = tokenizer.decode(answer_ids.tolist(), skip_special_tokens=False)
                 logger.info(f"TT stack + TT lm_head generated ({answer_ids.numel()} tokens):\n{answer_text}")
             finally:

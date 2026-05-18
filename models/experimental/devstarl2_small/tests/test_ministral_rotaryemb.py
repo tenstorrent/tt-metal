@@ -1,24 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-PCC test: Hugging Face ``Ministral3RotaryEmbedding`` vs ``TtMinistral3RotaryEmbedding``.
-
-Loads Devstral the same way as ``test_ministralattn.py`` (full multimodal checkpoint via
-``ModelArgs.load_state_dict()``, ``cache_hf=True``), uses the **cached** language-model ``rotary_emb``
-as the reference, and compares cos/sin for positions ``0 .. seq_len - 1`` against TT tables built from
-the real ``text_config`` (rope tables follow config / buffers from the loaded checkpoint).
-
-Applies the shared Devstral FP8 scalar-scale compat patch at import.
-
-Requirements:
-- Enough host RAM / VRAM for ``transformers`` to load Devstral (~24B parameters / FP8→BF16).
-- Sequence length multiple of 128 (matches attention PCC test convention).
-
-TT rotary tables are sized with ``model_args.max_seq_len`` (not full ``max_position_embeddings``)
-to stay within practical memory bounds while covering the test sequence.
-"""
+# PCC test: Hugging Face ``Ministral3RotaryEmbedding`` vs ``TtMinistral3RotaryEmbedding``. Loads Devstral the same way as ``test_ministralattn.py`` (full multimodal checkpoint via ``ModelArgs.load_state_dict()``, ``cache_hf=True``), uses the **cached** language-model ``rotary_emb`` as the reference, and compares cos/sin for positions ``0 .. seq_len - 1`` against TT tables built from the real ``text_config`` (rope tables follow config / buffers from the loaded checkpoint). Applies the shared Dev...
 
 from __future__ import annotations
 
