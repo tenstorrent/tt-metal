@@ -4,6 +4,7 @@
 
 from .base import Solver
 from .euler import EulerSolver
+from .fm_solvers_unipc import FlowUniPCMultistepScheduler
 from .unipc import UniPCSolver, UniPCVariant
 
-__all__ = ["EulerSolver", "Solver", "UniPCSolver", "UniPCVariant"]
+__all__ = ["EulerSolver", "FlowUniPCMultistepScheduler", "Solver", "UniPCSolver", "UniPCVariant"]

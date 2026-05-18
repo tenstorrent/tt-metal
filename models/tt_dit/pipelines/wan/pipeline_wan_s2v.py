@@ -86,7 +86,7 @@ from ...models.transformers.wan2_2.transformer_wan_s2v import WanS2VTransformer3
 from ...models.vae.vae_wan2_1 import WanDecoder, WanEncoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...solvers import UniPCSolver
+from ...solvers import FlowUniPCMultistepScheduler, UniPCSolver
 from ...utils import cache, tensor
 from ...utils.conv3d import conv3d_blocking_hash, conv_pad_height, conv_pad_in_channels
 from ...utils.tensor import (
@@ -103,7 +103,6 @@ from ...utils.wan_s2v_checkpoint import (
     load_s2v_state_dict,
     translate_s2v_state_dict,
 )
-from .fm_solvers_unipc import FlowUniPCMultistepScheduler
 from .pipeline_wan import TransformerState, WanPipeline
 
 # Production S2V repo (native naming, safetensors at root).
