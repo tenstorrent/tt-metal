@@ -519,6 +519,36 @@ class Attention(LightweightModule):
         return q_heads_1BQD, k_heads_1BKD
 
     def _hf_rope_decode(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
+        if getattr(self.args, "higgs_legacy_hf_rope_decode", False):
+            if q_heads_pre_rot_1BQD.dtype != ttnn.bfloat16:
+                q_heads_pre_rot_1BQD = ttnn.typecast(q_heads_pre_rot_1BQD, dtype=ttnn.bfloat16)
+            if k_heads_pre_rot_1BKD.dtype != ttnn.bfloat16:
+                k_heads_pre_rot_1BKD = ttnn.typecast(k_heads_pre_rot_1BKD, dtype=ttnn.bfloat16)
+            int_current_pos = int(ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0])
+            q_heads_1BQD = ttnn.experimental.rotary_embedding(
+                q_heads_pre_rot_1BQD,
+                rot_mats[0],
+                rot_mats[1],
+                int_current_pos,
+            )
+            k_heads_1BKD = ttnn.experimental.rotary_embedding(
+                k_heads_pre_rot_1BKD,
+                rot_mats[0],
+                rot_mats[1],
+                int_current_pos,
+            )
+            q_heads_1BQD = ttnn.reshape(
+                q_heads_1BQD,
+                (1, self.batch_size_per_device_group, self.n_local_heads, self.head_dim),
+                (1, self.batch_size_per_device_group, 32, self.head_dim),
+            )
+            k_heads_1BKD = ttnn.reshape(
+                k_heads_1BKD,
+                (1, self.batch_size_per_device_group, self.n_local_kv_heads, self.head_dim),
+                (1, self.batch_size_per_device_group, 32, self.head_dim),
+            )
+            return q_heads_1BQD[:, :, : self.n_local_heads], k_heads_1BKD[:, :, : self.n_local_kv_heads]
+
         if q_heads_pre_rot_1BQD.dtype != ttnn.bfloat16:
             q_heads_pre_rot_1BQD = ttnn.typecast(q_heads_pre_rot_1BQD, dtype=ttnn.bfloat16)
         if k_heads_pre_rot_1BKD.dtype != ttnn.bfloat16:
@@ -539,6 +569,12 @@ class Attention(LightweightModule):
         return q_heads_1BQD, k_heads_1BKD
 
     def _mllama_rope_prefill(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
+        if getattr(self.args, "higgs_rope_prefill_bf16", False):
+            if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:
+                q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
+            if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:
+                k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
+
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
             rot_mats[0],
@@ -616,9 +652,9 @@ class Attention(LightweightModule):
             self.mesh_device,
             self.tt_ccl,
             cluster_axis=1,
-            memory_config=qkv_all_reduce_mem_cfg
-            if qkv_all_reduce_mem_cfg is not None
-            else xqkv_fused_sharded.memory_config(),
+            memory_config=(
+                qkv_all_reduce_mem_cfg if qkv_all_reduce_mem_cfg is not None else xqkv_fused_sharded.memory_config()
+            ),
             sharded=True,
             dtype=self.ccl_dtype,
             topology=self.ccl_topology,

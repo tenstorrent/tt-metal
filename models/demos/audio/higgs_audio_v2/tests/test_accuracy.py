@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,13 @@ from models.demos.audio.higgs_audio_v2.demo._prompts import (
     load_cases,
     load_reference_audio_manifest,
 )
+from models.demos.audio.higgs_audio_v2.tt.mesh import (
+    close_higgs_mesh_device,
+    format_mesh_shape,
+    has_enough_devices,
+    open_higgs_mesh_device,
+    resolve_mesh_shape,
+)
 from models.demos.audio.higgs_audio_v2.tt.model import create_higgs_tt_model
 from models.demos.audio.higgs_audio_v2.tt.reference import (
     load_audio_tokenizer,
@@ -28,9 +36,10 @@ from models.demos.audio.higgs_audio_v2.tt.reference import (
     load_higgs_tokenizer,
     prepare_inputs_for_generation,
 )
+from models.tt_transformers.tt.common import copy_host_to_device
 
-MODEL_PATH = "bosonai/higgs-audio-v2-generation-3B-base"
-AUDIO_TOKENIZER_PATH = "bosonai/higgs-audio-v2-tokenizer"
+MODEL_PATH = os.environ.get("HIGGS_AUDIO_MODEL_PATH", "bosonai/higgs-audio-v2-generation-3B-base")
+AUDIO_TOKENIZER_PATH = os.environ.get("HIGGS_AUDIO_TOKENIZER_PATH", "bosonai/higgs-audio-v2-tokenizer")
 ACCURACY_MIN_TOKEN_ACCURACY = 0.95
 pytestmark = pytest.mark.timeout(600)
 
@@ -132,21 +141,36 @@ def _evaluate_accuracy_case(tt_model, model_inputs: dict, reference_case: dict, 
     current_audio_tokens = torch.full((config.audio_num_codebooks, 1), config.audio_stream_bos_id, dtype=torch.long)
     num_delay, num_remaining_delays = initialize_delay_pattern_state(current_audio_tokens, config)
     current_pos = prompt_embeddings.shape[1]
-    current_pos_tt = tt_model.create_current_pos_tensor(current_pos)
+    use_device_token_decode = tt_model.mesh_device.get_num_devices() > 1
+    current_pos_tt = None if use_device_token_decode else tt_model.create_current_pos_tensor(current_pos)
     token_matches = 0
     token_total = 0
     steps_run = 0
 
     try:
         for reference_audio_step in reference_case["audio_steps"]:
-            current_embedding = tt_model.embed_audio_tokens(current_audio_tokens)[0]
-            _, tt_audio_logits_flat = tt_model.decode_step(
-                current_embedding=current_embedding,
-                current_pos=current_pos,
-                is_audio_token=True,
-                return_text_logits=False,
-                current_pos_tt=current_pos_tt,
-            )
+            if use_device_token_decode:
+                host_inputs = tt_model.prepare_audio_decode_raw_token_inputs_host(current_audio_tokens, current_pos)
+                device_inputs = tuple(copy_host_to_device(host_inputs, mesh_device=tt_model.mesh_device))
+                tt_audio_logits_tensor = None
+                try:
+                    tt_audio_logits_tensor = tt_model.audio_ttnn_decode_from_raw_token_ids_forward(*device_inputs)
+                    tt_audio_logits_flat = tt_model.read_audio_decode_output(tt_audio_logits_tensor)
+                finally:
+                    if tt_audio_logits_tensor is not None:
+                        ttnn.deallocate(tt_audio_logits_tensor)
+                    for tensor in device_inputs:
+                        if tensor is not None:
+                            ttnn.deallocate(tensor)
+            else:
+                current_embedding = tt_model.embed_audio_tokens(current_audio_tokens)[0]
+                _, tt_audio_logits_flat = tt_model.decode_step(
+                    current_embedding=current_embedding,
+                    current_pos=current_pos,
+                    is_audio_token=True,
+                    return_text_logits=False,
+                    current_pos_tt=current_pos_tt,
+                )
             tt_audio_logits = tt_audio_logits_flat.view(config.audio_num_codebooks, -1)
             ref_next_tokens = reference_audio_step["next_tokens"]
             active_mask = reference_audio_step["active_mask"]
@@ -160,12 +184,14 @@ def _evaluate_accuracy_case(tt_model, model_inputs: dict, reference_case: dict, 
             token_total += int(active_mask.sum().item())
             current_audio_tokens = ref_next_tokens.unsqueeze(1)
             current_pos += 1
-            tt_model.increment_current_pos_tensor(current_pos_tt)
+            if current_pos_tt is not None:
+                tt_model.increment_current_pos_tensor(current_pos_tt)
             steps_run += 1
             if reference_audio_step["finished"]:
                 break
     finally:
-        ttnn.deallocate(current_pos_tt)
+        if current_pos_tt is not None:
+            ttnn.deallocate(current_pos_tt)
 
     return {
         "prompt_len": int(model_inputs["input_ids"].shape[1]),
@@ -184,6 +210,7 @@ def run_accuracy_check(
     cases_json_path: str | Path = DEFAULT_VALIDATION_CASES_PATH,
     reference_audio_manifest_path: str | Path = DEFAULT_REFERENCE_AUDIO_MANIFEST_PATH,
     reference_audio_assets_root: str | Path | None = None,
+    mesh_shape=None,
 ) -> dict:
     try:
         from boson_multimodal.model.higgs_audio import HiggsAudioModel
@@ -226,9 +253,10 @@ def run_accuracy_check(
             num_audio_steps=int(case["max_audio_steps"]),
         )
 
+    mesh_shape = resolve_mesh_shape(mesh_shape)
     previous_fallback_setting = ttnn.CONFIG.throw_exception_on_fallback
     ttnn.CONFIG.throw_exception_on_fallback = True
-    mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1))
+    mesh_device = open_higgs_mesh_device(mesh_shape=mesh_shape)
     try:
         _, tt_model, _ = create_higgs_tt_model(
             mesh_device,
@@ -265,13 +293,14 @@ def run_accuracy_check(
             "cases_json_path": str(cases_json_path),
             "reference_audio_manifest_path": str(Path(reference_audio_manifest_path).resolve()),
             "reference_audio_assets_root": str(reference_audio_assets_root) if reference_audio_assets_root else None,
+            "mesh_shape": format_mesh_shape(mesh_shape),
             "token_matches": token_matches,
             "token_total": token_total,
             "token_accuracy": token_matches / token_total if token_total > 0 else 1.0,
             "case_reports": case_reports,
         }
     finally:
-        ttnn.close_mesh_device(mesh_device)
+        close_higgs_mesh_device(mesh_device)
         ttnn.CONFIG.throw_exception_on_fallback = previous_fallback_setting
 
 
@@ -279,4 +308,15 @@ def test_accuracy():
     report = run_accuracy_check()
 
     assert report["mode"] == "accuracy"
+    assert report["token_accuracy"] >= ACCURACY_MIN_TOKEN_ACCURACY
+
+
+def test_accuracy_two_device():
+    if not has_enough_devices("1x2"):
+        pytest.skip("Higgs Audio two-device accuracy test requires at least 2 visible devices.")
+
+    report = run_accuracy_check(mesh_shape="1x2")
+
+    assert report["mode"] == "accuracy"
+    assert report["mesh_shape"] == "1x2"
     assert report["token_accuracy"] >= ACCURACY_MIN_TOKEN_ACCURACY

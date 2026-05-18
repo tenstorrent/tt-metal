@@ -30,7 +30,11 @@ def _ensure_higgs_audio_importable() -> None:
 
 
 def load_higgs_config(model_name_or_path: str):
-    checkpoint_path = snapshot_download(model_name_or_path, allow_patterns=["config.json"])
+    checkpoint_path = (
+        model_name_or_path
+        if os.path.exists(model_name_or_path)
+        else snapshot_download(model_name_or_path, allow_patterns=["config.json"])
+    )
     with open(os.path.join(checkpoint_path, "config.json"), "r", encoding="utf-8") as f:
         raw_config = json.load(f)
     text_config_dict = raw_config["text_config"]
@@ -58,7 +62,9 @@ def load_higgs_model_state_dict(
     model_name_or_path: str,
     dtype: torch.dtype = torch.bfloat16,
 ) -> dict[str, torch.Tensor]:
-    checkpoint_path = snapshot_download(model_name_or_path)
+    checkpoint_path = (
+        model_name_or_path if os.path.exists(model_name_or_path) else snapshot_download(model_name_or_path)
+    )
     index_path = os.path.join(checkpoint_path, "model.safetensors.index.json")
     if os.path.exists(index_path):
         with open(index_path, "r", encoding="utf-8") as f:

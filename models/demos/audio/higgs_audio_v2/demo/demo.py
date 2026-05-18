@@ -20,6 +20,7 @@ from models.demos.audio.higgs_audio_v2.demo._prompts import (
     build_demo_sample,
     load_chatml_sample_from_json,
 )
+from models.demos.audio.higgs_audio_v2.tt.mesh import close_higgs_mesh_device, open_higgs_mesh_device
 from models.demos.audio.higgs_audio_v2.tt.model import create_higgs_tt_model
 from models.demos.audio.higgs_audio_v2.tt.reference import (
     load_audio_tokenizer,
@@ -69,6 +70,7 @@ def run_demo(
     use_hf_rope: bool = True,
     reference_audio_manifest: str | None = None,
     reference_audio_assets_root: str | None = None,
+    mesh_shape: str | None = None,
 ) -> str:
     config = load_higgs_config(model_path)
     tokenizer = load_higgs_tokenizer(model_path)
@@ -93,7 +95,7 @@ def run_demo(
     if int(model_inputs["input_ids"][0, -1].item()) != config.audio_out_bos_token_id:
         raise RuntimeError("Prepared prompt did not end at the audio generation boundary.")
 
-    mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1))
+    mesh_device = open_higgs_mesh_device(mesh_shape=mesh_shape)
     current_pos_tt = None
     try:
         _, tt_model, _ = create_higgs_tt_model(
@@ -171,7 +173,7 @@ def run_demo(
     finally:
         if current_pos_tt is not None:
             ttnn.deallocate(current_pos_tt)
-        ttnn.close_mesh_device(mesh_device)
+        close_higgs_mesh_device(mesh_device)
 
 
 def main() -> None:
@@ -189,6 +191,7 @@ def main() -> None:
     parser.add_argument("--use-hf-rope", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--reference-audio-manifest")
     parser.add_argument("--reference-audio-assets-root")
+    parser.add_argument("--mesh-shape")
     args = parser.parse_args()
     run_demo(
         model_path=args.model_path,
@@ -204,6 +207,7 @@ def main() -> None:
         use_hf_rope=args.use_hf_rope,
         reference_audio_manifest=args.reference_audio_manifest,
         reference_audio_assets_root=args.reference_audio_assets_root,
+        mesh_shape=args.mesh_shape,
     )
 
 

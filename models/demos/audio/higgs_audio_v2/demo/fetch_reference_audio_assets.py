@@ -8,12 +8,13 @@ import argparse
 import hashlib
 import json
 import shutil
-import tempfile
 from pathlib import Path
 from urllib.request import urlopen
 
 from models.demos.audio.higgs_audio_v2.demo._prompts import (  # noqa: E402
     DEFAULT_REFERENCE_AUDIO_MANIFEST_PATH,
+    resolve_child_path_under_root,
+    resolve_path_under_root,
     resolve_reference_audio_assets_root,
 )
 
@@ -26,13 +27,15 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _download(url: str, destination: Path):
+def _download(url: str, destination: Path, assets_root: Path):
+    destination = resolve_path_under_root(destination, assets_root, "destination")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as tmp_file:
-        with urlopen(url) as response:
-            shutil.copyfileobj(response, tmp_file)
-        tmp_path = Path(tmp_file.name)
-    tmp_path.replace(destination)
+    try:
+        with urlopen(url) as response, destination.open("wb") as output_file:
+            shutil.copyfileobj(response, output_file)
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
 
 
 def fetch_reference_audio_assets(
@@ -47,7 +50,7 @@ def fetch_reference_audio_assets(
 
     fetched_paths = []
     for clip in manifest["clips"]:
-        destination = resolved_assets_root / clip["audio_path"]
+        destination = resolve_child_path_under_root(resolved_assets_root, clip["audio_path"], "audio path")
         if destination.exists() and not force:
             actual_sha = _sha256(destination)
             if actual_sha != clip["sha256"]:
@@ -58,7 +61,7 @@ def fetch_reference_audio_assets(
             fetched_paths.append(destination)
             continue
 
-        _download(clip["source_url"], destination)
+        _download(clip["source_url"], destination, resolved_assets_root)
         actual_sha = _sha256(destination)
         if actual_sha != clip["sha256"]:
             destination.unlink(missing_ok=True)

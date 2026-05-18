@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 import time
 from pathlib import Path
 
@@ -19,6 +20,14 @@ from models.demos.audio.higgs_audio_v2.demo._prompts import (
     load_cases,
     load_reference_audio_manifest,
 )
+from models.demos.audio.higgs_audio_v2.tt.mesh import (
+    close_higgs_mesh_device,
+    format_mesh_shape,
+    has_enough_devices,
+    open_higgs_mesh_device,
+    required_device_count,
+    resolve_mesh_shape,
+)
 from models.demos.audio.higgs_audio_v2.tt.model import create_higgs_tt_model
 from models.demos.audio.higgs_audio_v2.tt.reference import (
     load_audio_tokenizer,
@@ -28,12 +37,15 @@ from models.demos.audio.higgs_audio_v2.tt.reference import (
 )
 from models.tt_transformers.tt.common import copy_host_to_device
 
-MODEL_PATH = "bosonai/higgs-audio-v2-generation-3B-base"
-AUDIO_TOKENIZER_PATH = "bosonai/higgs-audio-v2-tokenizer"
+MODEL_PATH = os.environ.get("HIGGS_AUDIO_MODEL_PATH", "bosonai/higgs-audio-v2-generation-3B-base")
+AUDIO_TOKENIZER_PATH = os.environ.get("HIGGS_AUDIO_TOKENIZER_PATH", "bosonai/higgs-audio-v2-tokenizer")
 PERFORMANCE_MIN_TOKENS_PER_SECOND = 60.0
 PERFORMANCE_MAX_RTF = 0.5
+TWO_DEVICE_MAX_RTF = 0.2
 PERFORMANCE_TRACE_BLOCK_STEPS = 64
 PERFORMANCE_TRACE_REGION_SIZE = 400_000_000
+TWO_DEVICE_TRACE_BLOCK_STEPS = 124
+TWO_DEVICE_TRACE_REGION_SIZE = 870_000_000
 pytestmark = pytest.mark.timeout(600)
 
 
@@ -56,10 +68,19 @@ def _prepare_case_inputs(
     )
 
 
-def _select_decode_trace_block_steps(max_audio_steps: int) -> int:
+def _select_decode_trace_block_steps(max_audio_steps: int, max_block_steps: int) -> int:
     if max_audio_steps < 1:
         raise ValueError(f"Decode trace block steps must be >= 1, got {max_audio_steps}")
-    return min(int(max_audio_steps), PERFORMANCE_TRACE_BLOCK_STEPS)
+    return min(int(max_audio_steps), max_block_steps)
+
+
+def _select_divisible_decode_trace_block_steps(num_steps: int, max_block_steps: int) -> int:
+    if num_steps < 1:
+        raise ValueError(f"Decode trace block steps must be >= 1, got {num_steps}")
+    for block_steps in range(min(int(num_steps), max_block_steps), 0, -1):
+        if num_steps % block_steps == 0:
+            return block_steps
+    return 1
 
 
 def _allocate_decode_runtime_state(tt_model, config) -> dict:
@@ -189,11 +210,18 @@ def _capture_prefill_trace(tt_model, prefill_inputs: dict, decode_runtime_state:
         "trace_id": trace_id,
         "trace_output": trace_output,
         "device_inputs": device_inputs,
+        "decode_bootstrap_host_inputs": decode_bootstrap_host_inputs,
         "decode_bootstrap_device_inputs": decode_bootstrap_device_inputs,
     }
 
 
-def _capture_decode_trace(tt_model, decode_runtime_state: dict, *, block_steps: int) -> dict:
+def _capture_decode_trace(
+    tt_model,
+    decode_runtime_state: dict,
+    *,
+    block_steps: int,
+    steady_delay_state: bool = False,
+) -> dict:
     _reset_decode_runtime_state(decode_runtime_state)
     compile_output = tt_model.audio_ttnn_decode_block_from_raw_token_ids_inplace(
         decode_runtime_state["device_inputs"][0],
@@ -203,6 +231,7 @@ def _capture_decode_trace(tt_model, decode_runtime_state: dict, *, block_steps: 
         decode_runtime_state["postprocess_state_inputs"][1],
         block_steps=block_steps,
         tt_finished_output=decode_runtime_state["finished_output"],
+        steady_delay_state=steady_delay_state,
     )
     ttnn.synchronize_device(tt_model.mesh_device)
     assert compile_output is decode_runtime_state["finished_output"]
@@ -217,12 +246,14 @@ def _capture_decode_trace(tt_model, decode_runtime_state: dict, *, block_steps: 
         decode_runtime_state["postprocess_state_inputs"][1],
         block_steps=block_steps,
         tt_finished_output=decode_runtime_state["finished_output"],
+        steady_delay_state=steady_delay_state,
     )
     ttnn.end_trace_capture(tt_model.mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(tt_model.mesh_device)
     return {
         "trace_id": trace_id,
         "trace_output": trace_output,
+        "block_steps": block_steps,
     }
 
 
@@ -252,16 +283,18 @@ def _release_decode_trace_state(tt_model, trace_state: dict | None) -> None:
 
 
 def _benchmark_case_trace(
-    tt_model, model_inputs: dict, config, audio_tps: float, max_audio_steps: int, decode_runtime_state: dict
+    tt_model,
+    model_inputs: dict,
+    config,
+    audio_tps: float,
+    max_audio_steps: int,
+    decode_runtime_state: dict,
+    trace_block_steps: int,
 ) -> dict:
     tt_model.reset_kv_cache()
     tt_model.prime_trace_runtime_assets()
     actual_steps = int(max_audio_steps)
-    decode_block_steps = int(_select_decode_trace_block_steps(actual_steps))
-    if actual_steps % decode_block_steps != 0:
-        raise ValueError(
-            f"Fixed-horizon traced decode requires horizon divisible by block size, got {actual_steps=} {decode_block_steps=}"
-        )
+    decode_block_steps = int(_select_decode_trace_block_steps(actual_steps, trace_block_steps))
 
     prefill_inputs = tt_model.prepare_prefill_inputs_trace(
         input_ids=model_inputs["input_ids"],
@@ -278,7 +311,7 @@ def _benchmark_case_trace(
         device_tensors=prefill_trace_state["device_inputs"],
     )
     copy_host_to_device(
-        host_tensors=tt_model.prepare_audio_decode_bootstrap_inputs_host(prefill_inputs["effective_seq_len"]),
+        host_tensors=prefill_trace_state["decode_bootstrap_host_inputs"],
         device_tensors=prefill_trace_state["decode_bootstrap_device_inputs"],
     )
     ttnn.execute_trace(tt_model.mesh_device, prefill_trace_state["trace_id"], cq_id=0, blocking=False)
@@ -286,16 +319,55 @@ def _benchmark_case_trace(
     prefill_seconds = time.perf_counter() - prefill_start
     _release_prefill_trace_state(tt_model, prefill_trace_state)
 
-    decode_trace_state = _capture_decode_trace(tt_model, decode_runtime_state, block_steps=decode_block_steps)
-    decode_replay_count = actual_steps // decode_block_steps
+    use_steady_delay_trace = (
+        tt_model.args.higgs_fast_fixed_horizon_decode and actual_steps > tt_model.audio_num_codebooks
+    )
+    decode_trace_states = []
     try:
+        if use_steady_delay_trace:
+            warmup_steps = tt_model.audio_num_codebooks
+            steady_steps = actual_steps - warmup_steps
+            steady_block_steps = _select_divisible_decode_trace_block_steps(steady_steps, trace_block_steps)
+            warmup_trace_state = _capture_decode_trace(
+                tt_model,
+                decode_runtime_state,
+                block_steps=warmup_steps,
+                steady_delay_state=False,
+            )
+            steady_trace_state = _capture_decode_trace(
+                tt_model,
+                decode_runtime_state,
+                block_steps=steady_block_steps,
+                steady_delay_state=True,
+            )
+            decode_trace_states.extend([warmup_trace_state, steady_trace_state])
+        else:
+            if actual_steps % decode_block_steps != 0:
+                raise ValueError(
+                    "Fixed-horizon traced decode requires horizon divisible by block size, "
+                    f"got {actual_steps=} {decode_block_steps=}"
+                )
+            decode_trace_state = _capture_decode_trace(tt_model, decode_runtime_state, block_steps=decode_block_steps)
+            decode_trace_states.append(decode_trace_state)
+
         decode_start = time.perf_counter()
-        for _ in range(decode_replay_count):
-            ttnn.execute_trace(tt_model.mesh_device, decode_trace_state["trace_id"], cq_id=0, blocking=False)
+        if use_steady_delay_trace:
+            warmup_trace_state, steady_trace_state = decode_trace_states
+            ttnn.execute_trace(tt_model.mesh_device, warmup_trace_state["trace_id"], cq_id=0, blocking=False)
+            steady_replay_count = (actual_steps - warmup_trace_state["block_steps"]) // steady_trace_state[
+                "block_steps"
+            ]
+            for _ in range(steady_replay_count):
+                ttnn.execute_trace(tt_model.mesh_device, steady_trace_state["trace_id"], cq_id=0, blocking=False)
+        else:
+            decode_replay_count = actual_steps // decode_block_steps
+            for _ in range(decode_replay_count):
+                ttnn.execute_trace(tt_model.mesh_device, decode_trace_states[0]["trace_id"], cq_id=0, blocking=False)
         ttnn.synchronize_device(tt_model.mesh_device, cq_id=0)
         decode_seconds = time.perf_counter() - decode_start
     finally:
-        _release_decode_trace_state(tt_model, decode_trace_state)
+        for decode_trace_state in decode_trace_states:
+            _release_decode_trace_state(tt_model, decode_trace_state)
 
     audio_seconds = actual_steps / audio_tps if actual_steps > 0 else 0.0
     return {
@@ -318,6 +390,7 @@ def run_performance_check(
     cases_json_path: str | Path = DEFAULT_PERFORMANCE_CASES_PATH,
     reference_audio_manifest_path: str | Path = DEFAULT_REFERENCE_AUDIO_MANIFEST_PATH,
     reference_audio_assets_root: str | Path | None = None,
+    mesh_shape=None,
 ) -> dict:
     cases_json_path = Path(cases_json_path).resolve()
     performance_cases = load_cases(cases_json_path)
@@ -341,11 +414,17 @@ def run_performance_check(
             config=config,
         )
 
+    mesh_shape = resolve_mesh_shape(mesh_shape)
+    trace_block_steps = PERFORMANCE_TRACE_BLOCK_STEPS
+    trace_region_size = PERFORMANCE_TRACE_REGION_SIZE
+    if required_device_count(mesh_shape) > 1:
+        trace_block_steps = TWO_DEVICE_TRACE_BLOCK_STEPS
+        trace_region_size = TWO_DEVICE_TRACE_REGION_SIZE
     previous_fallback_setting = ttnn.CONFIG.throw_exception_on_fallback
     ttnn.CONFIG.throw_exception_on_fallback = True
-    mesh_device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(1, 1),
-        trace_region_size=PERFORMANCE_TRACE_REGION_SIZE,
+    mesh_device = open_higgs_mesh_device(
+        mesh_shape=mesh_shape,
+        trace_region_size=trace_region_size,
     )
     decode_runtime_state = None
     try:
@@ -369,6 +448,7 @@ def run_performance_check(
                 audio_tps=float(audio_tokenizer.tps),
                 max_audio_steps=int(case["max_audio_steps"]),
                 decode_runtime_state=decode_runtime_state,
+                trace_block_steps=trace_block_steps,
             )
             case_report.update(
                 {
@@ -391,6 +471,7 @@ def run_performance_check(
             "cases_json_path": str(cases_json_path),
             "reference_audio_manifest_path": str(Path(reference_audio_manifest_path).resolve()),
             "reference_audio_assets_root": str(reference_audio_assets_root) if reference_audio_assets_root else None,
+            "mesh_shape": format_mesh_shape(mesh_shape),
             "tokens_per_second": total_generated_audio_steps / total_decode_seconds,
             "rtf": (total_prefill_seconds + total_decode_seconds) / total_audio_seconds,
             "decode_rtf": total_decode_seconds / total_audio_seconds,
@@ -402,7 +483,7 @@ def run_performance_check(
         }
     finally:
         _release_decode_runtime_state(decode_runtime_state)
-        ttnn.close_mesh_device(mesh_device)
+        close_higgs_mesh_device(mesh_device)
         ttnn.CONFIG.throw_exception_on_fallback = previous_fallback_setting
 
 
@@ -412,3 +493,20 @@ def test_performance():
     assert report["mode"] == "performance"
     assert report["tokens_per_second"] >= PERFORMANCE_MIN_TOKENS_PER_SECOND
     assert report["rtf"] < PERFORMANCE_MAX_RTF
+
+
+@pytest.mark.timeout(1200)
+def test_performance_two_device():
+    if not has_enough_devices("1x2"):
+        pytest.skip("Higgs Audio two-device performance test requires at least 2 visible devices.")
+
+    report = run_performance_check(mesh_shape="1x2")
+    decode_seconds_per_token = report["decode_seconds"] / report["generated_audio_steps"]
+    max_decode_seconds_per_token = TWO_DEVICE_MAX_RTF * report["audio_seconds"] / report["generated_audio_steps"]
+
+    assert report["mode"] == "performance"
+    assert report["mesh_shape"] == "1x2"
+    assert report["tokens_per_second"] >= PERFORMANCE_MIN_TOKENS_PER_SECOND
+    assert report["rtf"] < TWO_DEVICE_MAX_RTF
+    assert report["decode_rtf"] < TWO_DEVICE_MAX_RTF
+    assert decode_seconds_per_token < max_decode_seconds_per_token

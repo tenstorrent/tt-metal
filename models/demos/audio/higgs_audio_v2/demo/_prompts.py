@@ -13,6 +13,22 @@ from typing import Any
 DEFAULT_VALIDATION_CASES_PATH = Path(__file__).with_name("validation_cases.json")
 DEFAULT_PERFORMANCE_CASES_PATH = Path(__file__).with_name("performance_cases.json")
 DEFAULT_REFERENCE_AUDIO_MANIFEST_PATH = Path(__file__).with_name("reference_audio_manifest.json")
+_DEMO_DIR = Path(__file__).resolve().parent
+
+
+def resolve_path_under_root(path: str | Path, root: str | Path, path_name: str = "path") -> Path:
+    resolved_root = Path(root).expanduser().resolve()
+    resolved_path = Path(path).expanduser().resolve()
+    if resolved_path != resolved_root and not resolved_path.is_relative_to(resolved_root):
+        raise ValueError(f"`{path_name}` must resolve under `{resolved_root}`, got `{resolved_path}`.")
+    return resolved_path
+
+
+def resolve_child_path_under_root(root: str | Path, child_path: str | Path, path_name: str = "path") -> Path:
+    child = Path(child_path)
+    if child.is_absolute():
+        raise ValueError(f"`{path_name}` must be relative, got `{child_path}`.")
+    return resolve_path_under_root(Path(root).expanduser() / child, root, path_name)
 
 
 @dataclass
@@ -47,7 +63,8 @@ class ChatMLSample:
 
 
 def load_cases(path: str | Path) -> list[dict]:
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    cases_path = resolve_path_under_root(path, _DEMO_DIR, "cases path")
+    payload = json.loads(cases_path.read_text(encoding="utf-8"))
     if isinstance(payload, dict):
         return payload["cases"]
     return payload
@@ -74,7 +91,7 @@ def load_reference_audio_manifest(
     resolved_assets_root = resolve_reference_audio_assets_root(manifest_path, assets_root)
     clips = {}
     for clip in manifest["clips"]:
-        resolved_audio_path = (resolved_assets_root / clip["audio_path"]).resolve()
+        resolved_audio_path = resolve_child_path_under_root(resolved_assets_root, clip["audio_path"], "audio path")
         resolved_clip = dict(clip)
         resolved_clip["audio_url"] = str(resolved_audio_path)
         resolved_clip["assets_root"] = str(resolved_assets_root)

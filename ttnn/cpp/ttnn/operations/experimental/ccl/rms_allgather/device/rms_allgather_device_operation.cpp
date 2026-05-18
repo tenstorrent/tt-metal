@@ -185,7 +185,9 @@ TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
     auto output_shard_spec = args.output_mem_config.shard_spec().value();
     auto input_shard_spec = input_tensor.shard_spec().value();
     if (output_shard_spec != input_shard_spec) {
-        output_padded_shape[3] = output_shard_spec.shape[1] * output_shard_spec.num_cores();
+        const auto gathered_width = output_shard_spec.shape[1] * output_shard_spec.num_cores();
+        output_shape[3] = gathered_width;
+        output_padded_shape[3] = gathered_width;
     }
 
     auto mem_config = args.output_mem_config;

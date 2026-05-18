@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import os
 from pathlib import Path
 from typing import Callable, Optional
@@ -30,9 +31,11 @@ from models.tt_transformers.tt.model_config import (
     OpGroup,
     PrecisionSetting,
     TensorGroup,
+    num_to_coregrid,
 )
 from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 
+from .mesh import format_mesh_shape
 from .reference import load_higgs_config, load_higgs_model_state_dict, remap_higgs_state_dict_to_tt
 
 HIGGS_TT_CACHE_ENV = "HIGGS_AUDIO_TT_CACHE"
@@ -57,6 +60,13 @@ def resolve_higgs_optimizations(
     if isinstance(optimizations, str):
         if optimizations == "accuracy":
             return lambda model_args: build_higgs_accuracy_optimizations(model_args.n_layers, model_args.model_name)
+        if optimizations == "performance":
+            standard_performance_factory = DecodersPrecision.from_string("performance")
+            return lambda model_args: (
+                build_higgs_performance_optimizations(model_args.n_layers, model_args.model_name)
+                if model_args.num_devices > 1
+                else standard_performance_factory(model_args.n_layers, model_args.model_name)
+            )
         optimization_factory = DecodersPrecision.from_string(optimizations)
         return lambda model_args, factory=optimization_factory: factory(model_args.n_layers, model_args.model_name)
     raise TypeError(f"Unsupported Higgs optimization config: {type(optimizations)!r}")
@@ -90,6 +100,34 @@ def build_higgs_accuracy_optimizations(num_decoders: int, model_name: str) -> De
     return precision
 
 
+def build_higgs_performance_optimizations(num_decoders: int, model_name: str) -> DecodersPrecision:
+    """Performance profile used by the traced decode path."""
+    fast_decode = ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
+                TensorGroup.FF2: PrecisionSetting.BFP4,
+                TensorGroup.WQKV: PrecisionSetting.BFP4,
+                TensorGroup.WO: PrecisionSetting.BFP4,
+                TensorGroup.ACTIVATION: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+                OpGroup.LI_QKV_DECODE: MathFidelitySetting.LOFI,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.LOFI,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.LOFI,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.LOFI,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
+            },
+        }
+    )
+    precision = DecodersPrecision(num_decoders, model_name, fast_decode)
+    precision.__name__ = "performance"
+    return precision
+
+
 class HiggsModelArgs(ModelArgs):
     def __init__(
         self,
@@ -110,6 +148,8 @@ class HiggsModelArgs(ModelArgs):
         old_hf_model = os.environ.get("HF_MODEL")
         old_tt_cache = os.environ.get("TT_CACHE_PATH")
         default_tt_cache = resolve_higgs_tt_cache_root(model_name_or_path)
+        if mesh_device is not None and mesh_device.get_num_devices() > 1:
+            default_tt_cache = default_tt_cache / f"mesh_{format_mesh_shape(mesh_device.shape)}"
         default_tt_cache.mkdir(parents=True, exist_ok=True)
         os.environ["HF_MODEL"] = model_name_or_path
         # Higgs checkpoints are large enough that the default tmpfs cache root is fragile on many hosts.
@@ -138,6 +178,249 @@ class HiggsModelArgs(ModelArgs):
                 os.environ["TT_CACHE_PATH"] = old_tt_cache
         self.model_name = "Llama-3.2-3B-Instruct"
         self.higgs_tt_cache_root = default_tt_cache if old_tt_cache is None else Path(old_tt_cache)
+        self.higgs_legacy_hf_rope_decode = self.num_devices > 1
+        two_device_performance = self.num_devices > 1 and getattr(self.optimizations, "__name__", "") == "performance"
+        self.higgs_rope_prefill_bf16 = two_device_performance
+        self.higgs_attention_output_activation_dtype = two_device_performance
+        self.higgs_fast_fixed_horizon_decode = two_device_performance
+        self.higgs_norm_all_gather_cluster_axis = 1 if two_device_performance else None
+        self.higgs_fused_rms_all_gather = two_device_performance
+        self.higgs_fused_rms_lofi = two_device_performance
+        self.higgs_audio_embedding_add_tree = two_device_performance
+        self.higgs_skip_text_head = two_device_performance
+        self.higgs_skip_fixed_horizon_finished_copy = two_device_performance
+        self.higgs_steady_argmax_to_input = two_device_performance
+        self.higgs_skip_qkv_all_reduce = two_device_performance
+        self._apply_higgs_core_grid_overrides()
+        self.model_config.setdefault("ATTN_RS_CONFIG", copy.copy(self.model_config["MLP_RS_CONFIG"]))
+        self._apply_higgs_ccl_overrides()
+
+    def _apply_higgs_core_grid_overrides(self) -> None:
+        if self.num_devices <= 1 or getattr(self.optimizations, "__name__", "") != "performance":
+            return
+
+        def apply_grid(attribute_name: str, num_cores: int) -> None:
+            core_grid = num_to_coregrid(num_cores)
+            if core_grid is None:
+                raise ValueError(f"Higgs decode core count {num_cores} does not map to a supported core grid")
+            setattr(self, attribute_name, core_grid)
+
+        apply_grid("attn_input_grid", 12)
+        apply_grid("mlp_core_grid", 16)
+        apply_grid("mlp2_core_grid", 16)
+
+    def _apply_higgs_ccl_overrides(self) -> None:
+        if self.num_devices <= 1 or getattr(self.optimizations, "__name__", "") != "performance":
+            return
+        for key in ("ATTN_LN_AG_CONFIG", "FFN_LN_AG_CONFIG"):
+            config = self.model_config.get(key)
+            if config:
+                config["chunks_per_sync"] = 1
+        for key in ("MLP_RS_CONFIG", "ATTN_RS_CONFIG"):
+            self.model_config[key]["chunks_per_sync"] = 2
+            self.model_config[key]["rs_memory_config"] = ttnn.L1_MEMORY_CONFIG
+
+    def find_prefill_grid(self, row_tiles, col_tiles):
+        if self.num_devices <= 1:
+            return super().find_prefill_grid(row_tiles, col_tiles)
+
+        max_rows = min(8, self.max_grid_size.y)
+        max_cols = min(8, self.max_grid_size.x)
+        cols = next((i for i in range(max_cols, 0, -1) if col_tiles % i == 0), None)
+        rows = next((i for i in range(max_rows, 0, -1) if row_tiles % i == 0), None)
+        assert cols is not None, f"Cannot find a number of columns that evenly divides into {col_tiles}."
+        assert rows is not None, f"Cannot find a number of rows that evenly divides into {row_tiles}."
+        return cols, rows
+
+    def _higgs_attention_prefill_grid(self):
+        return self.find_prefill_grid(self.prefill_rows, self.dim // ttnn.TILE_SIZE)
+
+    def _higgs_decode_sdpa_grid(self) -> tuple[int, int]:
+        if self.num_devices > 1 and getattr(self.optimizations, "__name__", "") == "performance":
+            return 8, 1
+        return self._higgs_attention_prefill_grid()
+
+    def _higgs_decode_dram_matmul_config(
+        self,
+        *,
+        k: int,
+        n: int,
+        num_cores: int,
+        fused_activation=None,
+    ):
+        return super().dram_matmul_config(
+            m=self.tile_padded_batch_rows,
+            k=k,
+            n=n,
+            num_cores=num_cores,
+            fused_activation=fused_activation,
+        )
+
+    def get_attn_qkv_program_config(self, mode: Mode, seq_len: int = 1, prefetcher=None):
+        if (
+            mode == Mode.DECODE
+            and self.num_devices > 1
+            and getattr(self.optimizations, "__name__", "") == "performance"
+            and prefetcher is None
+        ):
+            return self._higgs_decode_dram_matmul_config(
+                k=self.dim,
+                n=self.qkv_size // self.num_devices,
+                num_cores=self.attn_input_grid.num_cores,
+            )
+
+        if mode != Mode.PREFILL or self.num_devices <= 1:
+            return super().get_attn_qkv_program_config(mode, seq_len, prefetcher)
+
+        grid = self._higgs_attention_prefill_grid()
+        self.MAX_QKV_MM_SEQ_LEN = 2048
+        if seq_len > 128:
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=8,
+                K_block_size=8,
+                N_block_size=8,
+                compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
+            )
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=(
+                7
+                if self.device_name == "P100"
+                else max(1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / ttnn.TILE_SIZE / grid[1]))
+            ),
+            per_core_N=math.ceil(self.qkv_size / self.cluster_shape[1] / ttnn.TILE_SIZE / self.dram_shard_grid_width),
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
+        )
+
+    def get_attn_sdpa_prefill_program_config(self, seq_len: int = 1, chunk_start_idx: int = None):
+        if self.num_devices <= 1:
+            return super().get_attn_sdpa_prefill_program_config(seq_len, chunk_start_idx)
+
+        q_chunk = (
+            256
+            if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+            else (
+                64
+                if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else (
+                    min(256, chunk_start_idx & -chunk_start_idx)
+                    if seq_len >= 2048
+                    else min(64, chunk_start_idx & -chunk_start_idx)
+                )
+            )
+        )
+        k_chunk = (
+            256
+            if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+            else (
+                64
+                if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else (
+                    min(256, chunk_start_idx & -chunk_start_idx)
+                    if seq_len >= 2048
+                    else min(64, chunk_start_idx & -chunk_start_idx)
+                )
+            )
+        )
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self._higgs_attention_prefill_grid(),
+            exp_approx_mode=False,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+        )
+
+    def get_attn_sdpa_decode_program_config(self, prefetcher=None):
+        if self.num_devices <= 1 or prefetcher is not None:
+            return super().get_attn_sdpa_decode_program_config(prefetcher)
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self._higgs_decode_sdpa_grid(),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=0,
+        )
+
+    def get_attn_output_program_config(self, mode: Mode):
+        if (
+            mode == Mode.DECODE
+            and self.num_devices > 1
+            and not self.is_galaxy
+            and getattr(self.optimizations, "__name__", "") == "performance"
+        ):
+            return self._higgs_decode_dram_matmul_config(
+                k=(self.n_heads * self.head_dim) // self.num_devices,
+                n=self.dim,
+                num_cores=self.n_heads // self.num_devices,
+            )
+        return super().get_attn_output_program_config(mode)
+
+    def get_mlp_ff1_3_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher=None):
+        if (
+            mode == Mode.DECODE
+            and self.num_devices > 1
+            and not self.is_galaxy
+            and getattr(self.optimizations, "__name__", "") == "performance"
+            and prefetcher is None
+        ):
+            return self._higgs_decode_dram_matmul_config(
+                k=self.dim,
+                n=self.hidden_dim // self.cluster_shape[1],
+                num_cores=self.mlp_core_grid.num_cores,
+            )
+        return super().get_mlp_ff1_3_prg_config(mode, seq_len, prefetcher)
+
+    def get_mlp_ff1_3_mem_config(self, mode: Mode, prefetcher=None):
+        if (
+            mode == Mode.DECODE
+            and self.num_devices > 1
+            and not self.is_galaxy
+            and getattr(self.optimizations, "__name__", "") == "performance"
+            and prefetcher is None
+        ):
+            return self.get_mlp_binary_mult_mem_config(mode)
+        return super().get_mlp_ff1_3_mem_config(mode, prefetcher)
+
+    def get_mlp_ff2_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher=None):
+        if (
+            mode == Mode.DECODE
+            and self.num_devices > 1
+            and not self.is_galaxy
+            and getattr(self.optimizations, "__name__", "") == "performance"
+            and prefetcher is None
+        ):
+            return self._higgs_decode_dram_matmul_config(
+                k=self.hidden_dim // self.cluster_shape[1],
+                n=self.dim,
+                num_cores=self.mlp2_core_grid.num_cores,
+            )
+        return super().get_mlp_ff2_prg_config(mode, seq_len, prefetcher)
+
+    def get_mlp_ff2_all_reduce_mem_config(self, mode: Mode, tensor: ttnn.Tensor):
+        if (
+            mode == Mode.DECODE
+            and self.num_devices > 1
+            and not self.is_galaxy
+            and getattr(self.optimizations, "__name__", "") == "performance"
+        ):
+            return self.get_mlp_output_mem_config(mode, None)
+        return super().get_mlp_ff2_all_reduce_mem_config(mode, tensor)
+
+    def get_attn_kv_prefill_mem_config(self, seq_len: int = 1):
+        if self.num_devices <= 1:
+            return super().get_attn_kv_prefill_mem_config(seq_len)
+
+        grid = self._higgs_attention_prefill_grid()
+        return ttnn.create_sharded_memory_config(
+            (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (grid[0] * grid[1])), self.head_dim),
+            ttnn.CoreGrid(y=grid[1], x=grid[0]),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
 
     def _set_hf_params(self, checkpoint_dir):
         text_config = self.higgs_config.text_config.to_dict()
@@ -332,9 +615,41 @@ class HiggsDualFFNBlock(LightweightModule):
             raise ValueError("Mixed-prefill mask selection requires the inverse audio token mask.")
         # N300 mixed-prefill width-shards the full-width token mask. `ttnn.where` lowers that path to a broadcasted
         # binary kernel that rejects the current subtile pattern, so keep the selection as a same-shape masked blend.
+        temporary_audio_mask = None
+        temporary_inverse_mask = None
+        if audio_token_mask.shape[-1] != text_tensor.shape[-1]:
+            temporary_audio_mask = ttnn.slice(
+                audio_token_mask,
+                [0, 0, 0, 0],
+                [
+                    audio_token_mask.shape[0],
+                    audio_token_mask.shape[1],
+                    audio_token_mask.shape[2],
+                    text_tensor.shape[-1],
+                ],
+                memory_config=text_tensor.memory_config(),
+            )
+            temporary_inverse_mask = ttnn.slice(
+                inverse_audio_token_mask,
+                [0, 0, 0, 0],
+                [
+                    inverse_audio_token_mask.shape[0],
+                    inverse_audio_token_mask.shape[1],
+                    inverse_audio_token_mask.shape[2],
+                    text_tensor.shape[-1],
+                ],
+                memory_config=text_tensor.memory_config(),
+            )
+            audio_token_mask = temporary_audio_mask
+            inverse_audio_token_mask = temporary_inverse_mask
+
         audio_selected = ttnn.multiply(audio_tensor, audio_token_mask, dtype=ttnn.bfloat16)
         text_selected = ttnn.multiply(text_tensor, inverse_audio_token_mask, dtype=ttnn.bfloat16)
         selected = ttnn.add(text_selected, audio_selected, dtype=ttnn.bfloat16)
+        if temporary_audio_mask is not None:
+            ttnn.deallocate(temporary_audio_mask)
+        if temporary_inverse_mask is not None:
+            ttnn.deallocate(temporary_inverse_mask)
         ttnn.deallocate(audio_selected)
         ttnn.deallocate(text_selected)
         ttnn.deallocate(text_tensor)
@@ -374,9 +689,11 @@ class HiggsDualFFNBlock(LightweightModule):
             attn_out = self.attention.forward(
                 attn_in,
                 current_pos,
-                rot_mats_local
-                if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding)
-                else rot_mats_global,
+                (
+                    rot_mats_local
+                    if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding)
+                    else rot_mats_global
+                ),
                 0,
                 mode,
                 page_table=page_table,
@@ -410,9 +727,11 @@ class HiggsDualFFNBlock(LightweightModule):
                 residual,
                 hidden_states,
                 memory_config=skip_mem_cfg,
-                dtype=self.args.ccl_dtype
-                if TG and not self.args.is_distributed_norm(mode)
-                else activation_dtype or ttnn.bfloat16,
+                dtype=(
+                    self.args.ccl_dtype
+                    if TG and not self.args.is_distributed_norm(mode)
+                    else activation_dtype or ttnn.bfloat16
+                ),
             )
 
         residual = x
@@ -424,9 +743,11 @@ class HiggsDualFFNBlock(LightweightModule):
         attn_out = self.attention.forward(
             attn_in,
             current_pos,
-            rot_mats_local
-            if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding)
-            else rot_mats_global,
+            (
+                rot_mats_local
+                if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding)
+                else rot_mats_global
+            ),
             0,
             mode,
             page_table=page_table,
@@ -436,7 +757,17 @@ class HiggsDualFFNBlock(LightweightModule):
         )
         if attn_out.memory_config() != skip_mem_cfg:
             attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
-        hidden_states = ttnn.add(residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
+        activation_dtype = self.args.decoders_optimizations.get_tensor_dtype(
+            decoder_id=self.layer_num,
+            tensor=TensorGroup.ACTIVATION,
+        )
+        residual_add_dtype = ttnn.bfloat16 if TG else activation_dtype or ttnn.bfloat16
+        hidden_states = ttnn.add(
+            residual,
+            attn_out,
+            memory_config=skip_mem_cfg,
+            dtype=residual_add_dtype,
+        )
         ttnn.deallocate(attn_out)
         residual = hidden_states
         ff_norm_config = self.args.get_norm_config("ff", mode, None)
@@ -444,17 +775,14 @@ class HiggsDualFFNBlock(LightweightModule):
         if TG and mode == Mode.DECODE:
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.args.get_mlp_act_mem_config(mode))
         hidden_states = mlp_module.forward(hidden_states, mode)
-        activation_dtype = self.args.decoders_optimizations.get_tensor_dtype(
-            decoder_id=self.layer_num,
-            tensor=TensorGroup.ACTIVATION,
+        residual_add_dtype = (
+            self.args.ccl_dtype if TG and not self.args.is_distributed_norm(mode) else activation_dtype or ttnn.bfloat16
         )
         out = ttnn.add(
             residual,
             hidden_states,
             memory_config=skip_mem_cfg,
-            dtype=self.args.ccl_dtype
-            if TG and not self.args.is_distributed_norm(mode)
-            else activation_dtype or ttnn.bfloat16,
+            dtype=residual_add_dtype,
         )
         return out
 
@@ -522,9 +850,10 @@ class HiggsAudioTTModel(LightweightModule):
         )
         self.rope_local_setup = None
         self.transformation_mats = self.rope_setup.get_both_trans_mats()
-        self.cached_decode_rot_mats = (
-            (self.rope_setup.get_rot_mats(torch.tensor([0], dtype=torch.int64)), None) if args.use_hf_rope else None
-        )
+        if args.use_hf_rope and args.higgs_legacy_hf_rope_decode:
+            self.cached_decode_rot_mats = ([self.rope_setup.cos_matrix, self.rope_setup.sin_matrix], None)
+        else:
+            self.cached_decode_rot_mats = None
         self.layers = [
             HiggsDualFFNBlock(
                 args=args,
@@ -558,16 +887,18 @@ class HiggsAudioTTModel(LightweightModule):
             tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
-        self.text_head = LMHead(
-            args=args,
-            mesh_device=mesh_device,
-            tt_ccl=self.tt_ccl,
-            dtype=self.head_dtype,
-            state_dict=state_dict,
-            state_dict_prefix="",
-            weight_cache_path=self.weight_cache_path,
-            max_columns_per_device=args.max_columns_per_device_lm_head,
-        )
+        self.text_head = None
+        if not args.higgs_skip_text_head:
+            self.text_head = LMHead(
+                args=args,
+                mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
+                dtype=self.head_dtype,
+                state_dict=state_dict,
+                state_dict_prefix="",
+                weight_cache_path=self.weight_cache_path,
+                max_columns_per_device=args.max_columns_per_device_lm_head,
+            )
         audio_head_args = copy.copy(args)
         audio_head_args.vocab_size = args.audio_vocab_size
         # Keep the auxiliary audio head tile-aligned so LMHead does not create a trailing non-tile shard.
@@ -700,6 +1031,8 @@ class HiggsAudioTTModel(LightweightModule):
         audio_token_mask: Optional[torch.Tensor],
         seq_len: int,
     ) -> tuple[ttnn.Tensor | None, ttnn.Tensor | None]:
+        if audio_token_mask is not None and not bool(audio_token_mask.any()):
+            return None, None
         expanded_mask = self._expand_audio_token_mask(audio_token_mask, seq_len)
         if expanded_mask is None:
             return None, None
@@ -1064,6 +1397,10 @@ class HiggsAudioTTModel(LightweightModule):
     def increment_rot_mat_idx_tensor(self, rot_mat_idxs: ttnn.Tensor):
         ttnn.plus_one(rot_mat_idxs)
 
+    def _increment_rot_mat_idx_tensor_if_used(self, rot_mat_idxs: ttnn.Tensor):
+        if self.cached_decode_rot_mats is None:
+            self.increment_rot_mat_idx_tensor(rot_mat_idxs)
+
     def reset_kv_cache(self):
         for layer in self.layers:
             attention = getattr(layer, "attention", None)
@@ -1174,9 +1511,9 @@ class HiggsAudioTTModel(LightweightModule):
             ),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=self.args.get_model_config()["EMB_WEIGHTS_MEMCFG"],
-            cache_file_name=None
-            if self.args.dummy_weights
-            else self.weight_cache_path / "audio_codebook_embeddings.weight",
+            cache_file_name=(
+                None if self.args.dummy_weights else self.weight_cache_path / "audio_codebook_embeddings.weight"
+            ),
         )
         return self.audio_embedding_tt_weights
 
@@ -1494,6 +1831,81 @@ class HiggsAudioTTModel(LightweightModule):
 
         return tt_num_delay_final, tt_num_remaining_final, tt_finished
 
+    def audio_ttnn_delay_pattern_postprocess_fixed_horizon_inplace(
+        self,
+        tt_raw_audio_tokens: ttnn.Tensor,
+        tt_next_input_tokens: ttnn.Tensor,
+        tt_num_delay: ttnn.Tensor,
+        tt_finished_output: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        constants = self._ensure_audio_delay_postprocess_tensors()
+
+        tt_tokens_rm = ttnn.reshape(tt_raw_audio_tokens, [1, 1, 1, self.audio_num_codebooks])
+        if constants["pad_len"] > 0:
+            tt_tokens_rm = ttnn.pad(tt_tokens_rm, [(0, 0), (0, 0), (0, 0), (0, constants["pad_len"])], value=0)
+
+        tt_active_mask = ttnn.le(constants["codebook_indices"], tt_num_delay)
+        tt_tokens_after_delay = ttnn.where(
+            tt_active_mask,
+            tt_tokens_rm,
+            constants["bos_fill_uint"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(tt_active_mask)
+
+        tt_can_open_more = ttnn.lt(tt_num_delay, constants["last_codebook_idx"])
+        tt_num_delay_inc = ttnn.add(tt_num_delay, constants["one_scalar"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_num_delay_next = ttnn.where(
+            tt_can_open_more,
+            tt_num_delay_inc,
+            tt_num_delay,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(tt_can_open_more)
+        ttnn.deallocate(tt_num_delay_inc)
+
+        tt_next_tokens = ttnn.slice(
+            tt_tokens_after_delay,
+            (0, 0, 0, 0),
+            (1, 1, 1, self.audio_num_codebooks),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_next_tokens = ttnn.to_layout(
+            tt_next_tokens,
+            ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_next_tokens = ttnn.unsqueeze_to_4D(tt_next_tokens)
+        ttnn.copy(tt_next_tokens, tt_next_input_tokens)
+        ttnn.copy(tt_num_delay_next, tt_num_delay)
+        if tt_finished_output is not None and not self.args.higgs_skip_fixed_horizon_finished_copy:
+            ttnn.copy(constants["zero_scalar"], tt_finished_output)
+
+        ttnn.deallocate(tt_tokens_rm)
+        ttnn.deallocate(tt_tokens_after_delay)
+        ttnn.deallocate(tt_next_tokens)
+        ttnn.deallocate(tt_num_delay_next)
+        return tt_finished_output if tt_finished_output is not None else constants["zero_scalar"]
+
+    def audio_ttnn_delay_pattern_postprocess_steady_state_inplace(
+        self,
+        tt_raw_audio_tokens: ttnn.Tensor,
+        tt_next_input_tokens: ttnn.Tensor,
+        tt_finished_output: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        constants = self._ensure_audio_delay_postprocess_tensors()
+
+        # Once all delayed codebooks are open and fixed-horizon decode is in use, the delay pattern reduces to
+        # carrying the freshly sampled raw codebook ids into the next microstep. Keep the shape/layout conversion
+        # needed by the persistent raw-token input buffer, but skip the mask/state update chain.
+        tt_next_tokens = ttnn.reshape(tt_raw_audio_tokens, [1, 1, 1, self.audio_num_codebooks])
+        tt_next_tokens = ttnn.unsqueeze_to_4D(tt_next_tokens)
+        ttnn.copy(tt_next_tokens, tt_next_input_tokens)
+        if tt_finished_output is not None and not self.args.higgs_skip_fixed_horizon_finished_copy:
+            ttnn.copy(constants["zero_scalar"], tt_finished_output)
+        ttnn.deallocate(tt_next_tokens)
+        return tt_finished_output if tt_finished_output is not None else constants["zero_scalar"]
+
     def audio_ttnn_delay_pattern_postprocess_step_inplace(
         self,
         tt_raw_audio_tokens: ttnn.Tensor,
@@ -1502,7 +1914,23 @@ class HiggsAudioTTModel(LightweightModule):
         tt_num_remaining_delays: ttnn.Tensor,
         tt_finished_output: ttnn.Tensor | None = None,
         shift_output_tokens: bool = True,
+        steady_delay_state: bool = False,
     ) -> ttnn.Tensor:
+        if self.args.higgs_fast_fixed_horizon_decode and steady_delay_state and not shift_output_tokens:
+            return self.audio_ttnn_delay_pattern_postprocess_steady_state_inplace(
+                tt_raw_audio_tokens,
+                tt_next_input_tokens,
+                tt_finished_output=tt_finished_output,
+            )
+
+        if self.args.higgs_fast_fixed_horizon_decode and not shift_output_tokens:
+            return self.audio_ttnn_delay_pattern_postprocess_fixed_horizon_inplace(
+                tt_raw_audio_tokens,
+                tt_next_input_tokens,
+                tt_num_delay,
+                tt_finished_output=tt_finished_output,
+            )
+
         tt_num_delay_final, tt_num_remaining_final, tt_finished = self.audio_ttnn_delay_pattern_postprocess_inplace(
             tt_raw_audio_tokens,
             tt_next_input_tokens,
@@ -1541,12 +1969,21 @@ class HiggsAudioTTModel(LightweightModule):
             )
 
         audio_embedding_tt_weights = self._ensure_audio_embedding_tt_weights()
+        audio_token_shape = list(tt_audio_tokens.shape)
+        audio_token_width = audio_token_shape[-1]
+        audio_token_seq_len = math.prod(audio_token_shape[:-1])
+        tt_audio_tokens_flat = ttnn.reshape(tt_audio_tokens, [1, audio_token_seq_len * audio_token_width])
         tt_audio_embeddings = ttnn.embedding(
-            tt_audio_tokens,
+            tt_audio_tokens_flat,
             audio_embedding_tt_weights,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
+        )
+        ttnn.deallocate(tt_audio_tokens_flat)
+        tt_audio_embeddings = ttnn.reshape(
+            tt_audio_embeddings,
+            [1, audio_token_seq_len, audio_token_width, tt_audio_embeddings.shape[-1]],
         )
         if tt_audio_embeddings.shape[-2] != self.audio_num_codebooks:
             tt_audio_embeddings = ttnn.slice(
@@ -1619,6 +2056,8 @@ class HiggsAudioTTModel(LightweightModule):
         tt_x = self.norm(tt_x, mode=Mode.PREFILL, norm_config=self.args.get_norm_config("lm_head", Mode.PREFILL, None))
         if self.args.get_lm_head_input_mem_config(Mode.PREFILL, None).is_sharded():
             tt_x = ttnn.interleaved_to_sharded(tt_x, self.args.get_lm_head_input_mem_config(Mode.PREFILL, None))
+        if self.text_head is None:
+            raise RuntimeError("Text logits were requested, but the text head is disabled in performance mode.")
         return self.text_head(tt_x)
 
     def audio_ttnn_decode_from_token_ids_forward(
@@ -1628,8 +2067,12 @@ class HiggsAudioTTModel(LightweightModule):
         rot_mat_idxs: ttnn.Tensor,
     ):
         audio_embedding_tt_weights = self._ensure_audio_embedding_tt_weights()
+        token_shape = list(tt_audio_tokens.shape)
+        audio_token_width = token_shape[-1]
+        audio_token_seq_len = math.prod(token_shape[:-1])
+        tt_audio_tokens_flat = ttnn.reshape(tt_audio_tokens, [1, audio_token_seq_len * audio_token_width])
         tt_audio_embeddings = ttnn.embedding(
-            tt_audio_tokens,
+            tt_audio_tokens_flat,
             audio_embedding_tt_weights,
             layout=ttnn.TILE_LAYOUT,
             # Higgs only embeds 8 codebooks per decode step, so width-sharded decode residual output does not fit.
@@ -1637,14 +2080,46 @@ class HiggsAudioTTModel(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
         )
-        tt_audio_embeddings = ttnn.unsqueeze_to_4D(tt_audio_embeddings)
+        ttnn.deallocate(tt_audio_tokens_flat)
+        tt_audio_embeddings = ttnn.reshape(
+            tt_audio_embeddings,
+            [1, audio_token_seq_len, audio_token_width, tt_audio_embeddings.shape[-1]],
+        )
         if tt_audio_embeddings.shape[-2] != self.audio_num_codebooks:
             tt_audio_embeddings = ttnn.slice(
                 tt_audio_embeddings,
                 (0, 0, 0, 0),
-                (1, 1, self.audio_num_codebooks, tt_audio_embeddings.shape[-1]),
+                (1, audio_token_seq_len, self.audio_num_codebooks, tt_audio_embeddings.shape[-1]),
             )
-        if self.audio_embed_avg:
+        if self.args.higgs_audio_embedding_add_tree:
+            tt_embedding = ttnn.slice(
+                tt_audio_embeddings,
+                (0, 0, 0, 0),
+                (1, audio_token_seq_len, 1, tt_audio_embeddings.shape[-1]),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for codebook_index in range(1, self.audio_num_codebooks):
+                tt_codebook_embedding = ttnn.slice(
+                    tt_audio_embeddings,
+                    (0, 0, codebook_index, 0),
+                    (1, audio_token_seq_len, codebook_index + 1, tt_audio_embeddings.shape[-1]),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                tt_next_embedding = ttnn.add(
+                    tt_embedding,
+                    tt_codebook_embedding,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat16,
+                )
+                ttnn.deallocate(tt_embedding)
+                ttnn.deallocate(tt_codebook_embedding)
+                tt_embedding = tt_next_embedding
+            tt_embedding = ttnn.to_memory_config(
+                tt_embedding,
+                self.args.get_residual_mem_config(Mode.DECODE, None),
+                dtype=ttnn.bfloat16,
+            )
+        elif self.audio_embed_avg:
             tt_embedding = ttnn.mean(
                 tt_audio_embeddings,
                 dim=2,
@@ -1666,15 +2141,15 @@ class HiggsAudioTTModel(LightweightModule):
         tt_raw_audio_tokens: ttnn.Tensor,
         current_pos_tt: ttnn.Tensor,
         rot_mat_idxs: ttnn.Tensor,
-        shifted_tokens_output: ttnn.Tensor | None = None,
     ):
         tt_audio_tokens = ttnn.add(
             tt_raw_audio_tokens,
             self._ensure_audio_codebook_shift_tt(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_tensor=shifted_tokens_output,
         )
-        return self.audio_ttnn_decode_from_token_ids_forward(tt_audio_tokens, current_pos_tt, rot_mat_idxs)
+        tt_audio_logits = self.audio_ttnn_decode_from_token_ids_forward(tt_audio_tokens, current_pos_tt, rot_mat_idxs)
+        ttnn.deallocate(tt_audio_tokens)
+        return tt_audio_logits
 
     def audio_ttnn_decode_forward(
         self,
@@ -1687,8 +2162,13 @@ class HiggsAudioTTModel(LightweightModule):
             self.args.get_residual_mem_config(Mode.DECODE, None),
             dtype=ttnn.bfloat16,
         )
-        rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
-        rot_mats_local = self.rope_local_setup.get_rot_mats(rot_mat_idxs) if self.rope_local_setup is not None else None
+        if self.cached_decode_rot_mats is not None:
+            rot_mats_global, rot_mats_local = self.cached_decode_rot_mats
+        else:
+            rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
+            rot_mats_local = (
+                self.rope_local_setup.get_rot_mats(rot_mat_idxs) if self.rope_local_setup is not None else None
+            )
         tt_x = self._run_layers(
             tt_embedding,
             current_pos_tt,
@@ -1726,14 +2206,12 @@ class HiggsAudioTTModel(LightweightModule):
         tt_raw_audio_tokens: ttnn.Tensor,
         current_pos_tt: ttnn.Tensor,
         rot_mat_idxs: ttnn.Tensor,
-        shifted_tokens_output: ttnn.Tensor | None = None,
         output_tensor: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         tt_audio_logits = self.audio_ttnn_decode_from_raw_token_ids_forward(
             tt_raw_audio_tokens,
             current_pos_tt,
             rot_mat_idxs,
-            shifted_tokens_output=shifted_tokens_output,
         )
         return self._audio_logits_to_greedy_tokens(tt_audio_logits, output_tensor)
 
@@ -1760,7 +2238,7 @@ class HiggsAudioTTModel(LightweightModule):
         )
         ttnn.deallocate(tt_raw_audio_tokens)
         self.increment_current_pos_tensor(current_pos_tt)
-        self.increment_rot_mat_idx_tensor(rot_mat_idxs)
+        self._increment_rot_mat_idx_tensor_if_used(rot_mat_idxs)
         return tt_finished
 
     def audio_ttnn_decode_microstep_from_raw_token_ids_inplace(
@@ -1771,7 +2249,21 @@ class HiggsAudioTTModel(LightweightModule):
         tt_num_delay: ttnn.Tensor,
         tt_num_remaining_delays: ttnn.Tensor,
         tt_finished_output: ttnn.Tensor | None = None,
+        steady_delay_state: bool = False,
     ) -> ttnn.Tensor:
+        if steady_delay_state and self.args.higgs_steady_argmax_to_input:
+            tt_raw_next_audio_tokens = self.audio_ttnn_decode_greedy_tokens_from_raw_token_ids_forward(
+                tt_raw_audio_tokens,
+                current_pos_tt,
+                rot_mat_idxs,
+                output_tensor=tt_raw_audio_tokens,
+            )
+            self.increment_current_pos_tensor(current_pos_tt)
+            self._increment_rot_mat_idx_tensor_if_used(rot_mat_idxs)
+            if tt_finished_output is not None:
+                return tt_finished_output
+            return self._ensure_audio_delay_postprocess_tensors()["zero_scalar"]
+
         tt_raw_next_audio_tokens = self.audio_ttnn_decode_greedy_tokens_from_raw_token_ids_forward(
             tt_raw_audio_tokens,
             current_pos_tt,
@@ -1784,10 +2276,11 @@ class HiggsAudioTTModel(LightweightModule):
             tt_num_remaining_delays,
             tt_finished_output=tt_finished_output,
             shift_output_tokens=False,
+            steady_delay_state=steady_delay_state,
         )
         ttnn.deallocate(tt_raw_next_audio_tokens)
         self.increment_current_pos_tensor(current_pos_tt)
-        self.increment_rot_mat_idx_tensor(rot_mat_idxs)
+        self._increment_rot_mat_idx_tensor_if_used(rot_mat_idxs)
         return tt_finished
 
     def audio_ttnn_decode_block_from_raw_token_ids_inplace(
@@ -1800,6 +2293,7 @@ class HiggsAudioTTModel(LightweightModule):
         *,
         block_steps: int,
         tt_finished_output: ttnn.Tensor,
+        steady_delay_state: bool = False,
     ) -> ttnn.Tensor:
         if block_steps < 1:
             raise ValueError("block_steps must be >= 1")
@@ -1814,6 +2308,7 @@ class HiggsAudioTTModel(LightweightModule):
                 tt_num_delay,
                 tt_num_remaining_delays,
                 tt_finished_output=tt_finished_output,
+                steady_delay_state=steady_delay_state,
             )
         return tt_finished
 
@@ -1843,8 +2338,16 @@ class HiggsAudioTTModel(LightweightModule):
     def read_audio_decode_output(self, tt_audio_logits: ttnn.Tensor) -> torch.Tensor:
         return self._process_replicated_decode_output(tt_audio_logits, self.args.audio_vocab_size)
 
+    def _logits_to_torch(self, tt_out: ttnn.Tensor) -> torch.Tensor:
+        if self.mesh_device.get_num_devices() > 1:
+            return ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1),
+            ).float()
+        return ttnn.to_torch(tt_out).float()
+
     def _process_replicated_decode_output(self, tt_out: ttnn.Tensor, vocab_size: int) -> torch.Tensor:
-        out = ttnn.to_torch(tt_out).float()
+        out = self._logits_to_torch(tt_out)
         return out[0, 0, 0, :vocab_size]
 
     def _run_layers(
@@ -1867,11 +2370,14 @@ class HiggsAudioTTModel(LightweightModule):
                 tensor=TensorGroup.ACTIVATION,
             )
             if mode == Mode.DECODE and not self.args.is_galaxy:
-                x = ttnn.to_memory_config(
-                    x,
-                    self.args.get_residual_mem_config(mode, None),
-                    activation_dtype,
-                )
+                residual_mem_config = self.args.get_residual_mem_config(mode, None)
+                needs_dtype_cast = activation_dtype is not None and x.dtype != activation_dtype
+                if x.memory_config() != residual_mem_config or needs_dtype_cast:
+                    x = ttnn.to_memory_config(
+                        x,
+                        residual_mem_config,
+                        activation_dtype,
+                    )
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
             x = layer(
@@ -1939,7 +2445,7 @@ class HiggsAudioTTModel(LightweightModule):
             if tt_out is not None:
                 ttnn.deallocate(tt_out)
             return None
-        logits = ttnn.to_torch(tt_out).float()
+        logits = self._logits_to_torch(tt_out)
         last_block_start = (effective_seq_len - 1) // 32 * 32
         return logits[0, 0, effective_seq_len - 1 - last_block_start, : self.args.vocab_size]
 
@@ -1970,14 +2476,19 @@ class HiggsAudioTTModel(LightweightModule):
         audio_logits = None
         if is_audio_token:
             if return_text_logits:
+                if self.text_head is None:
+                    raise RuntimeError("Text logits were requested, but the text head is disabled in performance mode.")
                 # LMHead deallocates its input tensor, so dual-head decode needs a second view before text logits.
                 tt_x_for_text = ttnn.clone(tt_x, memory_config=tt_x.memory_config())
-                text_logits = self._process_replicated_decode_output(
-                    self.text_head(tt_x_for_text), self.args.vocab_size
-                )
-            audio_logits = self._process_replicated_decode_output(self.audio_head(tt_x), self.args.audio_vocab_size)
+                tt_text_logits = self.text_head(tt_x_for_text)
+                text_logits = self._process_replicated_decode_output(tt_text_logits, self.args.vocab_size)
+            tt_audio_logits = self.audio_head(tt_x)
+            audio_logits = self._process_replicated_decode_output(tt_audio_logits, self.args.audio_vocab_size)
         elif return_text_logits:
-            text_logits = self._process_replicated_decode_output(self.text_head(tt_x), self.args.vocab_size)
+            if self.text_head is None:
+                raise RuntimeError("Text logits were requested, but the text head is disabled in performance mode.")
+            tt_text_logits = self.text_head(tt_x)
+            text_logits = self._process_replicated_decode_output(tt_text_logits, self.args.vocab_size)
         else:
             ttnn.deallocate(tt_x)
         return text_logits, audio_logits
