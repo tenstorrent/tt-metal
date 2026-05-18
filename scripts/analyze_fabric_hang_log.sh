@@ -43,7 +43,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|FIX AA|FIX AB|FIX AB extension|FIX AC|FIX AD|FIX AE|FIX AF|FIX AH|FIX AI|FIX AI-2|FIX AJ|FIX AK|FIX AK-2|FIX AL|FIX AM|FIX AN|FIX AO|FIX AP|FIX AQ|FIX AR|FIX AR2|FIX AS|FIX AT|FIX AU|FIX AU-2|FIX AV|FIX AW|FIX AX|FIX AX-2|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX BD|FIX BE|FIX BE2|FIX BF|FIX BG|FIX BH|FIX BO|FIX BP|FIX BQ|FIX BR|FIX BT|FIX BU|FIX BW|FIX BX|FIX CD|FIX D2|FIX DJ|FIX DK|FIX DK-1|FIX DK-2|FIX DL|FIX DM|FIX DT-1|FIX E2|FIX E3|FIX EXT|FIX EXT2|FIX F2|FIX F5|FIX GS|FIX HS1|FIX HS2|FIX I2|FIX J2|FIX M2|FIX NS|FIX NT|FIX NU|FIX NV|FIX NW|FIX NX|FIX NY|FIX NZ|FIX P2|FIX PA|FIX PB|FIX PC|FIX PD|FIX PE|FIX PF|FIX PG|FIX PL|FIX PY|FIX QB|FIX QC|FIX QD|FIX QE|FIX QS|FIX QU|FIX QV|FIX QW|FIX RM|FIX RP|FIX RR|FIX RS|FIX RX|FIX RZ|FIX RZ2|FIX RZ3|FIX RZ4|FIX SA|FIX SB|FIX SB2|FIX SB2-R|FIX SC|FIX SC-ADDR|FIX ST|FIX TB|FIX TE|FIX TF|FIX TG|FIX TG2|FIX TH|FIX TH2|FIX TH3|FIX TI|FIX TJ|FIX TK|FIX TL|FIX TM|FIX TN|FIX TV|FIX TW|FIX UP2|FIX XX|FIX XY-2|FIX XZ|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|relay_broken cleared|relay path restored|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|FIX TN|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear|all_gather.*barrier|ENTERING.*barrier|EXITED.*barrier|topology damaged|topology recovered|topology still degraded|fabric_telemetry_dump|fabric_baseline_compare|rr_recovered|PCIe-direct soft reset|FIX BH|FIX BO|FIX BP|FIX CG|FIX CL|FIX CL-2|FIX DN|FIX DP|FIX DV|FIX EA|FIX EG|FIX GH|FIX GI|FIX GJ|FIX HX|FIX IJ|FIX KL|FIX MN|FIX DU|FIX DY|FIX EE|FIX EF|FIX S9|FIX SC2|FIX MM|FIX NO|FIX NP|FIX OP|FIX OP SA|FIX QR|FIX UP-2|FIX TL-2|FIX SA-ESC|FIX SA-GV|Strategy 11|STRATEGY7|STRATEGY3|handshake_bypass|readback MISMATCH|readback verified|dispatch init.*eligible|dispatch init.*skipped|pre-zero|pre-restore|poll entry|configure_fabric_cores SUMMARY|assert.*deassert window|quiesce poll|timeout snapshot|Strategy A|go_msg.*readback|0xDEADB07E|0xdeadb07e)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|FIX AA|FIX AB|FIX AB extension|FIX AC|FIX AD|FIX AE|FIX AF|FIX AH|FIX AI|FIX AI-2|FIX AJ|FIX AK|FIX AK-2|FIX AL|FIX AM|FIX AN|FIX AO|FIX AP|FIX AQ|FIX AR|FIX AR2|FIX AS|FIX AT|FIX AU|FIX AU-2|FIX AV|FIX AW|FIX AX|FIX AX-2|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX BD|FIX BE|FIX BE2|FIX BF|FIX BG|FIX BH|FIX BO|FIX BP|FIX BQ|FIX BR|FIX BT|FIX BU|FIX BW|FIX BX|FIX CD|FIX D2|FIX DJ|FIX DK|FIX DK-1|FIX DK-2|FIX DL|FIX DM|FIX DT-1|FIX E2|FIX E3|FIX EXT|FIX EXT2|FIX F2|FIX F5|FIX GS|FIX HS1|FIX HS2|FIX I2|FIX J2|FIX M2|FIX NS|FIX NT|FIX NU|FIX NV|FIX NW|FIX NX|FIX NY|FIX NZ|FIX P2|FIX PA|FIX PB|FIX PC|FIX PD|FIX PE|FIX PF|FIX PG|FIX PL|FIX PY|FIX QB|FIX QC|FIX QD|FIX QE|FIX QS|FIX QU|FIX QV|FIX QW|FIX RM|FIX RP|FIX RR|FIX RS|FIX RX|FIX RZ|FIX RZ2|FIX RZ3|FIX RZ4|FIX SA|FIX SB|FIX SB2|FIX SB2-R|FIX SC|FIX SC-ADDR|FIX ST|FIX TB|FIX TE|FIX TF|FIX TG|FIX TG2|FIX TH|FIX TH2|FIX TH3|FIX TI|FIX TJ|FIX TK|FIX TL|FIX TM|FIX TN|FIX TV|FIX TW|FIX UP2|FIX XX|FIX XY-2|FIX XZ|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|relay_broken cleared|relay path restored|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|FIX TN|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear|all_gather.*barrier|ENTERING.*barrier|EXITED.*barrier|topology damaged|topology recovered|topology still degraded|fabric_telemetry_dump|fabric_baseline_compare|rr_recovered|PCIe-direct soft reset|FIX BH|FIX BO|FIX BP|FIX CG|FIX CL|FIX CL-2|FIX DN|FIX DP|FIX DV|FIX EA|FIX EG|FIX GH|FIX GI|FIX GJ|FIX HX|FIX IJ|FIX KL|FIX MN|FIX DU|FIX DY|FIX EE|FIX EF|FIX S9|FIX SC2|FIX MM|FIX NO|FIX NP|FIX OP|FIX OP SA|FIX QR|FIX UP-2|FIX TL-2|FIX SA-A|FIX SA-B|FIX SA-S|FIX SA-ESC|FIX SA-GV|FIX S8|FIX QQ|FIX QR-S9|fw_ready|boot_fence|stagger|session_id|0xD0DEAD09|0xFEED1AB5|deferred_deassert|Strategy 11|STRATEGY7|STRATEGY3|handshake_bypass|readback MISMATCH|readback verified|dispatch init.*eligible|dispatch init.*skipped|pre-zero|pre-restore|poll entry|configure_fabric_cores SUMMARY|assert.*deassert window|quiesce poll|timeout snapshot|Strategy A|go_msg.*readback|0xDEADB07E|0xdeadb07e)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -112,7 +112,7 @@ echo ""
 
 # ─── PHASES ───
 echo "=== PHASES ==="
-grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AA|FIX AB|FIX AB extension|FIX AC|FIX AD|FIX AE|FIX AF|FIX AH|FIX AI|FIX AI-2|FIX AJ|FIX AK|FIX AK-2|FIX AL|FIX AM|FIX AN|FIX AO|FIX AP|FIX AQ|FIX AR|FIX AR2|FIX AS|FIX AT|FIX AU|FIX AU-2|FIX AV|FIX AW|FIX AX|FIX AX-2|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX BD|FIX BE|FIX BE2|FIX BF|FIX BG|FIX BH|FIX BO|FIX BP|FIX BQ|FIX BR|FIX BT|FIX BU|FIX BW|FIX BX|FIX CD|FIX D2|FIX DJ|FIX DK|FIX DK-1|FIX DK-2|FIX DL|FIX DM|FIX DT-1|FIX E2|FIX E3|FIX EXT|FIX EXT2|FIX F2|FIX F5|FIX GS|FIX HS1|FIX HS2|FIX I2|FIX J2|FIX M2|FIX NS|FIX NT|FIX NU|FIX NV|FIX NW|FIX NX|FIX NY|FIX NZ|FIX P2|FIX PA|FIX PB|FIX PC|FIX PD|FIX PE|FIX PF|FIX PG|FIX PL|FIX PY|FIX QB|FIX QC|FIX QD|FIX QE|FIX QS|FIX QU|FIX QV|FIX QW|FIX RM|FIX RP|FIX RR|FIX RS|FIX RX|FIX RZ|FIX RZ2|FIX RZ3|FIX RZ4|FIX SA|FIX SB|FIX SB2|FIX SB2-R|FIX SC|FIX SC-ADDR|FIX ST|FIX TB|FIX TE|FIX TF|FIX TG|FIX TG2|FIX TH|FIX TH2|FIX TH3|FIX TI|FIX TJ|FIX TK|FIX TL|FIX TM|FIX TN|FIX TV|FIX TW|FIX UP2|FIX XX|FIX XY-2|FIX XZ|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|relay_broken cleared|relay path restored|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|FIX TN|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear|all_gather.*barrier|ENTERING.*barrier|EXITED.*barrier|topology damaged|topology recovered|topology still degraded|rr_recovered|PCIe-direct soft reset|FIX BH|FIX BO|FIX BP|FIX CG|FIX CL|FIX CL-2|FIX DN|FIX DP|FIX DV|FIX EA|FIX EG|FIX GH|FIX GI|FIX GJ|FIX HX|FIX IJ|FIX KL|FIX MN|FIX DU|FIX DY|FIX EE|FIX EF|FIX MM|FIX NO|FIX NP|FIX S9|FIX SC2|FIX OP SA|FIX SA-ESC|FIX SA-GV|Strategy 11|STRATEGY7|STRATEGY3|handshake_bypass|readback MISMATCH|readback verified|dispatch init.*eligible|dispatch init.*skipped|pre-zero|pre-restore|poll entry|configure_fabric_cores SUMMARY|timeout snapshot|Strategy A|go_msg.*readback|0xDEADB07E|0xdeadb07e' "$CLEAN" | \
+grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AA|FIX AB|FIX AB extension|FIX AC|FIX AD|FIX AE|FIX AF|FIX AH|FIX AI|FIX AI-2|FIX AJ|FIX AK|FIX AK-2|FIX AL|FIX AM|FIX AN|FIX AO|FIX AP|FIX AQ|FIX AR|FIX AR2|FIX AS|FIX AT|FIX AU|FIX AU-2|FIX AV|FIX AW|FIX AX|FIX AX-2|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX BD|FIX BE|FIX BE2|FIX BF|FIX BG|FIX BH|FIX BO|FIX BP|FIX BQ|FIX BR|FIX BT|FIX BU|FIX BW|FIX BX|FIX CD|FIX D2|FIX DJ|FIX DK|FIX DK-1|FIX DK-2|FIX DL|FIX DM|FIX DT-1|FIX E2|FIX E3|FIX EXT|FIX EXT2|FIX F2|FIX F5|FIX GS|FIX HS1|FIX HS2|FIX I2|FIX J2|FIX M2|FIX NS|FIX NT|FIX NU|FIX NV|FIX NW|FIX NX|FIX NY|FIX NZ|FIX P2|FIX PA|FIX PB|FIX PC|FIX PD|FIX PE|FIX PF|FIX PG|FIX PL|FIX PY|FIX QB|FIX QC|FIX QD|FIX QE|FIX QS|FIX QU|FIX QV|FIX QW|FIX RM|FIX RP|FIX RR|FIX RS|FIX RX|FIX RZ|FIX RZ2|FIX RZ3|FIX RZ4|FIX SA|FIX SB|FIX SB2|FIX SB2-R|FIX SC|FIX SC-ADDR|FIX ST|FIX TB|FIX TE|FIX TF|FIX TG|FIX TG2|FIX TH|FIX TH2|FIX TH3|FIX TI|FIX TJ|FIX TK|FIX TL|FIX TM|FIX TN|FIX TV|FIX TW|FIX UP2|FIX XX|FIX XY-2|FIX XZ|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|relay_broken cleared|relay path restored|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|FIX TN|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear|all_gather.*barrier|ENTERING.*barrier|EXITED.*barrier|topology damaged|topology recovered|topology still degraded|rr_recovered|PCIe-direct soft reset|FIX BH|FIX BO|FIX BP|FIX CG|FIX CL|FIX CL-2|FIX DN|FIX DP|FIX DV|FIX EA|FIX EG|FIX GH|FIX GI|FIX GJ|FIX HX|FIX IJ|FIX KL|FIX MN|FIX DU|FIX DY|FIX EE|FIX EF|FIX MM|FIX NO|FIX NP|FIX S9|FIX SC2|FIX OP SA|FIX SA-A|FIX SA-B|FIX SA-S|FIX SA-ESC|FIX SA-GV|FIX S8|FIX QQ|FIX QR-S9|fw_ready|boot_fence|stagger|session_id|0xD0DEAD09|0xFEED1AB5|deferred_deassert|Strategy 11|STRATEGY7|STRATEGY3|handshake_bypass|readback MISMATCH|readback verified|dispatch init.*eligible|dispatch init.*skipped|pre-zero|pre-restore|poll entry|configure_fabric_cores SUMMARY|timeout snapshot|Strategy A|go_msg.*readback|0xDEADB07E|0xdeadb07e' "$CLEAN" | \
 grep -iE '(info|warning|error).*(Metal|Test|Always|Fabric)' | \
 python3 -c "
 import sys, re, signal
@@ -1245,6 +1245,26 @@ FIX_NO_MISMATCH=$(grep -cE 'FIX NO.*readback MISMATCH' "$CLEAN" 2>/dev/null; :)
 # FIX NP (#42429): actual edm_status snapshot at FIX EF / FIX QR timeout.
 FIX_NP_EF_FIRES=$(grep -cE 'FIX NP.*timeout snapshot' "$CLEAN" 2>/dev/null | grep -cE 'FIX EF' 2>/dev/null; :)
 FIX_NP_QR_FIRES=$(grep -cE 'FIX NP.*timeout snapshot' "$CLEAN" 2>/dev/null | grep -cE 'FIX QR' 2>/dev/null; :)
+# FIX SA-A (#42429): Firmware-Side Ready Gate — ERISC writes FW_READY_VALUE (0xFEED1AB5).
+# Log: "FIX SA-A (#42429): Device N chan=N ERISC signaled FW_READY after Nms"
+FIX_SA_A_OK=$(grep -cE 'FIX SA-A.*signaled FW_READY' "$CLEAN" 2>/dev/null; :)
+FIX_SA_A_TIMEOUT=$(grep -cE 'FIX SA-A.*did not signal FW_READY' "$CLEAN" 2>/dev/null; :)
+FIX_SA_A_MAX_MS=$(grep -oP 'FIX SA-A.*signaled FW_READY after \K[0-9]+' "$CLEAN" 2>/dev/null | sort -rn | head -1)
+# FIX SA-B (#42429): Unified Channel Recovery — pre-dead MMIO channel deferred to FIX SA.
+FIX_SA_B_FIRES=$(grep -cE 'FIX SA-B.*pre-dead MMIO channel' "$CLEAN" 2>/dev/null; :)
+# FIX SA-S (#42429): Stagger MMIO deasserts by chip_id * 100ms.
+FIX_SA_S_FIRES=$(grep -cE 'FIX SA-S.*stagger' "$CLEAN" 2>/dev/null; :)
+FIX_SA_S_MAX_MS=$(grep -oP 'FIX SA-S.*actual \K[0-9]+' "$CLEAN" 2>/dev/null | sort -rn | head -1)
+# FIX S8 (#42429): Boot fence write + readback verify.
+FIX_S8_OK=$(grep -cE 'FIX S8.*boot_fence.*readback verified\|FIX S8.*firmware will proceed past boot fence' "$CLEAN" 2>/dev/null; :)
+FIX_S8_MISMATCH=$(grep -cE 'FIX S8.*boot_fence readback MISMATCH' "$CLEAN" 2>/dev/null; :)
+# FIX S9 (#42429): Session ID write + readback verify.
+FIX_S9_SID_OK=$(grep -cE 'FIX S9.*session_id=.*firmware will use this session tag' "$CLEAN" 2>/dev/null; :)
+FIX_S9_SID_MISMATCH=$(grep -cE 'FIX S9.*session_id readback MISMATCH' "$CLEAN" 2>/dev/null; :)
+# FIX QQ (#42429): SA-A timeout snapshot — actual fw_ready value at timeout.
+FIX_QQ_FIRES=$(grep -cE 'FIX QQ.*timeout snapshot' "$CLEAN" 2>/dev/null; :)
+FIX_QQ_DORMANT=$(grep -cE 'FIX QQ.*actual fw_ready=0xd0dead09' "$CLEAN" 2>/dev/null; :)
+FIX_QQ_ZERO=$(grep -cE 'FIX QQ.*actual fw_ready=0x00000000' "$CLEAN" 2>/dev/null; :)
 # STRATEGY3 (#42429): stagger handshake entry.
 STRATEGY3_FIRES=$(grep -cE 'STRATEGY3.*stagger|HANDSHAKE_READY' "$CLEAN" 2>/dev/null; :)
 # 0xDEADB07E: base-UMD stuck at host-pre-launch canary (fw_launch_addr not restored).
@@ -2181,6 +2201,19 @@ echo "  FIX_SA_STRATA_COMPLETE:    ${FIX_SA_STRATA_COMPLETE:-0}  (Strategy A blo
 echo "  FIX_SA_ESC_FIRES:          ${FIX_SA_ESC_FIRES:-0}  (*** Strategy A DU timeout → relay_broken ***)"
 echo "  FIX_SA_GV_OK:              ${FIX_SA_GV_OK:-0}  (go_msg readback verified)"
 echo "  FIX_SA_GV_MISMATCH:        ${FIX_SA_GV_MISMATCH:-0}  (*** go_msg readback MISMATCH ***)"
+echo "  FIX_SA_A_OK:               ${FIX_SA_A_OK:-0}  (FW_READY gate passed)"
+echo "  FIX_SA_A_TIMEOUT:          ${FIX_SA_A_TIMEOUT:-0}  (*** FW_READY gate TIMEOUT — channel marked dead ***)"
+echo "  FIX_SA_A_MAX_MS:           ${FIX_SA_A_MAX_MS:-n/a}ms  (longest FW_READY wait)"
+echo "  FIX_SA_B_FIRES:            ${FIX_SA_B_FIRES:-0}  (pre-dead MMIO channels unified into Strategy A)"
+echo "  FIX_SA_S_FIRES:            ${FIX_SA_S_FIRES:-0}  (stagger delays applied)"
+echo "  FIX_SA_S_MAX_MS:           ${FIX_SA_S_MAX_MS:-n/a}ms  (longest stagger actual)"
+echo "  FIX_S8_OK:                 ${FIX_S8_OK:-0}  (boot fence written + verified)"
+echo "  FIX_S8_MISMATCH:           ${FIX_S8_MISMATCH:-0}  (*** boot fence readback MISMATCH ***)"
+echo "  FIX_S9_SID_OK:             ${FIX_S9_SID_OK:-0}  (session_id written + verified)"
+echo "  FIX_S9_SID_MISMATCH:       ${FIX_S9_SID_MISMATCH:-0}  (*** session_id readback MISMATCH ***)"
+echo "  FIX_QQ_FIRES:              ${FIX_QQ_FIRES:-0}  (SA-A timeout snapshots captured)"
+echo "  FIX_QQ_DORMANT:            ${FIX_QQ_DORMANT:-0}  (fw_ready=0xD0DEAD09 = session_id dormant)"
+echo "  FIX_QQ_ZERO:               ${FIX_QQ_ZERO:-0}  (fw_ready=0x00000000 = ERISC never reached init)"
 echo "  FIX_QR_FIRES:              ${FIX_QR_FIRES:-0}  (quiesce MMIO relay ERISCs exited 0xDEADB07E)"
 echo "  FIX_QR_TIMEOUT:            ${FIX_QR_TIMEOUT:-0}  (*** quiesce MMIO relay ERISC stuck at 0xDEADB07E ***)"
 echo "  DEADB07E_COUNT:            ${DEADB07E_COUNT:-0}  (0xDEADB07E host-pre-launch canary — fw_launch_addr not restored)"
@@ -2429,6 +2462,34 @@ if [ "${FIX_SA_GV_MISMATCH:-0}" -gt 0 ]; then
     echo "  => [FIX SA-GV] *** ${FIX_SA_GV_MISMATCH} go_msg readback MISMATCH(es) in Strategy A ***"
     echo "     go_msg write to L1 failed verification. ERISC will not launch fabric firmware."
     echo "     Check PCIe path integrity to this MMIO device."
+fi
+if [ "${FIX_SA_A_OK:-0}" -gt 0 ] || [ "${FIX_SA_A_TIMEOUT:-0}" -gt 0 ]; then
+    echo "  => [FIX SA-A] FW_READY gate: ${FIX_SA_A_OK:-0} ok, ${FIX_SA_A_TIMEOUT:-0} timeout(s)."
+    echo "     Longest FW_READY wait: ${FIX_SA_A_MAX_MS:-?}ms. Typical: 0-50ms."
+    if [ "${FIX_SA_A_TIMEOUT:-0}" -gt 0 ]; then
+        echo "     *** TIMEOUT = ERISC stuck in ROM or crashed before init. Channel marked dead. ***"
+        if [ "${FIX_QQ_DORMANT:-0}" -gt 0 ]; then
+            echo "     FIX QQ: ${FIX_QQ_DORMANT} timeout(s) had fw_ready=0xD0DEAD09 = session_id=0 dormant."
+        fi
+        if [ "${FIX_QQ_ZERO:-0}" -gt 0 ]; then
+            echo "     FIX QQ: ${FIX_QQ_ZERO} timeout(s) had fw_ready=0x00000000 = ERISC never reached init."
+        fi
+    fi
+fi
+if [ "${FIX_SA_B_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX SA-B] ${FIX_SA_B_FIRES} pre-dead MMIO channel(s) unified into Strategy A deferred path."
+fi
+if [ "${FIX_SA_S_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX SA-S] Stagger fired ${FIX_SA_S_FIRES} time(s). Longest actual: ${FIX_SA_S_MAX_MS:-?}ms."
+fi
+if [ "${FIX_S8_OK:-0}" -gt 0 ] || [ "${FIX_S8_MISMATCH:-0}" -gt 0 ]; then
+    echo "  => [FIX S8] Boot fence: ${FIX_S8_OK:-0} ok, ${FIX_S8_MISMATCH:-0} mismatch(es)."
+    if [ "${FIX_S8_MISMATCH:-0}" -gt 0 ]; then
+        echo "     *** MISMATCH = ERISC stuck at boot fence spin forever. PCIe write failed. ***"
+    fi
+fi
+if [ "${FIX_S9_SID_OK:-0}" -gt 0 ] || [ "${FIX_S9_SID_MISMATCH:-0}" -gt 0 ]; then
+    echo "  => [FIX S9 session_id] ${FIX_S9_SID_OK:-0} ok, ${FIX_S9_SID_MISMATCH:-0} mismatch(es)."
 fi
 if [ "${FIX_QR_TIMEOUT:-0}" -gt 0 ]; then
     echo "  => [FIX QR] *** ${FIX_QR_TIMEOUT} quiesce MMIO relay ERISC(s) stuck at 0xDEADB07E ***"
