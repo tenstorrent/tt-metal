@@ -10,10 +10,14 @@ from loguru import logger
 
 import ttnn
 from models.tt_dit.pipelines.ltx.pipeline_ltx_av import LTXAVPipeline
-from models.tt_dit.utils.test import line_params, ring_params
-
-# Match run_ltx_pro.py / test_pipeline_av_22b: pytest default l1_small_size is 0.
-wh_lb_params = {**line_params, "l1_small_size": 16384}
+from models.tt_dit.utils.test import (
+    bh_lb_2x4_id,
+    bh_lb_2x4_params,
+    ring_params,
+    skip_ltx_mesh_config_unless_matching_arch,
+    wh_lb_2x4_id,
+    wh_lb_2x4_params,
+)
 
 
 def _default_checkpoint() -> str | None:
@@ -31,17 +35,30 @@ def _default_gemma() -> str | None:
     return candidates[0].rstrip("/") if candidates else None
 
 
+def _no_prompt_param() -> bool:
+    """One-shot generation by default so pytest does not block on ``input()`` or hit 300s timeout.
+
+    - ``NO_PROMPT=1`` / ``0``: force non-interactive / interactive.
+    - ``INTERACTIVE_LTX_AV=1``: prompt loop (TTY); use when running this test manually.
+    """
+    env = os.environ.get("NO_PROMPT")
+    if env is not None:
+        return {"1": True, "0": False}.get(env, False)
+    if os.environ.get("INTERACTIVE_LTX_AV", "").lower() in ("1", "true", "yes"):
+        return False
+    return True
+
+
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize("no_prompt", [_no_prompt_param()])
 @pytest.mark.parametrize(
-    "no_prompt",
-    [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
-)
-@pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, mesh_config_id",
     [
-        [(2, 4), (2, 4), 0, 1, 2, wh_lb_params, ttnn.Topology.Linear],
-        [(4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring],
+        [*wh_lb_2x4_params, wh_lb_2x4_id],
+        [*bh_lb_2x4_params, bh_lb_2x4_id],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False, "bh_glx_4x8sp1tp0"],
     ],
-    ids=["wh_lb_2x4sp0tp1", "bh_glx_4x8sp1tp0"],
+    ids=[wh_lb_2x4_id, bh_lb_2x4_id, "bh_glx_4x8sp1tp0"],
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_av_pro(
@@ -50,10 +67,14 @@ def test_pipeline_av_pro(
     sp_axis,
     tp_axis,
     num_links,
+    dynamic_load,
     topology,
+    is_fsdp,
+    mesh_config_id,
     no_prompt,
 ):
     """Full LTX-2.3 Pro AV pipeline (one-stage, CFG+STG+modality guidance)."""
+    skip_ltx_mesh_config_unless_matching_arch(mesh_config_id)
     ckpt = _default_checkpoint()
     gemma = _default_gemma()
     if ckpt is None:
@@ -69,23 +90,14 @@ def test_pipeline_av_pro(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         num_links=num_links,
+        dynamic_load=dynamic_load,
         topology=topology,
+        is_fsdp=is_fsdp,
     )
 
     prompt = os.environ.get(
         "PROMPT",
-        (
-            "Medium shot in a quiet sunlit parlor: an orange tabby cat sits on a piano bench with "
-            "its front paws on the white keys, pressing them in a slow, uneven rhythm while dust "
-            "motes hang in a bright shaft of late-morning sunlight. Warm natural light rakes across "
-            "honey-toned floorboards and the lacquered piano lid; shallow depth of field keeps the "
-            "cat's whiskers and fur sharp as the far wall softens into a gentle blur. The camera "
-            "slowly dollies in toward the keyboard as the cat shifts its weight and lifts one paw "
-            "to swipe another cluster of keys, ears swiveling toward the bright plink of each note. "
-            "Audio: close, dry piano taps and short resonant chords, a faint bench creak, and soft "
-            "room tone with no speech—just the small acoustic of a single sunlit room for a brief "
-            "five-second moment."
-        ),
+        ("a cat playing piano"),
     )
     num_frames = int(os.environ.get("NUM_FRAMES", "121"))
     height = int(os.environ.get("HEIGHT", "512"))
@@ -101,17 +113,30 @@ def test_pipeline_av_pro(
             logger.info(f"Skipping generation on rank {ttnn.distributed_context_get_rank()}")
             return
 
-        pipeline.generate(
-            prompt,
-            output_path=output_filename,
-            checkpoint_path=ckpt,
-            gemma_path=gemma,
-            num_frames=num_frames,
-            height=height,
-            width=width,
-            num_inference_steps=num_steps,
-            seed=seed,
-        )
+        gen_kwargs = {
+            "output_path": output_filename,
+            "checkpoint_path": ckpt,
+            "gemma_path": gemma,
+            "num_frames": num_frames,
+            "height": height,
+            "width": width,
+            "num_inference_steps": num_steps,
+            "seed": seed,
+        }
+        for env_name, kw in (
+            ("VIDEO_CFG_SCALE", "video_cfg_scale"),
+            ("AUDIO_CFG_SCALE", "audio_cfg_scale"),
+            ("VIDEO_STG_SCALE", "video_stg_scale"),
+            ("AUDIO_STG_SCALE", "audio_stg_scale"),
+            ("VIDEO_MODALITY_SCALE", "video_modality_scale"),
+            ("AUDIO_MODALITY_SCALE", "audio_modality_scale"),
+            ("RESCALE_SCALE", "rescale_scale"),
+            ("GE_GAMMA", "ge_gamma"),
+        ):
+            if os.environ.get(env_name) is not None:
+                gen_kwargs[kw] = float(os.environ[env_name])
+
+        pipeline.generate(prompt, **gen_kwargs)
         logger.info(f"Saved video to: {output_filename}")
 
     if no_prompt:

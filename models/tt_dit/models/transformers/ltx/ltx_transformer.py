@@ -267,6 +267,7 @@ class LTXTransformerBlock(Module):
         skip_self_attn: bool = False,
         audio_attn_mask: ttnn.Tensor | None = None,
         audio_padding_mask: ttnn.Tensor | None = None,
+        audio_padding_mask_full: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         # === VIDEO MODULATION ===
         shifted_v = self.scale_shift_table.data + video_temb
@@ -364,6 +365,10 @@ class LTXTransformerBlock(Module):
             audio_ca_out = self.audio_attn2(spatial_1BND=audio_ca_input, N=audio_N, prompt_1BLP=audio_prompt)
             audio_1BND = audio_1BND + audio_ca_out
 
+        # Drop SP padding tokens before cross-modal attention (reference: padded slots are inert).
+        if audio_padding_mask is not None:
+            audio_1BND = ttnn.multiply(audio_1BND, audio_padding_mask)
+
         # === BIDIRECTIONAL A↔V CROSS-ATTENTION ===
         if not skip_cross_attn:
             shifted_av = self.scale_shift_table_a2v_ca_video.data + av_ca_temb
@@ -388,8 +393,9 @@ class LTXTransformerBlock(Module):
                     audio_kv_a2v, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
                 )
             # Zero out padded audio tokens so they contribute nothing to A→V cross-attention.
-            if audio_padding_mask is not None:
-                audio_kv_a2v = ttnn.multiply(audio_kv_a2v, audio_padding_mask)
+            pad_mask_a2v = audio_padding_mask_full if audio_padding_mask_full is not None else audio_padding_mask
+            if pad_mask_a2v is not None:
+                audio_kv_a2v = ttnn.multiply(audio_kv_a2v, pad_mask_a2v)
             if self.parallel_config.tensor_parallel.factor > 1:
                 audio_kv_a2v = self.ccl_manager.all_gather_persistent_buffer(
                     audio_kv_a2v, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
@@ -703,6 +709,7 @@ class LTXTransformerModel(Module):
         skip_self_attn_blocks: list[int] | None = None,
         audio_attn_mask: ttnn.Tensor | None = None,
         audio_padding_mask: ttnn.Tensor | None = None,
+        audio_padding_mask_full: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run one denoising step on device. Returns video output, or (video, audio) tuple."""
         from ....utils.tensor import bf16_tensor, float32_tensor
@@ -858,6 +865,7 @@ class LTXTransformerModel(Module):
                 skip_self_attn=skip_self_attn_blocks is not None and block_idx in skip_self_attn_blocks,
                 audio_attn_mask=audio_attn_mask,
                 audio_padding_mask=audio_padding_mask,
+                audio_padding_mask_full=audio_padding_mask_full,
             )
             if self.has_audio:
                 video_1BND, audio_1BND = result

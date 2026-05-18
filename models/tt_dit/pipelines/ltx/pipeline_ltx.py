@@ -225,7 +225,8 @@ class LTXPipeline:
                 "sp_axis": 1,
                 "tp_axis": 0,
                 "num_links": 2,
-                "dynamic_load": False,
+                # Match Wan BH 2x4: avoid holding DiT+VAE in DRAM at once on LB.
+                "dynamic_load": True,
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
             }
@@ -1200,21 +1201,89 @@ class LTXPipeline:
             bf16_tensor_2dshard(a_sin, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1}),
         )
 
+    @staticmethod
+    def _zero_audio_padding(t: torch.Tensor, audio_N_real: int) -> torch.Tensor:
+        """Zero SP-padded audio token slots so they do not affect guidance or GE."""
+        if t.shape[1] <= audio_N_real:
+            return t
+        out = t.clone()
+        out[:, audio_N_real:, :] = 0.0
+        return out
+
+    @staticmethod
+    def _apply_modal_guidance(
+        den: torch.Tensor,
+        unc,
+        ptb,
+        iso,
+        *,
+        cfg_scale: float,
+        stg_scale: float,
+        modality_scale: float,
+        rescale_scale: float,
+        do_cfg: bool,
+        do_stg: bool,
+        do_mod: bool,
+        real_token_count: int | None = None,
+    ) -> torch.Tensor:
+        """CFG + STG + modality guidance with optional per-modality token slice (audio pad)."""
+        if real_token_count is not None:
+            den_s = den[:, :real_token_count, :]
+        else:
+            den_s = den
+
+        pred = den_s.float()
+        c = den_s.float()
+        if do_cfg and isinstance(unc, torch.Tensor):
+            unc_s = unc[:, :real_token_count, :] if real_token_count is not None else unc
+            pred = pred + (cfg_scale - 1) * (c - unc_s.float())
+        if do_stg and isinstance(ptb, torch.Tensor):
+            ptb_s = ptb[:, :real_token_count, :] if real_token_count is not None else ptb
+            pred = pred + stg_scale * (c - ptb_s.float())
+        if do_mod and isinstance(iso, torch.Tensor):
+            iso_s = iso[:, :real_token_count, :] if real_token_count is not None else iso
+            pred = pred + (modality_scale - 1) * (c - iso_s.float())
+        if rescale_scale != 0:
+            pred = pred * (rescale_scale * (c.std() / pred.std()) + (1 - rescale_scale))
+
+        if real_token_count is not None:
+            out = den.clone()
+            out[:, :real_token_count, :] = pred.bfloat16()
+            return out
+        return pred.bfloat16()
+
     def _prepare_audio_masks(self, audio_N: int, audio_N_real: int) -> tuple:
-        """Create audio attention mask (for SDPA) and padding mask (for A-to-V)."""
-        sp_factor = self.parallel_config.sequence_parallel.factor
+        """Create SDPA attn mask and padding masks for SP-sharded vs gathered audio.
+
+        Returns (attn_mask, pad_mask_sp, pad_mask_full). pad_mask_sp is sharded on the
+        sequence dimension for multiply with local audio activations; pad_mask_full is
+        replicated for multiply after all_gather on A-to-V keys.
+        """
         if audio_N <= audio_N_real:
-            return None, None
+            return None, None, None
 
-        audio_N_local = audio_N // sp_factor
-        mask = torch.zeros(1, 1, audio_N_local, audio_N)
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+        mask = torch.zeros(1, 1, audio_N, audio_N)
         mask[:, :, :, audio_N_real:] = float("-inf")
-        tt_attn_mask = bf16_tensor(mask, device=self.mesh_device)
+        mask[:, :, audio_N_real:, :] = float("-inf")
+        mask = mask.to(torch.bfloat16)
+        tt_attn_mask = bf16_tensor(
+            mask,
+            device=self.mesh_device,
+            mesh_axis=sp_axis,
+            shard_dim=2,
+        )
 
-        pad_mask = torch.ones(1, 1, audio_N, 1)
+        pad_mask = torch.ones(1, 1, audio_N, 1, dtype=torch.bfloat16)
         pad_mask[:, :, audio_N_real:, :] = 0.0
-        tt_pad_mask = bf16_tensor(pad_mask, device=self.mesh_device)
-        return tt_attn_mask, tt_pad_mask
+        tt_pad_mask_sp = bf16_tensor(
+            pad_mask,
+            device=self.mesh_device,
+            mesh_axis=sp_axis,
+            shard_dim=2,
+        )
+        tt_pad_mask_full = bf16_tensor(pad_mask, device=self.mesh_device)
+        return tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full
 
     @torch.no_grad()
     def call_av(
@@ -1258,7 +1327,7 @@ class LTXPipeline:
 
         v_cos, v_sin = self._prepare_rope(latent_frames, latent_h, latent_w)
         a_cos, a_sin = self._prepare_audio_rope(audio_N, audio_N_real)
-        tt_attn_mask, tt_pad_mask = self._prepare_audio_masks(audio_N, audio_N_real)
+        tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
 
         tt_vp = self._prepare_prompt(video_prompt_embeds)
         tt_ap = bf16_tensor(audio_prompt_embeds.unsqueeze(0), device=self.mesh_device)
@@ -1306,13 +1375,14 @@ class LTXPipeline:
                     skip_cross_attn=skip_ca,
                     skip_self_attn_blocks=skip_sa_blocks,
                     audio_attn_mask=tt_attn_mask,
-                    audio_padding_mask=tt_pad_mask,
+                    audio_padding_mask=tt_pad_mask_sp,
+                    audio_padding_mask_full=tt_pad_mask_full,
                 )
                 vv = LTXTransformerModel.device_to_host(v).squeeze(0)
                 av = LTXTransformerModel.device_to_host(a).squeeze(0)
                 vd = (video_lat.bfloat16().float() - vv.float() * sigma).bfloat16()
                 ad = (audio_lat.bfloat16().float() - av.float() * sigma).bfloat16()
-                return vd, ad
+                return vd, self._zero_audio_padding(ad, audio_N_real)
 
             v_den, a_den = _run(tt_vp, tt_ap)
 
@@ -1325,34 +1395,47 @@ class LTXPipeline:
                 v_iso, a_iso = _run(tt_vp, tt_ap, skip_ca=True)
 
             if do_cfg or do_stg or do_mod:
-                for label, den, unc, ptb, iso, cfg_s, stg_s, mod_s in [
-                    ("v", v_den, v_unc, v_ptb, v_iso, video_cfg_scale, video_stg_scale, video_modality_scale),
-                    ("a", a_den, a_unc, a_ptb, a_iso, audio_cfg_scale, audio_stg_scale, audio_modality_scale),
-                ]:
-                    c = den.float()
-                    pred = c
-                    if do_cfg and isinstance(unc, torch.Tensor):
-                        pred = pred + (cfg_s - 1) * (c - unc.float())
-                    if do_stg and isinstance(ptb, torch.Tensor):
-                        pred = pred + stg_s * (c - ptb.float())
-                    if do_mod and isinstance(iso, torch.Tensor):
-                        pred = pred + (mod_s - 1) * (c - iso.float())
-                    if rescale_scale != 0:
-                        pred = pred * (rescale_scale * (c.std() / pred.std()) + (1 - rescale_scale))
-                    if label == "v":
-                        v_den = pred.bfloat16()
-                    else:
-                        a_den = pred.bfloat16()
+                v_den = self._apply_modal_guidance(
+                    v_den,
+                    v_unc,
+                    v_ptb,
+                    v_iso,
+                    cfg_scale=video_cfg_scale,
+                    stg_scale=video_stg_scale,
+                    modality_scale=video_modality_scale,
+                    rescale_scale=rescale_scale,
+                    do_cfg=do_cfg,
+                    do_stg=do_stg,
+                    do_mod=do_mod,
+                )
+                a_den = self._apply_modal_guidance(
+                    a_den,
+                    a_unc,
+                    a_ptb,
+                    a_iso,
+                    cfg_scale=audio_cfg_scale,
+                    stg_scale=audio_stg_scale,
+                    modality_scale=audio_modality_scale,
+                    rescale_scale=rescale_scale,
+                    do_cfg=do_cfg,
+                    do_stg=do_stg,
+                    do_mod=do_mod,
+                    real_token_count=audio_N_real,
+                )
 
             # Gradient estimation: correct velocity using previous step's velocity
             if ge_gamma != 0.0 and sigma_next != 0.0:
                 v_velocity = (video_lat.float() - v_den.float()) / sigma
-                a_velocity = (audio_lat.float() - a_den.float()) / sigma
+                a_lat_real = audio_lat[:, :audio_N_real, :]
+                a_den_real = a_den[:, :audio_N_real, :]
+                a_velocity = (a_lat_real.float() - a_den_real.float()) / sigma
                 if prev_v_vel is not None:
                     v_total = ge_gamma * (v_velocity - prev_v_vel) + prev_v_vel
                     a_total = ge_gamma * (a_velocity - prev_a_vel) + prev_a_vel
                     v_den = (video_lat.float() - v_total * sigma).bfloat16()
-                    a_den = (audio_lat.float() - a_total * sigma).bfloat16()
+                    a_den_real = (a_lat_real.float() - a_total * sigma).bfloat16()
+                    a_den = self._zero_audio_padding(a_den, audio_N_real)
+                    a_den[:, :audio_N_real, :] = a_den_real
                 prev_v_vel, prev_a_vel = v_velocity, a_velocity
 
             # Last step: return denoised directly (sigma_next == 0)

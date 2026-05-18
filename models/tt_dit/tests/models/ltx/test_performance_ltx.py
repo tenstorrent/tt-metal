@@ -22,17 +22,24 @@ from loguru import logger
 
 import ttnn
 from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
-from models.tt_dit.utils.test import line_params
+from models.tt_dit.utils.test import (
+    bh_lb_2x4_id,
+    bh_lb_2x4_params,
+    skip_ltx_mesh_config_unless_matching_arch,
+    wh_lb_2x4_id,
+    wh_lb_2x4_params,
+)
 
 sys.path.insert(0, "LTX-2/packages/ltx-core/src")
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, mesh_config_id",
     [
-        ((2, 4), (2, 4), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False),
+        [*wh_lb_2x4_params, wh_lb_2x4_id],
+        [*bh_lb_2x4_params, bh_lb_2x4_id],
     ],
-    ids=["wh_lb_2x4"],
+    ids=[wh_lb_2x4_id, bh_lb_2x4_id],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("width, height", [(768, 512)], ids=["512p"])
@@ -47,7 +54,9 @@ def test_pipeline_performance_video(
     width,
     height,
     is_fsdp,
+    mesh_config_id,
 ):
+    skip_ltx_mesh_config_unless_matching_arch(mesh_config_id)
     """
     Performance test for LTX-2 video-only pipeline.
 

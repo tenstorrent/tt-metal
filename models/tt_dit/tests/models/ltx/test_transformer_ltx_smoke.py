@@ -3,13 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Smoke tests for LTXTransformerBlock and LTXTransformerModel on BH Galaxy 4x8.
+Smoke tests for LTXTransformerBlock and LTXTransformerModel.
 
-Validates forward passes on 32 BH chips (4x8 mesh, sp_axis=1, tp_axis=0, Ring topology)
-without comparing against the reference ltx_core implementation.
-
-For full PCC validation, use test_transformer_ltx.py on a machine with
-the LTX-2 private repo cloned to LTX-2/.
+Mesh / fabric / CCL setup follows Wan2_2-style tests: ``line_params`` /
+``ring_params`` from ``utils.test``, explicit ``num_links`` and ``topology``,
+and ``is_fsdp``. Single-device uses empty ``device_params`` (no fabric).
 """
 
 import pytest
@@ -23,6 +21,7 @@ from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from models.tt_dit.utils.test import line_params, ring_params
 
 
 def _make_parallel_config(mesh_device, sp_axis, tp_axis):
@@ -80,18 +79,27 @@ def _make_ltx_block_state(dim, num_heads, context_dim, ffn_dim, *, cross_attenti
     return state
 
 
+# Primary smoke shapes (Wan-style: line on 8-chip, ring on 32-chip).
+_LTX_SMOKE_MESH_PARAMS = [
+    pytest.param((1, 1), 0, 1, 1, {}, ttnn.Topology.Linear, False, id="1x1sp0tp1"),
+    pytest.param((2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
+    pytest.param((4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
+]
+
+
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
-    [
-        [(1, 1), 0, 1],
-        [(2, 4), 0, 1],
-        [(4, 8), 1, 0],
-    ],
-    ids=["1x1sp0tp1", "2x4sp0tp1", "4x8sp1tp0"],
-    indirect=["mesh_device"],
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    _LTX_SMOKE_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-def test_ltx_transformer_block_smoke(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
+def test_ltx_transformer_block_smoke(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    topology: ttnn.Topology,
+    is_fsdp: bool,
+) -> None:
     """Smoke test: run LTXTransformerBlock forward pass on device without PCC comparison.
 
     Validates:
@@ -112,7 +120,7 @@ def test_ltx_transformer_block_smoke(mesh_device: ttnn.MeshDevice, sp_axis: int,
 
     logger.info(f"mesh shape: {tuple(mesh_device.shape)}, sp_axis={sp_axis}, tp_axis={tp_axis}")
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Ring)
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
 
     tt_block = LTXTransformerBlock(
@@ -124,6 +132,7 @@ def test_ltx_transformer_block_smoke(mesh_device: ttnn.MeshDevice, sp_axis: int,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
         has_audio=False,
     )
 
@@ -246,17 +255,18 @@ def _make_ltx_model_state(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
-    [
-        [(1, 1), 0, 1],
-        [(2, 4), 0, 1],
-        [(4, 8), 1, 0],
-    ],
-    ids=["1x1sp0tp1", "2x4sp0tp1", "4x8sp1tp0"],
-    indirect=["mesh_device"],
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    _LTX_SMOKE_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-def test_ltx_transformer_model_smoke(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
+def test_ltx_transformer_model_smoke(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    topology: ttnn.Topology,
+    is_fsdp: bool,
+) -> None:
     """Smoke test: run LTXTransformerModel.inner_step on device without PCC comparison.
 
     Uses num_layers=2 (not 48) to stay within host RAM while exercising the full
@@ -283,7 +293,7 @@ def test_ltx_transformer_model_smoke(mesh_device: ttnn.MeshDevice, sp_axis: int,
 
     logger.info(f"mesh shape: {tuple(mesh_device.shape)}, sp_axis={sp_axis}, tp_axis={tp_axis}")
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Ring)
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
 
     tt_model = LTXTransformerModel(
@@ -296,6 +306,7 @@ def test_ltx_transformer_model_smoke(mesh_device: ttnn.MeshDevice, sp_axis: int,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
         has_audio=False,
     )
 

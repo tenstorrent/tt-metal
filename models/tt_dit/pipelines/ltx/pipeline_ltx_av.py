@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import gc
+import os
 import time
 from typing import TYPE_CHECKING
 
@@ -55,10 +56,14 @@ class LTXAVPipeline(LTXPipeline):
         rescale_scale: float = 0.7,
         stg_block: int = 28,
         seed: int = 10,
-        ge_gamma: float = 0.0,
+        ge_gamma: float | None = None,
         fps: int = 24,
     ) -> str:
         """Run the full LTX-2.3 Pro AV generation pipeline and write an MP4."""
+        if ge_gamma is None:
+            # Official LTX gradient-estimation sampling; enable on BH by default for quality.
+            ge_gamma = 2.0 if ttnn.device.is_blackhole() else 0.0
+            logger.info(f"ge_gamma={ge_gamma} (arch default)")
         import sys
 
         sys.path.insert(0, "LTX-2/packages/ltx-core/src")
@@ -67,6 +72,21 @@ class LTXAVPipeline(LTXPipeline):
         from ltx_pipelines.utils.constants import DEFAULT_NEGATIVE_PROMPT
 
         neg = negative_prompt if negative_prompt is not None else DEFAULT_NEGATIVE_PROMPT
+
+        def _env_float(name: str, default: float) -> float:
+            val = os.environ.get(name)
+            return float(val) if val is not None else default
+
+        video_cfg_scale = _env_float("VIDEO_CFG_SCALE", video_cfg_scale)
+        audio_cfg_scale = _env_float("AUDIO_CFG_SCALE", audio_cfg_scale)
+        video_stg_scale = _env_float("VIDEO_STG_SCALE", video_stg_scale)
+        audio_stg_scale = _env_float("AUDIO_STG_SCALE", audio_stg_scale)
+        video_modality_scale = _env_float("VIDEO_MODALITY_SCALE", video_modality_scale)
+        audio_modality_scale = _env_float("AUDIO_MODALITY_SCALE", audio_modality_scale)
+        rescale_scale = _env_float("RESCALE_SCALE", rescale_scale)
+        if os.environ.get("GE_GAMMA") is not None:
+            ge_gamma = float(os.environ["GE_GAMMA"])
+
         total_t0 = time.time()
 
         t0 = time.time()
@@ -105,6 +125,8 @@ class LTXAVPipeline(LTXPipeline):
         denoise_time = time.time() - t0
         logger.info(f"Denoising: {denoise_time:.1f}s ({denoise_time / num_inference_steps:.1f}s/step)")
 
+        # Free 22B DiT before VAE load/decode (BH LB cannot hold both; VAE decode
+        # alone needs multi-GB contiguous DRAM per device).
         self.transformer = None
         gc.collect()
 

@@ -23,8 +23,16 @@ from models.tt_dit.models.vae.vae_ltx import (
 )
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.conv3d import conv_pad_in_channels
+from models.tt_dit.utils.test import ring_params
 
 sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+
+# Single-chip: no fabric (avoids BH fabric router handshake when only one device is opened).
+# 4×8 mesh: ring fabric matches other LTX multi-chip tests.
+_LTX_VAE_MESH_DEVICE_PARAMS = [
+    ((1, 1), {}),
+    ((4, 8), ring_params),
+]
 
 
 @pytest.mark.parametrize(
@@ -37,12 +45,11 @@ sys.path.insert(0, "LTX-2/packages/ltx-core/src")
     ids=["res_128_128", "expand_128_256", "conv_in_48_128"],
 )
 @pytest.mark.parametrize(
-    "mesh_device",
-    [(1, 1), (4, 8)],
+    "mesh_device, device_params",
+    _LTX_VAE_MESH_DEVICE_PARAMS,
     ids=["1x1", "4x8"],
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_ltx_causal_conv3d(
     mesh_device: ttnn.MeshDevice, in_c: int, out_c: int, kernel_size: int, stride: int, T: int, H: int, W: int
 ):
@@ -104,12 +111,11 @@ def test_ltx_causal_conv3d(
     ids=["same_channels", "expand_channels"],
 )
 @pytest.mark.parametrize(
-    "mesh_device",
-    [(1, 1), (4, 8)],
+    "mesh_device, device_params",
+    _LTX_VAE_MESH_DEVICE_PARAMS,
     ids=["1x1", "4x8"],
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_ltx_resnet_block(mesh_device: ttnn.MeshDevice, in_c: int, out_c: int, T: int, H: int, W: int):
     """
     Test LTXResnetBlock3D against PyTorch ResnetBlock3D reference.
@@ -171,12 +177,11 @@ def test_ltx_resnet_block(mesh_device: ttnn.MeshDevice, in_c: int, out_c: int, T
     ids=["upsample_all", "upsample_space", "upsample_time"],
 )
 @pytest.mark.parametrize(
-    "mesh_device",
-    [(1, 1), (4, 8)],
+    "mesh_device, device_params",
+    _LTX_VAE_MESH_DEVICE_PARAMS,
     ids=["1x1", "4x8"],
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_ltx_depth_to_space_upsample(mesh_device: ttnn.MeshDevice, in_c: int, stride: tuple, T: int, H: int, W: int):
     """Test LTXDepthToSpaceUpsample against PyTorch reference."""
     from ltx_core.model.video_vae.sampling import DepthToSpaceUpsample as TorchDTS
@@ -209,12 +214,11 @@ def test_ltx_depth_to_space_upsample(mesh_device: ttnn.MeshDevice, in_c: int, st
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
-    [(1, 1), (4, 8)],
+    "mesh_device, device_params",
+    _LTX_VAE_MESH_DEVICE_PARAMS,
     ids=["1x1", "4x8"],
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_ltx_video_decoder(mesh_device: ttnn.MeshDevice):
     """
     Test full LTXVideoDecoder against PyTorch VideoDecoder reference.

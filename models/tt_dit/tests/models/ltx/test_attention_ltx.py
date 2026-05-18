@@ -2,6 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+LTX-2 attention unit tests. Mesh / fabric / topology parametrization mirrors
+``test_wan_attention`` in ``tests/models/wan2_2/test_attention_wan.py``:
+
+- ``line_params`` / ``ring_params`` from ``utils.test`` (``FABRIC_1D`` vs ``FABRIC_1D_RING``)
+- explicit ``num_links`` and ``ttnn.Topology.{Linear,Ring}``
+- ``is_fsdp`` passed through to ``LTXAttention``
+
+LTX-only: ``1x1`` with empty ``device_params`` (no fabric) for single-chip runs.
+"""
+
 import sys
 
 import pytest
@@ -16,22 +27,33 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from models.tt_dit.utils.test import line_params, ring_params
 
 sys.path.insert(0, "LTX-2/packages/ltx-core/src")
 
+# Wan ``test_wan_attention`` grid + LTX single-device row (empty device_params).
+_LTX_ATTENTION_MESH_PARAMS = [
+    pytest.param((1, 1), 0, 1, 1, {}, ttnn.Topology.Linear, False, id="1x1sp0tp1"),
+    pytest.param((2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
+    pytest.param((2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
+    pytest.param((4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
+    pytest.param((4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="bh_4x8sp1tp0"),
+]
+
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
-    [
-        [(1, 1), 0, 1],
-        [(2, 4), 0, 1],
-        [(4, 8), 1, 0],
-    ],
-    ids=["1x1sp0tp1", "2x4sp0tp1", "4x8sp1tp0"],
-    indirect=["mesh_device"],
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    _LTX_ATTENTION_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-def test_ltx_self_attention(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
+def test_ltx_self_attention(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    topology: ttnn.Topology,
+    is_fsdp: bool,
+) -> None:
     """
     Test LTX-2 self-attention: compare TT LTXAttention vs PyTorch Attention.
     """
@@ -51,9 +73,7 @@ def test_ltx_self_attention(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis:
     torch_model.eval()
     torch_state = torch_model.state_dict()
 
-    # Create TT model
-    topology = ttnn.Topology.Ring if mesh_device.get_num_devices() > 8 else ttnn.Topology.Linear
-    ccl_manager = CCLManager(mesh_device, topology=topology)
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     parallel_config = DiTParallelConfig(
         cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
         sequence_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
@@ -67,6 +87,7 @@ def test_ltx_self_attention(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis:
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
         is_self=True,
     )
     tt_model.load_torch_state_dict(torch_state)
@@ -136,17 +157,18 @@ def test_ltx_self_attention(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis:
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
-    [
-        [(1, 1), 0, 1],
-        [(2, 4), 0, 1],
-        [(4, 8), 1, 0],
-    ],
-    ids=["1x1sp0tp1", "2x4sp0tp1", "4x8sp1tp0"],
-    indirect=["mesh_device"],
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    _LTX_ATTENTION_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-def test_ltx_cross_attention(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
+def test_ltx_cross_attention(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    topology: ttnn.Topology,
+    is_fsdp: bool,
+) -> None:
     """
     Test LTX-2 cross-attention: compare TT LTXAttention vs PyTorch Attention.
     """
@@ -167,8 +189,7 @@ def test_ltx_cross_attention(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis
     torch_model.eval()
     torch_state = torch_model.state_dict()
 
-    topology = ttnn.Topology.Ring if mesh_device.get_num_devices() > 8 else ttnn.Topology.Linear
-    ccl_manager = CCLManager(mesh_device, topology=topology)
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     parallel_config = DiTParallelConfig(
         cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
         sequence_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
@@ -182,6 +203,7 @@ def test_ltx_cross_attention(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
         is_self=False,
         context_dim=context_dim,
     )

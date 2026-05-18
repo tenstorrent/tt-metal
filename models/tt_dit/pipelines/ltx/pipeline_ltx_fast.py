@@ -57,7 +57,7 @@ class LTXFastPipeline(LTXAVPipeline):
 
         v_cos, v_sin = self._prepare_rope(latent_frames, latent_h, latent_w)
         a_cos, a_sin = self._prepare_audio_rope(audio_N, audio_N_real)
-        tt_attn_mask, tt_pad_mask = self._prepare_audio_masks(audio_N, audio_N_real)
+        tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
 
         tt_vp = self._prepare_prompt(v_embeds)
         tt_ap = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
@@ -105,7 +105,8 @@ class LTXFastPipeline(LTXAVPipeline):
                 trans_mat=None,
                 timestep_torch=torch.tensor([sigma]),
                 audio_attn_mask=tt_attn_mask,
-                audio_padding_mask=tt_pad_mask,
+                audio_padding_mask=tt_pad_mask_sp,
+                audio_padding_mask_full=tt_pad_mask_full,
             )
             v_vel = LTXTransformerModel.device_to_host(v_out).squeeze(0)
             a_vel = LTXTransformerModel.device_to_host(a_out).squeeze(0)
