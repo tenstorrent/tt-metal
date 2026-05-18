@@ -19,7 +19,7 @@ import ttnn
 from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
-from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_perf_targets
+from models.demos.utils.model_targets import normalize_sku, resolve_accuracy_targets, resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -1068,7 +1068,8 @@ def test_demo_text(
             input_prompts, tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
         )
         if mode != "decode":
-            num_prefill_tokens += int(sum(prefill_lens))
+            # Prefill work for a batch is defined by the longest prompt length.
+            num_prefill_tokens = max(num_prefill_tokens, max(prefill_lens))
 
         max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
         assert (
@@ -1380,7 +1381,11 @@ def test_demo_text(
         total_inference_decode_time / (num_tokens_generated_decode[0] - 1) if iteration > 1 else 0
     )
 
-    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * global_batch_size if mode != "decode" else 0
+    prefill_tok_s = (
+        num_prefill_tokens / total_inference_prefill_time * global_batch_size
+        if mode != "decode" and total_inference_prefill_time > 0
+        else 0
+    )
     decode_tok_s_user = (
         (num_tokens_generated_decode[0] - 1) / total_inference_decode_time if mode != "prefill" and iteration > 1 else 0
     )  # Remove the compile time
@@ -1453,7 +1458,11 @@ def test_demo_text(
     # Benchmark targets
     tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
     model_name = model_args[0].base_model_name
-    input_seq_len = int(max_seq_len) if max_seq_len is not None else None
+    input_seq_len = int(num_prefill_tokens) if num_prefill_tokens > 0 else None
+    logger.info(
+        f"Resolving perf targets for model={model_name}, sku={tt_device_name} "
+        f"(canonical={normalize_sku(tt_device_name)}), batch_size={global_batch_size}, seq_len={input_seq_len}"
+    )
 
     resolved_perf_targets = resolve_perf_targets(
         model_name=model_name,
@@ -1547,6 +1556,10 @@ def test_demo_text(
         if "performance" in test_id and "ci-32" in test_id:
             logger.info(
                 f"Checking measurements against centralized CI performance targets for batch size 32 of {model_name} on {tt_device_name}"
+            )
+            logger.info(
+                f"Verifying perf with sku={tt_device_name} (canonical={normalize_sku(tt_device_name)}), "
+                f"batch_size={global_batch_size}, seq_len={input_seq_len}"
             )
             ci_targets = resolve_perf_targets(
                 model_name=model_name,
