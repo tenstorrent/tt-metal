@@ -327,7 +327,7 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
     uint32_t core_type_index = hal.get_programmable_core_type_index(params.processor.core_type);
     uint32_t available_processors =
         hal.get_processor_types_count(core_type_index, static_cast<uint32_t>(params.processor.processor_class));
-    if (params.processor.processor_type >= available_processors) {
+    if (params.processor.processor_type >= static_cast<int>(available_processors)) {
         GTEST_SKIP() << "Test " << params.test_name << " requires processor type " << params.processor.processor_type
                      << " but only " << available_processors << " available on this architecture";
     }
