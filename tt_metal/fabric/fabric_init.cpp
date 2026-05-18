@@ -533,8 +533,8 @@ FabricCoresHealth configure_fabric_cores(
                 //   2. Write launch_msg while halted (send_go=false)
                 //   3. Write handshake_bypass=1 while halted (STRATEGY7 equivalent)
                 //   4. Deassert ERISC reset
-                //   5. FIX DW: 50ms sleep
-                //   6. FIX DU: poll edm_status until != ROM postcode
+                //   5. FIX S8: Write BOOT_FENCE_READY to L1 (replaces FIX DW+DU+PQ)
+                //   6. FIX S9: Write session_id to L1
                 //   7. Write go_msg (RUN_MSG_GO)
                 //
                 // FIX OP: log how long assert has been held (deassert timing captured in device.cpp).

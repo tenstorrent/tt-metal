@@ -1,5 +1,109 @@
 
 ---
+## 2026-05-18 — CI Run 26046712504 Analysis (FIX S8/S9 already covers root cause)
+
+### What Failed (run 26046712504 — FIX PQ era, iteration 17)
+
+Device 0 chan=8 had edm_status=0x49706550 (base-UMD sentinel) at pre-init.
+`terminate_stale_erisc_routers` detected it and put it in `mmio_base_umd_channels`.
+FIX PQ Phase 1 timed out (5000ms) for ALL 4 MMIO devices — ERISC never wrote any
+non-zero edm_status value. Device 0 never got go_msg → strategy A incomplete →
+`verify_all_fabric_channels_healthy`: "Device 0 own master router chan is pre-dead
+(no fabric firmware loaded)".
+
+The `last_analysis.txt` hypothesis was: firmware binary was skipped because the
+channel was classified as corrupt/pre-dead at init.
+
+### Investigation
+
+Analyzed the current HEAD (`25b2cc13257`) code path for MMIO chan=8 at 0x49706550:
+
+1. `terminate_stale_erisc_routers()` → `mmio_base_umd_channels={8}` (FIX EE)
+2. `configure_fabric(pre_dead={}, skip_soft_reset={}, ext={}, mmio_base_umd={8})`
+3. `configure_fabric_cores(this, pre_dead={}, skip_soft_reset_with_ext={})`
+   - chan=8 NOT in skip_soft_reset_channels (FIX EE excludes it from base_umd_channels)
+   - chan=8 falls through to FIX S9 assert+FIX EG+defer deassert path
+   - chan=8 added to `deferred_deassert_channels`
+4. `effective_pre_dead` = empty → `all_dead_channels` = empty
+5. `dead_eth_logical_cores` = empty → **`ConfigureDeviceWithProgram` loads firmware binary for chan=8**
+6. FIX SA runs 7-step sequence:
+   - Steps 1-4: fw_launch_addr + launch_msg + handshake_bypass + deassert
+   - Step 5: FIX S8 boot fence (writes BOOT_FENCE_READY to L1)
+   - Step 5b: FIX S9 session_id write
+   - Step 7: go_msg
+
+The firmware binary IS loaded for chan=8 in the current code. The hypothesis from
+`last_analysis.txt` does NOT apply to current HEAD.
+
+### Why FIX S8 Eliminates the Root Cause
+
+In the old FIX PQ era: host wrote go_msg only after polling edm_status (fragile timing).
+With FIX S8: active_erisc.cc (fabric ERISC) spins on boot_fence before entering the
+dispatch loop (line 251-267 in active_erisc.cc). No `routing_enabled` dependency — the
+boot fence is hit directly after init/flag_disable/go_messages setup. Host writes
+BOOT_FENCE_READY *after* all L1 writes are complete (step 5 in FIX SA), firmware
+advances only when that token is present. Deterministic, no 5000ms timeout.
+
+Note: `erisc.cc` (relay ERISC, used for non-MMIO relay channels) DOES have a
+`routing_enabled != 1` wait loop before the boot fence, but MMIO fabric router
+channels use `active_erisc.cc` (fabric ERISC), not `erisc.cc`.
+
+### Fix Applied
+
+Comment-only fix in `fabric_init.cpp` lines 535-538: updated the Strategy A step
+list in the FIX SA comment to reflect current FIX S8/S9 steps (was still listing
+"FIX DW: 50ms sleep" and "FIX DU: poll edm_status" which were removed by FIX S8).
+
+### Conclusion
+
+No new code changes needed for the root cause described in run 26046712504.
+FIX S8/S9 (commit `25b2cc13257`) already addresses the issue deterministically.
+Ready for next CI dispatch to validate FIX S8/S9 on hardware.
+
+---
+## FIX PQ — Two-phase FIX DU (2026-05-18)
+
+### Root Cause
+
+FIX DU (Step 6 in the Strategy A deassert sequence in `device.cpp`) polls `edm_status != 0x49705180` (ROM postcode) to detect when ERISC has finished ROM boot and entered the UMD polling loop. The bug: FIX CL (in the teardown path) deliberately zeros `edm_status` to `0x00000000` before asserting ERISC reset. On the next `configure_fabric()` call, FIX DU's very first read sees `0x00000000`, which `!= 0x49705180` is immediately true.
+
+### False-Positive Mechanism
+
+```
+FIX CL (teardown):  write edm_status = 0x00000000  → ERISC reset asserted
+...
+Strategy A (next run):
+  Step 4: ERISC reset deasserted
+  Step 6 (FIX DU Phase 2, pre-FIX PQ):
+    read edm_status → 0x00000000   (ERISC still in early ROM, hasn't written postcode yet)
+    0x00000000 != 0x49705180 → TRUE immediately
+    log: "ERISC exited ROM to 0x00000000 after 0ms post-deassert"   ← FALSE POSITIVE
+  Step 7: go_msg sent while ERISC is still in ROM boot → firmware never starts
+  Result: ring master never launches → all devices stuck → cascading failures
+```
+
+CI evidence from run 26044477135 (iteration 16):
+```
+FIX SA (#42429): FIX DU — Device 0 chan=8 ERISC exited ROM to 0x00000000 after 0ms post-deassert
+wait_for_fabric_router_sync: Device 0 master chan=8 stuck at 0x00000000 after 2001ms → dead-master-chan
+```
+All 4 non-MMIO ring masters showed "after 0ms" — universal false-positive when FIX CL pre-clears.
+
+### Fix
+
+FIX PQ adds a Phase 1 before the existing FIX DU loop. If the initial `edm_status` read is `0x00000000`, wait (up to `kFIX_DU_BootWaitMs_SA` = 5000ms) for ERISC to write any non-zero value before entering Phase 2. Phase 2 is the unchanged FIX DU loop (`poll until != 0x49705180`). If Phase 1 times out (ERISC really did not start), it logs a warning and still enters Phase 2 — which will then time out normally and set `fabric_relay_path_broken_` via FIX SA-ESC.
+
+Key design constraints preserved:
+- Same `kFIX_DU_BootWaitMs_SA` constant for Phase 1 (no new constants)
+- Existing FIX DU log line format unchanged (analysis scripts grep for it)
+- Phase 1 timeout still proceeds to Phase 2 (not abort)
+- FIX SA-ESC escalation path (Phase 2 timeout → `fabric_relay_path_broken_` + `continue`) unchanged
+
+### Commit
+
+`f6879319129` — FIX PQ: two-phase FIX DU to handle FIX CL pre-cleared edm_status=0
+
+---
 ## 2026-05-18 — CI Run 26040053897 Analysis (No Code Change Needed)
 
 ### What Failed
@@ -4777,3 +4881,73 @@ FIX SENDGO (f1a87f21dcf) replaced `hal.get_dev_addr(programmable_core_type, HalL
 Removed both dead `HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(...)` lines.
 
 Commit: 58a839220ef
+
+---
+
+## 2026-05-18 — Testing Gaps Audit Round 4
+
+### Methodology
+
+Systematic audit of all FIX SA (Strategy A) code paths in device.cpp,
+cross-referenced with fabric_init.cpp deferred_deassert_channels logic
+and analyze_fabric_hang_log.sh counter coverage. Focus on the new
+Strategy A deferred-deassert sequence (steps 1-7) which was added in
+the FIX SA commit but lacked several diagnostic and safety gaps.
+
+### Gaps Found
+
+**GAP 11 — FIX SA DU timeout does NOT escalate (FIXED: FIX SA-ESC)**
+
+Location: `device.cpp` Strategy A Step 6 (FIX DU poll in SA block)
+Problem: When FIX DU times out in Strategy A, the code logged a warning
+and `continue`d — skipping the go_msg write (step 7). But it did NOT
+set `fabric_relay_path_broken_=true`. The ERISC was deasserted in step 4
+and is stuck in ROM. Downstream FIX EF will poll this channel for 3s and
+time out, but non-MMIO devices may start routing writes through the dead
+relay before FIX EF fires — silently dropping launch messages.
+Fix: Added `fabric_relay_path_broken_.store(true)` before the `continue`
+statement. FIX SB2 will propagate the broken state to non-MMIO devices
+before they attempt relay writes.
+
+**GAP 12 — FIX SA has no per-channel timing (FIXED: FIX OP SA)**
+
+Location: `device.cpp` Strategy A per-channel loop
+Problem: The normal FIX S9 path has FIX OP timing and the FIX RR path
+has FIX OP RR timing, but Strategy A (steps 1-7) had no equivalent.
+CI logs showed no timing data for Strategy A channels — impossible to
+tell if a channel took 60ms (healthy) vs 5000ms (DU poll maxed out).
+Fix: Added `fix_op_sa_start` timer before the per-channel loop body
+and `FIX OP SA` timing log after step 7 (or after early `continue`).
+
+**GAP 13 — FIX SA Strategy A events not tracked in analyze script (FIXED)**
+
+Location: `scripts/analyze_fabric_hang_log.sh`
+Problem: Strategy A block entry, completion, DU timeout escalation,
+go_msg readback, and per-channel timing were all missing from the
+analyze script counters and insights.
+Fix: Added counters: FIX_SA_STRATA_FIRES, FIX_SA_STRATA_COMPLETE,
+FIX_SA_ESC_FIRES, FIX_SA_GV_OK, FIX_SA_GV_MISMATCH, FIX_OP_SA_FIRES,
+FIX_OP_SA_MAX_MS. Updated timeline/phases greps and insights section.
+
+**GAP 14 — FIX SA go_msg write has no readback verification (FIXED: FIX SA-GV)**
+
+Location: `device.cpp` Strategy A Step 7
+Problem: Steps 1 (fw_launch_addr) and 3 (handshake_bypass) had readback
+verification, but the go_msg write in step 7 did not. If go_msg write
+silently fails (PCIe error, wrong address), ERISC stays in base-UMD
+polling loop forever — no fabric firmware launches, FIX EF times out.
+Fix: Added readback verification of the first word of go_msg after the
+write. On mismatch, logs a warning with the expected and actual values.
+
+### Commits (Audit Round 4)
+
+```
+6e7271a53cc  GAPs 11-12,14: FIX SA-ESC/OP SA/SA-GV — Strategy A diagnostics and escalation (#42429)
+1c6df88c88c  GAP 13: analyze script — Strategy A counters (FIX SA-ESC/OP SA/SA-GV) (#42429)
+```
+
+### Files Changed (Audit Round 4)
+
+- `tt_metal/impl/device/device.cpp` — GAPs 11, 12, 14: FIX SA-ESC, FIX OP SA, FIX SA-GV
+- `scripts/analyze_fabric_hang_log.sh` — GAP 13: Strategy A counters + insights
+
