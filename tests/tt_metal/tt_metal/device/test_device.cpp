@@ -63,16 +63,16 @@ bool l1_ping(
     auto* device = mesh_device->get_devices()[0];
     bool pass = true;
     auto inputs = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
-    for (int y = 0; y < grid_size.y; y++) {
-        for (int x = 0; x < grid_size.x; x++) {
-            CoreCoord dest_core(static_cast<size_t>(x), static_cast<size_t>(y));
+    for (size_t y = 0; y < grid_size.y; y++) {
+        for (size_t x = 0; x < grid_size.x; x++) {
+            CoreCoord dest_core(x, y);
             tt_metal::detail::WriteToDeviceL1(device, dest_core, l1_byte_address, inputs);
         }
     }
 
-    for (int y = 0; y < grid_size.y; y++) {
-        for (int x = 0; x < grid_size.x; x++) {
-            CoreCoord dest_core(static_cast<size_t>(x), static_cast<size_t>(y));
+    for (size_t y = 0; y < grid_size.y; y++) {
+        for (size_t x = 0; x < grid_size.x; x++) {
+            CoreCoord dest_core(x, y);
             std::vector<uint32_t> dest_core_data;
             tt_metal::detail::ReadFromDeviceL1(device, dest_core, l1_byte_address, byte_size, dest_core_data);
             pass &= (dest_core_data == inputs);
@@ -403,8 +403,8 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
     auto& program_ = workload.get_programs().at(device_range);
 
     auto logical_grid_size = device->logical_grid_size();
-    for (int r = 0; r < logical_grid_size.y; r++) {
-        for (int c = 0; c < logical_grid_size.x; c++) {
+    for (size_t r = 0; r < logical_grid_size.y; r++) {
+        for (size_t c = 0; c < logical_grid_size.x; c++) {
             CoreCoord logical_coord(c, r);
             auto virtual_coord = device->virtual_core_from_logical_core(logical_coord, CoreType::WORKER);
             logical_to_virtual_map[logical_coord] = virtual_coord;

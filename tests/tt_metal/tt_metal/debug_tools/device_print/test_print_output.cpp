@@ -164,7 +164,7 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
                 break;
             }
             int iter = -1;
-            if (sscanf(line.c_str(), "Test iteration: %d", &iter) == 1 && iter >= 0 && iter < counts.size()) {
+            if (sscanf(line.c_str(), "Test iteration: %d", &iter) == 1 && iter >= 0 && iter < static_cast<int>(counts.size())) {
                 counts[iter]++;
             }
         }

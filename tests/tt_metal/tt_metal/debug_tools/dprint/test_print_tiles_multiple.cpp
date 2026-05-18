@@ -96,7 +96,7 @@ void RunTest(
     /* Generating input tiles so that all numbers are consecutive in the uint32_t representation.
        Tile with i=0 starts at 0, tile with i=1 starts at tile_size, etc.
     */
-    for (int i = 0; i < num_tiles; i++) {
+    for (uint32_t i = 0; i < num_tiles; i++) {
         std::vector<uint32_t> tile = GenerateInputTileWithOffset(data_format, i * elements_in_tile);
 
         u32_vec.insert(u32_vec.end(), tile.begin(), tile.end());
