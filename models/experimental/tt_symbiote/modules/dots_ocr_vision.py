@@ -22,7 +22,6 @@ import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 from models.experimental.tt_symbiote.core.module import TTNNModule, TTNNLayerStack
-from models.experimental.tt_symbiote.core.run_config import trace_enabled
 from ttnn.operations.transformer import SDPAProgramConfig
 
 # Tracy (perf): vision Matmul/SDPA show HiFi4; use lower fidelity for ViT matmul/SDPA only.
@@ -480,13 +479,13 @@ class TTNNDotsVisionRMSNorm(TTNNModule):
         if self._use_layer_norm:
             self.tt_weight = ttnn.from_torch(
                 self._weight_torch.unsqueeze(0),
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
             if self._bias_torch is not None:
                 self.tt_bias = ttnn.from_torch(
                     self._bias_torch.unsqueeze(0),
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                 )
         else:
@@ -718,7 +717,6 @@ class TTNNDotsVisionMLP(TTNNModule):
 # ---------------------------------------------------------------------------
 
 
-@trace_enabled
 class TTNNDotsVisionPatchEmbed(TTNNModule):
     """Patch embedding for Dots vision (14x14 patches, no CLS token, no pos embed)."""
 
@@ -812,7 +810,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
             self.device, math_fidelity=VISION_NORM_MATH_FIDELITY
         )
 
-    def prepare_input(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor = None) -> ttnn.Tensor:
+    def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor = None) -> ttnn.Tensor:
         mem = ttnn.DRAM_MEMORY_CONFIG
         mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
@@ -828,7 +826,25 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
             )
             if len(x_tt.shape) == 3:
                 x_tt = ttnn.reshape(x_tt, (1, 1, x_tt.shape[1], x_tt.shape[2]))
-            return x_tt
+
+            out = ttnn.linear(
+                x_tt,
+                self.tt_proj_weight,
+                bias=self.tt_proj_bias,
+                transpose_b=True,
+                memory_config=mem,
+                compute_kernel_config=self.vision_matmul_compute_kernel_config,
+            )
+
+            if self.tt_norm_weight is not None:
+                out = ttnn.rms_norm(
+                    out,
+                    weight=self.tt_norm_weight,
+                    epsilon=1e-5,
+                    compute_kernel_config=self.vision_norm_compute_kernel_config,
+                )
+
+            return out
 
         B, C, H, W = pixel_values.shape
 
@@ -861,16 +877,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         )
         if len(x_tt.shape) == 3:
             x_tt = ttnn.reshape(x_tt, (1, 1, x_tt.shape[1], x_tt.shape[2]))
-        return x_tt
 
-    def forward(self, pixel_values: torch.Tensor | ttnn.Tensor, grid_thw: torch.Tensor = None) -> ttnn.Tensor:
-        mem = ttnn.DRAM_MEMORY_CONFIG
-        if isinstance(pixel_values, ttnn.Tensor):
-            x_tt = pixel_values
-        else:
-            x_tt = self.prepare_input(pixel_values, grid_thw)
-        if len(x_tt.shape) == 3:
-            x_tt = ttnn.reshape(x_tt, (1, 1, x_tt.shape[1], x_tt.shape[2]))
         out = ttnn.linear(
             x_tt,
             self.tt_proj_weight,
@@ -1103,9 +1110,25 @@ class TTNNDotsVisionAttention(TTNNModule):
             q = ttnn.experimental.rotary_embedding(q, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             k = ttnn.experimental.rotary_embedding(k, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+        # V is BFP8 from the QKV matmul; cast to BFP4 to halve the V DRAM
+        # stream in the chunked SDPA kernel. Per-core SDPA reads V tiles
+        # ``q_per_core`` times during prefill (10 outer-Q iterations at
+        # q_chunk=256, S=12288), so V dominates DRAM bandwidth in non-causal
+        # attention. BFP4 V costs one typecast per layer (~0.1 ms reading
+        # 21 MB BFP8 + writing 10.5 MB BFP4) and saves ~2-3 ms per layer
+        # of SDPA bandwidth -- accuracy stays good because V only feeds
+        # the post-softmax weighted sum (no further matmul accumulation).
+        # Q/K stay BFP8: K participates in the full QK^T matmul where
+        # BFP4 would lose precision in the early-attention scores.
+        # SDPA validates BFP4 V in sdpa_device_operation.cpp:40 ("Data
+        # type ... must be BFLOAT16, BFLOAT8_B, or BFLOAT4_B"), and the
+        # output dtype matches Q's dtype (BFP8) regardless of V dtype.
+        v = ttnn.typecast(v, dtype=ttnn.bfloat4_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         # SDPA still requires interleaved Q/K/V (sdpa_device_operation.cpp:44 forbids
-        # sharded inputs) and at S=12288 the BFP8 Q+K+V (~54 MB) plus SDPA's static
-        # circular buffers exceed the per-core L1 budget — keep these tensors on DRAM.
+        # sharded inputs) and at S=12288 the BFP8 Q+K (~36 MB) + BFP4 V (~10 MB)
+        # plus SDPA's static circular buffers exceed the per-core L1 budget --
+        # keep these tensors on DRAM.
 
         if cu_seqlens is None:
             program_config = self._get_sdpa_program_config(s)
@@ -1716,20 +1739,37 @@ class TTNNDotsOCRVisionTower(TTNNModule):
                 self.patch_merger.to_device(device)
         return self
 
-    def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> ttnn.Tensor:
-        """Run the full vision pipeline and return the result as a ttnn.Tensor on device.
+    def merged_vision_sequence_length(self, grid_thw: torch.Tensor, pixel_values: torch.Tensor | None = None) -> int:
+        """Merged vision token count on dim=2 after ``patch_merger`` (matches ``forward``).
 
-        Returns:
-            ttnn.Tensor: [1, 1, N_vision, H/num_devices] in TILE_LAYOUT,
-                col-sharded across devices (on multi-device), or
-                [1, 1, N_vision, H] replicated (on single device).
+        Used for scatter gather sizing without running the vision trunk.
         """
         if grid_thw is None:
+            raise ValueError("grid_thw is required")
+        g = grid_thw.detach().cpu() if hasattr(grid_thw, "is_cuda") and grid_thw.is_cuda else grid_thw
+        if g.dim() == 1:
+            g = g.unsqueeze(0)
+        temporal = int(g[0, 0].item())
+        height_patches = int(g[0, 1].item())
+        width_patches = int(g[0, 2].item())
+        num_patches = temporal * height_patches * width_patches
+        if pixel_values is not None and self.patch_embed is not None and pixel_values.dim() == 4:
+            patch_size = int(getattr(self.patch_embed, "patch_size", 14))
+            _b, _c, h, w = pixel_values.shape
+            alt = temporal * (h // patch_size) * (w // patch_size)
+            if alt > 0:
+                num_patches = min(num_patches, alt)
+        # dim != 4 (e.g. HF ``pixel_values`` [num_patches, C*patch*patch]): use grid-derived count only.
+        if self.patch_merger is not None:
+            return num_patches // (self.spatial_merge_size**2)
+        return num_patches
+
+    def forward_post_patch_embed(self, x: ttnn.Tensor, grid_thw: torch.Tensor) -> ttnn.Tensor:
+        """Vision blocks + post-trunk norm + patch merger (``patch_embed`` already applied)."""
+        if grid_thw is None:
             raise ValueError("grid_thw is required for Dots vision")
-
-        patch_input = self.patch_embed.prepare_input(pixel_values, grid_thw)
-        x = self.patch_embed(patch_input)
-
+        if grid_thw.dim() == 1:
+            grid_thw = grid_thw.unsqueeze(0)
         if isinstance(x, torch.Tensor):
             mem = ttnn.DRAM_MEMORY_CONFIG
             mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
@@ -1780,3 +1820,17 @@ class TTNNDotsOCRVisionTower(TTNNModule):
                 x = ttnn.slice(x, (0, 0, 0, 0), (int(x.shape[0]), int(x.shape[1]), merged_seq_len, int(x.shape[3])))
 
         return x
+
+    def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> ttnn.Tensor:
+        """Run the full vision pipeline and return the result as a ttnn.Tensor on device.
+
+        Returns:
+            ttnn.Tensor: [1, 1, N_vision, H/num_devices] in TILE_LAYOUT,
+                col-sharded across devices (on multi-device), or
+                [1, 1, N_vision, H] replicated (on single device).
+        """
+        if grid_thw is None:
+            raise ValueError("grid_thw is required for Dots vision")
+
+        x = self.patch_embed(pixel_values, grid_thw)
+        return self.forward_post_patch_embed(x, grid_thw)

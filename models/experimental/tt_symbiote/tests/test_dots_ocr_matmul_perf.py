@@ -29,8 +29,8 @@ work performed on a single Wormhole chip):
 | ``text_decode_mlp_w13``  |    32 |   768 | 17920 | HiFi2    | BF16 | BFP8 | BFP8 |
 | ``text_decode_mlp_w2``   |    32 |  4480 |  1536 | HiFi2    | BFP8 | BFP8 | BFP8 |
 | ``text_decode_o_proj``   |    32 |  1536 |   768 | HiFi2    | BF16 | BFP8 | BF16 |
-| ``lm_head_decode_chunk`` |    32 |  1536 | 11136 | HiFi2    | BF16 | BFP8 | BFP8 |
-| ``lm_head_decode_tail``  |    32 |  1536 |  9152 | HiFi2    | BF16 | BFP8 | BFP8 |
+| ``lm_head_decode_chunk`` |    32 |  1536 | 11136 | LoFi     | BF16 | BFP4 | BFP8 |
+| ``lm_head_decode_tail``  |    32 |  1536 |  9152 | LoFi     | BF16 | BFP4 | BFP8 |
 
 Run a single shape::
 
@@ -358,12 +358,12 @@ _CASES = [
         k=1536,
         n=11136,
         in0_dtype=_BF16,
-        in1_dtype=_BFP8,
+        in1_dtype=_BFP4,
         out_dtype=_BFP8,
-        math_fidelity=_HIFI2,
+        math_fidelity=_LOFI,
         program_config_kind="text_1d",
         in0_kind="BF16",
-        in1_kind="BFP8",
+        in1_kind="BFP4",
         out_kind="BFP8",
         expected_device_us=80,
     ),
@@ -373,12 +373,12 @@ _CASES = [
         k=1536,
         n=9152,
         in0_dtype=_BF16,
-        in1_dtype=_BFP8,
+        in1_dtype=_BFP4,
         out_dtype=_BFP8,
-        math_fidelity=_HIFI2,
+        math_fidelity=_LOFI,
         program_config_kind="text_1d",
         in0_kind="BF16",
-        in1_kind="BFP8",
+        in1_kind="BFP4",
         out_kind="BFP8",
         expected_device_us=70,
     ),
