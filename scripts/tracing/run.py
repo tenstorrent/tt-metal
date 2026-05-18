@@ -626,7 +626,9 @@ def maybe_print_metrics_tables(
         }
         setting_sample = next(iter(mode_rows.values()))
         min_prefill = min(prefill_values.values())
-        winners = "/".join(mode for mode in trace_modes if mode in prefill_values and prefill_values[mode] == min_prefill)
+        winners = "/".join(
+            mode for mode in trace_modes if mode in prefill_values and prefill_values[mode] == min_prefill
+        )
 
         delta_sec = "n/a"
         delta_pct = "n/a"
