@@ -4763,3 +4763,17 @@ Pure namespace qualification fix. No logic changes.
 
 - `16872e0cda9` — fix: add tt_metal:: namespace qualifier to HalProgrammableCoreType in fabric_init.cpp
 
+
+## FIX OO — Unused variable compile error in tt_metal.cpp (2026-05-18)
+
+### What failed
+CI run 26043851159 — build failure (not a test failure).
+`tt_metal.cpp:488` and `tt_metal.cpp:907`: `-Werror,-Wunused-variable` on `programmable_core_type`.
+
+### Root cause
+FIX SENDGO (f1a87f21dcf) replaced `hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH)` with explicit `true` at both `write_launch_msg_to_core` call sites in `tt_metal.cpp`. This left `programmable_core_type` as the only user of that variable gone, making it unused — but the declaration was not removed.
+
+### Fix applied
+Removed both dead `HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(...)` lines.
+
+Commit: 58a839220ef
