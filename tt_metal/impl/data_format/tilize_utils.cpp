@@ -10,6 +10,10 @@
 #include <numeric>
 #include <ostream>
 
+#ifdef __linux__
+#include <omp.h>
+#endif
+
 #include <tt_stl/assert.hpp>
 #include "constants.hpp"
 #include <tt_stl/span.hpp>
@@ -46,9 +50,8 @@ template <typename T>
 std::vector<T> to_tile_major_layout_swizzled(
     tt::stl::Span<const T> in_row_major, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
     ZoneScoped;
-    std::vector<T> tilized_result;
     if (in_row_major.size() == 0) {
-        return tilized_result;
+        return std::vector<T>();
     }
 
     size_t tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
@@ -62,14 +65,19 @@ std::vector<T> to_tile_major_layout_swizzled(
     TT_FATAL((in_row_major.size() % (H * W)) == 0, "Input size must be divisible by H and W");
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
-    tilized_result.resize(in_row_major.size());
+    std::vector<T> tilized_result(in_row_major.size());
+
+    // Parallelize across batches using OpenMP
+#pragma omp parallel for schedule(static)
     for (size_t b = 0; b < B; b++) {
         for (size_t hs = 0; hs < H; hs += tile_H) {
             for (size_t ws = 0; ws < W; ws += tile_W) {
+                T* dst = tilized_result.data() + (b * H * W) + (hs * W) + (ws * tile_H);
+                const T* src = in_row_major.data() + (b * H * W) + (hs * W) + ws;
                 for (size_t ht = 0; ht < tile_H; ht++) {
-                    size_t src_idx = (b * H * W) + ((hs + ht) * W) + ws;
-                    size_t dst_idx = (b * H * W) + (hs * W) + (ws * tile_H) + (ht * tile_W);
-                    std::memcpy(&tilized_result[dst_idx], &in_row_major[src_idx], tile_W * sizeof(T));
+                    std::memcpy(dst, src, tile_W * sizeof(T));
+                    dst += tile_W;
+                    src += W;
                 }
             }
         }
@@ -83,9 +91,8 @@ template <typename T>
 std::vector<T> convert_layout_tile_swizzled_to_row_major(
     tt::stl::Span<const T> in_tile_swizzled, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
     ZoneScoped;
-    std::vector<T> result;
     if (in_tile_swizzled.size() == 0) {
-        return result;
+        return std::vector<T>();
     }
 
     size_t tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
@@ -100,15 +107,19 @@ std::vector<T> convert_layout_tile_swizzled_to_row_major(
     TT_FATAL((in_tile_swizzled.size() % (H * W)) == 0, "Input size must be divisible by H and W");
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
-    result.resize(in_tile_swizzled.size());
+    std::vector<T> result(in_tile_swizzled.size());
+
+    // Parallelize across batches using OpenMP
+#pragma omp parallel for schedule(static)
     for (size_t b = 0; b < B; b++) {
         for (size_t hs = 0; hs < H; hs += tile_H) {
             for (size_t ws = 0; ws < W; ws += tile_W) {
+                const T* src = in_tile_swizzled.data() + (b * H * W) + (hs * W) + (ws * tile_H);
+                T* dst = result.data() + (b * H * W) + (hs * W) + ws;
                 for (size_t ht = 0; ht < tile_H; ht++) {
-                    // Note: the only difference with tilize_row_major - switched src and dst indices
-                    size_t src_idx = (b * H * W) + (hs * W) + (ws * tile_H) + (ht * tile_W);
-                    size_t dst_idx = (b * H * W) + ((hs + ht) * W) + ws;
-                    std::memcpy(&result[dst_idx], &in_tile_swizzled[src_idx], tile_W * sizeof(T));
+                    std::memcpy(dst, src, tile_W * sizeof(T));
+                    dst += W;
+                    src += tile_W;
                 }
             }
         }
@@ -124,9 +135,8 @@ std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
     const bool transpose_face,
     bool transpose_face_order) {
     ZoneScoped;
-    std::vector<T> result;
     if (in_tile_swizzled.size() == 0) {
-        return result;
+        return std::vector<T>();
     }
 
     size_t tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
@@ -142,11 +152,13 @@ std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
     transpose_face_order = transpose_face_order && row_faces > 1 && col_faces > 1;
 
     TT_FATAL(in_tile_swizzled.size() % tile_HW == 0, "Input size must be divisible by tile size");
-    result.resize(in_tile_swizzled.size());
+    std::vector<T> result(in_tile_swizzled.size());
     size_t num_tiles = in_tile_swizzled.size() / tile_HW;
     size_t num_faces_col = tile_W / face_W;
     size_t num_faces_row = tile_H / face_H;
 
+    // Parallelize across tiles using OpenMP
+#pragma omp parallel for schedule(static)
     for (size_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         size_t tile_offset = tile_idx * tile_HW;
         for (size_t face_y = 0; face_y < num_faces_row; face_y++) {
@@ -188,9 +200,8 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
     const bool transpose_face,
     bool transpose_face_order) {
     ZoneScoped;
-    std::vector<T> result(in_tile_nfaces.size());
     if (in_tile_nfaces.size() == 0) {
-        return result;
+        return std::vector<T>();
     }
     size_t tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
     size_t tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
@@ -208,7 +219,11 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
     transpose_face_order = transpose_face_order && row_faces > 1 && col_faces > 1;
 
     TT_FATAL(in_tile_nfaces.size() % tile_HW == 0, "Input size must be divisible by tile size");
+    std::vector<T> result(in_tile_nfaces.size());
     size_t num_tiles = in_tile_nfaces.size() / tile_HW;
+
+    // Parallelize across tiles using OpenMP
+#pragma omp parallel for schedule(static)
     for (size_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         size_t tile_start = tile_idx * tile_HW;
 
@@ -267,9 +282,6 @@ std::vector<T> to_tile_major_layout_nfaces(
     size_t batch_size = H * W;
     size_t B = in_row_major.size() / batch_size;  // Number of batches
 
-    std::vector<T> tilized_input;
-    tilized_input.reserve(in_row_major.size());
-
     size_t tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
     size_t tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
     size_t face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
@@ -283,44 +295,61 @@ std::vector<T> to_tile_major_layout_nfaces(
     TT_FATAL((in_row_major.size() % (H * W)) == 0, "Input size must be divisible by H and W");
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
-    auto write_face = [&](size_t face_idx, size_t face_height, size_t face_width, size_t stride) {
-        size_t offset = tilized_input.size();
-        tilized_input.resize(offset + (face_height * face_width));
-        T* dst = tilized_input.data() + offset;
-        const T* src = in_row_major.data() + face_idx;
-        if (!transpose_face) {
-            for (size_t row = 0; row < face_height; row++) {
-                std::memcpy(dst, src, face_width * sizeof(T));
-                dst += face_width;
-                src += stride;
-            }
-        } else {
-            for (size_t row = 0; row < face_height; row++) {
-                for (size_t col = 0; col < face_width; col++) {
-                    dst[(col * face_height) + row] = src[(row * stride) + col];
-                }
-            }
-        }
-    };
+    std::vector<T> tilized_input(in_row_major.size());
+    const size_t face_HW = face_H * face_W;
+    const size_t face_tile_stride = tile_H / face_H;
 
-    size_t batch_start = 0;
+    // Parallelize across batches using OpenMP
+#pragma omp parallel for schedule(static)
     for (size_t b = 0; b < B; b++) {
+        size_t batch_start = b * batch_size;
         size_t tile_start = batch_start;
         for (size_t row_tile = 0; row_tile < row_tiles; row_tile++) {
             size_t row_tile_start = tile_start;
             for (size_t col_tile = 0; col_tile < col_tiles; col_tile++) {
+                size_t dst_offset = batch_start + (row_tile * tile_H * W) + (col_tile * tile_H * tile_W);
                 if (!transpose_face_order) {
                     for (size_t face_h_index = 0; face_h_index < tile_H / face_H; face_h_index++) {
                         for (size_t face_w_index = 0; face_w_index < tile_W / face_W; face_w_index++) {
                             size_t src_idx = row_tile_start + (face_w_index * face_W) + (face_h_index * face_H * W);
-                            write_face(src_idx, face_H, face_W, W);
+                            T* dst = tilized_input.data() + dst_offset;
+                            const T* src = in_row_major.data() + src_idx;
+                            if (!transpose_face) {
+                                for (size_t row = 0; row < face_H; row++) {
+                                    std::memcpy(dst, src, face_W * sizeof(T));
+                                    dst += face_W;
+                                    src += W;
+                                }
+                            } else {
+                                for (size_t row = 0; row < face_H; row++) {
+                                    for (size_t col = 0; col < face_W; col++) {
+                                        dst[(col * face_H) + row] = src[(row * W) + col];
+                                    }
+                                }
+                            }
+                            dst_offset += face_HW;
                         }
                     }
                 } else {
                     for (size_t face_w_index = 0; face_w_index < tile_W / face_W; face_w_index++) {
                         for (size_t face_h_index = 0; face_h_index < tile_H / face_H; face_h_index++) {
                             size_t src_idx = row_tile_start + (face_w_index * face_W) + (face_h_index * face_H * W);
-                            write_face(src_idx, face_H, face_W, W);
+                            T* dst = tilized_input.data() + dst_offset;
+                            const T* src = in_row_major.data() + src_idx;
+                            if (!transpose_face) {
+                                for (size_t row = 0; row < face_H; row++) {
+                                    std::memcpy(dst, src, face_W * sizeof(T));
+                                    dst += face_W;
+                                    src += W;
+                                }
+                            } else {
+                                for (size_t row = 0; row < face_H; row++) {
+                                    for (size_t col = 0; col < face_W; col++) {
+                                        dst[(col * face_H) + row] = src[(row * W) + col];
+                                    }
+                                }
+                            }
+                            dst_offset += face_HW;
                         }
                     }
                 }
@@ -328,7 +357,6 @@ std::vector<T> to_tile_major_layout_nfaces(
             }
             tile_start += row_of_tiles_num_elements;
         }
-        batch_start += batch_size;
     }
 
     return tilized_input;
@@ -368,34 +396,10 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
     TT_FATAL((in_nfaces.size() % (H * W)) == 0, "Input size must be divisible by H and W");
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
-    auto write_face =
-        [&](std::vector<T>& out_data, tt::stl::Span<const T> in_data, size_t in_face_start, size_t out_face_start) {
-            if (!transpose_face) {
-                for (size_t row = 0; row < face_H; row++) {
-                    size_t src_idx = in_face_start + (row * face_W);
-                    size_t dst_idx = out_face_start + (row * tile_W * tile_cols);
-                    if (dst_idx + face_W > out_data.size()) {
-                        std::cout << "dst_idx: " << dst_idx << " out_data.size(): " << out_data.size() << std::endl;
-                    }
-                    if (src_idx + face_W > in_data.size()) {
-                        std::cout << "src_idx: " << src_idx << " in_data.size(): " << in_data.size() << std::endl;
-                    }
-                    std::memcpy(&out_data[dst_idx], &in_data[src_idx], face_W * sizeof(T));
-                }
-            } else {
-                for (size_t row = 0; row < face_H; row++) {
-                    for (size_t col = 0; col < face_W; col++) {
-                        size_t src_idx = in_face_start + (row * face_W) + col;
-                        size_t dst_idx = out_face_start + (col * face_H * col_faces * tile_cols) + row;
-
-                        out_data[dst_idx] = in_data[src_idx];
-                    }
-                }
-            }
-        };
-
-    size_t batch_start = 0;
+    // Parallelize across batches using OpenMP
+#pragma omp parallel for schedule(static)
     for (size_t b = 0; b < B; b++) {
+        size_t batch_start = b * batch_size;
         for (size_t tile_row = 0; tile_row < tile_rows; tile_row++) {
             for (size_t tile_col = 0; tile_col < tile_cols; tile_col++) {
                 size_t in_tile_start = batch_start + (tile_row * tile_H * W) + (tile_col * tile_H * tile_W);
@@ -413,12 +417,29 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
                         size_t out_face_start =
                             transpose_face ? out_tile_start + (face_h_idx_dst * face_H * W) + (face_w_idx_dst * face_H)
                                            : out_tile_start + (face_h_idx_dst * face_H * W) + (face_w_idx_dst * face_W);
-                        write_face(output, in_nfaces, in_face_start, out_face_start);
+
+                        T* out_data = output.data();
+                        const T* in_data = in_nfaces.data();
+                        if (!transpose_face) {
+                            for (size_t row = 0; row < face_H; row++) {
+                                size_t src_idx = in_face_start + (row * face_W);
+                                size_t dst_idx = out_face_start + (row * tile_W * tile_cols);
+                                std::memcpy(&out_data[dst_idx], &in_data[src_idx], face_W * sizeof(T));
+                            }
+                        } else {
+                            for (size_t row = 0; row < face_H; row++) {
+                                for (size_t col = 0; col < face_W; col++) {
+                                    size_t src_idx = in_face_start + (row * face_W) + col;
+                                    size_t dst_idx = out_face_start + (col * face_H * col_faces * tile_cols) + row;
+
+                                    out_data[dst_idx] = in_data[src_idx];
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
-        batch_start += batch_size;
     }
 
     return output;
