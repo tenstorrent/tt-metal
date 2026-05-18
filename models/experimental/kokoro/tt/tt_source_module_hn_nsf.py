@@ -120,13 +120,13 @@ class TTSourceModuleHnNSF:
         *,
         use_torch_phase_fallback: bool = False,
         use_torch_linear_fallback: bool = False,
+        use_torch_tanh_fallback: bool = False,
     ) -> None:
         self.device = device
         self.params = params
         self._sinegen = TTSineGen(device, params.sinegen, use_torch_phase_fallback=use_torch_phase_fallback)
-        # l_linear+tanh runs on CPU when either the phase chain is already on CPU (phase fallback)
-        # or the caller explicitly requests it (linear fallback) to isolate l_linear BF16 error.
-        self._use_torch_linear_fallback = use_torch_linear_fallback or use_torch_phase_fallback
+        self._use_torch_linear_fallback = use_torch_linear_fallback
+        self._use_torch_tanh_fallback = use_torch_tanh_fallback
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi3,
@@ -167,7 +167,7 @@ class TTSourceModuleHnNSF:
 
         # ``sine_merge = tanh(l_linear(sine_wavs))`` — Linear(dim, 1) over channel axis.
         if self._use_torch_linear_fallback:
-            # CPU float32 linear+tanh: BH BF16 MACs on the dim=9 dot product introduce ~2%
+            # CPU float32 linear: BH BF16 MACs on the dim=9 dot product introduce ~2%
             # relative error in sine_merge, which corrupts near-zero STFT bins downstream
             # even when torch.stft is used for the transform.
             dim = p.sinegen.dim
@@ -175,15 +175,26 @@ class TTSourceModuleHnNSF:
             w_cpu = ttnn.to_torch(p.linear_weight).float().reshape(1, dim)
             b_cpu = ttnn.to_torch(p.linear_bias).float().flatten()[:1]
             ttnn.deallocate(sine_wavs)
-            merged_cpu = F_torch.linear(x_cpu, w_cpu, b_cpu)  # [B*T, 1]
-            sine_merge_cpu = torch.tanh(merged_cpu).reshape(B, p.time_len, 1)
-            sine_merge = ttnn.from_torch(
-                sine_merge_cpu.contiguous(),
-                dtype=p.sinegen.activation_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=memory_config,
-            )
+            merged_cpu = F_torch.linear(x_cpu, w_cpu, b_cpu).reshape(B, p.time_len, 1)
+            if self._use_torch_tanh_fallback:
+                sine_merge_cpu = torch.tanh(merged_cpu)
+                sine_merge = ttnn.from_torch(
+                    sine_merge_cpu.contiguous(),
+                    dtype=p.sinegen.activation_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=memory_config,
+                )
+            else:
+                merged = ttnn.from_torch(
+                    merged_cpu.contiguous(),
+                    dtype=p.sinegen.activation_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=memory_config,
+                )
+                sine_merge = ttnn.tanh(merged, memory_config=memory_config)
+                ttnn.deallocate(merged)
         else:
             merged = ttnn.linear(
                 sine_wavs,
@@ -197,8 +208,20 @@ class TTSourceModuleHnNSF:
             # ``ttnn.linear`` may pad to rank 4; squeeze leading singletons.
             while len(merged.shape) > 3:
                 merged = ttnn.squeeze(merged, 0)
-            sine_merge = ttnn.tanh(merged, memory_config=memory_config)
-            ttnn.deallocate(merged)
+            if self._use_torch_tanh_fallback:
+                merged_cpu = ttnn.to_torch(merged).float()
+                ttnn.deallocate(merged)
+                sine_merge_cpu = torch.tanh(merged_cpu)
+                sine_merge = ttnn.from_torch(
+                    sine_merge_cpu.contiguous(),
+                    dtype=p.sinegen.activation_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=memory_config,
+                )
+            else:
+                sine_merge = ttnn.tanh(merged, memory_config=memory_config)
+                ttnn.deallocate(merged)
 
         # ``noise = randn_like(uv) * sine_amp / 3`` → [B, T, 1]
         if out_noise_raw is None:

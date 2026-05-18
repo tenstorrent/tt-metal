@@ -111,7 +111,8 @@ class TTDurationEncoder:
 
         s_bc = ttnn.reshape(style_bs, [b, 1, p.sty_dim], memory_config=memory_config)
         s_btl = ttnn.repeat(s_bc, (1, t_len, 1), memory_config=memory_config)
-        ttnn.deallocate(s_bc)
+        # Keep s_bc alive: on some backends reshape can alias style_bs storage.
+        # Deallocating s_bc here may invalidate style_bs, which is reused by AdaLayerNorm.
         x = ttnn.concat([x, s_btl], dim=2, memory_config=memory_config)
         x = ttnn.multiply(x, keep_mask_btl, memory_config=memory_config)
 

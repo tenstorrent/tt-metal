@@ -104,6 +104,34 @@ def _torch_random_zeros():
         torch.randn_like = real_randn_like
 
 
+@contextmanager
+def _torch_source_module_fixed_noise(rand_ini: torch.Tensor, sinegen_noise: torch.Tensor, source_noise: torch.Tensor):
+    """Inject fixed SourceModuleHnNSF noise tensors into the reference path."""
+    real_rand = torch.rand
+    real_randn_like = torch.randn_like
+
+    def fake_rand(*size, **kwargs):
+        requested = tuple(size) if len(size) > 1 else tuple(size[0])
+        if requested == tuple(rand_ini.shape):
+            return rand_ini.to(dtype=kwargs.get("dtype", rand_ini.dtype), device=kwargs.get("device", rand_ini.device))
+        return torch.zeros(*size, **kwargs)
+
+    def fake_randn_like(t, **kwargs):
+        if tuple(t.shape) == tuple(sinegen_noise.shape):
+            return sinegen_noise.to(dtype=t.dtype, device=t.device)
+        if tuple(t.shape) == tuple(source_noise.shape):
+            return source_noise.to(dtype=t.dtype, device=t.device)
+        return torch.zeros_like(t, **kwargs)
+
+    torch.rand = fake_rand
+    torch.randn_like = fake_randn_like
+    try:
+        yield
+    finally:
+        torch.rand = real_rand
+        torch.randn_like = real_randn_like
+
+
 def _build_decoder() -> Decoder:
     return Decoder(
         dim_in=_DIM_IN,
@@ -386,6 +414,8 @@ def test_tt_decoder_full_forward_fallback_pcc(device):
         params.generator,
         use_torch_stft_fallback=True,
         use_torch_phase_fallback=True,
+        use_torch_linear_fallback=True,
+        use_torch_tanh_fallback=True,
     )
 
     mc = ttnn.DRAM_MEMORY_CONFIG
@@ -457,3 +487,102 @@ def test_tt_decoder_full_forward_no_fallback_smoke(device):
     assert y_hat.abs().max().item() > 1e-3, "TTDecoder (no fallback) produced ~zero output"
     _, pcc = comp_pcc(y_ref, y_hat, pcc=0.0)
     print(f"TTDecoder full-forward smoke PCC: {pcc:.6f} (informational; WH BF16 limit applies)")
+
+
+def test_tt_decoder_full_forward_no_fallback_matched_source_noise(device):
+    """Compare no-fallback vs full-fallback TTDecoder under identical source-noise tensors."""
+    ckpt_path = _find_checkpoint()
+    if ckpt_path is None:
+        pytest.skip("Kokoro checkpoint not found locally.")
+
+    ref = _build_decoder()
+    _load_trained_weights(ref, ckpt_path)
+    asr, F0_curve, N_curve, s = _setup_realistic_decoder_inputs(seed=4)
+
+    params = preprocess_tt_decoder(ref, device, time_len_asr=_T_MEL)
+    tt_mod_no_fallback = TTDecoder(device, params)
+    tt_mod_full_fallback = TTDecoder(
+        device,
+        params,
+        use_torch_stft_fallback=True,
+        use_torch_phase_fallback=True,
+        use_torch_linear_fallback=True,
+        use_torch_tanh_fallback=True,
+    )
+
+    B = int(F0_curve.shape[0])
+    T_har = params.generator.time_len_x * params.generator.upsample_scale_full
+    dim = params.generator.m_source.sinegen.dim
+
+    torch.manual_seed(321)
+    rand_ini = torch.rand(B, 1, dim)
+    sinegen_noise = torch.randn(B, T_har, dim)
+    source_noise = torch.randn(B, T_har, 1)
+
+    with torch.no_grad(), _torch_source_module_fixed_noise(rand_ini, sinegen_noise, source_noise):
+        y_ref = ref(asr, F0_curve, N_curve, s)
+
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    asr_nlc = asr.transpose(1, 2).contiguous()
+    asr_tt = ttnn.from_torch(asr_nlc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    F0_tt = ttnn.from_torch(F0_curve, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    N_tt = ttnn.from_torch(N_curve, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    s_tt = ttnn.from_torch(s, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    rand_ini_tt = ttnn.from_torch(rand_ini, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    sinegen_noise_tt = ttnn.from_torch(sinegen_noise, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    source_noise_tt = ttnn.from_torch(source_noise, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    audio_tt_no_fallback = tt_mod_no_fallback(
+        asr_tt,
+        F0_tt,
+        N_tt,
+        s_tt,
+        sinegen_rand_ini=rand_ini_tt,
+        sinegen_noise_raw=sinegen_noise_tt,
+        source_noise_raw=source_noise_tt,
+        memory_config=mc,
+    )
+    audio_tt_full_fallback = tt_mod_full_fallback(
+        asr_tt,
+        F0_tt,
+        N_tt,
+        s_tt,
+        sinegen_rand_ini=rand_ini_tt,
+        sinegen_noise_raw=sinegen_noise_tt,
+        source_noise_raw=source_noise_tt,
+        memory_config=mc,
+    )
+
+    y_hat_no_fallback = ttnn.to_torch(audio_tt_no_fallback).float()
+    y_hat_full_fallback = ttnn.to_torch(audio_tt_full_fallback).float()
+    ttnn.deallocate(audio_tt_no_fallback)
+    ttnn.deallocate(audio_tt_full_fallback)
+    ttnn.deallocate(asr_tt)
+    ttnn.deallocate(F0_tt)
+    ttnn.deallocate(N_tt)
+    ttnn.deallocate(s_tt)
+    ttnn.deallocate(rand_ini_tt)
+    ttnn.deallocate(sinegen_noise_tt)
+    ttnn.deallocate(source_noise_tt)
+
+    while y_hat_no_fallback.dim() > y_ref.dim():
+        y_hat_no_fallback = y_hat_no_fallback.squeeze(0)
+    while y_hat_full_fallback.dim() > y_ref.dim():
+        y_hat_full_fallback = y_hat_full_fallback.squeeze(0)
+
+    assert y_hat_no_fallback.shape == y_ref.shape, (y_hat_no_fallback.shape, y_ref.shape)
+    assert y_hat_full_fallback.shape == y_ref.shape, (y_hat_full_fallback.shape, y_ref.shape)
+    assert torch.isfinite(y_hat_no_fallback).all(), "TTDecoder (no fallback, matched source noise) produced NaN/Inf"
+    assert torch.isfinite(y_hat_full_fallback).all(), "TTDecoder (full fallback, matched source noise) produced NaN/Inf"
+    _, pcc_no_fallback = comp_pcc(y_ref, y_hat_no_fallback, pcc=0.0)
+    _, pcc_full_fallback = comp_pcc(y_ref, y_hat_full_fallback, pcc=0.0)
+    print(
+        "TTDecoder matched-source-noise PCCs: "
+        f"no-fallback={pcc_no_fallback:.6f}, full-fallback={pcc_full_fallback:.6f}"
+    )
+    assert (
+        pcc_no_fallback > 0.0
+    ), f"Expected positive PCC in matched-source-noise no-fallback run, got {pcc_no_fallback:.6f}"
+    assert (
+        pcc_full_fallback > 0.0
+    ), f"Expected positive PCC in matched-source-noise full-fallback run, got {pcc_full_fallback:.6f}"

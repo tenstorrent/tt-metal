@@ -56,16 +56,12 @@ def _conv1d_to_tt_params(conv: nn.Conv1d, device, *, weights_dtype) -> TTConv1dP
         w,
         dtype=weights_dtype,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     b_tt = (
         ttnn.from_torch(
             b.reshape(1, 1, 1, -1),
             dtype=weights_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         if b is not None
         else None
