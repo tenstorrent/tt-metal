@@ -114,9 +114,9 @@ void build_and_run_program(
             .noc_mode = mix_noc_mode ? tt_metal::NOC_MODE::DM_DEDICATED_NOC : tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
             .compile_args = compile_args});
 
-    for (int core_idx_y = 0; core_idx_y < worker_grid_size.y; core_idx_y++) {
-        for (int core_idx_x = 0; core_idx_x < worker_grid_size.x; core_idx_x++) {
-            CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
+    for (size_t core_idx_y = 0; core_idx_y < worker_grid_size.y; core_idx_y++) {
+        for (size_t core_idx_x = 0; core_idx_x < worker_grid_size.x; core_idx_x++) {
+            CoreCoord core = {core_idx_x, core_idx_y};
             CoreCoord neighbour_core = {core_idx_x == worker_grid_size.x - 1 ? 0 : core_idx_x + 1, core_idx_y};
             CoreCoord neighbour_core_physical = device->worker_core_from_logical_core(neighbour_core);
             // mcast
