@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
 import ttnn
 
@@ -13,7 +14,14 @@ from ...layers.module import Module, ModuleList
 from ...layers.normalization import LayerNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
-from .config_wav2vec2 import Wav2Vec2Config
+
+if TYPE_CHECKING:
+    # Wav2Vec2Config is defined in model_wav2vec2.py; we import it under
+    # TYPE_CHECKING to avoid a circular import (model_wav2vec2 imports
+    # Wav2Vec2EncoderStack / Wav2Vec2FeatureProjection from this module).
+    # All uses below are type annotations, evaluated lazily by `from __future__
+    # import annotations`.
+    from .model_wav2vec2 import Wav2Vec2Config
 
 # Note: there is no on-device `Wav2Vec2PositionalConvEmbedding` here. The HF
 # pos-conv is a grouped Conv1d with `groups=16, in_per_group=48, kernel=128`.

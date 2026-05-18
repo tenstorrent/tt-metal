@@ -9,7 +9,7 @@ from transformers import Wav2Vec2Model, Wav2Vec2Processor
 
 import ttnn
 
-from ....encoders.wav2vec2 import Wav2Vec2Config, Wav2Vec2Encoder
+from ....encoders.wav2vec2.model_wav2vec2 import Wav2Vec2Config, Wav2Vec2Encoder
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality

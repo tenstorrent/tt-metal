@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import torch
 
 import ttnn
@@ -11,7 +13,10 @@ import ttnn
 from ...layers.module import Module, ModuleList, Parameter
 from ...utils.conv3d import aligned_channels, get_conv3d_config, register_conv3d_configs
 from ...utils.tensor import local_device_to_torch
-from .config_wav2vec2 import Wav2Vec2Config
+
+if TYPE_CHECKING:
+    # See encoder_wav2vec2.py for the circular-import rationale.
+    from .model_wav2vec2 import Wav2Vec2Config
 
 
 def _conv1d_output_len(in_len: int, kernel: int, stride: int, padding: int = 0) -> int:
