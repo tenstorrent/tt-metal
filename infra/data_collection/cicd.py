@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from pprint import pprint
 from loguru import logger
 
 from infra.data_collection.github.utils import (
@@ -63,8 +62,6 @@ def create_cicd_json_for_data_analysis(
     )
 
     github_job_id_to_smi_versions, github_job_id_to_smi_resets = get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, github_pipeline_id, workflow_attempt)
-    print("CHECK:", 72824250364 in github_job_id_to_smi_resets)
-    print("AVAILABLE KEYS:", list(github_job_id_to_smi_resets.keys())[:10])
     jobs = []
     tt_smi_resets = []
 
@@ -103,14 +100,11 @@ def create_cicd_json_for_data_analysis(
         reset_data = github_job_id_to_smi_resets.get((workflow_attempt, github_job_id))
 
         if reset_data:
-            for attempt in reset_data:
-                attempt["github_job_id"] = github_job_id
-                attempt["workflow_attempt"] = workflow_attempt
-                tt_smi_resets.append(TtSmiReset(**attempt))
-
-        if github_job_id in [72824250364, 72824250365, 72824250368]:
-            logger.info(f"RESET DATA FOR {github_job_id}: {reset_data}")
-            assert reset_data is not None, f"Missing reset_data for {github_job_id}"
+            for smi_reset in reset_data:
+                smi_reset = dict(smi_reset)
+                smi_reset["github_job_id"] = github_job_id
+                smi_reset["workflow_attempt"] = workflow_attempt
+                tt_smi_resets.append(TtSmiReset(**smi_reset))
 
         job = pydantic_models.Job(
             **raw_job,
@@ -119,6 +113,20 @@ def create_cicd_json_for_data_analysis(
             steps=steps,
         )
         jobs.append(job)
+
+    # Collect SMI reset data for all earlier workflow attempts.
+    # raw_jobs only contains jobs from the latest attempt (workflow_jobs.json is overwritten
+    # per attempt during log download). Log files for all attempts are downloaded, so
+    # github_job_id_to_smi_resets contains keys for every attempt. We iterate over those
+    # earlier-attempt keys here so their reset data is captured in the pipeline record.
+    for (attempt_num, job_id), reset_entries in github_job_id_to_smi_resets.items():
+        if attempt_num == workflow_attempt:
+            continue  # Already handled in the job loop above
+        for smi_reset in reset_entries:
+            smi_reset = dict(smi_reset)
+            smi_reset["github_job_id"] = job_id
+            smi_reset["workflow_attempt"] = attempt_num
+            tt_smi_resets.append(TtSmiReset(**smi_reset))
 
     pipeline = pydantic_models.Pipeline(
         **raw_pipeline,
