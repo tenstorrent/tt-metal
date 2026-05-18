@@ -606,7 +606,7 @@ class TTNNDotsVisionMLP(TTNNModule):
         def pw(w):
             if w is None:
                 return None
-            return preprocess_linear_weight(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)
+            return preprocess_linear_weight(w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
 
         def pb(b):
             if b is None:
@@ -687,8 +687,8 @@ class TTNNDotsVisionMLP(TTNNModule):
         # exp+sigmoid is the bottleneck). ``fast_and_approximate_mode=True``
         # routes the fused SILU through the polynomial exp/sigmoid path,
         # cutting the ~2.2 ms BinaryNg time per vision layer. Output goes to
-        # BFP8 so the down-projection matmul reads half the bandwidth (BFP4
-        # weight x BFP8 activation instead of BFP4 x BF16).
+        # BFP8 so the down-projection matmul reads half the bandwidth (BFP8
+        # weight x BFP8 activation instead of BFP8 x BF16).
         gate_up_mul = ttnn.mul(
             gate,
             up,
@@ -783,7 +783,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         if self._proj_weight is not None:
             self.tt_proj_weight = ttnn.from_torch(
                 self._proj_weight.to(torch.bfloat16),
-                dtype=ttnn.bfloat4_b,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
             )
         if self._proj_bias is not None:
@@ -983,11 +983,11 @@ class TTNNDotsVisionAttention(TTNNModule):
         # preserves input dtype -- so Q/K can stay BFP8 the whole way from
         # the QKV matmul into SDPA, eliminating the 4 typecasts per layer
         # the llama kernel forced (~1.3 ms x 42 layers in vision prefill).
-        self.tt_qkv_weight = preprocess_linear_weight(self._qkv_weight, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)
+        self.tt_qkv_weight = preprocess_linear_weight(self._qkv_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
         if self._qkv_bias is not None:
             self.tt_qkv_bias = preprocess_linear_bias(self._qkv_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
         self.tt_o_proj_weight = preprocess_linear_weight(
-            self._o_proj_weight, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT
+            self._o_proj_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
         )
         if self._o_proj_bias is not None:
             self.tt_o_proj_bias = preprocess_linear_bias(
@@ -1188,7 +1188,7 @@ class TTNNDotsVisionAttention(TTNNModule):
             # ``ttnn.experimental.rotary_embedding`` (non-llama) preserves
             # input dtype, so Q/K stay BFP8 the whole way: no typecasts
             # around the rotary, and SDPA reads BFP8 Q/K/V directly.
-            # QKV matmul uses BF16 activations × BFP4 weights → BFP8 (same
+            # QKV matmul uses BF16 activations × BFP8 weights → BFP8 (same
             # contract as vision MLP gate/up).
             q = ttnn.experimental.rotary_embedding(q, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             k = ttnn.experimental.rotary_embedding(k, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1199,13 +1199,11 @@ class TTNNDotsVisionAttention(TTNNModule):
         # q_chunk=256, S=12288), so V dominates DRAM bandwidth in non-causal
         # attention. BFP4 V costs one typecast per layer (~0.1 ms reading
         # 21 MB BFP8 + writing 10.5 MB BFP4) and saves ~2-3 ms per layer
-        # of SDPA bandwidth -- accuracy stays good because V only feeds
-        # the post-softmax weighted sum (no further matmul accumulation).
-        # Q/K stay BFP8: K participates in the full QK^T matmul where
-        # BFP4 would lose precision in the early-attention scores.
-        # SDPA validates BFP4 V in sdpa_device_operation.cpp:40 ("Data
-        # type ... must be BFLOAT16, BFLOAT8_B, or BFLOAT4_B"), and the
-        # output dtype matches Q's dtype (BFP8) regardless of V dtype.
+        # of SDPA bandwidth. Q/K stay BFP8: K participates in the full QK^T
+        # matmul where BFP4 would lose precision in the early-attention scores.
+        # SDPA validates BFP4 V in sdpa_device_operation.cpp:40 ("Data type ...
+        # must be BFLOAT16, BFLOAT8_B, or BFLOAT4_B"), and the output dtype
+        # matches Q's dtype (BFP8) regardless of V dtype.
         v = ttnn.typecast(v, dtype=ttnn.bfloat4_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # SDPA still requires interleaved Q/K/V (sdpa_device_operation.cpp:44 forbids
@@ -1451,12 +1449,12 @@ class TTNNDotsPatchMerger(TTNNModule):
                 self.tt_ln_weight = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         self.tt_w1 = (
-            ttnn.from_torch(self._w1_weight.to(torch.bfloat16), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)
+            ttnn.from_torch(self._w1_weight.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
             if self._w1_weight is not None
             else None
         )
         self.tt_w2 = (
-            ttnn.from_torch(self._w2_weight.to(torch.bfloat16), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)
+            ttnn.from_torch(self._w2_weight.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
             if self._w2_weight is not None
             else None
         )
@@ -1466,7 +1464,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             else None
         )
         self.tt_w2_bias = (
-            ttnn.from_torch(self._w2_bias.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            ttnn.from_torch(self._w2_bias.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
             if self._w2_bias is not None
             else None
         )
@@ -1498,7 +1496,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             # Re-create w2 on device with col-shard mapper
             self.tt_w2 = ttnn.from_torch(
                 self._w2_weight.to(torch.bfloat16),
-                dtype=ttnn.bfloat4_b,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 memory_config=mem,
@@ -1507,7 +1505,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             if self._w2_bias is not None:
                 self.tt_w2_bias = ttnn.from_torch(
                     self._w2_bias.to(torch.bfloat16),
-                    dtype=ttnn.bfloat4_b,
+                    dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
                     memory_config=mem,

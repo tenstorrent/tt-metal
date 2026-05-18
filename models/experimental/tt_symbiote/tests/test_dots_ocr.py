@@ -271,6 +271,7 @@ def test_dots_ocr_vision(mesh_device, image_link):
         pixel_values=pixel_values,
         image_grid_thw=image_grid_thw,
         max_new_tokens=180,
+        stop_on_eos=False,
     )
     ttnn.synchronize_device(mesh_device)
     end_time = time.time()

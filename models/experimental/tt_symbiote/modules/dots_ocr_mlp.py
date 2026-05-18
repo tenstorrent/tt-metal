@@ -21,6 +21,10 @@ from models.experimental.tt_symbiote.modules.linear import (
 
 
 class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFusedGateUp):
+    def set_weight_dtype(self, dtype):
+        self._weight_dtype = dtype
+        return self
+
     def move_weights_to_device_impl(self):
         if not _tp_requires_ccl(self.device):
             return super().move_weights_to_device_impl()
@@ -51,7 +55,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         weight = torch.cat(weight_chunks, dim=0)
         self.tt_weight_host = preprocess_linear_weight(
             weight,
-            dtype=ttnn.bfloat4_b,
+            dtype=getattr(self, "_weight_dtype", ttnn.bfloat4_b),
             layout=ttnn.TILE_LAYOUT,
             weights_mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
         )
@@ -116,11 +120,16 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
 
 
 class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
+    def set_weight_dtype(self, dtype):
+        self._weight_dtype = dtype
+        return self
+
     def move_weights_to_device_impl(self):
+        weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat4_b)
         if isinstance(self.tt_weight_host, torch.Tensor):
             self.tt_weight_host = preprocess_linear_weight(
                 self.tt_weight_host,
-                dtype=ttnn.bfloat4_b,
+                dtype=weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 weights_mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
             )
@@ -213,6 +222,11 @@ class TTNNDotsOCRMLP(TTNNModule):
 
         tt_module.down_proj = TTNNDotsOCRRowShardedNoAllGather.from_torch(torch_mlp.down_proj)
         return tt_module
+
+    def set_weight_dtype(self, dtype):
+        self.fused_gate_up_proj.set_weight_dtype(dtype)
+        self.down_proj.set_weight_dtype(dtype)
+        return self
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:

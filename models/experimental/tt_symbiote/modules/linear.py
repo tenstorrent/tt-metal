@@ -691,17 +691,22 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
 
 
 class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
-    """Weight column-sharded linear with bfloat4_b weights (e.g. dots.ocr o_proj / down_proj).
+    """Weight column-sharded linear with configurable low-precision weights.
 
     See TTNNLinearLLamaIColShardedWAllReduced for the compute-kernel rationale —
-    HiFi2 + fp32_dest_acc_en=False matches the BF16×BFP4 matmul schedule on Wormhole.
+    HiFi2 + fp32_dest_acc_en=False matches the BF16×BFP4/BFP8 matmul schedule on Wormhole.
     """
 
+    def set_weight_dtype(self, dtype):
+        self._weight_dtype = dtype
+        return self
+
     def move_weights_to_device_impl(self):
+        weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat4_b)
         if isinstance(self.tt_weight_host, torch.Tensor):
             self.tt_weight_host = preprocess_linear_weight(
                 self.tt_weight_host,
-                dtype=ttnn.bfloat4_b,
+                dtype=weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 weights_mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
             )

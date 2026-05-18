@@ -1116,6 +1116,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
         pixel_values: Optional[torch.Tensor] = None,
         image_grid_thw: Optional[torch.Tensor] = None,
         max_new_tokens: int = 512,
+        stop_on_eos: bool = True,
     ) -> Union[List[int], List[List[int]]]:
         """Full generation: prefill + decode loop.
 
@@ -1125,12 +1126,14 @@ class TTNNDotsOCRPipeline(TTNNModule):
             pixel_values: Optional vision input.
             image_grid_thw: Optional grid info for vision.
             max_new_tokens: Maximum number of tokens to generate.
+            stop_on_eos: Stop appending tokens once EOS is produced. Disable
+                this for fixed-depth performance runs.
 
         Returns:
             List of generated token IDs per stream (prompt excluded). Single
             stream: ``List[int]``. DP batch-parallel: ``List[List[int]]`` with
             one inner list per stream (same decode depth; each stream stops
-            appending on EOS but the step keeps KV aligned for active rows).
+            appending on EOS unless ``stop_on_eos`` is disabled).
         """
         # Reset cache for fresh generation
         self.paged_cache.reset()
@@ -1151,16 +1154,16 @@ class TTNNDotsOCRPipeline(TTNNModule):
             rb_k = _dp_readback_batch_size()
             if rb_k <= 1:
                 for _ in range(max_new_tokens - 1):
-                    if not any(active):
+                    if stop_on_eos and not any(active):
                         break
                     next_toks = self.decode_step(currents)
                     if not isinstance(next_toks, list):
                         raise RuntimeError("decode_step must return a list in DP dual-stream mode")
                     for i in range(num_streams):
-                        if not active[i]:
+                        if stop_on_eos and not active[i]:
                             continue
                         generated[i].append(next_toks[i])
-                        if next_toks[i] in self.config.eos_token_ids:
+                        if stop_on_eos and next_toks[i] in self.config.eos_token_ids:
                             active[i] = False
                     currents = list(next_toks)
                 return generated
@@ -1179,7 +1182,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
             total_decode = max_new_tokens - 1
             decodes_done = 0
             for it in range(total_decode):
-                if not any(active):
+                if stop_on_eos and not any(active):
                     break
                 if it > 0 and it % rb_k == 0:
                     ttnn.synchronize_device(self.device)
@@ -1192,11 +1195,11 @@ class TTNNDotsOCRPipeline(TTNNModule):
                         if len(flat) != num_streams:
                             raise RuntimeError("batched DP readback token width mismatch")
                         for bi in range(num_streams):
-                            if not active[bi]:
+                            if stop_on_eos and not active[bi]:
                                 continue
                             tid = flat[bi]
                             generated[bi].append(tid)
-                            if tid in self.config.eos_token_ids:
+                            if stop_on_eos and tid in self.config.eos_token_ids:
                                 active[bi] = False
                         currents = list(flat)
                 si = it % rb_k
@@ -1223,11 +1226,11 @@ class TTNNDotsOCRPipeline(TTNNModule):
                     if len(flat) != num_streams:
                         raise RuntimeError("batched DP readback token width mismatch")
                     for bi in range(num_streams):
-                        if not active[bi]:
+                        if stop_on_eos and not active[bi]:
                             continue
                         tid = flat[bi]
                         generated[bi].append(tid)
-                        if tid in self.config.eos_token_ids:
+                        if stop_on_eos and tid in self.config.eos_token_ids:
                             active[bi] = False
                     currents = list(flat)
 
