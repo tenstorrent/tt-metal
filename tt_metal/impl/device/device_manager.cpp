@@ -548,6 +548,28 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
         }
     }
 
+    // FIX GJ (#42429): Log dispatch eligibility summary for CI diagnostics.
+    // Knowing HOW MANY devices were skipped (and why) is critical for diagnosing
+    // ring-sync failures that follow — previously this was silent on the clean-boot path.
+    const size_t skipped_count = active_devices.size() - dispatch_devices.size();
+    if (skipped_count > 0) {
+        log_info(
+            tt::LogMetal,
+            "FIX GJ (#42429): dispatch init: {}/{} devices eligible, {} skipped "
+            "(dead_relay={}, fixm_init=non-MMIO). Skipped devices will NOT receive "
+            "dispatch firmware — ring sync should still complete on eligible devices.",
+            dispatch_devices.size(),
+            active_devices.size(),
+            skipped_count,
+            dead_relay_devices.size());
+    } else {
+        log_info(
+            tt::LogMetal,
+            "FIX GJ (#42429): dispatch init: all {}/{} devices eligible (no FIX E/EA skips)",
+            dispatch_devices.size(),
+            active_devices.size());
+    }
+
     initializers_[DispatchKernelInitializer::key]->init(dispatch_devices, init_done_);
     init_done_.insert(DispatchKernelInitializer::key);
 

@@ -391,6 +391,28 @@ FabricCoresHealth configure_fabric_cores(
                         hal_eg.get_jit_build_config(aeth_idx_eg, 0, 0).fw_launch_addr;
                     cluster.write_core_immediate(
                         chip_id, virtual_core, std::vector<uint32_t>{0}, fw_launch_addr_eg);
+                    // FIX GI (#42429): Log + readback verify the FIX EG zero write.
+                    // Without logging, a silent PCIe write failure leaves no trace in CI logs.
+                    // Readback catches races where ERISC comes out of reset between write and
+                    // deassert (should not happen since ERISC0 is still asserted, but belt+suspenders).
+                    std::vector<uint32_t> eg_verify(1, 0xFFFFFFFF);
+                    cluster.read_core(eg_verify, sizeof(uint32_t),
+                        tt_cxy_pair(chip_id, virtual_core),
+                        static_cast<uint64_t>(fw_launch_addr_eg));
+                    if (eg_verify[0] != 0) {
+                        log_warning(
+                            tt::LogMetal,
+                            "FIX GI (#42429): FIX EG readback MISMATCH — wrote 0 to "
+                            "fw_launch_addr=0x{:08X} on Device {} chan={} but read back "
+                            "0x{:08X}. ERISC may prematurely launch stale firmware.",
+                            fw_launch_addr_eg, chip_id, router_chan, eg_verify[0]);
+                    } else {
+                        log_info(
+                            tt::LogMetal,
+                            "FIX EG (#42429): zeroed fw_launch_addr=0x{:08X} on Device {} "
+                            "chan={} (readback verified=0x{:08X}) while ERISC0 halted",
+                            fw_launch_addr_eg, chip_id, router_chan, eg_verify[0]);
+                    }
                 }
 
                 // Immediately deassert so ERISC0 restarts into base UMD firmware.
@@ -652,14 +674,35 @@ FabricCoresHealth configure_fabric_cores(
                 sizeof(uint32_t),
                 tt_cxy_pair(device->id(), virtual_core_gh),
                 jit_cfg_gh.fw_launch_addr);
-            log_info(
-                tt::LogMetal,
-                "FIX GH — restored fw_launch_addr_value=0x{:08X} at fw_launch_addr=0x{:08X} "
-                "for Device {} chan={}",
-                jit_cfg_gh.fw_launch_addr_value,
-                jit_cfg_gh.fw_launch_addr,
-                device->id(),
-                router_chan);
+            // FIX GI (#42429): Readback verify FIX GH write.  If this write is lost
+            // (PCIe error, L1 race), base-UMD sees fw_launch_addr==0 and stays at
+            // 0xDEADB07E indefinitely — the exact failure FIX GH was meant to prevent.
+            std::vector<uint32_t> gh_verify(1, 0);
+            cluster.read_core(gh_verify, sizeof(uint32_t),
+                tt_cxy_pair(device->id(), virtual_core_gh),
+                static_cast<uint64_t>(jit_cfg_gh.fw_launch_addr));
+            if (gh_verify[0] != jit_cfg_gh.fw_launch_addr_value) {
+                log_warning(
+                    tt::LogMetal,
+                    "FIX GI (#42429): FIX GH readback MISMATCH — wrote "
+                    "fw_launch_addr_value=0x{:08X} at fw_launch_addr=0x{:08X} on "
+                    "Device {} chan={} but read back 0x{:08X}. Base-UMD may stay "
+                    "at 0xDEADB07E.",
+                    jit_cfg_gh.fw_launch_addr_value,
+                    jit_cfg_gh.fw_launch_addr,
+                    device->id(),
+                    router_chan,
+                    gh_verify[0]);
+            } else {
+                log_info(
+                    tt::LogMetal,
+                    "FIX GH (#42429): restored fw_launch_addr_value=0x{:08X} at "
+                    "fw_launch_addr=0x{:08X} for Device {} chan={} (readback verified)",
+                    jit_cfg_gh.fw_launch_addr_value,
+                    jit_cfg_gh.fw_launch_addr,
+                    device->id(),
+                    router_chan);
+            }
         }
     }
 
