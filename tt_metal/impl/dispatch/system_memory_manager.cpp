@@ -59,6 +59,21 @@ void* open_ttsim_handle() {
     return handle;
 }
 
+bool dram_backed_cq_dirty_flush_enabled() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("TT_METAL_DRAM_BACKED_CQ_DIRTY_FLUSH");
+        if (env == nullptr) {
+            return false;
+        }
+        const std::string value(env);
+        if (value == "auto") {
+            return std::getenv("TT_METAL_SIMULATOR") != nullptr || std::getenv("TT_UMD_SIMULATOR") != nullptr;
+        }
+        return value == "1" || value == "true" || value == "TRUE" || value == "on" || value == "ON";
+    }();
+    return enabled;
+}
+
 TTSimClockAllDevicesFn get_ttsim_clock_all_devices() {
     static TTSimClockAllDevicesFn fn = [] {
         void* handle = open_ttsim_handle();
@@ -594,6 +609,7 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     const uint32_t push_size_16B = align(push_size_B, alignment) >> 4;
 
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+    const uint32_t issue_q_write_ptr_before_push = cq_interface.issue_fifo_wr_ptr << 4;
     uint32_t issue_q_wr_ptr = ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
 
     if (cq_interface.issue_fifo_wr_ptr + push_size_16B >= cq_interface.issue_fifo_limit) {
@@ -607,13 +623,25 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
         const IDevice* device = ctx.device_manager()->get_active_device(this->device_id);
         const uint32_t dram_channel =
             device->allocator_impl()->get_dram_channel_from_bank_id(this->get_dram_region_bank_id());
-        ctx.get_cluster().write_dram_vec(
-            this->cq_sysmem_start + (cq_interface.offset - this->get_dram_region_base_addr() - this->channel_offset) +
-                cq_interface.cq_start,
-            this->get_issue_queue_size(cq_id),
-            this->device_id,
-            dram_channel,
-            this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) + cq_interface.cq_start);
+        if (dram_backed_cq_dirty_flush_enabled()) {
+            ctx.get_cluster().write_dram_vec(
+                this->cq_sysmem_start +
+                    (issue_q_write_ptr_before_push - this->get_dram_region_base_addr() - this->channel_offset),
+                push_size_16B << 4,
+                this->device_id,
+                dram_channel,
+                issue_q_write_ptr_before_push);
+        } else {
+            ctx.get_cluster().write_dram_vec(
+                this->cq_sysmem_start +
+                    (cq_interface.offset - this->get_dram_region_base_addr() - this->channel_offset) +
+                    cq_interface.cq_start,
+                this->get_issue_queue_size(cq_id),
+                this->device_id,
+                dram_channel,
+                this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) +
+                    cq_interface.cq_start);
+        }
         ctx.get_cluster().write_dram_vec(
             &cq_interface.issue_fifo_wr_ptr,
             sizeof(uint32_t),
