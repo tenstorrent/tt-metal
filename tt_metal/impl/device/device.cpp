@@ -2770,10 +2770,17 @@ void Device::launch_eth_cores_for_quiesce() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(kFIX_QR_PollIntervalMs));
             }
             if (!exited) {
+                // GAP 6 (#42429): Escalate FIX QR timeout to set fabric_relay_path_broken_,
+                // matching FIX EF behaviour.  Without this, non-MMIO Pass 1c launch messages
+                // are silently dropped through the dead relay with no recovery path — the
+                // non-MMIO ERISC never starts and ring-sync times out 120s later.
+                // With the flag set, FIX SB2 propagates the broken state to non-MMIO devices,
+                // which then skip their relay reads and avoid the 120s hang.
+                fabric_relay_path_broken_.store(true);
                 log_warning(tt::LogMetal,
                     "FIX QR: Device {} chan {} (MMIO) still at 0xDEADB07E after {}ms in quiesce — "
-                    "relay ERISC did not start. Non-MMIO Pass 1c launch through this relay "
-                    "may be silently dropped. (#42429)",
+                    "relay ERISC did not start. Setting fabric_relay_path_broken_=true to block "
+                    "non-MMIO Pass 1c launch through dead relay. (#42429)",
                     this->id(), qr_chan, kFIX_QR_PollMaxMs);
             }
         }
