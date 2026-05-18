@@ -70,7 +70,7 @@ enum DstSync
     SyncFull = 1,
 };
 
-enum BroadcastType
+enum class BroadcastType : std::uint8_t
 {
     NONE   = 0x0, // A - None || B - None
     COL    = 0x1, // A - None || B - Col Broadcast
