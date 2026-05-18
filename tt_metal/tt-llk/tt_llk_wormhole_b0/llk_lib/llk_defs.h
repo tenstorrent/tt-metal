@@ -34,7 +34,7 @@ enum TileDim
     C_IDX = 1,
 };
 
-enum PoolType
+enum class PoolType : std::uint8_t
 {
     SUM,
     AVG,

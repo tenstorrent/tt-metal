@@ -166,7 +166,7 @@ inline void perform_reduce_col_sum_avg()
         else
         {
             lltt::replay(6, 4); // Half reduce with NOP for 2-cycle SFPADD latency
-            if constexpr (pool_type != AVG)
+            if constexpr (pool_type != PoolType::AVG)
             {
                 // SUM path: next op is SFPSTORE LREG0, needs NOP to cover SFPADD's 2-cycle latency.
                 // AVG path: first SFPLOADI in perform_float_average() is independent of LREG0 and fills the slot.
@@ -175,7 +175,7 @@ inline void perform_reduce_col_sum_avg()
         }
 
         // Perform averaging if requested (different for int vs float)
-        if constexpr (pool_type == AVG)
+        if constexpr (pool_type == PoolType::AVG)
         {
             if constexpr (is_integer_mode)
             {
@@ -897,7 +897,7 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
     static_assert(
         reduce_dim == REDUCE_COL || (pool_type == PoolType::SUM && reduce_dim == REDUCE_ROW),
         "Only column reduction (REDUCE_COL) is supported, except row reduction (REDUCE_ROW) is allowed only for SUM");
-    static_assert(pool_type == SUM || pool_type == AVG, "Only SUM and AVG pool types are currently supported on SFPU");
+    static_assert(pool_type == PoolType::SUM || pool_type == PoolType::AVG, "Only SUM and AVG pool types are currently supported on SFPU");
 
     // Supported instruction modes for SFPU reduce sum/avg (integer and float)
     constexpr bool is_supported_reduce_instr_mode =
