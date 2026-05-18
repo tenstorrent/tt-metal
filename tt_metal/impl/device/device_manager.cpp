@@ -508,27 +508,43 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
     auto* fabric_init =
         static_cast<FabricFirmwareInitializer*>(initializers_[FabricFirmwareInitializer::key].get());
     const auto& dead_relay_devices = fabric_init->get_dead_relay_devices();
+    // FIX EA (#42429): non-MMIO devices on FIX M path cannot receive dispatch writes.
+    // configure_fabric() already completed MMIO ERISC hard-reset (FIX S9) and loaded fabric
+    // EDM firmware.  Dispatch writes to non-MMIO devices route through MMIO ERISC chan=8 as
+    // a UMD relay endpoint.  Fabric EDM firmware does NOT forward UMD relay protocol bytes —
+    // it treats them as garbage EDM traffic, corrupting ring_sync_address and causing ring
+    // sync failure (FIX BZ → 0x00000000 exit → MeshDevice::create() fails).
+    // Skip dispatch init for non-MMIO fixm_init devices even when dead_relay_devices is empty.
+    auto is_dispatch_eligible = [&dead_relay_devices](const Device* dev) -> bool {
+        // MMIO devices always write via PCIe — always eligible.
+        if (dev->is_mmio_capable()) {
+            return true;
+        }
+        // FIX E (#42429): non-MMIO dead relay → dispatch writes hang in wait_for_non_mmio_flush.
+        if (dead_relay_devices.count(dev->id()) != 0) {
+            return false;
+        }
+        // FIX EA (#42429): non-MMIO FIX M path → MMIO ERISCs running fabric firmware (not UMD
+        // relay); dispatch writes corrupt ring_sync_address via garbage EDM traffic.
+        if (dev->is_fabric_base_umd_fixm_init()) {
+            return false;
+        }
+        return true;
+    };
+
     std::vector<Device*> dispatch_devices;
-    if (dead_relay_devices.empty()) {
-        dispatch_devices = active_devices;
-    } else {
-        for (auto* dev : active_devices) {
-            if (dead_relay_devices.count(dev->id()) == 0) {
-                dispatch_devices.push_back(dev);
-            } else if (dev->is_mmio_capable()) {
-                // FIX R (#42429): MMIO-capable devices write dispatch kernels via PCIe, not the
-                // ETH relay path.  Dead ETH channels do not affect MMIO writes, so dispatch kernel
-                // init is safe and MUST run — skipping it leaves stale CQ state from a prior
-                // process run, causing TT_FATAL "Unexpected values for event in completion queue"
-                // on the first CQ read.
-                dispatch_devices.push_back(dev);
-            } else {
-                log_warning(
-                    tt::LogMetal,
-                    "initialize_fabric_and_dispatch_fw: skipping dispatch kernel init for Device {} "
-                    "(dead ETH relay — dispatch writes would hang in wait_for_non_mmio_flush)",
-                    dev->id());
-            }
+    for (auto* dev : active_devices) {
+        if (is_dispatch_eligible(dev)) {
+            dispatch_devices.push_back(dev);
+        } else {
+            log_warning(
+                tt::LogMetal,
+                "initialize_fabric_and_dispatch_fw: skipping dispatch kernel init for Device {} "
+                "({})",
+                dev->id(),
+                dev->is_fabric_base_umd_fixm_init()
+                    ? "FIX EA — non-MMIO FIX M path; MMIO ERISCs running fabric firmware, relay unavailable"
+                    : "FIX E — dead ETH relay; dispatch writes would hang in wait_for_non_mmio_flush");
         }
     }
 
