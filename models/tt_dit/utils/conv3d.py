@@ -306,6 +306,35 @@ _BLOCKINGS = {
     # conv_out disabled — T_out_block=4 caused a frame-24-25 artifact; falls back to _DEFAULT_BLOCKINGS pending a clean re-sweep.
     # (2, 4, 96, 3, (3, 3, 3), 30, 240, 208): (96, 32, 4, 16, 2),  # conv_out — partial 5990us
     # ===================================================================
+    # BH Loud Box 2x4, 480p, VAE encoder with encoder_t_chunk_size=4
+    # h_factor=2, w_factor=4. Per-device (H,W): stage0(240,208) stage1(120,104)
+    # stage2(60,52) stage3(30,26). cur_T flow: 4 → 2 → 1 → 1 across 4 stages
+    # (temperal_downsample=[T,T,F]).
+    # Swept 2026-05-18 with max_combos=20, hw_product=32. Each layer in its own
+    # pytest process with tt-smi -r between runs (fixture re-init constraint).
+    # ===================================================================
+    # Stage 0 (cur_T=4): T_res=6, T_spatial=4 at (240,208); tconv at (120,104) T=4
+    (2, 4, 32, 96, (3, 3, 3), 6, 240, 208): (32, 96, 4, 2, 16),  # conv_in — 864us
+    (2, 4, 96, 96, (3, 3, 3), 6, 240, 208): (96, 96, 4, 16, 2),  # down0_res — 1224us
+    (2, 4, 96, 96, (1, 3, 3), 4, 240, 208): (96, 96, 1, 16, 2),  # down0_spatial — 706us
+    (2, 4, 96, 96, (3, 1, 1), 4, 120, 104): (96, 96, 2, 2, 16),  # down0_tconv — 157us
+    # Stage 1 (cur_T=2): T_res=4, T_spatial=2 at (120,104); tconv at (60,52) T=2
+    (2, 4, 96, 192, (3, 3, 3), 4, 120, 104): (96, 96, 2, 2, 16),  # down1_res0 — 386us
+    (2, 4, 192, 192, (3, 3, 3), 4, 120, 104): (96, 96, 2, 8, 4),  # down1_res1 — 821us
+    (2, 4, 192, 192, (1, 3, 3), 2, 120, 104): (192, 96, 1, 16, 2),  # down1_spatial — 251us
+    # down1_tconv swept with stride=(2,1,1) padding=(1,0,0) to match production
+    # WanResample call (cur_T=2 + cache → T_in=3, T_out=1); stride-1 padding-0
+    # gives T_out=0 (invalid).
+    (2, 4, 192, 192, (3, 1, 1), 2, 60, 52): (192, 96, 1, 8, 4),  # down1_tconv — 137us
+    # Stage 2 (cur_T=1): T_res=3, T_spatial=1 at (60,52); no tconv (downsample2d)
+    (2, 4, 192, 384, (3, 3, 3), 3, 60, 52): (96, 96, 1, 16, 2),  # down2_res0 — 316us
+    (2, 4, 384, 384, (3, 3, 3), 3, 60, 52): (96, 96, 1, 16, 2),  # down2_res1 — 515us
+    (2, 4, 384, 384, (1, 3, 3), 1, 60, 52): (192, 96, 1, 4, 8),  # down2_spatial — 233us
+    # Stage 3 (cur_T=1): T_res=3 at (30,26); no downsample
+    # down3_res / mid_res: channel-key DEFAULT (96,96,1,8,4) won at 272us; no entry
+    # needed beyond what _DEFAULT_BLOCKINGS provides.
+    (2, 4, 384, 32, (3, 3, 3), 3, 30, 26): (192, 32, 1, 2, 16),  # conv_out — 134us
+    # ===================================================================
     # BH Galaxy 4x8, 720p image encoder, T=33 output frames
     # h_factor=4, w_factor=8. Per-device H/W are unpadded output dims.
     # ===================================================================

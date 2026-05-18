@@ -574,6 +574,98 @@ def test_bruteforce_sweep_h2w4_480p_t7(
 
 
 # ---------------------------------------------------------------------------
+# BH Loud Box 2x4, 480p, VAE encoder with encoder_t_chunk_size=4
+# ---------------------------------------------------------------------------
+# Mesh: h_factor=2, w_factor=4. Per-device spatial (unpadded), pixel→latent:
+#   stage0(240,208) stage1(120,104) stage2(60,52) stage3(30,26)
+# Padded dims fed to conv3d (add int_pad=(0,1,1) for (3,3,3)/(1,3,3)):
+#   stage0(242,210) stage1(122,106) stage2(62,54) stage3(32,28)
+# (3,1,1) kernels use no spatial padding: stage1(120,104) stage2(60,52)
+#
+# WanEncoder3D structure (dim=96, dim_mult=[1,2,4,4], temperal_downsample=[T,T,F]):
+#   conv_in (3→96) at stage0; two res blocks per down stage; WanResample
+#   downsample3d at stage 0/1 (spatial (1,3,3) + temporal (3,1,1) at next res);
+#   WanResample downsample2d at stage 2 (spatial-only); mid block at stage 3;
+#   conv_out (384→32=2*z_dim) at stage 3.
+#
+# Temporal flow (compute_encoder_dims, cur_T starts at 4):
+#   stage 0 (cur_T=4): T_res=6, T_spatial=4, T_tconv=4 → cur_T→2
+#   stage 1 (cur_T=2): T_res=4, T_spatial=2, T_tconv=2 → cur_T→1
+#   stage 2 (cur_T=1): T_res=3, T_spatial=1, T_tconv=0
+#   stage 3 (cur_T=1): T_res=3
+#
+# These 13 unique shapes currently miss _BLOCKINGS and fall back to either a
+# generic (C_in,C_out,kernel) default or the in_channels/32/1/1/1 hardcode.
+# Layers ordered most-to-least compute (T × H × W).
+# ---------------------------------------------------------------------------
+_SWEEP_LAYERS_H2W4_480P_ENC_T4 = [
+    # (name,           C_in, C_out, kernel,    stride,    padding,    T, H,   W,   h, w)
+    # --- stage 0 (cur_T=4, full 240x208) ---
+    ("conv_in", 32, 96, (3, 3, 3), (1, 1, 1), (0, 0, 0), 6, 242, 210, 2, 4),
+    ("down0_res", 96, 96, (3, 3, 3), (1, 1, 1), (0, 0, 0), 6, 242, 210, 2, 4),
+    ("down0_spatial", 96, 96, (1, 3, 3), (1, 1, 1), (0, 0, 0), 4, 242, 210, 2, 4),
+    # --- stage 1 (cur_T=2, 120x104) ---
+    ("down1_res0", 96, 192, (3, 3, 3), (1, 1, 1), (0, 0, 0), 4, 122, 106, 2, 4),
+    ("down1_res1", 192, 192, (3, 3, 3), (1, 1, 1), (0, 0, 0), 4, 122, 106, 2, 4),
+    ("down0_tconv", 96, 96, (3, 1, 1), (1, 1, 1), (0, 0, 0), 4, 120, 104, 2, 4),
+    ("down1_spatial", 192, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 2, 122, 106, 2, 4),
+    # --- stage 2 (cur_T=1, 60x52) ---
+    ("down2_res0", 192, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 62, 54, 2, 4),
+    ("down2_res1", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 62, 54, 2, 4),
+    # down1_tconv runs with stride=(2,1,1) padding=(1,0,0) to match the actual
+    # WanResample downsample3d call (cur_T=2 input + 1-frame cache concat,
+    # kernel (3,1,1) stride 2 → T_out=1). Pure stride-1 padding-0 would give
+    # T_out=0 (invalid) so we sweep at the production stride/padding instead.
+    ("down1_tconv", 192, 192, (3, 1, 1), (2, 1, 1), (1, 0, 0), 2, 60, 52, 2, 4),
+    ("down2_spatial", 384, 384, (1, 3, 3), (1, 1, 1), (0, 0, 0), 1, 62, 54, 2, 4),
+    # --- stage 3 (cur_T=1, 30x26) ---
+    ("down3_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 32, 28, 2, 4),
+    ("conv_out", 384, 32, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 32, 28, 2, 4),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params",
+    [[(2, 4), (2, 4), line_params]],
+    ids=["bh_2x4"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
+    _SWEEP_LAYERS_H2W4_480P_ENC_T4,
+    ids=[l[0] for l in _SWEEP_LAYERS_H2W4_480P_ENC_T4],
+)
+def test_bruteforce_sweep_h2w4_480p_enc_t4(
+    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
+):
+    parent_mesh = mesh_device
+    device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    output = f"sweep_results_h2w4_480p_enc_t4/{layer_name}_{C_in}x{C_out}.json"
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        output,
+        stride=stride,
+        padding=padding,
+        h_factor=h_factor,
+        w_factor=w_factor,
+        # Tiny per-shape cap — combos are priority-sorted (T=1 baseline first,
+        # then large-Cin near optimal T, hw≈32). Top 20 covers the winning region
+        # for all encoder shapes without burning device time on tail combos.
+        max_combos=20,
+        # Same BH 2x4 480p hang mitigations as the t7 decoder sweep — T_out values
+        # here max out at 4 (T=6, kT=3) so max_t_block=8 is well above the cap.
+        max_t_block=8,
+        hw_product=32,
+    )
+
+
+# ---------------------------------------------------------------------------
 # BH Galaxy 4x8, 720p, 81 frames full-T (latent T=21)
 # ---------------------------------------------------------------------------
 # Mesh: h_factor=4, w_factor=8.  Per-device spatial (unpadded):
