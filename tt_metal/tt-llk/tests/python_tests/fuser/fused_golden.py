@@ -52,25 +52,19 @@ class FusedGolden:
             custom_rtol=0.1,
         )
 
-        if self.strict_golden:
-            logger.info("Master golden check (strict):")
-            master_passed = passed_test(
-                master_golden, res_tensor, output.data_format, print_pcc=True
-            )
-        else:
-            logger.info(
-                f"Master golden check (stage {operation.stage_id}, format {output.data_format.name},"
-                f"atol {output.acc_atol:.2f}, rtol {output.acc_rtol:.2f}, pcc {output.acc_pcc:.2f}):"
-            )
-            master_passed = passed_test(
-                master_golden,
-                res_tensor,
-                output.data_format,
-                print_pcc=True,
-                custom_atol=output.acc_atol,
-                custom_rtol=output.acc_rtol,
-                custom_pcc_threshold=output.acc_pcc,
-            )
+        logger.info(
+            f"Master golden check (stage {operation.stage_id}, format {output.data_format.name},"
+            f"atol {output.acc_atol:.2f}, rtol {output.acc_rtol:.2f}, pcc {output.acc_pcc:.2f}):"
+        )
+        master_passed = passed_test(
+            master_golden,
+            res_tensor,
+            output.data_format,
+            print_pcc=True,
+            custom_atol=output.acc_atol,
+            custom_rtol=output.acc_rtol,
+            custom_pcc_threshold=output.acc_pcc,
+        )
 
         passed = l1_passed and master_passed
 
@@ -130,7 +124,6 @@ class FusedGolden:
         operation.output.acc_pcc = min_input_pcc * base_pcc
 
     def check_pipeline(self, config: FuserConfig) -> bool:
-        self.strict_golden = config.global_config.strict_golden
         result = True
         for operation in config.pipeline:
             operation.golden(config.global_config)
