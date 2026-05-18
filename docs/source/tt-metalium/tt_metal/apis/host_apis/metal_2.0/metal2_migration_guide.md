@@ -147,6 +147,7 @@ Two structural additions vs. `ProgramDescriptor`:
 1. **Placement.** The kernel's effective node set is derived from the `WorkUnitSpec`(s) that include it.
 2. **Runtime arguments.** The `KernelSpec` declares a runtime arguments _schema_; runtime-arg _values_ are supplied per execution through `ProgramRunParams` or `ProgramRunParamsView`.
 3. **Resource bindings.** New syntax to bind DFB endpoints, semaphores, and tensors to the kernel, and retrieve them by name in device code. (See [TensorParameter](#tensorparameter) for the tensor case.)
+4. **Multiple `KernelSpec`s per source.** A single kernel source file may be represented by multiple `KernelSpec`s if structural specialization is needed (different CTA bindings, different DFB or semaphore bindings, etc.). Each `KernelSpec` is compiled and placed independently.
 
 
 **Legacy** (`KernelDescriptor`):
