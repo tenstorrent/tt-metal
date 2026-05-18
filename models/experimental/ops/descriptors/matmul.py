@@ -69,11 +69,7 @@ def matmul(
         fp32 = getattr(compute_kernel_config, "fp32_dest_acc_en", False) if compute_kernel_config else False
         program_config = _default_program_config(input_a, input_b, transpose_a, transpose_b, core_range_set, fp32)
 
-    # MatmulDeviceOperation's static API (compute_output_specs/create_output_tensors) and the
-    # matmul program-factory helpers TT_FATAL on unset allowed_worker_cores. The descriptor
-    # treats core_range_set as the single source of truth for where this op lives, so we use it
-    # to populate allowed_worker_cores when the program_config (user-provided or generated)
-    # has not set it. Variants without the field (e.g. DRAM-sharded) are skipped.
+    # allowed_worker_cores is required to be set by the ttnn.matmul API.
     if getattr(program_config, "allowed_worker_cores", "missing") is None:
         program_config.allowed_worker_cores = core_range_set
 

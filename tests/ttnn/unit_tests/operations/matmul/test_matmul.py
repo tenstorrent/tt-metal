@@ -3785,35 +3785,17 @@ def _make_matmul_inputs(device, grid_size, with_allowed_worker_cores, output_mem
     ],
     ids=["mcast_1d_width_sharded", "reuse_2d_block_sharded"],
 )
-def test_matmul_compute_output_specs_requires_allowed_worker_cores(
-    device, config_kind, output_memory_layout, grid_size
+@pytest.mark.parametrize("with_allowed_worker_cores", [True, False], ids=["with_awc", "without_awc"])
+def test_matmul_compute_output_specs_with_allowed_worker_cores(
+    device, config_kind, output_memory_layout, grid_size, with_allowed_worker_cores
 ):
+    # Today missing allowed_worker_cores triggers a warning and auto-populates from
+    # compute_with_storage_grid_size. This is temporary while CCL callers are migrated; it will
+    # become a hard error in a future release (see #44529).
     attributes, tensor_args = _make_matmul_inputs(
         device,
         grid_size,
-        with_allowed_worker_cores=False,
-        output_memory_layout=output_memory_layout,
-        config_kind=config_kind,
-    )
-    with pytest.raises(RuntimeError, match="allowed_worker_cores must be populated"):
-        ttnn.MatmulDeviceOperation.compute_output_specs(attributes, tensor_args)
-
-
-@pytest.mark.parametrize(
-    "config_kind, output_memory_layout, grid_size",
-    [
-        ("mcast_1d", ttnn.TensorMemoryLayout.WIDTH_SHARDED, (8, 1)),
-        ("reuse_2d", ttnn.TensorMemoryLayout.BLOCK_SHARDED, (4, 2)),
-    ],
-    ids=["mcast_1d_width_sharded", "reuse_2d_block_sharded"],
-)
-def test_matmul_compute_output_specs_with_allowed_worker_cores_succeeds(
-    device, config_kind, output_memory_layout, grid_size
-):
-    attributes, tensor_args = _make_matmul_inputs(
-        device,
-        grid_size,
-        with_allowed_worker_cores=True,
+        with_allowed_worker_cores=with_allowed_worker_cores,
         output_memory_layout=output_memory_layout,
         config_kind=config_kind,
     )
