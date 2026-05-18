@@ -128,7 +128,7 @@ class VoxtralTTAudioTokenizerDecoderTransformerBlock:
             ttnn.deallocate(attn)
             attn = scaled
         ttnn.deallocate(x_b1td)
-        h = ttnn.add(residual, attn, dtype=self.output_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=True)
+        h = ttnn.add(residual, attn, dtype=self.output_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(residual)
         ttnn.deallocate(attn)
 
@@ -143,7 +143,7 @@ class VoxtralTTAudioTokenizerDecoderTransformerBlock:
             ttnn.deallocate(ff)
             ff = scaled
         ttnn.deallocate(h)
-        out = ttnn.add(residual, ff, dtype=self.output_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=True)
+        out = ttnn.add(residual, ff, dtype=self.output_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(residual)
         ttnn.deallocate(ff)
         return out
