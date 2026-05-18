@@ -91,7 +91,6 @@ static bool run_test_integrity_dram_bidir(
     const CoreCoord& recv_core,
     DataMovementProcessor processor0 = DataMovementProcessor::RISCV_0) {
     /* ============= */
-    bool same_device = send_mesh_device == recv_mesh_device;
     auto* const send_device = send_mesh_device->get_devices()[0];
     auto* const recv_device = recv_mesh_device->get_devices()[0];
 
@@ -125,8 +124,10 @@ static bool run_test_integrity_dram_bidir(
     uint32_t recvbuf0 = l1_alloc(&alloc, transfer_size);
     uint32_t recvbuf1 = l1_alloc(&alloc, transfer_size);
 
-    tt_metal::Program send_program = tt_metal::Program(), recv_program_ = tt_metal::Program();
-    tt_metal::Program& recv_program = same_device ? send_program : recv_program_;
+    map<shared_ptr<distributed::MeshDevice>, shared_ptr<tt_metal::Program>> programs = {
+        {send_mesh_device, make_shared<Program>()},
+        {recv_mesh_device, make_shared<Program>()},
+    };
 
     prepare_bidir_integrity(
         fixture,
@@ -147,7 +148,7 @@ static bool run_test_integrity_dram_bidir(
         sendbuf1,
         recvbuf0,
         recvbuf1,
-        &send_program);
+        programs[send_mesh_device].get());
 
     prepare_bidir_integrity(
         fixture,
@@ -168,22 +169,28 @@ static bool run_test_integrity_dram_bidir(
         sendbuf1,
         recvbuf0,
         recvbuf1,
-        &recv_program);
+        programs[recv_mesh_device].get());
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
-    wait_to_finish_eth_timeout(
-        fixture,
-        send_program,
-        recv_program,
-        send_mesh_device,
-        recv_mesh_device,
-        device_range,
-        send_core,
-        recv_core,
-        iter_l1_address,
-        dram_end_addr);
+    vector<struct core_setup> cores = {
+        {
+            .program = programs[send_mesh_device],
+            .mesh_device = send_mesh_device,
+            .core = send_core,
+            .iter_l1_addr = iter_l1_address,
+            .expected_count = dram_end_addr,
+        },
+        {
+            .program = programs[recv_mesh_device],
+            .mesh_device = recv_mesh_device,
+            .core = recv_core,
+            .iter_l1_addr = iter_l1_address,
+            .expected_count = dram_end_addr,
+        },
+    };
+    wait_to_finish_eth_timeout_cores(fixture, cores, programs);
 
     double threshold = 140; /* NOTE: Same on both bh glx and p150 */
 
