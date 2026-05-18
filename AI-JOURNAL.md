@@ -1,5 +1,33 @@
 
 ---
+## 2026-05-18 — CI Run 26040053897 Analysis (No Code Change Needed)
+
+### What Failed
+
+CI run 26040053897 on runner `tt-metal-ci-vm-t3k-03` tested commit `16872e0cda9`
+(add tt_metal:: namespace qualifier to HalProgrammableCoreType).
+
+Failure: FIX EF timeout — all 4 MMIO ETH channels (devices 0-3, chan=8) stuck at
+`0xdeadb07e`. T3K topology damaged (0/8 chips visible).
+
+### Root Cause
+
+Same class as FIX GH: commit `16872e0cda9` had `configure_fabric_cores()` restoring
+`fw_launch_addr=1` BEFORE `write_launch_msg_to_core` wrote new fabric firmware to L1.
+ERISC re-entered ROM, saw `fw_launch_addr=1`, tried to execute from cleared/zeroed L1,
+got stuck at `0xdeadb07e`.
+
+### Resolution
+
+Branch HEAD (`e3f78d87634`) already contains the correct fixes:
+- **FIX SA** (`5b5526e88d2`): Strategy A — ERISC stays halted through ALL L1 writes,
+  `fw_launch_addr` + `launch_msg` written while halted, then ERISC released.
+- **FIX SENDGO** (`f1a87f21dcf`): Fix `write_launch_msg_to_core` `send_go` parameter
+  bug (implicit uint64_t→bool was always true, blocking Strategy A).
+
+No new code changes needed. Remote was already at `e3f78d87634`. Ready for next CI dispatch.
+
+---
 ## 2026-05-18 — Strategy A: Deferred ERISC Deassert (FIX SA, FIX S7-MOVE, FIX SENDGO)
 
 ### Root Cause Analysis
