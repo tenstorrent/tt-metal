@@ -12,16 +12,18 @@ Usage:
     $ python3 run.py \
         -m Qwen/Qwen3-4B-Instruct-2507 \
         -p 20 -w 3 -v 1 \
-        -t none decode_only all
+        -t none decode_only all \
+        -r 0.0 33.0 67.0 100.0
+        -c 0.5 1.0 2.0
     $ # You'll see something like this as an output:
-    Cross-Mode Summary (lower is better):
-    +-------------+-----------------+------------------------------+
-    | trace_mode  | avg_ttft (sec.) | ... | avg_e2e_latency (sec.) |
-    +-------------+-----------------+-...-+------------------------+
-    | none        |          *1.567 | ... |                  6.397 |
-    | decode_only |           1.568 | ... |                  3.591 |
-    | all         |           1.568 | ... |                 *3.581 |
-    +-------------+-----------------+-...-+------------------------+
+    Aggregate Cross-Mode Summary (lower is better):
+    +-------------+--------------------+-...-+---------------------------+
+    | trace_mode  | median_ttft (sec.) | ... | median_e2e_latency (sec.) |
+    +-------------+--------------------+-...-+---------------------------+
+    | none        |              1.567 | ... |                     6.397 |
+    | decode_only |              0.968 | ... |                     3.591 |
+    | all         |             *0.755 | ... |                    *2.551 |
+    +-------------+--------------------+-...-+---------------------------+
     * marks the lowest value per metric (ties allowed).
     Saved benchmark results to: results.json
 """
@@ -30,6 +32,7 @@ import argparse
 import collections
 import dataclasses
 import functools
+import itertools
 import json
 import os
 import pprint
@@ -64,9 +67,8 @@ def main() -> None:
     """Main function: parses CLI, benchmarks, and saves / reports results."""
     options = parse_options()
     sampling_params = load_sampling_params(options)
-    prompts = build_prompts(options)
-    results = benchmark_everything(sampling_params, prompts, options)
-    maybe_print_metrics_table(results, options)
+    results = benchmark_everything(sampling_params, options)
+    maybe_print_metrics_tables(results, options)
     maybe_save_results(results, options)
 
 
@@ -108,10 +110,16 @@ def parse_options() -> argparse.Namespace:
         default=64,
     )
     parser.add_argument(
-        "-D",
-        "--disable_prefix_caching",
-        help="Whether to disable automatic prefix caching through vLLM.\n",
-        action="store_true",
+        "-r",
+        "--prefix_caching_ratio",
+        help=(
+            "Percent of context tokens fixed in the shared prompt prefix.\n"
+            "0.0 means no prefix caching, 50.0 means half of context tokens are\n"
+            "in the shared prefix, and 100.0 means full prefix caching.\n"
+        ),
+        nargs="+",
+        default=[0.0, 50.0, 100.0],
+        type=float,
     )
     parser.add_argument(
         "-t",
@@ -121,7 +129,7 @@ def parse_options() -> argparse.Namespace:
             "--trace_mode none decode_only all\n"
         ),
         nargs="+",
-        default=["all"],
+        default=["decode_only", "all"],
         choices=["none", "decode_only", "all"],
     )
     parser.add_argument(
@@ -135,12 +143,14 @@ def parse_options() -> argparse.Namespace:
         "-c",
         "--context_multiply",
         help=(
-            "Context-length multiplier: shared context (excluding system prompt) will\n"
-            "be multiplied by this number; use for experiments with longer context.\n"
+            "Context-length multiplier (real-valued): shared context (excluding\n"
+            "system prompt) is scaled by token count. For example, 0.4 keeps 40%%\n"
+            "of context tokens and 1.5 means full context plus half of it.\n"
             "Default context has 1,662 tokens and system prompt 730 tokens.\n"
         ),
-        type=int,
-        default=1,
+        nargs="+",
+        type=float,
+        default=[0.5, 1.0, 1.5, 2.0],
     )
     parser.add_argument(
         "-g",
@@ -202,49 +212,103 @@ def load_sampling_params(options: argparse.Namespace) -> SamplingParams:
     )
 
 
-def build_prompts(options: argparse.Namespace) -> list[str]:
-    """Builds ``options.num_prompts`` number of realistic prompts with shared prefix.
+def benchmark_everything(
+    sampling_params: SamplingParams,
+    options: argparse.Namespace,
+) -> dict[str, list[dict[str, object]]]:
+    """Runs benchmarks on the full grid and returns one row per setting/mode pair.
+
+    The grid is ``trace_mode`` x ``prefix_caching_ratio`` x ``context_multiply``.
+    """
+    rows: list[dict[str, object]] = []
+
+    for context_multiply, prefix_caching_ratio in itertools.product(options.context_multiply, options.prefix_caching_ratio):
+        prompts, context_stats = build_prompts(options, context_multiply, prefix_caching_ratio)
+        for trace_mode in options.trace_mode:
+            metrics_summary = benchmark(
+                sampling_params=sampling_params,
+                prompts=prompts,
+                options=options,
+                trace_mode=trace_mode,
+                prefix_caching_ratio=prefix_caching_ratio,
+            )
+            rows.append(
+                {
+                    "trace_mode": trace_mode,
+                    "prefix_caching_ratio (%)": prefix_caching_ratio,
+                    "context_multiply": context_multiply,
+                    "context_tokens_cached": context_stats["context_tokens_cached"],
+                    "context_tokens_total": context_stats["context_tokens_total"],
+                    **metrics_summary,
+                }
+            )
+
+    return {"rows": rows}
+
+
+def build_prompts(
+    options: argparse.Namespace,
+    context_multiply: float,
+    prefix_caching_ratio: float,
+) -> tuple[list[str], dict[str, int]]:
+    """Builds ``options.num_prompts`` prompts using one context/cache configuration.
 
     Context (excluding system prompt) can be multiplied as requested by
     ``options.context_multiply``. If ``options.verbose``, prints the number of tokens
     in obtained shared prefix.
     """
-    # region Load local system, prefix, and user prompts
+    # region Load local system, context, and user prompts
+    tokenizer = AutoTokenizer.from_pretrained(options.model)
     system = DEFAULT_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
-    context = DEFAULT_CONTEXT_PATH.read_text(encoding="utf-8").strip() * options.context_multiply
-    shared_prefix = f"{system}\n---\n{context}"
+    base_context = DEFAULT_CONTEXT_PATH.read_text(encoding="utf-8").strip()
     prompt_tails = DEFAULT_QUESTIONS_PATH.read_text(encoding="utf-8").splitlines()
+
+    base_context_token_ids = tokenizer.encode(base_context, add_special_tokens=False)
+    n_base_context_tokens = len(base_context_token_ids)
+    n_target_context_tokens = max(0, int(n_base_context_tokens * context_multiply))
+
+    if n_target_context_tokens == 0 or n_base_context_tokens == 0:
+        context_token_ids: list[int] = []
+    elif n_target_context_tokens <= n_base_context_tokens:
+        context_token_ids = base_context_token_ids[:n_target_context_tokens]
+    else:
+        repeat_count, remainder = divmod(n_target_context_tokens, n_base_context_tokens)
+        context_token_ids = base_context_token_ids * repeat_count + base_context_token_ids[:remainder]
+
+    n_context_tokens = len(context_token_ids)
+    n_fixed_context_tokens = int(n_context_tokens * prefix_caching_ratio / 100.0)
+    fixed_context = tokenizer.decode(context_token_ids[:n_fixed_context_tokens], skip_special_tokens=False).strip()
+    nonfixed_context = tokenizer.decode(context_token_ids[n_fixed_context_tokens:], skip_special_tokens=False).strip()
+
+    shared_prefix = system if not fixed_context else f"{system}\n---\n{fixed_context}"
     # endregion
 
     # region Maybe print token stats
     if options.verbose > 0:
-        tokenizer = AutoTokenizer.from_pretrained(options.model)
         shared_tokens_map = tokenizer(shared_prefix, return_length=True)
         n_shared_tokens = shared_tokens_map["length"][0]
-        print(f"\n📚 Shared context has {n_shared_tokens:,} tokens.")
+        print(
+            "\n📚 Shared prefix has "
+            f"{n_shared_tokens:,} tokens, with {n_fixed_context_tokens:,}/{n_context_tokens:,} "
+            "context tokens fixed for prefix caching "
+            f"({prefix_caching_ratio:.1f}%) and context_multiply={context_multiply:.3f}."
+        )
     # endregion
 
     # If requested number of prompts is smaller than available prompt tails,
     # return the subset. Otherwise, just repeat the prompts.
     num_prompt_tails = len(prompt_tails)
     num_repeat_prompt_tails = options.num_prompts // num_prompt_tails + 1
-    return [
-        (f"<assistant>\n{shared_prefix}\n</assistant>\n\n" f"<user>\n{tail}\n</user>\n\n" f"<response/>\n")
-        for tail in (prompt_tails * num_repeat_prompt_tails)[: options.num_prompts]
-    ]
+    prompts = []
+    for tail in (prompt_tails * num_repeat_prompt_tails)[: options.num_prompts]:
+        user_body = tail if not nonfixed_context else f"{tail}\n\nAdditional context:\n{nonfixed_context}"
+        prompt = f"<assistant>\n{shared_prefix}\n</assistant>\n\n<user>\n{user_body}\n</user>\n\n<response/>\n"
+        prompts.append(prompt)
 
-
-def benchmark_everything(
-    sampling_params: SamplingParams,
-    prompts: list[str],
-    options: argparse.Namespace,
-) -> dict[str, dict[str, float]]:
-    """Loads LLM from ``options`` w/ 1 ore more trace modes. Evals and returns summary.
-
-    If ``options`` requests warmup, performs it on the first prompt requested number of
-    times. Metrics are returned as name-to-value mapping.
-    """
-    return {t: benchmark(sampling_params, prompts, options, t) for t in options.trace_mode}
+    return prompts, {
+        "context_tokens_cached": n_fixed_context_tokens,
+        "context_tokens_total": n_context_tokens,
+    }
 
 
 def benchmark(
@@ -252,26 +316,28 @@ def benchmark(
     prompts: list[str],
     options: argparse.Namespace,
     trace_mode: TraceModesT,
+    prefix_caching_ratio: float,
 ) -> dict[str, float]:
     """Loads LLM from ``options`` w/ ``trace_mode``. Evals & returns inference metrics.
 
     If ``options`` requests warmup, performs it on the first prompt requested number of
     times. Metrics are returned as name-to-value mapping.
     """
-    llm = load_llm(options, trace_mode)
+    llm = load_llm(options, trace_mode, prefix_caching_ratio)
     warmup_prompts(llm, sampling_params, prompts, options.warmup_runs)
     metrics_list = run_prompts(llm, sampling_params, prompts, options.verbose)
     metrics_summary = summarize_metrics(metrics_list, options.verbose)
     return metrics_summary
 
 
-def load_llm(options: argparse.Namespace, trace_mode: TraceModesT) -> LLM:
+def load_llm(options: argparse.Namespace, trace_mode: TraceModesT, prefix_caching_ratio: float) -> LLM:
     """Loads ``vllm.LLM`` with parsed CLI arguments from ``options``."""
     if options.verbose > 0:
-        apc_text = "disabled" if options.disable_prefix_caching else "enabled"
+        apc_text = "enabled" if prefix_caching_ratio > 0.0 else "disabled"
         print(
-            f"\n🤖 Preparing LLM '{options.model}' for inference with {apc_text} "
-            f"prefix caching,\n   block size {options.block_size}, "
+            f"\n🧠 Preparing LLM '{options.model}' for inference with {apc_text} "
+            f"prefix caching ({prefix_caching_ratio:.1f}% fixed context),\n"
+            f"   block size {options.block_size}, "
             f"{options.max_num_seqs} simultaneously processed sequences, "
             f"and with trace mode '{trace_mode}'.\n"
         )
@@ -279,7 +345,7 @@ def load_llm(options: argparse.Namespace, trace_mode: TraceModesT) -> LLM:
         model=options.model,
         block_size=options.block_size,
         max_num_seqs=options.max_num_seqs,
-        enable_prefix_caching=not options.disable_prefix_caching,
+        enable_prefix_caching=prefix_caching_ratio > 0.0,
         override_tt_config={"trace_mode": trace_mode},
         use_tqdm_on_load=False,
         disable_log_stats=False,
@@ -457,10 +523,10 @@ def summarize_metrics(
         e2e_latencies.append(metrics.e2e_latency)
 
     summary = {
-        "avg_ttft (sec.)": round(statistics.median(ttfts), 3),
-        "avg_prefill_latency (sec.)": round(statistics.median(prefill_latencies), 3),
-        "avg_decode_latency (sec.)": round(statistics.median(decode_latencies), 3),
-        "avg_e2e_latency (sec.)": round(statistics.median(e2e_latencies), 3),
+        "median_ttft (sec.)": round(statistics.median(ttfts), 3),
+        "median_prefill_latency (sec.)": round(statistics.median(prefill_latencies), 3),
+        "median_decode_latency (sec.)": round(statistics.median(decode_latencies), 3),
+        "median_e2e_latency (sec.)": round(statistics.median(e2e_latencies), 3),
     }
     if verbose > 0:
         print("\n📉 Inference-Evaluation Summary:")
@@ -469,75 +535,168 @@ def summarize_metrics(
     return summary
 
 
-def maybe_print_metrics_table(
-    summaries: dict[str, dict[str, object]],
+def maybe_print_metrics_tables(
+    results: dict[str, list[dict[str, object]]],
     options: argparse.Namespace,
 ) -> None:
-    """Prints a compact summary table with per-metric minima highlighted.
-
-    The output is intentionally close to a polars-like pretty table while using
-    plain ASCII for broad terminal compatibility. If ``options.verbose`` is 0,
-    nothing happens.
-    """
+    """Prints aggregate and per-setting summary tables for a parameter grid."""
     if options.verbose == 0:
         return
 
-    first_summary = next(iter(summaries.values()))
-    if not isinstance(first_summary, dict):
+    rows = results.get("rows", [])
+    if not rows:
         return
 
-    metric_names = list(first_summary.keys())
-    minima = {metric_name: min(summary[metric_name] for summary in summaries.values()) for metric_name in metric_names}
+    trace_modes = list(options.trace_mode)
+    by_setting: dict[tuple[float, float], dict[str, dict[str, object]]] = {}
+    for row in rows:
+        key = _setting_key(row)
+        by_setting.setdefault(key, {})[str(row["trace_mode"])] = row
 
-    headers = ["trace_mode", *metric_names]
-    rows = []
-    for trace_mode, summary in summaries.items():
-        row = [trace_mode]
-        for metric_name in metric_names:
-            value = float(summary[metric_name])
-            marker = "*" if value == minima[metric_name] else " "
-            row.append(f"{marker}{value:.3f}")
-        rows.append(row)
+    # Table 1: Aggregate summary over all settings.
+    aggregate_headers = [
+        "trace_mode",
+        "median_ttft (sec.)",
+        "median_prefill (sec.)",
+        "median_e2e (sec.)",
+    ]
+    aggregate_rows_data: list[dict[str, float | str]] = []
+    for mode in trace_modes:
+        mode_rows = [row for row in rows if row["trace_mode"] == mode]
+        ttfts = [float(row["median_ttft (sec.)"]) for row in mode_rows]
+        prefills = [float(row["median_prefill_latency (sec.)"]) for row in mode_rows]
+        e2es = [float(row["median_e2e_latency (sec.)"]) for row in mode_rows]
+        aggregate_rows_data.append(
+            {
+                "mode": mode,
+                "ttft": statistics.median(ttfts),
+                "prefill": statistics.median(prefills),
+                "e2e": statistics.median(e2es),
+            }
+        )
 
+    # Find minima for each metric.
+    min_ttft = min(d["ttft"] for d in aggregate_rows_data)
+    min_prefill = min(d["prefill"] for d in aggregate_rows_data)
+    min_e2e = min(d["e2e"] for d in aggregate_rows_data)
+
+    # Build rows with `*` markers on best values.
+    aggregate_rows: list[list[str]] = []
+    for data in aggregate_rows_data:
+        ttft_marker = "*" if data["ttft"] == min_ttft else " "
+        prefill_marker = "*" if data["prefill"] == min_prefill else " "
+        e2e_marker = "*" if data["e2e"] == min_e2e else " "
+        aggregate_rows.append(
+            [
+                str(data["mode"]),
+                f"{ttft_marker}{data['ttft']:.3f}",
+                f"{prefill_marker}{data['prefill']:.3f}",
+                f"{e2e_marker}{data['e2e']:.3f}",
+            ]
+        )
+
+    _print_ascii_table(
+        title="🧮 Aggregate Cross-Mode Summary (lower is better)",
+        headers=aggregate_headers,
+        rows=aggregate_rows,
+        right_align_from=1,
+    )
+    print("* marks the lowest value per metric (ties allowed).")
+
+    # Table 2: Per-setting prefill comparison with winner and delta against "all".
+    per_setting_headers = [
+        "prefix_ratio (%)",
+        "cached_ctx_toks",
+        "full_ctx_toks",
+        *[f"prefill_{mode}" for mode in trace_modes],
+        "winner",
+        "all_vs_best_other (sec.)",
+        "all_vs_best_other (%)",
+    ]
+
+    per_setting_rows: list[list[str]] = []
+    for (prefix_ratio, context_multiply), mode_rows in sorted(by_setting.items(), key=lambda item: (item[0][1], item[0][0])):
+        prefill_values = {mode: float(mode_rows[mode]["median_prefill_latency (sec.)"]) for mode in trace_modes if mode in mode_rows}
+        setting_sample = next(iter(mode_rows.values()))
+        min_prefill = min(prefill_values.values())
+        winners = "/".join(mode for mode in trace_modes if mode in prefill_values and prefill_values[mode] == min_prefill)
+
+        delta_sec = "n/a"
+        delta_pct = "n/a"
+        if "all" in prefill_values and len(prefill_values) > 1:
+            best_other = min(value for mode, value in prefill_values.items() if mode != "all")
+            all_value = prefill_values["all"]
+            delta_value = all_value - best_other
+            delta_sec = f"{delta_value:+.3f}"
+            delta_pct = f"{(100.0 * delta_value / best_other):+.1f}%"
+
+        per_setting_rows.append(
+            [
+                f"{prefix_ratio:.1f}",
+                str(int(setting_sample["context_tokens_cached"])),
+                str(int(setting_sample["context_tokens_total"])),
+                *[f"{prefill_values[mode]:.3f}" if mode in prefill_values else "n/a" for mode in trace_modes],
+                winners,
+                delta_sec,
+                delta_pct,
+            ]
+        )
+
+    _print_ascii_table(
+        title="📊 Per-Setting Prefill Comparison",
+        headers=per_setting_headers,
+        rows=per_setting_rows,
+        right_align_from=0,
+    )
+
+    print("\n🎸 Reminder: benchmarking used these fixed options (unless overridden on CLI):")
+    pprint.pprint(
+        {
+            "model": options.model,
+            "block_size": options.block_size,
+            "max_num_seqs": options.max_num_seqs,
+            "trace_mode": options.trace_mode,
+            "prefix_caching_ratio (%)": options.prefix_caching_ratio,
+            "context_multiply": options.context_multiply,
+        },
+        sort_dicts=False,
+    )
+
+
+def _print_ascii_table(
+    title: str,
+    headers: list[str],
+    rows: list[list[str]],
+    right_align_from: int = 1,
+) -> None:
+    """Prints an ASCII table with configurable numeric alignment."""
     col_widths = []
     for idx, header in enumerate(headers):
         max_cell_width = max(len(row[idx]) for row in rows)
         col_widths.append(max(len(header), max_cell_width))
 
     border = "+" + "+".join("-" * (w + 2) for w in col_widths) + "+"
-    print("\n🧮 Cross-Mode Summary (lower is better):")
+    print(f"\n{title}")
     print(border)
-
     header_cells = [f" {headers[i].ljust(col_widths[i])} " for i in range(len(headers))]
     print("|" + "|".join(header_cells) + "|")
     print(border)
 
     for row in rows:
-        cells = [f" {row[0].ljust(col_widths[0])} "]
-        for i in range(1, len(row)):
-            cells.append(f" {row[i].rjust(col_widths[i])} ")
+        cells = []
+        for i, cell in enumerate(row):
+            formatted = cell.rjust(col_widths[i]) if i >= right_align_from else cell.ljust(col_widths[i])
+            cells.append(f" {formatted} ")
         print("|" + "|".join(cells) + "|")
-
     print(border)
-    print("* marks the lowest value per metric (ties allowed).")
 
-    print(
-        "\n🎸 Reminder: benchmarking was done with the following configuration\n"
-        "   (if not specified explicitly, other parameters were set to defaults):"
-    )
-    pprint.pprint(
-        {
-            "model": options.model,
-            "block_size": options.block_size,
-            "enable_prefix_caching": not options.disable_prefix_caching,
-            "max_num_seqs": options.max_num_seqs,
-        },
-        sort_dicts=False,
-    )
+
+def _setting_key(row: dict[str, object]) -> tuple[float, float]:
+    return (round(float(row["prefix_caching_ratio (%)"]), 6), round(float(row["context_multiply"]), 6))
 
 
 def maybe_save_results(
-    results: dict[str, dict[str, float]],
+    results: dict[str, list[dict[str, object]]],
     options: argparse.Namespace,
 ) -> None:
     """Saves benchmark ``results`` in file ``options.output`` if filename is provided."""
