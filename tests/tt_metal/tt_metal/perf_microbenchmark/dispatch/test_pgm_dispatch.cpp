@@ -230,8 +230,8 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
 void set_runtime_args(
     tt_metal::Program& program, tt_metal::KernelHandle kernel_id, vector<uint32_t>& args, const CoreRangeSet& kgset) {
     for (const auto& kg : kgset.ranges()) {
-        for (int core_idx_y = kg.start_coord.y; core_idx_y <= kg.end_coord.y; core_idx_y++) {
-            for (int core_idx_x = kg.start_coord.x; core_idx_x <= kg.end_coord.x; core_idx_x++) {
+        for (size_t core_idx_y = kg.start_coord.y; core_idx_y <= kg.end_coord.y; core_idx_y++) {
+            for (size_t core_idx_x = kg.start_coord.x; core_idx_x <= kg.end_coord.x; core_idx_x++) {
                 CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
                 tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
             }
@@ -310,7 +310,7 @@ bool initialize_program(
     CoreRange cbg = {info.workers.start_coord, {info.workers.end_coord.x - info.n_cb_gs + 1, info.workers.end_coord.y}};
 
     for (uint32_t i = 0; i < info.n_cb_gs; i++) {
-        for (int j = 0; j < info.n_cbs; j++) {
+        for (uint32_t j = 0; j < info.n_cbs; j++) {
             tt_metal::CircularBufferConfig cb_config =
                 tt_metal::CircularBufferConfig(16, {{j, tt::DataFormat::Float16_b}}).set_page_size(j, 16);
             tt_metal::CreateCircularBuffer(program, cbg, cb_config);
@@ -423,23 +423,23 @@ ProgramExecutor create_standard_executor(
     MeshCommandQueue& mesh_cq) {
     // Create mesh workloads
     mesh_workloads.resize(programs.size());
-    for (auto i = 0; i < programs.size(); i++) {
+    for (size_t i = 0; i < programs.size(); i++) {
         mesh_workloads[i].add_program(
             MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)), std::move(programs[i]));
     }
     std::function warmup_func{[&info, &mesh_cq, &mesh_workloads]() {
-        for (int i = 0; i < info.warmup_iterations; i++) {
+        for (uint32_t i = 0; i < info.warmup_iterations; i++) {
             EnqueueMeshWorkload(mesh_cq, mesh_workloads[0], false);
-            for (int j = 0; j < info.nfast_kernels; j++) {
+            for (uint32_t j = 0; j < info.nfast_kernels; j++) {
                 EnqueueMeshWorkload(mesh_cq, mesh_workloads[1], false);
             }
         }
     }};
 
     std::function execute_func{[&info, &mesh_cq, &mesh_workloads]() {
-        for (int i = 0; i < info.iterations; i++) {
+        for (uint32_t i = 0; i < info.iterations; i++) {
             EnqueueMeshWorkload(mesh_cq, mesh_workloads[0], false);
-            for (int j = 0; j < info.nfast_kernels; j++) {
+            for (uint32_t j = 0; j < info.nfast_kernels; j++) {
                 EnqueueMeshWorkload(mesh_cq, mesh_workloads[1], false);
             }
         }
@@ -456,13 +456,13 @@ ProgramExecutor create_load_prefetcher_executor(
     MeshCommandQueue& mesh_cq) {
     // Create mesh workload
     mesh_workloads.resize(programs.size());
-    for (auto i = 0; i < programs.size(); i++) {
+    for (size_t i = 0; i < programs.size(); i++) {
         mesh_workloads[i].add_program(
             MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)), std::move(programs[i]));
     }
 
     std::function warmup_func{[&info, &mesh_cq, &mesh_workloads]() {
-        for (int i = 0; i < info.warmup_iterations; i++) {
+        for (uint32_t i = 0; i < info.warmup_iterations; i++) {
             for (auto& mesh_workload : mesh_workloads) {
                 EnqueueMeshWorkload(mesh_cq, mesh_workload, false);
             }
@@ -470,7 +470,7 @@ ProgramExecutor create_load_prefetcher_executor(
     }};
 
     std::function execute_func{[&info, &mesh_cq, &mesh_workloads]() {
-        for (int i = 0; i < info.iterations; i++) {
+        for (uint32_t i = 0; i < info.iterations; i++) {
             for (auto& mesh_workload : mesh_workloads) {
                 EnqueueMeshWorkload(mesh_cq, mesh_workload, false);
             }
