@@ -234,7 +234,295 @@ def test_qwen36_hooked_per_layer_decode_pcc_32(bh_glx_mesh, n_layers):
     _run_hooked(bh_glx_mesh, n_layers)
 
 
-def _run_hooked(bh_glx_mesh, n_layers):
+@pytest.mark.hardware
+@pytest.mark.parametrize("n_layers", [4])
+def test_qwen36_hooked_per_layer_decode_pcc_4(bh_glx_mesh, n_layers):
+    _run_hooked(bh_glx_mesh, n_layers)
+
+
+@pytest.mark.hardware
+@pytest.mark.parametrize("n_layers", [64])
+def test_qwen36_hf_deltanet_replaced_prefill_pcc(bh_glx_mesh, n_layers):
+    """64L prefill with DeltaNet layers REPLACED by HF reference computation."""
+    _run_hooked_prefill(bh_glx_mesh, n_layers, replace_with_hf="deltanet")
+
+
+@pytest.mark.hardware
+@pytest.mark.parametrize("n_layers", [64])
+def test_qwen36_hf_fullattn_replaced_prefill_pcc(bh_glx_mesh, n_layers):
+    """64L prefill with full_attention layers REPLACED by HF reference."""
+    _run_hooked_prefill(bh_glx_mesh, n_layers, replace_with_hf="fullattn")
+
+
+@pytest.mark.hardware
+@pytest.mark.parametrize("n_layers", [64])
+def test_qwen36_hf_all_replaced_prefill_pcc(bh_glx_mesh, n_layers):
+    """64L prefill with ALL layers replaced — sanity check (should give PCC ≈ 1)."""
+    _run_hooked_prefill(bh_glx_mesh, n_layers, replace_with_hf="all")
+
+
+@pytest.mark.hardware
+@pytest.mark.parametrize("n_layers", [64])
+def test_qwen36_hf_mlp_replaced_prefill_pcc(bh_glx_mesh, n_layers):
+    """64L prefill with MLP replaced by HF (attention + norms still TT)."""
+    _run_hooked_prefill(bh_glx_mesh, n_layers, replace_with_hf="mlp")
+
+
+@pytest.mark.hardware
+@pytest.mark.parametrize("n_layers", [64])
+def test_qwen36_hooked_per_layer_prefill_pcc_64(bh_glx_mesh, n_layers):
+    """V2-DEC-5: per-layer prefill PCC trajectory.
+
+    Diagnostic: hook each layer's forward during a single TT prefill T=128,
+    capture residual output after each layer, compare to HF reference's
+    per-layer hidden at the same position(s). Identify the first layer
+    where prefill PCC drops below 0.999 (then 0.99) — that's where the
+    precision compounding kicks in.
+    """
+    _run_hooked_prefill(bh_glx_mesh, n_layers)
+
+
+@pytest.mark.hardware
+@pytest.mark.parametrize("n_layers,tf_period", [(64, 16)])
+def test_qwen36_hooked_decode_teacher_forced(bh_glx_mesh, n_layers, tf_period):
+    """64L decode with teacher forcing every ``tf_period`` layers.
+
+    Diagnostic: if each 16L segment alone is clean (PCC > 0.997), the bug
+    is purely compounding (no per-segment bug). If a segment still drops,
+    the per-segment compute itself has a bug we need to drill into.
+    """
+    _run_hooked(bh_glx_mesh, n_layers, teacher_force_period=tf_period)
+
+
+def _run_hooked_prefill(bh_glx_mesh, n_layers, replace_with_hf=None):
+    """Per-layer prefill PCC.
+
+    replace_with_hf:
+      None        — pure TT (baseline)
+      "deltanet"  — replace only DeltaNet (linear_attention) layers
+      "fullattn"  — replace only full_attention layers
+      "all"       — replace every layer (sanity)
+    """
+    print(f"\n=== [hooked-prefill-{n_layers}L] starting ===")
+    layer_indices = list(range(n_layers))
+    state_dict = _load_state_dict_for_layers(_SNAPSHOT, layer_indices)
+    model, args = _build_tt_model(bh_glx_mesh, state_dict, n_layers)
+    print(f"[hooked-prefill-{n_layers}L] TT model built")
+
+    torch.manual_seed(44)
+    T_prefill = _T_PREFILL
+    x_full = torch.randn(1, T_prefill, args.dim, dtype=torch.bfloat16)
+
+    # CPU reference: capture per-layer residual on T=128 sequence.
+    print(f"[hooked-prefill-{n_layers}L] running CPU reference (T={T_prefill})...")
+    ref_captures = _cpu_reference_capture_per_layer(state_dict, layer_indices, x_full)
+    # ref_captures[i] is [B, T_prefill, H] — the residual after layer i.
+    print(f"[hooked-prefill-{n_layers}L] CPU ref done; {len(ref_captures)} per-layer hiddens captured")
+
+    # Hook each layer to capture output during prefill.
+    tt_prefill_hiddens: list[torch.Tensor] = []
+    original_forwards = [layer.forward for layer in model.layers]
+
+    # For HF replacement: get layer types per-layer
+    layer_types = list(args.linear_attention_pattern) if hasattr(args, "linear_attention_pattern") else []
+
+    # MLP-only replacement: monkey-patch each layer's feed_forward.forward to use HF MLP.
+    if replace_with_hf == "mlp":
+        from models.demos.qwen3_6_galaxy.reference.qwen36 import MLP as HF_MLP
+        from models.demos.qwen3_6_galaxy.reference.qwen36 import Qwen36Config
+
+        with open(_SNAPSHOT / "config.json") as f:
+            _cfg_dict = json.load(f)
+        _hf_cfg = Qwen36Config(_cfg_dict)
+        _hf_mlps = {}
+        for layer_idx in range(n_layers):
+            _hf_mlp = HF_MLP(_hf_cfg).eval()
+            _pfx = f"model.language_model.layers.{layer_idx}.mlp."
+            _sd = {}
+            for k, v in state_dict.items():
+                if k.startswith(_pfx):
+                    _sd[k[len(_pfx) :]] = v.float()
+            _hf_mlp.load_state_dict(_sd, strict=False)
+            _hf_mlps[layer_idx] = _hf_mlp
+
+        def make_mlp_hook(layer_idx):
+            def hooked_mlp(ff_in_sharded, mode, batch_size=1):
+                # Gather col-sharded input to torch full-H, run HF MLP, send back.
+                inp = _gather_col_sharded_to_full_torch(ff_in_sharded, bh_glx_mesh, args, T=T_prefill)
+                inp = inp.reshape(1, T_prefill, args.dim).float()
+                with torch.no_grad():
+                    out = _hf_mlps[layer_idx](inp)
+                ff_in_sharded.deallocate(True)
+                return _send_col_sharded_hidden(out.to(torch.bfloat16), bh_glx_mesh, args)
+
+            return hooked_mlp
+
+        for i, layer in enumerate(model.layers):
+            layer.feed_forward.forward = make_mlp_hook(i)
+        print(f"[hooked-prefill-{n_layers}L] MLP replaced by HF for all {n_layers} layers")
+
+    def make_hook(orig_forward, idx):
+        def hooked(
+            x,
+            h,
+            current_pos,
+            rot_mats=None,
+            user_id=0,
+            mode="decode",
+            page_table=None,
+            chunk_page_table=None,
+            chunk_start_idx=None,
+            chunk_start_idx_tensor=None,
+            kv_cache=None,
+            batch_size=1,
+        ):
+            is_deltanet = idx < len(layer_types) and layer_types[idx] == "linear_attention"
+            is_fullattn = idx < len(layer_types) and layer_types[idx] == "full_attention"
+            do_replace = (
+                replace_with_hf == "all"
+                or (replace_with_hf == "deltanet" and is_deltanet)
+                or (replace_with_hf == "fullattn" and is_fullattn)
+            )
+
+            if mode == "prefill" and do_replace:
+                # Replace this DeltaNet layer with HF reference computation.
+                # Get TT input residual → torch full-H → run HF layer → send back as col-sharded TT.
+                in_torch = _gather_col_sharded_to_full_torch(x, bh_glx_mesh, args, T=T_prefill)
+                in_torch = in_torch.reshape(1, T_prefill, args.dim).float()
+
+                # Run HF reference for this layer (single-layer forward).
+                from models.demos.qwen3_6_galaxy.reference.qwen36 import (
+                    HybridDecoderLayer,
+                    Qwen36Config,
+                    build_mrope_cos_sin,
+                )
+
+                with open(_SNAPSHOT / "config.json") as f:
+                    cfg_dict = json.load(f)
+                hf_cfg = Qwen36Config(cfg_dict)
+                hf_layer = HybridDecoderLayer(hf_cfg, idx).eval()
+                # Load layer weights from state_dict.
+                pfx = f"model.language_model.layers.{idx}."
+                hf_sd = {}
+                for k, v in state_dict.items():
+                    if k.startswith(pfx):
+                        short = k[len(pfx) :]
+                        if short.startswith("self_attn."):
+                            hf_sd["attention." + short[len("self_attn.") :]] = v.float()
+                        elif short.startswith("linear_attn."):
+                            hf_sd["attention." + short[len("linear_attn.") :]] = v.float()
+                        else:
+                            hf_sd[short] = v.float()
+                hf_layer.load_state_dict(hf_sd, strict=False)
+                # For full_attention we need RoPE cos/sin + causal mask.
+                if is_fullattn:
+                    positions = torch.arange(T_prefill, dtype=torch.long)
+                    positions_3d = torch.stack([positions, positions, positions], dim=0)
+                    cos_hf, sin_hf = build_mrope_cos_sin(
+                        positions_3d=positions_3d,
+                        head_dim=256,
+                        partial_rotary_factor=0.25,
+                        mrope_section=[11, 11, 10],
+                        theta=10_000_000.0,
+                    )
+                    causal_mask = torch.zeros(1, 1, T_prefill, T_prefill)
+                    causal_mask = causal_mask.masked_fill(
+                        torch.triu(torch.ones(T_prefill, T_prefill), diagonal=1).bool(),
+                        float("-inf"),
+                    )
+                    with torch.no_grad():
+                        out_torch, _, _, _ = hf_layer(in_torch, cos=cos_hf, sin=sin_hf, attention_mask=causal_mask)
+                else:
+                    with torch.no_grad():
+                        out_torch, _, _, _ = hf_layer(in_torch, cos=None, sin=None, attention_mask=None)
+                # Send back as col-sharded TT.
+                x.deallocate(True)
+                out_tt = _send_col_sharded_hidden(out_torch.to(torch.bfloat16), bh_glx_mesh, args)
+                tt_prefill_hiddens.append(out_torch.detach().clone().float())
+                return out_tt, h
+
+            # Standard path: run TT forward
+            out_x, out_h = orig_forward(
+                x,
+                h,
+                current_pos,
+                rot_mats=rot_mats,
+                user_id=user_id,
+                mode=mode,
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
+                kv_cache=kv_cache,
+                batch_size=batch_size,
+            )
+            if mode == "prefill":
+                t = _gather_col_sharded_to_full_torch(out_x, bh_glx_mesh, args, T=T_prefill)
+                tt_prefill_hiddens.append(t.detach().clone().float())
+            return out_x, out_h
+
+        return hooked
+
+    for i, layer in enumerate(model.layers):
+        layer.forward = make_hook(original_forwards[i], i)
+
+    # Run TT prefill (T=128).
+    x_tt = _send_col_sharded_hidden(x_full, bh_glx_mesh, args)
+    cos_tt, sin_tt = _build_partial_rope_cos_sin_tt(bh_glx_mesh, torch.arange(T_prefill, dtype=torch.long))
+    chunk_start_idx_tt = ttnn.from_torch(
+        torch.tensor([0], dtype=torch.int32),
+        device=bh_glx_mesh,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(bh_glx_mesh),
+    )
+    _ = model.forward(
+        x_tt,
+        current_pos=None,
+        rot_mats=(cos_tt, sin_tt),
+        user_id=0,
+        mode="prefill",
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=chunk_start_idx_tt,
+        start_pos=0,
+        get_last_token=-1,
+        kv_cache=None,
+        batch_size=1,
+    )
+
+    # Restore.
+    for i, layer in enumerate(model.layers):
+        layer.forward = original_forwards[i]
+
+    assert len(tt_prefill_hiddens) == n_layers, f"expected {n_layers} captures, got {len(tt_prefill_hiddens)}"
+
+    # Compute per-layer PCC averaged over all positions, and at the last position.
+    print(f"\n[hooked-prefill-{n_layers}L] === PER-LAYER PREFILL PCC ===")
+    print(f"{'lyr':>3}  {'pcc_all':>10}  {'pcc_lastT':>10}  {'Δpcc_all':>10}  {'kind':>16}")
+    prev = None
+    first_below_999 = None
+    first_below_99 = None
+    for i in range(n_layers):
+        tt_hi = tt_prefill_hiddens[i].reshape(1, T_prefill, -1)
+        ref_hi = ref_captures[i].reshape(1, T_prefill, -1)
+        pcc_all = _pcc(tt_hi, ref_hi)
+        # Per-position PCC at last position only:
+        pcc_lastT = _pcc(tt_hi[:, -1:, :], ref_hi[:, -1:, :])
+        d = (pcc_all - prev) if prev is not None else 0.0
+        prev = pcc_all
+        kind = args.linear_attention_pattern[i] if i < len(args.linear_attention_pattern) else "?"
+        if first_below_999 is None and pcc_all < 0.999:
+            first_below_999 = i
+        if first_below_99 is None and pcc_all < 0.99:
+            first_below_99 = i
+        print(f"{i:>3}  {pcc_all:>10.6f}  {pcc_lastT:>10.6f}  {d:>10.6f}  {kind:>16}")
+
+    print(f"\n[hooked-prefill-{n_layers}L] first layer with PCC < 0.999: {first_below_999}")
+    print(f"[hooked-prefill-{n_layers}L] first layer with PCC < 0.99 : {first_below_99}")
+
+
+def _run_hooked(bh_glx_mesh, n_layers, teacher_force_period=None):
     """Capture per-layer residual hidden state in a single 64L decode forward.
 
     Sequence:
@@ -336,6 +624,20 @@ def _run_hooked(bh_glx_mesh, n_layers):
                 t = _gather_col_sharded_to_full_torch(out_x, bh_glx_mesh, args, T=1)
                 # t is [B, 1, H] after squeeze. Detach + clone for safety.
                 tt_decode_hiddens.append(t.detach().clone().float())
+
+                # Teacher forcing: every ``teacher_force_period`` layers,
+                # replace the TT residual output with the HF reference's
+                # residual after this layer. Layer (idx+1) receives the
+                # clean residual instead of the drifted one.
+                if teacher_force_period is not None and (idx + 1) % teacher_force_period == 0 and (idx + 1) < n_layers:
+                    ref_after_i = ref_decode_per_layer[idx]  # [1, 1, H]
+                    # Upload to col-sharded [1, 1, 1, H/4] matching the
+                    # decoder's inter-layer contract.
+                    new_out_x = _send_col_sharded_hidden(
+                        ref_after_i.reshape(1, 1, args.dim).to(torch.bfloat16), bh_glx_mesh, args
+                    )
+                    out_x.deallocate(True)
+                    out_x = new_out_x
             return out_x, out_h
 
         return hooked
