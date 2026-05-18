@@ -141,8 +141,13 @@ void DramSenderGlobalCircularBuffer::setup_receiver_buffers(
     const auto& core_to_core_id = cb_config_buffer_.get_buffer()->get_buffer_page_mapping()->core_to_core_id;
     std::vector<uint32_t> cb_config_host_buffer(cb_config_size / sizeof(uint32_t), 0);
     const uint32_t noc_xy_address = config_buffer_address + (num_config_elements * sizeof(uint32_t));
-    const uint32_t pages_sent_address = tt::align(noc_xy_address + (num_noc_xy_words * sizeof(uint32_t)), l1_alignment);
     const auto buffer_address = cb_buffer().address();
+
+    // Receiver acks (`pages_acked`) and sender's view of `pages_sent` live in DRISC L1, not the
+    // receiver L1, because we deliberately don't shard a buffer onto DRAM cores. Use DRISC L1
+    // UNRESERVED as the agreed base — the DRISC kernel reserves the same region.
+    const auto& hal_inst = MetalContext::instance().hal();
+    pages_sent_drisc_l1_base_ = hal_inst.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
 
     for (const auto& [sender_core, receiver_cores] : sender_receiver_core_mapping_) {
         const auto& receiver_cores_vec = corerange_to_cores(receiver_cores);
@@ -157,7 +162,7 @@ void DramSenderGlobalCircularBuffer::setup_receiver_buffers(
             cb_config_host_buffer[receiver_idx++] = size_;
             cb_config_host_buffer[receiver_idx++] = buffer_address;
             cb_config_host_buffer[receiver_idx++] = noc_xy_address;
-            cb_config_host_buffer[receiver_idx++] = pages_sent_address + 2 * i * l1_alignment;
+            cb_config_host_buffer[receiver_idx++] = pages_sent_drisc_l1_base_ + 2 * i * l1_alignment;
             cb_config_host_buffer[receiver_idx++] = sender_physical_coord.x;
             cb_config_host_buffer[receiver_idx++] = sender_physical_coord.y;
         }
@@ -180,6 +185,7 @@ const std::vector<std::pair<CoreCoord, CoreRangeSet>>& DramSenderGlobalCircularB
 const std::vector<std::vector<CoreCoord>>& DramSenderGlobalCircularBuffer::receiver_coords_per_sender() const {
     return receiver_coords_per_sender_;
 }
+DeviceAddr DramSenderGlobalCircularBuffer::pages_sent_drisc_l1_base() const { return pages_sent_drisc_l1_base_; }
 
 DramSenderGlobalCircularBuffer CreateDramSenderGlobalCircularBuffer(
     IDevice* device,
