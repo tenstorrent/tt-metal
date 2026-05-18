@@ -863,17 +863,27 @@ FabricCoresHealth configure_fabric_cores(
     // FIX S9 never had FIX EG run, so no restore needed for them.
     //
     // NOTE: This fires BEFORE ConfigureDeviceWithProgram and write_launch_msg_to_core.
-    // base-UMD sees fw_launch_addr=1 but the launch message isn't in L1 yet.
-    // This is safe because base-UMD polls fw_launch_addr in a tight loop and
-    // only acts on it when it sees a VALID launch message structure in the
-    // LAUNCH address region.  The actual launch message is written by
-    // write_launch_msg_to_core() later in device.cpp — at which point base-UMD
-    // reads the ready launch message and jumps.  The sequence is:
+    //
+    // active_erisc.cc lifecycle (corrected description):
+    //   1. Writes flag_disable[0] = 1   (== fw_launch_addr = 0x9004) — ONCE at startup
+    //   2. Writes go_messages[0].signal = RUN_MSG_DONE
+    //   3. Enters polling loop: waits for go_messages[0].signal == RUN_MSG_GO
+    //   4. The flag_disable[0] != 1 check (line 264) is an EXIT condition:
+    //      if the host zeros flag_disable[0] (to signal "stop"), base-UMD returns.
+    //      It does NOT poll fw_launch_addr as a launch gate.
+    //
+    // FIX EG zeroed fw_launch_addr during the reset window to prevent premature
+    // old-firmware launch. Now that L1 is clean and we're about to deassert,
+    // restore it to 1 so active_erisc's startup write is a no-op (not a transition).
+    // NOTE: This restore is a no-op in practice since active_erisc overwrites it,
+    // but is kept for documentation clarity and to match expected hardware state.
+    //
+    // Sequence:
     //   FIX EG: zero fw_launch_addr (prevents stale launch during reset)
     //   L1 clear: zero sync addresses
-    //   FIX MM (here): restore fw_launch_addr=1 (base-UMD starts polling)
+    //   FIX MM (here): restore fw_launch_addr=1 (match expected active_erisc startup state)
     //   ConfigureDeviceWithProgram: writes fabric firmware binary to L1
-    //   write_launch_msg_to_core: writes launch message → base-UMD jumps
+    //   write_launch_msg_to_core: writes launch_msg + go_msg → base-UMD runs kernel
     if (device->is_mmio_capable()) {
         const auto& hal_mm = tt::tt_metal::MetalContext::instance().hal();
         const auto aeth_idx_mm = hal_mm.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
