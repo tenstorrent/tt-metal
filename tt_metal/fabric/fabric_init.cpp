@@ -740,7 +740,7 @@ FabricCoresHealth configure_fabric_cores(
         tt::LogMetal,
         "FIX MN (#42429): configure_fabric_cores SUMMARY — Device {} mmio={} "
         "total_active={} dead={} newly_dead={} recovered={} "
-        "skip_soft_reset={} pre_known_dead={} healthy={} "
+        "skip_soft_reset={} pre_known_dead={} deferred_deassert={} healthy={} "
         "paths: fix_m={} fix_s9={} normal={}",
         device->id(),
         is_mmio,
@@ -750,6 +750,7 @@ FabricCoresHealth configure_fabric_cores(
         recovered_channels.size(),
         skip_soft_reset_channels.size(),
         pre_known_dead_channels.size(),
+        deferred_deassert_channels.size(),
         all_channels_healthy ? "true" : "false",
         fix_m_count, fix_s9_count, normal_reset_count);
 

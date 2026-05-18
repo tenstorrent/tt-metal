@@ -291,7 +291,13 @@ int __attribute__((noinline)) main(void) {
 
 #ifdef STRATEGY9_SESSION_ID
     // FIX S9: If session_id is invalid (0), L1 data is from no valid session — stay dormant.
+    // FIX QR-S9 (#42429): Write a sentinel (0xD0DEAD09) to fw_ready slot so the host can
+    // distinguish "ERISC went dormant due to session_id=0" from "ERISC never reached this
+    // point."  Without this marker, FIX SA-A timeout just sees fw_ready=0 and can't tell
+    // whether ERISC is stuck in ROM vs. alive-but-dormant.
     if (expected_session_id == SESSION_ID_INVALID) {
+        *reinterpret_cast<volatile uint32_t*>(
+            MEM_AERISC_FABRIC_SCRATCH_BASE + FW_READY_OFFSET) = 0xD0DEAD09u;
         while (flag_disable[0] == 1) {
             internal_::risc_context_switch();
         }

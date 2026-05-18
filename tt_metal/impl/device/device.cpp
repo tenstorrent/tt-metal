@@ -683,7 +683,14 @@ void Device::configure_fabric(
                     "FIX SA-S (#42429): Device {} staggering deassert by {}ms (chip_id * {}ms) "
                     "to prevent simultaneous cross-chip ETH link training.",
                     this->id_, stagger_ms, kStaggerPerChipMs);
+                auto stagger_start = std::chrono::steady_clock::now();
                 std::this_thread::sleep_for(std::chrono::milliseconds(stagger_ms));
+                auto stagger_actual = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - stagger_start).count();
+                log_info(
+                    tt::LogMetal,
+                    "FIX SA-S (#42429): Device {} stagger complete — requested {}ms, actual {}ms.",
+                    this->id_, stagger_ms, stagger_actual);
             }
         }
 
@@ -826,11 +833,26 @@ void Device::configure_fabric(
                     fw_ready_elapsed += kFwReadyPollMs;
                 }
                 if (!fw_ready_ok) {
+                    // FIX QQ (#42429): Read the actual fw_ready value at timeout for diagnostics.
+                    // Without this, post-mortem can't tell if ERISC wrote a partial/wrong value
+                    // vs. the slot being still zeroed (ERISC never reached init).
+                    uint32_t fw_ready_actual = 0;
+                    try {
+                        std::vector<uint32_t> rb_timeout(1, 0);
+                        cluster_sa.read_core(rb_timeout, sizeof(uint32_t), core_loc_sa,
+                            static_cast<uint64_t>(fw_ready_addr_sa));
+                        fw_ready_actual = rb_timeout[0];
+                    } catch (...) {
+                        fw_ready_actual = 0xDEADDEAD;  // PCIe read failed
+                    }
                     log_warning(
                         tt::LogMetal,
                         "FIX SA-A (#42429): Device {} chan={} ERISC did not signal FW_READY within {}ms. "
-                        "Channel may be stuck in ROM or link training. Marking dead — skipping boot fence + go_msg.",
-                        this->id_, deferred_chan, FW_READY_TIMEOUT_MS);
+                        "actual fw_ready=0x{:08X} (expected 0x{:08X}). "
+                        "Channel may be stuck in ROM or link training. Marking dead — skipping boot fence + go_msg. "
+                        "FIX QQ (#42429): timeout snapshot.",
+                        this->id_, deferred_chan, FW_READY_TIMEOUT_MS,
+                        fw_ready_actual, static_cast<uint32_t>(FW_READY_VALUE));
                     // Mark as dead so downstream code knows this channel failed.
                     all_dead_channels_storage.insert(deferred_chan);
                     continue;  // skip boot fence + go_msg for this channel
