@@ -100,14 +100,19 @@ jobs:
 
       - name: Generate coverage reports
         run: |
+          # Debug: show what's available
+          echo "=== build/lib contents ===" && ls -la ./build/lib/*.so 2>/dev/null || echo "(no .so in build/lib)"
+          echo "=== ttnn .so in venv ===" && find /opt/venv/lib -path "*/ttnn/*.so" 2>/dev/null || echo "(none)"
+
           objects=()
-          # Collect instrumented .so files from build artifact and installed wheel
+          # Collect instrumented .so files from build artifact
           while IFS= read -r -d '' obj; do
             objects+=("$obj")
-          done < <(find ./build/lib -maxdepth 1 -name "libtt_metal.so" -o -name "libtt_stl.so" -print0 2>/dev/null)
+          done < <(find ./build/lib -maxdepth 1 \( -name "libtt_metal.so" -o -name "libtt_stl.so" \) -print0 2>/dev/null)
+          # Collect ttnn Python extension .so files from installed wheel
           while IFS= read -r -d '' obj; do
             objects+=("$obj")
-          done < <(find /opt/venv/lib -name "_ttnncpp*.so" -o -name "_ttnn*.so" -print0 2>/dev/null | grep -z -v "_ttnn_cpp_extensions")
+          done < <(find /opt/venv/lib -path "*/ttnn/*.so" -print0 2>/dev/null)
 
           if [ ${#objects[@]} -eq 0 ]; then
             echo "::error::No instrumented objects found"
