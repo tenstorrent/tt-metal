@@ -21,22 +21,32 @@ PCC ≈ 0.58.  This is the practical ceiling on current BH hardware without CPU 
 
 iSTFT path
 ----------
-Pre-computed dense matrices (device-resident):
+Pre-computed dense matrices (device-resident, small inputs only):
 
     y = X_real_flat @ B_real + X_imag_flat @ B_imag   # [B, output_length]
 
 B_real / B_imag already encode synthesis windowing, OLA and COLA normalisation, so the
 runtime is two matmuls + one add.
+
+When the iSTFT matrix would exceed ``_ISTFT_MATRIX_BYTES_LIMIT`` bytes (default 1 GiB) we avoid
+materializing the full matrix and instead run iSTFT as a sequence of on-device chunked matmuls.
+This keeps large-sequence synthesis fully on TT without torch runtime fallbacks.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 import torch
 
 import ttnn
+
+# iSTFT matrix bytes limit: if [K*F, output_length] float32 would exceed this, skip
+# precomputing the matrices and use torch.istft on CPU instead.
+_ISTFT_MATRIX_BYTES_LIMIT = 1_073_741_824  # 1 GiB
 
 
 @dataclass(frozen=True)
@@ -49,8 +59,10 @@ class TTTorchSTFTParams:
     conv_pad_len: int  # n_fft // 2
 
     # iSTFT: y = X_real_flat @ istft_real + X_imag_flat @ istft_imag
-    istft_real: ttnn.Tensor  # [K*F, output_length]
-    istft_imag: ttnn.Tensor  # [K*F, output_length]
+    # None when the full matrix exceeds _ISTFT_MATRIX_BYTES_LIMIT; inverse uses chunked TT matmuls.
+    istft_real: Optional[ttnn.Tensor]  # [K*F, output_length]
+    istft_imag: Optional[ttnn.Tensor]  # [K*F, output_length]
+    istft_chunk_size: int
 
     filter_length: int  # n_fft
     hop_length: int
@@ -108,6 +120,74 @@ def _build_istft_matrices(L: int, n_fft: int, hop: int, window: np.ndarray) -> t
     B_real_out = (B_real[:, p : p + output_length] * inv).astype(np.float32)
     B_imag_out = (B_imag[:, p : p + output_length] * inv).astype(np.float32)
     return B_real_out, B_imag_out, output_length
+
+
+def _build_istft_inverse_denom_trim(L: int, n_fft: int, hop: int, window: np.ndarray) -> np.ndarray:
+    """Return COLA normalization inverse for trimmed output positions ``[output_length]``."""
+    output_length = (L // hop) * hop
+    p = n_fft // 2
+    L_padded = output_length + n_fft
+    denom = np.zeros(L_padded, dtype=np.float64)
+    for f in range(L // hop + 1):
+        base = f * hop
+        for n in range(n_fft):
+            m = base + n
+            if m < L_padded:
+                w_n = window[n]
+                denom[m] += w_n * w_n
+    denom_trim = denom[p : p + output_length]
+    return (1.0 / np.maximum(denom_trim, 1e-11)).astype(np.float32)
+
+
+def _build_istft_matrix_chunk(
+    L: int,
+    n_fft: int,
+    hop: int,
+    window: np.ndarray,
+    inv_denom_trim: np.ndarray,
+    col_start: int,
+    col_end: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build one iSTFT chunk ``[K*F, col_end-col_start]`` for trimmed output columns."""
+    K = n_fft // 2 + 1
+    F = L // hop + 1
+    output_length = (F - 1) * hop
+    p = n_fft // 2
+    N = n_fft
+    chunk_w = col_end - col_start
+    padded_start = p + col_start
+    padded_end = p + col_end
+
+    iFFT_real = np.zeros((K, N), dtype=np.float64)
+    iFFT_imag = np.zeros((K, N), dtype=np.float64)
+    for n in range(N):
+        iFFT_real[0, n] = 1.0 / N
+        iFFT_real[K - 1, n] = (1.0 / N) * ((-1.0) ** n)
+        for k in range(1, K - 1):
+            angle = 2.0 * np.pi * k * n / N
+            iFFT_real[k, n] = (2.0 / N) * np.cos(angle)
+            iFFT_imag[k, n] = -(2.0 / N) * np.sin(angle)
+
+    B_real = np.zeros((K * F, chunk_w), dtype=np.float32)
+    B_imag = np.zeros((K * F, chunk_w), dtype=np.float32)
+    for f in range(F):
+        frame_base = f * hop
+        for n in range(N):
+            m = frame_base + n
+            if m < padded_start or m >= padded_end:
+                continue
+            out_col = m - padded_start
+            w_n = float(window[n])
+            row_base = f
+            for k in range(K):
+                row = k * F + row_base
+                B_real[row, out_col] = np.float32(w_n * iFFT_real[k, n])
+                B_imag[row, out_col] = np.float32(w_n * iFFT_imag[k, n])
+
+    norm = inv_denom_trim[col_start:col_end][None, :]
+    B_real *= norm
+    B_imag *= norm
+    return B_real, B_imag
 
 
 def _build_conv_stft_kernels(n_fft: int, win_length: int) -> tuple[np.ndarray, np.ndarray]:
@@ -180,7 +260,11 @@ def preprocess_tt_torch_stft(
     device: ttnn.Device,
     weights_dtype=ttnn.bfloat16,
 ) -> TTTorchSTFTParams:
-    """Build STFT/iSTFT parameters on the host and upload them to device."""
+    """Build STFT/iSTFT parameters on the host and upload them to device.
+
+    The iSTFT full matrix is skipped when it would exceed ``_ISTFT_MATRIX_BYTES_LIMIT``.
+    In that case ``TTTorchSTFT.inverse`` uses chunked on-device matmuls.
+    """
     if win_length != filter_length:
         raise ValueError(f"Only win_length == filter_length is supported (got {win_length} vs {filter_length})")
     if input_length % hop_length != 0:
@@ -189,18 +273,32 @@ def preprocess_tt_torch_stft(
             f"(got input_length={input_length}, hop_length={hop_length})"
         )
 
-    window = _hann_window(win_length)
     K = filter_length // 2 + 1
     F = input_length // hop_length + 1
-    B_real, B_imag, output_length = _build_istft_matrices(input_length, filter_length, hop_length, window)
+    output_length = (F - 1) * hop_length  # == input_length when input_length % hop_length == 0
+
+    matrix_bytes = K * F * output_length * 4  # float32 bytes for one matrix
+    skip_istft_precompute = matrix_bytes > _ISTFT_MATRIX_BYTES_LIMIT
+
+    istft_chunk_size = 1024
+    if skip_istft_precompute:
+        istft_real_t: Optional[ttnn.Tensor] = None
+        istft_imag_t: Optional[ttnn.Tensor] = None
+    else:
+        window = _hann_window(win_length)
+        B_real, B_imag, output_length = _build_istft_matrices(input_length, filter_length, hop_length, window)
+        istft_real_t = _upload(B_real, device, dtype=weights_dtype)
+        istft_imag_t = _upload(B_imag, device, dtype=weights_dtype)
+
     conv_real, conv_imag = _build_conv_stft_kernels(filter_length, win_length)
 
     return TTTorchSTFTParams(
         conv_stft_real=_upload_rm(conv_real, dtype=ttnn.float32),
         conv_stft_imag=_upload_rm(conv_imag, dtype=ttnn.float32),
         conv_pad_len=filter_length // 2,
-        istft_real=_upload(B_real, device, dtype=weights_dtype),
-        istft_imag=_upload(B_imag, device, dtype=weights_dtype),
+        istft_real=istft_real_t,
+        istft_imag=istft_imag_t,
+        istft_chunk_size=istft_chunk_size,
         filter_length=filter_length,
         hop_length=hop_length,
         win_length=win_length,
@@ -324,8 +422,8 @@ class _StridedStftConv:
 class TTTorchSTFT:
     """TT port of :class:`TorchSTFT` (STFT/iSTFT via precomputed dense matrices).
 
-    ``use_torch_stft_fallback=True`` applies to :meth:`transform` (CPU ``torch.stft``).
-    iSTFT stays on-device.
+    ``use_torch_stft_fallback=True`` applies to :meth:`transform` only.
+    iSTFT always runs on TT (full matrix or chunked matmuls).
     """
 
     def __init__(
@@ -338,6 +436,9 @@ class TTTorchSTFT:
         self.device = device
         self.params = params
         self.eps = 1e-11
+        # Phase is undefined for near-zero bins. In no-fallback TT STFT those bins are most
+        # sensitive to BF16 rounding; clamp their phase to 0 to reduce random phase jitter.
+        self.phase_zero_floor = float(os.getenv("KOKORO_STFT_PHASE_ZERO_FLOOR", "1e-8"))
         self._use_torch_stft_fallback = use_torch_stft_fallback
         # _StridedStftConv is used only when use_torch_stft_fallback=False.
         self._conv_real = _StridedStftConv(device, params.conv_stft_real, params.hop_length)
@@ -348,6 +449,10 @@ class TTTorchSTFT:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
+        )
+        self._istft_window = _hann_window(params.win_length)
+        self._istft_inv_denom_trim = _build_istft_inverse_denom_trim(
+            params.input_length, params.filter_length, params.hop_length, self._istft_window
         )
 
     def _transform_torch_fallback(self, x_bL: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -434,7 +539,6 @@ class TTTorchSTFT:
         mag_sq = ttnn.add(mag_sq, eps_t, memory_config=mc)
         ttnn.deallocate(eps_t)
         magnitude = ttnn.sqrt(mag_sq, memory_config=mc)
-        ttnn.deallocate(mag_sq)
         phase = ttnn.atan2(X_imag, X_real, memory_config=mc)
         corr_mask = ttnn.logical_and(
             ttnn.eq(X_imag, 0.0, memory_config=mc),
@@ -445,9 +549,55 @@ class TTTorchSTFT:
         phase = ttnn.where(corr_mask, pi_fill, phase, memory_config=mc)
         ttnn.deallocate(corr_mask)
         ttnn.deallocate(pi_fill)
+        near_zero_mask = ttnn.lt(mag_sq, self.phase_zero_floor, memory_config=mc)
+        zero_phase = ttnn.full_like(phase, 0.0, memory_config=mc)
+        phase = ttnn.where(near_zero_mask, zero_phase, phase, memory_config=mc)
+        ttnn.deallocate(near_zero_mask)
+        ttnn.deallocate(zero_phase)
+        ttnn.deallocate(mag_sq)
         ttnn.deallocate(X_real)
         ttnn.deallocate(X_imag)
         return magnitude, phase
+
+    def _inverse_chunked(self, X_real_flat: ttnn.Tensor, X_imag_flat: ttnn.Tensor) -> ttnn.Tensor:
+        """Chunked iSTFT matmul path for long sequences (TT-only, no torch runtime fallback)."""
+        p = self.params
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        parts: list[ttnn.Tensor] = []
+        for col_start in range(0, p.output_length, p.istft_chunk_size):
+            col_end = min(col_start + p.istft_chunk_size, p.output_length)
+            B_real_np, B_imag_np = _build_istft_matrix_chunk(
+                p.input_length,
+                p.filter_length,
+                p.hop_length,
+                self._istft_window,
+                self._istft_inv_denom_trim,
+                col_start,
+                col_end,
+            )
+            B_real_tt = _upload(B_real_np, self.device, dtype=ttnn.float32)
+            B_imag_tt = _upload(B_imag_np, self.device, dtype=ttnn.float32)
+            y_real = ttnn.matmul(
+                X_real_flat, B_real_tt, memory_config=mc, compute_kernel_config=self.compute_kernel_config
+            )
+            y_imag = ttnn.matmul(
+                X_imag_flat, B_imag_tt, memory_config=mc, compute_kernel_config=self.compute_kernel_config
+            )
+            y_chunk = ttnn.add(y_real, y_imag, memory_config=mc)
+            ttnn.deallocate(y_real)
+            ttnn.deallocate(y_imag)
+            ttnn.deallocate(B_real_tt)
+            ttnn.deallocate(B_imag_tt)
+            parts.append(y_chunk)
+        if len(parts) == 1:
+            return parts[0]
+        out = parts[0]
+        for i in range(1, len(parts)):
+            cat = ttnn.concat([out, parts[i]], dim=1, memory_config=mc)
+            ttnn.deallocate(out)
+            ttnn.deallocate(parts[i])
+            out = cat
+        return out
 
     def inverse(self, magnitude: ttnn.Tensor, phase: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -457,6 +607,9 @@ class TTTorchSTFT:
 
         Returns:
             ``[B, 1, output_length]`` (matches ``TorchSTFT.inverse``'s trailing ``unsqueeze(-2)``).
+
+        When iSTFT full matrices are not precomputed (input too large for
+        ``_ISTFT_MATRIX_BYTES_LIMIT``), this method uses chunked TT matmuls.
         """
         p = self.params
         if magnitude.dtype != ttnn.float32:
@@ -477,24 +630,26 @@ class TTTorchSTFT:
         ttnn.deallocate(X_real)
         ttnn.deallocate(X_imag)
 
-        y_real = ttnn.matmul(
-            X_real_flat,
-            p.istft_real,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-        y_imag = ttnn.matmul(
-            X_imag_flat,
-            p.istft_imag,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-        )
+        if p.istft_real is not None and p.istft_imag is not None:
+            y_real = ttnn.matmul(
+                X_real_flat,
+                p.istft_real,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            y_imag = ttnn.matmul(
+                X_imag_flat,
+                p.istft_imag,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            y = ttnn.add(y_real, y_imag, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(y_real)
+            ttnn.deallocate(y_imag)
+        else:
+            y = self._inverse_chunked(X_real_flat, X_imag_flat)
         ttnn.deallocate(X_real_flat)
         ttnn.deallocate(X_imag_flat)
-
-        y = ttnn.add(y_real, y_imag, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(y_real)
-        ttnn.deallocate(y_imag)
 
         while len(y.shape) > 2:
             y = ttnn.squeeze(y, 0)
