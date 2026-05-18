@@ -9,9 +9,6 @@ import pytest
 import torch
 from loguru import logger
 from ttnn.experimental.moe_compute_utils import (
-    DS_PAD_CORES,
-    DS_W0_W1_SHARD_VALS,
-    DS_W2_SHARD_VALS,
     add_shared_expert_weights,
     get_shared_experts_per_device,
     get_weight_core_shard_maps,
@@ -458,10 +455,10 @@ def verify_combine(
     if not allclose_passed:
         logger.warning(f"FAILED Combine Output - Iteration: {iteration} - AllClose: {allclose_output}")
         delta_mask = (valid_outputs - valid_goldens).abs() > ATOL_THRESHOLD
-        # logger.warning(
-    #             f"Elements out of bounds: {valid_outputs[delta_mask]} ref: {valid_goldens[delta_mask]} "
-    #             f"({int(delta_mask.sum())} of {valid_outputs.numel()})"
-    #         )
+        logger.warning(
+            f"Elements out of bounds: {valid_outputs[delta_mask]} ref: {valid_goldens[delta_mask]} "
+            f"({int(delta_mask.sum())} of {valid_outputs.numel()})"
+        )
 
     return pcc_passed and allclose_passed
 
