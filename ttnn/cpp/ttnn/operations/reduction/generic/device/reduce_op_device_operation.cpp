@@ -70,9 +70,11 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             path_name,
             tensor_args.dtype());
         TT_FATAL(
-            operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM,
-            "{} expects SUM math_op (mean is lowered from AVG before device launch)",
-            path_name);
+            operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM ||
+                operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MAX,
+            "{}: math_op must be SUM (mean lowered from AVG) or MAX, got {}",
+            path_name,
+            operation_attributes.math_op);
         // W RM path: allow HEIGHT_SHARDED only; H RM path: allow WIDTH_SHARDED only.
         const auto in_layout = tensor_args.memory_config().memory_layout();
         const auto out_layout = operation_attributes.output_mem_config.memory_layout();
@@ -189,7 +191,12 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             "Output shard grid {} must be contained in device grid {}",
             output_shard_grid,
             device_grid);
-        if (output_nd_shard_spec.shard_shape.rank() >= 2) {
+        // Tile-alignment checks only apply to TILE layout output. RM paths produce
+        // ROW_MAJOR output whose shard shape is in element units, not tile units,
+        // so shard_shape[-1]=1 (after a W-reduce) is perfectly valid.
+        const bool is_rm_path =
+            operation_attributes.row_major_w_dense_path || operation_attributes.row_major_h_dense_path;
+        if (!is_rm_path && output_nd_shard_spec.shard_shape.rank() >= 2) {
             TT_FATAL(
                 output_nd_shard_spec.shard_shape[-2] > 0 && output_nd_shard_spec.shard_shape[-1] > 0,
                 "ND sharded output: last-2 shard dims must be positive, got [..., {}, {}] (height/width in "
@@ -222,16 +229,17 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
             break;
     }
 
-    if (operation_attributes.row_major_w_dense_path || operation_attributes.row_major_h_dense_path) {
-        return build_reduce_output_row_major_tensor_spec(
-            output_shape, operation_attributes.output_dtype, operation_attributes.output_mem_config);
-    }
+    const tt::tt_metal::Layout output_layout =
+        (operation_attributes.row_major_w_dense_path || operation_attributes.row_major_h_dense_path)
+            ? tt::tt_metal::Layout::ROW_MAJOR
+            : tt::tt_metal::Layout::TILE;
     return build_reduce_output_tensor_spec(
         output_shape,
         operation_attributes.output_dtype,
         operation_attributes.output_mem_config,
         tensor_args.memory_config(),
-        operation_attributes.dim);
+        operation_attributes.dim,
+        output_layout);
 }
 
 ReduceDeviceOperation::tensor_return_value_t ReduceDeviceOperation::create_output_tensors(
