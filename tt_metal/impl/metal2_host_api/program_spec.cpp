@@ -264,20 +264,46 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 
     // Build DFB endpoint info from kernel bindings
     for (const auto& kernel : spec.kernels) {
-        // Check for duplicate local_accessor_names within this kernel
-        std::unordered_set<std::string> accessor_names;
+        // Track per-accessor-name signatures within this kernel. Reusing a single
+        // local_accessor_name across two DFBBindings is permitted as a "self-loop pair":
+        // both bindings target the same DFB with opposite endpoint types (one PRODUCER,
+        // one CONSUMER). This lets a kernel that both produces and consumes the same DFB
+        // use a single device-side accessor name instead of two aliasing wrappers.
+        struct AccessorBindingInfo {
+            DFBSpecName dfb_spec_name;
+            bool has_producer = false;
+            bool has_consumer = false;
+        };
+        std::unordered_map<std::string, AccessorBindingInfo> accessor_bindings;
         for (const auto& dfb_binding : kernel.dfb_bindings) {
-            auto [it, inserted] = accessor_names.insert(dfb_binding.local_accessor_name);
+            auto [it, inserted] = accessor_bindings.try_emplace(
+                dfb_binding.local_accessor_name, AccessorBindingInfo{dfb_binding.dfb_spec_name});
+            AccessorBindingInfo& info = it->second;
+            if (inserted) {
+                TT_FATAL(
+                    IsValidCppIdentifier(dfb_binding.local_accessor_name),
+                    "Kernel '{}' DFB local_accessor_name '{}' must be a valid C++ identifier",
+                    kernel.unique_id,
+                    dfb_binding.local_accessor_name);
+            } else {
+                TT_FATAL(
+                    info.dfb_spec_name == dfb_binding.dfb_spec_name,
+                    "Kernel '{}' uses local_accessor_name '{}' for two different DFBs ('{}' and '{}'). "
+                    "Reusing a name is only permitted when both bindings target the same DFB (self-loop pair).",
+                    kernel.unique_id,
+                    dfb_binding.local_accessor_name,
+                    info.dfb_spec_name,
+                    dfb_binding.dfb_spec_name);
+            }
+            const bool is_producer = (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::PRODUCER);
+            bool& seen_this_type = is_producer ? info.has_producer : info.has_consumer;
             TT_FATAL(
-                inserted,
-                "Kernel '{}' has duplicate local_accessor_name '{}'",
+                !seen_this_type,
+                "Kernel '{}' has duplicate {} binding for local_accessor_name '{}'",
                 kernel.unique_id,
+                is_producer ? "PRODUCER" : "CONSUMER",
                 dfb_binding.local_accessor_name);
-            TT_FATAL(
-                IsValidCppIdentifier(dfb_binding.local_accessor_name),
-                "Kernel '{}' DFB local_accessor_name '{}' must be a valid C++ identifier",
-                kernel.unique_id,
-                dfb_binding.local_accessor_name);
+            seen_this_type = true;
 
             // Referential integrity: the DFB must exist
             TT_FATAL(

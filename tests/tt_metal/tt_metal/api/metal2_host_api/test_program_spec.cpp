@@ -166,7 +166,7 @@ TEST_F(ProgramSpecTestQuasar, DuplicateWorkUnitNameFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate WorkUnitSpec name 'same_name'")));
 }
 
-TEST_F(ProgramSpecTestQuasar, DuplicateLocalAccessorNameFails) {
+TEST_F(ProgramSpecTestQuasar, SharedLocalAccessorNameForDifferentDFBsFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -176,9 +176,10 @@ TEST_F(ProgramSpecTestQuasar, DuplicateLocalAccessorNameFails) {
     auto dfb0 = MakeMinimalDFB("dfb_0");
     auto dfb1 = MakeMinimalDFB("dfb_1");
 
-    // Bind two DFBs with the same local_accessor_name
+    // Bind two *different* DFBs with the same local_accessor_name — illegal
+    // (self-loop sharing requires the same DFB on both bindings).
     BindDFBToKernel(kernel, "dfb_0", "same_accessor", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(kernel, "dfb_1", "same_accessor", KernelSpec::DFBEndpointType::CONSUMER);  // Duplicate accessor!
+    BindDFBToKernel(kernel, "dfb_1", "same_accessor", KernelSpec::DFBEndpointType::CONSUMER);
 
     spec.kernels = {kernel};
     spec.dataflow_buffers = {dfb0, dfb1};
@@ -187,7 +188,53 @@ TEST_F(ProgramSpecTestQuasar, DuplicateLocalAccessorNameFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Kernel 'kernel' has duplicate local_accessor_name 'same_accessor'")));
+            ::testing::HasSubstr("Kernel 'kernel' uses local_accessor_name 'same_accessor' for two different DFBs")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DuplicateProducerBindingForSameLocalAccessorNameFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto producer_kernel = MakeMinimalDMKernel("producer");
+    auto consumer_kernel = MakeMinimalDMKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb");
+
+    // Two PRODUCER bindings on the same kernel sharing a local_accessor_name —
+    // illegal: the self-loop relaxation requires opposite endpoint types.
+    BindDFBToKernel(producer_kernel, "dfb", "shared", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(producer_kernel, "dfb", "shared", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer_kernel, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {producer_kernel, consumer_kernel};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("duplicate PRODUCER binding for local_accessor_name 'shared'")));
+}
+
+TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    // A kernel that both produces and consumes the same DFB may share a single
+    // local_accessor_name across the PRODUCER and CONSUMER bindings.
+    auto kernel = MakeMinimalDMKernel("kernel");
+    auto dfb = MakeMinimalDFB("dfb");
+    BindDFBToKernel(kernel, "dfb", "acc", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(kernel, "dfb", "acc", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {kernel};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
