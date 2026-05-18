@@ -77,9 +77,13 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x)
 
     // Clamp x to [-127, 128]; out-of-range inputs land on ±boundary and pick up
     // the exact +inf / +0 encodings via setexp saturation in the core.
-    sfpi::vFloat x_clamped = x;
-    sfpi::vec_min_max(sfpi::vFloat(UNDERFLOW_THRESHOLD), x_clamped);
-    sfpi::vec_min_max(x_clamped, sfpi::vFloat(OVERFLOW_THRESHOLD));
+    // vec_min_max takes non-const lvalue references, so the thresholds must be
+    // named locals rather than temporaries.
+    sfpi::vFloat x_clamped     = x;
+    sfpi::vFloat underflow_lim = UNDERFLOW_THRESHOLD;
+    sfpi::vFloat overflow_lim  = OVERFLOW_THRESHOLD;
+    sfpi::vec_min_max(underflow_lim, x_clamped);
+    sfpi::vec_min_max(x_clamped, overflow_lim);
 
     sfpi::vFloat result = _sfpu_exp2_core_unsafe_(x_clamped);
 
