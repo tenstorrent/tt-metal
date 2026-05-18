@@ -59,11 +59,9 @@ class TTMistral3PatchMerger(LightweightModule):
         permuted_tensor = []
         for image_index, image_tokens in enumerate(ttnn.split(image_features, tokens_per_image, dim=0)):
             h, w = image_sizes[image_index]
-            n_h, n_w = h // s, w // s
+            n_h, n_w = h // s, w // s  # Grid dims after spatial merge (pool s×s patch groups into one token).
 
-            # On-device equivalent of torch.nn.functional.unfold(kernel_size=s, stride=s).
-            # Reshape (h*w, d) → (n_h, s, n_w, s, d) then permute → (n_h, n_w, d, s, s)
-            # so that the final reshape gives (n_h*n_w, d*s*s) matching unfold output ordering.
+            # On-device unfold(kernel=s, stride=s): reshape→permute(0,2,4,1,3)→reshape gives (n_h*n_w, d*s*s).
             image_tokens = ttnn.to_layout(image_tokens, ttnn.ROW_MAJOR_LAYOUT)
             image_tokens = ttnn.reshape(image_tokens, (n_h, s, n_w, s, d))
             image_tokens = ttnn.permute(image_tokens, (0, 2, 4, 1, 3))  # (n_h, n_w, d, s, s)
@@ -137,7 +135,9 @@ class TTMistral3MultiModalProjector(LightweightModule):
             self.linear_2_bias = None
 
     def forward(self, image_features: ttnn.Tensor, image_sizes):
-        image_features = self.norm(image_features, mode="prefill")
+        image_features = self.norm(
+            image_features, mode="prefill"
+        )  # Fix: projector norm runs during prefill, not decode.
         image_features = self.patch_merger(image_features, image_sizes)
 
         hidden_states = ttnn.linear(

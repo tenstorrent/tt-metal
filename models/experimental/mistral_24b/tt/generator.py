@@ -9,15 +9,7 @@ from models.tt_transformers.tt.generator import Generator
 
 
 class MistralGenerator(Generator):
-    """
-    Mistral-specific trace prefill override that keeps multimodal kwargs
-    (`processed_inputs`, `vision_model`) on capture and replay.
-
-    _capture_trace_prefill caches the computed host_inputs (merged vision+text
-    embedding) so _prefill_forward_trace can reuse them without re-running the
-    vision model, eliminating the redundant second EmbeddingsDeviceOperation and
-    vision forward pass that otherwise follow trace capture.
-    """
+    """Mistral prefill trace override; caches fused vision+text host_inputs to skip redundant vision forward on replay."""
 
     def _capture_trace_prefill(
         self,
@@ -31,7 +23,9 @@ class MistralGenerator(Generator):
         **kwargs,
     ):
         _pi = kwargs.get("processed_inputs", None)
-        _is_multimodal = _pi is not None and _pi.get("pixel_values") is not None
+        _is_multimodal = (
+            _pi is not None and _pi.get("pixel_values") is not None
+        )  # Detect multimodal input for cache path.
 
         if batch_size > 1:
             prefill_kwargs = {"page_table": page_table, "batch_size": batch_size, "user_id": user_id}
@@ -43,8 +37,10 @@ class MistralGenerator(Generator):
             tt_rot_mats_prefill_local = host_inputs[2]
             host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
             if _is_multimodal:
+                # Cache fused embeddings so _prefill_forward_trace can skip re-running the vision model on replay.
                 self._prefill_replay_cache = host_inputs
 
+            # Warmup pass: run once un-traced so KV cache is populated before trace capture begins.
             device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
             transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
             self.model[model_id].ttnn_prefill_forward(
@@ -59,6 +55,7 @@ class MistralGenerator(Generator):
             )
             ttnn.synchronize_device(self.model_args[model_id].mesh_device)
 
+            # Capture pass: record the steady-state forward graph into a replayable trace.
             device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
             trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
             transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
@@ -85,8 +82,10 @@ class MistralGenerator(Generator):
         tt_rot_mats_prefill_local = host_inputs[2]
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
         if _is_multimodal:
+            # Cache fused embeddings so _prefill_forward_trace can skip re-running the vision model on replay.
             self._prefill_replay_cache = host_inputs
 
+        # Warmup pass: run once un-traced so KV cache is populated before trace capture begins.
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
         transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
         self.model[model_id].ttnn_prefill_forward(
@@ -99,6 +98,7 @@ class MistralGenerator(Generator):
         )
         ttnn.synchronize_device(self.model_args[model_id].mesh_device)
 
+        # Capture pass: record the steady-state forward graph into a replayable trace.
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
         trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
         transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
@@ -143,11 +143,13 @@ class MistralGenerator(Generator):
     ):
         global_user_id = kwargs.get("global_user_id", None)
         processed_inputs = kwargs.get("processed_inputs", None)
+        # Separate trace keys for multimodal vs text-only: they differ in input dtype (embeddings vs token ids).
         use_multimodal_trace = (
             processed_inputs is not None
             and processed_inputs.get("pixel_values", None) is not None
             and kwargs.get("vision_model", None) is not None
         )
+        # Per-configuration key prevents trace collisions across seq lengths, model IDs, batch sizes, and modality.
         trace_key = f"{prefill_seq_len}_{model_id}_{batch_size}_{'multimodal' if use_multimodal_trace else 'text'}"
 
         if self.trace_id_prefill[trace_key] is None:
@@ -194,9 +196,7 @@ class MistralGenerator(Generator):
     ):
         cached = getattr(self, "_prefill_replay_cache", None)
         if cached is not None:
-            # Reuse the host_inputs computed during _capture_trace_prefill:
-            # skips re-running the vision model, two to_torch downloads,
-            # masked_scatter, from_torch, and re-upload.
+            # Reuse host_inputs from capture to skip re-running the vision model and host round-trips.
             host_inputs = cached
             self._prefill_replay_cache = None
         else:

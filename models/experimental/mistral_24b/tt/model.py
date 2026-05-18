@@ -39,6 +39,7 @@ class MistralTransformer(Transformer):
             use_paged_kv_cache=use_paged_kv_cache,
         )
 
+    # Explicit overrides ensure MistralGenerator.super() calls dispatch through this subclass.
     def ttnn_prefill_forward(self, *args, **kwargs):
         return super().ttnn_prefill_forward(*args, **kwargs)
 
@@ -48,6 +49,7 @@ class MistralTransformer(Transformer):
     def prepare_prefill_inputs_trace(
         self, tokens, page_table=None, chunk_page_table=None, batch_size=1, user_id=0, **kwargs
     ):
+        # Entry point for trace-mode prefill; always forces trace_enabled=True for fixed-shape input tensors.
         ret = self.prepare_inputs_prefill(
             tokens,
             page_table=page_table,
@@ -62,6 +64,7 @@ class MistralTransformer(Transformer):
     def _prepare_fused_prefill_embeddings(
         self, text_input_ids, processed_inputs=None, vision_model=None, return_host=False
     ):
+        # Run vision tower, then scatter vision features into text embeddings at image-token positions.
         tt_tokens = ttnn.from_torch(
             text_input_ids.reshape(1, 1, 1, -1),
             device=self.mesh_device,
@@ -143,7 +146,7 @@ class MistralTransformer(Transformer):
 
         tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
-        text_input_ids = tokens.reshape(1, -1)
+        text_input_ids = tokens.reshape(1, -1)  # Preserve flat token ids for multimodal fusion before ttnn conversion.
 
         tokens = ttnn.from_torch(
             tokens,
@@ -153,11 +156,13 @@ class MistralTransformer(Transformer):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if not trace_enabled else None,
         )
 
+        # Extract multimodal kwargs to select the embedding path (vision fusion vs text-only).
         processed_inputs = kwargs.get("processed_inputs", None)
         vision_model = kwargs.get("vision_model", None)
         has_multimodal_inputs = processed_inputs is not None and processed_inputs.get("pixel_values", None) is not None
 
         tokens_embd = None
+        # Multimodal: run vision forward + fusion; text-only (no trace): embed tokens directly; text trace: skip embed.
         if has_multimodal_inputs:
             tokens_embd = self._prepare_fused_prefill_embeddings(
                 text_input_ids=text_input_ids,
@@ -169,10 +174,12 @@ class MistralTransformer(Transformer):
             tokens_embd = self.embd(tokens)
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
+        # Guard against sequences exceeding the pre-allocated RoPE matrix (uses prefill-specific matrix).
         mat_len = self.rope_setup.cos_matrix_prefill.shape[2]
         seq_len = kwargs.get("last_token_idx", None) + 1 if kwargs.get("last_token_idx", None) is not None else S
         assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
 
+        # Trace mode always starts at position 0 and slices full max_seq_len for fixed-shape trace capture.
         required_end = start_pos + S
         pad_len = max(0, required_end - mat_len)
         prefill_start_pos = 0 if trace_enabled else start_pos
@@ -181,6 +188,7 @@ class MistralTransformer(Transformer):
         cos_slice = self.rope_setup.cos_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
         sin_slice = self.rope_setup.sin_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
 
+        # Pad RoPE slice to full shape when the sequence end exceeds the pre-allocated matrix length.
         if pad_len > 0:
             padding = [(0, 0)] * 4
             padding[2] = (0, pad_len)
@@ -190,6 +198,7 @@ class MistralTransformer(Transformer):
         tt_rot_mats_prefill_global = [cos_slice, sin_slice]
 
         if hasattr(self, "rope_local_setup"):
+            # Same slice/pad logic applied to the local RoPE matrix for models with dual RoPE setups.
             local_mat_len = self.rope_local_setup.cos_matrix_prefill.shape[2]
             local_required_end = start_pos + S
             local_pad_len = max(0, local_required_end - local_mat_len)
@@ -230,8 +239,7 @@ class MistralTransformer(Transformer):
         else:
             tt_chunk_page_table = None
 
-        # Trace text-only path keeps token ids as static trace inputs.
-        # Trace multimodal path feeds pre-fused embeddings to the trace.
+        # Trace text path: token ids as static inputs; multimodal path: pre-fused bfloat16 embeddings.
         if trace_enabled and not has_multimodal_inputs:
             return tokens, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
         else:

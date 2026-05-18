@@ -48,15 +48,19 @@ def get_image_features(vision_tower, projector, input_tensor, image_sizes):
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "P150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150x4": (1, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "device_params",
-    fabric_1d_trace_device_params(num_command_queues=1),
+    fabric_1d_trace_device_params(num_command_queues=1),  # Arch-adaptive trace region: 30 MiB WH / 35 MiB BH.
     indirect=True,
 )
 def test_mistral_vision_model(mesh_device, reset_seeds):
@@ -87,6 +91,7 @@ def test_mistral_vision_model(mesh_device, reset_seeds):
     B, C, H, W = 1, 3, model_args.vision_chunk_size, model_args.vision_chunk_size
     input_tensor = torch.rand((B, C, H, W), dtype=torch.bfloat16)
 
+    # Pass bfloat16 directly; redundant upcast to float32 dropped to match TT model input dtype.
     reference_output = get_image_features(reference_model, reference_mmp, input_tensor, image_sizes=[(H, W)])
 
     # ##### TT Model: TtMistralVisionTransformer #####
@@ -99,7 +104,7 @@ def test_mistral_vision_model(mesh_device, reset_seeds):
         dtype=dtype,
         model_args=model_args,
     )
-    tt_output = vision_model(input_tensor, image_sizes=[(H, W)])
+    tt_output = vision_model(input_tensor.float(), image_sizes=[(H, W)])
     tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
         :, : tt_output.shape[-1]
     ]

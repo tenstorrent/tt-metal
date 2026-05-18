@@ -39,15 +39,19 @@ def fabric_1d_trace_device_params(*, num_command_queues: int = 1):
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "P150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150x4": (1, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "device_params",
-    fabric_1d_trace_device_params(num_command_queues=1),
+    fabric_1d_trace_device_params(num_command_queues=1),  # Arch-adaptive trace region: 30 MiB WH / 35 MiB BH.
     indirect=True,
 )
 def test_mistral_vision_tower(mesh_device, reset_seeds):
@@ -68,6 +72,7 @@ def test_mistral_vision_tower(mesh_device, reset_seeds):
     ##### Reference model output (Torch) #####
     reference_model = model_args.reference_vision_model()
     reference_model.load_state_dict(partial_state_dict)
+    # Pass bfloat16 directly; redundant upcast to float32 dropped to match TT model input dtype.
     reference_output = reference_model(input_tensor, image_sizes=[(H, W)])
 
     reference_output = reference_output.last_hidden_state
@@ -81,7 +86,7 @@ def test_mistral_vision_tower(mesh_device, reset_seeds):
         dtype=dtype,
         configuration=model_args,
     )
-    tt_output = vision_model(input_tensor, image_sizes=[(H, W)])
+    tt_output = vision_model(input_tensor.float(), image_sizes=[(H, W)])  # bfloat16 input; no dtype promotion needed.
     tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
         :, :, :, : tt_output.shape[-1]
     ]

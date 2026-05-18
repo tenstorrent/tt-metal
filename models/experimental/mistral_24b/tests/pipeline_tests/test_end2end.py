@@ -136,12 +136,7 @@ def next_token_ids_from_decode_output(decode_output):
 
 
 def read_first_token_id_from_device(tt_decode_output):
-    """Per-step token read for greedy on-device sampling when decode_forward was
-    called with read_from_device=False. Reads just slot 0 from one device's
-    replica of the [1,1,1,padded_batch] token tensor; tokens are replicated
-    across the mesh, so the value matches what process_decode_output_host would
-    return, while skipping its per-device .cpu() + reshape/concat (the 30-70ms
-    host-side gap between Tilize ops in the decoder perf report)."""
+    """Read slot-0 token from device mesh replica; skips per-device .cpu()+reshape+concat of process_decode_output_host."""
     item = tt_decode_output[0]
     tt_tok = item[0] if isinstance(item, tuple) else item
     return int(ttnn.to_torch(ttnn.get_device_tensors(tt_tok)[0]).flatten()[0].item())
@@ -159,16 +154,7 @@ def log_e2e_performance_measurements(
     vision_model_prefill_time=None,
     full_run_time=None,
 ):
-    """
-    Log throughput and latency metrics in the same shape as Qwen VL demos
-    (see models/demos/qwen3_vl/demo/demo.py measurements + Performance metrics block).
-    Vision/text prefill are not split here without a profiler; vision timing is optional.
-
-    For decode, ``inference_decode_time`` is total wall time for the decode region and
-    ``decode_step_times`` may be a synthetic list of identical ``wall_time / N`` entries
-    (so ``num_decode_tokens`` matches ``N``) when per-call ``decode_forward`` timing is
-    not meaningful (e.g. non-blocking trace with ``read_from_device=False``).
-    """
+    """Log prefill/decode throughput and latency; decode_step_times may be synthetic (wall/N) for non-blocking trace."""
     avg_time_to_first_token = inference_prefill_time / batch_size if batch_size else inference_prefill_time
     prefill_tok_s = (num_prefill_tokens / inference_prefill_time * batch_size) if inference_prefill_time > 0 else 0.0
     num_decode_tokens = len(decode_step_times)
@@ -366,9 +352,11 @@ def run_generation_exactly_like_test_end2end(
     logger.info("Running generation exactly like test_end2end.py...")
 
     logger.info("Running Vision Model...")
+    # Use MistralGenerator for multimodal-aware trace prefill that caches fused embeddings across capture/replay.
     generator = MistralGenerator([text_model], [model_args], vision_model.mesh_device, tokenizer=model_args.tokenizer)
     tt_kv_cache = [[l.attention.layer_past for l in text_model.layers]] if paged_attention_config else None
 
+    # Pass processor output directly; derive prefill length from attention_mask to skip re-tokenization.
     input_tokens_prefill_pt = input_ids
     batch_size = input_tokens_prefill_pt.shape[0]
     attention_mask = processed_inputs.get("attention_mask", None)
@@ -380,6 +368,7 @@ def run_generation_exactly_like_test_end2end(
     encoded_prompts = [input_ids[0].tolist()]
 
     logger.info("Running prefill...")
+    # Start full-run and prefill wall-clock timers separately to report both TTFT and total runtime.
     run_t0 = time.perf_counter()
     prefill_t0 = time.perf_counter()
     logits = generator.prefill_forward_text(
@@ -391,7 +380,7 @@ def run_generation_exactly_like_test_end2end(
         processed_inputs=processed_inputs,
     )
     prefill_t1 = time.perf_counter()
-    inference_prefill_time = prefill_t1 - prefill_t0
+    inference_prefill_time = prefill_t1 - prefill_t0  # Wall time covering vision forward + text prefill.
     num_prefill_tokens = int(prefill_lens[0])
 
     prefilled_token = torch.argmax(logits, dim=-1)
@@ -432,16 +421,10 @@ def run_generation_exactly_like_test_end2end(
     # Cache eos id once — avoids tokenizer attribute lookup every step.
     eos_token_id = model_args.tokenizer.eos_token_id
 
-    # Wall-clock the whole decode loop: with read_from_device=False, decode_forward
-    # returns after non-blocking trace submit (~µs), so per-call timers are meaningless.
+    # Wall-clock the full decode loop; per-call timers are meaningless with non-blocking trace submit.
     loop_start = time.perf_counter()
     for _ in range(generation_length):
-        # read_from_device=False: keep the sampled token on-device. The trace's
-        # sampling op writes the next-step token directly into the trace input
-        # buffer, so when reset_inputs=False (steady state after warmup) the host
-        # `out_tok` is ignored by decode_forward — we don't need to feed it back.
-        # This skips process_decode_output_host's per-device .cpu()+reshape+concat
-        # which dominates the 30-70ms per-step gap in the report.
+        # read_from_device=False: trace sampling op writes next token on-device, skipping host readback overhead.
         decode_output = generator.decode_forward(
             out_tok,
             current_pos,
@@ -454,8 +437,7 @@ def run_generation_exactly_like_test_end2end(
 
         # Lightweight per-step read for EOS / repetition checks.
         token_id = read_first_token_id_from_device(decode_output)
-        # Mirror the device's token in `out_tok` so a future reset_inputs=True
-        # path (e.g., page_table change) still sees the correct value.
+        # Mirror device token in out_tok for any future reset_inputs=True path.
         out_tok = torch.tensor([token_id], dtype=torch.long)
 
         # Stop if EOS detected
@@ -468,6 +450,7 @@ def run_generation_exactly_like_test_end2end(
 
     loop_end = time.perf_counter()
 
+    # Build synthetic per-step times (total/N) since non-blocking trace makes per-call timing meaningless.
     total_decode_time = loop_end - loop_start
     num_decoded = len(all_outputs[0]) - prefill_lens[0]
     _n = max(num_decoded, 1)
@@ -480,7 +463,7 @@ def run_generation_exactly_like_test_end2end(
     display_chat(logger, chat)
 
     run_t1 = time.perf_counter()
-    full_run_time = run_t1 - run_t0
+    full_run_time = run_t1 - run_t0  # Total prefill + decode wall time including model init overhead.
 
     log_e2e_performance_measurements(
         batch_size=batch_size,
@@ -495,11 +478,7 @@ def run_generation_exactly_like_test_end2end(
 
 
 def validate_e2e_outputs(results, expected_min_tokens=1):
-    """Validate end-to-end pipeline outputs.
-
-    Passes when at least ``expected_min_tokens`` decode steps recorded a new token
-    in ``results`` (length check only; no per-entry schema checks).
-    """
+    """Check that results contains at least expected_min_tokens decoded token ids (length check only)."""
     if not results:
         logger.error("No results generated from E2E pipeline")
         return False
@@ -554,15 +533,20 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
 )
 @pytest.mark.parametrize(
     "device_params",
-    fabric_1d_trace_device_params(num_command_queues=1),
+    fabric_1d_trace_device_params(num_command_queues=1),  # Arch-adaptive trace region: 30 MiB WH / 35 MiB BH.
     indirect=True,
 )
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150x4": (1, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )

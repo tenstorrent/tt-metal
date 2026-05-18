@@ -19,9 +19,7 @@ from models.experimental.mistral_24b.tt.vision_pixtral_transformer import TtPixt
 
 
 def _meshgrid_position_ids_torch(patch_grid, max_width):
-    # Matches position_ids_in_meshgrid_tt but takes (h_p, w_p) ints directly,
-    # so the caller doesn't need to materialize a 4-D ttnn tensor purely so the
-    # helper can read .shape[-2:] off of it.
+    # Pure-torch replacement for position_ids_in_meshgrid_tt; avoids materializing a 4-D ttnn tensor.
     pieces = []
     for h, w in patch_grid:
         mesh = torch.meshgrid(torch.arange(h), torch.arange(w), indexing="ij")
@@ -134,14 +132,10 @@ class MistralVisionTower(LightweightModule):
             raise ValueError("image_sizes must be provided and non-empty")
         patch_embeds = self.patch_conv(input_tensor)  # [B, H*W, dim], TILE
 
+        # Pre-compute (h_patches, w_patches) per image; used for reshape, slice, and position ID generation.
         patch_grid = [(h // self.patch_size, w // self.patch_size) for h, w in image_sizes]
 
-        # Fast path: a single image filling the full conv input. The original
-        # transpose -> reshape -> slice -> reshape -> transpose chain collapses
-        # to an identity on the data in this case — it only existed so that
-        # position_ids_in_meshgrid_tt could read (H_p, W_p) off the 4-D shape.
-        # Skipping it removes the two ~5ms ReshapeView ops + two transposes from
-        # the prefill trace.
+        # Fast path for a single full image: skips the reshape/transpose/slice chain (~2× ~5ms ReshapeView ops).
         single_full_image = (
             len(image_sizes) == 1
             and patch_embeds.shape[0] == 1
@@ -150,8 +144,7 @@ class MistralVisionTower(LightweightModule):
         )
 
         if not single_full_image:
-            # Multi-image / sub-region path: the 4-D reshape + per-image slice
-            # is structurally required to gather strided patches per image.
+            # Multi-image path: 4-D reshape + per-image slice required to gather strided patches.
             patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
             patch_embeds = ttnn.reshape(
                 patch_embeds,
@@ -168,8 +161,7 @@ class MistralVisionTower(LightweightModule):
         # ln_pre RMS Norm
         patch_embeds = self.ln_pre(patch_embeds, mode="prefill")
 
-        # Positional embeddings - compute directly from int sizes, avoiding the
-        # ttnn meshgrid op chain + tt->torch round-trip in position_ids_in_meshgrid_tt.
+        # Compute positional IDs from int patch sizes; avoids ttnn meshgrid + tt->torch round-trip.
         torch_position_ids = _meshgrid_position_ids_torch(
             patch_grid,
             max_width=self.config.vision_image_size // self.config.vision_patch_size,

@@ -24,9 +24,13 @@ TRACE_REGION_SIZE_BLACKHOLE = 35_000_000  # 35 MiB
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "P150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150x4": (1, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -65,7 +69,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     )
     torch_input = torch.randn(1, 1, seq_len, 1024).to(torch.bfloat16)
 
-    reference_output = reference_model(torch_input)
+    reference_output = reference_model(torch_input)  # bfloat16 input; redundant upcast to float32 dropped.
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,

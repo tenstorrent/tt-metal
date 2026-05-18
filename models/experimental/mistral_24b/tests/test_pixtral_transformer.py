@@ -40,15 +40,19 @@ def fabric_1d_trace_device_params(*, num_command_queues: int = 1):
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "P150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150x4": (1, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "device_params",
-    fabric_1d_trace_device_params(num_command_queues=1),
+    fabric_1d_trace_device_params(num_command_queues=1),  # Arch-adaptive trace region: 30 MiB WH / 35 MiB BH.
     indirect=True,
 )
 def test_image_transformer_inference(batch, num_chunks, mesh_device):
@@ -120,6 +124,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
 
     with torch.no_grad():
         tt_out = tt_model(attention_input, position_embeddings=(cos_t, sin_t))
+        # Pass bfloat16 tensors directly; redundant upcast to float32 dropped to match TT model input dtype.
         reference_output = reference_model(
             pt_attention_input,
             attention_mask=attention_mask,
