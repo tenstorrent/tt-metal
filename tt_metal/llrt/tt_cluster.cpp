@@ -64,6 +64,7 @@ inline std::string get_soc_description_file(
         case tt::ARCH::QUASAR: file = "quasar_32_arch.yaml"; break;
         default: throw std::runtime_error("Unsupported device arch");
     }
+    file = "mock_test_yaml.yaml";
     path += file;
     return path;
 }
