@@ -91,7 +91,7 @@ endif()
 target_link_libraries(
     tt_metal
     PUBLIC
-        umd::tt-umd-workload
+        "$<BUILD_INTERFACE:umd::tt-umd-workload>"
         enchantum::enchantum
         fmt::fmt-header-only
         TracyClient

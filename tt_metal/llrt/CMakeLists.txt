@@ -15,7 +15,7 @@ add_dependencies(llrt hal_generate_dev_msgs_header)
 target_link_libraries(
     llrt
     PUBLIC
-        umd::tt-umd-workload
+        "$<BUILD_INTERFACE:umd::tt-umd-workload>"
         TT::Metalium::HostDevCommon
     PRIVATE
         HAL::1xx

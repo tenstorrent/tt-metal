@@ -22,7 +22,7 @@ target_link_libraries(
         Tracy::TracyClient
         hw
         fmt::fmt-header-only
-        umd::tt-umd
+        "$<BUILD_INTERFACE:umd::tt-umd-workload>"
         TT::STL
         tt-logger::tt-logger
 )
@@ -39,7 +39,7 @@ target_link_libraries(
     PRIVATE
         fmt::fmt-header-only
         hw
-        umd::tt-umd-workload
+        "$<BUILD_INTERFACE:umd::tt-umd-workload>"
         TT::STL
         tt-logger::tt-logger
 )

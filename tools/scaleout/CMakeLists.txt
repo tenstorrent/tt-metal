@@ -75,7 +75,7 @@ target_link_libraries(
     scaleout_tools
     PUBLIC
         TT::STL
-        umd::tt-umd
+        "$<BUILD_INTERFACE:umd::tt-umd-workload>"
     PRIVATE
         enchantum::enchantum
         tt-logger::tt-logger

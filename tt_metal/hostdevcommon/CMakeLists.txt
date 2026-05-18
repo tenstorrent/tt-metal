@@ -26,7 +26,7 @@ target_link_libraries(
     ttmetalium_hostdevcommon
     INTERFACE
         fmt::fmt-header-only
-        umd::tt-umd
+        "$<BUILD_INTERFACE:umd::tt-umd-workload>"
 )
 
 install(
