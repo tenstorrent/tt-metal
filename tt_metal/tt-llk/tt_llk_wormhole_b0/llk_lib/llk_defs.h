@@ -28,7 +28,7 @@ enum class ReduceDim : std::uint8_t
     REDUCE_SCALAR,
 };
 
-enum TileDim
+enum class TileDim : std::uint8_t
 {
     R_IDX = 0,
     C_IDX = 1,
@@ -64,7 +64,7 @@ enum class EltwiseBinaryReuseDestType
     DEST_TO_SRCB = 2,
 };
 
-enum DstSync
+enum class DstSync : std::uint8_t
 {
     SyncHalf = 0,
     SyncFull = 1,
@@ -86,7 +86,7 @@ enum class Transpose : std::uint8_t
     Both      = 3,
 };
 
-enum src_op_id_e
+enum class src_op_id_e : std::uint8_t
 {
     OP_SRC0 = 0,
     OP_SRC1 = 1,
@@ -95,7 +95,7 @@ enum src_op_id_e
     OP_SRC4 = 4,
 };
 
-enum local_op_id_e
+enum class local_op_id_e : std::uint8_t
 {
     OP_LOCAL0 = 0,
     OP_LOCAL1 = 1,
@@ -104,7 +104,7 @@ enum local_op_id_e
     OP_LOCAL4 = 4,
 };
 
-enum out_op_id_e
+enum class out_op_id_e : std::uint8_t
 {
     OUT_ID0 = 0,
     OUT_ID1 = 1,
@@ -141,7 +141,7 @@ Stochastic rounding modes:
     is in data format conversion stage from pack_src_format to pack_dst_format.
     All: Enables fpu, pack and gasket rounding.
 */
-enum struct StochRndType
+enum class StochRndType : std::uint8_t
 {
     None = 0,
     Fpu  = 1,
