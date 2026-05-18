@@ -349,6 +349,7 @@ class TTGenerator:
         use_torch_stft_fallback: bool = False,
         use_torch_phase_fallback: bool = False,
         use_torch_linear_fallback: bool = False,
+        use_torch_tanh_fallback: bool = False,
     ) -> None:
         self.device = device
         self.params = params
@@ -367,6 +368,7 @@ class TTGenerator:
             params.m_source,
             use_torch_phase_fallback=use_torch_phase_fallback,
             use_torch_linear_fallback=use_torch_linear_fallback,
+            use_torch_tanh_fallback=use_torch_tanh_fallback,
         )
         self._stft = TTTorchSTFT(device, params.stft, use_torch_stft_fallback=use_torch_stft_fallback)
         # Keep the full harmonic-source path (SineGen + Source linear + STFT) on the same
