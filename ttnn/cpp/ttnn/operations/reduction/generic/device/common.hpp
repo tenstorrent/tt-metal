@@ -33,17 +33,20 @@ tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
 bool h_reduce_negate_fits_in_l1(
     const tt::tt_metal::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
-// Builds a tilized TensorSpec for a reduction-style op output, given the
-// already shape-adjusted output shape and the dimension that was reduced.
+// Builds a TensorSpec for a reduction-style op output, given the already
+// shape-adjusted output shape and the dimension that was reduced.
+//
+// `output_layout` selects the physical layout of the result (TILE by default;
+// pass ROW_MAJOR for the dense RM reduce paths).
 //
 // Handles all currently supported output memory layouts:
 //   - INTERLEAVED: returns the basic spec.
 //   - WIDTH/HEIGHT/BLOCK_SHARDED: delegates to the corresponding TensorSpec
 //     builder using the grid/orientation taken from `output_mem_config` if
 //     available, otherwise falling back to `input_mem_config`.
-//   - ND_SHARDED: copies the ND shard spec (from `output_mem_config` or, as a
-//     fallback, `input_mem_config`) and sets the shard shape entries for the
-//     reduced dim(s) to 1.
+//   - ND_SHARDED (TILE output only): copies the ND shard spec (from
+//     `output_mem_config` or, as a fallback, `input_mem_config`) and sets the
+//     shard shape entries for the reduced dim(s) to 1.
 //
 // `input_mem_config` is the memory config of the reduction's input tensor and
 // is only consulted as a fallback when the output config omits a shard spec.
@@ -52,13 +55,8 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
     tt::tt_metal::DataType output_dtype,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::MemoryConfig& input_mem_config,
-    tt::tt_metal::ReduceOpDim reduce_dim);
-
-/// Row-major output spec for interleaved buffers (used by dense W-reduce path).
-tt::tt_metal::TensorSpec build_reduce_output_row_major_tensor_spec(
-    const tt::tt_metal::Shape& output_shape,
-    tt::tt_metal::DataType output_dtype,
-    const tt::tt_metal::MemoryConfig& output_mem_config);
+    tt::tt_metal::ReduceOpDim reduce_dim,
+    tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE);
 
 // Enforces the documented contract that, for reduction-style ops, any sharded
 // participant (input or output) must live in L1.  Sharded layouts and DRAM
