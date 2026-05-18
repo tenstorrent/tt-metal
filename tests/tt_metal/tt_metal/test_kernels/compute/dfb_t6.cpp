@@ -7,6 +7,16 @@
 #include "api/debug/dprint.h"
 #include "experimental/kernel_args.h"
 
+namespace {
+// Compile-time check that DFBAccessor implicitly converts to uint32_t in a copy-init context,
+// which is what makes `dfb::name` usable directly as the CB-id argument to LLK compute APIs
+// (reduce_init, pack_tile, etc.) without an intermediate DataflowBuffer.
+constexpr uint32_t take_cb_id(uint32_t v) { return v; }
+static_assert(
+    take_cb_id(dfb::in) == dfb::in.id,
+    "DFBAccessor must implicitly convert to its underlying uint32_t id for LLK compatibility");
+}  // namespace
+
 void kernel_main() {
     constexpr uint32_t num_entries = get_arg(args::num_entries);
     DataflowBuffer dfb_in(dfb::in);
