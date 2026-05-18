@@ -421,7 +421,7 @@ def test_attention_block_fused_sdpa_softmax_probe(device):
     # Softmax stacks SFPU exp_tile + recip_tile on top of the bfp8/HiFi4
     # QK^T base — compounded approximation error. With pure bf16 weights
     # the same kernel lands ~0.998; with our bfp8 weights it lands ~0.996.
-    # The pi0_base standalone SigLIP SDPA test runs at the same precision
+    # The pi0.5_base standalone SigLIP SDPA test runs at the same precision
     # regime.
     assert min_pcc >= 0.996, f"min softmax probe PCC {min_pcc} below 0.996"
 
@@ -755,7 +755,7 @@ VP = "paligemma_with_expert.paligemma.model.vision_tower.vision_model.encoder.la
 
 
 def _load_real_layer0_attention_weights():
-    """Load layer-0 SigLIP attention weights from the pi0_base checkpoint.
+    """Load layer-0 SigLIP attention weights from the pi0.5_base checkpoint.
 
     Returns (ln1_w, ln1_b, qkv_w_unpadded, qkv_b, o_w, o_b) all bfloat16.
     HF stores weights as (out, in); we transpose to (in, out) for x @ W form.
@@ -808,13 +808,13 @@ def _make_real_input_activation(seed: int = 42) -> torch.Tensor:
 
 @pytest.mark.skipif(
     not Path(PI05_WEIGHTS_PATH).exists(),
-    reason=f"pi0_base weights not found at {PI05_WEIGHTS_PATH}",
+    reason=f"pi0.5_base weights not found at {PI05_WEIGHTS_PATH}",
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_attention_block_fused_real_weights(device):
     """Real-weights acceptance for the fused attention block + O-proj (#5).
 
-    Loads pi0_base SigLIP layer-0 weights (LN1, Q/K/V projections, O-proj)
+    Loads pi0.5_base SigLIP layer-0 weights (LN1, Q/K/V projections, O-proj)
     and runs the full attention block (fused kernel + standalone O-proj) on
     a real patch_embed + pos_embed activation.
 
@@ -909,7 +909,7 @@ def test_attention_block_fused_real_weights(device):
     oproj_device = _ttnn.to_torch(output_tt)
 
     p = pcc(oproj_golden, oproj_device)
-    print(f"\nPCC (fused+O-proj on REAL pi0_base layer-0 weights, vs no-scale no-bias torch) = {p:.6f}")
+    print(f"\nPCC (fused+O-proj on REAL pi0.5_base layer-0 weights, vs no-scale no-bias torch) = {p:.6f}")
     print(f"  output shape={tuple(oproj_device.shape)}, dtype={oproj_device.dtype}")
     # Real-weight dynamic range vs synthetic. The bfp8 quantization on real
     # weights can be slightly worse than on small random weights (real layer-
