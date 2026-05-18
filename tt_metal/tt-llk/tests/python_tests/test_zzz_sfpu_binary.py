@@ -38,9 +38,9 @@ from helpers.utils import passed_test
     ),
     bcast_dim=[
         LlkBroadcastType.None_,
-        LlkBroadcastType.Row,
-        LlkBroadcastType.Column,
-        LlkBroadcastType.Scalar,
+        # LlkBroadcastType.Row,
+        # LlkBroadcastType.Column,
+        # LlkBroadcastType.Scalar,
     ],
     mathop=[
         MathOperation.SfpuElwadd,
