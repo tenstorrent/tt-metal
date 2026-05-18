@@ -163,6 +163,11 @@ from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
+from ttnn._ttnn import dram_sender_global_circular_buffer
+from ttnn._ttnn.dram_sender_global_circular_buffer import (
+    create_dram_sender_global_circular_buffer,
+)
+
 from ttnn._ttnn.fabric import (
     FabricConfig,
     FabricReliabilityMode,

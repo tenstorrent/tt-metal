@@ -5,6 +5,7 @@
 
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/dram_sender_global_circular_buffer.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/sub_device.hpp>
@@ -66,6 +67,7 @@ std::ostream& operator<<(std::ostream& os, const CoreRangeSet& core_range_set);
 using tt::tt_metal::GlobalSemaphore;
 using tt::tt_metal::SubDevice;
 using tt::tt_metal::SubDeviceManagerId;
+using tt::tt_metal::experimental::DramSenderGlobalCircularBuffer;
 using tt::tt_metal::experimental::GlobalCircularBuffer;
 
 }  // namespace types

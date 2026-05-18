@@ -19,7 +19,9 @@ namespace tt::tt_metal::experimental {
 
 uint32_t pick_unused_dram_subchannel(IDevice* device, uint32_t bank_id) {
     TT_FATAL(device != nullptr, "Device cannot be null");
-    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
+    // Use build_id() instead of id() so MeshDevice (which has its own virtual id) routes to the
+    // underlying chip's SOC descriptor.
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->build_id());
     const uint32_t num_banks = soc_desc.get_num_dram_views();
     TT_FATAL(bank_id < num_banks, "bank_id={} out of range (num_banks={})", bank_id, num_banks);
 

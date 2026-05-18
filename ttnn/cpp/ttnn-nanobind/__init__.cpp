@@ -15,6 +15,7 @@
 #include "ttnn-nanobind/events.hpp"
 #include "ttnn-nanobind/fabric.hpp"
 #include "ttnn-nanobind/disaggregation.hpp"
+#include "ttnn-nanobind/dram_sender_global_circular_buffer.hpp"
 #include "ttnn-nanobind/global_circular_buffer.hpp"
 #include "ttnn-nanobind/global_semaphore.hpp"
 #include "ttnn-nanobind/hd_socket.hpp"
@@ -243,6 +244,8 @@ NB_MODULE(_ttnn, mod) {
     auto m_device = mod.def_submodule("device", "ttnn devices");
     auto m_multi_device = mod.def_submodule("multi_device", "ttnn multi_device");
     auto m_events = mod.def_submodule("events", "ttnn events");
+    auto m_dram_sender_global_circular_buffer =
+        mod.def_submodule("dram_sender_global_circular_buffer", "ttnn DRAM-sender global circular buffer");
     auto m_global_circular_buffer = mod.def_submodule("global_circular_buffer", "ttnn global circular buffer");
     auto m_global_semaphore = mod.def_submodule("global_semaphore", "ttnn global semaphore");
     auto m_hd_socket = mod.def_submodule("hd_socket", "ttnn host-device sockets");
@@ -267,6 +270,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::fabric::bind_fabric_api(m_fabric);
     ttnn::distributed::py_module_types(m_multi_device);
     ttnn::events::py_module_types(m_events);
+    ttnn::dram_sender_global_circular_buffer::py_module_types(m_dram_sender_global_circular_buffer);
     ttnn::global_circular_buffer::py_module_types(m_global_circular_buffer);
     ttnn::global_semaphore::py_module_types(m_global_semaphore);
     ttnn::hd_socket::py_module_types(m_hd_socket);
@@ -304,6 +308,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::device::py_device_module(m_device);
     ttnn::distributed::py_module(m_multi_device);
     ttnn::events::py_module(m_events);
+    ttnn::dram_sender_global_circular_buffer::py_module(m_dram_sender_global_circular_buffer);
     ttnn::global_circular_buffer::py_module(m_global_circular_buffer);
     ttnn::global_semaphore::py_module(m_global_semaphore);
     ttnn::hd_socket::py_module(m_hd_socket);
