@@ -16,7 +16,6 @@ with :class:`~weights.cache.CacheConfig` and the ``prepare_*`` functions
 
 from __future__ import annotations
 
-import hashlib
 import time
 from dataclasses import dataclass
 from dataclasses import replace as _dataclass_replace
@@ -32,15 +31,12 @@ from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions 
 from models.demos.deepseek_v3_b1.weights.cache import (
     BspmVariant,
     CacheConfig,
-    CompressedTensorBuildInputs,
-    CompressedTensorTarget,
     ReplicateMeshMapper,
     Shard2dMeshMapper,
     ShardMeshMapper,
     SourceTensorSelection,
     TensorTarget,
 )
-from models.demos.deepseek_v3_b1.weights.cache.bspm_expert_cache import get_or_create_bspm_expert
 from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     DOWN_PROJ_SINGLE_DEVICE_SPEC,
@@ -371,12 +367,6 @@ _LM_HEAD_N_PER_CORE = 160
 _LM_HEAD_MCAST_CORE = ttnn.CoreCoord(10, 9)
 _LM_HEAD_MCAST_CORE_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(_LM_HEAD_MCAST_CORE, _LM_HEAD_MCAST_CORE)])
 
-_NORM_MEM_CONFIG = ttnn.MemoryConfig(
-    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-    ttnn.BufferType.L1,
-    ttnn.ShardSpec(_LM_HEAD_MCAST_CORE_GRID, (1, _LM_HEAD_K), ttnn.ShardOrientation.ROW_MAJOR),
-)
-
 
 def _gate_bias_target(layer_idx: int) -> TensorTarget:
     return TensorTarget(
@@ -422,26 +412,6 @@ def _lm_head_target(name: str) -> TensorTarget:
 _LM_HEAD_TARGET = _lm_head_target("lm_head")
 _LM_HEAD_FOLDED_NORM_TARGET = _lm_head_target("lm_head_folded_norm")
 _LM_HEAD_FOLDED_SPEC_NORM_TARGET = _lm_head_target("lm_head_folded_shared_head_norm")
-
-_FINAL_NORM_TARGET = TensorTarget(
-    name="final_norm",
-    dtype=ttnn.bfloat16,
-    layout=ttnn.TILE_LAYOUT,
-    memory_config=_NORM_MEM_CONFIG,
-    tile_shape=(1, 32),
-    transform_version=3,
-)
-
-
-def _mtp_norm_target(name: str) -> TensorTarget:
-    return TensorTarget(
-        name=name,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=_NORM_MEM_CONFIG,
-        tile_shape=(1, 32),
-        transform_version=3,
-    )
 
 
 def _mtp_eh_proj_target(K: int, N: int) -> TensorTarget:
@@ -511,7 +481,7 @@ def _moe_routed_expert_tensor_target(name: str, K: int, N: int, device) -> Tenso
         memory_config=mem_config,
         tile_shape=(32, 32),
         mesh_mapper_config=ReplicateMeshMapper(),
-        transform_version=1,
+        transform_version=3,
     )
 
 
@@ -538,7 +508,7 @@ def _dense_routed_stacked_tensor_target(name: str, K: int, N: int, device) -> Te
         memory_config=mem_config,
         tile_shape=(32, 32),
         mesh_mapper_config=Shard2dMeshMapper(dims=(0, 1)),
-        transform_version=1,
+        transform_version=3,
     )
 
 
@@ -749,6 +719,10 @@ def prepare_attention_weights(
     ffn_norm_key = _key(layer_idx, "post_attention_layernorm.weight")
 
     # -- kv_b12: always a separate fusion group --
+    # kv_norm is NOT folded into kv_b: the KV RMSNorm kernel uses DoGamma=true
+    # and applies kv_norm gamma at runtime. (KV cache stores the un-gammaed c_kv,
+    # which the kernel re-normalises with gamma on each read; folding here would
+    # double-apply gamma.)
     def _preprocess_kv_b12(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         kv_b1, kv_b2 = split_kv_b_proj(t[kv_b_key])
         if mla_tp == 1:
@@ -786,8 +760,13 @@ def prepare_attention_weights(
             o_proj = t[o_proj_key].T.contiguous()
             o_proj = pack_o_proj_weights_tp4_shuffled(o_proj)
             q_a = t[q_a_key].T.contiguous()
+            attn_norm_w = t[attn_norm_key].T.contiguous()
+            q_a = q_a * attn_norm_w.unsqueeze(-1)
             q_b = deinterleave_q_b_proj(t[q_b_key])
             kv_a = t[kv_a_key].T.contiguous()
+            kv_a = kv_a * attn_norm_w.unsqueeze(-1)
+            q_norm_w = t[q_norm_key].T.contiguous()
+            q_b = q_b * q_norm_w.unsqueeze(-1)
             q_ab_kv_a = preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
             return {
                 "o_proj": o_proj,
@@ -895,14 +874,20 @@ def prepare_attention_weights(
     # -- mla_tp == 1: separate q_ab_kv_a and o_proj fusion groups --
     def _preprocess_q_ab_kv_a(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         q_a = t[q_a_key].T.contiguous()
+        attn_norm = t[attn_norm_key].T.contiguous()
+        # deffered norm preprocessing step
+        q_a = q_a * attn_norm.unsqueeze(-1)
         q_b = deinterleave_q_b_proj(t[q_b_key])
         kv_a = t[kv_a_key].T.contiguous()
+        kv_a = kv_a * attn_norm.unsqueeze(-1)
         if q_b.shape[1] == _MLA_TP1_Q_B_WIDTH * 2:
             q_b = q_b[:, :_MLA_TP1_Q_B_WIDTH].contiguous()
+        q_norm = t[q_norm_key].T.contiguous()
+        q_b = q_b * q_norm.unsqueeze(-1)
         return preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
 
     q_ab_fp = cache_config.context.fingerprint(
-        source=SourceTensorSelection(names=(q_a_key, q_b_key, kv_a_key)),
+        source=SourceTensorSelection(names=(q_a_key, attn_norm_key, q_b_key, q_norm_key, kv_a_key)),
         target=Q_AB_KV_A_SPEC,
     )
     q_ab_views = cache_config.cache.get_or_create(
@@ -910,7 +895,7 @@ def prepare_attention_weights(
         device,
         move_to_device=move_to_device,
         preprocess=_preprocess_q_ab_kv_a,
-        raw_tensors=lambda: {k: state_dict[k] for k in (q_a_key, q_b_key, kv_a_key)},
+        raw_tensors=lambda: {k: state_dict[k] for k in (q_a_key, attn_norm_key, q_b_key, q_norm_key, kv_a_key)},
     )
     if not isinstance(q_ab_views, dict):
         raise TypeError("expected dict[str, OverlappedTensor] for q_ab_kv_a cache entry")
@@ -924,6 +909,8 @@ def prepare_attention_weights(
         def _preprocess_o_proj_moe(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
             o_proj = t[o_proj_key].T.contiguous()
             gate_mm = t[gate_key].T.contiguous()
+            # Fold ffn_norm gamma into gate.weight: (γ * W). Layout (K, N) * (K, 1).
+            gate_mm = gate_mm * t[ffn_norm_key].unsqueeze(-1)
             attn_norm = t[attn_norm_key].unsqueeze(0)
             q_norm = t[q_norm_key].unsqueeze(0)
             kv_norm = t[kv_norm_key].unsqueeze(0)
@@ -1066,10 +1053,15 @@ def prepare_shared_expert_weights(
         gate_k = _key(layer_idx, "mlp.shared_experts.gate_proj.weight")
         up_k = _key(layer_idx, "mlp.shared_experts.up_proj.weight")
         down_k = _key(layer_idx, "mlp.shared_experts.down_proj.weight")
+        ffn_norm_k = _key(layer_idx, "post_attention_layernorm.weight")
 
         def _preprocess_gate_up_moe(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
             sg = t[gate_k].T.contiguous()
             su = t[up_k].T.contiguous()
+            # Fold ffn_norm gamma into shared expert gate/up: (γ * W). Layout (K, N) * (K, 1).
+            ffn_norm = t[ffn_norm_k].unsqueeze(-1)
+            sg = sg * ffn_norm
+            su = su * ffn_norm
             if moe_tp == 1:
                 full_n = _MOE_TP1_SHARED_GATE_UP_N * 8
                 if sg.shape[1] == full_n:
@@ -1079,7 +1071,7 @@ def prepare_shared_expert_weights(
             return preprocess_gate_up(sg, su, moe_tp, mesh_rows, mesh_cols)
 
         gu_fp = cache_config.context.fingerprint(
-            source=SourceTensorSelection(names=(gate_k, up_k)),
+            source=SourceTensorSelection(names=(gate_k, up_k, ffn_norm_k)),
             target=GATE_UP_SPEC,
         )
         gu_views = cache_config.cache.get_or_create(
@@ -1087,7 +1079,11 @@ def prepare_shared_expert_weights(
             device,
             move_to_device=move_to_device,
             preprocess=_preprocess_gate_up_moe,
-            raw_tensors=lambda: {gate_k: state_dict[gate_k], up_k: state_dict[up_k]},
+            raw_tensors=lambda: {
+                gate_k: state_dict[gate_k],
+                up_k: state_dict[up_k],
+                ffn_norm_k: state_dict[ffn_norm_k],
+            },
         )
         if not isinstance(gu_views, dict):
             raise TypeError("expected dict[str, OverlappedTensor] for gate_up cache entry")
@@ -1118,17 +1114,18 @@ def prepare_shared_expert_weights(
         gate_k = _key(layer_idx, "mlp.gate_proj.weight")
         up_k = _key(layer_idx, "mlp.up_proj.weight")
         down_k = _key(layer_idx, "mlp.down_proj.weight")
+        ffn_norm_k = _key(layer_idx, "post_attention_layernorm.weight")
         shared_n = D.MOE_INTERMEDIATE_SIZE
 
         def _preprocess_gate_up_dense(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-            gate = t[gate_k].T.contiguous()
-            up = t[up_k].T.contiguous()
-            gate = gate[:, :shared_n]
-            up = up[:, :shared_n]
+            # Fold ffn_norm gamma into gate/up: (γ * W). Broadcast (K,) -> (K, 1) against (K, N).
+            ffn_norm = t[ffn_norm_k].unsqueeze(-1)
+            gate = t[gate_k].T.contiguous()[:, :shared_n] * ffn_norm
+            up = t[up_k].T.contiguous()[:, :shared_n] * ffn_norm
             return preprocess_gate_up(gate, up, moe_tp, mesh_rows, mesh_cols)
 
         gu_fp = cache_config.context.fingerprint(
-            source=SourceTensorSelection(names=(gate_k, up_k)),
+            source=SourceTensorSelection(names=(gate_k, up_k, ffn_norm_k)),
             target=GATE_UP_SPEC,
         )
         gu_views = cache_config.cache.get_or_create(
@@ -1136,7 +1133,11 @@ def prepare_shared_expert_weights(
             device,
             move_to_device=move_to_device,
             preprocess=_preprocess_gate_up_dense,
-            raw_tensors=lambda: {gate_k: state_dict[gate_k], up_k: state_dict[up_k]},
+            raw_tensors=lambda: {
+                gate_k: state_dict[gate_k],
+                up_k: state_dict[up_k],
+                ffn_norm_k: state_dict[ffn_norm_k],
+            },
         )
         if not isinstance(gu_views, dict):
             raise TypeError("expected dict[str, OverlappedTensor] for gate_up cache entry")
@@ -1199,7 +1200,7 @@ def prepare_moe_routed_experts_bspm(
         [_key(layer_idx, f"mlp.experts.{e}.up_proj.weight") for e in range(num_routed_experts)],
         [_key(layer_idx, f"mlp.experts.{e}.down_proj.weight") for e in range(num_routed_experts)],
     ]
-
+    ffn_norm = state_dict[_key(layer_idx, "post_attention_layernorm.weight")]  # (K,)
     results: list[list] = [[], [], []]
     for proj_idx, (proj_name, keys) in enumerate(zip(proj_names, proj_keys)):
         sample_w = state_dict[keys[0]]
@@ -1214,34 +1215,29 @@ def prepare_moe_routed_experts_bspm(
             for e in range(num_routed_experts)
         ]
 
+        # gate_proj (0) and up_proj (1) fold ffn_norm into the weight (γ * W).
+        # down_proj (2) operates on the SwiGLU output, not on rmsnorm(h, ffn_norm), so it is not folded.
+        # Note: BSPM codes are precomputed against raw magnitudes — folding here may reduce compression
+        # accuracy until the .bspm files are re-encoded against γ-folded weights.
+        fold_norm = proj_idx in (0, 1)
+
         for e, key in enumerate(keys):
-            assignment_logical = all_assignments[e]
-            assignment_hash = hashlib.sha256(assignment_logical.tobytes()).hexdigest()[:16]
-            tgt = CompressedTensorTarget(
-                name=proj_name,
-                K=K,
-                N_padded=N_padded,
-                num_banks=num_banks,
-                bspm_variant=bspm_variant,
-                bspm_budget=bspm_budget,
-                assignment_hash=assignment_hash,
-            )
-            fp = cache_config.context.fingerprint(
-                source=SourceTensorSelection(names=(key,)),
-                target=tgt,
-            )
-            ct = get_or_create_bspm_expert(
-                cache_config.cache,
-                fp,
-                device,
-                raw_tensors=lambda _k=key: {_k: state_dict[_k]},
-                preprocess=lambda tensors, _k=key, _a=assignment_logical, _N=N, _N_padded=N_padded: CompressedTensorBuildInputs(
-                    w=torch.nn.functional.pad(tensors[_k].T.contiguous().float(), (0, _N_padded - _N)).numpy()
-                    if _N_padded != _N
-                    else tensors[_k].T.contiguous().float().numpy(),
-                    assignment=_a,
-                ),
-                move_to_device=move_to_device,
+            w = state_dict[key]
+            if fold_norm:
+                w = w * ffn_norm  # (N, K) * (K,) — broadcasts on the K dim
+            w = w.T.contiguous()
+            if N_padded != N:
+                w = torch.nn.functional.pad(w, (0, N_padded - N))
+
+            w_shuffled = shuffle_dram_tiles(w.unsqueeze(0), tile_w, num_banks).squeeze(0)
+            assignment = _shuffle_dram_assignment(all_assignments[e], num_banks)
+
+            ct = CompressedTensor.from_bspm(
+                w_shuffled.float(),
+                assignment,
+                device=device_for_torch,
+                memory_config=mem_config,
+                min_shard_bytes=min_shard_bytes,
             )
             results[proj_idx].append(ct)
 
@@ -1320,23 +1316,26 @@ def prepare_routed_expert_weights(
         tgt_gate = _moe_routed_expert_tensor_target("routed_gate_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
         tgt_up = _moe_routed_expert_tensor_target("routed_up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
         tgt_down = _moe_routed_expert_tensor_target("routed_down_proj", _ROUTED_DOWN_K, _ROUTED_DOWN_N, device)
+        ffn_norm_k = _key(layer_idx, "post_attention_layernorm.weight")
         routed_gate_proj: list[ttnn.Tensor] = []
         routed_up_proj: list[ttnn.Tensor] = []
         routed_down_proj: list[ttnn.Tensor] = []
         for e in range(num_routed_experts):
             gk = _key(layer_idx, f"mlp.experts.{e}.gate_proj.weight")
             fp_g = cache_config.context.fingerprint(
-                source=SourceTensorSelection(names=(gk,)),
+                source=SourceTensorSelection(names=(gk, ffn_norm_k)),
                 target=tgt_gate,
             )
+
             gw = cache_config.cache.get_or_create(
                 fp_g,
                 device,
                 move_to_device=move_to_device,
-                preprocess=lambda t, _gk=gk: {
-                    "routed_gate_proj": moe_routed_expert_torch_for_cache(t[_gk].T.contiguous(), num_banks)
+                # Fold ffn_norm γ into gate_proj: (γ * W). HF layout (N, K) * (K,) broadcasts on K.
+                preprocess=lambda t, _gk=gk, _fk=ffn_norm_k: {
+                    "routed_gate_proj": moe_routed_expert_torch_for_cache((t[_gk] * t[_fk]).T.contiguous(), num_banks)
                 },
-                raw_tensors=lambda _gk=gk: {_gk: state_dict[_gk]},
+                raw_tensors=lambda _gk=gk, _fk=ffn_norm_k: {_gk: state_dict[_gk], _fk: state_dict[_fk]},
             )
             if not isinstance(gw, ttnn.Tensor):
                 raise TypeError("expected ttnn.Tensor for routed gate expert cache entry")
@@ -1344,17 +1343,19 @@ def prepare_routed_expert_weights(
         for e in range(num_routed_experts):
             uk = _key(layer_idx, f"mlp.experts.{e}.up_proj.weight")
             fp_u = cache_config.context.fingerprint(
-                source=SourceTensorSelection(names=(uk,)),
+                source=SourceTensorSelection(names=(uk, ffn_norm_k)),
                 target=tgt_up,
             )
+
             uw = cache_config.cache.get_or_create(
                 fp_u,
                 device,
                 move_to_device=move_to_device,
-                preprocess=lambda t, _uk=uk: {
-                    "routed_up_proj": moe_routed_expert_torch_for_cache(t[_uk].T.contiguous(), num_banks)
+                # Fold ffn_norm γ into up_proj: (γ * W). HF layout (N, K) * (K,) broadcasts on K.
+                preprocess=lambda t, _uk=uk, _fk=ffn_norm_k: {
+                    "routed_up_proj": moe_routed_expert_torch_for_cache((t[_uk] * t[_fk]).T.contiguous(), num_banks)
                 },
-                raw_tensors=lambda _uk=uk: {_uk: state_dict[_uk]},
+                raw_tensors=lambda _uk=uk, _fk=ffn_norm_k: {_uk: state_dict[_uk], _fk: state_dict[_fk]},
             )
             if not isinstance(uw, ttnn.Tensor):
                 raise TypeError("expected ttnn.Tensor for routed up expert cache entry")
@@ -1389,12 +1390,13 @@ def prepare_routed_expert_weights(
         gate_k = _key(layer_idx, "mlp.gate_proj.weight")
         up_k = _key(layer_idx, "mlp.up_proj.weight")
         down_k = _key(layer_idx, "mlp.down_proj.weight")
+        ffn_norm_k = _key(layer_idx, "post_attention_layernorm.weight")
         tgt_g = _dense_routed_stacked_tensor_target("routed_gate_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
         tgt_u = _dense_routed_stacked_tensor_target("routed_up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
         tgt_d = _dense_routed_stacked_tensor_target("routed_down_proj", _ROUTED_DOWN_K, _ROUTED_DOWN_N, device)
 
         fp_g = cache_config.context.fingerprint(
-            source=SourceTensorSelection(names=(gate_k,)),
+            source=SourceTensorSelection(names=(gate_k, ffn_norm_k)),
             target=tgt_g,
         )
 
@@ -1403,17 +1405,19 @@ def prepare_routed_expert_weights(
         _dn_expert_n = D.MOE_INTERMEDIATE_SIZE
 
         def _pre_routed_gate(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-            mg = t[gate_k].T.contiguous()
+            # Fold ffn_norm gamma into gate: (γ * W). Broadcast (K,) -> (K, 1) against (K, N).
+            mg = t[gate_k].T.contiguous() * t[ffn_norm_k].unsqueeze(-1)
             ge = mg[:, _dn_shared:].reshape(mg.shape[0], _dn_num_routed, _dn_expert_n).permute(1, 0, 2).contiguous()
             return {"routed_gate_proj": mlp_routed_dense_stacked_torch_for_cache(ge, num_banks, mesh_shape)}
 
         fp_u = cache_config.context.fingerprint(
-            source=SourceTensorSelection(names=(up_k,)),
+            source=SourceTensorSelection(names=(up_k, ffn_norm_k)),
             target=tgt_u,
         )
 
         def _pre_routed_up(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-            mu = t[up_k].T.contiguous()
+            # Fold ffn_norm gamma into up: (γ * W). Broadcast (K,) -> (K, 1) against (K, N).
+            mu = t[up_k].T.contiguous() * t[ffn_norm_k].unsqueeze(-1)
             ue = mu[:, _dn_shared:].reshape(mu.shape[0], _dn_num_routed, _dn_expert_n).permute(1, 0, 2).contiguous()
             return {"routed_up_proj": mlp_routed_dense_stacked_torch_for_cache(ue, num_banks, mesh_shape)}
 
@@ -1432,14 +1436,14 @@ def prepare_routed_expert_weights(
             device,
             move_to_device=move_to_device,
             preprocess=_pre_routed_gate,
-            raw_tensors=lambda: {gate_k: state_dict[gate_k]},
+            raw_tensors=lambda: {gate_k: state_dict[gate_k], ffn_norm_k: state_dict[ffn_norm_k]},
         )
         routed_up_proj = cache_config.cache.get_or_create(
             fp_u,
             device,
             move_to_device=move_to_device,
             preprocess=_pre_routed_up,
-            raw_tensors=lambda: {up_k: state_dict[up_k]},
+            raw_tensors=lambda: {up_k: state_dict[up_k], ffn_norm_k: state_dict[ffn_norm_k]},
         )
         routed_down_proj = cache_config.cache.get_or_create(
             fp_d,
@@ -1808,7 +1812,7 @@ def _transform_eh_proj(eh_proj_weight_T: torch.Tensor) -> torch.Tensor:
 def _mtp_eh_proj_preprocess(
     raw: dict[str, torch.Tensor], src_key: str, h_key: str, e_key: str, target_name: str
 ) -> dict[str, torch.Tensor]:
-    """Preprocess eh_proj for cache: transpose, optionally fold gammas, pad, tile-shuffle."""
+    """Preprocess eh_proj for cache: transpose, fold h_gamma and e_gamma, pad, tile-shuffle."""
     proj_t = raw[src_key].T.contiguous()
     gamma = torch.cat([raw[e_key], raw[h_key]], dim=0).unsqueeze(1)
     proj_t = proj_t * gamma
@@ -1879,8 +1883,6 @@ def prepare_mtp_weights(
     logger.info("Preparing MTP weights (layer {})...", mtp_layer_idx)
     t0 = time.perf_counter()
 
-    h_gamma_tt = None
-    e_gamma_tt = None
     _h_key = _key(mtp_layer_idx, "hnorm.weight")
     _e_key = _key(mtp_layer_idx, "enorm.weight")
     _eh_key = _key(mtp_layer_idx, "eh_proj.weight")
