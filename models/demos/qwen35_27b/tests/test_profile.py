@@ -135,7 +135,8 @@ def _print_results(label, times, batch_size):
 )
 def test_profile_decode(mesh_device, reset_seeds, ensure_gc):
     """Profile decode: host sampling vs device sampling side-by-side."""
-    model_path = _get_model_path()
+    # Use workspace-relative dir (contains tokenizer + safetensors); matches test_profile_breakdown.py.
+    model_path = "Qwen3.5-27B-FP8"
     batch_size = 32
     max_seq_len = 2048
     num_steps = 10

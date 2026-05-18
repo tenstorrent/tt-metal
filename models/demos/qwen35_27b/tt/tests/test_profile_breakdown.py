@@ -23,7 +23,8 @@ from models.demos.qwen35_27b.tt.model import create_qwen35_model
 
 
 def _get_model_path():
-    return os.path.expanduser(os.environ.get("HF_MODEL", "~/models/Qwen3.5-27B-FP8"))
+    # return os.path.expanduser(os.environ.get("HF_MODEL", "~/models/Qwen3.5-27B-FP8"))
+    return "Qwen3.5-27B-FP8"
 
 
 def _sync(mesh_device):

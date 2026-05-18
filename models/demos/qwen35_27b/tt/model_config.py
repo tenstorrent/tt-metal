@@ -405,8 +405,13 @@ class Qwen35ModelArgs(ModelArgs):
             "topology": self.ccl_topology() or ttnn.Topology.Linear,
         }
 
-        # TopK core grid: use 30 cores (3x10) instead of single-core default
-        self.sub_core_grid_topk = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9))])
+        # TopK core grid: 3-col band, height = device logical Tensix rows.
+        # TG has 10 logical rows so y goes up to 9; harvested T3K/wormhole only exposes 8,
+        # so we clamp the upper y to the device's actual compute grid (max_grid_size.y - 1).
+        topk_max_y = min(9, self.max_grid_size.y - 1)
+        self.sub_core_grid_topk = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, topk_max_y))]
+        )
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         """Map framework module names to Qwen3.5 state dict key prefixes."""
