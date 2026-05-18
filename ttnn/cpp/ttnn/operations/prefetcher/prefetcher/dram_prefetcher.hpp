@@ -8,6 +8,7 @@
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/dram_sender_global_circular_buffer.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/types.hpp"
 
@@ -17,6 +18,8 @@ ttnn::Tensor dram_prefetcher(
     std::vector<ttnn::Tensor>& tensors,
     uint32_t num_layers,
     const std::optional<const GlobalCircularBuffer>& global_cb,
-    bool enable_performance_mode = false);
+    bool enable_performance_mode = false,
+    bool run_on_dram_cores = false,
+    const std::optional<const DramSenderGlobalCircularBuffer>& dram_sender_global_cb = std::nullopt);
 
 }  // namespace ttnn

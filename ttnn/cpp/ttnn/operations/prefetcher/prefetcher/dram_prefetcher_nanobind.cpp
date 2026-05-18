@@ -33,9 +33,11 @@ void bind_dram_prefetcher_operation(nb::module_& mod) {
         &ttnn::dram_prefetcher,
         nb::arg("tensors"),
         nb::arg("num_layers"),
-        nb::arg("global_cb"),
+        nb::arg("global_cb") = std::nullopt,
         nb::kw_only(),
-        nb::arg("enable_performance_mode") = false);
+        nb::arg("enable_performance_mode") = false,
+        nb::arg("run_on_dram_cores") = false,
+        nb::arg("dram_sender_global_cb") = std::nullopt);
 }
 
 void bind_dram_prefetcher(nb::module_& mod) { bind_dram_prefetcher_operation(mod); }

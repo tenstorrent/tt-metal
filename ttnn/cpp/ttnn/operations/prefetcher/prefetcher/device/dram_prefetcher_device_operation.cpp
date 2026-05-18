@@ -15,6 +15,19 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
     auto input_tensors = tensor_args.input_tensors;
     TT_FATAL(!input_tensors.empty(), "Must have at least one input tensor");
     TT_FATAL(args.num_layers > 0, "Prefetcher must run for at least 1 layer");
+
+    if (args.run_on_dram_cores) {
+        TT_FATAL(args.dram_sender_global_cb.has_value(), "run_on_dram_cores=true requires a dram_sender_global_cb");
+        TT_FATAL(
+            !args.global_cb.has_value(),
+            "run_on_dram_cores=true is incompatible with global_cb; pass only dram_sender_global_cb");
+        // The DramSenderGlobalCircularBuffer constructor checks programmable-DRAM availability,
+        // so by the time we get here the GCB exists, the env flag was set, and the arch supports it.
+        // The rest of the validation (sharding, dtypes, num readers) is delegated to the new
+        // program factory.
+        return;
+    }
+
     TT_FATAL(args.global_cb.has_value(), "Global circular buffer must be provided");
     const ttnn::Tensor& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
 
@@ -92,11 +105,15 @@ ttnn::Tensor dram_prefetcher(
     std::vector<ttnn::Tensor>& tensors,
     const uint32_t num_layers,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
-    const bool enable_performance_mode) {
+    const bool enable_performance_mode,
+    const bool run_on_dram_cores,
+    const std::optional<const tt::tt_metal::experimental::DramSenderGlobalCircularBuffer>& dram_sender_global_cb) {
     auto operation_attributes = DramPrefetcherParams{
         .num_layers = num_layers,
         .enable_performance_mode = enable_performance_mode,
         .global_cb = global_cb,
+        .run_on_dram_cores = run_on_dram_cores,
+        .dram_sender_global_cb = dram_sender_global_cb,
     };
     auto tensor_args = DramPrefetcherInputs{.input_tensors = tensors};
 

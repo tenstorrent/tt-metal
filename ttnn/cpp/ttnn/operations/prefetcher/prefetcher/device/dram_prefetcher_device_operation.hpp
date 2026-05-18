@@ -30,6 +30,9 @@ ttnn::Tensor dram_prefetcher(
     std::vector<ttnn::Tensor>& tensors,
     uint32_t num_layers,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
-    bool enable_performance_mode);
+    bool enable_performance_mode,
+    bool run_on_dram_cores = false,
+    const std::optional<const tt::tt_metal::experimental::DramSenderGlobalCircularBuffer>& dram_sender_global_cb =
+        std::nullopt);
 
 }  // namespace ttnn::prim
