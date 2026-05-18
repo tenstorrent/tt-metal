@@ -1,44 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Tenstorrent variant of ``demo_agent.py``: same interactive agent tools and chat loop, but generation
-runs on **TT** via ``TtDevstral2SmallModel`` (Pixtral vision + projector + ``TtMinistral3`` LM),
-then LM head and ``SamplingGenerator`` / CPU logits (``demo_devstral2_tt_multimodal`` / ``demo_model_loading_prompt``).
-
-**Per turn:** one full TT prefill of the current chat history (rebuilds KV cache) followed by a
-**traced TT decode** for each new token. The single-token decode trace is captured once on the first
-turn and reused for every subsequent turn — including across tool-call rounds and ``/image`` switches
-— because the decode kernel sequence only depends on shapes (constant for this model), not on the
-prompt or KV cache contents.
-
-**Text default:** token-id prefill only (vision stack still loads in ``TtDevstral2SmallModel``).
-
-**Image in-session (no ``--image`` required):** at the ``You:`` prompt use::
-
-    /image /path/to/file.jpg
-    What do you see?
-
-Or one line (path + question; quote paths with spaces)::
-
-    /image ./screenshot.png Describe the UI.
-
-**Commands:** ``/image <path> [optional prompt…]``, ``/noimage`` (drop sticky image), ``/clear`` (reset
-chat + tools; image stays until ``/noimage``). Optional startup ``--image PATH`` pre-attaches like ``/image``.
-
-``--vision-square-pixels`` / ``--vision-max-edge`` apply to ``/image`` and ``--image`` alike.
-
-**Context budget:** TT KV is allocated for ``--max-context-tokens + max_new_tokens + 2048`` (padded).
-
-Usage (repo root)::
-
-    python models/experimental/devstarl2_small/demo/tt_demo_agent.py --mesh-width 1 \\
-        --vision-square-pixels 1540
-
-    python models/experimental/devstarl2_small/demo/tt_demo_agent.py --max-context-tokens 4096 \\
-        --lm-head-cpu --text-layers 2
-"""
+# Tenstorrent variant of ``demo_agent.py``: same interactive agent tools and chat loop, but generation runs on **TT** via ``TtDevstral2SmallModel`` (Pixtral vision + projector + ``TtMinistral3`` LM), then LM head and ``SamplingGenerator`` / CPU logits (``demo_devstral2_tt_multimodal`` / ``demo_model_loading_prompt``). **Per turn:** one full TT prefill of the current chat history (rebuilds KV cache) followed by a **traced TT decode** for each new token. The single-token decode trace is captured...
 
 from __future__ import annotations
 
@@ -464,13 +427,7 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
 
 
 def _ensure_decode_trace(rt: TtAgentRuntime, seed_token_id: int, seed_decode_pos: int) -> TtDecodeTraceContext:
-    """Lazily build the session-wide single-token decode trace.
-
-    Called once on the first decode step of the first generate call. The captured trace
-    is reused across every following call (text or multimodal) because the kernel sequence
-    for one decode step does not depend on the prompt — only on the KV cache contents,
-    which the per-call prefill rewrites.
-    """
+    """Lazily build the session-wide single-token decode trace. Called once on the first decode step of the first generate call. The captured trace is reused across every following call (text or multimodal) because the kernel sequence for one decode step does not depend on the prompt — only on the KV cache contents, which the per-call prefill rewrites."""
     if rt.decode_trace_ctx is not None:
         return rt.decode_trace_ctx
     decode_buffers = tt_alloc_decode_input_buffers(rt.mesh_device)
@@ -535,11 +492,7 @@ def _sample_next_from_decode_trace(rt: TtAgentRuntime) -> int:
 
 
 def generate_assistant_text_tt(rt: TtAgentRuntime, messages: List[Dict[str, str]], config: TTAgentConfig) -> str:
-    """One prompt-prefill + per-token traced decode (text or sticky-image multimodal).
-
-    Decode trace is captured lazily on the first call of the session and reused for every
-    subsequent turn (see :func:`_ensure_decode_trace`).
-    """
+    """One prompt-prefill + per-token traced decode (text or sticky-image multimodal). Decode trace is captured lazily on the first call of the session and reused for every subsequent turn (see :func:`_ensure_decode_trace`)."""
     pixel_values: Optional[torch.Tensor] = None
     image_sizes: Optional[torch.Tensor] = None
     image_sizes_list: Optional[list[tuple[int, int]]] = None

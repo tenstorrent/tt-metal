@@ -1,16 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-PCC test: Hugging Face ``Ministral3RMSNorm`` vs TT ``RMSNorm`` (``tt_rmsnorm.py``) on Devstral weights.
-
-Loads the full multimodal checkpoint via ``ModelArgs.load_state_dict()`` like ``test_ministralattn.py``,
-compares layer 0 ``input_layernorm`` (meta key ``layers.0.attention_norm.weight``) on random activations.
-
-Requirements:
-- Enough host RAM / VRAM for ``transformers`` to load Devstral (~24B parameters / FP8→BF16).
-"""
+# PCC test: Hugging Face ``Ministral3RMSNorm`` vs TT ``RMSNorm`` (``tt_rmsnorm.py``) on Devstral weights. Loads the full multimodal checkpoint via ``ModelArgs.load_state_dict()`` like ``test_ministralattn.py``, compares layer 0 ``input_layernorm`` (meta key ``layers.0.attention_norm.weight``) on random activations. Requirements: - Enough host RAM / VRAM for ``transformers`` to load Devstral (~24B parameters / FP8→BF16).
 
 from __future__ import annotations
 

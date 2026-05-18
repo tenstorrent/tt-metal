@@ -1,25 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-#
 # SPDX-License-Identifier: Apache-2.0
 
-"""DRAM-sharded matmul helpers (decode-style projections).
-
-Mirrors the pattern used in ``models/tt_transformers/tt/model_config.py``:
-
-* weights: width-sharded across the device's DRAM banks (see ``device.dram_grid_size()``).
-* activation: width-sharded in L1 across the compute grid along K.
-* program: ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``.
-
-**Mesh devices:** ``ttnn.from_torch(..., memory_config=WIDTH_SHARDED DRAM, mesh_mapper=...)``
-requires the ``ShardSpec`` to describe **per-device** tensor geometry (see
-``tests/ttnn/unit_tests/test_torch_conversion.py``,
-``test_from_torch_mesh_sharded_dram_width_no_tensorspec_crash``). Pixtral vision weights use
-``ShardTensorToMesh`` on width or height; wiring full DRAM-sharded specs for those tensors is
-left to call sites that compute per-shard ``shard_height`` / ``n_cols_on_device`` explicitly.
-
-For replicated weights on a mesh (e.g. MLP on N devices), use ``mesh_mapper=ReplicateTensorToMesh``
-and treat the logical matrix as fully replicated per device when building ``dram_sharded_weight_memcfg``.
-"""
+# DRAM-sharded matmul helpers (decode-style projections). Mirrors the pattern used in ``models/tt_transformers/tt/model_config.py``: * weights: width-sharded across the device's DRAM banks (see ``device.dram_grid_size()``). * activation: width-sharded in L1 across the compute grid along K. * program: ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``. **Mesh devices:** ``ttnn.from_torch(..., memory_config=WIDTH_SHARDED DRAM, mesh_mapper=...)`` requires the ``ShardSpec`` to describe **per...
 
 from __future__ import annotations
 
@@ -43,14 +25,7 @@ def _gather_in0_dram_mm_program_config(
     fused_activation: Optional[Any],
     compute_kernel_config: Any,
 ) -> Any:
-    """
-    ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``gather_in0=True``: legal path for
-    WIDTH_SHARDED L1 activations + WIDTH_SHARDED DRAM weights on Blackhole.
-
-    Subblock sizing follows ``ModelArgs.matmul_1d_config`` (largest divisors in bounds), not the
-    naive ``while out_block_w % w`` countdown used earlier — that often landed on tiny
-    subblocks and inflated ``MatmulDeviceOperation`` time.
-    """
+    """``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``gather_in0=True``: legal path for WIDTH_SHARDED L1 activations + WIDTH_SHARDED DRAM weights on Blackhole. Subblock sizing follows ``ModelArgs.matmul_1d_config`` (largest divisors in bounds), not the naive ``while out_block_w % w`` countdown used earlier — that often landed on tiny subblocks and inflated ``MatmulDeviceOperation`` time."""
     num_cores = grid.x * grid.y
     if m_seq % TILE != 0:
         raise ValueError(f"gather_in0 linear expects M divisible by {TILE}, got m_seq={m_seq}")
@@ -105,16 +80,7 @@ def width_sharded_l1_linear_reuse_multicast(
     compute_kernel_config: Any,
     fused_activation: Optional[Any] = None,
 ) -> ttnn.Tensor:
-    """
-    Width-shard activations on ``K`` in L1 (see :func:`width_sharded_l1_memcfg`), then ``ttnn.linear``
-    with ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` (``gather_in0=True``) for legal
-    WIDTH_SHARDED ``in0`` + DRAM WIDTH_SHARDED weights on the grid from
-    ``dram_shard_core_grid_for_k_and_n``.
-
-    Requires ``k_dim`` and ``n_dim`` **tile-aligned** so tile counts match
-    ``dram_shard_core_grid_for_k_and_n`` (which uses ``n // TILE``, not ``ceil``).
-    ``m_seq`` must be tile-aligned for the gather ring tiling assertion.
-    """
+    """Width-shard activations on ``K`` in L1 (see :func:`width_sharded_l1_memcfg`), then ``ttnn.linear`` with ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` (``gather_in0=True``) for legal WIDTH_SHARDED ``in0`` + DRAM WIDTH_SHARDED weights on the grid from ``dram_shard_core_grid_for_k_and_n``. Requires ``k_dim`` and ``n_dim`` **tile-aligned** so tile counts match ``dram_shard_core_grid_for_k_and_n`` (which uses ``n // TILE``, not ``ceil``). ``m_seq`` must be tile-aligned for the gather ring tiling assertion."""
     if k_dim % TILE != 0 or n_dim % TILE != 0:
         raise ValueError(
             f"width_sharded_l1_linear_reuse_multicast requires tile-aligned k_dim, n_dim; got k={k_dim} n={n_dim}"
@@ -261,15 +227,7 @@ def build_dram_sharded_weight(
     dtype=ttnn.bfloat16,
     mesh_mapper=None,
 ) -> Tuple[ttnn.Tensor, int, int]:
-    """
-    Build a DRAM width-sharded weight from ``weight_torch_2d`` shaped ``[K, N_unpadded]``.
-
-    Intended for **single-device** or **replicated** mesh tensors. For ``ShardTensorToMesh``,
-    build per-device shapes first and use :func:`dram_sharded_weight_memcfg` with matching
-    ``shard_height`` and per-device column count.
-
-    Returns ``(tensor, k, n_padded)``.
-    """
+    """Build a DRAM width-sharded weight from ``weight_torch_2d`` shaped ``[K, N_unpadded]``. Intended for **single-device** or **replicated** mesh tensors. For ``ShardTensorToMesh``, build per-device shapes first and use :func:`dram_sharded_weight_memcfg` with matching ``shard_height`` and per-device column count. Returns ``(tensor, k, n_padded)``."""
     assert weight_torch_2d.dim() == 2
     k, n_unpadded = weight_torch_2d.shape
     dram_cores = device.dram_grid_size().x

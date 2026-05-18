@@ -1,8 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""TT ``PixtralVisionModel``: patch Conv (Unfold+linear), ``ln_pre``, RoPE, ``TtPixtralTransformer``."""
+# TT ``PixtralVisionModel``: patch Conv (Unfold+linear), ``ln_pre``, RoPE, ``TtPixtralTransformer``.
 
 from __future__ import annotations
 
@@ -15,12 +14,7 @@ from models.experimental.devstarl2_small.tt.tt_pixtralnorm import TtPixtralRMSNo
 
 
 class TtPixtralVisionModel(LightweightModule):
-    """
-    Mirrors HF ``PixtralVisionModel`` compute path (Devstral / Pixtral checkpoints).
-
-    ``patch_conv`` uses ``TtPixtralPatchConv`` (Unfold + ``ttnn.linear``, equivalent to HF ``nn.Conv2d`` patch embed).
-    Pixel values must be torch ``[N,C,H,W]`` bf16 for the unfold step before device linear.
-    """
+    """Mirrors HF ``PixtralVisionModel`` compute path (Devstral / Pixtral checkpoints). ``patch_conv`` uses ``TtPixtralPatchConv`` (Unfold + ``ttnn.linear``, equivalent to HF ``nn.Conv2d`` patch embed). Pixel values must be torch ``[N,C,H,W]`` bf16 for the unfold step before device linear."""
 
     def __init__(
         self,
@@ -75,12 +69,7 @@ class TtPixtralVisionModel(LightweightModule):
         )
 
     def forward(self, pixel_values, image_sizes: list[tuple[int, int]], position_ids_tt: ttnn.Tensor):
-        """
-        Args:
-            pixel_values: torch ``[N,C,H,W]`` bf16 (patch conv unfold path).
-            image_sizes: ``[(H,W), ...]`` per image (batch aligned with ``N``).
-            position_ids_tt: device ids ``[1, seq]`` uint32, matching HF RoPE indexing.
-        """
+        """Args: pixel_values: torch ``[N,C,H,W]`` bf16 (patch conv unfold path). image_sizes: ``[(H,W), ...]`` per image (batch aligned with ``N``). position_ids_tt: device ids ``[1, seq]`` uint32, matching HF RoPE indexing."""
         patch_embeds = self.patch_conv(pixel_values)
         patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
         bsz = patch_embeds.shape[0]

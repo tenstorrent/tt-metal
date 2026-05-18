@@ -1,8 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC: HF ``Mistral3Model.get_image_features`` vs TT ``TtDevstral2SmallModel`` (vision + projector)."""
+# PCC: HF ``Mistral3Model.get_image_features`` vs TT ``TtDevstral2SmallModel`` (vision + projector).
 
 from __future__ import annotations
 

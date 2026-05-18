@@ -1,23 +1,6 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""
-Tenstorrent text self-attention for Hugging Face Ministral3 (``Ministral3Attention``).
-
-Extends :class:`~models.tt_transformers.tt.attention.Attention` with Llama-4-style **query
-scaling after RoPE** (see ``get_llama_4_attn_scale`` in Hugging Face ``modeling_ministral3``).
-
-Weight layout and fused ``wqkv``/``wo`` handling are unchanged from the base TT Llama-family
-attention; HF checkpoints still map ``q_proj``/``k_proj``/``v_proj`` into ``wq``/``wk``/``wv``
-via the usual loaders.
-
-Llama-4 scaling is computed **entirely on device** with ``ttnn`` (no host position read, no
-PyTorch in the scaling path).
-
-Prefill: pass ``position_ids`` as a **device** ``ttnn.Tensor`` (integer positions, shape
-``[batch, seq]``) through :meth:`forward` / :meth:`forward_prefill`. Decode uses ``current_pos``
-from the device path without reading it back to the host.
-"""
+# Tenstorrent text self-attention for Hugging Face Ministral3 (``Ministral3Attention``). Extends :class:`~models.tt_transformers.tt.attention.Attention` with Llama-4-style **query scaling after RoPE** (see ``get_llama_4_attn_scale`` in Hugging Face ``modeling_ministral3``). Weight layout and fused ``wqkv``/``wo`` handling are unchanged from the base TT Llama-family attention; HF checkpoints still map ``q_proj``/``k_proj``/``v_proj`` into ``wq``/``wk``/``wv`` via the usual loaders. Llama-4 scali...
 
 from __future__ import annotations
 
@@ -30,15 +13,7 @@ from models.tt_transformers.tt.common import Mode
 
 
 class TtMinistralAttention(Attention):
-    """
-    Ministral3 attention: same TT path as :class:`Attention`, plus post-RoPE Q scaling.
-
-    Parameters
-    ----------
-    llama_4_scaling_beta, original_max_position_embeddings
-        From HF ``config.rope_parameters`` (e.g. ``llama_4_scaling_beta``, ``original_max_position_embeddings``).
-        If either is ``None``, scaling is a no-op (not numerically equal to HF).
-    """
+    """Ministral3 attention: same TT path as :class:`Attention`, plus post-RoPE Q scaling. Parameters ---------- llama_4_scaling_beta, original_max_position_embeddings From HF ``config.rope_parameters`` (e.g. ``llama_4_scaling_beta``, ``original_max_position_embeddings``). If either is ``None``, scaling is a no-op (not numerically equal to HF)."""
 
     def __init__(
         self,
@@ -69,17 +44,7 @@ class TtMinistralAttention(Attention):
         return self.llama_4_scaling_beta is not None and self.original_max_position_embeddings is not None
 
     def _llama4_scale_factor_from_positions_ttnn(self, pos_tt: ttnn.Tensor) -> ttnn.Tensor:
-        """
-        ``scaling = 1 + beta * log(1 + floor(pos / original_max_position_embeddings))`` (float32),
-        same as HF ``get_llama_4_attn_scale``, shape matches ``pos_tt``.
-
-        IMPORTANT: avoid ``ttnn.ones_like(pos_f)`` here. ``pos_f`` is ROW_MAJOR (typecast
-        from a ROW_MAJOR uint32 position tensor), and for non-TILE inputs ``ones_like``
-        falls back to ``full_impl`` which builds a host buffer and uploads it via
-        ``to_device``. Inside a ``ttnn.begin_trace_capture`` region that host→device
-        write trips ``TT_FATAL: Writes are not supported during trace capture``. Using
-        ``ttnn.add(scaled, 1.0)`` keeps the ``+1`` as a kernel-arg scalar broadcast.
-        """
+        """``scaling = 1 + beta * log(1 + floor(pos / original_max_position_embeddings))`` (float32), same as HF ``get_llama_4_attn_scale``, shape matches ``pos_tt``. IMPORTANT: avoid ``ttnn.ones_like(pos_f)`` here. ``pos_f`` is ROW_MAJOR (typecast from a ROW_MAJOR uint32 position tensor), and for non-TILE inputs ``ones_like`` falls back to ``full_impl`` which builds a host buffer and uploads it via ``to_device``. Inside a ``ttnn.begin_trace_capture`` region that host→device write trips ``TT_FATAL: Writes are not supported during trace capture``. Using ``ttnn.add(scaled, 1.0)`` keeps the ``+1`` as a kernel-arg scalar broadcast."""
         orig = float(self.original_max_position_embeddings)
         beta = float(self.llama_4_scaling_beta)
         pos_f = ttnn.typecast(pos_tt, ttnn.float32)
@@ -161,11 +126,7 @@ class TtMinistralAttention(Attention):
         kv_cache=None,
         position_ids: ttnn.Tensor | None = None,
     ):
-        """
-        Optional ``position_ids``: device ``ttnn.Tensor`` of integer positions, shape ``[batch, seq]``
-        (or ``[seq]`` when ``batch == 1``), dtype typically ``uint32`` / ``int32``. Required for
-        Llama-4 Q scaling on prefill when scaling is enabled.
-        """
+        """Optional ``position_ids``: device ``ttnn.Tensor`` of integer positions, shape ``[batch, seq]`` (or ``[seq]`` when ``batch == 1``), dtype typically ``uint32`` / ``int32``. Required for Llama-4 Q scaling on prefill when scaling is enabled."""
         self._ministral_prefill_position_ids_tt = position_ids
         try:
             return super().forward_prefill(
@@ -217,8 +178,7 @@ class TtMinistralAttention(Attention):
         )
 
 
-# ``Attention.__init__`` uses ``self.__class__.__name__`` for checkpoint prefixes (see ``get_state_dict_prefix``).
-# Alias so this subclass resolves like ``Attention`` for ``layers.{i}.attention.*`` weight keys.
+# Alias __name__ to Attention so checkpoint prefixes match layers.{i}.attention.* (see get_state_dict_prefix).
 TtMinistralAttention.__name__ = "Attention"
 TtMinistralAttention.__qualname__ = "Attention"
 

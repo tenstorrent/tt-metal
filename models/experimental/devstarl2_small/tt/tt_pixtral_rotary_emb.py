@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import ttnn
@@ -6,9 +9,7 @@ from models.tt_transformers.tt.common import precompute_mistral_vision_freqs
 
 
 class TtPixtralRotaryEmbedding(LightweightModule):
-    """
-    TT version of HF ``PixtralRotaryEmbedding`` for vision position ids.
-    """
+    """TT version of HF ``PixtralRotaryEmbedding`` for vision position ids."""
 
     def __init__(self, mesh_device, config, datatype=ttnn.bfloat16):
         super().__init__()

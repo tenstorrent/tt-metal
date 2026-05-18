@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 from models.common.lightweightmodule import LightweightModule
 import ttnn
 import torch
@@ -79,7 +82,6 @@ class TTMistral3PatchMerger(LightweightModule):
 
         permuted_tensor = []
         for image_index, image_tokens in enumerate(ttnn.split(image_features, tokens_per_image, dim=0)):
-            # Reshape image_tokens into a 2D grid
             h, w = image_sizes[image_index]
             merged_h = h // self.spatial_merge_size
             merged_w = w // self.spatial_merge_size

@@ -1,5 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -61,15 +60,7 @@ _tt_prefill_target_seqlen_cache: dict = {}
 
 
 def tt_prefill_target_seqlen(seq_len: int, n_kv_heads: int, mesh_cluster_cols: int) -> int:
-    """
-    Prefill constraints (see ``models/tt_transformers/tt/attention.py`` ``forward_prefill``):
-
-    - ``seq_len % 128 == 0`` (hard assert before QKV).
-    - KV fill path: ``(n_kv // mesh_cols) * L // 64`` must be a multiple of the tile size (32), or
-      ``interleaved_to_sharded`` fails.
-    - When ``L > 1024``, ``wo`` reuses ``[1, L // 1024, 1024, H]``; **L must be a multiple of 1024** or
-      the reshape is invalid and the next ``ttnn.linear`` sees the wrong inner dim (e.g. 5120 vs 4096).
-    """
+    """Prefill constraints (see ``models/tt_transformers/tt/attention.py`` ``forward_prefill``): - ``seq_len % 128 == 0`` (hard assert before QKV). - KV fill path: ``(n_kv // mesh_cols) * L // 64`` must be a multiple of the tile size (32), or ``interleaved_to_sharded`` fails. - When ``L > 1024``, ``wo`` reuses ``[1, L // 1024, 1024, H]``; **L must be a multiple of 1024** or the reshape is invalid and the next ``ttnn.linear`` sees the wrong inner dim (e.g. 5120 vs 4096)."""
     cache_key = (seq_len, n_kv_heads, mesh_cluster_cols)
     if cache_key in _tt_prefill_target_seqlen_cache:
         return _tt_prefill_target_seqlen_cache[cache_key]
@@ -127,12 +118,7 @@ def open_devstral_demo_mesh(mesh_width: int):
 
 
 def close_devstral_demo_mesh(mesh_device) -> None:
-    """Close ``mesh_device`` and tear down the fabric if it was enabled.
-
-    The fabric is global runtime state; leaving it enabled across processes /
-    repeated mesh opens leaks resources and breaks subsequent runs. Always
-    pair :func:`open_devstral_demo_mesh` with this helper.
-    """
+    """Close ``mesh_device`` and tear down the fabric if it was enabled. The fabric is global runtime state; leaving it enabled across processes / repeated mesh opens leaks resources and breaks subsequent runs. Always pair :func:`open_devstral_demo_mesh` with this helper."""
     try:
         ttnn.close_mesh_device(mesh_device)
     finally:
@@ -152,13 +138,7 @@ def squeeze_tt_hidden_to_bsh(tt_lm_out: ttnn.Tensor, mesh_device, seq_len_keep: 
 
 
 def eos_token_ids(config, tokenizer=None) -> set[int]:
-    """
-    Collect EOS ids for stopping TT/HF loops.
-
-    ``Mistral3ForConditionalGeneration`` often leaves ``config.eos_token_id`` unset while
-    ``config.text_config.eos_token_id`` (and the tokenizer) still define EOS (e.g. 2). Missing this
-    yields an empty set and generation never stops on end-of-sequence, which causes long repetition.
-    """
+    """Collect EOS ids for stopping TT/HF loops. ``Mistral3ForConditionalGeneration`` often leaves ``config.eos_token_id`` unset while ``config.text_config.eos_token_id`` (and the tokenizer) still define EOS (e.g. 2). Missing this yields an empty set and generation never stops on end-of-sequence, which causes long repetition."""
     ids: set[int] = set()
 
     def _add(eos):
@@ -288,13 +268,7 @@ def tt_prefill_hidden_states_from_ids(
 
 
 def demo_lm_head_max_columns_per_device(model_args: ModelArgs, cli_cap: int | None = None) -> int:
-    """
-    ``ModelArgs.max_columns_per_device_lm_head`` can still exceed Wormhole L1 for dram-sharded
-    ``ttnn.linear`` (static circular buffers). Grids that already use ~16k caps need a **lower**
-    ceiling than 24k—otherwise ``min(default, 24576)`` is a no-op.
-
-    Defaults to **4096** columns per shard unless overridden (more matmul slices, smaller L1).
-    """
+    """``ModelArgs.max_columns_per_device_lm_head`` can still exceed Wormhole L1 for dram-sharded ``ttnn.linear`` (static circular buffers). Grids that already use ~16k caps need a **lower** ceiling than 24k—otherwise ``min(default, 24576)`` is a no-op. Defaults to **4096** columns per shard unless overridden (more matmul slices, smaller L1)."""
     default = int(model_args.max_columns_per_device_lm_head)
     if cli_cap is not None:
         cap = max(1024, int(cli_cap))
@@ -398,8 +372,16 @@ def tt_lm_head_logits_last_token(
 
 
 def devstral_supports_on_device_sampling(model_args: ModelArgs, mesh_device) -> bool:
-    """Same gate as ``Transformer`` on-device sampling: vocab shard size must be ≤ 64k per split."""
-    sampling_splits = model_args.num_devices if list(mesh_device.shape) != [1, 1] else 2
+    """Same gate as ``Transformer`` on-device sampling: vocab shard size must be ≤ 64k per split.
+
+    Single-device [1,1] mesh is excluded: the shared TTSampling multi_step_reduction path
+    incorrectly splits the indices_tensor to half the input width, causing out-of-bounds reads
+    that produce garbage local indices and global token IDs >= vocab_size.  Use host logits
+    sampling instead, which clips logits to vocab_size before argmax/multinomial.
+    """
+    if list(mesh_device.shape) == [1, 1]:
+        return False
+    sampling_splits = model_args.num_devices
     return model_args.vocab_size // sampling_splits <= 64 * 1024
 
 
@@ -426,11 +408,7 @@ def tt_sampling_output_token_id(tt_tokens: ttnn.Tensor, batch_slot: int) -> int:
 
 @dataclass
 class TtDecodeInputBuffers:
-    """Persistent device buffers used as trace inputs for one decode step.
-
-    All three live in DRAM so trace updates via ``copy_host_to_device_tensor`` are
-    address-stable across iterations.
-    """
+    """Persistent device buffers used as trace inputs for one decode step. All three live in DRAM so trace updates via ``copy_host_to_device_tensor`` are address-stable across iterations."""
 
     token_ids: ttnn.Tensor  # uint32 [1, 1]
     pos_uint32: ttnn.Tensor  # uint32 [1, 1]   - RoPE table lookup
@@ -439,26 +417,7 @@ class TtDecodeInputBuffers:
 
 @dataclass
 class TtDecodeTraceContext:
-    """Captured decode trace plus references to input/output tensors.
-
-    Depending on what we could keep on device, ``output_tokens`` and / or
-    ``output_logits`` are populated:
-
-    - On-device sampling: ``output_tokens`` is the sampled-id tensor (populated
-      by a *separate* ``SamplingGenerator`` trace that runs after the decode
-      trace each step) and ``output_logits`` is the persistent logits tensor
-      that both the decode trace and the sampling trace share.
-    - TT LM head + host sampling: ``output_tokens`` is None, ``output_logits`` is
-      the persistent decode-trace logits tensor.
-    - CPU LM head: ``output_tokens`` is None, ``output_logits`` is None,
-      ``output_hidden`` is the post-norm hidden state ``[1, 1, 32, dim]``
-      (callers run the LM head on host).
-
-    ``sampling`` is held so :func:`tt_execute_decode_trace` can replay the
-    sampling pipeline immediately after the decode trace when on-device sampling
-    is enabled, and so :func:`tt_release_decode_trace` can tear down the
-    sampling trace too.
-    """
+    """Captured decode trace plus references to input/output tensors. Depending on what we could keep on device, ``output_tokens`` and / or ``output_logits`` are populated: - On-device sampling: ``output_tokens`` is the sampled-id tensor (populated by a *separate* ``SamplingGenerator`` trace that runs after the decode trace each step) and ``output_logits`` is the persistent logits tensor that both the decode trace and the sampling trace share. - TT LM head + host sampling: ``output_tokens`` is None, ``output_logits`` is the persistent decode-trace logits tensor. - CPU LM head: ``output_tokens`` is None, ``output_logits`` is None, ``output_hidden`` is the post-norm hidden state ``[1, 1, 32, dim]`` (callers run the LM head on host). ``sampling`` is held so :func:`tt_execute_decode_trace` can replay the sampling pipeline immediately after the decode trace when on-device sampling is enabled, and so :func:`tt_release_decode_trace` can tear down the sampling trace too."""
 
     trace_id: int
     buffers: TtDecodeInputBuffers
@@ -490,12 +449,7 @@ def tt_update_decode_input_buffers(
     token_id: int,
     decode_pos: int,
 ) -> None:
-    """Copy ``(token_id, decode_pos)`` into the pre-allocated decode buffers.
-
-    Uses ``ttnn.copy_host_to_device_tensor`` so the device-side buffer addresses
-    captured by the trace remain valid (no re-allocation, no torch CPU ops on the
-    trace fast path).
-    """
+    """Copy ``(token_id, decode_pos)`` into the pre-allocated decode buffers. Uses ``ttnn.copy_host_to_device_tensor`` so the device-side buffer addresses captured by the trace remain valid (no re-allocation, no torch CPU ops on the trace fast path)."""
     tok_host = ttnn.from_torch(
         torch.tensor([[int(token_id)]], dtype=torch.int32),
         dtype=ttnn.uint32,
@@ -524,13 +478,7 @@ def _tt_decode_lm_head_logits(
     model_args: ModelArgs,
     tt_lm_head: LMHead,
 ) -> ttnn.Tensor:
-    """Trace-safe LM head over the decode hidden block ``[1,1,32,dim]`` -> logits ``[1,1,32,V/shard]``.
-
-    Mirrors :func:`tt_lm_head_logits_block` but skips the prefill-only ``ttnn.slice`` because
-    decode output is already ``[1, 1, 32, dim]``. Uses ``Mode.PREFILL`` for the input mem
-    config: this is what the non-traced decode path in ``demo_model_loading_prompt.py`` uses
-    (the default non-prefetcher PREFILL / DECODE configs are identical in ``ModelArgs``).
-    """
+    """Trace-safe LM head over the decode hidden block ``[1,1,32,dim]`` -> logits ``[1,1,32,V/shard]``. Mirrors :func:`tt_lm_head_logits_block` but skips the prefill-only ``ttnn.slice`` because decode output is already ``[1, 1, 32, dim]``. Uses ``Mode.PREFILL`` for the input mem config: this is what the non-traced decode path in ``demo_model_loading_prompt.py`` uses (the default non-prefetcher PREFILL / DECODE configs are identical in ``ModelArgs``)."""
     h = tt_hidden
     lm_head_input_mem_cfg = model_args.get_lm_head_input_mem_config(Mode.PREFILL, None)
     if lm_head_input_mem_cfg is not None and lm_head_input_mem_cfg.is_sharded():
@@ -548,35 +496,7 @@ def tt_capture_decode_trace(
     tt_lm_head: Optional[LMHead] = None,
     sampling: Optional[SamplingGenerator] = None,
 ) -> TtDecodeTraceContext:
-    """Compile + capture a decode trace.
-
-    Capture mode is selected from ``tt_lm_head`` / ``sampling``:
-
-    - ``tt_lm_head`` set, ``sampling`` set: main trace captures
-      ``forward_decode -> lm_head`` (output: persistent DRAM logits) and a
-      *second* trace (captured by :meth:`SamplingGenerator.capture_trace`)
-      consumes those logits to produce sampled token ids. Both traces are
-      replayed back-to-back in :func:`tt_execute_decode_trace`.
-    - ``tt_lm_head`` set, ``sampling`` None: traced region is
-      ``forward_decode -> lm_head`` (output: full DRAM logits, host samples).
-    - Both None: traced region is ``forward_decode`` only (output: hidden states,
-      host runs the CPU LM head and sampling).
-
-    The caller MUST first populate the three buffers with valid values via
-    :func:`tt_update_decode_input_buffers` (token id 0 + decode pos 0 is fine for
-    warmup), so the warmup compile run sees realistic shapes.
-
-    Sampling is intentionally captured as a SEPARATE trace (instead of being
-    inlined into the main decode trace). This mirrors how ``tt_transformers``
-    handles ``enable_internal_trace=True`` sampling-in-trace and avoids the
-    ``TT_FATAL: Writes are not supported during trace capture`` that fires if
-    the in-trace ``ttnn.sampling`` op is the first instantiation of its
-    program (the first call lazily uploads kernel args / runtime tables
-    through the FD command queue, which counts as a host write).
-    :meth:`SamplingGenerator.capture_trace` runs its own pre-trace warmup with
-    the matching ``tt_out_tok``, so by the time the captured sampling trace
-    runs, every program it needs is already in the cache.
-    """
+    """Compile + capture a decode trace. Capture mode is selected from ``tt_lm_head`` / ``sampling``: - ``tt_lm_head`` set, ``sampling`` set: main trace captures ``forward_decode -> lm_head`` (output: persistent DRAM logits) and a *second* trace (captured by :meth:`SamplingGenerator.capture_trace`) consumes those logits to produce sampled token ids. Both traces are replayed back-to-back in :func:`tt_execute_decode_trace`. - ``tt_lm_head`` set, ``sampling`` None: traced region is ``forward_decode -> lm_head`` (output: full DRAM logits, host samples). - Both None: traced region is ``forward_decode`` only (output: hidden states, host runs the CPU LM head and sampling). The caller MUST first populate the three buffers with valid values via :func:`tt_update_decode_input_buffers` (token id 0 + decode pos 0 is fine for warmup), so the warmup compile run sees realistic shapes. Sampling is intentionally captured as a SEPARATE trace (instead of being inlined into the main decode trace). This mirrors how ``tt_transformers`` handles ``enable_internal_trace=True`` sampling-in-trace and avoids the ``TT_FATAL: Writes are not supported during trace capture`` that fires if the in-trace ``ttnn.sampling`` op is the first instantiation of its program (the first call lazily uploads kernel args / runtime tables through the FD command queue, which counts as a host write). :meth:`SamplingGenerator.capture_trace` runs its own pre-trace warmup with the matching ``tt_out_tok``, so by the time the captured sampling trace runs, every program it needs is already in the cache."""
     # ── Warmup (compile decoder + lm_head kernels, allocate persistent CBs). Not part of the trace. ──
     # Sampling is intentionally NOT warmed up here: ``SamplingGenerator.capture_trace``
     # below does its own warmup with the matching ``tt_out_tok`` so the program
@@ -639,18 +559,7 @@ def tt_capture_decode_trace(
 
 
 def tt_execute_decode_trace(mesh_device, ctx: TtDecodeTraceContext) -> None:
-    """Replay the previously captured decode trace (and, if present, the sampling trace).
-
-    Non-blocking submission: the device pipelines this iteration's kernels while the
-    host gets to start work for the next iteration. Reads of ``ctx.output_*`` go through
-    ``ttnn.to_torch`` / ``ttnn.get_device_tensors`` which synchronize implicitly when
-    callers actually need the data.
-
-    When on-device sampling is enabled the sampling pipeline lives in a second
-    trace captured by :class:`SamplingGenerator` (see :func:`tt_capture_decode_trace`).
-    We replay it here right after the main decode trace via ``sampling.sample`` so
-    callers see a single "execute trace" API.
-    """
+    """Replay the previously captured decode trace (and, if present, the sampling trace). Non-blocking submission: the device pipelines this iteration's kernels while the host gets to start work for the next iteration. Reads of ``ctx.output_*`` go through ``ttnn.to_torch`` / ``ttnn.get_device_tensors`` which synchronize implicitly when callers actually need the data. When on-device sampling is enabled the sampling pipeline lives in a second trace captured by :class:`SamplingGenerator` (see :func:`tt_capture_decode_trace`). We replay it here right after the main decode trace via ``sampling.sample`` so callers see a single "execute trace" API."""
     ttnn.execute_trace(mesh_device, ctx.trace_id, cq_id=0, blocking=False)
     if ctx.sampling is not None and ctx.output_tokens is not None and ctx.output_logits is not None:
         ctx.sampling.sample(ctx.output_logits, enable_trace=True, tt_out_tok=ctx.output_tokens)
@@ -709,11 +618,7 @@ def tt_read_decode_traced_hidden(
     mesh_device,
     batch_slot: int = 0,
 ) -> ttnn.Tensor:
-    """Return a 32-row hidden block clone for callers that want to drive a CPU LM head.
-
-    The clone is needed because ``output_hidden`` is owned by the trace and gets overwritten
-    on the next ``execute_trace`` call. Caller is responsible for deallocating.
-    """
+    """Return a 32-row hidden block clone for callers that want to drive a CPU LM head. The clone is needed because ``output_hidden`` is owned by the trace and gets overwritten on the next ``execute_trace`` call. Caller is responsible for deallocating."""
     if ctx.output_hidden is None:
         raise RuntimeError("Decode trace did not retain hidden states.")
     return ttnn.clone(ctx.output_hidden, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -787,10 +692,7 @@ def tt_forward_prefill_multimodal_scatter_merge_from_device_ids(
     mesh_device,
     model_args: ModelArgs,
 ) -> ttnn.Tensor:
-    """
-    TT multimodal prompt: embed ids on device → ``ttnn.scatter`` image rows onto placeholders → concat pad embeddings
-    to TT-valid sequence length → ``ttnn.arange`` positions → ``forward_prefill_from_embeddings``.
-    """
+    """TT multimodal prompt: embed ids on device → ``ttnn.scatter`` image rows onto placeholders → concat pad embeddings to TT-valid sequence length → ``ttnn.arange`` positions → ``forward_prefill_from_embeddings``."""
     hid = tt_lm.embed_tokens(ids_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     hid4 = ttnn.unsqueeze_to_4D(hid)
     hid_work = ttnn.clone(hid4)

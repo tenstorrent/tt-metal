@@ -1,10 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Vision FeedForward for Mistral-Small / Pixtral-class checkpoints.
-"""
+# Vision FeedForward for Mistral-Small / Pixtral-class checkpoints.
 
 import torch
 import ttnn
@@ -47,7 +44,6 @@ class MistralTTVisionMLP(LightweightModule):
         w3_t = get_weight("w3")
         if w1_t.shape != w3_t.shape:
             raise ValueError(f"w1 and w3 must match for fused SwiGLU matmul; got {w1_t.shape} vs {w3_t.shape}")
-        # Single matmul over x for gate+up cuts duplicate activation reads and one matmul enqueue vs separate w1/w3 linears.
         w1_tt = as_tensor(w1_t, dtype)
         w3_tt = as_tensor(w3_t, dtype)
         self.w1_w3 = ttnn.concat([w1_tt, w3_tt], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)

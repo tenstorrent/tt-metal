@@ -1,8 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""HF-equivalent patch embedding: ``nn.Conv2d`` (square stride=kernel) using ``ttnn.conv2d``."""
+# HF-equivalent patch embedding: ``nn.Conv2d`` (square stride=kernel) using ``ttnn.conv2d``.
 
 from __future__ import annotations
 
@@ -12,12 +11,7 @@ from models.common.lightweightmodule import LightweightModule
 
 
 class TtPixtralPatchConv(LightweightModule):
-    """
-    Patch Conv for Pixtral / Devstral vision towers.
-
-    Maps checkpoint keys ``{prefix}_linear.weight`` / ``{prefix}_linear.bias`` (meta layout after
-    ``convert_vision_hf_to_meta``). Accepts torch ``[N, C, H, W]``, returns ``[N, num_patches, out_channels]``.
-    """
+    """Patch Conv for Pixtral / Devstral vision towers. Maps checkpoint keys ``{prefix}_linear.weight`` / ``{prefix}_linear.bias`` (meta layout after ``convert_vision_hf_to_meta``). Accepts torch ``[N, C, H, W]``, returns ``[N, num_patches, out_channels]``."""
 
     def __init__(
         self,
