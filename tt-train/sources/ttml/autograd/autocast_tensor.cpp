@@ -28,6 +28,15 @@ void AutocastTensor::set_tensor(const tt::tt_metal::Tensor &tensor) {
     }
 }
 
+void AutocastTensor::deallocate(bool force) {
+    if (has_half()) {
+        m_half_precision_tensor.deallocate(force);
+    }
+    if (has_full()) {
+        m_full_precision_tensor.deallocate(force);
+    }
+}
+
 bool AutocastTensor::has_half() const {
     return core::is_tensor_initialized(m_half_precision_tensor);
 }

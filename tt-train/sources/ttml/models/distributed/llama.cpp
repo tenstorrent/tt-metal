@@ -4,6 +4,8 @@
 
 #include "llama.hpp"
 
+#include <memory>
+
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -11,6 +13,7 @@
 #include "modules/embedding_module.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/rms_norm_module.hpp"
+#include "ops/distributed/comm_ops.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/unary_ops.hpp"
 
@@ -117,7 +120,7 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
         // LM head keeps its output vocab-sharded ([B,1,S,V/tp_size] per device); pair it
         // with ttml::ops::distributed::vocab_parallel_cross_entropy_loss.
         fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-            embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ false, tp_axis);
+            embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ true, tp_axis);
     } else {
         fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* has_bias */ false);
     }
@@ -145,7 +148,23 @@ autograd::TensorPtr DistributedLlama::operator()(
         }
     }
     out = (*ln_fc)(out);
-    auto logits = (*fc)(out);
+    const auto& pctx = autograd::ctx().get_parallelism_context();
+    if (pctx.is_sp_enabled()) {
+        static bool printed_sp_lm_head_gather = false;
+        const int seq_dim = static_cast<int>(out->get_rank()) - 2;
+        if (!printed_sp_lm_head_gather) {
+            fmt::println(
+                "[ttml][SP] DistributedLlama all_gathering hidden before LM head on seq_dim={} cluster_axis={}",
+                seq_dim,
+                pctx.get_tp_axis().has_value() ? static_cast<int>(*pctx.get_tp_axis()) : -1);
+            printed_sp_lm_head_gather = true;
+        }
+        out = ops::distributed::all_gather(out, seq_dim, pctx.get_tp_axis(), ops::distributed::GradOutputType::SHARDED);
+    }
+    auto logits =
+        pctx.is_sp_enabled()
+            ? std::static_pointer_cast<modules::distributed::ColumnParallelLinear>(fc)->forward_no_input_broadcast(out)
+            : (*fc)(out);
     return logits;
 }
 

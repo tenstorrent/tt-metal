@@ -22,6 +22,7 @@ struct DistributedConfig {
     bool enable_ddp = false;
     bool enable_tp = false;
     bool enable_cp = false;
+    bool enable_sp = false;
 };
 
 class ParallelismContext {
@@ -57,11 +58,15 @@ public:
     [[nodiscard]] const bool is_cp_enabled() const {
         return m_cp_axis.has_value();
     }
+    [[nodiscard]] const bool is_sp_enabled() const {
+        return m_sp_enabled;
+    }
 
 private:
     std::optional<uint32_t> m_ddp_axis = std::nullopt;
     std::optional<uint32_t> m_tp_axis = std::nullopt;
     std::optional<uint32_t> m_cp_axis = std::nullopt;
+    bool m_sp_enabled = false;
     uint32_t m_num_cp_devices = 1U;
     uint32_t m_num_ddp_devices = 1U;
     uint32_t m_num_tp_devices = 1U;

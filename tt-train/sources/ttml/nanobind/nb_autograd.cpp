@@ -336,14 +336,22 @@ void py_module(nb::module_& m) {
         py_parallelism_context.def("get_tp_size", &ParallelismContext::get_tp_size, "Get number of TP devices");
         py_parallelism_context.def("is_ddp_enabled", &ParallelismContext::is_ddp_enabled, "Check if DDP is enabled");
         py_parallelism_context.def("is_tp_enabled", &ParallelismContext::is_tp_enabled, "Check if TP is enabled");
+        py_parallelism_context.def("is_sp_enabled", &ParallelismContext::is_sp_enabled, "Check if SP is enabled");
     }
 
     {
         auto py_distributed_config = static_cast<nb::class_<DistributedConfig>>(m.attr("DistributedConfig"));
         py_distributed_config.def(nb::init<>());
-        py_distributed_config.def(nb::init<bool, bool>(), nb::arg("enable_ddp") = false, nb::arg("enable_tp") = false);
+        py_distributed_config.def(
+            nb::init<bool, bool, bool, bool>(),
+            nb::arg("enable_ddp") = false,
+            nb::arg("enable_tp") = false,
+            nb::arg("enable_cp") = false,
+            nb::arg("enable_sp") = false);
         py_distributed_config.def_rw("enable_ddp", &DistributedConfig::enable_ddp, "Enable data parallelism");
         py_distributed_config.def_rw("enable_tp", &DistributedConfig::enable_tp, "Enable tensor parallelism");
+        py_distributed_config.def_rw("enable_cp", &DistributedConfig::enable_cp, "Enable context parallelism");
+        py_distributed_config.def_rw("enable_sp", &DistributedConfig::enable_sp, "Enable sequence parallelism");
     }
 
     // Module-level create_tensor functions for creating autograd tensors
