@@ -68,6 +68,15 @@ jobs:
         working-directory: docker-job
         run: tar --zstd -xf ttm_any.tar.zst
 
+      - name: Download wheel artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          path: /work/wheel
+
+      - name: Install CodeCoverage wheel
+        run: pip install --force-reinstall /work/wheel/*.whl
+
       - name: Download all profdata artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -92,13 +101,13 @@ jobs:
       - name: Generate coverage reports
         run: |
           objects=()
-          for obj in \
-            ./build/lib/libtt_metal.so \
-            ./build/lib/libtt_stl.so \
-            ./build/lib/_ttnncpp.so \
-            ./build/lib/_ttnn.so; do
-            [ -f "$obj" ] && objects+=("$obj")
-          done
+          # Collect instrumented .so files from build artifact and installed wheel
+          while IFS= read -r -d '' obj; do
+            objects+=("$obj")
+          done < <(find ./build/lib -maxdepth 1 -name "libtt_metal.so" -o -name "libtt_stl.so" -print0 2>/dev/null)
+          while IFS= read -r -d '' obj; do
+            objects+=("$obj")
+          done < <(find /opt/venv/lib -name "_ttnncpp*.so" -o -name "_ttnn*.so" -print0 2>/dev/null | grep -z -v "_ttnn_cpp_extensions")
 
           if [ ${#objects[@]} -eq 0 ]; then
             echo "::error::No instrumented objects found"
