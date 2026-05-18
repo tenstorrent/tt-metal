@@ -149,7 +149,11 @@ except Exception as e:
   # resets the chips but the relay stays dead, causing an identical 3-minute futile
   # retry before the same exit-1 is reached (observed: run 26052603107, t3k-05).
   WARM_RELAY_DEAD=0
-  if echo "$WARM_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX BX.*initialize_and_launch_firmware threw.*non-MMIO|FIX NZ.*skipping initialize_and_launch_firmware.*relay broken)"; then
+  # [FIX LM-3] (#42429): bash substring check avoids set -o pipefail + grep -q SIGPIPE bug.
+  # When grep -q exits early on match, sed gets SIGPIPE (exit 141); pipefail returns 141
+  # → if=false even though match was found.  Pure bash [[ ]] check has no pipes.
+  # "FIX BX"/"FIX NZ" are plain ASCII within ANSI-colored Metal log lines — no stripping needed.
+  if [[ "$WARM_OUTPUT" == *"FIX BX"* || "$WARM_OUTPUT" == *"FIX NZ"* ]]; then
     WARM_RELAY_DEAD=1
     echo "LOG_METAL: [FIX LM] cold-start relay-dead detected in warm-up (FIX BX/NZ fired for non-MMIO devices) — tt-smi -r cannot recover hardware degradation. (#42429)" >&2
   fi
@@ -251,7 +255,11 @@ except Exception as e:
     fi
     # FIX LM (#42429): also detect cold-start relay-dead in the FIX TM post-recovery warm-up.
     # If FIX BX fires again after tt-smi -r, the relay is permanently dead — fail fast.
-    if echo "$TM_WARM_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX BX.*initialize_and_launch_firmware threw.*non-MMIO|FIX NZ.*skipping initialize_and_launch_firmware.*relay broken)"; then
+    # [FIX LM-3] (#42429): bash substring check avoids set -o pipefail + grep -q SIGPIPE bug.
+    # When grep -q exits early on match, sed gets SIGPIPE (exit 141); pipefail returns 141
+    # → if=false even though match was found.  Pure bash [[ ]] check has no pipes.
+    # "FIX BX"/"FIX NZ" are plain ASCII within ANSI-colored Metal log lines — no stripping needed.
+    if [[ "$TM_WARM_OUTPUT" == *"FIX BX"* || "$TM_WARM_OUTPUT" == *"FIX NZ"* ]]; then
       echo "LOG_METAL: [FIX LM] cold-start relay-dead PERSISTS after tt-smi -r (FIX BX/NZ in post-TL warm-up) — hardware cannot be recovered by reset. (#42429)" >&2
       echo "LOG_METAL: ERROR — T3K topology still degraded: ERISC relay dead after recovery. Hardware needs engineer attention or host reboot." >&2
       exit 1
@@ -655,7 +663,11 @@ except Exception as e:
   # resets the chips but the relay stays dead, causing an identical 3-minute futile
   # retry before the same exit-1 is reached (observed: run 26052603107, t3k-05).
   WARM_RELAY_DEAD=0
-  if echo "$WARM_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX BX.*initialize_and_launch_firmware threw.*non-MMIO|FIX NZ.*skipping initialize_and_launch_firmware.*relay broken)"; then
+  # [FIX LM-3] (#42429): bash substring check avoids set -o pipefail + grep -q SIGPIPE bug.
+  # When grep -q exits early on match, sed gets SIGPIPE (exit 141); pipefail returns 141
+  # → if=false even though match was found.  Pure bash [[ ]] check has no pipes.
+  # "FIX BX"/"FIX NZ" are plain ASCII within ANSI-colored Metal log lines — no stripping needed.
+  if [[ "$WARM_OUTPUT" == *"FIX BX"* || "$WARM_OUTPUT" == *"FIX NZ"* ]]; then
     WARM_RELAY_DEAD=1
     echo "LOG_METAL: [FIX LM] cold-start relay-dead detected in warm-up (FIX BX/NZ fired for non-MMIO devices) — tt-smi -r cannot recover hardware degradation. (#42429)" >&2
   fi
@@ -730,7 +742,11 @@ except Exception as e:
     fi
     # FIX LM (#42429): also detect cold-start relay-dead in the FIX TM post-recovery warm-up.
     # If FIX BX fires again after tt-smi -r, the relay is permanently dead — fail fast.
-    if echo "$TM_WARM_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -qE "(FIX BX.*initialize_and_launch_firmware threw.*non-MMIO|FIX NZ.*skipping initialize_and_launch_firmware.*relay broken)"; then
+    # [FIX LM-3] (#42429): bash substring check avoids set -o pipefail + grep -q SIGPIPE bug.
+    # When grep -q exits early on match, sed gets SIGPIPE (exit 141); pipefail returns 141
+    # → if=false even though match was found.  Pure bash [[ ]] check has no pipes.
+    # "FIX BX"/"FIX NZ" are plain ASCII within ANSI-colored Metal log lines — no stripping needed.
+    if [[ "$TM_WARM_OUTPUT" == *"FIX BX"* || "$TM_WARM_OUTPUT" == *"FIX NZ"* ]]; then
       echo "LOG_METAL: [FIX LM] cold-start relay-dead PERSISTS after tt-smi -r (FIX BX/NZ in post-TL warm-up) — hardware cannot be recovered by reset. (#42429)" >&2
       echo "LOG_METAL: ERROR — T3K topology still degraded: ERISC relay dead after recovery. Hardware needs engineer attention or host reboot." >&2
       exit 1
