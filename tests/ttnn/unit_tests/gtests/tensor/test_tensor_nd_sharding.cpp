@@ -430,7 +430,7 @@ TEST_F(NDShardingSqueezeRankStressTests, TestSqueezeRankStress) {
                 return;
             }
 
-            for (int val = 1; val <= upper_shape[current_shape.size()]; val++) {
+            for (uint32_t val = 1; val <= upper_shape[current_shape.size()]; val++) {
                 current_shape.push_back(val);
                 iterate_shapes_impl(upper_shape, current_shape, callback);
                 current_shape.pop_back();

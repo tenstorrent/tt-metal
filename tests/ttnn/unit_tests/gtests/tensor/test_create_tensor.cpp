@@ -51,7 +51,7 @@ void run_create_tensor_test(tt::tt_metal::distributed::MeshDevice* device, const
     auto host_data = std::shared_ptr<uint16_t[]>(new uint16_t[input_buf_size_datums]);
     auto readback_data = std::shared_ptr<uint16_t[]>(new uint16_t[input_buf_size_datums]);
 
-    for (int i = 0; i < input_buf_size_datums; i++) {
+    for (uint64_t i = 0; i < input_buf_size_datums; i++) {
         host_data[i] = 1;
     }
 
@@ -65,7 +65,7 @@ void run_create_tensor_test(tt::tt_metal::distributed::MeshDevice* device, const
 
     ttnn::read_buffer(io_cq, input_tensor, {readback_data});
 
-    for (int i = 0; i < input_buf_size_datums; i++) {
+    for (uint64_t i = 0; i < input_buf_size_datums; i++) {
         EXPECT_EQ(host_data[i], readback_data[i]);
     }
 

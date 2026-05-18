@@ -39,7 +39,7 @@ void test_tensor_on_device(
     auto* readback_data_ptr = static_cast<uint8_t*>(readback_data.get());
 
     const auto random_prime_number = 4051;
-    for (int i = 0; i < input_buf_size; i++) {
+    for (size_t i = 0; i < input_buf_size; i++) {
         host_data_ptr[i] = i % random_prime_number;
     }
 
@@ -52,7 +52,7 @@ void test_tensor_on_device(
     ttnn::read_buffer(io_cq, tensor, {readback_data});
     ttnn::queue_synchronize(device->mesh_command_queue(*io_cq));
 
-    for (int i = 0; i < input_buf_size; i++) {
+    for (size_t i = 0; i < input_buf_size; i++) {
         EXPECT_EQ(host_data_ptr[i], readback_data_ptr[i]);
         if (host_data_ptr[i] != readback_data_ptr[i]) {
             break;
