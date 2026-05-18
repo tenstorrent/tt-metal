@@ -179,6 +179,20 @@ def check_attention_shapes(cfg: dict, tp: int) -> List[KernelFinding]:
             )
         )
 
+    if nkv and tp > 1 and not mla:
+        out.append(
+            KernelFinding(
+                op="nlp_concat_heads_decode (KV sharding)",
+                field="num_key_value_heads",
+                value=nkv,
+                constraint=f"num_key_value_heads must be divisible by TP({tp}); GQA/MQA shards KV across the mesh's TP dim",
+                passes=(int(nkv) % tp == 0),
+                severity=Severity.BLOCKER,
+                fix=f"Use TP that divides {nkv} (e.g. {', '.join(str(t) for t in (1, 2, 4, 8) if int(nkv) % t == 0) or '1'}), or replicate KV (not supported in tt_transformers).",
+                source="models/tt_transformers/tt/model_config.py: `assert self.n_kv_heads % self.cluster_shape[1] == 0`",
+            )
+        )
+
     if h is not None:
         out.append(
             KernelFinding(

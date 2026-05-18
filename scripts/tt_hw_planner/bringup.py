@@ -96,22 +96,28 @@ def derive_base_model_name(hf_id: str) -> str:
 def mesh_device_for(arch: str, mesh_shape: Tuple[int, int]) -> Tuple[Optional[str], str]:
     """Resolve (arch, mesh_shape) to a MESH_DEVICE label.
 
-    Returns (label, note).  `note` is empty when the mapping is direct; if
-    the planner picked a non-canonical mesh (e.g. QB2 [2,2]), we fall back
-    to a same-chip-count label and warn that the demo will open a different
-    canonical shape internally.
+    Returns (label, note). When `label is None`, the demo has no env-var
+    mapping for this physical shape and bring-up must refuse — silently
+    substituting a different shape (e.g. [1,4] for [2,2]) used to happen
+    here but is now disallowed because the substitute shape changes the
+    runtime divisibility constraints (n_kv_heads % cluster_shape[1]).
     """
     direct = MESH_DEVICE_MAP.get((arch, mesh_shape))
     if direct is not None:
         return direct, ""
     chips = mesh_shape[0] * mesh_shape[1]
-    for (a, shape), label in MESH_DEVICE_MAP.items():
-        if a == arch and shape[0] * shape[1] == chips:
-            return label, (
-                f"mesh {mesh_shape} has no direct MESH_DEVICE label on {arch}; "
-                f"falling back to '{label}' (same chip count). The demo will "
-                f"open shape {shape} instead."
-            )
+    same_chip_alternatives = sorted(
+        [(shape, label) for (a, shape), label in MESH_DEVICE_MAP.items() if a == arch and shape[0] * shape[1] == chips]
+    )
+    if same_chip_alternatives:
+        alts = ", ".join(f"{label} → {shape}" for shape, label in same_chip_alternatives)
+        return None, (
+            f"mesh {mesh_shape} has no MESH_DEVICE label on {arch}. "
+            f"The demo only exposes these {chips}-chip shapes: {alts}. "
+            f"Pick one that satisfies the model's divisibility constraints "
+            f"(see `compat`'s Per-TP table), or add a {mesh_shape} entry to "
+            f"the demo's mesh_device parametrize before re-running."
+        )
     return None, f"no MESH_DEVICE label for {arch} mesh {mesh_shape}; demo cannot be parametrized."
 
 
@@ -474,9 +480,12 @@ def prepare_bringup(
 
     kernel_blockers: List[str] = []
     if kernels is not None:
-        for f in kernels.findings_by_tp.get(1, []):
-            if not f.passes and f.severity == Severity.BLOCKER:
-                kernel_blockers.append(f"{f.op}.{f.field}={f.value}: {f.constraint}")
+        chosen_tp = max(1, int(best.mesh_shape[1]))
+        tps_to_check = {1, chosen_tp}
+        for tp in sorted(tps_to_check):
+            for f in kernels.findings_by_tp.get(tp, []):
+                if not f.passes and f.severity == Severity.BLOCKER:
+                    kernel_blockers.append(f"TP={tp}: {f.op}.{f.field}={f.value}: {f.constraint}")
 
     arch_blocker: Optional[str] = None
     if not discovery.runnable_on_arch(arch):
@@ -488,6 +497,10 @@ def prepare_bringup(
             f"or harvested-core static_asserts)."
         )
 
+    mesh_label_blocker: Optional[str] = None
+    if mesh_device is None and mesh_note:
+        mesh_label_blocker = mesh_note
+
     invocation: Optional[PytestInvocation] = None
     has_missing_blocks = any(r.needed and r.status == Status.MISSING for r in compat.results)
     can_run = (
@@ -495,6 +508,7 @@ def prepare_bringup(
         and compat.overall != "BLOCKED"
         and not compat.overall.startswith("TARGETED")
         and not has_missing_blocks
+        and mesh_label_blocker is None
         and not kernel_blockers
         and arch_blocker is None
     )
@@ -526,6 +540,8 @@ def prepare_bringup(
     notes: List[str] = list(discovery.notes)
     if arch_blocker is not None:
         notes.insert(0, f"ARCH-INCOMPATIBLE: {arch_blocker}")
+    if mesh_label_blocker is not None:
+        notes.insert(0, f"MESH-LABEL-MISSING: {mesh_label_blocker}")
 
     return BringupPlan(
         model_id=model_id,

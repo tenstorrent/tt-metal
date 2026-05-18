@@ -199,6 +199,9 @@ def render_table(
         p(f"                  per-chip={r.per_chip_gb:.1f} GB, headroom={r.headroom_gb:.1f} GB")
         p(f"                  verdict: {r.tightness.value}")
         p(f"                  {r.box.notes}")
+        for note in verdict.notes:
+            if note.startswith("recommendation bumped"):
+                p(f"                  NOTE: {note}")
         if r.tightness == Tightness.TIGHT:
             p()
             p("  WARNING: this is a tight fit (< 10% headroom). Run a hardware")

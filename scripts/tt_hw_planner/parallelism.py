@@ -81,13 +81,20 @@ def _divisors(n: int):
 
 
 def canonical_meshes(box: Box) -> List[Tuple[int, int]]:
-    """One canonical mesh per chip-count for this box.  Largest TP comes last."""
-    seen = {}
-    for shape in box.mesh_shapes:
-        chips = shape[0] * shape[1]
-        if chips not in seen:
-            seen[chips] = shape
-    return list(seen.values())
+    """Every canonical mesh shape declared for this box.
+
+    Previously this deduplicated by chip count (kept only the largest-TP
+    shape per chip-count), which silently hid same-chip-count alternatives
+    like [2,2] / [4,1] from the verdict pipeline. Those alternatives
+    matter when the largest-TP shape fails kernel divisibility for a
+    given model's head counts; the verdict layer is then free to bump the
+    recommendation to a shape that the model actually fits.
+
+    `pick_best` (in verdict.py) tiebreaks toward fewest chips when
+    everything else is equal, so emitting the full list does not change
+    the default recommendation for the common case.
+    """
+    return list(box.mesh_shapes)
 
 
 def enumerate_parallelism(chips: int, explore_pp: bool = False) -> List[ParallelConfig]:

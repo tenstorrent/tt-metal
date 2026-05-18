@@ -109,6 +109,25 @@ def cmd_plan(args) -> int:
         explore_pp=args.explore_pp,
     )
 
+    if probe.raw_config:
+        all_mesh_verdict = (
+            verdict
+            if args.all_meshes
+            else evaluate_all(
+                model=probe.memory_model,
+                boxes=boxes,
+                dtypes=dtypes,
+                batch=args.batch,
+                seq=args.seq,
+                kv_dtype_bytes=kv_bpe,
+                all_meshes=True,
+                explore_pp=args.explore_pp,
+            )
+        )
+        tps = sorted({max(1, int(r.mesh_shape[1])) for r in all_mesh_verdict.rows} | {1})
+        kernel_report = evaluate_kernels(probe.raw_config, tp_grid=tps)
+        verdict = _filter_verdict_by_divisibility(verdict, kernel_report, all_mesh_verdict)
+
     if args.format == "json":
         print(render_json(probe, verdict, args.batch, args.seq, args.kv_dtype, dtypes))
     elif args.format == "markdown":
@@ -120,6 +139,53 @@ def cmd_plan(args) -> int:
             )
         )
     return 0
+
+
+def _filter_verdict_by_divisibility(verdict, kernel_report, all_mesh_verdict=None):
+    """Drop the planner's `best` if its chosen mesh has BLOCKER findings at
+    that TP, and re-pick from rows that pass all divisibility constraints
+    AND have a demo-runnable MESH_DEVICE label.
+
+    This stops `plan` from ever recommending a mesh `prepare` is going to
+    refuse — the same constraint table is now used by both, and we never
+    point users at a shape the demo cannot open (e.g. [2,2] on Blackhole
+    today has no env-var mapping in simple_text_demo.py).
+
+    `all_mesh_verdict` is consulted for picking a fallback when the
+    user-displayed table is narrowed.
+    """
+    from .bringup import mesh_device_for
+    from .kernel_constraints import Severity
+    from .verdict import FitVerdict, pick_best
+
+    def row_passes(row) -> bool:
+        tp = max(1, int(row.mesh_shape[1]))
+        for f in kernel_report.findings_by_tp.get(tp, []):
+            if not f.passes and f.severity == Severity.BLOCKER:
+                return False
+        label, _ = mesh_device_for(row.box.arch, row.mesh_shape)
+        if label is None:
+            return False
+        return True
+
+    pool = all_mesh_verdict.rows if all_mesh_verdict is not None else verdict.rows
+    feasible = [r for r in pool if row_passes(r)]
+    if not feasible:
+        return verdict
+    new_best = pick_best(feasible)
+    notes = list(verdict.notes)
+    if (
+        verdict.best is not None
+        and new_best is not None
+        and (verdict.best.mesh_shape != new_best.mesh_shape or verdict.best.box.name != new_best.box.name)
+    ):
+        notes.append(
+            f"recommendation bumped to {new_best.box.name} mesh "
+            f"[{new_best.mesh_shape[0]},{new_best.mesh_shape[1]}]: original best "
+            f"[{verdict.best.mesh_shape[0]},{verdict.best.mesh_shape[1]}] fails "
+            f"kernel divisibility at TP={verdict.best.mesh_shape[1]}."
+        )
+    return FitVerdict(rows=verdict.rows, best=new_best, notes=notes)
 
 
 def _render_weights_only(probe, boxes, dtypes, args) -> int:
@@ -709,8 +775,23 @@ def cmd_show_overhead(args) -> int:
 # ---------------------------------------------------------------------------
 
 
+def cmd_perf(args, perf_argv: List[str]) -> int:
+    """Route to the `perf` subcommand router."""
+    from .perf.cli import main as perf_main
+
+    return perf_main(perf_argv)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+
+    # Route `perf ...` directly to the perf CLI to keep its argument
+    # structure independent of the top-level parser's strict subcommand
+    # mode.
+    if argv and argv[0] == "perf":
+        from .perf.cli import main as perf_main
+
+        return perf_main(argv[1:])
 
     # Backward-compat: if the first arg looks like an HF model ID (has a
     # slash and isn't a known subcommand), inject `plan`.
@@ -724,6 +805,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "validate",
         "list-meshes",
         "show-overhead",
+        "perf",
         "-h",
         "--help",
     }
