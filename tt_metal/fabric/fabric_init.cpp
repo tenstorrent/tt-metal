@@ -626,6 +626,41 @@ FabricCoresHealth configure_fabric_cores(
         for (const auto& address : addresses_to_clear) {
             tt::tt_metal::detail::WriteToDeviceL1(device, router_logical_core, address, router_zero_buf, CoreType::ETH);
         }
+
+        // FIX GH (#42429): Restore fw_launch_addr_value after FIX EG zeroed it.
+        //
+        // FIX EG zeros fw_launch_addr (0x9004 = LAUNCH_ERISC_APP_FLAG) while ERISC0 is halted
+        // (FIX S9) to prevent stale firmware from auto-launching after the reset deassert.
+        // After FIX S9 deasserts, ERISC0 boots ROM → base-UMD firmware, which reads fw_launch_addr
+        // to find the fabric firmware jump target.  With fw_launch_addr == 0, base-UMD cannot
+        // jump → ERISC0 stays at 0xdeadb07e indefinitely → FIX EF times out at 500ms →
+        // FIX BG fires at 2001ms → entire test session deadlocked.
+        // Reproducible on all 4 T3000 devices (MMIO chan=8 on each).
+        //
+        // Fix: write fw_launch_addr_value back to fw_launch_addr immediately after the L1 clear,
+        // before write_launch_msg_to_core fires in configure_fabric().  Only MMIO channels that
+        // went through FIX S9 (skip_soft_reset_channels && is_mmio_capable) reach this code
+        // path; non-MMIO channels `continue`d above so they are unaffected.
+        if (skip_soft_reset_channels.count(router_chan) && device->is_mmio_capable()) {
+            const auto& hal_gh = tt::tt_metal::MetalContext::instance().hal();
+            const auto aeth_idx_gh = hal_gh.get_programmable_core_type_index(
+                tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+            const auto& jit_cfg_gh = hal_gh.get_jit_build_config(aeth_idx_gh, 0, 0);
+            auto virtual_core_gh = cluster.get_virtual_eth_core_from_channel(device->id(), router_chan);
+            cluster.write_core(
+                &jit_cfg_gh.fw_launch_addr_value,
+                sizeof(uint32_t),
+                tt_cxy_pair(device->id(), virtual_core_gh),
+                jit_cfg_gh.fw_launch_addr);
+            log_info(
+                tt::LogMetal,
+                "FIX GH — restored fw_launch_addr_value=0x{:08X} at fw_launch_addr=0x{:08X} "
+                "for Device {} chan={}",
+                jit_cfg_gh.fw_launch_addr_value,
+                jit_cfg_gh.fw_launch_addr,
+                device->id(),
+                router_chan);
+        }
     }
 
     // FIX RR (#42429): re-evaluate all_channels_healthy after FIX RR may have recovered
