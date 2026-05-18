@@ -72,7 +72,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* tilize */, false /* is_int_fpu_en */>(
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         params.num_faces, formats.math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -122,12 +122,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const int num_blocks         = params.NUM_BLOCKS;
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false, false>(
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces);
 
     // Standard init sets addr_mods and strides for the tile shape.
-    _llk_pack_init_with_src_wrapper_<false, false, false>(
-        formats.pack_src, formats.pack_dst, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces, false, false, 1);
+    _llk_pack_init_with_src_wrapper_<PackMode::Default, false /* zero_output */>(
+        formats.pack_src,
+        formats.pack_dst,
+        params.TEST_FACE_R_DIM,
+        params.in0_tile_c_dim,
+        params.num_faces,
+        false /* partial_face */,
+        false /* narrow_tile */,
+        1 /* num_tiles */);
 
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
@@ -154,7 +161,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (int tile = 0; tile < num_tiles_in_block; ++tile)
         {
             int res_idx = block * num_tiles_in_block + tile;
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(tile, L1_ADDRESS(params.buffer_Res[res_idx]));
+            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[res_idx]));
         }
 #endif
 

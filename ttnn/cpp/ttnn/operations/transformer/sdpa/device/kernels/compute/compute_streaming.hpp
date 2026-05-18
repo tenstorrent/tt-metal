@@ -86,9 +86,8 @@ ALWI void configure_pack_width(uint32_t cb, uint32_t pack_width) {
     // the MOP. Skipping the packer-strides reconfig saves a THCON stall per
     // call on the SDPA streaming hot path.
     PACK((llk_pack_init<
-          false /* untilize */,
+          ckernel::PackMode::Default,
           false /* zero_output */,
-          false /* tilize */,
           true /* skip_addrmod_config */,
           true /* skip_packer_strides */>(cb, pack_width)));
 }
