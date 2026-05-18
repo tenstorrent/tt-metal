@@ -18,8 +18,8 @@ jobs:
     with:
       build-type: CodeCoverage
       build-wheel: true
-      tracy: false
-      skip-tt-train: true
+      tracy: true
+      skip-tt-train: false
       platform: "Ubuntu 22.04"
       enable-lto: false
 
