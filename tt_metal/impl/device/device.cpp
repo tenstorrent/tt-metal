@@ -2349,17 +2349,17 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
 
             // Compute addresses (mirrors SA init path, lines 650-663).
             const uint32_t handshake_bypass_offset_qs89 = 32;
-            const uint32_t handshake_bypass_l1_addr_qs89 =
+            [[maybe_unused]] const uint32_t handshake_bypass_l1_addr_qs89 =
                 static_cast<uint32_t>(router_config_qs89.handshake_addr) + handshake_bypass_offset_qs89;
             const uint32_t scratch_base_qs89 = static_cast<uint32_t>(
                 hal_qs89.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::FABRIC_TELEMETRY) +
                 hal_qs89.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::FABRIC_TELEMETRY) -
                 4u /* MEM_AERISC_FABRIC_POSTCODES_SIZE */);
-            const uint32_t fw_ready_addr_qs89 = scratch_base_qs89 + FW_READY_OFFSET;
-            const uint32_t boot_fence_addr_qs89 = scratch_base_qs89 + BOOT_FENCE_OFFSET;
-            const uint32_t session_id_addr_qs89 = scratch_base_qs89 + SESSION_ID_OFFSET;
+            [[maybe_unused]] const uint32_t fw_ready_addr_qs89 = scratch_base_qs89 + FW_READY_OFFSET;
+            [[maybe_unused]] const uint32_t boot_fence_addr_qs89 = scratch_base_qs89 + BOOT_FENCE_OFFSET;
+            [[maybe_unused]] const uint32_t session_id_addr_qs89 = scratch_base_qs89 + SESSION_ID_OFFSET;
 
-            constexpr uint32_t kFwReadyPollMs_qs89 = 5;
+            [[maybe_unused]] constexpr uint32_t kFwReadyPollMs_qs89 = 5;
             const auto erisc_sync_addr_p0 = builder_ctx.get_fabric_router_sync_address_and_status().first;
             const uint32_t umd_relay_canary_p0 =
                 static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
@@ -2977,17 +2977,17 @@ void Device::launch_eth_cores_for_quiesce() {
             const auto& router_config_dqs89 = builder_ctx.get_fabric_router_config();
 
             const uint32_t handshake_bypass_offset_dqs89 = 32;
-            const uint32_t handshake_bypass_l1_addr_dqs89 =
+            [[maybe_unused]] const uint32_t handshake_bypass_l1_addr_dqs89 =
                 static_cast<uint32_t>(router_config_dqs89.handshake_addr) + handshake_bypass_offset_dqs89;
             const uint32_t scratch_base_dqs89 = static_cast<uint32_t>(
                 hal_dqs89.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::FABRIC_TELEMETRY) +
                 hal_dqs89.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::FABRIC_TELEMETRY) -
                 4u);
-            const uint32_t fw_ready_addr_dqs89 = scratch_base_dqs89 + FW_READY_OFFSET;
-            const uint32_t boot_fence_addr_dqs89 = scratch_base_dqs89 + BOOT_FENCE_OFFSET;
-            const uint32_t session_id_addr_dqs89 = scratch_base_dqs89 + SESSION_ID_OFFSET;
+            [[maybe_unused]] const uint32_t fw_ready_addr_dqs89 = scratch_base_dqs89 + FW_READY_OFFSET;
+            [[maybe_unused]] const uint32_t boot_fence_addr_dqs89 = scratch_base_dqs89 + BOOT_FENCE_OFFSET;
+            [[maybe_unused]] const uint32_t session_id_addr_dqs89 = scratch_base_dqs89 + SESSION_ID_OFFSET;
 
-            constexpr uint32_t kFwReadyPollMs_dqs89 = 5;
+            [[maybe_unused]] constexpr uint32_t kFwReadyPollMs_dqs89 = 5;
             const auto erisc_sync_addr_poll = builder_ctx.get_fabric_router_sync_address_and_status().first;
             const uint32_t umd_relay_canary_poll =
                 static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
