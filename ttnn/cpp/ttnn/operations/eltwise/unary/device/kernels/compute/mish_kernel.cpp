@@ -25,8 +25,8 @@ inline void run_mish(uint32_t num_tiles) {
             cb_input,
             cklib::Dst::D0,
             cklib::CopyTilePolicy::WaitNoPop,
-            CbIndexMode::FirstTile,
-            CopyTileReconfig::None>{},
+            cklib::CbIndexMode::FirstTile,
+            cklib::CopyTileReconfig::None>{},
         cklib::Exp<approx, cklib::Approx::Exact, cklib::Dst::D0>{},
         cklib::Log1p<approx, cklib::Dst::D0>{},
         cklib::Tanh<cklib::Dst::D0>{},
@@ -34,15 +34,15 @@ inline void run_mish(uint32_t num_tiles) {
             cb_input,
             cklib::Dst::D1,
             cklib::CopyTilePolicy::NoWaitPop,
-            CbIndexMode::FirstTile,
-            CopyTileReconfig::None>{},
+            cklib::CbIndexMode::FirstTile,
+            cklib::CopyTileReconfig::None>{},
         cklib::MulBinary<cklib::Dst::D0, cklib::Dst::D1, cklib::Dst::D0>{},
         cklib::PackTile<
             cb_output,
             cklib::Dst::D0,
             cklib::PackTilePolicy::PerTileReserveAndPush,
-            PackTileIndexMode::FirstTile,
-            PackTileReconfig::None>{});
+            cklib::PackTileIndexMode::FirstTile,
+            cklib::PackTileReconfig::None>{});
 #endif
 #ifdef INP_FLOAT
     cklib::eltwise_chain(
@@ -51,8 +51,8 @@ inline void run_mish(uint32_t num_tiles) {
             cb_input,
             cklib::Dst::D0,
             cklib::CopyTilePolicy::WaitNoPop,
-            CbIndexMode::FirstTile,
-            CopyTileReconfig::None>{},
+            cklib::CbIndexMode::FirstTile,
+            cklib::CopyTileReconfig::None>{},
         cklib::Exp<approx, cklib::Approx::Exact, cklib::Dst::D0>{},
         cklib::Log1p<approx, cklib::Dst::D0>{},
         cklib::Tanh<cklib::Dst::D0>{},
@@ -69,8 +69,8 @@ inline void run_mish(uint32_t num_tiles) {
             cb_output,
             cklib::Dst::D0,
             cklib::PackTilePolicy::PerTileReserveAndPush,
-            PackTileIndexMode::FirstTile,
-            PackTileReconfig::None>{});
+            cklib::PackTileIndexMode::FirstTile,
+            cklib::PackTileReconfig::None>{});
 #endif
 }
 

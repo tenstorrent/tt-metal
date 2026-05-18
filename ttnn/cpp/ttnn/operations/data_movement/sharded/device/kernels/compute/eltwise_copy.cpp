@@ -4,26 +4,32 @@
 
 #include <cstdint>
 
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
 
-    constexpr auto cb_in = tt::CBIndex::c_0;
-    constexpr auto cb_out = tt::CBIndex::c_16;
+    experimental::CircularBuffer cb_in(tt::CBIndex::c_0);
+    experimental::CircularBuffer cb_out(tt::CBIndex::c_16);
 
-    compute_kernel_lib::eltwise_chain_with_init<compute_kernel_lib::DEST_AUTO_LIMIT>(
-        per_core_tile_cnt,
-        compute_kernel_lib::CopyTile<
-            cb_in,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::CopyTilePolicy::WaitUpfrontPopAtEnd,
-            compute_kernel_lib::CbIndexMode::BlockIter,
-            compute_kernel_lib::CopyTileReconfig::None>{},
-        compute_kernel_lib::PackTile<
-            cb_out,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::PackTilePolicy::UpfrontReservePushAtEnd,
-            compute_kernel_lib::PackTileIndexMode::BlockIter,
-            compute_kernel_lib::PackTileReconfig::None>{});
+    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    copy_tile_init(tt::CBIndex::c_0);
+    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
+        acquire_dst();
+
+        // Pop tile after tile, copy to DST and pack
+        cb_in.wait_front(1);
+        cb_out.reserve_back(1);
+        copy_tile(tt::CBIndex::c_0, 0, 0);
+
+        pack_tile(0, tt::CBIndex::c_16);
+
+        cb_in.pop_front(1);
+        cb_out.push_back(1);
+
+        release_dst();
+    }
 }
