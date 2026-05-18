@@ -1,5 +1,130 @@
 
 ---
+## STRATEGY7: handshake bypass flag (2026-05-18)
+
+### What It Does
+
+Makes the ETH DMA handshake (`fabric_symmetric_handshake()`) a NOP by having the host
+write a `handshake_bypass=1` flag into each ERISC's L1 `handshake_info_t` during
+`configure_fabric_cores()`. Firmware checks this flag at the START of
+`fabric_symmetric_handshake()` and returns immediately if set — skipping the entire
+ETH DMA handshake loop, Strategy 3 stagger, and neighbor identity exchange.
+
+### Why
+
+The symmetric_handshake() ETH DMA loop is the root source of ALL handshake-related race
+conditions: TXQ races, STARTED deadlocks, lost MAGIC overwrites, and the
+SENDER-SENDER deadlock class. Its only functional purpose is ETH link liveness
+confirmation, which the host already provides via:
+- ETH_LINK_ERR_STATUS register reads (Strategy 11, fabric_init.cpp)
+- STARTED status poll (edm_status_address) for all channels
+- Firmware write relay exercised during configure_fabric() (forward path)
+
+### Mechanism
+
+1. Host writes `handshake_bypass=1` at `handshake_addr + 32` (offset of
+   `handshake_info_t::handshake_bypass`) for each non-dead channel in
+   `configure_fabric_cores()` — BEFORE firmware binary load.
+2. Firmware boots, runs `prepare_handshake_state()` (which does NOT touch
+   `handshake_bypass`), writes STARTED.
+3. At `fabric_symmetric_handshake()` entry, firmware checks `handshake_bypass != 0`
+   and jumps past the handshake loop + Strategy 3 stagger directly to
+   `edm_status = REMOTE_HANDSHAKE_COMPLETE`.
+4. Neighbor identity (neighbor_mesh_id/neighbor_device_id) stays at sentinel values
+   (0xFFFF/0xFF) in telemetry — acceptable for telemetry-only fields.
+
+### Files Changed
+
+- `edm_handshake.hpp`: added `handshake_bypass` field to `handshake_info_t` at byte 32;
+  shifted diagnostic fields to bytes 36-63; added bypass check in base `symmetric_handshake()`
+- `fabric_router_eth_handshake.hpp`: added bypass check at top of
+  `fabric_symmetric_handshake()` — returns immediately if `handshake_bypass != 0`
+- `fabric_erisc_router.cpp`: added `#if STRATEGY7_HANDSHAKE_BYPASS` block before Strategy 3
+  stagger that checks bypass flag and jumps past handshake+telemetry to
+  `REMOTE_HANDSHAKE_COMPLETE` write; sets neighbor telemetry to sentinel values
+- `erisc_datamover_builder.cpp`: added `STRATEGY7_HANDSHAKE_BYPASS = 1` CT arg alongside
+  `STRATEGY3_NO_PREPING`
+- `fabric_init.cpp`: added host-side write of `handshake_bypass=1` to each ERISC's L1
+  after the `addresses_to_clear` loop but before FIX MM / firmware launch
+
+### Control Defines
+
+- `STRATEGY7_HANDSHAKE_BYPASS` (firmware CT arg): gates the bypass check in firmware.
+  Remove the named_arg in erisc_datamover_builder.cpp to disable.
+- Old handshake code is preserved and unreachable when bypass is active — rollback
+  by removing `STRATEGY7_HANDSHAKE_BYPASS` from the builder.
+
+### Hypothesis
+
+With handshake bypassed, STARTED-confirmed ERISCs skip ETH DMA entirely:
+- No TXQ races (no eth_send_packet calls in handshake)
+- No symmetric_handshake deadlocks
+- No lost MAGIC overwrites
+- Strategy 3 stagger becomes dead code (still gated behind its own ifdef)
+- ERISCs proceed directly to ring sync and READY_FOR_TRAFFIC deterministically
+
+---
+## STRATEGY3: stagger handshake entry via edm_status (2026-05-18) — commit 89ea768e25b
+
+### What It Does
+
+Eliminates the race where non-MMIO ERISCs enter `fabric_symmetric_handshake()`
+before the MMIO side is ready (e.g. after FIX EG/MM soft-reset recovery).
+
+### Mechanism
+
+- **MMIO side** (`IS_HANDSHAKE_SENDER=1`): writes `HANDSHAKE_READY` (0xC0FFEE01)
+  to local `edm_status`, sends it to peer's `edm_status` via `eth_send_packet`,
+  then enters `fabric_symmetric_handshake()` immediately.
+- **Non-MMIO side** (`IS_HANDSHAKE_SENDER=0`): polls own `edm_status` for
+  `HANDSHAKE_READY` (written by MMIO peer via ETH), then enters the handshake.
+
+### Build Chain
+
+1. `FabricEriscDatamoverBuilder::build()` captures `device->is_mmio_capable()`
+   into `builder.is_mmio_device`
+2. `get_compile_time_args()` sets `IS_HANDSHAKE_SENDER = is_mmio_device ? 1 : 0`
+   and `STRATEGY3_NO_PREPING = 1`
+3. These become preprocessor defines during JIT compilation
+4. Firmware uses `#if STRATEGY3_NO_PREPING` + `if constexpr (is_handshake_sender)`
+
+### Files Changed
+
+- `fabric_edm_packet_header.hpp`: `EDMStatus::HANDSHAKE_READY = 0xC0FFEE01`
+- `erisc_datamover_builder.hpp`: `bool is_mmio_device` member
+- `erisc_datamover_builder.cpp`: IS_HANDSHAKE_SENDER from MMIO flag, STRATEGY3_NO_PREPING CT arg
+- `fabric_erisc_router_ct_args.hpp`: updated is_handshake_sender comment
+- `fabric_erisc_router.cpp`: stagger logic before symmetric handshake
+
+All gated behind `#if STRATEGY3_NO_PREPING` for rollback.
+
+---
+## FIX MM: unconditional fw_launch_addr restore (2026-05-18) — commit 69d11efbd6e
+
+### What It Does
+
+Moves fw_launch_addr restore from 3 per-path sites in device.cpp to a single
+unconditional site in `configure_fabric_cores()` (fabric_init.cpp), after the
+L1 clear loop. Covers ALL surviving MMIO channels that had FIX EG run.
+
+### Root Cause of DEADB07E (26 occurrences)
+
+FIX IJ/KL in device.cpp only covered `configure_fabric()`, `quiesce_and_restart`,
+and `launch_eth_cores_for_quiesce` paths. Channels taking other paths through
+`configure_fabric_cores()` never got fw_launch_addr restored → ERISC launched
+from zeroed L1 → stuck at 0xDEADB07E.
+
+### Fix
+
+After the `addresses_to_clear` loop in `configure_fabric_cores()`:
+- Iterate `router_chans_and_direction` for MMIO devices
+- Skip dead channels
+- Restore fw_launch_addr with readback verify + diagnostic logging
+
+FIX IJ/KL blocks in device.cpp wrapped with `#ifdef FIXIJ_REDUNDANT_AFTER_FIX_MM`
+(not defined → disabled).
+
+---
 ## FIX EG RR (2026-05-18) — commit a35bf234f74
 
 ### What Failed
@@ -4349,3 +4474,76 @@ FIX_QR_FIRES, FIX_QR_TIMEOUT counters + display + insights.
 - `tt_metal/fabric/fabric_init.cpp` — FIX OP timing, enhanced FIX MN SUMMARY
 - `tt_metal/impl/device/device.cpp` — FIX QR quiesce poll
 - `scripts/analyze_fabric_hang_log.sh` — FIX OP/QR counters + grep patterns
+
+---
+
+## Audit Round 3 — Testing Gaps Audit (2026-05-18)
+
+Comprehensive review of fabric_init.cpp, device.cpp, and analyze_fabric_hang_log.sh
+to identify missing assertions, untested code paths, race windows with no coverage,
+and unlogged state.
+
+### GAP 6 — FIX QR timeout does not escalate to relay_broken
+
+**Location**: `device.cpp` `launch_eth_cores_for_quiesce()` ~line 2772
+**Problem**: FIX QR timeout handler only logged a warning but did NOT set
+`fabric_relay_path_broken_=true`, unlike FIX EF which does.  When a quiesce relay
+ERISC stays at 0xDEADB07E, non-MMIO Pass 1c launch messages are silently dropped
+through the dead relay — the non-MMIO ERISC never starts and ring-sync times out
+120s later with no diagnostic pointing to the root cause.
+**Fix**: Added `fabric_relay_path_broken_.store(true)` and updated the log message
+to indicate the escalation.  FIX SB2 propagates the broken state to non-MMIO
+devices which then skip their relay reads.
+
+### GAP 7 — FIX RR path has no timing log (FIX OP RR)
+
+**Location**: `fabric_init.cpp` `configure_fabric_cores()` FIX RR try block
+**Problem**: The normal FIX S9 path has FIX OP timing (`held in reset for Nms`),
+but the FIX RR path (pre-known-dead channels) had no equivalent.  CI logs showed
+no timing data for FIX RR recovery — impossible to tell if a channel spent 5ms or
+5000ms in the reset+boot window.
+**Fix**: Added `fix_rr_start` timer before `assert_risc_reset_at_core` and a
+`FIX OP RR` timing log after the FIX BH success/failure block.  Log includes
+total recovery time and whether the channel was ultimately recovered.
+
+### GAP 8 — Strategy 11 ETH link status not tracked in analyze script
+
+**Location**: `analyze_fabric_hang_log.sh`
+**Problem**: Strategy 11 fires in `configure_fabric_cores()` for MMIO devices to
+check ETH link error status before firmware launch, but the analyze script had no
+counter or summary section for it.  ETH link errors (which predict handshake
+failure) were invisible in analysis output.
+**Fix**: Added `STRATEGY_11_WARN`, `STRATEGY_11_OK`, `STRATEGY_11_FAIL` counters
+and a summary section that warns when link errors are detected.
+
+### GAP 9 — FIX QR events not fully captured by analyze script
+
+**Location**: `analyze_fabric_hang_log.sh`
+**Problem**: FIX QR counters existed for success and timeout, but the new GAP 6
+escalation path (`Setting fabric_relay_path_broken_=true`) was not captured.
+**Fix**: Added `FIX_QR_ESCALATION` counter with summary line.
+
+### GAP 10 — FIX EG RR / FIX GI RR / FIX MN RR not tracked in analyze script
+
+**Location**: `analyze_fabric_hang_log.sh`
+**Problem**: The FIX RR path's EG/GI/MN diagnostic logs (zeroing fw_launch_addr,
+readback verification, pre-zero snapshot) were captured by the general FIX EG/GI/MN
+counters but had no dedicated RR-specific counters.  Impossible to distinguish
+normal-path events from FIX-RR-path events in analysis output.
+**Fix**: Added `FIX_EG_RR_FIRES`, `FIX_GI_RR_MISMATCH`, `FIX_MN_RR_FIRES`,
+`FIX_MN_RR_STALE` counters with summary section showing stale fw_launch_addr
+detection and readback mismatch warnings.
+
+### Commits (Audit Round 3)
+
+```
+(pending commit)  GAP 6: FIX QR timeout escalation to fabric_relay_path_broken_ (#42429)
+(pending commit)  GAP 7: FIX OP RR timing for FIX RR recovery path (#42429)
+(pending commit)  GAPs 8-10: analyze script — Strategy 11, FIX QR escalation, FIX RR-path counters (#42429)
+```
+
+### Files Changed (Audit Round 3)
+
+- `tt_metal/impl/device/device.cpp` — GAP 6: FIX QR escalation
+- `tt_metal/fabric/fabric_init.cpp` — GAP 7: FIX OP RR timing
+- `scripts/analyze_fabric_hang_log.sh` — GAPs 8-10: new counters + summary lines
