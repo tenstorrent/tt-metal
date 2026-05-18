@@ -62,7 +62,8 @@ def _make_qwen36_args():
         head_dim=256,
         max_seq_len=4096,
         max_batch_size=1,
-        n_kv_heads=4,
+        n_kv_heads_unpadded=4,
+        n_kv_heads=8,  # V2-TP: padded 4 → 8 for 2D-TP head split on rows
         is_qwen36=True,
         zero_centered_norm=True,
         rope_dim=64,
@@ -167,23 +168,21 @@ def test_qwen36_attention_constructs():
     assert attn.zero_centered_norm is True
     assert attn.qk_norm is True
     assert attn.rope_dim == 64
-    # Q/Gate post-deinterleave: each is n_q*hd = 6144 rows × H=5120 cols.
+    # V2-TP: 2D tensor-parallel layout.  Q/Gate are n_q*hd=6144; K/V padded
+    # 4 → 8 heads → 2048 rows.
     assert attn.q_proj_weight_shape == (6144, 5120)
     assert attn.gate_proj_weight_shape == (6144, 5120)
-    # K and V keep their HF shapes.
-    assert attn.k_proj_weight_shape == (1024, 5120)
-    assert attn.v_proj_weight_shape == (1024, 5120)
-    # WO has input dim = n_q*hd = 6144 (the gated attention output width).
+    assert attn.k_proj_weight_shape == (2048, 5120)
+    assert attn.v_proj_weight_shape == (2048, 5120)
     assert attn.wo_proj_weight_shape == (5120, 6144)
-    # Per-col fused QKVG width = (n_q + n_q + n_kv + n_kv) / cluster_cols * hd
-    #                         = (24 + 24 + 4 + 4) / 4 * 256
-    #                         = 3584.
-    assert attn.total_per_col == 3584
-    assert attn.n_q_per_col == 6
-    assert attn.n_kv_per_col == 1
-    # Total fused QKVG width across all 4 cols — must match the V2-6 ``QKV``
-    # CCL persistent-buffer last-dim shape times cluster_cols=4 (=3584*4=14336).
-    assert attn.qkvg_total_width == 14336
+    # Per-chip fused QKVG width = (n_q + n_q + n_kv_padded + n_kv_padded) / 8 rows * hd
+    #                          = (24 + 24 + 8 + 8) / 8 * 256
+    #                          = 2048.
+    assert attn.total_per_chip == 2048
+    assert attn.n_q_per_chip == 3
+    assert attn.n_kv_per_chip == 1
+    # Total fused QKVG width across all 8 rows = 2048 * 8 = 16384.
+    assert attn.qkvg_total_width == 16384
     # qwen36 path uses ``self.wqkvg``; ``self.wqkv_interleaved`` is aliased to
     # the same buffer so any downstream attribute lookup still resolves.
     assert hasattr(attn, "wqkvg")
@@ -255,26 +254,24 @@ def test_qwen36_attention_de_interleaves_q_and_gate_correctly():
         for p in patches:
             p.stop()
 
-    # The wqkvg upload tensor has shape [1, 1, H, qkvg_total_width].
-    qkvg_blob = captured.get("layers.0.attention.wqkvg_col_sharded")
+    # V2-TP: wqkvg upload now has shape [1, 1, H, qkvg_total_width=16384].
+    qkvg_blob = captured.get("layers.0.attention.wqkvg_tp2d_row_col")
     assert (
         qkvg_blob is not None and len(qkvg_blob) == 1
     ), f"wqkvg upload not captured; captured keys: {list(captured.keys())}"
     qkvg_tensor = qkvg_blob[0]
-    assert qkvg_tensor.shape == (1, 1, 5120, 14336), f"qkvg shape={qkvg_tensor.shape}"
+    assert qkvg_tensor.shape == (1, 1, 5120, 16384), f"qkvg shape={qkvg_tensor.shape}"
 
-    # Column 0 spans columns [0, 3584).  Within that block the per-col layout
-    # is [Q (6*256=1536) | Gate (1536) | K (256) | V (256)] on the OUTPUT dim.
-    col0 = qkvg_tensor[0, 0, :, :3584]
-    # The wqkvg buffer is stored as ``H × total_per_col`` per col, i.e. the
-    # rows are the H dim and the cols partition into Q / Gate / K / V groups.
-    # Q block cols [0, 1536) must equal 1.0 (Q sentinel); Gate cols
-    # [1536, 3072) must equal 7.0 (Gate sentinel).
-    assert torch.all(col0[:, 0:1536] == 1.0), "Q block did not pick up the Q sentinel value"
-    assert torch.all(col0[:, 1536:3072] == 7.0), "Gate block did not pick up the Gate sentinel value"
-    # K block (cols [3072, 3328)) and V block (cols [3328, 3584)) — K=2, V=3.
-    assert torch.all(col0[:, 3072:3328] == 2.0), "K block sentinel mismatch"
-    assert torch.all(col0[:, 3328:3584] == 3.0), "V block sentinel mismatch"
+    # Row 0 block spans output columns [0, 2048).  Within that block the
+    # per-chip layout is [Q (3*256=768) | Gate (768) | K (256) | V (256)].
+    row0 = qkvg_tensor[0, 0, :, :2048]
+    assert torch.all(row0[:, 0:768] == 1.0), "Q block did not pick up the Q sentinel value"
+    assert torch.all(row0[:, 768:1536] == 7.0), "Gate block did not pick up the Gate sentinel value"
+    # K block (cols [1536, 1792)) and V block (cols [1792, 2048)).  K head 0
+    # comes from the repeat_interleave(2, dim=0) padded layout, so K head 0
+    # = original K head 0 with sentinel 2.0; V head 0 sentinel 3.0.
+    assert torch.all(row0[:, 1536:1792] == 2.0), "K block sentinel mismatch"
+    assert torch.all(row0[:, 1792:2048] == 3.0), "V block sentinel mismatch"
 
 
 if __name__ == "__main__":

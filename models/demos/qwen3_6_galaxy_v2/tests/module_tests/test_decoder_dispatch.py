@@ -67,7 +67,8 @@ def _make_args(is_qwen36: bool, pattern):
     args = MagicMock(name="TtQwen36ModelArgs")
     args.dim = 5120
     args.n_heads = 24
-    args.n_kv_heads = 4
+    args.n_kv_heads_unpadded = 4
+    args.n_kv_heads = 8  # V2-TP: padded 4 → 8 for 2D-TP head split on rows
     args.max_seq_len = 4096
     args.max_batch_size = 32
     args.unfuse_res_add = False

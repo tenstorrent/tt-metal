@@ -117,7 +117,12 @@ class TtQwen36ModelArgs(TtModelArgs):
         self.dim = 5120
         self.n_q_heads = 24  # full_attention path
         self.n_heads = 24  # alias used by parent class
-        self.n_kv_heads = 4  # full_attention path
+        # V2-TP: KV heads padded 4 → 8 so the 8-row mesh axis can split heads
+        # cleanly (8 / 8 = 1 KV per chip).  Replication is GQA-preserving via
+        # `repeat_interleave(2, dim=0)` at weight-load time — verified bit-
+        # identical in /tmp/test_gqa_kv_replication.py (V2-TP-1).
+        self.n_kv_heads_unpadded = 4  # native HF
+        self.n_kv_heads = 8  # padded for 2D-TP head split on rows (cluster_axis=0)
         self.head_dim = 256  # 5120 / 24 ≠ 256: heads are NOT dim/n_heads
         self.rope_dim = 64  # partial RoPE, rotary_factor=0.25
         self.partial_rotary_factor = 0.25
@@ -241,7 +246,10 @@ class TtQwen36ModelArgs(TtModelArgs):
         self.num_device_groups = self.num_devices // self.n_kv_heads
         self.num_devices_per_group = self.n_kv_heads
         self.batch_size_per_device_group = max(self.max_batch_size // self.num_device_groups, 1)
-        self.n_local_heads = self.n_q_heads // self.cluster_shape[1]
+        # V2-TP: heads now split on cluster_axis=0 (rows=8) for 2D-TP.
+        # Per-chip values: Q = 24/8 = 3, KV = 8/8 = 1.
+        self.n_local_heads = self.n_q_heads // self.cluster_shape[0]
+        self.n_local_kv_heads = self.n_kv_heads // self.cluster_shape[0]
 
         # --- Model config dict (memory configs by op key) ---
         DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
@@ -957,10 +965,11 @@ class TtQwen36ModelArgs(TtModelArgs):
         # ------------------------------------------------------------------
         # KV prefill mem-config (sharded by seq_len).
         # ------------------------------------------------------------------
-        assert self.n_kv_heads % self.cluster_shape[1] == 0
-        self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / max(1, (self.n_kv_heads // self.cluster_shape[1]))
+        # V2-TP: KV heads split on rows (cluster_axis=0); 8 padded KV / 8 rows = 1 per chip.
+        assert self.n_kv_heads % self.cluster_shape[0] == 0
+        self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / max(1, (self.n_kv_heads // self.cluster_shape[0]))
         self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
-            (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
+            (((self.n_kv_heads // self.cluster_shape[0]) * seq_len // (8 * 8)), self.head_dim),
             ttnn.CoreGrid(y=8, x=8),
             ttnn.ShardStrategy.HEIGHT,
             ttnn.ShardOrientation.ROW_MAJOR,

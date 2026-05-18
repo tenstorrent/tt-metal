@@ -145,20 +145,21 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 def _gather_kv_cache_from_mesh(kv_tt, mesh, args):
     """Gather TT KV cache to torch.
 
-    Per-chip shape: [B, n_local_kv_heads=1, max_S, head_dim].
-    Across mesh: rows replicate, cols hold different KV heads.
-    Expected gathered shape: [B, n_kv_heads=4, max_S, head_dim].
+    V2-TP layout: per-chip [B=1, n_kv_local=1, max_S, hd] with KV heads on
+    rows (8-way), cols replicate.  ConcatMesh2dToTensor(dims=(0, 1)) gives
+    [rows*B=8, cols*n_kv_local=4, max_S, hd] — the 8 rows are the 8 padded
+    KV heads stacked on dim 0; the 4 cols on dim 1 are all identical
+    (replicated).
+    Returns [n_kv=4, max_S, hd] (de-padded to match HF's 4 heads).
     """
     out = ttnn.to_torch(
         kv_tt,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, dims=(0, 1), mesh_shape=args.cluster_shape),
     )
-    # ConcatMesh2dToTensor with dims=(0, 1): rows on dim 0, cols on dim 1.
-    # Take row 0 (rows replicate).
-    out = out[0:1]
-    # Result: [1, n_kv*cols, max_S, head_dim] → squeeze to [n_kv*cols, max_S, head_dim].
-    while out.dim() > 4:
-        out = out.squeeze(0)
+    # Drop replicated cols: keep col 0 only.
+    out = out[:, 0]  # [8, max_S, hd]
+    # De-pad: heads are k0,k0,k1,k1,k2,k2,k3,k3 → take every other → k0..k3.
+    out = out[::2]  # [4, max_S, hd]
     return out
 
 

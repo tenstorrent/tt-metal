@@ -352,149 +352,115 @@ class TtTransformerBlock(LightweightModule):
         attn_mode = mode  # "prefill" or "decode" dispatches to the right attention path
 
         if is_qwen36_path:
-            # --- Entry gather: residual stream lifted to full-H ---
-            # For layer 0, x and h-into-block both = the embedding output
-            # (col-sharded). Gather x to full-H once; h is unused this branch.
-            if self.layer_num == 0:
-                x_full = ttnn.all_gather(
-                    x,
+            # V2-TP: 2D tensor-parallel data flow.
+            # Residual stream is COL-SHARDED H/cols throughout the decoder.
+            # - Full-attention layers: pure col-sharded I/O (attention takes
+            #   and returns col-sharded). No gather / no scatter in the
+            #   decoder.
+            # - DeltaNet layers: DeltaNet still requires full-H input/output
+            #   (its w_qkvz / w_out are dims=(1, None), so input dim is not
+            #   sharded). We gather just before DeltaNet and scatter just
+            #   after — same op count as before for DeltaNet, but the
+            #   surrounding norm / MLP / residual all stay col-sharded.
+            # Net per-layer savings on full-attn: 2 all_gather + 2
+            # mesh_partition removed; 16 full-attn layers × 4 CCL ops.
+
+            # --- Attention norm (col-sharded → col-sharded) ---
+            # x arrives col-sharded H/cols from the embedding (layer 0) or
+            # from the prior layer's exit (layer > 0).  DistributedNorm
+            # consumes col-sharded directly (gamma is col-sharded H/cols).
+            attn_in_sharded, _ = self.attention_norm(x, None, norm_mlp_mode)
+
+            if self.is_linear_attention_layer:
+                # DeltaNet: gather norm output to full-H, run attention,
+                # scatter back to col-sharded.
+                attn_in_full = ttnn.all_gather(
+                    attn_in_sharded,
                     dim=3,
                     num_links=1,
                     cluster_axis=1,
                     topology=ttnn.Topology.Linear,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
-                x.deallocate(True)
-                x = x_full
-                # h follows x (residual seed), full-H replicated.
-                h = x
+                attn_in_sharded.deallocate(True)
+                attn_out_full = self.attention.forward(
+                    attn_in_full,
+                    current_pos,
+                    rot_mats,
+                    user_id,
+                    attn_mode,
+                    page_table=page_table,
+                    chunk_page_table=chunk_page_table,
+                    chunk_start_idx=chunk_start_idx,
+                    chunk_start_idx_tensor=chunk_start_idx_tensor,
+                    kv_cache=kv_cache,
+                    batch_size=batch_size,
+                )
+                attn_in_full.deallocate(True)
+                if len(list(attn_out_full.shape)) == 3:
+                    _B_a, _T_a, _H_a = list(attn_out_full.shape)
+                    attn_out_full = ttnn.reshape(attn_out_full, ttnn.Shape([_B_a, 1, _T_a, _H_a]))
+                if mode == "decode":
+                    _B_a, _, _T_a, _H_a = list(attn_out_full.shape)
+                    if _T_a != 1:
+                        attn_out_full_t1 = ttnn.slice(
+                            attn_out_full, [0, 0, 0, 0], [_B_a, 1, 1, _H_a], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                        )
+                        attn_out_full.deallocate(True)
+                        attn_out_full = attn_out_full_t1
+                # Scatter full-H output back to col-sharded for the residual.
+                attn_out = ttnn.mesh_partition(
+                    attn_out_full, dim=-1, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                attn_out_full.deallocate(True)
             else:
-                # x and h came from prior layer's exit (still col-sharded).
-                x_full = ttnn.all_gather(
-                    x,
-                    dim=3,
-                    num_links=1,
-                    cluster_axis=1,
-                    topology=ttnn.Topology.Linear,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # Full-attention 2D-TP: col-sharded I/O all the way through.
+                attn_out = self.attention.forward(
+                    attn_in_sharded,
+                    current_pos,
+                    rot_mats,
+                    user_id,
+                    attn_mode,
+                    page_table=page_table,
+                    chunk_page_table=chunk_page_table,
+                    chunk_start_idx=chunk_start_idx,
+                    chunk_start_idx_tensor=chunk_start_idx_tensor,
+                    kv_cache=kv_cache,
+                    batch_size=batch_size,
                 )
-                x.deallocate(True)
-                x = x_full
-                if h is not None:
-                    h_full = ttnn.all_gather(
-                        h,
-                        dim=3,
-                        num_links=1,
-                        cluster_axis=1,
-                        topology=ttnn.Topology.Linear,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    )
-                    h.deallocate(True)
-                    h = h_full
+                attn_in_sharded.deallocate(True)
+                if len(list(attn_out.shape)) == 3:
+                    _B_a, _T_a, _H_a = list(attn_out.shape)
+                    attn_out = ttnn.reshape(attn_out, ttnn.Shape([_B_a, 1, _T_a, _H_a]))
+                if mode == "decode":
+                    _B_a, _, _T_a, _H_a = list(attn_out.shape)
+                    if _T_a != 1:
+                        attn_out_t1 = ttnn.slice(
+                            attn_out, [0, 0, 0, 0], [_B_a, 1, 1, _H_a], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                        )
+                        attn_out.deallocate(True)
+                        attn_out = attn_out_t1
 
-            # --- Attention norm: scatter → norm (col-sharded) → gather ---
-            x_norm_in = ttnn.mesh_partition(x, dim=-1, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            attn_in_sharded, _ = self.attention_norm(x_norm_in, None, norm_mlp_mode)
-            x_norm_in.deallocate(True)
-            attn_in_full = ttnn.all_gather(
-                attn_in_sharded,
-                dim=3,
-                num_links=1,
-                cluster_axis=1,
-                topology=ttnn.Topology.Linear,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            attn_in_sharded.deallocate(True)
-
-            # --- Attention forward (full-H replicated in/out) ---
-            attn_out = self.attention.forward(
-                attn_in_full,
-                current_pos,
-                rot_mats,
-                user_id,
-                attn_mode,
-                page_table=page_table,
-                chunk_page_table=chunk_page_table,
-                chunk_start_idx=chunk_start_idx,
-                chunk_start_idx_tensor=chunk_start_idx_tensor,
-                kv_cache=kv_cache,
-                batch_size=batch_size,
-            )
-            attn_in_full.deallocate(True)
-            # Some attention paths return rank-3 [B, T, H]; reshape to rank-4 for
-            # the residual add to match x's [B, 1, T, H] layout.
-            if len(list(attn_out.shape)) == 3:
-                _B_a, _T_a, _H_a = list(attn_out.shape)
-                attn_out_4d = ttnn.reshape(attn_out, ttnn.Shape([_B_a, 1, _T_a, _H_a]))
-                attn_out.deallocate(True)
-                attn_out = attn_out_4d
-
-            # V2-decode: DeltaNet's forward_decode may return logical T=32 (tile-
-            # padded T=1) when the internal output projection inflates the
-            # second-to-last dim. Slice back to T=1 so the downstream residual
-            # add / norms / MLP see the correct contract.
-            if mode == "decode":
-                _B_a, _, _T_a, _H_a = list(attn_out.shape)
-                if _T_a != 1:
-                    attn_out_t1 = ttnn.slice(
-                        attn_out, [0, 0, 0, 0], [_B_a, 1, 1, _H_a], memory_config=ttnn.DRAM_MEMORY_CONFIG
-                    )
-                    attn_out.deallocate(True)
-                    attn_out = attn_out_t1
-
-            # --- Residual add (full-H replicated) ---
-            # Note: residual stream stays in bfloat16 because both inputs are
-            # bfloat16 — x is bfloat16 (from embedding / prior layer all_gather)
-            # and attn_out is bfloat16 (TtLlamaAttention/_forward_prefill_qwen36
-            # and TtQwen36DeltaAttention._output_proj_and_reduce force bf16).
-            # We do NOT pass dtype=ttnn.bfloat16 here: an explicit dtype kwarg
-            # on ttnn.add with a tile-DRAM input observed a regression on
-            # layer-3 full_attention 1L (PCC 0.9995 → 0.77). The dtype default
-            # (inherited from inputs) is already bf16 and is the correct path.
-            # V2-decode-debug-3: experimentally promoting to fp32 dest accum
-            # did NOT change the 64L decode PCC trajectory (0.298 → 0.282).
-            # The per-layer 1.07× error amplifier lives elsewhere.
+            # --- Residual add (col-sharded) ---
+            # x and attn_out are both col-sharded H/cols, bf16.  No dtype
+            # kwarg (see prior comment about regression on layer-3 PCC).
             h_new = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)
             x.deallocate(True)
             attn_out.deallocate(True)
 
-            # --- FF norm: scatter → norm (col-sharded) ---
-            h_norm_in = ttnn.mesh_partition(h_new, dim=-1, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ff_in_sharded, _ = self.ff_norm(h_norm_in, None, norm_mlp_mode)
-            h_norm_in.deallocate(True)
+            # --- FF norm (col-sharded → col-sharded) ---
+            ff_in_sharded, _ = self.ff_norm(h_new, None, norm_mlp_mode)
 
-            # --- MLP (col-sharded H/4 → col-sharded H/4) ---
+            # --- MLP (col-sharded → col-sharded) ---
             if mode == "decode":
-                # V2-decode: bypass the prefill MLP program-config path (it
-                # requires L1-sharded mcast_in0 input AND fuse_batch math that
-                # doesn't validate for the T=1 tile-padded-to-32 single-user
-                # contract). Use plain ttnn.linear (auto-selects a DRAM-safe
-                # 2D MCAST kernel) followed by the same CCL pattern.
                 ff_out_sharded = self._mlp_decode_qwen36(ff_in_sharded, batch_size=batch_size)
             else:
                 ff_out_sharded = self.feed_forward.forward(ff_in_sharded, norm_mlp_mode, batch_size=batch_size)
-            # Gather MLP output back to full-H for the residual add against h_new.
-            ff_out_full = ttnn.all_gather(
-                ff_out_sharded,
-                dim=3,
-                num_links=1,
-                cluster_axis=1,
-                topology=ttnn.Topology.Linear,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            ff_out_sharded.deallocate(True)
 
-            # --- Final residual + exit scatter back to col-sharded H/4 ---
-            # ff_out_full and h_new are both bf16 (MLP typecasts to bf16 at
-            # exit; h_new from previous add is bf16). Default add dtype keeps
-            # bf16; do NOT pass explicit dtype (see comment on h_new add above).
-            out_full = ttnn.add(ff_out_full, h_new, memory_config=skip_mem_cfg)
-            ff_out_full.deallocate(True)
+            # --- Final residual (col-sharded) ---
+            out_sharded = ttnn.add(ff_out_sharded, h_new, memory_config=skip_mem_cfg)
+            ff_out_sharded.deallocate(True)
             h_new.deallocate(True)
-            # Decoder exit contract: col-sharded H/4 so the next layer / final
-            # norm / lm_head sees the same layout as the embedding produces.
-            out_sharded = ttnn.mesh_partition(out_full, dim=-1, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            out_full.deallocate(True)
             return out_sharded, None
 
         # --- Non-qwen36 / decode path (unchanged) -------------------------
