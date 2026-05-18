@@ -63,6 +63,15 @@ class SigLIPAttentionBlockFused:
     QKV_GRID_Y = 6
     QKV_NUM_CORES = QKV_GRID_X * QKV_GRID_Y  # 36
 
+    # QKV matmul (encoder-shape) — fused Q/K/V projection.
+    #   Activation per core: (M=256, K=1152) bf16, replicated across 36 cores.
+    #   Weight per core:     (K=1152, N=96)  bfp8, width-sharded across 36 cores.
+    #   Output per core:     (M=256, N=96)   bf16, width-sharded across 36 cores.
+    # Total weight + output cover N=3456 = 3·D — concatenated Q, K, V projections.
+    QKV_N = 3 * D  # 3456
+    QKV_N_TILES = QKV_N // TILE  # 108
+    QKV_N_TILES_PER_CORE = QKV_N_TILES // QKV_NUM_CORES  # 3
+
     # CB IDs (must match the kernel's get_named_compile_time_arg_val calls)
     CB = {
         "ln_in_cb": 0,
@@ -86,6 +95,15 @@ class SigLIPAttentionBlockFused:
         # races: residual's cb_pop_front would otherwise starve the sender's
         # cb_wait_front, since both read pages_received - pages_acked).
         "ln_done_trigger_cb": 15,
+        # Commit 3: QKV matmul on the 36-core receiver grid.
+        # qkv_w_cb: bfp8 weight, width-sharded (K=1152, N/36=96) per core, all
+        #   K_TILES × N_TILES_PER_CORE = 36×3 = 108 tiles per core; L1-resident,
+        #   pre-loaded via from_torch + setup_sharded_buffer.
+        # qkv_out_cb: bf16 output, width-sharded (M=256, 96) per core, M_TILES ×
+        #   N_TILES_PER_CORE = 8×3 = 24 tiles per core. Produced by TRISC matmul;
+        #   left for downstream (#11 SDPA) to consume.
+        "qkv_w_cb": 16,
+        "qkv_out_cb": 17,
     }
 
     # Counter semaphore for the LN1→QKV receiver-pull. Each QKV receiver
@@ -111,6 +129,8 @@ class SigLIPAttentionBlockFused:
         final_out_tt,
         qkv_act_tt,
         ln_done_trigger_tt,
+        qkv_w_tt,
+        qkv_out_tt,
         math_fidelity=ttnn.MathFidelity.HiFi4,
         eps: float = 1e-6,
     ):
@@ -124,6 +144,16 @@ class SigLIPAttentionBlockFused:
         # Per-receiver qkv_act_cb holds the full re-assembled (256, 1152) = 8 LN1
         # shards = 8 * 36 = 288 tiles.
         qkv_act_tiles_per_core = SigLIPAttentionBlockFused.LN1_NUM_CORES * in_tiles
+
+        # QKV matmul per-core tile counts (encoder-shape Op-struct convention):
+        #   M_TILES=8, K_TILES=36, N_TILES_PER_CORE=3.
+        # ACT_TOTAL_TILES = 288 (matches qkv_act_tiles_per_core above).
+        # WEIGHT_TILES = K_TILES * N_TILES_PER_CORE = 36*3 = 108.
+        # OUT_TOTAL_TILES = M_TILES * N_TILES_PER_CORE = 8*3 = 24.
+        # K_TILES for the matmul equals D_TILES (per-receiver activation is the
+        # full (M, D) = (256, 1152) replicated).
+        qkv_weight_tiles = SigLIPAttentionBlockFused.D_TILES * SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE
+        qkv_out_tiles_per_core = SigLIPAttentionBlockFused.M_TILES * SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE
 
         eps_bf16 = torch.tensor(eps, dtype=torch.bfloat16).view(torch.uint16).item()
         eps_bits = eps_bf16 << 16
@@ -149,13 +179,23 @@ class SigLIPAttentionBlockFused:
             ("qkv_grid_y", SigLIPAttentionBlockFused.QKV_GRID_Y),
             ("qkv_act_tiles_per_core", qkv_act_tiles_per_core),
             ("counter_sem_id", SigLIPAttentionBlockFused.COUNTER_SEM_ID),
+            # QKV weight is pre-loaded; NCRISC marks all 108 tiles pushed so
+            # TRISC matmul's cb_wait_front returns immediately.
+            ("qkv_w_cb", SigLIPAttentionBlockFused.CB["qkv_w_cb"]),
+            ("qkv_weight_tiles", qkv_weight_tiles),
         ]
-        # TRISC needs all CBs + tile counts + eps.
+        # TRISC needs all CBs + tile counts + eps + QKV matmul shape params.
         trisc_ct = [
             *[(k, v) for k, v in SigLIPAttentionBlockFused.CB.items()],
             ("d_tiles", SigLIPAttentionBlockFused.D_TILES),
             ("in_tiles", in_tiles),
             ("eps_bits", eps_bits),
+            # QKV matmul shape (encoder-shape Op-struct):
+            ("qkv_m_tiles", SigLIPAttentionBlockFused.M_TILES),
+            ("qkv_k_tiles", SigLIPAttentionBlockFused.D_TILES),
+            ("qkv_n_tiles_per_core", SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE),
+            ("qkv_act_total_tiles", qkv_act_tiles_per_core),
+            ("qkv_weight_tiles", qkv_weight_tiles),
         ]
 
         # Physical NoC coords for the worker grid. BH's logical-to-physical x
@@ -228,8 +268,16 @@ class SigLIPAttentionBlockFused:
 
         def _cb(cb_id, tensor):
             d = ttnn.cb_descriptor_from_sharded_tensor(cb_id, tensor)
-            d.format_descriptors[0].tile = tile_descriptor
-            d.format_descriptors[0].page_size = bf16_page
+            # The Op-struct ports were validated with an explicit bf16 page-size
+            # override (2048 B per 32×32 tile). bfp8 tensors have a different
+            # tile size (1088 B = 32×32 mantissa + per-row exponents), so the
+            # override would yield a non-divisible CB size and fail validation.
+            # Skip the override for non-bf16 dtypes and let the descriptor's
+            # auto-derived page_size carry the layout (matches qkv_op.py's
+            # standalone QKV matmul, which uses the unmodified helper).
+            if tensor.dtype == ttnn.bfloat16:
+                d.format_descriptors[0].tile = tile_descriptor
+                d.format_descriptors[0].page_size = bf16_page
             return d
 
         # Counter semaphore lives on the 36 QKV receivers. Senders unicast +1
@@ -267,6 +315,8 @@ class SigLIPAttentionBlockFused:
                 _cb(SigLIPAttentionBlockFused.CB["final_out_cb"], final_out_tt),
                 _cb(SigLIPAttentionBlockFused.CB["qkv_act_cb"], qkv_act_tt),
                 _cb(SigLIPAttentionBlockFused.CB["ln_done_trigger_cb"], ln_done_trigger_tt),
+                _cb(SigLIPAttentionBlockFused.CB["qkv_w_cb"], qkv_w_tt),
+                _cb(SigLIPAttentionBlockFused.CB["qkv_out_cb"], qkv_out_tt),
             ],
             semaphores=[counter_sem],
         )
@@ -289,19 +339,28 @@ class SigLIPAttentionBlockFused:
                 final_out_tt,
                 qkv_act_tt,
                 ln_done_trigger_tt,
+                qkv_w_tt,
+                qkv_out_tt,
             ],
             program_descriptor,
         )
-        return final_out_tt, qkv_act_tt
+        return final_out_tt, qkv_act_tt, qkv_out_tt
 
 
-def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_torch):
+def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_torch, w_qkv_torch=None):
     """Build all sharded tensors needed by the fused attention-block op.
 
-    Returns a 15-tuple matching SigLIPAttentionBlockFused.op's positional inputs.
-    The first 14 entries match Commit 1 (LN1 + residual on the 8-core row); the
-    15th is qkv_act_tt — a (36 × 256, 1152) HEIGHT_SHARDED tensor that the 36
-    QKV receivers write into via NCRISC noc_async_read.
+    Returns a 17-tuple matching SigLIPAttentionBlockFused.op's positional inputs.
+    Entries 0..13: LN1 + residual on the 8-core row (Commit 1).
+    Entry 14: qkv_act_tt — (36×256, 1152) HEIGHT_SHARDED, written by NCRISC
+        receiver-pull mcast (Commit 2).
+    Entry 15: ln_done_trigger_tt — 1-tile sync CB on the LN1 row (Commit 2).
+    Entries 16..17: qkv_w_tt + qkv_out_tt — QKV matmul weight (bfp8) and output
+        (bf16), both WIDTH_SHARDED on the 36-core QKV grid (Commit 3).
+
+    If `w_qkv_torch` is None, a deterministic random `(1152, 3456)` weight is
+    generated — useful for math-only tests where the caller passes the same
+    seed to its torch golden.
     """
     M = SigLIPAttentionBlockFused.M
     D = SigLIPAttentionBlockFused.D
@@ -431,6 +490,35 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         memory_config=tile_mem,
     )
 
+    # QKV matmul weight + output, WIDTH_SHARDED across the 36-core QKV grid.
+    # Weight is bfp8 (matches the qkv_op.py pattern), output is bf16.
+    N = SigLIPAttentionBlockFused.QKV_N  # 3456
+    n_per_core = N // qkv_num_cores  # 96
+    if w_qkv_torch is None:
+        g = torch.Generator().manual_seed(7)
+        w_qkv_torch = torch.randn(D, N, generator=g, dtype=torch.bfloat16) * 0.05
+    assert w_qkv_torch.shape == (D, N), f"w_qkv shape {tuple(w_qkv_torch.shape)} != {(D, N)}"
+
+    qkv_w_shard = ttnn.ShardSpec(qkv_core_grid, (D, n_per_core), ttnn.ShardOrientation.ROW_MAJOR)
+    qkv_w_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, qkv_w_shard)
+    qkv_w_tt = ttnn.from_torch(
+        w_qkv_torch,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=qkv_w_mem,
+    )
+
+    qkv_out_shard = ttnn.ShardSpec(qkv_core_grid, (M, n_per_core), ttnn.ShardOrientation.ROW_MAJOR)
+    qkv_out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, qkv_out_shard)
+    qkv_out_tt = ttnn.from_torch(
+        torch.zeros(M, N, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=qkv_out_mem,
+    )
+
     return (
         ln_in_tt,
         gamma_tt,
@@ -448,4 +536,6 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         final_out_tt,
         qkv_act_tt,
         ln_done_trigger_tt,
+        qkv_w_tt,
+        qkv_out_tt,
     )

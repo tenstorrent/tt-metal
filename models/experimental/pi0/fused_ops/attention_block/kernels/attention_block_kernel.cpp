@@ -15,6 +15,7 @@
 //   Commit 3: QKV EncoderMatmul::Op on the 36-core receiver grid.
 
 #include "../../unified_kernels/ln.h"
+#include "../../unified_kernels/matmul.h"
 #include "../../unified_kernels/residual_add.h"
 #include "../../../../../demos/deepseek_v3_b1/unified_kernels/kernel_utils.hpp"
 // mcast.hpp left included as it advertises deepseek_b1_ops::Mcast::Op for any
@@ -72,6 +73,12 @@ void kernel_main() {
     constexpr uint32_t qkv_grid_y = get_named_compile_time_arg_val("qkv_grid_y");
     constexpr uint32_t qkv_act_tiles_per_core = get_named_compile_time_arg_val("qkv_act_tiles_per_core");
     constexpr uint32_t counter_sem_id = get_named_compile_time_arg_val("counter_sem_id");
+    // Commit 3: QKV matmul weight CB lives on the 36-core QKV grid. Pre-loaded
+    // bfp8 weight; NCRISC marks all 108 tiles pushed so TRISC matmul's
+    // cb_wait_front returns immediately. The matmul Op-struct doesn't pop the
+    // weight CB (weights stay L1-resident).
+    constexpr uint32_t qkv_w_cb = get_named_compile_time_arg_val("qkv_w_cb");
+    constexpr uint32_t qkv_weight_tiles = get_named_compile_time_arg_val("qkv_weight_tiles");
 
     const bool is_ln1_core_nc = (get_relative_logical_y() == 0) && (get_relative_logical_x() < ln1_num_cores);
     const bool is_qkv_core_nc = (get_relative_logical_y() < qkv_grid_y) && (get_relative_logical_x() < qkv_grid_x);
@@ -87,6 +94,13 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(ones_cb, 1);
         unified_kernels::setup_sharded_buffer(x_residual_cb, in_tiles);
         unified_kernels::setup_sharded_buffer(final_out_cb, in_tiles);
+    }
+
+    // QKV weight is pre-loaded; mark all 108 tiles pushed on every QKV core so
+    // the TRISC matmul's cb_wait_front returns immediately. Skipped on LN1-only
+    // cores (no qkv_w_cb allocated there).
+    if (is_qkv_core_nc) {
+        unified_kernels::setup_sharded_buffer(qkv_w_cb, qkv_weight_tiles);
     }
 
     // =========================================================================
@@ -194,6 +208,17 @@ void kernel_main() {
     // 1-tile sync CB pushed at the end of LN1 to release the NCRISC sender —
     // see NCRISC's matching wait_front/pop above.
     constexpr uint32_t ln_done_trigger_cb = get_named_compile_time_arg_val("ln_done_trigger_cb");
+    // QKV matmul CBs + shape params (Commit 3). The matmul Op-struct waits on
+    // qkv_act_cb (288 tiles, pushed by NCRISC receiver) and qkv_w_cb (108
+    // tiles, pre-loaded), and writes 24 tiles to qkv_out_cb.
+    constexpr uint32_t qkv_act_cb_tr = get_named_compile_time_arg_val("qkv_act_cb");
+    constexpr uint32_t qkv_w_cb_tr = get_named_compile_time_arg_val("qkv_w_cb");
+    constexpr uint32_t qkv_out_cb_tr = get_named_compile_time_arg_val("qkv_out_cb");
+    constexpr uint32_t qkv_m_tiles = get_named_compile_time_arg_val("qkv_m_tiles");
+    constexpr uint32_t qkv_k_tiles = get_named_compile_time_arg_val("qkv_k_tiles");
+    constexpr uint32_t qkv_n_tiles_per_core = get_named_compile_time_arg_val("qkv_n_tiles_per_core");
+    constexpr uint32_t qkv_act_total_tiles = get_named_compile_time_arg_val("qkv_act_total_tiles");
+    constexpr uint32_t qkv_weight_tiles_tr = get_named_compile_time_arg_val("qkv_weight_tiles");
 
     constexpr uint32_t d_tiles = get_named_compile_time_arg_val("d_tiles");
     constexpr uint32_t in_tiles = get_named_compile_time_arg_val("in_tiles");
@@ -204,10 +229,7 @@ void kernel_main() {
     // side-by-side.
     const bool is_ln1_core_tr = (get_relative_logical_y() == 0) && (get_relative_logical_x() < 8);
     const bool is_residual_core_tr = is_ln1_core_tr;
-    // is_qkv_core_tr is computed but currently unused at TRISC level — Commit 3
-    // will gate the QKV EncoderMatmul::Op call on it. Marked maybe_unused so
-    // the compiler doesn't warn pre-Commit 3.
-    [[maybe_unused]] const bool is_qkv_core_tr = (get_relative_logical_y() < 6) && (get_relative_logical_x() < 6);
+    const bool is_qkv_core_tr = (get_relative_logical_y() < 6) && (get_relative_logical_x() < 6);
 
     // =========================================================================
     // PHASE 1: LN1 — y = ((x - mean) / sqrt(var + eps)) * gamma + beta
@@ -255,6 +277,35 @@ void kernel_main() {
         pi05_siglip_ops::ResidualAdd::Op<ResCTArgs, true> residual;
         pi05_siglip_ops::ResidualAdd::RTArgs res_args{};
         residual(res_args);
+    }
+
+    // =========================================================================
+    // PHASE 3 (Commit 3): QKV matmul on the 36-core receiver grid.
+    //   Activation: qkv_act_cb (8×36 = 288 tiles, full (256, 1152) per core,
+    //               produced by NCRISC receiver-pull).
+    //   Weight:     qkv_w_cb   (36×3 = 108 tiles, (1152, 96) per core, bfp8,
+    //               pre-loaded; NCRISC ran setup_sharded_buffer on the 36-core
+    //               grid to mark all tiles pushed).
+    //   Output:     qkv_out_cb (8×3 = 24 tiles, (256, 96) per core, bf16). Left
+    //               for #11 SDPA to consume; Commit 3 only validates the math.
+    //
+    // The matmul Op-struct pops act_cb after the matmul and leaves weight_cb
+    // L1-resident — both matching the standalone qkv_matmul kernel.
+    // =========================================================================
+    if (is_qkv_core_tr) {
+        using QkvMmCTArgs = pi05_siglip_ops::EncoderMatmul::ComputeCTArgs<
+            qkv_act_cb_tr,
+            qkv_w_cb_tr,
+            qkv_out_cb_tr,
+            qkv_m_tiles,
+            qkv_k_tiles,
+            qkv_n_tiles_per_core,
+            qkv_act_total_tiles,
+            qkv_weight_tiles_tr>;
+
+        pi05_siglip_ops::EncoderMatmul::Op<QkvMmCTArgs, true> qkv_mm;
+        pi05_siglip_ops::EncoderMatmul::RTArgs qkv_args{};
+        qkv_mm(qkv_args);
     }
 #endif
 }
