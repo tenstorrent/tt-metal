@@ -125,21 +125,12 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
             final_status = "FAILURE"
             if ts:
                 block_end_ts = ts
-            reset_done = True
-        if not reset_done:
-            # Collect unique error lines with timestamps and GH annotation prefixes stripped
+            # Collect this conclusive failure line in the summary before marking done
             content = clean_line(line)
-            if content and any(x in lower for x in [
-                "error accessing board", "could not open chip", "failed with:",
-                "enodev", "error when re-initializing", "unable to reset board",
-                "runner will now shutdown", "the operation was canceled",
-            ]):
-                # Strip unhelpful "Use -ls to see all devices available to reset" suffix
-                if "use -ls to see all devices" in content.lower():
-                    content = content.split("!")[0] + "!"
-                if content not in seen_errors:
-                    seen_errors.add(content)
-                    error_lines.append(content)
+            if content and content not in seen_errors:
+                seen_errors.add(content)
+                error_lines.append(content)
+            reset_done = True
 
     if num_smi_attempts == 0:
         num_smi_attempts = 1
