@@ -124,10 +124,11 @@
  *   );
  *
  *   // Streaming binary — A + B → out
- *   //   (3rd template arg is CbOut)
+ *   //   BinaryFpu writes to DEST; the output CB lives on the PackTile element.
  *   eltwise_chain(num_tiles,
- *       BinaryFpu<cb_a, cb_b, cb_out, BinaryFpuOp::Add>{},
- *       PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{}
+ *       BinaryFpu<cb_a, cb_b, BinaryFpuOp::Add>{},
+ *       PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
+ *                PackTileIndexMode::FirstTile, PackTileReconfig::Output>{}
  *   );
  *
  *   // Single-stage with deduced wrapper — U4
@@ -156,14 +157,14 @@
  *
  *   // Asymmetric bcast walk — A streams the tile range, B pinned at tile 0
  *   //   (softmax-style: out[t] = exp(in[t] - max), max pinned at tile 0)
- *   //   BinaryFpu's 9th template arg is AIndex; 12th (trailing) is BIndex (defaults to AIndex).
+ *   //   BinaryFpu's 8th template arg is AIndex; 10th (trailing) is BIndex (defaults to AIndex).
  *   eltwise_chain(num_tiles,
- *       BinaryFpu<cb_in, cb_max, cb_tmp, BinaryFpuOp::Sub, BroadcastDim::COL,
+ *       BinaryFpu<cb_in, cb_max, BinaryFpuOp::Sub, BroadcastDim::COL,
  *                 BinaryDataFormatReconfig::None,
  *                 CopyTilePolicy::WaitUpfrontPopAtEnd,   // A: wait N upfront, pop at end
  *                 CopyTilePolicy::WaitNoPop,             // B: wait 1, never pop
  *                 CbIndexMode::BlockIter,                // AIndex — A walks 0..num_tiles-1
- *                 Dst::D0, false,
+ *                 Dst::D0,
  *                 CbIndexMode::FirstTile>{},             // BIndex — B pinned at tile 0
  *       Exp<>{},
  *       PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{}
@@ -183,9 +184,8 @@
  *  - CopyTileReconfig::Input         → fold emits `reconfig_data_format_srca(curr)` (compile-time-elided when prev ==
  * curr).
  *  - BinaryDataFormatReconfig::Input → fold emits `reconfig_data_format_srca / _srcb` per side (compile-time-elided per
- * side).
- *  - BinaryDataFormatReconfig::Output → fold emits `pack_reconfig_data_format(CbOut)` (compile-time-elided when
- * prev_pack == CbOut).
+ * side). Pack-side reconfig is owned by the downstream `PackTile` (`PackTileReconfig::Output`); BinaryFpu writes to
+ * DEST, never to a CB.
  *  - DestReuseReconfig::Input        → fold emits per-side reconfig (srca OR srcb depending on ReuseType).
  *  - PackTileReconfig::Output        → fold emits `pack_reconfig_data_format(new_cb)`.
  *  - PackTileReconfig::OutputConditional → currently emits same as ::Output; future extension may
@@ -285,6 +285,29 @@ template <class T>
 inline constexpr bool is_rand_tile_op_v = std::is_base_of_v<RandTileTag, T>;
 
 // =============================================================================
+// 1b. 2D shape — (Ht, Wt) tile grid for the 2D chain overload
+// =============================================================================
+
+/// Tile grid for the 2D `eltwise_chain` overload. Rows × cols, both in tiles.
+/// 1D code paths keep the legacy `eltwise_chain(n_tiles, ...)` overload — pass
+/// `EltwiseShape::of(Ht, Wt)` here when you need row/col/scalar broadcast indexing
+/// inside the chain (normalization-style kernels: subtract per-row mean, multiply
+/// by per-channel gamma, …).
+///
+/// Factory aliases mirror `binary_op_helpers`' `BinaryInputBlockShape` (which is
+/// preferred where the kernel already uses the binary helper alone). Both structs
+/// are layout-compatible and used interchangeably for the 2D walk.
+struct EltwiseShape {
+    uint32_t Ht;
+    uint32_t Wt;
+
+    static constexpr EltwiseShape of(uint32_t r, uint32_t c) { return {r, c}; }
+    static constexpr EltwiseShape row(uint32_t c) { return {1, c}; }
+    static constexpr EltwiseShape col(uint32_t r) { return {r, 1}; }
+    static constexpr EltwiseShape single() { return {1, 1}; }
+};
+
+// =============================================================================
 // 2. DEST slot enum — capped at compile-time DEST capacity
 // =============================================================================
 
@@ -319,12 +342,15 @@ constexpr uint32_t to_u32(Dst s) noexcept { return static_cast<uint32_t>(s); }
 enum class Approx : bool { Exact = false, Fast = true };
 enum class Legacy : bool { Off = false, On = true };
 
-/// Auto-block toggle (item 2 of eltwise_helper_proposal.md). Chain-wide template
-/// parameter on `eltwise_chain<AutoBlock, ...>`. When On, chain computes
-/// `BlockSize = DEST_AUTO_LIMIT / chain_lane_width` and runs that many lanes per
-/// outer iter (each lane offsets DEST slot by `j * chain_lane_width`). When Off,
-/// `BlockSize = 1` — every outer iter processes one tile (today's per-tile shape).
-enum class AutoBlock : bool { Off = false, On = true };
+/// Auto-block size (item 2 of eltwise_helper_proposal.md). Chain-wide template
+/// parameter on `eltwise_chain<BlockSize, ...>`. Caller picks the per-outer-iter
+/// block size at compile time. The chain runs `BlockSize` DEST lanes per outer iter
+/// (each lane offsets DEST slot by `j * chain_lane_width`). Default `BlockSize = 1`
+/// reproduces the per-tile shape. Static asserts validate:
+///   - `BlockSize * chain_lane_width <= DEST_AUTO_LIMIT`  (slot reach)
+///   - `BlockSize == 1 || chain_supports_block_v<Chain>`  (policy compat)
+/// Callers needing the "auto" max BlockSize can pass `DEST_AUTO_LIMIT / chain_lane_width`
+/// directly — typically `DEST_AUTO_LIMIT` when every element has `lane_width == 1`.
 
 // =============================================================================
 // 4. Policy enums — CB lifecycle, indexing, reconfig, broadcast
@@ -337,19 +363,57 @@ enum class CopyTilePolicy : uint8_t {
     NoWaitPop,               // no wait     + per-tile pop    (fan-out last / pre-waited single)
     NoWaitNoPop,             // no wait     + no pop          (caller owns lifecycle / sharded)
     WaitUpfrontPopAtEnd,     // upfront wait + upfront pop    (block access — BlockIter / Absolute legal)
+    WaitUpfrontNoPop,        // upfront wait + NO pop. Same wait shape as WaitUpfrontPopAtEnd but
+                             // caller keeps the tiles alive past chain exit — used when a
+                             // downstream stage (another chain, a reduce, raw LLK) still needs
+                             // the same CB. Caller is responsible for the final pop. Symmetric
+                             // with CumulativeWaitNoPop but pays the full N wait once at entry
+                             // instead of growing per iter.
     CumulativeWaitPopAtEnd,  // per-iter cumulative wait (cb_wait_front(cb, i+1)) + bulk pop at end
                              // (block access with producer streaming: consumer iter i starts as
                              // soon as producer has pushed i+1 tiles, vs WaitUpfrontPopAtEnd which
                              // blocks iter 0 on the full N. BlockIter / Absolute / Pinned all
                              // legal — cumulative wait guarantees tile i present at iter i.)
+    CumulativeWaitNoPop,     // per-iter cumulative wait + NO pop. Same wait shape as
+                             // CumulativeWaitPopAtEnd but caller keeps the tiles alive — used
+                             // when downstream stages (e.g. a sum reduce after the x² stage)
+                             // still need the same CB. Caller is responsible for the final
+                             // pop after the consuming stage(s) finish.
 };
 
 /// CB-input tile indexing.
+///
+/// 2D-mode semantics (only meaningful in the `EltwiseShape{Ht, Wt}` chain overload —
+/// in the 1D `n_tiles` overload, RowBcast/ColBcast are static_assert-rejected since
+/// there is no Ht axis):
+///
+///   | Mode      | Tile index in 2D walk    | Upfront window |
+///   |-----------|--------------------------|----------------|
+///   | FirstTile | 0                        | 1              |
+///   | BlockIter | ht * Wt + wt   (flat)    | Ht * Wt        |
+///   | RowBcast  | wt                       | Wt             |
+///   | ColBcast  | ht                       | Ht             |
+///   | Pinned    | runtime k                | 1              |
+///   | Absolute  | runtime k                | Ht * Wt        |
+///
+/// RowBcast / ColBcast require non-streaming CB policy (WaitUpfrontPopAtEnd,
+/// WaitNoPop, NoWaitPop, NoWaitNoPop, CumulativeWaitPopAtEnd) — caller stages all
+/// broadcast operand tiles before the chain starts. Same constraint as
+/// `binary_op_helpers`' ROW/COL static_assert.
 enum class CbIndexMode : uint8_t {
-    FirstTile,  // always tile 0 of the CB
-    BlockIter,  // tile i (loop var). Requires WaitUpfrontPopAtEnd or NoWaitNoPop.
-    Pinned,     // fixed runtime k. Under single-tile-window policies, k must be 0.
-    Absolute,   // runtime idx ∈ caller's window. Requires WaitUpfrontPopAtEnd or NoWaitNoPop.
+    FirstTile,        // always tile 0 of the CB
+    BlockIter,        // 2D: tile (ht*Wt + wt) ; 1D: tile i. Requires non-streaming policy.
+    Pinned,           // fixed runtime k. Under single-tile-window policies, k must be 0.
+    Absolute,         // runtime idx ∈ caller's window. Requires non-streaming policy.
+    RowBcast,         // 2D only: tile wt (B replicated across rows). Requires non-streaming.
+    ColBcast,         // 2D only: tile ht (B replicated across cols). Requires non-streaming.
+    BlockIterOffset,  // runtime k + i (1D) or runtime k + ht*Wt+wt (2D). Requires
+                      // non-streaming policy. Use case: chain runs N tiles per outer
+                      // C++ loop iter; caller passes the outer-iter base via ctor
+                      // (a_tile_idx_ / b_tile_idx_), chain emits b_tile_idx_ + j for
+                      // each inner iter j. Unlocks the "block-streaming consumer with
+                      // global B index" pattern in normalization gamma/beta stages.
+                      // Caller-managed lifecycle (NoWaitNoPop) — chain doesn't wait/pop.
 };
 
 /// CopyTile dtype-reconfig.
@@ -361,12 +425,12 @@ enum class CopyTileReconfig : uint8_t {
 /// FPU binary op selector.
 enum class BinaryFpuOp : uint8_t { Add, Sub, Mul };
 
-/// FPU binary dtype-reconfig.
+/// FPU binary dtype-reconfig. Input-side only — pack-side reconfig is owned by
+/// the downstream `PackTile` element (`PackTileReconfig::Output`). BinaryFpu writes
+/// to DEST, never to a CB, so it has no pack-side responsibility.
 enum class BinaryDataFormatReconfig : uint8_t {
     None,
-    Input,           // srca and/or srcb on entry
-    Output,          // pack reconfig on entry
-    InputAndOutput,  // both — default (safest, no skip)
+    Input,  // srca and/or srcb on entry (default — safest, no skip)
 };
 
 /// FPU broadcast dimension. Caller MUST pass explicitly — no inference.
@@ -423,10 +487,14 @@ enum class PackTilePolicy : uint8_t {
 
 /// PackTile output-tile-index mode (mirrors CbIndexMode).
 enum class PackTileIndexMode : uint8_t {
-    FirstTile,  // always output index 0
-    BlockIter,  // i (loop var). Requires UpfrontReservePushAtEnd / NoReserve* with caller-managed window.
-    Pinned,     // fixed runtime k.
-    Absolute,   // runtime idx.
+    FirstTile,        // always output index 0
+    BlockIter,        // i (loop var). Requires UpfrontReservePushAtEnd / NoReserve* with caller-managed window.
+    Pinned,           // fixed runtime k.
+    Absolute,         // runtime idx.
+    BlockIterOffset,  // runtime k + i (1D) or runtime k + i_flat (2D). Requires
+                      // NoReserveNoPush so caller owns the bulk reserve/push for the
+                      // output window. Use case: per-outer-iter pack to absolute
+                      // output slots `wt + wtr` matching pre-reserved Wt-wide window.
 };
 
 /// Pack-side dtype-reconfig.
@@ -478,8 +546,8 @@ struct UnaryOp : DestOnlyTag {
 
     /// Pipeline dispatch — forwards to `Derived::exec_impl(slot_offset)`. Override
     /// in derived to consume runtime payload (per-instance fields). `slot_offset`
-    /// is added by the chain to shift DEST writes into lane `j` when auto-block is
-    /// on; AutoBlock::Off passes 0 (today's shape).
+    /// is added by the chain to shift DEST writes into lane `j` when `BlockSize > 1`;
+    /// `BlockSize == 1` passes 0 (per-tile shape).
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { Derived::exec_impl(slot_offset); }
 };
 
@@ -597,16 +665,15 @@ template <
     Dst DstSlot = Dst::D0,
     CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
     CbIndexMode IndexMode = CbIndexMode::FirstTile,
-    CopyTileReconfig Reconfig = CopyTileReconfig::None>
+    CopyTileReconfig Reconfig = CopyTileReconfig::Input>
 struct CopyTile;
 
 template <
     uint32_t CbA,
     uint32_t CbB,
-    uint32_t CbOut = 0,
     BinaryFpuOp Op = BinaryFpuOp::Add,
     BroadcastDim Bcast = BroadcastDim::None,
-    BinaryDataFormatReconfig DfReconfig = BinaryDataFormatReconfig::InputAndOutput,
+    BinaryDataFormatReconfig DfReconfig = BinaryDataFormatReconfig::Input,
     CopyTilePolicy APolicy = CopyTilePolicy::WaitAndPop,
     CopyTilePolicy BPolicy = CopyTilePolicy::WaitAndPop,
     CbIndexMode AIndex = CbIndexMode::FirstTile,
@@ -620,7 +687,7 @@ template <
     DestReuseType ReuseType,
     Dst DstIn = Dst::D0,
     Dst DstOut = Dst::D0,
-    DestReuseReconfig Reconfig = DestReuseReconfig::None,
+    DestReuseReconfig Reconfig = DestReuseReconfig::Input,
     CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
     CbIndexMode IndexMode = CbIndexMode::FirstTile>
 struct DestReuseBinary;
@@ -631,7 +698,7 @@ template <
     uint32_t CbOut = 0,
     Dst DstSlot = Dst::D0,
     CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
-    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::None>
+    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::Input>
 struct UnaryBcast;
 
 template <
@@ -639,7 +706,7 @@ template <
     Dst DstSlot = Dst::D0,
     PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
     PackTileIndexMode IndexMode = PackTileIndexMode::FirstTile,
-    PackTileReconfig Reconfig = PackTileReconfig::None>
+    PackTileReconfig Reconfig = PackTileReconfig::Output>
 struct PackTile;
 
 template <
@@ -647,7 +714,7 @@ template <
     Dst FirstSlot,
     uint32_t NTiles,
     PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
-    PackTileReconfig Reconfig = PackTileReconfig::None>
+    PackTileReconfig Reconfig = PackTileReconfig::Output>
 struct PackTileBlock;
 
 // Fill / Rand forward declarations — implementations live in eltwise_fill.hpp / eltwise_rand.hpp.
@@ -735,7 +802,7 @@ inline constexpr bool chain_is_hoist_safe_v = chain_is_hoist_safe<Chain>::value;
 ///
 /// Block-mode auto-detection: if any element in `Es...` exposes `is_upfront == true`,
 /// the helper takes the upfront-block path (wait N upfront, loop, pop N at end).
-template <AutoBlock Block = AutoBlock::Off, class... Es>
+template <uint32_t BlockSize = 1, class... Es>
 ALWI void eltwise_chain(uint32_t n_tiles, Es... elts);
 
 /// Run the chain over `n_tiles` iterations, plus emit `compute_kernel_hw_startup`
@@ -752,8 +819,35 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts);
 /// kernels (different PACK output CB per stage) MUST keep explicit per-stage
 /// `compute_kernel_hw_startup` calls — `eltwise_chain_with_init` would emit it once
 /// with stage-1 CBs and stage 2's PACK would target the wrong CB.
-template <AutoBlock Block = AutoBlock::Off, class... Es>
+template <uint32_t BlockSize = 1, class... Es>
 ALWI void eltwise_chain_with_init(uint32_t n_tiles, Es... elts);
+
+/// 2D variant — runs the chain over an (Ht, Wt) tile grid.
+///
+/// Inner loop blocks W (BlockSize tiles per inner iter). Each CB-reader element
+/// uses its `CbIndexMode` to derive the per-iter CB tile index from `(ht, wt)`:
+///
+///   - `BlockIter`/`Absolute` → `ht * Wt + wt`     (window = Ht*Wt)
+///   - `RowBcast`            → `wt`                (window = Wt)
+///   - `ColBcast`            → `ht`                (window = Ht)
+///   - `FirstTile`/`Pinned`  → 0 / runtime k       (window = 1)
+///
+/// **Constraint**: `RowBcast`/`ColBcast` require non-streaming CB policy (Upfront,
+/// Cumulative, NoWait* / WaitNoPop / NoWaitPop) — caller stages broadcast operand
+/// tiles before the chain starts. Same rule `binary_op_helpers` enforces for ROW /
+/// SCALAR. The static_assert fires per-element at the chain call site.
+///
+/// **Equivalence with 1D**: `eltwise_chain(EltwiseShape::of(1, n), …)` is
+/// semantically equivalent to `eltwise_chain(n, …)` for chains that use only
+/// `FirstTile` / `BlockIter` / `Pinned` / `Absolute`. The 1D overload skips the
+/// outer `ht` loop so it avoids the `ht * Wt` multiplication in the per-tile path;
+/// prefer 1D when no broadcast axis is in play.
+template <uint32_t BlockSize = 1, class... Es>
+ALWI void eltwise_chain(EltwiseShape shape, Es... elts);
+
+/// 2D variant of the deduced wrapper. Same single-stage caveat as the 1D version.
+template <uint32_t BlockSize = 1, class... Es>
+ALWI void eltwise_chain_with_init(EltwiseShape shape, Es... elts);
 
 }  // namespace compute_kernel_lib
 

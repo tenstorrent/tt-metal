@@ -22,18 +22,26 @@ ALWI void binary_op(uint32_t n_tiles) {
     using BinElt = BinaryFpu<
         CbA,
         CbB,
-        CbOut,
         Op,
         BroadcastDim::None,
-        BinaryDataFormatReconfig::None,
+        BinaryDataFormatReconfig::Input,
         CopyTilePolicy::WaitAndPop,
         CopyTilePolicy::WaitAndPop,
         CbIndexMode::FirstTile,
         Dst::D0>;
     // D8: caller-side BIG init. The convenience wrapper boots the engine for the
     // (CbA, CbB, CbOut) triple it owns, then runs the chain (per-element-init only).
+    // Pack-side reconfig lives on PackTile (BinaryFpu no longer owns it).
     compute_kernel_hw_startup(CbA, CbB, CbOut);
-    eltwise_chain(n_tiles, BinElt{}, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    eltwise_chain(
+        n_tiles,
+        BinElt{},
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output>{});
 }
 
 template <uint32_t CbA, uint32_t CbB, uint32_t CbOut>

@@ -33,6 +33,72 @@ enum class Side : uint8_t { SrcA, SrcB, Pack };
 namespace detail {
 
 // =============================================================================
+// A0. 2D index-mode helpers (CbIndexMode → tile index / upfront window)
+//
+// Pure compile-time-elided helpers. `idx_2d` and `window_2d` are inlined by
+// every CB-reader element's `exec_2d` / `wait_upfront_2d`. RISC-V cost: zero
+// branches at run time — `if constexpr` collapses to a single arithmetic op.
+//
+//   Mode      | tile index            | window size
+//   ----------|-----------------------|-----------------
+//   FirstTile | 0                     | 1
+//   BlockIter | i_flat (= ht*Wt+wt)   | Ht * Wt
+//   RowBcast  | wt                    | Wt
+//   ColBcast  | ht                    | Ht
+//   Pinned    | runtime_k             | 1
+//   Absolute  | runtime_k             | Ht * Wt
+//
+// `is_bcast_mode_v<M>` is the predicate driving the (Policy × Mode) compatibility
+// static_asserts on every CB-reader element (Row/Col modes reject streaming
+// policies the same way `binary_op_helpers` rejects ROW/SCALAR + WaitAndPopPerTile).
+// =============================================================================
+
+template <CbIndexMode M>
+inline constexpr bool is_bcast_mode_v =
+    (M == CbIndexMode::RowBcast) || (M == CbIndexMode::ColBcast);
+
+template <CbIndexMode M>
+ALWI constexpr uint32_t idx_2d(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t runtime_k) noexcept {
+    if constexpr (M == CbIndexMode::FirstTile) { (void)i_flat; (void)ht; (void)wt; (void)runtime_k; return 0; }
+    else if constexpr (M == CbIndexMode::BlockIter) { (void)ht; (void)wt; (void)runtime_k; return i_flat; }
+    else if constexpr (M == CbIndexMode::RowBcast)  { (void)i_flat; (void)ht; (void)runtime_k; return wt; }
+    else if constexpr (M == CbIndexMode::ColBcast)  { (void)i_flat; (void)wt; (void)runtime_k; return ht; }
+    else if constexpr (M == CbIndexMode::BlockIterOffset) {
+        (void)ht; (void)wt; return runtime_k + i_flat;
+    }
+    else                                             { (void)i_flat; (void)ht; (void)wt; return runtime_k; }
+}
+
+template <CbIndexMode M>
+ALWI constexpr uint32_t window_2d(uint32_t Ht, uint32_t Wt) noexcept {
+    if constexpr (M == CbIndexMode::BlockIter || M == CbIndexMode::Absolute) return Ht * Wt;
+    else if constexpr (M == CbIndexMode::RowBcast) { (void)Ht; return Wt; }
+    else if constexpr (M == CbIndexMode::ColBcast) { (void)Wt; return Ht; }
+    // BlockIterOffset: chain doesn't wait/pop (caller-managed). window_2d is only
+    // consumed by wait_upfront_2d / pop_upfront_end_2d, which only fire for
+    // WaitUpfrontPopAtEnd / CumulativeWaitPopAtEnd — those are rejected by the
+    // valid_policy_mode_2d_v static_assert for this mode, so the returned value
+    // is dead-code in practice. Return 0 to make accidental misuse harmless.
+    else if constexpr (M == CbIndexMode::BlockIterOffset) { (void)Ht; (void)Wt; return 0u; }
+    else                                            { (void)Ht; (void)Wt; return 1u; }
+}
+
+// Allowed (Policy × Mode) combinations in 2D. RowBcast/ColBcast cannot stream
+// per-tile — the producer must stage the full row/col upfront. Matches the
+// `binary_op_helpers` static_assert (ROW/SCALAR require WaitUpfront* / NoWait*).
+//
+// BlockIterOffset also requires non-streaming: it pulls `runtime_k + i` which can
+// reference an arbitrary tile in the caller-staged window, so streaming wait/pop
+// would under-wait or pop the wrong slot. Caller-managed lifecycle (NoWaitNoPop)
+// is the canonical pairing.
+template <CopyTilePolicy P, CbIndexMode M>
+inline constexpr bool valid_policy_mode_2d_v =
+    !(is_bcast_mode_v<M> && (P == CopyTilePolicy::WaitAndPop)) &&
+    !(M == CbIndexMode::BlockIterOffset &&
+      (P == CopyTilePolicy::WaitAndPop || P == CopyTilePolicy::WaitNoPop ||
+       P == CopyTilePolicy::NoWaitPop));
+
+// =============================================================================
 // A. Chain typed-list machinery
 // =============================================================================
 
@@ -177,14 +243,21 @@ struct CopyTile : CopyTileTag {
                   "CopyTile: BlockIter index requires Upfront / Cumulative / NoWaitNoPop policy");
     static_assert(!(Policy == CopyTilePolicy::NoWaitPop   && IndexMode == CbIndexMode::Absolute),
                   "CopyTile: Absolute index requires Upfront / Cumulative / NoWaitNoPop policy");
+    // 2D: RowBcast / ColBcast require non-streaming policy (matches binary_op_helpers ROW/SCALAR rule).
+    static_assert(detail::valid_policy_mode_2d_v<Policy, IndexMode>,
+                  "CopyTile: RowBcast / ColBcast index require non-streaming policy "
+                  "(WaitUpfrontPopAtEnd, WaitNoPop, NoWaitPop, NoWaitNoPop, CumulativeWaitPopAtEnd)");
 
     static constexpr uint32_t       cb              = Cb;
     static constexpr uint32_t       cb_a_id()       { return Cb; }
     static constexpr uint32_t       cb_b_id()       { return 0;  }
+    static constexpr CbIndexMode    a_index_mode    = IndexMode;
+    static constexpr CbIndexMode    b_index_mode    = CbIndexMode::FirstTile;
     static constexpr Dst            dst_slot        = DstSlot;
     static constexpr CopyTilePolicy a_policy()      { return Policy; }
     static constexpr CopyTilePolicy b_policy()      { return CopyTilePolicy::NoWaitNoPop; }
     static constexpr bool           is_upfront      = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
+                                                      (Policy == CopyTilePolicy::WaitUpfrontNoPop) ||
                                                       (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd);
     static constexpr bool           clashes_with_fpu= true;   // copy_tile uses unpacker MOP
 
@@ -212,16 +285,18 @@ struct CopyTile : CopyTileTag {
     /// per iter, Cumulative grows wait count with i (i+1), Upfront fires once via
     /// wait_upfront with full n_tiles. None scale by chain block_size — block_size
     /// only drives the inner DEST-lane loop and slot_offset.
-    ALWI void wait_per_tile(uint32_t i) const {
+    ALWI void wait_per_tile(uint32_t cumulative_count) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(Cb, 1);
-        } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
-            cb_wait_front(Cb, i + 1);
+        } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd ||
+                             Policy == CopyTilePolicy::CumulativeWaitNoPop) {
+            cb_wait_front(Cb, cumulative_count);
         }
     }
 
     ALWI void wait_upfront(uint32_t n) const {
-        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) {
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::WaitUpfrontNoPop) {
             cb_wait_front(Cb, n);
         }
     }
@@ -230,9 +305,32 @@ struct CopyTile : CopyTileTag {
         const uint32_t in_idx = [&]() -> uint32_t {
             if constexpr (IndexMode == CbIndexMode::FirstTile) return 0;
             else if constexpr (IndexMode == CbIndexMode::BlockIter) return i;
+            else if constexpr (IndexMode == CbIndexMode::BlockIterOffset) return cb_tile_idx_ + i;
             else return cb_tile_idx_;  // Pinned / Absolute
         }();
         copy_tile(Cb, in_idx, to_u32(DstSlot) + slot_offset);
+    }
+
+    // 2D variants — Ht/Wt-aware. Identical to 1D for FirstTile/BlockIter/Pinned/Absolute
+    // (just routes through `idx_2d` and `window_2d`), and adds RowBcast/ColBcast support.
+    // Streaming policies handled by the same `wait_per_tile` / `pop_per_tile` as 1D.
+    ALWI void wait_upfront_2d(uint32_t Ht, uint32_t Wt) const {
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::WaitUpfrontNoPop) {
+            cb_wait_front(Cb, detail::window_2d<IndexMode>(Ht, Wt));
+        }
+    }
+
+    ALWI void exec_2d(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
+        const uint32_t in_idx = detail::idx_2d<IndexMode>(i_flat, ht, wt, cb_tile_idx_);
+        copy_tile(Cb, in_idx, to_u32(DstSlot) + slot_offset);
+    }
+
+    ALWI void pop_upfront_end_2d(uint32_t Ht, uint32_t Wt) const {
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+            cb_pop_front(Cb, detail::window_2d<IndexMode>(Ht, Wt));
+        }
     }
 
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
@@ -276,6 +374,14 @@ struct PackTile : PackTileTag {
                   "PackTile: BlockIter index requires UpfrontReservePushAtEnd or NoReserve* policy");
     static_assert(!(Policy == PackTilePolicy::NoReservePushAtEnd    && IndexMode == PackTileIndexMode::BlockIter),
                   "PackTile: BlockIter requires Upfront* / NoReserveNoPush");
+    // BlockIterOffset packs to absolute slots `output_tile_idx_ + i`. Reserve+push
+    // bookkeeping for a strided window can only be expressed by the caller; the
+    // chain's per-tile / upfront reserve+push policies would push the wrong count.
+    // Restrict to NoReserveNoPush — caller owns the whole lifecycle.
+    static_assert(!(IndexMode == PackTileIndexMode::BlockIterOffset &&
+                    Policy != PackTilePolicy::NoReserveNoPush),
+                  "PackTile: BlockIterOffset index requires NoReserveNoPush policy "
+                  "(caller owns cb_reserve_back / cb_push_back).");
 
     static constexpr uint32_t          cb                  = Cb;
     static constexpr uint32_t          pack_cb_id()        { return Cb; }
@@ -318,9 +424,36 @@ struct PackTile : PackTileTag {
         const uint32_t out_idx = [&]() -> uint32_t {
             if constexpr (IndexMode == PackTileIndexMode::FirstTile) return 0;
             else if constexpr (IndexMode == PackTileIndexMode::BlockIter) return i;
+            else if constexpr (IndexMode == PackTileIndexMode::BlockIterOffset) return output_tile_idx_ + i;
             else return output_tile_idx_;  // Pinned / Absolute
         }();
         pack_tile(to_u32(DstSlot) + slot_offset, Cb, out_idx);
+    }
+
+    // 2D pack exec — output is always block-walked (ht*Wt + wt). `i_flat` is the
+    // flat tile index in the (Ht, Wt) walk. FirstTile/Pinned/Absolute behave identically
+    // to 1D. No RowBcast/ColBcast for pack — output covers the full block.
+    ALWI void exec_2d(uint32_t i_flat, uint32_t /*ht*/, uint32_t /*wt*/, uint32_t slot_offset) const {
+        const uint32_t out_idx = [&]() -> uint32_t {
+            if constexpr (IndexMode == PackTileIndexMode::FirstTile) return 0;
+            else if constexpr (IndexMode == PackTileIndexMode::BlockIter) return i_flat;
+            else if constexpr (IndexMode == PackTileIndexMode::BlockIterOffset) return output_tile_idx_ + i_flat;
+            else return output_tile_idx_;
+        }();
+        pack_tile(to_u32(DstSlot) + slot_offset, Cb, out_idx);
+    }
+
+    // 2D upfront reserve/push — full block window (Ht * Wt tiles).
+    ALWI void reserve_upfront_2d(uint32_t Ht, uint32_t Wt) const {
+        if constexpr (Policy == PackTilePolicy::UpfrontReservePushAtEnd) {
+            cb_reserve_back(Cb, Ht * Wt);
+        }
+    }
+    ALWI void push_at_end_2d(uint32_t Ht, uint32_t Wt) const {
+        if constexpr (Policy == PackTilePolicy::NoReservePushAtEnd ||
+                      Policy == PackTilePolicy::UpfrontReservePushAtEnd) {
+            cb_push_back(Cb, Ht * Wt);
+        }
     }
 
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
@@ -388,6 +521,20 @@ struct PackTileBlock : PackTileTag {
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
         pack_tile_block(to_u32(FirstSlot) + slot_offset, Cb, NTiles);
     }
+    ALWI void exec_2d(uint32_t /*i_flat*/, uint32_t /*ht*/, uint32_t /*wt*/, uint32_t slot_offset) const {
+        pack_tile_block(to_u32(FirstSlot) + slot_offset, Cb, NTiles);
+    }
+    ALWI void reserve_upfront_2d(uint32_t Ht, uint32_t Wt) const {
+        if constexpr (Policy == PackTilePolicy::UpfrontReservePushAtEnd) {
+            cb_reserve_back(Cb, Ht * Wt * NTiles);
+        }
+    }
+    ALWI void push_at_end_2d(uint32_t Ht, uint32_t Wt) const {
+        if constexpr (Policy == PackTilePolicy::NoReservePushAtEnd ||
+                      Policy == PackTilePolicy::UpfrontReservePushAtEnd) {
+            cb_push_back(Cb, Ht * Wt * NTiles);
+        }
+    }
 
     static constexpr uint32_t lane_width = to_u32(FirstSlot) + NTiles;
     ALWI void push_per_tile(uint32_t /*i*/, uint32_t /*block_size*/) const {
@@ -409,7 +556,6 @@ struct PackTileBlock : PackTileTag {
 
 template <uint32_t CbA,
           uint32_t CbB,
-          uint32_t CbOut,
           BinaryFpuOp Op,
           BroadcastDim Bcast,
           BinaryDataFormatReconfig DfReconfig,
@@ -432,32 +578,36 @@ struct BinaryFpu : BinaryFpuTag {
     static_assert((CbA != CbB) || AIndex == BIndex,
                   "BinaryFpu: when CbA == CbB, AIndex and BIndex must match "
                   "(B-side wait/pop is deduped — asymmetric indices would under-wait).");
+    // 2D: RowBcast / ColBcast on either side require non-streaming policy.
+    static_assert(detail::valid_policy_mode_2d_v<APolicy, AIndex>,
+                  "BinaryFpu: A-side RowBcast / ColBcast index require non-streaming APolicy");
+    static_assert(detail::valid_policy_mode_2d_v<BPolicy, BIndex>,
+                  "BinaryFpu: B-side RowBcast / ColBcast index require non-streaming BPolicy");
 
     static constexpr uint32_t      cb_a_id()  { return CbA; }
     static constexpr uint32_t      cb_b_id()  { return CbB; }
+    static constexpr CbIndexMode   a_index_mode = AIndex;
+    static constexpr CbIndexMode   b_index_mode = BIndex;
     static constexpr CopyTilePolicy a_policy(){ return APolicy; }
     static constexpr CopyTilePolicy b_policy(){ return BPolicy; }
     static constexpr Dst           dst_slot   = DstSlot;
     static constexpr bool          is_upfront = (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
+                                                (APolicy == CopyTilePolicy::WaitUpfrontNoPop) ||
                                                 (APolicy == CopyTilePolicy::CumulativeWaitPopAtEnd) ||
                                                 (BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
+                                                (BPolicy == CopyTilePolicy::WaitUpfrontNoPop) ||
                                                 (BPolicy == CopyTilePolicy::CumulativeWaitPopAtEnd);
     static constexpr bool          clashes_with_fpu = true;
     static constexpr bool          same_cb    = (CbA == CbB);
 
-    // Prev-CB fold (D2): BinaryFpu touches both srca (CbA), srcb (CbB), and pack (CbOut)
-    // when the corresponding reconfig is opted in. F-PERF-3 strips the per-element pack
-    // reconfig from init(); the chain's compile-time-elided fold drives both input-side
-    // and output-side reconfig before this element runs.
+    // Prev-CB fold (D2): BinaryFpu touches srca (CbA) and srcb (CbB) only. Pack-side
+    // reconfig is owned by the downstream PackTile element (`PackTileReconfig::Output`)
+    // — BinaryFpu writes to DEST, not to a CB, so it has no pack-side responsibility.
     static constexpr uint32_t      reconfig_srca_cb =
-        (DfReconfig == BinaryDataFormatReconfig::Input || DfReconfig == BinaryDataFormatReconfig::InputAndOutput)
-            ? CbA : NO_PREV_CB;
+        (DfReconfig == BinaryDataFormatReconfig::Input) ? CbA : NO_PREV_CB;
     static constexpr uint32_t      reconfig_srcb_cb =
-        (DfReconfig == BinaryDataFormatReconfig::Input || DfReconfig == BinaryDataFormatReconfig::InputAndOutput)
-            ? CbB : NO_PREV_CB;
-    static constexpr uint32_t      reconfig_pack_cb =
-        ((DfReconfig == BinaryDataFormatReconfig::Output || DfReconfig == BinaryDataFormatReconfig::InputAndOutput)
-         && CbOut != 0) ? CbOut : NO_PREV_CB;
+        (DfReconfig == BinaryDataFormatReconfig::Input) ? CbB : NO_PREV_CB;
+    static constexpr uint32_t      reconfig_pack_cb = NO_PREV_CB;
 
     constexpr BinaryFpu() noexcept = default;
     constexpr BinaryFpu(uint32_t a_tile_idx, uint32_t b_tile_idx) noexcept
@@ -495,40 +645,66 @@ struct BinaryFpu : BinaryFpuTag {
 
     // ---- CB lifecycle (per-tile) ----
     // Streaming policies (WaitAndPop / WaitNoPop) always wait 1 — they are incompatible
-    // with BlockSize > 1 per-iter consumption. Cumulative scales `(i+1) * block_size`.
-    ALWI void wait_per_tile(uint32_t i) const {
+    // with BlockSize > 1 per-iter consumption. Cumulative scales `(i+1) * block_size`
+    // — caller passes `cumulative_count = (i_outer + 1) * block_size`.
+    ALWI void wait_per_tile(uint32_t cumulative_count) const {
         if constexpr (APolicy == CopyTilePolicy::WaitAndPop || APolicy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(CbA, 1);
-        } else if constexpr (APolicy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
-            cb_wait_front(CbA, i + 1);
+        } else if constexpr (APolicy == CopyTilePolicy::CumulativeWaitPopAtEnd ||
+                             APolicy == CopyTilePolicy::CumulativeWaitNoPop) {
+            cb_wait_front(CbA, cumulative_count);
         }
         if constexpr (!same_cb) {
             if constexpr (BPolicy == CopyTilePolicy::WaitAndPop || BPolicy == CopyTilePolicy::WaitNoPop) {
                 cb_wait_front(CbB, 1);
-            } else if constexpr (BPolicy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
-                cb_wait_front(CbB, i + 1);
+            } else if constexpr (BPolicy == CopyTilePolicy::CumulativeWaitPopAtEnd ||
+                                 BPolicy == CopyTilePolicy::CumulativeWaitNoPop) {
+                cb_wait_front(CbB, cumulative_count);
             }
         }
     }
 
     ALWI void wait_upfront(uint32_t n) const {
-        if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_wait_front(CbA, n);
-        if constexpr (!same_cb && BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_wait_front(CbB, n);
+        if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      APolicy == CopyTilePolicy::WaitUpfrontNoPop) {
+            cb_wait_front(CbA, n);
+        }
+        if constexpr (!same_cb && (BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                                   BPolicy == CopyTilePolicy::WaitUpfrontNoPop)) {
+            cb_wait_front(CbB, n);
+        }
+    }
+
+    // 2D: per-side upfront wait — A uses AIndex's window, B uses BIndex's window.
+    // Same `same_cb` dedup as 1D (skip B side when CbA == CbB).
+    ALWI void wait_upfront_2d(uint32_t Ht, uint32_t Wt) const {
+        if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      APolicy == CopyTilePolicy::WaitUpfrontNoPop) {
+            cb_wait_front(CbA, detail::window_2d<AIndex>(Ht, Wt));
+        }
+        if constexpr (!same_cb && (BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                                   BPolicy == CopyTilePolicy::WaitUpfrontNoPop)) {
+            cb_wait_front(CbB, detail::window_2d<BIndex>(Ht, Wt));
+        }
     }
 
     ALWI void exec(uint32_t i, uint32_t slot_offset) const {
         // Per-side index mode. AIndex drives a_idx, BIndex drives b_idx. The
         // canonical bcast walk is A=BlockIter (walks the tile range) + B=FirstTile
-        // (pins the scaler/vector operand at tile 0).
+        // (pins the scaler/vector operand at tile 0). BlockIterOffset adds a
+        // runtime base from the ctor (a_tile_idx_ / b_tile_idx_) to the per-iter
+        // index — used by per-outer-iter chains that pass `wt` as base.
         const uint32_t a_idx = [&]() -> uint32_t {
-            if constexpr      (AIndex == CbIndexMode::FirstTile)  return 0;
-            else if constexpr (AIndex == CbIndexMode::BlockIter)  return i;
-            else                                                  return a_tile_idx_;  // Pinned / Absolute
+            if constexpr      (AIndex == CbIndexMode::FirstTile)        return 0;
+            else if constexpr (AIndex == CbIndexMode::BlockIter)        return i;
+            else if constexpr (AIndex == CbIndexMode::BlockIterOffset)  return a_tile_idx_ + i;
+            else                                                        return a_tile_idx_;  // Pinned / Absolute
         }();
         const uint32_t b_idx = [&]() -> uint32_t {
-            if constexpr      (BIndex == CbIndexMode::FirstTile)  return 0;
-            else if constexpr (BIndex == CbIndexMode::BlockIter)  return i;
-            else                                                  return b_tile_idx_;  // Pinned / Absolute
+            if constexpr      (BIndex == CbIndexMode::FirstTile)        return 0;
+            else if constexpr (BIndex == CbIndexMode::BlockIter)        return i;
+            else if constexpr (BIndex == CbIndexMode::BlockIterOffset)  return b_tile_idx_ + i;
+            else                                                        return b_tile_idx_;  // Pinned / Absolute
         }();
         const uint32_t dst = to_u32(DstSlot) + slot_offset;
         if constexpr (Bcast == BroadcastDim::None) {
@@ -567,6 +743,34 @@ struct BinaryFpu : BinaryFpuTag {
         }
     }
 
+    // 2D variants — per-side index + window.
+    ALWI void exec_2d(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
+        const uint32_t a_idx = detail::idx_2d<AIndex>(i_flat, ht, wt, a_tile_idx_);
+        const uint32_t b_idx = detail::idx_2d<BIndex>(i_flat, ht, wt, b_tile_idx_);
+        const uint32_t dst   = to_u32(DstSlot) + slot_offset;
+        if constexpr (Bcast == BroadcastDim::None) {
+            if constexpr      (Op == BinaryFpuOp::Add) add_tiles(CbA, CbB, a_idx, b_idx, dst);
+            else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles(CbA, CbB, a_idx, b_idx, dst);
+            else                                       mul_tiles(CbA, CbB, a_idx, b_idx, dst);
+        } else {
+            constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Bcast));
+            if constexpr      (Op == BinaryFpuOp::Add) add_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
+            else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
+            else                                       mul_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
+        }
+    }
+
+    ALWI void pop_upfront_end_2d(uint32_t Ht, uint32_t Wt) const {
+        if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      APolicy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+            cb_pop_front(CbA, detail::window_2d<AIndex>(Ht, Wt));
+        }
+        if constexpr (!same_cb && (BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                                   BPolicy == CopyTilePolicy::CumulativeWaitPopAtEnd)) {
+            cb_pop_front(CbB, detail::window_2d<BIndex>(Ht, Wt));
+        }
+    }
+
 private:
     /// Pipeline-driven runtime indices for Pinned / Absolute modes — ctor-only.
     uint32_t a_tile_idx_ = 0;
@@ -590,13 +794,18 @@ struct DestReuseBinary : DestReuseBinaryTag {
                   "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(!(Policy == CopyTilePolicy::WaitAndPop && IndexMode == CbIndexMode::BlockIter),
                   "DestReuseBinary: BlockIter index requires Upfront / Cumulative / NoWaitNoPop policy");
+    static_assert(detail::valid_policy_mode_2d_v<Policy, IndexMode>,
+                  "DestReuseBinary: RowBcast / ColBcast index require non-streaming policy");
 
     static constexpr uint32_t       cb_a_id()         { return Cb; }
     static constexpr uint32_t       cb_b_id()         { return 0;  }
+    static constexpr CbIndexMode    a_index_mode     = IndexMode;
+    static constexpr CbIndexMode    b_index_mode     = CbIndexMode::FirstTile;
     static constexpr CopyTilePolicy a_policy()        { return Policy; }
     static constexpr CopyTilePolicy b_policy()        { return CopyTilePolicy::NoWaitNoPop; }
     static constexpr Dst            dst_slot          = DstOut;
     static constexpr bool           is_upfront        = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
+                                                        (Policy == CopyTilePolicy::WaitUpfrontNoPop) ||
                                                         (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd);
     static constexpr bool           clashes_with_fpu  = true;
 
@@ -623,15 +832,19 @@ struct DestReuseBinary : DestReuseBinaryTag {
         binary_dest_reuse_tiles_init<et, reuse>(Cb);
     }
 
-    ALWI void wait_per_tile(uint32_t i) const {
+    ALWI void wait_per_tile(uint32_t cumulative_count) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(Cb, 1);
-        } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
-            cb_wait_front(Cb, i + 1);
+        } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd ||
+                             Policy == CopyTilePolicy::CumulativeWaitNoPop) {
+            cb_wait_front(Cb, cumulative_count);
         }
     }
     ALWI void wait_upfront(uint32_t n) const {
-        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_wait_front(Cb, n);
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::WaitUpfrontNoPop) {
+            cb_wait_front(Cb, n);
+        }
     }
     ALWI void exec(uint32_t i, uint32_t slot_offset) const {
         constexpr auto et = (Op == BinaryFpuOp::Add) ? ckernel::EltwiseBinaryType::ELWADD :
@@ -643,9 +856,34 @@ struct DestReuseBinary : DestReuseBinaryTag {
         const uint32_t in_idx = [&]() -> uint32_t {
             if constexpr (IndexMode == CbIndexMode::FirstTile) return 0;
             else if constexpr (IndexMode == CbIndexMode::BlockIter) return i;
+            else if constexpr (IndexMode == CbIndexMode::BlockIterOffset) return cb_tile_idx_ + i;
             else return cb_tile_idx_;
         }();
         binary_dest_reuse_tiles<et, reuse>(Cb, in_idx, to_u32(DstIn) + slot_offset);
+    }
+
+    // 2D variants
+    ALWI void wait_upfront_2d(uint32_t Ht, uint32_t Wt) const {
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::WaitUpfrontNoPop) {
+            cb_wait_front(Cb, detail::window_2d<IndexMode>(Ht, Wt));
+        }
+    }
+    ALWI void exec_2d(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
+        constexpr auto et = (Op == BinaryFpuOp::Add) ? ckernel::EltwiseBinaryType::ELWADD :
+                            (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB :
+                                                       ckernel::EltwiseBinaryType::ELWMUL;
+        constexpr auto reuse = (ReuseType == DestReuseType::DEST_TO_SRCA)
+                                   ? ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA
+                                   : ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB;
+        const uint32_t in_idx = detail::idx_2d<IndexMode>(i_flat, ht, wt, cb_tile_idx_);
+        binary_dest_reuse_tiles<et, reuse>(Cb, in_idx, to_u32(DstIn) + slot_offset);
+    }
+    ALWI void pop_upfront_end_2d(uint32_t Ht, uint32_t Wt) const {
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+            cb_pop_front(Cb, detail::window_2d<IndexMode>(Ht, Wt));
+        }
     }
 
     static constexpr uint32_t lane_width =
@@ -687,6 +925,7 @@ struct UnaryBcast : UnaryBcastTag {
     static constexpr CopyTilePolicy b_policy()        { return CopyTilePolicy::NoWaitNoPop; }
     static constexpr Dst            dst_slot          = DstSlot;
     static constexpr bool           is_upfront        = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
+                                                        (Policy == CopyTilePolicy::WaitUpfrontNoPop) ||
                                                         (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd);
     static constexpr bool           clashes_with_fpu  = true;
 
@@ -705,19 +944,42 @@ struct UnaryBcast : UnaryBcastTag {
         unary_bcast_init<bt>(Cb, ocb);
     }
 
-    ALWI void wait_per_tile(uint32_t i) const {
+    ALWI void wait_per_tile(uint32_t cumulative_count) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(Cb, 1);
-        } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
-            cb_wait_front(Cb, i + 1);
+        } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd ||
+                             Policy == CopyTilePolicy::CumulativeWaitNoPop) {
+            cb_wait_front(Cb, cumulative_count);
         }
     }
     ALWI void wait_upfront(uint32_t n) const {
-        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_wait_front(Cb, n);
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::WaitUpfrontNoPop) {
+            cb_wait_front(Cb, n);
+        }
     }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
         constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
         unary_bcast<bt>(Cb, /*in_tile_index=*/0, to_u32(DstSlot) + slot_offset);
+    }
+
+    // 2D variants — UnaryBcast always reads tile 0 (intra-tile bcast LLK), no per-iter
+    // tile index. Upfront window in 2D = Ht * Wt (every (ht, wt) iter consumes one tile).
+    ALWI void wait_upfront_2d(uint32_t Ht, uint32_t Wt) const {
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::WaitUpfrontNoPop) {
+            cb_wait_front(Cb, Ht * Wt);
+        }
+    }
+    ALWI void exec_2d(uint32_t /*i_flat*/, uint32_t /*ht*/, uint32_t /*wt*/, uint32_t slot_offset) const {
+        constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
+        unary_bcast<bt>(Cb, /*in_tile_index=*/0, to_u32(DstSlot) + slot_offset);
+    }
+    ALWI void pop_upfront_end_2d(uint32_t Ht, uint32_t Wt) const {
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+            cb_pop_front(Cb, Ht * Wt);
+        }
     }
 
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
@@ -811,9 +1073,10 @@ template <class... Es>
 struct chain_loads_share_cb<EltwiseChain<Es...>>
     : std::bool_constant<detail::copy_tiles_share_cb_v<Es...>> {};
 
-// chain_lane_width — N-element fold (item 2). Max of per-element `lane_width`. Drives
-// auto-block: chain BlockSize = DEST_AUTO_LIMIT / chain_lane_width when AutoBlock::On.
-// Each element writes to DEST[dst_slot + j * chain_lane_width] for lane j in [0, BlockSize).
+// chain_lane_width — N-element fold (item 2). Max of per-element `lane_width`. Bounds
+// the legal BlockSize at the chain call site via the static_assert
+// `BlockSize * chain_lane_width <= DEST_AUTO_LIMIT`. Each element writes to
+// DEST[dst_slot + j * chain_lane_width] for lane j in [0, BlockSize).
 //
 // SFINAE fallback: elements that don't expose a `lane_width` member (caller-defined
 // chain elements that inherit directly from `CopyTileTag` / `PackTileTag` / `DestOnlyTag`
@@ -857,11 +1120,13 @@ inline constexpr uint32_t chain_lane_width_v = chain_lane_width<Chain>::value;
 // policy that stages a multi-tile DEST window (Upfront / Cumulative / NoWaitNoPop).
 // Streaming policies (WaitAndPop / WaitNoPop / NoWaitPop) consume ONE tile per iter
 // and are incompatible with chain BlockSize > 1 (chain consumes BlockSize tiles per
-// outer iter). The chain `static_assert`s on this predicate when AutoBlock::On.
+// outer iter). The chain `static_assert`s on this predicate when `BlockSize > 1`.
 namespace detail {
 constexpr bool policy_supports_block(CopyTilePolicy p) {
     return p == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+           p == CopyTilePolicy::WaitUpfrontNoPop ||
            p == CopyTilePolicy::CumulativeWaitPopAtEnd ||
+           p == CopyTilePolicy::CumulativeWaitNoPop ||
            p == CopyTilePolicy::NoWaitNoPop;
 }
 
@@ -1034,11 +1299,29 @@ ALWI void emit_pre_element_transitions() {
 
 // Pack-phase init (Pack* only — F-PERF-4: hoisted to boot, not per-tile).
 // Note: post-commit-2 the pack reconfig is fold-driven via `emit_pre_element_transitions`,
-// so this is effectively a no-op for PackTile / PackTileBlock. Retained for symmetry
+// so the init body is effectively a no-op for PackTile / PackTileBlock. Retained for symmetry
 // in case a pack element gains per-op LLK programming in a future commit.
-template <class E>
+//
+// For FPU-clash chains (non-hoist-safe), `hoisted_init_for_each` is NOT called, so
+// pack-side `reconfig_data_format` from PackTile would never fire on the per-tile path
+// (apply_compute_phase + apply_pack_phase intentionally skip PackTile transitions —
+// init for cb-reader elements re-fires per tile to recover from FPU clash, and pack
+// reconfig has no business firing on every iteration). Emit the pack-side fold once
+// here at chain boot so `PackTileReconfig::Output` programs the pack engine before the
+// first iteration on FPU-clash chains as well.
+template <std::size_t I, class E, class... Es>
 ALWI void elem_pack_init() {
-    if constexpr (is_pack_tile_op_v<E>) E::init();
+    if constexpr (is_pack_tile_op_v<E>) {
+        emit_pre_element_transitions<E, I, Es...>();
+        E::init();
+    }
+}
+
+// Hoisted pack-init dispatcher — visits each chain element by compile-time index
+// and forwards (Is, Es, Es...) into the per-element pack init.
+template <class... Es, std::size_t... Is>
+ALWI void pack_init_for_each(std::index_sequence<Is...>) {
+    (elem_pack_init<Is, Es, Es...>(), ...);
 }
 
 // =============================================================================
@@ -1081,7 +1364,10 @@ ALWI void elem_apply_compute(
     if constexpr (is_pack_tile_op_v<ElemT>) {
         (void)elem; (void)i_outer; (void)base_tile; (void)inner_count; (void)chain_lane_width; (void)n_tiles;
     } else if constexpr (is_cb_reader_op_v<ElemT>) {
-        elem.wait_per_tile(i_outer);
+        // Cumulative wait scales with BlockSize: by end-of-iter we need (base_tile + inner_count)
+        // tiles in CB. At BlockSize=1 this equals i_outer+1 (legacy shape). At BlockSize>1
+        // this grows in block chunks so cumulative tracks producer streaming progress.
+        elem.wait_per_tile(base_tile + inner_count);
         elem.wait_upfront(n_tiles);
         if constexpr (EmitInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();
@@ -1196,7 +1482,7 @@ ALWI void hoisted_init_for_each(std::index_sequence<Is...>, Es&... elts) {
 //     immediately before that stage's chain call).
 // =============================================================================
 
-template <AutoBlock Block, class... Es>
+template <uint32_t BlockSize, class... Es>
 ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     using Chain = EltwiseChain<Es...>;
 
@@ -1210,28 +1496,30 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
 
     constexpr bool emit_init_per_tile = !chain_is_hoist_safe_v<Chain>;
 
-    // ---- Auto-block (item 2 of eltwise_helper_proposal.md) ----
+    // ---- Block size (item 2 of eltwise_helper_proposal.md) ----
     //
-    // AutoBlock::On  → BlockSize = DEST_AUTO_LIMIT / chain_lane_width.
-    //                  Each outer iter processes BlockSize tiles in BlockSize DEST lanes
-    //                  (lane j at slot dst_slot + j * chain_lane_width). Requires every
-    //                  CB-reader policy to stage a multi-tile window — see
-    //                  chain_supports_block_v.
-    // AutoBlock::Off → BlockSize = 1 (today's per-tile shape).
-    static_assert(Block == AutoBlock::Off || chain_supports_block_v<Chain>,
-                  "eltwise_chain<AutoBlock::On>: streaming CB-reader policy (WaitAndPop / "
+    // Caller picks BlockSize at compile time. Each outer iter processes BlockSize
+    // tiles in BlockSize DEST lanes (lane j at slot dst_slot + j * chain_lane_width).
+    // BlockSize == 1 reproduces the per-tile shape. BlockSize > 1 requires every
+    // CB-reader policy to stage a multi-tile window (see chain_supports_block_v).
+    static_assert(BlockSize >= 1, "eltwise_chain: BlockSize must be >= 1");
+    constexpr uint32_t chain_lane_w = chain_lane_width_v<Chain>;
+    static_assert(BlockSize * chain_lane_w <= DEST_AUTO_LIMIT,
+                  "eltwise_chain: BlockSize * chain_lane_width exceeds DEST_AUTO_LIMIT. "
+                  "Reduce BlockSize or shrink the chain's DEST footprint.");
+    static_assert(BlockSize == 1 || chain_supports_block_v<Chain>,
+                  "eltwise_chain<BlockSize>1>: streaming CB-reader policy (WaitAndPop / "
                   "WaitNoPop / NoWaitPop) consumes one tile per iter — incompatible with "
                   "BlockSize > 1. Switch the reader to WaitUpfrontPopAtEnd, "
-                  "CumulativeWaitPopAtEnd, or NoWaitNoPop, or call eltwise_chain<AutoBlock::Off>.");
-    constexpr uint32_t chain_lane_w = chain_lane_width_v<Chain>;
-    constexpr uint32_t auto_block_size = DEST_AUTO_LIMIT / chain_lane_w;
-    constexpr uint32_t block_size = (Block == AutoBlock::On) ? auto_block_size : 1u;
-    static_assert(block_size >= 1, "eltwise_chain: chain_lane_width exceeds DEST_AUTO_LIMIT");
+                  "CumulativeWaitPopAtEnd, or NoWaitNoPop, or call eltwise_chain<1>.");
+    constexpr uint32_t block_size = BlockSize;
 
     using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
 
     // ---- F-PERF-4: hoist pack init out of per-tile loop ----
-    (detail::elem_pack_init<Es>(), ...);
+    // Pack-side init also drives the pack-format reconfig fold for FPU-clash chains
+    // (where `hoisted_init_for_each` is skipped).
+    detail::pack_init_for_each<Es...>(IdxSeq{});
 
     if constexpr (!emit_init_per_tile) {
         detail::hoisted_init_for_each(IdxSeq{}, elts...);
@@ -1256,6 +1544,187 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     // End-of-chain upfront-policy lifecycle (policy-gated no-op for non-upfront elts).
     (detail::elem_pop_upfront_end(elts, n_tiles), ...);
     (detail::elem_push_at_end(elts, n_tiles), ...);
+}
+
+// =============================================================================
+// 11b. 2D eltwise_chain — (Ht, Wt) walk with per-element broadcast indexing
+//
+// Walks an (Ht, Wt) tile grid. Inner loop blocks W (BlockSize tiles per inner
+// iter). Per-element index mode picks the tile index for each CB-reader:
+// BlockIter → flat (ht*Wt + wt), RowBcast → wt, ColBcast → ht, FirstTile → 0.
+//
+// The 1D `eltwise_chain(n_tiles, ...)` overload is preserved verbatim above —
+// no `ht * Wt` multiplication in its hot path. Use 1D unless you need broadcast.
+// =============================================================================
+
+namespace detail {
+
+template <bool EmitInit, std::size_t I, class ElemT, class... Es>
+ALWI void elem_apply_compute_2d(
+    const ElemT& elem,
+    uint32_t i_flat,
+    uint32_t ht,
+    uint32_t wt,
+    uint32_t inner_count,
+    uint32_t chain_lane_width,
+    uint32_t Ht,
+    uint32_t Wt) {
+    if constexpr (is_pack_tile_op_v<ElemT>) {
+        (void)elem; (void)i_flat; (void)ht; (void)wt; (void)inner_count;
+        (void)chain_lane_width; (void)Ht; (void)Wt;
+    } else if constexpr (is_cb_reader_op_v<ElemT>) {
+        // Streaming wait fires per-tile (Block walks); upfront wait is idempotent.
+        elem.wait_per_tile(i_flat + inner_count);
+        elem.wait_upfront_2d(Ht, Wt);
+        if constexpr (EmitInit) {
+            emit_pre_element_transitions<ElemT, I, Es...>();
+            ElemT::init();
+        }
+        for (uint32_t j = 0; j < inner_count; ++j) {
+            elem.exec_2d(i_flat + j, ht, wt + j, j * chain_lane_width);
+        }
+        elem.pop_per_tile(i_flat);
+    } else if constexpr (is_dest_only_op_v<ElemT>) {
+        if constexpr (EmitInit) {
+            emit_pre_element_transitions<ElemT, I, Es...>();
+            ElemT::init();
+        }
+        for (uint32_t j = 0; j < inner_count; ++j) {
+            elem.exec(i_flat + j, j * chain_lane_width);
+        }
+    }
+}
+
+template <std::size_t I, class ElemT, class... Es>
+ALWI void elem_apply_pack_2d(
+    const ElemT& elem,
+    uint32_t i_flat,
+    uint32_t ht,
+    uint32_t wt,
+    uint32_t inner_count,
+    uint32_t chain_lane_width,
+    uint32_t Ht,
+    uint32_t Wt) {
+    if constexpr (is_pack_tile_op_v<ElemT>) {
+        elem.reserve_per_tile(i_flat);
+        elem.reserve_upfront_2d(Ht, Wt);
+        for (uint32_t j = 0; j < inner_count; ++j) {
+            elem.exec_2d(i_flat + j, ht, wt + j, j * chain_lane_width);
+        }
+        elem.push_per_tile(i_flat);
+    } else {
+        (void)elem; (void)i_flat; (void)ht; (void)wt; (void)inner_count;
+        (void)chain_lane_width; (void)Ht; (void)Wt;
+    }
+}
+
+template <bool EmitInit, std::size_t... Is, class... Es>
+ALWI void apply_compute_phase_2d(
+    std::index_sequence<Is...>,
+    uint32_t i_flat,
+    uint32_t ht,
+    uint32_t wt,
+    uint32_t inner_count,
+    uint32_t chain_lane_width,
+    uint32_t Ht,
+    uint32_t Wt,
+    Es&... elts) {
+    auto run_one = [&](auto idx_const, auto& elem) {
+        constexpr std::size_t II = decltype(idx_const)::value;
+        using ElemT = std::remove_reference_t<decltype(elem)>;
+        elem_apply_compute_2d<EmitInit, II, ElemT, Es...>(
+            elem, i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
+    };
+    (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
+}
+
+template <std::size_t... Is, class... Es>
+ALWI void apply_pack_phase_2d(
+    std::index_sequence<Is...>,
+    uint32_t i_flat,
+    uint32_t ht,
+    uint32_t wt,
+    uint32_t inner_count,
+    uint32_t chain_lane_width,
+    uint32_t Ht,
+    uint32_t Wt,
+    Es&... elts) {
+    auto run_one = [&](auto idx_const, auto& elem) {
+        constexpr std::size_t II = decltype(idx_const)::value;
+        using ElemT = std::remove_reference_t<decltype(elem)>;
+        elem_apply_pack_2d<II, ElemT, Es...>(
+            elem, i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
+    };
+    (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
+}
+
+template <class E>
+ALWI void elem_pop_upfront_end_2d(const E& e, uint32_t Ht, uint32_t Wt) {
+    if constexpr (is_cb_reader_op_v<E>) e.pop_upfront_end_2d(Ht, Wt);
+}
+template <class E>
+ALWI void elem_push_at_end_2d(const E& e, uint32_t Ht, uint32_t Wt) {
+    if constexpr (is_cb_writer_op_v<E>) e.push_at_end_2d(Ht, Wt);
+}
+
+}  // namespace detail
+
+template <uint32_t BlockSize, class... Es>
+ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
+    using Chain = EltwiseChain<Es...>;
+
+    // ---- Compile-time invariant checks (same as 1D) ----
+    static_assert(!chain_has_duplicate_upfront_cbs_v<Chain>,
+                  "eltwise_chain(2D): two CB-reader elements share a CB on upfront-wait policy.");
+    static_assert(!chain_pack_writes_collide_v<Chain>,
+                  "eltwise_chain(2D): two PackTile elements collide on (cb, dst_slot).");
+
+    constexpr bool emit_init_per_tile = !chain_is_hoist_safe_v<Chain>;
+
+    static_assert(BlockSize >= 1, "eltwise_chain(2D): BlockSize must be >= 1");
+    constexpr uint32_t chain_lane_w = chain_lane_width_v<Chain>;
+    static_assert(BlockSize * chain_lane_w <= DEST_AUTO_LIMIT,
+                  "eltwise_chain(2D): BlockSize * chain_lane_width exceeds DEST_AUTO_LIMIT.");
+    static_assert(BlockSize == 1 || chain_supports_block_v<Chain>,
+                  "eltwise_chain<2D, BlockSize>1>: streaming CB-reader policy incompatible.");
+    constexpr uint32_t block_size = BlockSize;
+
+    using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
+
+    // Pack init hoisted to boot.
+    detail::pack_init_for_each<Es...>(IdxSeq{});
+
+    if constexpr (!emit_init_per_tile) {
+        detail::hoisted_init_for_each(IdxSeq{}, elts...);
+    }
+
+    const uint32_t Ht = shape.Ht;
+    const uint32_t Wt = shape.Wt;
+
+    // Outer 2D loop. `flat_base = ht * Wt + wt_base` is computed once per (ht, wt_base)
+    // pair — single MUL on the inner-W path. Block-mode elements consume `flat_base + j`
+    // directly; bcast-mode elements read `ht` or `wt = wt_base + j` instead. No
+    // per-tile multiplication inside the element's exec_2d.
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
+        const uint32_t row_base = ht * Wt;
+        for (uint32_t wt_base = 0; wt_base < Wt; wt_base += block_size) {
+            const uint32_t inner_count =
+                (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
+            const uint32_t i_flat = row_base + wt_base;
+            tile_regs_acquire();
+            detail::apply_compute_phase_2d<emit_init_per_tile>(
+                IdxSeq{}, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt, elts...);
+            tile_regs_commit();
+            tile_regs_wait();
+            detail::apply_pack_phase_2d(
+                IdxSeq{}, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt, elts...);
+            tile_regs_release();
+        }
+    }
+
+    // End-of-chain upfront-policy lifecycle.
+    (detail::elem_pop_upfront_end_2d(elts, Ht, Wt), ...);
+    (detail::elem_push_at_end_2d(elts, Ht, Wt), ...);
 }
 
 // =============================================================================
@@ -1372,7 +1841,7 @@ constexpr uint32_t first_pack_cb() { return first_pack_cb_impl<Es...>(); }
 
 }  // namespace detail
 
-template <AutoBlock Block, class... Es>
+template <uint32_t BlockSize, class... Es>
 ALWI void eltwise_chain_with_init(uint32_t n_tiles, Es... elts) {
     static_assert(detail::has_any_pack_tile_v<Es...>,
                   "eltwise_chain_with_init: chain has no PackTile element. Multi-stage kernels "
@@ -1383,7 +1852,21 @@ ALWI void eltwise_chain_with_init(uint32_t n_tiles, Es... elts) {
     constexpr uint32_t cb_b   = detail::has_any_binary_v<Es...> ? detail::first_cb_b<Es...>() : cb_a;
 
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
-    eltwise_chain<Block>(n_tiles, elts...);
+    eltwise_chain<BlockSize>(n_tiles, elts...);
+}
+
+// 2D variant of the deduced wrapper.
+template <uint32_t BlockSize, class... Es>
+ALWI void eltwise_chain_with_init(EltwiseShape shape, Es... elts) {
+    static_assert(detail::has_any_pack_tile_v<Es...>,
+                  "eltwise_chain_with_init(2D): chain has no PackTile element.");
+
+    constexpr uint32_t cb_out = detail::first_pack_cb<Es...>();
+    constexpr uint32_t cb_a   = detail::has_any_cb_reader_v<Es...> ? detail::first_cb_a<Es...>() : cb_out;
+    constexpr uint32_t cb_b   = detail::has_any_binary_v<Es...> ? detail::first_cb_b<Es...>() : cb_a;
+
+    compute_kernel_hw_startup(cb_a, cb_b, cb_out);
+    eltwise_chain<BlockSize>(shape, elts...);
 }
 
 }  // namespace compute_kernel_lib
