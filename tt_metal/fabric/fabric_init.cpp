@@ -386,7 +386,7 @@ FabricCoresHealth configure_fabric_cores(
                 {
                     const auto& hal_eg = tt::tt_metal::MetalContext::instance().hal();
                     const auto aeth_idx_eg = hal_eg.get_programmable_core_type_index(
-                        HalProgrammableCoreType::ACTIVE_ETH);
+                        tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
                     const uint32_t fw_launch_addr_eg =
                         hal_eg.get_jit_build_config(aeth_idx_eg, 0, 0).fw_launch_addr;
                     cluster.write_core_immediate(
