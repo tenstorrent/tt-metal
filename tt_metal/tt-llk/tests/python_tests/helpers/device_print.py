@@ -287,7 +287,6 @@ class DevicePrintParser:
         for risc_id, p in elf_paths.items():
             self.elfs[risc_id] = ElfStrings(str(p))
         self._risc_names: dict[int, str] = _risc_names_tensix()
-        self._poll_rpos: int = 0
 
     def _walk_records(self, data_slice: bytes) -> list[str]:
         """Parse all complete records in data_slice,
@@ -355,52 +354,61 @@ class DevicePrintParser:
     def poll(self, location: str = "0,0") -> list[str]:
         """Incremental drain: read new data since last poll, advance device rpos.
         Return immediately if there is no new data.
+        See dprint_server.cpp:read_core_data.
         """
         out: list[str] = []
 
+        aux_raw = read_from_device(location, self.buffer_base, num_bytes=self.aux_size)
+        wpos, rpos = _decode_wpos_rpos(aux_raw)
+
+        # Nothing to do: producer has no new data.
+        if wpos == rpos:
+            return out
+
         for _ in range(self._MAX_STALL_RESETS_PER_POLL):
-            aux_raw = read_from_device(
-                location, self.buffer_base, num_bytes=self.aux_size
-            )
-            wpos_raw, _ = _decode_wpos_rpos(aux_raw)
+            stall = bool(wpos & DEVICE_PRINT_WRITE_STALL_FLAG)
+            wpos = _strip_stall(wpos)
+            if rpos == DEVICE_PRINT_RESET_BUFFER_MAGIC:
+                rpos = 0  # Start reading from the beginning
 
-            stall = bool(wpos_raw & DEVICE_PRINT_WRITE_STALL_FLAG)
-            wpos = _strip_stall(wpos_raw)
-
-            if self._poll_rpos > wpos:
+            if rpos > wpos:
                 # Kernel wrapped wpos back to 0; drain the tail then fall through to head.
-                tail_size = self.data_size - self._poll_rpos
+                tail_size = self.data_size - rpos
                 if tail_size > 0:
                     tail = bytes(
                         read_from_device(
                             location,
-                            self.buffer_base + self.aux_size + self._poll_rpos,
+                            self.buffer_base + self.aux_size + rpos,
                             num_bytes=tail_size,
                         )
                     )
                     out.extend(self._walk_records(tail))
-                self._poll_rpos = 0
+                rpos = 0
 
-            if self._poll_rpos < wpos:
+            if rpos < wpos:
                 chunk = bytes(
                     read_from_device(
                         location,
-                        self.buffer_base + self.aux_size + self._poll_rpos,
-                        num_bytes=wpos - self._poll_rpos,
+                        self.buffer_base + self.aux_size + rpos,
+                        num_bytes=wpos - rpos,
                     )
                 )
                 out.extend(self._walk_records(chunk))
-                self._poll_rpos = wpos
+                rpos = wpos
 
             if stall:
-                # Buffer full; stall kernel and continue from offset 0.
+                # Buffer full; signal kernel to reset and continue from offset 0,
+                # then re-read both wpos and rpos.
                 write_words_to_device(
                     location, self.buffer_base + 4, [DEVICE_PRINT_RESET_BUFFER_MAGIC]
                 )
-                self._poll_rpos = 0
-                continue  # Re-read wpos to catch data kernel wrote after reset
+                aux_raw = read_from_device(
+                    location, self.buffer_base, num_bytes=self.aux_size
+                )
+                wpos, rpos = _decode_wpos_rpos(aux_raw)
+                continue
 
-            write_words_to_device(location, self.buffer_base + 4, [self._poll_rpos])
+            write_words_to_device(location, self.buffer_base + 4, [rpos])
             return out
 
         raise RuntimeError(
@@ -409,10 +417,8 @@ class DevicePrintParser:
         )
 
     def final_drain(self, location: str = "0,0") -> list[str]:
-        """Last poll after kernel finishes. Resets poll state for the next run."""
-        out = self.poll(location)
-        self._poll_rpos = 0
-        return out
+        """Last poll after kernel finishes."""
+        return self.poll(location)
 
     def _render(self, fmt: str, args_blob: bytes, elf: ElfStrings) -> str:
         placeholders = list(PLACEHOLDER_RE.finditer(fmt))
