@@ -516,7 +516,7 @@ static bool allclose(const Tensor& tensor_a, const Tensor& tensor_b, Args... arg
     ttsl::Span<const DataType> tensor_a_buffer = tt::tt_metal::host_buffer::get_as<DataType>(tensor_a);
     ttsl::Span<const DataType> tensor_b_buffer = tt::tt_metal::host_buffer::get_as<DataType>(tensor_b);
 
-    for (int index = 0; index < tensor_a_buffer.size(); index++) {
+    for (size_t index = 0; index < tensor_a_buffer.size(); index++) {
         using ::ttnn::detail::nearly_equal;
         if (not nearly_equal(tensor_a_buffer[index], tensor_b_buffer[index], args...)) {
             return false;
