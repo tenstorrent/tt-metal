@@ -74,7 +74,7 @@ std::vector<T> move_act_dram_to_l1_tilized(
     std::vector<T> l1_tilized_act;
     TT_FATAL(dram_read_size_bytes % sizeof(T) == 0, "dram_read_size_bytes must be divisible by sizeof(T)");
     uint32_t dram_read_size = dram_read_size_bytes / sizeof(T);
-    for (int i = 0; i < address_map.size(); i++) {
+    for (size_t i = 0; i < address_map.size(); i++) {
         TT_FATAL(address_map[i] % sizeof(T) == 0, "address_map[{}] must be divisible by sizeof(T)", i);
         std::uint32_t dram_address = address_map[i] / sizeof(T);
         for (uint32_t j = 0; j < dram_read_size; j++) {

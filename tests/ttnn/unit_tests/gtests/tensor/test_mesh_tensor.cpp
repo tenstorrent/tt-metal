@@ -494,7 +494,7 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
 
     std::vector<Tensor> output_host_shards = get_device_tensors(output_host_tensor);
     ASSERT_EQ(output_host_shards.size(), input_host_shards.size());
-    for (int i = 0; i < output_host_shards.size(); i++) {
+    for (size_t i = 0; i < output_host_shards.size(); i++) {
         EXPECT_THAT(
             output_host_shards[i].to_vector<float>(), Pointwise(FloatEq(), input_host_shards[i].to_vector<float>()));
     }

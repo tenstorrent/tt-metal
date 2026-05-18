@@ -56,7 +56,7 @@ TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
     std::vector<ttnn::Tensor> tensors;
     TensorSpec tensor_spec(
         ttnn::Shape({1, 8, 1024, 768}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
-    for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+    for (size_t dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
         tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
     }
@@ -74,9 +74,9 @@ TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
     mesh_device_->quiesce_devices();
 
     auto disaggregated_output_tensors = tt::tt_metal::experimental::unit_mesh::disaggregate(all_gathered_tensor);
-    for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+    for (size_t dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = disaggregated_output_tensors[dev_idx].to_vector<bfloat16>();
-        for (int i = 0; i < data.size(); i++) {
+        for (size_t i = 0; i < data.size(); i++) {
             // NOLINTNEXTLINE(bugprone-integer-division)
             auto expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
             EXPECT_EQ(static_cast<float>(data[i]), expected);
@@ -92,7 +92,7 @@ TEST_F(MeshDevice1x4Fixture, AllGatherPersistentOutput) {
         ttnn::Shape({1, 8, 1024, 768}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
     TensorSpec output_tensor_spec(
         ttnn::Shape({4, 8, 1024, 768}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
-    for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+    for (size_t dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
         tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
         std::vector<bfloat16> output_data(output_tensor_spec.logical_shape().volume(), bfloat16(0));
@@ -117,9 +117,9 @@ TEST_F(MeshDevice1x4Fixture, AllGatherPersistentOutput) {
     // Quiesce parent mesh after all gather
     mesh_device_->quiesce_devices();
 
-    for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+    for (size_t dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = output_tensors[dev_idx].to_vector<bfloat16>();
-        for (int i = 0; i < data.size(); i++) {
+        for (size_t i = 0; i < data.size(); i++) {
             // NOLINTNEXTLINE(bugprone-integer-division)
             auto expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
             EXPECT_EQ(static_cast<float>(data[i]), expected);
@@ -158,7 +158,7 @@ TEST_F(MeshDevice1x4Fixture, ReduceScatter) {
     // Quiesce parent mesh after reduce scatter
     mesh_device_->quiesce_devices();
 
-    for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+    for (size_t dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = output_tensors[dev_idx].to_vector<bfloat16>();
         for (auto val : data) {
             float expected = static_cast<float>(mesh_devices.size());
@@ -189,7 +189,7 @@ TEST_F(MeshDevice1x4Fixture, AllReduce) {
     mesh_device_->quiesce_devices();
 
     auto disaggregated_output_tensors = tt::tt_metal::experimental::unit_mesh::disaggregate(all_reduced_tensor);
-    for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+    for (size_t dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = disaggregated_output_tensors[dev_idx].to_vector<bfloat16>();
         for (auto val : data) {
             float expected = static_cast<float>(mesh_devices.size());
