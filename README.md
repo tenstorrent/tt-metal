@@ -233,3 +233,13 @@ Some distributable forms of this project—such as manylinux-compliant wheels—
 - libevent (when built with multihost support)
 
 These libraries are bound by their own license terms.
+
+## Blackhole Galaxy
+
+Blackhole Galaxy is Tenstorrent next-generation AI accelerator chip architecture. Key features include:
+- Support for FP16, BF16, and FP8 data types
+- Advanced tensor processing capabilities
+- High-bandwidth memory interface
+- Scalable interconnect for multi-chip configurations
+
+For more details, see our [product documentation](https://www.tenstorrent.com/products/blackhole-galaxy).
