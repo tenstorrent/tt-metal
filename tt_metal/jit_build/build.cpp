@@ -129,8 +129,8 @@ void JitBuildEnv::init(
 
     // Flags
     string common_flags =
-        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval"
-        " -flto=auto -ffast-math -fno-exceptions ";
+        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval "
+        "-flto=auto -ffast-math -fno-exceptions ";
 
     if (rtoptions.get_jit_analytics_enabled()) {
         common_flags += "-fdump-rtl-all -fdump-tree-original ";
@@ -144,6 +144,7 @@ void JitBuildEnv::init(
     this->cflags_ +=
         "-MMD "
         "-fno-use-cxa-atexit "
+        "-ftt-no-dyninit "
         "-Wall -Werror "
         "-Wno-error=deprecated-declarations "
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
