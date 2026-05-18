@@ -89,6 +89,7 @@ private:
     uint32_t get_active_erisc_launch_flag_addr();
     bool erisc_app_still_running(tt::ChipId device_id, CoreCoord virtual_core);
     void erisc_send_exit_signal(tt::ChipId device_id, CoreCoord virtual_core, bool is_idle_eth);
+    bool wait_for_eth_fw_ready(tt::ChipId device_id, const CoreCoord& virtual_core, int timeout_ms = 10000);
 
     void assert_cores(tt::ChipId device_id);
     void teardown_simulator_ethernet_cores();

@@ -163,6 +163,13 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
         (uint64_t)&((eth_live_status_t*)MEM_SYSENG_ETH_LIVE_STATUS)->rx_link_up;
     fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::PORT_STATUS)] =
         (uint64_t)&((eth_status_t*)MEM_SYSENG_ETH_STATUS)->port_status;
+    fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::TRAIN_STATUS)] =
+        (uint64_t)&((eth_status_t*)MEM_SYSENG_ETH_STATUS)->train_status;
+    fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::SERDES_RESET_STATUS)] =
+        MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, serdes_results) +
+        offsetof(serdes_results_t, serdes_reset_status);
+    fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::PCS_STATUS_REG)] =
+        ETH_CORE_A_ETH_CTRL_A_PCS_STATUS_REG_ADDR;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes;
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names;

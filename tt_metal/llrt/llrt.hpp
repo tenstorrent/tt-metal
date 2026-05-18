@@ -83,7 +83,7 @@ void send_msg_to_eth_mailbox(
 // Return to base firmware and wait for a heartbeat from the active ethernet core, if supported
 // Default timeout time empirically chosen to be 10 seconds to avoid timeouts
 void return_to_base_firmware_and_wait_for_heartbeat(
-    ChipId device_id, const CoreCoord& virtual_core, int timeout_ms = 10000);
+    ChipId device_id, const CoreCoord& virtual_core, int timeout_ms = 20000);
 
 void set_metal_eth_fw_run_flag(ChipId device_id, const CoreCoord& virtual_core, bool enable);
 
