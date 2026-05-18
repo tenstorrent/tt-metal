@@ -71,7 +71,7 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     # Check if there is any tt-smi reset activity in this log at all
     has_reset = any(
         "tt-smi reset" in line.lower() or
-        ("reset.sh" in line.lower() and "tt_metal_infra" in line.lower())
+        ("tt_metal_infra" in line.lower() and ".sh" in line.lower())
         for line in lines
     )
 
@@ -83,8 +83,9 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     reset_start_idx = None
     for i, line in enumerate(lines):
         lower = line.lower()
-        if ("tt_metal_infra" in lower and "reset.sh" in lower) or \
-           "starting tt-smi reset" in lower:
+        if ("tt_metal_infra" in lower and ".sh" in lower) or \
+           "starting tt-smi reset" in lower or \
+           "tt-smi reset" in lower:
             reset_start_idx = i
             break
 
