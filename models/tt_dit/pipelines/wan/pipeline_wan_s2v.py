@@ -87,7 +87,7 @@ from ...models.transformers.wan2_2.transformer_wan_s2v import WanS2VTransformer3
 from ...models.vae.vae_wan2_1 import WanDecoder, WanEncoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...solvers import FlowUniPCMultistepScheduler, UniPCSolver
+from ...solvers import UniPCSolver
 from ...utils import cache, tensor
 from ...utils.conv3d import conv3d_blocking_hash, conv_pad_height, conv_pad_in_channels
 from ...utils.tensor import (
@@ -342,37 +342,23 @@ class WanPipelineS2V(WanPipeline):
         # ------------------------------------------------------------------
         # 7. Scheduler — built manually since the S2V repo has no scheduler/.
         # ------------------------------------------------------------------
-        # Reference uses the WAN-custom ``FlowUniPCMultistepScheduler``
-        # (wan/utils/fm_solvers_unipc.py) constructed with ``shift=1`` then
-        # ``set_timesteps(shift=sample_shift)``. For s2v_14B
-        # ``sample_shift=3`` (wan_s2v_14B.py:57). Diffusers'
-        # ``UniPCMultistepScheduler`` with ``use_flow_sigmas=True`` has
-        # different timestep math (causes "5 steps == 40 steps" output).
-        # Subclass FlowUniPC so the existing ``Solver.set_schedule(steps)``
-        # call (which forwards to ``set_timesteps`` without shift) still picks
-        # up the WAN ``sample_shift`` value.
+        # Reference uses ``wan/utils/fm_solvers_unipc.py:FlowUniPCMultistepScheduler``
+        # with ``sample_shift=3`` (wan_s2v_14B.py:57). Diffusers'
+        # ``UniPCMultistepScheduler`` with ``use_flow_sigmas=True``,
+        # ``prediction_type="flow_prediction"`` and ``flow_shift=3.0`` produces
+        # byte-identical timesteps and sigmas at 5/40 steps (verified), so the
+        # vendored scheduler isn't needed.
         if scheduler is None:
-
-            class _S2VFlowUniPC(FlowUniPCMultistepScheduler):
-                """FlowUniPC with WAN s2v_14B ``sample_shift=3`` baked in."""
-
-                _S2V_SHIFT = 3
-
-                def set_timesteps(self, num_inference_steps=None, device=None, sigmas=None, mu=None, shift=None):
-                    if shift is None:
-                        shift = self._S2V_SHIFT
-                    return super().set_timesteps(
-                        num_inference_steps,
-                        device=device,
-                        sigmas=sigmas,
-                        mu=mu,
-                        shift=shift,
-                    )
-
-            scheduler = _S2VFlowUniPC(
+            scheduler = UniPCMultistepScheduler(
                 num_train_timesteps=1000,
-                shift=1,  # base; set_timesteps applies _S2V_SHIFT=3
+                use_flow_sigmas=True,
+                prediction_type="flow_prediction",
+                flow_shift=3.0,
                 use_dynamic_shifting=False,
+                solver_order=2,
+                solver_type="bh2",
+                predict_x0=True,
+                lower_order_final=True,
             )
         self._solver = UniPCSolver(scheduler=scheduler)
 
