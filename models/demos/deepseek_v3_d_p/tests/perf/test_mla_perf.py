@@ -13,7 +13,7 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla"
 
 _CMD_2X4 = f"pytest {_TEST_PATH} -k 'balanced-skip_check-seq100k-scaled_sl-random-line-2x4'"
-_CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced-skip_check-seq100k-scaled_sl-random-ring-8x4'"
+_CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced-skip_check-seq100k-scaled_sl-random-line-8x4'"
 
 
 @pytest.mark.timeout(0)
@@ -44,5 +44,5 @@ def test_deepseek_v3_mla_perf_galaxy():
         num_iterations=1,
         batch_size=1,
         margin=0.03,
-        comments="seq100k_scaled_glx_8x4_ring_ground_truth",
+        comments="seq100k_scaled_glx_8x4_ground_truth",
     )
