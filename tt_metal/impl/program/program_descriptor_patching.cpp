@@ -97,32 +97,42 @@ ResolvedBindings resolve_bindings(
         }
     }
 
-    // Resolve every `.buffer = ...` CB binding the descriptor declares.
+    // Resolve every `.buffer = ...` CB binding whose buffer comes from
+    // tensor_args / tensor_return_value, so the cache-hit fast path can patch
+    // it.  CB buffers that come from elsewhere (e.g. a GlobalCircularBuffer
+    // referenced by `operation_attributes`, or any other workload-scoped
+    // resource the factory injects directly into a CBDescriptor) are SKIPPED
+    // here rather than fatal:
     //
-    // This used to be gated on `!result.rt_args.empty()` to keep contract-1
-    // sharded factories that mixed `.buffer = ...` CBs with OLD-style raw
-    // `buffer->address()` runtime args from accidentally taking the fast path:
-    // a non-empty `cbs` alone would have made the adapter patch CBs while
-    // leaving those raw rt-args pointing at stale addresses.
+    //   - Such buffers have stable addresses across dispatches by design —
+    //     the caller owns the resource and keeps it alive for the cache
+    //     entry's lifetime.  Cache-hit patching would be a no-op.
+    //   - Fatalling would make `emplace_runtime_args(buffer)` and
+    //     `cbs[i].buffer = buffer` semantically asymmetric for the same buffer
+    //     and break legitimate factories (e.g. `dram_prefetcher`'s reader CB
+    //     pegged to a GlobalCircularBuffer's backing buffer).
     //
-    // That guard now lives in the caller, not the resolver.  The adapter's
-    // `apply_descriptor` picks the path per workload contract:
-    //   - contract 1 (per-coord factory): fast-path only when there are
-    //     declared rt-arg bindings, otherwise rebuild the descriptor — exactly
-    //     the old behaviour.
-    //   - contract 2 (declarative MeshWorkload): always fast-path, because the
-    //     contract forbids raw-uint32 rt-args (factories must declare bindings
-    //     via emplace_runtime_args) and rebuilding would re-allocate the
-    //     workload-scoped resources held in the descriptor.
+    // Runtime-arg buffer bindings stay strict (find_idx) above — they must
+    // map to a tensor_args/return slot because raw rt-args ARE the only
+    // mechanism by which input/output addresses can change between dispatches.
     //
-    // Resolving CBs unconditionally here gives the adapter the information it
-    // needs to make that contract-aware decision.
+    // The CB-resolution gate (whether to use the result on cache hit) lives
+    // in DescriptorMeshWorkloadAdapter::apply_descriptor and is contract-aware:
+    //   - contract 1: fast-path only when rt-arg bindings are present;
+    //     otherwise rebuild the descriptor.
+    //   - contract 2: always fast-path; no rebuild fallback.
     {
         auto program_cbs = program.circular_buffers();
         for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
             if (desc.cbs[ci].buffer) {
-                result.cbs.push_back(
-                    {program_cbs[ci]->id(), find_idx(desc.cbs[ci].buffer, "cbs"), desc.cbs[ci].address_offset});
+                auto it = std::find(tensor_buffers.begin(), tensor_buffers.end(), desc.cbs[ci].buffer);
+                if (it != tensor_buffers.end()) {
+                    result.cbs.push_back(
+                        {program_cbs[ci]->id(),
+                         static_cast<uint32_t>(it - tensor_buffers.begin()),
+                         desc.cbs[ci].address_offset});
+                }
+                // else: stable, non-tensor buffer; pegged at create time, no patching needed.
             }
         }
     }
