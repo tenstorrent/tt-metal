@@ -29,8 +29,9 @@ from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
 from ...models.transformers.ltx.ltx_transformer import LTXTransformerModel
 from ...parallel.config import DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
-from ...utils import cache
+from ...utils import cache as _cache_utils
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ...utils.tensor import to_torch as _tt_to_torch
 
 if TYPE_CHECKING:
     pass
@@ -273,6 +274,124 @@ class LTXPipeline:
 
         return pipeline
 
+    def _torch_cache_path(self, subfolder: str) -> str | None:
+        """Path to per-config torch-tensor cache for a subcomponent. None when cache is disabled.
+
+        Uses the same {model_name}/{subfolder}/{parallel_config × mesh × dtype} key shape as
+        utils.cache.model_cache_dir, but stores a single .pt of host torch tensors rather than
+        per-parameter flatbuffers. This sidesteps a `ttnn.dump_tensor(DISTRIBUTED_GATHER)`
+        round-trip that mis-distributes weights replicated on a non-CCL mesh axis (e.g. the
+        Linear in LTXAdaLayerNormSingle).
+        """
+        cache_root = os.environ.get("TT_DIT_CACHE_DIR")
+        ckpt_path = getattr(self, "_vae_checkpoint_path", None)
+        if not cache_root or not ckpt_path:
+            return None
+        model_name = os.path.splitext(os.path.basename(ckpt_path))[0]
+        parallel_key = _cache_utils.config_id(self.parallel_config)
+        mesh_key = "x".join(str(x) for x in self.mesh_device.shape)
+        key = f"{parallel_key}mesh{mesh_key}_bf16"
+        return os.path.join(cache_root, model_name, subfolder, key, "torch_state.pt")
+
+    @staticmethod
+    def _walk_parameters(model, prefix: str = ""):
+        """Recursively yield (qualified_name, Parameter) over a Module tree.
+
+        Mirrors the recursion pattern of Module.save (module.py:168) so the cache key
+        space matches what dump-tensor caching would have used.
+        """
+        for name, child in model.named_children():
+            yield from LTXPipeline._walk_parameters(child, f"{prefix}{name}.")
+        for name, p in model.named_parameters():
+            yield f"{prefix}{name}", p
+
+    @staticmethod
+    def _walk_host_state(model, prefix: str = ""):
+        """Recursively yield host-side torch state stored outside Parameter.
+
+        Some LTX modules populate plain attributes during _prepare_torch_state — e.g.
+        attention_ltx._gate_weight_host (Tensor) and ltx_transformer._caption_proj_state
+        (dict of Tensors) — that are used on the host path during forward(). These get
+        missed by named_parameters() but must be restored from cache, or warm-loaded
+        runs produce silently wrong attention/captioning outputs.
+
+        Yields qualified names prefixed by '@' so they can't collide with the parameter
+        namespace. Dict entries get further qualified by their sub-key.
+        """
+        for name, child in model.named_children():
+            yield from LTXPipeline._walk_host_state(child, f"{prefix}{name}.")
+        for attr_name, val in vars(model).items():
+            if attr_name in ("_children", "_parameters") or not isinstance(attr_name, str):
+                continue
+            if isinstance(val, torch.Tensor):
+                yield f"{prefix}@{attr_name}", val
+            elif isinstance(val, dict) and val and all(isinstance(v, torch.Tensor) for v in val.values()):
+                for k, v in val.items():
+                    yield f"{prefix}@{attr_name}.{k}", v
+
+    @staticmethod
+    def _restore_host_attr(model, qualified: str, value: torch.Tensor) -> bool:
+        """Restore a single host-state entry produced by _walk_host_state."""
+        # qualified ends in '@attr' or '@attr.sub_key' (dict entry)
+        path, _, leaf = qualified.rpartition("@")
+        target = model
+        if path:
+            for part in path.rstrip(".").split("."):
+                target = target._children.get(part) if hasattr(target, "_children") else None
+                if target is None:
+                    return False
+        attr_name, _, sub_key = leaf.partition(".")
+        if sub_key:
+            existing = getattr(target, attr_name, None)
+            if not isinstance(existing, dict):
+                setattr(target, attr_name, {})
+                existing = getattr(target, attr_name)
+            existing[sub_key] = value
+        else:
+            setattr(target, attr_name, value)
+        return True
+
+    def _try_load_torch_cache(self, model, cache_path: str | None) -> bool:
+        if not cache_path or not os.path.isfile(cache_path):
+            return False
+        logger.info(f"loading torch cache at '{cache_path}'.")
+        state = torch.load(cache_path, weights_only=True, map_location="cpu")
+        for name, p in self._walk_parameters(model):
+            if name not in state:
+                logger.warning(f"torch cache missing parameter '{name}', falling back to fresh load")
+                return False
+            p.load_torch_tensor(state[name])
+        # Restore non-Parameter host state populated by _prepare_torch_state (gate weights,
+        # caption projection, etc). Skipping this is what caused warm runs to produce noise.
+        host_keys = [k for k in state if "@" in k]
+        for k in host_keys:
+            if not self._restore_host_attr(model, k, state[k]):
+                logger.warning(f"failed to restore host state '{k}'")
+        if host_keys:
+            logger.info(f"restored {len(host_keys)} host-side tensors from cache.")
+        model._is_loaded = True
+        return True
+
+    def _write_torch_cache(self, model, cache_path: str | None) -> None:
+        if not cache_path:
+            return
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        state = {}
+        for name, p in self._walk_parameters(model):
+            t = _tt_to_torch(p.data, mesh_axes=p.mesh_axes, composer_device=p.device)
+            # Only downcast to bf16 when the Parameter's on-device dtype is bf16. AdaLN
+            # Linears use float32 on device for timestep-conditioning precision; casting
+            # them to bf16 here introduces rounding that breaks warm-load fidelity.
+            if t.dtype == torch.float32 and p.dtype == ttnn.bfloat16:
+                t = t.to(torch.bfloat16)
+            state[name] = t
+        host_count = 0
+        for name, t in self._walk_host_state(model):
+            state[name] = t.detach().clone()
+            host_count += 1
+        torch.save(state, cache_path)
+        logger.info(f"wrote torch cache to '{cache_path}' ({host_count} host-side tensors included).")
+
     def load_transformer(self, state_dict: dict[str, torch.Tensor]) -> None:
         """Load transformer weights from a state dict."""
         has_gate = any("to_gate_logits" in k for k in state_dict)
@@ -301,16 +420,10 @@ class LTXPipeline:
             cross_attention_adaln=cross_attention_adaln,
         )
 
-        ckpt_path = getattr(self, "_vae_checkpoint_path", None)
-        model_name = os.path.splitext(os.path.basename(ckpt_path))[0] if ckpt_path else "ltx-unknown"
-        cache.load_model(
-            self.transformer,
-            model_name=model_name,
-            subfolder="transformer",
-            parallel_config=self.parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            get_torch_state_dict=lambda: state_dict,
-        )
+        cache_path = self._torch_cache_path("transformer")
+        if not self._try_load_torch_cache(self.transformer, cache_path):
+            self.transformer.load_torch_state_dict(state_dict)
+            self._write_torch_cache(self.transformer, cache_path)
         logger.info(f"Loaded LTX transformer ({self.mode} mode) with {self.num_layers} layers")
 
     def load_text_encoder(
@@ -879,15 +992,10 @@ class LTXPipeline:
             mesh_device=self.mesh_device,
         )
 
-        model_name = os.path.splitext(os.path.basename(self._vae_checkpoint_path))[0]
-        cache.load_model(
-            self.vae_decoder,
-            model_name=model_name,
-            subfolder="vae",
-            parallel_config=self.parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            get_torch_state_dict=_load_vae_state_dict,
-        )
+        cache_path = self._torch_cache_path("vae")
+        if not self._try_load_torch_cache(self.vae_decoder, cache_path):
+            self.vae_decoder.load_torch_state_dict(_load_vae_state_dict())
+            self._write_torch_cache(self.vae_decoder, cache_path)
         logger.info(f"Loaded TTNN VAE decoder ({len(self._vae_decoder_blocks)} blocks)")
 
     def load_connectors_from_checkpoint(self) -> None:
