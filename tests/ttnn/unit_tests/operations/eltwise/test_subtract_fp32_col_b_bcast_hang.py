@@ -105,3 +105,75 @@ def test_subtract_fp32_col_b_bcast_smallest_hang(device):
     Expected outcome on broken builds: pytest times out after 60s.
     """
     _run_subtract_fp32_col_b_bcast(device, w_tiles=3)
+
+
+# ─── Controls (no dtype mismatch) ───────────────────────────────────────────
+# These two tests use the EXACT same shape (W=3, B=5, S=256) and broadcast
+# pattern as the canonical hanging test above, but with matching input/output
+# dtypes (no narrow→wide conversion). They exist to answer:
+#
+#   "Does the bug live in the col_bcast kernel itself for these shapes, or
+#    specifically in the dtype-mismatch packer-reconfig path?"
+#
+# Run with profile_this.py to see which compute kernel the program factory
+# picks for each. Compare against the BF16→FP32 case (which picks
+# `eltwise_binary_col_bcast.cpp` with the post-bcast pack_reconfig).
+
+
+def test_subtract_bf16_in_bf16_out_W3(device):
+    """Control: BF16 inputs, BF16 output, W_tiles=3.
+
+    Expected: same compute kernel path as the hanging BF16→FP32 case
+    (`eltwise_binary_col_bcast.cpp`, is_sfpu=false), but no FP32 packer
+    reconfig. If this PASSES at W=3, the kernel itself is fine for that shape
+    — the bug is specifically the BF16→FP32 reconfig.
+    """
+    b, s, w_tiles = 5, 256, 3
+    v = w_tiles * TILE_W
+
+    lhs_torch = torch.ones(b, 1, s, v, dtype=torch.float32)
+    rhs_torch = torch.ones(b, 1, s, 1, dtype=torch.float32)
+
+    lhs = ttnn.from_torch(lhs_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    rhs = ttnn.from_torch(rhs_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    print(f"[ctrl bf16→bf16] W_tiles={w_tiles}, V={v}", flush=True)
+    ttnn.synchronize_device(device)
+    out = ttnn.subtract(lhs, rhs)  # no dtype override
+    print(f"[ctrl bf16→bf16] dispatch returned", flush=True)
+    ttnn.synchronize_device(device)
+    print(f"[ctrl bf16→bf16] post-op sync done", flush=True)
+
+    assert out.dtype == ttnn.bfloat16, f"expected bf16 output, got {out.dtype}"
+    out_torch = ttnn.to_torch(out)
+    assert torch.equal(out_torch, torch.zeros_like(out_torch))
+
+
+def test_subtract_fp32_in_fp32_out_W3(device):
+    """Control: FP32 inputs, FP32 output, W_tiles=3.
+
+    Expected: may pick a different compute kernel (likely the SFPU variant
+    `eltwise_binary_sfpu_col_bcast.cpp`, since Blackhole's FPU doesn't
+    natively support FP32 binary ops). If this PASSES at W=3, it tells us
+    the SFPU path handles W=3 fine — narrowing the bug further to the FPU
+    compute kernel's interaction with the FP32 output packer reconfig.
+    """
+    b, s, w_tiles = 5, 256, 3
+    v = w_tiles * TILE_W
+
+    lhs_torch = torch.ones(b, 1, s, v, dtype=torch.float32)
+    rhs_torch = torch.ones(b, 1, s, 1, dtype=torch.float32)
+
+    lhs = ttnn.from_torch(lhs_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    rhs = ttnn.from_torch(rhs_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    print(f"[ctrl fp32→fp32] W_tiles={w_tiles}, V={v}", flush=True)
+    ttnn.synchronize_device(device)
+    out = ttnn.subtract(lhs, rhs)  # output dtype follows input
+    print(f"[ctrl fp32→fp32] dispatch returned", flush=True)
+    ttnn.synchronize_device(device)
+    print(f"[ctrl fp32→fp32] post-op sync done", flush=True)
+
+    assert out.dtype == ttnn.float32, f"expected fp32 output, got {out.dtype}"
+    out_torch = ttnn.to_torch(out)
+    assert torch.equal(out_torch, torch.zeros_like(out_torch))
