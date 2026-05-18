@@ -56,7 +56,7 @@ Tensor host_function(const Tensor& input_tensor) {
 
     auto output_buffer = std::vector<bfloat16>(input_tensor.physical_volume());
 
-    for (auto index = 0; index < output_buffer.size(); index++) {
+    for (std::size_t index = 0; index < output_buffer.size(); index++) {
         auto value = UnaryFunction(static_cast<float>(input_buffer[index]));
         output_buffer[index] = bfloat16(value);
     }

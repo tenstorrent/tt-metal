@@ -101,7 +101,7 @@ void test_raw_host_memory_pointer() {
     }
 
     // Check that numpy array's data is now set to that value
-    for (auto index = 0; index < a_np_array.size(); index++) {
+    for (std::size_t index = 0; index < a_np_array.size(); index++) {
         auto a_np_array_element = static_cast<bfloat16*>(a_np_array_data)[index];
         TT_FATAL(a_np_array_element == a_value, "a_np_array_element does not match expected value");
     }

@@ -72,7 +72,7 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> generate_a
             distributed_context->broadcast(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&num_entries), sizeof(num_entries)),
                 distributed::multihost::Rank{rank});
-            for (auto i = 0; i < num_entries; i++) {
+            for (std::size_t i = 0; i < num_entries; i++) {
                 tt_metal::AsicID asic_id;
                 distributed::MeshCoordinate mesh_coord = distributed::MeshCoordinate(0, 0);
                 distributed_context->broadcast(
@@ -104,7 +104,7 @@ std::vector<LogicalPipelineStageConfig> build_2x4_pipeline(
         {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 1}};
 
     std::vector<LogicalPipelineStageConfig> logical_pipeline_stage_configs;
-    for (auto stage_index = 0; stage_index < physical_pipeline_stage_configs.size(); stage_index++) {
+    for (std::size_t stage_index = 0; stage_index < physical_pipeline_stage_configs.size(); stage_index++) {
         auto stage_hostname = physical_system_descriptor.get_hostname_for_rank(stage_index);
         auto entry_node_asic_id = physical_system_descriptor.get_asic_id(
             stage_hostname,
