@@ -1739,19 +1739,37 @@ class TTNNDotsOCRVisionTower(TTNNModule):
                 self.patch_merger.to_device(device)
         return self
 
-    def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> ttnn.Tensor:
-        """Run the full vision pipeline and return the result as a ttnn.Tensor on device.
+    def merged_vision_sequence_length(self, grid_thw: torch.Tensor, pixel_values: torch.Tensor | None = None) -> int:
+        """Merged vision token count on dim=2 after ``patch_merger`` (matches ``forward``).
 
-        Returns:
-            ttnn.Tensor: [1, 1, N_vision, H/num_devices] in TILE_LAYOUT,
-                col-sharded across devices (on multi-device), or
-                [1, 1, N_vision, H] replicated (on single device).
+        Used for scatter gather sizing without running the vision trunk.
         """
         if grid_thw is None:
+            raise ValueError("grid_thw is required")
+        g = grid_thw.detach().cpu() if hasattr(grid_thw, "is_cuda") and grid_thw.is_cuda else grid_thw
+        if g.dim() == 1:
+            g = g.unsqueeze(0)
+        temporal = int(g[0, 0].item())
+        height_patches = int(g[0, 1].item())
+        width_patches = int(g[0, 2].item())
+        num_patches = temporal * height_patches * width_patches
+        if pixel_values is not None and self.patch_embed is not None and pixel_values.dim() == 4:
+            patch_size = int(getattr(self.patch_embed, "patch_size", 14))
+            _b, _c, h, w = pixel_values.shape
+            alt = temporal * (h // patch_size) * (w // patch_size)
+            if alt > 0:
+                num_patches = min(num_patches, alt)
+        # dim != 4 (e.g. HF ``pixel_values`` [num_patches, C*patch*patch]): use grid-derived count only.
+        if self.patch_merger is not None:
+            return num_patches // (self.spatial_merge_size**2)
+        return num_patches
+
+    def forward_post_patch_embed(self, x: ttnn.Tensor, grid_thw: torch.Tensor) -> ttnn.Tensor:
+        """Vision blocks + post-trunk norm + patch merger (``patch_embed`` already applied)."""
+        if grid_thw is None:
             raise ValueError("grid_thw is required for Dots vision")
-
-        x = self.patch_embed(pixel_values, grid_thw)
-
+        if grid_thw.dim() == 1:
+            grid_thw = grid_thw.unsqueeze(0)
         if isinstance(x, torch.Tensor):
             mem = ttnn.DRAM_MEMORY_CONFIG
             mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
@@ -1802,3 +1820,17 @@ class TTNNDotsOCRVisionTower(TTNNModule):
                 x = ttnn.slice(x, (0, 0, 0, 0), (int(x.shape[0]), int(x.shape[1]), merged_seq_len, int(x.shape[3])))
 
         return x
+
+    def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> ttnn.Tensor:
+        """Run the full vision pipeline and return the result as a ttnn.Tensor on device.
+
+        Returns:
+            ttnn.Tensor: [1, 1, N_vision, H/num_devices] in TILE_LAYOUT,
+                col-sharded across devices (on multi-device), or
+                [1, 1, N_vision, H] replicated (on single device).
+        """
+        if grid_thw is None:
+            raise ValueError("grid_thw is required for Dots vision")
+
+        x = self.patch_embed(pixel_values, grid_thw)
+        return self.forward_post_patch_embed(x, grid_thw)

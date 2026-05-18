@@ -812,6 +812,7 @@ class TTNNViTIntermediate(TTNNLinearGelu):
 # DRAM-width-sharded LM head with N-chunk splitting.
 # =============================================================================
 #
+# LM head chunk weights: ``bfloat4_b`` (BF16 activations from the decoder).
 # Mirrors the pattern from ``models/tt_transformers/tt/lm_head.py``: weights
 # are stored with ``TensorMemoryLayout.WIDTH_SHARDED`` over the 12 DRAM banks
 # (vs DRAM-interleaved which reads serially from one bank), and the matmul
@@ -1037,7 +1038,7 @@ class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
                 device=device,
                 mesh_mapper=weight_mapper,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat4_b,
                 memory_config=mem_cfg,
             )
             self.tt_weight_chunks.append(tt_chunk)
@@ -1090,11 +1091,10 @@ class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         )
 
-        # Compute kernel: HiFi2 + bf8 weights + packer L1 acc + FP32 dest accum
-        # (matches the prior lm_head's stable argmax fidelity). The pipeline
-        # may override this attribute after weight load.
+        # Compute kernel: LoFi + BFP4 weights + packer L1 acc + FP32 dest accum
+        # (bandwidth-bound LM head). Pipeline may override after weight load.
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -1124,6 +1124,8 @@ class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
             x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if x.dtype != ttnn.bfloat16:
+            x = ttnn.typecast(x, ttnn.bfloat16, memory_config=x.memory_config())
         # Force shape to 4D [B, 1, M, K] for the matmul kernel.
         in_shape = list(x.shape)
         if len(in_shape) == 2:
@@ -1151,10 +1153,14 @@ class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
         x_sharded = ttnn.to_memory_config(x, self._input_shard_cfg)
 
         # Step 3: per-chunk DRAM-sharded matmul, then sharded → interleaved.
-        chunk_outs = []
-        for i, (w_chunk, pc) in enumerate(zip(self.tt_weight_chunks, self._chunk_program_configs)):
-            bias_chunk = self.tt_bias_chunks[i] if self.tt_bias_chunks else None
-            out_chunk = ttnn.linear(
+        # Single-chunk decode (common when N fits one DRAM-sharded slice) avoids
+        # a Python list + concat/dealloc round-trip between matmul and gather.
+        num_chunks = len(self.tt_weight_chunks)
+        if num_chunks == 1:
+            w_chunk = self.tt_weight_chunks[0]
+            pc = self._chunk_program_configs[0]
+            bias_chunk = self.tt_bias_chunks[0] if self.tt_bias_chunks else None
+            full = ttnn.linear(
                 x_sharded,
                 w_chunk,
                 bias=bias_chunk,
@@ -1163,19 +1169,28 @@ class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 dtype=ttnn.bfloat8_b,
             )
-            out_chunk = ttnn.sharded_to_interleaved(out_chunk, ttnn.DRAM_MEMORY_CONFIG)
-            chunk_outs.append(out_chunk)
-        ttnn.deallocate(x_sharded)
-
-        # Step 4: concat per-chunk outputs (each [B, 1, M, chunk_n]) → [B, 1, M, size_per_device].
-        if len(chunk_outs) == 1:
-            full = chunk_outs[0]
+            full = ttnn.sharded_to_interleaved(full, ttnn.DRAM_MEMORY_CONFIG)
         else:
+            chunk_outs = []
+            for i, (w_chunk, pc) in enumerate(zip(self.tt_weight_chunks, self._chunk_program_configs)):
+                bias_chunk = self.tt_bias_chunks[i] if self.tt_bias_chunks else None
+                out_chunk = ttnn.linear(
+                    x_sharded,
+                    w_chunk,
+                    bias=bias_chunk,
+                    program_config=pc,
+                    compute_kernel_config=self.compute_kernel_config,
+                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat8_b,
+                )
+                out_chunk = ttnn.sharded_to_interleaved(out_chunk, ttnn.DRAM_MEMORY_CONFIG)
+                chunk_outs.append(out_chunk)
             full = ttnn.concat(chunk_outs, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             for c in chunk_outs:
                 ttnn.deallocate(c)
+        ttnn.deallocate(x_sharded)
 
-        # Step 5: all_gather across mesh on N to assemble full vocab on every
+        # Step 4: all_gather across mesh on N to assemble full vocab on every
         # device for argmax.
         if needs_ccl:
             full = ttnn.all_gather(
