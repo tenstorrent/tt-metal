@@ -328,7 +328,7 @@ void RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(tt::ChipId d
             llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core);
         }
         tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
-        cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
+        cluster_.assert_risc_reset_at_core_immediate(tt_cxy_pair(device_id, virtual_core), reset_val);
     }
 }
 
@@ -339,7 +339,7 @@ void RiscFirmwareInitializer::assert_tensix_workers_impl(tt::ChipId device_id) {
             CoreCoord logical_core(x, y);
             CoreCoord worker_core =
                 cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
-            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
+            cluster_.assert_risc_reset_at_core_immediate(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
         }
     }
 }
@@ -348,7 +348,7 @@ void RiscFirmwareInitializer::assert_inactive_ethernet_cores(tt::ChipId device_i
     for (const auto& logical_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-        cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+        cluster_.assert_risc_reset_at_core_immediate(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
     }
 }
 
@@ -358,7 +358,8 @@ void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
         const auto& soc_d = cluster_.get_soc_desc(device_id);
         for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
             CoreCoord virtual_core{dram_core.x, dram_core.y};
-            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            cluster_.assert_risc_reset_at_core_immediate(
+                tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
         }
     }
 }
@@ -1083,7 +1084,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                 reset_val &= ~tt::umd::RiscType::ERISC0;
             }
             if (is_idle_eth or !hal_.get_eth_fw_is_cooperative()) {
-                cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
+                cluster_.assert_risc_reset_at_core_immediate(tt_cxy_pair(device_id, virtual_core), reset_val);
             }
             if (not rtoptions_.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
@@ -1138,7 +1139,8 @@ void RiscFirmwareInitializer::initialize_firmware(
             break;
         }
         case HalProgrammableCoreType::DRAM: {
-            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            cluster_.assert_risc_reset_at_core_immediate(
+                tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
             if (not rtoptions_.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
@@ -1327,10 +1329,10 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
                 reset_val |= tt::umd::RiscType::ERISC1;
             }
         }
-        cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
+        cluster_.deassert_risc_reset_at_core_immediate(tt_cxy_pair(device_id, worker_core), reset_val);
     }
     for (const auto& dram_core : dram_not_done_cores) {
-        cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), tt::umd::RiscType::BRISC);
+        cluster_.deassert_risc_reset_at_core_immediate(tt_cxy_pair(device_id, dram_core), tt::umd::RiscType::BRISC);
     }
 
     log_debug(LogDevice, "Waiting for firmware init complete");
