@@ -395,8 +395,8 @@ public:
             ttsl::SmallVector<tt::tt_metal::Buffer*, 16> buffers;
             extract_tensor_buffers_into(tensor_args, buffers);
             extract_tensor_buffers_into(tensor_return_value, buffers);
-            for (const auto& mb : workload_descriptor.buffers) {
-                buffers.push_back(mb->get_reference_buffer());
+            for (const auto& wb : workload_descriptor.buffers) {
+                buffers.push_back(wb.buffer);
             }
             return buffers;
         }

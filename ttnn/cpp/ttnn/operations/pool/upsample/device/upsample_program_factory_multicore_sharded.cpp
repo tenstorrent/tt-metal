@@ -449,11 +449,16 @@ tt::tt_metal::WorkloadDescriptor UpsampleMultiCoreShardedProgramFactory::create_
 
     Tensor config_tensor_dev = config_tensor.to_device(device, config_memory_config);
     const uint32_t config_tensor_width = static_cast<uint32_t>(config_tensor_dev.logical_shape()[-1]);
-    auto config_mesh_buffer = config_tensor_dev.device_storage().get_mesh_buffer_leak_ownership();
-    tt::tt_metal::Buffer* config_buffer = config_mesh_buffer->get_reference_buffer();
+    // See pool_multi_core_program_factory.cpp for the rationale: holding a
+    // shared_ptr<MeshBuffer> is not enough because ~Tensor force-deallocates
+    // the underlying device memory.  Wrap the source Tensor in a shared_ptr
+    // and stash it in WorkloadBuffer.owner so its destructor is deferred
+    // until the cached workload is evicted.
+    auto config_tensor_owner = std::make_shared<Tensor>(std::move(config_tensor_dev));
+    tt::tt_metal::Buffer* config_buffer = config_tensor_owner->buffer();
 
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
-    workload_descriptor.buffers.push_back(std::move(config_mesh_buffer));
+    workload_descriptor.buffers.push_back({std::move(config_tensor_owner), config_buffer});
 
     // Single-device op: the per-coord program is structurally identical for
     // every coord in `tensor_coords` (upsample doesn't depend on cluster

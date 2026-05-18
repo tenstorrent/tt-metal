@@ -1056,9 +1056,16 @@ tt::tt_metal::WorkloadDescriptor Pool2D::MultiCore::create_workload_descriptor(
         op_attr.config_tensor_in_dram);
 
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
-    auto reader_indices_mesh_buffer = reader_indices_on_device.device_storage().get_mesh_buffer_leak_ownership();
-    tt::tt_metal::Buffer* reader_indices_buffer = reader_indices_mesh_buffer->get_reference_buffer();
-    workload_descriptor.buffers.push_back(std::move(reader_indices_mesh_buffer));
+    // Keep the source Tensor alive in the cached workload.  Holding only a
+    // shared_ptr<MeshBuffer> would not be enough: when the local Tensor went
+    // out of scope here, ~Tensor would call DeviceStorage::deallocate which
+    // force-frees the underlying device memory regardless of shared_ptr
+    // ownership (see is_sole_owner_of_device_memory).  Wrapping the Tensor in
+    // a shared_ptr held by WorkloadBuffer.owner defers ~Tensor until the
+    // cached workload itself is evicted.
+    auto reader_indices_tensor_owner = std::make_shared<Tensor>(std::move(reader_indices_on_device));
+    tt::tt_metal::Buffer* reader_indices_buffer = reader_indices_tensor_owner->buffer();
+    workload_descriptor.buffers.push_back({reader_indices_tensor_owner, reader_indices_buffer});
 
     // For avg-pool, decide whether a single bf16 scalar per core is sufficient.  When it isn't
     // (ceil_mode w/ ceil_pad, or !count_include_pad with non-zero padding, both with no
@@ -1116,11 +1123,12 @@ tt::tt_metal::WorkloadDescriptor Pool2D::MultiCore::create_workload_descriptor(
 
         Tensor config_tensor_on_device = config_tensor.to_device(
             input.device(), op_attr.config_tensor_in_dram ? DRAM_MEMORY_CONFIG : l1_small_memory_config);
-        workload_descriptor.buffers.push_back(
-            config_tensor_on_device.device_storage().get_mesh_buffer_leak_ownership());
+        auto scalar_config_tensor_owner = std::make_shared<Tensor>(std::move(config_tensor_on_device));
+        tt::tt_metal::Buffer* scalar_config_buf = scalar_config_tensor_owner->buffer();
+        workload_descriptor.buffers.push_back({std::move(scalar_config_tensor_owner), scalar_config_buf});
     }
     tt::tt_metal::Buffer* scalar_config_buffer =
-        workload_descriptor.buffers.size() > 1 ? workload_descriptor.buffers[1]->get_reference_buffer() : nullptr;
+        workload_descriptor.buffers.size() > 1 ? workload_descriptor.buffers[1].buffer : nullptr;
 
     // Single-device op: the kernel program is structurally identical for every
     // coord in `tensor_coords` (Pool2D doesn't depend on cluster position).
