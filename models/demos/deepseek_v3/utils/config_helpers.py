@@ -11,9 +11,15 @@ from types import NoneType
 from typing import Any, Mapping, Sequence
 
 import torch
+from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.utils.config_dataclass import ConfigWeight, DeepseekSamplingArgs, SavedWeight
+from models.demos.deepseek_v3.utils.config_dataclass import (
+    ConfigWeight,
+    DeepseekSamplingArgs,
+    PrefillChunkSizes,
+    SavedWeight,
+)
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
@@ -66,6 +72,47 @@ DEFAULT_SAMPLING_TOP_P = 0.95
 # So, using 32 as default value for top-k when sampling on device. If top-k = 0 is needed, then
 # do sampling on host.
 DEFAULT_SAMPLING_TOP_K = 32
+
+
+# Each value is a tuple of (seq_len_threshold, PrefillChunkSizes) pairs, sorted ascending by threshold.
+PREFILL_CHUNK_SIZES = {
+    # QUAD
+    16: (
+        (0, PrefillChunkSizes(model_chunk=DEFAULT_MAX_SEQ_LEN, mla_chunk=DEFAULT_MAX_SEQ_LEN, wkv_b2_chunk=2 * 1024)),
+        (32 * 1024, PrefillChunkSizes(model_chunk=32 * 1024, mla_chunk=32 * 1024, wkv_b2_chunk=8 * 1024)),
+        (48 * 1024, PrefillChunkSizes(model_chunk=48 * 1024, mla_chunk=48 * 1024, wkv_b2_chunk=4 * 1024)),
+        (64 * 1024, PrefillChunkSizes(model_chunk=64 * 1024, mla_chunk=4 * 1024, wkv_b2_chunk=4 * 1024)),
+        (128 * 1024, PrefillChunkSizes(model_chunk=1024, mla_chunk=256, wkv_b2_chunk=256)),
+    ),
+    # DUAL
+    8: (
+        (0, PrefillChunkSizes(model_chunk=DEFAULT_MAX_SEQ_LEN, mla_chunk=DEFAULT_MAX_SEQ_LEN, wkv_b2_chunk=2 * 1024)),
+        (8 * 1024, PrefillChunkSizes(model_chunk=8 * 1024, mla_chunk=8 * 1024, wkv_b2_chunk=2 * 1024)),
+        (16 * 1024, PrefillChunkSizes(model_chunk=16 * 1024, mla_chunk=1 * 1024, wkv_b2_chunk=1 * 1024)),
+        (32 * 1024, PrefillChunkSizes(model_chunk=1024, mla_chunk=512, wkv_b2_chunk=512)),
+    ),
+    # TG
+    4: ((0, PrefillChunkSizes(model_chunk=DEFAULT_MAX_SEQ_LEN, mla_chunk=DEFAULT_MAX_SEQ_LEN, wkv_b2_chunk=2 * 1024)),),
+}
+
+
+def get_prefill_chunk_sizes(max_seq_len: int, num_rows: int) -> PrefillChunkSizes:
+    """Return PrefillChunkSizes for the given (num_rows, max_seq_len).
+
+    Return the configuration of the first seq_len which is >= input seq_len
+    """
+    if num_rows not in PREFILL_CHUNK_SIZES:
+        raise ValueError(f"num_rows should be in (4, 8, 16), got {num_rows}")
+    chunk_sizes = PREFILL_CHUNK_SIZES[num_rows]
+
+    chunks_to_return = chunk_sizes[0][1]
+    for config_seq_len, chunks in chunk_sizes:
+        chunks_to_return = chunks
+        if config_seq_len >= max_seq_len:
+            break
+    logger.info(f"Prefill chunks: {chunks_to_return}")
+    return chunks_to_return
+
 
 _LEGACY_SAVED_WEIGHT_EMISSION_DEPTH = 0
 

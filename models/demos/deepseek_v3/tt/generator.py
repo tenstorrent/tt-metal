@@ -2045,13 +2045,16 @@ class DeepseekGenerator(WarmupForwardMixin):
                     else:
                         assert prefill_tokens is not None
                         prefill_logits = self._prefill(
-                            tokens_batched[user_id], user_id=user_id, sample_on_device=self.sample_on_device
+                            tokens_batched[user_id],
+                            user_id=user_id,
+                            sample_on_device=self.sample_on_device,
+                            prompt_len=prompt_len,
                         )
                         assert prefill_logits is not None
                         if self.sample_on_device:
-                            prefill_logits = self._slice_last_token_logits(
-                                prefill_logits, prompt_len, expand_to_batch=True
-                            )
+                            # prefill_logits is already sliced to [1,1,1,vocab] (single-ring)
+                            # or [1,1,batch,vocab] (multi-ring via _slice_last_token_logits),
+                            # so no further slicing is needed here.
                             prefill_logits_sampled_device = self._sample_tokens_device(
                                 prefill_logits, user_slots=[user_id]
                             )
@@ -2065,7 +2068,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                             assert isinstance(
                                 prefill_logits, torch.Tensor
                             ), "prefill_logits should be a torch.Tensor on host"
-                            last_token_logits = prefill_logits[0, 0, max(prompt_len - 1, 0), :]
+                            last_token_logits = prefill_logits[
+                                0, 0, min(max(prompt_len - 1, 0), prefill_logits.shape[2] - 1), :
+                            ]
                             pred_token = int(
                                 self._sample_on_host(last_token_logits.unsqueeze(0), start_user_idx=user_id).item()
                             )
@@ -2499,6 +2504,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 cfg=self.model_run_config_prefill,
                 rope_tensors=rope_tensors,
                 page_tables=page_tables_to_use,
+                prompt_len=prompt_len,
             )
             hidden_tt = None
 
@@ -2506,7 +2512,17 @@ class DeepseekGenerator(WarmupForwardMixin):
             raise ValueError("sample_on_device=True and return_last_hidden=True is not supported.")
 
         if sample_on_device:
-            logits = logits_tt
+            if prompt_len is not None:
+                # forward_prefill already returned only the [1,1,1,vocab] logit
+                # (for all ring sizes, via the intra-chunk row all-gather in
+                # _forward_prefill).
+                logits = logits_tt
+                if self.batch_size_per_row > 1:
+                    expanded = ttnn.repeat(logits_tt, (1, 1, self.batch_size_per_row, 1))
+                    ttnn.deallocate(logits_tt)
+                    logits = expanded
+            else:
+                logits = logits_tt
         else:
             logits = ttnn.to_torch(
                 logits_tt,
@@ -3088,6 +3104,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                     user_id=user_id,
                     sample_on_device=sample_on_device,
                     return_last_hidden=False,
+                    prompt_len=token_len,
                 )
                 if sample_on_device:
                     self._validate_and_initialize_sampling(
@@ -3096,20 +3113,12 @@ class DeepseekGenerator(WarmupForwardMixin):
                         enable_trace=enable_trace,
                     )
 
-                    sliced_prefill_logits = self._slice_last_token_logits(
-                        prefill_logits, token_len, expand_to_batch=True
-                    )
-                    sampled_tokens = self._sample_tokens_device(sliced_prefill_logits, user_slots=[user_id])
+                    sampled_tokens = self._sample_tokens_device(prefill_logits, user_slots=[user_id])
                     try:
                         if sampled_tokens is not None:
                             ttnn.deallocate(sampled_tokens)
                     except Exception as e:
                         logger.warning(f"Failed to deallocate sampled tokens: {e}")
-                    try:
-                        if sliced_prefill_logits is not None:
-                            ttnn.deallocate(sliced_prefill_logits)
-                    except Exception as e:
-                        logger.warning(f"Failed to deallocate sliced prefill logits: {e}")
                     try:
                         if prefill_logits is not None:
                             ttnn.deallocate(prefill_logits)
