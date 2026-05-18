@@ -31,7 +31,10 @@ TRACE_REGION_SIZE_BLACKHOLE = 35_000_000  # 35 MiB
 def fabric_1d_trace_device_params(*, num_command_queues: int = 1):
     from models.common.utility_functions import is_wormhole_b0
 
-    trace_region_size = TRACE_REGION_SIZE_WORMHOLE if is_wormhole_b0() else TRACE_REGION_SIZE_BLACKHOLE
+    wormhole = is_wormhole_b0()
+    trace_region_size = TRACE_REGION_SIZE_WORMHOLE if wormhole else TRACE_REGION_SIZE_BLACKHOLE
+    if not wormhole:
+        num_command_queues = 2
     return [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
