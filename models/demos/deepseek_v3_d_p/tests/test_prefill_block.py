@@ -78,7 +78,6 @@ PCC_THRESHOLD_KVPE = 0.999
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "worker_l1_size": 1344544,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
             },
             2,

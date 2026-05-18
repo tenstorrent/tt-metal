@@ -35,6 +35,7 @@ original token ordering after expert processing.
 """
 
 import os
+from pathlib import Path
 
 import torch
 from loguru import logger
@@ -46,6 +47,33 @@ from models.common.lightweightmodule import LightweightModule
 _tracy = Profiler()
 _tracy.disable()
 _PROFILE_OPS = os.getenv("TT_DS_PROFILE_OPS") == "1"
+
+# Capture the gate's `indices` tensor at specific MoE layers — the ONE input that's
+# load-driving for dispatch (everything else either falls out of `indices` via
+# get_gate_outputs or is static config). Saved files are ~KB-sized.
+#
+# Use the unified replay test (`test_dispatch_combine_replay.py`) which reconstructs
+# expert_dispatch_table, expert_offsets, expert_token_counts, expert_region_offsets
+# from these `indices` and runs dispatch + combine in sequence on the target mesh.
+# This replaces the older combine-only capture flow (which had to capture the
+# already-routed metadata + counts + offsets and remap src_chip values).
+#
+# TT_DS_CAPTURE_DISPATCH_LAYERS supports:
+#   - unset / empty: no capture (default)
+#   - "all": capture every layer that runs dispatch (every MoE layer)
+#   - comma-separated integers (e.g., "3,30,60"): capture only those layer indices
+# Files land at <TT_DS_DISPATCH_CAPTURE_DIR>/L<layer>/indices.pt
+_CAPTURE_DISPATCH_LAYERS_STR = os.getenv("TT_DS_CAPTURE_DISPATCH_LAYERS", "").strip()
+_CAPTURE_DISPATCH_ALL = _CAPTURE_DISPATCH_LAYERS_STR.lower() == "all"
+_CAPTURE_DISPATCH_LAYERS = (
+    set() if _CAPTURE_DISPATCH_ALL else {int(x) for x in _CAPTURE_DISPATCH_LAYERS_STR.split(",") if x.strip()}
+)
+_CAPTURE_DISPATCH_DIR = Path(
+    os.getenv(
+        "TT_DS_DISPATCH_CAPTURE_DIR",
+        str(Path(os.getenv("TT_METAL_HOME", ".")) / "generated" / "dispatch_capture"),
+    )
+)
 
 
 class TtDispatchModule(LightweightModule):
@@ -198,6 +226,55 @@ class TtDispatchModule(LightweightModule):
         logger.debug(f"[shard_expert_dispatch_table] OUTPUT: result.shape={result.shape}")
         return result
 
+    def _capture_indices(self, indices: ttnn.Tensor, emb_dim: int):
+        """Save the gate `indices` tensor for off-machine dispatch+combine replay.
+
+        Indices are replicated across EP cols and sharded across SP rows. We use
+        get_sp_mesh_composer which takes one copy from the col axis and concatenates
+        the 8 SP rows along tensor dim 0. Result: (dispatch_group_size, seq_len_per_chip,
+        num_experts_per_tok) int32 — the same shape every chip in the original Galaxy
+        dispatch group received as input.
+        """
+        from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_sp_mesh_composer
+
+        composer = get_sp_mesh_composer(self.mesh_device)
+        indices_host = ttnn.to_torch(indices, mesh_composer=composer, dtype=torch.int32).clone()
+
+        # Compose result for a 3D per-device tensor (1, seq, topk) with sp_composer is
+        # (dgs, seq, topk). For 4D (1, 1, seq, topk) it would be (dgs, 1, seq, topk).
+        # Squeeze any leading singleton dims past the dgs axis.
+        while indices_host.dim() > 3 and indices_host.shape[1] == 1:
+            indices_host = indices_host.squeeze(1)
+
+        num_dispatch_groups = self.num_routed_experts // self.experts_per_chip // self.dispatch_group_size
+
+        layer_dir = _CAPTURE_DISPATCH_DIR / f"L{self.layer_idx:02d}"
+        layer_dir.mkdir(parents=True, exist_ok=True)
+        save_path = layer_dir / "indices.pt"
+        torch.save(
+            {
+                "indices": indices_host,
+                "config": {
+                    "dispatch_group_size": self.dispatch_group_size,
+                    "num_dispatch_groups": num_dispatch_groups,
+                    "experts_per_chip": self.experts_per_chip,
+                    "num_routed_experts": self.num_routed_experts,
+                    "num_experts_per_tok": self.num_experts_per_tok,
+                    "seq_len_per_chip": self.seq_len_per_chip,
+                    "emb_dim": emb_dim,
+                    "metadata_len": self.metadata_len,
+                    "max_dispatch_buffer_token_size": self.max_dispatch_buffer_token_size,
+                    "layer_idx": self.layer_idx,
+                },
+            },
+            save_path,
+        )
+        size_kb = indices_host.numel() * 4 / 1024
+        logger.info(
+            f"[dispatch_capture] L{self.layer_idx} -> {save_path}  "
+            f"indices {tuple(indices_host.shape)} int32 ({size_kb:.1f} KB)"
+        )
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -255,6 +332,12 @@ class TtDispatchModule(LightweightModule):
             f"  metadata_len={self.metadata_len}, max_dispatch_buffer_token_size={self.max_dispatch_buffer_token_size}"
         )
         logger.debug(f"  cluster_axis={self.cluster_axis}, num_links={self.num_links}, topology={self.topology}")
+
+        if _CAPTURE_DISPATCH_ALL or self.layer_idx in _CAPTURE_DISPATCH_LAYERS:
+            try:
+                self._capture_indices(indices, emb_dim=int(x.shape[-1]))
+            except Exception as e:
+                logger.error(f"[dispatch_capture] L{self.layer_idx} failed: {e}")
 
         if _PROFILE_OPS:
             signpost(header=f"dispatch_L{self.layer_idx}_start")
