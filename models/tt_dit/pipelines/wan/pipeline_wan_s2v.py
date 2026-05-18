@@ -81,7 +81,8 @@ from ...encoders.wav2vec2.audio_preprocess import (
     linear_interpolation,
     load_audio_to_input_values,
 )
-from ...encoders.wav2vec2.model_wav2vec2 import Wav2Vec2Config, Wav2Vec2Encoder
+from ...encoders.wav2vec2.config_wav2vec2 import Wav2Vec2Config
+from ...encoders.wav2vec2.model_wav2vec2 import Wav2Vec2Encoder
 from ...models.transformers.wan2_2.transformer_wan_s2v import WanS2VTransformer3DModel
 from ...models.vae.vae_wan2_1 import WanDecoder, WanEncoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
