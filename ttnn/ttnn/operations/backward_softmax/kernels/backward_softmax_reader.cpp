@@ -23,17 +23,21 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
+    // RT args (per-core under multi-core distribution): the lane partition
+    // [start_lane, start_lane + num_lanes) is the contiguous slice this core
+    // owns. `total_lanes` itself is no longer a compile-time quantity because
+    // the per-core lane count differs by up to 1 across cores.
     uint32_t grad_output_addr = get_arg_val<uint32_t>(0);
     uint32_t output_addr = get_arg_val<uint32_t>(1);
     uint32_t start_lane = get_arg_val<uint32_t>(2);
+    uint32_t num_lanes = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t BLOCK_SIZE = get_compile_time_arg_val(0);
     constexpr uint32_t NUM_BLOCKS = get_compile_time_arg_val(1);
     constexpr uint32_t DIM_IS_W = get_compile_time_arg_val(2);  // 1 = dim=-1, 0 = dim=-2
     constexpr uint32_t Ht = get_compile_time_arg_val(3);
     constexpr uint32_t Wt = get_compile_time_arg_val(4);
-    constexpr uint32_t num_lanes = get_compile_time_arg_val(5);
-    constexpr auto grad_output_args = TensorAccessorArgs<6>();
+    constexpr auto grad_output_args = TensorAccessorArgs<5>();
     constexpr auto output_args = TensorAccessorArgs<grad_output_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_grad_output = 0;

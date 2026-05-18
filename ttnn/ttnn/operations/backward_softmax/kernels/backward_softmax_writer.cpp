@@ -16,16 +16,18 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
+    // RT args (per-core under multi-core distribution): [start_lane, num_lanes]
+    // is this core's contiguous lane slice. See the reader kernel for context.
     uint32_t grad_input_addr = get_arg_val<uint32_t>(0);
     uint32_t start_lane = get_arg_val<uint32_t>(1);
+    uint32_t num_lanes = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t BLOCK_SIZE = get_compile_time_arg_val(0);
     constexpr uint32_t NUM_BLOCKS = get_compile_time_arg_val(1);
     constexpr uint32_t DIM_IS_W = get_compile_time_arg_val(2);  // 1 = dim=-1, 0 = dim=-2
     constexpr uint32_t Ht = get_compile_time_arg_val(3);
     constexpr uint32_t Wt = get_compile_time_arg_val(4);
-    constexpr uint32_t num_lanes = get_compile_time_arg_val(5);
-    constexpr auto dst_args = TensorAccessorArgs<6>();
+    constexpr auto dst_args = TensorAccessorArgs<5>();
 
     constexpr uint32_t cb_grad_input = 16;
 

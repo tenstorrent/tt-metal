@@ -49,7 +49,8 @@ void kernel_main() {
     constexpr uint32_t BLOCK_SIZE = get_compile_time_arg_val(0);
     constexpr uint32_t NUM_BLOCKS = get_compile_time_arg_val(1);
     constexpr uint32_t DIM_IS_W = get_compile_time_arg_val(2);  // 1 = dim=-1, 0 = dim=-2
-    constexpr uint32_t num_lanes = get_compile_time_arg_val(3);
+    // RT arg 0: per-core lane count under multi-core distribution.
+    uint32_t num_lanes = get_arg_val<uint32_t>(0);
 
     // Block shapes — orientation flips with dim:
     //   dim=-1 (W reduction): block is 1 row × BLOCK_SIZE cols of tiles.

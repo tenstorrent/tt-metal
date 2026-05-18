@@ -1,0 +1,15 @@
+{"ts":"2026-05-08T00:00:00+00:00","event":"start","details":"Begin numerical stability analysis for backward_softmax"}
+{"ts":"2026-05-08T00:00:01+00:00","event":"read_reference","details":"Read tt_metal/third_party/tt_ops_code_gen/references/numerical_stability_analysis_reference.md (full)"}
+{"ts":"2026-05-08T00:00:02+00:00","event":"glob_op_dir","details":"Listed ttnn/ttnn/operations/backward_softmax/** to discover entry points"}
+{"ts":"2026-05-08T00:00:03+00:00","event":"read_entrypoint","details":"Read backward_softmax.py — confirmed float32-only, tile-aligned validation, no compute_kernel_config exposed"}
+{"ts":"2026-05-08T00:00:04+00:00","event":"read_descriptor","details":"Read backward_softmax_program_descriptor.py — confirmed math_fidelity=HiFi4, fp32_dest_acc_en=True, all intermediate CBs (cb_prod, cb_sum, cb_centered) are Float32, cb_scaler is bfloat16 (1.0), no UnpackToDestMode set"}
+{"ts":"2026-05-08T00:00:05+00:00","event":"read_compute","details":"Read backward_softmax_compute.cpp — two-pass: (mul + accumulate_reduce_block) then (sub<SCALAR> + mul); identified catastrophic cancellation site at sub<SCALAR>(dy, s)"}
+{"ts":"2026-05-08T00:00:06+00:00","event":"read_reader","details":"Read backward_softmax_reader.cpp — scaler prepared once via calculate_and_prepare_reduce_scaler<SUM,...> (factor=1.0, no divide-then-sum); per-lane lockstep dual-tensor streaming"}
+{"ts":"2026-05-08T00:00:07+00:00","event":"read_writer","details":"Read backward_softmax_writer.cpp — straight per-tile drain to DRAM; no precision events"}
+{"ts":"2026-05-08T00:00:08+00:00","event":"inspect_helpers","details":"Read streaming_reduce_helpers.hpp/.inl: accumulate_reduce_block uses Accumulate::at(cb_acc, b) for inter-block reload (round-trip via cb_sum)"}
+{"ts":"2026-05-08T00:00:09+00:00","event":"inspect_helpers","details":"Confirmed scaler factor=SUM_AND_MAX_REDUCE_FACTOR=1 (sum-only reduce, no 1/N scaler)"}
+{"ts":"2026-05-08T00:00:10+00:00","event":"design_decision","details":"Severity assessment: cancellation at (dy - s) is the dominant precision risk; fp32 dest is the only mitigation; algorithmic form has no cancellation-free O(N) alternative"}
+{"ts":"2026-05-08T00:00:11+00:00","event":"design_decision","details":"Identified gap: UnpackToDestMode::UnpackToDestFp32 is not set on cb_sum despite Float32 CB + fp32 dest — inter-block reload may go through TF32 SrcA path"}
+{"ts":"2026-05-08T00:00:12+00:00","event":"design_decision","details":"Noted Wormhole B0 hardware bug #38306: HiFi4 + fp32_dest_acc_en is reportedly unsafe; op uses both with no caller override"}
+{"ts":"2026-05-08T00:00:13+00:00","event":"write_output","details":"Wrote numerical_stability.md to ttnn/ttnn/operations/backward_softmax/numerical_stability.md"}
+{"ts":"2026-05-08T00:00:14+00:00","event":"complete","details":"Analysis done; no tests run (static-only)"}

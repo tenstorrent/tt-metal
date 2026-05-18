@@ -9,8 +9,15 @@ Implements the two-pass streaming VJP described in op_design.md:
     Pass 1 (per block): mul(dy, y) -> cb_prod  → accumulate_reduce_block -> cb_sum
     Pass 2 (per block): sub<SCALAR>(dy, cb_sum) -> cb_centered → mul(y, cb_centered) -> cb_grad_input
 
-Single-core for Phase 0. Each lane (a row for dim=-1, or a column for dim=-2)
-is processed end-to-end on one core; the lane loop runs sequentially.
+Multi-core (Refinement 1): the embarrassingly-parallel lanes (one tile-row for
+`dim=-1`, one tile-column for `dim=-2`) are distributed across the full
+``device.compute_with_storage_grid_size()`` grid via
+``ttnn.split_work_to_cores``. Per-core lane counts differ by at most 1 (no
+work-stealing, no inter-core communication, no sub-lane splitting). Each core
+runs its assigned contiguous range ``[start_lane, start_lane + num_lanes)``
+end-to-end via the same kernels as the single-core path — only the
+work-partition (``num_lanes``, ``start_lane``) is per-core, supplied as
+runtime args.
 """
 
 from pathlib import Path
@@ -76,9 +83,25 @@ def create_program_descriptor(
     scaler_page_size = ttnn.tile_size(ttnn.bfloat16)
     scaler_dtype = ttnn.bfloat16
 
-    # ---- Single-core layout ----
-    core = ttnn.CoreCoord(0, 0)
-    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+    # ---- Multi-core work distribution ----
+    # Lanes are embarrassingly parallel. Spread them across the full
+    # compute-with-storage grid; `ttnn.split_work_to_cores` guarantees the
+    # per-core lane counts differ by at most one. `all_cores` is the union of
+    # cores that actually receive work, which is what every kernel + CB binds
+    # to (cores outside this union are not part of the program).
+    device = grad_output.device()
+    grid_size = device.compute_with_storage_grid_size()
+
+    (
+        num_cores,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        lanes_per_core_g1,
+        lanes_per_core_g2,
+    ) = ttnn.split_work_to_cores(grid_size, total_lanes)
+
+    core_grid = all_cores
 
     # ---- CB indices ----
     CB_GRAD_OUTPUT = 0
@@ -189,52 +212,73 @@ def create_program_descriptor(
     ]
 
     # ---- Compile-time args (shared across kernels where applicable) ----
+    # Per-core `num_lanes` and `start_lane` are now RT args (they differ per
+    # core under multi-core distribution). Everything else stays compile-time.
     DIM_IS_W = 1 if dim_is_w else 0
 
-    # Reader CT args: BLOCK_SIZE, NUM_BLOCKS, DIM_IS_W, Ht, Wt, num_lanes, then accessors.
+    # Reader CT args: BLOCK_SIZE, NUM_BLOCKS, DIM_IS_W, Ht, Wt, then accessors.
     reader_ct_args = [
         BLOCK_SIZE,
         NUM_BLOCKS,
         DIM_IS_W,
         Ht,
         Wt,
-        total_lanes,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(grad_output).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
 
-    # Writer CT args: BLOCK_SIZE, NUM_BLOCKS, DIM_IS_W, Ht, Wt, num_lanes, then accessors.
+    # Writer CT args: BLOCK_SIZE, NUM_BLOCKS, DIM_IS_W, Ht, Wt, then accessors.
     writer_ct_args = [
         BLOCK_SIZE,
         NUM_BLOCKS,
         DIM_IS_W,
         Ht,
         Wt,
-        total_lanes,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(grad_input).get_compile_time_args())
 
-    # Compute CT args: BLOCK_SIZE, NUM_BLOCKS, DIM_IS_W, num_lanes.
+    # Compute CT args: BLOCK_SIZE, NUM_BLOCKS, DIM_IS_W.
     compute_ct_args = [
         BLOCK_SIZE,
         NUM_BLOCKS,
         DIM_IS_W,
-        total_lanes,
     ]
 
-    # ---- Runtime args (single core) ----
+    # ---- Runtime args (one set per core in `all_cores`) ----
+    # Walk groups in the same order `split_work_to_cores` walks them:
+    # group 1 first (more lanes per core), then group 2. The cumulative
+    # `current_lane` is the running `start_lane` for the next core, so the
+    # union of [start_lane, start_lane + num_lanes) ranges covers [0, total_lanes)
+    # exactly once with no overlap.
     reader_rt_args = ttnn.RuntimeArgs()
-    reader_rt_args[core.x][core.y] = [
-        grad_output.buffer_address(),
-        output.buffer_address(),
-        0,  # start_lane
-    ]
-
     writer_rt_args = ttnn.RuntimeArgs()
-    writer_rt_args[core.x][core.y] = [
-        grad_input.buffer_address(),
-        0,  # start_lane
-    ]
+    compute_rt_args = ttnn.RuntimeArgs()
+
+    current_lane = 0
+    for group, lanes_per_core in (
+        (core_group_1, lanes_per_core_g1),
+        (core_group_2, lanes_per_core_g2),
+    ):
+        if lanes_per_core == 0:
+            continue
+        for core_range in group.ranges():
+            for x in range(core_range.start.x, core_range.end.x + 1):
+                for y in range(core_range.start.y, core_range.end.y + 1):
+                    reader_rt_args[x][y] = [
+                        grad_output.buffer_address(),
+                        output.buffer_address(),
+                        current_lane,  # start_lane
+                        lanes_per_core,  # num_lanes
+                    ]
+                    writer_rt_args[x][y] = [
+                        grad_input.buffer_address(),
+                        current_lane,  # start_lane
+                        lanes_per_core,  # num_lanes
+                    ]
+                    compute_rt_args[x][y] = [
+                        lanes_per_core,  # num_lanes
+                    ]
+                    current_lane += lanes_per_core
 
     # ---- Kernels ----
     reader_kernel = ttnn.KernelDescriptor(
@@ -257,7 +301,7 @@ def create_program_descriptor(
         kernel_source=str(KERNEL_DIR / "backward_softmax_compute.cpp"),
         core_ranges=core_grid,
         compile_time_args=compute_ct_args,
-        runtime_args=[],
+        runtime_args=compute_rt_args,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest_acc_en=True,
