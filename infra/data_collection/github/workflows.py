@@ -117,20 +117,21 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
             if ts:
                 block_end_ts = ts
             reset_done = True
-        if not reset_done and (
+        if (
             "unable to reset board successfully" in lower or
             "runner will now shutdown" in lower or
             "the operation was canceled" in lower
         ):
-            final_status = "FAILURE"
-            if ts:
-                block_end_ts = ts
-            # Collect this conclusive failure line in the summary before marking done
+            # Always collect all conclusive failure lines (there can be multiple)
             content = clean_line(line)
             if content and content not in seen_errors:
                 seen_errors.add(content)
                 error_lines.append(content)
-            reset_done = True
+            if not reset_done:
+                final_status = "FAILURE"
+                if ts:
+                    block_end_ts = ts
+                reset_done = True
 
     if num_smi_attempts == 0:
         num_smi_attempts = 1
