@@ -110,11 +110,35 @@ If agent is about to write blocked CPU code:
 - [ ] Divisibility checks pass for target device
 - [ ] Memory budget < 85%
 - [ ] ARCHITECTURE.md written with machine-parseable block inventory table
+- [ ] MESH_SHARDING_PLAN.md written with one row per block
+- [ ] Every divergence from the canonical Galaxy port has a documented reason
+
+### Output: MESH_SHARDING_PLAN.md (mandatory before Phase 3)
+
+One row per block (attention / MLP / norm / LM head). For each:
+- `cluster_axis` for every CCL op, head-sharding axis, output memcfg, num_links
+- File-and-line citation to the canonical Galaxy port row this matches
+  (e.g. `llama3_70b_galaxy/tt/llama_attention.py:N`)
+- For any deviation from the canonical port: one-line reason (e.g. "head count
+  not divisible by mesh.rows=8")
+
+**Two-reference disambiguation.** When both a same-model v1 (correctness-locked)
+and a canonical Galaxy port (perf-locked) exist:
+- v1 is the **math oracle** (HF key map, qknorm placement, rope_dim, gate placement).
+- Canonical Galaxy port is the **structural oracle** (cluster_axis, num_links,
+  head-sharding axis, output memcfg, residual-stream dtype).
+- On disagreement, default to the Galaxy port unless this plan documents the
+  deviation with a reason. v1's structural choice may have been correctness-locked
+  at one ISL, not perf-locked.
+
+Acceptance gate for Phase 1: this file exists AND every row either matches the
+canonical port OR documents the deviation. **Phase 3 cannot start without it.**
 
 ### Outputs
 ```
 models/demos/{model}/
 ├── ARCHITECTURE.md          # block inventory, weight mapping, TP plan, bottlenecks
+├── MESH_SHARDING_PLAN.md    # per-block sharding parity table vs canonical Galaxy port
 ```
 
 ---
@@ -192,6 +216,19 @@ models/demos/{model}/
 ```
 Log: `"attention.py: adapted from qwen3_vl/tt/attention.py (RoPE style only)"`
 
+**When both a same-model v1 and a canonical Galaxy port exist:**
+- v1 is the **math oracle** — take from it: HF key map, qknorm placement,
+  rope_dim, gate placement, custom-op math.
+- Canonical Galaxy port is the **structural oracle** — take from it
+  unconditionally: cluster_axis, num_links, head-sharding axis, output memcfg,
+  residual-stream dtype, CCL buffer key conventions.
+- If they disagree on a structural choice, the v1's choice is treated as
+  potentially correctness-locked-not-perf-locked. Default to the Galaxy port
+  unless `MESH_SHARDING_PLAN.md` says otherwise with a reason.
+
+Log: `"attention.py: math from qwen3_6_galaxy/tt/llama_attention.py, sharding
+from llama3_70b_galaxy/tt/llama_attention.py (cluster_axis=0 WO, num_links=2)"`
+
 #### 3b. Implement (no CPU in forward)
 Every TTNN block gets `debug_mode=False` parameter for op-level capture.
 
@@ -248,6 +285,14 @@ Hint (free text or reference to working impl) resets counter to 0.
       with `ShardTensor2dMesh` + the necessary CCL ops in forward. Compare against
       the per-block budget in 7c. **This check must run before scaling layer count**
       — single-block tests cannot expose replicated-weight OOMs.
+- [ ] **Sharding parity check passes.** Open `MESH_SHARDING_PLAN.md`, verify the
+      row for this block matches the code as written (cluster_axis, num_links,
+      head-sharding axis, output memcfg). Any drift from the plan must be
+      explicitly justified before merge, not retro-fixed.
+- [ ] **CCL op diff vs canonical port is empty (or annotated).** Grep this block's
+      file for `cluster_axis=`, `num_links=`, `reduce_scatter`, `all_gather`,
+      `line_all_reduce`. Compare to the same grep in the canonical Galaxy port.
+      Every divergence is annotated in `MESH_SHARDING_PLAN.md`.
 - [ ] **Full-layer-count smoke load.** After 1-layer PCC passes, instantiate the model
       with all `n_layers` decoder layers (DRAM only, no forward) on real target hardware.
       If model construction OOMs, the per-block budget is wrong — fix sharding now,

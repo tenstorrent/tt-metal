@@ -203,13 +203,57 @@ def inspect_tensor(tensor, name="tensor"):
 
 ## Tracing Debugging
 
-### "Writes not supported during trace capture"
-**Cause**: Using ops that write to device memory during trace
-**Solution**: Move writes outside trace, use pre-allocated tensors
+### `TT_FATAL: Writes are not supported during trace capture`
 
-### "Allocating device buffers is unsafe" Warning
-**Cause**: Allocating after trace capture started
-**Solution**: Pre-allocate all tensors before `begin_trace_capture`
+**Cause**: a host→device or device→host transfer (`ttnn.from_torch` / `ttnn.to_torch`)
+or a non-trace-safe allocation runs INSIDE the captured region. Trace can only record
+device-resident ops.
+
+**Diagnosis recipe**: flip trace on with the same forward path and read the stack from
+the first `ttnn.begin_trace_capture` frame down. Every per-step `from_torch` /
+`to_torch` is a suspect. Common offenders observed in real bring-ups:
+
+| Site | Symptom | Fix |
+|------|---------|-----|
+| Norm wrappers like `_shard_across_cols` / `_gather_from_cols` that do `to_torch → reshape → from_torch` | Crash on the first decoder layer | Replace with on-device CCL: `ttnn.all_gather(dim, cluster_axis=1)` and keep residual sharded throughout the layer (`llama3_70b_galaxy` pattern) |
+| `_embed`: `from_torch(input_ids)` per step | Crash on embedding | Preallocate `input_ids_buf` once; refresh via `ttnn.copy_host_to_device_tensor(host_ids, input_ids_buf)` |
+| Logits gather inside forward (`to_torch` at end of `_norm_and_lm_head`) | Crash near LM head | Return `ttnn.Tensor` from forward; do `to_torch` AFTER `ttnn.execute_trace` |
+| Decode mask / `cur_pos` / `update_idxs` rebuilt via `from_torch` per call | Crash inside attention | Preallocate `cur_pos` as `[B]` int32 device tensor; derive other indices on-device; build any static mask once at `__init__` and `ttnn.slice` inside forward |
+| DeltaNet recurrent state returned as a fresh tensor each step | Trace captures but second `execute_trace` gives wrong output | State must be a `self.state_buffer` preallocated tensor that the kernel writes into in place — same discipline as `paged_update_cache` |
+
+The fix template is in `skills/ttnn` § "Trace-Safe Forward (REQUIRED for production
+perf)". Read that section before refactoring.
+
+### `Allocating device buffers is unsafe` Warning
+
+**Cause**: Allocating after `begin_trace_capture` started. Even a stray `ttnn.zeros`
+inside the forward will trigger this.
+
+**Solution**: Pre-allocate every tensor before `begin_trace_capture`. Helpers like
+`ttnn.zeros(...)` and even `ttnn.linear` with no preallocated output buffer can
+allocate. Look for `memory_config=...` args and confirm they reuse existing memory.
+
+### Trace works but second `execute_trace` returns the wrong values
+
+**Cause**: state that should persist across iterations was returned as a fresh tensor
+the first time and dangles after that. Trace replays the pointer dependency captured
+at `begin_trace_capture` — if the layer returns a *new* DeltaNet state tensor each
+call, the trace points at the FIRST iteration's output, not the most recent one.
+
+**Fix**: state-holding layers must hold a `self.state_buffer` (preallocated, persistent
+across calls) and update it in place. The KV-cache pattern (`paged_update_cache`) is
+the model — copy that discipline for DeltaNet recurrent state and conv1d state.
+
+### `from_torch` works in eager but `copy_host_to_device_tensor` errors with shape mismatch
+
+**Cause**: the preallocated device buffer was created with a different shape, dtype, or
+mesh_mapper than the host tensor being copied. `copy_host_to_device_tensor` is strict;
+`from_torch` is lenient (it allocates a fresh buffer matching the host tensor).
+
+**Fix**: build the device buffer with `ttnn.from_torch(<reference_host_tensor>, ...)`
+ONCE at capture time, then reuse it. The host tensor passed to `copy_host_to_device_tensor`
+must match it exactly. Common mismatches: wrong int dtype (`uint32` vs `int32`), wrong
+layout (`ROW_MAJOR` vs `TILE`), wrong mesh_mapper (forgot `ReplicateTensorToMesh`).
 
 ## Performance Debugging
 
@@ -357,6 +401,165 @@ Symptom: correct prefill output, but wrong first decode token (often EOS or wron
 
 Fix: disable decode traces for servers; use `forward_decode_step()` which re-selects
 the program config on every call.
+
+### `ttnn.reshape` view aliasing — `deallocate(True)` on pre-reshape tensor invalidates the view
+
+Symptom: PCC degrades step-by-step in deep stacks (e.g. 16L PCC=0.98, 4L PCC=0.9999).
+The per-block PCC is fine in isolation but multi-layer regression diverges. Root cause:
+`ttnn.reshape` returns an *aliased view* — not a copy — and the post-reshape tensor
+becomes invalid once you call `deallocate(True)` on the pre-reshape tensor it views.
+
+```python
+# BUG: view freed under our feet
+x = ttnn.reshape(qk_per_head, ttnn.Shape([B, T, n_heads, head_dim]))
+qk_per_head.deallocate(True)        # ← invalidates x!
+... use x ...                       # corrupted reads, no error raised
+```
+
+Fixes (any of):
+- Keep the pre-reshape tensor alive until you're fully done with the reshaped view.
+- For multi-head loops: collect all per-head views, concat, THEN deallocate the source.
+- For the n_heads==1 path: `ttnn.clone()` the view before freeing the source.
+
+Found in `models/demos/qwen3_6_galaxy/tt/llama_attention.py` (T11c fix). The
+no-error-raised aspect is the trap — only PCC drift exposes it.
+
+### `fast_reduce_nc` uses padded_shape, not logical_shape (T=1 decode bug)
+
+Symptom: prefill PCC = 0.9999, decode PCC = 0.5 for T=1 batches. Off-by-31 errors
+in residual shape, NaN propagation downstream.
+
+`ttnn.fast_reduce_nc` and several other ops operate on the **padded** tile shape, so a
+T=1 input stored in a 32-row tile produces a logical T=32 output. The garbage in rows
+[1:32] then leaks into subsequent matmuls.
+
+Fix: clip back to the logical shape with `ttnn.slice` after the op:
+
+```python
+x_normed = self.distributed_norm(x_sharded)
+x_normed = _gather_from_cols(x_normed_sharded, self.mesh_device)
+# CLIP back — fast_reduce_nc inside the norm padded T=1 to T=32:
+x_normed = ttnn.slice(x_normed, [0, 0, 0], [B, T, H],
+                      memory_config=ttnn.DRAM_MEMORY_CONFIG)
+```
+
+Watch for this anywhere reductions / norms run on T < 32. Standard `ttnn.reshape`
+preserves logical shape, but ops that internally operate on tiles may not.
+
+### Zero-Centered RMSNorm: `(1+w)*norm(x)` vs `w*norm(x)`
+
+HF's `Qwen3NextRMSNorm` uses `output = (1+w) * x * rsqrt(var+eps)` (weight is
+*zero-centered*: stored as the deviation from 1.0). Loading the weight as-is and
+applying the standard `w*norm(x)` kernel drops PCC catastrophically on early layers
+where the residual is small.
+
+Diagnosis: norm-block PCC ≈ 0.5 while every other block is fine; full model output is
+near-random.
+
+Fix at weight-load time (no kernel change needed):
+
+```python
+w = state_dict[f"{prefix}.weight"].float()
+if zero_centered:
+    w = w + 1.0   # bake +1 into the stored weight; standard rmsnorm kernel now correct
+```
+
+Models that use this convention: Qwen3-Next family (Qwen3.6-27B), some Olmo3 variants.
+Check HF `modeling_*.py` for `1 + self.weight` in the RMSNorm forward — that's the tell.
+
+The reverse exists too: `Qwen3NextRMSNormGated` in the same file uses the standard
+convention (`w*norm(x)`). Different norms in the SAME model can use different
+conventions — read every norm class.
+
+### DistributedNorm Precision (HiFi2 / BF16-accum drops PCC on small activations)
+
+`rms_norm_pre_all_gather` computes sum-of-squares, then `rms_norm_post_all_gather`
+applies `rsqrt(var+eps)`. With BF16 accumulation, `rsqrt` of a small variance
+(embedding output std ≈ 0.013 → var ≈ 1.7e-4) compounds rounding error catastrophically
+on the way to a 5120-dim hidden state.
+
+Symptom: 4L PCC = 0.985 (norm-bounded), block-level norm test passes 0.9999.
+
+Fix: use HiFi4 + fp32 dest accumulation in the compute kernel config:
+
+```python
+self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+```
+
+Apply this to every norm operating on small-magnitude residuals (i.e. the residual
+stream norms in a hybrid model). Block-level test gain: 0.99998. 4L gain: 0.985 → 0.9934.
+
+**BUT** — HiFi4 has bigger per-tile CBs. For *replicated* `ttnn.rms_norm` on a wide
+dim (5120 on a single core), HiFi4 + fp32_dest_acc CBs don't fit alongside the L1
+residual buffer. Symptom:
+
+```
+TT_THROW @ program.cpp:1052: Statically allocated circular buffers in program N
+clash with L1 buffers on core range [(x=0,y=0)-(x=0,y=0)].
+L1 buffer allocated at 1355776 and static circular buffer region ends at 1520128
+```
+
+For the replicated case, use **HiFi2 + fp32_dest_acc_en=True** (matches production
+`models/common/rmsnorm.py` line 115-120 — Llama-3 8B, 70B all run this way). The
+fp32 dest accumulation is what preserves precision; HiFi2 vs HiFi4 only affects
+mantissa rounds in the matmul-like inner product, which has negligible impact
+on the variance estimate over a 5120-element sum.
+
+Rule of thumb: HiFi4 + fp32_dest_acc on a *sharded* slice (1280-dim per col) → fits
+in L1, max precision. HiFi2 + fp32_dest_acc on the *replicated* full dim (5120) →
+fits in L1, same effective precision for norms.
+
+### `Circular buffers clash with L1 buffers` — L1 CB-budget overflow
+
+The error above (`program.cpp:1052: Statically allocated circular buffers in
+program N clash with L1 buffers on core range ...`) is **not** memory exhaustion in
+the usual sense — it's a layout conflict. A static CB region the op wants to put
+on core (x, y) overlaps an L1 *buffer* already allocated there (residual stream,
+KV cache slice, etc.). Diagnostic info in the message: `L1 buffer allocated at
+A`, `static circular buffer region ends at B`. If `A < B`, they overlap.
+
+Causes & fixes:
+- **HiFi4 + fp32_dest_acc on a wide unsharded input**: switch to HiFi2 (above).
+- **Single-core program config on a multi-core-amenable op**: pass an explicit
+  `program_config` with a bigger `compute_with_storage_grid_size`.
+- **Op called on an INTERLEAVED L1 input where the L1 buffer is large**: move the
+  input to DRAM via `ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)` before the
+  op, or shard the input across cores.
+- **CB sizing tied to tile-row count × dtype**: drop weight dtype from bfloat16
+  to bfloat8_b for the offending op — the weight-side CB shrinks 2×.
+
+The single-core grid in the error (`x=0,y=0 - x=0,y=0`) is the giveaway: ttnn
+picked a default single-core layout that doesn't fit. Force multi-core or move
+the bulky buffer to DRAM.
+
+### Paged KV Cache PCC Mismatch vs Non-Paged
+
+Symptom: paged-attention test fails parity against non-paged at PCC ≈ 0.5–0.9 (not the
+expected 0.999+). Both paths are the same math — divergence is a layout/index bug.
+
+Common causes:
+1. **Wrong `block_size` vs `k_chunk_size`**: SDPA's `k_chunk_size` must equal (or
+   evenly divide) `block_size`. Mismatch reads garbage from the next block.
+2. **`update_idxs_tensor` index calculation wrong**: `paged_update_cache` expects
+   absolute positions in the user's logical sequence, not offsets into the current
+   block. If you've translated to a block-local offset, the write lands in the wrong
+   slot in the pool.
+3. **Page table not refreshed before decode** when the user's sequence crosses a block
+   boundary — `paged_update_cache` reads `page_table[user_id, block_idx]` for the
+   physical block, but if the table still has the old block_idx, the write goes to
+   the previous block.
+4. **`paged_update_cache` not configured HEIGHT_SHARDED on 1 core**: the default
+   program config can shard across cores in a way incompatible with paged layout.
+   Use `compute_with_storage_grid_size=(1,1)`.
+
+Test the parity FIRST (small seq, small block_size) with a known-good non-paged
+reference; only after PCC ≥ 0.999 against non-paged should you trust the paged
+pipeline for production.
 
 ---
 

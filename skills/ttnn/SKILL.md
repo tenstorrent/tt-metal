@@ -78,6 +78,7 @@ late. Decide the mesh_mapper at block-design time, not bring-up time.
 | **Attention QKV (fused)** | `ShardTensor2dMesh(dims=(None,-1))` | Column-parallel on heads → each chip owns `n_heads/n_dev` heads. |
 | **Attention output (Wo)** | `ShardTensor2dMesh(dims=(None,-1))` | Row-parallel — followed by `reduce_scatter` on cluster_axis=1. |
 | **LM head** | `ShardTensor2dMesh(dims=(None,-1))` | Vocab-parallel — replicated for 32K vocab OK, **MUST shard for >128K vocab** (Qwen3 248K replicated = 2.4 GB/chip just for the head). |
+| **Full-attn WO / MLP FF2** | `ShardTensor2dMesh` row-parallel, `reduce_scatter` on the **same `cluster_axis` as the canonical Galaxy port** | The ring topology (4-way vs 8-way) sets a hard floor on per-call CCL latency. Mirroring the canonical port costs nothing at write time and 3-5 ms/layer at audit time. |
 | **Norm weights, QK-norm** | `ReplicateTensorToMesh` | Small 1-D tensors (`[dim]`). |
 | **Embedding table** | `ReplicateTensorToMesh` | Sparse lookup, OK to replicate if vocab small. |
 | **RoPE cos/sin tables** | `ReplicateTensorToMesh` | Small, read by every chip. |
@@ -121,6 +122,39 @@ def _print_footprint(self, name: str):
 **Acceptance rule:** `(per_block_MB × n_layers) < 0.6 × dram_per_chip_MB`. If not,
 the block is replicating something it shouldn't. Stop and re-plan before writing
 the next block.
+
+### 3b. Sharding Parity Against Canonical Galaxy Reference (RUN BEFORE WRITING THE BLOCK)
+
+**Two references, two roles.** When porting a model to Galaxy, you often have:
+- A **v1 implementation** of the same model (correctness-locked; passes PCC > 0.99).
+- A **canonical Galaxy port** (e.g. `models/demos/llama3_70b_galaxy/`, `models/demos/olmo_galaxy/`)
+  — perf-locked; sharding / CCL choices are tuned for Galaxy ring topology.
+
+**Rule:** the v1 is your *math oracle* (gives you `q_norm`, `rope_dim`, gate placement,
+HF key map). The canonical port is your *structural oracle* (gives you cluster_axis,
+num_links, output memcfg, head-sharding direction, residual-stream dtype).
+
+**For every block, before writing it**, fill out this 6-row table against both
+references. If the row differs between v1 and the Galaxy port, **default to the
+Galaxy port** unless the math forces otherwise (and document why in
+`MESH_SHARDING_PLAN.md`):
+
+| structural choice            | v1 | canonical Galaxy port | this block uses | reason if differs |
+|---|---|---|---|---|
+| QKV `cluster_axis`           | ? | ? | ? | |
+| QKV head-sharding axis (rows vs cols) | ? | ? | ? | |
+| WO (output proj) `cluster_axis` for reduce_scatter | ? | ? | ? | |
+| MLP `cluster_axis` (FF1/FF2/FF3) | ? | ? | ? | |
+| `num_links` for CCL ops (1 vs 2) | ? | ? | ? | |
+| Residual-stream dtype across N layers | ? | ? | ? | |
+
+**Anti-pattern (precedent: V2-4 in qwen3_6_galaxy_v2 bringup):** A `is_<model>`
+branch agent was told "mirror v1's working `llama_attention.py`" and inherited
+v1's `cluster_axis=1` (4-way ring) for full-attention WO reduce_scatter. The
+canonical llama3_70b_galaxy uses `cluster_axis=0` (8-way ring). The 4-way ring
+takes ~3.8× longer per call. The miss survived 40+ downstream commits before
+tracy revealed it; the fix is a foundational refactor at that point. **Catch
+this at table-fill time, not at tracy-audit time.**
 
 ### 4. Memory Configuration (Activations)
 
@@ -209,6 +243,171 @@ class TtAttentionWithKVCache(LightweightModule):
 
         return self.attention(q, keys, values)
 ```
+
+### 5a. Paged KV Cache (REQUIRED for vLLM / tt-inference-server)
+
+vLLM and tt-inference-server require a **paged** KV cache: the cache is allocated as
+fixed-size blocks indexed by a `page_table`, allowing arbitrary sequence reorderings.
+Without paged attention the model cannot be served behind vLLM.
+
+**Cache layout** (per layer, per device):
+```
+[max_num_blocks, n_kv_per_dev, block_size, head_dim]
+```
+- `block_size`: tokens per page block (typical: 64). Must be a multiple of 32.
+- `max_num_blocks`: pool size. Sized as `max_batch * ceil(max_seq_len / block_size)`.
+- `page_table`: int32 tensor `[B, max_blocks_per_seq]` mapping logical block id → physical block id in the pool.
+
+```python
+# Allocation at __init__ — one buffer per layer:
+self.k_cache = ttnn.from_torch(
+    torch.zeros(max_num_blocks, n_kv_per_dev, block_size, head_dim, dtype=torch.bfloat16),
+    device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 1), mesh_shape=cluster_shape),
+)
+# Identical for v_cache.
+```
+
+**Prefill** uses `paged_fill_cache` (writes user_id's blocks into the pool at indices
+specified by the page_table row for that user):
+
+```python
+ttnn.experimental.paged_fill_cache(
+    self.k_cache, k_tile, page_table_tt, user_id=user_id, batch_offset=0,
+)
+ttnn.experimental.paged_fill_cache(
+    self.v_cache, v_tile, page_table_tt, user_id=user_id, batch_offset=0,
+)
+```
+
+**Decode** uses `paged_update_cache` (writes ONE token at `current_pos` per user) and
+`paged_scaled_dot_product_attention_decode`:
+
+```python
+# Update — HEIGHT_SHARDED on a single core, current_pos as int32[B] device tensor
+ttnn.experimental.paged_update_cache(
+    self.k_cache, k_decode, update_idxs_tensor=cur_pos_tt, page_table=page_table_tt,
+    batch_offset=0,
+)
+
+# Attend over paged cache
+attn = ttnn.experimental.paged_scaled_dot_product_attention_decode(
+    q_decode, self.k_cache, self.v_cache,
+    cur_pos_tensor=cur_pos_tt,
+    page_table=page_table_tt,
+    scale=1.0 / math.sqrt(head_dim),
+    program_config=ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(1, 1),  # 1-core for HEIGHT_SHARDED
+        q_chunk_size=32, k_chunk_size=block_size,
+    ),
+    compute_kernel_config=hifi4_kernel,
+)
+```
+
+**Why both paged_update_cache AND paged_SDPA**: paged_update_cache writes the NEW K/V
+into the block pool *in place* (trace-safe). paged_SDPA reads from the pool through the
+page_table, so K/V layout in the pool can be sparse / reordered without breaking the
+attention pattern. Both ops are required — using regular `update_cache` + `SDPA_decode`
+on a paged buffer silently writes/reads the wrong indices.
+
+**Block-size constraints**:
+- `block_size % 32 == 0` (TILE_LAYOUT)
+- `block_size >= k_chunk_size` in SDPA program config — undersize causes a partial-tile hang.
+
+**Test the paged path with a parity test against the non-paged path** at the same
+sequence positions — PCC should be > 0.999 (same math, just different cache layout).
+See `models/demos/qwen3_6_galaxy/tests/test_paged_attention.py` for the template.
+
+### 5b. Trace-Safe Forward (REQUIRED for production perf)
+
+`ttnn.begin_trace_capture` / `ttnn.execute_trace` records a graph of device ops and replays
+it on subsequent calls — eliminating the ~hundreds of ms/step Python dispatch overhead
+for a 64-layer model. Trace gives 10-50× decode speedup. But trace ONLY captures device
+ops — host roundtrips inside the captured region crash with:
+
+```
+TT_FATAL: Writes are not supported during trace capture. trace id: 0
+```
+
+**Rules for a trace-safe forward:**
+
+1. **NO `ttnn.from_torch` inside the captured region.** Every per-step input must live in
+   a *preallocated* device buffer. Refresh contents per step with:
+   ```python
+   ttnn.copy_host_to_device_tensor(host_tensor_cpu, device_buffer_tt)
+   ```
+   This copies through a pre-existing buffer (trace-safe) instead of allocating a new one.
+
+2. **NO `ttnn.to_torch` inside the captured region.** All host gathers (logits readback,
+   sampling) happen OUTSIDE `execute_trace`. The forward returns a `ttnn.Tensor`; the
+   caller does `ttnn.to_torch(...)` after `ttnn.execute_trace(...)` returns.
+
+3. **NO per-step `ttnn.from_torch` for masks / position indices.** Either:
+   - Build a static device tensor once at `__init__` (e.g. full causal mask) and `ttnn.slice`
+     inside the forward (slice IS trace-safe), OR
+   - Make `current_pos` itself a preallocated `[B]` int32 device tensor refreshed via
+     `copy_host_to_device_tensor`; derive `update_idxs` / `cur_pos_sdpa` on-device.
+
+4. **No host roundtrip for residual reshaping.** Helpers that do `to_torch → torch op →
+   from_torch` (e.g. "shard replicated→sharded-across-cols by going through CPU") must be
+   replaced by on-device CCL (`ttnn.all_gather`, `ttnn.reduce_scatter`, `ttnn.experimental.all_gather_async`)
+   or by keeping the residual stream in its target layout throughout (sharded across cols
+   in the Galaxy convention — never gather to replicated mid-layer).
+
+5. **In-place state updates only.** Any persistent state across decode steps (KV cache,
+   DeltaNet recurrent state, conv1d input state) must be updated in place in a preallocated
+   buffer. Use `paged_update_cache` for KV (5a above); for custom state buffers, prefer
+   kernels that accept an output-buffer argument and write into it. `ttnn.assign(dst, src)`
+   can also work if the underlying op is trace-safe.
+
+**Trace pattern (lazy capture, keyed by shape):**
+
+```python
+class Generator:
+    def __init__(self, model, mesh_device):
+        self.model = model
+        self.mesh_device = mesh_device
+        self.trace_id_prefill = {}     # (B, T) -> trace_id
+        self.trace_inputs_prefill = {} # (B, T) -> tuple of device buffers
+        self.trace_output_prefill = {} # (B, T) -> output tensor handle
+        # ... similar for decode
+
+    def prefill_forward(self, input_ids, page_table=None, enable_trace=True):
+        B, T = input_ids.shape
+        key = (B, T)
+        if enable_trace and key not in self.trace_id_prefill:
+            # Capture once
+            host_inputs = self.model.prepare_prefill_inputs_host(input_ids, page_table)
+            device_inputs = self.model.allocate_prefill_input_buffers(B, T)
+            self._copy_host_to_device(host_inputs, device_inputs)
+            # Compile run (warms caches, compiles kernels)
+            _ = self.model.ttnn_prefill_forward(*device_inputs)
+            ttnn.synchronize_device(self.mesh_device)
+            # Capture run with the SAME device buffers
+            self._copy_host_to_device(host_inputs, device_inputs)
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            out_tt = self.model.ttnn_prefill_forward(*device_inputs)
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            self.trace_id_prefill[key] = trace_id
+            self.trace_inputs_prefill[key] = device_inputs
+            self.trace_output_prefill[key] = out_tt
+        # Execute: refresh inputs in place, run trace, gather output AFTER
+        host_inputs = self.model.prepare_prefill_inputs_host(input_ids, page_table)
+        self._copy_host_to_device(host_inputs, self.trace_inputs_prefill[key])
+        ttnn.execute_trace(self.mesh_device, self.trace_id_prefill[key], cq_id=0, blocking=False)
+        return ttnn.to_torch(self.trace_output_prefill[key], ...)
+```
+
+Precedent: `models/demos/llama3_70b_galaxy/tt/generator.py` — `_capture_trace_prefill`
+(L854), `_capture_trace_text` (L1153), `_prefill_forward_trace_text` (L977),
+`_decode_forward_trace_text` (L1202). The `copy_host_to_device` helper at the top of
+that file is the trace-safe input refresh pattern.
+
+**Decode trace and variable S**: a decode trace captured at S₁ produces wrong output at
+S₂ ≠ S₁ because the SDPA program config (core grid, tile sizing) is baked at capture
+time. For servers with variable-length sequences either capture one trace per S bucket
+or fall back to eager decode. See "Decode Trace Does NOT Scale to Variable S" below.
 
 ### 6. Prefill vs Decode Modes
 
@@ -301,6 +500,19 @@ class AudioCodecDecoder(LightweightModule):
 - Upsample ratios can be large (e.g., 1920× for 12.5Hz → 24kHz)
 
 ## Common Pitfalls
+
+### Inheriting cluster_axis From v1 Instead of the Canonical Galaxy Port
+
+If the v1 implementation has a `cluster_axis` choice that diverges from the
+canonical Galaxy port for the same op shape, **the v1 was probably
+correctness-locked at that choice, not perf-locked**. A v1 that passes PCC at
+ISL=128 with `cluster_axis=1` on a 4-way ring will pass PCC at any ISL with
+`cluster_axis=0` on an 8-way ring too — but the latter has half the per-call
+latency on Galaxy. Take cluster_axis from the Galaxy port, not v1.
+
+Symptom (tracy): a single per-op call in your model is 2-4× heavier than the
+same op in the reference Galaxy port for the same shape. Before reaching for
+fusion or custom kernels, **diff cluster_axis and num_links first**.
 
 ### bfloat8_b Numerical Overflow
 **Symptom**: PCC drops at specific layers, NaN/Inf values
