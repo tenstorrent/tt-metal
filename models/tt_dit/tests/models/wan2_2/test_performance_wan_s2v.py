@@ -1,20 +1,19 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Performance benchmark for the S2V pipeline.
+"""Performance benchmark for the multi-clip S2V pipeline.
 
-Measures the time breakdown across the four base-pipeline stages already
-hooked in ``pipeline_wan.py``:
+Reports per-clip and aggregate wall-clock for each stage emitted by
+``WanPipelineS2V.__call__``:
 
-  * ``encoder``         — UMT5 text encoder forward.
-  * ``prepare_latents`` — for S2V this is wav2vec2 + audio prep + VAE encode
-    (ref image, motion latents) + ``prepare_cond_emb``.
-  * ``denoising``       — the full diffusion loop (``num_inference_steps``
-    transformer forward passes + scheduler steps).
-  * ``vae``             — VAE decoder.
-
-Reports mean/min/max wall-clock for each stage so we can see where
-optimization effort should focus on BH-LB (2x4).
+  * ``encoder``                       — UMT5 text encoder forward (once).
+  * ``prepare_latents``               — wav2vec2 + audio bucketing + ref VAE
+                                        encode + initial-motion VAE encode (once).
+  * ``s2v_clip_{r}_prepare_audio_emb``— on-device CausalAudioEncoder (per clip).
+  * ``s2v_clip_{r}_prepare_cond_emb`` — cond/ref/motion prep (per clip).
+  * ``s2v_clip_{r}_denoise``          — diffusion loop (per clip).
+  * ``s2v_clip_{r}_vae_decode``       — VAE decode (per clip).
+  * ``s2v_clip_{r}_vae_encode_motion``— VAE encode of next-clip motion (per clip).
 """
 
 import os
@@ -44,11 +43,10 @@ _NEGATIVE_PROMPT = (
 )
 
 
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(3000)
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        # BH-LB (2x4) — the only S2V-supported BH mesh in device_configs today.
         [(2, 4), (2, 4), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0"],
@@ -64,6 +62,11 @@ _NEGATIVE_PROMPT = (
     [5, 40],
     ids=["steps5", "steps40"],
 )
+@pytest.mark.parametrize(
+    "num_clips",
+    [1, 4],
+    ids=["clips1", "clips4"],
+)
 def test_s2v_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -77,20 +80,20 @@ def test_s2v_pipeline_performance(
     height: int,
     is_fsdp: bool,
     num_inference_steps: int,
+    num_clips: int,
 ) -> None:
-    """Performance breakdown for WanPipelineS2V."""
+    """Multi-clip performance breakdown for WanPipelineS2V."""
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
+    guidance_scale = 4.5  # reference wan_s2v_14B.py:59
 
-    num_frames = 81
-    # Reference s2v_14B (wan_s2v_14B.py:59) uses sample_guide_scale=4.5.
-    guidance_scale = 4.5
-    guidance_scale_2 = 4.5
-
-    print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
+    print(
+        f"Parameters: {height}x{width}, {num_clips} clips × {WanPipelineS2V._INFER_FRAMES_PIXEL} pixels, "
+        f"{num_inference_steps} steps"
+    )
 
     pipeline = WanPipelineS2V.create_pipeline(
         mesh_device=mesh_device,
@@ -103,41 +106,35 @@ def test_s2v_pipeline_performance(
         sdpa_t_fracture_w_only=False,
         height=height,
         width=width,
-        num_frames=num_frames,
+        num_frames=81,  # reserved hook into create_pipeline's config-loading path
     )
 
     ref_image = PIL.Image.open(_REF_IMAGE_PATH)
 
-    benchmark_profiler = BenchmarkProfiler()
-
-    # No warmup — S2V's weight load + audio encoder warmup is part of what we
-    # want to measure here. Single perf run.
-    num_perf_runs = 1
+    profiler = BenchmarkProfiler()
 
     ttnn.synchronize_device(mesh_device)
 
-    for i in range(num_perf_runs):
-        logger.info(f"S2V performance run {i+1}/{num_perf_runs} ({num_inference_steps} steps)...")
-        with benchmark_profiler("run", iteration=i):
-            with torch.no_grad():
-                result = pipeline(
-                    prompt=_PROMPT,
-                    image_prompt=ref_image,
-                    audio_prompt=_AUDIO_PATH,
-                    negative_prompt=_NEGATIVE_PROMPT,
-                    height=height,
-                    width=width,
-                    num_frames=num_frames,
-                    num_inference_steps=num_inference_steps,
-                    seed=0,
-                    guidance_scale=guidance_scale,
-                    guidance_scale_2=guidance_scale_2,
-                    output_type="uint8",
-                    profiler=benchmark_profiler,
-                    profiler_iteration=i,
-                )
-                ttnn.synchronize_device(mesh_device)
-        logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
+    logger.info(f"S2V performance run: num_clips={num_clips}, steps={num_inference_steps}")
+    with profiler("run", iteration=0):
+        with torch.no_grad():
+            result = pipeline(
+                prompt=_PROMPT,
+                image_prompt=ref_image,
+                audio_prompt=_AUDIO_PATH,
+                negative_prompt=_NEGATIVE_PROMPT,
+                height=height,
+                width=width,
+                num_clips=num_clips,
+                num_inference_steps=num_inference_steps,
+                seed=0,
+                guidance_scale=guidance_scale,
+                output_type="uint8",
+                profiler=profiler,
+                profiler_iteration=0,
+            )
+            ttnn.synchronize_device(mesh_device)
+    logger.info(f"  Run completed in {profiler.get_duration('run', 0):.2f}s")
 
     frames = result.frames if hasattr(result, "frames") else (result[0] if isinstance(result, tuple) else result)
     if isinstance(frames, np.ndarray):
@@ -145,100 +142,125 @@ def test_s2v_pipeline_performance(
     elif isinstance(frames, torch.Tensor):
         print(f"Output shape: {tuple(frames.shape)}, range: [{frames.min().item():.1f}, {frames.max().item():.1f}]")
 
-    def _maybe_durs(step_name: str) -> list[float]:
-        return [
-            benchmark_profiler.get_duration(step_name, i)
-            for i in range(num_perf_runs)
-            if benchmark_profiler.contains_step(step_name, i)
-        ]
+    def _dur(step_name: str) -> float:
+        return profiler.get_duration(step_name, 0) if profiler.contains_step(step_name, 0) else 0.0
 
-    encoder_times = _maybe_durs("encoder")
-    prepare_latents_times = _maybe_durs("prepare_latents")
-    s2v_vae_ref_times = _maybe_durs("s2v_vae_encode_ref")
-    s2v_wav2vec2_times = _maybe_durs("s2v_wav2vec2")
-    s2v_prep_audio_emb_times = _maybe_durs("s2v_prepare_audio_emb")
-    s2v_vae_motion_times = _maybe_durs("s2v_vae_encode_motion")
-    s2v_prep_cond_emb_times = _maybe_durs("s2v_prepare_cond_emb")
-    denoising_times = _maybe_durs("denoising")
-    vae_times = _maybe_durs("vae")
-    total_times = _maybe_durs("run")
+    # Top-level (once per pipeline call) stages.
+    total = _dur("run")
+    encoder_t = _dur("encoder")
+    prepare_latents_t = _dur("prepare_latents")
+    vae_encode_ref_t = _dur("s2v_vae_encode_ref")
+    wav2vec2_t = _dur("s2v_wav2vec2")
+    vae_encode_initial_motion_t = _dur("s2v_vae_encode_motion")
 
-    # Audio cross-attn injection accumulator across the denoising loop —
-    # reported directly by the transformer (post-inference).
+    # Per-clip stages.
+    per_clip_total = [_dur(f"s2v_clip_{r}_total") for r in range(num_clips)]
+    per_clip_prepare_audio_emb = [_dur(f"s2v_clip_{r}_prepare_audio_emb") for r in range(num_clips)]
+    per_clip_prepare_cond_emb = [_dur(f"s2v_clip_{r}_prepare_cond_emb") for r in range(num_clips)]
+    per_clip_denoise = [_dur(f"s2v_clip_{r}_denoise") for r in range(num_clips)]
+    per_clip_vae_decode = [_dur(f"s2v_clip_{r}_vae_decode") for r in range(num_clips)]
+    per_clip_vae_encode_motion = [_dur(f"s2v_clip_{r}_vae_encode_motion") for r in range(num_clips)]
+
+    # Audio cross-attn injection accumulator (cumulative across the whole run).
     audio_inject_seconds = float(getattr(pipeline.transformer, "_audio_inject_sec_accum", 0.0))
 
-    print("\n" + "=" * 80)
-    print(f"WAN 2.2 S2V PERFORMANCE — BH-LB ({mesh_shape[0]}x{mesh_shape[1]}, {num_inference_steps} steps, {height}p)")
-    print("=" * 80)
-    print(f"Resolution:       {width}x{height}")
-    print(f"Num Frames:       {num_frames}")
-    print(f"Inference Steps:  {num_inference_steps}")
-    print(f"DiT Parallel:     sp={sp_factor}, tp={tp_factor}, topology={topology}")
-    print("-" * 80)
+    sum_denoise = sum(per_clip_denoise)
+    sum_vae_decode = sum(per_clip_vae_decode)
+    sum_vae_encode_motion = sum(per_clip_vae_encode_motion)
+    sum_prep_audio = sum(per_clip_prepare_audio_emb)
+    sum_prep_cond = sum(per_clip_prepare_cond_emb)
+    total_denoise_steps = max(1, num_clips * num_inference_steps)
 
-    def print_stats(name: str, times: list[float], *, per_step: bool = False, indent: int = 2) -> float:
+    print("\n" + "=" * 88)
+    print(
+        f"WAN 2.2 S2V PERFORMANCE — BH-LB ({mesh_shape[0]}x{mesh_shape[1]}), "
+        f"{num_clips} clip{'s' if num_clips != 1 else ''} × {num_inference_steps} steps, {height}p"
+    )
+    print("=" * 88)
+    print(f"Resolution:        {width}x{height}")
+    print(f"Output frames:     {num_clips * WanPipelineS2V._INFER_FRAMES_PIXEL - WanPipelineS2V._S2V_VAE_CLIP0_TRIM}")
+    print(f"DiT Parallel:      sp={sp_factor}, tp={tp_factor}, topology={topology}")
+    print("-" * 88)
+
+    def row(name: str, value: float, *, per_step: bool = False, indent: int = 2) -> None:
         prefix = " " * indent
-        if not times:
-            print(f"{prefix}{name:36}  (no data)")
-            return 0.0
-        mean_time = statistics.mean(times)
-        if per_step and num_inference_steps > 0:
-            extra = f"   {mean_time / num_inference_steps:6.3f}s/step"
+        if per_step and total_denoise_steps > 0:
+            extra = f"   {value / total_denoise_steps:6.3f}s/step"
         else:
             extra = ""
-        print(f"{prefix}{name:36}  mean={mean_time:8.3f}s{extra}")
-        return mean_time
+        print(f"{prefix}{name:38}  {value:8.3f}s{extra}")
 
-    print("TOP-LEVEL STAGES")
-    print_stats("Text encoder (UMT5)", encoder_times)
-    pl_time = print_stats("prepare_latents (total)", prepare_latents_times)
-    print_stats("Denoising loop", denoising_times, per_step=True)
-    print_stats("VAE decoder", vae_times)
-    print_stats("TOTAL pipeline", total_times)
-
-    print()
-    print("PREPARE_LATENTS BREAKDOWN (S2V-specific)")
-    print_stats("VAE encode (ref image)", s2v_vae_ref_times)
-    print_stats("wav2vec2 + bucketing", s2v_wav2vec2_times)
-    print_stats("prepare_audio_emb (CausalAudioEnc)", s2v_prep_audio_emb_times)
-    print_stats("VAE encode (motion 73f zeros)", s2v_vae_motion_times)
-    print_stats("prepare_cond_emb", s2v_prep_cond_emb_times)
+    print("TOP-LEVEL")
+    row("Text encoder (UMT5)", encoder_t)
+    row("prepare_latents (one-time, audio+ref)", prepare_latents_t)
+    row("Sum denoise (across clips)", sum_denoise, per_step=True)
+    row("Sum VAE decode (across clips)", sum_vae_decode)
+    row("Sum VAE motion-encode (across clips)", sum_vae_encode_motion)
+    row("TOTAL pipeline", total)
 
     print()
-    print("DENOISING-LOOP BREAKDOWN")
-    if denoising_times:
-        denoise_mean = statistics.mean(denoising_times)
-        print(f"  {'Denoising loop (total)':36}  mean={denoise_mean:8.3f}s")
+    print("ONE-TIME PREPARE_LATENTS BREAKDOWN")
+    row("VAE encode (ref image)", vae_encode_ref_t)
+    row("wav2vec2 + bucketing", wav2vec2_t)
+    row("VAE encode (initial zero motion)", vae_encode_initial_motion_t)
+
+    print()
+    print("PER-CLIP BREAKDOWN")
+    print(
+        f"  {'clip':4} {'total':>9} {'prep_audio':>11} {'prep_cond':>10} {'denoise':>9} {'vae_dec':>9} {'vae_mot_enc':>12}"
+    )
+    for r in range(num_clips):
         print(
-            f"  {'Audio cross-attn (cumulative)':36}  mean={audio_inject_seconds:8.3f}s"
-            f"   {audio_inject_seconds / max(num_inference_steps, 1):.4f}s/step"
-            f"  ({100.0 * audio_inject_seconds / max(denoise_mean, 1e-9):4.1f}% of denoise)"
+            f"  {r:4d} {per_clip_total[r]:>8.2f}s "
+            f"{per_clip_prepare_audio_emb[r]:>10.2f}s "
+            f"{per_clip_prepare_cond_emb[r]:>9.2f}s "
+            f"{per_clip_denoise[r]:>8.2f}s "
+            f"{per_clip_vae_decode[r]:>8.2f}s "
+            f"{per_clip_vae_encode_motion[r]:>11.2f}s"
         )
-        block_other = denoise_mean - audio_inject_seconds
+    if num_clips > 1:
         print(
-            f"  {'Block-stack (non-audio, cumulative)':36}  mean={block_other:8.3f}s"
-            f"   {block_other / max(num_inference_steps, 1):.4f}s/step"
+            f"  {'mean':>4} {statistics.mean(per_clip_total):>8.2f}s "
+            f"{statistics.mean(per_clip_prepare_audio_emb):>10.2f}s "
+            f"{statistics.mean(per_clip_prepare_cond_emb):>9.2f}s "
+            f"{statistics.mean(per_clip_denoise):>8.2f}s "
+            f"{statistics.mean(per_clip_vae_decode):>8.2f}s "
+            f"{statistics.mean(per_clip_vae_encode_motion):>11.2f}s"
         )
 
-    if total_times:
-        total = statistics.mean(total_times)
+    print()
+    print("DENOISE-LOOP AGGREGATES")
+    print(
+        f"  Total denoise:                       {sum_denoise:8.3f}s   {sum_denoise / total_denoise_steps:6.3f}s/step"
+    )
+    print(
+        f"  Audio cross-attn (cumulative):       {audio_inject_seconds:8.3f}s   "
+        f"{audio_inject_seconds / total_denoise_steps:6.4f}s/step  "
+        f"({100.0 * audio_inject_seconds / max(sum_denoise, 1e-9):4.1f}% of denoise)"
+    )
+    block_other = sum_denoise - audio_inject_seconds
+    print(
+        f"  Block-stack (non-audio, cumulative): {block_other:8.3f}s   {block_other / total_denoise_steps:6.4f}s/step"
+    )
+
+    if total > 0:
         print()
         print("STAGE SHARE OF TOTAL PIPELINE")
-        for name, times in [
-            ("text encoder", encoder_times),
-            ("prepare_latents", prepare_latents_times),
-            ("  ↳ VAE encode (ref)", s2v_vae_ref_times),
-            ("  ↳ wav2vec2", s2v_wav2vec2_times),
-            ("  ↳ prepare_audio_emb", s2v_prep_audio_emb_times),
-            ("  ↳ VAE encode (motion)", s2v_vae_motion_times),
-            ("  ↳ prepare_cond_emb", s2v_prep_cond_emb_times),
-            ("denoising loop", denoising_times),
-            ("  ↳ audio injection", [audio_inject_seconds] if audio_inject_seconds > 0 else []),
-            ("vae decode", vae_times),
+        for name, value in [
+            ("text encoder", encoder_t),
+            ("prepare_latents (one-time)", prepare_latents_t),
+            ("  ↳ VAE encode (ref)", vae_encode_ref_t),
+            ("  ↳ wav2vec2", wav2vec2_t),
+            ("  ↳ VAE encode (initial motion)", vae_encode_initial_motion_t),
+            ("per-clip prepare_audio_emb (sum)", sum_prep_audio),
+            ("per-clip prepare_cond_emb (sum)", sum_prep_cond),
+            ("per-clip denoise (sum)", sum_denoise),
+            ("  ↳ audio injection", audio_inject_seconds),
+            ("per-clip vae_decode (sum)", sum_vae_decode),
+            ("per-clip vae_encode_motion (sum)", sum_vae_encode_motion),
         ]:
-            if times:
-                pct = 100.0 * statistics.mean(times) / total
-                print(f"  {name:36}  {pct:5.1f}%")
-    print("=" * 80)
+            if value > 0:
+                print(f"  {name:38}  {100.0 * value / total:5.1f}%")
+    print("=" * 88)
 
     logger.info("S2V performance test completed!")
