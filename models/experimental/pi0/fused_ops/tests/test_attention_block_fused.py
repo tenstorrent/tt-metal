@@ -738,3 +738,175 @@ def test_attention_block_fused_with_oproj(device):
     # O-proj stacks another bfp8/HiFi2 matmul on top of softmax + Attn @ V.
     # Same precision regime as the underlying probes; gate stays at 0.996.
     assert p >= 0.996, f"fused+O-proj PCC {p} below 0.996"
+
+
+# pi05_base weights live in the HuggingFace cache; the older /storage path
+# referenced by test_encoder_block_real.py is no longer accessible from this
+# host. Resolve dynamically to be portable across cache snapshots.
+_PI05_HF_CACHE_DIR = Path.home() / ".cache/huggingface/hub/models--lerobot--pi05_base/snapshots"
+_PI05_WEIGHTS_PATHS = sorted(_PI05_HF_CACHE_DIR.glob("*/model.safetensors")) if _PI05_HF_CACHE_DIR.exists() else []
+PI05_WEIGHTS_PATH = str(_PI05_WEIGHTS_PATHS[0]) if _PI05_WEIGHTS_PATHS else "<not-available>"
+VP = "paligemma_with_expert.paligemma.model.vision_tower.vision_model.encoder.layers.0."
+
+
+def _load_real_layer0_attention_weights():
+    """Load layer-0 SigLIP attention weights from the pi0_base checkpoint.
+
+    Returns (ln1_w, ln1_b, qkv_w_unpadded, qkv_b, o_w, o_b) all bfloat16.
+    HF stores weights as (out, in); we transpose to (in, out) for x @ W form.
+    """
+    from safetensors.torch import load_file
+
+    sd = load_file(PI05_WEIGHTS_PATH)
+
+    def g(name):
+        return sd[f"{VP}{name}"].to(torch.bfloat16)
+
+    ln1_w = g("layer_norm1.weight")
+    ln1_b = g("layer_norm1.bias")
+    wq = g("self_attn.q_proj.weight").T.contiguous()  # (D, D)
+    wk = g("self_attn.k_proj.weight").T.contiguous()
+    wv = g("self_attn.v_proj.weight").T.contiguous()
+    bq = g("self_attn.q_proj.bias")  # (D,)
+    bk = g("self_attn.k_proj.bias")
+    bv = g("self_attn.v_proj.bias")
+    qkv_w_unpadded = torch.cat([wq, wk, wv], dim=1).contiguous()  # (D, 3D=3456)
+    qkv_b = torch.cat([bq, bk, bv], dim=0).contiguous()  # (3D,)
+    o_w = g("self_attn.out_proj.weight").T.contiguous()  # (D, D)
+    o_b = g("self_attn.out_proj.bias")  # (D,)
+    return ln1_w, ln1_b, qkv_w_unpadded, qkv_b, o_w, o_b
+
+
+def _make_real_input_activation(seed: int = 42) -> torch.Tensor:
+    """Real patch_embed + pos_embed output for a deterministic synthetic image.
+    Shape (M=256, D=1152) bf16 — distribution-realistic SigLIP layer-0 input.
+
+    Inlined here (not using golden_fc1.make_real_activation) because that
+    helper hard-codes the /storage path which isn't available on this host.
+    """
+    from safetensors.torch import load_file
+
+    sd = load_file(PI05_WEIGHTS_PATH)
+    vision_prefix = "paligemma_with_expert.paligemma.model.vision_tower."
+    pe_w = sd[f"{vision_prefix}vision_model.embeddings.patch_embedding.weight"].float()
+    pe_b = sd[f"{vision_prefix}vision_model.embeddings.patch_embedding.bias"].float()
+    pos_emb = sd[f"{vision_prefix}vision_model.embeddings.position_embedding.weight"].float()
+
+    IMAGE_SIZE = 224
+    PATCH_SIZE = 14
+    g = torch.Generator().manual_seed(seed)
+    pixel = torch.randn(1, 3, IMAGE_SIZE, IMAGE_SIZE, generator=g, dtype=torch.float32)
+    patches = F.conv2d(pixel, pe_w, bias=pe_b, stride=PATCH_SIZE)
+    embeds = patches.flatten(2).transpose(1, 2) + pos_emb.unsqueeze(0)
+    return embeds.squeeze(0).to(torch.bfloat16)
+
+
+@pytest.mark.skipif(
+    not Path(PI05_WEIGHTS_PATH).exists(),
+    reason=f"pi0_base weights not found at {PI05_WEIGHTS_PATH}",
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_attention_block_fused_real_weights(device):
+    """Real-weights acceptance for the fused attention block + O-proj (#5).
+
+    Loads pi0_base SigLIP layer-0 weights (LN1, Q/K/V projections, O-proj)
+    and runs the full attention block (fused kernel + standalone O-proj) on
+    a real patch_embed + pos_embed activation.
+
+    Limitations vs the full SigLIP attention math:
+      * No 1/sqrt(head_dim) softmax scaling. The fused kernel applies pure
+        softmax(Q @ K^T), so the torch reference here also omits the scale.
+      * No QKV / O-proj biases. The kernel's matmul Op-struct doesn't
+        currently support output bias, so the torch reference here also
+        omits them.
+      * No attention residual. We compare against the bare attention(LN1(x))
+        output, not (attention(LN1(x)) + x).
+
+    These are documented gaps that don't reflect kernel-precision issues;
+    they're tracked for follow-up commits (bias support is the bigger ask
+    — likely needs a matmul Op-struct update). PCC here validates that the
+    REAL-WEIGHT DYNAMIC RANGE (vs synthetic random weights) doesn't trigger
+    precision blow-ups in the bfp8/HiFi4 matmul + softmax + Attn @ V pipeline.
+    """
+    import importlib.util
+
+    spec_path = Path(__file__).resolve().parents[2] / "tests" / "perf" / "oproj_op.py"
+    spec = importlib.util.spec_from_file_location("oproj_op", spec_path)
+    oproj_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(oproj_module)
+    SigLIPOprojMatmulOp = oproj_module.SigLIPOprojMatmulOp
+    build_tensors_for_oproj_test = oproj_module.build_tensors_for_oproj_test
+
+    import ttnn as _ttnn
+
+    ln1_w, ln1_b, qkv_w_unpadded, qkv_b, o_w, o_b = _load_real_layer0_attention_weights()
+    x = _make_real_input_activation(seed=42)
+    assert x.shape == (M, D)
+
+    # ---- Torch golden (no scaling, no bias, no residual) ------------------
+    ln_out = F.layer_norm(x.float(), (D,), ln1_w.float(), ln1_b.float(), eps=EPS)
+    qkv_golden_unpadded = (ln_out @ qkv_w_unpadded.float()).to(torch.bfloat16)
+    sdpa_concat = torch.zeros(M, D, dtype=torch.bfloat16)
+    for h in range(NUM_HEADS):
+        q = qkv_golden_unpadded[:, h * HEAD_DIM_TRUE : (h + 1) * HEAD_DIM_TRUE].to(torch.float32)
+        k = qkv_golden_unpadded[:, D + h * HEAD_DIM_TRUE : D + (h + 1) * HEAD_DIM_TRUE].to(torch.float32)
+        v = qkv_golden_unpadded[:, 2 * D + h * HEAD_DIM_TRUE : 2 * D + (h + 1) * HEAD_DIM_TRUE].to(torch.float32)
+        scores = q @ k.T  # NO 1/sqrt(d_k) scaling
+        attn = torch.softmax(scores, dim=-1) @ v
+        sdpa_concat[:, h * HEAD_DIM_TRUE : (h + 1) * HEAD_DIM_TRUE] = attn.to(torch.bfloat16)
+    oproj_golden = (sdpa_concat.float() @ o_w.float()).to(torch.bfloat16)  # NO O-proj bias
+
+    # ---- Device pipeline --------------------------------------------------
+    tensors = build_tensors_for_fused_attention_block(
+        device,
+        x,
+        ln1_w,  # gamma (LN1's learned scale)
+        ln1_b,  # beta (LN1's learned shift)
+        w_qkv_torch=qkv_w_unpadded,
+    )
+    SigLIPAttentionBlockFused.op(*tensors, eps=EPS)
+
+    fused_scratch_tt = tensors[6]
+    fused_scratch_torch = _ttnn.to_torch(fused_scratch_tt)
+
+    # Reassemble (256, 1536) from LN1 shards (same logic as the
+    # fused+oproj test above).
+    ln1_num_cores = SigLIPAttentionBlockFused.LN1_NUM_CORES
+    head_dim_n_tiles = SigLIPAttentionBlockFused.QKV_N_TILES_PER_CORE
+    shard_h = 2 * SigLIPAttentionBlockFused.D_TILES * SigLIPAttentionBlockFused.TILE
+    assembled_tiles_per_core = NUM_HEADS * head_dim_n_tiles
+    assembled_rows_per_core = assembled_tiles_per_core * SigLIPAttentionBlockFused.TILE
+    m_per_ln1_core = M // ln1_num_cores
+    D_padded = NUM_HEADS * HEAD_DIM_PADDED
+
+    assembled_padded = torch.zeros(M, D_padded, dtype=fused_scratch_torch.dtype)
+    for c in range(ln1_num_cores):
+        shard_start = c * shard_h
+        region = fused_scratch_torch[shard_start : shard_start + assembled_rows_per_core, :]
+        tile_stack = region.reshape(
+            assembled_tiles_per_core, SigLIPAttentionBlockFused.TILE, SigLIPAttentionBlockFused.TILE
+        )
+        per_core = torch.zeros(m_per_ln1_core, D_padded, dtype=region.dtype)
+        for h in range(NUM_HEADS):
+            for d in range(head_dim_n_tiles):
+                tile_idx = h * head_dim_n_tiles + d
+                col_start = h * HEAD_DIM_PADDED + d * SigLIPAttentionBlockFused.TILE
+                per_core[:, col_start : col_start + SigLIPAttentionBlockFused.TILE] = tile_stack[tile_idx]
+        assembled_padded[c * m_per_ln1_core : (c + 1) * m_per_ln1_core, :] = per_core
+
+    assembled_unpadded = unpad_sdpa_assembled(assembled_padded)
+
+    for tt_tensor in tensors:
+        _ttnn.deallocate(tt_tensor)
+
+    activation_tt, weight_tt, output_tt = build_tensors_for_oproj_test(device, o_w, assembled_unpadded, num_cores=36)
+    SigLIPOprojMatmulOp.op(activation_tt, weight_tt, output_tt, num_cores=36)
+    oproj_device = _ttnn.to_torch(output_tt)
+
+    p = pcc(oproj_golden, oproj_device)
+    print(f"\nPCC (fused+O-proj on REAL pi0_base layer-0 weights, vs no-scale no-bias torch) = {p:.6f}")
+    print(f"  output shape={tuple(oproj_device.shape)}, dtype={oproj_device.dtype}")
+    # Real-weight dynamic range vs synthetic. The bfp8 quantization on real
+    # weights can be slightly worse than on small random weights (real layer-
+    # 0 Q/K/V have wider spread per channel). Gate at 0.99 to admit this.
+    assert p >= 0.99, f"real-weights fused+O-proj PCC {p} below 0.99"
