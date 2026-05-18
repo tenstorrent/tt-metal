@@ -90,8 +90,8 @@ def test_attention_block_fused_ln_plus_residual(device):
     import ttnn as _ttnn
 
     # build_tensors order tail: ..., final_out_tt, qkv_act_tt,
-    # ln_done_trigger_tt, qkv_w_tt, qkv_out_tt, qkv_done_trigger_tt, sdpa_q_tt.
-    # Indexing from the end: final_out_tt is -7.
+    # ln_done_trigger_tt, qkv_w_tt, qkv_out_tt, qkv_done_trigger_tt,
+    # sdpa_q_tt. final_out_tt is -7.
     final_out_tt = tensors[-7]
     y_device = _ttnn.to_torch(final_out_tt)
 
@@ -230,17 +230,19 @@ def test_attention_block_fused_sdpa_q_probe(device):
     sdpa_q_tt = tensors[-1]
     sdpa_q_torch = _ttnn.to_torch(sdpa_q_tt)
 
-    sdpa_num_workers = SigLIPAttentionBlockFused.SDPA_NUM_CORES  # 64
-    rows_per_worker = M // SigLIPAttentionBlockFused.NUM_SDPA_WORKERS_PER_HEAD  # 64
+    sdpa_num_workers = SigLIPAttentionBlockFused.SDPA_NUM_CORES  # 32 (#11 Commit 4: relocated SDPA)
+    rows_per_worker = M // SigLIPAttentionBlockFused.NUM_SDPA_WORKERS_PER_HEAD  # 128 (2 workers/head)
     assert sdpa_q_torch.shape == (
         sdpa_num_workers * rows_per_worker,
         HEAD_DIM_PADDED,
     ), f"sdpa_q shape {tuple(sdpa_q_torch.shape)} != expected"
 
     # Reshape to (workers, rows, cols). Workers laid out row-major across the
-    # 8×8 grid: worker linear idx = y * SDPA_GRID_X + x. Worker (x, y) is the
-    # w-th worker of head head_idx = (y // num_workers_per_head) * SDPA_GRID_X + x,
-    # with worker_idx = y % num_workers_per_head.
+    # 4×8 SDPA grid (logical x=8..11, y=0..7): linear shard idx maps to
+    # relative (rel_x, rel_y) = (idx % SDPA_GRID_X, idx // SDPA_GRID_X). Head
+    # mapping uses those relative coords (the absolute x_offset cancels out):
+    #   head_idx   = (rel_y // num_workers_per_head) * SDPA_GRID_X + rel_x
+    #   worker_idx = rel_y % num_workers_per_head
     sdpa_q_workers = sdpa_q_torch.reshape(sdpa_num_workers, rows_per_worker, HEAD_DIM_PADDED)
     sdpa_grid_x = SigLIPAttentionBlockFused.SDPA_GRID_X
     num_workers_per_head = SigLIPAttentionBlockFused.NUM_SDPA_WORKERS_PER_HEAD

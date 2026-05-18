@@ -79,6 +79,8 @@ void kernel_main() {
     // QK^T / softmax / Attn@V Op-struct calls under is_sdpa_core_*.
     constexpr uint32_t sdpa_grid_x = get_named_compile_time_arg_val("sdpa_grid_x");
     constexpr uint32_t sdpa_grid_y = get_named_compile_time_arg_val("sdpa_grid_y");
+    constexpr uint32_t sdpa_y_offset = get_named_compile_time_arg_val("sdpa_y_offset");
+    constexpr uint32_t sdpa_x_offset = get_named_compile_time_arg_val("sdpa_x_offset");
     // Commit 3: QKV matmul weight CB lives on the 36-core QKV grid. Pre-loaded
     // bfp8 weight; NCRISC marks all 108 tiles pushed so TRISC matmul's
     // cb_wait_front returns immediately. The matmul Op-struct doesn't pop the
@@ -97,12 +99,15 @@ void kernel_main() {
 
     const bool is_ln1_core_nc = (get_relative_logical_y() == 0) && (get_relative_logical_x() < ln1_num_cores);
     const bool is_qkv_core_nc = (get_relative_logical_y() < qkv_grid_y) && (get_relative_logical_x() < qkv_grid_x);
-    // SDPA role flag — true for every core in the kernel's union grid (the
-    // SDPA grid is the union's bounding rect). Computed but unused this
-    // commit; #11 compute commits gate per-head SDPA work on it. Marked
-    // [[maybe_unused]] to keep -Werror=unused-variable happy until then.
-    [[maybe_unused]] const bool is_sdpa_core_nc =
-        (get_relative_logical_y() < sdpa_grid_y) && (get_relative_logical_x() < sdpa_grid_x);
+    // SDPA role flag — grid at logical (x_offset..x_offset+grid_x-1,
+    // y_offset..y_offset+grid_y-1) = (8..11, 0..7). Disjoint from LN1+QKV
+    // (which live in x=0..7), so SDPA cores have the full per-core L1 to
+    // themselves for Q + K + V CBs.
+    const uint32_t my_logical_y_nc = get_relative_logical_y();
+    const uint32_t my_logical_x_nc = get_relative_logical_x();
+    const bool is_sdpa_core_nc = (my_logical_y_nc >= sdpa_y_offset) &&
+                                 (my_logical_y_nc < sdpa_y_offset + sdpa_grid_y) &&
+                                 (my_logical_x_nc >= sdpa_x_offset) && (my_logical_x_nc < sdpa_x_offset + sdpa_grid_x);
 
     // setup_sharded_buffer pre-pushes the LN1 row's input CBs so TRISC's
     // cb_wait_front returns immediately. These CBs only exist on the LN1 row;
@@ -233,21 +238,27 @@ void kernel_main() {
         cb_pop_front(qkv_done_trigger_cb, 1);
 
         const uint32_t my_qkv_shard_idx = get_relative_logical_y() * qkv_grid_x + get_relative_logical_x();
-        // Only Q shards (0..num_heads-1) signal this commit. K/V join later.
+        // #11 Commit 4 scope: only Q producers signal (shards 0..num_heads-1).
+        // K and V producers join once their CBs land on SDPA workers.
         if (my_qkv_shard_idx < num_heads) {
             const uint32_t head_idx = my_qkv_shard_idx;
-            const uint32_t head_col = head_idx % sdpa_grid_x;  // x of head's workers
-            const uint32_t head_row = head_idx / sdpa_grid_x;  // 0 or 1
-            const uint32_t sdpa_y_base = head_row * num_sdpa_workers_per_head;
+            const uint32_t head_col = head_idx % sdpa_grid_x;  // x within SDPA (0..3)
+            const uint32_t head_row = head_idx / sdpa_grid_x;  // y/num_workers within SDPA (0..3)
+            // Workers of head h are at logical
+            //   (x = sdpa_x_offset + head_col,
+            //    y = sdpa_y_offset + head_row * num_workers_per_head + w).
+            const uint32_t sdpa_y_base = sdpa_y_offset + head_row * num_sdpa_workers_per_head;
 
-            // sdpa_phys_x is the SDPA grid's physical NoC x array (8 entries),
-            // sitting right after ln1_phys_x in the common RT arg slots:
+            // sdpa_phys_x carries the SDPA grid's physical NoC x coords (one
+            // per head_col), sitting after ln1_phys_x in the common RT arg
+            // slots. With sdpa_grid_x=4 (16 heads × 2 workers/head, #11
+            // Commit 4) the array has 4 entries; ln1_phys_x still has 8.
             //   slot  0: ln_out_l1_addr
             //   slot  1: worker_phys_origin_x
             //   slot  2: worker_phys_origin_y
-            //   slot  3: qkv_out_l1_addr (this commit)
-            //   slots 4..11: ln1_phys_x[0..7]
-            //   slots 12..19: sdpa_phys_x[0..7]
+            //   slot  3: qkv_out_l1_addr
+            //   slots 4..11:  ln1_phys_x[0..7]
+            //   slots 12..15: sdpa_phys_x[0..3]
             constexpr uint32_t SDPA_PHYS_X_BASE = 4 + 8;
             const uint32_t sdpa_worker_phys_x = get_common_arg_val<uint32_t>(SDPA_PHYS_X_BASE + head_col);
             const uint32_t phys_origin_y_local = get_common_arg_val<uint32_t>(2);
@@ -262,21 +273,21 @@ void kernel_main() {
     }
 
     // =========================================================================
-    // PHASE 4b (Commit 3 of #11): SDPA NCRISC reader — wait for head's Q ready,
-    // pull (M/num_sdpa_workers_per_head=64, 96) Q-shard from the QKV core
-    // holding this head's Q (linear QKV shard idx = head_idx) at byte offset
-    // worker_idx * (m_tiles_per_sdpa_worker * qkv_n_tiles_per_core) * tile_size.
+    // PHASE 4b (#11 Commit 4): SDPA NCRISC reader — Q-only this commit.
+    // Q: M-parallel slice (rows_per_worker, head_dim_padded) from the head's
+    // QKV source core's qkv_out_cb at byte offset = worker_idx * Q-bytes.
     //
-    // K and V reads land in Commit 4+ of #11; this commit validates the Q path
-    // alone, so the sem-wait threshold is num_qkv_signals_per_worker=1.
+    // K and V deliveries deferred to a follow-up commit (global L1 budget
+    // currently maxed; needs LN1 intermediate CB reuse or bfp8 packing).
     // =========================================================================
     if (is_sdpa_core_nc) {
-        const uint32_t head_col_self = get_relative_logical_x();  // h % sdpa_grid_x
-        const uint32_t head_row_self = get_relative_logical_y() / num_sdpa_workers_per_head;
-        const uint32_t worker_idx_self = get_relative_logical_y() % num_sdpa_workers_per_head;
+        // Translate this core's logical (x, y) back to (head_idx, worker_idx).
+        const uint32_t head_col_self = get_relative_logical_x() - sdpa_x_offset;
+        const uint32_t sdpa_local_y = get_relative_logical_y() - sdpa_y_offset;
+        const uint32_t head_row_self = sdpa_local_y / num_sdpa_workers_per_head;
+        const uint32_t worker_idx_self = sdpa_local_y % num_sdpa_workers_per_head;
         const uint32_t head_idx_self = head_row_self * sdpa_grid_x + head_col_self;
 
-        // Wait for the head's QKV producer(s) to signal Q-ready.
         const uint32_t sdpa_sem_l1_addr = get_semaphore(sdpa_qkv_ready_sem_id);
         volatile tt_l1_ptr uint32_t* sdpa_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sdpa_sem_l1_addr);
 
@@ -284,27 +295,18 @@ void kernel_main() {
         noc_semaphore_wait_min(sdpa_sem_ptr, num_qkv_signals_per_worker);
         noc_semaphore_set(sdpa_sem_ptr, 0);
 
-        // QKV source core for Q head head_idx_self: linear shard = head_idx,
-        // core at logical (head_idx % qkv_grid_x, head_idx / qkv_grid_x).
-        // QKV grid logical x ∈ [0..5] is contiguous (no eth gap), so
-        // physical = origin + logical works.
         const uint32_t phys_origin_x_local = get_common_arg_val<uint32_t>(1);
         const uint32_t phys_origin_y_local = get_common_arg_val<uint32_t>(2);
         const uint32_t qkv_out_l1_addr = get_common_arg_val<uint32_t>(3);
-        const uint32_t q_src_qkv_x = head_idx_self % qkv_grid_x;
-        const uint32_t q_src_qkv_y = head_idx_self / qkv_grid_x;
-        const uint32_t q_src_phys_x = phys_origin_x_local + q_src_qkv_x;
-        const uint32_t q_src_phys_y = phys_origin_y_local + q_src_qkv_y;
-
-        // Byte offset into the source core's qkv_out_cb: each worker takes
-        // m_tiles_per_sdpa_worker row-tiles × qkv_n_tiles_per_core col-tiles,
-        // contiguous in the tile-major (row-major over tiles) L1 layout.
         const uint32_t tile_size_bytes = get_tile_size(sdpa_q_cb);
+
+        const uint32_t q_shard_idx = head_idx_self;  // shards [0..num_heads-1]
+        const uint32_t q_src_phys_x = phys_origin_x_local + (q_shard_idx % qkv_grid_x);
+        const uint32_t q_src_phys_y = phys_origin_y_local + (q_shard_idx / qkv_grid_x);
         const uint32_t q_bytes_per_worker = sdpa_q_tiles_per_worker * tile_size_bytes;
-        const uint32_t src_byte_offset = worker_idx_self * q_bytes_per_worker;
-        const uint64_t q_src_noc_addr = get_noc_addr(q_src_phys_x, q_src_phys_y, qkv_out_l1_addr + src_byte_offset);
-        const uint32_t q_dst_local_addr = get_write_ptr(sdpa_q_cb);
-        noc_async_read(q_src_noc_addr, q_dst_local_addr, q_bytes_per_worker);
+        const uint32_t q_byte_offset = worker_idx_self * q_bytes_per_worker;
+        const uint64_t q_src_noc_addr = get_noc_addr(q_src_phys_x, q_src_phys_y, qkv_out_l1_addr + q_byte_offset);
+        noc_async_read(q_src_noc_addr, get_write_ptr(sdpa_q_cb), q_bytes_per_worker);
         noc_async_read_barrier();
         cb_push_back(sdpa_q_cb, sdpa_q_tiles_per_worker);
     }
@@ -362,15 +364,20 @@ void kernel_main() {
     constexpr uint32_t qkv_grid_y_tr = get_named_compile_time_arg_val("qkv_grid_y");
     constexpr uint32_t sdpa_grid_x_tr = get_named_compile_time_arg_val("sdpa_grid_x");
     constexpr uint32_t sdpa_grid_y_tr = get_named_compile_time_arg_val("sdpa_grid_y");
+    constexpr uint32_t sdpa_y_offset_tr = get_named_compile_time_arg_val("sdpa_y_offset");
+    constexpr uint32_t sdpa_x_offset_tr = get_named_compile_time_arg_val("sdpa_x_offset");
     const bool is_ln1_core_tr = (get_relative_logical_y() == 0) && (get_relative_logical_x() < ln1_num_cores_tr);
     const bool is_residual_core_tr = is_ln1_core_tr;
     const bool is_qkv_core_tr =
         (get_relative_logical_y() < qkv_grid_y_tr) && (get_relative_logical_x() < qkv_grid_x_tr);
-    // SDPA role flag — unused this commit (#11 Commit 2 is structural).
-    // Compute commits (#11 commits 3+) gate the QK^T / softmax / Attn@V
-    // Op-struct calls on it.
+    // SDPA role flag — grid at logical (sdpa_x_offset..+grid_x-1,
+    // sdpa_y_offset..+grid_y-1). Disjoint from LN1∪QKV; compute commits
+    // (#11 commits 5+) gate QK^T/softmax/Attn@V calls on it.
+    const uint32_t my_logical_y_tr = get_relative_logical_y();
+    const uint32_t my_logical_x_tr = get_relative_logical_x();
     [[maybe_unused]] const bool is_sdpa_core_tr =
-        (get_relative_logical_y() < sdpa_grid_y_tr) && (get_relative_logical_x() < sdpa_grid_x_tr);
+        (my_logical_y_tr >= sdpa_y_offset_tr) && (my_logical_y_tr < sdpa_y_offset_tr + sdpa_grid_y_tr) &&
+        (my_logical_x_tr >= sdpa_x_offset_tr) && (my_logical_x_tr < sdpa_x_offset_tr + sdpa_grid_x_tr);
 
     // =========================================================================
     // PHASE 1: LN1 — y = ((x - mean) / sqrt(var + eps)) * gamma + beta

@@ -83,23 +83,35 @@ class SigLIPAttentionBlockFused:
     QKV_N_TILES = QKV_N // TILE  # 144
     QKV_N_TILES_PER_CORE = QKV_N_TILES // QKV_NUM_CORES  # 3 (= 1 padded head)
 
-    # SDPA grid (task #11 Commit 2 — structural plumbing only, no compute yet).
-    #   Logical layout: 8 cols × 8 rows = 64 cores, y=0..7, x=0..7.
-    #   Each head h ∈ [0..15] owns 4 workers (M-parallel: M=256 split 4 ways =
-    #   64 rows/worker). Head layout: head_col=h%8, head_row=h/8 (top or
-    #   bottom half). Workers of head h are at:
-    #     x = head_col,  y = head_row*4 + worker_idx  for worker_idx ∈ [0..3].
+    # SDPA grid (task #11 Commit 4 — relocated to a region disjoint from LN1
+    # and QKV). Logical layout: 4 cols × 8 rows = 32 cores at
+    # x=SDPA_X_OFFSET..SDPA_X_OFFSET+SDPA_GRID_X-1, y=0..SDPA_GRID_Y-1
+    # → x=8..11, y=0..7.
     #
-    # Why not the 128-core layout from RESUME_PROMPT (16 heads × 8 workers)?
-    # BH worker grid is 13 cols × 10 rows = 130 cores. 16×8=128 doesn't fit any
-    # rectangle inside that (need ≥16 of one dim). 64 cores (8×8) fits cleanly
-    # and supersets LN1 ∪ QKV — the kernel core_ranges simplifies to one rect.
-    # Workers/head can grow to 8 in a later perf pass if compute is bound;
-    # current per-head matmul work splits cleanly at either 4 or 8 workers.
-    SDPA_GRID_X = 8
+    # Why DISJOINT from QKV instead of overlapping (the earlier 64-core 8×8
+    # plan)? Even with the LN1 row dodged, the QKV+SDPA overlap cores at
+    # y=1..7, x=0..5 have ~13 KB of L1 free after qkv_act_cb (576 KB),
+    # qkv_w_cb (117 KB), qkv_out_cb, scratches, and system overhead. K+V CBs
+    # need ~96 KB per worker (24 tiles bf16 each), and even the (a)+(b)
+    # bfp8-shared-KV mitigation (~26 KB) doesn't fit. Moving SDPA to the
+    # right of QKV (x=8..11) gives each SDPA core the full 1.4 MB L1 to
+    # itself — Q + K + V allocations land in ~120 KB with massive headroom.
+    #
+    # The cost: SDPA_NUM_CORES drops from 64 → 32 (16 heads × 2 workers/head
+    # instead of 4 workers/head). M-parallel splits 256 rows two ways =
+    # 128 rows per worker. Kernel head mapping:
+    #   head h ∈ [0..15]:
+    #     head_col = h % SDPA_GRID_X (= h % 4)
+    #     head_row = h / SDPA_GRID_X (= h / 4)
+    #     workers at (SDPA_X_OFFSET + head_col, head_row*2 + worker_idx)
+    #     for worker_idx ∈ [0..1].
+    # SDPA workers/head can grow back to 4 in a later perf pass if needed.
+    SDPA_GRID_X = 4
     SDPA_GRID_Y = 8
-    SDPA_NUM_CORES = SDPA_GRID_X * SDPA_GRID_Y  # 64
-    NUM_SDPA_WORKERS_PER_HEAD = SDPA_NUM_CORES // NUM_HEADS  # 4
+    SDPA_X_OFFSET = 8  # right of LN1/QKV; logical x ∈ [8..11], physical ∈ [11..14]
+    SDPA_Y_OFFSET = 0  # top-aligned; SDPA fully disjoint from LN1∪QKV in x
+    SDPA_NUM_CORES = SDPA_GRID_X * SDPA_GRID_Y  # 32
+    NUM_SDPA_WORKERS_PER_HEAD = SDPA_NUM_CORES // NUM_HEADS  # 2
 
     # CB IDs (must match the kernel's get_named_compile_time_arg_val calls)
     CB = {
@@ -142,14 +154,19 @@ class SigLIPAttentionBlockFused:
         #   pulling 64-row M-slices. K and V land in subsequent commits.
         "qkv_done_trigger_cb": 18,
         "sdpa_q_cb": 19,
+        # #11 Commit 5+ — sdpa_k_cb / sdpa_v_cb deferred. Adding 48 KB-each
+        # bf16 CBs (or 26 KB-each bfp8 with format-conversion plumbing) blows
+        # tt-metal's globally-reserved L1 budget (currently ~1393 KB of
+        # ~1437 KB available). Will land alongside LN1-intermediate CB reuse
+        # or other L1-saving surgery in a follow-up commit.
     }
 
     # SDPA QKV-ready semaphore (id=3 on SDPA grid). QKV NCRISC atomic-incs
-    # each head's 4 SDPA workers after the matmul completes. SDPA NCRISC
-    # waits for count = NUM_QKV_SIGNALS_PER_WORKER (= 1 this commit; will be
-    # 3 once K and V land — one inc each from the head's Q, K, V source).
+    # each head's SDPA workers; this commit keeps the count at 1 (Q-only
+    # signal) since K+V delivery is deferred. Will grow to 3 when K and V
+    # producers also signal.
     SDPA_QKV_READY_SEM_ID = 3
-    NUM_QKV_SIGNALS_PER_WORKER = 1  # Q only this commit
+    NUM_QKV_SIGNALS_PER_WORKER = 1  # Q only (#11 Commit 4 scope)
 
     # Counter semaphore for the LN1→QKV receiver-pull. Each QKV receiver
     # increments-and-waits on its own copy at this ID; the host allocates the
@@ -254,6 +271,9 @@ class SigLIPAttentionBlockFused:
             ("num_sdpa_workers_per_head", SigLIPAttentionBlockFused.NUM_SDPA_WORKERS_PER_HEAD),
             ("m_tiles_per_sdpa_worker", m_tiles_per_sdpa_worker),
             ("sdpa_q_tiles_per_worker", sdpa_q_tiles_per_worker),
+            # #11 Commit 4: SDPA grid relocation (x_offset=8, y_offset=0).
+            ("sdpa_y_offset", SigLIPAttentionBlockFused.SDPA_Y_OFFSET),
+            ("sdpa_x_offset", SigLIPAttentionBlockFused.SDPA_X_OFFSET),
         ]
         # TRISC needs all CBs + tile counts + eps + QKV matmul shape params.
         trisc_ct = [
@@ -273,6 +293,8 @@ class SigLIPAttentionBlockFused:
             ("qkv_grid_y", SigLIPAttentionBlockFused.QKV_GRID_Y),
             ("sdpa_grid_x", SigLIPAttentionBlockFused.SDPA_GRID_X),
             ("sdpa_grid_y", SigLIPAttentionBlockFused.SDPA_GRID_Y),
+            ("sdpa_y_offset", SigLIPAttentionBlockFused.SDPA_Y_OFFSET),
+            ("sdpa_x_offset", SigLIPAttentionBlockFused.SDPA_X_OFFSET),
         ]
 
         # Physical NoC coords for the worker grid. BH's logical-to-physical x
@@ -288,32 +310,34 @@ class SigLIPAttentionBlockFused:
             _device.worker_core_from_logical_core(ttnn.CoreCoord(lx, 0)).x
             for lx in range(SigLIPAttentionBlockFused.LN1_NUM_CORES)
         ]
-        # SDPA grid logical x ∈ [0..7] also spans the eth/PCIe gap at logical
-        # x=7 (just like the LN1 row), so QKV NCRISC needs an explicit array of
-        # 8 physical x coords to atomic-inc its head's SDPA workers. The y
-        # dimension is contiguous within 0..7, so phys_origin_y + logical_y is
-        # always correct for SDPA workers.
+        # SDPA grid logical x ∈ [SDPA_X_OFFSET .. SDPA_X_OFFSET + SDPA_GRID_X - 1]
+        # = [8..11], which is fully past the BH eth/PCIe gap at logical x=7.
+        # Pass the 4 physical x coords so QKV NCRISC can atomic-inc each head's
+        # SDPA workers without assuming contiguous physical addressing.
         _sdpa_phys_xs = [
-            _device.worker_core_from_logical_core(ttnn.CoreCoord(lx, 0)).x
+            _device.worker_core_from_logical_core(ttnn.CoreCoord(SigLIPAttentionBlockFused.SDPA_X_OFFSET + lx, 0)).x
             for lx in range(SigLIPAttentionBlockFused.SDPA_GRID_X)
         ]
 
-        # Kernel runs on every core in LN1 ∪ QKV ∪ SDPA. Since SDPA's logical
-        # layout y=0..7 × x=0..7 is a superset of LN1 (y=0, x=0..7) and QKV
-        # (y=0..7, x=0..5), the union simplifies to one rectangle covering the
-        # SDPA grid. Runtime role flags inside the kernel gate the per-phase
-        # bodies (only SDPA-grid cores see SDPA work, only LN1-row cores see
-        # LN1 + residual, etc.).
-        union_core_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(
-                        SigLIPAttentionBlockFused.SDPA_GRID_X - 1, SigLIPAttentionBlockFused.SDPA_GRID_Y - 1
-                    ),
-                )
-            }
+        # Kernel runs on every core in LN1 ∪ QKV ∪ SDPA. With SDPA relocated
+        # to (x=SDPA_X_OFFSET..+SDPA_GRID_X-1, y=0..SDPA_GRID_Y-1) =
+        # (x=8..11, y=0..7), it's disjoint from LN1+QKV (which live in
+        # x=0..7). The union is two non-overlapping rectangles:
+        #   Range A: LN1 ∪ QKV = (y=0..7, x=0..7)   = 64 cores
+        #   Range B: SDPA       = (y=0..7, x=8..11) = 32 cores
+        # Total kernel core_ranges: 96 distinct cores.
+        ln1_qkv_range = ttnn.CoreRange(
+            ttnn.CoreCoord(0, 0),
+            ttnn.CoreCoord(SigLIPAttentionBlockFused.LN1_NUM_CORES - 1, SigLIPAttentionBlockFused.QKV_GRID_Y - 1),
         )
+        sdpa_x_lo = SigLIPAttentionBlockFused.SDPA_X_OFFSET
+        sdpa_x_hi = sdpa_x_lo + SigLIPAttentionBlockFused.SDPA_GRID_X - 1
+        sdpa_y_hi = SigLIPAttentionBlockFused.SDPA_Y_OFFSET + SigLIPAttentionBlockFused.SDPA_GRID_Y - 1
+        sdpa_range = ttnn.CoreRange(
+            ttnn.CoreCoord(sdpa_x_lo, SigLIPAttentionBlockFused.SDPA_Y_OFFSET),
+            ttnn.CoreCoord(sdpa_x_hi, sdpa_y_hi),
+        )
+        union_core_grid = ttnn.CoreRangeSet({ln1_qkv_range, sdpa_range})
 
         unified_kernel = UnifiedKernelDescriptor(
             kernel_source=SigLIPAttentionBlockFused.KERNEL_SOURCE,
@@ -392,17 +416,19 @@ class SigLIPAttentionBlockFused:
             initial_value=0,
         )
 
-        # #11 Commit 3: SDPA-Q-ready semaphore on the 64-core SDPA grid. QKV
-        # NCRISC atomic-incs each head's 4 SDPA workers; workers wait for
-        # value ≥ NUM_QKV_SIGNALS_PER_WORKER (=1 this commit, =3 once K+V
-        # land in subsequent commits).
+        # #11 Commit 3/4: SDPA-Q-ready semaphore on the 64-core SDPA grid
+        # at y=SDPA_Y_OFFSET..SDPA_Y_OFFSET+SDPA_GRID_Y-1. QKV NCRISC
+        # atomic-incs each head's 4 SDPA workers; workers wait for value ≥
+        # NUM_QKV_SIGNALS_PER_WORKER (= 3 once K+V lands in #11 Commit 4).
+        sdpa_x_lo_sem = SigLIPAttentionBlockFused.SDPA_X_OFFSET
+        sdpa_x_hi_sem = sdpa_x_lo_sem + SigLIPAttentionBlockFused.SDPA_GRID_X - 1
+        sdpa_y_lo_sem = SigLIPAttentionBlockFused.SDPA_Y_OFFSET
+        sdpa_y_hi_sem = sdpa_y_lo_sem + SigLIPAttentionBlockFused.SDPA_GRID_Y - 1
         sdpa_sem_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(
-                        SigLIPAttentionBlockFused.SDPA_GRID_X - 1, SigLIPAttentionBlockFused.SDPA_GRID_Y - 1
-                    ),
+                    ttnn.CoreCoord(sdpa_x_lo_sem, sdpa_y_lo_sem),
+                    ttnn.CoreCoord(sdpa_x_hi_sem, sdpa_y_hi_sem),
                 )
             }
         )
@@ -678,14 +704,25 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         ),
     )
 
-    # #11 Commit 3: per-SDPA-worker Q slice CB on the 64-core SDPA grid.
-    # Each worker holds (64, head_dim_padded=96) bf16 = 6 tiles. Total
-    # tensor shape: (64 workers × 64 rows, 96 cols) = (4096, 96).
+    # #11 Commit 3/4: per-SDPA-worker Q / K / V CBs on the 64-core SDPA grid.
+    # Grid shifted down by SDPA_Y_OFFSET=1 so SDPA workers don't double up
+    # with LN1 cores at y=0 (triple-role L1 overflow). Each worker holds:
+    #   sdpa_q_cb:  (rows_per_worker, head_dim_padded) = (64, 96) bf16, 6 tiles
+    #   sdpa_k_cb:  (M, head_dim_padded)              = (256, 96) bf16, 24 tiles
+    #   sdpa_v_cb:  (M, head_dim_padded)              = (256, 96) bf16, 24 tiles
+    # K and V are NOT M-parallel split (every Q row needs the full K/V dim).
     sdpa_grid_x = SigLIPAttentionBlockFused.SDPA_GRID_X
     sdpa_grid_y = SigLIPAttentionBlockFused.SDPA_GRID_Y
+    sdpa_x_offset = SigLIPAttentionBlockFused.SDPA_X_OFFSET
+    sdpa_y_offset = SigLIPAttentionBlockFused.SDPA_Y_OFFSET
     sdpa_num_workers = SigLIPAttentionBlockFused.SDPA_NUM_CORES
     sdpa_core_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(sdpa_grid_x - 1, sdpa_grid_y - 1))}
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(sdpa_x_offset, sdpa_y_offset),
+                ttnn.CoreCoord(sdpa_x_offset + sdpa_grid_x - 1, sdpa_y_offset + sdpa_grid_y - 1),
+            )
+        }
     )
     rows_per_worker = M // SigLIPAttentionBlockFused.NUM_SDPA_WORKERS_PER_HEAD  # 64
     sdpa_q_shard = ttnn.ShardSpec(sdpa_core_grid, (rows_per_worker, head_dim_padded), ttnn.ShardOrientation.ROW_MAJOR)
@@ -697,6 +734,10 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         device=device,
         memory_config=sdpa_q_mem,
     )
+    # #11 Commit 5+: sdpa_k_tt and sdpa_v_tt deferred — global L1 budget is
+    # already at ~1393/1437 KB, no room for 48 KB-each K and V buffers.
+    # Future commit pairs the K+V allocation with LN1-intermediate CB reuse
+    # or bfp8 packing.
 
     return (
         ln_in_tt,
