@@ -605,12 +605,12 @@ class WanPipelineS2V(WanPipeline):
     # Reference-faithful frame-count constants (wan_s2v_14B + speech2video.py).
     # ----------------------------------------------------------------------
 
-    # Pixel frames per clip. The reference's ``infer_frames=80``
-    # (speech2video.py:404) tripped a ttnn ``binary_ng`` "Invalid subtile
-    # broadcast type" assertion at the resulting Sq=8224 (= 257 tiles per
-    # device on (2,4) BH 480p). Bumping by 1 gives Sq=8608 (= 269 tiles),
-    # which the op handles. Motion-frame, audio-bucketing, and clip-trim
-    # semantics still match the reference.
+    # Per-clip pixel frame count. The reference uses ``infer_frames=80``
+    # (speech2video.py:404) with ``lat_target_frames=20``; we use 81/21 because
+    # ``20`` triggers a ttnn ``binary_ng`` "Invalid subtile broadcast type"
+    # assertion at the resulting Sq=8224 (= 257 tiles per device on (2,4) BH
+    # 480p). Both single-clip and multi-clip mostly match reference except for
+    # a ~1-frame audio-to-pixel offset per clip; accepted.
     _INFER_FRAMES_PIXEL = 81
     # Motion-context pixel frames carried between clips
     # (config wan_s2v_14B.py:51, ``motion_frames=73``).
@@ -784,14 +784,18 @@ class WanPipelineS2V(WanPipeline):
             mesh_axes=[None, None, sp_axis, None],
             dtype=ts.model.output_dtype,
         )
-        if self.latent_buffer is None:
-            self.latent_buffer = permuted_latent_tt
-        else:
-            ttnn.copy(permuted_latent_tt, self.latent_buffer)
-            ttnn.deallocate(permuted_latent_tt)
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
+                # Refresh ``latent_buffer`` from the solver's evolving
+                # ``permuted_latent_tt`` (initial noise on i=0, then the
+                # previous step's denoised output). Matches the base
+                # ``WanPipeline.__call__`` per-iteration update.
+                if self.latent_buffer is None:
+                    self.latent_buffer = permuted_latent_tt
+                else:
+                    ttnn.copy(permuted_latent_tt, self.latent_buffer)
+
                 timestep = t.expand(latents_torch.shape[0])  # S2V uses expand_timesteps=False
                 timestep = float32_tensor(
                     timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=(None if traced else self.mesh_device)
