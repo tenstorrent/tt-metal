@@ -447,10 +447,6 @@ from ttnn.operations.reduction import ReduceType
 from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
 
 
-from ttnn.operations.pool import (
-    prepare_grid_sample_grid,
-)
-
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
 
 import ttnn.graph
