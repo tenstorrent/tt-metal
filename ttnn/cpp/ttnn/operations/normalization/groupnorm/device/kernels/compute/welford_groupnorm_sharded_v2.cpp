@@ -179,13 +179,17 @@ void kernel_main() {
                 transpose_wh_tile(cb_in0_id, tile_id, input_dst);
 #endif
 
-                // For Float32 input with fp32_dest_acc_en the program factory sets
-                // unpack_to_dest_mode=UnpackToDestFp32 on cb_in so transpose_wh_tile takes the
-                // UnpackToDest fp32 path. That path calls llk_math_transpose_dest which writes
-                // to SFPU replay buffer slot 0; the same slot welford_init programmed.
-                // Re-program the replay buffer so welford_update_rows replays welford ops.
-                // LREG4/5 are about to be overwritten by welford_restore_state, so no need to
-                // preserve them.
+                // Re-establish the welford SFPU replay buffer state. Neither c_0 (non-TILIZE_IN)
+                // nor c_1 (TILIZE_IN) can carry UnpackToDestFp32 in this kernel because both
+                // CBs are also consumed by sub_tiles_bcast_scalar in the final-normalization
+                // stage (an FPU op on SrcA, incompatible with unpack-to-DEST). transpose_wh_tile
+                // therefore always routes through SrcA and this re-init is currently a no-op.
+                // Kept as defensive cover: if the kernel is later restructured to use a
+                // unary-only intake CB with the flag set, llk_math_transpose_dest would write
+                // to SFPU replay buffer slot 0 -- the same slot welford_init programmed with
+                // the welford recurrence -- and welford_update_rows would replay stale
+                // transpose-dest ops without this re-init. LREG4/5 are about to be overwritten
+                // by welford_restore_state, so no need to preserve them.
                 MATH((llk_math_welfords_sfpu_init()));
 
                 uint32_t group_offset = 0;

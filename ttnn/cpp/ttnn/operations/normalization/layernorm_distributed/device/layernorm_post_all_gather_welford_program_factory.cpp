@@ -440,13 +440,25 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherWelfordProgramFactory::cre
         "compute kernel config; otherwise precision is silently lost in the unpacker format "
         "conversion.");
 
-    // For Float32 input with fp32_dest_acc_en, force unpack-to-dest in fp32 mode so the
-    // unpacker writes full fp32 to DEST instead of routing through SrcA (which would downcast
-    // to TF32 -- 10 mantissa bits).
+    // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
+    // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode). For those, setting
+    // the flag preserves the full 23-mantissa fp32 by bypassing SrcA. Setting the flag on a
+    // CB consumed by any FPU op (mul_tiles, add_tiles, sub_tiles, *_bcast_*, reduce_tile)
+    // is unsafe: per base_types.hpp the CB is "incompatible with unpacking to SRCA/B", and
+    // on Wormhole/Blackhole that combination produces garbage in SrcA (not silent TF32
+    // truncation as one might assume).
+    //
+    // c_0 (input) is consumed only by sub_tiles_bcast_cols (layernorm welford kernel) or
+    //   mul_tiles_bcast_cols (rmsnorm kernel) -- both FPU. Do NOT enable the flag for it.
+    // c_1 (stats):
+    //   - layernorm welford path: consumed only by copy_tile inside combine_welford_partials,
+    //     a real unpack-to-DEST candidate. Set the flag when stats are Float32 to preserve
+    //     full mantissa precision into the per-row mean/M2 recombine.
+    //   - rmsnorm path: consumed by reduce_tile (FPU). Must NOT enable the flag.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    if (!is_rmsnorm && fp32_dest_acc_en && stats_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_1)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     // Compute kernel

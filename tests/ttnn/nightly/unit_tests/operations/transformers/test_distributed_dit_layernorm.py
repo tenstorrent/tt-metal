@@ -8,8 +8,6 @@ import torch
 
 import ttnn
 
-from loguru import logger
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose
 from tests.ttnn.utils_for_testing import assert_numeric_metrics, tt_dtype_to_torch_dtype
 
 
@@ -172,9 +170,41 @@ def run_distributed_dit_layernorm(
         out_torch = out_torch * torch_weight
         out_torch = out_torch + torch_bias
 
-    passing, output_str = comp_allclose(tt_out, out_torch, rtol=1e-1, atol=1e-01)
-    logger.debug(f"torch vs tt distributed dit layernorm = {output_str}")
-    assert passing
+    # Post-allgather layernorm output noise floor decomposition:
+    #
+    # - The final (x - mu) / sqrt(var + eps) * gamma + beta cascade is built on FPU
+    #   bcast ops (sub_tiles_bcast_cols, mul_tiles_bcast_cols, mul_tiles_bcast_rows,
+    #   add_tiles_bcast_rows). Their SrcA/SrcB reads are 19-bit (TF32, 10 mantissa),
+    #   so any FP32 routed through them is structurally truncated to ~1e-3 relative.
+    # - The test always uses bf16 stats (and the affine path uses bf16 gamma/beta),
+    #   so mean / sqrt(var + eps) carry bf16 quantization (~0.78% relative). For
+    #   per-element output of magnitude up to ~3 that gives an absolute floor of
+    #   3 * 0.0078 ~= 0.024 per element. bf16 quantization of gamma/beta gives the
+    #   same magnitude, dominating the TF32 FPU floor.
+    # - For bf16 input, the input itself is quantized to ~0.78% relative; the
+    #   compounded error is slightly larger than the fp32-input case.
+    #
+    # atol leaves ~1.6x headroom over the structural element floor across shapes.
+    # PCC and frobenius are global metrics that come in much tighter than the
+    # element-wise atol; thresholds set close to observed (~5x headroom in 1-PCC).
+    if dtype == ttnn.float32:
+        rtol = 0.005
+        atol = 0.04
+        pcc = 0.999994
+        frobenius_threshold = 0.005
+    else:
+        rtol = 0.01
+        atol = 0.05
+        pcc = 0.99996
+        frobenius_threshold = 0.005
+    assert_numeric_metrics(
+        out_torch,
+        tt_out,
+        rtol=rtol,
+        atol=atol,
+        pcc_threshold=pcc,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["BFLOAT16_in"])
@@ -446,9 +476,29 @@ def run_distributed_dit_layernorm_batched_affine(
     out_torch = out_torch * torch_weight  # broadcasts [batch, 1, dim] over [1, batch, seq, dim]
     out_torch = out_torch + torch_bias
 
-    passing, output_str = comp_allclose(tt_out, out_torch, rtol=1e-1, atol=1e-01)
-    logger.debug(f"torch vs tt distributed dit layernorm (batched affine) = {output_str}")
-    assert passing
+    # Post-allgather layernorm output has a structural TF32 floor: the final
+    # (x - mu) / sqrt(var + eps) * gamma + beta cascade routes through FPU bcast ops
+    # which read operands through SrcA/SrcB (19-bit, 10 mantissa). For bf16 stats the
+    # bf16 quantization of mean / sqrt(var + eps) dominates; for fp32 stats the TF32
+    # FPU floor takes over.
+    if dtype == ttnn.float32:
+        rtol = 0.01
+        atol = 0.05
+        pcc = 0.9999
+        frobenius_threshold = 0.005
+    else:
+        rtol = 0.01
+        atol = 0.06
+        pcc = 0.999
+        frobenius_threshold = 0.01
+    assert_numeric_metrics(
+        out_torch,
+        tt_out,
+        rtol=rtol,
+        atol=atol,
+        pcc_threshold=pcc,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["BFLOAT16_in"])
