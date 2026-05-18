@@ -56,7 +56,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[input_buf_size_datums]);
     auto readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[output_buf_size_datums]);
 
-    for (int i = 0; i < input_buf_size_datums; i++) {
+    for (uint32_t i = 0; i < input_buf_size_datums; i++) {
         host_data[i] = bfloat16(static_cast<float>(1));
     }
     // Create golden data using tt_eager APIs

@@ -48,9 +48,9 @@ void run_full_width_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_b
     for (unsigned int row : rows) {
         uint32_t page = constants.pages_per_tensor_row * row;
         uint32_t base_address = constants.pages_per_shard_width * row * constants.page_size_jump;
-        for (int j = 0; j < constants.number_of_cores; j++) {
+        for (size_t j = 0; j < constants.number_of_cores; j++) {
             uint64_t l1_address = base_address;
-            for (int k = 0; k < constants.pages_per_shard_width; k++) {
+            for (size_t k = 0; k < constants.pages_per_shard_width; k++) {
                 if (j * constants.pages_per_shard_width + k < constants.pages_per_tensor_row) {
                     uint64_t calculated_address =
                         bank_base_address + NOC_XY_ADDR(
@@ -72,9 +72,9 @@ void run_full_height_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_
     uint32_t width_pages[5] = {0, 1, 31, 30, 14};
     for (unsigned int page : width_pages) {
         uint32_t base_address = page * constants.page_size_jump;
-        for (int j = 0; j < constants.number_of_cores; j++) {
+        for (size_t j = 0; j < constants.number_of_cores; j++) {
             uint32_t l1_address = base_address;
-            for (int k = 0; k < constants.rows_per_shard_height; k++) {
+            for (size_t k = 0; k < constants.rows_per_shard_height; k++) {
                 uint64_t calculated_address =
                     bank_base_address + NOC_XY_ADDR(
                                             DYNAMIC_NOC_X(noc, sharding_testing_parameters::real_core_x_vals[j]),
@@ -100,9 +100,9 @@ void run_full_block_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_b
             uint64_t outer_page = random_width_offset + (random_height_offset * constants.pages_per_tensor_row);
             uint64_t l1_address = (random_width_offset + random_height_offset * constants.pages_per_shard_width) *
                                   constants.page_size_jump;
-            for (int h = 0; h < cores_height; h++) {
+            for (uint32_t h = 0; h < cores_height; h++) {
                 uint64_t page = outer_page;
-                for (int w = 0; w < cores_per_block_row; w++) {
+                for (uint32_t w = 0; w < cores_per_block_row; w++) {
                     uint32_t core_number = w + (h * cores_per_block_row);
                     uint64_t calculated_address =
                         bank_base_address +
