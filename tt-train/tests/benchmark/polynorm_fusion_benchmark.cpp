@@ -18,12 +18,6 @@
 // Timed regions enqueue multiple steps and synchronize once at the end; this amortizes
 // dispatch/sync latency and is closer to how model-level runs queue TTNN operations.
 // Results are printed as % time and DRAM change relative to the baseline.
-//
-// Environment variables:
-//   TTML_POLYNORM_BENCH_WARMUP   — warmup iterations  (default 2)
-//   TTML_POLYNORM_BENCH_MEASURE  — measured iterations (default 5)
-//   TTML_POLYNORM_BENCH_BATCHES  — comma-separated batch sizes (default 1,2,4,8,16)
-//   TTML_POLYNORM_BENCH_MODELS   — comma-separated model names to include
 // ============================================================================
 
 #include <benchmark/benchmark.h>
@@ -51,7 +45,6 @@ struct SweepConfig {
     std::vector<uint32_t> batch_sizes = {1, 2, 4, 8, 16};
     uint32_t num_warmup = 2;
     uint32_t num_measure = 5;
-    std::vector<std::string> model_filter;
 };
 
 struct ModelShape {
@@ -80,16 +73,8 @@ const std::vector<ModelShape>& all_models() {
     return models;
 }
 
-SweepConfig load_sweep_config_from_env() {
-    SweepConfig sweep_cfg{};
-    ttml::benchmark_utils::override_u32_from_env("TTML_POLYNORM_BENCH_WARMUP", sweep_cfg.num_warmup);
-    ttml::benchmark_utils::override_u32_from_env("TTML_POLYNORM_BENCH_MEASURE", sweep_cfg.num_measure);
-    ttml::benchmark_utils::override_u32_csv_from_env("TTML_POLYNORM_BENCH_BATCHES", sweep_cfg.batch_sizes);
-    ttml::benchmark_utils::override_string_csv_from_env("TTML_POLYNORM_BENCH_MODELS", sweep_cfg.model_filter);
-    if (sweep_cfg.num_measure == 0U) {
-        throw std::invalid_argument("TTML_POLYNORM_BENCH_MEASURE must be greater than zero.");
-    }
-    return sweep_cfg;
+SweepConfig load_sweep_config() {
+    return SweepConfig{};
 }
 
 std::vector<BenchmarkCase> make_benchmark_cases(const SweepConfig& cfg) {
@@ -97,9 +82,6 @@ std::vector<BenchmarkCase> make_benchmark_cases(const SweepConfig& cfg) {
     const auto& models = all_models();
     cases.reserve(models.size() * cfg.batch_sizes.size());
     for (uint32_t model_index = 0; model_index < models.size(); ++model_index) {
-        if (!ttml::benchmark_utils::name_is_enabled(cfg.model_filter, models[model_index].name)) {
-            continue;
-        }
         for (const auto batch_size : cfg.batch_sizes) {
             cases.push_back(BenchmarkCase{.model_index = model_index, .batch_size = batch_size});
         }
@@ -334,7 +316,7 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        g_sweep_cfg = load_sweep_config_from_env();
+        g_sweep_cfg = load_sweep_config();
         g_cases = make_benchmark_cases(g_sweep_cfg);
         if (g_cases.empty()) {
             throw std::invalid_argument("No PolyNorm benchmark cases selected.");
@@ -344,7 +326,7 @@ int main(int argc, char** argv) {
         fmt::print(
             "preset models=tinyllama,undisclosed-model batches={} warmup={} measure={} "
             "seq_lens=tinyllama:2048,undisclosed-model:4096\n",
-            ttml::benchmark_utils::join_u32_csv(g_sweep_cfg.batch_sizes),
+            "1,2,4,8,16",
             g_sweep_cfg.num_warmup,
             g_sweep_cfg.num_measure);
         fmt::print(

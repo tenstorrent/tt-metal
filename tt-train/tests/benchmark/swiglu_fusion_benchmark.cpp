@@ -9,7 +9,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <stdexcept>
 #include <string>
 #include <tt-metalium/distributed.hpp>
 #include <vector>
@@ -33,7 +32,6 @@ struct SweepConfig {
     uint32_t sequence_length = 256;
     // 0 means: use model.num_blocks from the selected preset.
     uint32_t stacked_blocks = 0;
-    std::vector<std::string> model_filter;
 };
 
 struct ModelShape {
@@ -244,13 +242,6 @@ int main() {
                 sweep_cfg.stacked_blocks = static_cast<uint32_t>(parsed);
             }
         }
-        ttml::benchmark_utils::override_u32_from_env("TTML_SWIGLU_BENCH_WARMUP", sweep_cfg.num_warmup);
-        ttml::benchmark_utils::override_u32_from_env("TTML_SWIGLU_BENCH_MEASURE", sweep_cfg.num_measure);
-        ttml::benchmark_utils::override_u32_csv_from_env("TTML_SWIGLU_BENCH_BATCHES", sweep_cfg.batch_sizes);
-        ttml::benchmark_utils::override_string_csv_from_env("TTML_SWIGLU_BENCH_MODELS", sweep_cfg.model_filter);
-        if (sweep_cfg.num_measure == 0U) {
-            throw std::invalid_argument("TTML_SWIGLU_BENCH_MEASURE must be greater than zero.");
-        }
         const auto& models = all_models();
 
         const tt::tt_metal::distributed::MeshShape mesh(1, 1);
@@ -268,9 +259,6 @@ int main() {
         fmt::print("Runs full training-like step: model forward + CE loss + backward + AdamW step.\n");
 
         for (const auto& model : models) {
-            if (!ttml::benchmark_utils::name_is_enabled(sweep_cfg.model_filter, model.name)) {
-                continue;
-            }
             std::vector<RowSummary> rows;
             rows.reserve(sweep_cfg.batch_sizes.size());
             for (const auto batch_size : sweep_cfg.batch_sizes) {
