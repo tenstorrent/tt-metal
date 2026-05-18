@@ -100,7 +100,7 @@ def create_cicd_json_for_data_analysis(
         raw_job.pop("steps", None)
         raw_job.pop("tt_smi_reset", None)
 
-        reset_data = github_job_id_to_smi_resets.get(github_job_id)
+        reset_data = github_job_id_to_smi_resets.get((workflow_attempt, github_job_id))
 
         if reset_data:
             for attempt in reset_data:

@@ -184,8 +184,11 @@ def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id:
     github_job_ids_to_tt_smi_resets = {}
 
     for log_file in log_files:
-        github_job_id_str = log_file.name.replace(".log", "")
-        assert github_job_id_str.isnumeric(), f"Unexpected log filename: {log_file.name}"
+        filename = log_file.stem  # 1_75973563201
+
+        workflow_attempt_str, github_job_id_str = filename.split("_", 1)
+
+        workflow_attempt_from_file = int(workflow_attempt_str)
         github_job_id = int(github_job_id_str)
 
         tt_smi_version = search_for_tt_smi_version_in_log_file_(log_file)
@@ -197,7 +200,7 @@ def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id:
             reset["workflow_attempt"] = workflow_attempt
         assert tt_smi_reset is not None, f"Parser returned None for {log_file}"
 
-        github_job_ids_to_tt_smi_resets[github_job_id] = tt_smi_reset
+        github_job_ids_to_tt_smi_resets[(workflow_attempt_from_file, github_job_id)] = tt_smi_reset
 
     return github_job_ids_to_tt_smi_versions, github_job_ids_to_tt_smi_resets
 
