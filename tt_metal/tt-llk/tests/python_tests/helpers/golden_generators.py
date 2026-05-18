@@ -2287,8 +2287,18 @@ class EltwiseBinaryGolden(FidelityMasking):
             MathOperation.Elwmul: self._mul,
         }
 
-    def _quantize_input(self, operand, fmt, data_format):
-        """Quantize a single operand to match what hardware sees after unpack."""
+    def _quantize_input(
+        self, operand, fmt, data_format, preserve_input_precision=False
+    ):
+        """Quantize a single operand to match what hardware sees after unpack.
+
+        Args:
+            preserve_input_precision: When True, plain FP inputs are cast to
+                their own format's dtype rather than the output's. Set this for
+                MX-output paths on Quasar with implied math format — the dest
+                register holds values in the input's precision (fp16 for
+                Float16, bf16 for Float16_b).
+        """
         if fmt is None:
             return to_tensor(operand, data_format)
         if fmt == DataFormat.Bfp2_b:
@@ -2299,7 +2309,7 @@ class EltwiseBinaryGolden(FidelityMasking):
             return _bfp8b_to_float16b(operand)
         if fmt.is_mx_format():
             return quantize_mx_tensor_chunked(operand, fmt)
-        return to_tensor(operand, data_format)
+        return to_tensor(operand, fmt if preserve_input_precision else data_format)
 
     _UNSET = object()
 
@@ -2363,10 +2373,30 @@ class EltwiseBinaryGolden(FidelityMasking):
         if input_format_B is EltwiseBinaryGolden._UNSET:
             input_format_B = input_format
 
+        # On Quasar with IMPLIED_MATH_FORMAT=Yes, the HW dest register's
+        # physical storage is implied from the SrcA tag: Float16 input →
+        # FP16A (1.5.10); Float16_b and plain MX inputs → BF16 (1.8.7).
+        # For MX-output paths we preserve that precision through the golden
+        # so multi-tile accumulation rounds the same way as HW.
+        out_is_mx = data_format.is_mx_format()
+        hw_dest_dtype = (
+            torch.float16
+            if (
+                out_is_mx
+                and input_format == DataFormat.Float16
+                and (input_format_B is None or input_format_B == DataFormat.Float16)
+            )
+            else torch.bfloat16
+        )
+
         # Step 1: Quantize each input independently to match what hardware sees
         # after unpacking from L1. Each operand uses its own format.
-        operand1 = self._quantize_input(operand1, input_format, data_format)
-        operand2 = self._quantize_input(operand2, input_format_B, data_format)
+        operand1 = self._quantize_input(
+            operand1, input_format, data_format, preserve_input_precision=out_is_mx
+        )
+        operand2 = self._quantize_input(
+            operand2, input_format_B, data_format, preserve_input_precision=out_is_mx
+        )
 
         # Fidelity masking models the source register decomposition, so use
         # the *input* format, not the output format.  Block-float / MX formats
@@ -2421,11 +2451,11 @@ class EltwiseBinaryGolden(FidelityMasking):
                         keep_float32=True,
                     )
                     if block_acc is None:
-                        block_acc = tile_result_f32.to(torch.bfloat16)
+                        block_acc = tile_result_f32.to(hw_dest_dtype)
                     else:
                         # Add in better precision and then convert to lower precision.
                         block_acc = (block_acc.to(torch.float32) + tile_result_f32).to(
-                            torch.bfloat16
+                            hw_dest_dtype
                         )
                 accumulated.append(block_acc)
 
@@ -2447,7 +2477,9 @@ class EltwiseBinaryGolden(FidelityMasking):
         elif data_format == DataFormat.Bfp8_b:
             result = _bfp8b_to_float16b(result.to(torch.bfloat16))
         elif data_format.is_mx_format():
-            result = quantize_mx_tensor_chunked(result.to(torch.bfloat16), data_format)
+            # HW pack widens dest directly to an fp32-bus then MX-quantizes —
+            # no bf16 detour. Pass the native dtype to preserve precision.
+            result = quantize_mx_tensor_chunked(result, data_format)
         else:
             result = to_tensor(result, data_format)
 

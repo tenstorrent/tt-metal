@@ -67,6 +67,7 @@ TILE_DIMENSIONS = [32, 32]
             DataFormat.MxFp4,
             DataFormat.MxInt8,
             DataFormat.MxInt4,
+            DataFormat.MxInt2,
         ],
     ),
     mathop=[
@@ -188,9 +189,25 @@ def test_eltwise_binary_reuse_dest_quasar(
         src_B_t = quantize_mx_tensor_chunked(
             src_B_t.to(torch.bfloat16), formats.input_format
         )
-    golden_tensor = torch.zeros(tile_cnt_output * tile_elements, dtype=torch_format)
 
-    internal_dtype = torch.bfloat16 if use_mx else torch_format
+    # On Quasar with IMPLIED_MATH_FORMAT=Yes the HW dest accumulator's physical
+    # storage is implied from the SrcA tag: Float16 input → FP16A (1.5.10);
+    # Float16_b and plain MX inputs → BF16 (1.8.7). Match that here so the
+    # golden's multi-tile accumulation rounds the same way as HW. The pack
+    # stage widens dest to (sign, 8-bit exp, 23-bit mantissa) without a bf16
+    # detour, so the post-loop tensor is kept in fp32 — feeding bf16 into the
+    # MX quantize would discard 3 mantissa bits the HW preserves.
+    if use_mx:
+        internal_dtype = (
+            torch.float16
+            if formats.input_format == DataFormat.Float16
+            else torch.bfloat16
+        )
+        golden_dtype = torch.float32
+    else:
+        internal_dtype = torch_format
+        golden_dtype = torch_format
+    golden_tensor = torch.zeros(tile_cnt_output * tile_elements, dtype=golden_dtype)
 
     eltwise_golden = (
         EltwiseBinaryGolden()
@@ -248,7 +265,7 @@ def test_eltwise_binary_reuse_dest_quasar(
                 else:
                     dest = srcA * srcB
 
-        golden_tensor[out_start : out_start + tile_elements] = dest.to(torch_format)
+        golden_tensor[out_start : out_start + tile_elements] = dest.to(golden_dtype)
 
     configuration = TestConfig(
         "sources/quasar/eltwise_binary_reuse_dest_quasar_test.cpp",
@@ -307,10 +324,11 @@ def test_eltwise_binary_reuse_dest_quasar(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    # Quantize golden tensor if output format is MX format
+    # Quantize golden tensor if output format is MX format. Feed the native
+    # (fp16 or bf16) values directly — HW does not bf16-cast before MX quantize.
     if formats.output_format.is_mx_format():
         golden_tensor = quantize_mx_tensor_chunked(
-            golden_tensor.to(torch.bfloat16), formats.output_format
+            golden_tensor, formats.output_format
         ).to(torch_format)
 
     assert passed_test(
