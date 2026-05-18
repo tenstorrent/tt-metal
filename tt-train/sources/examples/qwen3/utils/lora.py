@@ -157,7 +157,7 @@ class LoRARowParallelLinear(AbstractModuleBase):
 def _make_lora_wrapper(module, rank: int, alpha: float):
     """Create the appropriate LoRA wrapper for the given base module."""
     cls_name = type(module).__name__
-    if cls_name == "LinearProjection":
+    if cls_name in ("LinearProjection", "LinearLayer"):
         return LoRALinearProjection(module, rank, alpha)
     elif cls_name == "ColumnParallelLinear":
         return LoRAColumnParallelLinear(module, rank, alpha)
@@ -166,7 +166,7 @@ def _make_lora_wrapper(module, rank: int, alpha: float):
     else:
         raise ValueError(
             f"Cannot inject LoRA into module type '{cls_name}'. "
-            f"Supported: LinearProjection, ColumnParallelLinear, RowParallelLinear"
+            f"Supported: LinearLayer, LinearProjection, ColumnParallelLinear, RowParallelLinear"
         )
 
 

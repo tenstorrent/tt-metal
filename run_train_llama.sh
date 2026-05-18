@@ -2,6 +2,7 @@ echo "Python path: $(which python3)"
 
 export TT_METAL_HOME="$(pwd)"
 export TT_METAL_RUNTIME_ROOT="$(pwd)"
+export TT_VISIBLE_DEVICES=0
 
 env -u TT_METAL_DPRINT_CORES \
 TT_METAL_WATCHER_NOINLINE=1 \

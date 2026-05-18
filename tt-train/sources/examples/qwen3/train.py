@@ -80,7 +80,21 @@ import ttml
 
 from utils.lora import LORA_TARGETS_ALL, inject_adapter_in_model
 from utils.memory import MemoryUsageTracker, finalize_memory
+from ttml.common.profiler_utils import profiler_marker
 from ttml.common.utils import no_grad
+
+try:
+    import tracy as _tracy
+
+    def _signpost(header: str) -> None:
+        _tracy.signpost(header)
+
+except ImportError:
+
+    def _signpost(header: str) -> None:
+        pass
+
+
 from utils.tensor_utils import (
     create_causal_mask,
     create_input_tensor,
@@ -414,6 +428,12 @@ def main():
         default=False,
         help="Print per-step timing breakdown for each training operation "
         "(zero_grad, forward, loss, backward, opt_step, eval, etc.)",
+    )
+    parser.add_argument(
+        "--profile_warmup_steps",
+        type=int,
+        default=0,
+        help="Number of initial steps to exclude from profiling signposts (default: 0).",
     )
 
     args = parser.parse_args()
@@ -760,10 +780,16 @@ def main():
         return time.time()
 
     bar = tqdm(range(resume_step + 1, total_steps + 1), desc="Training")
+    warmup_announced = False
     for step in bar:
         step_start = time.time()
         if timings:
             print(f">>> STEP {step} START")
+
+        measure = step > args.profile_warmup_steps
+        if measure and not warmup_announced and args.profile_warmup_steps > 0:
+            _signpost(f"WARMUP_END after={args.profile_warmup_steps}")
+            warmup_announced = True
 
         # Learning rate schedule
         if args.lr_schedule == "constant":
@@ -798,6 +824,8 @@ def main():
             input_tensor = create_input_tensor(x_np, dp_mapper)
             t0 = _tlog(step, "create_input", t0)
 
+            if measure:
+                _signpost(f"FWD_BEGIN step={step}")
             # Forward pass
             logits = ttml_model(input_tensor, causal_mask, input_ids_np=x_np)
             t0 = _tlog(step, "forward", t0)
@@ -819,6 +847,11 @@ def main():
             accum_loss += get_loss_value(loss, distributed)
             t0 = _tlog(step, "loss_sync", t0)
 
+            profiler_marker(None, "forward_pass_done", dump_results=True)
+            if measure:
+                _signpost(f"FWD_END step={step}")
+                _signpost(f"BWD_BEGIN step={step}")
+
             # Scale for gradient accumulation
             if accum_steps > 1:
                 loss = loss * (1.0 / float(accum_steps))
@@ -833,6 +866,9 @@ def main():
 
             ctx.reset_graph()
             t0 = _tlog(step, "reset_graph", t0)
+            profiler_marker(None, "backward_pass_done", dump_results=True)
+            if measure:
+                _signpost(f"BWD_END step={step}")
 
         # Synchronize gradients across DP groups (all-reduce along mesh dim 0)
         if dp_size > 1:
@@ -856,9 +892,14 @@ def main():
             t0 = _tlog(step, "clip_grad", t0)
 
         # Optimizer step
+        if measure:
+            _signpost(f"OPT_BEGIN step={step}")
         t0 = time.time()
         optimizer.step()
         t0 = _tlog(step, "opt_step", t0)
+        profiler_marker(None, "optimizer_step_done", dump_results=True)
+        if measure:
+            _signpost(f"OPT_END step={step}")
 
         # Print memory usage after first iteration (compilation complete)
         if args.track_memory and not is_everything_compiled:
@@ -906,7 +947,7 @@ def main():
         }
 
         # Periodic evaluation
-        if step % args.eval_every == 0 or step == resume_step + 1:
+        if args.eval_every > 0 and (step % args.eval_every == 0 or step == resume_step + 1):
             t0 = time.time()
             val_loss = evaluate(
                 ttml_model,
@@ -938,7 +979,7 @@ def main():
         bar.set_postfix(postfix, refresh=False)
 
         # Periodic text generation
-        if step % args.gen_every == 0:
+        if args.gen_every > 0 and step % args.gen_every == 0:
             print(f"\n--- Generation at step {step} ---")
             gen_text = generate_text(
                 ttml_model,

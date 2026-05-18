@@ -545,7 +545,7 @@ def load_weights_from_hf_distributed(
     loaded = 0
     skipped = []
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=1) as pool:
         futures = [
             (hf_name, ttml_name, pool.submit(_prepare_and_transfer, hf_name, ttml_name)) for hf_name, ttml_name in items
         ]
