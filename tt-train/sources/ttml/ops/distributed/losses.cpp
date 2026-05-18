@@ -6,8 +6,10 @@
 
 #include <fmt/core.h>
 
+#include <cstdio>
 #include <enchantum/enchantum.hpp>
 #include <stdexcept>
+#include <tt-metalium/distributed.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
@@ -96,10 +98,47 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
 
     // Step 3: (logits - global_max).exp() — TEMPORARILY UNFUSED for diagnostic check.
     // TODO: revert to fused_subtract_exp() once diagnostic is done.
-    auto shifted = ttnn::subtract(logits->get_value(), global_max, ttnn::DataType::FLOAT32);
+    //
+    // DIAGNOSTIC: trace per-op dispatch + device completion to pinpoint hangs.
+    // Removed once the FP32+COL_B-broadcast subtract path is fixed.
+    auto* dbg_mesh_device = logits->get_value().device();
+    const auto dbg_sync = [dbg_mesh_device](const char* tag) {
+        std::fprintf(stderr, "[ce-loss] sync BEFORE %s\n", tag);
+        std::fflush(stderr);
+        tt::tt_metal::distributed::Synchronize(dbg_mesh_device, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>{});
+        std::fprintf(stderr, "[ce-loss] sync AFTER  %s\n", tag);
+        std::fflush(stderr);
+    };
+
+    dbg_sync("pre-subtract");
+    std::fprintf(
+        stderr,
+        "[ce-loss] dispatching subtract: lhs.dtype=%s rhs.dtype=%s out_dtype=FLOAT32\n",
+        enchantum::to_string(logits->get_value().dtype()).data(),
+        enchantum::to_string(global_max.dtype()).data());
+    std::fflush(stderr);
+    auto shifted = ttnn::subtract(logits->get_value(), global_max);
+    std::fprintf(
+        stderr,
+        "[ce-loss] subtract dispatch returned; shifted.dtype=%s\n",
+        enchantum::to_string(shifted.dtype()).data());
+    std::fflush(stderr);
+    dbg_sync("subtract");
+
     auto local_exp = ttnn::exp(shifted);
+    std::fprintf(stderr, "[ce-loss] exp dispatch returned\n");
+    std::fflush(stderr);
+    dbg_sync("exp");
+
     auto local_sum = ttnn::sum(local_exp, 3, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
+    std::fprintf(stderr, "[ce-loss] sum dispatch returned\n");
+    std::fflush(stderr);
+    dbg_sync("sum");
+
     auto global_sum = ttnn_fixed::distributed::all_reduce(local_sum, cluster_axis);
+    std::fprintf(stderr, "[ce-loss] all_reduce dispatch returned\n");
+    std::fflush(stderr);
+    dbg_sync("all_reduce");
 
     // log_normalizer = global_max + log(global_sum)  [B,1,S,1].
     // Kept in BF16 — global_max and log(global_sum) are both small, well-behaved scalars
