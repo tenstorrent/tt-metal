@@ -675,6 +675,25 @@ void Device::configure_fabric(
             "after ConfigureDeviceWithProgram",
             this->id_, health.deferred_deassert_channels.size());
 
+        // FIX SA-S (#42429): Stagger deasserts across MMIO devices by 100ms per chip_id.
+        // When multiple MMIO devices (e.g., 4 N300s in T3K) all deassert simultaneously,
+        // their ETH links try to train at the same time → cross-chip link training loops →
+        // ALL channels timeout in FIX BH (now SA-A).  Staggering by chip_id breaks the
+        // simultaneous link training deadlock: Device 0 deasserts first, Device 1 100ms later, etc.
+        // Only MMIO devices have deferred deassert channels so this only affects MMIO paths.
+        {
+            constexpr uint32_t kStaggerPerChipMs = 100;
+            const uint32_t stagger_ms = this->id_ * kStaggerPerChipMs;
+            if (stagger_ms > 0) {
+                log_info(
+                    tt::LogMetal,
+                    "FIX SA-S (#42429): Device {} staggering deassert by {}ms (chip_id * {}ms) "
+                    "to prevent simultaneous cross-chip ETH link training.",
+                    this->id_, stagger_ms, kStaggerPerChipMs);
+                std::this_thread::sleep_for(std::chrono::milliseconds(stagger_ms));
+            }
+        }
+
         for (const auto& deferred_chan : health.deferred_deassert_channels) {
             if (all_dead_channels.count(deferred_chan)) {
                 continue;  // Became dead during configure_fabric_cores — skip.
