@@ -2,11 +2,14 @@
 
 Mistral-24B is a multimodal model that takes text prompts and optional images, then generates text responses token-by-token. On TT, the pipeline first converts images into visual features (vision tower + patch merger + multimodal projector), fuses those features with text embeddings during prefill, and then runs autoregressive decode to generate output tokens.
 
+The model is validated on **Blackhole QuietBox-2** (`P150x4` / shape `(1, 4)`).
+
 ## Performance measurements
 
-Measured on **Blackhole QuietBox-2 (BH QB-2)** with mesh device **`P150x4`** (logical shape `(1, 4)`.
+Measured on **Blackhole QuietBox-2 (BH QB-2)** with mesh device `P150x4` (logical shape `(1, 4)`).
 
 End-to-end demo metrics:
+
 
 | Metric                                | Without trace | With trace |
 | ------------------------------------- | ------------- | ---------- |
@@ -20,15 +23,27 @@ End-to-end demo metrics:
 | **num_decode_tokens**                 | 471           | 471        |
 | **Full demo runtime** (s)             | 29.9914       | 17.4228    |
 
-## Command to run the end-to-end test
+
+## End-to-end demo test
 
 ```bash
 pytest models/experimental/mistral_24b/tests/pipeline_tests/test_end2end.py
 ```
 
-## Commands to run vision pipeline tests
+## Pipeline tests
 
 ```bash
 pytest models/experimental/mistral_24b/tests/pipeline_tests/test_vision_model.py
 pytest models/experimental/mistral_24b/tests/pipeline_tests/test_vision_tower.py
+```
+
+## Vision unit tests
+
+```bash
+pytest models/experimental/mistral_24b/tests/test_conv2d.py
+pytest models/experimental/mistral_24b/tests/test_patch_rot_emb.py
+pytest models/experimental/mistral_24b/tests/test_vision_rms.py
+pytest models/experimental/mistral_24b/tests/test_vision_mlp.py
+pytest models/experimental/mistral_24b/tests/test_vision_attention.py
+pytest models/experimental/mistral_24b/tests/test_pixtral_transformer.py
 ```
