@@ -1241,7 +1241,7 @@ class TestConfig:
             if TestConfig.ARCH != ChipArchitecture.QUASAR:
                 commit_brisc_command(TestConfig.TENSIX_LOCATION, BriscCmd.RESET_TRISCS)
         else:
-            set_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
+            commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
 
         VARIANT_ELF_DIR = (
             TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"

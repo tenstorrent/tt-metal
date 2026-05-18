@@ -81,7 +81,15 @@ constexpr uint32_t MIN_BLOCKED_PACK_TILES = 8;
 ALWI bool should_use_blocked_pack_width(uint32_t pack_width) { return pack_width >= MIN_BLOCKED_PACK_TILES; }
 
 ALWI void configure_pack_width(uint32_t cb, uint32_t pack_width) {
-    PACK((llk_pack_mop_config<false, false, false>(cb, pack_width)));
+    // Pure MOP refresh: addrmod and packer strides are already configured from
+    // the initial pack init, and changing pack_width only requires re-issuing
+    // the MOP. Skipping the packer-strides reconfig saves a THCON stall per
+    // call on the SDPA streaming hot path.
+    PACK((llk_pack_init<
+          ckernel::PackMode::Default,
+          false /* zero_output */,
+          true /* skip_addrmod_config */,
+          true /* skip_packer_strides */>(cb, pack_width)));
 }
 
 ALWI void configure_single_tile_pack(uint32_t cb) { configure_pack_width(cb, 1); }

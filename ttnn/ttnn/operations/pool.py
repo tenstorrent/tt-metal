@@ -49,11 +49,94 @@ def golden_maxpool2d(
 ttnn.attach_golden_function(ttnn.max_pool2d, golden_maxpool2d)
 
 
-def golden_global_avg_pool2d(input_tensor: ttnn.Tensor):
+def global_avg_pool2d(input_tensor, *, memory_config=None, dtype=None):
+    """Global average pooling. Wrapper around avg_pool2d.
+
+    Mirrors PyTorch where global pooling has no dedicated op — it always routes through
+    pool2d/adaptive_avg_pool2d. avg_pool2d's pool2d() entry point detects the global-pool
+    case (kernel == input spatial, no padding/dilation) and runs a single pool_sum reduction.
+
+    The caller does not need to flatten to (1, 1, N*H*W, C); the fast path inside pool2d()
+    handles rank-4 NHWC directly via an explicit logical+padded reshape so it preserves
+    pad-to-tile zero-padding from legacy callers.
+
+    Args:
+        input_tensor: Input tensor in NHWC format. Rank 2 [H,W], 3 [H,W,C], or 4 [N,H,W,C] accepted.
+
+    Keyword Args:
+        memory_config: Optional output memory config.
+        dtype: Optional output data type.
+
+    Returns:
+        ttnn.Tensor of shape (N, 1, 1, C) in TILE layout.
+    """
+    shape = list(input_tensor.shape)
+    rank = len(shape)
+    if rank == 4:
+        N, H, W, C = shape
+    elif rank == 3:
+        H, W, C = shape
+        N = 1
+    elif rank == 2:
+        H, W = shape
+        N, C = 1, 1
+    else:
+        raise ValueError(f"global_avg_pool2d expects rank 2, 3, or 4 input, got rank {rank}")
+
+    # The avg_pool2d reduction fast path opts out for sharded inputs (it would force a
+    # sharded→interleaved round-trip that erases the win for direct MobileNetV2-style
+    # callers). For the global_avg_pool2d wrapper specifically, falling through to the
+    # sliding-window path is wrong: it goes through halo, which needs L1_SMALL, and the
+    # legacy C++ global_avg_pool2d device op called pool_sum directly with no halo —
+    # so callers don't reserve L1_SMALL. Convert sharded inputs to interleaved here to
+    # match legacy behavior. Buffer type is preserved.
+    if input_tensor.memory_config().is_sharded():
+        input_tensor = ttnn.to_memory_config(
+            input_tensor,
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, input_tensor.memory_config().buffer_type),
+        )
+
+    out_dtype = dtype if dtype is not None else ttnn.bfloat16
+    result = ttnn.avg_pool2d(
+        input_tensor=input_tensor,
+        batch_size=N,
+        input_h=H,
+        input_w=W,
+        channels=C,
+        kernel_size=(H, W),
+        stride=(1, 1),
+        padding=(0, 0),
+        memory_config=memory_config,
+        dtype=out_dtype,
+        output_layout=ttnn.TILE_LAYOUT,  # match the legacy global_avg_pool2d's TILE output
+    )
+    # avg_pool2d returns flat (1, 1, N, C); restore (N, 1, 1, C) for backward compatibility.
+    return ttnn.reshape(result, (N, 1, 1, C))
+
+
+ttnn.global_avg_pool2d = global_avg_pool2d
+
+
+def golden_global_avg_pool2d(input_tensor):
     import torch
 
-    output_size = (1, 1)
-    return torch.nn.functional.global_avg_pool2d(input_tensor, output_size)
+    # ttnn operates on NHWC. torch.nn.functional.adaptive_avg_pool2d expects NCHW.
+    # PyTorch has no dedicated global_avg_pool2d — it always routes through adaptive or pool2d.
+    rank = input_tensor.dim()
+    if rank == 2:
+        # [H, W] -> [1, 1, H, W] (NCHW with N=C=1)
+        input_nchw = input_tensor.unsqueeze(0).unsqueeze(0)
+        output_nchw = torch.nn.functional.adaptive_avg_pool2d(input_nchw, output_size=(1, 1))
+        return output_nchw.squeeze(0).squeeze(0)
+    if rank == 3:
+        # [H, W, C] (NHWC with N=1) -> [1, C, H, W] (NCHW)
+        input_nchw = input_tensor.permute(2, 0, 1).unsqueeze(0)
+        output_nchw = torch.nn.functional.adaptive_avg_pool2d(input_nchw, output_size=(1, 1))
+        return output_nchw.squeeze(0).permute(1, 2, 0)
+    # rank 4: [N, H, W, C] -> [N, C, H, W]
+    input_nchw = input_tensor.permute(0, 3, 1, 2)
+    output_nchw = torch.nn.functional.adaptive_avg_pool2d(input_nchw, output_size=(1, 1))
+    return output_nchw.permute(0, 2, 3, 1)
 
 
 ttnn.attach_golden_function(ttnn.global_avg_pool2d, golden_global_avg_pool2d)

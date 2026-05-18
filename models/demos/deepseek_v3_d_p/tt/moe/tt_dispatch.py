@@ -73,6 +73,7 @@ class TtDispatchModule(LightweightModule):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         fp8_output: bool = False,
         layer_idx: int = -1,
+        subdevice_id=None,
     ):
         """
         Initialize dispatch module with configuration parameters.
@@ -111,6 +112,7 @@ class TtDispatchModule(LightweightModule):
         self.topology = topology
         self.fp8_output = fp8_output
         self.layer_idx = layer_idx
+        self.subdevice_id = subdevice_id
 
     @staticmethod
     def shard_expert_offsets(
@@ -276,6 +278,7 @@ class TtDispatchModule(LightweightModule):
             num_links=self.num_links,
             topology=self.topology,
             use_fp8_dispatch=self.fp8_output,
+            subdevice_id=self.subdevice_id,
         )
         if _PROFILE_OPS:
             _tracy.disable()

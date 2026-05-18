@@ -2,26 +2,26 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple
+import random
 from functools import partial
 
-import random
 import torch
+
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
-    create_mesh_device,
-    create_tensor_on_mesh,
-    mesh_tensor_to_torch,
-    reconcile_golden_to_actual,
-)
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    create_mesh_device,
+    create_tensor_on_mesh,
+    get_mesh_shape,
+    mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
+)
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -219,10 +219,24 @@ def run(
 
     # Only pass dtype/memory_config/layout if they were in the master trace.
     # Passing None creates extra_key diffs in validation.
+    # Use __absent_keys__ to distinguish "master had kwarg=None" from "master never had kwarg".
+    absent_keys = kwargs.get("__absent_keys__")
+    has_absent_info = absent_keys is not None
+    absent_keys = set(absent_keys or [])
     embedding_kwargs = dict(op_kwargs)
     if dtype is not None:
         embedding_kwargs["dtype"] = dtype
-    if memory_config is not None:
+    if has_absent_info and "memory_config" not in absent_keys:
+        if memory_config is not None:
+            from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+            parsed_mc = (
+                parse_dict_value("memory_config", memory_config) if isinstance(memory_config, dict) else memory_config
+            )
+            embedding_kwargs["memory_config"] = parsed_mc
+        else:
+            embedding_kwargs["memory_config"] = None
+    elif memory_config is not None:
         embedding_kwargs["memory_config"] = memory_config
     if layout is not None:
         from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
@@ -285,10 +299,25 @@ def run(
             torch_output_tensor, output_tensor, input_a_tensor_placement, weight_tensor_placement
         )
     if torch_output_tensor.shape != output_tensor.shape:
-        squeezed_expected = torch_output_tensor.squeeze()
-        squeezed_actual = output_tensor.squeeze()
-        if squeezed_expected.shape == squeezed_actual.shape:
-            torch_output_tensor = squeezed_expected
-            output_tensor = squeezed_actual
+        # Try reshaping golden to match actual
+        if torch_output_tensor.numel() == output_tensor.numel():
+            torch_output_tensor = torch_output_tensor.reshape(output_tensor.shape)
+        else:
+            # Numel differs (e.g. golden uses global weight, actual is per-device).
+            # Slice golden to match actual shape.
+            g = torch_output_tensor.squeeze()
+            a = output_tensor.squeeze()
+            if g.ndim == a.ndim and g.shape[:-1] == a.shape[:-1]:
+                torch_output_tensor = g[..., : a.shape[-1]]
+                output_tensor = a
+            elif g.ndim == a.ndim and g.shape[1:] == a.shape[1:]:
+                torch_output_tensor = g[: a.shape[0]]
+                output_tensor = a
+            elif g.numel() > a.numel() and a.numel() > 0 and g.numel() % a.numel() == 0:
+                torch_output_tensor = g.reshape(-1)[: a.numel()].reshape(a.shape)
+                output_tensor = a
+            else:
+                torch_output_tensor = g
+                output_tensor = a
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]

@@ -256,7 +256,7 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
         this->cq_to_last_completed_event.push_back(0);
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
         this->prefetch_q_dev_fences[cq_id] = prefetch_q_base + ctx.dispatch_mem_map().prefetch_q_entries() *
-                                                                   sizeof(DispatchSettings::prefetch_q_entry_type);
+                                                                   ctx.dispatch_mem_map().prefetch_q_entry_size_bytes();
     }
 }
 
@@ -667,6 +667,8 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         auto fetch_operation_body = [&]() {
             ctx.get_cluster().read_core(&fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
             this->prefetch_q_dev_fences[cq_id] = fence;
+            // Yield to clock the simulator when running on TTSim; no-op on real hardware.
+            ctx.get_cluster().advance_device_execution(this->device_id);
         };
 
         // Condition to check if should continue waiting
@@ -694,7 +696,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     uint32_t prefetch_q_base =
         ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
     uint32_t prefetch_q_limit = prefetch_q_base + (ctx.dispatch_mem_map().prefetch_q_entries() *
-                                                   sizeof(DispatchSettings::prefetch_q_entry_type));
+                                                   ctx.dispatch_mem_map().prefetch_q_entry_size_bytes());
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
         wait_for_fetch_q_space();
@@ -717,6 +719,8 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
+        // Yield to clock the simulator when running on TTSim; no-op on real hardware.
+        tt::tt_metal::MetalContext::instance(this->context_id).get_cluster().advance_device_execution(this->device_id);
     };
 
     // Condition to check if the operation should continue
@@ -796,31 +800,42 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
         return;
     }
 
-    uint32_t max_command_size_B = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+    const DispatchMemMap& dispatch_mem_map = MetalContext::instance(this->context_id).dispatch_mem_map();
+    const uint32_t max_command_size_B = dispatch_mem_map.max_prefetch_command_size();
     TT_ASSERT(
         command_size_B <= max_command_size_B,
         "Generated prefetcher command of size {} B exceeds max command size {} B",
         command_size_B,
         max_command_size_B);
+
+    const uint32_t entry_bytes = dispatch_mem_map.prefetch_q_entry_size_bytes();
+    const uint32_t shift_for_msb = entry_bytes * 8 - 1;
+    const uint32_t max_encodable = 1u << shift_for_msb;
     TT_ASSERT(
-        (command_size_B >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
+        (command_size_B >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) < max_encodable,
+        "FetchQ command too large to represent");
     TT_ASSERT(command_size_B > 0, "Command size must be greater than 0");
     if (this->bypass_enable) {
         return;
     }
     tt_driver_atomics::sfence();
-    DispatchSettings::prefetch_q_entry_type command_size_16B =
-        command_size_B >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE;
+    uint32_t entry_val = command_size_B >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE;
 
     // stall_prefetcher is used for enqueuing traces, as replaying a trace will hijack the cmd_data_q
     // so prefetcher fetches multiple cmds that include the trace cmd, they will be corrupted by trace pulling data
     // from DRAM stall flag prevents pulling prefetch q entries that occur after the stall entry Stall flag for
     // prefetcher is MSB of FetchQ entry.
     if (stall_prefetcher) {
-        command_size_16B |= (1 << ((sizeof(DispatchSettings::prefetch_q_entry_type) * 8) - 1));
+        entry_val |= 1u << shift_for_msb;
     }
-    this->prefetch_q_windows[cq_id]->write16(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
-    this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
+
+    if (entry_bytes == 2) {
+        this->prefetch_q_windows[cq_id]->write16(this->prefetch_q_dev_ptrs[cq_id], static_cast<uint16_t>(entry_val));
+    } else {
+        TT_ASSERT(entry_bytes == 4);
+        this->prefetch_q_windows[cq_id]->write32(this->prefetch_q_dev_ptrs[cq_id], entry_val);
+    }
+    this->prefetch_q_dev_ptrs[cq_id] += entry_bytes;
 }
 
 bool SystemMemoryManager::is_dram_backed() const {

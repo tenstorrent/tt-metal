@@ -130,6 +130,10 @@ inline std::string get_debug_assert_message(
         case dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped:
             return "detected an inter-kernel data race due to kernel completing with pending NOC "
                    "transactions (missing NOC posted writes sent barrier).";
+        case dev_msgs::DebugAssertNCriscNOCPacketTagClearedTripped:
+            return "detected invalid NOC command buffer state before starting the next kernel "
+                   "(write-capable NOC packet tags must be zero so implicit transaction ID users start with "
+                   "transaction ID 0).";
         case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
         case dev_msgs::DebugAssertHwFault:

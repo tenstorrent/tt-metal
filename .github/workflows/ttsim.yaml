@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.5.7"
+        default: "v1.6.1"
       job-timeout:
         required: false
         type: number
@@ -72,7 +72,7 @@ jobs:
     steps:
 
       - name: Checkout actions
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions/download-artifact-with-retry
           sparse-checkout-cone-mode: false
@@ -156,7 +156,7 @@ jobs:
       ttnn-tests: ${{ steps.compute-tests.outputs.ttnn-tests }}
     steps:
       - name: Checkout repository for test definitions
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github
@@ -229,7 +229,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: ⬇️  Setup Job
@@ -297,6 +297,12 @@ jobs:
           ${{ matrix.test-group.serial_cmd }} -p no:timeout --lf --lfnf=all --tb=long -v ${{ steps.skip-list.outputs.skip_args }} || true
           exit 1
 
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
     runs-on: ubuntu-latest
@@ -327,7 +333,7 @@ jobs:
       TT_METAL_DISABLE_SFPLOADMACRO: 1
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: Setup Job
@@ -413,7 +419,7 @@ jobs:
       TT_METAL_MOCK_CLUSTER_DESC_PATH: ${{ matrix.cluster_desc }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: Setup Job
