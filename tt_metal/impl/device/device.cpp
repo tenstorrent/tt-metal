@@ -2719,6 +2719,66 @@ void Device::launch_eth_cores_for_quiesce() {
         }
     }
 
+    // FIX QR (#42429): FIX EF quiesce analogue — poll MMIO relay ERISCs after FIX IJ
+    // restore to confirm they exited 0xDEADB07E before returning.
+    //
+    // Race window: quiesce_internal() Pass 1b calls launch_eth_cores_for_quiesce() on
+    // MMIO devices, then Pass 1c immediately launches non-MMIO devices.  Non-MMIO
+    // write_launch_msg_to_core routes through the MMIO relay ERISCs.  If an MMIO relay
+    // ERISC is still at 0xDEADB07E when Pass 1c starts, the non-MMIO launch message
+    // is silently dropped → non-MMIO ERISC never starts → ring-sync timeout.
+    //
+    // This is the quiesce analogue of the initial configure_fabric() FIX EF poll.
+    // The poll is only needed for MMIO devices (relay ERISCs that serve non-MMIO peers).
+    if (this->is_mmio_capable()) {
+        static constexpr uint32_t kPreLaunchCanary_QR =
+            static_cast<uint32_t>(EthDiagSentinel::HOST_PRE_LAUNCH_CANARY);
+        static constexpr int kFIX_QR_PollIntervalMs = 5;
+        static constexpr int kFIX_QR_PollMaxMs = 3000;
+        const auto [qr_sync_addr, unused_qr] = builder_ctx.get_fabric_router_sync_address_and_status();
+        const auto& env_qr = MetalContext::instance();
+        auto& cluster_qr = env_qr.get_cluster();
+        const auto fabric_node_qr = control_plane.get_fabric_node_id_from_physical_chip_id(this->id());
+        const auto router_chans_qr = control_plane.get_active_fabric_eth_channels(fabric_node_qr);
+
+        for (const auto& [qr_chan, _] : router_chans_qr) {
+            if (newly_dead.count(qr_chan)) continue;
+            auto qr_virtual = cluster_qr.get_virtual_eth_core_from_channel(this->id(), qr_chan);
+            const int max_iters = kFIX_QR_PollMaxMs / kFIX_QR_PollIntervalMs;
+            bool exited = false;
+            for (int iter = 0; iter < max_iters; ++iter) {
+                std::vector<uint32_t> qr_buf(1, kPreLaunchCanary_QR);
+                try {
+                    cluster_qr.read_core(qr_buf, sizeof(uint32_t),
+                        tt_cxy_pair(this->id(), qr_virtual),
+                        static_cast<uint64_t>(qr_sync_addr));
+                } catch (const std::exception& e) {
+                    log_warning(tt::LogMetal,
+                        "FIX QR: Device {} chan {} quiesce poll read failed: {}",
+                        this->id(), qr_chan, e.what());
+                    break;
+                }
+                if (qr_buf[0] != kPreLaunchCanary_QR) {
+                    log_info(tt::LogMetal,
+                        "FIX QR: Device {} chan {} (MMIO) exited 0xDEADB07E → 0x{:08x} "
+                        "after {}ms in quiesce — relay ERISC ready for Pass 1c. (#42429)",
+                        this->id(), qr_chan, qr_buf[0],
+                        iter * kFIX_QR_PollIntervalMs);
+                    exited = true;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(kFIX_QR_PollIntervalMs));
+            }
+            if (!exited) {
+                log_warning(tt::LogMetal,
+                    "FIX QR: Device {} chan {} (MMIO) still at 0xDEADB07E after {}ms in quiesce — "
+                    "relay ERISC did not start. Non-MMIO Pass 1c launch through this relay "
+                    "may be silently dropped. (#42429)",
+                    this->id(), qr_chan, kFIX_QR_PollMaxMs);
+            }
+        }
+    }
+
     log_info(
         tt::LogMetal, "launch_eth_cores_for_quiesce: Device {} complete — all ETH ERISC cores launched.", this->id());
 }
