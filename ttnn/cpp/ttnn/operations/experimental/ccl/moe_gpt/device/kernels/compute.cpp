@@ -151,11 +151,11 @@ void kernel_main() {
     // declared inside the W2 / a2a iteration loop. cb_r2c_w0_w1 and cb_r2c_w2
     // alias to c_0, so one weight wrapper suffices. mm_w2c_rdy_buf wraps the
     // ring sync CB used by KStepWithRing during the W2 cycle.
-    experimental::CircularBuffer mm_in_buf(cb_s2c_in);
-    experimental::CircularBuffer mm_in2_buf(cb_s2c_in2);
-    experimental::CircularBuffer mm_ones_buf(cb_c2c_ones_tile);
-    experimental::CircularBuffer mm_w_buf(cb_r2c_w0_w1);  // == cb_r2c_w2
-    experimental::CircularBuffer mm_w2c_rdy_buf(cb_w2c_rdy);
+    CircularBuffer mm_in_buf(cb_s2c_in);
+    CircularBuffer mm_in2_buf(cb_s2c_in2);
+    CircularBuffer mm_ones_buf(cb_c2c_ones_tile);
+    CircularBuffer mm_w_buf(cb_r2c_w0_w1);  // == cb_r2c_w2
+    CircularBuffer mm_w2c_rdy_buf(cb_w2c_rdy);
 
     // Constants for MoEGPT
     // GPT-OSS: K=2880 -> 90 tiles height, N=2880 -> 90 tiles
@@ -283,7 +283,7 @@ void kernel_main() {
             // KStepWithBias interleaves the bias FMA at the K-tile boundary and
             // skips padding K-slots after. pack_body: STALL_CFG semwait +
             // PACK-thread SwiGLU activation, then out-of-order packs.
-            using FusedW0W1KStep = KStepWithBias<experimental::CircularBuffer>;
+            using FusedW0W1KStep = KStepWithBias<CircularBuffer>;
             using FusedW0W1Pack = detail::MoEGptW0W1SwiGLUPack<cb_s2c_in2>;
             const SegmentedKLoopShape w0_w1_kloop_shape = SegmentedKLoopShape::of(
                 /*num_blocks=*/w0_w1_blocks_per_two_elt_tile,
@@ -321,7 +321,7 @@ void kernel_main() {
             // pack_body: pack_untilize_dest with init/uninit hoisted around the
             // iter loop.
             using FusedW2RingStep = detail::MoEGptW2RingStep<tiles_per_step, /*CyclicSlots=*/6>;
-            using FusedW2KStep = KStepWithRing<true, experimental::CircularBuffer, FusedW2RingStep>;
+            using FusedW2KStep = KStepWithRing<true, CircularBuffer, FusedW2RingStep>;
             using FusedW2Pack =
                 detail::MoEGptFusedW2UntilizePack<cb_c2s_out, /*BlockCtDim=*/4, /*FullCtDim=*/source_width_tiles>;
             const SegmentedKLoopShape w2_kloop_shape = SegmentedKLoopShape::of(
@@ -372,7 +372,7 @@ void kernel_main() {
         }
 
         // Compute in @ {W0,W1} with bias — same K-loop shape as FUSED W0/W1.
-        using NfW0W1KStep = KStepWithBias<experimental::CircularBuffer>;
+        using NfW0W1KStep = KStepWithBias<CircularBuffer>;
         using NfW0W1Pack = detail::MoEGptW0W1SwiGLUPack<cb_s2c_in2>;
         const SegmentedKLoopShape w0_w1_kloop_shape_nf = SegmentedKLoopShape::of(
             /*num_blocks=*/w0_w1_blocks_per_two_elt_tile,
@@ -399,7 +399,7 @@ void kernel_main() {
         // to cb_c2s_out at incrementing output indices instead of untilize.
         constexpr uint32_t w2_bias_blocks_per_iter_nf = w2_blocks_per_expert / num_a2a_iters;
         using NfW2RingStep = detail::MoEGptW2RingStep<tiles_per_step, /*CyclicSlots=*/6>;
-        using NfW2KStep = KStepWithRing<true, experimental::CircularBuffer, NfW2RingStep>;
+        using NfW2KStep = KStepWithRing<true, CircularBuffer, NfW2RingStep>;
         using NfW2Pack = detail::MoEGptNonFusedW2OutOfOrderPack<cb_c2s_out>;
         const SegmentedKLoopShape w2_kloop_shape_nf = SegmentedKLoopShape::of(
             /*num_blocks=*/w2_bias_blocks_per_iter_nf,

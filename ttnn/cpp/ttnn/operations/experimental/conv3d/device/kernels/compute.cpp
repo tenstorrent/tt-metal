@@ -213,9 +213,9 @@ void kernel_main() {
     constexpr uint32_t subblock_tiles = subblock_h * matmul_N_t;
 
     // CircularBuffer wrappers for compute_kernel_lib helpers.
-    experimental::CircularBuffer cb_vol2col_tiled_buf(cb_vol2col_tiled);
-    experimental::CircularBuffer cb_weight_tiled_buf(cb_weight_tiled);
-    experimental::CircularBuffer cb_matmul_interm_tiled_buf(cb_matmul_interm_tiled);
+    CircularBuffer cb_vol2col_tiled_buf(cb_vol2col_tiled);
+    CircularBuffer cb_weight_tiled_buf(cb_weight_tiled);
+    CircularBuffer cb_matmul_interm_tiled_buf(cb_matmul_interm_tiled);
 
     mm_init(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
 

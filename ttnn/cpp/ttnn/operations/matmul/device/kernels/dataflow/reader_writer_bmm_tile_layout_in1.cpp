@@ -169,7 +169,7 @@ void kernel_main() {
                     uint32_t out_tensor_tile_id = out_tensor_row_start;
                     for (uint32_t w = 0; w < out_row_width; ++w) {
                         noc.async_write(
-                            experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(cb_out),
+                            use<CircularBuffer::AddrSelector::READ_PTR>(cb_out),
                             s,
                             output_single_tile_size_bytes,
                             {.offset_bytes = out_read_offset},

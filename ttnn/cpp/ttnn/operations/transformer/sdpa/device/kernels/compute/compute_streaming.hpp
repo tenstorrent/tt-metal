@@ -537,9 +537,9 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 }
             };
 
-            experimental::CircularBuffer cur_sum_buf(cur_sum_cb);
-            experimental::CircularBuffer col_identity_buf(col_identity_cb);
-            experimental::CircularBuffer scratch_buf(scratch_cb);
+            CircularBuffer cur_sum_buf(cur_sum_cb);
+            CircularBuffer col_identity_buf(col_identity_cb);
+            CircularBuffer scratch_buf(scratch_cb);
 
             // num_k_blocks=1, so the helper's K-accumulation path is inert and cur_sum_buf
             // is forwarded as the unused interm placeholder. in1_policy keeps col_identity

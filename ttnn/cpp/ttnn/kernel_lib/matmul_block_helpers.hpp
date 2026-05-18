@@ -408,9 +408,9 @@ struct NoIn1BaseOffset {
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
  *   in0_buf, in1_buf   Input buffers for matrices A and B (CircularBuffer or
- *                      DataflowBuffer — pass an experimental::CircularBuffer
+ *                      DataflowBuffer — pass an CircularBuffer
  *                      object on legacy CB-backed kernels, or an
- *                      experimental::DataflowBuffer object on Metal-2.0 / DFB
+ *                      DataflowBuffer object on Metal-2.0 / DFB
  *                      kernels).
  *   out_buf            Output buffer for the final result.
  *   interm_buf         Intermediate buffer for K-blocking spill/reload or
@@ -443,15 +443,15 @@ struct NoIn1BaseOffset {
  *   // no activation fusion, SubblockMajor pack, init_mode=Full. Valid for any
  *   // (M, K, N) whose K dimension fits in a single K-block (= all Kt tiles
  *   // fit alongside one M and N sub-block in L1). Caller constructs
- *   // experimental::CircularBuffer (or DataflowBuffer) once per CB and
+ *   // CircularBuffer (or DataflowBuffer) once per CB and
  *   // passes the object; the helper wraps wait_front / pop_front /
  *   // reserve_back / push_back on it and issues mm_block_init internally.
  *   // Passes out_buf itself as the interm placeholder — see the interm_buf
  *   // runtime-param doc above for why that is the canonical pattern when
  *   // num_k_blocks == 1.
- *   experimental::CircularBuffer in0_buf(cb_in0);
- *   experimental::CircularBuffer in1_buf(cb_in1);
- *   experimental::CircularBuffer out_buf(cb_out);
+ *   CircularBuffer in0_buf(cb_in0);
+ *   CircularBuffer in1_buf(cb_in1);
+ *   CircularBuffer out_buf(cb_out);
  *   matmul_block<>(
  *       in0_buf, in1_buf, out_buf,
  *       out_buf,  // interm placeholder — unread when num_k_blocks == 1
@@ -590,7 +590,7 @@ template <
     typename In1BaseOffsetFn = NoIn1BaseOffset,
     bool caller_owns_pack_target = false,
     typename Activation = NoneActivation,
-    typename Buf = ::experimental::CircularBuffer>
+    typename Buf = ::CircularBuffer>
 ALWI void matmul_block(
     Buf& in0_buf,
     Buf& in1_buf,
@@ -635,7 +635,7 @@ ALWI void matmul_block(
  *   // After:  out_accum_buf has Wt tiles (one reduced row).
  *   matmul_reduce_inplace(out_accum_buf, col_identity_buf, Wt, STATS_GRANULARITY);
  */
-template <typename Buf = ::experimental::CircularBuffer>
+template <typename Buf = ::CircularBuffer>
 ALWI void matmul_reduce_inplace(
     Buf& in_out_buf,
     Buf& in1_buf,

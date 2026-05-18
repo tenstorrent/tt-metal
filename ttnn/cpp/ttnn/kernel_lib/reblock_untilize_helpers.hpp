@@ -42,10 +42,10 @@ enum class InitUninitMode : uint8_t { InitAndUninit, InitOnly, UninitOnly, Neith
  *   }
  *   reblock_and_untilize_uninit(interm_buf);
  */
-template <uint32_t out_subblock_w, uint32_t out_block_w, typename Buf = ::experimental::CircularBuffer>
+template <uint32_t out_subblock_w, uint32_t out_block_w, typename Buf = ::CircularBuffer>
 ALWI void reblock_and_untilize_init(Buf& interm_buf, Buf& out_buf);
 
-template <typename Buf = ::experimental::CircularBuffer>
+template <typename Buf = ::CircularBuffer>
 ALWI void reblock_and_untilize_uninit(Buf& interm_buf);
 
 /**
@@ -86,7 +86,7 @@ template <
     uint32_t out_subblock_w,
     uint32_t out_block_w,
     reblock_untilize_config::InitUninitMode init_uninit_mode = reblock_untilize_config::InitUninitMode::InitAndUninit,
-    typename Buf = ::experimental::CircularBuffer>
+    typename Buf = ::CircularBuffer>
 inline void reblock_and_untilize(
     uint32_t num_subblocks_w, uint32_t out_subblock_num_tiles, uint32_t out_subblock_h, Buf& interm_buf, Buf& out_buf);
 

@@ -311,8 +311,8 @@ void kernel_main() {
 #endif
 
     // Buf wrappers for the helper's wait_front / pop_front / LLK call hygiene.
-    experimental::CircularBuffer in0_buf(in0_cb_id);
-    experimental::CircularBuffer in1_buf(in1_cb_id);
+    CircularBuffer in0_buf(in0_cb_id);
+    CircularBuffer in1_buf(in1_cb_id);
 
     // Boot-time matmul init. The helper invocation below uses InitMode::None so it
     // doesn't re-init each call; the per-batch pack_reconfig_data_format below
@@ -353,8 +353,8 @@ void kernel_main() {
         const uint32_t mm_out_cb_id = mm_out_cb_ids[b];
         const uint32_t mm_partials_cb_id = mm_partials_cb_ids[b];
 
-        experimental::CircularBuffer mm_out_buf(mm_out_cb_id);
-        experimental::CircularBuffer mm_partials_buf(mm_partials_cb_id);
+        CircularBuffer mm_out_buf(mm_out_cb_id);
+        CircularBuffer mm_partials_buf(mm_partials_cb_id);
 
 #ifdef PACK_RELU
         // for each batch we start with relu disabled so that intermediate results are not relu'd

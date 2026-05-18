@@ -20,10 +20,10 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t cb_intermed0 = get_named_compile_time_arg_val("cb_intermed0");
 
-    experimental::CircularBuffer in0_buf(cb_in0);
-    experimental::CircularBuffer in1_buf(cb_in1);
-    experimental::CircularBuffer out_buf(cb_out);
-    experimental::CircularBuffer interm_buf(cb_intermed0);
+    CircularBuffer in0_buf(cb_in0);
+    CircularBuffer in1_buf(cb_in1);
+    CircularBuffer out_buf(cb_out);
+    CircularBuffer interm_buf(cb_intermed0);
 
     // Factories that emit TILE_PACK_ROW_MAJOR want absolute-offset packing so writers
     // read tiles in row-major order. Multicast factories (no define) use sequential pack.
