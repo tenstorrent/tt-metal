@@ -141,8 +141,10 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
 
     uint32_t num_cores = effective_num_links;
 
-    // ==================== Core layout: senders + untilize groups ====================
+    // ==================== Core layout: senders + untilize cores ====================
     // Collect all cores in the first row (y == subdevice_cores[0].y), sorted by x.
+    // Each sender owns exactly one untilize core: cores are paired (sender, untilize)
+    // consecutively along x.
     uint32_t sender_row_y = subdevice_cores.at(0).y;
     std::vector<CoreCoord> all_row_cores;
     for (const auto& core : subdevice_cores) {
@@ -155,44 +157,28 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
 
     uint32_t total_row_cores = static_cast<uint32_t>(all_row_cores.size());
     TT_FATAL(
-        total_row_cores > num_cores,
-        "Same-row has only {} cores for {} senders — need at least one untilize core per sender",
+        total_row_cores >= 2 * num_cores,
+        "Same-row has only {} cores for {} senders — need one untilize core per sender (>= {} required)",
         total_row_cores,
-        num_cores);
-
-    // Divide total_row_cores into num_cores groups.
-    // Within each group: first core = sender, remaining cores = that sender's untilize cores.
-    uint32_t base_group_size = total_row_cores / num_cores;
-    uint32_t extra_groups = total_row_cores % num_cores;
+        num_cores,
+        2 * num_cores);
 
     std::vector<CoreCoord> sender_cores;
     sender_cores.reserve(num_cores);
     std::vector<std::vector<CoreCoord>> sender_untilize_groups(num_cores);
     std::vector<CoreCoord> all_untilize_cores;
+    all_untilize_cores.reserve(num_cores);
     std::vector<uint32_t> untilize_sender_map;
+    untilize_sender_map.reserve(num_cores);
 
-    {
-        uint32_t pos = 0;
-        for (uint32_t s = 0; s < num_cores; s++) {
-            uint32_t group_size = base_group_size + (s >= num_cores - extra_groups ? 1 : 0);
-            for (uint32_t j = 0; j < group_size; j++, pos++) {
-                if (j == 0) {
-                    sender_cores.push_back(all_row_cores[pos]);
-                } else {
-                    sender_untilize_groups[s].push_back(all_row_cores[pos]);
-                    all_untilize_cores.push_back(all_row_cores[pos]);
-                    untilize_sender_map.push_back(s);
-                }
-            }
-        }
+    for (uint32_t s = 0; s < num_cores; s++) {
+        sender_cores.push_back(all_row_cores[2 * s]);
+        sender_untilize_groups[s].push_back(all_row_cores[2 * s + 1]);
+        all_untilize_cores.push_back(all_row_cores[2 * s + 1]);
+        untilize_sender_map.push_back(s);
     }
 
     uint32_t num_untilize_cores = static_cast<uint32_t>(all_untilize_cores.size());
-    TT_FATAL(
-        num_untilize_cores >= num_cores,
-        "Same-row has only {} untilize cores for {} senders — need at least one untilize core per sender",
-        num_untilize_cores,
-        num_cores);
 
     // Build sender_core_grid and untilize_core_grid CoreRangeSets
     std::set<CoreRange> sender_ranges_set;
@@ -277,11 +263,13 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
     }
     // c_11: untilize output (compute → writer)
     // FP8 path: pack_untilize converts BF16 tiles → FP8 row-major; page size is one aligned FP8 row.
+    // Double-buffered at batch granularity: two slots of read_batch_size tokens so compute can
+    // pack the next batch while the writer is still draining the previous one.
     detail::create_tensor_cb(
         program,
         untilize_core_grid,
         output_tensor,
-        /*buffering_factor=*/read_batch_size,
+        /*buffering_factor=*/2 * read_batch_size,
         /*cb_id=*/tt::CBIndex::c_11,
         "untilize_untilize_output");
     // c_12: route table mailbox (sender writes before start_semaphore; writer reads after)
