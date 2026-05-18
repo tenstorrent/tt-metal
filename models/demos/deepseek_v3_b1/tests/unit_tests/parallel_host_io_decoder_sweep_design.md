@@ -20,7 +20,6 @@ Choose a trace root and prompt stem:
 ```bash
 export TT_METAL_HOME=/path/to/tt-metal
 export TRACE_ROOT=/path/to/converted_traces/TRACE_NAME
-export BIT_SCULPT_TRACE=/path/to/bit_sculpt/results/deepseek-r1-0528/debug_trace/TRACE_NAME
 export PROMPT=PROMPT_NAME
 export LAYERS="4 5 6 7"
 ```
@@ -59,40 +58,14 @@ kv_cache_reference_<prompt>.pt:
 `kv_cache_reference_<prompt>.pt` is only required when
 `--validate-kv-cache-cross-trace` is enabled.
 
-## Convert Traces
+## Converted Trace Prerequisite
 
-If the converted `.pt` files already exist under `$TRACE_ROOT/layer_*`, skip
-this section.
+This runbook assumes the layer directories under `$TRACE_ROOT` have already been
+converted into the `<prompt>.pt` and `kv_cache_reference_<prompt>.pt` files
+shown above.
 
-Convert one layer:
-
-```bash
-cd "$TT_METAL_HOME"
-
-python_env/bin/python -m models.demos.deepseek_v3_b1.tests.unit_tests.convert_bit_sculpt_trace \
-  --bit-sculpt-dir "$BIT_SCULPT_TRACE" \
-  --layer-idx 4 \
-  --prompt-name "$PROMPT" \
-  --out-dir "$TRACE_ROOT/layer_04"
-```
-
-Convert multiple layers:
-
-```bash
-cd "$TT_METAL_HOME"
-
-for layer in $LAYERS; do
-  printf -v layer_dir "layer_%02d" "$layer"
-  python_env/bin/python -m models.demos.deepseek_v3_b1.tests.unit_tests.convert_bit_sculpt_trace \
-    --bit-sculpt-dir "$BIT_SCULPT_TRACE" \
-    --layer-idx "$layer" \
-    --prompt-name "$PROMPT" \
-    --out-dir "$TRACE_ROOT/$layer_dir"
-done
-```
-
-Keep `--decoder-layer-idx` aligned with the converter's `--layer-idx`. The
-prompt filename does not encode the layer id.
+Keep `--decoder-layer-idx` aligned with the layer id used to generate each
+directory. The prompt filename does not encode the layer id.
 
 ## Check Converted Traces
 
