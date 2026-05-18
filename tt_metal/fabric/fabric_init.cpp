@@ -201,6 +201,11 @@ FabricCoresHealth configure_fabric_cores(
                 try {
                     auto virtual_core = cluster.get_virtual_eth_core_from_channel(chip_id, router_chan);
                     tt_cxy_pair core_loc(chip_id, virtual_core);
+                    // GAP 7 / FIX OP RR (#42429): Time the FIX RR assert→deassert+BH window,
+                    // matching the FIX OP timing log on the normal FIX S9 path.  Without this,
+                    // CI logs show no timing data for the FIX RR recovery path — we can't tell
+                    // if the channel spent 5ms or 5000ms in the reset window.
+                    auto fix_rr_start = std::chrono::steady_clock::now();
                     cluster.assert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
 
                     // FIX EG RR (#42429): While ERISC0 is halted, zero fw_launch_addr (0x9004 =
@@ -351,6 +356,21 @@ FabricCoresHealth configure_fabric_cores(
                                 kFIX_BH_BootWaitMs,
                                 final_val);
                         }
+                    }
+                    // GAP 7 / FIX OP RR (#42429): Log elapsed time for the entire FIX RR
+                    // assert→deassert+BH window — mirrors FIX OP on the normal FIX S9 path.
+                    {
+                        auto fix_rr_end = std::chrono::steady_clock::now();
+                        auto fix_rr_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            fix_rr_end - fix_rr_start).count();
+                        log_info(
+                            tt::LogMetal,
+                            "FIX OP RR (#42429): FIX RR assert→deassert+BH window — Device {} "
+                            "chan={} total recovery took {}ms (recovered={})",
+                            chip_id,
+                            router_chan,
+                            fix_rr_ms,
+                            recovered_channels.count(router_chan) > 0);
                     }
                 } catch (const std::exception& e) {
                     newly_dead_channels.insert(router_chan);
