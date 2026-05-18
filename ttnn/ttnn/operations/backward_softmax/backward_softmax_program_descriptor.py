@@ -56,6 +56,22 @@ Compute config is dtype-aware (Refinement 3):
                 below LoFi would cost cycles without measurable accuracy
                 gain. Same DST capacity benefit as bf16.
 
+Refinement 4 exposes the compute config to the caller. When
+``compute_kernel_config`` is None we keep the R3 dtype-aware default. When
+the caller passes a ``WormholeComputeKernelConfig`` it is forwarded directly:
+``math_fidelity``, ``math_approx_mode``, ``fp32_dest_acc_en``, and
+``dst_full_sync_en`` are propagated to ``ComputeConfigDescriptor``. The
+``packer_l1_acc`` and ``throttle_level`` fields are accepted for symmetry
+with the standard ``ttnn`` interface but are not consumed (no packer-side
+L1 accumulation in this op; throttling is a host-side knob the
+``ComputeConfigDescriptor`` does not expose).
+
+``unpack_to_dest_mode`` is a separate caller-overridable per-CB vector
+because it is not a field of ``WormholeComputeKernelConfig``. The default
+is ``UnpackToDestMode.Default`` on every CB. See the verifier note in
+``op_requirements.md``: applying ``UnpackToDestFp32`` to CBs that feed the
+matmul-based REDUCE_ROW SUM (cb_prod for fp32 input) breaks the path.
+
 The kernels themselves are dtype-agnostic — the CB unpack/pack reconfig
 inside the kernel-lib helpers handles each format. All CBs except cb_scaler
 inherit the input dtype; cb_scaler is bf16 regardless (matmul col-0 fill
@@ -221,6 +237,57 @@ def pick_strategy_name(
     )
 
 
+def _default_compute_kernel_config_for_dtype(dtype) -> ttnn.WormholeComputeKernelConfig:
+    """
+    R3 dtype-aware default. Returns a fully-populated
+    ``WormholeComputeKernelConfig`` so the rest of the descriptor can treat
+    user-supplied configs and the default uniformly.
+    """
+    if dtype == ttnn.float32:
+        return ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            dst_full_sync_en=False,
+        )
+    if dtype == ttnn.bfloat16:
+        return ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            dst_full_sync_en=False,
+        )
+    # ttnn.bfloat8_b — validator enforces this is the only remaining option.
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        dst_full_sync_en=False,
+    )
+
+
+def _validate_unpack_to_dest_mode(unpack_to_dest_mode) -> None:
+    """
+    Per-CB unpack-to-dest mode override is a length-32 vector of
+    ``ttnn.UnpackToDestMode`` (one entry per CB index 0..31). The
+    ``ComputeConfigDescriptor`` always allocates 32 entries; we mirror that
+    here so the caller passes a complete vector.
+    """
+    if unpack_to_dest_mode is None:
+        return
+    if len(unpack_to_dest_mode) != 32:
+        raise ValueError(
+            f"backward_softmax: unpack_to_dest_mode must be a length-32 list "
+            f"(one entry per CB index), got length {len(unpack_to_dest_mode)}"
+        )
+    for i, mode in enumerate(unpack_to_dest_mode):
+        if not isinstance(mode, ttnn.UnpackToDestMode):
+            raise ValueError(
+                f"backward_softmax: unpack_to_dest_mode[{i}] must be a "
+                f"ttnn.UnpackToDestMode, got {type(mode).__name__}"
+            )
+
+
 def create_program_descriptor(
     grad_output: ttnn.Tensor,
     output: ttnn.Tensor,
@@ -228,6 +295,8 @@ def create_program_descriptor(
     *,
     dim: int = -1,
     block_size: int | None = None,
+    compute_kernel_config: ttnn.WormholeComputeKernelConfig = None,
+    unpack_to_dest_mode: list = None,
 ) -> ttnn.ProgramDescriptor:
     # ---- Shape & tile geometry ----
     shape = list(grad_output.shape)
@@ -512,27 +581,40 @@ def create_program_descriptor(
         config=ttnn.WriterConfigDescriptor(),
     )
 
-    # ---- Compute config (dtype-aware, Refinement 3) ----
-    # fp32 keeps the Phase-0 max-precision lock-in. bf16/bfp8 inputs are
-    # already coarser than HiFi4+fp32-acc can preserve — drop both knobs so
-    # the matmul SrcA path runs in fewer cycles and the DST tile capacity
-    # doesn't get halved by fp32 DEST. See the module docstring for the full
-    # rationale.
-    if grad_output.dtype == ttnn.float32:
-        compute_config = ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            fp32_dest_acc_en=True,
-        )
-    elif grad_output.dtype == ttnn.bfloat16:
-        compute_config = ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            fp32_dest_acc_en=False,
-        )
-    else:  # ttnn.bfloat8_b — validator enforces this is the only remaining option
-        compute_config = ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=False,
-        )
+    # ---- Compute config (Refinement 4: caller-overridable) ----
+    # Pick the R3 dtype-aware default, then let the caller override fields by
+    # passing a fully-populated ``WormholeComputeKernelConfig``. Treating the
+    # default as a ``WormholeComputeKernelConfig`` (instead of branching on
+    # dtype inline) keeps the override path a single line: if the caller
+    # passed a config, use it; otherwise use the dtype-default.
+    dtype_default = _default_compute_kernel_config_for_dtype(grad_output.dtype)
+    resolved_config = compute_kernel_config if compute_kernel_config is not None else dtype_default
+
+    # ``WormholeComputeKernelConfig.math_fidelity`` defaults to
+    # ``MathFidelity.Invalid`` when constructed without arguments — fall back
+    # to the dtype-default so a user who only set the other knobs still gets
+    # a workable config. We read into a local instead of mutating the
+    # user-supplied object to keep the call side-effect-free.
+    resolved_fidelity = (
+        resolved_config.math_fidelity
+        if resolved_config.math_fidelity != ttnn.MathFidelity.Invalid
+        else dtype_default.math_fidelity
+    )
+
+    compute_config = ttnn.ComputeConfigDescriptor(
+        math_fidelity=resolved_fidelity,
+        math_approx_mode=resolved_config.math_approx_mode,
+        fp32_dest_acc_en=resolved_config.fp32_dest_acc_en,
+        dst_full_sync_en=resolved_config.dst_full_sync_en,
+    )
+
+    # Per-CB unpack-to-dest mode. Default = ``UnpackToDestMode.Default`` on
+    # every CB (matches R3 behaviour). Caller may override; see the verifier
+    # note in op_requirements.md re: the matmul-input CBs being incompatible
+    # with ``UnpackToDestFp32``.
+    _validate_unpack_to_dest_mode(unpack_to_dest_mode)
+    if unpack_to_dest_mode is not None:
+        compute_config.unpack_to_dest_mode = list(unpack_to_dest_mode)
 
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "backward_softmax_compute.cpp"),

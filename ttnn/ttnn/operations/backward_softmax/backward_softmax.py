@@ -6,15 +6,17 @@ backward_softmax — VJP of softmax.
 
     grad_input = output * (grad_output - sum(output * grad_output, dim))
 
-Current constraints (post Refinement 3):
+Current constraints (post Refinement 4):
 - Inputs: ``float32`` / ``bfloat16`` / ``bfloat8_b``, TILE_LAYOUT, rank-4,
   H/W tile-aligned (multiple of 32), identical shape and dtype between the
   two inputs.
 - Reduce dimension: dim ∈ {-1, -2}.
 - Output dtype matches input dtype.
-- Compute config is dtype-aware (HiFi4 + fp32_dest_acc for fp32; lower-fidelity
-  defaults for bf16/bfp8 since the input precision floor is already coarser
-  than what HiFi4 + fp32-acc can deliver). See ``backward_softmax_program_descriptor.py``.
+- Compute config: dtype-aware default (HiFi4 + fp32_dest_acc for fp32;
+  lower-fidelity defaults for bf16/bfp8). Refinement 4 adds caller overrides
+  via ``compute_kernel_config`` (a :class:`ttnn.WormholeComputeKernelConfig`)
+  and ``unpack_to_dest_mode`` (per-CB vector). When both are ``None`` the
+  behaviour is bit-identical to R3.
 """
 
 import ttnn
@@ -29,6 +31,8 @@ def backward_softmax(
     *,
     dim: int = -1,
     memory_config: ttnn.MemoryConfig = None,
+    compute_kernel_config: ttnn.WormholeComputeKernelConfig = None,
+    unpack_to_dest_mode: list = None,
 ) -> ttnn.Tensor:
     """
     Vector-Jacobian product (VJP) of softmax.
@@ -44,6 +48,24 @@ def backward_softmax(
             grad_output.
         dim: Reduction dimension. Must be -1 (W) or -2 (H). Defaults to -1.
         memory_config: Output memory config (default: DRAM interleaved).
+        compute_kernel_config: Optional override of the compute config
+            (math_fidelity, math_approx_mode, fp32_dest_acc_en,
+            dst_full_sync_en). When ``None``, a dtype-aware default is used
+            (fp32 → HiFi4 + fp32_dest_acc; bf16 → HiFi2; bfp8_b → LoFi —
+            see ``backward_softmax_program_descriptor.py``). ``packer_l1_acc``
+            and ``throttle_level`` on the passed config are accepted for
+            interface symmetry but **ignored** — the kernels do not consume
+            them (no packer-side L1 accumulation; throttling is a host-side
+            policy not applicable to this op).
+        unpack_to_dest_mode: Optional per-CB vector of
+            :class:`ttnn.UnpackToDestMode` (length 32, one entry per CB
+            index). When ``None`` the default ``UnpackToDestMode.Default``
+            applies to every CB. **CAUTION** — applying
+            ``UnpackToDestMode.UnpackToDestFp32`` to ``CB_PROD`` (index 24)
+            or ``CB_OUTPUT`` (index 1, with fp32 input) is known to produce
+            ``inf`` outputs because the matmul-based REDUCE_ROW SUM path is
+            incompatible with that unpack mode. Apply only to non-matmul
+            input CBs (typically ``CB_GRAD_OUTPUT`` index 0 alone).
 
     Returns:
         grad_input: same shape and dtype as grad_output.
@@ -64,7 +86,14 @@ def backward_softmax(
         output_memory_config,
     )
 
-    program_descriptor = create_program_descriptor(grad_output, output, grad_input, dim=dim)
+    program_descriptor = create_program_descriptor(
+        grad_output,
+        output,
+        grad_input,
+        dim=dim,
+        compute_kernel_config=compute_kernel_config,
+        unpack_to_dest_mode=unpack_to_dest_mode,
+    )
 
     # Output tensor MUST be last in the io list.
     return ttnn.generic_op([grad_output, output, grad_input], program_descriptor)

@@ -93,7 +93,7 @@
 - **Dtype-aware default compute config**: pick sensible per-dtype defaults rather than reusing the fp32 settings for bf16/bfp8. The current fp32 defaults (HiFi4 + fp32_dest_acc_en=True) are precision-first; for bf16/bfp8 storage the input is already quantized to ~3 decimal digits, so HiFi4 overhead buys little and a lower-fidelity / approx-mode default is the better trade-off. Pick defaults that match the operation's chosen design point (see how `glu_fused` handled this in its R2). Refinement 4 below will let callers override the chosen defaults explicitly.
 - **Tests**: parametrize the acceptance + extended test set over `{float32, bfloat16, bfloat8_b}`. Expect PCC ≥ 0.999 across dtypes; absolute-error tolerances may need loosening for bf16/bfp8 (document the chosen tolerances per dtype in `capabilities.md`).
 
-### [ ] Refinement 4 — Compute kernel config exposed to caller
+### [x] Refinement 4 — Compute kernel config exposed to caller
 
 - Expose `compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None` on `backward_softmax(...)`.
 - Default to the dtype-aware config chosen in Refinement 3 (no behavior change when `None` is passed). Forward to `ComputeConfigDescriptor` in `create_program_descriptor`.
