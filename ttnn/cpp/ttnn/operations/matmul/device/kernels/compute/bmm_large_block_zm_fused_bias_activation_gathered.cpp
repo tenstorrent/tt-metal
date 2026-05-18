@@ -205,6 +205,8 @@ void kernel_main() {
     constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
     constexpr bool in1_is_dram_interleaved = get_compile_time_arg_val(16);     // in1 is in dram
     constexpr bool in1_is_dram_sharded = get_compile_time_arg_val(17);
+    // Benchmark-only: loop the per-batch matmul body N times in a single op invocation. Default 1.
+    constexpr uint32_t num_kernel_repeats = get_compile_time_arg_val(18);
     constexpr uint32_t in0_cb_id = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t in1_cb_id = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t in2_cb_id = get_named_compile_time_arg_val("cb_in2");
@@ -255,7 +257,8 @@ void kernel_main() {
 
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_ids[0], in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
-    for (uint32_t b = 0; b < batch; b++) {
+    for (uint32_t r = 0; r < num_kernel_repeats; ++r) {
+        for (uint32_t b = 0; b < batch; b++) {
 #ifdef ENABLE_GLOBAL_CB
         uint32_t in1_cb_start_addr = 0;
         uint32_t in1_rd_ptr_start_addr = 0;
@@ -482,5 +485,6 @@ void kernel_main() {
         UNPACK((update_rd_ptr_to_ring_index(
             in1_cb_id, in1_block_size_bytes, ring_size, in1_tensor_split)));  // update to next tensor addr
 #endif
-    }
+        }
+    }  // num_kernel_repeats
 }

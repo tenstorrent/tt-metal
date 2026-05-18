@@ -23,6 +23,9 @@ void kernel_main() {
 
     // All Gather specific
     constexpr uint32_t ring_size = get_compile_time_arg_val(3);
+    // Compile arg index 4 is the in0 signal semaphore id (read below as a Semaphore<>); 5 is the
+    // benchmark-only repeat count.
+    constexpr uint32_t num_kernel_repeats = get_compile_time_arg_val(5);
 
     // Runtime args
     uint32_t rt_args_idx = 0;
@@ -98,7 +101,10 @@ void kernel_main() {
     }
 
     if (!is_hop_core) {
-        for (uint32_t b = 0; b < batch - 1; ++b) {  // for rest batches, not need to gather in0 anymore
+        // Repeat-loop: in0 ring-gather happens once, then pre-push (ring_size-1) shards for
+        // every remaining (batch * num_kernel_repeats - 1) consumer iteration of compute / in1.
+        const uint32_t total_effective_batches = batch * num_kernel_repeats;
+        for (uint32_t b = 0; b < total_effective_batches - 1; ++b) {
             cb_in2.reserve_back((ring_size - 1) * shard_size_in_tiles);
             cb_in2.push_back((ring_size - 1) * shard_size_in_tiles);
         }

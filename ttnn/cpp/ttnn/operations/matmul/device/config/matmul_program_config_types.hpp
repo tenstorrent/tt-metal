@@ -63,6 +63,10 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     CoreRangeSet hop_cores;
     std::size_t num_global_cb_receivers{};
     bool untilize_out{};
+    // Benchmark-only: loop the matmul work N times in a single op invocation so op-launch cost
+    // amortizes when trace isn't available (e.g., slow dispatch). Default 1 is a no-op.
+    // Prefetcher's num_layers must be set to the same value so it pushes N copies of the weight.
+    std::size_t num_kernel_repeats{1};
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
