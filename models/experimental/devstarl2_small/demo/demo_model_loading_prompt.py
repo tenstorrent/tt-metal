@@ -70,7 +70,7 @@ from models.experimental.devstarl2_small.tt.tt_devstral2_small_model import TtDe
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.lm_head import LMHead
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 
 _DEFAULT_MODEL_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 _DEMO_DIR = Path(__file__).resolve().parent
@@ -359,16 +359,6 @@ def run_tt(
         dtype_tt = ttnn.bfloat16
 
         logger.info("Loading checkpoint via ModelArgs.load_state_dict() …")
-        # ``optimizations`` picks the precision recipe for the 40 decoder
-        # layers. ``DecodersPrecision.performance`` maps to ``bfp4`` MLP
-        # FF1/FF3, ``bfp8`` everything else (WQKV, WO, KV_CACHE, FF2) and
-        # cuts per-token decode bandwidth from ~48 GB (bf16) to ~14 GB —
-        # the single biggest decode-throughput knob on multi-chip.
-        # The MLP / attention modules already consult
-        # ``args.decoders_optimizations.get_tensor_dtype(...)`` at construction
-        # time (see ``tt_ministralmlp.py:93-127``, ``attention.py:115-128``),
-        # so no other code changes are needed. ``dtype_tt`` below is kept as
-        # ``bfloat16`` so activations / embeddings / LM head behave as before.
         model_args = ModelArgs(
             mesh_device,
             max_batch_size=1,
@@ -376,7 +366,6 @@ def run_tt(
             dummy_weights=False,
             use_hf_rope=True,
             cache_hf=True,
-            optimizations=lambda ma: DecodersPrecision.performance(ma.n_layers, ma.model_name),
         )
         # The two model paths use different multi-chip tensor conventions at the
         # norm boundary:
