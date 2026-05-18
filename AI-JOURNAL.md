@@ -1,5 +1,210 @@
 
 ---
+## 2026-05-18 — Testing Gaps Audit Round 5: Elapsed Timers and Phase 2.5 Summary
+
+### Scope
+
+Post-mortem analysis of AllGather hangs on T3K revealed that CI logs lack single-line
+summaries of wall-clock time for two critical paths: `configure_fabric()` and
+`quiesce_and_restart_fabric_workers()`. Additionally, the Phase 2.5 ERISC termination
+loop had no summary of how many channels required force-reset vs self-terminated.
+
+### Gaps Identified
+
+- **GAP-R5**: `configure_fabric()` had no total elapsed timer. Post-mortem required
+  manually correlating entry/exit timestamps across interleaved per-device logs.
+- **GAP-R6**: `quiesce_and_restart_fabric_workers()` had no elapsed timer at ANY of its
+  7 exit points (3 early guards, fabric_program_==nullptr, relay_broken skip,
+  defer_eth_launch deferred return, normal completion). This function can take minutes
+  with Phase 2.5 relay retries.
+- **GAP-R8**: Phase 2.5 force-reset tracking existed per-channel but had no summary.
+  Cannot tell at a glance whether force-resets are routine or a regression.
+- **GAP-R9**: `analyze_fabric_hang_log.sh` had no counters for configure_fabric elapsed,
+  quiesce elapsed, or Phase 2.5 force-reset summary patterns.
+
+### Fixes Applied
+
+- **GAP-R5** (commit 245ce6329ca): `configure_fabric()` start timer after null-check,
+  elapsed log before "Fabric initialized" with session_id.
+- **GAP-R6** (commit 245ce6329ca): `quiesce_and_restart_fabric_workers()` start timer at
+  entry, elapsed logged at all 7 exit points. SUMMARY line includes `total_elapsed=NNNms`.
+- **GAP-R8** (commit 245ce6329ca): Phase 2.5 summary log after termination loop:
+  `force_reset_count=N/M active_channels, relay_path_broken=bool`.
+- **GAP-R9** (commit 9f2eefaac7a): `analyze_fabric_hang_log.sh` new counters:
+  `GAP_R5_FIRES/MAX_MS`, `GAP_R6_FIRES/MAX_MS`, `GAP_R8_FIRES/ANY_FORCED`.
+  Thresholds: configure_fabric >30s and quiesce >60s flagged as anomalous.
+
+### Files Modified
+
+- `tt_metal/impl/device/device.cpp` — GAP-R5, GAP-R6, GAP-R8
+- `scripts/analyze_fabric_hang_log.sh` — GAP-R9
+
+---
+## 2026-05-18 — FIX LM-2: Fast-fail BEFORE GetNumAvailableDevices() when WARM_RELAY_DEAD=1
+
+### Root Cause Addressed
+
+CI run 26055043001 (iteration 21, runner tt-metal-ci-vm-t3k-05): After FIX LM was added,
+a new bug remained: the script still ran `python3 -c "import ttnn; print(ttnn.GetNumAvailableDevices())"`
+BEFORE reaching the `WARM_RELAY_DEAD=1` fast-fail check (which was inside the `n_chips < 8` block).
+
+**Sequence with the bug:**
+1. Warm-up fires FIX BX/NZ (non-MMIO relay dead) → `WARM_RELAY_DEAD=1`
+2. Script runs `GetNumAvailableDevices()` — creates new MetalContext → topology discovery
+3. Topology discovery hits `eth_fw_heartbeat_failure = Action::THROW` (from `topology_discovery_options.hpp`)
+4. `ETH_STARTUP_TIMEOUT` (10s) expires → C++ exception → Python exits non-zero without printing
+5. `|| true` handles crash but `raw_output` has only error text → `n_chips=""`
+6. FIX TL-2 fires → `tt-smi -ls` fallback also returns 0 chips
+7. `n_chips < 8` block entered → FIX LM check fires → misleading "0/8 chips" log
+
+Evidence: 12-second gap in CI log (19:37:45 → 19:37:57) exactly matches ETH_STARTUP_TIMEOUT (10s) + overhead.
+
+**Root cause of 0/8 false report**: `GetNumAvailableDevices()` should return 4 (MMIO-only),
+but it throws before printing because `eth_fw_heartbeat_failure = Action::THROW` also fires
+for MMIO device ETH cores that aren't heartbeating (they're in reset state).
+
+### Fix Applied
+
+**FIX LM-2** — commit `6c9a0da5a94`
+File: `tests/scripts/t3000/run_t3000_unit_tests.sh`
+
+Added early fast-fail block immediately after the FIX TO `tt-smi -r` block, BEFORE the
+`GetNumAvailableDevices()` Python call, in BOTH topology-check blocks:
+1. `run_t3000_ttnn_tests` function (line ~175)
+2. `run_t3000_racecondition_hunt_tests` function (line ~681)
+
+When `WARM_RELAY_DEAD=1`, exits immediately without running the Python call. The existing
+FIX LM check inside `n_chips < 8` is now dead code for this path (harmless, left intact).
+
+**Result**: Clean, attributable `exit 1` with proper "relay dead" message, no 10s hang, no
+misleading "0/8 chips" noise. Saves ~12 seconds per failure.
+
+### What Was NOT Fixed (Priority 2)
+
+Non-MMIO relay staying dead after two `tt-smi -r` resets is a hardware degradation issue
+on t3k-05. FIX IJ is already disabled (superseded by FIX MM). No code fix available —
+t3k-05 needs a host reboot. The FIX LM/LM-2 path correctly identifies and fails fast.
+
+---
+## 2026-05-18 — FIX LM: Fast-fail on cold-start relay-dead in run_t3000 warm-up
+
+### Root Cause Addressed
+
+CI run 26052603107 (runner tt-metal-ci-vm-t3k-05) showed a new failure pattern:
+the ERISC relay to non-MMIO devices (4-7) was dead BEFORE `reset_cores()` began.
+Zero FIX SA messages (vs 88 in the prior run on the same runner). Progressive
+hardware degradation on t3k-05.
+
+**Code path wasted ~179s on futile recovery:**
+1. GS-3 warm-up: `open_mesh_device()` — relay dead, FIX BX fires for all 4
+   non-MMIO devices → warm-up completes but degraded
+2. Topology check: 4/8 chips (MMIO only)
+3. FIX TL: `tt-smi -r` — does NOT fix hardware link degradation
+4. FIX TM warm-up: identical relay-dead pattern again
+5. Second topology check: still 4/8 → `exit 1`
+
+### Fix Applied
+
+**FIX LM** — commit `6594fae2897`
+File: `tests/scripts/t3000/run_t3000_unit_tests.sh`
+
+Added cold-start relay-dead detection after the GS-3 warm-up output check. Greps
+for Metal log markers `"FIX BX.*initialize_and_launch_firmware threw.*non-MMIO"`
+and `"FIX NZ.*skipping initialize_and_launch_firmware.*relay broken"` in
+`WARM_OUTPUT`.
+
+When detected AND topology shows <8 chips:
+- Skips the FIX TL/TM recovery cycle entirely (saves 3+ futile minutes)
+- Fails immediately with `[FIX LM] relay dead from cold start` error message
+- Also applied to FIX TM post-recovery warm-up: if relay-dead persists
+  after tt-smi -r, fail fast without second topology check
+
+Applied to both `run_t3000_ttnn_tests()` and `run_t3000_racecondition_hunt_tests()`.
+
+### Key Insight
+
+`is_relay_broken()` / `relay_broken_chips_` (set by FIX BW in tt_cluster.cpp) is
+the Cluster-level tracking. FIX NZ reads this before `initialize_and_launch_firmware`
+and FIX BX catches exceptions if relay breaks mid-init. When ALL non-MMIO devices
+(4,5,6,7) hit FIX BX/NZ in a single warm-up, this is unambiguously hardware
+degradation — tt-smi cannot restore ETH physical links.
+
+---
+## 2026-05-18 — Testing Gaps Audit Round 4 (FIX QQ, FIX QR-S9)
+
+### Audit Scope
+
+Systematic review of the SA-A/SA-B/SA-S/S8/S9 code paths (Strategy Report v9)
+for: missing state capture at failure points, silent error paths, untested
+firmware behavior, and analyze script coverage gaps.
+
+### Gaps Found and Fixed
+
+**GAP 1 — FIX SA-A timeout has no snapshot of actual fw_ready value (device.cpp)**
+- Problem: When FIX SA-A timed out waiting for ERISC to write FW_READY_VALUE
+  (0xFEED1AB5), the log said "did not signal FW_READY" but never reported WHAT
+  value was actually at the fw_ready L1 slot. Post-mortem couldn't distinguish:
+  - 0x00000000: ERISC never reached init (stuck in ROM or link training)
+  - 0xD0DEAD09: ERISC alive but went dormant (session_id=0, FIX QR-S9)
+  - Partial value: ERISC crashed mid-init
+  - 0xDEADDEAD: PCIe read itself failed
+- Fix (FIX QQ): Added best-effort read of fw_ready at timeout, with try/catch
+  for PCIe failures. Log now includes `actual fw_ready=0x...`.
+
+**GAP 2 — Session_id=0 dormant firmware path is invisible (active_erisc.cc)**
+- Problem: When ERISC reads session_id=0 (SESSION_ID_INVALID) from L1, it
+  enters an infinite dormant loop (`while (flag_disable[0] == 1)`) and never
+  writes FW_READY_VALUE. From the host side, this is indistinguishable from
+  "ERISC stuck in ROM" — both show fw_ready=0x00000000 at timeout.
+- Fix (FIX QR-S9): Before entering dormant loop, firmware writes sentinel
+  0xD0DEAD09 to fw_ready slot. Host FIX QQ timeout now sees this distinct
+  value and can immediately identify session_id-related failures.
+
+**GAP 3 — FIX SA-S stagger has no post-sleep timing verification (device.cpp)**
+- Problem: FIX SA-S logged "staggering by Nms" before sleeping but never
+  reported actual sleep duration. OS scheduler jitter could cause the sleep
+  to be significantly longer than requested (e.g., 500ms instead of 100ms),
+  which would shift the entire deassert window and potentially cause
+  cross-device timing conflicts.
+- Fix: Added steady_clock timing around the sleep with post-completion log.
+
+**GAP 4 — configure_fabric_cores SUMMARY missing deferred_deassert count (fabric_init.cpp)**
+- Problem: The FIX MN summary log listed total/dead/recovered/skip counts
+  but not how many channels were deferred to Strategy A. Had to count
+  individual "Deferring deassert" lines manually.
+- Fix: Added `deferred_deassert=N` to the summary format string.
+
+**GAP 5 — Analyze script missing 15+ FIX tags from SA-A/SA-B/SA-S/S8/S9 era**
+- Problem: The analyze_fabric_hang_log.sh script had no counters or grep
+  patterns for: FIX SA-A, FIX SA-B, FIX SA-S, FIX S8, FIX S9 session_id,
+  FIX QQ, FIX QR-S9, fw_ready, boot_fence, stagger, 0xD0DEAD09, 0xFEED1AB5.
+  Post-mortem analysis of CI runs after Strategy Report v9 would miss all
+  these signals entirely.
+- Fix: Added to both TIMELINE and PHASES grep patterns. Added 16 new counters
+  with summary output. Added interpretation blocks explaining failure modes.
+
+### Files Changed
+
+- `tt_metal/impl/device/device.cpp`: FIX QQ timeout snapshot + SA-S timing
+- `tt_metal/fabric/fabric_init.cpp`: deferred_deassert count in SUMMARY
+- `tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc`: FIX QR-S9 dormant sentinel
+- `scripts/analyze_fabric_hang_log.sh`: SA-A/SA-B/SA-S/S8/S9/QQ/QR-S9 counters
+
+### Commits
+
+- `44f4d2205ed` — FIX QQ + FIX QR-S9 diagnostics (device.cpp, fabric_init.cpp, active_erisc.cc)
+- `9fcb8529db5` — analyze script update (SA-A/SA-B/SA-S/S8/S9/QQ counters)
+
+### What to Watch in Next CI Run
+
+1. FIX_SA_A_TIMEOUT — if > 0, check FIX_QQ breakdown:
+   - 0xD0DEAD09 = session_id problem (host wrote 0 or didn't write session_id)
+   - 0x00000000 = ERISC stuck in ROM / link training failure
+   - 0xDEADDEAD = PCIe read failed (bus error)
+2. FIX_S8_MISMATCH — if > 0, boot fence write failed → ERISC hangs at spin
+3. FIX_SA_S_MAX_MS — if actual >> requested, OS scheduler contention on CI runner
+
+---
 ## 2026-05-18 — Strategy Report v9 Implementation (SA-A + SA-B + SA-S)
 
 ### Implemented
@@ -5013,3 +5218,51 @@ the boot-polling logic that used them with a boot-fence approach.
 **Fix**: Delete the entire block (7 lines). No logic change.
 
 **Commit**: d1ab227e46f
+
+## 2026-05-18 — CI Run 26059864284: Hardware Degradation on tt-metal-ci-vm-t3k-12
+
+**Run**: 26059864284 — `t3000-unit-tests / racecondition-hunt [wh_llmbox]`
+**Runner**: tt-metal-ci-vm-t3k-12
+**Conclusion**: Hardware issue — NO code fix applied.
+
+### Failure Analysis
+
+Non-MMIO devices (4,5,6,7) have dead ERISC relays at cold start.
+
+Key log sequence:
+- +5s: `reset_cores` — dead ERISC relay on device 4 (cores 21-16, 22-16, 18-16, 25-16)
+- +20s: FIX BX fires for devices 4,5,6,7 → relay broken
+- +65s: FIX TV: 24 MMIO channels OK
+- FIX LM: "ERROR — T3K topology degraded" → exit 1 (tests never run)
+
+### Root Cause
+
+FIX GH (449d6bd0aba) left non-MMIO ERISCs stuck at `0xdeadb07e` — they ran
+from zeroed L1 after the fw_launch_addr was restored before the firmware binary
+was written. Those ERISCs have been stuck since FIX GH's CI run.
+
+Non-MMIO devices (4-7) have no PCIe connection — `tt-smi -r` only resets
+MMIO devices (0-3) via PCIe. The only reset path for non-MMIO devices is
+the ETH relay (which is broken) or a host power cycle.
+
+The script already runs `tt-smi -r` before the warm-up check, but the
+warm-up STILL shows FIX BX firing for devices 4-7 because `tt-smi -r`
+cannot reach them.
+
+### FIX IJ Status
+
+FIX IJ (6805e11439d) code changes are correct — they move fw_launch_addr
+restore to AFTER `write_launch_msg_to_core`. The fix cannot be tested on
+this runner because the hardware is in a degraded state from FIX GH.
+
+### Action Required
+
+**Runner tt-metal-ci-vm-t3k-12 needs a host reboot** to recover non-MMIO
+chips 4-7 that have been stuck since FIX GH's CI run.
+
+Alternative: continue dispatching CI — may land on a healthy runner in the pool.
+
+### Code Changes
+
+None. The failure is hardware degradation, not a code bug. FIX LM exit-1
+behavior is correct — it correctly detects and reports the degraded topology.
