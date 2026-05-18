@@ -282,6 +282,7 @@ static void wait_to_finish_eth_timeout_cores(
     }
 
     for (const auto& [dev, workload] : devices) {
+        detail::CompileProgram(dev->get_devices()[0], *programs[dev]);
         devices[dev]->add_program(device_range, std::move(*programs[dev]));
     }
 
