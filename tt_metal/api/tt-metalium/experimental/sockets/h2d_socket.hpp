@@ -17,6 +17,7 @@ namespace tt::tt_metal::distributed {
 
 class NamedShm;
 class PCIeCoreWriter;
+struct HDSocketConnectorState;
 
 /**
  * @brief Specifies the data transfer mode for Host-to-Device communication.
@@ -147,6 +148,17 @@ public:
 
     H2DMode get_h2d_mode() const;
 
+    /**
+     * @brief Returns whether the prior connector process shut down cleanly.
+     *
+     * On the owner side this is always true (no prior connector existed). On a
+     * connector created via connect(), this reflects the clean_shutdown flag
+     * left in SHM by the previous process: true if it ran its destructor, false
+     * if it exited via crash, _exit, or kill. Useful for warning the operator
+     * or running cleanup (e.g. discard_pending_pages on the paired D2H socket).
+     */
+    bool had_clean_prior_shutdown() const { return prior_clean_shutdown_; }
+
     H2DSocket(const H2DSocket&) = delete;
     H2DSocket& operator=(const H2DSocket&) = delete;
 
@@ -209,6 +221,9 @@ private:
     bool is_owner_ = true;
     std::string descriptor_path_;
     bool exported_ = false;
+    HDSocketConnectorState* connector_state_ = nullptr;
+    uint32_t connector_state_offset_ = 0;
+    bool prior_clean_shutdown_ = true;
 };
 
 }  // namespace tt::tt_metal::distributed
