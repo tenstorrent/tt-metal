@@ -1,5 +1,78 @@
 
 ---
+## 2026-05-18 — Strategy A: Deferred ERISC Deassert (FIX SA, FIX S7-MOVE, FIX SENDGO)
+
+### Root Cause Analysis
+
+ERISC was being deasserted (started running base-UMD active_erisc.cc) in
+configure_fabric_cores() BEFORE ConfigureDeviceWithProgram and WriteRuntimeArgsToDevice
+wrote their data to L1.  This created a race: base-UMD was executing and modifying
+L1 (writing flag_disable[0]=1, go_messages[0].signal=RUN_MSG_DONE, then polling)
+while the host was simultaneously writing launch_msg, kernel binaries, and go_msg
+to the same L1 region.  Corrupted launch_msg → 0xDEADB07E (dead firmware launch).
+
+### active_erisc.cc Lifecycle (Corrected Understanding)
+
+Previous comments incorrectly claimed base-UMD "polls fw_launch_addr."  Actual flow:
+1. ROM loads active_erisc.cc (ERISC firmware) using fw_launch_addr
+2. active_erisc.cc writes `flag_disable[0] = 1` ONCE
+3. active_erisc.cc writes `go_messages[0].signal = RUN_MSG_DONE`
+4. active_erisc.cc enters polling loop: `while (go_messages[0].signal == RUN_MSG_GO) { ... }`
+   (Actually polls for signal != RUN_MSG_DONE to proceed, but effective gate is RUN_MSG_GO)
+5. `flag_disable[0] != 1` is an EXIT condition checked inside the loop, not a launch gate
+
+### FIX SENDGO (ISSUE 3) — f1a87f21dcf
+
+All 8 call sites of write_launch_msg_to_core passed `hal.get_dev_addr(...)` (uint64_t)
+as the `bool send_go` parameter.  Implicit uint64_t→bool conversion always yielded `true`,
+masking the bug.  This blocked Strategy A which needs `send_go=false`.
+
+Fixed: all sites now pass `/* send_go= */ true)` explicitly.  device.cpp (6 sites) +
+tt_metal.cpp (2 sites).
+
+### COMMENT Fix (ISSUE 4) — c9311b07fa6
+
+Fixed FIX MM comment that claimed "base-UMD polls fw_launch_addr in a tight loop" —
+replaced with correct active_erisc.cc lifecycle description (see above).
+
+### FIX SA: Strategy A — Deferred Deassert (ISSUE 1) — 5b5526e88d2
+
+For MMIO channels going through FIX S9 soft reset, ERISC stays halted from FIX S9
+through ALL L1 writes (L1 clear, ConfigureDeviceWithProgram, WriteRuntimeArgsToDevice).
+Only deasserted after everything is written.
+
+New FabricCoresHealth field: `deferred_deassert_channels` — set of ETH channel IDs
+where FIX S9 asserted reset but deassert was deferred.
+
+7-step sequence in device.cpp (after ConfigureDeviceWithProgram):
+1. Write fw_launch_addr=1 while halted (FIX MM equivalent)
+2. Write launch_msg with send_go=false while halted
+3. Write handshake_bypass=1 while halted (FIX S7-MOVE)
+4. Deassert ERISC reset
+5. FIX DW: 50ms sleep
+6. FIX DU: poll edm_status until != ROM postcode (5s timeout)
+7. Write go_msg (RUN_MSG_GO) — ERISC now in base-UMD polling loop, launches firmware
+
+Key insight: BaseStructView (ConstView) has no default constructor — must store
+KernelGroup* pointer instead of ConstView, get fresh view at step 7.
+
+### FIX S7-MOVE (ISSUE 2) — same commit 5b5526e88d2
+
+Moved STRATEGY7 handshake_bypass write from configure_fabric_cores() (before
+ConfigureDeviceWithProgram, where BSS zeroing overwrites it) to step 3 of
+Strategy A block (after ConfigureDeviceWithProgram, while ERISC is still halted).
+Deferred channels are skipped in the original STRATEGY7 loop in fabric_init.cpp.
+
+### Files Changed
+
+- `tt_metal/fabric/fabric_init.hpp` — FabricCoresHealth + deferred_deassert_channels
+- `tt_metal/fabric/fabric_init.cpp` — deferred marking replaces deassert+DW+DU;
+  STRATEGY7 skip for deferred channels; FIX MM removed (moved to device.cpp)
+- `tt_metal/impl/device/device.cpp` — Strategy A 7-step block; skip deferred in
+  write_launch_msg_to_core loop; FIX SENDGO explicit bool
+- `tt_metal/tt_metal.cpp` — FIX SENDGO explicit bool (2 sites)
+
+---
 ## 2026-05-18 — Testing Gaps Audit Round 3 (FIX NO, FIX NP)
 
 ### Audit Scope
@@ -4636,3 +4709,29 @@ detection and readback mismatch warnings.
 **Fix**: Added `(void)mmio_base_umd_channels;` at the top of the function body with an explanatory comment. No logic change; no callers modified.
 
 **Commit**: 77c03714d70
+
+---
+## 2026-05-18 — FIX NQ: Namespace qualifier on HalProgrammableCoreType
+
+### What Failed
+
+Build error: missing `tt_metal::` namespace qualifier on `HalProgrammableCoreType::ACTIVE_ETH`
+at `tt_metal/fabric/fabric_init.cpp` line 879.
+
+The other two occurrences at lines 237 and 479 already had the `tt_metal::` prefix.
+Line 879 (inside the `configure_fabric_cores()` function for MMIO device HAL index lookup)
+was the only one missing it, causing a compilation failure.
+
+### Fix Applied
+
+Changed:
+    const auto aeth_idx_mm = hal_mm.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+to:
+    const auto aeth_idx_mm = hal_mm.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+
+Pure namespace qualification fix. No logic changes.
+
+### Commit
+
+- `16872e0cda9` — fix: add tt_metal:: namespace qualifier to HalProgrammableCoreType in fabric_init.cpp
+
