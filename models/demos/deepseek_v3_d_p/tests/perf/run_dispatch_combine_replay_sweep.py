@@ -97,12 +97,28 @@ def run_one(
     if rr.returncode != 0:
         print(f"  ! process_ops_logs exit {rr.returncode}", file=sys.stderr)
 
-    pattern = str(REPORTS_ROOT / "*" / f"ops_perf_results_*_{name}.csv")
-    matches = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+    # process_ops_logs.py -n <name> writes to:
+    #   reports/<name>/ops_perf_results_<name>.csv  (current convention, no timestamp prefix)
+    # Older versions used:
+    #   reports/<timestamp>/ops_perf_results_<timestamp>_<name>.csv
+    # Match either.
+    candidates = [
+        REPORTS_ROOT / name / f"ops_perf_results_{name}.csv",
+    ]
+    matches = [p for p in candidates if p.exists()]
     if not matches:
-        print(f"  ! no CSV matched {pattern}", file=sys.stderr)
+        # fall back to old timestamped pattern
+        legacy_pattern = str(REPORTS_ROOT / "*" / f"ops_perf_results_*_{name}.csv")
+        legacy_matches = sorted(glob.glob(legacy_pattern), key=os.path.getmtime, reverse=True)
+        if legacy_matches:
+            matches = [Path(legacy_matches[0])]
+    if not matches:
+        print(
+            f"  ! no CSV at {REPORTS_ROOT / name / f'ops_perf_results_{name}.csv'} " f"or matching legacy pattern",
+            file=sys.stderr,
+        )
         return None
-    produced = Path(matches[0])
+    produced = matches[0]
     out_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(produced, out_csv)
     print(f"  saved → {out_csv}  ({out_csv.stat().st_size / 1024:.1f} KB)")
