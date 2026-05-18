@@ -11,7 +11,7 @@ use ``argparse.BooleanOptionalAction`` so each is toggleable with
 
 The same entrypoint supports one local decoder-layer sweep, a chained local
 multi-layer pass, and rank-parallel layer verification under ``tt-run`` /
-``mpirun`` / ``srun``. When multiple ``--decoder-layer-idx`` values are supplied
+``mpirun`` / ``srun``. When multiple ``--decoder-layer-indices`` values are supplied
 without ``--chained-layer-pass``, rank ``i`` verifies the i-th layer id and the
 launcher world size must match the number of layer ids.
 
@@ -31,7 +31,7 @@ Mode A (single slot), one prompt, dump everything to ``./dumps``::
 
     TT_METAL_SLOW_DISPATCH_MODE=1 \\
     python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
-        --decoder-layer-idx 4 \\
+        --decoder-layer-indices 4 \\
         --hidden-states-dir /data/asaigal/pipeclean_traces \\
         --prompt pipeclean_seq_8192 \\
         --num-replication-slots 1 \\
@@ -44,7 +44,7 @@ GPU/HF reference), no dumps::
     TT_METAL_SLOW_DISPATCH_MODE=1 \\
     DEEPSEEK_V3_HIDDEN_STATES_DIR=/data/gpu_reference \\
     python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
-        --decoder-layer-idx 4 \\
+        --decoder-layer-indices 4 \\
         --prompt q_what_is_python q_quick_brown_fox \\
         --num-replication-slots 8 \\
         --validate-hidden-states-cross-trace \\
@@ -61,7 +61,7 @@ interleaved layout in-memory before the compare).
 Dry-run (print resolved config and exit, no device opened)::
 
     python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
-        --decoder-layer-idx 4 \\
+        --decoder-layer-indices 4 \\
         --hidden-states-dir /tmp/x --prompt foo --dry-run
 
 Four-layer rank-parallel verification::
@@ -70,7 +70,7 @@ Four-layer rank-parallel verification::
       --rank-bindings-mapping decoder_verify_4x_rank_bindings_mapping.yaml \\
       --mpi-args "--map-by rankfile:file=decoder_verify_4x_rank_file_single_pod --bind-to hwt:overload-allowed --host ${HOSTSP} --tag-output" \\
       python_env/bin/python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
-        --decoder-layer-idx 4 5 6 7 \\
+        --decoder-layer-indices 4 5 6 7 \\
         --hidden-states-dir-template '/data/username/pipeclean_traces/cache_design_gen8192/layer_{layer:02d}' \\
         --prompt cache_design_gen8192 \\
         --validate-hidden-states-cross-trace \\
@@ -81,7 +81,7 @@ against layer 7 output)::
 
     TT_METAL_SLOW_DISPATCH_MODE=1 \\
     python_env/bin/python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
-        --decoder-layer-idx 4 5 6 7 \\
+        --decoder-layer-indices 4 5 6 7 \\
         --chained-layer-pass \\
         --hidden-states-dir-template '/data/username/pipeclean_traces/cache_design_gen8192/layer_{layer:02d}' \\
         --prompt cache_design_gen8192 \\
@@ -117,9 +117,6 @@ _FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_2D_TORUS_X
 _LAYER_PARALLEL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_2D_TORUS_Y
 _FABRIC_ROUTER_MAX_PAYLOAD_BYTES = 15232
 _WORKER_L1_SIZE = 1431568
-_MPI_SIZE_ENV_VARS = ("OMPI_COMM_WORLD_SIZE", "PMI_SIZE", "PMIX_SIZE")
-_SLURM_SIZE_ENV_VAR = "SLURM_NTASKS"
-_SLURM_RANK_ENV_VAR = "SLURM_PROCID"
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +138,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     # --- required: prompt source + identifying knobs ---
     required = parser.add_argument_group("required")
     required.add_argument(
-        "--decoder-layer-idx",
+        "--decoder-layer-indices",
+        dest="decoder_layer_indices",
         type=int,
         nargs="+",
         required=True,
@@ -167,7 +165,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help=(
-            "Per-layer reference trace directory template for rank-parallel verification. Supports "
+            "Per-layer reference trace directory template for rank-parallel or chained verification. Supports "
             "{layer}, {layer_idx}, and {rank}; for example /data/gpu_reference/layer_{layer:02d}."
         ),
     )
@@ -206,7 +204,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=False,
         help=(
-            "Interpret multiple --decoder-layer-idx values as one ordered local pass. The first layer's "
+            "Interpret multiple --decoder-layer-indices values as one ordered local pass. The first layer's "
             "trace supplies inputs, each TT layer output feeds the next layer, and final outputs compare "
             "against the last layer's trace. Without this flag, multiple layer ids keep the existing "
             "one-rank-per-layer verification behavior."
@@ -245,7 +243,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Per-(prompt, slot) PCC of collected output against the prompt's reference 'output' trace. "
-            "Defaults to off for a single local layer and on for rank-parallel or chained-layer verification."
+            "Defaults to off for a single local layer and on for rank-parallel or chained verification."
         ),
     )
     val.add_argument(
@@ -343,18 +341,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 def _layer_ids_from_args(args: argparse.Namespace) -> list[int]:
-    """Return decoder layer ids as a list, preserving compatibility with older tests."""
-    if isinstance(args.decoder_layer_idx, int):
-        return [args.decoder_layer_idx]
-    return list(args.decoder_layer_idx)
-
-
-def _is_probably_under_mpi() -> bool:
-    return any(os.environ.get(name) for name in _MPI_SIZE_ENV_VARS)
-
-
-def _is_probably_under_slurm() -> bool:
-    return os.environ.get(_SLURM_SIZE_ENV_VAR) is not None and os.environ.get(_SLURM_RANK_ENV_VAR) is not None
+    """Return decoder layer ids as a list."""
+    if isinstance(args.decoder_layer_indices, int):
+        return [args.decoder_layer_indices]
+    return list(args.decoder_layer_indices)
 
 
 def _format_path(raw: str | Path, *, layer_idx: int, rank: int) -> Path:
@@ -412,10 +402,11 @@ def _config_from_args_for_rank(
 ) -> HostIoDecoderSweepConfig:
     """Build a frozen config for either local single-layer or rank-selected layer mode."""
     layer_chain = bool(args.chained_layer_pass)
-    layer_indices = tuple(_layer_ids_from_args(args)) if layer_chain else None
+    layer_indices = tuple(_layer_ids_from_args(args)) if layer_chain else (layer_idx,)
     reference_hidden_states_dir = (
-        _resolve_hidden_states_dir(args, layer_idx=layer_indices[-1], rank=rank) if layer_indices is not None else None
+        _resolve_hidden_states_dir(args, layer_idx=layer_indices[-1], rank=rank) if len(layer_indices) > 1 else None
     )
+    dump_layer_idx = layer_indices[-1] if layer_chain else layer_idx
 
     num_replication_slots = args.num_replication_slots
     if num_replication_slots is None:
@@ -434,10 +425,9 @@ def _config_from_args_for_rank(
         validate_hidden_states_cross_trace = layer_parallel or layer_chain
 
     return HostIoDecoderSweepConfig(
-        decoder_layer_idx=layer_idx,
+        decoder_layer_indices=layer_indices,
         hidden_states_dir=_resolve_hidden_states_dir(args, layer_idx=layer_idx, rank=rank),
         prompt_names=tuple(args.prompt_names),
-        decoder_layer_indices=layer_indices,
         reference_hidden_states_dir=reference_hidden_states_dir,
         max_seq_len=args.max_seq_len,
         num_slots=args.num_slots,
@@ -453,7 +443,7 @@ def _config_from_args_for_rank(
         kv_cache_pcc_threshold=args.kv_cache_pcc_threshold,
         dump_hidden_states=args.dump_hidden_states,
         dump_kv_cache=args.dump_kv_cache,
-        dump_dir=_resolve_dump_dir(args, layer_idx=layer_idx, rank=rank, layer_parallel=layer_parallel),
+        dump_dir=_resolve_dump_dir(args, layer_idx=dump_layer_idx, rank=rank, layer_parallel=layer_parallel),
         hf_model_path=args.hf_model_path,
         cache_path=args.cache_path,
         seed=args.seed,
@@ -465,7 +455,7 @@ def _config_from_args(args: argparse.Namespace) -> HostIoDecoderSweepConfig:
     """Build a single local-layer config; retained for callers/tests that import this helper."""
     layer_ids = _layer_ids_from_args(args)
     if len(layer_ids) != 1:
-        raise ValueError("_config_from_args expects exactly one --decoder-layer-idx value")
+        raise ValueError("_config_from_args expects exactly one --decoder-layer-indices value")
     return _config_from_args_for_rank(args, rank=0, layer_idx=layer_ids[0], layer_parallel=False)
 
 
@@ -484,15 +474,6 @@ def _build_device_params(config: HostIoDecoderSweepConfig, *, layer_parallel: bo
 
 
 def _init_rank_context_or_error() -> tuple[int, int]:
-    if _is_probably_under_slurm() and not _is_probably_under_mpi():
-        # Some lab allocations can launch ranks with Slurm but cannot launch
-        # OpenMPI/PRTE over SSH. The layer checks are independent, so Slurm's
-        # process rank is enough for rank->layer selection; TT mesh placement
-        # still comes from the per-rank TT_* environment set by the launcher.
-        return int(os.environ[_SLURM_RANK_ENV_VAR]), int(os.environ[_SLURM_SIZE_ENV_VAR])
-
-    if not _is_probably_under_mpi():
-        raise RuntimeError("multiple --decoder-layer-idx values must be launched under tt-run/mpirun or srun")
     ttnn.init_distributed_context()
     if ttnn.distributed_context_subcontext_id() is not None:
         return int(ttnn.distributed_context_world_rank()), int(ttnn.distributed_context_world_size())
@@ -502,7 +483,7 @@ def _init_rank_context_or_error() -> tuple[int, int]:
 def _layer_for_rank(layer_ids: list[int], *, rank: int, world_size: int) -> int:
     if len(layer_ids) != world_size:
         raise ValueError(
-            f"Number of --decoder-layer-idx values ({len(layer_ids)}) must match launcher world size "
+            f"Number of --decoder-layer-indices values ({len(layer_ids)}) must match launcher world size "
             f"({world_size}). Launch {len(layer_ids)} ranks or pass exactly {world_size} layers."
         )
     return layer_ids[rank]
@@ -512,7 +493,6 @@ def _log_resolved_config(config: HostIoDecoderSweepConfig) -> None:
     """Render the resolved config in a human-readable block, before the run."""
     logger.info("Resolved HostIoDecoderSweepConfig:")
     for field, value in (
-        ("decoder_layer_idx", config.decoder_layer_idx),
         ("decoder_layer_indices", config.decoder_layer_indices),
         ("hidden_states_dir", config.hidden_states_dir),
         ("reference_hidden_states_dir", config.reference_hidden_states_dir),
@@ -556,7 +536,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if chained_layer_pass and not multi_layer_requested:
-            raise ValueError("--chained-layer-pass requires at least two --decoder-layer-idx values")
+            raise ValueError("--chained-layer-pass requires at least two --decoder-layer-indices values")
         if multi_layer_requested and not chained_layer_pass:
             rank, world_size = _init_rank_context_or_error()
             layer_idx = _layer_for_rank(layer_ids, rank=rank, world_size=world_size)
@@ -579,7 +559,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2  # pragma: no cover (parser.error sys.exits 2)
 
     if rank is not None and world_size is not None:
-        logger.info(f"rank={rank}/{world_size}: verifying decoder layer {config.decoder_layer_idx}")
+        logger.info(f"rank={rank}/{world_size}: verifying decoder layer {config.decoder_layer_indices[0]}")
     _log_resolved_config(config)
 
     if args.dry_run:
@@ -593,8 +573,8 @@ def main(argv: list[str] | None = None) -> int:
     # Result summary so the CLI ends with an audit-friendly digest of what ran.
     logger.info("=" * 80)
     if rank is not None and world_size is not None:
-        logger.info(f"SUMMARY rank={rank}/{world_size} layer={config.decoder_layer_idx}")
-    elif config.decoder_layer_indices is not None:
+        logger.info(f"SUMMARY rank={rank}/{world_size} layer={config.decoder_layer_indices[0]}")
+    elif len(config.decoder_layer_indices) > 1:
         logger.info(f"SUMMARY chained_layers={list(config.decoder_layer_indices)}")
     else:
         logger.info("SUMMARY")
@@ -611,30 +591,18 @@ def main(argv: list[str] | None = None) -> int:
     hidden_states_cross_slot_status = (
         "disabled"
         if not config.validate_hidden_states_cross_slot
-        else (
-            "enabled"
-            if config.num_replication_slots > 1
-            else "skipped/no-op (num_replication_slots=1)"
-        )
+        else ("enabled" if config.num_replication_slots > 1 else "skipped/no-op (num_replication_slots=1)")
     )
     hidden_states_cross_trace_status = (
-        f"enabled (threshold={config.pcc_threshold})"
-        if config.validate_hidden_states_cross_trace
-        else "disabled"
+        f"enabled (threshold={config.pcc_threshold})" if config.validate_hidden_states_cross_trace else "disabled"
     )
     kv_cache_cross_slot_status = (
         "disabled"
         if not config.validate_kv_cache_cross_slot
-        else (
-            "enabled"
-            if config.num_replication_slots > 1
-            else "skipped/no-op (num_replication_slots=1)"
-        )
+        else ("enabled" if config.num_replication_slots > 1 else "skipped/no-op (num_replication_slots=1)")
     )
     kv_cache_cross_trace_status = (
-        f"enabled (threshold={config.kv_cache_pcc_threshold})"
-        if config.validate_kv_cache_cross_trace
-        else "disabled"
+        f"enabled (threshold={config.kv_cache_pcc_threshold})" if config.validate_kv_cache_cross_trace else "disabled"
     )
     logger.info(
         f"validation gates: "

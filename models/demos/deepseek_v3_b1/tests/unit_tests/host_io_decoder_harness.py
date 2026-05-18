@@ -18,10 +18,10 @@ this models a single user (slot) continuing a multi-turn conversation, fanned
 out across ``num_replication_slots`` identical-state replicas for cross-slot
 determinism validation.
 
-The persistent decoder + H2D/D2H sockets are launched ONCE before the first
-prompt and torn down ONCE after the last prompt. The on-device KV cache thus
-holds the concatenated state of every prompt at the end of the sweep, and can
-be sliced by prompt for downstream consumption.
+For a single layer, the persistent decoder + H2D/D2H sockets are launched once
+before the first prompt and torn down once after the last prompt. For a chained
+layer pass, each layer is launched in order and the collected output of layer N
+feeds layer N+1; validation runs only after the final layer.
 
 Validation gates (every gate is independently toggleable in the config)
 -----------------------------------------------------------------------
@@ -35,32 +35,34 @@ Validation gates (every gate is independently toggleable in the config)
    on the KV cache slice (slot s, prompt p's position range) against slot 0
    (same property, checked through the KV-cache path; no-op in Mode A).
 4. ``validate_hidden_states_cross_trace`` — per-(prompt, slot) PCC of the
-   collected output against the prompt's reference ``trace["output"]``
+   final collected output against the prompt's reference ``trace["output"]``
    (numerical-correctness check; threshold from ``pcc_threshold``).
 5. ``validate_kv_cache_cross_trace`` — per-(prompt, slot) PCC of the
    on-device KV-cache slice against a slot-agnostic
-   ``kv_cache_reference_{prompt}.pt`` sibling file in
-   ``hidden_states_dir``. Reference is permuted from HF/split-halves into
+   ``kv_cache_reference_{prompt}.pt`` sibling file in the active reference
+   trace directory. Reference is permuted from HF/split-halves into
    TT/interleaved RoPE storage before the compare, so the on-disk reference
    stays in the canonical HF layout while the harness compares like-for-like
-   against the device's interleaved layout. Forces the host KV-cache pull
-   even when no KV-cache dump is requested. Threshold from
+   against the device's interleaved layout. Forces the final layer KV-cache
+   pull even when no KV-cache dump is requested. Threshold from
    ``kv_cache_pcc_threshold``. On failure, logs a per-channel diagnostic
    PCC for ``kv_latent_normed[:, :, :KV_LATENT_DIM]`` and
    ``k_pe_roped[:, :, KV_LATENT_DIM:]`` so mismatches can be localized
    between MLA's two sub-paths.
 
-I/O files (paths relative to ``hidden_states_dir``)
----------------------------------------------------
-Inputs (per prompt, loaded by preflight / Phase 4b):
+I/O files
+---------
+Inputs (per prompt, loaded by preflight):
 - ``{prompt}.pt`` — required. ``{"input", "output"}`` dict of
-  ``(L_p, HIDDEN_SIZE)`` bf16 tensors. ``trace["input"]`` is fed through the
-  decoder one row per H2D iteration; ``trace["output"]`` is the cross-trace
-  PCC reference for ``validate_hidden_states_cross_trace``.
+  ``(L_p, HIDDEN_SIZE)`` bf16 tensors. ``trace["input"]`` from
+  ``hidden_states_dir`` is fed through the first decoder layer one row per H2D
+  iteration. ``trace["output"]`` from ``reference_hidden_states_dir`` (or
+  ``hidden_states_dir`` when no separate reference dir is set) is the
+  cross-trace PCC reference for final outputs.
 - ``kv_cache_reference_{prompt}.pt`` — required iff
   ``validate_kv_cache_cross_trace`` is on. Slot-agnostic ``(1, L_p, KV_PE_DIM)``
-  bf16 tensor in HF/split-halves RoPE layout; the harness permutes it to TT/interleaved
-  in-memory before PCC.
+  bf16 tensor in HF/split-halves RoPE layout from the active reference trace
+  directory; the harness permutes it to TT/interleaved in-memory before PCC.
 
 Dumps (independently toggleable, both off by default suppresses all disk I/O):
 - ``dump_hidden_states`` — one file per (slot, prompt):
@@ -85,11 +87,6 @@ Public API surface
   MeshDevice and applies fabric configuration. Replaces the
   ``bh_2d_mesh_device`` pytest fixture.
 
-Stubs / not yet implemented
----------------------------
-The helpers, preflight, and ``run_sweep`` body are scoped to subsequent
-checkpoints of the migration plan. See ``host_io_decoder_stage_context.txt``
-(or the per-PR notes) for which checkpoint lands what.
 """
 
 from __future__ import annotations
@@ -246,9 +243,10 @@ class HostIoDecoderSweepConfig:
     # Positions are disjoint and incrementing in ``prompt_names`` order. Single
     # prompt is allowed; multi-prompt fans out into a multi-turn conversation
     # across the shared slot range.
-    decoder_layer_idx: int
+    decoder_layer_indices: tuple[int, ...]
     hidden_states_dir: Path
     prompt_names: tuple[str, ...]
+    reference_hidden_states_dir: Path | None = None
 
     # --- model shape ---
     max_seq_len: int = 128 * 1024
@@ -265,8 +263,8 @@ class HostIoDecoderSweepConfig:
     validate_kv_cache_cross_slot: bool = True
     validate_hidden_states_cross_trace: bool = False
     pcc_threshold: float = 0.97  # only consulted when validate_hidden_states_cross_trace is True
-    # Per-(prompt, slot) PCC of the device KV-cache slice against a
-    # ``kv_cache_reference_{prompt}.pt`` sibling file in ``hidden_states_dir``.
+    # Per-(prompt, slot) PCC of the final layer KV-cache slice against a
+    # ``kv_cache_reference_{prompt}.pt`` sibling in the active reference dir.
     # Independent of cross-slot equality; both can be enabled together.
     validate_kv_cache_cross_trace: bool = False
     kv_cache_pcc_threshold: float = 0.97  # only consulted when validate_kv_cache_cross_trace is True
@@ -289,8 +287,11 @@ class HostIoDecoderSweepConfig:
 
     def __post_init__(self) -> None:
         """Validate static invariants. Trace-dependent checks live in preflight."""
-        if self.decoder_layer_idx < 0:
-            raise ValueError(f"decoder_layer_idx must be >= 0, got {self.decoder_layer_idx}")
+        if not self.decoder_layer_indices:
+            raise ValueError("decoder_layer_indices must contain at least one entry")
+        for layer_idx in self.decoder_layer_indices:
+            if layer_idx < 0:
+                raise ValueError(f"decoder_layer_indices must be >= 0, got {self.decoder_layer_indices}")
         if not self.prompt_names:
             raise ValueError("prompt_names must contain at least one entry")
         for name in self.prompt_names:
@@ -594,7 +595,7 @@ def _extract_metadata_from_d2h(output_tensor: ttnn.Tensor):
 
 def _preflight(
     config: HostIoDecoderSweepConfig,
-) -> tuple[MultiTurnSchedule, dict[str, dict[str, torch.Tensor]]]:
+) -> tuple[MultiTurnSchedule, dict[str, dict[str, torch.Tensor]], dict[str, dict[str, torch.Tensor]]]:
     """Load all reference traces and build the multi-turn schedule.
 
     Validates trace-dependent invariants that ``HostIoDecoderSweepConfig.__post_init__``
@@ -606,8 +607,10 @@ def _preflight(
     dummy in :func:`run_sweep`'s phase 1).
 
     Returns:
-        ``(schedule, traces)`` where ``traces`` is keyed by prompt_name and
-        each value is the dict returned by :func:`_load_reference_trace`.
+        ``(schedule, input_traces, reference_traces)`` where both trace dicts are
+        keyed by prompt_name. In a chained layer pass, ``input_traces`` comes
+        from the first layer directory and ``reference_traces`` comes from the
+        final layer directory.
 
     Raises:
         ValueError: any trace-dependent invariant violated.
@@ -617,12 +620,30 @@ def _preflight(
     if not config.hidden_states_dir.is_dir():
         raise ValueError(f"hidden_states_dir does not exist or is not a directory: {config.hidden_states_dir}")
 
-    traces: dict[str, dict[str, torch.Tensor]] = {}
+    input_traces: dict[str, dict[str, torch.Tensor]] = {}
     prompt_lengths: list[int] = []
     for prompt_name in config.prompt_names:
         trace = _load_reference_trace(config.hidden_states_dir, prompt_name)
-        traces[prompt_name] = trace
+        input_traces[prompt_name] = trace
         prompt_lengths.append(int(trace["input"].shape[0]))
+
+    reference_dir = config.reference_hidden_states_dir or config.hidden_states_dir
+    if not reference_dir.is_dir():
+        raise ValueError(f"reference_hidden_states_dir does not exist or is not a directory: {reference_dir}")
+
+    if reference_dir == config.hidden_states_dir:
+        reference_traces = input_traces
+    else:
+        reference_traces: dict[str, dict[str, torch.Tensor]] = {}
+        for prompt_idx, prompt_name in enumerate(config.prompt_names):
+            trace = _load_reference_trace(reference_dir, prompt_name)
+            expected_len = prompt_lengths[prompt_idx]
+            if int(trace["output"].shape[0]) != expected_len:
+                raise ValueError(
+                    f"{reference_dir / f'{prompt_name}.pt'}: reference output seq_len "
+                    f"{trace['output'].shape[0]} does not match input seq_len {expected_len}"
+                )
+            reference_traces[prompt_name] = trace
 
     schedule = MultiTurnSchedule(prompt_lengths=tuple(prompt_lengths))
 
@@ -633,7 +654,7 @@ def _preflight(
             f">= max_seq_len ({config.max_seq_len}). Reduce prompt seq_lens or increase max_seq_len."
         )
 
-    return schedule, traces
+    return schedule, input_traces, reference_traces
 
 
 # ---------------------------------------------------------------------------
@@ -648,7 +669,7 @@ def _run_prompt_sweep(
     prompt_name: str,
     prompt_idx: int,
     schedule: MultiTurnSchedule,
-    trace: dict[str, torch.Tensor],
+    input_for_prompt: dict[int, torch.Tensor],
     collected_for_prompt: dict[int, torch.Tensor],
     output_tensor: ttnn.Tensor,
 ) -> None:
@@ -672,10 +693,19 @@ def _run_prompt_sweep(
     """
     L_p = schedule.prompt_lengths[prompt_idx]
     offset = schedule.offset_for(prompt_idx)
-    assert set(collected_for_prompt.keys()) == set(range(config.num_replication_slots)), (
+    expected_slots = set(range(config.num_replication_slots))
+    assert (
+        set(input_for_prompt.keys()) == expected_slots
+    ), f"input_for_prompt keys mismatch: expected {expected_slots}, got {set(input_for_prompt.keys())}"
+    assert set(collected_for_prompt.keys()) == expected_slots, (
         f"collected_for_prompt keys mismatch: expected {set(range(config.num_replication_slots))}, "
         f"got {set(collected_for_prompt.keys())}"
     )
+    for slot, tensor in input_for_prompt.items():
+        assert tensor.shape == (L_p, D.HIDDEN_SIZE) and tensor.dtype == torch.bfloat16, (
+            f"input_for_prompt[{slot}] must be ({L_p}, {D.HIDDEN_SIZE}) bf16; "
+            f"got shape={tuple(tensor.shape)} dtype={tensor.dtype}"
+        )
     for slot, tensor in collected_for_prompt.items():
         assert tensor.shape == (L_p, D.HIDDEN_SIZE) and tensor.dtype == torch.bfloat16, (
             f"collected_for_prompt[{slot}] must be ({L_p}, {D.HIDDEN_SIZE}) bf16; "
@@ -689,8 +719,8 @@ def _run_prompt_sweep(
     )
     for p_local in range(L_p):
         global_pos = offset + p_local
-        hidden_state = trace["input"][p_local]
         for slot_id in range(config.num_replication_slots):
+            hidden_state = input_for_prompt[slot_id][p_local]
             input_tensor = _build_per_iteration_input(hidden_state, slot_id=slot_id, global_pos=global_pos)
             pipeline_block.write_token(input_tensor)
 
@@ -773,109 +803,51 @@ def open_mesh_device(device_params: dict) -> Iterator[ttnn.MeshDevice]:
         yield parent_mesh
 
 
-def run_sweep(
+def _reference_trace_dir(config: HostIoDecoderSweepConfig) -> Path:
+    return config.reference_hidden_states_dir or config.hidden_states_dir
+
+
+def _inputs_from_traces(
+    config: HostIoDecoderSweepConfig,
+    traces: dict[str, dict[str, torch.Tensor]],
+) -> dict[str, dict[int, torch.Tensor]]:
+    return {
+        prompt_name: {slot: traces[prompt_name]["input"] for slot in range(config.num_replication_slots)}
+        for prompt_name in config.prompt_names
+    }
+
+
+def _run_decoder_layer_pass(
+    *,
     config: HostIoDecoderSweepConfig,
     parent_mesh: ttnn.MeshDevice,
-) -> SweepResult:
-    """Run one multi-turn HostIoDecoderStage sweep end-to-end.
-
-    Phases (see module docstring for full semantics):
-        0.  Preflight: load traces, build :class:`MultiTurnSchedule`, validate
-            trace-dependent invariants. Pre-allocate every prompt's per-slot
-            ``collected`` tensors so the sweep loop has zero allocation work.
-        0.5 Submesh + slow-dispatch + weights + HostIoDecoderStage + persistent
-            kernels launch (runs ONCE for the whole multi-turn run).
-        1.  Multi-turn prompt loop: per-prompt sweep into pre-allocated
-            collectors. No validation in this phase — keeps the hot path
-            (write/read/round-trip/store) free of any per-prompt host work
-            other than the per-iter metadata round-trip asserts.
-        2.  Termination (single teardown).
-        3.  Hidden state validation (post-teardown):
-            3a. Per-prompt cross-slot ``torch.equal`` across replicated slots.
-            3b. Optional per-(prompt, slot) cross-trace PCC vs reference.
-        4.  KV cache validation: conditional pull (fast-dispatch) + per-prompt
-            checks.
-            4a. Per-prompt cross-slot ``torch.equal`` across replicated slots.
-            4b. Optional per-(prompt, slot) cross-trace PCC vs
-                ``kv_cache_reference_{prompt}.pt`` reference, with
-                split-halves → TT-interleaved RoPE-layout permutation applied
-                to the reference before compare. Short-circuits to slot 0 as a
-                proxy for all replicated slots when 4a proved cross-slot
-                equality, mirroring 3b's optimization.
-        5.  Per-(prompt, slot) dumps for hidden states and KV cache.
-
-    Args:
-        config: Frozen configuration. Validate-only and dump-only invocations
-            are supported by toggling the relevant knobs.
-        parent_mesh: Parent ``MeshDevice`` owned by the caller (e.g. by
-            :func:`open_mesh_device`); not closed by ``run_sweep``.
-
-    Returns:
-        :class:`SweepResult` with collected outputs, full KV cache, schedule,
-        and loaded reference traces.
-
-    Raises:
-        AssertionError: any enabled validation gate that fires.
-        ValueError: preflight invariants violated (trace shape, sum of seq lens
-            vs max_seq_len, missing dump_dir while a dump knob is set, etc.).
-        RuntimeError: not invoked under slow dispatch (sets the env var
-            ``TT_METAL_SLOW_DISPATCH_MODE=1`` upstream).
-    """
-    # =========================================================================
-    # Phase 0: Preflight + environment checks
-    # =========================================================================
-    if not is_slow_dispatch():
-        raise RuntimeError(
-            "run_sweep requires slow dispatch (the H2D / D2H sockets do not work under fast "
-            "dispatch). Set TT_METAL_SLOW_DISPATCH_MODE=1 before launching."
-        )
-    if not config.hf_model_path.exists():
-        raise FileNotFoundError(f"HF model path does not exist: {config.hf_model_path}")
-
-    torch.manual_seed(config.seed)
-    schedule, traces = _preflight(config)
-    logger.info(
-        f"preflight: prompts={list(config.prompt_names)} "
-        f"prompt_lengths={schedule.prompt_lengths} total_length={schedule.total_length()} "
-        f"max_seq_len={config.max_seq_len}"
-    )
-
+    provider: CacheWeightProvider,
+    layer_idx: int,
+    layer_position: int,
+    total_layers: int,
+    schedule: MultiTurnSchedule,
+    input_hidden_states: dict[str, dict[int, torch.Tensor]],
+    pull_kv_cache: bool,
+) -> tuple[dict[str, dict[int, torch.Tensor]], torch.Tensor | None]:
+    """Run one decoder layer over the scheduled prompt inputs."""
     num_devices = config.mesh_rows * config.mesh_cols
-    if parent_mesh.shape[0] * parent_mesh.shape[1] < num_devices:
-        raise RuntimeError(
-            f"parent_mesh has {parent_mesh.shape[0] * parent_mesh.shape[1]} devices but "
-            f"config requires {num_devices} ({config.mesh_rows}x{config.mesh_cols})"
-        )
-
-    if config.dump_dir is not None:
-        config.dump_dir.mkdir(parents=True, exist_ok=True)
-
-    # =========================================================================
-    # Phase 0.5: One-time setup (submesh, weights, persistent kernels)
-    # =========================================================================
-    logger.info(f"Creating {config.mesh_rows}x{config.mesh_cols} submesh ({num_devices} devices)")
+    layer_prefix = f"layer {layer_position + 1}/{total_layers} (idx={layer_idx})"
+    logger.info(f"{layer_prefix}: creating {config.mesh_rows}x{config.mesh_cols} submesh ({num_devices} devices)")
     submesh = parent_mesh.create_submesh(ttnn.MeshShape((config.mesh_rows, config.mesh_cols)))
     ttnn.enable_asynchronous_slow_dispatch(submesh)
-
-    logger.info(f"Using HF model path: {config.hf_model_path}")
-    logger.info(f"Using cache path:    {config.cache_path}")
-    provider = CacheWeightProvider(cache_path=config.cache_path, model_path=config.hf_model_path)
 
     # Auto-detect dense vs MoE from layer_idx (see NUM_DENSE_LAYERS comment at the
     # top of this module). Dense layers use a different weight loader and pass
     # different MoE-related kwargs into HostIoDecoderStage; everything else about
     # the harness (broadcast / reduce / sockets / KV cache) is layer-type agnostic.
-    is_moe_layer = _is_moe_layer(config.decoder_layer_idx)
+    is_moe_layer = _is_moe_layer(layer_idx)
     layer_type = "MoE" if is_moe_layer else "dense"
-    logger.info(
-        f"Layer type auto-detected: layer_idx={config.decoder_layer_idx} -> {layer_type} "
-        f"(NUM_DENSE_LAYERS={NUM_DENSE_LAYERS})"
-    )
+    logger.info(f"{layer_prefix}: layer type auto-detected -> {layer_type} " f"(NUM_DENSE_LAYERS={NUM_DENSE_LAYERS})")
     if is_moe_layer:
-        layer_weights = provider.load_moe_layer(layer_id=config.decoder_layer_idx, device=submesh)
+        layer_weights = provider.load_moe_layer(layer_id=layer_idx, device=submesh)
     else:
-        layer_weights = provider.load_dense_layer(layer_id=config.decoder_layer_idx, device=submesh)
-    logger.info(f"{layer_type} layer weights ready")
+        layer_weights = provider.load_dense_layer(layer_id=layer_idx, device=submesh)
+    logger.info(f"{layer_prefix}: {layer_type} layer weights ready")
 
     # Single-stage pipeline (num_procs == 1, no loopback). Coords match
     # the original test_decoder_block.test_decoder layout:
@@ -913,12 +885,12 @@ def run_sweep(
             enable_routing=False,
         )
     logger.info(
-        f"Instantiating HostIoDecoderStage (layer_idx={config.decoder_layer_idx}, "
-        f"layer_type={layer_type}, layer_type_kwargs={layer_type_kwargs})"
+        f"{layer_prefix}: instantiating HostIoDecoderStage "
+        f"(layer_type={layer_type}, layer_type_kwargs={layer_type_kwargs})"
     )
     stage = HostIoDecoderStage(
         weights=layer_weights,
-        layer_idx=config.decoder_layer_idx,
+        layer_idx=layer_idx,
         metadata=DeepseekMetadata(position_id=0),
         max_seq_len=config.max_seq_len,
         num_slots=config.num_slots,
@@ -929,12 +901,12 @@ def run_sweep(
         **layer_type_kwargs,
     )
 
-    logger.info("Building PipelineBlock + persistent kernels")
+    logger.info(f"{layer_prefix}: building PipelineBlock + persistent kernels")
     pipeline_block = stage.create_pipeline_block(ctx)
     stage.setup(ctx, pipeline_block)
     pipeline_block.run()
     stage.launch_compute(ctx, pipeline_block)
-    logger.info("All persistent kernels dispatched")
+    logger.info(f"{layer_prefix}: all persistent kernels dispatched")
 
     out_words = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES // dtype_size(ttnn.bfloat16)
 
@@ -959,7 +931,7 @@ def run_sweep(
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     logger.info(
-        f"Pre-allocated collected hidden states for {len(config.prompt_names)} prompt(s) x "
+        f"{layer_prefix}: pre-allocated collected hidden states for {len(config.prompt_names)} prompt(s) x "
         f"{config.num_replication_slots} slot(s); reusing one D2H receive buffer "
         f"(out_words={out_words}) across all iterations"
     )
@@ -974,7 +946,7 @@ def run_sweep(
             prompt_name=prompt_name,
             prompt_idx=prompt_idx,
             schedule=schedule,
-            trace=traces[prompt_name],
+            input_for_prompt=input_hidden_states[prompt_name],
             collected_for_prompt=collected[prompt_name],
             output_tensor=output_tensor,
         )
@@ -982,7 +954,7 @@ def run_sweep(
     # =========================================================================
     # Phase 2: Termination (single teardown for the entire multi-turn run)
     # =========================================================================
-    logger.info("Phase 2: signalling persistent decoder termination")
+    logger.info(f"{layer_prefix}: Phase 2: signalling persistent decoder termination")
     stage.terminate(ctx, pipeline_block)
 
     # Termination dummy targets (slot=num_slots-1, position=max_seq_len-1).
@@ -1001,12 +973,101 @@ def run_sweep(
         top_k=1,
         probability_mass_threshold=1.0,
     )
-    logger.info(f"Pushing termination dummy at slot={config.num_slots - 1} pos={config.max_seq_len - 1}")
+    logger.info(
+        f"{layer_prefix}: pushing termination dummy at slot={config.num_slots - 1} pos={config.max_seq_len - 1}"
+    )
     pipeline_block.write_token(termination_dummy)
     pipeline_block.drain_dummy_output()
     pipeline_block.terminate()
     ttnn.synchronize_device(submesh)
-    logger.info("Phase 2 complete: HostIoDecoderStage teardown done")
+    logger.info(f"{layer_prefix}: Phase 2 complete: HostIoDecoderStage teardown done")
+
+    kv_cache_torch: torch.Tensor | None = None
+    if pull_kv_cache:
+        logger.info(f"{layer_prefix}: pulling on-device KV cache to host (fast-dispatch context)")
+        with ttnn.device.setup_fast_dispatch(submesh):
+            kv_cache_torch = stage.get_kv_cache_host()
+        assert kv_cache_torch is not None, "get_kv_cache_host returned None (setup not completed?)"
+        logger.info(f"{layer_prefix}: KV cache shape={tuple(kv_cache_torch.shape)} dtype={kv_cache_torch.dtype}")
+    else:
+        logger.info(f"{layer_prefix}: KV cache pull skipped")
+
+    return collected, kv_cache_torch
+
+
+def run_sweep(
+    config: HostIoDecoderSweepConfig,
+    parent_mesh: ttnn.MeshDevice,
+) -> SweepResult:
+    """Run one multi-turn HostIoDecoderStage sweep end-to-end.
+
+    Single-layer and rank-parallel invocations carry one layer id in
+    ``decoder_layer_indices``. Chained local invocations carry multiple layer ids;
+    the collected output of layer N is fed as the input to layer N+1, and final
+    validation uses ``reference_hidden_states_dir`` when provided.
+    """
+    # =========================================================================
+    # Phase 0: Preflight + environment checks
+    # =========================================================================
+    if not is_slow_dispatch():
+        raise RuntimeError(
+            "run_sweep requires slow dispatch (the H2D / D2H sockets do not work under fast "
+            "dispatch). Set TT_METAL_SLOW_DISPATCH_MODE=1 before launching."
+        )
+    if not config.hf_model_path.exists():
+        raise FileNotFoundError(f"HF model path does not exist: {config.hf_model_path}")
+
+    torch.manual_seed(config.seed)
+    layer_indices = config.decoder_layer_indices
+    schedule, input_traces, reference_traces = _preflight(config)
+    logger.info(
+        f"preflight: layers={list(layer_indices)} prompts={list(config.prompt_names)} "
+        f"prompt_lengths={schedule.prompt_lengths} total_length={schedule.total_length()} "
+        f"max_seq_len={config.max_seq_len}"
+    )
+
+    num_devices = config.mesh_rows * config.mesh_cols
+    if parent_mesh.shape[0] * parent_mesh.shape[1] < num_devices:
+        raise RuntimeError(
+            f"parent_mesh has {parent_mesh.shape[0] * parent_mesh.shape[1]} devices but "
+            f"config requires {num_devices} ({config.mesh_rows}x{config.mesh_cols})"
+        )
+
+    if config.dump_dir is not None:
+        config.dump_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Using HF model path: {config.hf_model_path}")
+    logger.info(f"Using cache path:    {config.cache_path}")
+    provider = CacheWeightProvider(cache_path=config.cache_path, model_path=config.hf_model_path)
+
+    need_kv_cache = (
+        config.dump_kv_cache
+        or (config.validate_kv_cache_cross_slot and config.num_replication_slots > 1)
+        or config.validate_kv_cache_cross_trace
+    )
+
+    input_hidden_states = _inputs_from_traces(config, input_traces)
+    collected: dict[str, dict[int, torch.Tensor]] | None = None
+    kv_cache_torch: torch.Tensor | None = None
+    for layer_position, layer_idx in enumerate(layer_indices):
+        final_layer = layer_position == len(layer_indices) - 1
+        collected, maybe_kv_cache = _run_decoder_layer_pass(
+            config=config,
+            parent_mesh=parent_mesh,
+            provider=provider,
+            layer_idx=layer_idx,
+            layer_position=layer_position,
+            total_layers=len(layer_indices),
+            schedule=schedule,
+            input_hidden_states=input_hidden_states,
+            pull_kv_cache=final_layer and need_kv_cache,
+        )
+        if final_layer:
+            kv_cache_torch = maybe_kv_cache
+        else:
+            input_hidden_states = collected
+
+    assert collected is not None
 
     # =========================================================================
     # Phase 3: Hidden state validation (cross-slot equality + cross-trace PCC)
@@ -1043,7 +1104,7 @@ def run_sweep(
             f"(cross_slot_proven_in_3a={cross_slot_proven})"
         )
         for prompt_name in config.prompt_names:
-            expected = traces[prompt_name]["output"]
+            expected = reference_traces[prompt_name]["output"]
             for slot in slots_to_pcc:
                 passing, pcc = comp_pcc(
                     expected.flatten(),
@@ -1070,24 +1131,7 @@ def run_sweep(
     # =========================================================================
     # Phase 4: KV cache pull (fast-dispatch) + per-prompt cross-slot validation
     # =========================================================================
-    # Skip the device-to-host KV pull entirely if neither validation nor dump
-    # needs it. The pull composes a ~9.6 GB host tensor (production shape) so
-    # this is a meaningful win for validation-only or pure-sweep invocations.
-    # Note: cross-slot validation is itself a no-op in Mode A (single slot), so
-    # it can't justify pulling on its own when num_replication_slots == 1.
-    kv_cache_torch: torch.Tensor | None = None
-    need_kv_cache = (
-        config.dump_kv_cache
-        or (config.validate_kv_cache_cross_slot and config.num_replication_slots > 1)
-        or config.validate_kv_cache_cross_trace
-    )
-    if need_kv_cache:
-        logger.info("Phase 4: pulling on-device KV cache to host (fast-dispatch context)")
-        with ttnn.device.setup_fast_dispatch(submesh):
-            kv_cache_torch = stage.get_kv_cache_host()
-        assert kv_cache_torch is not None, "get_kv_cache_host returned None (setup not completed?)"
-        logger.info(f"KV cache shape={tuple(kv_cache_torch.shape)} dtype={kv_cache_torch.dtype}")
-    else:
+    if not need_kv_cache:
         logger.info("Phase 4: KV cache pull skipped (no KV-cache validation, no KV-cache dump)")
 
     if config.validate_kv_cache_cross_slot and config.num_replication_slots > 1:
@@ -1127,7 +1171,7 @@ def run_sweep(
         for prompt_idx, prompt_name in enumerate(config.prompt_names):
             start, end = schedule.range_for(prompt_idx)
             L_p = end - start
-            expected_kv = _load_kv_cache_reference(config.hidden_states_dir, prompt_name, L_p=L_p)
+            expected_kv = _load_kv_cache_reference(_reference_trace_dir(config), prompt_name, L_p=L_p)
             # The on-disk reference (produced from a bit_sculpt / HF trace) is
             # in HF/split-halves RoPE storage; permute the k_pe channels into
             # TT/interleaved storage so the PCC compares like-for-like against
@@ -1215,6 +1259,6 @@ def run_sweep(
         collected=collected,
         kv_cache=kv_cache_torch,
         schedule=schedule,
-        traces=traces,
+        traces=reference_traces,
         kv_cache_references=kv_cache_references,
     )

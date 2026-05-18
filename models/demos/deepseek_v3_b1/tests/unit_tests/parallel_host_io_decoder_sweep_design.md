@@ -64,7 +64,7 @@ This runbook assumes the layer directories under `$TRACE_ROOT` have already been
 converted into the `<prompt>.pt` and `kv_cache_reference_<prompt>.pt` files
 shown above.
 
-Keep `--decoder-layer-idx` aligned with the layer id used to generate each
+Keep `--decoder-layer-indices` aligned with the layer id used to generate each
 directory. The prompt filename does not encode the layer id.
 
 ## Check Converted Traces
@@ -113,7 +113,7 @@ cd "$TT_METAL_HOME"
 
 TT_METAL_SLOW_DISPATCH_MODE=1 \
 python_env/bin/python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \
-  --decoder-layer-idx 4 \
+  --decoder-layer-indices 4 \
   --hidden-states-dir "$TRACE_ROOT/layer_04" \
   --prompt "$PROMPT" \
   --num-replication-slots 1 \
@@ -144,7 +144,7 @@ cd "$TT_METAL_HOME"
 
 TT_METAL_SLOW_DISPATCH_MODE=1 \
 python_env/bin/python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \
-  --decoder-layer-idx 4 5 6 7 \
+  --decoder-layer-indices 4 5 6 7 \
   --chained-layer-pass \
   --hidden-states-dir-template "$TRACE_ROOT/layer_{layer:02d}" \
   --prompt "$PROMPT" \
@@ -164,7 +164,7 @@ In chained mode:
 For independent per-layer checks in parallel, launch one rank per layer. With:
 
 ```bash
---decoder-layer-idx 4 5 6 7
+--decoder-layer-indices 4 5 6 7
 ```
 
 the rank mapping is:
@@ -190,7 +190,7 @@ TT_METAL_SLOW_DISPATCH_MODE=1 python_env/bin/tt-run \
   --rank-bindings-mapping "$RANK_BINDINGS_MAPPING" \
   --mpi-args "--host ${HOSTSP} --map-by slot --bind-to none --oversubscribe --tag-output" \
   python_env/bin/python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \
-    --decoder-layer-idx $LAYERS \
+    --decoder-layer-indices $LAYERS \
     --hidden-states-dir-template "$TRACE_ROOT/layer_{layer:02d}" \
     --prompt "$PROMPT" \
     --validate-kv-cache-cross-trace \
@@ -234,7 +234,7 @@ need artifacts:
 ```bash
 TT_METAL_SLOW_DISPATCH_MODE=1 \
 python_env/bin/python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \
-  --decoder-layer-idx 4 \
+  --decoder-layer-indices 4 \
   --hidden-states-dir "$TRACE_ROOT/layer_04" \
   --prompt "$PROMPT" \
   --num-replication-slots 1 \
@@ -255,10 +255,10 @@ If `--dump-dir` has no format fields in parallel mode, each rank writes under
 ## Troubleshooting
 
 - If the CLI says the number of layer ids does not match world size, launch the
-  same number of ranks as `--decoder-layer-idx` values.
+  same number of ranks as `--decoder-layer-indices` values.
 - If a trace is missing, check `--hidden-states-dir` or the resolved
   `--hidden-states-dir-template` for that rank's layer id.
-- If PCC is low but not random, verify `--decoder-layer-idx` matches the layer
+- If PCC is low but not random, verify `--decoder-layer-indices` matches the layer
   used when converting the trace.
 - If KV-cache validation fails while hidden-state validation passes, verify the
   converted trace used the same RoPE layout and tensor ordering expected by this
