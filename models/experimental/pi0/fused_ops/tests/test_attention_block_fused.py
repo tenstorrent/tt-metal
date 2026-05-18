@@ -91,7 +91,7 @@ def test_attention_block_fused_ln_plus_residual(device):
 
     # build_tensors order tail: ..., final_out_tt, qkv_act_tt,
     # ln_done_trigger_tt, qkv_w_tt, qkv_out_tt, qkv_done_trigger_tt,
-    # sdpa_q_tt, sdpa_k_probe_tt, sdpa_v_probe_tt. final_out_tt is -9.
+    # sdpa_q_tt, sdpa_k_partial_tt, sdpa_qk_probe_tt. final_out_tt is -9.
     final_out_tt = tensors[-9]
     y_device = _ttnn.to_torch(final_out_tt)
 
@@ -124,7 +124,7 @@ def test_attention_block_fused_ln_mcast_probe(device):
 
     # qkv_act_tt is index -8 in the (... qkv_act_tt, ln_done_trigger_tt,
     # qkv_w_tt, qkv_out_tt, qkv_done_trigger_tt, sdpa_q_tt,
-    # sdpa_k_probe_tt, sdpa_v_probe_tt) ordering.
+    # sdpa_k_partial_tt, sdpa_qk_probe_tt) ordering.
     qkv_act_tt = tensors[-8]
     qkv_act_torch = _ttnn.to_torch(qkv_act_tt)
 
@@ -175,7 +175,7 @@ def test_attention_block_fused_qkv_matmul(device):
     import ttnn as _ttnn
 
     # qkv_out_tt is now at index -5 in build_tensors order (followed by
-    # qkv_done_trigger_tt, sdpa_q_tt, sdpa_k_probe_tt, sdpa_v_probe_tt).
+    # qkv_done_trigger_tt, sdpa_q_tt, sdpa_k_partial_tt, sdpa_qk_probe_tt).
     # Device shape is the padded (M, 4608); we slice each head's first
     # head_dim_true cols to recover the natural (M, 3456) layout before PCC.
     qkv_out_tt = tensors[-5]
@@ -228,7 +228,7 @@ def test_attention_block_fused_sdpa_q_probe(device):
     import ttnn as _ttnn
 
     # sdpa_q_tt is at index -3 in build_tensors order (followed by
-    # sdpa_k_probe_tt and sdpa_v_probe_tt as of #11 Commit 5).
+    # sdpa_k_partial_tt and sdpa_qk_probe_tt as of #11 Commit 6).
     sdpa_q_tt = tensors[-3]
     sdpa_q_torch = _ttnn.to_torch(sdpa_q_tt)
 
@@ -271,89 +271,78 @@ def test_attention_block_fused_sdpa_q_probe(device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_attention_block_fused_sdpa_kv_probe(device):
-    """Validate K+V streaming probe — production NoC-read pattern.
+def test_attention_block_fused_sdpa_qk_compute_probe(device):
+    """First TRISC SDPA compute: one tile of QK^T per worker.
 
-    Each of the 32 SDPA workers reads ONE tile (32, 32) of its head's K from
-    the head's K source core (QKV linear shard num_heads + h), and the same
-    for V. The probe tiles are written to per-worker 1-tile CBs. Compares
-    each worker's K tile against torch K head h, first 32 rows and first 32
-    cols (the (0,0) tile of the (M=256, head_dim_padded=96) per-head matrix).
-    Same for V.
+    Each of the 32 SDPA workers computes its M-slice's first QK^T output tile
+    (32 rows × 32 cols), using:
+      - Q tiles from sdpa_q_cb (M-row 0 of the worker's M-slice).
+      - K tiles streamed in via sdpa_k_partial_cb (K-row 0, all 3 head_dim
+        tiles).
+    TRISC matmul does Q @ K^T with transpose=true on K, accumulating across
+    the 3 head_dim tiles.
 
-    This is the same noc_async_read pattern that future SDPA compute commits
-    will inline tile-by-tile during QK^T and Attn@V matmul iterations —
-    no L1-resident K/V buffers needed.
+    Golden: torch Q_padded[h, worker_M_slice[:32], :] @ K_padded[h, :32, :].T
+    where _padded means head_dim_true=72 real data + 24 zero-padded cols.
     """
     x, gamma, beta = make_inputs(seed=42)
     w_qkv = make_qkv_weight(seed=7)
 
     ln_out_golden = F.layer_norm(x.float(), (D,), gamma.float(), beta.float(), eps=EPS)
     qkv_golden_unpadded = (ln_out_golden.to(torch.float32) @ w_qkv.to(torch.float32)).to(torch.bfloat16)
-    # Build per-head padded K and V matrices, then take each head's (0,0) tile.
-    k_tile_per_head = torch.zeros(NUM_HEADS, 32, 32, dtype=torch.bfloat16)
-    v_tile_per_head = torch.zeros(NUM_HEADS, 32, 32, dtype=torch.bfloat16)
+
+    # Build per-head padded Q and K matrices to match the device's layout
+    # (head_dim_true=72 real data, head_dim_padded=96 with zeros at [72:96]).
+    q_padded_per_head = torch.zeros(NUM_HEADS, M, HEAD_DIM_PADDED, dtype=torch.bfloat16)
+    k_padded_per_head = torch.zeros(NUM_HEADS, M, HEAD_DIM_PADDED, dtype=torch.bfloat16)
     for h in range(NUM_HEADS):
+        q_start = h * HEAD_DIM_TRUE  # Q-region: cols [0..D)
         k_start = D + h * HEAD_DIM_TRUE  # K-region: cols [D..2D)
-        v_start = 2 * D + h * HEAD_DIM_TRUE  # V-region: cols [2D..3D)
-        # The padded (256, 96) per-head matrix has real data in [:, :72]; the
-        # (0, 0) tile is rows 0..31, cols 0..31 — all 32 cols are real (since
-        # 32 < HEAD_DIM_TRUE=72).
-        k_tile_per_head[h] = qkv_golden_unpadded[:32, k_start : k_start + 32]
-        v_tile_per_head[h] = qkv_golden_unpadded[:32, v_start : v_start + 32]
+        q_padded_per_head[h, :, :HEAD_DIM_TRUE] = qkv_golden_unpadded[:, q_start : q_start + HEAD_DIM_TRUE]
+        k_padded_per_head[h, :, :HEAD_DIM_TRUE] = qkv_golden_unpadded[:, k_start : k_start + HEAD_DIM_TRUE]
 
     tensors = build_tensors_for_fused_attention_block(device, x, gamma, beta, w_qkv_torch=w_qkv)
     SigLIPAttentionBlockFused.op(*tensors, eps=EPS)
 
     import ttnn as _ttnn
 
-    sdpa_k_probe_tt = tensors[-2]
-    sdpa_v_probe_tt = tensors[-1]
-    sdpa_k_probe_torch = _ttnn.to_torch(sdpa_k_probe_tt)
-    sdpa_v_probe_torch = _ttnn.to_torch(sdpa_v_probe_tt)
+    # sdpa_qk_probe_tt is the last tensor in build_tensors order.
+    sdpa_qk_probe_tt = tensors[-1]
+    sdpa_qk_probe_torch = _ttnn.to_torch(sdpa_qk_probe_tt)
 
-    sdpa_num_workers = SigLIPAttentionBlockFused.SDPA_NUM_CORES
-    sdpa_grid_x = SigLIPAttentionBlockFused.SDPA_GRID_X
-    num_workers_per_head = SigLIPAttentionBlockFused.NUM_SDPA_WORKERS_PER_HEAD
+    sdpa_num_workers = SigLIPAttentionBlockFused.SDPA_NUM_CORES  # 32
+    sdpa_grid_x = SigLIPAttentionBlockFused.SDPA_GRID_X  # 4
+    num_workers_per_head = SigLIPAttentionBlockFused.NUM_SDPA_WORKERS_PER_HEAD  # 2
+    rows_per_worker = M // num_workers_per_head  # 128
 
-    # Each per-worker probe is (32, 32) tile → tensor shape (32*32, 32) = (1024, 32).
+    # Per-worker probe tile is (32, 32) → tensor shape (32 * num_workers, 32).
     expected_shape = (sdpa_num_workers * 32, 32)
     assert (
-        sdpa_k_probe_torch.shape == expected_shape
-    ), f"K probe shape {tuple(sdpa_k_probe_torch.shape)} != {expected_shape}"
-    assert (
-        sdpa_v_probe_torch.shape == expected_shape
-    ), f"V probe shape {tuple(sdpa_v_probe_torch.shape)} != {expected_shape}"
+        sdpa_qk_probe_torch.shape == expected_shape
+    ), f"qk probe shape {tuple(sdpa_qk_probe_torch.shape)} != {expected_shape}"
+    qk_per_worker = sdpa_qk_probe_torch.reshape(sdpa_num_workers, 32, 32)
 
-    k_per_worker = sdpa_k_probe_torch.reshape(sdpa_num_workers, 32, 32)
-    v_per_worker = sdpa_v_probe_torch.reshape(sdpa_num_workers, 32, 32)
-
-    min_k_pcc = float("inf")
-    min_v_pcc = float("inf")
-    worst_k = None
-    worst_v = None
+    min_pcc = float("inf")
+    worst = None
     for worker_linear in range(sdpa_num_workers):
         y = worker_linear // sdpa_grid_x
         x_rel = worker_linear % sdpa_grid_x
         head_idx = (y // num_workers_per_head) * sdpa_grid_x + x_rel
-        pk = pcc(k_tile_per_head[head_idx], k_per_worker[worker_linear])
-        pv = pcc(v_tile_per_head[head_idx], v_per_worker[worker_linear])
-        if pk < min_k_pcc:
-            min_k_pcc = pk
-            worst_k = (worker_linear, head_idx)
-        if pv < min_v_pcc:
-            min_v_pcc = pv
-            worst_v = (worker_linear, head_idx)
+        worker_idx = y % num_workers_per_head
+        # Worker's M-slice's first 32 rows; K-source's first 32 rows.
+        m_start = worker_idx * rows_per_worker
+        q_slice = q_padded_per_head[head_idx, m_start : m_start + 32, :].to(torch.float32)
+        k_slice = k_padded_per_head[head_idx, :32, :].to(torch.float32)
+        expected = (q_slice @ k_slice.T).to(torch.bfloat16)
+        p = pcc(expected, qk_per_worker[worker_linear])
+        if p < min_pcc:
+            min_pcc = p
+            worst = (worker_linear, head_idx, worker_idx)
 
     print(
-        f"\nPCC (SDPA K streaming probe, min/32 workers) = {min_k_pcc:.6f} (worst worker={worst_k[0]}, head={worst_k[1]})"
+        f"\nPCC (SDPA QK^T first-tile compute probe, min/32 workers) = "
+        f"{min_pcc:.6f} (worst: worker={worst[0]}, head={worst[1]}, w_idx={worst[2]})"
     )
-    print(
-        f"PCC (SDPA V streaming probe, min/32 workers) = {min_v_pcc:.6f} (worst worker={worst_v[0]}, head={worst_v[1]})"
-    )
-    # Probe gate is 0.998 (lower than QKV matmul's 0.999): bfp8 + HiFi4 on a
-    # single (32, 32) tile has higher per-tile variance than the full (256, 96)
-    # comparison. Math is bit-identical to the QKV matmul output — only the
-    # comparison window differs.
-    assert min_k_pcc >= 0.998, f"min K probe PCC {min_k_pcc} below 0.998"
-    assert min_v_pcc >= 0.998, f"min V probe PCC {min_v_pcc} below 0.998"
+    # bfp8 weight + HiFi4 + per-tile-only PCC — same precision regime as
+    # other SDPA probes; gate at 0.998.
+    assert min_pcc >= 0.998, f"min QK^T probe PCC {min_pcc} below 0.998"

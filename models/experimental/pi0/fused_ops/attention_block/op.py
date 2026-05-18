@@ -154,17 +154,17 @@ class SigLIPAttentionBlockFused:
         #   pulling 64-row M-slices. K and V land in subsequent commits.
         "qkv_done_trigger_cb": 18,
         "sdpa_q_cb": 19,
-        # #11 Commit 5 — 1-tile K and V streaming probes. NO persistent K/V
-        # CBs (which would blow the global L1 budget — see commit message of
-        # #11 Commit 4). Instead, SDPA NCRISC reads ONE K tile and ONE V tile
-        # via the production streaming pattern: noc_async_read straight from
-        # the head's K/V source core's qkv_out_cb, no caching. The 1-tile
-        # probes validate the streaming reader works and the K/V data is
-        # accessible from each SDPA worker. Future #11 commits inline the
-        # tile-by-tile reads into the QK^T / Attn@V matmul loops without
-        # adding L1-resident K/V buffers.
-        "sdpa_k_probe_cb": 20,
-        "sdpa_v_probe_cb": 21,
+        # #11 Commit 6 — streaming K row 0 + first QK^T tile probe.
+        # sdpa_k_partial_cb: 3 tiles bf16 = (32, 96) per worker. Holds K
+        #   row 0 (the 3 head_dim tiles needed for QK^T's (0, 0) output
+        #   tile). Streamed in (3-tile burst) by NCRISC from the head's K
+        #   source core's qkv_out_cb at L1 offset 0. The streaming reader
+        #   shape extends naturally to all 8 K rows in future commits.
+        # sdpa_qk_probe_cb: 1 tile bf16 = (32, 32) per worker. TRISC matmul
+        #   output: QK^T[worker_M_slice[0:32], 0:32] for the worker's head.
+        # V probe dropped (V isn't used until Attn@V; V signaling stays).
+        "sdpa_k_partial_cb": 20,
+        "sdpa_qk_probe_cb": 21,
     }
 
     # SDPA QKV-ready semaphore (id=3). All three QKV producers (Q, K, V)
@@ -200,8 +200,8 @@ class SigLIPAttentionBlockFused:
         qkv_out_tt,
         qkv_done_trigger_tt,
         sdpa_q_tt,
-        sdpa_k_probe_tt,
-        sdpa_v_probe_tt,
+        sdpa_k_partial_tt,
+        sdpa_qk_probe_tt,
         math_fidelity=ttnn.MathFidelity.HiFi4,
         eps: float = 1e-6,
     ):
@@ -281,9 +281,10 @@ class SigLIPAttentionBlockFused:
             # #11 Commit 4: SDPA grid relocation (x_offset=8, y_offset=0).
             ("sdpa_y_offset", SigLIPAttentionBlockFused.SDPA_Y_OFFSET),
             ("sdpa_x_offset", SigLIPAttentionBlockFused.SDPA_X_OFFSET),
-            # #11 Commit 5: K/V streaming probes (1 tile each per worker).
-            ("sdpa_k_probe_cb", SigLIPAttentionBlockFused.CB["sdpa_k_probe_cb"]),
-            ("sdpa_v_probe_cb", SigLIPAttentionBlockFused.CB["sdpa_v_probe_cb"]),
+            # #11 Commit 6: streaming K partial (3 tiles) + QK^T probe.
+            ("sdpa_k_partial_cb", SigLIPAttentionBlockFused.CB["sdpa_k_partial_cb"]),
+            ("sdpa_qk_probe_cb", SigLIPAttentionBlockFused.CB["sdpa_qk_probe_cb"]),
+            ("sdpa_k_partial_tiles", 3),  # K row 0: 3 head_dim tiles
         ]
         # TRISC needs all CBs + tile counts + eps + QKV matmul shape params.
         trisc_ct = [
@@ -305,6 +306,9 @@ class SigLIPAttentionBlockFused:
             ("sdpa_grid_y", SigLIPAttentionBlockFused.SDPA_GRID_Y),
             ("sdpa_y_offset", SigLIPAttentionBlockFused.SDPA_Y_OFFSET),
             ("sdpa_x_offset", SigLIPAttentionBlockFused.SDPA_X_OFFSET),
+            # #11 Commit 6: TRISC QK^T first-tile matmul tile counts.
+            ("sdpa_q_tiles_per_worker", sdpa_q_tiles_per_worker),
+            ("sdpa_k_partial_tiles", 3),  # head_dim_padded / TILE = 96/32 = 3
         ]
 
         # Physical NoC coords for the worker grid. BH's logical-to-physical x
@@ -471,8 +475,8 @@ class SigLIPAttentionBlockFused:
                 _cb(SigLIPAttentionBlockFused.CB["qkv_out_cb"], qkv_out_tt),
                 _cb(SigLIPAttentionBlockFused.CB["qkv_done_trigger_cb"], qkv_done_trigger_tt),
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_q_cb"], sdpa_q_tt),
-                _cb(SigLIPAttentionBlockFused.CB["sdpa_k_probe_cb"], sdpa_k_probe_tt),
-                _cb(SigLIPAttentionBlockFused.CB["sdpa_v_probe_cb"], sdpa_v_probe_tt),
+                _cb(SigLIPAttentionBlockFused.CB["sdpa_k_partial_cb"], sdpa_k_partial_tt),
+                _cb(SigLIPAttentionBlockFused.CB["sdpa_qk_probe_cb"], sdpa_qk_probe_tt),
             ],
             semaphores=[counter_sem, sdpa_qkv_ready_sem],
         )
@@ -499,12 +503,12 @@ class SigLIPAttentionBlockFused:
                 qkv_out_tt,
                 qkv_done_trigger_tt,
                 sdpa_q_tt,
-                sdpa_k_probe_tt,
-                sdpa_v_probe_tt,
+                sdpa_k_partial_tt,
+                sdpa_qk_probe_tt,
             ],
             program_descriptor,
         )
-        return final_out_tt, qkv_act_tt, qkv_out_tt, sdpa_q_tt, sdpa_k_probe_tt, sdpa_v_probe_tt
+        return final_out_tt, qkv_act_tt, qkv_out_tt, sdpa_q_tt, sdpa_k_partial_tt, sdpa_qk_probe_tt
 
 
 def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_torch, w_qkv_torch=None):
@@ -749,26 +753,33 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         memory_config=sdpa_q_mem,
     )
 
-    # #11 Commit 5: 1-tile streaming probes for K and V. Tiny L1 footprint
-    # (~2 KB per worker per probe = 64 KB global per probe across 32 banks)
-    # validates the streaming reader pattern without committing to persistent
-    # K/V CBs. Future commits inline tile-by-tile streaming reads into the
-    # QK^T / Attn@V matmul loops, no allocation growth.
-    sdpa_probe_shard = ttnn.ShardSpec(sdpa_core_grid, (TILE, TILE), ttnn.ShardOrientation.ROW_MAJOR)
-    sdpa_probe_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_probe_shard)
-    sdpa_k_probe_tt = ttnn.from_torch(
-        torch.zeros(sdpa_num_workers * TILE, TILE, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=sdpa_probe_mem,
+    # #11 Commit 6: streaming K partial (3 tiles per worker = (TILE, 3*TILE)
+    # = (32, 96)) + QK^T first-tile probe (1 tile per worker = (32, 32)).
+    # K-partial holds the K source's row 0 (all 3 head_dim tiles) — enough
+    # for the first QK^T output tile. The streaming-read shape is the same
+    # the future Commits will iterate across other K rows tile-by-tile.
+    sdpa_k_partial_shard = ttnn.ShardSpec(sdpa_core_grid, (TILE, 3 * TILE), ttnn.ShardOrientation.ROW_MAJOR)
+    sdpa_k_partial_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_k_partial_shard
     )
-    sdpa_v_probe_tt = ttnn.from_torch(
+    sdpa_k_partial_tt = ttnn.from_torch(
+        torch.zeros(sdpa_num_workers * TILE, 3 * TILE, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sdpa_k_partial_mem,
+    )
+
+    sdpa_qk_probe_shard = ttnn.ShardSpec(sdpa_core_grid, (TILE, TILE), ttnn.ShardOrientation.ROW_MAJOR)
+    sdpa_qk_probe_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_qk_probe_shard
+    )
+    sdpa_qk_probe_tt = ttnn.from_torch(
         torch.zeros(sdpa_num_workers * TILE, TILE, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=sdpa_probe_mem,
+        memory_config=sdpa_qk_probe_mem,
     )
 
     return (
@@ -792,6 +803,6 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         qkv_out_tt,
         qkv_done_trigger_tt,
         sdpa_q_tt,
-        sdpa_k_probe_tt,
-        sdpa_v_probe_tt,
+        sdpa_k_partial_tt,
+        sdpa_qk_probe_tt,
     )
