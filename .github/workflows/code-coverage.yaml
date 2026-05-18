@@ -101,11 +101,8 @@ jobs:
       - name: Generate coverage reports
         run: |
           objects=()
-          # Collect instrumented .so files from build artifact
-          while IFS= read -r -d '' obj; do
-            objects+=("$obj")
-          done < <(find ./build/lib -maxdepth 1 -name "*.so" -print0 2>/dev/null)
-          # Collect ttnn Python extension .so files from installed wheel
+          # Collect instrumented .so files from wheel-installed ttnn
+          # (test jobs install the wheel; profraw is recorded against these paths)
           while IFS= read -r -d '' obj; do
             objects+=("$obj")
           done < <(find /opt/venv/lib -path "*/ttnn/build/lib/*.so" -print0 2>/dev/null)
