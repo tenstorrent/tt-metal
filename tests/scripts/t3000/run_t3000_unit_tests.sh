@@ -165,6 +165,19 @@ except Exception as e:
     timeout 30 tt-smi -r || true
   fi
 
+  # [FIX LM-2] (#42429): Fast-fail BEFORE GetNumAvailableDevices() when cold-start relay
+  # dead was detected.  The Python topology-discovery call opens all MMIO devices and then
+  # waits ETH_STARTUP_TIMEOUT (10 s) for each dead ETH core's heartbeat before throwing.
+  # That 10s hang produces empty output → FIX TL-2 fires → tt-smi fallback also returns 0
+  # → the log shows "0/8 chips" and the FIX LM check fires only afterwards.  Skipping the
+  # Python call entirely when the relay is already known to be dead saves 10+ seconds and
+  # produces a clean, attributable exit-1 without the misleading "0/8 chips" noise.
+  if [[ $WARM_RELAY_DEAD -eq 1 ]]; then
+    echo "LOG_METAL: [FIX LM] relay dead from cold start (FIX BX/NZ in warm-up) — skipping topology check + FIX TL/TM recovery (tt-smi -r cannot fix hardware link degradation)." >&2
+    echo "LOG_METAL: ERROR — T3K topology degraded: ERISC relay path dead before reset_cores. Hardware needs engineer attention or host reboot." >&2
+    exit 1
+  fi
+
   # T3K topology sanity check — fail immediately if fewer than 8 chips are visible.
   # A degraded N300 host (FIX AQ path) shrinks the topology to 4 MMIO-only chips.
   # T3K multi-chip GTest fixtures call GTEST_SKIP() on a 4-chip topology and exit 0 —
@@ -656,6 +669,19 @@ except Exception as e:
   if [[ $WARM_DURATION -ge 120 || $WARM_RING_TIMEOUT -eq 1 ]]; then
     echo "LOG_METAL: [FIX TO] warm-up ran ${WARM_DURATION}s (ring-sync timeout path, WARM_RING_TIMEOUT=${WARM_RING_TIMEOUT}). Running remedial tt-smi -r to clear dispatch-ERISC stale state. (#42429)"
     timeout 30 tt-smi -r || true
+  fi
+
+  # [FIX LM-2] (#42429): Fast-fail BEFORE GetNumAvailableDevices() when cold-start relay
+  # dead was detected.  The Python topology-discovery call opens all MMIO devices and then
+  # waits ETH_STARTUP_TIMEOUT (10 s) for each dead ETH core's heartbeat before throwing.
+  # That 10s hang produces empty output → FIX TL-2 fires → tt-smi fallback also returns 0
+  # → the log shows "0/8 chips" and the FIX LM check fires only afterwards.  Skipping the
+  # Python call entirely when the relay is already known to be dead saves 10+ seconds and
+  # produces a clean, attributable exit-1 without the misleading "0/8 chips" noise.
+  if [[ $WARM_RELAY_DEAD -eq 1 ]]; then
+    echo "LOG_METAL: [FIX LM] relay dead from cold start (FIX BX/NZ in warm-up) — skipping topology check + FIX TL/TM recovery (tt-smi -r cannot fix hardware link degradation)." >&2
+    echo "LOG_METAL: ERROR — T3K topology degraded: ERISC relay path dead before reset_cores. Hardware needs engineer attention or host reboot." >&2
+    exit 1
   fi
 
   local n_chips raw_output
