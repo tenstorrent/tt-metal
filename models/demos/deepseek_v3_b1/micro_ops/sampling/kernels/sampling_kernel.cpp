@@ -103,9 +103,9 @@ void kernel_main() {
     using SamplingWriterCTArgs = deepseek_b1_ops::TopKSampling::WriterCTArgs<
         get_named_compile_time_arg_val("sampling_winner_page_bytes"),
         get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"),
-        0,
-        0,
-        0,
+        0,  // SocketMode
+        0,  // SocketCBId
+        0,  // SocketPageSizeBytes
         get_named_compile_time_arg_val("sampling_topk_k"),
         get_named_compile_time_arg_val("sampling_softmax_out_cb"),
         get_named_compile_time_arg_val("sampling_rand_cb"),
@@ -119,10 +119,15 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_inv_temp_bf16"),
         get_named_compile_time_arg_val("sampling_softmax_in_cb"),
         get_named_compile_time_arg_val("sampling_temp_cb"),
-        0,
+        0,  // DeferSocketOutput
         get_named_compile_time_arg_val("sampling_enable_metadata"),
         get_named_compile_time_arg_val("sampling_copy_probabilities"),
-        get_named_compile_time_arg_val("sampling_metadata_address")>;
+        get_named_compile_time_arg_val("sampling_metadata_address"),
+        get_named_compile_time_arg_val("sampling_copy_probabilities_to_q"),
+        get_named_compile_time_arg_val("sampling_p_bcast_cb"),
+        get_named_compile_time_arg_val("sampling_rand_bcast_cb"),
+        get_named_compile_time_arg_val("sampling_max_cb"),
+        get_named_compile_time_arg_val("sampling_mask_cb")>;
 
     deepseek_b1_ops::TopKSampling::WriterArgs args{
         .final_noc_x = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
@@ -160,7 +165,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_stage1_row_elements"),
         get_named_compile_time_arg_val("sampling_stage1_num_input_tiles"),
         get_named_compile_time_arg_val("sampling_stage2_row_elements"),
-        get_named_compile_time_arg_val("sampling_stage2_num_input_tiles")>;
+        get_named_compile_time_arg_val("sampling_stage2_num_input_tiles"),
+        // Dedicated TRISC -> BRISC mask channel; see WriterCTArgs note above.
+        get_named_compile_time_arg_val("sampling_mask_cb")>;
     deepseek_b1_ops::TopKSampling::ComputeArgs args{};
     deepseek_b1_ops::TopKSampling::
         Op<SamplingComputeCTArgs, Core::is_active_core, Core::is_final_core, Core::is_mesh_sender_core>

@@ -1828,7 +1828,7 @@ def create_input_page(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "worker_l1_size": 1455316,
+            "worker_l1_size": 1451828,
         }
     ],
     indirect=True,
@@ -1912,8 +1912,8 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32, num_mtp_levels):
                 slot_id=slot_id,
                 lane_id=0,
                 temperature=0.6,
-                top_k=1,
-                top_p=1.0,
+                top_k=32,
+                top_p=0.95,
                 prefill_token_ids=prefill_ids,
             )
 

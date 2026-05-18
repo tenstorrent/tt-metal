@@ -657,9 +657,6 @@ class BaseLMHeadStage(StageKind):
         down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
         down_fifo = activation_fifo_size_bytes(down_page, self._downstream_fifo_pages)
 
-        # Match PassthroughStage: fabric multi-host ring uses loopback; without this,
-        # loopback=None becomes no_loopback and the last rank hits _init_last_stage_with_d2h
-        # without d2h_socket_* (e.g. num_mtp_levels == num_procs - 1 → final stage is Base).
         loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD))
         return PipelineBlock(
             mesh_device,

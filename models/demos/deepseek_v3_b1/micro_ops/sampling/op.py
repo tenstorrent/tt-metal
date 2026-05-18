@@ -77,9 +77,18 @@ class SamplingOp:
         actual_k = min(k, len(scores_f32))
         topk_values, topk_positions = torch.topk(scores_f32, k=actual_k, sorted=True)
         topk_indices = indices_i64[topk_positions]
-
-        scaled = (topk_values.to(torch.bfloat16) * torch.tensor(1.0 / temperature, dtype=torch.bfloat16)).float()
-        probs = torch.softmax(scaled, dim=-1)
+        inv_temperature = torch.tensor(1.0 / temperature, dtype=torch.bfloat16)
+        scaled = (topk_values.to(torch.bfloat16)).float()
+        # Stable-softmax intermediates -- mirrors the kernel's Steps 1-5
+        # (max -> sub -> exp -> sum). Print the un-normalized exp(scaled - max)
+        # so it lines up with the kernel's exp_cb col 0 dump for direct comparison.
+        scaled_max = scaled.max(dim=-1, keepdim=True).values
+        unnorm_exp = torch.exp((scaled - scaled_max) * inv_temperature)
+        unnorm_exp_sum = unnorm_exp.sum(dim=-1)
+        probs = unnorm_exp / unnorm_exp_sum
+        logger.debug(f"Stable softmax max(scaled): {scaled_max.squeeze(-1)}")
+        logger.debug(f"Stable softmax exp(scaled - max) [unnormalized]: {unnorm_exp}")
+        logger.debug(f"Stable softmax sum(exp(scaled - max)): {unnorm_exp.sum(dim=-1)}")
         logger.debug(f"Raw Probabilities: {probs}")
 
         cum_probs = torch.cumsum(probs, dim=-1)
@@ -328,6 +337,7 @@ class SamplingOp:
         topk_in_indices_cb = 12
         topk_out_scores_cb = 13
         topk_out_indices_cb = 14
+        mask_cb = 17
         semaphore_id = 0
         local_ready_semaphore_id = 1
         l1_alignment = 16
@@ -432,6 +442,7 @@ class SamplingOp:
             ("sampling_stage2_row_elements", 0),
             ("sampling_stage2_num_input_tiles", 0),
             ("sampling_num_internal_iterations", num_internal_iterations),
+            ("sampling_mask_cb", mask_cb),
         ]
         brisc_named_compile_time_args = [
             ("sampling_winner_page_bytes", winner_page_bytes),
@@ -459,6 +470,11 @@ class SamplingOp:
                 "sampling_metadata_address",
                 int(metadata_output_tensor.buffer_address()) if metadata_output_tensor is not None else 0,
             ),
+            ("sampling_copy_probabilities_to_q", 0),
+            ("sampling_p_bcast_cb", softmax_sub_cb),
+            ("sampling_rand_bcast_cb", sum_cb),
+            ("sampling_max_cb", max_cb),
+            ("sampling_mask_cb", mask_cb),
         ]
 
         unified_kernel = UnifiedKernelDescriptor(
@@ -601,6 +617,16 @@ class SamplingOp:
                 ttnn.CBFormatDescriptor(buffer_index=rand_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
             ],
         )
+        # Dedicated TRISC -> BRISC mask channel on the final core. Sized at
+        # one bf16 tile to match the ge_binary_tile output that TRISC packs in
+        # Block C of trisc_fused_softmax_top_p_sampling_block.
+        mask_cb_descriptor = ttnn.CBDescriptor(
+            total_size=bf16_tile_size,
+            core_ranges=final_core_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=mask_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
+            ],
+        )
 
         topk_cbs = [
             ttnn.CBDescriptor(
@@ -675,6 +701,7 @@ class SamplingOp:
                 temp_cb_descriptor,
                 softmax_sub_cb_descriptor,
                 rand_cb_descriptor,
+                mask_cb_descriptor,
             ]
             + topk_cbs,
             semaphores=[receiver_semaphore_descriptor, local_ready_semaphore_descriptor],
@@ -768,6 +795,7 @@ class SamplingOp:
         topk_in_indices_cb = 12
         topk_out_scores_cb = 13
         topk_out_indices_cb = 14
+        mask_cb = 17
         semaphore_id = 0
         local_ready_semaphore_id = 1
 
@@ -933,6 +961,7 @@ class SamplingOp:
                     ("sampling_stage2_row_elements", stage2_num_slots * topk_min_alignment),
                     ("sampling_stage2_num_input_tiles", stage2_mesh_tiles),
                     ("sampling_num_internal_iterations", num_internal_iterations),
+                    ("sampling_mask_cb", mask_cb if is_final_mesh_device else 0),
                 ]
                 rand_output_addr = 0
                 if rand_per_device is not None and is_final_mesh_device:
@@ -960,6 +989,11 @@ class SamplingOp:
                         "sampling_metadata_address",
                         int(metadata_output_tensor.buffer_address()) if metadata_output_tensor is not None else 0,
                     ),
+                    ("sampling_copy_probabilities_to_q", 0),
+                    ("sampling_p_bcast_cb", softmax_sub_cb if is_final_mesh_device else 0),
+                    ("sampling_rand_bcast_cb", sum_cb if is_final_mesh_device else 0),
+                    ("sampling_max_cb", max_cb if is_final_mesh_device else 0),
+                    ("sampling_mask_cb", mask_cb if is_final_mesh_device else 0),
                 ]
 
                 per_core_brisc_runtime_args = []
@@ -1168,6 +1202,7 @@ class SamplingOp:
                         (temp_cb, ttnn.bfloat16),
                         (softmax_sub_cb, ttnn.bfloat16),
                         (rand_cb, ttnn.bfloat16),
+                        (mask_cb, ttnn.bfloat16),
                     ]:
                         cbs.append(
                             ttnn.CBDescriptor(
