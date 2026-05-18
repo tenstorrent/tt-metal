@@ -142,7 +142,7 @@ jobs:
 
           # JSON summary
           llvm-cov-20 export \
-            --format=json \
+            --format=text \
             --instr-profile=/work/coverage/coverage.profdata \
             "${obj_flags[@]}" \
             --ignore-filename-regex='(/work/build/|/work/.cpmcache/|/work/tt_metal/llrt/hal/generated/)' \
