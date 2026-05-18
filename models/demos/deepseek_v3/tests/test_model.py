@@ -22,7 +22,13 @@ from models.demos.deepseek_v3.tests.pytest_utils import (
 )
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
+from models.demos.deepseek_v3.utils.config_dataclass import PrefillChunkSizes
+from models.demos.deepseek_v3.utils.config_helpers import (
+    USERS_PER_ROW,
+    get_fabric_config,
+    get_min_alignment_value_for_prefill,
+    sub_state_dict,
+)
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -335,6 +341,7 @@ def run_test_forward_pass_dpmodel(
     force_recalculate_weight_config,
     state_dict,
     decode_position_ids: int | None = None,
+    users_per_row: int = USERS_PER_ROW,
 ):
     if mode == "prefill":
         assert batch_size_per_row == 1, "Model-level prefill only supports a batch size of 1"
@@ -416,8 +423,8 @@ def run_test_forward_pass_dpmodel(
 
     logger.info("Setting up model configs")
     mesh_rows, dp_factor = mesh_device.shape
-    user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW, ()).item()
-    paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, dp_factor)
+    user_id = None if mode == "decode" else torch.randint(0, users_per_row, ()).item()
+    paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, users_per_row, dp_factor)
 
     if mode == "decode":
         decode_kv_caches = cached_case.get("decode_kv_caches")
@@ -448,7 +455,7 @@ def run_test_forward_pass_dpmodel(
         )
     else:
         paged_input_caches = None
-        total_global_users = mesh_rows * USERS_PER_ROW
+        total_global_users = mesh_rows * users_per_row
         num_devices = mesh_rows * dp_factor
 
         assert (
@@ -481,7 +488,7 @@ def run_test_forward_pass_dpmodel(
     )
     # The generator still drives prefill one prompt at a time, but the underlying
     # row-batched prefill kernels/cache layout are configured for a full row.
-    configured_row_width = batch_size_per_row if mode == "decode" else USERS_PER_ROW
+    configured_row_width = batch_size_per_row if mode == "decode" else users_per_row
     model_config = get_model_config(
         RowBatchedModel,
         mode,
@@ -641,6 +648,87 @@ def test_mode_decode_forward_pass_batch_8_users_per_row(
         state_dict=state_dict,
         decode_position_ids=17,
     )
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": get_fabric_config()},
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "model_chunks, mla_chunks",
+    [
+        (1, 1),
+        (2, 1),
+        (1, 2),
+        (2, 2),
+    ],
+    ids=["no_chunking", "model_chunking", "mla_chunking", "full_chunking"],
+)
+def test_model_chunked_prefill_8upr(
+    model_chunks,
+    mla_chunks,
+    hf_config_short,
+    cache_path,
+    mesh_device,
+    ccl,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict,
+    monkeypatch,
+):
+    hf_config_short.num_hidden_layers = 5
+
+    num_rows = mesh_device.shape[0]
+    mla_base_chunk = 128
+    model_chunk = max(get_min_alignment_value_for_prefill(num_rows), mla_base_chunk * mla_chunks)
+    if model_chunk % (mla_base_chunk * mla_chunks) != 0:
+        raise ValueError(
+            f"model_chunk ({model_chunk}) should be divisible by mla_base_chunk*mla_chunks ({mla_base_chunk * mla_chunks})"
+        )
+    mla_chunk = model_chunk // mla_chunks
+    seq_len = model_chunk * model_chunks
+
+    # Rope/paged caches are sized from hf_config_short.max_seq_len.
+    original_max_seq_len = hf_config_short.max_seq_len
+    hf_config_short.max_seq_len = max(seq_len, original_max_seq_len)
+
+    chunk_sizes_override = PrefillChunkSizes(
+        model_chunk=model_chunk,
+        mla_chunk=mla_chunk,
+        wkv_b2_chunk=hf_config_short.max_seq_len,
+    )
+
+    def _patched_chunk_sizes(_max_seq_len, _num_rows):
+        return chunk_sizes_override
+
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.model.row_batched_model.get_prefill_chunk_sizes",
+        _patched_chunk_sizes,
+    )
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.mla.mla1d.get_prefill_chunk_sizes",
+        _patched_chunk_sizes,
+    )
+
+    try:
+        run_test_forward_pass_dpmodel(
+            mode="prefill",
+            seq_len=seq_len,
+            batch_size_per_row=1,
+            hf_config_short=hf_config_short,
+            cache_path=cache_path,
+            mesh_device=mesh_device,
+            ccl=ccl,
+            force_recalculate_weight_config=force_recalculate_weight_config,
+            state_dict=state_dict,
+            users_per_row=8,
+        )
+    finally:
+        hf_config_short.max_seq_len = original_max_seq_len
 
 
 if __name__ == "__main__":
