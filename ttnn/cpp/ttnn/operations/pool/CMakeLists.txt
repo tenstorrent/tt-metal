@@ -31,7 +31,6 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        global_avg_pool/global_avg_pool.cpp
         grid_sample/device/grid_sample_device_operation.cpp
         grid_sample/device/grid_sample_bilinear_program_factory.cpp
         grid_sample/device/grid_sample_nearest_program_factory.cpp

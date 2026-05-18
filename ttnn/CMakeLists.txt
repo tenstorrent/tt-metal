@@ -221,7 +221,6 @@ target_link_libraries(
         TTNN::Core
         TTNN::Ops::Bernoulli
         TTNN::Ops::CCL
-        TTNN::Ops::Conv
         TTNN::Ops::Core
         TTNN::Ops::Creation
         TTNN::Ops::DataMovement
@@ -240,11 +239,9 @@ target_link_libraries(
         TTNN::Ops::Embedding
         TTNN::Ops::Embedding::Backward
         TTNN::Ops::Examples
-        TTNN::Ops::Experimental::AdaptivePool
         TTNN::Ops::Experimental::BcastTo
         TTNN::Ops::Experimental::CCL
         TTNN::Ops::Experimental::CNN
-        TTNN::Ops::Experimental::Conv3d
         TTNN::Ops::Experimental::Copy
         TTNN::Ops::Experimental::Dropout
         TTNN::Ops::Experimental::IsIn

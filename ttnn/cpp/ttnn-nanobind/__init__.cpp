@@ -61,7 +61,6 @@
 #include "ttnn/operations/moreh/moreh_nanobind.hpp"
 #include "ttnn/operations/normalization/normalization_nanobind.hpp"
 #include "ttnn/operations/point_to_point/point_to_point_nanobind.hpp"
-#include "ttnn/operations/pool/global_avg_pool/global_avg_pool_nanobind.hpp"
 #include "ttnn/operations/pool/rotate/rotate_nanobind.hpp"
 #include "ttnn/operations/pool/grid_sample/grid_sample_nanobind.hpp"
 #include "ttnn/operations/prefetcher/prefetcher_nanobind.hpp"
@@ -148,7 +147,6 @@ void py_module(nb::module_& mod) {
     data_movement::py_module(m_data_movement);
 
     auto m_pool = mod.def_submodule("pool", "pooling  operations");
-    avgpool::py_module(m_pool);
     rotate::py_module(m_pool);
     grid_sample::bind_grid_sample(m_pool);
 
