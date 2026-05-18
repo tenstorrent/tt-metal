@@ -263,7 +263,25 @@ class TTNNDotsOCRAttention(TTNNModule):
 
         use_paged = isinstance(past_key_values, TTNNPagedAttentionKVCache)
         if past_key_values is not None and use_paged:
-            past_key_values.paged_fill_on_device(key_states, value_states, layer_idx=self.layer_idx, batch_idx=0)
+            # ``paged_fill_cache`` requires FLOAT32/BFLOAT16 *input* when the
+            # on-device cache is BF16 (see paged_fill_cache_device_operation.cpp).
+            # QKV matmul uses BF16×BFP4→BFP8; keep BFP8 for SDPA below but cast
+            # only the fill-cache operands to BF16 for the write.
+            k_fill = (
+                key_states
+                if key_states.dtype == ttnn.bfloat16
+                else ttnn.typecast(key_states, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            )
+            v_fill = (
+                value_states
+                if value_states.dtype == ttnn.bfloat16
+                else ttnn.typecast(value_states, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            )
+            past_key_values.paged_fill_on_device(k_fill, v_fill, layer_idx=self.layer_idx, batch_idx=0)
+            if k_fill is not key_states:
+                ttnn.deallocate(k_fill)
+            if v_fill is not value_states:
+                ttnn.deallocate(v_fill)
 
         attn_output = self.sdpa(
             self,

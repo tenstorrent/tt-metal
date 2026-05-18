@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import torch
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
@@ -20,14 +18,6 @@ from models.experimental.tt_symbiote.modules.linear import (
     _linear_mesh_num_devices,
     _ccl_num_links,
 )
-
-
-def _mlp_bfp8_activation_enabled() -> bool:
-    return os.environ.get("DOTS_OCR_MLP_BFP8_ACT", "1").lower() not in {"0", "false", "no", "off"}
-
-
-def _mlp_down_bfp8_output_enabled() -> bool:
-    return os.environ.get("DOTS_OCR_MLP_DOWN_BFP8_OUT", "1").lower() not in {"0", "false", "no", "off"}
 
 
 class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFusedGateUp):
@@ -61,7 +51,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         weight = torch.cat(weight_chunks, dim=0)
         self.tt_weight_host = preprocess_linear_weight(
             weight,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
             weights_mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
         )
@@ -106,7 +96,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             input_tensor,
             self.tt_weight,
             bias=fused_bias,
-            dtype=ttnn.bfloat8_b if _mlp_bfp8_activation_enabled() else None,
+            dtype=ttnn.bfloat8_b,
             memory_config=matmul_mc,
             compute_kernel_config=self.compute_kernel_config,
             program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
@@ -130,7 +120,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
         if isinstance(self.tt_weight_host, torch.Tensor):
             self.tt_weight_host = preprocess_linear_weight(
                 self.tt_weight_host,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 weights_mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
             )
@@ -165,7 +155,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             input_tensor,
             self.tt_weight,
             bias=fused_bias,
-            dtype=ttnn.bfloat8_b if _mlp_down_bfp8_output_enabled() else None,
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
@@ -255,7 +245,7 @@ class TTNNDotsOCRMLP(TTNNModule):
             up,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             fast_and_approximate_mode=True,
-            dtype=ttnn.bfloat8_b if _mlp_bfp8_activation_enabled() else None,
+            dtype=ttnn.bfloat8_b,
             memory_config=activation_mc,
         )
         ttnn.deallocate(gate)

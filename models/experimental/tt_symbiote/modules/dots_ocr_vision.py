@@ -38,6 +38,17 @@ VISION_SDPA_MATH_FIDELITY = ttnn.MathFidelity.LoFi
 VISION_NORM_MATH_FIDELITY = ttnn.MathFidelity.HiFi2
 
 
+def _align_vision_sdpa_seq_len(seq_len: int) -> int:
+    """Round sequence length up to a tile multiple for vision SDPA.
+
+    Padded keys are masked out via ``attn_mask`` so attention matches the
+    unpadded sequence while SDPA sees tile-friendly extents (less implicit
+    tilize/untilize work inside the kernel).
+    """
+    s = int(seq_len)
+    return max(32, ((s + 31) // 32) * 32)
+
+
 def _largest_divisor_le(value: int, limit: int) -> int:
     for c in range(min(value, limit), 0, -1):
         if value % c == 0:
@@ -772,7 +783,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         if self._proj_weight is not None:
             self.tt_proj_weight = ttnn.from_torch(
                 self._proj_weight.to(torch.bfloat16),
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
             )
         if self._proj_bias is not None:
@@ -832,6 +843,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
                 self.tt_proj_weight,
                 bias=self.tt_proj_bias,
                 transpose_b=True,
+                dtype=ttnn.bfloat16,
                 memory_config=mem,
                 compute_kernel_config=self.vision_matmul_compute_kernel_config,
             )
@@ -883,6 +895,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
             self.tt_proj_weight,
             bias=self.tt_proj_bias,
             transpose_b=True,
+            dtype=ttnn.bfloat16,
             memory_config=mem,
             compute_kernel_config=self.vision_matmul_compute_kernel_config,
         )
@@ -970,11 +983,11 @@ class TTNNDotsVisionAttention(TTNNModule):
         # preserves input dtype -- so Q/K can stay BFP8 the whole way from
         # the QKV matmul into SDPA, eliminating the 4 typecasts per layer
         # the llama kernel forced (~1.3 ms x 42 layers in vision prefill).
-        self.tt_qkv_weight = preprocess_linear_weight(self._qkv_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+        self.tt_qkv_weight = preprocess_linear_weight(self._qkv_weight, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)
         if self._qkv_bias is not None:
             self.tt_qkv_bias = preprocess_linear_bias(self._qkv_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
         self.tt_o_proj_weight = preprocess_linear_weight(
-            self._o_proj_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+            self._o_proj_weight, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT
         )
         if self._o_proj_bias is not None:
             self.tt_o_proj_bias = preprocess_linear_bias(
@@ -1003,15 +1016,28 @@ class TTNNDotsVisionAttention(TTNNModule):
         )
 
     def _concat_heads(self, ctx: ttnn.Tensor) -> ttnn.Tensor:
-        """Gather head slices back into a single sequence-major tensor."""
-        if ctx.memory_config().buffer_type == ttnn.BufferType.L1:
-            return ttnn.experimental.nlp_concat_heads(ctx, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        """Gather head slices back into a single sequence-major tensor.
+
+        ``nlp_concat_heads`` supports interleaved DRAM or L1 inputs (see
+        ``tests/tt_eager/.../test_nlp_concat_heads.py``). SDPA often leaves
+        ``[B,H,S,D]`` on DRAM in BF8; call the concat kernel directly instead
+        of staging through L1 + extra typecasts.
+        """
+        out_mem = ttnn.DRAM_MEMORY_CONFIG
+        buf = ctx.memory_config().buffer_type
+        dt = ctx.dtype
+
+        if buf == ttnn.BufferType.L1:
+            return ttnn.experimental.nlp_concat_heads(ctx, memory_config=out_mem)
+
+        if buf == ttnn.BufferType.DRAM and dt in (ttnn.bfloat8_b, ttnn.bfloat16):
+            return ttnn.experimental.nlp_concat_heads(ctx, memory_config=out_mem)
 
         ctx_l1 = ttnn.typecast(ctx, ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(ctx)
-        ctx_gathered = ttnn.experimental.nlp_concat_heads(ctx_l1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ctx_gathered = ttnn.experimental.nlp_concat_heads(ctx_l1, memory_config=out_mem)
         ttnn.deallocate(ctx_l1)
-        return ttnn.typecast(ctx_gathered, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.typecast(ctx_gathered, ttnn.bfloat16, memory_config=out_mem)
 
     def _get_sdpa_program_config(self, seq_len: int):
         """Chunked SDPA program config for the vision tower.
@@ -1056,6 +1082,61 @@ class TTNNDotsVisionAttention(TTNNModule):
             k_chunk_size=k_chunk,
             exp_approx_mode=True,
         )
+
+    def _sdpa_padded_with_key_mask(
+        self,
+        q: ttnn.Tensor,
+        k: ttnn.Tensor,
+        v: ttnn.Tensor,
+        logical_seq_len: int,
+    ) -> ttnn.Tensor:
+        """Run SDPA on ``[1,H,S_pad,D]`` Q/K/V with trailing key padding masked out."""
+        logical_seq_len = int(logical_seq_len)
+        h = int(q.shape[1])
+        d = int(q.shape[3])
+        s_pad = _align_vision_sdpa_seq_len(logical_seq_len)
+        pad = s_pad - logical_seq_len
+        if pad > 0:
+            q_old, k_old, v_old = q, k, v
+            q = ttnn.pad(q_old, ((0, 0), (0, 0), (0, pad), (0, 0)), value=0.0)
+            k = ttnn.pad(k_old, ((0, 0), (0, 0), (0, pad), (0, 0)), value=0.0)
+            v = ttnn.pad(v_old, ((0, 0), (0, 0), (0, pad), (0, 0)), value=0.0)
+            ttnn.deallocate(q_old)
+            ttnn.deallocate(k_old)
+            ttnn.deallocate(v_old)
+
+        attn_mask = None
+        if pad > 0:
+            m = torch.zeros((1, 1, 1, s_pad), dtype=torch.float32)
+            m[..., logical_seq_len:] = -1e9
+            num_dev = int(self.device.get_num_devices()) if hasattr(self.device, "get_num_devices") else 1
+            mapper = ttnn.ReplicateTensorToMesh(self.device) if num_dev > 1 else None
+            attn_mask = ttnn.from_torch(
+                m,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                mesh_mapper=mapper,
+            )
+            if attn_mask.dtype != q.dtype:
+                attn_mask = ttnn.typecast(attn_mask, q.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        program_config = self._get_sdpa_program_config(s_pad)
+        ctx = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=False,
+            attn_mask=attn_mask,
+            program_config=program_config,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        if attn_mask is not None:
+            ttnn.deallocate(attn_mask)
+        if pad > 0:
+            ctx = ttnn.slice(ctx, (0, 0, 0, 0), (1, h, logical_seq_len, d))
+        return ctx
 
     def forward(
         self,
@@ -1107,6 +1188,8 @@ class TTNNDotsVisionAttention(TTNNModule):
             # ``ttnn.experimental.rotary_embedding`` (non-llama) preserves
             # input dtype, so Q/K stay BFP8 the whole way: no typecasts
             # around the rotary, and SDPA reads BFP8 Q/K/V directly.
+            # QKV matmul uses BF16 activations × BFP4 weights → BFP8 (same
+            # contract as vision MLP gate/up).
             q = ttnn.experimental.rotary_embedding(q, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             k = ttnn.experimental.rotary_embedding(k, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -1131,16 +1214,7 @@ class TTNNDotsVisionAttention(TTNNModule):
         # keep these tensors on DRAM.
 
         if cu_seqlens is None:
-            program_config = self._get_sdpa_program_config(s)
-            ctx = ttnn.transformer.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                is_causal=False,
-                program_config=program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
+            ctx = self._sdpa_padded_with_key_mask(q, k, v, s)
             ctx = self._concat_heads(ctx)
             o_m = int(ctx.shape[0]) * int(ctx.shape[1]) * int(ctx.shape[2])
             o_k = int(self.tt_o_proj_weight.shape[-2])
@@ -1150,6 +1224,7 @@ class TTNNDotsVisionAttention(TTNNModule):
                 ctx,
                 self.tt_o_proj_weight,
                 bias=self.tt_o_proj_bias,
+                dtype=ttnn.bfloat16,
                 memory_config=mem,
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=o_pc,
@@ -1158,17 +1233,8 @@ class TTNNDotsVisionAttention(TTNNModule):
         cu_host = self._cu_seqlens_to_list(cu_seqlens, s)
 
         if len(cu_host) == 2:
-            # Single segment — skip slicing and concat
-            program_config = self._get_sdpa_program_config(s)
-            ctx = ttnn.transformer.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                is_causal=False,
-                program_config=program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
+            # Single segment — same path as ``cu_seqlens is None`` (full sequence).
+            ctx = self._sdpa_padded_with_key_mask(q, k, v, s)
         else:
             ctx_segments = []
 
@@ -1182,16 +1248,7 @@ class TTNNDotsVisionAttention(TTNNModule):
                 k_seg = ttnn.slice(k, (0, 0, seg_start, 0), (1, h, seg_end, hd))
                 v_seg = ttnn.slice(v, (0, 0, seg_start, 0), (1, h, seg_end, hd))
 
-                program_config = self._get_sdpa_program_config(seg_len)
-                ctx_seg = ttnn.transformer.scaled_dot_product_attention(
-                    q_seg,
-                    k_seg,
-                    v_seg,
-                    is_causal=False,
-                    program_config=program_config,
-                    compute_kernel_config=self.sdpa_compute_kernel_config,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
+                ctx_seg = self._sdpa_padded_with_key_mask(q_seg, k_seg, v_seg, seg_len)
                 ctx_segments.append(ctx_seg)
 
             ctx = ttnn.concat(ctx_segments, dim=2) if len(ctx_segments) > 1 else ctx_segments[0]
@@ -1205,6 +1262,7 @@ class TTNNDotsVisionAttention(TTNNModule):
             ctx,
             self.tt_o_proj_weight,
             bias=self.tt_o_proj_bias,
+            dtype=ttnn.bfloat16,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
             program_config=o_pc,
@@ -1393,12 +1451,12 @@ class TTNNDotsPatchMerger(TTNNModule):
                 self.tt_ln_weight = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         self.tt_w1 = (
-            ttnn.from_torch(self._w1_weight.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            ttnn.from_torch(self._w1_weight.to(torch.bfloat16), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)
             if self._w1_weight is not None
             else None
         )
         self.tt_w2 = (
-            ttnn.from_torch(self._w2_weight.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            ttnn.from_torch(self._w2_weight.to(torch.bfloat16), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)
             if self._w2_weight is not None
             else None
         )
@@ -1440,7 +1498,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             # Re-create w2 on device with col-shard mapper
             self.tt_w2 = ttnn.from_torch(
                 self._w2_weight.to(torch.bfloat16),
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 memory_config=mem,
@@ -1449,7 +1507,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             if self._w2_bias is not None:
                 self.tt_w2_bias = ttnn.from_torch(
                     self._w2_bias.to(torch.bfloat16),
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
                     memory_config=mem,
@@ -1485,12 +1543,18 @@ class TTNNDotsPatchMerger(TTNNModule):
                 epsilon=1e-6,
             )
 
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-        hidden_states = ttnn.reshape(
-            hidden_states,
-            (hidden_states.shape[0], hidden_states.shape[1], -1, self.mlp_size),
+        # Fold ``[B,1,S,H] -> [B,1,S',mlp_size]`` in TILE only (avoids RM untilize/tilize).
+        b0, b1, r, h = (
+            int(hidden_states.shape[0]),
+            int(hidden_states.shape[1]),
+            int(hidden_states.shape[2]),
+            int(hidden_states.shape[3]),
         )
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+        flat = r * h
+        if flat % int(self.mlp_size) != 0:
+            raise ValueError(f"PatchMerger reshape: S*H={flat} not divisible by mlp_size={self.mlp_size}")
+        new_r = flat // int(self.mlp_size)
+        hidden_states = ttnn.reshape(hidden_states, (b0, b1, new_r, int(self.mlp_size)))
 
         compute_kc = getattr(self, "compute_kernel_config", None)
 
@@ -1499,6 +1563,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             self.tt_w1,
             bias=self.tt_w1_bias,
             activation="gelu",
+            dtype=ttnn.bfloat8_b,
             memory_config=mem,
             compute_kernel_config=compute_kc,
         )
@@ -1506,6 +1571,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             hidden_states,
             self.tt_w2,
             bias=self.tt_w2_bias,
+            dtype=ttnn.bfloat16,
             memory_config=mem,
             compute_kernel_config=compute_kc,
         )
