@@ -479,11 +479,12 @@ void Device::configure_fabric(
     const auto health = tt::tt_fabric::configure_fabric_cores(this, pre_dead_channels, skip_soft_reset_with_ext);
 
     // FIX RR (#42429): Compute the effective dead set: pre_dead_channels that were NOT
-    // recovered by FIX RR.  Recovered channels got their L1 cleared and are ready for
-    // firmware load — treat them as healthy from this point forward.
+    // recovered by FIX RR or deferred to FIX SA (Strategy B).
+    // Recovered channels got their L1 cleared and are ready for firmware load.
+    // FIX SA-B deferred channels are halted and will get firmware via FIX SA — not dead.
     std::unordered_set<uint32_t> effective_pre_dead;
     for (const auto& ch : pre_dead_channels) {
-        if (!health.recovered_channels.count(ch)) {
+        if (!health.recovered_channels.count(ch) && !health.deferred_deassert_channels.count(ch)) {
             effective_pre_dead.insert(ch);
         }
     }
@@ -548,6 +549,15 @@ void Device::configure_fabric(
     } else {
         all_dead_channels_storage = effective_pre_dead.empty() ? health.newly_dead_channels : effective_pre_dead;
         all_dead_channels_ptr = &all_dead_channels_storage;
+    }
+    // FIX SA-B (#42429): Remove deferred_deassert channels from dead sets.
+    // Pre-dead MMIO channels merged into FIX SA (Strategy B) are no longer truly dead —
+    // they just need firmware loaded while halted, then deassert via FIX SA.
+    // Ensure ConfigureDeviceWithProgram writes firmware to these channels.
+    if (!health.deferred_deassert_channels.empty()) {
+        for (const auto& deferred_ch : health.deferred_deassert_channels) {
+            all_dead_channels_storage.erase(deferred_ch);
+        }
     }
     const auto& all_dead_channels = *all_dead_channels_ptr;
     // Look up SOC descriptor once for the ETH-core→channel reverse mapping.

@@ -278,106 +278,28 @@ FabricCoresHealth configure_fabric_cores(
                         }
                     }
 
-                    cluster.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
-                    // FIX BH (#42429): Wait for ERISC to boot from ROM phase (0x49705180)
-                    // to base-UMD firmware before declaring recovery.  Without this wait,
-                    // write_launch_msg_to_core races with ROM boot: the host writes the
-                    // pre-launch canary (0xdeadb07e) to L1 while ERISC is still in ROM
-                    // and cannot process the launch message.  0xdeadb07e then persists in L1;
-                    // FIX BG marks the master channel as dead; AllGather is skipped (FIX QE);
-                    // and the test fails — even though FIX RR's assert/deassert succeeded.
+                    // FIX SA-B (#42429): Unified Channel Recovery — merge pre-dead FIX RR
+                    // into FIX SA deferred deassert path.  Instead of deassert + FIX BH
+                    // (5000ms ROM postcode poll), defer deassert to device.cpp FIX SA loop.
+                    // FIX SA will write firmware binary (via ConfigureDeviceWithProgram),
+                    // fw_launch_addr, launch_msg, handshake_bypass while ERISC is halted,
+                    // then deassert and use Strategy A Firmware-Ready Gate (FIX SA-A) to
+                    // confirm ERISC booted — replacing the fragile 5000ms FIX BH timeout.
                     //
-                    // We poll edm_status_address via PCIe-direct cluster.read_core until the
-                    // value transitions away from the ROM postcode (kRomPostcode = 0x49705180).
-                    // If it transitions within kFIX_BH_BootWaitMs (5000ms) we declare recovery.
-                    // If it does not, the channel is irrecoverable this session and is moved to
-                    // newly_dead_channels to prevent a downstream launch-message race.
-                    {
-                        constexpr uint32_t kRomPostcode_BH = 0x49705180u;
-                        // FIX DP (#42429): After PCIe hard-reset of 20+ channels simultaneously,
-                        // ERISC BRISC needs time to execute ROM before starting the application.
-                        // 500ms was insufficient — all channels still at ROM postcode 0x49705180
-                        // after 500ms → marked as newly_dead_channels → 24 channels dead → init
-                        // failure.  3000ms was also insufficient when 24+ channels boot
-                        // simultaneously (run 25964368272: ALL 24 MMIO channels still at
-                        // 0x49705180 after 3s).  5000ms matches the FIX RP PARALLEL batch
-                        // deadline and gives sufficient margin for WH ETH link training.
-                        constexpr uint32_t kFIX_BH_BootWaitMs = 5000;
-                        constexpr uint32_t kFIX_BH_PollIntervalMs = 5;
-                        const uint64_t edm_addr =
-                            static_cast<uint64_t>(router_config.edm_status_address);
-                        uint32_t elapsed_bh_ms = 0;
-                        bool fix_bh_ok = false;
-                        while (elapsed_bh_ms < kFIX_BH_BootWaitMs) {
-                            std::vector<uint32_t> status_buf(1, 0);
-                            cluster.read_core(status_buf, sizeof(uint32_t), core_loc, edm_addr);
-                            if (status_buf[0] != kRomPostcode_BH) {
-                                fix_bh_ok = true;
-                                log_info(
-                                    tt::LogMetal,
-                                    "configure_fabric_cores: device {} channel {} FIX BH — "
-                                    "ERISC booted from ROM to 0x{:08x} after {}ms.",
-                                    chip_id,
-                                    router_chan,
-                                    status_buf[0],
-                                    elapsed_bh_ms);
-                                break;
-                            }
-                            std::this_thread::sleep_for(
-                                std::chrono::milliseconds(kFIX_BH_PollIntervalMs));
-                            elapsed_bh_ms += kFIX_BH_PollIntervalMs;
-                        }
-                        if (fix_bh_ok) {
-                            // Boot succeeded — clear from dead set so L1 init proceeds and
-                            // configure_fabric() loads firmware on this channel.
-                            dead_channels.erase(router_chan);
-                            recovered_channels.insert(router_chan);
-                            log_info(
-                                tt::LogMetal,
-                                "configure_fabric_cores: device {} channel {} FIX RR+BH — "
-                                "PCIe-direct soft reset and ROM boot both succeeded. "
-                                "Channel cleared from dead_channels; L1 init will proceed.",
-                                chip_id,
-                                router_chan);
-                        } else {
-                            // ROM boot did not complete within timeout — channel irrecoverable.
-                            // Leave dead_channels intact so the L1 write loop below skips it
-                            // (preventing a hang on the non-functional relay path).
-                            // FIX DR (#42429): Read the actual value at timeout to distinguish
-                            // "completely stuck at ROM postcode" from "partially booted".
-                            uint32_t final_val = kRomPostcode_BH;
-                            try {
-                                std::vector<uint32_t> final_buf(1, 0);
-                                cluster.read_core(final_buf, sizeof(uint32_t), core_loc, edm_addr);
-                                final_val = final_buf[0];
-                            } catch (...) {}
-                            newly_dead_channels.insert(router_chan);
-                            log_warning(
-                                tt::LogMetal,
-                                "configure_fabric_cores: device {} channel {} FIX BH — "
-                                "ERISC did not exit ROM phase within {}ms "
-                                "(edm_status=0x{:08x} after FIX RR deassert). "
-                                "Channel remains dead; skipping L1 init.",
-                                chip_id,
-                                router_chan,
-                                kFIX_BH_BootWaitMs,
-                                final_val);
-                        }
-                    }
-                    // GAP 7 / FIX OP RR (#42429): Log elapsed time for the entire FIX RR
-                    // assert→deassert+BH window — mirrors FIX OP on the normal FIX S9 path.
+                    // Channel was pre-dead but is now halted with clean fw_launch_addr
+                    // (FIX EG RR above).  Do NOT add to recovered_channels or dead_channels
+                    // — FIX SA-A will decide if the channel is alive.
+                    dead_channels.erase(router_chan);  // remove from dead set so L1 init proceeds
+                    deferred_deassert_channels.insert(router_chan);
                     {
                         auto fix_rr_end = std::chrono::steady_clock::now();
                         auto fix_rr_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             fix_rr_end - fix_rr_start).count();
                         log_info(
                             tt::LogMetal,
-                            "FIX OP RR (#42429): FIX RR assert→deassert+BH window — Device {} "
-                            "chan={} total recovery took {}ms (recovered={})",
-                            chip_id,
-                            router_chan,
-                            fix_rr_ms,
-                            recovered_channels.count(router_chan) > 0);
+                            "FIX SA-B (#42429): Device {} chan={} pre-dead MMIO channel — "
+                            "assert+FIX EG done in {}ms. Deferred to FIX SA path (no FIX BH poll).",
+                            chip_id, router_chan, fix_rr_ms);
                     }
                 } catch (const std::exception& e) {
                     newly_dead_channels.insert(router_chan);
