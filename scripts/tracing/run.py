@@ -222,7 +222,9 @@ def benchmark_everything(
     """
     rows: list[dict[str, object]] = []
 
-    for context_multiply, prefix_caching_ratio in itertools.product(options.context_multiply, options.prefix_caching_ratio):
+    for context_multiply, prefix_caching_ratio in itertools.product(
+        options.context_multiply, options.prefix_caching_ratio
+    ):
         prompts, context_stats = build_prompts(options, context_multiply, prefix_caching_ratio)
         for trace_mode in options.trace_mode:
             metrics_summary = benchmark(
@@ -553,7 +555,7 @@ def maybe_print_metrics_tables(
         key = _setting_key(row)
         by_setting.setdefault(key, {})[str(row["trace_mode"])] = row
 
-    # Table 1: Aggregate summary over all settings.
+    # region Table 1: Aggregate summary over all settings.
     aggregate_headers = [
         "trace_mode",
         "median_ttft (sec.)",
@@ -602,8 +604,9 @@ def maybe_print_metrics_tables(
         right_align_from=1,
     )
     print("* marks the lowest value per metric (ties allowed).")
+    # endregion
 
-    # Table 2: Per-setting prefill comparison with winner and delta against "all".
+    # region Table 2: Per-setting prefill comparison with winner and delta against "all".
     per_setting_headers = [
         "prefix_ratio (%)",
         "cached_ctx_toks",
@@ -615,8 +618,12 @@ def maybe_print_metrics_tables(
     ]
 
     per_setting_rows: list[list[str]] = []
-    for (prefix_ratio, context_multiply), mode_rows in sorted(by_setting.items(), key=lambda item: (item[0][1], item[0][0])):
-        prefill_values = {mode: float(mode_rows[mode]["median_prefill_latency (sec.)"]) for mode in trace_modes if mode in mode_rows}
+    for (prefix_ratio, context_multiply), mode_rows in sorted(
+        by_setting.items(), key=lambda item: (item[0][1], item[0][0])
+    ):
+        prefill_values = {
+            mode: float(mode_rows[mode]["median_prefill_latency (sec.)"]) for mode in trace_modes if mode in mode_rows
+        }
         setting_sample = next(iter(mode_rows.values()))
         min_prefill = min(prefill_values.values())
         winners = "/".join(mode for mode in trace_modes if mode in prefill_values and prefill_values[mode] == min_prefill)
@@ -648,7 +655,9 @@ def maybe_print_metrics_tables(
         rows=per_setting_rows,
         right_align_from=0,
     )
+    # endregion
 
+    # region Reminder about input options
     print("\n🎸 Reminder: benchmarking used these fixed options (unless overridden on CLI):")
     pprint.pprint(
         {
@@ -661,6 +670,7 @@ def maybe_print_metrics_tables(
         },
         sort_dicts=False,
     )
+    # endregion
 
 
 def _print_ascii_table(
