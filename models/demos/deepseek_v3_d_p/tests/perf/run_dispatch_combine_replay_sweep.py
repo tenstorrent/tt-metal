@@ -140,25 +140,64 @@ def run_one(
     return out_csv
 
 
+# Position of each op within one iter of test_dispatch_combine_replay's _run_one_iter:
+#   0 = dispatch, 1 = to_layout (skip in summary), 2 = combine
+# Plus 1 startup op at op_idx==1 before the iter loop begins.
+_OPS_PER_ITER = 3
+_OP_POSITION = {
+    "DispatchDeviceOperation": 0,
+    "CombineDeviceOperation": 2,
+}
+
+
 def aggregate_one_csv(csv: Path, op_code: str, n_warmup: int) -> dict | None:
-    """For one LB run CSV, return per-chip stats for one op (Dispatch or Combine)."""
+    """For one LB run CSV, return per-chip stats for one op (Dispatch or Combine).
+
+    Supports two CSV variants:
+      - Full tracy merge (has OP CODE + DEVICE ID columns): filter by OP CODE.
+      - Device-only OPs csv (no OP CODE / DEVICE ID): attribute by GLOBAL CALL COUNT.
+        chip_id = GCC % 1024, op_idx = GCC // 1024. Test sequence per iter is
+        dispatch → to_layout → combine, with one startup op at op_idx=1.
+    """
     try:
         df = pd.read_csv(csv, low_memory=False)
     except Exception as e:
         print(f"  ! failed to read {csv}: {e}", file=sys.stderr)
         return None
-    if "OP CODE" not in df.columns:
+    if df.empty:
         return None
-    op_df = df[df["OP CODE"] == op_code].copy()
-    if op_df.empty:
+    df = df.copy()
+    df["dur_ns"] = pd.to_numeric(df["DEVICE KERNEL DURATION [ns]"], errors="coerce")
+    df = df.dropna(subset=["dur_ns"])
+    if df.empty:
         return None
-    op_df["dur_ns"] = pd.to_numeric(op_df["DEVICE KERNEL DURATION [ns]"], errors="coerce")
-    op_df = op_df.dropna(subset=["dur_ns"]).sort_values(["DEVICE ID", "GLOBAL CALL COUNT"]).reset_index(drop=True)
-    op_df["iter"] = op_df.groupby("DEVICE ID").cumcount()
-    timed = op_df[op_df["iter"] >= n_warmup]
-    if timed.empty:
-        return None
-    per_chip = timed.groupby("DEVICE ID")["dur_ns"].median()
+
+    if "OP CODE" in df.columns and "DEVICE ID" in df.columns:
+        op_df = df[df["OP CODE"] == op_code].copy()
+        if op_df.empty:
+            return None
+        op_df = op_df.sort_values(["DEVICE ID", "GLOBAL CALL COUNT"]).reset_index(drop=True)
+        op_df["iter"] = op_df.groupby("DEVICE ID").cumcount()
+        timed = op_df[op_df["iter"] >= n_warmup]
+        if timed.empty:
+            return None
+        per_chip = timed.groupby("DEVICE ID")["dur_ns"].median()
+    else:
+        # Device-only fallback: attribute by GCC encoding.
+        pos = _OP_POSITION.get(op_code)
+        if pos is None:
+            return None
+        df["chip_id"] = df["GLOBAL CALL COUNT"] % 1024
+        df["op_idx"] = df["GLOBAL CALL COUNT"] // 1024
+        df = df[df["op_idx"] >= 2]  # drop op_idx=1 startup op
+        df["op_idx_in_iter"] = (df["op_idx"] - 2) % _OPS_PER_ITER
+        df["iter_in_dev"] = (df["op_idx"] - 2) // _OPS_PER_ITER
+        op_df = df[df["op_idx_in_iter"] == pos]
+        timed = op_df[op_df["iter_in_dev"] >= n_warmup]
+        if timed.empty:
+            return None
+        per_chip = timed.groupby("chip_id")["dur_ns"].median()
+
     return {
         "n_chips": len(per_chip),
         "max_chip_med_ns": int(per_chip.max()),
