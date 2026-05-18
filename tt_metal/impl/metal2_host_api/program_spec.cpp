@@ -65,11 +65,20 @@ struct CollectedSpecData {
 
     // DFB endpoint info (derived from kernel bindings).
     // Populated for both local and remote DFBs.
+    //
+    // Multiple PRODUCER KernelSpecs (and multiple CONSUMER KernelSpecs) may bind the same DFB,
+    // provided they have non-overlapping node coverage and matching binding-site parameters
+    // (access_pattern, num_threads). This permits the canonical Metal 2.0 expression of the
+    // legacy "two KernelDescriptors per work split, sharing CBs" pattern. The physical
+    // invariant is local: at each node, exactly one producer kernel instance and one
+    // consumer kernel instance.
     struct DFBEndpointInfo {
-        const KernelSpec* producer = nullptr;
-        const KernelSpec* consumer = nullptr;
-        const KernelSpec::DFBBinding* producer_binding = nullptr;
-        const KernelSpec::DFBBinding* consumer_binding = nullptr;
+        struct EndpointRecord {
+            const KernelSpec* kernel = nullptr;
+            const KernelSpec::DFBBinding* binding = nullptr;
+        };
+        std::vector<EndpointRecord> producers;
+        std::vector<EndpointRecord> consumers;
     };
     std::unordered_map<DFBSpecName, DFBEndpointInfo> dfb_endpoints;
 
@@ -315,31 +324,21 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             CollectedSpecData::DFBEndpointInfo& endpoint_info = collected.dfb_endpoints[dfb_binding.dfb_spec_name];
 
             if (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::PRODUCER) {
-                TT_FATAL(
-                    endpoint_info.producer == nullptr,
-                    "DFB '{}' has multiple producers (second: '{}')",
-                    dfb_binding.dfb_spec_name,
-                    kernel.unique_id);
-                endpoint_info.producer = &kernel;
-                endpoint_info.producer_binding = &dfb_binding;
+                endpoint_info.producers.push_back({&kernel, &dfb_binding});
             } else if (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
-                TT_FATAL(
-                    endpoint_info.consumer == nullptr,
-                    "DFB '{}' has multiple consumers (second: '{}')",
-                    dfb_binding.dfb_spec_name,
-                    kernel.unique_id);
-                endpoint_info.consumer = &kernel;
-                endpoint_info.consumer_binding = &dfb_binding;
+                endpoint_info.consumers.push_back({&kernel, &dfb_binding});
             } else {
                 TT_FATAL(false, "RELAY endpoints are only used for remote DFB, which is not supported yet");
             }
         }
     }
 
-    // Completeness: every DFB must have exactly one producer and one consumer
+    // Completeness: every DFB must have at least one producer and one consumer.
+    // (Cross-role coverage matching and within-role binding-site uniformity are checked
+    // later, after kernel node coverage is computed.)
     for (const auto& [dfb_name, endpoint_info] : collected.dfb_endpoints) {
-        TT_FATAL(endpoint_info.producer != nullptr, "DFB '{}' has no producer", dfb_name);
-        TT_FATAL(endpoint_info.consumer != nullptr, "DFB '{}' has no consumer", dfb_name);
+        TT_FATAL(!endpoint_info.producers.empty(), "DFB '{}' has no producer", dfb_name);
+        TT_FATAL(!endpoint_info.consumers.empty(), "DFB '{}' has no consumer", dfb_name);
     }
 
     // Referential integrity: every declared DFB (local or remote) must be bound by some kernel
@@ -468,11 +467,18 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
     }
 
     // Derive each local DFB's allocation node set: union of binding-kernels' node sets.
-    // (Collected, but unvalidated. Semantic integrity checks for DFB take place in ValidateProgramSpec.)
+    // (Collected, but unvalidated. Semantic integrity checks for DFB take place in ValidateProgramSpec.
+    //  Once those pass, producer and consumer coverages are guaranteed equal; here we union both
+    //  sides for safety before that guarantee holds.)
     for (const auto& dfb : spec.dataflow_buffers) {
         const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
-        NodeRangeSet node_set = collected.kernel_node_set.at(endpoints.producer->unique_id);
-        node_set = node_set.merge(collected.kernel_node_set.at(endpoints.consumer->unique_id));
+        NodeRangeSet node_set;
+        for (const auto& rec : endpoints.producers) {
+            node_set = node_set.merge(collected.kernel_node_set.at(rec.kernel->unique_id));
+        }
+        for (const auto& rec : endpoints.consumers) {
+            node_set = node_set.merge(collected.kernel_node_set.at(rec.kernel->unique_id));
+        }
         collected.dfb_node_set[dfb.unique_id] = node_set;
     }
 
@@ -793,9 +799,24 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             dfb.unique_id);
     }
 
-    // Validate local DFB endpoint placement:
-    // A local DFB's producer and consumer kernels must be on the same node (sharing SRAM memory).
-    // For this to be true, the producer and consumer kernels need IDENTICAL WorkUnitSpec membership.
+    // Validate local DFB endpoint placement and multi-binding consistency.
+    //
+    // The hardware invariant is local: at each node where the DFB is instantiated, exactly one
+    // producer kernel instance and one consumer kernel instance run on that node. This is
+    // sufficient — but not strictly necessary — to enforce at the spec level via "one producer
+    // KernelSpec, one consumer KernelSpec". Metal 2.0 also permits multiple PRODUCER KernelSpecs
+    // (and multiple CONSUMER KernelSpecs) per DFB, provided:
+    //   1. Within each role (producer / consumer): KernelSpecs' WorkUnitSpec memberships are
+    //      pairwise disjoint (so no node has two same-role instances).
+    //   2. Across roles: union of producer KernelSpecs' WU memberships ==
+    //      union of consumer KernelSpecs' WU memberships (so every node where the DFB lives
+    //      has both a producer instance and a consumer instance).
+    //   3. All bindings on the same role have matching `access_pattern` (the DFB scheduler
+    //      config is shared per role).
+    //   4. All KernelSpecs on the same role have matching `num_threads` (the per-side
+    //      credit-tracking config is shared per role).
+    // Self-loop (a kernel that appears in both producers and consumers of a DFB) is currently
+    // restricted to the simple single-producer-single-consumer case.
     auto kernel_work_unit_set = [&](const KernelSpecName& name) {
         std::set<const WorkUnitSpec*> work_units;
         for (const WorkUnitSpec* w : collected.kernel_work_units.at(name)) {
@@ -805,17 +826,90 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     };
     for (const auto& dfb : spec.dataflow_buffers) {
         const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
-        const auto producer_work_units = kernel_work_unit_set(endpoints.producer->unique_id);
-        const auto consumer_work_units = kernel_work_unit_set(endpoints.consumer->unique_id);
+
+        // (3) and (4): per-role uniformity of binding-site parameters.
+        auto check_role_uniformity = [&](const auto& records, std::string_view role) {
+            if (records.size() < 2) {
+                return;
+            }
+            const auto first_pattern = records[0].binding->access_pattern;
+            const auto first_threads = records[0].kernel->num_threads;
+            const auto& first_kernel = records[0].kernel->unique_id;
+            for (size_t i = 1; i < records.size(); ++i) {
+                TT_FATAL(
+                    records[i].binding->access_pattern == first_pattern,
+                    "DFB '{}' has multiple {} bindings with mismatched access_pattern (kernel '{}' vs kernel '{}')",
+                    dfb.unique_id,
+                    role,
+                    first_kernel,
+                    records[i].kernel->unique_id);
+                TT_FATAL(
+                    records[i].kernel->num_threads == first_threads,
+                    "DFB '{}' has multiple {} KernelSpecs with mismatched num_threads (kernel '{}' = {} vs kernel '{}' "
+                    "= {})",
+                    dfb.unique_id,
+                    role,
+                    first_kernel,
+                    first_threads,
+                    records[i].kernel->unique_id,
+                    records[i].kernel->num_threads);
+            }
+        };
+        check_role_uniformity(endpoints.producers, "PRODUCER");
+        check_role_uniformity(endpoints.consumers, "CONSUMER");
+
+        // (1) and (2): WU membership disjointness within each role + cross-role equality.
+        // Compute per-role unions while also checking within-role pairwise disjointness.
+        auto compute_role_union = [&](const auto& records, std::string_view role) {
+            std::set<const WorkUnitSpec*> role_union;
+            for (const auto& rec : records) {
+                const auto wu_set = kernel_work_unit_set(rec.kernel->unique_id);
+                for (const WorkUnitSpec* wu : wu_set) {
+                    auto [it, inserted] = role_union.insert(wu);
+                    TT_FATAL(
+                        inserted,
+                        "DFB '{}' has multiple {} KernelSpecs sharing WorkUnitSpec '{}' (kernel '{}' collides with a "
+                        "prior {} binding). Same-role bindings must have pairwise-disjoint WorkUnitSpec membership.",
+                        dfb.unique_id,
+                        role,
+                        wu->unique_id,
+                        rec.kernel->unique_id,
+                        role);
+                }
+            }
+            return role_union;
+        };
+        const auto producer_wu_union = compute_role_union(endpoints.producers, "PRODUCER");
+        const auto consumer_wu_union = compute_role_union(endpoints.consumers, "CONSUMER");
         TT_FATAL(
-            producer_work_units == consumer_work_units,
-            "Local DFB '{}' is bound by producer kernel '{}' and consumer kernel '{}', but they "
-            "do not share identical WorkUnitSpec membership. Local DFBs require both endpoints to "
-            "live on the same set of WorkUnitSpecs; either refactor the placement, or model this as "
+            producer_wu_union == consumer_wu_union,
+            "Local DFB '{}' producer and consumer KernelSpecs do not cover the same WorkUnitSpec(s). "
+            "Local DFBs require every node where the DFB is instantiated to host both a producer "
+            "and a consumer kernel instance; either refactor the placement, or model this as "
             "a RemoteDataflowBufferSpec.",
-            dfb.unique_id,
-            endpoints.producer->unique_id,
-            endpoints.consumer->unique_id);
+            dfb.unique_id);
+
+        // Self-loop interplay with multi-binding: a kernel that self-loops a DFB (appears in
+        // both producers and consumers) must be the only binding on each side. Mixing self-loop
+        // with non-self-loop bindings on the same DFB is not currently supported.
+        const bool has_self_loop = [&] {
+            for (const auto& p : endpoints.producers) {
+                for (const auto& c : endpoints.consumers) {
+                    if (p.kernel == c.kernel) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }();
+        if (has_self_loop) {
+            TT_FATAL(
+                endpoints.producers.size() == 1 && endpoints.consumers.size() == 1,
+                "DFB '{}' is self-looped (bound by a kernel as both producer and consumer) and also "
+                "has additional bindings. Self-loop is currently restricted to a single producer "
+                "KernelSpec and a single consumer KernelSpec.",
+                dfb.unique_id);
+        }
     }
 
     // Remote DFBs are not yet supported.
@@ -848,9 +942,16 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     }
 
     // Data format metadata (optional param) MUST be specified for a DFB with a compute endpoint
+    auto any_compute_endpoint = [](const auto& records) {
+        for (const auto& rec : records) {
+            if (rec.kernel->is_compute_kernel()) {
+                return true;
+            }
+        }
+        return false;
+    };
     for (const auto& [dfb_name, endpoint_info] : collected.dfb_endpoints) {
-        if ((endpoint_info.producer && endpoint_info.producer->is_compute_kernel()) ||
-            (endpoint_info.consumer && endpoint_info.consumer->is_compute_kernel())) {
+        if (any_compute_endpoint(endpoint_info.producers) || any_compute_endpoint(endpoint_info.consumers)) {
             const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
             TT_FATAL(
                 dfb_spec->data_format_metadata.has_value(),
@@ -1515,8 +1616,14 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
     const CollectedSpecData::DFBEndpointInfo& dfb_endpoint_info,
     const KernelRiscMaskMap& kernel_to_risc_mask) {
-    const KernelSpec* producer = dfb_endpoint_info.producer;
-    const KernelSpec* consumer = dfb_endpoint_info.consumer;
+    // With multi-binding, all producer KernelSpecs share the same access_pattern and num_threads
+    // (enforced in ValidateProgramSpec), so any representative producer/consumer gives the
+    // correct DFB config. For risc_mask, same-source KernelSpecs (the canonical multi-binding
+    // case) have identical processor placement and therefore the same mask; we take the first.
+    const KernelSpec* producer = dfb_endpoint_info.producers.front().kernel;
+    const KernelSpec* consumer = dfb_endpoint_info.consumers.front().kernel;
+    const KernelSpec::DFBBinding* producer_binding = dfb_endpoint_info.producers.front().binding;
+    const KernelSpec::DFBBinding* consumer_binding = dfb_endpoint_info.consumers.front().binding;
 
     uint16_t producer_risc_mask = kernel_to_risc_mask.at(producer);
     uint16_t consumer_risc_mask = kernel_to_risc_mask.at(consumer);
@@ -1531,12 +1638,14 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         }
         TT_FATAL(false, "Unknown DFBAccessPattern");
     };
-    auto producer_access_pattern = to_hw_access_pattern(dfb_endpoint_info.producer_binding->access_pattern);
-    auto consumer_access_pattern = to_hw_access_pattern(dfb_endpoint_info.consumer_binding->access_pattern);
+    auto producer_access_pattern = to_hw_access_pattern(producer_binding->access_pattern);
+    auto consumer_access_pattern = to_hw_access_pattern(consumer_binding->access_pattern);
 
     // For a compute kernel that self-loops a DFB (binds it as both producer and consumer), the
-    // lower-layer DFB API requires an explicit scope.
-    // The user can declare it via KernelSpec::dfb_compute_self_loop_scopes:
+    // lower-layer DFB API requires an explicit scope. Self-loop is restricted to
+    // single-producer-single-consumer (validated upstream), so the producer/consumer check is
+    // pointer equality on the representative records.
+    // The user can declare scope via KernelSpec::dfb_compute_self_loop_scopes:
     //  - absence of an entry means we infer INTRA (the common case)
     //  - user-specified INTRA is also fine
     //  - user-specified INTER is not currently supported. This will have already failed validation.
@@ -1558,10 +1667,10 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .entry_size = dfb_spec->entry_size,
         .num_entries = dfb_spec->num_entries,
         .producer_risc_mask = producer_risc_mask,
-        .num_producers = dfb_endpoint_info.producer->num_threads,
+        .num_producers = producer->num_threads,
         .pap = producer_access_pattern,
         .consumer_risc_mask = consumer_risc_mask,
-        .num_consumers = dfb_endpoint_info.consumer->num_threads,
+        .num_consumers = consumer->num_threads,
         .cap = consumer_access_pattern,
         .enable_implicit_sync = !dfb_spec->disable_implicit_sync,
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),

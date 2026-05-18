@@ -358,7 +358,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithOnlyConsumerFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has no producer")));
 }
 
-TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersFails) {
+TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersInSameWorkUnitFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -371,7 +371,8 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersFails) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    // Two producers for same DFB
+    // Two PRODUCER bindings on the same DFB, both KernelSpecs in the same WorkUnitSpec.
+    // Multi-binding requires non-overlapping WU membership per role; this should fail.
     BindDFBToKernel(producer1, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(producer2, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -383,10 +384,11 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has multiple producers")));
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB 'dfb' has multiple PRODUCER KernelSpecs sharing WorkUnitSpec 'work_unit'")));
 }
 
-TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersFails) {
+TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInSameWorkUnitFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -399,7 +401,6 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersFails) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    // Two consumers for same DFB
     BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(consumer1, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
     BindDFBToKernel(consumer2, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -411,7 +412,189 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has multiple consumers")));
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB 'dfb' has multiple CONSUMER KernelSpecs sharing WorkUnitSpec 'work_unit'")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInDifferentWorkUnitsSucceeds) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer1 = MakeMinimalComputeKernel("consumer1");
+    auto consumer2 = MakeMinimalComputeKernel("consumer2");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer1, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(consumer2, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    // producer covers both WUs (placed in both); each consumer covers one WU.
+    spec.kernels = {producer, consumer1, consumer2};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"producer", "consumer1"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"producer", "consumer2"}),
+    };
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersInDifferentWorkUnitsSucceeds) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto producer1 = MakeMinimalDMKernel("producer1");
+    auto producer2 = MakeMinimalDMKernel("producer2");
+    auto consumer = MakeMinimalComputeKernel("consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(producer1, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(producer2, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {producer1, producer2, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"producer1", "consumer"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"producer2", "consumer"}),
+    };
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBProducerConsumerCoverageMismatchFails) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer = MakeMinimalComputeKernel("consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    // Producer covers wu_p; consumer covers wu_c. Their coverages differ — invalid.
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_p", node0, {"producer"}),
+        MakeMinimalWorkUnit("wu_c", node1, {"consumer"}),
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("do not cover the same WorkUnitSpec(s)")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBMultiBindingAccessPatternMismatchFails) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer1 = MakeMinimalComputeKernel("consumer1");
+    auto consumer2 = MakeMinimalComputeKernel("consumer2");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer1, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER, DFBAccessPattern::STRIDED);
+    BindDFBToKernel(consumer2, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER, DFBAccessPattern::ALL);
+
+    spec.kernels = {producer, consumer1, consumer2};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"producer", "consumer1"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"producer", "consumer2"}),
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB 'dfb' has multiple CONSUMER bindings with mismatched access_pattern")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBMultiBindingNumThreadsMismatchFails) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer1 = MakeMinimalComputeKernel("consumer1", /*num_threads=*/1);
+    auto consumer2 = MakeMinimalComputeKernel("consumer2", /*num_threads=*/2);
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer1, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(consumer2, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {producer, consumer1, consumer2};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"producer", "consumer1"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"producer", "consumer2"}),
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB 'dfb' has multiple CONSUMER KernelSpecs with mismatched num_threads")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithMultiBindingFails) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    // Two self-looping kernels on disjoint WUs. Each binds "dfb" as both producer and consumer.
+    // Coverage matches (both unions = {wu_g1, wu_g2}); per-role uniformity passes; but the
+    // self-loop multi-binding rule rejects this case.
+    auto self_loop_1 = MakeMinimalComputeKernel("self_loop_1");
+    auto self_loop_2 = MakeMinimalComputeKernel("self_loop_2");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(self_loop_1, "dfb", "p", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(self_loop_1, "dfb", "c", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(self_loop_2, "dfb", "p", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(self_loop_2, "dfb", "c", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {self_loop_1, self_loop_2};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"self_loop_1"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"self_loop_2"}),
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' is self-looped")));
 }
 
 // ============================================================================
@@ -652,7 +835,7 @@ TEST_F(ProgramSpecTestQuasar, SemaphoreBoundToComputeKernelFailsOnQuasar) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Semaphore bindings are not currently supported for compute kernels.")));
+            ::testing::HasSubstr("Semaphore bindings are not supported for compute kernels.")));
 }
 
 TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingUnknownSemaphoreFails) {
@@ -1077,8 +1260,7 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkUnitMembershipMismatch
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("do not share identical WorkUnitSpec membership")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("do not cover the same WorkUnitSpec(s)")));
 }
 
 // ----------------------------------------------------------------------------
@@ -2266,7 +2448,7 @@ TEST_F(ProgramSpecTestGen1, SemaphoreBoundToComputeKernelFailsOnGen1) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Semaphore bindings are not currently supported for compute kernels.")));
+            ::testing::HasSubstr("Semaphore bindings are not supported for compute kernels.")));
 }
 
 TEST_F(ProgramSpecTestGen1, SemaphoreBoundToDMKernelSucceedsOnGen1) {
