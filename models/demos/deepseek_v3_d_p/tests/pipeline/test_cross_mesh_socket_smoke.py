@@ -69,7 +69,14 @@ _FABRIC_ROUTER_MAX_PAYLOAD_BYTES = 2048
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [(2, 4)],
+    [
+        # Single-galaxy 2-mesh: rank 0 = tray 1, rank 1 = tray 2; each mesh is (2, 4).
+        # Pairs with dual_tray_2x4_rank_bindings.yaml.
+        (2, 4),
+        # Two-galaxy 2-mesh: rank 0 = galaxy A, rank 1 = galaxy B; each mesh is (4, 8).
+        # Pairs with dual_galaxy_rank_bindings.yaml + runme_2galaxy_cross_mesh_smoke.sh.
+        (4, 8),
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
