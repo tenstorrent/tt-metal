@@ -41,7 +41,7 @@ std::string get_mobo_name() {
 }
 
 TrayID get_tray_id_for_chip(
-    tt::umd::Cluster& cluster, ChipId chip_id, const std::string& mobo_name, bool using_mock_cluster_desc) {
+    tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id, const std::string& mobo_name, bool using_mock_cluster_desc) {
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
         {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
@@ -58,7 +58,7 @@ TrayID get_tray_id_for_chip(
         return TrayID{0};
     }
     if (!mobo_to_bus_ids.contains(mobo_name)) {
-        auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
+        auto bus_id = tt::tt_fabric::get_bus_id(cluster_desc, chip_id);
         log_warning(
             tt::LogAlways,
             "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — defaulting tray_id to 0. "
@@ -69,7 +69,7 @@ TrayID get_tray_id_for_chip(
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
-    auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
+    auto bus_id = tt::tt_fabric::get_bus_id(cluster_desc, chip_id);
     auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
     // Apply alias if original bus_id not found and an alias exists
     if (bus_id_it == ordered_bus_ids.end()) {
@@ -83,32 +83,32 @@ TrayID get_tray_id_for_chip(
 }
 
 std::pair<TrayID, ASICLocation> get_asic_position(
-    tt::umd::Cluster& cluster,
+    tt::umd::ClusterDescriptor& cluster_desc,
     ChipId chip_id,
     bool using_mock_cluster_desc,
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& pcie_devices_per_tray,
     std::unordered_map<uint32_t, ASICLocation>& pcie_id_to_asic_location) {
-    auto* cluster_desc = cluster.get_cluster_description();
-    if (cluster_desc->get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
-        cluster_desc->get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
+    if (cluster_desc.get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
+        cluster_desc.get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
 
         TT_FATAL(
             using_mock_cluster_desc || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
-        auto ubb_id = tt::tt_fabric::get_ubb_id(cluster, chip_id);
-        auto pcie_id = cluster_desc->get_chips_with_mmio().at(chip_id);
+        auto ubb_id = tt::tt_fabric::get_ubb_id(cluster_desc, chip_id);
+        auto pcie_id = cluster_desc.get_chips_with_mmio().at(chip_id);
         pcie_devices_per_tray[ubb_id.tray_id].insert(pcie_id);
         pcie_id_to_asic_location[pcie_id] = ASICLocation{ubb_id.asic_id};
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     }
-    auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
+    auto tray_id = get_tray_id_for_chip(cluster_desc, chip_id, get_mobo_name(), using_mock_cluster_desc);
     ASICLocation asic_location;
-    tt::ARCH arch = cluster_desc->get_arch(chip_id);
+    tt::ARCH arch = cluster_desc.get_arch(chip_id);
     if (arch == tt::ARCH::WORMHOLE_B0) {
         // Derive ASIC Location based on the tunnel depth for Wormhole systems
         // TODO: Remove this once UMD populates the ASIC Location for WH systems.
-        auto mmio_device = cluster_desc->get_closest_mmio_capable_chip(chip_id);
-        auto tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster);
+        auto mmio_device = cluster_desc.get_closest_mmio_capable_chip(chip_id);
+        auto tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster_desc);
+
         const auto& tunnels = tunnels_from_mmio_device.at(mmio_device);
         for (const auto& devices_on_tunnel : tunnels) {
             auto device_it = std::find(devices_on_tunnel.begin(), devices_on_tunnel.end(), chip_id);
@@ -119,7 +119,7 @@ std::pair<TrayID, ASICLocation> get_asic_position(
         }
     } else if (arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR) {
         // Query ASIC Location from the Cluster Descriptor for BH/QUASAR.
-        asic_location = ASICLocation{cluster_desc->get_asic_location(chip_id)};
+        asic_location = ASICLocation{cluster_desc.get_asic_location(chip_id)};
     } else {
         TT_THROW("Unrecognized Architecture. Cannot determine asic location.");
     }
@@ -527,12 +527,11 @@ void exchange_metadata(
     distributed_context->barrier();
 }
 
-bool is_bh_galaxy_rev_c(tt::umd::Cluster& cluster) {
-    auto* cluster_desc = cluster.get_cluster_description();
-    if (cluster_desc->get_board_type(0) != BoardType::UBB_BLACKHOLE) {
+bool is_bh_galaxy_rev_c(tt::umd::ClusterDescriptor& cluster_desc) {
+    if (cluster_desc.get_board_type(0) != BoardType::UBB_BLACKHOLE) {
         return false;
     }
-    uint64_t board_id = cluster_desc->get_board_id_for_chip(0);
+    uint64_t board_id = cluster_desc.get_board_id_for_chip(0);
     uint32_t revision_bits = (board_id >> 32) & 0xF;  // bits [35:32]
     return revision_bits >= 3;
 }
@@ -542,26 +541,19 @@ bool is_bh_galaxy_rev_c(tt::umd::Cluster& cluster) {
 namespace discovery_impl {
 
 PhysicalSystemDescriptor run_local_discovery(
-    tt::umd::Cluster& cluster,
+    tt::umd::ClusterDescriptor& cluster_desc,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
-    bool run_live_discovery,
     bool all_hostnames_unique) {
+
     PhysicalSystemDescriptor psd(target_device_type);
-    if (is_bh_galaxy_rev_c(cluster)) {
+    if (is_bh_galaxy_rev_c(cluster_desc)) {
         psd.set_is_bh_galaxy_rev_c(true);
     }
 
-    std::unique_ptr<umd::ClusterDescriptor> cluster_desc = nullptr;
-    if (!run_live_discovery || target_device_type != TargetDevice::Silicon) {
-        cluster_desc = std::make_unique<tt::umd::ClusterDescriptor>(*cluster.get_cluster_description());
-    } else {
-        // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
-        cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-    }
-    const auto& chip_unique_ids = cluster_desc->get_chip_unique_ids();
-    const auto& eth_connections = cluster_desc->get_ethernet_connections();
-    auto cross_host_eth_connections = cluster_desc->get_ethernet_connections_to_remote_devices();
+    const auto& chip_unique_ids = cluster_desc.get_chip_unique_ids();
+    const auto& eth_connections = cluster_desc.get_ethernet_connections();
+    auto cross_host_eth_connections = cluster_desc.get_ethernet_connections_to_remote_devices();
 
     auto my_rank = *(distributed_context->rank());
     auto hostname = get_host_name();
@@ -582,7 +574,7 @@ PhysicalSystemDescriptor run_local_discovery(
 
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
         auto [tray_id, asic_location] = get_asic_position(
-            cluster,
+            cluster_desc,
             src_chip_id,
             target_device_type != TargetDevice::Silicon,
             psd.get_pcie_devices_per_tray()[hostname_key],
@@ -590,7 +582,7 @@ PhysicalSystemDescriptor run_local_discovery(
         psd.get_asic_descriptors()[src_unique_id] = ASICDescriptor{
             TrayID{tray_id},
             asic_location,
-            cluster_desc->get_board_type(src_chip_id),
+            cluster_desc.get_board_type(src_chip_id),
             src_unique_id,
             src_chip_id,
             hostname_key};
@@ -650,15 +642,33 @@ PhysicalSystemDescriptor run_local_discovery(
 
     psd.get_system_graph().host_connectivity_graph[hostname_key] = {};
     // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
-    psd.get_ethernet_firmware_version() = cluster.get_ethernet_firmware_version().value_or(tt::umd::semver_t(0, 0, 0));
+    psd.get_ethernet_firmware_version() = cluster_desc.get_cluster_eth_fw_version().value_or(tt::umd::semver_t(0, 0, 0));
 
     return psd;
+}
+
+PhysicalSystemDescriptor run_local_discovery_live(
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
+    tt::TargetDevice target_device_type,
+    bool all_hostnames_unique) {
+
+    std::unique_ptr<tt::umd::ClusterDescriptor> cdptr =
+        tt::umd::Cluster::create_cluster_descriptor();
+
+    // Live discovery and silicon discovery refresh the descriptor from UMD; other modes keep a stable snapshot of
+    // the caller-provided descriptor.
+    auto& cluster_desc_ref = *cdptr;
+    return run_local_discovery(
+        cluster_desc_ref,
+        distributed_context,
+        target_device_type,
+        all_hostnames_unique);
 }
 
 }  // namespace discovery_impl
 
 PhysicalSystemDescriptor run_physical_system_discovery(
-    tt::umd::Cluster& cluster,
+    tt::umd::ClusterDescriptor & cluster_desc,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
     bool run_global_discovery,
@@ -669,8 +679,18 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     // Resolve hostname uniqueness before discovery so run_local_discovery can use the right key
     // (hostname when unique, hostname_rank when not), matching my_host_name() for lookups.
     bool all_hostnames_unique = resolve_hostname_uniqueness(distributed_context);
-    auto psd = discovery_impl::run_local_discovery(
-        cluster, distributed_context, target_device_type, run_live_discovery, all_hostnames_unique);
+
+    static constexpr bool dispatch_local_discovery = false;
+    static constexpr bool dispatch_live_discovery  = true;
+
+    bool const dispatch_live =
+        (!run_live_discovery || (target_device_type != TargetDevice::Silicon)) ?
+            dispatch_local_discovery : dispatch_live_discovery;
+
+    PhysicalSystemDescriptor psd = dispatch_live ?
+        discovery_impl::run_local_discovery_live(distributed_context, target_device_type, all_hostnames_unique) :
+        discovery_impl::run_local_discovery(cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
+
 
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
@@ -685,10 +705,6 @@ PhysicalSystemDescriptor run_physical_system_discovery(
             remove_unresolved_nodes(psd);
             generate_cross_host_connections(psd);
             validate_graphs(psd);
-
-            // With multi-rank (size > 1), run_local_discovery uses hostname_rank keys from the start,
-            // so asic_connectivity_graph, exit_node_connection_table, and host_connectivity_graph
-            // already have the correct keys. No rename needed.
         }
         exchange_metadata(psd, distributed_context, false);
     }
