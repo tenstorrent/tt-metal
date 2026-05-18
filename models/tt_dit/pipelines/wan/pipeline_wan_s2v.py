@@ -968,10 +968,17 @@ class WanPipelineS2V(WanPipeline):
                 f"{num_clips * self._INFER_FRAMES_PIXEL - self._S2V_VAE_CLIP0_TRIM} final frames"
             )
 
-            # 4. Initialize motion state (matches reference 478-507).
+            # 4. Initialize motion state. Clip 0 always has ``drop_first_motion=True``
+            # which prepends ``ref_latents_for_decode`` instead of ``motion_latents``
+            # in :meth:`_decode_clip`, so the initial motion latents are never read.
+            # Use a zero placeholder of the right latent shape (skips a 8.6 s VAE
+            # encode of 73 zero pixel frames).
             videos_last_frames = torch.zeros(1, 3, self._MOTION_FRAMES_PIXEL, height, width, dtype=torch.float32)
-            with _stage("s2v_vae_encode_motion"):
-                motion_latents_torch = self._encode_normalized(videos_last_frames)
+            latent_h = height // self.vae_scale_factor_spatial
+            latent_w = width // self.vae_scale_factor_spatial
+            motion_latents_torch = torch.zeros(
+                1, self.vae.config.z_dim, self._LAT_MOTION_FRAMES, latent_h, latent_w, dtype=torch.float32
+            )
 
             if seed is None:
                 seed = int(torch.seed())
@@ -1022,17 +1029,20 @@ class WanPipelineS2V(WanPipeline):
                 if drop_first_motion:
                     image_BCTHW = image_BCTHW[:, :, self._S2V_VAE_CLIP0_TRIM :]
 
-                # Slide videos_last_frames forward (reference 658-663).
-                overlap = min(self._MOTION_FRAMES_PIXEL, image_BCTHW.shape[2])
-                videos_last_frames = torch.cat(
-                    [
-                        videos_last_frames[:, :, overlap:],
-                        image_BCTHW[:, :, -overlap:],
-                    ],
-                    dim=2,
-                )
-                with _stage(f"s2v_clip_{clip_idx}_vae_encode_motion"):
-                    motion_latents_torch = self._encode_normalized(videos_last_frames)
+                # Slide videos_last_frames forward (reference 658-663) only if
+                # there's a next clip that will consume it. On the final clip we
+                # skip the motion-tail VAE encode entirely (~6.5 s saved).
+                if clip_idx + 1 < num_clips:
+                    overlap = min(self._MOTION_FRAMES_PIXEL, image_BCTHW.shape[2])
+                    videos_last_frames = torch.cat(
+                        [
+                            videos_last_frames[:, :, overlap:],
+                            image_BCTHW[:, :, -overlap:],
+                        ],
+                        dim=2,
+                    )
+                    with _stage(f"s2v_clip_{clip_idx}_vae_encode_motion"):
+                        motion_latents_torch = self._encode_normalized(videos_last_frames)
 
                 clip_videos.append(image_BCTHW)
 
