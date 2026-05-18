@@ -17,6 +17,7 @@
 #include "../../unified_kernels/ln.h"
 #include "../../unified_kernels/matmul.h"
 #include "../../unified_kernels/residual_add.h"
+#include "../../unified_kernels/softmax.h"
 #include "../../../../../demos/deepseek_v3_b1/unified_kernels/kernel_utils.hpp"
 // mcast.hpp left included as it advertises deepseek_b1_ops::Mcast::Op for any
 // future sender-push variant. The receiver-pull design used here doesn't
@@ -136,6 +137,14 @@ void kernel_main() {
     // cores (no qkv_w_cb allocated there).
     if (is_qkv_core_nc) {
         unified_kernels::setup_sharded_buffer(qkv_w_cb, qkv_weight_tiles);
+    }
+
+    // #11 Commit 9: softmax scaler (1 tile of 1.0 per SDPA worker) is
+    // pre-loaded from host; mark it pushed so TRISC's reduce_init can
+    // cb_wait_front it without waiting.
+    constexpr uint32_t sdpa_softmax_scaler_cb_nc = get_named_compile_time_arg_val("sdpa_softmax_scaler_cb");
+    if (is_sdpa_core_nc) {
+        unified_kernels::setup_sharded_buffer(sdpa_softmax_scaler_cb_nc, 1);
     }
 
     // =========================================================================
@@ -410,6 +419,13 @@ void kernel_main() {
     constexpr uint32_t sdpa_k_partial_tiles_tr = get_named_compile_time_arg_val("sdpa_k_partial_tiles");
     constexpr uint32_t m_kv_n_tiles_tr = get_named_compile_time_arg_val("m_kv_n_tiles");
     constexpr uint32_t m_per_worker_n_tiles_tr = get_named_compile_time_arg_val("m_per_worker_n_tiles");
+    // #11 Commit 9: softmax CBs (TRISC reads/writes; NCRISC marks scaler pushed).
+    constexpr uint32_t sdpa_softmax_max_cb_tr = get_named_compile_time_arg_val("sdpa_softmax_max_cb");
+    constexpr uint32_t sdpa_softmax_exp_cb_tr = get_named_compile_time_arg_val("sdpa_softmax_exp_cb");
+    constexpr uint32_t sdpa_softmax_sum_cb_tr = get_named_compile_time_arg_val("sdpa_softmax_sum_cb");
+    constexpr uint32_t sdpa_softmax_isum_cb_tr = get_named_compile_time_arg_val("sdpa_softmax_isum_cb");
+    constexpr uint32_t sdpa_softmax_scaler_cb_tr = get_named_compile_time_arg_val("sdpa_softmax_scaler_cb");
+    constexpr uint32_t sdpa_softmax_out_cb_tr = get_named_compile_time_arg_val("sdpa_softmax_out_cb");
     const bool is_ln1_core_tr = (get_relative_logical_y() == 0) && (get_relative_logical_x() < ln1_num_cores_tr);
     const bool is_residual_core_tr = is_ln1_core_tr;
     const bool is_qkv_core_tr =
@@ -591,6 +607,47 @@ void kernel_main() {
 
         cb_push_back(sdpa_qk_scores_cb_tr, qk_scores_total_tiles);
         cb_pop_front(sdpa_q_cb_tr, sdpa_q_tiles_per_worker_tr);
+    }
+
+    // =========================================================================
+    // PHASE 6 (#11 Commit 9): per-head row-wise softmax on qk_scores.
+    //
+    // Reads sdpa_qk_scores_cb (in_cb, 32 tiles per worker) + scaler_cb (1
+    // tile of 1.0) and writes sdpa_softmax_out_cb (32 tiles per worker,
+    // ALIASED to qk_scores's L1 region via fused_scratch — in-place).
+    //
+    // Math per row r (4 row-tiles × 8 col-tiles = 4 × 8 grid per worker):
+    //   m_r = max_k qk[r, k]
+    //   exp[r, k] = exp(qk[r, k] - m_r)
+    //   s_r = sum_k exp[r, k]
+    //   out[r, k] = exp[r, k] / s_r
+    //
+    // The Op-struct iterates the 4 M-rows of qk_scores serially; each row
+    // touches its 8 col-tiles three times (max, exp, mul by 1/sum). Total
+    // ops per row: 8 max-reduces + 8 sub+exp + 8 sum-reduces + 1 recip + 8
+    // mul-by-inv-sum = 33 LLK ops. × 4 rows = 132 ops per worker.
+    //
+    // No softmax scaling factor (1/sqrt(head_dim)) applied here — that's a
+    // later commit. Test golden is torch.softmax(Q @ K^T, dim=-1) without
+    // pre-scaling.
+    // =========================================================================
+    if (is_sdpa_core_tr) {
+        constexpr uint32_t softmax_in_tiles = m_per_worker_n_tiles_tr * m_kv_n_tiles_tr;  // 32
+        using SoftmaxCTArgs = pi05_siglip_ops::Softmax::ComputeCTArgs<
+            sdpa_qk_scores_cb_tr,
+            sdpa_softmax_scaler_cb_tr,
+            sdpa_softmax_max_cb_tr,
+            sdpa_softmax_exp_cb_tr,
+            sdpa_softmax_sum_cb_tr,
+            sdpa_softmax_isum_cb_tr,
+            sdpa_softmax_out_cb_tr,
+            m_kv_n_tiles_tr,
+            m_per_worker_n_tiles_tr,
+            softmax_in_tiles>;
+
+        pi05_siglip_ops::Softmax::Op<SoftmaxCTArgs, true> softmax;
+        pi05_siglip_ops::Softmax::RTArgs softmax_args{};
+        softmax(softmax_args);
     }
 #endif
 }

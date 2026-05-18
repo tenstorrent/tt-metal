@@ -89,11 +89,16 @@ def test_attention_block_fused_ln_plus_residual(device):
 
     import ttnn as _ttnn
 
-    # #11 Commit 8: build_tensors dropped xmm_tt and sdpa_qk_probe_tt, added
-    # one fused_scratch_tt — tuple length 22 → 21. Tail order:
-    # ..., final_out_tt, qkv_act_tt, ln_done_trigger_tt, qkv_w_tt, qkv_out_tt,
-    # qkv_done_trigger_tt, sdpa_q_tt, sdpa_k_partial_tt. final_out_tt is -8.
-    final_out_tt = tensors[-8]
+    # Positional layout (positive indices for resilience to future growth):
+    #   0..5: ln_in, gamma, beta, scaler, ones, accum
+    #   6:   fused_scratch
+    #   7..10: xmm2, mean, var, ivar
+    #   11..13: ln_out, x_residual, final_out
+    #   14..15: qkv_act, ln_done_trigger
+    #   16..18: qkv_w, qkv_out, qkv_done_trigger
+    #   19..20: sdpa_q, sdpa_k_partial
+    #   21..25: softmax max, exp, sum, isum, scaler  (Commit 9)
+    final_out_tt = tensors[13]
     y_device = _ttnn.to_torch(final_out_tt)
 
     p = pcc(y_golden, y_device)
@@ -123,10 +128,8 @@ def test_attention_block_fused_ln_mcast_probe(device):
 
     import ttnn as _ttnn
 
-    # qkv_act_tt is index -7 in the (... qkv_act_tt, ln_done_trigger_tt,
-    # qkv_w_tt, qkv_out_tt, qkv_done_trigger_tt, sdpa_q_tt,
-    # sdpa_k_partial_tt) ordering after Commit 8's tensor-list shrink.
-    qkv_act_tt = tensors[-7]
+    # qkv_act_tt is at positional index 14 (see test_attention_block_fused_ln_plus_residual).
+    qkv_act_tt = tensors[14]
     qkv_act_torch = _ttnn.to_torch(qkv_act_tt)
 
     num_receivers = SigLIPAttentionBlockFused.QKV_NUM_CORES
@@ -175,11 +178,10 @@ def test_attention_block_fused_qkv_matmul(device):
 
     import ttnn as _ttnn
 
-    # qkv_out_tt is at index -4 in build_tensors order (followed by
-    # qkv_done_trigger_tt, sdpa_q_tt, sdpa_k_partial_tt).
+    # qkv_out_tt is at positional index 17.
     # Device shape is the padded (M, 4608); we slice each head's first
     # head_dim_true cols to recover the natural (M, 3456) layout before PCC.
-    qkv_out_tt = tensors[-4]
+    qkv_out_tt = tensors[17]
     qkv_out_device_padded = _ttnn.to_torch(qkv_out_tt)
     assert qkv_out_device_padded.shape == (
         M,
@@ -228,10 +230,8 @@ def test_attention_block_fused_sdpa_q_probe(device):
 
     import ttnn as _ttnn
 
-    # sdpa_q_tt is at index -2 in build_tensors order (followed by
-    # sdpa_k_partial_tt; sdpa_qk_probe was dropped in Commit 8 in favor of
-    # the fused_scratch alias).
-    sdpa_q_tt = tensors[-2]
+    # sdpa_q_tt is at positional index 19.
+    sdpa_q_tt = tensors[19]
     sdpa_q_torch = _ttnn.to_torch(sdpa_q_tt)
 
     sdpa_num_workers = SigLIPAttentionBlockFused.SDPA_NUM_CORES  # 32 (#11 Commit 4: relocated SDPA)
@@ -273,13 +273,14 @@ def test_attention_block_fused_sdpa_q_probe(device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_attention_block_fused_sdpa_qk_compute_probe(device):
-    """Streaming QK^T compute: full per-worker QK^T (M_per_worker × M_KV).
+def test_attention_block_fused_sdpa_softmax_probe(device):
+    """Per-head row-wise softmax on QK^T (Commit 9).
 
-    Each of the 32 SDPA workers computes its full M-slice's QK^T = (128, 256)
-    bf16 = 32 tiles, aliased into fused_scratch_tt at byte offset 0 on the
-    SDPA grid (same L1 region the LN1 row's xmm_cb uses on LN1 cores —
-    disjoint grids, no conflict).
+    Each of the 32 SDPA workers computes Q @ K^T then runs softmax(.., dim=-1)
+    row-wise over the (128, 256) per-worker scores via pi05_siglip_ops::
+    Softmax::Op. softmax_out_cb is aliased to sdpa_qk_scores_cb's L1 region
+    (in-place via fused_scratch_tt) — after the dispatch, fused_scratch
+    holds softmax values on SDPA cores' shards.
 
     TRISC iterates n_out (K-row) ∈ [0..7]: waits on NCRISC-streamed K-row,
     then for each m_out (Q-row) ∈ [0..3] matmuls Q[m_out, :] @ K[n_out, :]^T
@@ -376,7 +377,9 @@ def test_attention_block_fused_sdpa_qk_compute_probe(device):
         m_start = worker_idx * rows_per_worker
         q_slice = q_padded_per_head[head_idx, m_start : m_start + rows_per_worker, :].to(torch.float32)
         k_slice = k_padded_per_head[head_idx, :, :].to(torch.float32)  # full (M_KV, head_dim_padded)
-        expected = (q_slice @ k_slice.T).to(torch.bfloat16)  # (rows_per_worker, M_KV)
+        scores = q_slice @ k_slice.T  # (rows_per_worker, M_KV) fp32
+        # Pure softmax(scores, dim=-1) — no 1/sqrt(d_k) scaling in this commit.
+        expected = torch.softmax(scores, dim=-1).to(torch.bfloat16)
 
         p = pcc(expected, qk_worker)
         if p < min_pcc:
@@ -384,8 +387,13 @@ def test_attention_block_fused_sdpa_qk_compute_probe(device):
             worst = (worker_linear, head_idx, worker_idx)
 
     print(
-        f"\nPCC (SDPA full QK^T compute probe, min/32 workers) = "
+        f"\nPCC (SDPA softmax(Q @ K^T) probe, min/32 workers) = "
         f"{min_pcc:.6f} (worst: worker={worst[0]}, head={worst[1]}, w_idx={worst[2]})"
     )
     print(f"  per-worker shape={(rows_per_worker, m_kv)}, dtype={qk_worker.dtype}")
-    assert min_pcc >= 0.998, f"min QK^T probe PCC {min_pcc} below 0.998"
+    # Softmax stacks SFPU exp_tile + recip_tile on top of the bfp8/HiFi4
+    # QK^T base — compounded approximation error. With pure bf16 weights
+    # the same kernel lands ~0.998; with our bfp8 weights it lands ~0.996.
+    # The pi0_base standalone SigLIP SDPA test runs at the same precision
+    # regime.
+    assert min_pcc >= 0.996, f"min softmax probe PCC {min_pcc} below 0.996"

@@ -170,6 +170,19 @@ class SigLIPAttentionBlockFused:
         # L1 region used by xmm_cb on LN1 cores (disjoint grids, no
         # conflict). Replaces sdpa_qk_probe_cb from Commit 6/7.
         "sdpa_qk_scores_cb": 21,
+        # #11 Commit 9: per-head row-wise softmax on qk_scores via
+        # pi05_siglip_ops::Softmax::Op. Five intermediate CBs on SDPA grid:
+        # scaler (1.0 broadcast for reduces), max + sum + isum (1 tile each
+        # per row), exp (K_TILES = 8 tiles per row, refilled per row).
+        # softmax_out aliases sdpa_qk_scores_cb (same fused_scratch L1 region
+        # at offset 0) — softmax overwrites qk_scores in-place. Test reads
+        # back the L1 region and PCCs against torch.softmax(Q @ K^T).
+        "sdpa_softmax_max_cb": 22,
+        "sdpa_softmax_exp_cb": 23,
+        "sdpa_softmax_sum_cb": 24,
+        "sdpa_softmax_isum_cb": 25,
+        "sdpa_softmax_scaler_cb": 26,
+        "sdpa_softmax_out_cb": 27,
     }
 
     # SDPA QKV-ready semaphore (id=3). All three QKV producers (Q, K, V)
@@ -206,6 +219,11 @@ class SigLIPAttentionBlockFused:
         qkv_done_trigger_tt,
         sdpa_q_tt,
         sdpa_k_partial_tt,
+        sdpa_softmax_max_tt,
+        sdpa_softmax_exp_tt,
+        sdpa_softmax_sum_tt,
+        sdpa_softmax_isum_tt,
+        sdpa_softmax_scaler_tt,
         math_fidelity=ttnn.MathFidelity.HiFi4,
         eps: float = 1e-6,
     ):
@@ -293,6 +311,9 @@ class SigLIPAttentionBlockFused:
             ("sdpa_k_partial_tiles", 3),  # K row 0: 3 head_dim tiles
             # #11 Commit 7: NCRISC loops over M_KV K-rows to stream each one.
             ("m_kv_n_tiles", SigLIPAttentionBlockFused.M // SigLIPAttentionBlockFused.TILE),
+            # #11 Commit 9: NCRISC marks softmax_scaler as pushed (1 tile of
+            # 1.0 pre-loaded from host); TRISC's reduce_init reads it.
+            ("sdpa_softmax_scaler_cb", SigLIPAttentionBlockFused.CB["sdpa_softmax_scaler_cb"]),
         ]
         # TRISC needs all CBs + tile counts + eps + QKV matmul shape params.
         trisc_ct = [
@@ -324,6 +345,16 @@ class SigLIPAttentionBlockFused:
             # [0..m_per_worker_n_tiles-1] within each n_out's K-row to fill
             # the full per-worker (M_per_worker, M_KV) qk_scores buffer.
             ("m_per_worker_n_tiles", m_tiles_per_sdpa_worker),
+            # #11 Commit 9: softmax CBs — TRISC calls pi05_siglip_ops::
+            # Softmax::Op after the QK^T compute completes. softmax_out_cb
+            # aliases sdpa_qk_scores_cb's L1 (in-place softmax via the
+            # fused_scratch buffer).
+            ("sdpa_softmax_max_cb", SigLIPAttentionBlockFused.CB["sdpa_softmax_max_cb"]),
+            ("sdpa_softmax_exp_cb", SigLIPAttentionBlockFused.CB["sdpa_softmax_exp_cb"]),
+            ("sdpa_softmax_sum_cb", SigLIPAttentionBlockFused.CB["sdpa_softmax_sum_cb"]),
+            ("sdpa_softmax_isum_cb", SigLIPAttentionBlockFused.CB["sdpa_softmax_isum_cb"]),
+            ("sdpa_softmax_scaler_cb", SigLIPAttentionBlockFused.CB["sdpa_softmax_scaler_cb"]),
+            ("sdpa_softmax_out_cb", SigLIPAttentionBlockFused.CB["sdpa_softmax_out_cb"]),
         ]
 
         # Physical NoC coords for the worker grid. BH's logical-to-physical x
@@ -516,6 +547,22 @@ class SigLIPAttentionBlockFused:
         qk_scores_cb_aliased.format_descriptors[0].tile = tile_descriptor
         qk_scores_cb_aliased.format_descriptors[0].page_size = bf16_tile_bytes
 
+        # #11 Commit 9: softmax_out_cb aliases the SAME L1 region as
+        # sdpa_qk_scores_cb (different CB ID, same fused_scratch byte
+        # offset 0). The Softmax Op-struct writes softmax(qk_scores)
+        # tile-by-tile into out_cb's slots; with capacity 32 tiles and
+        # no pops, the L1 region holds softmax data after all M_TILES
+        # iterations complete. In-place via separate CB counters.
+        softmax_out_cb_aliased = ttnn.cb_descriptor_from_sharded_tensor(
+            SigLIPAttentionBlockFused.CB["sdpa_softmax_out_cb"],
+            fused_scratch_tt,
+            address_offset=0,
+            total_size=qk_scores_total_size,
+            core_ranges=sdpa_grid_alias,
+        )
+        softmax_out_cb_aliased.format_descriptors[0].tile = tile_descriptor
+        softmax_out_cb_aliased.format_descriptors[0].page_size = bf16_tile_bytes
+
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
@@ -541,6 +588,12 @@ class SigLIPAttentionBlockFused:
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_q_cb"], sdpa_q_tt),
                 _cb(SigLIPAttentionBlockFused.CB["sdpa_k_partial_cb"], sdpa_k_partial_tt),
                 qk_scores_cb_aliased,
+                _cb(SigLIPAttentionBlockFused.CB["sdpa_softmax_max_cb"], sdpa_softmax_max_tt),
+                _cb(SigLIPAttentionBlockFused.CB["sdpa_softmax_exp_cb"], sdpa_softmax_exp_tt),
+                _cb(SigLIPAttentionBlockFused.CB["sdpa_softmax_sum_cb"], sdpa_softmax_sum_tt),
+                _cb(SigLIPAttentionBlockFused.CB["sdpa_softmax_isum_cb"], sdpa_softmax_isum_tt),
+                _cb(SigLIPAttentionBlockFused.CB["sdpa_softmax_scaler_cb"], sdpa_softmax_scaler_tt),
+                softmax_out_cb_aliased,
             ],
             semaphores=[counter_sem, sdpa_qkv_ready_sem],
         )
@@ -568,6 +621,11 @@ class SigLIPAttentionBlockFused:
                 qkv_done_trigger_tt,
                 sdpa_q_tt,
                 sdpa_k_partial_tt,
+                sdpa_softmax_max_tt,
+                sdpa_softmax_exp_tt,
+                sdpa_softmax_sum_tt,
+                sdpa_softmax_isum_tt,
+                sdpa_softmax_scaler_tt,
             ],
             program_descriptor,
         )
@@ -869,6 +927,54 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         memory_config=fused_scratch_mem,
     )
 
+    # #11 Commit 9: softmax intermediate CBs on the SDPA grid (32 cores).
+    # max, sum, isum: 1 tile per worker. exp: M_KV / TILE = 8 tiles per worker.
+    # scaler: 1 tile of 1.0 (no scaling — pure softmax).
+    sdpa_softmax_tile_shard = ttnn.ShardSpec(sdpa_core_grid, (TILE, TILE), ttnn.ShardOrientation.ROW_MAJOR)
+    sdpa_softmax_tile_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_softmax_tile_shard
+    )
+
+    def _sdpa_1tile():
+        return ttnn.from_torch(
+            torch.zeros(sdpa_num_workers * TILE, TILE, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sdpa_softmax_tile_mem,
+        )
+
+    sdpa_softmax_max_tt = _sdpa_1tile()
+    sdpa_softmax_sum_tt = _sdpa_1tile()
+    sdpa_softmax_isum_tt = _sdpa_1tile()
+
+    softmax_k_tiles = M // TILE  # 8 — matches m_kv_n_tiles
+    sdpa_softmax_exp_shard = ttnn.ShardSpec(
+        sdpa_core_grid, (TILE, softmax_k_tiles * TILE), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    sdpa_softmax_exp_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_softmax_exp_shard
+    )
+    sdpa_softmax_exp_tt = ttnn.from_torch(
+        torch.zeros(sdpa_num_workers * TILE, softmax_k_tiles * TILE, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sdpa_softmax_exp_mem,
+    )
+
+    ones_per_worker = torch.full((TILE, TILE), 1.0, dtype=torch.bfloat16)
+    softmax_scaler_stacked = (
+        ones_per_worker.unsqueeze(0).repeat(sdpa_num_workers, 1, 1).reshape(sdpa_num_workers * TILE, TILE)
+    )
+    sdpa_softmax_scaler_tt = ttnn.from_torch(
+        softmax_scaler_stacked,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sdpa_softmax_tile_mem,
+    )
+
     return (
         ln_in_tt,
         gamma_tt,
@@ -891,4 +997,9 @@ def build_tensors_for_fused_attention_block(device, x_torch, gamma_torch, beta_t
         qkv_done_trigger_tt,
         sdpa_q_tt,
         sdpa_k_partial_tt,
+        sdpa_softmax_max_tt,
+        sdpa_softmax_exp_tt,
+        sdpa_softmax_sum_tt,
+        sdpa_softmax_isum_tt,
+        sdpa_softmax_scaler_tt,
     )
