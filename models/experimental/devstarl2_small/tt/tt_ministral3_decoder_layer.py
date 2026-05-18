@@ -138,17 +138,31 @@ class TtMinistral3DecoderLayer(LightweightModule):
         ``rot_mats``: ``[cos, sin]`` sliced for ``current_pos`` from ``TtMinistral3RotaryEmbedding.get_rot_mats``.
         """
         args = self.self_attn.args
+        num_devices = self.self_attn.num_devices
         residual_mem_cfg = args.get_residual_mem_config(Mode.DECODE, None)
         attn_input_mem_cfg = args.get_attn_input_mem_config(Mode.DECODE, None)
         mlp_input_mem_cfg = args.get_mlp_input_mem_config(Mode.DECODE, None)
 
-        # x must be in residual mem config (L1 width-sharded) for decode ops.
+        # ``x`` (residual) is width-fractured across chips on multi-chip
+        # (``residual_mem_cfg`` shards by ``dim / num_devices``). The
+        # downstream QKV / FF1 matmuls expect **full** ``dim`` per chip, so we
+        # must all-gather the post-norm tensor before resharding for them.
+        # On single chip this is a no-op (``num_devices == 1``).
         x = ttnn.to_memory_config(x, residual_mem_cfg)
 
-        # Attention sub-block: norm on DRAM (plain RMSNorm), then shard for the DRAM-sharded QKV matmul.
+        # Attention sub-block: norm on DRAM (distributed on multi-chip),
+        # gather to full dim per chip, then shard for the DRAM-sharded QKV.
         x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         h_normed = self.input_layernorm(x_dram, Mode.DECODE)
         ttnn.deallocate(x_dram)
+        if num_devices > 1:
+            h_normed = ttnn.all_gather(
+                h_normed,
+                dim=3,
+                num_links=1,
+                topology=args.ccl_topology(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         h = ttnn.to_memory_config(h_normed, attn_input_mem_cfg)
         ttnn.deallocate(h_normed)
 
@@ -164,10 +178,19 @@ class TtMinistral3DecoderLayer(LightweightModule):
         skip1 = ttnn.add(x, attn_out, memory_config=residual_mem_cfg)
         ttnn.deallocate(attn_out)
 
-        # MLP sub-block: norm on DRAM, then shard for the DRAM-sharded FF matmuls.
+        # MLP sub-block: norm on DRAM, gather, then shard for the DRAM-sharded
+        # FF matmuls (same multi-chip rationale as above).
         skip1_dram = ttnn.to_memory_config(skip1, ttnn.DRAM_MEMORY_CONFIG)
         h2_normed = self.post_attention_layernorm(skip1_dram, Mode.DECODE)
         ttnn.deallocate(skip1_dram)
+        if num_devices > 1:
+            h2_normed = ttnn.all_gather(
+                h2_normed,
+                dim=3,
+                num_links=1,
+                topology=args.ccl_topology(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         h2 = ttnn.to_memory_config(h2_normed, mlp_input_mem_cfg)
         ttnn.deallocate(h2_normed)
 
