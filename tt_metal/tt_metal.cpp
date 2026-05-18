@@ -12,6 +12,7 @@
 #include "context/context_types.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "device/device_manager.hpp"
+#include <dram_sender_global_circular_buffer.hpp>
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
@@ -1776,6 +1777,15 @@ CBHandle CreateCircularBuffer(
     const GlobalCircularBuffer& global_circular_buffer) {
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     return program.impl().add_circular_buffer(core_ranges, config, global_circular_buffer);
+}
+
+CBHandle CreateCircularBuffer(
+    Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const CircularBufferConfig& config,
+    const DramSenderGlobalCircularBuffer& dram_sender_global_circular_buffer) {
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    return program.impl().add_circular_buffer(core_ranges, config, dram_sender_global_circular_buffer);
 }
 
 void UpdateDynamicCircularBufferAddress(

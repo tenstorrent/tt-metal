@@ -6,16 +6,20 @@
 
 #include <cstdint>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 
 namespace tt::tt_metal {
 
 class Buffer;
+class CircularBufferConfig;
 class IDevice;
+class Program;
 
 namespace experimental {
 
@@ -75,6 +79,14 @@ DramSenderGlobalCircularBuffer CreateDramSenderGlobalCircularBuffer(
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& dram_sender_to_worker_receivers,
     uint32_t size,
     BufferType buffer_type = BufferType::L1);
+
+// Receiver-side attachment of a DramSenderGlobalCircularBuffer to a worker-core program. The
+// sender side (DRISC) is hand-managed by the kernel and intentionally not attached here.
+CBHandle CreateCircularBuffer(
+    Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const CircularBufferConfig& config,
+    const DramSenderGlobalCircularBuffer& dram_sender_global_circular_buffer);
 
 }  // namespace experimental
 

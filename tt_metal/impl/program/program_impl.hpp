@@ -61,6 +61,7 @@ class MeshWorkloadImpl;
 
 namespace experimental {
 class GlobalCircularBuffer;
+class DramSenderGlobalCircularBuffer;
 }
 
 namespace program_dispatch {
@@ -282,6 +283,10 @@ public:
         const CoreRangeSet& core_range_set,
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
+    CBHandle add_circular_buffer(
+        const CoreRangeSet& core_range_set,
+        const CircularBufferConfig& config,
+        const experimental::DramSenderGlobalCircularBuffer& dram_sender_global_circular_buffer);
 
     uint32_t add_dataflow_buffer(
         const CoreRangeSet& core_range_set, const experimental::dfb::DataflowBufferConfig& config);

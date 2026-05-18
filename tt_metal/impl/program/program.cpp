@@ -95,6 +95,7 @@ class tt_hlk_desc;
 enum CBIndex : std::uint8_t;
 namespace tt_metal::experimental {
 class GlobalCircularBuffer;
+class DramSenderGlobalCircularBuffer;
 }  // namespace tt_metal::experimental
 }  // namespace tt
 
@@ -1064,6 +1065,18 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
     // Merge ranges to reduce the number of multicasts needed to initialize CBs.
     std::shared_ptr<CircularBufferImpl> circular_buffer =
         std::make_shared<CircularBufferImpl>(core_range_set.merge_ranges(), config, global_circular_buffer);
+    return add_circular_buffer_(circular_buffer);
+}
+
+CBHandle detail::ProgramImpl::add_circular_buffer(
+    const CoreRangeSet& core_range_set,
+    const CircularBufferConfig& config,
+    const experimental::DramSenderGlobalCircularBuffer& dram_sender_global_circular_buffer) {
+    TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
+    TT_FATAL(
+        this->dataflow_buffers_.empty(), "Cannot add circular buffer to a program that already has dataflow buffers");
+    std::shared_ptr<CircularBufferImpl> circular_buffer =
+        std::make_shared<CircularBufferImpl>(core_range_set.merge_ranges(), config, dram_sender_global_circular_buffer);
     return add_circular_buffer_(circular_buffer);
 }
 
