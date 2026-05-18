@@ -416,6 +416,10 @@ void Device::configure_fabric(
         return;
     }
 
+    // GAP-R5 (#42429): Total elapsed timer for configure_fabric — post-mortem can't tell how
+    // long fabric init took without this.  Logged at function exit.
+    const auto configure_fabric_start = std::chrono::steady_clock::now();
+
     // FIX S9 (#42429): Bump monotonic session ID.  Firmware uses this to reject stale data
     // from a previous session.  SESSION_ID_INVALID(0) is never used — the counter starts at 1
     // and only increments forward.  Wrap at UINT32_MAX is astronomically unlikely.
@@ -1421,10 +1425,25 @@ void Device::configure_fabric(
             health.newly_dead_channels.size(),
             health.recovered_channels.size());
     }
+    // GAP-R5 (#42429): Log total elapsed for configure_fabric.
+    {
+        auto configure_fabric_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - configure_fabric_start).count();
+        log_info(
+            tt::LogMetal,
+            "configure_fabric: Device {} complete — total elapsed {}ms (session_id=0x{:08X})",
+            this->id_,
+            configure_fabric_elapsed,
+            fabric_session_id_);
+    }
     log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
 }
 
 void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
+    // GAP-R6 (#42429): Total elapsed timer for quiesce_and_restart — can take minutes with
+    // MUX terminate + ERISC terminate + re-launch phases.  Logged at every exit point.
+    const auto quiesce_restart_start = std::chrono::steady_clock::now();
+
     // Diagnostic: env toggle lets CI / repro runs skip this restart path entirely to isolate
     // whether the Tensix MUX restart is the cause of a post-quiesce hang. When set, we return
     // before any fabric MUX termination. See plan Experiment B.
@@ -1433,9 +1452,11 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
         log_info(
             tt::LogMetal,
             "quiesce_and_restart_fabric_workers: Device {} early-return: "
-            "TT_METAL_DISABLE_QUIESCE_FABRIC_RESTART={} (restart path disabled)",
+            "TT_METAL_DISABLE_QUIESCE_FABRIC_RESTART={} (restart path disabled) — elapsed {}ms",
             this->id(),
-            env);
+            env,
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - quiesce_restart_start).count());
         return;
     }
 
@@ -1444,9 +1465,11 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
         log_info(
             tt::LogMetal,
             "quiesce_and_restart_fabric_workers: Device {} early-return at guard L426: "
-            "!is_tt_fabric_config(fabric_config={})",
+            "!is_tt_fabric_config(fabric_config={}) — elapsed {}ms",
             this->id(),
-            static_cast<uint32_t>(fabric_config));
+            static_cast<uint32_t>(fabric_config),
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - quiesce_restart_start).count());
         return;
     }
 
@@ -1472,8 +1495,10 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
         log_info(
             tt::LogMetal,
             "quiesce_and_restart_fabric_workers: Device {} early-return at guard L439: "
-            "get_num_fabric_initialized_routers == 0",
-            this->id());
+            "get_num_fabric_initialized_routers == 0 — elapsed {}ms",
+            this->id(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - quiesce_restart_start).count());
         return;
     }
 
@@ -1964,6 +1989,18 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
         }
     }  // end else (Phase 2.5 — relay path not broken)
 
+    // GAP-R8 (#42429): Phase 2.5 force-reset summary — how many channels needed force-halt
+    // vs how many were active.  High force_reset_count relative to active_channels indicates
+    // ERISCs are routinely failing to self-terminate within the 2000ms budget.
+    log_info(
+        tt::LogMetal,
+        "quiesce_and_restart_fabric_workers: Device {} Phase 2.5 summary: "
+        "force_reset_count={}/{} active_channels, relay_path_broken={}",
+        this->id(),
+        pending_phase25_force_reset_chans_.size(),
+        active_channels.size(),
+        fabric_relay_path_broken_.load());
+
     // Phase 3: Re-configure and re-launch the fabric workers
     // Reset termination signals, clear channel state, and re-send launch messages
     // for WORKER cores in the fabric program.
@@ -1971,8 +2008,10 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
         log_info(
             tt::LogMetal,
             "quiesce_and_restart_fabric_workers: Device {} early-return at guard L564: "
-            "fabric_program_ == nullptr (Phase 1/2 ran but Phase 3/4 skipped)",
-            this->id());
+            "fabric_program_ == nullptr (Phase 1/2 ran but Phase 3/4 skipped) — elapsed {}ms",
+            this->id(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - quiesce_restart_start).count());
         return;
     }
 
@@ -2007,8 +2046,11 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
             tt::LogMetal,
             "quiesce_and_restart_fabric_workers: Device {} Phase 3 skipped — "
             "relay path broken; configure_fabric_cores/WriteRuntimeArgs/write_launch_msg "
-            "omitted. wait_for_fabric_workers_ready() will also skip Phase 5 for this device.",
-            this->id());
+            "omitted. wait_for_fabric_workers_ready() will also skip Phase 5 for this device. "
+            "— elapsed {}ms",
+            this->id(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - quiesce_restart_start).count());
         return;
     }
 
@@ -2171,8 +2213,11 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
         log_info(
             tt::LogMetal,
             "quiesce_and_restart_fabric_workers: Device {} Phase 3 complete (ETH deferred) — "
-            "WORKER cores relaunched. ETH ERISC launch pending launch_eth_cores_for_quiesce().",
-            this->id());
+            "WORKER cores relaunched. ETH ERISC launch pending launch_eth_cores_for_quiesce(). "
+            "— elapsed {}ms",
+            this->id(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - quiesce_restart_start).count());
         return;
     }
     // ETH write_launch_msg executes inline (defer_eth_launch=false, the default).
@@ -2619,17 +2664,24 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
         "quiesce_and_restart_fabric_workers: Device {} Phase 3 complete — "
         "all cores relaunched. Handshake completion deferred to wait_for_fabric_workers_ready().",
         this->id());
-    log_info(
-        tt::LogMetal,
-        "quiesce_and_restart_fabric_workers: Device {} SUMMARY — "
-        "relay_path_broken={} mmio={} "
-        "Phase1=done Phase2=done Phase2.5={} Phase3={} "
-        "(wait_for_fabric_workers_ready() handles Phase4+Phase5)",
-        this->id(),
-        fabric_relay_path_broken_.load(),
-        this->is_mmio_capable(),
-        (fabric_relay_path_broken_.load() && !this->is_mmio_capable()) ? "skipped(relay_broken)" : "done",
-        (fabric_relay_path_broken_.load() && !this->is_mmio_capable()) ? "skipped(relay_broken)" : "done");
+    // GAP-R6 (#42429): Log total elapsed at normal exit.
+    {
+        auto quiesce_restart_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - quiesce_restart_start).count();
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} SUMMARY — "
+            "relay_path_broken={} mmio={} "
+            "Phase1=done Phase2=done Phase2.5={} Phase3={} "
+            "total_elapsed={}ms "
+            "(wait_for_fabric_workers_ready() handles Phase4+Phase5)",
+            this->id(),
+            fabric_relay_path_broken_.load(),
+            this->is_mmio_capable(),
+            (fabric_relay_path_broken_.load() && !this->is_mmio_capable()) ? "skipped(relay_broken)" : "done",
+            (fabric_relay_path_broken_.load() && !this->is_mmio_capable()) ? "skipped(relay_broken)" : "done",
+            quiesce_restart_elapsed);
+    }
 }
 
 // FIX AE (#42429): Deferred ETH write_launch_msg for quiesce.
