@@ -45,7 +45,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
+from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, ParallelSocketInterface, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 
@@ -511,3 +511,295 @@ def test_cross_mesh_socket_perf(
         entry_socket.terminate(True)
 
     logger.info(f"[rank with mesh_id={my_mesh_id}] PERF done")
+
+
+# ---------------------------------------------------------------------------
+# Parallel variant — N chip-pair sockets in parallel via ParallelSocketInterface.
+#
+# Per-channel layout (per chip):
+#   core (0,0) "entry"  — D2D recv core on receiver, sender's exit-node-recv on sender
+#   core (0,1) "exit"   — D2D send core on sender, receiver's entry-node-send on receiver
+#   core (0,2) "io"     — H2D socket on rank 0; D2H socket on rank 1
+#
+# Per chip on rank 0: H2D socket → HostInterface forwards to (0,1) exit core
+#                   → ParallelSocketInterface channel N → fabric → rank 1's chip N entry core
+# Per chip on rank 1: ParallelSocketInterface channel N delivers to (0,0) entry core
+#                   → HostInterface forwards to (0,2) → D2H socket back to host
+#
+# One ParallelSocketInterface per rank owns N channels (one per chip in the
+# mesh). All N sockets run in one kernel dispatch and can carry data
+# simultaneously across the inter-mesh fabric. This is the same machinery
+# the production decode pipeline uses for inter-stage data movement; we test
+# it at the unit level here.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    # (num_channels, page_size_bytes, num_logical_tensors_per_channel)
+    # Each channel transfers a 640×1792 bf16 (= 2,293,760 bytes) "logical tensor"
+    # per iteration. Aggregate per iteration = num_channels × that.
+    "num_channels, page_size_bytes, num_logical_tensors_per_channel",
+    [
+        (1, 4096, 20),
+        (4, 4096, 20),
+        (8, 4096, 20),
+        (16, 4096, 20),
+        (32, 4096, 20),
+    ],
+    ids=["nc1", "nc4", "nc8", "nc16", "nc32"],
+)
+@pytest.mark.parametrize("h2d_mode", [ttnn.H2DMode.HOST_PUSH])
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (2, 4),
+        (4, 8),
+    ],
+    ids=["1galaxy", "2galaxy"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": _FABRIC_CONFIG,
+            "fabric_router_config": create_fabric_router_config(_FABRIC_ROUTER_MAX_PAYLOAD_BYTES),
+        }
+    ],
+    indirect=True,
+)
+def test_cross_mesh_socket_parallel_perf(
+    mesh_device, num_channels, page_size_bytes, num_logical_tensors_per_channel, h2d_mode
+):
+    """N-channel parallel cross-mesh socket: one socket per chip-pair, all in flight at once.
+
+    Each channel ships a 640×1792 bf16 logical tensor per iteration (chunked into
+    page_size_bytes-sized H2D writes). Wall time is measured across MPI barriers;
+    aggregate bandwidth = (num_channels × logical_bytes_per_chan × iters) / elapsed.
+
+    Skipped when num_channels exceeds the available chip count for the chosen
+    mesh shape: max 8 for (2,4) single-galaxy, max 32 for (4,8) two-galaxy.
+
+    First page of channel 0 is bit-exact verified to confirm the path is healthy;
+    rest of the hot loop runs without per-iter asserts to keep timing honest.
+    """
+    if not is_slow_dispatch():
+        pytest.skip("Sockets require slow dispatch (set TT_METAL_SLOW_DISPATCH_MODE=1).")
+
+    num_procs = int(ttnn.distributed_context_get_size())
+    if num_procs != 2:
+        pytest.skip(f"This test runs with exactly 2 ranks; got num_procs={num_procs}")
+
+    mesh_rows, mesh_cols = mesh_device.shape
+    num_chips_in_mesh = int(mesh_rows) * int(mesh_cols)
+    if num_channels > num_chips_in_mesh:
+        pytest.skip(f"num_channels={num_channels} exceeds chips in this mesh ({num_chips_in_mesh})")
+
+    BF16_BYTES = 2
+    logical_rows = 640
+    logical_cols = 1792
+    logical_bytes_per_chan = logical_rows * logical_cols * BF16_BYTES  # 2,293,760
+    assert (
+        logical_bytes_per_chan % page_size_bytes == 0
+    ), f"logical_bytes_per_chan ({logical_bytes_per_chan}) must be a multiple of page_size_bytes ({page_size_bytes})"
+    pages_per_chan = logical_bytes_per_chan // page_size_bytes
+
+    fifo_size = page_size_bytes * 4
+    page_size_datums = page_size_bytes // 4
+
+    my_mesh_id = mesh_device.get_system_mesh_id()
+    peer_mesh_id = 1 if my_mesh_id == 0 else 0
+
+    # Pick the first num_channels chips in row-major order.
+    device_coords = [ttnn.MeshCoordinate((r, c)) for r in range(int(mesh_rows)) for c in range(int(mesh_cols))][
+        :num_channels
+    ]
+    core_entry = ttnn.CoreCoord(0, 0)
+    core_exit = ttnn.CoreCoord(0, 1)
+    core_io = ttnn.CoreCoord(0, 2)
+
+    logger.info(
+        f"[mesh_id={my_mesh_id}] PARALLEL setup: nc={num_channels} on mesh {mesh_rows}x{mesh_cols}, "
+        f"page={page_size_bytes} B ({pages_per_chan} pages/chan/iter), fifo={fifo_size} B, "
+        f"iters={num_logical_tensors_per_channel}, "
+        f"aggregate per logical_tensor = {num_channels * logical_bytes_per_chan / 1e6:.2f} MB"
+    )
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+
+    if my_mesh_id == 0:
+        # ----------------- SENDER -----------------
+        h2d_sockets = []
+        host_ios = []
+        for dc in device_coords:
+            h2d = ttnn.H2DSocket(
+                mesh_device,
+                ttnn.MeshCoreCoord(dc, core_io),
+                ttnn.BufferType.L1,
+                fifo_size,
+                h2d_mode,
+            )
+            hio = HostInterface(
+                h2d_socket=h2d,
+                d2h_socket=None,
+                h2d_page_size=page_size_bytes,
+                d2h_page_size=page_size_bytes,
+                core_to_core_socket_buffer_size=fifo_size,
+                h2d_downstream_core=ttnn.MeshCoreCoord(dc, core_exit),
+            )
+            h2d_sockets.append(h2d)
+            host_ios.append(hio)
+
+        # Same chip on each side: send from chip's exit core, receive on
+        # corresponding chip's entry core in the peer mesh.
+        send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in device_coords]
+        recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in device_coords]
+
+        parallel_socket = ParallelSocketInterface(
+            page_size=page_size_bytes,
+            socket_fifo_size=fifo_size,
+            send_core_coords=send_cores,
+            recv_core_coords=recv_cores,
+            upstream_sockets=[hio.get_downstream_socket() for hio in host_ios],
+            sender_mesh=MeshWrapper(mesh_device),
+            receiver_mesh=MeshWrapper(mesh_id=peer_mesh_id),
+        )
+
+        for hio in host_ios:
+            hio.run()
+        parallel_socket.run()
+
+        # Pre-build pages so the hot loop is free of host-side construction.
+        # All channels share the same input pages (channel 0's data is the
+        # bit-exact reference; other channels carry the same bytes — receiver
+        # will verify channel 0's first page).
+        input_pages = [
+            ttnn.from_torch(
+                torch.arange(p * page_size_datums, (p + 1) * page_size_datums, dtype=torch.int32).reshape(
+                    1, page_size_datums
+                ),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            for p in range(pages_per_chan)
+        ]
+
+        logger.info(f"[mesh_id=0] PARALLEL: pages pre-built; barrier before hot loop")
+        ttnn.distributed_context_barrier()
+
+        # --- hot loop (timed) ---
+        t0 = time.perf_counter()
+        for _t in range(num_logical_tensors_per_channel):
+            for p in range(pages_per_chan):
+                # Push the same page into each channel's H2D socket. The
+                # parallel kernel drains all channels' FIFOs simultaneously.
+                for ch in range(num_channels):
+                    h2d_sockets[ch].write_tensor(input_pages[p])
+        ttnn.distributed_context_barrier()
+        t1 = time.perf_counter()
+        # ---
+
+        elapsed_s = t1 - t0
+        total_bytes = num_logical_tensors_per_channel * num_channels * logical_bytes_per_chan
+        per_logical_ms = (elapsed_s / num_logical_tensors_per_channel) * 1000.0
+        agg_gbps = total_bytes / elapsed_s / 1e9
+        per_chan_gbps = (total_bytes / num_channels) / elapsed_s / 1e9
+        logger.info(
+            f"[mesh_id=0] PARALLEL RESULT: nc={num_channels}  page={page_size_bytes}B  "
+            f"iters={num_logical_tensors_per_channel}  total={total_bytes/1e6:.2f} MB  "
+            f"elapsed={elapsed_s:.3f}s  per-logical-tensor={per_logical_ms:.3f} ms  "
+            f"aggregate_bw={agg_gbps:.3f} GB/s  per_channel_bw={per_chan_gbps:.3f} GB/s"
+        )
+
+        for hio in host_ios:
+            hio.terminate(False)
+        parallel_socket.terminate(True)
+
+    else:
+        # ----------------- RECEIVER -----------------
+        d2h_sockets = []
+        host_ios = []
+        for dc in device_coords:
+            d2h = ttnn.D2HSocket(
+                mesh_device,
+                ttnn.MeshCoreCoord(dc, core_io),
+                fifo_size,
+            )
+            hio = HostInterface(
+                h2d_socket=None,
+                d2h_socket=d2h,
+                h2d_page_size=page_size_bytes,
+                d2h_page_size=page_size_bytes,
+                core_to_core_socket_buffer_size=fifo_size,
+                d2h_upstream_core=ttnn.MeshCoreCoord(dc, core_entry),
+            )
+            d2h_sockets.append(d2h)
+            host_ios.append(hio)
+
+        # Mirror the sender's wiring: same chip pairs send/recv between the meshes.
+        send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in device_coords]
+        recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in device_coords]
+
+        parallel_socket = ParallelSocketInterface(
+            page_size=page_size_bytes,
+            socket_fifo_size=fifo_size,
+            send_core_coords=send_cores,
+            recv_core_coords=recv_cores,
+            downstream_sockets=[hio.get_upstream_socket() for hio in host_ios],
+            sender_mesh=MeshWrapper(mesh_id=peer_mesh_id),
+            receiver_mesh=MeshWrapper(mesh_device),
+        )
+
+        for hio in host_ios:
+            hio.run()
+        parallel_socket.run()
+
+        # One reusable output tensor per channel (read_tensor overwrites in place).
+        output_tensors = [
+            ttnn.from_torch(
+                torch.zeros(1, page_size_datums, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            for _ in range(num_channels)
+        ]
+
+        logger.info(f"[mesh_id=1] PARALLEL: ready; barrier before hot loop")
+        ttnn.distributed_context_barrier()
+
+        # --- hot loop (timed) ---
+        verified_first = False
+        t0 = time.perf_counter()
+        for _t in range(num_logical_tensors_per_channel):
+            for p in range(pages_per_chan):
+                for ch in range(num_channels):
+                    d2h_sockets[ch].read_tensor(output_tensors[ch])
+                    if not verified_first:
+                        got = ttnn.to_torch(output_tensors[ch]).to(torch.int32)
+                        expected = torch.arange(
+                            p * page_size_datums, (p + 1) * page_size_datums, dtype=torch.int32
+                        ).reshape(1, page_size_datums)
+                        assert torch.equal(expected, got), f"[mesh_id=1] ch={ch} first-page bit-exact check failed."
+                        logger.info(f"[mesh_id=1] ch=0 first page bit-exact OK; entering hot loop")
+                        verified_first = True
+        ttnn.distributed_context_barrier()
+        t1 = time.perf_counter()
+        # ---
+
+        elapsed_s = t1 - t0
+        total_bytes = num_logical_tensors_per_channel * num_channels * logical_bytes_per_chan
+        per_logical_ms = (elapsed_s / num_logical_tensors_per_channel) * 1000.0
+        agg_gbps = total_bytes / elapsed_s / 1e9
+        per_chan_gbps = (total_bytes / num_channels) / elapsed_s / 1e9
+        logger.info(
+            f"[mesh_id=1] PARALLEL RESULT: nc={num_channels}  page={page_size_bytes}B  "
+            f"iters={num_logical_tensors_per_channel}  total={total_bytes/1e6:.2f} MB  "
+            f"elapsed={elapsed_s:.3f}s  per-logical-tensor={per_logical_ms:.3f} ms  "
+            f"aggregate_bw={agg_gbps:.3f} GB/s  per_channel_bw={per_chan_gbps:.3f} GB/s"
+        )
+
+        for hio in host_ios:
+            hio.terminate(False)
+        parallel_socket.terminate(True)
+
+    logger.info(f"[rank with mesh_id={my_mesh_id}] PARALLEL done")
