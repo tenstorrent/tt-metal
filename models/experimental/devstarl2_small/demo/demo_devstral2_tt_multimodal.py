@@ -99,7 +99,7 @@ from models.experimental.devstarl2_small.tt.tt_ministral3_model import TtMinistr
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.lm_head import LMHead
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 
 apply_fp8_dequantize_compat()
 
@@ -241,9 +241,6 @@ def main():
         max_seq = max(4096, prompt_len + extra_tokens + 2048)
         max_seq = ((max_seq + 511) // 512) * 512
 
-        # ``optimizations``: bfp4 MLP FF1/FF3 + bfp8 elsewhere. Cuts decode
-        # bandwidth from ~48 GB/token (bf16) to ~14 GB/token. MLP and
-        # attention modules read this via ``args.decoders_optimizations``.
         model_args = ModelArgs(
             mesh_device,
             max_batch_size=1,
@@ -251,7 +248,6 @@ def main():
             dummy_weights=False,
             use_hf_rope=True,
             cache_hf=True,
-            optimizations=lambda ma: DecodersPrecision.performance(ma.n_layers, ma.model_name),
         )
         # Multi-chip: PREFILL is gathered to full-dim inside the decoder layer
         # (replicated norm), DECODE leaves residual width-fractured across chips
