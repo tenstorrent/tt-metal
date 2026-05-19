@@ -283,23 +283,19 @@ _BLOCKINGS = {
     # BH Loud Box 2x4, 480p, cached t_chunk_size=7 (vae_t_chunk_size=7).
     # Per-device (H, W): stage0(30, 26), stage1(60, 52), stage2(120, 104), stage3(240, 208).
     # Cached T_res grows 9 → 16 → 30 across stages.
-    #
-    # Disabled entries below fall back to _DEFAULT_BLOCKINGS — they're
-    # bit-mismatched vs chunk_size=1 in test_wan_decoder_chunked_consistency
-    # and need re-sweeping cleanly. The fallback is correctness-checked.
-    # conv_out is fixed in-place: T_out_block=4 left a 2-frame T-leftover
-    # which interacts buggily with C_out=3 (padded to C_out_block=32);
-    # T_out_block=1 sidesteps that leftover path.
+    # conv_out: T_out_block=4 left a 2-frame T-leftover which interacts buggily
+    # with C_out=3 (padded to C_out_block=32) and caused visible distortion at
+    # pixel frame 24-25 of every clip; T_out_block=1 sidesteps that leftover path.
     # Stage 0
     (2, 4, 32, 384, (3, 3, 3), 9, 30, 26): (32, 128, 7, 2, 2),  # conv_in
-    # (2, 4, 384, 384, (3, 3, 3), 9, 30, 26): (96, 96, 1, 32, 4),  # lat_mid_res - disabled, re-sweep
-    # (2, 4, 384, 768, (3, 1, 1), 9, 30, 26): (192, 256, 1, 16, 2),  # up0_tconv - disabled, re-sweep
+    (2, 4, 384, 384, (3, 3, 3), 9, 30, 26): (96, 96, 1, 32, 4),  # lat_mid_res
+    (2, 4, 384, 768, (3, 1, 1), 9, 30, 26): (192, 256, 1, 16, 2),  # up0_tconv
     (2, 4, 384, 192, (1, 3, 3), 14, 60, 52): (192, 96, 1, 32, 4),  # up0_spatial
     # Stage 1
-    # (2, 4, 192, 384, (3, 3, 3), 16, 60, 52): (96, 96, 7, 16, 2),  # up1_res0 - disabled, re-sweep
-    # (2, 4, 384, 384, (3, 3, 3), 16, 60, 52): (96, 96, 7, 16, 2),  # up1_res - disabled, re-sweep
-    # (2, 4, 384, 768, (3, 1, 1), 16, 60, 52): (192, 768, 1, 8, 4),  # up1_tconv - disabled, re-sweep
-    # (2, 4, 384, 192, (1, 3, 3), 28, 120, 104): (384, 96, 1, 4, 8),  # up1_spatial - disabled, re-sweep
+    (2, 4, 192, 384, (3, 3, 3), 16, 60, 52): (96, 96, 7, 16, 2),  # up1_res0
+    (2, 4, 384, 384, (3, 3, 3), 16, 60, 52): (96, 96, 7, 16, 2),  # up1_res
+    (2, 4, 384, 768, (3, 1, 1), 16, 60, 52): (192, 768, 1, 8, 4),  # up1_tconv
+    (2, 4, 384, 192, (1, 3, 3), 28, 120, 104): (384, 96, 1, 4, 8),  # up1_spatial
     # Stage 2
     (2, 4, 192, 192, (3, 3, 3), 30, 120, 104): (96, 96, 7, 4, 8),  # up2_res
     (2, 4, 192, 96, (1, 3, 3), 28, 240, 208): (192, 96, 1, 4, 16),  # up2_spatial
