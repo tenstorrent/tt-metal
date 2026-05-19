@@ -1296,8 +1296,24 @@ def run_moe_compute_test(
     # CREATE TILIZE INPUT TENSORS AND GOLDENS
     #########################################
 
-    # Drain tilize core is core (6,9) where indices and scores are sharded
-    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9))})
+    mux_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange((1, 1), (3, 3))])
+
+    # Drain tilize core holds height-sharded expert indices/scores in L1.
+    tilize_drain_core_coord = ttnn.experimental.get_moe_tilize_drain_core(
+        mesh_device,
+        output_height_shard_dim,
+        output_width_shard_dim,
+        hidden_size,
+        mux_core_range_set=mux_core_range_set,
+    )
+    tilize_drain_core = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(tilize_drain_core_coord.x, tilize_drain_core_coord.y),
+                ttnn.CoreCoord(tilize_drain_core_coord.x, tilize_drain_core_coord.y),
+            )
+        }
+    )
 
     #### Expert mapping - per-device [num_devices, experts], replicated on every device ###
     # Each device gets its own row after sharding, but since it's replicated,
@@ -1573,11 +1589,14 @@ def run_moe_compute_test(
     )
 
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(
-        mesh_device, output_height_shard_dim, output_width_shard_dim
+        mesh_device,
+        output_height_shard_dim,
+        output_width_shard_dim,
+        hidden_size,
+        mux_core_range_set=mux_core_range_set,
     )
     combine_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in output_shard_cores])
     combine_barrier_semaphore = ttnn.create_global_semaphore(mesh_device, combine_core_range_set, 0)
-    mux_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange((1, 1), (3, 3))])
 
     torch_combine_output_tensor = torch.zeros([selected_experts_k, total_tokens, hidden_size], dtype=torch.bfloat16)
     tt_combine_output_tensors = [
@@ -1724,7 +1743,11 @@ def run_moe_compute_test(
     base_pcc_threshold = _get_base_pcc_threshold(activation_type, has_bias)
 
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(
-        mesh_device, output_height_shard_dim, output_width_shard_dim
+        mesh_device,
+        output_height_shard_dim,
+        output_width_shard_dim,
+        hidden_size,
+        mux_core_range_set=mux_core_range_set,
     )
     per_expert_tokens_all_passed = True
     activation_all_passed = True

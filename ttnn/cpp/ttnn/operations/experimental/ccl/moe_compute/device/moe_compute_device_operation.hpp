@@ -58,5 +58,6 @@ std::vector<Tensor> moe_compute(
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type = std::nullopt);
 
 using ttnn::experimental::prim::get_moe_combine_cores;
+using ttnn::experimental::prim::get_moe_tilize_drain_core;
 
 }  // namespace ttnn::prim
