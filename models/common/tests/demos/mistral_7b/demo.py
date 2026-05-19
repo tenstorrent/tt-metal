@@ -50,7 +50,7 @@ from transformers import AutoConfig, AutoTokenizer
 import ttnn
 from models.common.models.executor import run_perf_benchmark, run_teacher_forcing
 from models.common.models.mistral_7b.executor import EagerMistralExecutor, TracedMistralExecutor
-from models.common.models.mistral_7b.model import Mistral7B
+from models.common.models.mistral_7b.model import MISTRAL_ACCURACY, MISTRAL_PERFORMANCE, Mistral7B
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.tt_transformers.tt.common import encode_prompt_hf
 
@@ -316,25 +316,16 @@ def create_model(
 ):
     """Build ``Mistral7B`` in executor (paged KV) mode.
 
-    TTTv1's accuracy mode keeps BFP8 WQKV/WO + HIFI2_FP16 MLP for Mistral-7B (see
-    REFERENCE.md and ``model_config.py:130-159``), so the TTTv2 module defaults are
-    already production-correct. The performance / accuracy split here just tightens
-    KV-cache + LM-head dtypes in "accuracy" mode for a marginally tighter floor,
-    mirroring the Llama-3.1-8B demo.
+    Picks one of the two module-level precision recipes (``MISTRAL_ACCURACY`` /
+    ``MISTRAL_PERFORMANCE``) — both defined in ``mistral_7b/model.py`` and grounded in
+    TTTv1's ``DecodersPrecision`` for Mistral-7B (``model_config.py:130-159`` for accuracy,
+    ``:208-218`` for performance). The dataclass owns the dtype + math-fidelity recipe;
+    this demo just selects between the two and passes through.
     """
     hf_model = os.environ.get("HF_MODEL", "mistralai/Mistral-7B-Instruct-v0.3")
     _skip_unless_heads_divide_mesh(mesh_device, hf_model)
 
-    if optimizations == "accuracy":
-        wqkv_dtype = ttnn.bfloat8_b
-        mlp_w_dtype = ttnn.bfloat8_b
-        kv_cache_dtype = ttnn.bfloat16
-        lm_head_dtype = ttnn.bfloat16
-    else:
-        wqkv_dtype = ttnn.bfloat8_b
-        mlp_w_dtype = ttnn.bfloat8_b
-        kv_cache_dtype = ttnn.bfloat8_b
-        lm_head_dtype = ttnn.bfloat8_b
+    precision = MISTRAL_PERFORMANCE if optimizations == "performance" else MISTRAL_ACCURACY
 
     num_devices = mesh_device.get_num_devices()
     # Mistral 7B v0.3 has full attention (no SWA) and a 32K vocab; reuse the Llama
@@ -352,10 +343,7 @@ def create_model(
             max_seq_len=max_seq_len,
             num_layers=None,
             cache_dir=cache_dir,
-            wqkv_dtype=wqkv_dtype,
-            mlp_w_dtype=mlp_w_dtype,
-            kv_cache_dtype=kv_cache_dtype,
-            lm_head_dtype=lm_head_dtype,
+            precision=precision,
             executor_mode=True,
         )
     except Exception as e:
@@ -387,7 +375,12 @@ def test_mistral_7b(test_config, mesh_device, optimizations):
     cache_dir = lazy_weight_cache_dir_for_demo(mesh_device, hf_model)
 
     try:
-        max_bs = 1 if test_config == "batch-1" else 32
+        # Only the batch-32 throughput test actually exercises 32 users; the
+        # teacher-forcing token-accuracy path feeds a single reference sequence
+        # (see _run_token_accuracy), so running it with max_batch_size=1 cuts
+        # the paged KV cache 32x and removes the N300 DRAM pressure that used
+        # to OOM the accuracy/token-accuracy config.
+        max_bs = 32 if test_config == "batch-32" else 1
         model = create_model(
             mesh_device,
             optimizations,
