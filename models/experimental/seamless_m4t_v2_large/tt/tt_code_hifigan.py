@@ -29,6 +29,8 @@ from typing import Any, Optional, Tuple
 import torch
 import ttnn
 
+from models.experimental.seamless_m4t_v2_large.tt.common import core_grid
+
 
 def _vocoder_hf_gather_index(input_ids: ttnn.Tensor, *, batch: int, seq: int, pad_id: int) -> int:
     """HF ``_get_dur_output_lengths`` index: ``clamp((input_ids != pad).sum(-1), 0, seq - 1)`` for row 0.
@@ -41,11 +43,6 @@ def _vocoder_hf_gather_index(input_ids: ttnn.Tensor, *, batch: int, seq: int, pa
         ids_t = ids_t[:, :seq]
     count = int((ids_t[0] != pad_id).sum().item())
     return max(0, min(count, seq - 1))
-
-
-def _core_grid(device: ttnn.Device) -> ttnn.CoreGrid:
-    grid = device.compute_with_storage_grid_size()
-    return ttnn.CoreGrid(y=grid.y, x=grid.x)
 
 
 def _fused_relu() -> ttnn.UnaryWithParam:
@@ -82,7 +79,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             x,
             weight,
             bias=bias,
-            core_grid=_core_grid(self.device),
+            core_grid=core_grid(self.device),
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self._compute,
         )

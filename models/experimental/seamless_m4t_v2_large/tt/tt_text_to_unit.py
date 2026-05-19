@@ -30,6 +30,7 @@ import torch
 import ttnn
 
 from models.common.utility_functions import nearest_32
+from models.experimental.seamless_m4t_v2_large.tt.common import core_grid
 
 # HF ``torch.finfo(torch.bfloat16).min`` additive padding mask floor (approx.).
 _BF16_MASK_FLOOR = -3.3895313892565356e38
@@ -48,11 +49,6 @@ def _row_major_host_f32_flat(host_tensor: ttnn.Tensor, *, num_floats: int) -> li
     if int(flat.numel()) < n:
         raise RuntimeError(f"Host tensor has {int(flat.numel())} floats; need {n}.")
     return flat[:n].tolist()
-
-
-def _core_grid(device: ttnn.Device) -> ttnn.CoreGrid:
-    grid = device.compute_with_storage_grid_size()
-    return ttnn.CoreGrid(y=grid.y, x=grid.x)
 
 
 def _mask_row_valid_prefix(device: ttnn.Device, width: int, valid_len: int) -> ttnn.Tensor:
@@ -271,7 +267,7 @@ def _hard_upsample_nlc(
 ) -> ttnn.Tensor:
     """HF ``_hard_upsample`` for batch 1: ``enc`` is ``[1, T, H]`` tile; ``repeats`` length ``T``.
 
-    Stage 2.2b: variable repeat-interleave as one device matmul.
+    Variable repeat-interleave as one device matmul.
 
     The previous per-slot Python loop (``slice`` + ``repeat_interleave`` +
     pairwise ``concat``) dispatched ~100 device ops per call, with each row
@@ -452,7 +448,7 @@ def _conv1d_same(
     # bytes the kernel waits on.  Activations and accumulators stay at bf16/fp32
     # (``fp32_dest_acc_en=True`` in the compute config), so per-tile rounding is
     # preserved -- the bf8 hit is a one-time weight quantization, the same
-    # recipe used for FFN/attention matmuls in Stage 1.
+    # Same recipe used for FFN/attention matmuls elsewhere in this model.
     #
     # enable conv-side double buffering.
     # ``enable_weights_double_buffer`` allocates two L1 slots for incoming
@@ -659,7 +655,7 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
             weight,
             bias=bias,
             activation=activation,
-            core_grid=_core_grid(self.device),
+            core_grid=core_grid(self.device),
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self._linear_ln_compute_cfg,
         )
@@ -923,7 +919,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             weight,
             bias=bias,
             activation=activation,
-            core_grid=_core_grid(self.device),
+            core_grid=core_grid(self.device),
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self._linear_ln_compute_cfg,
         )
@@ -1057,7 +1053,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             h_fp32,
             self._dp_proj_w_fp32,
             bias=self._dp_proj_b_fp32,
-            core_grid=_core_grid(self.device),
+            core_grid=core_grid(self.device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self._linear_ln_compute_cfg,
             dtype=ttnn.float32,
@@ -1399,7 +1395,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             hidden,
             self.parameters.lm_head.weight,
             bias=None,
-            core_grid=_core_grid(self.device),
+            core_grid=core_grid(self.device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self._linear_ln_compute_cfg,
         )
