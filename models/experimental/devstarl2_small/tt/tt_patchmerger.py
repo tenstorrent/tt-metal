@@ -111,11 +111,22 @@ class TTMistral3PatchMerger(LightweightModule):
                         self.merging_weights[weight_index],
                         **linear_kwargs,
                     )
-                    merged = projected if merged is None else ttnn.add(merged, projected)
+                    ttnn.deallocate(patch)
+                    if merged is None:
+                        merged = projected
+                    else:
+                        prev_merged = merged
+                        merged = ttnn.add(merged, projected)
+                        ttnn.deallocate(prev_merged)
+                        ttnn.deallocate(projected)
                     weight_index += 1
 
+            ttnn.deallocate(grid)
             permuted_tensor.append(merged)
 
         image_features = ttnn.concat(permuted_tensor, dim=0)
 
         return image_features
+
+
+__all__ = ["TTMistral3PatchMerger"]

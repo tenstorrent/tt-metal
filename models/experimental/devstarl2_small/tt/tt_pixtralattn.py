@@ -7,7 +7,7 @@ import os
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole, nearest_32
+from models.common.utility_functions import nearest_32
 from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import pixtral_vision_seq_chunk_len
 
 
@@ -53,7 +53,6 @@ class TtMistralImageAttention(LightweightModule):
     ):
         super().__init__()
 
-        self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
@@ -81,8 +80,10 @@ class TtMistralImageAttention(LightweightModule):
         wv_str = f"{state_dict_prefix}wv.weight"
         wo_str = f"{state_dict_prefix}wo.weight"
 
-        assert self.n_heads % configuration.num_devices == 0
-        assert self.n_kv_heads % configuration.num_devices == 0
+        if self.n_heads % configuration.num_devices != 0:
+            raise ValueError(f"n_heads {self.n_heads} must divide num_devices {configuration.num_devices}")
+        if self.n_kv_heads % configuration.num_devices != 0:
+            raise ValueError(f"n_kv_heads {self.n_kv_heads} must divide num_devices {configuration.num_devices}")
 
         def pad_head_dim(weight, heads_out=True):
             dim = weight.shape[1]
@@ -101,10 +102,10 @@ class TtMistralImageAttention(LightweightModule):
                     weight = weight.transpose(-1, -2)
             return weight
 
-        wq_padded = pad_head_dim(self.state_dict[wq_str])
-        wk_padded = pad_head_dim(self.state_dict[wk_str])
-        wv_padded = pad_head_dim(self.state_dict[wv_str])
-        wo_padded = pad_head_dim(self.state_dict[wo_str], heads_out=False)
+        wq_padded = pad_head_dim(state_dict[wq_str])
+        wk_padded = pad_head_dim(state_dict[wk_str])
+        wv_padded = pad_head_dim(state_dict[wv_str])
+        wo_padded = pad_head_dim(state_dict[wo_str], heads_out=False)
 
         def pack_qkv_for_sharding(wq, wk, wv):
             local_width = wq.shape[0] // configuration.num_devices
@@ -301,32 +302,18 @@ class TtMistralImageAttention(LightweightModule):
 
         if self.num_devices > 1:
             num_links = 2
-            if is_blackhole():
-                dense_out_gathered = ttnn.experimental.all_gather_async(
-                    output_11SH,
-                    persistent_output_buffer=None,
-                    dim=1,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                    num_links=num_links,
-                    topology=ttnn.Topology.Linear,
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                    chunks_per_sync=10,
-                    num_workers_per_link=2,
-                    num_buffers_per_channel=2,
-                )
-            else:
-                dense_out_gathered = ttnn.experimental.all_gather_async(
-                    output_11SH,
-                    persistent_output_buffer=None,
-                    dim=1,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                    num_links=num_links,
-                    topology=ttnn.Topology.Linear,
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                    chunks_per_sync=10,
-                    num_workers_per_link=2,
-                    num_buffers_per_channel=2,
-                )
+            dense_out_gathered = ttnn.experimental.all_gather_async(
+                output_11SH,
+                persistent_output_buffer=None,
+                dim=1,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=num_links,
+                topology=ttnn.Topology.Linear,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
             output_11SH.deallocate(True)
             dense_out_reduced = ttnn.experimental.fast_reduce_nc(
                 dense_out_gathered, dims=[1], output=None, compute_kernel_config=None

@@ -107,13 +107,12 @@ class TtMinistralMLP(LightweightModule):
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         full_seq_len = int(x.shape[-2])
         TG = self.args.is_galaxy
-        layer_num = max(self.layer_num, 0)
         activation_dtype = self.decoders_optimizations.get_tensor_dtype(
-            decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
+            decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
         )
 
         li_ff1_3_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
+            decoder_id=self.layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
         )
 
         cfg_seq = full_seq_len
@@ -129,7 +128,6 @@ class TtMinistralMLP(LightweightModule):
 
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, cfg_seq, self.prefetcher)
 
-        x_to_deallocate_after_ff13 = None
         if mode == Mode.PREFILL and not TG:
             grid = self.args.mlp1_3_grid(cfg_seq)
             mmc_ff13 = ttnn.MinimalMatmulConfig(
@@ -152,8 +150,6 @@ class TtMinistralMLP(LightweightModule):
                 config=mmc_ff13,
                 dtype=ttnn.bfloat8_b,
             )
-            if x_to_deallocate_after_ff13 is not None:
-                ttnn.deallocate(x_to_deallocate_after_ff13)
         elif mode == Mode.DECODE and not TG and self.prefetcher is None:
             # decode FF1/FF3 via minimal_matmul (DRAM-sharded weights)
             x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
@@ -303,7 +299,7 @@ class TtMinistralMLP(LightweightModule):
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
         li_ff2_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
+            decoder_id=self.layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
 
         if cfg_seq > 128 and mode != Mode.DECODE:

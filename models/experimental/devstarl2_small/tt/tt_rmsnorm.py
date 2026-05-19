@@ -53,7 +53,7 @@ class RMSNorm(LightweightModule):
 
         cache_name = None if weight_cache_path is None else weight_cache_path / weight_name
 
-        is_mesh_device = device.__class__.__name__ == "MeshDevice"
+        is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
 
         self.weight = ttnn.as_tensor(  # gamma last dim must be TILE (32)
             torch_weight,
@@ -104,10 +104,10 @@ class RMSNorm(LightweightModule):
 
         weight = self.weight_distributed if distributed else self.weight
 
-        if in_sharded:
-            assert not distributed, "Distributed RMSNorm does not support sharded inputs"
-        else:
-            assert not out_sharded, "Non-sharded version of RMSNorm cannot output a sharded tensor"
+        if in_sharded and distributed:
+            raise ValueError("Distributed RMSNorm does not support sharded inputs")
+        if not in_sharded and out_sharded:
+            raise ValueError("Non-sharded version of RMSNorm cannot output a sharded tensor")
 
         x = norm(
             x,
@@ -131,22 +131,24 @@ class RMSNorm(LightweightModule):
         xnorm = ttnn.mean(xnorm, dim=-1, keepdim=True)
         xnorm = ttnn.rsqrt(xnorm + epsilon)
         xnorm = ttnn.multiply(inp, xnorm)
-        weight = ttnn.reshape(weight, [1, 1, -1])
-        output = ttnn.multiply(xnorm, (weight))
+        gamma = ttnn.reshape(weight, [1, 1, -1])
+        output = ttnn.multiply(xnorm, gamma)
 
         if memory_config is not None:
             output = ttnn.to_memory_config(output, memory_config)
 
         ttnn.deallocate(xnorm)
-        ttnn.deallocate(weight)
+        ttnn.deallocate(gamma)
 
         return output
 
     def _distributed_rmsnorm(
         self, inp, epsilon=None, weight=None, program_config=None, memory_config=None, compute_kernel_config=None
     ):
-        assert program_config is None, "Distributed RMSNorm does not support sharded inputs"
-        assert memory_config is None, "Distributed RMSNorm does not support sharded outputs"
+        if program_config is not None:
+            raise ValueError("Distributed RMSNorm does not support sharded inputs")
+        if memory_config is not None:
+            raise ValueError("Distributed RMSNorm does not support sharded outputs")
 
         tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
         tt_stats = ttnn.all_gather(

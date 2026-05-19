@@ -23,33 +23,31 @@ This folder contains an experimental Tenstorrent (`ttnn`) port of **Mistral [Dev
 
 ## How to run (PCC tests)
 
-Tests are marked `models_performance_bare_metal` and expect a configured Blackhole mesh (`MESH_DEVICE` etc., following repo conventions for bare-metal pytest).
+From repo root:
 
-Examples (from repo root):
+**All PCC tests** (building blocks + pipeline; long run, loads Devstral weights):
 
 ```sh
-pytest models/experimental/devstarl2_small/tests/pipeline_tests/test_devstral2_small.py::test_devstral2_small_projected_image_features_pcc
+pytest models/experimental/devstarl2_small/tests/ -k pcc
 ```
 
+**Pipeline / composed models** (`tests/pipeline_tests/`):
+
 ```sh
-pytest models/experimental/devstarl2_small/tests/pipeline_tests/test_ministral3_model.py::test_ministral3_model_pcc_devstral_weights
+pytest models/experimental/devstarl2_small/tests/pipeline_tests/ -k pcc
 ```
 
-```sh
-pytest models/experimental/devstarl2_small/tests/pipeline_tests/test_pixtral_vision_model.py::test_pixtral_vision_model_pcc_devstral_weights
-```
-
-Run a whole file (longer):
+Single file, e.g. attention only:
 
 ```sh
-pytest models/experimental/devstarl2_small/tests/test_ministralattn.py
+pytest models/experimental/devstarl2_small/tests/test_ministralattn.py -k pcc
 ```
 
 ## Demos
 
 ### Image + text (`tt_image_demo.py`)
 
-TT backend (example mesh / vision sizing):
+Defaults to Hugging Face (`--backend hf`). Pass **`--backend tt`** to run vision + text on device (example mesh / vision sizing):
 
 ```sh
 python3 -m models.experimental.devstarl2_small.demo.tt_image_demo \
@@ -63,7 +61,8 @@ python3 -m models.experimental.devstarl2_small.demo.tt_image_demo \
 ### Text LM on TT (`tt_text_demo.py`)
 
 ```sh
-python models/experimental/devstarl2_small/demo/tt_text_demo.py
+python models/experimental/devstarl2_small/demo/tt_text_demo.py \
+  --mesh-width 4
 ```
 
 ### Agent on TT (`tt_demo_agent.py`)
@@ -72,13 +71,13 @@ python models/experimental/devstarl2_small/demo/tt_text_demo.py
 python models/experimental/devstarl2_small/demo/tt_demo_agent.py --vision-square-pixels 1540
 ```
 
-Sample multimodal prompt (attach the resource image, then ask a question):
+Example multimodal prompt for `tt_demo_agent.py` (attach the resource image, then ask a question):
 
 ```text
 /image ./models/experimental/devstarl2_small/resource/sample.jpeg What is in this image?
 ```
 
-Sample text prompt (coding task):
+Example text prompt (not the `tt_text_demo.py` default; pass via `--prompt` if desired):
 
 ```text
 Can you implement in Python a method to compute the fibonnaci sequence at the `n`th element with `n` a parameter passed to the function ? You should start the sequence from 1, previous values are invalid.
@@ -95,7 +94,7 @@ Then run the Python code for the function for n=5 and give the answer.
 | **`tt/`** | TT layer implementations (Ministral3 + Pixtral building blocks). |
 | **`tt/pipeline/`** | Composed models: vision → projector → text LM. |
 | **`tests/`** | Per-op PCC tests (attention, MLP, norms, Pixtral blocks, decoder layer, …). |
-| **`tests/pipeline_tests/`** | End-to-end PCC for `TtDevstral2SmallModel`, `TtMinistral3Model`, vision tower, and projector. |
+| **`tests/pipeline_tests/`** | Composed-model PCC: vision tower, projector, text stack, and projected image features. |
 
 **`devstral_utils/` modules**
 
@@ -125,4 +124,4 @@ Then run the Python code for the function for n=5 and give the answer.
 **PCC tests**
 
 - Submodule tests under `tests/` validate individual TT ops against HF on Devstral weights (often layer 0, partial safetensors, or full `ModelArgs.load_state_dict()` where noted).
-- Pipeline tests under `tests/pipeline_tests/` validate composed vision, text, and full multimodal paths.
+- Pipeline tests under `tests/pipeline_tests/` validate the vision tower, multimodal projector, text stack, and projected image features.
