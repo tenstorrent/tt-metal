@@ -302,15 +302,27 @@ class TtMistralImageAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         if self.num_devices > 1:
+            num_links = 2
             if is_blackhole():
-                dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+                dense_out_gathered = ttnn.experimental.all_gather_async(
+                    output_11SH,
+                    persistent_output_buffer=None,
+                    dim=1,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    num_links=num_links,
+                    topology=ttnn.Topology.Linear,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                )
             else:
                 dense_out_gathered = ttnn.experimental.all_gather_async(
                     output_11SH,
                     persistent_output_buffer=None,
                     dim=1,
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                    num_links=1,
+                    num_links=num_links,
                     topology=ttnn.Topology.Linear,
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                     chunks_per_sync=10,

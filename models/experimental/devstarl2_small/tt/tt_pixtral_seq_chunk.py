@@ -19,7 +19,8 @@ def pixtral_vision_seq_chunk_len(configuration) -> int:
     if force is not None and str(force).strip() != "":
         chunk = max(32, nearest_32(int(force)))
     else:
-        cap_raw = os.environ.get("PIXTRAL_VISION_MM_SEQ_CHUNK_CAP", "448")
+        # cap_raw = os.environ.get("PIXTRAL_VISION_MM_SEQ_CHUNK_CAP", "448")
+        cap_raw = os.environ.get("PIXTRAL_VISION_MM_SEQ_CHUNK_CAP", "512")
         cap = max(32, nearest_32(int(cap_raw)))
         cfg_chunk = getattr(configuration, "VISION_MAX_MM_SEQ", cap)
         if cfg_chunk is None:
