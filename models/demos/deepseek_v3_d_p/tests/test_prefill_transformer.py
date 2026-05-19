@@ -22,7 +22,6 @@ Parametrized over:
 import gc
 import json
 import os
-from pathlib import Path
 
 import pytest
 import torch
@@ -33,7 +32,6 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
-    global_to_local_token_id,
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
@@ -59,6 +57,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     create_hf_model,
     download_infinitebench_subset,
     extract_tt_state_dict,
+    find_trace_dir,
     load_and_compute_layer_by_layer,
     load_debug_trace,
     load_reference_cache,
@@ -74,55 +73,33 @@ TRACE_PCC_THRESHOLD_HOST = 0.96
 TRACE_PCC_THRESHOLD_DEVICE_BF16 = 0.88
 TRACE_PCC_THRESHOLD_DEVICE_FP32 = 0.95
 
-TRACE_DIR_BASE = Path(os.getenv("DEEPSEEK_V3_TRACE_DIR", "/mnt/MLPerf/deepseek-prefill-cache"))
-ILLIAD_1024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2"
-ILLIAD_25024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2_25024"
-ABC_1K_PAD_RIGHT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_right_1024"
-ABC_1K_PAD_LEFT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_left_1024"
-LONGBOOK_QA_ENG_25024 = TRACE_DIR_BASE / "longbook_qa_eng_25088"
-LONGBOOK_QA_ENG_25600 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_25600_nopad"
-
 # Input sources: "random" = random token IDs, "json_prompts" = test_prompts_1024.json,
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
 INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"}
 SEQ_LEN_1K = 1024
 SEQ_LEN_25K = 25600
 
-# Identity-based trace lookup: (input_source, isl_total, padding_side) -> Path.
-# Traces are only used when use_pretrained=True and n_routed_experts=256, since they
-# were generated from the full pretrained model.
-TRACE_LOOKUP: dict[tuple[str, int, str], Path] = {
-    ("json_prompts", SEQ_LEN_1K, "right"): ILLIAD_1024_TRACE,
-    ("json_prompts", SEQ_LEN_25K, "right"): ILLIAD_25024_TRACE,
-    ("abc_1k", SEQ_LEN_1K, "right"): ABC_1K_PAD_RIGHT_1024,
-    ("abc_1k", SEQ_LEN_1K, "left"): ABC_1K_PAD_LEFT_1024,
-    # ("longbook_qa_eng", SEQ_LEN_25K, "right"): LONGBOOK_QA_ENG_25024,
-    ("longbook_qa_eng", SEQ_LEN_25K, "right"): LONGBOOK_QA_ENG_25600,
-}
 
+def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_padded_tokens, padding_side):
+    pcc_results = []
+    for label, ref_host in reference_items:
+        if label not in tt_intermediates:
+            logger.error(f"{label:<20s}  Missing from TT intermediates")
+            pcc_results.append((label, -1.0))
+            continue
 
-def find_trace_dir(
-    input_source: str,
-    isl_total: int,
-    padding_side: str,
-    use_pretrained: bool,
-    n_routed_experts: int,
-) -> Path | None:
-    """Return the trace directory for an exact test configuration, or None.
-
-    A trace is eligible only when:
-    - the model uses pretrained weights with 256 experts (traces were generated from
-      the full pretrained DeepSeek-R1 model)
-    - (input_source, isl_total, padding_side) match a known trace exactly
-    - the directory exists and contains a metadata.json
-    """
-    if not use_pretrained or n_routed_experts != 256:
-        return None
-
-    path = TRACE_LOOKUP.get((input_source, isl_total, padding_side))
-    if path is not None and path.exists() and (path / "metadata.json").exists():
-        return path
-    return None
+        tt_host = tt_intermediates[label]
+        try:
+            _, pcc = comp_pcc(
+                slice_non_padded(ref_host, number_of_non_padded_tokens, padding_side).float(),
+                slice_non_padded(tt_host, number_of_non_padded_tokens, padding_side).float(),
+            )
+            logger.debug(f"{label:<20s}  PCC = {pcc:.6f}")
+            pcc_results.append((label, pcc))
+        except Exception as e:
+            logger.error(f"{label:<20s}  PCC comparison failed: {e}")
+            pcc_results.append((label, -1.0))
+    return pcc_results
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
@@ -603,40 +580,23 @@ def test_prefill_transformer(
         # --- Load reference snapshots (priority: trace > cache > already computed) ---
         pcc_results = []
         if trace is not None:
-            for label, tt_host in tt_intermediates.items():
-                if label not in trace.ref_snapshots:
-                    logger.debug(f"Skipping {label} (no trace reference)")
-                    continue
-                ref_host = trace.ref_snapshots[label]
-                try:
-                    _, pcc = comp_pcc(ref_host.float(), tt_host.float())
-                    logger.debug(f"{label:<20s}  PCC = {pcc:.6f}")
-                    pcc_results.append((label, pcc))
-                except Exception as e:
-                    logger.error(f"{label:<20s}  PCC comparison failed: {e}")
-                    pcc_results.append((label, -1.0))
+            reference_items = trace.ref_snapshots.items()
         else:
             if ref_snapshots is None:
                 logger.info("Loading reference from cache...")
                 ref_snapshots, ref_kvpe_list = load_reference_cache(cache_key)
 
             ref_labels = ["embed"] + [f"layer_{i}" for i in range(num_layers)] + ["norm", "lm_head"]
-            for label, ref_host in zip(ref_labels, ref_snapshots):
-                if label not in tt_intermediates:
-                    logger.error(f"{label:<20s}  Missing from TT intermediates")
-                    pcc_results.append((label, -1.0))
-                    continue
-                tt_host = tt_intermediates[label]
-                try:
-                    _, pcc = comp_pcc(
-                        slice_non_padded(ref_host, number_of_non_padded_tokens, padding_side).float(),
-                        slice_non_padded(tt_host, number_of_non_padded_tokens, padding_side).float(),
-                    )
-                    logger.debug(f"{label:<20s}  PCC = {pcc:.6f}")
-                    pcc_results.append((label, pcc))
-                except Exception as e:
-                    logger.error(f"{label:<20s}  PCC comparison failed: {e}")
-                    pcc_results.append((label, -1.0))
+            reference_items = zip(ref_labels, ref_snapshots)
+
+        pcc_results.extend(
+            _compare_intermediate_pcc(
+                reference_items,
+                tt_intermediates,
+                number_of_non_padded_tokens,
+                padding_side,
+            )
+        )
 
         # Per-layer KVPE PCC comparison — read back from external cache
         if do_return_kv and ref_kvpe_list is not None:
@@ -644,6 +604,7 @@ def test_prefill_transformer(
                 tt_kvpe_cache,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
             ).to(torch.bfloat16)
+            # Shape: [num_layers, tp_factor, seq_total, head_dim] — take first TP replica
             tt_kvpe_all_layers = tt_kvpe_all[:, :1, :, :]
             if is_balanced:
                 tt_kvpe_all_layers = reverse_reorder_tensor_chunks(tt_kvpe_all_layers, chunk_order, seq_dim=2)
@@ -652,6 +613,7 @@ def test_prefill_transformer(
                 tt_kvpe_layer = tt_kvpe_all_layers[i : i + 1, :, :, :]
                 label = f"layer_{i}_kvpe"
                 try:
+                    # ignore padded tokens in comparison
                     _, kv_pcc = comp_pcc(
                         slice_non_padded(
                             ref_kvpe[..., :kv_lora_rank], number_of_non_padded_tokens, padding_side
@@ -660,6 +622,7 @@ def test_prefill_transformer(
                             tt_kvpe_layer[..., :kv_lora_rank], number_of_non_padded_tokens, padding_side
                         ).float(),
                     )
+                    # ignore padded tokens in comparison
                     _, pe_pcc = comp_pcc(
                         slice_non_padded(
                             ref_kvpe[..., kv_lora_rank:], number_of_non_padded_tokens, padding_side
@@ -671,6 +634,7 @@ def test_prefill_transformer(
                     logger.info(f"{label:<20s}  KV PCC = {kv_pcc:.6f}, PE PCC = {pe_pcc:.6f}")
                     pcc_results.append((f"{label}_kv", kv_pcc))
                     pcc_results.append((f"{label}_pe", pe_pcc))
+
                 except Exception as e:
                     logger.error(f"{label:<20s}  KVPE PCC comparison failed: {e}")
                     pcc_results.append((f"{label}_kv", -1.0))
@@ -680,35 +644,19 @@ def test_prefill_transformer(
         # Trace logits / next-token are products of the full traced model. They are
         # only meaningful when the TT model ran the same number of layers as the trace.
         trace_full_model = trace is not None and num_layers == trace.metadata.get("n_layers")
-        trace_logits = trace.logits if trace_full_model else None
-        if trace is not None and not trace_full_model:
-            logger.info(
-                f"Skipping trace logits/first-token checks: "
-                f"num_layers={num_layers} != trace n_layers={trace.metadata.get('n_layers')}"
-            )
-        if trace_logits is not None and "lm_head" in tt_intermediates:
+        if trace_full_model and trace.logits is not None and "logits" in tt_intermediates:
             try:
-                tt_logits_full = tt_intermediates["lm_head"]
-                global_token_id = isl_total - 1
-                device_id, local_token_id = global_to_local_token_id(
-                    global_token_id,
-                    sp_factor,
-                    isl_total,
-                    is_balanced=is_balanced,
-                )
-                token_offset = local_token_id % ttnn.TILE_SIZE
-                tt_last_token_logits = tt_logits_full[device_id, 0, token_offset, :].unsqueeze(0)
-                logger.debug(
-                    f"Logits extraction: full={list(tt_logits_full.shape)}, "
-                    f"device_id={device_id}, local_token_id={local_token_id}, token_offset={token_offset}, "
-                    f"extracted={list(tt_last_token_logits.shape)}, trace={list(trace_logits.shape)}"
-                )
-                _, logits_pcc = comp_pcc(trace_logits.float(), tt_last_token_logits.float())
+                _, logits_pcc = comp_pcc(trace.logits.float(), tt_intermediates["logits"].float())
                 logger.info(f"{'logits':<20s}  PCC = {logits_pcc:.6f}")
                 pcc_results.append(("logits", logits_pcc))
             except Exception as e:
                 logger.error(f"{'logits':<20s}  PCC comparison failed: {e}")
                 pcc_results.append(("logits", -1.0))
+        elif trace is not None and not trace_full_model:
+            logger.info(
+                f"Skipping trace logits/first-token checks: "
+                f"num_layers={num_layers} != trace n_layers={trace.metadata.get('n_layers')}"
+            )
 
         profiler.end("pcc_validation")
 
@@ -751,6 +699,8 @@ def test_prefill_transformer(
                 f"Trace={ref_token_id} [{repr(ref_token_text)}], "
                 f"Match={'YES' if token_match else 'NO' if token_match is not None else 'N/A'}"
             )
+            if token_match is False:
+                failures.append(("first_token_match", -1.0))
 
         # Log all temperature results from intermediates
         if tt_intermediates and "first_token" in tt_intermediates:
