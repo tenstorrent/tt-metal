@@ -23,6 +23,7 @@ Usage:
 """
 
 import argparse
+import os
 import time
 from typing import Optional
 
@@ -107,14 +108,29 @@ def run_full_ttnn_tts(
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-TTS-12Hz-1.7B-Base", trust_remote_code=True)
 
     # Open device with explicit trace region.
-    print(f"\nOpening TT device {device_id}...")
+    # MESH_DEVICE env var follows the tt_transformers convention (see
+    # models/tt_transformers/conftest.py): N150=(1,1), N300=(1,2), T3K=(1,8).
+    # When set, open via open_mesh_device so tt-metal selects the matching
+    # core descriptor (N150 gives the 8x8 worker grid the sharded TTS layouts
+    # require). Unset → legacy single-chip open_device path.
     _ncq = 2 if use_2cq else 1
-    device = ttnn.open_device(
-        device_id=device_id,
-        l1_small_size=32768,
-        trace_region_size=200000000,
-        num_command_queues=_ncq,
-    )
+    _mesh_shape = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(os.environ.get("MESH_DEVICE"))
+    if _mesh_shape is not None:
+        print(f"\nOpening TT mesh device {_mesh_shape} (MESH_DEVICE={os.environ['MESH_DEVICE']})...")
+        device = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(*_mesh_shape),
+            l1_small_size=32768,
+            trace_region_size=200000000,
+            num_command_queues=_ncq,
+        )
+    else:
+        print(f"\nOpening TT device {device_id}...")
+        device = ttnn.open_device(
+            device_id=device_id,
+            l1_small_size=32768,
+            trace_region_size=200000000,
+            num_command_queues=_ncq,
+        )
     device.enable_program_cache()
 
     try:
@@ -306,9 +322,13 @@ def run_full_ttnn_tts(
             "steady_frames_per_sec": float(compile_timings.get("steady_frames_per_sec", 0.0)),
             "num_frames": int(num_frames),
             "output_wav": output_path,
+            "arch": device.arch().name,
         }
     finally:
-        ttnn.close_device(device)
+        if _mesh_shape is not None:
+            ttnn.close_mesh_device(device)
+        else:
+            ttnn.close_device(device)
         print("\nDevice closed")
 
     return result

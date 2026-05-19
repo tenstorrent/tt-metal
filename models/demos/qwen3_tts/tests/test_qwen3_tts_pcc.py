@@ -55,9 +55,16 @@ def _assert_pcc(name: str, pcc: float) -> None:
 # -----------------------------------------------------------------------------
 @pytest.fixture(scope="module")
 def device():
-    d = ttnn.open_device(device_id=0)
+    # (1,1) mesh device is portable across arches:
+    #  - BH P150: single-chip, exposes the full BH compute grid.
+    #  - WH N150 (true single-chip board): nebula_x1 descriptor, 8x8 grid.
+    #  - WH N300 / T3K (multi-chip boards): tt-metal still selects the
+    #    nebula_x1 descriptor because we ask for a 1-chip mesh — 8x8 grid —
+    #    instead of the nebula_x2 layout (8x7) that plain
+    #    ttnn.open_device(device_id=0) would pick on a multi-chip board.
+    d = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1))
     yield d
-    ttnn.close_device(d)
+    ttnn.close_mesh_device(d)
 
 
 @pytest.fixture(scope="module")

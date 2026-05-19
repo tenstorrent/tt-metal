@@ -88,7 +88,9 @@ class MLP(LightweightModule):
         self.up_proj_dram_sharded, _, _ = build_dram_sharded_weight(up_w_kn, device, dtype=weight_dtype)
         self._decode_gate_up_n_padded = n_padded_gu
         k_tiles_gu, n_tiles_gu = k_gu // 32, n_padded_gu // 32
-        rows_gu, cols_gu = find_grid_k_n(k_tiles_gu, n_tiles_gu)
+        # find_grid_k_n must honor the actual compute grid (8x8 on WH N150, 13x10 on BH P150).
+        _cg = device.compute_with_storage_grid_size()
+        rows_gu, cols_gu = find_grid_k_n(k_tiles_gu, n_tiles_gu, max_rows=_cg.y, max_cols=_cg.x)
         self._decode_gate_up_dramshard_progcfg = dram_sharded_program_config(
             m=32, k=k_gu, n=n_padded_gu, num_cores=rows_gu * cols_gu
         )
@@ -103,7 +105,7 @@ class MLP(LightweightModule):
         self.down_proj_dram_sharded, k_d, n_padded_d = build_dram_sharded_weight(down_w_kn, device, dtype=weight_dtype)
         self._decode_down_n_padded = n_padded_d
         k_tiles_d, n_tiles_d = k_d // 32, n_padded_d // 32
-        rows_d, cols_d = find_grid_k_n(k_tiles_d, n_tiles_d)
+        rows_d, cols_d = find_grid_k_n(k_tiles_d, n_tiles_d, max_rows=_cg.y, max_cols=_cg.x)
         self._decode_down_dramshard_progcfg = dram_sharded_program_config(
             m=32, k=k_d, n=n_padded_d, num_cores=rows_d * cols_d
         )
@@ -209,14 +211,24 @@ class MLP(LightweightModule):
             )
             ttnn.deallocate(gate_sharded)
             ttnn.deallocate(up_sharded)
+            # Gate-up output layout and down input layout match only when N for
+            # down doesn't get DRAM-padded (i.e. hidden_size already multiple of
+            # TILE*dram_cores). True on BH P150 (dram_cores=8, hidden=2048) but
+            # not on Wormhole (dram_cores=12 → hidden pads 2048→2304, giving
+            # down a different num_cores). Reshard when they differ.
+            if self._decode_gate_up_out_memcfg != self._decode_down_in0_memcfg:
+                hidden_for_down = ttnn.to_memory_config(hidden_sharded, self._decode_down_in0_memcfg)
+                ttnn.deallocate(hidden_sharded)
+            else:
+                hidden_for_down = hidden_sharded
             out_sharded = ttnn.linear(
-                hidden_sharded,
+                hidden_for_down,
                 self.down_proj_dram_sharded,
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=self._decode_down_dramshard_progcfg,
                 memory_config=self._decode_down_out_memcfg,
             )
-            ttnn.deallocate(hidden_sharded)
+            ttnn.deallocate(hidden_for_down)
             # Decoder layer's residual add wants sharded input — return sharded.
             if self._decode_down_n_padded == self.hidden_size:
                 return out_sharded
