@@ -524,12 +524,10 @@ def run(
         if mesh_shape[0] == 1 or mesh_shape[1] == 1:
             fabric_config = ttnn.FabricConfig.FABRIC_1D
         else:
-            # The qwen3 model uses FABRIC_1D_RING for Galaxy (set via
-            # fabric_config=True in device_params).  FABRIC_2D causes
-            # "Not enough cores" for num_links=4 because it changes
-            # which ETH/fabric cores are reserved, leaving fewer
-            # TENSIX workers on the sub-device.
-            fabric_config = ttnn.FabricConfig.FABRIC_2D
+            # The qwen3 model uses FABRIC_1D_RING for 6U Galaxy (set via
+            # fabric_config=True in device_params, resolved in conftest.py).
+            # FABRIC_2D causes ETH heartbeat failures on Galaxy.
+            fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
 
         replicate_dim = mesh_shape[cluster_axis]
         is_2d_mesh = mesh_shape[0] > 1 and mesh_shape[1] > 1
