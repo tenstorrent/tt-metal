@@ -8,18 +8,6 @@ include(sources.cmake)
 # Use target_sources to gather the necessary sources
 target_sources(unit_tests_api_lib PRIVATE
     ${UNIT_TESTS_API_SOURCES}
-    test_alignment_writes.cpp
-    test_cb_leak.cpp
-    test_cb_pages.cpp
-    test_fabric_allocation.cpp
-    test_metadata_size.cpp
-    test_noc_without_barrier.cpp
-    test_padded_write.cpp
-    test_pointer_size.cpp
-    test_semaphore_write.cpp
-    test_tensor_bad_acess.cpp
-    test_write_beyond_res_pages.cpp
-    test_write_outside_tensor.cpp
 )
 
 target_include_directories(

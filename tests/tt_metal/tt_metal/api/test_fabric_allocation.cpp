@@ -21,25 +21,30 @@ using namespace tt::tt_metal;
 namespace tt::tt_metal {
 
 TEST_F(MeshDeviceFixture, Fabric_Access_Violation_SanityCheck) {
-    // temp
     ::setenv("TT_EMULE_STRICT_NOC", "1", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
+    // Allocate a real L1 buffer as the read destination so the tensor-area
+    // sanitizer doesn't fire before the fabric check sees (50, 50).
+    auto dst_buf = Buffer::create(device, 64, 64, BufferType::L1);
+
     // Coordinate (50, 50) is definitely not on a standard N150/N300 worker grid
     std::string kernel_src = R"(
         #include "api/dataflow/dataflow_api.h"
         void kernel_main() {
+            uint32_t dst_addr = get_arg_val<uint32_t>(0);
             // Target a core that doesn't exist in our 1x1 or 8x8 mesh
             uint64_t ghost_noc_addr = get_noc_addr(50, 50, 0x1000);
-            noc_async_read(ghost_noc_addr, 0x20000, 16);
+            noc_async_read(ghost_noc_addr, dst_addr, 16);
         }
     )";
 
-    CreateKernelFromString(program, kernel_src, logical_core, 
+    auto kernel = CreateKernelFromString(program, kernel_src, logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    SetRuntimeArgs(program, kernel, logical_core, {dst_buf->address()});
 
     EXPECT_DEATH(
         detail::LaunchProgram(device, program),

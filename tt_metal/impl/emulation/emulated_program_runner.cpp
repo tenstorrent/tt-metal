@@ -30,6 +30,7 @@
 #include <future>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <algorithm>
 #include <vector>
 
@@ -165,6 +166,18 @@ thread_local uint32_t __emule_dram_tensor_ranges_count = 0;
 thread_local const uint64_t* __emule_l1_padding_ranges = nullptr;
 thread_local uint32_t __emule_l1_padding_ranges_count = 0;
 
+// Per-kernel-thread "resolved ranges" log for the object-intent provenance
+// sanitizer. Allocated in the kernel-thread closure inside launch_cores when
+// emule_strict_object_intent_enabled(); the inline append in
+// __emule_local_l1_to_ptr records each distinct live-tensor extent the kernel
+// resolves. Exact attribution is only supported when there is one kernel on a
+// core for the launch: after that kernel exits, the core thread memcmp's every
+// live tensor extent NOT in this array against its pre-launch byte snapshot —
+// any mismatch is reported as an Object Intent Violation.
+thread_local uint64_t* __emule_l1_resolved_ranges = nullptr;
+thread_local uint32_t* __emule_l1_resolved_ranges_count = nullptr;
+thread_local uint32_t __emule_l1_resolved_ranges_capacity = 0;
+
 // Per-kernel-thread CB-boundary sanitizer state. Two windows per CB:
 //   __emule_cb_reserved_pages[i] — active write reservation: page count
 //       starting at cb.write_idx (mod num_pages). Bumped on cb_reserve_back,
@@ -289,6 +302,20 @@ static bool emule_strict_noc_enabled() {
 static bool emule_strict_tensor_enabled() {
     static const bool enabled = []() {
         const char* v = std::getenv("TT_EMULE_STRICT_TENSOR");
+        return v != nullptr && v[0] != '\0' && v[0] != '0';
+    }();
+    return enabled;
+}
+
+// TT_EMULE_STRICT_OBJECT_INTENT: when set, enable the post-kernel provenance
+// comparison that catches writes landing in the wrong live L1 object even when
+// the target address is still valid allocated memory. This reuses the live
+// tensor range snapshots from STRICT_TENSOR, but keeps the stronger
+// per-kernel-intent check behind its own opt-in because exact attribution is
+// only supported for single-kernel-per-core launches.
+static bool emule_strict_object_intent_enabled() {
+    static const bool enabled = []() {
+        const char* v = std::getenv("TT_EMULE_STRICT_OBJECT_INTENT");
         return v != nullptr && v[0] != '\0' && v[0] != '0';
     }();
     return enabled;
@@ -2003,6 +2030,13 @@ struct EmuleOobTensorState {
     // STRICT_TENSOR. Null means "no padding check this launch".
     const uint64_t* l1_padding_ranges = nullptr;
     uint32_t l1_padding_ranges_count = 0;
+    // Object-intent provenance check.
+    // When true, launch_cores snapshots every live L1 tensor's bytes on each
+    // core before kernels run, threads the resolved-ranges array into the one
+    // supported kernel's thread_locals, and post-launch compares every
+    // snapshot against current bytes for buffers that kernel never resolved.
+    // Any byte diff fires an Object Intent Violation abort.
+    bool object_intent_strict = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -2030,6 +2064,48 @@ static void launch_cores(
                     std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> per_thread_dfbs;
                     if (cs.has_dfbs) {
                         per_thread_dfbs = build_per_thread_dfb_interfaces(*cs.ki_list, cs.dfb_allocs);
+                    }
+
+                    // Object-intent provenance: exact per-kernel attribution
+                    // is only supported when one kernel runs on the core for
+                    // this launch. In that case, snapshot every live L1 tensor
+                    // before launch, let the kernel append every explicitly
+                    // resolved range to its local log, then post-join memcmp
+                    // every snapshot whose (start, end) never made it into
+                    // that log. Mismatches mean the kernel modified an object
+                    // it never explicitly addressed via
+                    // __emule_local_l1_to_ptr.
+                    struct ObjectIntentSnap {
+                        uint64_t packed;  // (start << 32) | end
+                        std::vector<uint8_t> bytes;
+                    };
+                    std::vector<ObjectIntentSnap> oi_snapshots;
+                    std::vector<uint64_t> oi_resolved_single_kernel;
+                    if (oob_state.object_intent_strict &&
+                        oob_state.tensor_ranges != nullptr) {
+                        if (cs.ki_list->size() != 1) {
+                            fprintf(
+                                stderr,
+                                "[ASAN ERROR] Object Intent Violation: Exact per-kernel provenance tracking is unsupported when %zu kernels share core (%u, %u) in one launch. Enable TT_EMULE_STRICT_OBJECT_INTENT only for single-kernel-per-core launches.\n",
+                                cs.ki_list->size(),
+                                static_cast<unsigned>(cs.logical_core.x),
+                                static_cast<unsigned>(cs.logical_core.y));
+                            std::abort();
+                        }
+                        oi_snapshots.reserve(oob_state.tensor_ranges_count);
+                        for (uint32_t i = 0; i < oob_state.tensor_ranges_count; ++i) {
+                            uint64_t packed = oob_state.tensor_ranges[i];
+                            uint32_t r_start = static_cast<uint32_t>(packed >> 32);
+                            uint32_t r_end = static_cast<uint32_t>(packed);
+                            if (r_end <= r_start) {
+                                continue;
+                            }
+                            ObjectIntentSnap snap;
+                            snap.packed = packed;
+                            snap.bytes.resize(r_end - r_start);
+                            std::memcpy(snap.bytes.data(), l1_data + r_start, r_end - r_start);
+                            oi_snapshots.push_back(std::move(snap));
+                        }
                     }
 
                     std::vector<std::thread> threads;
@@ -2066,6 +2142,7 @@ static void launch_cores(
                                               kidx,
                                               single_kernel_on_core,
                                               oob_state,
+                                              &oi_resolved_single_kernel,
                                               &kep = kernel_exceptions[kidx]]() {
                             (void)kidx;
                             auto& ki = *ki_ptr;
@@ -2103,6 +2180,27 @@ static void launch_cores(
                             __emule_dram_tensor_ranges_count = oob_state.dram_tensor_ranges_count;
                             __emule_l1_padding_ranges = oob_state.l1_padding_ranges;
                             __emule_l1_padding_ranges_count = oob_state.l1_padding_ranges_count;
+                            // Object-intent resolved-ranges log. Kept on the
+                            // kernel-thread stack; copied into the per-core
+                            // oi_resolved_single_kernel vector at kernel exit.
+                            // Capacity 64 is plenty — even pathological
+                            // kernels rarely touch more than a handful of
+                            // distinct L1 buffers, and overflow just drops the
+                            // excess (post-launch compare will false-positive
+                            // instead of false-negative, which is the safer
+                            // direction for a sanitizer).
+                            constexpr uint32_t kResolvedCap = 64;
+                            uint64_t local_resolved[kResolvedCap] = {};
+                            uint32_t local_resolved_count = 0;
+                            if (oob_state.object_intent_strict) {
+                                __emule_l1_resolved_ranges = local_resolved;
+                                __emule_l1_resolved_ranges_count = &local_resolved_count;
+                                __emule_l1_resolved_ranges_capacity = kResolvedCap;
+                            } else {
+                                __emule_l1_resolved_ranges = nullptr;
+                                __emule_l1_resolved_ranges_count = nullptr;
+                                __emule_l1_resolved_ranges_capacity = 0;
+                            }
                             for (uint32_t i = 0; i < EMULE_NUM_CBS; ++i) {
                                 __emule_cb_reserved_pages[i] = 0;
                                 __emule_cb_waited_pages[i] = 0;
@@ -2178,6 +2276,21 @@ static void launch_cores(
                             __emule_dram_tensor_ranges_count = 0;
                             __emule_l1_padding_ranges = nullptr;
                             __emule_l1_padding_ranges_count = 0;
+                            // Copy the single supported kernel's resolved log
+                            // into the per-core vector before tearing down the
+                            // thread_locals. Done unconditionally —
+                            // local_resolved_count is zero when
+                            // object_intent_strict is off, so this is a no-op
+                            // in that case.
+                            if (local_resolved_count > 0) {
+                                oi_resolved_single_kernel.insert(
+                                    oi_resolved_single_kernel.end(),
+                                    local_resolved,
+                                    local_resolved + local_resolved_count);
+                            }
+                            __emule_l1_resolved_ranges = nullptr;
+                            __emule_l1_resolved_ranges_count = nullptr;
+                            __emule_l1_resolved_ranges_capacity = 0;
                             for (uint32_t i = 0; i < EMULE_NUM_CBS; ++i) {
                                 __emule_cb_reserved_pages[i] = 0;
                                 __emule_cb_waited_pages[i] = 0;
@@ -2188,6 +2301,34 @@ static void launch_cores(
 
                     for (auto& t : threads) {
                         t.join();
+                    }
+
+                    // Object-intent provenance post-launch comparison.
+                    // For every live L1 tensor we snapshotted, if the one
+                    // supported kernel on this core never resolved its
+                    // (start, end) pair via __emule_local_l1_to_ptr, the
+                    // kernel had no "intent" to touch it — so a byte diff
+                    // between the snapshot and current L1 is a stomp on an
+                    // adjacent (or unrelated) object.
+                    if (oob_state.object_intent_strict && !oi_snapshots.empty()) {
+                        std::unordered_set<uint64_t> resolved_set;
+                        resolved_set.insert(
+                            oi_resolved_single_kernel.begin(), oi_resolved_single_kernel.end());
+                        for (const auto& snap : oi_snapshots) {
+                            if (resolved_set.count(snap.packed)) {
+                                continue;
+                            }
+                            uint32_t r_start = static_cast<uint32_t>(snap.packed >> 32);
+                            uint32_t r_end = static_cast<uint32_t>(snap.packed);
+                            if (std::memcmp(snap.bytes.data(), l1_data + r_start, r_end - r_start) != 0) {
+                                fprintf(stderr,
+                                        "[ASAN ERROR] Object Intent Violation: Attempted to modify memory belonging to an "
+                                        "adjacent object context — L1 buffer [0x%x, 0x%x) on core (%u, %u) changed but no "
+                                        "kernel in this launch resolved a pointer into it via __emule_local_l1_to_ptr.\n",
+                                        r_start, r_end, lx, ly);
+                                std::abort();
+                            }
+                        }
                     }
 
                     // Rethrow first kernel exception
@@ -2309,8 +2450,10 @@ void execute_program_emulated(IDevice* device, Program& program) {
     uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
 
     // Snapshot live L1 tensor ranges and the allocator's unreserved base for
-    // the OOB-tensor sanitizer (TT_EMULE_STRICT_TENSOR). When disabled, leave
-    // ranges null so the inline check in __emule_local_l1_to_ptr is a no-op.
+    // the OOB-tensor sanitizer (TT_EMULE_STRICT_TENSOR) and the stricter
+    // object-intent provenance sanitizer (TT_EMULE_STRICT_OBJECT_INTENT).
+    // When both are disabled, leave ranges null so the inline check in
+    // __emule_local_l1_to_ptr is a no-op.
     EmuleOobTensorState oob_state;
     std::vector<uint64_t> live_ranges_snapshot;
     std::vector<uint64_t> dram_live_ranges_snapshot;
@@ -2320,7 +2463,9 @@ void execute_program_emulated(IDevice* device, Program& program) {
     // accesses through. A non-null sentinel with count=0 forces the check to
     // run and abort, which is the correct behavior when no tensor is live.
     static const uint64_t kEmptyRange = 0;
-    if (emule_strict_tensor_enabled()) {
+    const bool strict_tensor = emule_strict_tensor_enabled();
+    const bool strict_object_intent = emule_strict_object_intent_enabled();
+    if (strict_tensor || strict_object_intent) {
         live_ranges_snapshot = tt::tt_metal::emule::LiveL1Ranges::snapshot(device_id);
         oob_state.l1_unreserved_base = static_cast<uint32_t>(
             device->allocator()->get_base_allocator_addr(HalMemType::L1));
@@ -2336,6 +2481,7 @@ void execute_program_emulated(IDevice* device, Program& program) {
             ? &kEmptyRange
             : dram_live_ranges_snapshot.data();
         oob_state.dram_tensor_ranges_count = static_cast<uint32_t>(dram_live_ranges_snapshot.size());
+        oob_state.object_intent_strict = strict_object_intent;
     }
     if (emule_strict_padding_enabled()) {
         padding_ranges_snapshot = tt::tt_metal::emule::LiveL1PaddingRanges::snapshot(device_id);
