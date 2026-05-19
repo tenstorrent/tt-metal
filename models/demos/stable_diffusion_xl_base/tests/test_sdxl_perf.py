@@ -133,7 +133,7 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_encode_1024x1024": {
         "wormhole": 328_968_938,  # Note: this is an average value of 30 test runs due to high variability
-        "blackhole": 143_563_697,
+        "blackhole": 141_175_333,
     },
     "vae_encode_512x512": {
         "wormhole": 85_005_572,  # Note: this is an average value of 30 test runs due to high variability
