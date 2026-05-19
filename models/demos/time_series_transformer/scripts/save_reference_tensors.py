@@ -45,10 +45,13 @@ def _remove_stale_reference_tensors(save_dir: Path) -> None:
 
 def _write_or_assert_config(save_dir: Path, config_dict: dict) -> None:
     """Write config.json if it doesn't exist; assert it matches if it does."""
-    # Resolve to absolute path and validate it stays within save_dir
     config_path = (save_dir / "config.json").resolve()
     expected_parent = save_dir.resolve()
-    if not str(config_path).startswith(str(expected_parent)):
+
+    # Use relative_to for reliable path containment check (avoids prefix collisions)
+    try:
+        config_path.relative_to(expected_parent)
+    except ValueError:
         raise ValueError(f"Unsafe path detected: {config_path} is outside {expected_parent}")
 
     if config_path.exists():
