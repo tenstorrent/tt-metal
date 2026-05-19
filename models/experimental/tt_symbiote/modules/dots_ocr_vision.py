@@ -32,10 +32,16 @@ from ttnn.operations.transformer import SDPAProgramConfig
 # 60.9 / 130 TFLOPs peak HiFi2 ceiling we were hitting in tracy.
 VISION_MATMUL_MATH_FIDELITY = ttnn.MathFidelity.LoFi
 VISION_SDPA_MATH_FIDELITY = ttnn.MathFidelity.LoFi
-# RMSNorm/LayerNorm at HiFi2: the variance reduce is a sum of squares of BF16
-# inputs, and HiFi2 already gives full BF16 multiplication precision in the
-# single-pass kernel -- HiFi4's extra phases are wasted work for our dtype mix.
-VISION_NORM_MATH_FIDELITY = ttnn.MathFidelity.HiFi2
+# All vision matmuls / SDPA / norms run at LoFi -- the residual stream
+# carries BFP8 activations (post-attention out, post-MLP out, post-norm
+# out) so the higher norm fidelity was being thrown away into a coarser
+# downstream representation anyway.
+# RMSNorm/LayerNorm at LoFi: when the input residual stream is BFP8 the
+# multiplication precision needed for the variance reduce is bounded by
+# BFP8's per-tile shared exponent (~7 mantissa bits effective on a tile of
+# correlated magnitudes), so dropping from HiFi2 to LoFi is in the noise
+# floor of the BFP8 quantization upstream.
+VISION_NORM_MATH_FIDELITY = ttnn.MathFidelity.LoFi
 
 
 def _align_vision_sdpa_seq_len(seq_len: int) -> int:
@@ -132,53 +138,85 @@ def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int):
     # auto-config's 1) -> 6 K iterations instead of 48.
     in0_block_w = _largest_divisor_le(k_tiles, 8)
 
-    # In-flight output block sized to keep total L1 (act + weight + output)
-    # comfortably under 1.5 MB per core. ``out_block_h`` chunks the per-core
-    # output along M; the kernel iterates ``per_core_M / out_block_h`` blocks
-    # per core. Larger ``out_block_h`` -> fewer outer-block iterations.
+    # Joint (out_block_h, out_subblock_h, out_subblock_w) selection.
     #
-    # Tracy ablation across the 4 vision matmul shapes (TP=2):
-    #   * QKV/gate/up (K=48 -> 6 inner-K iters/outer) and O proj (K=48):
-    #     out_block_h=16 either ties or *regresses* (O proj 40.8% -> 35.5%
-    #     FLOPs) -- the (16, 1) output-subblock shape fights the matmul
-    #     kernel's tile layout when N is small.
-    #   * Down (K=132 -> 22 inner-K iters/outer): out_block_h=16 wins
-    #     (28.8% -> 48.5% FLOPs) because the 33% saving in outer-M
-    #     iterations dominates each iteration's heavy K loop.
-    # Discriminate on inner-K iters per outer-M block: bigger K loop ->
-    # bigger out_block_h gains. For QKV (per_core_n=18, BFP8 out,
-    # in0_block_w=8) out_block_h=12 lands at ~384 KB act + 324 KB weight +
-    # 486 KB out (all double-buffered) = ~1.2 MB << 1.5 MB.
-    inner_k_iters = max(1, k_tiles // max(in0_block_w, 1))
-    target_out_block_h_tiles = 16 if inner_k_iters >= 12 else 12
-    out_block_h = min(per_core_m, target_out_block_h_tiles)
-    while out_block_h > 1 and per_core_m % out_block_h != 0:
-        out_block_h -= 1
-    out_block_w = per_core_n
-
-    # Pick (out_subblock_h, out_subblock_w) to fill the DST register budget
-    # (8 tiles when fp32_dest_acc_en=False, which is the vision matmul setup).
-    # Prefer a wide subblock (keeps the M loop tight); when out_block_w is
-    # prime (e.g. 17 for the MLP gate/up at n_tiles=132/8) the wide axis
-    # collapses to 1, so fall back to growing out_subblock_h to keep DST
-    # full. Empty 1x1 subblocks waste 7/8 of the DST register file and
-    # compound across the 384-tile M dimension of the vision matmuls.
+    # Compute is dominated by the number of MMU-style ``matmul_tiles``
+    # instructions issued, which equals ``per_core_M * per_core_N * K_tiles
+    # / (in0_block_w * dst_area)``. So the *primary* lever for compute
+    # throughput is ``dst_area = out_subblock_h * out_subblock_w``: 8/8
+    # tiles fills the DST register file (LoFi, fp32_dest_acc_en=False) and
+    # is 2x more arithmetic per instruction than 4/8.
+    #
+    # The trap that the original heuristic fell into: when ``per_core_N``
+    # is prime (e.g. 17 for the MLP gate/up at N=4224, n_tiles=132,
+    # per_core_n=ceil(132/8)=17) the ``out_subblock_w`` loop can only pick
+    # 1, so DST area depends entirely on ``out_subblock_h``. With the
+    # default ``out_block_h=12`` the largest h that divides it is 4
+    # (12 % 8 != 0), capping the subblock at (4,1) = 4/8 DST. Tracy showed
+    # this matmul running at 28.3% FLOPs vs 48% for the same-FLOPs MLP
+    # down (which has per_core_n=6, factors {1,2,3,6}, hits area=8 easily).
+    #
+    # Fix: enumerate candidate ``out_block_h`` values, compute the best
+    # achievable ``dst_area`` for each, and pick (dst_area, out_block_h)
+    # lexicographically -- max DST utilization first, then largest
+    # ``out_block_h`` (= fewest outer-M iters = fewest weight DRAM
+    # re-reads, since the kernel re-streams weights per outer-M iter
+    # in matmul_multicore_reuse_mcast_2d_program_factory.cpp:111). The
+    # per-core L1 budget caps ``out_block_h``: BF16 inputs/intermediates
+    # at out_block_h=16 with per_core_n>=17 push interm0 past ~558 KB
+    # which combined with the in0/in1/out CBs trips ``program.cpp:934``
+    # at ~1.7 MB. Empirically out_block_h=8 fits all four vision shapes
+    # at full DST when out_block_h=12 doesn't.
     dst_tiles_budget = 8
-    out_subblock_h = 1
-    out_subblock_w = 1
+    candidate_out_block_h = [16, 12, 8, 6, 4, 3, 2, 1]
     best_area = 0
-    for h in range(min(out_block_h, dst_tiles_budget), 0, -1):
-        if out_block_h % h != 0:
+    best_out_block_h = 1
+    best_subblock_h = 1
+    best_subblock_w = 1
+    for ob_h in candidate_out_block_h:
+        if ob_h > per_core_m or per_core_m % ob_h != 0:
             continue
-        for w in range(min(out_block_w, dst_tiles_budget // h), 0, -1):
-            if out_block_w % w != 0:
+
+        # L1 sanity cap: when N is large enough that the BF16 interm0 CB
+        # (out_block_h * per_core_n * 2048 B) plus the BF16 in0 CB
+        # (out_block_h * in0_block_w * 2 * 2048 B) push past ~1.0 MB on
+        # their own, skip this candidate. The matmul kernel also allocates
+        # in1 + out + bias CBs on top, so leaving headroom here avoids the
+        # 1.5 MB-per-core L1 clash that bigger blocks trigger on the
+        # large-N (per_core_n>=17) vision matmuls.
+        approx_interm_kb = (ob_h * per_core_n * 2048) // 1024
+        approx_in0_kb = (ob_h * in0_block_w * 2 * 2048) // 1024
+        if approx_interm_kb + approx_in0_kb > 1024:
+            continue
+
+        # Best DST area achievable with this out_block_h
+        cand_area = 0
+        cand_h = 1
+        cand_w = 1
+        for h in range(min(ob_h, dst_tiles_budget), 0, -1):
+            if ob_h % h != 0:
                 continue
-            area = h * w
-            if area > best_area:
-                best_area = area
-                out_subblock_h = h
-                out_subblock_w = w
-                break
+            for w in range(min(per_core_n, dst_tiles_budget // h), 0, -1):
+                if per_core_n % w != 0:
+                    continue
+                area = h * w
+                if area > cand_area:
+                    cand_area = area
+                    cand_h = h
+                    cand_w = w
+                    break
+
+        # Lexicographic preference: (dst_area, out_block_h) DESC.
+        if (cand_area > best_area) or (cand_area == best_area and ob_h > best_out_block_h):
+            best_area = cand_area
+            best_out_block_h = ob_h
+            best_subblock_h = cand_h
+            best_subblock_w = cand_w
+
+    out_block_h = best_out_block_h
+    out_block_w = per_core_n
+    out_subblock_h = best_subblock_h
+    out_subblock_w = best_subblock_w
 
     pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
@@ -256,7 +294,7 @@ def apply_rotary_tt(
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Apply rotary embedding to Q and K tensors in fp32 then cast back."""
     if out_dtype is None:
-        out_dtype = ttnn.bfloat16
+        out_dtype = ttnn.bfloat8_b
 
     f32 = getattr(ttnn, "float32", None)
 
@@ -404,7 +442,7 @@ class TTNNDotsVision2DRoPE:
         cos_tt = ttnn.from_torch(
             cos_full,
             device=self.device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
             mesh_mapper=mapper,
@@ -412,7 +450,7 @@ class TTNNDotsVision2DRoPE:
         sin_tt = ttnn.from_torch(
             sin_full,
             device=self.device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
             mesh_mapper=mapper,
@@ -490,14 +528,16 @@ class TTNNDotsVisionRMSNorm(TTNNModule):
         if self._use_layer_norm:
             self.tt_weight = ttnn.from_torch(
                 self._weight_torch.unsqueeze(0),
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             if self._bias_torch is not None:
                 self.tt_bias = ttnn.from_torch(
                     self._bias_torch.unsqueeze(0),
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
         else:
             dim = self._weight_torch.numel()
@@ -516,15 +556,15 @@ class TTNNDotsVisionRMSNorm(TTNNModule):
         self.compute_kernel_config = _vision_sdpa_compute_config(self.device, math_fidelity=VISION_NORM_MATH_FIDELITY)
 
         if self._use_layer_norm:
-            self.tt_weight = ttnn.to_device(self.tt_weight, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            self.tt_weight = ttnn.to_device(self.tt_weight, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
             if self.tt_bias is not None:
-                self.tt_bias = ttnn.to_device(self.tt_bias, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                self.tt_bias = ttnn.to_device(self.tt_bias, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
         else:
-            self.tt_weight = ttnn.to_device(self.tt_weight, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            self.tt_weight = ttnn.to_device(self.tt_weight, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         if self._use_layer_norm:
             return ttnn.layer_norm(
@@ -659,12 +699,24 @@ class TTNNDotsVisionMLP(TTNNModule):
         m_dim = int(hidden_states.shape[0]) * int(hidden_states.shape[1]) * int(hidden_states.shape[2])
         k_dim = int(self.tt_fc1_weight.shape[-2])
         n_dim = int(self.tt_fc1_weight.shape[-1])
-        gate_up_pc = _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
+
         # Gate/up outputs are BFP8: halves the matmul writeback (38 MB BF16
         # -> 21 MB BFP8) and the matching read in the SILU multiply, with
         # no quality impact since the silu+mul output is already BFP8 in
         # this path. BFP4 weight x BF16 activation -> BFP8 output is a
         # supported matmul dtype combo on Wormhole.
+        #
+        # Note: an L1 BLOCK_SHARDED activation variant was tried (shard
+        # ``hidden_states`` once across the 8x8 grid and reuse for gate/up).
+        # It regressed FLOP utilization from 28% to 24% on these matmuls
+        # (per-op time 2.42 ms -> 2.83 ms) because the BF16 shard at
+        # 576 KB / core forces ``out_block_h`` from 12 down to 6 in the
+        # sharded program_config to stay under the 1.5 MB per-core L1 cap.
+        # Halving ``out_block_h`` doubles outer-M iterations, doubling weight
+        # DRAM re-reads -- the slow vision matmuls are weight-DRAM-bound, so
+        # the activation L1 win is more than wiped out by the weight DRAM
+        # cost. Stay on the DRAM-interleaved path.
+        gate_up_pc = _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
         gate = ttnn.linear(
             hidden_states,
             self.tt_fc1_weight,
@@ -836,12 +888,22 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
                 mesh_mapper=mapper,
             )
 
+            # Output BFP8 here so the entire residual stream feeding the 42
+            # vision blocks is BFP8: the QKV / MLP gate / MLP up matmuls then
+            # see BFP8 in0 (instead of BF16) which roughly matches the MLP
+            # down matmul's 48% FLOP utilization on the gate/up shapes (BF16
+            # in0 was capped at ~28% by the kernel's lower-fidelity inner
+            # math path on mixed-precision in0/in1). The ``rms_norm`` below
+            # picks up its output dtype from the BFP8 input (the public
+            # ``ttnn.layer_norm`` / ``ttnn.rms_norm`` wrapper passes
+            # ``dtype=std::nullopt`` to the device prim, which preserves
+            # input dtype), so no extra typecast is needed.
             out = ttnn.linear(
                 x_tt,
                 self.tt_proj_weight,
                 bias=self.tt_proj_bias,
                 transpose_b=True,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 memory_config=mem,
                 compute_kernel_config=self.vision_matmul_compute_kernel_config,
             )
@@ -886,12 +948,15 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
             mesh_mapper=mapper,
         )
 
+        # See note above on the dim==2 path: BFP8 here keeps the residual
+        # stream (and therefore every downstream matmul's in0) BFP8, which
+        # is the dominant per-layer compute speedup.
         out = ttnn.linear(
             x_tt,
             self.tt_proj_weight,
             bias=self.tt_proj_bias,
             transpose_b=True,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             memory_config=mem,
             compute_kernel_config=self.vision_matmul_compute_kernel_config,
         )
@@ -1163,6 +1228,16 @@ class TTNNDotsVisionAttention(TTNNModule):
         qkv_m = int(hidden_states.shape[0]) * int(hidden_states.shape[1]) * s
         qkv_k = int(self.tt_qkv_weight.shape[-2])
         qkv_n = int(self.tt_qkv_weight.shape[-1])
+
+        # An L1 BLOCK_SHARDED activation variant of this matmul was attempted
+        # (shard ``hidden_states`` once across the 8x8 grid, feed the QKV
+        # matmul in0 from the resident L1 shard). It regressed the per-op
+        # time from 1.9 ms -> 3.0 ms (FLOP utilization 39% -> 25%) because
+        # the BF16 shard at 576 KB / core forces ``out_block_h`` from 12
+        # down to 6 in the matched program_config to stay under the per-core
+        # L1 cap. Halving ``out_block_h`` doubles outer-M iterations, and
+        # this matmul is weight-DRAM-bound -- the 2x weight re-reads from
+        # DRAM more than wipe out the activation L1 win.
         qkv_pc = _vision_matmul_program_config(self.device, qkv_m, qkv_k, qkv_n)
         qkv = ttnn.linear(
             hidden_states,
@@ -1189,8 +1264,8 @@ class TTNNDotsVisionAttention(TTNNModule):
             # ``ttnn.experimental.rotary_embedding`` (non-llama) preserves
             # input dtype, so Q/K stay BFP8 the whole way: no typecasts
             # around the rotary, and SDPA reads BFP8 Q/K/V directly.
-            # QKV matmul uses BF16 activations × BFP8 weights → BFP8 (same
-            # contract as vision MLP gate/up).
+            # QKV matmul is BFP8 in0 (post-norm1) x BFP8 weight -> BFP8
+            # output now -- the residual stream is BFP8 end-to-end.
             q = ttnn.experimental.rotary_embedding(q, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             k = ttnn.experimental.rotary_embedding(k, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -1227,11 +1302,15 @@ class TTNNDotsVisionAttention(TTNNModule):
             o_k = int(self.tt_o_proj_weight.shape[-2])
             o_n = int(self.tt_o_proj_weight.shape[-1])
             o_pc = _vision_matmul_program_config(self.device, o_m, o_k, o_n)
+            # BFP8 output keeps the post-attn residual on the BFP8 stream.
+            # The previous BF16 here forced the residual ``ttnn.add`` below
+            # to upcast its BFP8 input back to BF16, doubling the residual
+            # tensor footprint and silently making norm2 read BF16.
             return ttnn.linear(
                 ctx,
                 self.tt_o_proj_weight,
                 bias=self.tt_o_proj_bias,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 memory_config=mem,
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=o_pc,
@@ -1265,11 +1344,12 @@ class TTNNDotsVisionAttention(TTNNModule):
         o_k = int(self.tt_o_proj_weight.shape[-2])
         o_n = int(self.tt_o_proj_weight.shape[-1])
         o_pc = _vision_matmul_program_config(self.device, o_m, o_k, o_n)
+        # Same BFP8 rationale as the no-cu_seqlens branch above.
         return ttnn.linear(
             ctx,
             self.tt_o_proj_weight,
             bias=self.tt_o_proj_bias,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
             program_config=o_pc,
@@ -1357,12 +1437,17 @@ class TTNNDotsVisionBlock(TTNNModule):
             attention_mask=attention_mask,
             attention_logical_seq_len=attention_logical_seq_len,
         )
-        hidden_states = ttnn.add(residual, hidden_states)
+        # Force BFP8 output on the residual stream. Without this, when one
+        # operand is BF16 (older path) and the other BFP8 the binary op
+        # promotes to BF16, doubling the residual tile footprint going into
+        # ``norm2``. Now both operands are BFP8 and so is the result, so the
+        # whole layer (and the next one's norm input) stays in BFP8.
+        hidden_states = ttnn.add(residual, hidden_states, dtype=ttnn.bfloat8_b)
 
         residual = hidden_states
         hidden_states = self.norm2(hidden_states)
         hidden_states = self.mlp(hidden_states)
-        hidden_states = ttnn.add(residual, hidden_states)
+        hidden_states = ttnn.add(residual, hidden_states, dtype=ttnn.bfloat8_b)
 
         return hidden_states
 
@@ -1451,7 +1536,7 @@ class TTNNDotsPatchMerger(TTNNModule):
         def _to_host(w, layout=ttnn.TILE_LAYOUT):
             if w is None:
                 return None
-            return ttnn.from_torch(w.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=layout)
+            return ttnn.from_torch(w.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=layout)
 
         if self._use_layer_norm:
             self.tt_ln_weight = _to_host(self._ln_weight.unsqueeze(0))
@@ -1471,7 +1556,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             else None
         )
         self.tt_w2 = (
-            ttnn.from_torch(self._w2_weight.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            ttnn.from_torch(self._w2_weight.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
             if self._w2_weight is not None
             else None
         )
@@ -1481,7 +1566,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             else None
         )
         self.tt_w2_bias = (
-            ttnn.from_torch(self._w2_bias.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            ttnn.from_torch(self._w2_bias.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
             if self._w2_bias is not None
             else None
         )
@@ -1513,7 +1598,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             # Re-create w2 on device with col-shard mapper
             self.tt_w2 = ttnn.from_torch(
                 self._w2_weight.to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 memory_config=mem,
@@ -1522,7 +1607,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             if self._w2_bias is not None:
                 self.tt_w2_bias = ttnn.from_torch(
                     self._w2_bias.to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
                     memory_config=mem,
@@ -1579,15 +1664,15 @@ class TTNNDotsPatchMerger(TTNNModule):
             bias=self.tt_w1_bias,
             activation="gelu",
             dtype=ttnn.bfloat8_b,
-            memory_config=mem,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=compute_kc,
         )
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_w2,
             bias=self.tt_w2_bias,
-            dtype=ttnn.bfloat16,
-            memory_config=mem,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=compute_kc,
         )
 
@@ -1865,7 +1950,7 @@ class TTNNDotsOCRVisionTower(TTNNModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             mesh_mapper=mapper,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
     def forward_post_patch_embed(
@@ -1886,9 +1971,9 @@ class TTNNDotsOCRVisionTower(TTNNModule):
             x = ttnn.from_torch(
                 x.to(torch.bfloat16),
                 device=self.device,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 mesh_mapper=mapper,
             )
         if len(x.shape) == 3:
