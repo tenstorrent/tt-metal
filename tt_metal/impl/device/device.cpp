@@ -1799,6 +1799,11 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
     pending_phase25_force_reset_chans_.clear();
     quiesce_relay_transitioned_ = false;  // FIX DV: clear per-cycle relay-transitioned flag
 
+    // GAP-R13 (#42429): Track Phase 2.5 outcome per channel for summary.
+    uint32_t gap_r13_clean_skip = 0;      // already TERMINATED/0 — no action needed
+    uint32_t gap_r13_term_ok = 0;         // received TERMINATE signal and acknowledged it
+    uint32_t gap_r13_relay_skip = 0;      // skipped due to relay path broken
+
     if (fabric_relay_path_broken_ && !this->is_mmio_capable()) {
         log_warning(
             tt::LogMetal,
@@ -1807,6 +1812,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
             "reads/writes to prevent indefinite UMD relay hang.  Phase 3 will also be skipped.",
             this->id(),
             active_channels.size());
+        gap_r13_relay_skip = active_channels.size();
     } else {
         {
             const auto [erisc_term_addr, erisc_term_signal] =
@@ -1840,6 +1846,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                         "relay already marked broken by prior channel — skipping (FIX PY #42429).",
                         this->id(),
                         eth_chan_id);
+                    gap_r13_relay_skip++;
                     continue;
                 }
                 const auto eth_logical_core = env_impl.get_cluster()
@@ -1912,6 +1919,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                         this->id(),
                         eth_chan_id,
                         status_buf[0]);
+                    gap_r13_clean_skip++;
                     continue;
                 }
 
@@ -1979,6 +1987,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
                         .count();
                 if (terminated) {
+                    gap_r13_term_ok++;
                     log_info(
                         tt::LogMetal,
                         "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
@@ -2031,13 +2040,17 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
     // GAP-R8 (#42429): Phase 2.5 force-reset summary — how many channels needed force-halt
     // vs how many were active.  High force_reset_count relative to active_channels indicates
     // ERISCs are routinely failing to self-terminate within the 2000ms budget.
+    // GAP-R13 (#42429): Extended with per-outcome breakdown for post-mortem triage.
     log_info(
         tt::LogMetal,
         "quiesce_and_restart_fabric_workers: Device {} Phase 2.5 summary: "
-        "force_reset_count={}/{} active_channels, relay_path_broken={}",
+        "active={} clean_skip={} term_ok={} force_reset={} relay_skip={} relay_broken={}",
         this->id(),
-        pending_phase25_force_reset_chans_.size(),
         active_channels.size(),
+        gap_r13_clean_skip,
+        gap_r13_term_ok,
+        pending_phase25_force_reset_chans_.size(),
+        gap_r13_relay_skip,
         fabric_relay_path_broken_.load());
 
     // Phase 3: Re-configure and re-launch the fabric workers
