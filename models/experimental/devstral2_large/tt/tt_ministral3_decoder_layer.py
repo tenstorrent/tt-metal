@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from typing import Optional
 
-import torch
 import ttnn
 
 from models.experimental.devstral2_large.tt.model_args import Devstral2Args
@@ -72,7 +71,7 @@ class TtDecoderLayer:
         *,
         mode: str = "decode",
         start_pos: int = 0,
-        current_pos_host: Optional[torch.Tensor] = None,
+        current_pos: Optional[ttnn.Tensor] = None,
         user_id: int = 0,
     ) -> ttnn.Tensor:
         mesh_device = self.self_attn.mesh_device
@@ -85,7 +84,7 @@ class TtDecoderLayer:
             h,
             mode=mode,
             start_pos=start_pos,
-            current_pos_host=current_pos_host,
+            current_pos=current_pos,
             user_id=user_id,
         )
         h = ttnn.add(h, residual, memory_config=act_mem)
