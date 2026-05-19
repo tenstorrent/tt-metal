@@ -35,9 +35,12 @@ from models.demos.ace_step_v1_5.ttnn_impl.lm_constrained_logits_ttnn import (
     logits_add_delta_bf16,
     logits_divide_by_scalar_bf16,
     logits_keep_allowed_bf16,
-    repetition_penalty_apply_bf16,
 )
 from models.demos.ace_step_v1_5.ttnn_impl.lm_logits_ttnn import cfg_linear_combination_bf16
+from models.demos.ace_step_v1_5.ttnn_impl.lm_postprocess_tt_transformers import (
+    apply_penalty_filter_sample,
+    repetition_penalty_apply,
+)
 
 _PCC = 0.99
 # Experimental causal LM vs HF (``comp_pcc``).
@@ -202,13 +205,41 @@ def test_llm_handler_logits_cfg_linear_combination_pcc(device, logits_pair):
 
 
 def test_llm_handler_logits_repetition_penalty_pcc(device, logits_pair):
+    """PCC for ``AceStepPenalties1D.apply_hf_repetition`` (subclass of ``Penalties1D``)
+    vs HF ``RepetitionPenaltyLogitsProcessor`` semantics. The wrapper trades the
+    legacy ``prompt_ignore_length`` knob for HF-faithful behaviour (all input_ids
+    contribute to the penalty mask)."""
     scores, _ = logits_pair
     b, v = scores.shape
     seq = torch.randint(0, v, (b, 48), dtype=torch.long)
     penalty = 1.12
-    ref = _torch_repetition_penalty_bf16(scores, seq, penalty, prompt_ignore_length=4)
-    got = repetition_penalty_apply_bf16(scores, seq, penalty, device=device, prompt_ignore_length=4)
-    _assert_pcc(ref, got, name="repetition_penalty_apply_bf16")
+    # ``prompt_ignore_length=0`` ⇒ HF semantics, which is what AceStepPenalties1D emulates.
+    ref = _torch_repetition_penalty_bf16(scores, seq, penalty, prompt_ignore_length=0)
+    got = repetition_penalty_apply(scores, seq, penalty, device=device)
+    _assert_pcc(ref, got, name="AceStepPenalties1D.apply_hf_repetition")
+
+
+def test_llm_handler_fused_postprocess_sample_smoke(device, logits_pair):
+    """Smoke test: the fused on-device ``apply_penalty_filter_sample`` returns a valid
+    token id per row. We can't do an exact PCC match against HF here because the
+    sampler is stochastic (``ttnn.sampling`` with per-call seeds), but we can check
+    the contract: shape ``[B]``, dtype int64, every id in ``[0, vocab)``."""
+    scores, _ = logits_pair
+    b, v = scores.shape
+    seq = torch.randint(0, v, (b, 48), dtype=torch.long)
+    tokens = apply_penalty_filter_sample(
+        scores,
+        seq,
+        repetition_penalty=1.1,
+        top_k=32,
+        top_p=0.9,
+        temperature=1.0,
+        seed=1234,
+        device=device,
+    )
+    assert tokens.shape == (b,), f"expected [{b}], got {tuple(tokens.shape)}"
+    assert tokens.dtype == torch.int64, f"expected int64, got {tokens.dtype}"
+    assert int(tokens.min()) >= 0 and int(tokens.max()) < v
 
 
 def test_llm_handler_logits_keep_allowed_pcc(device, torch_seed):

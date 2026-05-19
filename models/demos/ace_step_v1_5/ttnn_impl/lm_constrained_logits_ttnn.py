@@ -6,16 +6,20 @@
 
 :class:`~models.demos.ace_step_v1_5.ttnn_impl.five_hz_lm.five_hz_constrained_logits_processor.MetadataConstrainedLogitsProcessor`
 keeps FSM / tokenizer logic on the host. When ``LocalFiveHzLMHandler.set_ttnn_logits_device`` has run,
-the processor sets ``_ttnn_logits_device`` and these ops run on TTNN (strict no-fallback when supported):
+the processor sets ``_ttnn_logits_device`` and these helpers run on TTNN (strict no-fallback when supported):
 
-- **Whitelist** (only a set of token ids keep their logits; others → large negative)
-- **Logits + dense mask** (e.g. ``non_audio_code_mask``, ``audio_code_mask``)
-- **Temperature** (divide logits by temperature)
-- **Repetition penalty** (HF ``RepetitionPenaltyLogitsProcessor`` math on ``[B, V]`` last-step logits)
-- **Top-k / top-p (nucleus)** (same masking rules as ``LocalFiveHzLMHandler._apply_top_k_filter`` / ``_apply_top_p_filter``)
-- **Sampling** (``temperature > 0``: categorical via inverse CDF on softmax; else ``argmax``), matching ``_sample_tokens`` semantics on ``[B, V]`` logits
-- **Sequence concat** (``[B, S]`` + ``[B, T]`` along dim 1 for token ids / masks as ``int32`` on TTNN when used from the handler)
-- **EOS / pad row mask** (``[B]`` bool per row), **any-reduction** on small bool masks, and **int32 identity round-trip** for host callbacks (streamer / FSM ``update_state``) when the logits device is set
+- **Whitelist** (only a set of token ids keep their logits; others → large negative) — :func:`logits_keep_allowed_bf16`
+- **Logits + dense mask** (e.g. ``non_audio_code_mask``, ``audio_code_mask``) — :func:`logits_add_delta_bf16`
+- **Temperature** (divide logits by temperature) — :func:`logits_divide_by_scalar_bf16`
+- **Sequence concat** (``[B, S]`` + ``[B, T]`` along dim 1 for token ids / masks as ``int32``) — :func:`tensor_concat_dim1_int32_ttnn`
+- **EOS / pad row mask** (``[B]`` bool per row), **any-reduction** on small bool masks, and **int32 identity round-trip** for host callbacks (streamer / FSM ``update_state``) — :func:`tokens_row_eos_or_pad_mask_int32_ttnn`, :func:`mask_any_true_int32_ttnn`, :func:`tensor_identity_roundtrip_int32_ttnn`
+
+**Repetition penalty + top-k + top-p + temperature + sampling** were moved out of this
+file and now run as one **fused on-device pipeline** in
+:mod:`models.demos.ace_step_v1_5.ttnn_impl.lm_postprocess_tt_transformers`
+(subclasses of :class:`models.common.modules.sampling.penalties_1d.Penalties1D` and
+:class:`models.common.modules.sampling.sampling_1d.Sampling1D`). Use
+:meth:`LocalFiveHzLMHandler._postprocess_and_sample_ttnn_or_torch` as the entry point.
 
 Host :mod:`tqdm` remains the progress UI (TTNN has no tqdm analogue); the handler tags the description when TTNN assist is active.
 
@@ -206,266 +210,16 @@ def tokens_any_eos_or_pad_int32_ttnn(
     return mask_any_true_int32_ttnn(row, device=device, memory_config=memory_config)
 
 
-def logits_top_k_filter_bf16(
-    logits: torch.Tensor,
-    top_k: int,
-    *,
-    device,
-    memory_config=None,
-) -> torch.Tensor:
-    """Mask logits below the k-th largest value per row (HF / handler semantics); ``logits`` is ``[B, V]``."""
-    import ttnn
-
-    if logits.dim() != 2:
-        raise ValueError(f"expected [B, V], got {tuple(logits.shape)}")
-    b, v = int(logits.shape[0]), int(logits.shape[1])
-    k = int(top_k)
-    if k <= 0 or v == 0:
-        return logits
-
-    k_eff = min(k, v)
-    mem = memory_config if memory_config is not None else _dram_mem(ttnn)
-    mem_kw = dict(memory_config=mem) if mem is not None else {}
-
-    x = logits.detach().float().cpu().contiguous()
-    x_bf = x.to(dtype=torch.bfloat16)
-
-    with _strict_ttnn_no_fallback():
-        tt_x = ttnn.from_torch(x_bf, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, **mem_kw)
-        tt_x = _row_to_tile_bf16(tt_x, ttnn)
-        vals, _idx = ttnn.topk(tt_x, k_eff, dim=-1, largest=True, sorted=True)
-        kth = ttnn.slice(vals, (0, k_eff - 1), (b, k_eff))
-        ttnn.deallocate(vals)
-        ttnn.deallocate(_idx)
-        neg = ttnn.from_torch(
-            torch.full((b, v), -1e9, dtype=torch.bfloat16),
-            device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            **mem_kw,
-        )
-        neg = _row_to_tile_bf16(neg, ttnn)
-        remove = ttnn.lt(tt_x, kth)
-        ttnn.deallocate(kth)
-        out_tt = ttnn.where(remove, neg, tt_x, **mem_kw)
-        ttnn.deallocate(remove)
-        ttnn.deallocate(neg)
-        out = ttnn.to_torch(out_tt, dtype=torch.float32).contiguous()
-        ttnn.deallocate(out_tt)
-        ttnn.deallocate(tt_x)
-    if int(out.shape[1]) != v:
-        out = out[:, :v].contiguous()
-    return out
-
-
-def logits_top_p_nucleus_bf16(
-    logits: torch.Tensor,
-    top_p: float,
-    *,
-    device,
-    memory_config=None,
-) -> torch.Tensor:
-    """Nucleus (top-p) filter matching handler ``_apply_top_p_filter``; ``logits`` is ``[B, V]``."""
-    import ttnn
-
-    p = float(top_p)
-    if not (0.0 < p < 1.0):
-        raise ValueError(f"top_p must be in (0, 1), got {p}")
-    if logits.dim() != 2:
-        raise ValueError(f"expected [B, V], got {tuple(logits.shape)}")
-    b, v = int(logits.shape[0]), int(logits.shape[1])
-    if v == 0:
-        return logits
-
-    mem = memory_config if memory_config is not None else _dram_mem(ttnn)
-    mem_kw = dict(memory_config=mem) if mem is not None else {}
-
-    x = logits.detach().float().cpu().contiguous()
-    x_bf = x.to(dtype=torch.bfloat16)
-
-    with _strict_ttnn_no_fallback():
-        tt_x = ttnn.from_torch(x_bf, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, **mem_kw)
-        tt_x = _row_to_tile_bf16(tt_x, ttnn)
-        sorted_logits, sorted_idx = ttnn.sort(tt_x, dim=-1, descending=True)
-        if sorted_logits.layout == ttnn.ROW_MAJOR_LAYOUT:
-            sorted_logits = _row_to_tile_bf16(sorted_logits, ttnn)
-        else:
-            # Already TILE from sorting a TILE tensor (``softmax`` requires TILE on some arch).
-            pass
-
-        if mem is not None:
-            probs = ttnn.softmax(sorted_logits, dim=-1, numeric_stable=True, memory_config=mem)
-        else:
-            probs = ttnn.softmax(sorted_logits, dim=-1, numeric_stable=True)
-        ttnn.deallocate(sorted_logits)
-        cum = ttnn.cumsum(probs, dim=-1, dtype=ttnn.bfloat16)
-        ttnn.deallocate(probs)
-
-        top_p_tt = ttnn.from_torch(
-            torch.full((b, v), p, dtype=torch.bfloat16),
-            device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            **mem_kw,
-        )
-        top_p_tt = _row_to_tile_bf16(top_p_tt, ttnn)
-        to_remove_sorted = ttnn.gt(cum, top_p_tt)
-        ttnn.deallocate(cum)
-        ttnn.deallocate(top_p_tt)
-
-        to_remove_bf = ttnn.typecast(to_remove_sorted, dtype=ttnn.bfloat16)
-        ttnn.deallocate(to_remove_sorted)
-
-        if v == 1:
-            shifted = ttnn.from_torch(
-                torch.zeros((b, 1), dtype=torch.bfloat16),
-                device=device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                **mem_kw,
-            )
-        else:
-            tail = ttnn.slice(to_remove_bf, (0, 0), (b, v - 1))
-            zero_col = ttnn.from_torch(
-                torch.zeros((b, 1), dtype=torch.bfloat16),
-                device=device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                **mem_kw,
-            )
-            zero_col = _row_to_tile_bf16(zero_col, ttnn)
-            shifted = _concat_dim1(ttnn, zero_col, tail)
-            ttnn.deallocate(tail)
-            ttnn.deallocate(zero_col)
-
-        ttnn.deallocate(to_remove_bf)
-
-        sorted_idx_i32 = ttnn.typecast(sorted_idx, dtype=ttnn.int32)
-        ttnn.deallocate(sorted_idx)
-        if sorted_idx_i32.layout != ttnn.ROW_MAJOR_LAYOUT:
-            idx_row = ttnn.to_layout(sorted_idx_i32, ttnn.ROW_MAJOR_LAYOUT)
-            ttnn.deallocate(sorted_idx_i32)
-            sorted_idx_i32 = idx_row
-
-        dest = ttnn.from_torch(
-            torch.zeros((b, v), dtype=torch.bfloat16),
-            device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            **mem_kw,
-        )
-        mask_vocab = ttnn.scatter(dest, 1, sorted_idx_i32, shifted)
-        if mask_vocab is not dest:
-            ttnn.deallocate(dest)
-        ttnn.deallocate(sorted_idx_i32)
-        ttnn.deallocate(shifted)
-
-        mask_vocab = _row_to_tile_bf16(mask_vocab, ttnn)
-
-        neg = ttnn.from_torch(
-            torch.full((b, v), -1e9, dtype=torch.bfloat16),
-            device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            **mem_kw,
-        )
-        neg = _row_to_tile_bf16(neg, ttnn)
-        half = ttnn.from_torch(
-            torch.full((b, v), 0.5, dtype=torch.bfloat16),
-            device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            **mem_kw,
-        )
-        half = _row_to_tile_bf16(half, ttnn)
-        do_remove = ttnn.gt(mask_vocab, half)
-        ttnn.deallocate(mask_vocab)
-        ttnn.deallocate(half)
-        out_tt = ttnn.where(do_remove, neg, tt_x, **mem_kw)
-        ttnn.deallocate(do_remove)
-        ttnn.deallocate(neg)
-        out = ttnn.to_torch(out_tt, dtype=torch.float32).contiguous()
-        ttnn.deallocate(out_tt)
-        ttnn.deallocate(tt_x)
-    if int(out.shape[1]) != v:
-        out = out[:, :v].contiguous()
-    return out
-
-
-def logits_sample_indices_bf16(
-    logits: torch.Tensor,
-    temperature: float,
-    *,
-    device,
-    memory_config=None,
-    seed: int = 0,
-) -> torch.Tensor:
-    """Sample one vocab index per row on TTNN (``logits`` ``[B, V]``).
-
-    - ``temperature <= 0``: ``argmax`` over the last dimension (same branch as the handler).
-    - ``temperature > 0``: ``softmax(logits / T)``, cumulative sum, one ``U(0,1)`` per row on device,
-      then the first column with ``cdf >= u`` (inverse CDF; same distribution as ``torch.multinomial`` for one draw).
-
-    Returned tensor is host ``torch.int64`` shape ``[B]``; caller should ``.to(logits.device)`` if needed.
-    ``seed`` is passed to ``ttnn.rand`` (0 lets the device pick a seed per kernel docs).
-    """
-    import ttnn
-
-    if logits.dim() != 2:
-        raise ValueError(f"expected [B, V], got {tuple(logits.shape)}")
-    b, v = int(logits.shape[0]), int(logits.shape[1])
-    if b == 0 or v == 0:
-        return torch.zeros((b,), dtype=torch.int64)
-
-    mem = memory_config if memory_config is not None else _dram_mem(ttnn)
-    mem_kw = dict(memory_config=mem) if mem is not None else {}
-
-    x = logits.detach().float().cpu().contiguous()
-    x_bf = x.to(dtype=torch.bfloat16)
-
-    with _strict_ttnn_no_fallback():
-        tt_x = ttnn.from_torch(x_bf, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, **mem_kw)
-        if float(temperature) <= 0.0:
-            idx_tt = ttnn.argmax(tt_x, dim=-1, keepdim=False)
-            out = ttnn.to_torch(idx_tt).to(dtype=torch.int64).reshape(b).contiguous()
-            ttnn.deallocate(idx_tt)
-            ttnn.deallocate(tt_x)
-            return out
-
-        t = max(float(temperature), 1e-6)
-        scaled = ttnn.div(tt_x, t, **mem_kw)
-        ttnn.deallocate(tt_x)
-        scaled_tile = ttnn.to_layout(scaled, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(scaled)
-        scaled = scaled_tile
-        if mem is not None:
-            probs = ttnn.softmax(scaled, dim=-1, numeric_stable=True, memory_config=mem)
-        else:
-            probs = ttnn.softmax(scaled, dim=-1, numeric_stable=True)
-        ttnn.deallocate(scaled)
-        cdf = ttnn.cumsum(probs, dim=-1, dtype=ttnn.bfloat16)
-        ttnn.deallocate(probs)
-
-        u = ttnn.rand(
-            (b, 1),
-            device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=mem if mem is not None else ttnn.DRAM_MEMORY_CONFIG,
-            low=1e-6,
-            high=1.0 - 1e-6,
-            seed=int(seed) & 0xFFFFFFFF,
-        )
-        ge = ttnn.ge(cdf, u)
-        ttnn.deallocate(cdf)
-        ttnn.deallocate(u)
-        ge_f = ttnn.typecast(ge, dtype=ttnn.bfloat16)
-        ttnn.deallocate(ge)
-        idx_tt = ttnn.argmax(ge_f, dim=-1, keepdim=False)
-        ttnn.deallocate(ge_f)
-        out = ttnn.to_torch(idx_tt).to(dtype=torch.int64).reshape(b).contiguous()
-        ttnn.deallocate(idx_tt)
-    return out
+# NOTE: ``logits_top_k_filter_bf16``, ``logits_top_p_nucleus_bf16``,
+# ``logits_sample_indices_bf16``, and ``repetition_penalty_apply_bf16`` were removed
+# from this file. The fused ``repetition_penalty → top-k → top-p → temperature → sample``
+# pipeline now runs through
+# :class:`~models.demos.ace_step_v1_5.ttnn_impl.lm_postprocess_tt_transformers.AceStepPenalties1D`
+# (subclass of :class:`models.common.modules.sampling.penalties_1d.Penalties1D`) and
+# :class:`~models.demos.ace_step_v1_5.ttnn_impl.lm_postprocess_tt_transformers.AceStepSampling1D`
+# (subclass of :class:`models.common.modules.sampling.sampling_1d.Sampling1D`),
+# orchestrated by ``apply_penalty_filter_sample`` and called from
+# :meth:`LocalFiveHzLMHandler._postprocess_and_sample_ttnn_or_torch`.
 
 
 def logits_add_delta_bf16(
@@ -581,88 +335,11 @@ def logits_divide_by_scalar_bf16(
     return out
 
 
-def repetition_penalty_apply_bf16(
-    scores: torch.Tensor,
-    input_ids: torch.Tensor,
-    penalty: float,
-    *,
-    device,
-    prompt_ignore_length: Optional[int] = None,
-    memory_config=None,
-) -> torch.Tensor:
-    """HF-style repetition penalty on TTNN (``scores`` ``[B, V]``, ``input_ids`` ``[B, seq]``).
-
-    Matches ``transformers.RepetitionPenaltyLogitsProcessor`` for the 2-D logits path:
-    for each token id present in ``input_ids``, if the logit is negative multiply by ``penalty``,
-    else divide by ``penalty`` (see HF docstring / paper).
-    """
-    import ttnn
-
-    p = float(penalty)
-    if p <= 0:
-        raise ValueError(f"penalty must be > 0, got {p}")
-
-    if scores.dim() != 2:
-        raise ValueError(f"expected scores [B, V], got {tuple(scores.shape)}")
-    b, v = int(scores.shape[0]), int(scores.shape[1])
-
-    ids = input_ids.long()
-    if ids.dim() == 1:
-        ids = ids.unsqueeze(0)
-    if int(ids.shape[0]) != b:
-        raise ValueError(f"batch mismatch scores B={b} vs input_ids {tuple(ids.shape)}")
-    if prompt_ignore_length is not None and int(prompt_ignore_length) > 0:
-        ids = ids[:, int(prompt_ignore_length) :]
-
-    ids_cpu = ids.detach().cpu().clamp(min=0, max=max(0, v - 1))
-    mask = torch.zeros((b, v), dtype=torch.bfloat16)
-    mask.scatter_(1, ids_cpu, 1.0)
-
-    mem = memory_config if memory_config is not None else _dram_mem(ttnn)
-    mem_kw = dict(memory_config=mem) if mem is not None else {}
-
-    s = scores.detach().float().cpu().contiguous()
-    s_bf = s.to(dtype=torch.bfloat16)
-
-    with _strict_ttnn_no_fallback():
-        tt_s = ttnn.from_torch(s_bf, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, **mem_kw)
-        tt_m = ttnn.from_torch(mask, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, **mem_kw)
-        zero = ttnn.from_torch(
-            torch.zeros((b, v), dtype=torch.bfloat16),
-            device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            **mem_kw,
-        )
-        tt_s = _row_to_tile_bf16(tt_s, ttnn)
-        tt_m = _row_to_tile_bf16(tt_m, ttnn)
-        zero = _row_to_tile_bf16(zero, ttnn)
-        is_neg = ttnn.lt(tt_s, zero, **mem_kw)
-        scaled_neg = ttnn.multiply(tt_s, p, **mem_kw)
-        scaled_pos = ttnn.div(tt_s, p, **mem_kw)
-        penalized = ttnn.where(is_neg, scaled_neg, scaled_pos, **mem_kw)
-        ttnn.deallocate(zero)
-        ttnn.deallocate(is_neg)
-        ttnn.deallocate(scaled_neg)
-        ttnn.deallocate(scaled_pos)
-        out_tt = ttnn.where(tt_m, penalized, tt_s, **mem_kw)
-        out = ttnn.to_torch(out_tt, dtype=torch.float32).contiguous()
-        ttnn.deallocate(out_tt)
-        ttnn.deallocate(tt_s)
-        ttnn.deallocate(tt_m)
-        ttnn.deallocate(penalized)
-    return out
-
-
 __all__ = [
     "logits_add_delta_bf16",
     "logits_divide_by_scalar_bf16",
     "logits_keep_allowed_bf16",
-    "logits_sample_indices_bf16",
-    "logits_top_k_filter_bf16",
-    "logits_top_p_nucleus_bf16",
     "mask_any_true_int32_ttnn",
-    "repetition_penalty_apply_bf16",
     "tensor_concat_dim1_int32_ttnn",
     "tensor_identity_roundtrip_int32_ttnn",
     "tokens_any_eos_or_pad_int32_ttnn",
