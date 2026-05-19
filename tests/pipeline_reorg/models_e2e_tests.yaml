@@ -7,8 +7,6 @@
 #   skus: A mapping of SKU names to their configuration:
 #     timeout: Job timeout in minutes.
 #     tier: Model tier (1, 2, or 3) used to filter which pipeline runs this test.
-#     strict_perf_target_checks: Optional bool, defaults to true. Set false only
-#       for specific migration legs that must run in warning-only perf mode.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
 
