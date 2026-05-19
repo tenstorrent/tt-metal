@@ -1222,7 +1222,7 @@ static Conv2dBlockConfig get_opt_block_config(
         conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
 
     const bool conv_is_1d_depthwise =
-        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], kernel_size[1], input_height, has_bias);
+        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, has_bias);
     const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
         conv_is_1d_depthwise,
         parallel_config.shard_scheme,
@@ -1510,7 +1510,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         parallel_config, output_compute_grid_size, out_channels, parallel_config.shard_orientation, mm_conv);
 
     const bool conv_is_1d_depthwise =
-        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], kernel_size[1], input_height, has_bias);
+        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, has_bias);
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
     const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
@@ -1565,7 +1565,6 @@ static ttnn::Tensor prepare_conv_weights_internal(
         original_weights_in_channels * params.groups,
         original_weights_out_channels,
         original_weights_window_h,
-        original_weights_window_w,
         params.input_height,
         params.has_bias);
     // Convert weight tensor to 0 padded shape if groups > 1

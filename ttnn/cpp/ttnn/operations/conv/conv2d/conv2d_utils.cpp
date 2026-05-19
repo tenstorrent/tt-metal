@@ -39,11 +39,13 @@ using ttnn::prim::conv_op_l1_usage;
 namespace {
 
 uint32_t get_conv_noc_max_burst_size(tt::ARCH arch) {
+    // Mirrors device NOC_MAX_BURST_WORDS * NOC_WORD_BYTES. The public host HAL exposes the arch,
+    // but not this device constant, so unknown archs conservatively disable coalescing.
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: return 256 * 32;
         case tt::ARCH::BLACKHOLE: return 256 * 64;
         case tt::ARCH::QUASAR: return 256 * 256;
-        default: TT_THROW("Unsupported architecture for coalesced 1D depthwise conv reads: {}", arch);
+        default: return 0;
     }
 }
 
@@ -540,10 +542,8 @@ bool is_1d_depthwise_conv(
     uint32_t input_channels,
     uint32_t output_channels,
     uint32_t kernel_height,
-    uint32_t kernel_width,
     uint32_t image_height,
     bool has_bias) {
-    (void)kernel_width;
     bool is_depthwise_conv = groups == input_channels && groups == output_channels;
     // 1D depthwise path supports kernel_height == 1 (and any kernel_width >= 1). The kw>1 case
     // accumulates across kernel taps via per-tap blocks in the depthwise factory.
@@ -977,8 +977,8 @@ core_count_and_size calculate_L1_usage_for_conv_op(
                                                         : tt::tt_metal::DataType::BFLOAT16;
     const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
 
-    const bool conv_is_1d_depthwise = is_1d_depthwise_conv(
-        groups, in_channels, out_channels, kernel_size[0], kernel_size[1], input_height, enable_bias);
+    const bool conv_is_1d_depthwise =
+        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, enable_bias);
 
     const uint32_t input_channels_alignment =
         get_input_channels_alignment(shard_layout, input_layout, false, is_mm_conv, std::nullopt);
@@ -1151,8 +1151,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         conv_config.shard_layout.has_value()) {
         return conv_config;
     }
-    const bool conv_is_1d_depthwise = is_1d_depthwise_conv(
-        groups, in_channels, out_channels, kernel_size[0], kernel_size[1], input_height, enable_bias);
+    const bool conv_is_1d_depthwise =
+        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, enable_bias);
 
     auto get_l1_usage_for_sharding = [&](TensorMemoryLayout shard_layout, const Conv2dConfig& conv_config) {
         return calculate_L1_usage_for_conv_op(

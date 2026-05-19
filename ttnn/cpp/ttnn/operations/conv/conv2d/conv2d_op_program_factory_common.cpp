@@ -750,13 +750,7 @@ void post_conv2d_op_memory_checks(
         output_image_width,
         has_bias,
         is_1d_depthwise_conv(
-            groups,
-            input_tensor_shape[3],
-            output_channels,
-            kernel_dims[0],
-            kernel_dims[1],
-            input_tensor_shape[1],
-            has_bias),
+            groups, input_tensor_shape[3], output_channels, kernel_dims[0], input_tensor_shape[1], has_bias),
         input_channels_padded,
         skip_mcast.skip_activation_mcast,
         reader_indices_actual_page_size);

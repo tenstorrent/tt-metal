@@ -158,8 +158,8 @@ Result conv2d_L1(
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
 
-    const bool conv_is_1d_depthwise = is_1d_depthwise_conv(
-        groups, in_channels, out_channels, kernel_size[0], kernel_size[1], input_height, bias_tensor.has_value());
+    const bool conv_is_1d_depthwise =
+        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, bias_tensor.has_value());
     const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
         conv_is_1d_depthwise,
         parallel_config.shard_scheme,
