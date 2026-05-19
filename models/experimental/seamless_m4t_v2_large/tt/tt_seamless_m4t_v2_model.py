@@ -38,17 +38,22 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
     warm_text_decoder_kv_cache_prefill,
 )
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_encoder import TTSeamlessM4Tv2Encoder
+from models.experimental.seamless_m4t_v2_large.tt.common import (
+    build_causal_with_padding_4d,
+    build_cross_attn_mask_4d,
+    build_encoder_self_mask_4d,
+    core_grid,
+    encoder_self_additive_mask_all_zeros_4d,
+    ones_mask,
+    pad_input_ids_to,
+    pad_mask_to,
+    tile_align,
+    tt_position_ids,
+)
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_to_unit import (
     T2UTraceHardUpsampleCumsums,
     TTSeamlessM4Tv2TextToUnitForConditionalGeneration,
 )
-
-# ``torch.finfo(torch.bfloat16).min`` — the additive-mask "minus infinity" HF uses. Bf16-representable.
-NEG_INF = -3.3895313892515355e38
-
-# Tile alignment: TT SDPA must score against tile-aligned key sequences; we pad inputs to ``ceil(seq/32)*32``.
-_TILE = 32
-
 
 # ---------------------------------------------------------------------------
 # Output dataclasses
@@ -85,215 +90,6 @@ class TextDecoderKvDecodeRuntime:
     logits_tt: Optional[ttnn.Tensor] = None
     trace_cache_seq_len: Optional[int] = None
     trace_id: Optional[int] = None
-
-
-# ---------------------------------------------------------------------------
-# TTNN helpers (tensor math runs on device only)
-# ---------------------------------------------------------------------------
-
-
-def _core_grid(device: ttnn.Device) -> ttnn.CoreGrid:
-    grid = device.compute_with_storage_grid_size()
-    return ttnn.CoreGrid(y=grid.y, x=grid.x)
-
-
-def _ensure_tile_bf16_sdpa_mask(x: ttnn.Tensor) -> ttnn.Tensor:
-    """SDPA requires a TILE bf16 mask; ``expand``/``add`` paths often yield ROW_MAJOR."""
-    if x.get_layout() == ttnn.TILE_LAYOUT and x.dtype == ttnn.bfloat16:
-        return x
-    out = ttnn.to_layout(x, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(x)
-    return out
-
-
-def _tile_align(seq: int) -> int:
-    return ((seq + _TILE - 1) // _TILE) * _TILE
-
-
-def _tt_position_ids(input_ids: ttnn.Tensor, pad_id: int) -> ttnn.Tensor:
-    """HF ``create_position_ids_from_input_ids`` on device — ``cumsum`` of non-pad mask + offset."""
-    ids_tile = (
-        ttnn.to_layout(input_ids, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if input_ids.get_layout() != ttnn.TILE_LAYOUT
-        else input_ids
-    )
-    mask = ttnn.ne(ids_tile, pad_id)
-    if ids_tile is not input_ids:
-        ttnn.deallocate(ids_tile)
-    mask_i32 = ttnn.typecast(mask, ttnn.int32)
-    ttnn.deallocate(mask)
-    cumsum = ttnn.cumsum(mask_i32, dim=1, dtype=ttnn.int32)
-    pos = ttnn.multiply(cumsum, mask_i32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(cumsum)
-    ttnn.deallocate(mask_i32)
-    pos = ttnn.add(pos, pad_id, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    pos = ttnn.typecast(pos, ttnn.uint32)
-    if pos.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-        pos = ttnn.to_layout(pos, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return pos
-
-
-def _tt_seq_position_ids(bsz: int, seq: int, pad_id: int, device: ttnn.Device) -> ttnn.Tensor:
-    """HF ``create_position_ids_from_inputs_embeds`` on device — ``[pad+1, pad+2, …, pad+seq]``."""
-    pos_1d = ttnn.arange(
-        pad_id + 1,
-        seq + pad_id + 1,
-        dtype=ttnn.uint32,
-        device=device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    pos_2d = ttnn.reshape(pos_1d, [1, seq])
-    if bsz <= 1:
-        return pos_2d
-    pos_out = ttnn.expand(pos_2d, [bsz, seq], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(pos_2d)
-    return pos_out
-
-
-def _key_padding_additive(mask_2d: ttnn.Tensor, *, device: ttnn.Device) -> ttnn.Tensor:
-    """``[B, S]`` 0/1 → ``[B, S]`` bf16 with ``0`` at real and ``NEG_INF`` at padded positions."""
-    # ``ttnn.eq`` returns a bool/u8 mask of pad positions. typecast → bf16 (1.0 pad, 0.0 real),
-    # then multiply by NEG_INF → additive mask.
-    pad_bool = ttnn.eq(mask_2d, 0)
-    pad_bf = ttnn.typecast(pad_bool, ttnn.bfloat16)
-    ttnn.deallocate(pad_bool)
-    additive = ttnn.multiply(pad_bf, NEG_INF, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(pad_bf)
-    return additive
-
-
-def _build_causal_mask_4d(batch: int, seq: int, device: ttnn.Device) -> ttnn.Tensor:
-    """HF ``_prepare_4d_causal_attention_mask`` (causal half only) on device.
-
-    Returns ``[B, 1, S, S]`` bf16 with ``NEG_INF`` strictly above the diagonal, ``0`` on/below.
-    """
-    full_neg = ttnn.full(
-        [seq, seq],
-        NEG_INF,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    causal_2d = ttnn.triu(full_neg, diagonal=1)
-    ttnn.deallocate(full_neg)
-    causal_4d = ttnn.reshape(causal_2d, [1, 1, seq, seq])
-    if batch <= 1:
-        # ``reshape`` / ``triu`` can return non-TILE / non-bf16 storage; SDPA requires TILE bf16.
-        return _ensure_tile_bf16_sdpa_mask(causal_4d)
-    expanded = ttnn.expand(causal_4d, [batch, 1, seq, seq], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(causal_4d)
-    return _ensure_tile_bf16_sdpa_mask(expanded)
-
-
-def _build_causal_with_padding_4d(
-    attention_mask_2d: Optional[ttnn.Tensor], batch: int, seq: int, device: ttnn.Device
-) -> ttnn.Tensor:
-    """HF ``_prepare_4d_causal_attention_mask`` (causal + key padding) on device → ``[B, 1, S, S]`` bf16."""
-    causal_4d = _build_causal_mask_4d(batch, seq, device)
-    if attention_mask_2d is None:
-        # ``_build_causal_mask_4d`` already normalises layout/dtype, but go through the helper for
-        # consistency with the cross-/encoder-mask builders below.
-        return _ensure_tile_bf16_sdpa_mask(causal_4d)
-    pad_add_2d = _key_padding_additive(attention_mask_2d, device=device)
-    pad_add_4d = ttnn.reshape(pad_add_2d, [batch, 1, 1, seq])
-    pad_add_expanded = ttnn.expand(pad_add_4d, [batch, 1, seq, seq], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(pad_add_4d)
-    combined = ttnn.add(causal_4d, pad_add_expanded, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(causal_4d)
-    ttnn.deallocate(pad_add_expanded)
-    return _ensure_tile_bf16_sdpa_mask(combined)
-
-
-def _build_cross_attn_mask_4d(encoder_pad_mask_2d: ttnn.Tensor, *, tgt_seq: int, device: ttnn.Device) -> ttnn.Tensor:
-    """HF ``_prepare_4d_attention_mask`` for cross-attn → ``[B, 1, tgt_seq, src_seq]`` bf16."""
-    batch = int(encoder_pad_mask_2d.shape[0])
-    src_seq = int(encoder_pad_mask_2d.shape[1])
-    add_2d = _key_padding_additive(encoder_pad_mask_2d, device=device)
-    add_4d = ttnn.reshape(add_2d, [batch, 1, 1, src_seq])
-    if tgt_seq == 1:
-        return _ensure_tile_bf16_sdpa_mask(add_4d)
-    expanded = ttnn.expand(add_4d, [batch, 1, tgt_seq, src_seq], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(add_4d)
-    return _ensure_tile_bf16_sdpa_mask(expanded)
-
-
-def _build_encoder_self_mask_4d(attention_mask_2d: ttnn.Tensor, *, device: ttnn.Device) -> ttnn.Tensor:
-    """HF ``_prepare_4d_attention_mask`` for encoder self-attn → ``[B, 1, S, S]`` bf16."""
-    batch = int(attention_mask_2d.shape[0])
-    seq = int(attention_mask_2d.shape[1])
-    add_2d = _key_padding_additive(attention_mask_2d, device=device)
-    add_4d = ttnn.reshape(add_2d, [batch, 1, 1, seq])
-    expanded = ttnn.expand(add_4d, [batch, 1, seq, seq], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(add_4d)
-    return _ensure_tile_bf16_sdpa_mask(expanded)
-
-
-def _encoder_self_additive_mask_all_zeros_4d(batch: int, seq: int, device: ttnn.Device) -> ttnn.Tensor:
-    """Additive encoder self-attention mask when every position is valid (all keys visible).
-
-    Numerically matches ``_build_encoder_self_mask_4d`` on an all-ones ``[B, seq]`` mask (zero padding
-    contribution everywhere), but uses a single ``zeros`` tensor instead of ``eq`` / ``expand`` chains.
-    """
-    zeros = ttnn.zeros(
-        [batch, 1, seq, seq],
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    return _ensure_tile_bf16_sdpa_mask(zeros)
-
-
-def _pad_input_ids_to(input_ids: ttnn.Tensor, padded_seq: int, pad_id: int, device: ttnn.Device) -> ttnn.Tensor:
-    """Right-pad ``[B, S]`` uint32 to ``[B, padded_seq]`` with ``pad_id`` (on device, ``ttnn.concat``)."""
-    bsz = int(input_ids.shape[0])
-    seq = int(input_ids.shape[1])
-    if padded_seq == seq:
-        return input_ids
-    pad_tail = ttnn.full(
-        [bsz, padded_seq - seq],
-        float(pad_id),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    padded = ttnn.concat([input_ids, pad_tail], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(pad_tail)
-    return padded
-
-
-def _pad_mask_to(mask: ttnn.Tensor, padded_seq: int, device: ttnn.Device) -> ttnn.Tensor:
-    """Right-pad ``[B, S]`` uint32 attention mask to ``[B, padded_seq]`` with 0 (on device)."""
-    bsz = int(mask.shape[0])
-    seq = int(mask.shape[1])
-    if padded_seq == seq:
-        return mask
-    zeros = ttnn.full(
-        [bsz, padded_seq - seq],
-        0.0,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    padded = ttnn.concat([mask, zeros], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(zeros)
-    return padded
-
-
-def _ones_mask(batch: int, seq: int, device: ttnn.Device) -> ttnn.Tensor:
-    """``[B, S]`` uint32 all-ones (real-position mask) — used when caller omits ``attention_mask``."""
-    return ttnn.full(
-        [batch, seq],
-        1.0,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
 
 
 def _subsampled_lens_dev(attention_mask_2d: ttnn.Tensor, kernel_size: int, stride: int) -> ttnn.Tensor:
@@ -629,7 +425,7 @@ class TTSeamlessM4Tv2Model:
             dec_out,
             self.parameters.lm_head.weight,
             bias=None,
-            core_grid=_core_grid(self.device),
+            core_grid=core_grid(self.device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self._lm_head_compute,
         )
@@ -650,21 +446,21 @@ class TTSeamlessM4Tv2Model:
         """
         batch = int(input_ids.shape[0])
         seq = int(input_ids.shape[1])
-        padded_seq = _tile_align(seq)
+        padded_seq = tile_align(seq)
 
-        ids_padded = _pad_input_ids_to(input_ids, padded_seq, self.pad_token_id, self.device)
+        ids_padded = pad_input_ids_to(input_ids, padded_seq, self.pad_token_id, self.device)
         if attention_mask is None:
-            attn_padded = _ones_mask(batch, padded_seq, self.device)
+            attn_padded = ones_mask(batch, padded_seq, self.device)
             attn_owned = True
         else:
-            attn_padded = _pad_mask_to(attention_mask, padded_seq, self.device)
+            attn_padded = pad_mask_to(attention_mask, padded_seq, self.device)
             attn_owned = attn_padded is not attention_mask
 
-        pos_tt = _tt_position_ids(ids_padded, self.pad_token_id)
+        pos_tt = tt_position_ids(ids_padded, self.pad_token_id)
         if attention_mask is None:
-            enc_mask_4d = _encoder_self_additive_mask_all_zeros_4d(batch, padded_seq, self.device)
+            enc_mask_4d = encoder_self_additive_mask_all_zeros_4d(batch, padded_seq, self.device)
         else:
-            enc_mask_4d = _build_encoder_self_mask_4d(attn_padded, device=self.device)
+            enc_mask_4d = build_encoder_self_mask_4d(attn_padded, device=self.device)
         return ids_padded, pos_tt, enc_mask_4d, attn_padded, attn_owned
 
     def _encode_text(
@@ -704,7 +500,7 @@ class TTSeamlessM4Tv2Model:
         sub_lens = _read_int_row(sub_lens_tt)[:batch]
         physical_len = int(enc_raw.shape[1])
         logical_len = max(1, min(min(sub_lens), physical_len))
-        padded_len = _tile_align(logical_len)
+        padded_len = tile_align(logical_len)
 
         enc_out = enc_raw
         if physical_len > logical_len:
@@ -741,7 +537,7 @@ class TTSeamlessM4Tv2Model:
         """
         batch = int(input_features.shape[0])
         seq_in = int(input_features.shape[1])
-        mask_2d = attention_mask if attention_mask is not None else _ones_mask(batch, seq_in, self.device)
+        mask_2d = attention_mask if attention_mask is not None else ones_mask(batch, seq_in, self.device)
         owned_input_mask = attention_mask is None
 
         mask_bf16_tile = self._speech_attention_uint_to_conv_bf16(mask_2d)
@@ -775,7 +571,7 @@ class TTSeamlessM4Tv2Model:
         """
         batch = int(input_features.shape[0])
         seq_in = int(input_features.shape[1])
-        mask_2d = attention_mask if attention_mask is not None else _ones_mask(batch, seq_in, self.device)
+        mask_2d = attention_mask if attention_mask is not None else ones_mask(batch, seq_in, self.device)
         owned_input_mask = attention_mask is None
 
         conv_mask_bf16 = self._speech_attention_uint_to_conv_bf16(mask_2d)
@@ -792,7 +588,7 @@ class TTSeamlessM4Tv2Model:
 
         sub_lens = _read_int_row(sub_lens_tt)[:batch]
         logical_len = max(1, min(min(sub_lens), physical_len))
-        padded_len = _tile_align(logical_len)
+        padded_len = tile_align(logical_len)
 
         pad_tail: Optional[ttnn.Tensor] = None
         if logical_len < padded_len:
@@ -828,9 +624,9 @@ class TTSeamlessM4Tv2Model:
         """
         batch = int(decoder_input_ids.shape[0])
         dec_seq = int(decoder_input_ids.shape[1])
-        padded_dec_seq = _tile_align(dec_seq)
+        padded_dec_seq = tile_align(dec_seq)
 
-        ids_padded = _pad_input_ids_to(decoder_input_ids, padded_dec_seq, self.pad_token_id, self.device)
+        ids_padded = pad_input_ids_to(decoder_input_ids, padded_dec_seq, self.pad_token_id, self.device)
 
         use_prebuilt = prebuilt_causal_4d is not None or prebuilt_cross_4d is not None
         if use_prebuilt:
@@ -843,22 +639,22 @@ class TTSeamlessM4Tv2Model:
             own_masks = False
         else:
             own_masks = True
-            # Decoder mask for ``_build_causal_with_padding_4d``: an all-ones 2-D mask adds **zero** padding
-            # to the causal 4-D mask (HF semantics). Skip allocating ``_ones_mask`` + ``_key_padding_additive``
+            # Decoder mask for ``build_causal_with_padding_4d``: an all-ones 2-D mask adds **zero** padding
+            # to the causal 4-D mask (HF semantics). Skip allocating ``ones_mask`` + ``key_padding_additive``
             # when the caller omits ``decoder_attention_mask`` — use the ``None`` fast path instead.
             if decoder_attention_mask is None:
                 dec_attn_padded = None
                 attn_owned = False
             else:
-                dec_attn_padded = _pad_mask_to(decoder_attention_mask, padded_dec_seq, self.device)
+                dec_attn_padded = pad_mask_to(decoder_attention_mask, padded_dec_seq, self.device)
                 attn_owned = dec_attn_padded is not decoder_attention_mask
 
-            causal_4d = _build_causal_with_padding_4d(dec_attn_padded, batch, padded_dec_seq, self.device)
+            causal_4d = build_causal_with_padding_4d(dec_attn_padded, batch, padded_dec_seq, self.device)
             if attn_owned:
                 ttnn.deallocate(dec_attn_padded)
-            cross_4d = _build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=padded_dec_seq, device=self.device)
+            cross_4d = build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=padded_dec_seq, device=self.device)
 
-        pos_tt = _tt_position_ids(ids_padded, self.pad_token_id)
+        pos_tt = tt_position_ids(ids_padded, self.pad_token_id)
 
         dec_out = self.text_decoder.forward(ids_padded, pos_tt, encoder_hidden, causal_4d, cross_4d)
         if ids_padded is not decoder_input_ids:
@@ -954,7 +750,7 @@ class TTSeamlessM4Tv2Model:
         position: int,
         batch_size: int,
     ) -> None:
-        """Stage one decode token + position on pre-allocated device buffers (small H2D only)."""
+        """Upload one decode token + position on pre-allocated device buffers (small H2D only)."""
         rt = self._ensure_kv_decode_runtime(batch_size)
         if int(token_ids_tt.shape[1]) == 1:
             ttnn.copy(token_ids_tt, rt.token_tt)
@@ -1108,16 +904,16 @@ class TTSeamlessM4Tv2Model:
         if seq == 0:
             return
         batch_size = int(input_ids_tt.shape[0])
-        padded_seq = _tile_align(seq)
-        ids_padded = _pad_input_ids_to(input_ids_tt, padded_seq, self.pad_token_id, self.device)
-        attn_2d = _ones_mask(batch_size, padded_seq, self.device)
-        pos_tt = _tt_position_ids(ids_padded, self.pad_token_id)
-        causal_4d = _build_causal_with_padding_4d(attn_2d, batch_size, padded_seq, self.device)
+        padded_seq = tile_align(seq)
+        ids_padded = pad_input_ids_to(input_ids_tt, padded_seq, self.pad_token_id, self.device)
+        attn_2d = ones_mask(batch_size, padded_seq, self.device)
+        pos_tt = tt_position_ids(ids_padded, self.pad_token_id)
+        causal_4d = build_causal_with_padding_4d(attn_2d, batch_size, padded_seq, self.device)
         ttnn.deallocate(attn_2d)
 
         owns_cross_4d = cross_4d is None
         if cross_4d is None:
-            cross_4d = _build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=padded_seq, device=self.device)
+            cross_4d = build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=padded_seq, device=self.device)
 
         warm_text_decoder_kv_cache_prefill(
             self.text_decoder,
@@ -1163,7 +959,7 @@ class TTSeamlessM4Tv2Model:
         )
         owns_cross_4d = cross_4d is None
         if cross_4d is None:
-            cross_4d = _build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=1, device=self.device)
+            cross_4d = build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=1, device=self.device)
         cur_pos = self.text_decoder.borrow_current_decode_pos_tensor(position, batch_size=batch)
         dec_out = self.text_decoder.forward(
             token_ids,
@@ -1198,22 +994,22 @@ class TTSeamlessM4Tv2Model:
         """
         batch = int(decoder_input_ids.shape[0])
         dec_seq = int(decoder_input_ids.shape[1])
-        padded_dec_seq = _tile_align(dec_seq)
+        padded_dec_seq = tile_align(dec_seq)
 
-        ids_padded = _pad_input_ids_to(decoder_input_ids, padded_dec_seq, self.pad_token_id, self.device)
+        ids_padded = pad_input_ids_to(decoder_input_ids, padded_dec_seq, self.pad_token_id, self.device)
 
         if decoder_attention_mask is None:
             dec_attn_padded = None
             attn_owned = False
         else:
-            dec_attn_padded = _pad_mask_to(decoder_attention_mask, padded_dec_seq, self.device)
+            dec_attn_padded = pad_mask_to(decoder_attention_mask, padded_dec_seq, self.device)
             attn_owned = dec_attn_padded is not decoder_attention_mask
 
-        pos_tt = _tt_position_ids(ids_padded, self.pad_token_id)
-        causal_4d = _build_causal_with_padding_4d(dec_attn_padded, batch, padded_dec_seq, self.device)
+        pos_tt = tt_position_ids(ids_padded, self.pad_token_id)
+        causal_4d = build_causal_with_padding_4d(dec_attn_padded, batch, padded_dec_seq, self.device)
         if attn_owned:
             ttnn.deallocate(dec_attn_padded)
-        cross_4d = _build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=padded_dec_seq, device=self.device)
+        cross_4d = build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=padded_dec_seq, device=self.device)
 
         return ids_padded, pos_tt, causal_4d, cross_4d
 
@@ -1377,9 +1173,9 @@ class TTSeamlessM4Tv2Model:
         """text-decoder → ``(decoder_hidden_states [B, padded_dec_seq, H], padded_dec_seq)`` (no lm_head)."""
         batch = int(decoder_input_ids.shape[0])
         dec_seq = int(decoder_input_ids.shape[1])
-        padded_dec_seq = _tile_align(dec_seq)
+        padded_dec_seq = tile_align(dec_seq)
 
-        ids_padded = _pad_input_ids_to(decoder_input_ids, padded_dec_seq, self.pad_token_id, self.device)
+        ids_padded = pad_input_ids_to(decoder_input_ids, padded_dec_seq, self.pad_token_id, self.device)
 
         # Build padded key mask: real positions (1) at non-pad tokens, 0 elsewhere.
         # ``ttnn.ne(ids, pad_id)`` gives a bool mask of real positions; typecast to uint32.
@@ -1391,10 +1187,10 @@ class TTSeamlessM4Tv2Model:
             ttnn.deallocate(attn_2d)
             attn_2d = attn_2d_rm
 
-        pos_tt = _tt_position_ids(ids_padded, self.pad_token_id)
-        causal_4d = _build_causal_with_padding_4d(attn_2d, batch, padded_dec_seq, self.device)
+        pos_tt = tt_position_ids(ids_padded, self.pad_token_id)
+        causal_4d = build_causal_with_padding_4d(attn_2d, batch, padded_dec_seq, self.device)
         ttnn.deallocate(attn_2d)
-        cross_4d = _build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=padded_dec_seq, device=self.device)
+        cross_4d = build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=padded_dec_seq, device=self.device)
 
         dec_out = self.text_decoder.forward(ids_padded, pos_tt, encoder_hidden, causal_4d, cross_4d)
         if ids_padded is not decoder_input_ids:
@@ -1572,7 +1368,7 @@ class TTSeamlessM4Tv2Model:
                 max_seq_len=self.max_text_seq_len,
                 encoder_seq_len=enc_seq,
             )
-            decode_cross_4d = _build_cross_attn_mask_4d(enc_attn_tt, tgt_seq=1, device=self.device)
+            decode_cross_4d = build_cross_attn_mask_4d(enc_attn_tt, tgt_seq=1, device=self.device)
             # Cache tokens ``0 .. seed_len-2``; last seed token is consumed on the first decode step.
             # NOTE: prefill tile-aligns Q to ``padded_seq`` (e.g. 32 for seq=1), so it needs its own
             # cross mask with ``tgt_seq=padded_seq`` — passing ``decode_cross_4d`` (built with
@@ -1631,14 +1427,14 @@ class TTSeamlessM4Tv2Model:
         else:
             for _ in range(max_new_tokens):
                 batch_i = int(sequences_tt.shape[0])
-                padded_i = _tile_align(int(sequences_tt.shape[1]))
+                padded_i = tile_align(int(sequences_tt.shape[1]))
                 mask_key = (batch_i, padded_i, id(enc_attn_tt))
                 if mask_key != gen_mask_key:
                     if gen_causal is not None:
                         ttnn.deallocate(gen_causal)
                         ttnn.deallocate(gen_cross)
-                    gen_causal = _build_causal_with_padding_4d(None, batch_i, padded_i, self.device)
-                    gen_cross = _build_cross_attn_mask_4d(enc_attn_tt, tgt_seq=padded_i, device=self.device)
+                    gen_causal = build_causal_with_padding_4d(None, batch_i, padded_i, self.device)
+                    gen_cross = build_cross_attn_mask_4d(enc_attn_tt, tgt_seq=padded_i, device=self.device)
                     gen_mask_key = mask_key
                 logits = self._decode_and_lm_head(
                     enc_tt,
@@ -1709,7 +1505,7 @@ class TTSeamlessM4Tv2Model:
         # On-device tensors for T2U: char_input_ids and the T2U attention mask.
         char_ids_tt = _ttnn_ids_from_list([char_ids], self.device)
         t2u_mask_2d = _t2u_attention_mask(real_dec_len, padded_dec_seq, self.device)
-        t2u_mask_4d = _build_encoder_self_mask_4d(t2u_mask_2d, device=self.device)
+        t2u_mask_4d = build_encoder_self_mask_4d(t2u_mask_2d, device=self.device)
         ttnn.deallocate(t2u_mask_2d)
 
         t2u_logits_tt, padding_tt = self.t2u.forward(
