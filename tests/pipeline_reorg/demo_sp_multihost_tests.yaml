@@ -17,31 +17,23 @@
 
 - name: "Stress Test (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
   cmd: |
-    PIPELINE_DIR=/ci/pipeline-${GITHUB_RUN_ID}
-    mkdir -p $PIPELINE_DIR
-    python3 /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
-      --mpi-user user \
-      --hostfile /ci/ttrun/hostfile \
-      --worker-tt-metal-home /home/user/tt-metal \
-      --output-dir $PIPELINE_DIR \
-      /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
-
+    echo "============= SP1 superpod: copy ttrun.py and rank files ============="
     wget https://raw.githubusercontent.com/tenstorrent/tt-metal/main/ttnn/ttnn/distributed/ttrun.py
-    # NOTE: check where the python3 is coming from
-    echo "============= SP1 superpod: checking python3 location ============="
-    which python3
-    ls ./ttrun.py
-
-    echo "============= SP1 superpod: generated rank files ============="
-    ls -la ./blitz_decode_pipeline_rank_file_single_pod_ci ./blitz_decode_pipeline_rank_binding_single_pod_ci.yaml
-    echo "rankfile entries: $(wc -l < ./blitz_decode_pipeline_rank_file_single_pod_ci)"
-    echo "rank binding entries: $(grep -c '^  - rank:' ./blitz_decode_pipeline_rank_binding_single_pod_ci.yaml)"
+    cp /mnt/models/ref_data/rank_bindings/*_single_pod* .
+    echo "============= SP4 superpod: copied rank bindings ============="
+    for file in "$RANK_BINDINGS_SRC"/*; do
+      dst_file="./$(basename "$file")"
+      echo "----- dst: $dst_file -----"
+      ls -la "$dst_file"
+      cat "$dst_file"
+    done
 
     # todo)) add proper stress test that can run for 2 hours -- repeat batches?
+    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 ./ttrun.py \
       --tcp-interface ens5f0np0 \
-      --mpi-args "--hostfile /ci/ttrun/hostfile --map-by rankfile:file=/ci/tt-metal/blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --tag-output --wdir /home/user/tt-metal" \
-      --rank-binding /ci/tt-metal/blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
+      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_single_pod --bind-to hwt:overload-allowed --tag-output --wdir /home/user/tt-metal" \
+      --rank-binding rev_c_rank_binding_single_pod.yaml \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 128000 \
         --weights real \
