@@ -15,5 +15,6 @@ import pytest
 def test_replaced_by_random_weight_pcc() -> None:
     pytest.skip(
         "Replaced by tests/test_ministral3_model.py::"
-        "test_full_model_prefill_pcc_real_weights and test_full_model_decode_pcc_real_weights"
+        "test_ministral3_model_pcc_devstral2_large_partial_weights_one_layer_prefill and "
+        "test_ministral3_model_pcc_devstral2_large_partial_weights_one_layer_decode"
     )
