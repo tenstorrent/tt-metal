@@ -229,8 +229,8 @@ If `--dump-dir` has no format fields in parallel mode, each rank writes under
 
 - If the CLI says the number of layer ids does not match world size, launch the
   same number of ranks as `--decoder-layer-indices` values.
-- If a trace is missing, check `--hidden-states-dir` or the resolved
-  `--hidden-states-dir-template` for that rank's layer id.
+- If a trace is missing, check `--hidden-states-dir` and, in parallel mode, the
+  per-layer subdirectory resolved internally for that rank's layer id.
 - If PCC is low but not random, verify `--decoder-layer-indices` matches the layer
   used when converting the trace.
 - If KV-cache validation fails while hidden-state validation passes, verify the
