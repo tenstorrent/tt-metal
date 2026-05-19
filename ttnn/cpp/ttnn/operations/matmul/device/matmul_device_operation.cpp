@@ -39,10 +39,10 @@ void validate_matmul_matrix_dimensions(
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile) {
     TT_FATAL(b_shape.rank() >= 2, "Matmul expects input B rank >= 2, got {}", b_shape.rank());
+    TT_FATAL(a_shape[-1] > 0, "K dimension must be positive, got {}", a_shape[-1]);
     TT_FATAL(
-        a_shape[-1] == b_shape[-2] && a_shape[-1] > 0,
-        "The width of the first tensor must be equal to the height of the "
-        "second tensor, and K must be positive. Mismatch: width={} height={}",
+        a_shape[-1] == b_shape[-2],
+        "The width of the first tensor must be equal to the height of the second tensor. Mismatch: width={} height={}",
         a_shape[-1],
         b_shape[-2]);
     TT_FATAL(b_shape[-1] > 0, "Matmul requires N (columns of B) > 0, got {}", b_shape[-1]);
@@ -266,17 +266,7 @@ void validate_matmul_sharded_operand_grids_within_program_compute_grid(
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (
-                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig> ||
-                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
-                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                if constexpr (std::is_same_v<
-                                  ProgramConfigType,
-                                  operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                    if (program_config.gather_in0) {
-                        return;
-                    }
-                }
+            if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
                 const auto& grid = program_config.compute_with_storage_grid_size;
                 check_tensor_in_grid(input_tensor_a, grid);
                 check_tensor_in_grid(input_tensor_b, grid);
@@ -872,6 +862,10 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     }
 
                     TT_FATAL(!optional_bias.has_value(), "Bias is not supported when using gather_in0.");
+                } else {
+                    auto grid_1d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
+                    check_tensor_in_grid(input_tensor_a, grid_1d);
+                    check_tensor_in_grid(input_tensor_b, grid_1d);
                 }
                 if (program_config.mcast_in0 || program_config.gather_in0) {
                     if (input_tensor_a.is_sharded()) {
@@ -1135,6 +1129,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
+                auto grid_2d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
+                check_tensor_in_grid(input_tensor_a, grid_2d);
+                check_tensor_in_grid(input_tensor_b, grid_2d);
                 if (input_tensor_a.memory_config().is_sharded()) {
                     TT_FATAL(program_config.fuse_batch, "Batch fusion is required when input A is sharded");
                     auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout();
