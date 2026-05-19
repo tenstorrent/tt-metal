@@ -30,8 +30,8 @@
  */
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t W_tiles = get_compile_time_arg_val(0);
@@ -52,8 +52,8 @@ void kernel_main() {
 
     constexpr uint32_t row_stride_bytes = W_tiles * tile_bytes;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_data_in(cb_data_in_idx);
+    Noc noc;
+    CircularBuffer cb_data_in(cb_data_in_idx);
 
     // Local-L1 self-read: no address-generator trait is applicable, so fall back
     // to raw noc_async_read(get_noc_addr(addr), ...). CB reservations and the

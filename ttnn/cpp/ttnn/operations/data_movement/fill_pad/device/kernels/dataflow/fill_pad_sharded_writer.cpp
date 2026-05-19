@@ -34,8 +34,8 @@
  */
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "fill_pad_dataflow_common.hpp"
 
 void kernel_main() {
@@ -59,10 +59,10 @@ void kernel_main() {
         return;
     }
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_right_mask(cb_right_mask_idx);
-    experimental::CircularBuffer cb_bot_mask(cb_bot_mask_idx);
-    experimental::CircularBuffer cb_data_out(cb_data_out_idx);
+    Noc noc;
+    CircularBuffer cb_right_mask(cb_right_mask_idx);
+    CircularBuffer cb_bot_mask(cb_bot_mask_idx);
+    CircularBuffer cb_data_out(cb_data_out_idx);
 
     // ---- Phase 1: generate and push mask tile(s) ----
     using mask_t = MASK_ELEM_UINT;

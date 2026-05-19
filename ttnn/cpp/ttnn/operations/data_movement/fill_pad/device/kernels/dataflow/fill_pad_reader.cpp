@@ -52,9 +52,9 @@
  */
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t W_tiles = get_compile_time_arg_val(0);
@@ -86,8 +86,8 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<10>();
     const auto s = TensorAccessor(src_args, buf_addr, tile_bytes);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_tile_in(cb_tile_in_idx);
+    Noc noc;
+    CircularBuffer cb_tile_in(cb_tile_in_idx);
 
     // ---- Right phase ----
     // Maintain (slice, row) incrementally instead of dividing every iteration
