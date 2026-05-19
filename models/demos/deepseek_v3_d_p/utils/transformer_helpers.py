@@ -483,7 +483,7 @@ def load_and_compute_layer_by_layer(
         hf_model.embed_tokens.weight.data = torch.empty(0)
         del embed_with_prefix
 
-        attention_mask = get_4d_causal_mask(attention_mask, causal_only=causal_only)
+    attention_mask = get_4d_causal_mask(attention_mask, causal_only=causal_only)
 
     if build_ttnn_cache:
         # Build embedding cache (device=None, no accumulation!)
