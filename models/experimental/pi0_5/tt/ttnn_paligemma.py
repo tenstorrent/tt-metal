@@ -36,6 +36,7 @@ from .ttnn_siglip import (
     SigLIPVisionTowerTTNN,
     MultiModalProjectorTTNN,
 )
+from models.experimental.pi0_5.reference.torch_siglip_hf import use_hf_siglip
 
 
 class PaliGemmaBackboneTTNN:
@@ -83,15 +84,31 @@ class PaliGemmaBackboneTTNN:
             weights["action_expert"]["model.norm.weight"] + 1.0, device, dtype=ttnn.bfloat16
         )
 
-        # Initialize vision tower
-        self.vision_tower = SigLIPVisionTowerTTNN(
-            config.siglip_config,
-            weights["vlm_vision"],
-            device,
-        )
+        # Initialize vision tower. When PI0_SIGLIP_HF=1, we run the SigLIP
+        # encoder + multimodal projector on HOST in torch (via HFSigLIPVisionTower
+        # and the torch MultiModalProjector) to get openpi-equivalent image
+        # features, then upload to device. The device-side ttnn_siglip path
+        # produces different numerical results — required for the lerobot
+        # finetune (which trained on those features) but wrong for the
+        # upstream openpi pi05_libero checkpoint.
+        self._use_host_hf_siglip = use_hf_siglip()
+        if self._use_host_hf_siglip:
+            from models.experimental.pi0_5.reference.torch_siglip_hf import HFSigLIPVisionTower
+            from models.experimental.pi0_5.reference.torch_siglip import MultiModalProjector as _TorchMMProjector
 
-        # Initialize projector
-        self.mm_projector = MultiModalProjectorTTNN(weights["vlm_projector"], device)
+            self._host_vision_tower = HFSigLIPVisionTower(config.siglip_config, weights["vlm_vision"])
+            self._host_mm_projector = _TorchMMProjector(weights["vlm_projector"])
+            # Skip the device-side tower / projector init — saves the device memory
+            # they would have consumed.
+            self.vision_tower = None
+            self.mm_projector = None
+        else:
+            self.vision_tower = SigLIPVisionTowerTTNN(
+                config.siglip_config,
+                weights["vlm_vision"],
+                device,
+            )
+            self.mm_projector = MultiModalProjectorTTNN(weights["vlm_projector"], device)
 
         # Store torch weights for blocks (converted on demand)
         self.torch_weights = weights
@@ -304,16 +321,43 @@ class PaliGemmaBackboneTTNN:
                     )
         return block_weights
 
-    def embed_image(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
+    def embed_image(self, pixel_values) -> ttnn.Tensor:
         """
-        Embed images through vision tower and projector (TTNN).
+        Embed images through vision tower and projector.
+
+        When PI0_SIGLIP_HF=1: SigLIP + projector run on host in torch and we
+        upload the result. The bf16 numerical convention is preserved end-to-end
+        because both run inside HFSigLIPVisionTower's mixed-precision scheme.
 
         Args:
-            pixel_values: PyTorch tensor (batch_size, channels, height, width)
+            pixel_values: torch.Tensor (BS=1) or ttnn.Tensor (BS=N stacked) on
+                device. The host path requires a torch tensor; if given a ttnn
+                tensor it's moved off the device first.
 
         Returns:
-            TTNN tensor (batch_size, num_patches, vlm_width)
+            TTNN tensor (batch_size, num_patches, vlm_width).
         """
+        if self._use_host_hf_siglip:
+            # Pull the input back to torch if it came from device. Callers
+            # (e.g. PrefixEmbeddingTTNN.embed_images) sometimes pre-stack
+            # multiple images as a ttnn.Tensor for the BS>1 SigLIP fast path —
+            # the host path doesn't need that optimization and we'd rather
+            # not duplicate the stacking logic.
+            if isinstance(pixel_values, ttnn.Tensor):
+                pixel_torch = ttnn.to_torch(pixel_values).to(torch.float32)
+            else:
+                pixel_torch = pixel_values.to(torch.float32) if pixel_values.dtype != torch.float32 else pixel_values
+            with torch.no_grad():
+                vision_features = self._host_vision_tower.forward(pixel_torch)  # (B, 256, 1152) bf16
+                projected = self._host_mm_projector.forward(vision_features)  # (B, 256, 2048) bf16
+            # Match the device-side embed_image's contract: TILE_LAYOUT bf16 tensor.
+            return ttnn.from_torch(
+                projected.to(torch.float32),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
         vision_features = self.vision_tower.forward(pixel_values)
         return self.mm_projector.forward(vision_features)
 
