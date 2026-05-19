@@ -322,7 +322,10 @@ def main() -> None:
         "--guidance_scale",
         type=float,
         default=None,
-        help="CFG strength (default: 7 base, 1 turbo). Set 1 to disable CFG.",
+        help=(
+            "CFG strength. Default: 1 when --experimental-5hz-ttnn-causal-lm is on "
+            "(required by that path), 1 for turbo variants, 7 for base/sft. Set 1 to disable CFG."
+        ),
     )
     ap.add_argument("--cfg_interval_start", type=float, default=0.0)
     ap.add_argument("--cfg_interval_end", type=float, default=1.0)
@@ -356,10 +359,10 @@ def main() -> None:
     ap.add_argument(
         "--ttnn-condition-embedding",
         action=argparse.BooleanOptionalAction,
-        default=None,
+        default=True,
         help=(
             "Run ACE condition embedding / prepare_condition assembly in TTNN instead of HF prepare_condition. "
-            "Default: on for the official LM/handler TTNN demo path, off for --fast-preprocess. "
+            "Default: on (forced off when --fast-preprocess is used). "
             "Use --no-ttnn-condition-embedding to force the Torch prepare_condition reference path."
         ),
     )
@@ -370,11 +373,14 @@ def main() -> None:
     )
     ap.add_argument(
         "--experimental-5hz-ttnn-causal-lm",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
-            "Load the 5 Hz LM via demo TTNN causal stack (models/demos/ace_step_v1_5/ttnn_impl/ace_step_ds_r1_qwen.py). "
-            "Opens TTNN before LM init; requires guidance_scale==1 for DiT KV batch=1. "
-            "LM classifier-free guidance uses lm_cfg_scale (default 2); this path forces lm_cfg_scale=1."
+            "Load the 5 Hz LM via the experimental TTNN causal stack "
+            "(ttnn_impl/five_hz_causal_lm_experimental.py -> qwen_tt_transformers_lm.QwenModelTtTransformers, "
+            "i.e. the stock models/tt_transformers graph). Default: on. "
+            "Opens TTNN before LM init; requires guidance_scale==1 for DiT KV / mesh batch=1. "
+            "Use --no-experimental-5hz-ttnn-causal-lm to fall back to host PyTorch HF Qwen 1.7B."
         ),
     )
     ap.add_argument(
@@ -418,8 +424,24 @@ def main() -> None:
                 flush=True,
             )
             fast_preprocess = True
-    if args.ttnn_condition_embedding is None:
-        args.ttnn_condition_embedding = not fast_preprocess
+    if fast_preprocess and bool(args.ttnn_condition_embedding):
+        # The TTNN condition encoder requires the handler path; --fast-preprocess bypasses it.
+        print(
+            "[ace_step_v1_5] --fast-preprocess active: forcing --no-ttnn-condition-embedding "
+            "(HF prepare_condition on host).",
+            file=sys.stderr,
+            flush=True,
+        )
+        args.ttnn_condition_embedding = False
+    if fast_preprocess and bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False)):
+        # The experimental TTNN causal LM lives inside the official LM/handler path.
+        print(
+            "[ace_step_v1_5] --fast-preprocess active: forcing --no-experimental-5hz-ttnn-causal-lm "
+            "(no 5 Hz LM forward in fast preprocess).",
+            file=sys.stderr,
+            flush=True,
+        )
+        args.experimental_5hz_ttnn_causal_lm = False
 
     import torch
 
@@ -451,7 +473,12 @@ def main() -> None:
 
     gs = args.guidance_scale
     if gs is None:
-        gs = 1.0 if "turbo" in str(args.variant).lower() else 7.0
+        if bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False)):
+            gs = 1.0
+        elif "turbo" in str(args.variant).lower():
+            gs = 1.0
+        else:
+            gs = 7.0
     gs = float(gs)
 
     use_adg = args.use_adg
