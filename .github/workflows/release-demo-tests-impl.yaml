@@ -157,13 +157,18 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: performance
-      - name: Download model weights from LFC
-        if: ${{ contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') && contains(matrix.test-group.name, 'llama') }}
+      - name: Download Llama model weights from LFC
+        if: ${{ contains(matrix.test-group.name, 'llama') && (contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') || contains(join(matrix.test-group.runs_on, ' '), 'BH-LLMBox')) }}
         timeout-minutes: 15
         run: |
           set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
-          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
+          if [[ "${{ matrix.test-group.model-name }}" == "llama3.3-70b" ]]; then
+            model_path="Llama-3.3-70B-Instruct/"
+          else
+            model_path="Llama-3.1-8B-Instruct/"
+          fi
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama "http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/${model_path}"
       - name: Ensure BH links online
         if: ${{ contains(matrix.test-group.sku, 'bh_') }}
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
