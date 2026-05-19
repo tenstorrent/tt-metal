@@ -429,6 +429,8 @@ class TtLlamaAttention(LightweightModule):
 
             # 2D shard: dim 3 (output qkvg=16384) on rows (8-way) → 2048 per chip
             #           dim 2 (input hidden=5120) on cols (4-way) → 1280 per chip
+            # Prefill matmul consumes plain DRAM_INTERLEAVED weight; decode
+            # uses the secondary DRAM-sharded copy below (V2-DRAM-P1).
             self.wqkvg = ttnn.as_tensor(
                 wqkvg_T,
                 dtype=self.dtype,
@@ -441,6 +443,23 @@ class TtLlamaAttention(LightweightModule):
                 cache_file_name=cache_name("wqkvg_tp2d_row_col"),
             )
             self.wqkv_interleaved = self.wqkvg
+            # V2-DRAM-P1: secondary DRAM-width-sharded copy for the decode
+            # fast-path matmul (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig).
+            _wqkvg_ds_memcfg = self.model_config.get("V2TP_WQKVG_WEIGHT_MEMCFG")
+            if _wqkvg_ds_memcfg is not None:
+                self.wqkvg_dram_sharded = ttnn.as_tensor(
+                    wqkvg_T,
+                    dtype=self.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=_wqkvg_ds_memcfg,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(3, 2), mesh_shape=configuration.cluster_shape
+                    ),
+                    cache_file_name=cache_name("wqkvg_tp2d_row_col_dram_sharded"),
+                )
+            else:
+                self.wqkvg_dram_sharded = None
 
             # 3. WO weight: 2D shard mirroring llama70b.
             #    Native: [H=5120, n_q*hd=6144]
@@ -451,6 +470,7 @@ class TtLlamaAttention(LightweightModule):
             assert wo_native.shape == expected_wo, f"o_proj.weight: expected {expected_wo}, got {wo_native.shape}"
             wo_T = wo_native.T.contiguous().unsqueeze(0).unsqueeze(0)  # [1, 1, 6144, 5120]
             self.wo_proj_weight_shape = tuple(wo_native.shape)
+            # Prefill consumes DRAM_INTERLEAVED; decode uses the DRAM-sharded copy.
             self.wo = ttnn.as_tensor(
                 wo_T,
                 dtype=self.dtype,
@@ -463,6 +483,22 @@ class TtLlamaAttention(LightweightModule):
                 cache_file_name=cache_name("wo_tp2d_row_col"),
             )
             self.wo_interleaved = self.wo
+            # V2-DRAM-P1: secondary DRAM-width-sharded WO for decode fast-path.
+            _wo_ds_memcfg = self.model_config.get("V2TP_WO_WEIGHT_MEMCFG")
+            if _wo_ds_memcfg is not None:
+                self.wo_dram_sharded = ttnn.as_tensor(
+                    wo_T,
+                    dtype=self.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=_wo_ds_memcfg,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(2, 3), mesh_shape=configuration.cluster_shape
+                    ),
+                    cache_file_name=cache_name("wo_tp2d_row_col_dram_sharded"),
+                )
+            else:
+                self.wo_dram_sharded = None
 
             # qwen3.6 has its own forward path; no need for the fused-AG matmul
             # config that the 70B-prefetcher path relies on.
@@ -1694,14 +1730,36 @@ class TtLlamaAttention(LightweightModule):
         k_dim_pc = self.k_dim_per_chip  # 256
         total_pc = self.total_per_chip  # 2048
 
-        # 1. QKVG projection (2D-sharded, partial [B, T, 2048] per chip).
-        xqkvg_partial = ttnn.linear(
-            x_3d,
-            self.wqkvg,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-        )
+        # 1. QKVG projection (V2-DRAM-P1: DRAM-sharded matmul fast path).
+        #    Activation L1-width-sharded → matmul with DRAM-sharded weight +
+        #    program_config → output L1-width-sharded → back to DRAM for the
+        #    downstream col-axis all_reduce.
+        _wqkvg_progcfg = self.model_config.get("V2TP_WQKVG_PROGCFG")
+        _wqkvg_act_memcfg = self.model_config.get("V2TP_WQKVG_ACT_MEMCFG")
+        _wqkvg_weight = getattr(self, "wqkvg_dram_sharded", None)
+        if _wqkvg_progcfg is not None and _wqkvg_act_memcfg is not None and _wqkvg_weight is not None:
+            x_sharded = ttnn.to_memory_config(x_3d, _wqkvg_act_memcfg)
+            xqkvg_partial_l1 = ttnn.linear(
+                x_sharded,
+                _wqkvg_weight,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                program_config=_wqkvg_progcfg,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+            )
+            ttnn.deallocate(x_sharded)
+            xqkvg_partial = ttnn.to_memory_config(xqkvg_partial_l1, ttnn.DRAM_MEMORY_CONFIG)
+            xqkvg_partial_l1.deallocate(True)
+        else:
+            # Fallback to slow path (no program_config) if the V2-DRAM memcfgs
+            # weren't built (e.g. construction-time tests with mocked configs).
+            xqkvg_partial = ttnn.linear(
+                x_3d,
+                self.wqkvg,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+            )
         if len(list(xqkvg_partial.shape)) == 4:
             _, _, _T_q, _N_q = list(xqkvg_partial.shape)
             xqkvg_partial = ttnn.reshape(xqkvg_partial, [B, _T_q, _N_q])
@@ -1934,18 +1992,36 @@ class TtLlamaAttention(LightweightModule):
         attn_flat.deallocate(True)
         gate_sig.deallocate(True)
 
-        # V2-TP: WO projection (2D-sharded) + all-reduce on rows (cluster_axis=0,
-        # 8-way ring — 2× faster than the previous cluster_axis=1 4-way).
-        # Per chip: gated [B, T, 768] × wo [768, 1280] = partial [B, T, 1280]
-        # All-reduce across rows completes the head sum; result is col-sharded H/4.
-        dense_partial = ttnn.linear(
-            gated,
-            self.wo,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-        )
-        gated.deallocate(True)
+        # V2-TP / V2-DRAM-P1: WO projection via DRAM-sharded matmul + all-reduce
+        # on rows (cluster_axis=0, 8-way ring). Per chip: gated [B, T, 768] ×
+        # wo [768, 1280] = partial [B, T, 1280]; row-axis all_reduce completes
+        # the head sum → result col-sharded H/4.
+        _wo_progcfg = self.model_config.get("V2TP_WO_PROGCFG")
+        _wo_act_memcfg = self.model_config.get("V2TP_WO_ACT_MEMCFG")
+        _wo_weight = getattr(self, "wo_dram_sharded", None)
+        if _wo_progcfg is not None and _wo_act_memcfg is not None and _wo_weight is not None:
+            gated_sharded = ttnn.to_memory_config(gated, _wo_act_memcfg)
+            gated.deallocate(True)
+            dense_partial_l1 = ttnn.linear(
+                gated_sharded,
+                _wo_weight,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                program_config=_wo_progcfg,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+            )
+            ttnn.deallocate(gated_sharded)
+            dense_partial = ttnn.to_memory_config(dense_partial_l1, ttnn.DRAM_MEMORY_CONFIG)
+            dense_partial_l1.deallocate(True)
+        else:
+            dense_partial = ttnn.linear(
+                gated,
+                self.wo,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+            )
+            gated.deallocate(True)
         dense_out_full = ttnn.all_reduce(
             dense_partial,
             cluster_axis=0,

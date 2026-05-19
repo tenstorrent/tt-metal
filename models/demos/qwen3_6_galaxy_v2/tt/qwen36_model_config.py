@@ -250,6 +250,10 @@ class TtQwen36ModelArgs(TtModelArgs):
         # Per-chip values: Q = 24/8 = 3, KV = 8/8 = 1.
         self.n_local_heads = self.n_q_heads // self.cluster_shape[0]
         self.n_local_kv_heads = self.n_kv_heads // self.cluster_shape[0]
+        # V2-DRAM: fused QKVG output width per chip (V2-TP geometry).
+        #   Per chip = (n_q + n_q + n_kv_padded + n_kv_padded) / n_rows * head_dim
+        #           = (24 + 24 + 8 + 8) / 8 * 256 = 2048
+        self.total_per_chip = (2 * self.n_q_heads + 2 * self.n_kv_heads) // self.cluster_shape[0] * self.head_dim
 
         # --- Model config dict (memory configs by op key) ---
         DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
@@ -547,6 +551,36 @@ class TtQwen36ModelArgs(TtModelArgs):
         # weight upload time).  K must be the *native* per-device tensor
         # height; only the N dim is padded (the ring matmul tolerates the
         # extra zero-padded output columns).  Matches qwen3-32B precedent.
+        # ------------------------------------------------------------------
+        # V2-DRAM-P1: standalone DRAM-sharded matmul fast-path for V2-TP
+        # attention WQKVG + WO (atupe/qwen35-27b-4xp150 pattern).  These
+        # bypass the 24-core ring + prefetcher infrastructure; the matmul
+        # kernel itself streams weights from DRAM-sharded banks into L1
+        # width-sharded activations.  Used by _forward_decode_qwen36.
+        #
+        # Per-chip dims (V2-TP geometry):
+        #   WQKVG: M=32 (tile-padded T=1), K=1280 (H/cols), N=2048 (qkvg/8)
+        #   WO:    M=32,                   K=768  (n_q_pc*hd), N=1280 (H/cols)
+        # ------------------------------------------------------------------
+        v2tp_M = 32
+        v2tp_wqkvg_K = self.dim_per_tp  # 1280
+        v2tp_wqkvg_N = self.total_per_chip  # 2048
+        v2tp_wo_K = self.n_local_heads * self.head_dim  # 768
+        v2tp_wo_N = self.dim_per_tp  # 1280
+
+        self.model_config["V2TP_WQKVG_WEIGHT_MEMCFG"] = self.create_dram_sharded_mem_config(
+            k=v2tp_wqkvg_K, n=v2tp_wqkvg_N
+        )
+        self.model_config["V2TP_WO_WEIGHT_MEMCFG"] = self.create_dram_sharded_mem_config(k=v2tp_wo_K, n=v2tp_wo_N)
+        self.model_config["V2TP_WQKVG_ACT_MEMCFG"] = self._v2tp_create_activation_shard_config(v2tp_wqkvg_K)
+        self.model_config["V2TP_WO_ACT_MEMCFG"] = self._v2tp_create_activation_shard_config(v2tp_wo_K)
+        self.model_config["V2TP_WQKVG_PROGCFG"] = self._v2tp_create_dram_sharded_matmul_progcfg(
+            m=v2tp_M, k=v2tp_wqkvg_K, n=v2tp_wqkvg_N
+        )
+        self.model_config["V2TP_WO_PROGCFG"] = self._v2tp_create_dram_sharded_matmul_progcfg(
+            m=v2tp_M, k=v2tp_wo_K, n=v2tp_wo_N
+        )
+
         self.model_config["W1W3_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
             k=self.dim_per_tp,  # 1280
             n=ff_n_padded,  # 3840
@@ -1081,3 +1115,81 @@ class TtQwen36ModelArgs(TtModelArgs):
             ttnn.ShardOrientation.ROW_MAJOR,
         )
         return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    # ------------------------------------------------------------------
+    # V2-DRAM-P1: standalone DRAM-sharded matmul helpers (atupe pattern).
+    # Used by _forward_decode_qwen36 to drive WQKVG + WO via the fast
+    # MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig kernel.
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _v2tp_find_largest_divisor(n, max_div=8):
+        for d in range(max_div, 0, -1):
+            if n % d == 0:
+                return d
+        return 1
+
+    @staticmethod
+    def _v2tp_find_grid(n_tiles, target=32, max_rows=8, max_cols=8):
+        """Find (rows, cols) on ≤ max_rows × max_cols grid where n_tiles is
+        evenly divided.  Prefer grids closest to ``target`` cores."""
+        max_cores = max_rows * max_cols
+        possible = [k for k in range(1, max_cores + 1) if n_tiles % k == 0]
+        possible.sort(key=lambda x: abs(x - target))
+        for cores in possible:
+            for rows in range(1, max_rows + 1):
+                if cores % rows == 0:
+                    cols = cores // rows
+                    if cols <= max_cols:
+                        return rows, cols
+        raise AssertionError(f"Cannot find grid for {n_tiles} tiles in {max_rows}x{max_cols}")
+
+    def _v2tp_create_activation_shard_config(self, k):
+        """L1 WIDTH_SHARDED activation memcfg sized to feed the V2-DRAM matmul.
+
+        Picks a grid that evenly divides K_tiles so each core gets a contiguous
+        K-stripe of the activation.  Used as the input layout to the
+        DRAM-sharded matmul kernel.
+        """
+        k_tiles = k // self.tile_size
+        rows, cols = self._v2tp_find_grid(k_tiles)
+        num_cores = rows * cols
+        width_per_core = k // num_cores
+        return ttnn.create_sharded_memory_config(
+            shape=(self.tile_size, width_per_core),
+            core_grid=ttnn.CoreGrid(x=cols, y=rows),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    def _v2tp_create_dram_sharded_matmul_progcfg(self, m, k, n):
+        """``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`` builder.
+
+        Same shape derivation as atupe/qwen35-27b-4xp150's
+        ``create_dram_sharded_matmul_program_config``: pick K-grid via
+        ``_find_grid(k_tiles)``, pad N to ``tile_size * dram_cores``, set
+        ``per_core_N = n_tiles // num_cores``.  Kernel internally fans out
+        the N dim across compute cores.
+        """
+        dram_cores = self.dram_weight_grid.bounding_box().grid_size().x
+        m_tiles = math.ceil(m / self.tile_size)
+        k_tiles = math.ceil(k / self.tile_size)
+        n_padded = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
+        n_tiles = n_padded // self.tile_size
+
+        rows, cols = self._v2tp_find_grid(k_tiles)
+        num_cores = rows * cols
+
+        k_tiles_per_core = k_tiles // num_cores
+        if k_tiles_per_core == 0:
+            k_tiles_per_core = k_tiles
+            num_cores = 1
+        in0_block_w = self._v2tp_find_largest_divisor(k_tiles_per_core)
+        per_core_N = n_tiles // num_cores if n_tiles >= num_cores else 1
+
+        return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=in0_block_w,
+            per_core_M=m_tiles,
+            per_core_N=per_core_N,
+            fused_activation=None,
+        )

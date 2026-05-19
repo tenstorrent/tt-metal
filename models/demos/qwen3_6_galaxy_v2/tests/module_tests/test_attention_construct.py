@@ -255,7 +255,7 @@ def test_qwen36_attention_de_interleaves_q_and_gate_correctly():
             p.stop()
 
     # V2-TP: wqkvg upload now has shape [1, 1, H, qkvg_total_width=16384].
-    qkvg_blob = captured.get("layers.0.attention.wqkvg_tp2d_row_col")
+    qkvg_blob = captured.get("layers.0.attention.wqkvg_tp2d_row_col_dram_sharded")
     assert (
         qkvg_blob is not None and len(qkvg_blob) == 1
     ), f"wqkvg upload not captured; captured keys: {list(captured.keys())}"
