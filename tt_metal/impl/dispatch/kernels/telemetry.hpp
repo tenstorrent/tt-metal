@@ -32,14 +32,11 @@ class TelemetryBlockGuardImpl;
 template <typename Telemetry, uint32_t telemetry_addr>
 class TelemetryBlockGuardImpl<Telemetry, telemetry_addr, true> {
 public:
-    FORCE_INLINE explicit TelemetryBlockGuardImpl() :
-        telemetry_(get_telemetry_ptr<Telemetry, telemetry_addr>()) {
-            telemetry_->blocked_by_host_count++;
-        }
-
-    FORCE_INLINE ~TelemetryBlockGuardImpl() {
-        telemetry_->unblocked_by_host_count++;
+    FORCE_INLINE explicit TelemetryBlockGuardImpl() : telemetry_(get_telemetry_ptr<Telemetry, telemetry_addr>()) {
+        telemetry_->blocked_by_host_count++;
     }
+
+    FORCE_INLINE ~TelemetryBlockGuardImpl() { telemetry_->unblocked_by_host_count++; }
 
     TelemetryBlockGuardImpl(const TelemetryBlockGuardImpl&) = delete;
     TelemetryBlockGuardImpl& operator=(const TelemetryBlockGuardImpl&) = delete;

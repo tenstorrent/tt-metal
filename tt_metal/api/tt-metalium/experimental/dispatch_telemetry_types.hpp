@@ -9,12 +9,9 @@
 #include <cstdint>
 namespace {
 constexpr uint32_t pack(const char (&s)[5]) {
-    return (uint32_t(s[0]) << 24)
-            | (uint32_t(s[1]) << 16)
-            | (uint32_t(s[2]) <<  8)
-            | (uint32_t(s[3]));
+    return (uint32_t(s[0]) << 24) | (uint32_t(s[1]) << 16) | (uint32_t(s[2]) << 8) | (uint32_t(s[3]));
 }
-} // namespace
+}  // namespace
 namespace tt::tt_metal {
 /**
  * @brief Expected signature for validating that a telemetry buffer contains dispatch telemetry data.
@@ -51,7 +48,5 @@ struct DispatchTelemetry {
 
 // Used to determine the size of the L1 buffer that dispatch_mem_map allocates
 // Note: If new telemetry types are added, update this calculation
-constexpr size_t DISPATCH_TELEMETRY_SIZE = std::max(
-    sizeof(DispatchTelemetry),
-    sizeof(PrefetchTelemetry));
+constexpr size_t DISPATCH_TELEMETRY_SIZE = std::max(sizeof(DispatchTelemetry), sizeof(PrefetchTelemetry));
 }  // namespace tt::tt_metal

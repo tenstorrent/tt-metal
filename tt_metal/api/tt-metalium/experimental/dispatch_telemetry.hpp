@@ -5,9 +5,9 @@
 #pragma once
 
 #include <optional>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/dispatch_telemetry_types.hpp>
 
-#include "core_coord.hpp"
-#include "dispatch_telemetry_types.hpp"
 namespace tt::tt_metal {
 class IDevice;
 

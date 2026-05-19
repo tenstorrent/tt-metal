@@ -99,9 +99,7 @@ constexpr std::string_view to_string(CoreRole role) {
     return "UNKNOWN";
 }
 
-constexpr bool is_prefetch_role(CoreRole role) {
-    return role == CoreRole::PREFETCH || role == CoreRole::PREFETCH_D;
-}
+constexpr bool is_prefetch_role(CoreRole role) { return role == CoreRole::PREFETCH || role == CoreRole::PREFETCH_D; }
 
 struct CoreEntry {
     CoreRole role;
@@ -186,8 +184,7 @@ void print_snapshot(IDevice* device, const std::vector<CoreEntry>& entries) {
     std::cout.flush();
 }
 
-void flood_completion_queue(
-    distributed::MeshDevice* mesh_device, uint32_t num_reads, uint32_t bytes_per_read) {
+void flood_completion_queue(distributed::MeshDevice* mesh_device, uint32_t num_reads, uint32_t bytes_per_read) {
     if (num_reads == 0 || bytes_per_read == 0) {
         return;
     }
@@ -195,8 +192,7 @@ void flood_completion_queue(
     auto& cq = mesh_device->mesh_command_queue();
 
     // bytes_per_read is used both as DRAM page size and total buffer size (one page = one buffer)
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = bytes_per_read, .buffer_type = BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = bytes_per_read, .buffer_type = BufferType::DRAM};
     distributed::ReplicatedBufferConfig buffer_config{.size = bytes_per_read};
 
     auto src_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device);
@@ -229,9 +225,7 @@ int main(int argc, char** argv) {
     uint32_t num_reads = 512;
     uint32_t bytes_per_read = 1 * MB;
 
-    auto parse_u32 = [](const char* s) -> uint32_t {
-        return static_cast<uint32_t>(std::max<long>(0, std::atol(s)));
-    };
+    auto parse_u32 = [](const char* s) -> uint32_t { return static_cast<uint32_t>(std::max<long>(0, std::atol(s))); };
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -248,18 +242,15 @@ int main(int argc, char** argv) {
     }
 
     // Verify bytes_per_read is a valid DRAM page size
-    const uint32_t dram_alignment =
-        MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
-    TT_FATAL(bytes_per_read != 0 && bytes_per_read % dram_alignment == 0,
-            "--read-bytes ({}) must be a positive multiple of the DRAM alignment ({})",
-            bytes_per_read, dram_alignment);
+    const uint32_t dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
+    TT_FATAL(
+        bytes_per_read != 0 && bytes_per_read % dram_alignment == 0,
+        "--read-bytes ({}) must be a positive multiple of the DRAM alignment ({})",
+        bytes_per_read,
+        dram_alignment);
 
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(
-        device_id,
-        DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
-        1,
-        DispatchCoreConfig{DispatchCoreType::WORKER});
+        device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
     IDevice* device = mesh_device->get_devices().front();
 
     auto entries = collect_cores(device);

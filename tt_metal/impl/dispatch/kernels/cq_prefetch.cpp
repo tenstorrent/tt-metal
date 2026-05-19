@@ -265,7 +265,8 @@ static uint32_t router_direction;
 CQRelayClient<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes, fabric_header_rb_base>
     relay_client;
 
-using PrefetchTelemetryBlockGuard = TelemetryBlockGuard<tt::tt_metal::PrefetchTelemetry, prefetch_telemetry_base, telemetry_enabled>;
+using PrefetchTelemetryBlockGuard =
+    TelemetryBlockGuard<tt::tt_metal::PrefetchTelemetry, prefetch_telemetry_base, telemetry_enabled>;
 FORCE_INLINE void init_prefetch_telemetry() {
     init_telemetry<tt::tt_metal::PrefetchTelemetry, prefetch_telemetry_base, telemetry_enabled>();
 }
@@ -749,7 +750,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 WAYPOINT("HQW");
                 uint32_t heartbeat = 0U;
 
-                if((fetch_size = *prefetch_q_rd_ptr) == 0U) {
+                if ((fetch_size = *prefetch_q_rd_ptr) == 0U) {
                     PrefetchTelemetryBlockGuard prefetch_telemetry_blocked;
                     do {
                         invalidate_l1_cache();

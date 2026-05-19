@@ -252,8 +252,8 @@ FORCE_INLINE uint32_t get_completion_queue_available_space() {
     uint32_t completion_rd_ptr = completion_rd_ptr_and_toggle & 0x7fffffff;
     uint32_t completion_rd_toggle = completion_rd_ptr_and_toggle >> 31;
     return completion_rd_toggle != cq_write_interface.completion_fifo_wr_toggle
-            ? completion_rd_ptr - cq_write_interface.completion_fifo_wr_ptr
-            : (completion_queue_size_16B - (cq_write_interface.completion_fifo_wr_ptr - completion_rd_ptr));
+               ? completion_rd_ptr - cq_write_interface.completion_fifo_wr_ptr
+               : (completion_queue_size_16B - (cq_write_interface.completion_fifo_wr_ptr - completion_rd_ptr));
 }
 
 FORCE_INLINE

@@ -18,7 +18,12 @@ namespace {
 
 template <typename T>
 std::optional<T> read_telemetry_impl(
-    const char* type_name, IDevice* device, const CoreCoord& logical_core, CoreType core_type, uint32_t signature, uint32_t version) {
+    const char* type_name,
+    IDevice* device,
+    const CoreCoord& logical_core,
+    CoreType core_type,
+    uint32_t signature,
+    uint32_t version) {
     // Telemetry lives at a fixed dispatch-core-local L1 offset assigned by DispatchMemMap.
     // Prefetch and dispatch both use this section depending on which one owns the core.
     const auto& dispatch_mem_map = MetalContext::instance().dispatch_mem_map();
@@ -64,12 +69,24 @@ std::optional<T> read_telemetry_impl(
 
 std::optional<DispatchTelemetry> read_dispatch_telemetry(
     IDevice* device, const CoreCoord& dispatch_logical_core, CoreType core_type) {
-    return read_telemetry_impl<DispatchTelemetry>("DispatchTelemetry", device, dispatch_logical_core, core_type, DISPATCH_TELEMETRY_SIGNATURE, DISPATCH_TELEMETRY_VERSION);
+    return read_telemetry_impl<DispatchTelemetry>(
+        "DispatchTelemetry",
+        device,
+        dispatch_logical_core,
+        core_type,
+        DISPATCH_TELEMETRY_SIGNATURE,
+        DISPATCH_TELEMETRY_VERSION);
 }
 
 std::optional<PrefetchTelemetry> read_prefetch_telemetry(
     IDevice* device, const CoreCoord& prefetch_logical_core, CoreType core_type) {
-    return read_telemetry_impl<PrefetchTelemetry>("PrefetchTelemetry", device, prefetch_logical_core, core_type, PREFETCH_TELEMETRY_SIGNATURE, PREFETCH_TELEMETRY_VERSION);
+    return read_telemetry_impl<PrefetchTelemetry>(
+        "PrefetchTelemetry",
+        device,
+        prefetch_logical_core,
+        core_type,
+        PREFETCH_TELEMETRY_SIGNATURE,
+        PREFETCH_TELEMETRY_VERSION);
 }
 
 }  // namespace tt::tt_metal
