@@ -164,12 +164,20 @@ def CreateDevice(
     *,
     worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
 ):
+    if dispatch_core_config is None:
+        return ttnn._ttnn.device.CreateDevice(
+            device_id,
+            num_command_queues,
+            l1_small_size,
+            trace_region_size,
+            worker_l1_size=worker_l1_size,
+        )
     return ttnn._ttnn.device.CreateDevice(
         device_id,
         num_command_queues,
         l1_small_size,
         trace_region_size,
-        dispatch_core_config or DispatchCoreConfig(),
+        dispatch_core_config,
         worker_l1_size=worker_l1_size,
     )
 
@@ -183,12 +191,20 @@ def CreateDevices(
     *,
     worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
 ):
+    if dispatch_core_config is None:
+        return ttnn._ttnn.device.CreateDevices(
+            device_ids,
+            num_command_queues,
+            l1_small_size,
+            trace_region_size,
+            worker_l1_size=worker_l1_size,
+        )
     return ttnn._ttnn.device.CreateDevices(
         device_ids,
         num_command_queues,
         l1_small_size,
         trace_region_size,
-        dispatch_core_config or DispatchCoreConfig(),
+        dispatch_core_config,
         worker_l1_size=worker_l1_size,
     )
 

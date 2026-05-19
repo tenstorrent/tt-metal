@@ -14,6 +14,26 @@ def test_open_device():
     ttnn.close_device(device)
 
 
+def test_createdevice_matches_open_device_grid_defaults():
+    open_device_handle = None
+    create_device_handle = None
+    try:
+        open_device_handle = ttnn.open_device(device_id=0)
+        open_device_grid = open_device_handle.compute_with_storage_grid_size()
+        ttnn.close_device(open_device_handle)
+        open_device_handle = None
+
+        create_device_handle = ttnn.CreateDevice(device_id=0)
+        create_device_grid = create_device_handle.compute_with_storage_grid_size()
+
+        assert open_device_grid == create_device_grid
+    finally:
+        if open_device_handle is not None:
+            ttnn.close_device(open_device_handle)
+        if create_device_handle is not None:
+            ttnn.close_device(create_device_handle)
+
+
 def test_manage_device():
     """Simple unit test to test device context manager APIs"""
     with ttnn.manage_device(0) as device:
