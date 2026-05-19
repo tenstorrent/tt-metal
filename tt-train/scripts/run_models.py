@@ -200,7 +200,9 @@ def main() -> int:
             if model_filename in exclude_filenames:
                 continue
         if "mgd" in model:
-            os.environ["TT_MESH_GRAPH_DESC_PATH"] = os.path.expandvars(model["mgd"])
+            os.environ["TT_MESH_GRAPH_DESC_PATH"] = _verify_path(
+                os.path.expandvars(model["mgd"]), tt_metal_runtime_root
+            )
         else:
             # Since mgd is optional, clear env so previous iterations won't affect current
             os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
