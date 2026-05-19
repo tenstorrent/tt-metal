@@ -46,7 +46,7 @@ wormhole_b0:
 
   # MOVD2B failures (worker crash on 4D INT32/UINT32 concat). Passes on real
   # wormhole silicon; already deselected for blackhole below for the same reason.
-  # https://github.com/tenstorrent/tt-metal/issues/43295
+  # https://github.com/tenstorrent/tt-metal/issues/41286
   - tests/ttnn/unit_tests/operations/data_movement/test_concat.py::test_tiled_concat
 
 blackhole:
