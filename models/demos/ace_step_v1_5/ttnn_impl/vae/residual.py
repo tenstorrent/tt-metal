@@ -95,10 +95,8 @@ class TtOobleckResidualUnit:
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
         y = self.snake1(x)
-        y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
         y = self.conv1(y)
         y = self.snake2(y)
-        y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
         y = self.conv2(y)
 
         x_T = int(x.shape[1])

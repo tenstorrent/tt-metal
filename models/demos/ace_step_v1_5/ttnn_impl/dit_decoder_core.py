@@ -775,10 +775,10 @@ class TtAceStepAttentionSDPA:
             k = _pad_seq_to_rank4(k, target)
             v = _pad_seq_to_rank4(v, target)
 
-        # Q: [B,1,S,H*Dh] -> [B,H,S,Dh]
-        q = ttnn.reshape(q, (B, 1, S, H, Dh), **_sr)
-        q = ttnn.permute(q, (0, 3, 2, 4, 1), **_pk)
-        q = ttnn.reshape(q, (B, H, S, Dh), **_sr)
+        # Q: [B,1,S,H*Dh] -> [B,S,H,Dh] -> [B,H,S,Dh]
+        # 4-D reshape+permute avoids 5-D intermediate tensors and uses the faster (0,2,1,3) transpose.
+        q = ttnn.reshape(q, (B, S, H, Dh), **_sr)
+        q = ttnn.permute(q, (0, 2, 1, 3), **_pk)
         if _trace:
             _ace_step_log_ttnn_tensor(f"{debug_prefix}q_after_reshape_BHSD", q, ttnn=ttnn)
 
@@ -788,12 +788,10 @@ class TtAceStepAttentionSDPA:
         # K/V use num_key_value_heads; we expand to num_attention_heads by repeat if needed.
         S_k = int(k.shape[2])
         kv_h = self.n_kv
-        k = ttnn.reshape(k, (B, 1, S_k, kv_h, Dh), **_sr)
-        v = ttnn.reshape(v, (B, 1, S_k, kv_h, Dh), **_sr)
-        k = ttnn.permute(k, (0, 3, 2, 4, 1), **_pk)
-        v = ttnn.permute(v, (0, 3, 2, 4, 1), **_pk)
-        k = ttnn.reshape(k, (B, kv_h, S_k, Dh), **_sr)
-        v = ttnn.reshape(v, (B, kv_h, S_k, Dh), **_sr)
+        k = ttnn.reshape(k, (B, S_k, kv_h, Dh), **_sr)
+        v = ttnn.reshape(v, (B, S_k, kv_h, Dh), **_sr)
+        k = ttnn.permute(k, (0, 2, 1, 3), **_pk)
+        v = ttnn.permute(v, (0, 2, 1, 3), **_pk)
         if debug is not None and debug.get("enabled", False):
             debug[f"{debug_prefix}k_lin"] = k
             debug[f"{debug_prefix}v_lin"] = v

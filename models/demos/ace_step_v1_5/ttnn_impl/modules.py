@@ -214,16 +214,13 @@ class MultiHeadSelfAttentionTTNN:
         H = self.n_heads
         Dh = self.d_head
 
-        # [B,1,S,H*Dh] -> [B,H,S,Dh]
-        q = ttnn.reshape(q, (B, 1, S, H, Dh), **_sr)
-        k = ttnn.reshape(k, (B, 1, S, H, Dh), **_sr)
-        v = ttnn.reshape(v, (B, 1, S, H, Dh), **_sr)
-        q = ttnn.permute(q, (0, 3, 2, 4, 1), **_pk)
-        k = ttnn.permute(k, (0, 3, 2, 4, 1), **_pk)
-        v = ttnn.permute(v, (0, 3, 2, 4, 1), **_pk)
-        q = ttnn.reshape(q, (B, H, S, Dh), **_sr)
-        k = ttnn.reshape(k, (B, H, S, Dh), **_sr)
-        v = ttnn.reshape(v, (B, H, S, Dh), **_sr)
+        # [B,1,S,H*Dh] -> [B,S,H,Dh] -> [B,H,S,Dh]
+        q = ttnn.reshape(q, (B, S, H, Dh), **_sr)
+        k = ttnn.reshape(k, (B, S, H, Dh), **_sr)
+        v = ttnn.reshape(v, (B, S, H, Dh), **_sr)
+        q = ttnn.permute(q, (0, 2, 1, 3), **_pk)
+        k = ttnn.permute(k, (0, 2, 1, 3), **_pk)
+        v = ttnn.permute(v, (0, 2, 1, 3), **_pk)
 
         kt = ttnn.transpose(k, -2, -1)
         ttnn.deallocate(k)
@@ -255,9 +252,7 @@ class MultiHeadSelfAttentionTTNN:
         ttnn.deallocate(v)
 
         # [B,H,S,Dh] -> [B,S,H,Dh] -> [B,1,S,H*Dh]
-        # Keep all ops rank-4 (TTNN permute requires dims.size() == input_rank).
-        ctx = ttnn.reshape(ctx, (B, H, S, Dh), **_sr)
-        ctx = ttnn.permute(ctx, (0, 2, 1, 3), **_pk)  # [B,S,H,Dh]
+        ctx = ttnn.permute(ctx, (0, 2, 1, 3), **_pk)  # [B,H,S,Dh] -> [B,S,H,Dh]
         ctx = ttnn.reshape(ctx, (B, 1, S, H * Dh), **_sr)
         out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True)
         ttnn.deallocate(ctx)
@@ -329,15 +324,13 @@ class MultiHeadSelfAttentionSDPATTNN:
         H = self.n_heads
         Dh = self.d_head
 
-        q = ttnn.reshape(q, (B, 1, S, H, Dh), **_sr)
-        k = ttnn.reshape(k, (B, 1, S, H, Dh), **_sr)
-        v = ttnn.reshape(v, (B, 1, S, H, Dh), **_sr)
-        q = ttnn.permute(q, (0, 3, 2, 4, 1), **_pk)
-        k = ttnn.permute(k, (0, 3, 2, 4, 1), **_pk)
-        v = ttnn.permute(v, (0, 3, 2, 4, 1), **_pk)
-        q = ttnn.reshape(q, (B, H, S, Dh), **_sr)
-        k = ttnn.reshape(k, (B, H, S, Dh), **_sr)
-        v = ttnn.reshape(v, (B, H, S, Dh), **_sr)
+        # [B,1,S,H*Dh] -> [B,S,H,Dh] -> [B,H,S,Dh]
+        q = ttnn.reshape(q, (B, S, H, Dh), **_sr)
+        k = ttnn.reshape(k, (B, S, H, Dh), **_sr)
+        v = ttnn.reshape(v, (B, S, H, Dh), **_sr)
+        q = ttnn.permute(q, (0, 2, 1, 3), **_pk)
+        k = ttnn.permute(k, (0, 2, 1, 3), **_pk)
+        v = ttnn.permute(v, (0, 2, 1, 3), **_pk)
 
         sdpa_d = _sdpa_head_dim_tile_padding(Dh)
         if sdpa_d > Dh:

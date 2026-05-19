@@ -22,7 +22,7 @@ from __future__ import annotations
 import numpy as np
 
 from .._ttnn import get_ttnn
-from ..math_perf_env import ace_step_reshape_kwargs
+from ..math_perf_env import ace_step_linear_l1_memory_config, ace_step_reshape_kwargs
 
 
 def _require_ttnn():
@@ -83,9 +83,11 @@ class TtConv1d:
             math_fidelity = ttnn.MathFidelity.HiFi2
 
         self._vae_conv_perf = True
-        # DRAM activations only: L1 input + act_block_h_override=32 overflows static CB region on
-        # Blackhole (e.g. res_unit dilated conv: L1 buffer @ 139072 vs CB end @ 139328).
-        self._l1_mem = None
+        # Dilated convs (dilation > 1) overflow the static CB region on Blackhole when input is in
+        # L1 with act_block_h_override=32 (L1 buffer @ 139072 vs CB end @ 139328, 256-byte clash).
+        # Non-dilated convs have a smaller effective kernel → smaller CB → fit in L1 interleaved,
+        # avoiding the I2S + extra-block-conv + tilize overhead of the DRAM auto-sharding path.
+        self._l1_mem = ace_step_linear_l1_memory_config(ttnn) if (self.dilation <= 1) else None
 
         w = _to_float32_numpy(weight_host)
         if w.ndim != 3 or w.shape[0] != self.out_channels or w.shape[1] != self.in_channels:
@@ -282,7 +284,8 @@ class TtConvTranspose1d:
             math_fidelity = ttnn.MathFidelity.HiFi2
 
         self._vae_conv_perf = True
-        self._l1_mem = None
+        # conv_transpose has no dilation → smaller CB requirement → L1 interleaved is safe on Blackhole.
+        self._l1_mem = ace_step_linear_l1_memory_config(ttnn)
 
         w = _to_float32_numpy(weight_host)
         if w.ndim != 3 or w.shape[0] != self.in_channels or w.shape[1] != self.out_channels:
