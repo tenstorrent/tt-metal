@@ -144,13 +144,22 @@ class Transformer(TTTransformer):
                     memory_config=args.attn_wo_weight_memcfg,
                     cache_path=os.path.join(ld, "wo"),
                 )
+                # Bake +1 into the loaded q_norm/k_norm weight so attention forward
+                # can stay a single multiply instead of an add+multiply per token.
+                #   * HF weight (w) is what the safetensors checkpoint stores.
+                #   * HF Qwen3_5RMSNorm computes  out = norm(x) * (1 + w)
+                #     (modeling_qwen3_5.py:735), w is initialized near 0.
+                #   * tt-metal forward computes   out = norm(x) * w_baked
+                #     (attention.py:179-180,463-464,677-678); with w_baked = 1+w
+                #     loaded here, the two match.
+                # Same pattern as the outer norms (attn_norm/ffn_norm/final_norm).
                 tw["q_norm"] = _replicate(
-                    state_dict[p + "attention.q_norm.weight"],
+                    1.0 + state_dict[p + "attention.q_norm.weight"],
                     mesh,
                     os.path.join(ld, "q_norm"),
                 )
                 tw["k_norm"] = _replicate(
-                    state_dict[p + "attention.k_norm.weight"],
+                    1.0 + state_dict[p + "attention.k_norm.weight"],
                     mesh,
                     os.path.join(ld, "k_norm"),
                 )
