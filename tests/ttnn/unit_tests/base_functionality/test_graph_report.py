@@ -2617,6 +2617,114 @@ class TestBeginGraphCaptureClearing:
         assert g._python_io_data == []
         ttnn.graph.end_graph_capture()
 
+    def test_load_config_dictionary_enables_python_stack_traces_on_begin_graph_capture(self):
+        """TTNN_CONFIG_OVERRIDES loads via load_config_from_dictionary (same code path)."""
+        import ttnn.graph as g
+
+        if not hasattr(ttnn.CONFIG, "enable_graph_python_stack_traces"):
+            pytest.skip("CONFIG lacks enable_graph_python_stack_traces (rebuild and install _ttnn)")
+
+        original = ttnn.CONFIG.enable_graph_python_stack_traces
+        try:
+            g.disable_python_stack_traces()
+            assert not g.is_python_stack_trace_enabled()
+            ttnn.load_config_from_dictionary({"enable_graph_python_stack_traces": True}, from_file=False)
+            assert ttnn.CONFIG.enable_graph_python_stack_traces is True
+
+            g.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                g.record_python_operation("ttnn.relu", (), {})
+                entry = g._python_io_data[0]
+                assert "python_stack_trace" in entry
+                assert len(entry["python_stack_trace"]) > 0
+            finally:
+                ttnn.graph.end_graph_capture()
+
+            assert not g.is_python_stack_trace_enabled()
+        finally:
+            ttnn.CONFIG.enable_graph_python_stack_traces = original
+
+    def test_begin_graph_capture_auto_enables_python_stack_traces_when_config_true(self):
+        import ttnn.graph as g
+
+        with ttnn.manage_config("enable_graph_python_stack_traces", True):
+            g.disable_python_stack_traces()
+            assert not g.is_python_stack_trace_enabled()
+
+            g.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                g.record_python_operation("ttnn.relu", (), {})
+                assert len(g._python_io_data) == 1
+                entry = g._python_io_data[0]
+                assert "python_stack_trace" in entry
+                assert len(entry["python_stack_trace"]) > 0
+            finally:
+                ttnn.graph.end_graph_capture()
+
+            assert not g.is_python_stack_trace_enabled()
+
+    def test_begin_graph_capture_default_no_python_stack_traces(self):
+        import ttnn.graph as g
+
+        g.disable_python_stack_traces()
+        assert not g.is_python_stack_trace_enabled()
+
+        g.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            g.record_python_operation("ttnn.relu", (), {})
+            assert len(g._python_io_data) == 1
+            entry = g._python_io_data[0]
+            assert "python_stack_trace" not in entry
+        finally:
+            ttnn.graph.end_graph_capture()
+
+        assert not g.is_python_stack_trace_enabled()
+
+    def test_begin_graph_capture_respects_disable_graph_python_stack_traces_config(self):
+        import ttnn.graph as g
+
+        with ttnn.manage_config("enable_graph_python_stack_traces", False):
+            g.disable_python_stack_traces()
+            assert not g.is_python_stack_trace_enabled()
+
+            g.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                g.record_python_operation("ttnn.relu", (), {})
+                assert len(g._python_io_data) == 1
+                entry = g._python_io_data[0]
+                assert "python_stack_trace" not in entry
+            finally:
+                ttnn.graph.end_graph_capture()
+
+            assert not g.is_python_stack_trace_enabled()
+
+    def test_begin_graph_capture_keeps_pre_enabled_python_stack_traces_when_config_false(self):
+        """Stacks enabled before begin are not overridden when config auto-enable is off."""
+        import ttnn.graph as g
+
+        with ttnn.manage_config("enable_graph_python_stack_traces", False):
+            g.disable_python_stack_traces()
+            g.enable_python_stack_traces()
+            g.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                g.record_python_operation("ttnn.relu", (), {})
+                entry = g._python_io_data[0]
+                assert "python_stack_trace" in entry
+                assert len(entry["python_stack_trace"]) > 0
+            finally:
+                ttnn.graph.end_graph_capture()
+            g.disable_python_stack_traces()
+
+    def test_configure_stack_traces_defaults_false_when_config_attr_missing(self):
+        import types
+
+        import ttnn.graph as g
+
+        g.disable_python_stack_traces()
+        fake_ttnn = types.SimpleNamespace(CONFIG=types.SimpleNamespace())
+        g._configure_python_stack_traces_for_outer_graph_capture(fake_ttnn)
+        assert not g.is_python_stack_trace_enabled()
+
     def test_preserves_python_io_when_active(self):
         import ttnn.graph as g
 
