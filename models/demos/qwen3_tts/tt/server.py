@@ -1107,19 +1107,25 @@ def generate_codes_ttnn(
     )
     print(f"  Allocated CP KV cache ({model.code_predictor_config.num_hidden_layers} layers, max_seq={max_cp_seq_len})")
 
-    # Pre-allocate zero host tensors for CP KV cache reset between frames
+    # Pre-allocate zero DEVICE tensors for CP KV cache reset between frames.
+    # Keeping them on device lets us use ttnn.assign (D2D) instead of
+    # copy_host_to_device_tensor (H2D) each frame — same zeros, no PCIe transfer.
     cp_kv_zero_hosts = []
     for layer_kv in cp_kv_caches_persistent:
         k_cache, v_cache = layer_kv
         k_zero = ttnn.from_torch(
             torch.zeros(k_cache.shape[0], k_cache.shape[1], k_cache.shape[2], k_cache.shape[3], dtype=torch.bfloat16),
+            device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         v_zero = ttnn.from_torch(
             torch.zeros(v_cache.shape[0], v_cache.shape[1], v_cache.shape[2], v_cache.shape[3], dtype=torch.bfloat16),
+            device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         cp_kv_zero_hosts.append((k_zero, v_zero))
 
@@ -1320,11 +1326,23 @@ def generate_codes_ttnn(
     cp_trace_prefill_cos_tt, cp_trace_prefill_sin_tt = get_rope_tensors(
         device, cp_head_dim, 2, cp_prefill_pos, cp_rope_theta
     )
+    # "host" tensors are used to restore constants that the Talker's
+    # paged_fused_update_cache corrupts each frame.  They hold constant values
+    # so we keep them ON DEVICE and restore via ttnn.assign (D2D) instead of
+    # copy_host_to_device_tensor (H2D), which is much faster.
     cp_trace_prefill_cos_host = ttnn.from_torch(
-        _mesh_to_torch(cp_trace_prefill_cos_tt).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        _mesh_to_torch(cp_trace_prefill_cos_tt).bfloat16(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     cp_trace_prefill_sin_host = ttnn.from_torch(
-        _mesh_to_torch(cp_trace_prefill_sin_tt).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        _mesh_to_torch(cp_trace_prefill_sin_tt).bfloat16(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     cp_prefill_mask_host_torch = torch.full((1, _cp_num_heads, 2, max_cp_seq_len), float("-inf"))
     cp_prefill_mask_host_torch[0, :, 0, 0] = 0.0
@@ -1337,7 +1355,11 @@ def generate_codes_ttnn(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     cp_trace_prefill_mask_host = ttnn.from_torch(
-        cp_prefill_mask_host_torch.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+        cp_prefill_mask_host_torch.float(),
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     cp_trace_prefill_embed_tt = ttnn.from_torch(
         torch.zeros(1, 1, 2, talker_h, dtype=torch.bfloat16),
@@ -1424,8 +1446,8 @@ def generate_codes_ttnn(
     # --- 5b: CP prefill trace ---
     print("  Untraced warmup: CP prefill (same tensors as trace)...")
     for (k_zero, v_zero), (k_cache, v_cache) in zip(cp_kv_zero_hosts, cp_kv_caches_persistent):
-        ttnn.copy_host_to_device_tensor(k_zero, k_cache)
-        ttnn.copy_host_to_device_tensor(v_zero, v_cache)
+        ttnn.assign(k_zero, k_cache)
+        ttnn.assign(v_zero, v_cache)
     _wu_cp_pf_logits, cp_kv_caches_persistent = model.code_predictor.forward_single_step(
         cp_trace_prefill_embed_tt,
         cp_trace_prefill_cos_tt,
@@ -2071,10 +2093,18 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
     cp_kv_zero_hosts = []
     for k_cache, v_cache in cp_kv_caches_persistent:
         k_zero = ttnn.from_torch(
-            torch.zeros(*k_cache.shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            torch.zeros(*k_cache.shape, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         v_zero = ttnn.from_torch(
-            torch.zeros(*v_cache.shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            torch.zeros(*v_cache.shape, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         cp_kv_zero_hosts.append((k_zero, v_zero))
 
@@ -2094,10 +2124,18 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
         device, cp_head_dim, 2, cp_prefill_pos, cp_rope_theta
     )
     cp_trace_prefill_cos_host = ttnn.from_torch(
-        _mesh_to_torch(cp_trace_prefill_cos_tt).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        _mesh_to_torch(cp_trace_prefill_cos_tt).bfloat16(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cp_trace_prefill_sin_host = ttnn.from_torch(
-        _mesh_to_torch(cp_trace_prefill_sin_tt).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        _mesh_to_torch(cp_trace_prefill_sin_tt).bfloat16(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cp_prefill_mask_torch = torch.full((1, _cp_num_heads, 2, max_cp_seq_len), float("-inf"))
     cp_prefill_mask_torch[0, :, 0, 0] = 0.0
@@ -2110,7 +2148,11 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cp_trace_prefill_mask_host = ttnn.from_torch(
-        cp_prefill_mask_torch.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+        cp_prefill_mask_torch.float(),
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     cp_trace_decode_embed_tts = [
@@ -2260,10 +2302,10 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
             cp_decode_logits_tts[_buf_i].append(_logits_tt)
     print(f"  Captured {len(cp_decode_trace_ids[0])} CP decode traces x2 buffers.")
 
-    # Zero-reset CP KV caches for first real request
+    # Zero-reset CP KV caches for first real request (D2D assign — zeros are on device)
     for (k_zero, v_zero), (k_cache, v_cache) in zip(cp_kv_zero_hosts, cp_kv_caches_persistent):
-        ttnn.copy_host_to_device_tensor(k_zero, k_cache)
-        ttnn.copy_host_to_device_tensor(v_zero, v_cache)
+        ttnn.assign(k_zero, k_cache)
+        ttnn.assign(v_zero, v_cache)
 
     # ─── Persistent Talker decode state (one trace per prefill bucket) ──────
     # Hoists what used to be per-request alloc + capture inside run_inference.

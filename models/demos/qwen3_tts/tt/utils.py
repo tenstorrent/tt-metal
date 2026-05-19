@@ -178,12 +178,15 @@ def ar_decode_loop(
         _t_after_cp_input = time.perf_counter()
 
         # Restore CP constants corrupted by Talker's paged_update_cache.
-        ttnn.copy_host_to_device_tensor(state.cp_trace_prefill_mask_host, state.cp_trace_prefill_mask_tt, cq_id=h2d_cq)
-        ttnn.copy_host_to_device_tensor(state.cp_trace_prefill_cos_host, state.cp_trace_prefill_cos_tt, cq_id=h2d_cq)
-        ttnn.copy_host_to_device_tensor(state.cp_trace_prefill_sin_host, state.cp_trace_prefill_sin_tt, cq_id=h2d_cq)
+        # Source tensors are on device (not host) so we use ttnn.assign (D2D)
+        # instead of copy_host_to_device_tensor (H2D) — same constant data,
+        # no PCIe transfer needed, much faster.
+        ttnn.assign(state.cp_trace_prefill_mask_host, state.cp_trace_prefill_mask_tt)
+        ttnn.assign(state.cp_trace_prefill_cos_host, state.cp_trace_prefill_cos_tt)
+        ttnn.assign(state.cp_trace_prefill_sin_host, state.cp_trace_prefill_sin_tt)
         for (k_zero, v_zero), (k_cache, v_cache) in zip(state.cp_kv_zero_hosts, state.cp_kv_caches_persistent):
-            ttnn.copy_host_to_device_tensor(k_zero, k_cache, cq_id=h2d_cq)
-            ttnn.copy_host_to_device_tensor(v_zero, v_cache, cq_id=h2d_cq)
+            ttnn.assign(k_zero, k_cache)
+            ttnn.assign(v_zero, v_cache)
         _t_after_kv = time.perf_counter()
 
         # CP prefill trace.
