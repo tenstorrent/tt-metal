@@ -123,20 +123,46 @@ class EN_DEST_REUSE(TemplateParameter):
         return "#define EN_DEST_REUSE"
 
 
+_COMP_OP_NAMES: frozenset[str] = frozenset({"GT", "LT", "LE", "GE"})
+
+
 @dataclass
 class SFPU_INT_OP(TemplateParameter):
-    """Emit a #define to select the integer SFPU operation in a shared C++ test source.
+    """Emit compile-time constants to select the integer SFPU operation in a shared C++ test source.
 
-    Supported values: "MUL", "GT", "LT", "LE", "GE".  When omitted the C++ source
-    falls through to its default (add_int) path.
+    For comparison ops (GT, LT, LE, GE) a ``constexpr SfpuType SFPU_COMP_OP`` and a
+    ``#define SFPU_COMP_ENABLED`` sentinel are emitted so the C++ test can call the unified
+    ``calculate_binary_comp<…, SFPU_COMP_OP, COMP_DATA_FORMAT>`` entry point.
+
+    For other ops (e.g. "MUL") the legacy ``#define SFPU_INT_OP_{OP}`` form is kept.
+
+    When omitted the C++ source falls through to its default (add_int) path.
     """
 
     op: str = ""
 
     def convert_to_cpp(self) -> str:
-        if self.op:
-            return f"#define SFPU_INT_OP_{self.op.upper()}"
-        return ""
+        if not self.op:
+            return ""
+        op_upper = self.op.upper()
+        if op_upper in _COMP_OP_NAMES:
+            return f"constexpr auto SFPU_COMP_OP = SfpuType::{op_upper.lower()};\n#define SFPU_COMP_ENABLED"
+        return f"#define SFPU_INT_OP_{op_upper}"
+
+
+@dataclass
+class COMP_DATA_FORMAT(TemplateParameter):
+    """Inject a compile-time DataFormat constant for binary comparison SFPU ops.
+
+    Generates ``constexpr auto COMP_DATA_FORMAT = DataFormat::<name>;`` so the
+    unified ``calculate_binary_comp`` template can dispatch to the correct
+    implementation (int vs. float) purely at compile time.
+    """
+
+    data_format: DataFormat = DataFormat.Int32
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto COMP_DATA_FORMAT = DataFormat::{self.data_format.name};"
 
 
 def _generate_operation_constants(mathop: MathOperation) -> list[str]:

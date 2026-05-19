@@ -17,6 +17,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    COMP_DATA_FORMAT,
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
     MATH_OP,
@@ -96,6 +97,8 @@ def _run_sfpu_binary_quasar(
     ]
     if sfpu_int_op:
         templates.insert(1, SFPU_INT_OP(sfpu_int_op))
+        if sfpu_int_op.upper() in {"GT", "LT", "LE", "GE"}:
+            templates.insert(2, COMP_DATA_FORMAT(data_format))
 
     configuration = TestConfig(
         "sources/quasar/sfpu_binary_quasar_test.cpp",

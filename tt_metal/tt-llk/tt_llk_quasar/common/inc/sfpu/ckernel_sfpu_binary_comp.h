@@ -72,5 +72,17 @@ inline void calculate_binary_comp_int32(
     }
 }
 
+// Unified binary comparison entry point.
+// DataFormat is a compile-time template argument that controls dispatch to the
+// appropriate implementation, so callers always use the same function regardless
+// of the element type — the selection is fully abstracted away from the caller.
+template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, DataFormat FMT>
+inline void calculate_binary_comp(
+    const int iterations, const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
+{
+    static_assert(FMT == DataFormat::Int32, "Only DataFormat::Int32 is currently supported for binary comparison on Quasar");
+    calculate_binary_comp_int32<APPROXIMATION_MODE, ITERATIONS, RELATIONAL_OP>(iterations, dst_index_in0, dst_index_in1, dst_index_out);
+}
+
 } // namespace sfpu
 } // namespace ckernel

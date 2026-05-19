@@ -62,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(SFPU_INT_OP_MUL)
 #include "sfpu/ckernel_sfpu_mul_int32.h"
 #endif
-#if defined(SFPU_INT_OP_GT) || defined(SFPU_INT_OP_LT) || defined(SFPU_INT_OP_LE) || defined(SFPU_INT_OP_GE)
+#if defined(SFPU_COMP_ENABLED)
 #include "sfpu/ckernel_sfpu_binary_comp.h"
 #endif
 
@@ -92,18 +92,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(SFPU_INT_OP_MUL)
     _llk_math_eltwise_binary_sfpu_params_<false>(
         _mul_int32_<false, 8>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
-#elif defined(SFPU_INT_OP_GT)
+#elif defined(SFPU_COMP_ENABLED)
     _llk_math_eltwise_binary_sfpu_params_<false>(
-        calculate_binary_comp_int32<false, 8, SfpuType::gt>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
-#elif defined(SFPU_INT_OP_LT)
-    _llk_math_eltwise_binary_sfpu_params_<false>(
-        calculate_binary_comp_int32<false, 8, SfpuType::lt>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
-#elif defined(SFPU_INT_OP_LE)
-    _llk_math_eltwise_binary_sfpu_params_<false>(
-        calculate_binary_comp_int32<false, 8, SfpuType::le>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
-#elif defined(SFPU_INT_OP_GE)
-    _llk_math_eltwise_binary_sfpu_params_<false>(
-        calculate_binary_comp_int32<false, 8, SfpuType::ge>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+        calculate_binary_comp<false, 8, SFPU_COMP_OP, COMP_DATA_FORMAT>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
 #else
     _llk_math_eltwise_binary_sfpu_params_<false>(
         _add_int_<false, 8, 0, false>, 0, src_format, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
