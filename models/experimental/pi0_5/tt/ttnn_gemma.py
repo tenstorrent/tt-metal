@@ -416,6 +416,7 @@ class GemmaAttentionTTNN:
         past_key_value: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         use_cache: bool = False,
         keep_padded: bool = False,
+        static_cache: Optional[Tuple[ttnn.Tensor, ttnn.Tensor, int]] = None,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         OPTIMIZED forward pass using fused QKV and native TTNN operations.
@@ -566,14 +567,38 @@ class GemmaAttentionTTNN:
             q_rope = ttnn.slice(q_rope_padded, [0, 0, 0, 0], [batch_size, self.num_heads, seq_len, self.head_dim])
             k_rope = ttnn.slice(k_rope_padded, [0, 0, 0, 0], [batch_size, self.num_kv_heads, seq_len, self.head_dim])
 
-        # Handle KV cache. Force concat output to L1 — the result feeds SDPA
-        # directly so keeping it on-chip avoids DRAM round-trips.
-        if past_key_value is not None:
+        # Handle KV cache.
+        # Three modes:
+        #   (a) static_cache != None — pre-allocated buffer mode. Write the
+        #       fresh suffix K/V into the buffer at `update_idx` via
+        #       ttnn.kv_cache.update_cache (in-place). SDPA reads the full
+        #       buffer; the caller-supplied attention_mask hides unused
+        #       positions. Avoids the 2-concats-per-call cost (~53 µs each
+        #       for K on bf16 BS=1). Used by the action expert's denoise
+        #       loop where the prefix doesn't change across steps.
+        #   (b) past_key_value != None — legacy concat path. K/V grow each
+        #       call. Used by anything that hasn't migrated to static_cache.
+        #   (c) neither — fresh forward without cache reuse.
+        if static_cache is not None:
+            k_buf, v_buf, update_idx = static_cache
+            ttnn.kv_cache.update_cache(k_buf, k_rope, update_idx)
+            ttnn.kv_cache.update_cache(v_buf, v, update_idx)
+            # SDPA sees the full pre-allocated buffer (with prefix already
+            # filled via fill_cache + the suffix slot we just wrote). The
+            # caller's attention_mask masks the unused tail beyond
+            # prefix_len + suffix_len.
+            ttnn.deallocate(k_rope)
+            ttnn.deallocate(v)
+            k_rope = k_buf
+            v = v_buf
+            new_cache = None  # caller owns the buffers
+        elif past_key_value is not None:
             past_k, past_v = past_key_value
             k_rope = ttnn.concat([past_k, k_rope], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
             v = ttnn.concat([past_v, v], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        new_cache = (k_rope, v) if use_cache else None
+            new_cache = (k_rope, v) if use_cache else None
+        else:
+            new_cache = (k_rope, v) if use_cache else None
 
         # SDPA chunk sizes aligned with models/tt_transformers/tt/model_config.py prefill defaults
         kv_seq_len = k_rope.shape[2]
@@ -944,6 +969,7 @@ class GemmaBlockTTNN:
         past_key_value: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         use_cache: bool = False,
         keep_padded: bool = False,
+        static_cache: Optional[Tuple[ttnn.Tensor, ttnn.Tensor, int]] = None,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass using TTNN operations.
@@ -983,6 +1009,7 @@ class GemmaBlockTTNN:
             past_key_value,
             use_cache,
             keep_padded=keep_padded,
+            static_cache=static_cache,
         )
         hidden_states = ttnn.add(hidden_states, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
@@ -1301,6 +1328,7 @@ class AdaRMSGemmaBlockTTNN:
         use_cache: bool = False,
         precomputed_mod: Optional[Tuple["ttnn.Tensor", ...]] = None,
         keep_padded: bool = False,
+        static_cache: Optional[Tuple["ttnn.Tensor", "ttnn.Tensor", int]] = None,
     ) -> Tuple["ttnn.Tensor", Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]]]:
         # Fast path: 6 modulation tensors precomputed at init (sa already = 1+scale_a).
         if precomputed_mod is not None:
@@ -1355,7 +1383,15 @@ class AdaRMSGemmaBlockTTNN:
         if sh_pc is not None:
             normed = ttnn.sharded_to_interleaved(normed, memory_config=ttnn.L1_MEMORY_CONFIG)
         attn_output, new_cache = self.attention.forward(
-            normed, cos, sin, attention_mask, position_ids, past_key_value, use_cache, keep_padded=keep_padded
+            normed,
+            cos,
+            sin,
+            attention_mask,
+            position_ids,
+            past_key_value,
+            use_cache,
+            keep_padded=keep_padded,
+            static_cache=static_cache,
         )
         ttnn.deallocate(normed)
         gated_attn = ttnn.mul(attn_output, ga, memory_config=ttnn.L1_MEMORY_CONFIG)

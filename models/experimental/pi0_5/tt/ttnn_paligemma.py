@@ -598,6 +598,58 @@ class Pi0_5PaliGemmaBackboneTTNN(PaliGemmaBackboneTTNN):
         device_grid = device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
 
+        # Optional pre-allocated KV cache for the action expert.
+        #
+        # Gated by PI0_EXPERT_KV_INPLACE=1. When active, each expert layer's
+        # `[past_k, k_rope]` and `[past_v, v]` concat at GemmaAttentionTTNN.forward
+        # is replaced with an in-place ttnn.kv_cache.update_cache that writes
+        # only the trailing suffix slot. Targets the ~360 concats/chunk
+        # contributed by the denoise loop (18 expert layers × 10 steps × 2
+        # for K and V). The prefix-K from VLM forward is one-shot per chunk
+        # so we ttnn.fill_cache it from sample_actions; only the suffix slots
+        # change per denoise step.
+        #
+        # Shape: (1, num_kv_heads, max_seq_len_padded, head_dim). Memory
+        # config INTERLEAVED L1 — update_cache accepts INTERLEAVED or
+        # ND_SHARDED; INTERLEAVED is the simplest path that meets validation
+        # (see ttnn/cpp/.../kv_cache/device/update_cache_device_operation.cpp:60).
+        # Total memory: depth × 2 × 1 × num_kv_heads × max_seq_len × head_dim
+        # × 2 bytes (bf16). For pi0.5 expert (depth=18, num_kv_heads=1,
+        # max=1024, head_dim=256): 18 × 2 × 1 × 1 × 1024 × 256 × 2 = 18 MB.
+        # That's well under L1 (~120 MB on BH). If memory pressure shows up
+        # later we can demote the cache to DRAM.
+        import os as _os
+
+        self._kv_inplace_enabled = _os.environ.get("PI0_EXPERT_KV_INPLACE", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        self.expert_kv_static_cache: Optional[List[Tuple["ttnn.Tensor", "ttnn.Tensor"]]] = None
+        if self._kv_inplace_enabled:
+            num_kv_heads = config.expert_config.num_kv_heads
+            head_dim = config.expert_config.head_dim
+            max_seq = config.max_seq_len  # already tile-aligned (=1024 in our config)
+            cache_shape = (1, num_kv_heads, max_seq, head_dim)
+            self.expert_kv_static_cache = []
+            for _ in range(config.expert_config.depth):
+                k_buf = ttnn.from_torch(
+                    torch.zeros(*cache_shape, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                v_buf = ttnn.from_torch(
+                    torch.zeros(*cache_shape, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                self.expert_kv_static_cache.append((k_buf, v_buf))
+
     def _inject_adarms_weights(
         self,
         block_weights: Dict[str, "ttnn.Tensor"],
@@ -648,7 +700,17 @@ class Pi0_5PaliGemmaBackboneTTNN(PaliGemmaBackboneTTNN):
         keep_padded: bool = False,
         cos_override: Optional["ttnn.Tensor"] = None,
         sin_override: Optional["ttnn.Tensor"] = None,
+        static_kv_cache_update_idx: Optional[int] = None,
     ) -> Tuple["ttnn.Tensor", Optional[List[Tuple["ttnn.Tensor", "ttnn.Tensor"]]]]:
+        """static_kv_cache_update_idx: when set AND self.expert_kv_static_cache
+        is allocated (PI0_EXPERT_KV_INPLACE=1), each expert block writes its
+        fresh K/V into the pre-allocated buffer at this index via
+        ttnn.kv_cache.update_cache instead of `concat([past_k, k_rope])`.
+        past_key_values is ignored in that mode — the static buffer already
+        contains the prefix from `Pi0_5ModelTTNN.sample_actions`'s
+        fill_cache step. Eliminates ~360 concats/chunk (the bulk of the
+        474-op concat traffic, see commit 5df59f16201 for the breakdown).
+        """
         # `cos_override`/`sin_override`: pre-gathered RoPE tables shaped
         # [1, 1, suffix_padded, head_dim] at absolute positions
         # `prefix_offset + [0..suffix_padded-1]`. Required for openpi-trained
@@ -658,9 +720,14 @@ class Pi0_5PaliGemmaBackboneTTNN(PaliGemmaBackboneTTNN):
         # scores against the prefix KV cache for the upstream model.
         new_cache = [] if use_cache else None
 
+        use_static = self.expert_kv_static_cache is not None and static_kv_cache_update_idx is not None
         for i, block in enumerate(self.expert_blocks):
-            past_kv = past_key_values[i] if past_key_values else None
+            past_kv = None if use_static else (past_key_values[i] if past_key_values else None)
             block_mod = precomputed_block_mods[i] if precomputed_block_mods is not None else None
+            block_static_cache = None
+            if use_static:
+                k_buf, v_buf = self.expert_kv_static_cache[i]
+                block_static_cache = (k_buf, v_buf, static_kv_cache_update_idx)
             hidden_states, new_kv = block.forward(
                 hidden_states,
                 cos_override,
@@ -672,6 +739,7 @@ class Pi0_5PaliGemmaBackboneTTNN(PaliGemmaBackboneTTNN):
                 use_cache,
                 precomputed_mod=block_mod,
                 keep_padded=keep_padded,
+                static_cache=block_static_cache,
             )
             if use_cache:
                 new_cache.append(new_kv)
