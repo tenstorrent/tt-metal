@@ -104,9 +104,7 @@ class TtOobleckResidualUnit:
         x_T = int(x.shape[1])
         y_T = int(y.shape[1])
         if y_T < x_T:
-            pad = (x_T - y_T) // 2
-            if pad > 0:
-                x = x[:, pad : pad + y_T, :]
+            x = x[:, :y_T, :]
 
         x4 = ttnn.unsqueeze(x, 1)
         y4 = ttnn.unsqueeze(y, 1)
