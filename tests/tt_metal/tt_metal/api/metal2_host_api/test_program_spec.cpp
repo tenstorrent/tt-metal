@@ -786,8 +786,9 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
 }
 
 // Helper: build a ProgramSpec with a single borrowed-memory DFB backed by a TensorParameter.
-//   - DFB sized to 32 bytes (1*32*sizeof(bfloat16)), matching MakeMinimalTensorParameter's
-//     1x32 BFLOAT16 default exactly.
+//   - DFB default size: 32 bytes (entry_size 16 * num_entries 2). Fits inside
+//     MakeMinimalTensorParameter's 1x32 BFLOAT16 default (64 bytes); oversized cases
+//     pass larger dfb_entry_size / dfb_num_entries via the parameters.
 //   - tensor_buffer_type defaults to L1 (the only legal choice for borrowing).
 inline ProgramSpec MakeBorrowedDFBProgramSpec(
     const std::string& tensor_param_name = "borrowed_tensor",

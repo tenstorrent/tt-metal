@@ -1093,6 +1093,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             "required).",
             dfb.unique_id,
             tp_name);
+        // Coarse spec-time sizing check against the TensorSpec's full packed size. No Buffer is
+        // available at spec time, so we can't query the per-bank allocation; the precise per-bank
+        // check fires at attach time in AttachBorrowedDFBBuffers (program_run_params.cpp), where
+        // a Buffer is in hand. For sharded L1 tensors the two checks differ — a DFB can pass
+        // here against the full-tensor size and still fail per-bank later. By design.
         const size_t dfb_bytes = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
         const size_t tensor_bytes = tensor_spec.compute_packed_buffer_size_bytes();
         TT_FATAL(

@@ -986,7 +986,8 @@ TEST_F(ProgramRunParamsTestQuasar, NamedAndVarargRTAsCoexistSucceeds) {
 // for these checks — set_borrowed_memory_base_addr iterates `groups[].l1_by_core` regardless.
 
 // Helper: build a ProgramSpec with a borrowed-memory DFB backed by a TensorParameter.
-// Sized to exactly match MakeMinimalTensorParameter's default 1x32 BFLOAT16 layout (64 bytes).
+// DFB default size: 32 bytes (entry_size 16 * num_entries 2); fits inside
+// MakeMinimalTensorParameter's 1x32 BFLOAT16 default (64 bytes).
 inline ProgramSpec MakeBorrowedDFBProgramSpecForRunParams(
     const std::string& tensor_param_name = "borrowed_tensor",
     uint32_t dfb_entry_size = 16,
