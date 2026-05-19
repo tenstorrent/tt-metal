@@ -2,23 +2,35 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Benchmark: DRAM-core prefetcher + matmul throughput on Blackhole.
+"""Benchmark: DRAM-core prefetcher vs worker-core prefetcher on Blackhole.
 
-Uses the `num_kernel_repeats` knob (default 1) on
-`MatmulMultiCoreReuseMultiCast1DProgramConfig` to collapse N matmuls into a single op
-invocation: the three gather_in0 matmul kernels (in0 reader, in1 reader, compute) wrap
-their per-batch loop in an outer `for (r = 0; r < num_kernel_repeats; ++r)` loop, and the
-DRAM-core prefetcher's `num_layers` is set to the same value so it pushes the weight N
-times. One op launch -> N matmuls -> op-launch overhead amortized.
+Both paths share the same gather_in0 matmul kernels. Uses the `num_kernel_repeats` knob
+(default 1) on `MatmulMultiCoreReuseMultiCast1DProgramConfig` to collapse N matmuls into
+a single op invocation: the three gather_in0 matmul kernels wrap their per-batch loop in
+an outer `for (r = 0; r < num_kernel_repeats; ++r)` loop, and the prefetcher's
+`num_layers` is set to the same value so it pushes the weight N times. One op launch ->
+N matmuls -> op-launch overhead amortized.
 
 Slow dispatch only (the DRAM-core prefetcher doesn't run under fast dispatch yet, so
-trace replay isn't an option for the prototype).
+trace replay isn't an option). SubDevice managers also don't work under slow dispatch,
+so the worker-core case runs senders + receivers on the default sub-device.
 
-Shape matches the proven `ff_widest` case from `test_prefetcher_BH_dram_core_large`:
-K=512, N=1024, bf16, ring=8 (8 DRAM banks * 1 receiver/bank). Llama-3.1-8B's FF1 shape
-won't fit per-receiver L1 at ring=8; production runs it at ring=24+.
+Shape: K=512, N=1024, bf16, ring=8 (matches the proven `ff_widest` case from
+`test_prefetcher_BH_dram_core_large`). Llama-3.1-8B's FF1 shape doesn't fit per-receiver
+L1 at ring=8; production runs it at ring=24+.
 
-Use BENCH_REPEATS to set the repeat count (default 1000).
+Use BENCH_REPEATS to set the repeat count (default 1000). For useful asymptotic numbers,
+1000+ is recommended.
+
+Measured (M=32, K=512, N=1024, ring=8, bf16, BH):
+                    DRAM-core           Worker-core
+  N=10:    188us, 0.18 TFLOP/s     190us, 0.18 TFLOP/s
+  N=100:    29us, 1.17 TFLOP/s      25us, 1.34 TFLOP/s
+  N=1000:   12us, 2.70 TFLOP/s     8.5us, 3.96 TFLOP/s
+  N=10000:  11us, 3.10 TFLOP/s     6.8us, 4.95 TFLOP/s
+
+Worker-core is ~60% faster at the asymptote on this shape. Op-launch overhead per
+invocation is ~1.8 ms for both paths (the per-matmul cost at N=10 vs N=10000).
 """
 
 import math
@@ -211,6 +223,149 @@ def test_bench_dram_core_repeats(device):
     per_matmul_us = elapsed / num_kernel_repeats * 1e6
     tflops = _flops_per_matmul() * num_kernel_repeats / elapsed / 1e12
     logger.info(
-        f"[bench] elapsed={elapsed * 1e3:.2f}ms/op repeats={num_kernel_repeats} "
+        f"[dram_core] elapsed={elapsed * 1e3:.2f}ms/op repeats={num_kernel_repeats} "
+        f"per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s"
+    )
+
+
+def test_bench_workercore_repeats(device):
+    """A/B baseline: same matmul + num_kernel_repeats but with the worker-core prefetcher
+    (BRISC+NCRISC senders on worker cores instead of DRISC on DRAM cores). Same shape,
+    same dtype, same num_kernel_repeats as the DRAM-core bench. SubDevice managers aren't
+    supported under slow dispatch so we run without sub_device_id; senders + receivers
+    share the default sub-device.
+    """
+    arch = getattr(device, "arch", lambda: None)()
+    if arch is not None and "BLACKHOLE" not in str(arch).upper():
+        pytest.skip("Bench tuned for Blackhole topology")
+
+    ttnn.device.enable_asynchronous_slow_dispatch(device)
+
+    num_kernel_repeats = _bench_repeats()
+
+    # 8 sender workers on row 1, 8 receiver workers on row 0.
+    sender_core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(_RING_SIZE - 1, 1))})
+    receiver_core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_RING_SIZE - 1, 0))}
+    )
+
+    sender_receiver_mapping = [
+        (
+            ttnn.CoreCoord(i, 1),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(i, 0), ttnn.CoreCoord(i, 0))}),
+        )
+        for i in range(_RING_SIZE)
+    ]
+    block_size_bytes = (_K * (_N // _RING_SIZE)) * 2  # bf16
+    gcb_size = _round_up(block_size_bytes * 4, 4096)
+    gcb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, gcb_size)
+
+    torch.manual_seed(0xBE8)
+    pt_weight = torch.randn(1, 1, _K, _N)
+    pt_act = torch.randn(1, 1, _M, _K)
+
+    # Weight: width-sharded in DRAM across `_RING_SIZE` banks (= num senders).
+    dram_core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_RING_SIZE - 1, 0))})
+    weight_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_core_range_set, [_K, _N // _RING_SIZE], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tt_weight = ttnn.as_tensor(
+        pt_weight, device=device, dtype=ttnn.bfloat16, memory_config=weight_mem_config, layout=ttnn.TILE_LAYOUT
+    )
+
+    # tensor_addrs: worker-core BRISC reader expects num_layers addresses per sender (= same
+    # tt_weight repeated for each iteration since the bench reuses the same matmul).
+    def _build_tensor_addrs(n_addrs: int) -> ttnn.Tensor:
+        addr_row = torch.tensor([tt_weight.buffer_address()] * n_addrs, dtype=torch.int32).reshape(1, n_addrs)
+        tensor_addrs = addr_row.repeat(_RING_SIZE, 1)  # one row per sender, all rows identical
+        return ttnn.as_tensor(
+            tensor_addrs,
+            device=device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(sender_core_range_set, [1, n_addrs], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+    tt_addrs_cc = _build_tensor_addrs(1)
+    tt_addrs = _build_tensor_addrs(num_kernel_repeats)
+
+    K_per_shard = _round_up(math.ceil(_K / _RING_SIZE), ttnn.TILE_SIZE)
+    act_mem_config = ttnn.create_sharded_memory_config(
+        shape=(_M, K_per_shard),
+        core_grid=receiver_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_act = ttnn.from_torch(
+        pt_act, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config
+    )
+
+    program_config = _build_program_config(num_kernel_repeats)
+    output_mem_config = ttnn.create_sharded_memory_config(
+        shape=(_M, _N // _RING_SIZE),
+        core_grid=receiver_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+        dst_full_sync_en=True,
+    )
+
+    logger.info(f"[workercore] K={_K} N={_N} ring={_RING_SIZE} gcb_size={gcb_size} repeats={num_kernel_repeats}")
+
+    # Correctness: single-repeat config first.
+    cc_config = _build_program_config(num_kernel_repeats=1)
+    ttnn.dram_prefetcher([tt_weight, tt_addrs_cc], num_layers=1, global_cb=gcb)
+    cc_out = ttnn.linear(
+        tt_act,
+        tt_weight,
+        program_config=cc_config,
+        memory_config=output_mem_config,
+        compute_kernel_config=compute_kernel_config,
+        dtype=ttnn.bfloat16,
+        global_cb=gcb,
+    )
+    cc_torch = ttnn.to_torch(cc_out)
+    expected = pt_act.float() @ pt_weight.float()
+    passing, output_str = comp_pcc(expected, cc_torch, 0.99)
+    logger.info(f"[workercore] PCC (repeats=1): {output_str}")
+    assert passing, f"[workercore] PCC failed: {output_str}"
+
+    def run_once():
+        ttnn.dram_prefetcher([tt_weight, tt_addrs], num_layers=num_kernel_repeats, global_cb=gcb)
+        return ttnn.linear(
+            tt_act,
+            tt_weight,
+            program_config=program_config,
+            memory_config=output_mem_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            global_cb=gcb,
+        )
+
+    # Warmup + 3 timed runs.
+    run_once()
+    ttnn.synchronize_device(device)
+    t0 = time.perf_counter()
+    for _ in range(3):
+        run_once()
+    ttnn.synchronize_device(device)
+    elapsed = (time.perf_counter() - t0) / 3
+    per_matmul_us = elapsed / num_kernel_repeats * 1e6
+    tflops = _flops_per_matmul() * num_kernel_repeats / elapsed / 1e12
+    logger.info(
+        f"[workercore] elapsed={elapsed * 1e3:.2f}ms/op repeats={num_kernel_repeats} "
         f"per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s"
     )
