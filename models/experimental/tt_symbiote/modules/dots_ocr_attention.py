@@ -14,6 +14,7 @@ from models.experimental.tt_symbiote.modules.attention import (
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWAllReduced,
     TTNNLinearLLamaIReplicatedWColSharded,
+    _l1_or_dram_mc,
 )
 from models.experimental.tt_symbiote.modules.rope import BailingRotarySetup
 
@@ -219,11 +220,22 @@ class TTNNDotsOCRAttention(TTNNModule):
         of qkv_proj is already (W·x + b). On single-device decode, we only need
         to make sure the result lives in L1 to keep nlp_create_qkv_heads on
         L1 inputs.
-        """
-        if hidden_states.layout != ttnn.TILE_LAYOUT:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        qkv_states = self.qkv_proj(hidden_states)
+        Takes ownership of ``hidden_states`` and deallocates it after the
+        qkv_proj consumes it. The norm output upstream is L1-resident (8.65 MB
+        in text prefill); leaving it alive until trace cleanup pushes the L1
+        high-water mark into the SDPA program's static circular-buffer band
+        and triggers a static-CB-vs-L1-buffer clash at SDPA dispatch.
+        """
+        layout_fixed = hidden_states
+        if hidden_states.layout != ttnn.TILE_LAYOUT:
+            layout_fixed = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        qkv_states = self.qkv_proj(layout_fixed)
+
+        if layout_fixed is not hidden_states:
+            ttnn.deallocate(layout_fixed)
+        ttnn.deallocate(hidden_states)
 
         is_decode = int(seq_length) == 1
         if is_decode and qkv_states.memory_config().buffer_type != ttnn.BufferType.L1:
@@ -295,7 +307,15 @@ class TTNNDotsOCRAttention(TTNNModule):
             transpose_output=False,
         )
 
-        attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # nlp_concat_heads output (= [B, 1, S, hidden]) is the input to o_proj.
+        # At seq=2814 hidden=1536 BF16 that's ~8.65 MB which fits the 14 MB
+        # L1 single-tensor budget. SDPA's static CB region is already torn
+        # down by this point so there's no clash risk.
+        concat_mc = _l1_or_dram_mc(
+            (attn_output.shape[0], 1, attn_output.shape[2], self.num_attention_heads * self.head_dim),
+            ttnn.bfloat16,
+        )
+        attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=concat_mc)
         attn_output = ttnn.squeeze(attn_output, 1)
 
         attn_output = self.o_proj(attn_output)

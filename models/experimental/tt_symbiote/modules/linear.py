@@ -199,6 +199,50 @@ def _decode_linear_output_memory_config(device, input_shape):
     return ttnn.L1_MEMORY_CONFIG if int(input_shape[-2]) <= 32 else ttnn.DRAM_MEMORY_CONFIG
 
 
+# Per-core L1 budget for an interleaved tensor on the 8x8 grid (64 cores).
+# 14 MB total ≈ 224 KB/core leaves headroom for matmul/SDPA static circular
+# buffer regions which themselves reserve ~200-250 KB/core. Empirically the
+# dots.ocr prefill SDPA hits a static-CB-vs-L1-buffer clash above this.
+_L1_INTERLEAVED_BYTE_BUDGET = 14 * 1024 * 1024
+
+# Bytes-per-element lookup. BFP{4,8} are block-floating point: one
+# shared-exponent byte per 16 elements (BFP8) / 16 elements (BFP4) plus
+# packed mantissas. Conservative byte/elem estimates (rounded up) below
+# match what the matmul output buffers actually reserve in L1.
+_DTYPE_BYTES_PER_ELEM = {
+    ttnn.bfloat16: 2,
+    ttnn.float32: 4,
+    ttnn.uint32: 4,
+    ttnn.int32: 4,
+    ttnn.uint16: 2,
+    ttnn.uint8: 1,
+    ttnn.bfloat8_b: 1,
+    ttnn.bfloat4_b: 1,
+}
+
+
+def _tensor_bytes(shape, dtype) -> int:
+    """Conservative on-device byte estimate for a TILE-layout tensor of given shape."""
+    numel = 1
+    for d in shape:
+        numel *= int(d)
+    return numel * _DTYPE_BYTES_PER_ELEM.get(dtype, 2)
+
+
+def _fits_l1_interleaved(shape, dtype) -> bool:
+    """True if a single interleaved L1 tensor of this shape+dtype fits the budget.
+
+    Use this to gate per-op L1 placement: when the predicate fails, callers
+    should fall back to DRAM rather than try L1 and risk a static-CB clash.
+    """
+    return _tensor_bytes(shape, dtype) <= _L1_INTERLEAVED_BYTE_BUDGET
+
+
+def _l1_or_dram_mc(shape, dtype):
+    """Pick L1 if a single interleaved tensor of this shape+dtype fits, else DRAM."""
+    return ttnn.L1_MEMORY_CONFIG if _fits_l1_interleaved(shape, dtype) else ttnn.DRAM_MEMORY_CONFIG
+
+
 def _linear_mesh_num_devices(device) -> int:
     """Rank count on the active mesh. Single-device meshes cannot use fabric CCLs."""
     if device is None or not hasattr(device, "get_num_devices"):

@@ -6,6 +6,7 @@ from models.experimental.tt_symbiote.core.module import TTNNLayerStack, TTNNModu
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
 from models.experimental.tt_symbiote.modules.dots_ocr_attention import TTNNDotsOCRAttention
 from models.experimental.tt_symbiote.modules.dots_ocr_mlp import TTNNDotsOCRMLP
+from models.experimental.tt_symbiote.modules.linear import _l1_or_dram_mc
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
 
@@ -47,14 +48,25 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
         original_shape = inp.shape
         if len(original_shape) == 3:
             inp = ttnn.unsqueeze(inp, 1)
+        # Norm output goes to L1 when it fits the 14 MB single-tensor budget
+        # (covers all decode shapes and text-prefill seq=2814 hidden=1536
+        # which is ~8.65 MB BF16). The caller (decoder layer) keeps the
+        # *residual* stream DRAM so SDPA's static CB region does not clash
+        # with a long-lived L1 residual buffer. Norm output is consumed
+        # immediately by the qkv matmul so it doesn't live across SDPA.
+        norm_mc = _l1_or_dram_mc(inp.shape, ttnn.bfloat16)
+        # Don't change residual's layout/placement on the to_layout fast-path;
+        # the layer always feeds us TILE+DRAM, so this branch is a no-op for
+        # the hot path and only fires for unusual shapes.
         if inp.layout != ttnn.TILE_LAYOUT:
-            inp = ttnn.to_layout(inp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            inp = ttnn.to_layout(inp, ttnn.TILE_LAYOUT, memory_config=norm_mc)
         eps = getattr(self.torch_layer, "variance_epsilon", getattr(self.torch_layer, "eps", 1e-6))
         tt_out = ttnn.rms_norm(
             inp,
             epsilon=eps,
             weight=self.weight_distributed,
             compute_kernel_config=self.compute_kernel_config,
+            memory_config=norm_mc,
         )
         if len(original_shape) == 3 and len(tt_out.shape) == 4:
             tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])

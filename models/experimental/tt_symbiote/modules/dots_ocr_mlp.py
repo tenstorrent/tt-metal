@@ -17,6 +17,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     _tp_mesh_mapper,
     _linear_mesh_num_devices,
     _ccl_num_links,
+    _l1_or_dram_mc,
 )
 
 
@@ -235,19 +236,39 @@ class TTNNDotsOCRMLP(TTNNModule):
 
         batch_size = hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
-        is_decode = int(seq_len) == 1
-        activation_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+        hidden_dim = int(hidden_states.shape[-1])
 
-        gate_up = self.fused_gate_up_proj(hidden_states, output_memory_config=activation_mc if is_decode else None)
+        # Per-tensor L1-fit predicates. In decode (seq=1 padded to M=32) every
+        # tensor here is < 600 KB and trivially fits. In prefill (seq=2814 on
+        # this run) gate_up output is [..., 2*I] BFP8 ~= 50 MB and the two
+        # slices are ~25 MB each — both exceed the 14 MB single-tensor budget
+        # and fall back to DRAM, so the heavy matmul path is unchanged. The
+        # down_proj output [..., hidden] BF16 ~= 8.65 MB fits and becomes the
+        # L1 input to the layer's residual add.
+        I_full = int(self.intermediate_size)  # post-CCL global intermediate
+        gate_up_shape = (batch_size, 1, seq_len, 2 * I_full)
+        slice_shape = (batch_size, 1, seq_len, I_full)
+        down_shape = (batch_size, 1, seq_len, hidden_dim)
+        gate_up_mc = _l1_or_dram_mc(gate_up_shape, ttnn.bfloat8_b)
+        slice_mc = _l1_or_dram_mc(slice_shape, ttnn.bfloat8_b)
+        silu_mul_mc = _l1_or_dram_mc(slice_shape, ttnn.bfloat8_b)
+        down_mc = _l1_or_dram_mc(down_shape, ttnn.bfloat8_b)
 
-        if is_decode and gate_up.memory_config().buffer_type != ttnn.BufferType.L1:
-            gate_up = ttnn.to_memory_config(gate_up, activation_mc)
+        gate_up = self.fused_gate_up_proj(
+            hidden_states,
+            output_memory_config=gate_up_mc if gate_up_mc == ttnn.L1_MEMORY_CONFIG else None,
+        )
+
+        if gate_up_mc == ttnn.L1_MEMORY_CONFIG and gate_up.memory_config().buffer_type != ttnn.BufferType.L1:
+            gate_up = ttnn.to_memory_config(gate_up, gate_up_mc)
 
         # Slice into gate / up halves along the last dim. ttnn.slice on a TILE
         # tensor is a metadata + small copy op, far cheaper than a second CCL.
+        # Use the post-CCL tensor's actual last dim so the slice end-indices
+        # match whether or not a reduce_scatter ran inside fused_gate_up_proj.
         I = int(gate_up.shape[-1]) // 2
-        gate = ttnn.slice(gate_up, [0, 0, 0], [batch_size, seq_len, I], memory_config=activation_mc)
-        up = ttnn.slice(gate_up, [0, 0, I], [batch_size, seq_len, 2 * I], memory_config=activation_mc)
+        gate = ttnn.slice(gate_up, [0, 0, 0], [batch_size, seq_len, I], memory_config=slice_mc)
+        up = ttnn.slice(gate_up, [0, 0, I], [batch_size, seq_len, 2 * I], memory_config=slice_mc)
         ttnn.deallocate(gate_up)
 
         # ``fast_and_approximate_mode=True`` routes the fused SILU through
@@ -261,13 +282,12 @@ class TTNNDotsOCRMLP(TTNNModule):
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             fast_and_approximate_mode=True,
             dtype=ttnn.bfloat8_b,
-            memory_config=activation_mc,
+            memory_config=silu_mul_mc,
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
 
-        down_output_mc = activation_mc if is_decode else None
-        output = self.down_proj(gate_up_mul, output_memory_config=down_output_mc)
+        output = self.down_proj(gate_up_mul, output_memory_config=down_mc)
         ttnn.deallocate(gate_up_mul)
 
         return output
