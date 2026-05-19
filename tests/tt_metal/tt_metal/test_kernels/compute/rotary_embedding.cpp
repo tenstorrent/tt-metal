@@ -10,8 +10,8 @@
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() { tile_regs_acquire(); }
+ALWI void REL() { tile_regs_release(); }
 
 ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles, uint32_t in1_idx) {
     // Multiply input by cos

@@ -18,7 +18,7 @@ void kernel_main() {
     unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
     copy_tile_init(tt::CBIndex::c_0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-        acquire_dst();
+        tile_regs_acquire();
 
         // Pop tile after tile, copy to DST and pack
         cb_in.wait_front(1);
@@ -30,6 +30,6 @@ void kernel_main() {
         cb_in.pop_front(1);
         cb_out.push_back(1);
 
-        release_dst();
+        tile_regs_release();
     }
 }

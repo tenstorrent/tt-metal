@@ -30,7 +30,7 @@ void kernel_main() {
     // out = in0[r x k]*in1[k x c]
     mm_init(in0_cb, in1_cb, out_cb);
     for (uint32_t block_id = 0; block_id < num_blocks; block_id++) {
-        acquire_dst();
+        tile_regs_acquire();
         if (block_id > 0) {
             copy_tile_to_dst_init_short(partials_cb);
             cb_partials.wait_front(out_block_num_tiles);
@@ -71,6 +71,6 @@ void kernel_main() {
                 cb_partials.push_back(out_block_num_tiles);
             }
         }
-        release_dst();
+        tile_regs_release();
     }
 }

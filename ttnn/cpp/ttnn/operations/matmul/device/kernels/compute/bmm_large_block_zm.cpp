@@ -48,7 +48,7 @@ void kernel_main() {
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                 int in1_index_subblock_offset = 0;
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                    acquire_dst();
+                    tile_regs_acquire();
 
                     if (enable_reload) {
                         copy_tile_to_dst_init_short_with_dt(cb_in1, cb_intermed0);
@@ -98,7 +98,7 @@ void kernel_main() {
                         intermed0_cb.push_back(out_subblock_num_tiles);
                     }
 
-                    release_dst();
+                    tile_regs_release();
                     in1_index_subblock_offset += out_subblock_w;
                 }
                 in0_index_subblock_offset += in0_subblock_num_tiles;

@@ -20,7 +20,7 @@ void kernel_main() {
 
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb0.wait_front(per_core_block_dim);
-        acquire_dst();
+        tile_regs_acquire();
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             unary_bcast<BCAST_DIM_0>(tt::CBIndex::c_0, tile_index, tile_index);
         }
@@ -33,7 +33,7 @@ void kernel_main() {
         }
 
         cb16.push_back(per_core_block_dim);
-        release_dst();
+        tile_regs_release();
     }
 
     reconfigure_unary_bcast<BCAST_DIM_0, BCAST_DIM_1>(
@@ -41,7 +41,7 @@ void kernel_main() {
 
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb1.wait_front(per_core_block_dim);
-        acquire_dst();
+        tile_regs_acquire();
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             unary_bcast<BCAST_DIM_1>(tt::CBIndex::c_1, tile_index, tile_index);
         }
@@ -54,6 +54,6 @@ void kernel_main() {
         }
 
         cb17.push_back(per_core_block_dim);
-        release_dst();
+        tile_regs_release();
     }
 }

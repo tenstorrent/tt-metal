@@ -21,7 +21,7 @@ void kernel_main() {
     uint32_t out_block_tile_cnt = get_compile_time_arg_val(6);
     uint32_t with_bias = get_compile_time_arg_val(7);
 
-    acquire_dst();
+    tile_regs_acquire();
 
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb1(tt::CBIndex::c_1);
@@ -63,9 +63,9 @@ void kernel_main() {
             pack_tile(i, tt::CBIndex::c_24);
         }
         cb24.push_back(out_block_tile_cnt);
-        release_dst();
+        tile_regs_release();
 
-        acquire_dst();
+        tile_regs_acquire();
 
         add_bcast_rows_init_short(tt::HlkOperand::intermed0, tt::HlkOperand::in2);
         cb24.wait_front(out_block_tile_cnt);
@@ -88,5 +88,5 @@ void kernel_main() {
     }
 
     cb16.push_back(out_block_tile_cnt);
-    release_dst();
+    tile_regs_release();
 }

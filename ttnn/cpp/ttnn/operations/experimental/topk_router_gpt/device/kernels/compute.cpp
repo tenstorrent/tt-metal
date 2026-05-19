@@ -77,7 +77,7 @@ void kernel_main() {
     constexpr uint32_t BLOCK_SIZE = 2;
 
     // NOTE: dst_full_sync_en = false (half-sync mode). We use tile_regs_*
-    // consistently throughout the kernel for correctness. acquire_dst/release_dst
+    // consistently throughout the kernel for correctness. tile_regs_acquire/tile_regs_release
     // must NOT be mixed with tile_regs_* in half-sync mode.
     mm_block_init(
         cb_input,

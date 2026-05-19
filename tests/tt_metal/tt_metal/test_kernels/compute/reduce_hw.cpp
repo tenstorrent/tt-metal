@@ -46,7 +46,7 @@ void kernel_main() {
 #endif
     for (uint32_t nc = 0; nc < NC; nc++) {
         int reduce_dst_idx = 0;
-        acquire_dst();
+        tile_regs_acquire();
         for (uint32_t ht = 0; ht < Ht; ++ht) {
             // tiles are expected to be coming in in NCHW order (W-contiguous)
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
@@ -86,7 +86,7 @@ void kernel_main() {
         pack_tile(reduce_dst_idx, tt::CBIndex::c_16);
         cb16.push_back(onetile);
 #endif
-        release_dst();
+        tile_regs_release();
     }
     reduce_uninit();
 }

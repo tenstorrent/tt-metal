@@ -41,7 +41,7 @@ void apply_mask_on_reg(
     const uint32_t scaler_bits,
     const uint32_t minus_one_bits,
     const uint32_t custom_inf_bits) {
-    /* The DST register buffer must be in acquired state via *acquire_dst* call.*/
+    /* The DST register buffer must be in acquired state via *tile_regs_acquire* call.*/
 
     const uint32_t mask_register = register_idx + 1U;  // mask register should be next to data register
     cb_wait_front(cb_attn_mask, onetile);

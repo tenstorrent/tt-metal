@@ -34,7 +34,7 @@ FORCE_INLINE void transpose_and_pack(
     // Wait for all tiles to be available (double-buffered, hence 2 * total_tiles)
     input_cb.wait_front(2 * total_tiles);
     for (uint32_t i = 0; i < total_tiles; ++i) {
-        acquire_dst();
+        tile_regs_acquire();
         dest_cb.reserve_back(1);
 
         // Transpose tile from WH to HW format
@@ -43,7 +43,7 @@ FORCE_INLINE void transpose_and_pack(
         // Pack transposed tile to destination
         pack_tile(0, dest_cb_index);
         dest_cb.push_back(1);
-        release_dst();
+        tile_regs_release();
     }  // i loop
     // Pop in two halves so a single pop never crosses the circular buffer
     // wrap boundary (fifo_rd_ptr must not exceed fifo_limit in one step).
@@ -317,7 +317,7 @@ void kernel_main() {
                 transposed_val_cb.reserve_back(1);
                 transposed_ind_cb.reserve_back(1);
 
-                acquire_dst();
+                tile_regs_acquire();
 
                 // Load tiles into destination registers for merging
                 // Load existing sorted values into dest reg 0
@@ -371,7 +371,7 @@ void kernel_main() {
                 result_prep_val_cb.push_back(incr);
                 result_prep_ind_cb.push_back(incr);
 
-                release_dst();
+                tile_regs_release();
 
                 // Clean up transposed buffers if we consumed from them
                 if ((transposed_offset == 0) && !first_sort_from_transposed) {

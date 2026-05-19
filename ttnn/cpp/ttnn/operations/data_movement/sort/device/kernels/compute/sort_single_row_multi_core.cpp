@@ -188,7 +188,7 @@ void kernel_main() {
                                 tile_regs_release();
 
                                 // Pack and push sorted values tensor tiles
-                                acquire_dst();
+                                tile_regs_acquire();
 
                                 cb_wait_front(input_tensor_transposed_cb_index, 2 * one_tile);
                                 reconfig_data_format_srca(input_tensor_transposed_cb_index);
@@ -205,10 +205,10 @@ void kernel_main() {
                                 cb_pop_front(input_tensor_transposed_cb_index, 2 * one_tile);
                                 cb_push_back(input_tensor_output_cb_index, 2 * one_tile);
 
-                                release_dst();
+                                tile_regs_release();
 
                                 // Pack and push adjusted index tensor tiles
-                                acquire_dst();
+                                tile_regs_acquire();
 
                                 cb_wait_front(index_tensor_transposed_cb_index, 2 * one_tile);
                                 reconfig_data_format_srca(index_tensor_transposed_cb_index);
@@ -225,7 +225,7 @@ void kernel_main() {
                                 cb_pop_front(index_tensor_transposed_cb_index, 2 * one_tile);
                                 cb_push_back(index_tensor_output_cb_index, 2 * one_tile);
 
-                                release_dst();
+                                tile_regs_release();
                             } else {
                                 // Intermediate step - pack and push transposed tiles to be saved for the next stage
                                 cb_reserve_back(index_tensor_output_cb_index, 2 * one_tile);

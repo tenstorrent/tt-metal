@@ -85,7 +85,7 @@ void kernel_main() {
 #endif
 #endif
 
-    acquire_dst();
+    tile_regs_acquire();
     for (uint32_t b = 0; b < block_cnt; ++b) {
 #ifdef ARCH_QUASAR
         dfb0.wait_front(in0_block_tile_cnt);
@@ -120,5 +120,5 @@ void kernel_main() {
     }
     cb_push_back(tt::CBIndex::c_16, out_block_tile_cnt);
 #endif
-    release_dst();
+    tile_regs_release();
 }

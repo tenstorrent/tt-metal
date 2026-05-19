@@ -42,7 +42,7 @@ void kernel_main() {
     cb16.reserve_back(num_output_tiles);
     cb17.reserve_back(num_output_tiles);
 
-    acquire_dst();
+    tile_regs_acquire();
 
     /*
     Algorithm implementation:
@@ -148,7 +148,7 @@ void kernel_main() {
     ckernel::pack_reconfig_data_format(cb_out0, cb_out1);
     ckernel::pack_tile(index_offset_tiles, cb_out1);
 
-    release_dst();
+    tile_regs_release();
 
     cb0.pop_front(num_input_tiles);
     cb1.pop_front(num_input_tiles);

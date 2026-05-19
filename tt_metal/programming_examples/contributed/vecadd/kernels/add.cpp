@@ -23,7 +23,7 @@ void kernel_main() {
     // free and then we will submit compute to the FPU/SFPU that writes to the register.
     // see:
     // //
-    // https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/acquire_dst.html#acquire-dst
+    // https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/tile_regs_acquire.html#acquire-dst
     constexpr uint32_t dst_reg = 0;
 
     // Tell the SFPU that we will be using circular buffers c_in0, c_in1 and c_out0

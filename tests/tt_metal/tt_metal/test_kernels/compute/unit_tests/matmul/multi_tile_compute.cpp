@@ -26,7 +26,7 @@ void kernel_main() {
     // we are looking at block
     // out = in0[r x k]*in1[k x c]
     mm_init(in0_cb, in1_cb, out_cb);
-    acquire_dst();
+    tile_regs_acquire();
 
     uint32_t out_tile_index = 0;
     uint32_t in0_index_r_offset = 0;
@@ -53,5 +53,5 @@ void kernel_main() {
         pack_tile(tile_index, out_cb);
     }
     cb_out.push_back(out_num_tiles);
-    release_dst();
+    tile_regs_release();
 }

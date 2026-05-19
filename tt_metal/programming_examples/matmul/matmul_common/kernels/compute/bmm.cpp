@@ -29,7 +29,7 @@ void kernel_main() {
         for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
             for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C)  // output tile index of C
             {
-                acquire_dst();
+                tile_regs_acquire();
                 for (uint32_t kt = 0; kt < Kt; kt++) {
                     cb_wait_front(tt::CBIndex::c_0, onetile);
                     cb_wait_front(tt::CBIndex::c_1, onetile);
@@ -44,7 +44,7 @@ void kernel_main() {
                 pack_tile(0, tt::CBIndex::c_16);
                 cb_push_back(tt::CBIndex::c_16, onetile);
 
-                release_dst();
+                tile_regs_release();
             }
         }
     }

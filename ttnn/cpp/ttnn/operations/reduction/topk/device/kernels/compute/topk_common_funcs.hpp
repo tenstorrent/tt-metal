@@ -25,7 +25,7 @@ void process_and_sort_tiles(
 
     // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
-        acquire_dst();
+        tile_regs_acquire();
         // local sort into k groups
         // for the last iteration, we only need to wait for 1 tile if Wt is odd, otherwise we wait for 2 tiles
         uint32_t tiles_to_wait = ((Wt % 2 != 0) && (wt + 2 > Wt)) ? 1 : 2;
@@ -60,7 +60,7 @@ void process_and_sort_tiles(
         }
         input_cb.pop_front(tiles_to_wait);
         index_cb.pop_front(tiles_to_wait);
-        release_dst();
+        tile_regs_release();
         ascending = switch_dir ? !ascending : ascending;
     }
 
@@ -82,7 +82,7 @@ void process_tile_pair(
     uint32_t K,
     uint32_t logk,
     bool target_tiles_is_one) {
-    acquire_dst();
+    tile_regs_acquire();
 
     copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
     copy_tile(input_transposed_cb_index, left_ind, input_dest_start);
@@ -116,7 +116,7 @@ void process_tile_pair(
     if (!target_tiles_is_one) {
         pack_tile<true>(index_dest_end, index_transposed_cb_index, right_ind);
     }
-    release_dst();
+    tile_regs_release();
 }
 
 void process_tiles(
@@ -146,7 +146,7 @@ void process_tiles(
                 break;
             }
 
-            acquire_dst();
+            tile_regs_acquire();
 
             copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
             copy_tile(input_transposed_cb_index, left_tile_id, input_dest_start);
@@ -177,7 +177,7 @@ void process_tiles(
             pack_reconfig_data_format(index_transposed_cb_index);
             pack_tile<true>(index_dest_start, index_transposed_cb_index, left_tile_id);
             pack_tile<true>(index_dest_end, index_transposed_cb_index, right_tile_id);
-            release_dst();
+            tile_regs_release();
         }
     }
 }
@@ -292,12 +292,12 @@ void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, ui
 
     transposed_cb.wait_front(Kt);
     for (uint32_t i = 0; i < Kt; ++i) {
-        acquire_dst();
+        tile_regs_acquire();
         dest_cb.reserve_back(1);
         transpose_wh_tile(transposed_cb_index, i, 0);
         pack_tile(0, dest_cb_index);
         dest_cb.push_back(1);
-        release_dst();
+        tile_regs_release();
     }
     transposed_cb.wait_front(Wt);
     transposed_cb.pop_front(Wt);

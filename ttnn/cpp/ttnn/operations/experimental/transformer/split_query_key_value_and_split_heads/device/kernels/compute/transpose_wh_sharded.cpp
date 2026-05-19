@@ -22,10 +22,10 @@ void kernel_main() {
         cb_wait_front(cb_im0, 1);
         cb_reserve_back(cb_out1, 1);
 
-        acquire_dst();
+        tile_regs_acquire();
         transpose_wh_tile(cb_im0, 0, 0);
         pack_tile(0, cb_out1);
-        release_dst();
+        tile_regs_release();
 
         cb_push_back(cb_out1, 1);
         cb_pop_front(cb_im0, 1);

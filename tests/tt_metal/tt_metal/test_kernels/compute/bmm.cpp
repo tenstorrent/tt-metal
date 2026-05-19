@@ -59,7 +59,7 @@ void kernel_main() {
 #endif
             for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C)  // output tile index of C
             {
-                acquire_dst();
+                tile_regs_acquire();
                 for (uint32_t kt = 0; kt < Kt; kt++) {
 #ifdef ARCH_QUASAR
                     dfb0.wait_front(onetile);
@@ -89,7 +89,7 @@ void kernel_main() {
                     cb16.push_back(onetile);
 #endif
 
-                release_dst();
+                    tile_regs_release();
             }
         }
     }

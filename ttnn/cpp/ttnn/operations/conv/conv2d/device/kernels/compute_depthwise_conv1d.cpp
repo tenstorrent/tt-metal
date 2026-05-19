@@ -22,8 +22,8 @@
 
 #define DEBUG_PRINT 0
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() { tile_regs_acquire(); }
+ALWI void REL() { tile_regs_release(); }
 
 inline void eltwise_mul_and_add_block_v2(
     experimental::CB in0_cb,

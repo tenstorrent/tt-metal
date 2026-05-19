@@ -40,7 +40,7 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
         dfb_in.wait_front(num_single_transfer);
         dfb_out.reserve_back(num_single_transfer);
-        acquire_dst();
+        tile_regs_acquire();
 
         for (uint32_t i = 0; i < num_single_transfer; ++i) {
             copy_block_matmul_partials(dfb_in.get_id(), i, i, 1);
@@ -48,7 +48,7 @@ void kernel_main() {
 
         pack_tile_block(0, dfb_out.get_id(), num_single_transfer);
 
-        release_dst();
+        tile_regs_release();
         dfb_in.pop_front(num_single_transfer);
         dfb_out.push_back(num_single_transfer);
 #else
@@ -57,7 +57,7 @@ void kernel_main() {
         // Reserve out_cb space for num_single_transfer tiles
         cb_out.reserve_back(num_single_transfer);
         // Acquire DEST reg for MATH/PACK
-        acquire_dst();
+        tile_regs_acquire();
 
         // Copy num_single_transfer tiles from in_cb to DEST
         for (uint32_t i = 0; i < num_single_transfer; ++i) {
@@ -67,7 +67,7 @@ void kernel_main() {
         pack_tile_block(0, out_cb_id, num_single_transfer);
 
         // Release DEST reg marking compute/pack complete
-        release_dst();
+        tile_regs_release();
         // Move rd ptr from in_cb by num_single_transfer places
         cb_in.pop_front(num_single_transfer);
         // Move wr prt from out_cb by num_single_transfer places

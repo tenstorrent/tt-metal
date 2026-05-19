@@ -18,8 +18,8 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 
 namespace pre_add = norm::kernel_util::compute::pre_add;
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() { tile_regs_acquire(); }
+ALWI void REL() { tile_regs_release(); }
 
 void kernel_main() {
     constexpr uint32_t NCHt = get_compile_time_arg_val(0);

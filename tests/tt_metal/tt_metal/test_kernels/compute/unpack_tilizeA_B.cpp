@@ -40,11 +40,11 @@ void kernel_main() {
         unpack_tilizeA_B_block(tt::CBIndex::c_0, tt::CBIndex::c_1, per_core_block_tile_cnt, b);
 
         for (uint i = 0; i < per_core_block_tile_cnt; ++i) {
-            acquire_dst();
+            tile_regs_acquire();
             add_tiles_math(tt::CBIndex::c_0, tt::CBIndex::c_1, i, i, 0);
             // dprint_tensix_dest_reg(0);
             pack_tile(0, tt::CBIndex::c_16);
-            release_dst();
+            tile_regs_release();
         }
 
         cb16.push_back(per_core_block_tile_cnt);

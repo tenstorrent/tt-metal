@@ -87,12 +87,12 @@ void kernel_main() {
             cb_wait_front(input_slice_cb_id, tile_granularity);
             cb_wait_front(intermediate_slice_cb_id, tile_granularity);
             cb_reserve_back(compute_cb_id, tile_granularity);
-            acquire_dst();
+            tile_regs_acquire();
             for (uint32_t tile_id = 0; tile_id < tile_granularity; ++tile_id) {
                 add_tiles(input_slice_cb_id, intermediate_slice_cb_id, tile_id, tile_id, tile_id);
                 pack_tile(tile_id, compute_cb_id);
             }
-            release_dst();
+            tile_regs_release();
             cb_pop_front(input_slice_cb_id, tile_granularity);
             cb_pop_front(intermediate_slice_cb_id, tile_granularity);
             cb_push_back(compute_cb_id, tile_granularity);

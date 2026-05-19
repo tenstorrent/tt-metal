@@ -33,7 +33,7 @@ void kernel_main() {
         for (uint32_t wt = 0; wt < Wt; ++wt) {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 cb16.reserve_back(onetile);
-                acquire_dst();
+                tile_regs_acquire();
                 cb0.wait_front(onetile);
 
 #ifndef ROWWISE
@@ -51,7 +51,7 @@ void kernel_main() {
                 pack_tile(0, tt::CBIndex::c_16);
 
                 cb0.pop_front(onetile);
-                release_dst();
+                tile_regs_release();
                 cb16.push_back(onetile);
             }
         }

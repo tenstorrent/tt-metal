@@ -22,8 +22,8 @@
 #include "api/compute/layernorm.h"
 #include "chain_llk.hpp"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() { tile_regs_acquire(); }
+ALWI void REL() { tile_regs_release(); }
 
 constexpr uint32_t cb_inp = tt::CBIndex::c_0;
 constexpr uint32_t cb_stats = tt::CBIndex::c_1;

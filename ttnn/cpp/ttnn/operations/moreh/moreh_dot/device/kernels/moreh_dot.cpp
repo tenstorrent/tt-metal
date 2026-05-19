@@ -8,8 +8,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "api/dataflow/circular_buffer.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() { tile_regs_acquire(); }
+ALWI void REL() { tile_regs_release(); }
 
 void kernel_main() {
     constexpr int onetile = 1;

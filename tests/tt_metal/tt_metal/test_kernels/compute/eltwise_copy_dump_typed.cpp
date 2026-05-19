@@ -18,7 +18,7 @@ void kernel_main() {
 
     unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
 
-    acquire_dst();
+    tile_regs_acquire();
     cb_wait_front(tt::CBIndex::c_0, per_core_tile_cnt);
     cb_reserve_back(tt::CBIndex::c_16, per_core_tile_cnt);
 
@@ -35,5 +35,5 @@ void kernel_main() {
         cb_push_back(tt::CBIndex::c_16, 1);
     }
 
-    release_dst();
+    tile_regs_release();
 }

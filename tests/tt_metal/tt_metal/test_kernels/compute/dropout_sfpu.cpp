@@ -24,7 +24,7 @@ void kernel_main() {
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb16.reserve_back(per_core_block_dim);
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            acquire_dst();
+            tile_regs_acquire();
 
             // Pop tile after tile, copy to DST and pack
             cb0.wait_front(1);
@@ -37,7 +37,7 @@ void kernel_main() {
 
             cb0.pop_front(1);
 
-            release_dst();
+            tile_regs_release();
         }
         cb16.push_back(per_core_block_dim);
     }

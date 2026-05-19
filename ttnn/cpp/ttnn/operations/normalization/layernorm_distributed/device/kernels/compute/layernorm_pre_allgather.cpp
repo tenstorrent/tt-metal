@@ -20,8 +20,8 @@
 
 namespace pre_add = norm::kernel_util::compute::pre_add;
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() { tile_regs_acquire(); }
+ALWI void REL() { tile_regs_release(); }
 
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
