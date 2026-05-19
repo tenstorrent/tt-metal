@@ -447,6 +447,11 @@ class TTNNSDPAAttention(TTNNModule):
                 attention_mask = ttnn.typecast(attention_mask, query.dtype)
 
         if self._sdpa_available:
+            # Masked prefill needs smaller chunk sizes so the per-tile mask
+            # circular buffer fits alongside Q/K/V chunks in per-core L1.
+            sdpa_prog_cfg = self.program_config
+            if attention_mask is not None and getattr(self, "masked_program_config", None) is not None:
+                sdpa_prog_cfg = self.masked_program_config
             try:
                 attn_output = ttnn.transformer.scaled_dot_product_attention(
                     query,
@@ -454,7 +459,7 @@ class TTNNSDPAAttention(TTNNModule):
                     value,
                     is_causal=is_causal,
                     scale=scaling,
-                    program_config=self.program_config,
+                    program_config=sdpa_prog_cfg,
                     attn_mask=attention_mask,
                     compute_kernel_config=self.compute_kernel_config,
                     memory_config=self.memory_config,

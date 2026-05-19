@@ -130,6 +130,18 @@ class TTNNDotsOCRAttention(TTNNModule):
                 k_chunk_size=512,
                 exp_approx_mode=True,
             )
+            # When an explicit attention mask is provided (multimodal prefill
+            # with padded input_ids), the per-tile mask circular buffer pushes
+            # the q=256/k=512 schedule past the per-core L1 budget. Halve
+            # k_chunk so the mask CB fits; this is only used on the masked
+            # prefill code path so the unmasked text-decoder schedule keeps
+            # its original chunk sizes.
+            self.sdpa.masked_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                q_chunk_size=128,
+                k_chunk_size=256,
+                exp_approx_mode=True,
+            )
             self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
                 q_chunk_size=0,
@@ -399,12 +411,14 @@ class TTNNDotsOCRAttention(TTNNModule):
         )
 
         # paged_sdpa_decode produces [S=1, B, H, D] in DRAM-interleaved.
-        # Tried ``nlp_concat_heads_decode`` here -- it requires the input
-        # to be SHARDED (asserted at nlp_concat_heads_decode_device_operation.cpp:44).
-        # Adding an interleaved -> sharded conversion just to satisfy the
-        # kernel adds a dispatch and erases the savings.
-        attn_output = ttnn.permute(attn_output, (1, 0, 2, 3))
-        attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self.num_attention_heads * self.head_dim))
+        # Permute to [B, H, S=1, D] then use nlp_concat_heads (same trick as
+        # the prefill sec-2.3 fusion): nlp_concat_heads runs in ~150 us vs
+        # the previous reshape costing ~3,054 us per decode layer.
+        # Note: nlp_concat_heads_decode requires sharded input, but the
+        # non-decode nlp_concat_heads accepts DRAM-interleaved BFP8/BF16.
+        attn_output = ttnn.permute(attn_output, (1, 2, 0, 3))
+        attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_output = ttnn.squeeze(attn_output, 1)
 
         attn_output = self.o_proj(attn_output)
         return attn_output, None

@@ -77,7 +77,7 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
     def call(self, *args, **kwds):
         # Keep only kwargs used by forward — unused kwargs with incompatible
         # dtypes (e.g. UINT8 from bool masks) cause ttnn.copy failures in trace replay.
-        filtered = {k: kwds[k] for k in ("past_key_value", "cache_position") if k in kwds}
+        filtered = {k: kwds[k] for k in ("past_key_value", "cache_position", "attention_mask") if k in kwds}
         return super().call(*args, **filtered)
 
     def post_trace_execute(self, func_args, func_kwargs, result):
@@ -114,7 +114,7 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         attn_out, _ = self.self_attn(
             hidden_states=hs,
             position_embeddings=None,
-            attention_mask=None,
+            attention_mask=attention_mask,
             past_key_values=past_key_value,
             cache_position=kwargs.get("cache_position"),
             decode_cur_pos_tt=kwargs.get("decode_cur_pos_tt"),
@@ -139,7 +139,7 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
 
 class TTNNDotsOCRLayerStack(TTNNLayerStack):
     def call(self, *args, **kwds):
-        filtered = {k: kwds[k] for k in ("past_key_value", "cache_position") if k in kwds}
+        filtered = {k: kwds[k] for k in ("past_key_value", "cache_position", "attention_mask") if k in kwds}
         return super().call(*args, **filtered)
 
     def move_weights_to_device_impl(self):

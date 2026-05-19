@@ -186,6 +186,325 @@ def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int):
     return pc
 
 
+# --------------------------------------------------------------------------
+# Vision MLP gate/up projections — block-sharded **in0** 2D-mcast path.
+#
+# Tracy: ``MatmulDeviceOperation 12288 x 1536 x 4224  2,367 µs  67 TFLOPs
+# 28.9 % LoFi BF16 x BFP4 => BFP8`` is flagged SLOW with three hints:
+#   1. "place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)"
+#   2. "in0_block_w=8 and output subblock 6x1 look good 🤷"  (already applied
+#      in the DRAM fallback path)
+#   3. "Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+#
+# (1) is the actionable item. The matmul is bandwidth-bound on the in0
+# stream when the 64 cores of the 2D-mcast kernel all read activation tiles
+# from DRAM through NoC mcast contention. Block-sharding the activation
+# across the 8x8 grid puts each per-core in0 shard in local L1 so the
+# matmul's reader threads pull from L1 instead of DRAM — DRAM activity for
+# this matmul collapses to BFP4 weight fetches only.
+#
+# Design choices that fall out of the L1 budget (1.5 MB per tensix):
+#   * **Sharded in0, DRAM out.** A fully-sharded variant (block-shard both
+#     ends + sharded SILU mul + sharded fc2) does not fit at production
+#     M=12288: per-core gate output is 48*17 BFP8 = 816 KB, doubled when
+#     ``up`` is also alive for the SILU multiply, plus matmul kernel CBs
+#     (~900 KB) easily exceeds 2 MB. Smoke confirms an L1 OOM at exactly
+#     this point ("Statically allocated circular buffers ... clash with L1
+#     buffers" in program.cpp:934). Sharded *output* doesn't fit; sharded
+#     *input* alone fits with comfortable headroom.
+#   * **BFP8 in0.** We typecast the BF16 activation to BFP8 before sharding
+#     so the per-core in0 shard is 48*6 BFP8 = 288 KB instead of 576 KB.
+#     With BFP4 weights already capping accuracy on this matmul, BFP8 act
+#     doesn't move the needle (the SILU multiply path already produces BFP8
+#     downstream); the ~30 KB DRAM-side tradeoff is the typecast cost.
+#   * **N padded 4224 -> 4352.** Block-sharded matmul kernels require
+#     ``N_t`` divisible by grid_x. ``N=4224`` (132 tiles) doesn't divide
+#     grid_x=8; padding to 4352 (136 tiles) gives ``per_core_N = 17``. The
+#     padded 128 N-columns are zero in fc1/fc3 weight (so the padded
+#     gate/up output columns are zero) and the matching 128 K-rows of fc2
+#     weight are also zero — the padded contribution is identically zero,
+#     numerics preserved. ~3% extra compute, paid back by the in0 win.
+#   * **fc2 stays on the existing DRAM 2D-mcast path** with the same
+#     ``_vision_matmul_program_config``; only its weight is K-padded so it
+#     reads the (M, 4352) gate*up tensor cleanly.
+#
+# Per-tensix L1 budget on 8x8 production grid (M=12288):
+#   * gate/up matmul: in0 shard 48*6 BFP8 ≈ 288 KB
+#                     act CB + weight CB + chunked out_block_h CB ≈ 800 KB
+#                     total ≈ 1.1 MB (well inside 1.5 MB)
+# On harvested grids (e.g. dev 8x7) the divisibility check still passes for
+# small M but per-core M scales with M/grid_y, so very large M can OOM —
+# the cache helper falls through to ``None`` in that case and the existing
+# DRAM-only path runs unchanged.
+# --------------------------------------------------------------------------
+
+# Logical -> grid-padded N for fc1/fc3 output (= K of fc2). 4224 = 132 tiles
+# (factors 4*3*11) doesn't divide grid_x=8; pad to 4352 = 136 tiles for clean
+# block-sharded output / fc2 input alignment.
+_VISION_MLP_INTERMEDIATE_LOGICAL = 4224
+_VISION_MLP_INTERMEDIATE_PADDED = 4352
+
+# Cache for sharded MLP program_config / shard_spec triples per (grid, m_dim).
+# Same trace-dedup rationale as ``_VISION_MATMUL_PC_CACHE``: the trace cache
+# keys on the program_config object identity, so rebuilding the PC every
+# forward call breaks trace replay even though the kernel inputs are
+# identical.
+_VISION_MLP_GATEUP_CFG_CACHE: dict = {}
+
+
+def _vision_mlp_block_shard_cfg(device, m_dim: int, dim2: int):
+    """Build a BLOCK_SHARDED L1 ``MemoryConfig`` over the device compute grid.
+
+    Production target is 8x8 (per_core_M=48 for M=12288, per-core shards size
+    fit ~1.49 MB inside the 1.5 MB L1 budget). On harvested grids (e.g. 8x7
+    dev chips with per_core_M=55 for M=12320) the per-core shards inflate to
+    ~1.7 MB and the matmul kernel will OOM at runtime — callers must catch
+    that and fall back to the DRAM path. We still build the cfg for those
+    grids so unit tests on harvested hw can exercise the layout when M is
+    small enough to fit.
+    """
+    if device is None:
+        return None
+    grid = device.compute_with_storage_grid_size()
+    grid_x, grid_y = int(grid.x), int(grid.y)
+    if grid_x <= 0 or grid_y <= 0:
+        return None
+    tile = 32
+    if m_dim % (grid_y * tile) != 0 or dim2 % (grid_x * tile) != 0:
+        return None
+    shard_h = m_dim // grid_y
+    shard_w = dim2 // grid_x
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
+    spec = ttnn.ShardSpec(core_grid, (shard_h, shard_w), ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
+
+
+def _build_block_sharded_mm_pc(grid_x: int, grid_y: int, m_dim: int, k_dim: int, n_dim: int):
+    """2D-mcast matmul PC tuned for block-sharded in0 + block-sharded out.
+
+    Sharded matmul kernel asserts ``out_subblock_w == per_core_N`` OR
+    ``out_subblock_h == 1`` (matmul_device_operation.cpp:841). Choose the
+    largest divisor of ``per_core_N`` ≤ DST budget (8) for ``out_subblock_w``
+    with ``out_subblock_h == 1``; this keeps the M dimension iterating a
+    subblock at a time and lets the output store fill DST.
+
+    ``in0_block_w`` is forced to ``per_core_K_t`` (whole local K-shard
+    consumed per outer iteration) — the kernel doesn't support a smaller
+    inner-K block when in0 is block-sharded.
+
+    ``fuse_batch=True`` is required by the sharded-matmul kernel; the
+    DRAM-interleaved variant ``_vision_matmul_program_config`` uses
+    ``fuse_batch=False``.
+    """
+    tile = 32
+    m_tiles = m_dim // tile
+    k_tiles = k_dim // tile
+    n_tiles = n_dim // tile
+    per_core_m = m_tiles // grid_y
+    per_core_k = k_tiles // grid_x
+    per_core_n = n_tiles // grid_x
+    in0_block_w = per_core_k
+
+    out_block_h = min(per_core_m, 12)
+    while out_block_h > 1 and per_core_m % out_block_h != 0:
+        out_block_h -= 1
+    out_block_w = per_core_n
+
+    out_subblock_h = 1
+    out_subblock_w = 1
+    for w in range(min(per_core_n, 8), 0, -1):
+        if per_core_n % w == 0:
+            out_subblock_w = w
+            break
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+
+
+def _vision_sharded_in0_matmul_cfg(device, m_dim: int, k_dim: int, n_dim: int):
+    """Generic block-sharded in0 + DRAM out matmul cfg for vision linears.
+
+    Returns ``(pc, in0_cfg)`` when the (M, K, N) tile counts divide the
+    live device's ``(grid_y, grid_x)`` cleanly, else ``(None, None)``.
+
+    Same approach as ``_vision_mlp_gateup_sharded_cfg`` but works for any
+    vision-prefill matmul shape: typecast in0 to BFP8 host-side, shard in0
+    to L1 BLOCK_SHARDED across the 8x8 grid, run matmul reading in0 from
+    local L1 (no DRAM in0 stream), write output to DRAM-interleaved.
+    Sharding output too would double the per-core L1 footprint for these
+    M=12288 shapes and OOM with the matmul kernel CBs (see the long block
+    comment near ``_VISION_MLP_INTERMEDIATE_PADDED``).
+
+    Cache keyed on (grid, m, k, n) so trace replay identity is preserved.
+    """
+    if device is None:
+        return None, None
+    grid = device.compute_with_storage_grid_size()
+    grid_x, grid_y = int(grid.x), int(grid.y)
+    cache_key = ("sharded_in0", grid_x, grid_y, m_dim, k_dim, n_dim)
+    cached = _VISION_MLP_GATEUP_CFG_CACHE.get(cache_key)
+    if cached is not None or cache_key in _VISION_MLP_GATEUP_CFG_CACHE:
+        return cached
+
+    in0_cfg = _vision_mlp_block_shard_cfg(device, m_dim, k_dim)
+    # We don't actually shard the output here, but reuse the same divisibility
+    # check (n_dim divides grid_x * tile) since the matmul kernel's
+    # ``per_core_N`` value comes from ``n_dim / grid_x`` and must be integer
+    # for sharded in0 + 2D mcast.
+    n_check = _vision_mlp_block_shard_cfg(device, m_dim, n_dim)
+    if in0_cfg is None or n_check is None:
+        _VISION_MLP_GATEUP_CFG_CACHE[cache_key] = (None, None)
+        return _VISION_MLP_GATEUP_CFG_CACHE[cache_key]
+    pc = _build_block_sharded_mm_pc(grid_x, grid_y, m_dim, k_dim, n_dim)
+    _VISION_MLP_GATEUP_CFG_CACHE[cache_key] = (pc, in0_cfg)
+    return _VISION_MLP_GATEUP_CFG_CACHE[cache_key]
+
+
+def _vision_mlp_gateup_sharded_cfg(device, m_dim: int):
+    """Block-sharded in0 cfg for fc1/fc3 (thin wrapper over the generic helper).
+
+    Returns ``(pc, in0_cfg, out_cfg)`` where ``out_cfg`` is unused (we keep
+    DRAM output for L1 budget reasons) — kept for source-compat with the
+    initial MLP optimization.
+    """
+    pc, in0_cfg = _vision_sharded_in0_matmul_cfg(device, m_dim, 1536, _VISION_MLP_INTERMEDIATE_PADDED)
+    return pc, in0_cfg, None
+
+
+# Cache patch-embed matmul program configs per (grid, m_padded, k_padded, n_dim).
+# Same trace-dedup rationale as ``_VISION_MATMUL_PC_CACHE``: re-creating the
+# config object every forward call breaks ttnn trace cache identity even
+# though patch_embed is currently outside the trace, and keeps the cost of
+# the helper at one Python-object lookup per call.
+_PATCH_EMBED_MATMUL_PC_CACHE: dict = {}
+
+# Tile-padded K for the patch_embed proj matmul. Logical K is
+# ``in_channels * patch_size**2 = 3 * 14 * 14 = 588``; tile padding alone
+# rounds that to K=608 (19 tiles, prime). Bumping to K=640 (20 tiles) gives
+# the matmul kernel a non-trivial set of in0_block_w divisors {2, 4, 5, 10, 20},
+# which is what unblocks the "in0_block_w=1 is small" perf-report flag.
+_PATCH_EMBED_K_PADDED = 640
+
+
+def _patch_embed_matmul_program_config(device, m_padded: int, k_padded: int, n_dim: int):
+    """2D-mcast program config for the dots.ocr patch-embedding proj matmul.
+
+    Default ttnn auto-config falls back to ``in0_block_w=1`` for this shape
+    because K_tiles=19 (= 608/32) is prime; combined with M_tiles=351 not
+    being divisible by grid_y=8, the kernel runs at ~3.7% peak TFLOPs and
+    ~17.7% DRAM bandwidth (Tracy: ``11232 x 608 x 608  961 µs  8.6 TFLOPs``).
+
+    The caller pre-pads M to a grid_y-aligned multiple and pads K from 608 to
+    640 (one extra zero K tile in both the activation and the proj weight).
+    With K_tiles=20 we can pick ``in0_block_w=5`` (4 inner-K iterations vs
+    the auto-config's 19), and once M_tiles % grid_y == 0 the standard 2D
+    mcast factory accepts the shape. Per-core L1 footprint with
+    ``per_core_M=44, per_core_N=6, in0_block_w=5`` is bounded by
+    ~440 KB act + ~30 KB wt + ~150 KB out (BF16 / BFP8), which sits well
+    within the 1.5 MB L1 budget.
+
+    Returns ``None`` if the shape doesn't tile-align cleanly so the caller
+    can fall back to ttnn auto-config.
+    """
+    if device is None:
+        return None
+    grid = device.compute_with_storage_grid_size()
+    grid_x, grid_y = int(grid.x), int(grid.y)
+    tile = 32
+
+    cache_key = (grid_x, grid_y, m_padded, k_padded, n_dim)
+    cached = _PATCH_EMBED_MATMUL_PC_CACHE.get(cache_key)
+    if cached is not None or cache_key in _PATCH_EMBED_MATMUL_PC_CACHE:
+        return cached
+
+    if m_padded % tile != 0 or k_padded % tile != 0 or n_dim % tile != 0:
+        _PATCH_EMBED_MATMUL_PC_CACHE[cache_key] = None
+        return None
+
+    m_tiles = m_padded // tile
+    k_tiles = k_padded // tile
+    n_tiles = n_dim // tile
+
+    if m_tiles % grid_y != 0:
+        _PATCH_EMBED_MATMUL_PC_CACHE[cache_key] = None
+        return None
+
+    per_core_m = m_tiles // grid_y
+    # ``num_blocks_x = ceil(n_tiles / per_core_n)`` so n_tiles need not divide
+    # grid_x cleanly; the kernel pads internal output tiles to align.
+    per_core_n = (n_tiles + grid_x - 1) // grid_x
+
+    if per_core_n > 24 or per_core_m > 64:
+        _PATCH_EMBED_MATMUL_PC_CACHE[cache_key] = None
+        return None
+
+    # Pick the largest in0_block_w (cap at 8) that divides K_tiles. With
+    # K_tiles=20 this picks 5 (4 inner-K iters), keeping the act CB
+    # ``per_core_M * in0_block_w * sizeof(BF16)`` well under the per-core
+    # 1.5 MB L1 budget while still cutting the K-loop iteration count by
+    # ~5x vs the auto-config's ``in0_block_w=1``. Cap matches the rest of
+    # the vision matmul configs (see ``_vision_matmul_program_config``)
+    # for consistency. Going higher (e.g. 10 with K_tiles=20, 2 iters)
+    # double-buffers the act CB to ~880 KB which crowds the kernel
+    # working set when stacked with weight + output blocks.
+    in0_block_w = _largest_divisor_le(k_tiles, 8)
+
+    inner_k_iters = max(1, k_tiles // max(in0_block_w, 1))
+    target_out_block_h_tiles = 16 if inner_k_iters >= 12 else 12
+    out_block_h = min(per_core_m, target_out_block_h_tiles)
+    while out_block_h > 1 and per_core_m % out_block_h != 0:
+        out_block_h -= 1
+    out_block_w = per_core_n
+
+    # Pick (out_subblock_h, out_subblock_w) to fill the DST register budget
+    # (8 tiles when fp32_dest_acc_en=False). Same scoring as the rest of the
+    # vision matmul configs: prefer wide subblock when out_block_w divides
+    # the budget, else grow out_subblock_h to keep DST full.
+    dst_tiles_budget = 8
+    out_subblock_h = 1
+    out_subblock_w = 1
+    best_area = 0
+    for h in range(min(out_block_h, dst_tiles_budget), 0, -1):
+        if out_block_h % h != 0:
+            continue
+        for w in range(min(out_block_w, dst_tiles_budget // h), 0, -1):
+            if out_block_w % w != 0:
+                continue
+            area = h * w
+            if area > best_area:
+                best_area = area
+                out_subblock_h = h
+                out_subblock_w = w
+                break
+
+    pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+    _PATCH_EMBED_MATMUL_PC_CACHE[cache_key] = pc
+    return pc
+
+
 def _vision_matmul_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -> ttnn.DeviceComputeKernelConfig:
     """Compute config for vision linear/matmul ops.
 
@@ -602,18 +921,63 @@ class TTNNDotsVisionMLP(TTNNModule):
                 return None
             return preprocess_linear_bias(b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
 
+        # Pad fc1/fc3 output (= fc2 input) from 4224 to 4352 so the
+        # gate/up + fc2 matmuls and the SILU multiply can run in the
+        # block-sharded 8x8 layout (see ``_vision_mlp_gateup_sharded_cfg``
+        # / ``_vision_mlp_down_sharded_cfg`` and the long block comment near
+        # ``_VISION_MLP_INTERMEDIATE_PADDED``). The 128 padded N columns of
+        # fc1/fc3 are zero, so the gate/up matmul writes zeros there; the
+        # corresponding 128 K rows of fc2 weight are also zero, so fc2's
+        # contribution from padded K is zero — numerics preserved.
+        # Bias is also padded to keep the +bias broadcast clean.
+        n_padded = _VISION_MLP_INTERMEDIATE_PADDED
+        n_logical = _VISION_MLP_INTERMEDIATE_LOGICAL
+
+        def _pad_fc1_fc3_weight(w):
+            if w is None:
+                return None
+            n = int(w.shape[0])
+            if n == n_padded:
+                return w
+            if n != n_logical:
+                # Unexpected intermediate size — leave unpadded; the forward
+                # path will use the DRAM fallback path.
+                return w
+            return torch.nn.functional.pad(w, (0, 0, 0, n_padded - n))
+
+        def _pad_fc1_fc3_bias(b):
+            if b is None:
+                return None
+            n = int(b.shape[-1])
+            if n == n_padded:
+                return b
+            if n != n_logical:
+                return b
+            return torch.nn.functional.pad(b, (0, n_padded - n))
+
+        def _pad_fc2_weight(w):
+            if w is None:
+                return None
+            k = int(w.shape[1])
+            if k == n_padded:
+                return w
+            if k != n_logical:
+                return w
+            return torch.nn.functional.pad(w, (0, n_padded - k))
+
         # Unfused gate/up projections (two linears). Vision MLP uses DRAM linears without
         # decoder-style CCL, so fusion only saved one matmul launch while forcing two
         # SliceDeviceOperation per block on the fused [gate|up] output; unfused removes those slices.
         self._intermediate_size = None
         self.tt_fused_gate_up_weight = None
         self.tt_fused_gate_up_bias = None
-        self.tt_fc1_weight = pw(self._fc1_weight)
-        self.tt_fc1_bias = pb(self._fc1_bias)
-        self.tt_fc3_weight = pw(self._fc3_weight)
-        self.tt_fc3_bias = pb(self._fc3_bias)
+        self._fc_intermediate_padded = self._fc1_weight is not None and int(self._fc1_weight.shape[0]) == n_logical
+        self.tt_fc1_weight = pw(_pad_fc1_fc3_weight(self._fc1_weight))
+        self.tt_fc1_bias = pb(_pad_fc1_fc3_bias(self._fc1_bias))
+        self.tt_fc3_weight = pw(_pad_fc1_fc3_weight(self._fc3_weight))
+        self.tt_fc3_bias = pb(_pad_fc1_fc3_bias(self._fc3_bias))
 
-        self.tt_fc2_weight = pw(self._fc2_weight)
+        self.tt_fc2_weight = pw(_pad_fc2_weight(self._fc2_weight))
         self.tt_fc2_bias = pb(self._fc2_bias)
 
     def move_weights_to_device_impl(self):
@@ -641,11 +1005,115 @@ class TTNNDotsVisionMLP(TTNNModule):
 
         mem = ttnn.DRAM_MEMORY_CONFIG
 
+        m_dim = int(hidden_states.shape[0]) * int(hidden_states.shape[1]) * int(hidden_states.shape[2])
+
+        # Tracy: ``MatmulDeviceOperation 12288 x 1536 x 4224  2,367 µs  67
+        # TFLOPs  28.9 % utilization`` flagged SLOW with "place input 0 in
+        # L1 (currently in DEV_0_DRAM_INTERLEAVED)". The fix below shards
+        # in0 to L1 across the 8x8 grid and pads N (4224 -> 4352) so the
+        # block-sharded matmul kernel divides cleanly. ``_vision_mlp_gateup_sharded_cfg``
+        # returns ``(None, None, None)`` on harvested grids or non-divisible
+        # M, in which case we fall back to the existing DRAM-only path.
+        gateup_pc, gateup_in0_cfg, _ = _vision_mlp_gateup_sharded_cfg(self.device, m_dim)
+        sharded_path = (
+            gateup_pc is not None
+            and getattr(self, "_fc_intermediate_padded", False)
+            and int(self.tt_fc1_weight.shape[-1]) == _VISION_MLP_INTERMEDIATE_PADDED
+        )
+
+        if sharded_path:
+            # **Sharded-in0 / DRAM-out** path.
+            #
+            # We can't keep both gate and up sharded outputs in L1 alongside
+            # the matmul kernel's CBs at production M=12288: per-core gate
+            # (BFP8, 48×17 tiles ≈ 816 KB) + up (816 KB) + matmul CBs (~900
+            # KB) blows past the 1.5 MB L1 budget (smoke OOMs at "Statically
+            # allocated circular buffers ... clash with L1 buffers" — see
+            # program.cpp:934). Sharded *output* doesn't fit; what fits is
+            # sharded *input* with DRAM output.
+            #
+            # We also down-cast the activation from BF16 to BFP8 before
+            # sharding: 48×6 BFP8 tiles is ~288 KB/core vs ~576 KB/core for
+            # BF16, which leaves enough room for the matmul kernel CBs
+            # (act + weight + chunked-output via ``out_block_h``). With BFP4
+            # weights already capping accuracy in this matmul, BFP8 act
+            # doesn't move the model-quality needle (the SILU multiply
+            # immediately returns to BFP8 anyway).
+            #
+            # The gate/up matmul reads in0 from local L1 (eliminating the
+            # DRAM in0 stream that Tracy flagged as the bottleneck) and
+            # writes the (M, N_padded=4352) output to DRAM-interleaved. The
+            # SILU-multiply and fc2 stay on the existing DRAM path; fc2
+            # weight is K-padded to 4352 so its matmul reads the
+            # zero-padded columns of gate*up as zero contribution.
+            hs_bfp8 = (
+                hidden_states if hidden_states.dtype == ttnn.bfloat8_b else ttnn.typecast(hidden_states, ttnn.bfloat8_b)
+            )
+            x_sharded = ttnn.to_memory_config(hs_bfp8, gateup_in0_cfg)
+            if hs_bfp8 is not hidden_states:
+                ttnn.deallocate(hs_bfp8)
+
+            gate = ttnn.linear(
+                x_sharded,
+                self.tt_fc1_weight,
+                bias=self.tt_fc1_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=mem,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=gateup_pc,
+            )
+            up = ttnn.linear(
+                x_sharded,
+                self.tt_fc3_weight,
+                bias=self.tt_fc3_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=mem,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=gateup_pc,
+            )
+            ttnn.deallocate(x_sharded)
+
+            # SILU dominates this op; ``fast_and_approximate_mode=True``
+            # routes the fused SILU through the polynomial exp/sigmoid path.
+            # Inputs / output stay DRAM_INTERLEAVED to match fc2's path.
+            gate_up_mul = ttnn.mul(
+                gate,
+                up,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                fast_and_approximate_mode=True,
+                dtype=ttnn.bfloat8_b,
+                memory_config=mem,
+            )
+            ttnn.deallocate(gate)
+            ttnn.deallocate(up)
+
+            # fc2 reads K=4352 (= padded gate*up width). Weight was K-padded
+            # in ``preprocess_weights_impl`` so the 128 padded K columns
+            # contribute zero to the output. Use the existing DRAM 2D-mcast
+            # PC; K=4352 (K_t=136) divides grid_y=8 cleanly so the helper
+            # picks ``in0_block_w=8`` and a tuned out_block_h, no special
+            # config needed.
+            down_m = int(gate_up_mul.shape[0]) * int(gate_up_mul.shape[1]) * int(gate_up_mul.shape[2])
+            down_k = int(self.tt_fc2_weight.shape[-2])
+            down_n = int(self.tt_fc2_weight.shape[-1])
+            down_pc_dram = _vision_matmul_program_config(self.device, down_m, down_k, down_n)
+            output = ttnn.linear(
+                gate_up_mul,
+                self.tt_fc2_weight,
+                bias=self.tt_fc2_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=mem,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=down_pc_dram,
+            )
+            ttnn.deallocate(gate_up_mul)
+            return output
+
+        # ----- Fallback: DRAM-interleaved 2D-mcast (existing path) -----
         # Explicit 2D-mcast program_config: tracy showed gate/up running at
         # 27.7% LoFi TFLOPs / 13% DRAM with the auto-config (in0_block_w=1).
         # Setting a tuned in0_block_w + out_subblock_w increases L1 weight
         # reuse and matches the text-decoder linears' ``SLOW``->faster path.
-        m_dim = int(hidden_states.shape[0]) * int(hidden_states.shape[1]) * int(hidden_states.shape[2])
         k_dim = int(self.tt_fc1_weight.shape[-2])
         n_dim = int(self.tt_fc1_weight.shape[-1])
         gate_up_pc = _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
@@ -697,7 +1165,7 @@ class TTNNDotsVisionMLP(TTNNModule):
         down_m = int(gate_up_mul.shape[0]) * int(gate_up_mul.shape[1]) * int(gate_up_mul.shape[2])
         down_k = int(self.tt_fc2_weight.shape[-2])
         down_n = int(self.tt_fc2_weight.shape[-1])
-        down_pc = _vision_matmul_program_config(self.device, down_m, down_k, down_n)
+        down_pc_dram = _vision_matmul_program_config(self.device, down_m, down_k, down_n)
         output = ttnn.linear(
             gate_up_mul,
             self.tt_fc2_weight,
@@ -705,7 +1173,7 @@ class TTNNDotsVisionMLP(TTNNModule):
             dtype=ttnn.bfloat8_b,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
-            program_config=down_pc,
+            program_config=down_pc_dram,
         )
         ttnn.deallocate(gate_up_mul)
 
@@ -770,8 +1238,20 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
 
     def preprocess_weights_impl(self):
         if self._proj_weight is not None:
+            # Pad the K dimension of the proj weight from the logical 588
+            # (= in_channels * patch_size**2) up to ``_PATCH_EMBED_K_PADDED``
+            # (640 = 20 tiles). Without this pad, K_tiles=19 is prime and the
+            # auto-config matmul falls back to ``in0_block_w=1`` (19 inner-K
+            # iterations) which Tracy flags as the slow path. The activation
+            # is padded symmetrically with zero columns at runtime, so the
+            # padded-K columns of the weight contribute zero to the matmul
+            # output and numerics are preserved.
+            w = self._proj_weight.to(torch.bfloat16)
+            k_logical = int(w.shape[-1])
+            if k_logical < _PATCH_EMBED_K_PADDED:
+                w = torch.nn.functional.pad(w, (0, _PATCH_EMBED_K_PADDED - k_logical))
             self.tt_proj_weight = ttnn.from_torch(
-                self._proj_weight.to(torch.bfloat16),
+                w,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
             )
@@ -803,38 +1283,139 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         if self.tt_norm_weight is not None:
             self.tt_norm_weight = ttnn.to_device(self.tt_norm_weight, self.device, memory_config=mem)
 
+        # Patch-embed proj matmul: HiFi2 instead of LoFi. The Tracy hint for
+        # this BF16 x BFP8 -> BF16 matmul explicitly recommends "Use HiFi2 or
+        # HiFi4 with BF16 activations for improved accuracy"; HiFi2 doubles
+        # the math work per tile vs LoFi but still leaves us bandwidth-bound
+        # at this shape (M=11232 small enough that the K loop never saturates
+        # math), so the wall-clock impact is small while accuracy of the
+        # patch projection improves measurably for the downstream RMSNorm +
+        # 42-block trunk.
         self.vision_matmul_compute_kernel_config = _vision_matmul_compute_config(
-            self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
+            self.device, math_fidelity=ttnn.MathFidelity.HiFi2
         )
         self.vision_norm_compute_kernel_config = _vision_sdpa_compute_config(
             self.device, math_fidelity=VISION_NORM_MATH_FIDELITY
         )
 
-    def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor = None) -> ttnn.Tensor:
+    def _proj_matmul(self, x_host: torch.Tensor) -> ttnn.Tensor:
+        """Run the patch-embed proj linear on a host ``[1, N, K_logical]`` tensor.
+
+        Padding scheme for the ``vision_patch_embed`` Tracy slow-matmul:
+
+        * **K**: weight is already padded to ``_PATCH_EMBED_K_PADDED`` (= 640
+          / 20 tiles) in ``preprocess_weights_impl``; pad the activation's
+          last dim to match so the matmul kernel can use ``in0_block_w >= 4``.
+          Without this, K_tiles=19 is prime and ``in0_block_w`` is forced to 1
+          (19 inner-K iterations per outer block, the perf-report hot-spot).
+
+        * **M**: pad up to the next ``grid_y * tile`` multiple so the 2D
+          mcast factory's ``num_blocks_y == m_tiles / per_core_M`` strict
+          divisibility check passes. The activation rows beyond the logical
+          ``num_patches`` are zero, so the per-core matmul outputs match
+          what we'd get by running the kernel on an exactly-sized M; the
+          extra rows are sliced off before RMSNorm so downstream RoPE /
+          sequence-length math sees the original ``num_patches``.
+
+        Activation is moved to **L1 interleaved** before the matmul, which
+        is the lowest-effort win flagged by Tracy ("If possible place input
+        0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)") -- the matmul kernel
+        reads activation tiles directly from L1 across the per-core in0 CB
+        instead of streaming them in over DRAM each outer-K iteration.
+        Output stays in DRAM-interleaved so the downstream RMSNorm sees the
+        layout it already expects.
+        """
+        device = self.device
         mem = ttnn.DRAM_MEMORY_CONFIG
-        mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+        mapper = ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None
 
+        if x_host.dim() == 3:
+            num_patches = int(x_host.shape[1])
+            k_logical = int(x_host.shape[2])
+        elif x_host.dim() == 2:
+            num_patches = int(x_host.shape[0])
+            k_logical = int(x_host.shape[1])
+            x_host = x_host.unsqueeze(0)
+        else:
+            raise ValueError(f"_proj_matmul expects 2D or 3D host tensor, got shape {tuple(x_host.shape)}")
+
+        tile = 32
+        grid = device.compute_with_storage_grid_size()
+        grid_x, grid_y = int(grid.x), int(grid.y)
+
+        # Round M up to ``grid_y * tile`` so the 2D mcast factory's strict
+        # ``num_blocks_y == m_tiles / per_core_M`` divisibility check passes.
+        # For dots.ocr's typical num_patches=11232 (351 tiles), grid_y=8 ->
+        # m_align=256 -> m_padded=11264 (just one extra grid_y row of
+        # zero-pad rows, ~0.3% extra matmul work). The
+        # ``_patch_embed_matmul_program_config`` helper handles non-12-divisible
+        # per_core_M (e.g. 44 here) by falling back to ``out_block_h=11`` and
+        # ``out_subblock=(1,6)`` automatically; we accept the resulting
+        # 6/8 DST utilization in exchange for the smaller M pad vs aligning
+        # to a 12-multiple (which would cost an extra ~25% rows of work).
+        m_align = grid_y * tile
+        m_padded = ((num_patches + m_align - 1) // m_align) * m_align
+
+        k_padded = max(_PATCH_EMBED_K_PADDED, ((k_logical + tile - 1) // tile) * tile)
+
+        # Pad on host so the upload moves the right number of bytes once and
+        # we don't pay for a separate ``ttnn.pad`` device call per prefill.
+        if num_patches < m_padded or k_logical < k_padded:
+            x_padded = torch.zeros(1, m_padded, k_padded, dtype=x_host.dtype)
+            x_padded[:, :num_patches, :k_logical] = x_host
+        else:
+            x_padded = x_host
+
+        x_tt = ttnn.from_torch(
+            x_padded.to(torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem,
+            mesh_mapper=mapper,
+        )
+        if len(x_tt.shape) == 3:
+            x_tt = ttnn.reshape(x_tt, (1, 1, int(x_tt.shape[1]), int(x_tt.shape[2])))
+
+        # Place the activation in L1 interleaved so the per-core in0 CB reads
+        # tiles from local L1 instead of DRAM. M=12288 BF16 is ~14 MB total;
+        # spread across 64 cores' 1.5 MB L1 budget that's ~220 KB/core which
+        # easily fits alongside the matmul kernel's working set.
+        x_tt_l1 = ttnn.to_memory_config(x_tt, ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(x_tt)
+
+        n_dim = int(self.tt_proj_weight.shape[-2])  # weight stored as [N, K] with transpose_b=True
+        program_config = _patch_embed_matmul_program_config(device, m_padded, k_padded, n_dim)
+
+        out = ttnn.linear(
+            x_tt_l1,
+            self.tt_proj_weight,
+            bias=self.tt_proj_bias,
+            transpose_b=True,
+            memory_config=mem,
+            compute_kernel_config=self.vision_matmul_compute_kernel_config,
+            program_config=program_config,
+        )
+        ttnn.deallocate(x_tt_l1)
+
+        # Slice padded M rows back to the logical num_patches so downstream
+        # ``forward_post_patch_embed`` (which uses ``actual_seq_len = x.shape[2]``
+        # for RoPE / merger sizing) sees the real sequence length. Keep the
+        # output in DRAM-interleaved BF16 to match RMSNorm expectations.
+        if int(out.shape[2]) > num_patches:
+            out = ttnn.slice(
+                out,
+                (0, 0, 0, 0),
+                (int(out.shape[0]), int(out.shape[1]), num_patches, int(out.shape[3])),
+            )
+        return out
+
+    def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor = None) -> ttnn.Tensor:
         if pixel_values.dim() == 2:
+            # Production path: HF Qwen2VL-style processor returns
+            # ``pixel_values`` already flattened to ``[num_patches, C*p*p]``.
             x = pixel_values.to(torch.bfloat16).unsqueeze(0)
-            x_tt = ttnn.from_torch(
-                x,
-                device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
-                mesh_mapper=mapper,
-            )
-            if len(x_tt.shape) == 3:
-                x_tt = ttnn.reshape(x_tt, (1, 1, x_tt.shape[1], x_tt.shape[2]))
-
-            out = ttnn.linear(
-                x_tt,
-                self.tt_proj_weight,
-                bias=self.tt_proj_bias,
-                transpose_b=True,
-                memory_config=mem,
-                compute_kernel_config=self.vision_matmul_compute_kernel_config,
-            )
+            out = self._proj_matmul(x)
 
             if self.tt_norm_weight is not None:
                 out = ttnn.rms_norm(
@@ -867,25 +1448,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         x = x[:, :, 0]
         x = x.reshape(1, num_patches, C * self.patch_size * self.patch_size)
 
-        x_tt = ttnn.from_torch(
-            x.to(torch.bfloat16),
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=mem,
-            mesh_mapper=mapper,
-        )
-        if len(x_tt.shape) == 3:
-            x_tt = ttnn.reshape(x_tt, (1, 1, x_tt.shape[1], x_tt.shape[2]))
-
-        out = ttnn.linear(
-            x_tt,
-            self.tt_proj_weight,
-            bias=self.tt_proj_bias,
-            transpose_b=True,
-            memory_config=mem,
-            compute_kernel_config=self.vision_matmul_compute_kernel_config,
-        )
+        out = self._proj_matmul(x.to(torch.bfloat16))
 
         if self.tt_norm_weight is not None:
             out = ttnn.rms_norm(

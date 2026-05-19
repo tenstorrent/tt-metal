@@ -131,7 +131,7 @@ def _dp_repack_batch_sharded_hidden_for_device(device, batch_input_mapper, tt_hi
 
     t = _unwrap_ttnn_tensor(tt_hidden)
     ttnn.synchronize_device(device)
-    owned = ttnn.clone(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    owned = ttnn.clone(t, memory_config=ttnn.L1_MEMORY_CONFIG)
     mesh_shape = tuple(int(x) for x in device.shape)
     full = ttnn.to_torch(
         owned,
@@ -144,7 +144,7 @@ def _dp_repack_batch_sharded_hidden_for_device(device, batch_input_mapper, tt_hi
         layout=ttnn.TILE_LAYOUT,
         device=device,
         mesh_mapper=batch_input_mapper,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
 
@@ -211,6 +211,9 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         self._scatter_cache_mask: Optional[ttnn.Tensor] = None
         self._scatter_zero_row_key: Optional[tuple] = None
         self._scatter_zero_row: Optional[ttnn.Tensor] = None
+        self._mm_img_start_aligned: int = 0
+        self._mm_n_vis_aligned: int = 0
+        self._mm_last_valid_pos: int = -1  # -1 = use last row (text-only / unaligned-tail case)
 
     def release_scatter_cache(self) -> None:
         if self._scatter_cache_idx is not None:
@@ -225,6 +228,96 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
             self._scatter_zero_row_key = None
         self._scatter_cache_input_ids = None
         self._scatter_cache_key = None
+
+    def prepare_padded_prefill_inputs(
+        self,
+        input_ids: torch.Tensor,
+        n_vision: int,
+        num_devices: int,
+        tile_size: int = 32,
+        pad_token_id: int = 0,
+    ) -> Tuple[torch.Tensor, ttnn.Tensor, int, int]:
+        """Pad ``input_ids`` so the image-token block is tile-aligned, build the
+        prefill SDPA mask, and return the aligned image bounds.
+
+        The image block is assumed to be contiguous in ``input_ids`` (the
+        dots.ocr prompt template puts all ``<|imgpad|>`` tokens together).
+        ``pre_pad`` benign tokens are inserted before the image block to align
+        its start to a 32-multiple, and ``post_img_pad`` extra image-tokens are
+        appended to round the image-block length up to a 32-multiple. Both pad
+        regions are masked out in the attention mask so they cannot influence
+        attention output at the valid (last) position.
+
+        Returns:
+            padded_input_ids: ``[B, S_padded]`` int32 host tensor.
+            attention_mask_tt: ``[1, 1, S_padded, S_padded]`` BF16 mask on device
+                (causal + padding columns set to ``-inf``).
+            img_start_aligned: tile-aligned start of the image block.
+            n_vis_aligned: tile-aligned image-block length (>= ``n_vision``).
+        """
+        device = self.device
+        B, S = int(input_ids.shape[0]), int(input_ids.shape[-1])
+        img_token = self._image_token_id
+
+        img_positions_b0 = (input_ids[0] == img_token).nonzero(as_tuple=True)[0]
+        if img_positions_b0.numel() == 0:
+            raise ValueError("prepare_padded_prefill_inputs called without any image tokens in input_ids")
+        img_start = int(img_positions_b0[0].item())
+        img_end = int(img_positions_b0[-1].item()) + 1
+        actual_n_vision = img_end - img_start
+
+        pre_pad = (tile_size - img_start % tile_size) % tile_size
+        n_vis_aligned = ((actual_n_vision + tile_size - 1) // tile_size) * tile_size
+        post_img_pad = n_vis_aligned - actual_n_vision
+        img_start_aligned = img_start + pre_pad
+
+        # Naive padded length before any tail alignment.
+        S_naive = S + pre_pad + post_img_pad
+        # Round S_padded up to a tile multiple so the suffix slice's end is
+        # tile-aligned (prefix and image-block boundaries are already aligned
+        # via pre_pad / post_img_pad). Extra rows go at the very end of the
+        # sequence as tail-pad tokens, masked out in attention.
+        tail_pad = (tile_size - S_naive % tile_size) % tile_size
+
+        padded_parts = [
+            input_ids[:, :img_start],
+            torch.full((B, pre_pad), pad_token_id, dtype=input_ids.dtype),
+            input_ids[:, img_start:img_end],
+            torch.full((B, post_img_pad), img_token, dtype=input_ids.dtype),
+            input_ids[:, img_end:],
+            torch.full((B, tail_pad), pad_token_id, dtype=input_ids.dtype),
+        ]
+        padded_input_ids = torch.cat(padded_parts, dim=1)
+        S_padded = int(padded_input_ids.shape[-1])
+
+        # The valid last position (assistant role token, used for next-token
+        # prediction) is S_naive - 1; tail_pad rows above it must be ignored
+        # both by attention and by the final LM-head slice.
+        last_valid_pos = S_naive - 1
+
+        mask = torch.zeros(1, 1, S_padded, S_padded, dtype=torch.bfloat16)
+        causal = torch.triu(torch.ones(S_padded, S_padded, dtype=torch.bool), diagonal=1)
+        mask[0, 0].masked_fill_(causal, float("-inf"))
+        pad_cols = (
+            list(range(img_start, img_start + pre_pad))
+            + list(range(img_start_aligned + actual_n_vision, img_start_aligned + n_vis_aligned))
+            + list(range(S_naive, S_padded))
+        )
+        for col in pad_cols:
+            mask[0, 0, :, col] = float("-inf")
+
+        mask_mapper = ttnn.ReplicateTensorToMesh(device) if num_devices > 1 else None
+        attention_mask_tt = ttnn.from_torch(
+            mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=mask_mapper,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        self._mm_last_valid_pos = last_valid_pos
+        return padded_input_ids, attention_mask_tt, img_start_aligned, n_vis_aligned
 
     def get_or_build_scatter_tensors(
         self,
@@ -312,19 +405,35 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
             )
             self._scatter_zero_row_key = zero_row_key
 
-    def _scatter_fuse_text_and_vision(
+    def _scatter_fuse_text_and_vision_embedding(
         self,
         text_embeds: ttnn.Tensor,
         vision_tt: ttnn.Tensor,
         tt_idx: ttnn.Tensor,
         tt_mask: ttnn.Tensor,
     ) -> ttnn.Tensor:
+        """Embedding-lookup scatter (active path).
+
+        Vision rows are untilized to ROW_MAJOR, prepended with a zero row, and
+        indexed by ``tt_idx`` via ``ttnn.embedding``. ``ttnn.where`` then
+        merges the resulting per-position vision tensor with ``text_embeds``.
+
+        This still pays a ~2.6 s/iter ``UntilizeWithUnpadding`` cost at
+        S=2814. The follow-up tile-layout scatter (slice+concat) lives in
+        ``_scatter_fuse_text_and_vision_tile`` and requires ``input_ids`` to be
+        padded so the image block lands on tile boundaries; that path is
+        wired through ``prepare_padded_prefill_inputs`` but is currently
+        gated off because the position shift it introduces changes the RoPE
+        relative positions of valid tokens and produces gibberish decode
+        output. Fixing that requires custom per-position cos/sin tables in
+        the rotary path — left as follow-up work.
+        """
         device = self.device
         num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
         N_vision = int(vision_tt.shape[2])
         H_per_device = int(vision_tt.shape[3])
 
-        vision_rm = ttnn.to_layout(vision_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        vision_rm = ttnn.to_layout(vision_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(vision_tt)
 
         vision_2d = ttnn.reshape(vision_rm, (N_vision, H_per_device))
@@ -337,6 +446,50 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         ttnn.deallocate(vision_table)
 
         return ttnn.where(tt_mask, full_vision_col_sharded, text_embeds)
+
+    def _scatter_fuse_text_and_vision_tile(
+        self,
+        text_embeds: ttnn.Tensor,
+        vision_tt: ttnn.Tensor,
+        img_start_aligned: int,
+        n_vis_aligned: int,
+    ) -> ttnn.Tensor:
+        """Tile-aligned scatter: prefix + vision_slice + suffix via slice+concat.
+
+        Eliminates the embedding-lookup UntilizeWithUnpadding chain when the
+        caller has padded ``input_ids`` so ``img_start_aligned`` and
+        ``n_vis_aligned`` are multiples of 32. See
+        ``prepare_padded_prefill_inputs`` for the padding logic.
+        """
+        B = int(text_embeds.shape[0])
+        S = int(text_embeds.shape[-2])
+        H_per_device = int(text_embeds.shape[-1])
+
+        vision_slice = ttnn.slice(
+            vision_tt,
+            [0, 0, 0, 0],
+            [int(vision_tt.shape[0]), int(vision_tt.shape[1]), n_vis_aligned, H_per_device],
+        )
+        ttnn.deallocate(vision_tt)
+
+        text_4d = ttnn.reshape(text_embeds, [B, 1, S, H_per_device]) if len(text_embeds.shape) == 3 else text_embeds
+
+        prefix = ttnn.slice(text_4d, [0, 0, 0, 0], [B, 1, img_start_aligned, H_per_device])
+        suffix = ttnn.slice(
+            text_4d,
+            [0, 0, img_start_aligned + n_vis_aligned, 0],
+            [B, 1, S, H_per_device],
+        )
+
+        if B > 1 and int(vision_slice.shape[0]) == 1:
+            vision_slice = ttnn.repeat(vision_slice, ttnn.Shape([B, 1, 1, 1]))
+
+        merged = ttnn.concat([prefix, vision_slice, suffix], dim=2)
+
+        if len(text_embeds.shape) == 3:
+            merged = ttnn.reshape(merged, [B, S, H_per_device])
+
+        return merged
 
     def forward(
         self, hidden_states, cache_position, *mm_args, past_key_value=None, mm_grid_thw: Optional[torch.Tensor] = None
@@ -370,7 +523,7 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
                     grid_torch = ttnn.to_torch(tt_grid)
                 grid_torch = _normalize_image_grid_thw_torch(grid_torch)
             vision_tt = self._p_vision.forward_post_patch_embed(x_patch, grid_torch)
-            text_e = self._scatter_fuse_text_and_vision(text_e, vision_tt, tt_idx, tt_mask)
+            text_e = self._scatter_fuse_text_and_vision_embedding(text_e, vision_tt, tt_idx, tt_mask)
 
         h = self._p_stack.forward(text_e, past_key_value=past_key_value, cache_position=cache_position)
         h = self._p_norm.forward(h)
@@ -473,7 +626,7 @@ def _create_paged_kv_cache(model_config, device, batch_size: int = 1):
 
     Cache dtype is left at default ``bfloat16``. ``bfloat8_b`` was tried
     twice in isolation -- both runs produced visibly corrupted text
-    (``EX丝滿º衔task放...``). The K/V values for dots.ocr decode SDPA
+    . The K/V values for dots.ocr decode SDPA
     are sensitive to per-element quantization in a way that is not
     captured by simple per-tile statistics; the BFP8 shared exponent
     appears to be too coarse for the long-horizon attention scores in
@@ -795,7 +948,6 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 f"DP batch-parallel prefill expects input_ids batch {self.config.batch_size}, "
                 f"got {input_ids.shape[0]}"
             )
-        seq_len = input_ids.shape[-1]
 
         # --- Embedding ---
         # All children have _bypass_tensor_wrapping=True (pipeline is a
@@ -805,20 +957,18 @@ class TTNNDotsOCRPipeline(TTNNModule):
             if self._batch_input_mapper is not None
             else ttnn.ReplicateTensorToMesh(self.device)
         )
-        with _profile_stage(self.device, "prefill.input_ids_h2d"):
-            tt_input_ids = ttnn.from_torch(
-                input_ids.to(torch.int32),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-                mesh_mapper=id_mapper,
-            )
 
         # --- Multimodal vision: patch_embed outside; vision trunk + scatter + decoder in one trace ---
+        # Reset the multimodal padding state so a text-only call after a
+        # multimodal call doesn't accidentally use a stale last-valid index.
+        self.graph_prefill._mm_last_valid_pos = -1
         if pixel_values is not None:
             if image_grid_thw is None:
                 raise ValueError("image_grid_thw is required when pixel_values is set")
             num_devices = int(self.device.get_num_devices()) if hasattr(self.device, "get_num_devices") else 1
+            n_vis = self.vision_tower.merged_vision_sequence_length(image_grid_thw, pixel_values)
+            tt_idx, tt_mask = self.graph_prefill.get_or_build_scatter_tensors(input_ids, n_vis, id_mapper, num_devices)
+
             with _profile_stage(self.device, "prefill.vision_patch_embed"):
                 x_patch = self.vision_tower.patch_embed(pixel_values, image_grid_thw)
                 if isinstance(x_patch, torch.Tensor):
@@ -829,13 +979,11 @@ class TTNNDotsOCRPipeline(TTNNModule):
                         device=self.device,
                         dtype=ttnn.bfloat16,
                         layout=ttnn.TILE_LAYOUT,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
                         mesh_mapper=mapper,
                     )
                 if len(x_patch.shape) == 3:
                     x_patch = ttnn.reshape(x_patch, (1, 1, int(x_patch.shape[1]), int(x_patch.shape[2])))
-            n_vis = self.vision_tower.merged_vision_sequence_length(image_grid_thw, pixel_values)
-            tt_idx, tt_mask = self.graph_prefill.get_or_build_scatter_tensors(input_ids, n_vis, id_mapper, num_devices)
             grid_cpu = image_grid_thw.detach().cpu()
             if grid_cpu.dim() == 1:
                 grid_cpu = grid_cpu.unsqueeze(0)
@@ -847,6 +995,20 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 device=self.device,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
             )
+
+        # Now that ``input_ids`` is finalized (possibly padded in multimodal),
+        # materialize it on device with the right seq_len.
+        seq_len = input_ids.shape[-1]
+        with _profile_stage(self.device, "prefill.input_ids_h2d"):
+            tt_input_ids = ttnn.from_torch(
+                input_ids.to(torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=id_mapper,
+            )
+
+        if pixel_values is not None:
             if dual:
                 with _profile_stage(self.device, "prefill.text_embedding"):
                     text_embeds = self.embedding(tt_input_ids)
@@ -1043,7 +1205,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 # because ``_decode_cache_position`` is INT32 / ROW_MAJOR. Stay
                 # on the temp-buffer path until in-place row-major elementwise
                 # is supported.
-                cache_next = ttnn.add(self._decode_cache_position, 1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                cache_next = ttnn.add(self._decode_cache_position, 1, memory_config=ttnn.L1_MEMORY_CONFIG)
                 ttnn.copy(cache_next, self._decode_cache_position)
                 ttnn.deallocate(cache_next)
 
@@ -1172,7 +1334,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 device=self.device,
                 mesh_mapper=self._batch_input_mapper,
             )
-            slots = [ttnn.clone(proto, memory_config=ttnn.DRAM_MEMORY_CONFIG) for _ in range(rb_k)]
+            slots = [ttnn.clone(proto, memory_config=ttnn.L1_MEMORY_CONFIG) for _ in range(rb_k)]
             ttnn.deallocate(proto)
             self._dp_readback_ring = slots
 
