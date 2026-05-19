@@ -85,3 +85,86 @@ def test_bcast_multiply_bf16_x_fp32_sizes(device, T, C):
         f"T={T} C={C}: max deviation across {N_ITERS} iters = {max_dev}; "
         f"expected uniform output of 1.0. Per-iter deviations: {deviations}"
     )
+
+
+# ─── BH: BF16→FP32 + COL bcast hang ────────────────────────────────────────
+# Regression coverage for a BH-specific LLK `unary_bcast` hang: COL bcast with
+# any sub-word float input and fp32_dest_acc_en hangs the post-op Synchronize.
+# Fix lives in `is_llk_bcast`, gated to BH + COL (the only configuration tested).
+
+TILE_W = 32
+
+_OPS = {
+    "subtract": (ttnn.subtract, torch.subtract),
+    "add": (ttnn.add, torch.add),
+    "multiply": (ttnn.multiply, torch.multiply),
+}
+
+
+def _bf16_round(x: torch.Tensor) -> torch.Tensor:
+    """Round to BF16 precision and back to float32; matches ttnn storage."""
+    return x.to(torch.bfloat16).to(torch.float32)
+
+
+def _run_subtract_fp32_col_b(device, w_tiles, b=5, s=256):
+    """Canonical bf16 − bf16 → fp32 + COL_B-bcast on ones inputs; expects zeros."""
+    v = w_tiles * TILE_W
+    lhs = ttnn.from_torch(torch.ones(b, 1, s, v), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    rhs = ttnn.from_torch(torch.ones(b, 1, s, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.synchronize_device(device)
+    out = ttnn.subtract(lhs, rhs, dtype=ttnn.float32)
+    ttnn.synchronize_device(device)  # ← pre-fix blocks here
+    assert out.dtype == ttnn.float32
+    return ttnn.to_torch(out)
+
+
+@pytest.mark.timeout(60)
+@pytest.mark.parametrize("w_tiles", [1, 2, 3, 4, 5, 6, 7, 8], ids=lambda w: f"W_{w}")
+def test_subtract_bf16_to_fp32_col_b_w_sweep(device, w_tiles):
+    """LLK #1338: full W sweep of the canonical hang case."""
+    out = _run_subtract_fp32_col_b(device, w_tiles)
+    assert torch.equal(out, torch.zeros_like(out)), f"W={w_tiles}: max abs = {out.abs().max()}"
+
+
+def _run_bcast_subword_in_fp32_out(device, ttnn_op, torch_op, bcast_input, w_tiles, b=5, s=256):
+    """Generic BF16→FP32 col-bcast op runner. bcast_input ∈ {'a','b'}."""
+    v = w_tiles * TILE_W
+    if bcast_input == "a":
+        lhs_torch = torch.full((b, 1, s, 1), 0.5, dtype=torch.float32)
+        rhs_torch = torch.full((b, 1, s, v), 1.0, dtype=torch.float32)
+    else:
+        lhs_torch = torch.full((b, 1, s, v), 1.0, dtype=torch.float32)
+        rhs_torch = torch.full((b, 1, s, 1), 0.5, dtype=torch.float32)
+    ref = torch_op(_bf16_round(lhs_torch), _bf16_round(rhs_torch)).expand(b, 1, s, v).contiguous()
+
+    lhs = ttnn.from_torch(lhs_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    rhs = ttnn.from_torch(rhs_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.synchronize_device(device)
+    out = ttnn_op(lhs, rhs, dtype=ttnn.float32)
+    ttnn.synchronize_device(device)
+    assert out.dtype == ttnn.float32
+    return ttnn.to_torch(out), ref
+
+
+# Matrix covers subtract+COL_B → W sweep.
+_MATRIX_COMBOS = [
+    ("subtract", "a"),
+    ("add", "a"),
+    ("add", "b"),
+    ("multiply", "a"),
+    ("multiply", "b"),
+]
+
+
+@pytest.mark.timeout(60)
+@pytest.mark.parametrize("w_tiles", [1, 2, 3, 4, 5, 6, 7, 8], ids=lambda w: f"W_{w}")
+@pytest.mark.parametrize(
+    "op_name, bcast_input", _MATRIX_COMBOS, ids=[f"{op}_COL_{d.upper()}" for op, d in _MATRIX_COMBOS]
+)
+def test_binary_ng_bcast_bf16_in_fp32_out_matrix(device, op_name, bcast_input, w_tiles):
+    """LLK #1338: (op × bcast direction × W) matrix for BF16→FP32 col-bcast."""
+    ttnn_op, torch_op = _OPS[op_name]
+    out, ref = _run_bcast_subword_in_fp32_out(device, ttnn_op, torch_op, bcast_input, w_tiles)
+    assert torch.equal(
+        out, ref
+    ), f"{op_name} COL_{bcast_input.upper()} W={w_tiles}: max abs diff = {(out - ref).abs().max()}"

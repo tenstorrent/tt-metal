@@ -312,11 +312,24 @@ void overwrite_compute_kernel_name_and_defines(
     }
 }
 
+// Check if either input is BFLOAT16 with FP32 dest accumulation enabled.
+bool bcast_bf16_to_fp32(DataType a_dtype, DataType b_dtype, bool fp32_dest_acc_en) {
+    return fp32_dest_acc_en && (a_dtype == DataType::BFLOAT16 || b_dtype == DataType::BFLOAT16);
+}
+
 bool is_llk_bcast(
     const SubtileBroadcastType subtile_broadcast_type,
     const DataType a_dtype,
     const DataType b_dtype,
-    [[maybe_unused]] const DataType c_dtype) {
+    const bool fp32_dest_acc_en) {
+    // COL bcast + BFLOAT16 input + fp32_dest_acc_en causes hangs on BH.
+    const bool is_col_bcast =
+        subtile_broadcast_type == SubtileBroadcastType::COL_A || subtile_broadcast_type == SubtileBroadcastType::COL_B;
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && is_col_bcast &&
+        bcast_bf16_to_fp32(a_dtype, b_dtype, fp32_dest_acc_en)) {
+        return false;
+    }
+
     auto all_match = [&](DataType dt) { return a_dtype == dt && b_dtype == dt; };
 
     if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
@@ -731,8 +744,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
     bool use_llk_bcast =
-        !inputs_row_major &&
-        CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype);
+        !inputs_row_major && CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(
+                                 operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en);
 
     // The B2D broadcast path for BFP formats introduces rounding that EXP/EXP2
     // amplifies beyond acceptable tolerance.
