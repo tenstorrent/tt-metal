@@ -260,48 +260,43 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     // small control CB that compute waits on.
     const bool offsets_active =
         operation_attributes.offsets_role != OffsetsRole::None && tensor_args.offsets_tensor.has_value();
-    const bool output_row_active = offsets_active && operation_attributes.offsets_role == OffsetsRole::OutputRow;
-    const bool input_row_active = offsets_active && operation_attributes.offsets_role == OffsetsRole::InputRow;
-    const bool input_k_active = offsets_active && operation_attributes.offsets_role == OffsetsRole::InputK;
-    const bool weight_k_active = offsets_active && operation_attributes.offsets_role == OffsetsRole::WeightK;
-    const bool input_and_output_row_active =
-        offsets_active && operation_attributes.offsets_role == OffsetsRole::InputAndOutputRow;
-    const bool input_and_weight_k_active =
-        offsets_active && operation_attributes.offsets_role == OffsetsRole::InputAndWeightK;
-    // Which kernel(s) need the offsets accessor + RT args + OFFSETS_ROLE define:
-    //   in0 side (dm_in0_sender):    OutputRow (M+out_row when writer), InputRow (M+offset),
-    //                                InputK (K+offset), WeightK (K override),
-    //                                InputAndOutputRow (M+in0_offset+out_row when writer).
-    //   in1 side (dm_in1_sender_out): OutputRow (M+out_row when writer), InputRow (M),
-    //                                 InputK (K override), WeightK (K+offset),
-    //                                 InputAndOutputRow (M+out_row when writer).
-    //   compute: any role — override via cb_ctrl.
-    const bool in0_needs_offsets = output_row_active || input_row_active || input_k_active || weight_k_active ||
-                                   input_and_output_row_active || input_and_weight_k_active;
-    const bool in1_needs_offsets = output_row_active || input_row_active || input_k_active || weight_k_active ||
-                                   input_and_output_row_active || input_and_weight_k_active;
-    const bool compute_needs_offsets_define = output_row_active || input_row_active || input_k_active ||
-                                              weight_k_active || input_and_output_row_active ||
-                                              input_and_weight_k_active;
+    // Orthogonal offset flags derived from the role. Each kernel branch keys off these (not
+    // off the role enum), so future role combinations = just listing flags here. See
+    // docs/VARIABLE_MATMUL_REFACTOR.md (#1).
+    const auto role = operation_attributes.offsets_role;
+    const bool offset_m_axis = offsets_active && (role == OffsetsRole::OutputRow || role == OffsetsRole::InputRow ||
+                                                  role == OffsetsRole::InputAndOutputRow);
+    const bool offset_in0_row =
+        offsets_active && (role == OffsetsRole::InputRow || role == OffsetsRole::InputAndOutputRow);
+    const bool offset_out_row =
+        offsets_active && (role == OffsetsRole::OutputRow || role == OffsetsRole::InputAndOutputRow);
+    const bool offset_in0_k = offsets_active && (role == OffsetsRole::InputK || role == OffsetsRole::InputAndWeightK);
+    const bool offset_in1_k = offsets_active && (role == OffsetsRole::WeightK || role == OffsetsRole::InputAndWeightK);
+    // Both dm kernels need the offsets accessor + RT args whenever any flag is active —
+    // they each read the offsets tensor to derive their own slice of the override values.
+    // compute reads its override values from cb_ctrl, not directly from offsets.
+    const bool in0_needs_offsets = offsets_active;
+    const bool in1_needs_offsets = offsets_active;
     std::map<std::string, std::string> in0_defines = defines;
     std::map<std::string, std::string> in1_defines = defines;
     std::map<std::string, std::string> compute_offsets_defines;  // merged into compute_defines below
-    if (offsets_active) {
-        const std::string role_str = std::to_string(static_cast<uint32_t>(operation_attributes.offsets_role));
-        if (in0_needs_offsets) {
-            in0_defines["OFFSETS_ROLE"] = role_str;
+    auto set_flag = [](std::map<std::string, std::string>& m, const char* name, bool active) {
+        if (active) {
+            m[name] = "1";
         }
-        if (in1_needs_offsets) {
-            in1_defines["OFFSETS_ROLE"] = role_str;
-        }
-        if (compute_needs_offsets_define) {
-            compute_offsets_defines["OFFSETS_ROLE"] = role_str;
-        }
+    };
+    for (auto* m : {&in0_defines, &in1_defines, &compute_offsets_defines}) {
+        set_flag(*m, "OFFSETS_ACTIVE", offsets_active);
+        set_flag(*m, "OFFSET_M_AXIS", offset_m_axis);
+        set_flag(*m, "OFFSET_IN0_ROW", offset_in0_row);
+        set_flag(*m, "OFFSET_OUT_ROW", offset_out_row);
+        set_flag(*m, "OFFSET_IN0_K", offset_in0_k);
+        set_flag(*m, "OFFSET_IN1_K", offset_in1_k);
     }
-    // CT args used by OutputRow/InputRow per-core M computation. Compile-time constants so
-    // the kernel can specialize.
+    // CT args used by the M-axis per-core M computation. Compile-time constant so the
+    // kernel can specialize.
     const uint32_t in0_axis_cores_ct = transpose_core_grid ? grid_size.x : grid_size.y;
-    if (output_row_active || input_row_active || input_and_output_row_active) {
+    if (offset_m_axis) {
         in0_defines["IN0_AXIS_CORES"] = std::to_string(in0_axis_cores_ct);
         in1_defines["IN0_AXIS_CORES"] = std::to_string(in0_axis_cores_ct);
         compute_offsets_defines["IN0_AXIS_CORES"] = std::to_string(in0_axis_cores_ct);
@@ -354,8 +349,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         // common (no offset) case (e.g. all moe-ffn backward calls).
         static_cast<uint32_t>(
             operation_attributes.in0_row_offset_tiles > 0 || operation_attributes.effective_M_tiles > 0 ||
-            operation_attributes.in0_k_offset_tiles > 0 || parent_K_tiles_in0 > K_tiles || input_k_active ||
-            input_and_weight_k_active),
+            operation_attributes.in0_k_offset_tiles > 0 || parent_K_tiles_in0 > K_tiles || offset_in0_k),
         static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 24: use_out_offset
     };
     append_accessors(in0_sender_compile_time_args, input_tensor, output_tensor);
@@ -399,10 +393,10 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         N_tiles,  // N_tiles_per_chunk
         in3_tile_size,
         static_cast<uint32_t>(transpose_a),  // 22: transpose_a
+        // 23: use_offset (must match sender)
         static_cast<uint32_t>(
             operation_attributes.in0_row_offset_tiles > 0 || operation_attributes.effective_M_tiles > 0 ||
-            operation_attributes.in0_k_offset_tiles > 0 || parent_K_tiles_in0 > K_tiles || input_k_active ||
-            input_and_weight_k_active),                                // 23: use_offset (must match sender)
+            operation_attributes.in0_k_offset_tiles > 0 || parent_K_tiles_in0 > K_tiles || offset_in0_k),
         static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 24: use_out_offset
     };
     append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensor);
@@ -447,8 +441,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         static_cast<uint32_t>(transpose_b),  // 21: transpose_b
         // 22: use_offset_in1 — K-offset path on the weight (analogous to in0's use_offset).
         static_cast<uint32_t>(
-            operation_attributes.in1_k_offset_tiles > 0 || parent_K_tiles_in1 > K_tiles || weight_k_active ||
-            input_and_weight_k_active),
+            operation_attributes.in1_k_offset_tiles > 0 || parent_K_tiles_in1 > K_tiles || offset_in1_k),
         static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 23: use_out_offset
     };
     append_accessors(in1_sender_compile_time_args, weight_tensor, output_tensor);
@@ -492,8 +485,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         N_tiles,                             // N_tiles_per_chunk
         static_cast<uint32_t>(transpose_b),  // 21: transpose_b
         static_cast<uint32_t>(
-            operation_attributes.in1_k_offset_tiles > 0 || parent_K_tiles_in1 > K_tiles || weight_k_active ||
-            input_and_weight_k_active),                                // 22: use_offset_in1
+            operation_attributes.in1_k_offset_tiles > 0 || parent_K_tiles_in1 > K_tiles ||
+            offset_in1_k),                                             // 22: use_offset_in1
         static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 23: use_out_offset
     };
     append_accessors(in1_receiver_compile_time_args, weight_tensor, output_tensor);
@@ -661,7 +654,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         if (in0_needs_offsets) {
             in0_args.push_back(tensor_args.offsets_tensor.value().buffer()->address());
             in0_args.push_back(operation_attributes.offsets_start_index);
-            if (output_row_active || input_row_active || input_and_output_row_active) {
+            if (offset_m_axis) {
                 in0_args.push_back(in0_idx);
             }
         }
@@ -722,7 +715,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         if (in1_needs_offsets) {
             in1_args.push_back(tensor_args.offsets_tensor.value().buffer()->address());
             in1_args.push_back(operation_attributes.offsets_start_index);
-            if (output_row_active || input_row_active || input_and_output_row_active) {
+            if (offset_m_axis) {
                 in1_args.push_back(in0_idx);
             }
         }
@@ -849,24 +842,14 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     constexpr uint32_t IN1_DEFER_WRITE_K_BLOCK_IDX = 11;
 
     // On-device offsets RT-arg indices (appended after K_tiles on each kernel).
+    // Must mirror init-path: both in0 and in1 kernels are compiled with the offset defines for
+    // every role, so RT-arg updates must match — otherwise the kernel's `offsets_start_index`
+    // arg keeps the value from the first build and subsequent cache-hit invocations read
+    // offsets[0] instead of offsets[e]. See docs/VARIABLE_MATMUL_REFACTOR.md (#1).
     const bool offsets_active =
         operation_attributes.offsets_role != OffsetsRole::None && tensor_args.offsets_tensor.has_value();
-    const bool output_row_active = offsets_active && operation_attributes.offsets_role == OffsetsRole::OutputRow;
-    const bool input_row_active = offsets_active && operation_attributes.offsets_role == OffsetsRole::InputRow;
-    const bool input_k_active = offsets_active && operation_attributes.offsets_role == OffsetsRole::InputK;
-    const bool weight_k_active = offsets_active && operation_attributes.offsets_role == OffsetsRole::WeightK;
-    const bool input_and_output_row_active =
-        offsets_active && operation_attributes.offsets_role == OffsetsRole::InputAndOutputRow;
-    const bool input_and_weight_k_active =
-        offsets_active && operation_attributes.offsets_role == OffsetsRole::InputAndWeightK;
-    // Mirror init-path eligibility (see comment ~line 274): both in0 and in1 kernels are
-    // compiled with OFFSETS_ROLE for every role, so RT-arg updates must match — otherwise the
-    // kernel's `offsets_start_index` arg keeps the value from the first build and subsequent
-    // cache-hit invocations read offsets[0] instead of offsets[e].
-    const bool in0_needs_offsets = output_row_active || input_row_active || input_k_active || weight_k_active ||
-                                   input_and_output_row_active || input_and_weight_k_active;
-    const bool in1_needs_offsets = output_row_active || input_row_active || input_k_active || weight_k_active ||
-                                   input_and_output_row_active || input_and_weight_k_active;
+    const bool in0_needs_offsets = offsets_active;
+    const bool in1_needs_offsets = offsets_active;
     const uint32_t offsets_addr = offsets_active ? tensor_args.offsets_tensor.value().buffer()->address() : 0U;
     constexpr uint32_t IN0_OFFSETS_ADDR_IDX = 23;  // appended after K_tiles (idx 22).
     constexpr uint32_t IN0_OFFSETS_START_IDX_IDX = 24;

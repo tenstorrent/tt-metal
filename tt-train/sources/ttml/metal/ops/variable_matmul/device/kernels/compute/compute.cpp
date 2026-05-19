@@ -352,7 +352,7 @@ void kernel_main() {
     constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(9));
 
     uint32_t argidx = 0;
-    // OFFSETS_ROLE=InputRow overrides M_start/M_end/M_blocks_per_core via cb_ctrl below.
+    // OFFSET_M_AXIS overrides M_start/M_end/M_blocks_per_core via cb_ctrl below.
     uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -360,22 +360,20 @@ void kernel_main() {
     // Variable-M: actual M_blocks_per_core from runtime args
     uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
     // Variable-K: K extent comes from runtime; K_num_blocks derived using K_block_tiles (CTA).
-    // OFFSETS_ROLE=InputK/WeightK overrides K_tiles from cb_ctrl[3].
+    // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from cb_ctrl[3].
     uint32_t K_tiles = get_arg_val<uint32_t>(argidx++);
 
-#if defined(OFFSETS_ROLE) && (OFFSETS_ROLE == 1 || OFFSETS_ROLE == 2 || OFFSETS_ROLE == 3 || OFFSETS_ROLE == 4 || \
-                              OFFSETS_ROLE == 5 || OFFSETS_ROLE == 6)
-    // Each role's cb_ctrl payload:
-    //   OutputRow         (1): ctrl[0..2] = (M_start, M_end, M_blocks_per_core).
-    //   InputRow          (2): ctrl[0..2] = (M_start, M_end, M_blocks_per_core).
-    //   InputK            (3): ctrl[3]    = K_tiles.
-    //   WeightK           (4): ctrl[3]    = K_tiles.
-    //   InputAndOutputRow (5): ctrl[0..2] = (M_start, M_end, M_blocks_per_core).
-    //   InputAndWeightK   (6): ctrl[3]    = K_tiles.
+#ifdef OFFSETS_ACTIVE
+    // cb_ctrl payload, packed by whichever dm kernel owns the publish (see dataflow kernels):
+    //   OFFSET_M_AXIS:                       ctrl[0..2] = (M_start, M_end, M_blocks_per_core)
+    //   OFFSET_IN0_K or OFFSET_IN1_K:        ctrl[3]    = K_tiles
+    // M-axis and K-axis are not currently combined in a single role, so the cb_ctrl publish
+    // is exclusive — exactly one of the two payloads is written per invocation. See
+    // docs/VARIABLE_MATMUL_REFACTOR.md (#1).
     {
         constexpr uint32_t cb_ctrl_id = tt::CBIndex::c_8;
         cb_wait_front(cb_ctrl_id, 1U);
-#if OFFSETS_ROLE == 1 || OFFSETS_ROLE == 2 || OFFSETS_ROLE == 5
+#ifdef OFFSET_M_AXIS
         M_start_tile = read_tile_value(cb_ctrl_id, 0U, 0U);
         M_end_tile = read_tile_value(cb_ctrl_id, 0U, 1U);
         M_blocks_per_core = read_tile_value(cb_ctrl_id, 0U, 2U);
@@ -384,7 +382,7 @@ void kernel_main() {
 #endif
         cb_pop_front(cb_ctrl_id, 1U);
     }
-#endif
+#endif  // OFFSETS_ACTIVE
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
     const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
 
