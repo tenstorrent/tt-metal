@@ -11,7 +11,7 @@ greedy ``argmax`` decode and all per-step tensor math run on device. Host-side w
 * a single scalar readback of the subsampled-encoder length (needed for ``ttnn.slice`` end index);
 * a per-step scalar readback of the predicted greedy token (for the EOS early-stop check).
 
-Out of scope: KV cache, attentions/hidden-state outputs, label loss.
+Out of scope: attentions/hidden-state outputs, label loss. Text-decoder KV cache is used in ``generate`` when ``use_kv_cache=True``.
 """
 
 from __future__ import annotations
@@ -19,16 +19,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple, Union
 
+import torch
 import ttnn
 from transformers.modeling_outputs import Seq2SeqLMOutput
-from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import format_speech_generation_kwargs
+from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import (
+    create_position_ids_from_input_ids,
+    format_speech_generation_kwargs,
+)
 
 from models.experimental.seamless_m4t_v2_large.tt.tt_code_hifigan import TTSeamlessM4Tv2CodeHifiGan
 from models.experimental.seamless_m4t_v2_large.tt.tt_speech_encoder import (
     SpeechEncoderTraceMasks,
     TTSeamlessM4Tv2SpeechEncoder,
 )
-from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import TTSeamlessM4Tv2Decoder
+from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
+    TTSeamlessM4Tv2Decoder,
+    init_text_decoder_kv_cache,
+    warm_text_decoder_kv_cache_prefill,
+)
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_encoder import TTSeamlessM4Tv2Encoder
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_to_unit import (
     T2UTraceHardUpsampleCumsums,
@@ -62,6 +70,21 @@ class TTSeamlessM4Tv2GenerationOutput:
     waveform_lengths: ttnn.Tensor
     sequences: ttnn.Tensor
     unit_sequences: ttnn.Tensor
+
+
+@dataclass
+class TextDecoderKvDecodeRuntime:
+    """Pre-allocated device tensors for single-token KV decode (+ optional Metal trace)."""
+
+    batch_size: int
+    token_tt: ttnn.Tensor
+    pos_tt: ttnn.Tensor
+    cur_pos_tt: ttnn.Tensor
+    token_host: ttnn.Tensor
+    pos_host: ttnn.Tensor
+    logits_tt: Optional[ttnn.Tensor] = None
+    trace_cache_seq_len: Optional[int] = None
+    trace_id: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +519,7 @@ class TTSeamlessM4Tv2Model:
         decoder_layers: int,
         decoder_attention_heads: int,
         hidden_size: int,
+        max_text_seq_len: int = 2048,
         feature_projection_input_dim: int,
         speech_encoder_attention_heads: int,
         speech_encoder_intermediate_size: int,
@@ -551,7 +575,11 @@ class TTSeamlessM4Tv2Model:
             num_hidden_layers=decoder_layers,
             num_attention_heads=decoder_attention_heads,
             hidden_size=hidden_size,
+            max_batch_size=1,
+            max_seq_len=max_text_seq_len,
         )
+        self.max_text_seq_len = max_text_seq_len
+        self.decoder_attention_heads = decoder_attention_heads
         self.speech_encoder = TTSeamlessM4Tv2SpeechEncoder(
             device,
             parameters.speech_encoder,
@@ -587,6 +615,8 @@ class TTSeamlessM4Tv2Model:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self._kv_decode_rt: Optional[TextDecoderKvDecodeRuntime] = None
+        self._decode_trace_kernels_warmed = False
 
     # ------------------------------------------------------------------
     # Internal pieces
@@ -834,6 +864,320 @@ class TTSeamlessM4Tv2Model:
         ttnn.deallocate(pos_tt)
         if own_masks:
             ttnn.deallocate(causal_4d)
+            ttnn.deallocate(cross_4d)
+        logits = self._lm_head(dec_out)
+        ttnn.deallocate(dec_out)
+        return logits
+
+    def release_text_decoder_decode_trace(self) -> None:
+        """Release captured decode trace so device buffers can be reallocated."""
+        if self._kv_decode_rt is not None and self._kv_decode_rt.trace_id is not None:
+            ttnn.release_trace(self.device, self._kv_decode_rt.trace_id)
+            self._kv_decode_rt.trace_id = None
+            self._kv_decode_rt.trace_cache_seq_len = None
+
+    def _release_kv_decode_runtime(self) -> None:
+        self.release_text_decoder_decode_trace()
+        self._kv_decode_rt = None
+        self._decode_trace_kernels_warmed = False
+
+    def _ensure_kv_decode_runtime(self, batch_size: int) -> TextDecoderKvDecodeRuntime:
+        if self._kv_decode_rt is not None and self._kv_decode_rt.batch_size == batch_size:
+            return self._kv_decode_rt
+        self._release_kv_decode_runtime()
+
+        token_host = ttnn.from_torch(
+            torch.zeros((batch_size, 1), dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        token_tt = ttnn.from_torch(
+            torch.zeros((batch_size, 1), dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        pos_host = ttnn.from_torch(
+            torch.zeros((batch_size, 1), dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        pos_tt = ttnn.from_torch(
+            torch.zeros((batch_size, 1), dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cur_pos_tt = ttnn.from_torch(
+            torch.zeros((batch_size,), dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._kv_decode_rt = TextDecoderKvDecodeRuntime(
+            batch_size=batch_size,
+            token_tt=token_tt,
+            pos_tt=pos_tt,
+            cur_pos_tt=cur_pos_tt,
+            token_host=token_host,
+            pos_host=pos_host,
+        )
+        return self._kv_decode_rt
+
+    def _reset_kv_decode_cur_pos(self, position: int, batch_size: int) -> None:
+        rt = self._ensure_kv_decode_runtime(batch_size)
+        pos_cpu = torch.full((batch_size,), position, dtype=torch.int32)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(pos_cpu, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT),
+            rt.cur_pos_tt,
+        )
+
+    def _ensure_kv_decode_logits_buffer(self, rt: TextDecoderKvDecodeRuntime, sample: ttnn.Tensor) -> ttnn.Tensor:
+        if rt.logits_tt is None:
+            rt.logits_tt = ttnn.allocate_tensor_on_device(
+                sample.shape,
+                sample.dtype,
+                sample.layout,
+                self.device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return rt.logits_tt
+
+    def _upload_kv_decode_step_inputs(
+        self,
+        token_ids_tt: ttnn.Tensor,
+        position: int,
+        batch_size: int,
+    ) -> None:
+        """Stage one decode token + position on pre-allocated device buffers (small H2D only)."""
+        rt = self._ensure_kv_decode_runtime(batch_size)
+        if int(token_ids_tt.shape[1]) == 1:
+            ttnn.copy(token_ids_tt, rt.token_tt)
+        else:
+            step_tok = ttnn.slice(token_ids_tt, [0, position], [batch_size, position + 1], (1, 1))
+            ttnn.copy(step_tok, rt.token_tt)
+            ttnn.deallocate(step_tok)
+
+        tok_cpu = ttnn.to_torch(rt.token_tt).to(torch.int64)
+        pos_cpu = create_position_ids_from_input_ids(tok_cpu, self.pad_token_id, past_key_values_length=position)
+        pos_torch = pos_cpu.to(torch.int32)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(pos_torch, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+            rt.pos_tt,
+        )
+
+    def _forward_decode_kv_lm(
+        self,
+        rt: TextDecoderKvDecodeRuntime,
+        encoder_hidden: ttnn.Tensor,
+        cross_4d: ttnn.Tensor,
+        kv_cache: list,
+        cross_attn_cache: list,
+        *,
+        cache_seq_len: int,
+    ) -> ttnn.Tensor:
+        """Decoder forward + ``lm_head`` on pre-allocated decode tensors."""
+        dec_out = self.text_decoder.forward(
+            rt.token_tt,
+            rt.pos_tt,
+            encoder_hidden,
+            None,
+            cross_4d,
+            kv_cache=kv_cache,
+            cross_attn_cache=cross_attn_cache,
+            cross_attn_cache_valid=True,
+            current_decode_pos=rt.cur_pos_tt,
+            cache_seq_len=cache_seq_len,
+            trace_no_profiler=True,
+        )
+        logits = self._lm_head(dec_out)
+        ttnn.deallocate(dec_out)
+        return logits
+
+    def capture_text_decoder_decode_trace(
+        self,
+        token_ids_tt: ttnn.Tensor,
+        position: int,
+        encoder_hidden: ttnn.Tensor,
+        cross_4d: ttnn.Tensor,
+        kv_cache: list,
+        cross_attn_cache: list,
+    ) -> None:
+        """Capture Metal trace for one KV decode step (fixed SDPA program bucket at ``max_text_seq_len``)."""
+        batch_size = int(token_ids_tt.shape[0])
+        rt = self._ensure_kv_decode_runtime(batch_size)
+        self.release_text_decoder_decode_trace()
+
+        # SDPA decode programs depend on ``cache_seq_len`` bucket; must match eager ``position + 1``.
+        config_cache_len = position + 1
+
+        def traced_step() -> None:
+            out = self.text_decoder.forward(
+                rt.token_tt,
+                rt.pos_tt,
+                encoder_hidden,
+                None,
+                cross_4d,
+                kv_cache=kv_cache,
+                cross_attn_cache=cross_attn_cache,
+                cross_attn_cache_valid=True,
+                current_decode_pos=rt.cur_pos_tt,
+                cache_seq_len=config_cache_len,
+                trace_no_profiler=True,
+            )
+            logits = self._lm_head(out)
+            ttnn.deallocate(out)
+            logits_buf = self._ensure_kv_decode_logits_buffer(rt, logits)
+            ttnn.copy(logits, logits_buf)
+            ttnn.deallocate(logits)
+            ttnn.plus_one(rt.cur_pos_tt)
+
+        self._upload_kv_decode_step_inputs(token_ids_tt, position, batch_size)
+        self._reset_kv_decode_cur_pos(position, batch_size)
+        ttnn.synchronize_device(self.device)
+
+        if not self._decode_trace_kernels_warmed:
+            traced_step()
+            ttnn.synchronize_device(self.device)
+            self._decode_trace_kernels_warmed = True
+            self._upload_kv_decode_step_inputs(token_ids_tt, position, batch_size)
+            self._reset_kv_decode_cur_pos(position, batch_size)
+            ttnn.synchronize_device(self.device)
+
+        rt.trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        traced_step()
+        ttnn.end_trace_capture(self.device, rt.trace_id, cq_id=0)
+        rt.trace_cache_seq_len = config_cache_len
+        ttnn.synchronize_device(self.device)
+        self._upload_kv_decode_step_inputs(token_ids_tt, position, batch_size)
+        self._reset_kv_decode_cur_pos(position, batch_size)
+        ttnn.synchronize_device(self.device)
+
+    def execute_text_decoder_decode_trace(self) -> ttnn.Tensor:
+        """Replay captured decode trace; caller must ``_upload_kv_decode_step_inputs`` first."""
+        if self._kv_decode_rt is None or self._kv_decode_rt.trace_id is None:
+            raise RuntimeError("Decode trace not captured; call capture_text_decoder_decode_trace first.")
+        if self._kv_decode_rt.logits_tt is None:
+            raise RuntimeError("Decode trace logits buffer missing; re-capture the trace.")
+        ttnn.execute_trace(self.device, self._kv_decode_rt.trace_id, cq_id=0, blocking=True)
+        return self._kv_decode_rt.logits_tt
+
+    def _decode_token_with_kv_cache_traced(
+        self,
+        sequences_tt: ttnn.Tensor,
+        position: int,
+        encoder_hidden: ttnn.Tensor,
+        cross_4d: ttnn.Tensor,
+        kv_cache: list,
+        cross_attn_cache: list,
+    ) -> ttnn.Tensor:
+        batch_size = int(sequences_tt.shape[0])
+        needed_cache_len = position + 1
+        if (
+            self._kv_decode_rt is None
+            or self._kv_decode_rt.trace_id is None
+            or self._kv_decode_rt.trace_cache_seq_len != needed_cache_len
+        ):
+            self.capture_text_decoder_decode_trace(
+                sequences_tt,
+                position,
+                encoder_hidden,
+                cross_4d,
+                kv_cache,
+                cross_attn_cache,
+            )
+        self._upload_kv_decode_step_inputs(sequences_tt, position, batch_size)
+        return self.execute_text_decoder_decode_trace()
+
+    def _prefill_text_decoder_kv_cache(
+        self,
+        input_ids_tt: ttnn.Tensor,
+        encoder_hidden: ttnn.Tensor,
+        encoder_attn_2d: ttnn.Tensor,
+        kv_cache: list,
+        cross_attn_cache: list,
+        cross_4d: Optional[ttnn.Tensor] = None,
+    ) -> None:
+        """Populate KV caches with one batched prefill forward (``slice_write`` self + cross copy)."""
+        seq = int(input_ids_tt.shape[1])
+        if seq == 0:
+            return
+        batch_size = int(input_ids_tt.shape[0])
+        padded_seq = _tile_align(seq)
+        ids_padded = _pad_input_ids_to(input_ids_tt, padded_seq, self.pad_token_id, self.device)
+        attn_2d = _ones_mask(batch_size, padded_seq, self.device)
+        pos_tt = _tt_position_ids(ids_padded, self.pad_token_id)
+        causal_4d = _build_causal_with_padding_4d(attn_2d, batch_size, padded_seq, self.device)
+        ttnn.deallocate(attn_2d)
+
+        owns_cross_4d = cross_4d is None
+        if cross_4d is None:
+            cross_4d = _build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=padded_seq, device=self.device)
+
+        warm_text_decoder_kv_cache_prefill(
+            self.text_decoder,
+            ids_padded,
+            pos_tt,
+            encoder_hidden,
+            causal_4d,
+            cross_4d,
+            kv_cache,
+            cross_attn_cache,
+            kv_cache_fill_len=seq,
+            trace_no_profiler=True,
+        )
+
+        if ids_padded is not input_ids_tt:
+            ttnn.deallocate(ids_padded)
+        ttnn.deallocate(pos_tt)
+        ttnn.deallocate(causal_4d)
+        if owns_cross_4d:
+            ttnn.deallocate(cross_4d)
+
+    def _decode_token_with_kv_cache(
+        self,
+        token_ids: ttnn.Tensor,
+        position: int,
+        encoder_hidden: ttnn.Tensor,
+        encoder_attn_2d: ttnn.Tensor,
+        kv_cache: list,
+        cross_attn_cache: list,
+        cross_attn_cache_valid: bool,
+        cross_4d: Optional[ttnn.Tensor] = None,
+    ) -> ttnn.Tensor:
+        """Single decoder step with KV cache → ``[B, 1, V]`` logits."""
+        batch = int(token_ids.shape[0])
+        tok_cpu = ttnn.to_torch(token_ids).to(torch.int64)
+        pos_cpu = create_position_ids_from_input_ids(tok_cpu, self.pad_token_id, past_key_values_length=position)
+        pos_tt = ttnn.from_torch(
+            pos_cpu.to(torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        owns_cross_4d = cross_4d is None
+        if cross_4d is None:
+            cross_4d = _build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=1, device=self.device)
+        cur_pos = self.text_decoder.borrow_current_decode_pos_tensor(position, batch_size=batch)
+        dec_out = self.text_decoder.forward(
+            token_ids,
+            pos_tt,
+            encoder_hidden,
+            None,
+            cross_4d,
+            kv_cache=kv_cache,
+            cross_attn_cache=cross_attn_cache,
+            cross_attn_cache_valid=cross_attn_cache_valid,
+            current_decode_pos=cur_pos,
+            cache_seq_len=position + 1,
+            trace_no_profiler=True,
+        )
+        ttnn.deallocate(pos_tt)
+        if owns_cross_4d:
             ttnn.deallocate(cross_4d)
         logits = self._lm_head(dec_out)
         ttnn.deallocate(dec_out)
@@ -1202,36 +1546,112 @@ class TTSeamlessM4Tv2Model:
         # Causal + cross 4-D masks depend only on ``(batch, tile_padded_dec_seq, encoder_attn_2d)`` when
         # ``decoder_attention_mask`` is omitted — rebuild only when that key changes (tile boundary).
         sequences_tt = seed_tt
+        use_kv_cache = bool(kwargs_text.get("use_kv_cache", True))
+        # Metal trace replay for KV decode (requires ``trace_region_size`` in device params).
+        use_decode_trace = bool(kwargs_text.get("use_decode_trace", False))
+        seed_len = int(sequences_tt.shape[1])
         gen_causal: Optional[ttnn.Tensor] = None
         gen_cross: Optional[ttnn.Tensor] = None
         gen_mask_key: Optional[Tuple[int, int, int]] = None
-        for _ in range(max_new_tokens):
-            batch_i = int(sequences_tt.shape[0])
-            padded_i = _tile_align(int(sequences_tt.shape[1]))
-            mask_key = (batch_i, padded_i, id(enc_attn_tt))
-            if mask_key != gen_mask_key:
-                if gen_causal is not None:
-                    ttnn.deallocate(gen_causal)
-                    ttnn.deallocate(gen_cross)
-                gen_causal = _build_causal_with_padding_4d(None, batch_i, padded_i, self.device)
-                gen_cross = _build_cross_attn_mask_4d(enc_attn_tt, tgt_seq=padded_i, device=self.device)
-                gen_mask_key = mask_key
-            logits = self._decode_and_lm_head(
-                enc_tt,
-                enc_attn_tt,
-                sequences_tt,
-                None,
-                prebuilt_causal_4d=gen_causal,
-                prebuilt_cross_4d=gen_cross,
+
+        if use_kv_cache:
+            if seed_len + max_new_tokens > self.max_text_seq_len:
+                raise ValueError(
+                    f"seed_len ({seed_len}) + max_new_tokens ({max_new_tokens}) exceeds "
+                    f"max_text_seq_len ({self.max_text_seq_len})"
+                )
+            enc_seq = int(enc_tt.shape[1])
+            kv_cache, cross_attn_cache = init_text_decoder_kv_cache(
+                self.device,
+                num_hidden_layers=self.text_decoder.num_hidden_layers,
+                num_attention_heads=self.decoder_attention_heads,
+                hidden_size=self.hidden_size,
+                max_batch_size=1,
+                max_seq_len=self.max_text_seq_len,
+                encoder_seq_len=enc_seq,
             )
-            next_tt, next_id = self._greedy_next_token(logits, int(sequences_tt.shape[1]))
-            ttnn.deallocate(logits)
-            new_seq = ttnn.concat([sequences_tt, next_tt], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(sequences_tt)
-            ttnn.deallocate(next_tt)
-            sequences_tt = new_seq
-            if eos_ids and next_id in eos_ids:
-                break
+            decode_cross_4d = _build_cross_attn_mask_4d(enc_attn_tt, tgt_seq=1, device=self.device)
+            # Cache tokens ``0 .. seed_len-2``; last seed token is consumed on the first decode step.
+            if seed_len > 1:
+                warm_tt = ttnn.slice(sequences_tt, [0, 0], [batch_size, seed_len - 1], (1, 1))
+                self._prefill_text_decoder_kv_cache(
+                    warm_tt,
+                    enc_tt,
+                    enc_attn_tt,
+                    kv_cache,
+                    cross_attn_cache,
+                    cross_4d=decode_cross_4d,
+                )
+                ttnn.deallocate(warm_tt)
+            cross_valid = seed_len > 1
+
+            cur_pos = max(0, seed_len - 1)
+            decode_trace_ready = False
+            for decode_step in range(max_new_tokens):
+                if use_decode_trace and decode_trace_ready:
+                    logits = self._decode_token_with_kv_cache_traced(
+                        sequences_tt,
+                        cur_pos,
+                        enc_tt,
+                        decode_cross_4d,
+                        kv_cache,
+                        cross_attn_cache,
+                    )
+                else:
+                    tok_tt = ttnn.slice(sequences_tt, [0, cur_pos], [batch_size, cur_pos + 1], (1, 1))
+                    logits = self._decode_token_with_kv_cache(
+                        tok_tt,
+                        cur_pos,
+                        enc_tt,
+                        enc_attn_tt,
+                        kv_cache,
+                        cross_attn_cache,
+                        cross_valid,
+                        cross_4d=decode_cross_4d,
+                    )
+                    ttnn.deallocate(tok_tt)
+                next_tt, next_id = self._greedy_next_token(logits, 1)
+                ttnn.deallocate(logits)
+                cur_pos += 1
+                new_seq = ttnn.concat([sequences_tt, next_tt], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(sequences_tt)
+                ttnn.deallocate(next_tt)
+                sequences_tt = new_seq
+                if not cross_valid:
+                    cross_valid = True
+                if use_decode_trace and not decode_trace_ready:
+                    decode_trace_ready = True
+                if eos_ids and next_id in eos_ids:
+                    break
+            ttnn.deallocate(decode_cross_4d)
+        else:
+            for _ in range(max_new_tokens):
+                batch_i = int(sequences_tt.shape[0])
+                padded_i = _tile_align(int(sequences_tt.shape[1]))
+                mask_key = (batch_i, padded_i, id(enc_attn_tt))
+                if mask_key != gen_mask_key:
+                    if gen_causal is not None:
+                        ttnn.deallocate(gen_causal)
+                        ttnn.deallocate(gen_cross)
+                    gen_causal = _build_causal_with_padding_4d(None, batch_i, padded_i, self.device)
+                    gen_cross = _build_cross_attn_mask_4d(enc_attn_tt, tgt_seq=padded_i, device=self.device)
+                    gen_mask_key = mask_key
+                logits = self._decode_and_lm_head(
+                    enc_tt,
+                    enc_attn_tt,
+                    sequences_tt,
+                    None,
+                    prebuilt_causal_4d=gen_causal,
+                    prebuilt_cross_4d=gen_cross,
+                )
+                next_tt, next_id = self._greedy_next_token(logits, int(sequences_tt.shape[1]))
+                ttnn.deallocate(logits)
+                new_seq = ttnn.concat([sequences_tt, next_tt], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(sequences_tt)
+                ttnn.deallocate(next_tt)
+                sequences_tt = new_seq
+                if eos_ids and next_id in eos_ids:
+                    break
 
         if gen_causal is not None:
             ttnn.deallocate(gen_causal)
