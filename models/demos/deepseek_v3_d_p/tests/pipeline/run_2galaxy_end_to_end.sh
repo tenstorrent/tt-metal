@@ -8,12 +8,12 @@
 #      enough — empirically 2 with --num-iterations 10 each is reliable).
 #   3. Launch runme_2galaxy_cross_mesh_smoke.sh on the trained fabric.
 #
-# Default hosts/interface match the d04 reservation; override via flags.
+# Default hosts/interface match the d03 reservation; override via flags.
 
 set -eo pipefail
 
-HOST_A="bh-glx-d04u02"
-HOST_B="bh-glx-d04u08"
+HOST_A="bh-glx-d03u02"
+HOST_B="bh-glx-d03u08"
 TT_TCP_INTERFACE="ens5f0np0"
 NUM_RECOVERY_PASSES=2
 RECOVERY_ITERS=10
@@ -36,7 +36,7 @@ Options:
     -h, --help              Show this help
 
 Example:
-    $0 --host-a bh-glx-d04u02 --host-b bh-glx-d04u08
+    $0 --host-a bh-glx-d03u02 --host-b bh-glx-d03u08
 EOF
 }
 

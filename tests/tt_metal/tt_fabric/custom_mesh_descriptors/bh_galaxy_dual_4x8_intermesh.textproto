@@ -1,0 +1,40 @@
+# Black Hole 2-galaxy MGD for the cross-mesh prefill pipeline tests.
+#
+# Two (4, 8) Blackhole meshes (one per galaxy), connected over the inter-mesh
+# fabric.
+#
+# Channel counts match the physical BH-galaxy fabric topology (per Aditya
+# Saigal):
+#   - Intra-mesh:  2 channels per ETH link
+#   - Inter-mesh:  8 channels (4 exit nodes per galaxy × 2 channels per chip)
+#
+# Forked from dual_bh_galaxy_experimental_mesh_graph_descriptor.textproto so
+# that the other fabric tests consuming the experimental MGD aren't disturbed.
+# The intra count is unchanged (was already 2 RELAXED); the inter count goes
+# from 4 STRICT → 8 RELAXED so the socket infra can route over all available
+# inter-galaxy channels.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 8 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+    directional: false
+    assign_z_direction: true
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
