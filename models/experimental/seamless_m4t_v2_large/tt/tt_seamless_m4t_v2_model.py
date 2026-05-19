@@ -212,6 +212,8 @@ def _build_cross_attn_mask_4d(encoder_pad_mask_2d: ttnn.Tensor, *, tgt_seq: int,
     src_seq = int(encoder_pad_mask_2d.shape[1])
     add_2d = _key_padding_additive(encoder_pad_mask_2d, device=device)
     add_4d = ttnn.reshape(add_2d, [batch, 1, 1, src_seq])
+    if tgt_seq == 1:
+        return _ensure_tile_bf16_sdpa_mask(add_4d)
     expanded = ttnn.expand(add_4d, [batch, 1, tgt_seq, src_seq], memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(add_4d)
     return _ensure_tile_bf16_sdpa_mask(expanded)
@@ -1572,6 +1574,9 @@ class TTSeamlessM4Tv2Model:
             )
             decode_cross_4d = _build_cross_attn_mask_4d(enc_attn_tt, tgt_seq=1, device=self.device)
             # Cache tokens ``0 .. seed_len-2``; last seed token is consumed on the first decode step.
+            # NOTE: prefill tile-aligns Q to ``padded_seq`` (e.g. 32 for seq=1), so it needs its own
+            # cross mask with ``tgt_seq=padded_seq`` — passing ``decode_cross_4d`` (built with
+            # ``tgt_seq=1``) would trip SDPA's ``mask[2] == q[2]`` check.
             if seed_len > 1:
                 warm_tt = ttnn.slice(sequences_tt, [0, 0], [batch_size, seed_len - 1], (1, 1))
                 self._prefill_text_decoder_kv_cache(
@@ -1580,7 +1585,6 @@ class TTSeamlessM4Tv2Model:
                     enc_attn_tt,
                     kv_cache,
                     cross_attn_cache,
-                    cross_4d=decode_cross_4d,
                 )
                 ttnn.deallocate(warm_tt)
             cross_valid = seed_len > 1
