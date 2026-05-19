@@ -495,6 +495,132 @@ class ttMLA:
             exp_approx_mode=False,
         )
 
+    def _on_device_chunked_attention(
+        self,
+        tt_q: ttnn.Tensor,
+        kvpe_cache: ttnn.Tensor,
+        chunk_start_global: int,
+        chunk_end_global: int,
+        cache_batch_idx: int = 0,
+    ) -> ttnn.Tensor:
+        """On-device chunked attention for one prefill chunk.
+
+        Slices this (user, layer)'s cache row, all-gathers it across SP so each
+        device holds the full cumulative K (chunked-interleaved layout), permutes
+        back to global token order, and runs flash_mla_prefill with an explicit
+        non-square causal mask (V is K[..., :kv_lora_rank], handled by the op
+        via head_dim_v). Then applies wkv_b2 on device to expand the latent SDPA
+        output to v_head_dim per head.
+
+        Returns [1, num_heads/tp, chunk_size_global/sp, v_head_dim] SP-sharded on
+        seq and TP-sharded on heads — same shape as the single-shot SDPA output.
+        """
+        sp = self.sp_factor
+        kv_lora_rank = self.kv_lora_rank
+        kvpe_dim = kv_lora_rank + self.qk_rope_head_dim
+        seq_len_local = kvpe_cache.shape[2]
+        chunk_size_global = chunk_end_global - chunk_start_global
+        chunk_local = chunk_size_global // sp
+
+        # 1) Slice the (user, layer) slot into interleaved DRAM. Cache is
+        # ND_SHARDED, which all_gather_async doesn't accept — slicing into
+        # INTERLEAVED also matches the price of not AG'ing the whole multi-user
+        # cache (which would scale traffic by num_users*num_layers).
+        slot = ttnn.slice(
+            kvpe_cache,
+            [cache_batch_idx, 0, 0, 0],
+            [cache_batch_idx + 1, 1, seq_len_local, kvpe_dim],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # 2) AG slot across SP. Every device now has [1, 1, sp*seq_len_local, kvpe_dim].
+        gathered = ttnn.experimental.all_gather_async(
+            slot,
+            dim=2,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.ccl_topology,
+            cluster_axis=self.sp_axis,
+        )
+
+        # 3) Unscramble the chunked-interleaved layout.
+        # gathered is [device_0_slot | device_1_slot | ...] and each device's slot
+        # is [chunk0_slice_devk | chunk1_slice_devk | ...]. Reshape to
+        # [1, 1, sp, n_max, chunk_local, kvpe] then permute (sp, n_max) → (n_max, sp).
+        n_max = seq_len_local // chunk_local
+        seq_len_total = sp * seq_len_local
+        gathered = ttnn.reshape(gathered, [1, 1, sp, n_max, chunk_local, kvpe_dim])
+        gathered = ttnn.permute(gathered, [0, 1, 3, 2, 4, 5])
+        gathered = ttnn.reshape(gathered, [1, 1, seq_len_total, kvpe_dim])
+
+        # 4) Slice to the populated prefix.
+        k_full = ttnn.slice(
+            gathered, [0, 0, 0, 0], [1, 1, chunk_end_global, kvpe_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        # 5) Per-SP-device causal mask. Device sp_i's Q covers global positions
+        # [chunk_start + sp_i*chunk_local, chunk_start + (sp_i+1)*chunk_local).
+        # Build the full mask (rows for all SP devices stacked along seq), then
+        # SP-shard so each device gets only its rows.
+        full_mask = torch.full((1, 1, sp * chunk_local, chunk_end_global), float("-inf"), dtype=torch.float32)
+        k_pos = torch.arange(0, chunk_end_global).unsqueeze(0)
+        for sp_i in range(sp):
+            q_start = chunk_start_global + sp_i * chunk_local
+            q_pos = torch.arange(q_start, q_start + chunk_local).unsqueeze(1)
+            allowed = k_pos <= q_pos
+            row_start = sp_i * chunk_local
+            full_mask[0, 0, row_start : row_start + chunk_local, :] = torch.where(
+                allowed, torch.tensor(0.0), torch.tensor(float("-inf"))
+            )
+
+        mask_shard_dims = [None, None]
+        mask_shard_dims[self.sp_axis] = 2
+        tt_mask = ttnn.from_torch(
+            full_mask.to(torch.bfloat16),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=mask_shard_dims
+            ),
+        )
+
+        # 6) flash_mla_prefill: V latent (= K[..., :kv_lora_rank]) handled by the op.
+        # Fixed (128, 128) chunk sizes — the single-shot MLA SDPA config can use
+        # bigger Q chunks (256), but flash_mla_prefill's CBs at that size + the
+        # mask consumption can exceed per-core L1. (128, 128) divides every
+        # Q seq (chunk_local) and K seq (chunk_end_global) we hit.
+        sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+        attn_out_latent = ttnn.transformer.flash_mla_prefill(
+            tt_q,
+            k_full,
+            kv_lora_rank,
+            attn_mask=tt_mask,
+            is_causal=False,
+            scale=self.scale,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=sdpa_program_config,
+            compute_kernel_config=self.default_compute_kernel_config,
+        )
+        # attn_out_latent: [1, num_heads/tp, chunk_local, kv_lora_rank]
+
+        # 7) wkv_b2 expansion per-head: latent → v_head_dim.
+        attn_out = ttnn.linear(
+            attn_out_latent,
+            self.wkv_b2_weight,
+            compute_kernel_config=self.default_compute_kernel_config,
+            **self._get_mm_kwargs("wkv_b2", chunk_local),
+        )
+        return attn_out
+
     # Expects ativation in form of:
     # [1, batch_size == 1, seq_len // sp_factor, hidden_size // tp_factor]
     def forward(
@@ -505,9 +631,22 @@ class ttMLA:
         cache_layer_idx: int = 0,
         on_layer_complete: Optional[Callable[[int], None]] = None,
         actual_isl: Optional[int] = None,
+        chunk_start_global: Optional[int] = None,
+        cache_user_id: int = 0,
+        num_cache_layers: Optional[int] = None,
     ) -> ttnn.Tensor:
         num_heads_local = self.num_heads // self.tp_factor
         seq_len_local = hidden_states.shape[2]
+
+        # Cache batch dim is laid out user-major: each user reserves num_cache_layers
+        # contiguous slots. For single-user callers (default), cache_user_id == 0 and
+        # num_cache_layers can be left None, preserving the original cache_layer_idx
+        # indexing.
+        if num_cache_layers is None:
+            assert cache_user_id == 0, "num_cache_layers must be set when cache_user_id != 0"
+            cache_batch_idx = cache_layer_idx
+        else:
+            cache_batch_idx = cache_user_id * num_cache_layers + cache_layer_idx
 
         # q_projection
         tt_q = ttnn.linear(
@@ -645,61 +784,95 @@ class ttMLA:
         ttnn.deallocate(tt_kv_rope)
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
 
-        # Zero the padding region of THIS layer's slot before fill so migration
-        # streams clean zeros (not residual data from a prior request) for the
-        # decode side. Slice the cache to batch=cache_layer_idx so the page math
-        # in zero_cache_range hits this layer's slot, not layer 0.
-        if on_layer_complete is not None:
-            assert actual_isl is not None, "actual_isl required when on_layer_complete is set"
-            seq_len_local = kvpe_cache.shape[2]
-            seq_len_total = seq_len_local * self.sp_factor
-            zero_cache_padding_zigzag(
-                kvpe_cache=kvpe_cache[cache_layer_idx],
-                global_end_token=actual_isl,
-                sp_factor=self.sp_factor,
-                seq_len=seq_len_total,
-                decode_chunk_align=DECODE_CHUNK_ALIGN,
-                tp_factor=self.tp_factor,
+        if chunk_start_global is None:
+            # Single-shot prefill: fill whole local slot, run on-device ring SDPA.
+
+            # Zero the padding region of THIS layer's slot before fill so migration
+            # streams clean zeros (not residual data from a prior request) for the
+            # decode side. Slice the cache to batch=cache_batch_idx so the page math
+            # in zero_cache_range hits this user/layer's slot, not slot 0.
+            if on_layer_complete is not None:
+                assert actual_isl is not None, "actual_isl required when on_layer_complete is set"
+                seq_len_local = kvpe_cache.shape[2]
+                seq_len_total = seq_len_local * self.sp_factor
+                zero_cache_padding_zigzag(
+                    kvpe_cache=kvpe_cache[cache_batch_idx],
+                    global_end_token=actual_isl,
+                    sp_factor=self.sp_factor,
+                    seq_len=seq_len_total,
+                    decode_chunk_align=DECODE_CHUNK_ALIGN,
+                    tp_factor=self.tp_factor,
+                )
+
+            ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_batch_idx)
+
+            if on_layer_complete is not None:
+                on_layer_complete(self.layer_idx)
+
+            tt_v_embedding = ttnn.linear(
+                tt_kv_nope,
+                self.wkv_b2_weight,
+                compute_kernel_config=self.default_compute_kernel_config,
+                **self._get_mm_kwargs("wkv_b2", seq_len_local),
             )
 
-        ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_layer_idx)
+            attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                tt_q,
+                tt_kvpe,
+                tt_v_embedding,
+                self.joint_q,
+                self.joint_kv,
+                self.joint_v,
+                persistent_output_buffer_k=self.persistent_k_output_buffer,
+                persistent_output_buffer_v=self.persistent_v_output_buffer,
+                joint_strategy="rear",
+                logical_n=seq_len_local * self.sp_factor,
+                program_config=self._get_sdpa_program_config(seq_len_local),
+                compute_kernel_config=self.default_compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
+                num_links=self.ccl_num_links,
+                cluster_axis=self.sp_axis,
+                mesh_device=self.mesh_device,
+                topology=self.ccl_topology,
+                subdevice_id=self.tt_ccl.worker_sub_device_id,
+                ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
+                use_column_major_ccl=True,
+                is_causal=True,
+                scale=self.scale,
+                is_balanced=self.is_balanced,
+            )
+        else:
+            # Chunked prefill: write this chunk's K/V at the right local offset
+            # in the layer's user slot, then run SDPA + wkv_b2 over the cumulative
+            # cache on device. We use fill_cache_for_user_ (not update_cache):
+            # update_cache is decode-shaped and allocates CBs proportional to
+            # input height, which OOMs L1 for prefill-sized chunks.
+            assert not self.is_balanced, "Chunked prefill currently requires is_balanced=False"
+            assert on_layer_complete is None, "on_layer_complete not yet supported in chunked prefill"
 
-        if on_layer_complete is not None:
-            on_layer_complete(self.layer_idx)
+            chunk_size_global = seq_len_local * self.sp_factor
+            chunk_end_global = chunk_start_global + chunk_size_global
+            tile_size = ttnn.TILE_SIZE
+            assert (
+                chunk_start_global % (tile_size * self.sp_factor) == 0
+                and chunk_size_global % (tile_size * self.sp_factor) == 0
+            ), (
+                f"chunk_start_global ({chunk_start_global}) and chunk_size_global "
+                f"({chunk_size_global}) must be multiples of TILE_SIZE * sp_factor "
+                f"({tile_size * self.sp_factor})"
+            )
 
-        tt_v_embedding = ttnn.linear(
-            tt_kv_nope,
-            self.wkv_b2_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
-            **self._get_mm_kwargs("wkv_b2", seq_len_local),
-        )
+            local_offset = chunk_start_global // self.sp_factor
+            ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_batch_idx, update_idx=local_offset)
 
-        attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-            tt_q,
-            tt_kvpe,
-            tt_v_embedding,
-            self.joint_q,
-            self.joint_kv,
-            self.joint_v,
-            persistent_output_buffer_k=self.persistent_k_output_buffer,
-            persistent_output_buffer_v=self.persistent_v_output_buffer,
-            joint_strategy="rear",
-            logical_n=seq_len_local * self.sp_factor,
-            program_config=self._get_sdpa_program_config(seq_len_local),
-            compute_kernel_config=self.default_compute_kernel_config,
-            dim=2,
-            multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
-            num_links=self.ccl_num_links,
-            cluster_axis=self.sp_axis,
-            mesh_device=self.mesh_device,
-            topology=self.ccl_topology,
-            subdevice_id=self.tt_ccl.worker_sub_device_id,
-            ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
-            use_column_major_ccl=True,
-            is_causal=True,
-            scale=self.scale,
-            is_balanced=self.is_balanced,
-        )
+            attn_out = self._on_device_chunked_attention(
+                tt_q=tt_q,
+                kvpe_cache=kvpe_cache,
+                chunk_start_global=chunk_start_global,
+                chunk_end_global=chunk_end_global,
+                cache_batch_idx=cache_batch_idx,
+            )
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v_out = ttnn.linear(
