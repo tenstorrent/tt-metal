@@ -200,9 +200,9 @@ class BgeM3Model(LightweightModule):
     ) -> ttnn.Tensor:
         self._require_rank2(input_ids, "input_ids")
 
-        if token_type_ids is None:
+        if token_type_ids is None and not getattr(self.embeddings, "_fold_token_type", False):
             token_type_ids = ttnn.subtract(input_ids, input_ids)
-        else:
+        elif token_type_ids is not None:
             self._require_rank2(token_type_ids, "token_type_ids")
 
         if position_ids is None:
