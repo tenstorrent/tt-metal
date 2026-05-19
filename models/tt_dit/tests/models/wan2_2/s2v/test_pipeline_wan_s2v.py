@@ -13,7 +13,7 @@ from loguru import logger
 import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan_s2v import WanPipelineS2V
 
-from .....utils.test import line_params
+from .....utils.test import line_params, ring_params
 
 # Inputs are expected at the repo root (same pattern as test_pipeline_wan_i2v.py).
 # Override with env vars when needed.
@@ -57,6 +57,20 @@ _PROMPT = "a person is talking"
             False,
             False,
             id="bh_2x4sp1tp0",
+        ),
+        # BH Galaxy (4x8, 32 chips) — sp_factor=8, tp_factor=4. Ring fabric matches t2v/i2v.
+        pytest.param(
+            (4, 8),
+            (4, 8),
+            1,
+            0,
+            2,
+            False,
+            ring_params,
+            ttnn.Topology.Ring,
+            False,
+            False,
+            id="bh_4x8sp1tp0",
         ),
     ],
     indirect=["mesh_device", "device_params"],

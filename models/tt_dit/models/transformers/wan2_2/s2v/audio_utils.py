@@ -35,7 +35,7 @@ import torch
 
 import ttnn
 
-from .....layers.linear import Linear
+from .....layers.linear import ColParallelLinear, Linear, prepare_chunked_linear_output
 from .....layers.module import Module, ModuleList, Parameter
 from .....parallel.config import DiTParallelConfig
 from .....parallel.manager import CCLManager
@@ -84,6 +84,8 @@ class CausalConv1d(Module):
         *,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        tp_mesh_axis: int | None = None,
+        ccl_manager: CCLManager | None = None,
     ) -> None:
         super().__init__()
         self.chan_in = chan_in
@@ -92,10 +94,30 @@ class CausalConv1d(Module):
         self.stride = stride
         self.mesh_device = mesh_device
         self.dtype = dtype
+        # TP sharding splits the weight's ``chan_out`` axis across ``tp_mesh_axis``
+        # (ColParallelLinear-style). Each chip's local weight is
+        # ``[chan_out/tp_factor, chan_in, k, 1, 1]`` and the conv3d runs locally
+        # producing ``[B, T, 1, 1, chan_out/tp_factor]`` per chip. An all-gather
+        # at the end re-replicates the output so downstream code sees a
+        # replicated tensor unchanged. Eliminates the 32× redundant compute on
+        # the previously-replicated path.
+        self.tp_mesh_axis = tp_mesh_axis
+        self.ccl_manager = ccl_manager
+        if tp_mesh_axis is not None:
+            tp_factor = self.mesh_device.shape[tp_mesh_axis]
+            assert ccl_manager is not None, "TP-sharded CausalConv1d requires ccl_manager for all-gather"
+            assert chan_out % tp_factor == 0, f"chan_out={chan_out} must be divisible by tp_factor={tp_factor}"
+            weight_mesh_axes = [tp_mesh_axis, None, None, None, None]
+            bias_mesh_axes = [None, tp_mesh_axis]
+            on_host = False
+        else:
+            weight_mesh_axes = None
+            bias_mesh_axes = None
+            on_host = True
 
         self.conv_config = get_conv3d_config(
             chan_in,
-            chan_out,
+            chan_out // (self.mesh_device.shape[tp_mesh_axis] if tp_mesh_axis is not None else 1),
             (kernel_size, 1, 1),
             dtype,
             grid_size=mesh_device.compute_with_storage_grid_size(),
@@ -110,19 +132,36 @@ class CausalConv1d(Module):
             packer_l1_acc=True,
         )
 
-        # Prepared weight layout is [d, out] where d = kT * kH * kW * in_aligned.
-        # Allow the conv3d kernel to do its own prep on first call by keeping the
-        # weight in rank-5 form on host.
-        self.weight = Parameter(
-            total_shape=[chan_out, chan_in, kernel_size, 1, 1],
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            pad_value=0,
-            dtype=dtype,
-            on_host=True,
-        )
+        # Weight storage strategy depends on TP sharding:
+        #   * Replicated path: kept as rank-5 ``[chan_out, chan_in, k, 1, 1]``
+        #     on host. ``ttnn.experimental.conv3d`` prepares it internally on
+        #     first call. Matches the original audio-encoder design.
+        #   * TP-sharded path: pre-prepare via ``prepare_conv3d_weights`` and
+        #     store as ``[d, chan_out]`` (mirrors WanCausalConv3d in the VAE
+        #     decoder), so ``mesh_axes`` can shard ``chan_out`` on tp_axis
+        #     cleanly. The conv3d kernel sees the prepared form on device.
+        if tp_mesh_axis is not None:
+            in_aligned = ((chan_in + 31) // 32) * 32
+            d = kernel_size * 1 * 1 * in_aligned
+            self.weight = Parameter(
+                total_shape=[d, chan_out],
+                mesh_axes=[None, tp_mesh_axis],
+                device=mesh_device,
+                pad_value=0,
+                dtype=dtype,
+            )
+        else:
+            self.weight = Parameter(
+                total_shape=[chan_out, chan_in, kernel_size, 1, 1],
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                pad_value=0,
+                dtype=dtype,
+                on_host=True,
+            )
         self.bias = Parameter(
             total_shape=[1, chan_out],
+            mesh_axes=bias_mesh_axes,
             device=mesh_device,
             pad_value=0,
             dtype=dtype,
@@ -132,18 +171,34 @@ class CausalConv1d(Module):
         if "conv.weight" in state:
             w = state.pop("conv.weight")  # [out, in, k]
             assert w.shape == (self.chan_out, self.chan_in, self.kernel_size), w.shape
-            state["weight"] = w.unsqueeze(-1).unsqueeze(-1).contiguous()  # [out, in, k, 1, 1]
+            w_5d = w.unsqueeze(-1).unsqueeze(-1).contiguous()  # [out, in, k, 1, 1]
+            if self.tp_mesh_axis is not None:
+                # Pre-prepare the conv3d weight so the Parameter can shard the
+                # last dim (chan_out) cleanly. Mirrors WanCausalConv3d.
+                weight_tt = ttnn.from_torch(w_5d, dtype=self.dtype, pad_value=0)
+                prepared = ttnn.experimental.prepare_conv3d_weights(
+                    weight_tensor=weight_tt,
+                    C_in_block=self.conv_config.C_in_block,
+                    device=self.mesh_device,
+                )
+                state["weight"] = local_device_to_torch(prepared)  # [d, chan_out]
+            else:
+                state["weight"] = w_5d
         if "conv.bias" in state:
             state["bias"] = state.pop("conv.bias").reshape(1, -1)
 
     def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+        local_out_channels = self.chan_out
+        if self.tp_mesh_axis is not None:
+            tp_factor = self.mesh_device.shape[self.tp_mesh_axis]
+            local_out_channels = self.chan_out // tp_factor
         out = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
             bias_tensor=self.bias.data,
             device=self.mesh_device,
             config=self.conv_config,
-            output_channels=self.chan_out,
+            output_channels=local_out_channels,
             kernel_size=(self.kernel_size, 1, 1),
             stride=(self.stride, 1, 1),
             padding=(0, 0, 0),
@@ -151,7 +206,13 @@ class CausalConv1d(Module):
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
-        return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+        out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+        if self.tp_mesh_axis is not None:
+            # Output is sharded on the last (chan) dim. Gather across the TP
+            # mesh axis so downstream sees the same replicated layout as the
+            # non-sharded path.
+            out = self.ccl_manager.all_gather_persistent_buffer(out, dim=-1, mesh_axis=self.tp_mesh_axis)
+        return out
 
 
 class MotionEncoder_tc(Module):
@@ -173,6 +234,8 @@ class MotionEncoder_tc(Module):
         need_global: bool = False,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        tp_mesh_axis: int | None = None,
+        ccl_manager: CCLManager | None = None,
     ) -> None:
         super().__init__()
         assert hidden_dim % 4 == 0, "MotionEncoder hidden_dim must be divisible by 4"
@@ -183,20 +246,48 @@ class MotionEncoder_tc(Module):
         self.mesh_device = mesh_device
         self.dtype = dtype
 
+        # All three causal convs ColParallel-shard their out_channels across
+        # the TP mesh axis. Eliminates the 32× redundant compute that the
+        # previously-replicated weights produced.
+        conv_tp = dict(tp_mesh_axis=tp_mesh_axis, ccl_manager=ccl_manager)
         self.conv1_local = CausalConv1d(
-            in_dim, hidden_dim // 4 * num_heads, kernel_size=3, stride=1, mesh_device=mesh_device, dtype=dtype
+            in_dim,
+            hidden_dim // 4 * num_heads,
+            kernel_size=3,
+            stride=1,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            **conv_tp,
         )
         if need_global:
             self.conv1_global = CausalConv1d(
-                in_dim, hidden_dim // 4, kernel_size=3, stride=1, mesh_device=mesh_device, dtype=dtype
+                in_dim,
+                hidden_dim // 4,
+                kernel_size=3,
+                stride=1,
+                mesh_device=mesh_device,
+                dtype=dtype,
+                **conv_tp,
             )
             # Final dense projection used only on the global branch.
             self.final_linear = Linear(hidden_dim, hidden_dim, bias=True, mesh_device=mesh_device)
         self.conv2 = CausalConv1d(
-            hidden_dim // 4, hidden_dim // 2, kernel_size=3, stride=2, mesh_device=mesh_device, dtype=dtype
+            hidden_dim // 4,
+            hidden_dim // 2,
+            kernel_size=3,
+            stride=2,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            **conv_tp,
         )
         self.conv3 = CausalConv1d(
-            hidden_dim // 2, hidden_dim, kernel_size=3, stride=2, mesh_device=mesh_device, dtype=dtype
+            hidden_dim // 2,
+            hidden_dim,
+            kernel_size=3,
+            stride=2,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            **conv_tp,
         )
 
         self.padding_tokens = Parameter(
@@ -223,13 +314,28 @@ class MotionEncoder_tc(Module):
         """Left-replicate-pad the temporal dim by ``kernel_size - 1`` frames.
 
         HF equivalent: ``F.pad(x, (kernel-1, 0), mode='replicate')`` on ``[B, C, T]``;
-        we apply it to ``[B, T, C]``.
+        we apply it to ``[B, T, C]``. Used for the very first upload only —
+        every subsequent conv stage uses ``_causal_pad_device`` instead.
         """
         pad = kernel_size - 1
         if pad == 0:
             return x_torch
         first = x_torch[:, :1, :].expand(-1, pad, -1)
         return torch.cat([first, x_torch], dim=1)
+
+    def _causal_pad_device(self, x_BTHWC: ttnn.Tensor, kernel_size: int) -> ttnn.Tensor:
+        """On-device equivalent of ``_causal_pad_host`` for 5D ``[B, T, 1, 1, C]``.
+
+        ttnn.slice the first frame, ttnn.concat ``kernel_size-1`` copies before
+        the original. Stays on device — no D↔H roundtrip per conv stage.
+        """
+        pad = kernel_size - 1
+        if pad == 0:
+            return x_BTHWC
+        B = int(x_BTHWC.shape[0])
+        C = int(x_BTHWC.shape[-1])
+        first = ttnn.slice(x_BTHWC, [0, 0, 0, 0, 0], [B, 1, 1, 1, C])
+        return ttnn.concat([first] * pad + [x_BTHWC], dim=1)
 
     def _conv_stage_BTC(
         self,
@@ -239,18 +345,21 @@ class MotionEncoder_tc(Module):
         in_chan: int,
         out_chan: int,
     ) -> ttnn.Tensor:
-        """``[B_eff, T, in_chan]`` → host causal-pad → conv → on-device
-        no-affine LayerNorm → SiLU → ``[B_eff, T_post, out_chan]``.
+        """``[B_eff, T, in_chan]`` TILE → on-device causal-pad → conv →
+        no-affine LayerNorm → SiLU → ``[B_eff, T_post, out_chan]`` TILE.
 
-        Pad runs on host because it needs the conv input reshaped to 3D.
-        Downstream code (final_linear / head-unmerge) expects 3D out, so we
-        reshape the conv's TILE 5D ``[B_eff, T, 1, 1, C]`` back at the end.
+        Fully on-device path. Reshapes from 3D TILE to the 5D ROW_MAJOR layout
+        that ``ttnn.experimental.conv3d`` expects, runs the causal pad with
+        ttnn slice+concat (no D↔H roundtrip), then collapses the singleton
+        H/W dims back at the end. Saves the ~1.5 s/stage that was being spent
+        in ``local_device_to_torch`` + host pad + ``ttnn.from_torch`` per
+        conv stage call (4 calls per audio_encoder forward).
         """
-        x_torch = local_device_to_torch(x_tile_BTC).reshape(B_eff, -1, in_chan)
-        x_torch_p = self._causal_pad_host(x_torch, kernel_size=3)
-        x_5d = x_torch_p.reshape(B_eff, x_torch_p.shape[1], 1, 1, in_chan).contiguous()
-        x_dev = ttnn.from_torch(x_5d, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = conv(x_dev)
+        T = int(x_tile_BTC.shape[1])
+        x_rm = ttnn.to_layout(x_tile_BTC, ttnn.ROW_MAJOR_LAYOUT)
+        x_5d = ttnn.reshape(x_rm, [B_eff, T, 1, 1, in_chan])
+        x_padded = self._causal_pad_device(x_5d, kernel_size=3)
+        x = conv(x_padded)
         x = ttnn.layer_norm(
             x,
             weight=None,
@@ -266,59 +375,65 @@ class MotionEncoder_tc(Module):
         """Run the 3-stage encoder on ``x_torch`` ``[B, T, in_dim]`` (CPU).
 
         Returns the local branch alone, or ``(global, local)`` when
-        ``need_global=True``.
+        ``need_global=True``. All intermediate work runs on device — the
+        only D↔H boundary is the initial upload of ``x_torch`` and the
+        final output tensors.
         """
         B, T, _ = x_torch.shape
+        H4 = self.hidden_dim // 4
+        H2 = self.hidden_dim // 2
+        H = self.hidden_dim
 
-        # --- Local branch ---
-        # Stage 1 needs a host head-split between conv and layer_norm, so it's
-        # not folded into _conv_stage_BTC.
+        # Pre-pad on host once so the upload includes the causal pad; later
+        # conv stages re-pad on-device via ``_causal_pad_device``.
         x_torch_p = self._causal_pad_host(x_torch, kernel_size=3)
-        x_5d = x_torch_p.reshape(B, x_torch_p.shape[1], 1, 1, self.in_dim).contiguous()
-        x_dev = ttnn.from_torch(x_5d, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = self.conv1_local(x_dev)
-        head_split = (
-            local_device_to_torch(x)
-            .reshape(B, T, self.num_heads, self.hidden_dim // 4)
-            .permute(0, 2, 1, 3)
-            .reshape(B * self.num_heads, T, self.hidden_dim // 4)
-        )
-        head_split_normed = torch.nn.functional.layer_norm(head_split.float(), (self.hidden_dim // 4,), eps=1e-6)
-        x_dev = ttnn.from_torch(
-            head_split_normed, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        T_in_padded = x_torch_p.shape[1]
+        x_5d = x_torch_p.reshape(B, T_in_padded, 1, 1, self.in_dim).contiguous()
+        x_dev_in = ttnn.from_torch(x_5d, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        # Local branch: conv1_local → split heads → LN → conv2 → conv3.
+        x = self.conv1_local(x_dev_in)
+        x_BT_nH_H4 = ttnn.reshape(x, [B, T, self.num_heads, H4])
+        x_B_nH_T_H4 = ttnn.permute(x_BT_nH_H4, [0, 2, 1, 3])
+        B_local = B * self.num_heads
+        x_BTC = ttnn.reshape(x_B_nH_T_H4, [B_local, T, H4])
+        x_BTC = ttnn.to_layout(x_BTC, ttnn.TILE_LAYOUT)
+        x_dev = ttnn.layer_norm(
+            x_BTC,
+            weight=None,
+            bias=None,
+            epsilon=1e-6,
+            compute_kernel_config=self.layer_norm_compute_kernel_config,
         )
         x_dev = ttnn.silu(x_dev)
-        B_local = B * self.num_heads
-        x_dev = self._conv_stage_BTC(x_dev, self.conv2, B_local, self.hidden_dim // 4, self.hidden_dim // 2)
-        x_dev = self._conv_stage_BTC(x_dev, self.conv3, B_local, self.hidden_dim // 2, self.hidden_dim)
+        x_dev = self._conv_stage_BTC(x_dev, self.conv2, B_local, H4, H2)
+        x_dev = self._conv_stage_BTC(x_dev, self.conv3, B_local, H2, H)
 
-        # Unmerge heads back to ``[B, T/4, num_heads, hidden]`` and append the
-        # learned padding token as an extra head along the token axis.
-        local_out = local_device_to_torch(x_dev).reshape(B, self.num_heads, -1, self.hidden_dim)
-        T4 = local_out.shape[2]
-        local_out = local_out.permute(0, 2, 1, 3).contiguous()
-        pad_torch = (
-            local_device_to_torch(self.padding_tokens.data)
-            .reshape(1, 1, 1, self.hidden_dim)
-            .expand(B, T4, 1, self.hidden_dim)
-        )
-        local_out = torch.cat([local_out, pad_torch.to(local_out.dtype)], dim=2)
-        local_dev = ttnn.from_torch(local_out, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        # Unmerge heads and append the learned padding token as an extra
+        # head/token slot along dim 2.
+        T4 = int(x_dev.shape[1])
+        x_unmerge = ttnn.reshape(x_dev, [B, self.num_heads, T4, H])
+        x_unmerge = ttnn.permute(x_unmerge, [0, 2, 1, 3])
+        pad_tokens_BTH = ttnn.expand(self.padding_tokens.data, [B, T4, 1, H])
+        local_dev = ttnn.concat([x_unmerge, pad_tokens_BTH], dim=2)
 
         if not self.need_global:
             return local_dev
 
-        # --- Global branch ---
-        # No head split → can stay 3D from conv1_global through to final_linear.
-        x_5d = x_torch_p.reshape(B, x_torch_p.shape[1], 1, 1, self.in_dim).contiguous()
-        x_dev = ttnn.from_torch(x_5d, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = self.conv1_global(x_dev)
-        x_torch = local_device_to_torch(x).reshape(B, T, self.hidden_dim // 4).float()
-        x_torch_normed = torch.nn.functional.layer_norm(x_torch, (self.hidden_dim // 4,), eps=1e-6)
-        x_dev = ttnn.from_torch(x_torch_normed, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        # Global branch: reuses the same upload; no head-split.
+        x = self.conv1_global(x_dev_in)
+        x = ttnn.reshape(x, [B, T, H4])
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x_dev = ttnn.layer_norm(
+            x,
+            weight=None,
+            bias=None,
+            epsilon=1e-6,
+            compute_kernel_config=self.layer_norm_compute_kernel_config,
+        )
         x_dev = ttnn.silu(x_dev)
-        x_dev = self._conv_stage_BTC(x_dev, self.conv2, B, self.hidden_dim // 4, self.hidden_dim // 2)
-        x_dev = self._conv_stage_BTC(x_dev, self.conv3, B, self.hidden_dim // 2, self.hidden_dim)
+        x_dev = self._conv_stage_BTC(x_dev, self.conv2, B, H4, H2)
+        x_dev = self._conv_stage_BTC(x_dev, self.conv3, B, H2, H)
         x_dev = self.final_linear(x_dev)
         # Unsqueeze the singleton "head" axis to match the reference's
         # ``rearrange('(b n) t c -> b t n c', b=b)`` with n=1.
@@ -360,6 +475,8 @@ class CausalAudioEncoder(Module):
         need_global: bool = False,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        tp_mesh_axis: int | None = None,
+        ccl_manager: CCLManager | None = None,
     ) -> None:
         super().__init__()
         self.dim = dim
@@ -377,6 +494,8 @@ class CausalAudioEncoder(Module):
             need_global=need_global,
             mesh_device=mesh_device,
             dtype=dtype,
+            tp_mesh_axis=tp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
 
         # Per-layer weights, initialized to 0.01 in the reference. Shape
@@ -421,6 +540,15 @@ class AdaLayerNormZero(Module):
     :meth:`WanS2VTransformer3DModel.after_transformer_block`; this class only
     exists so the state-dict path
     ``audio_injector.injector_adain_layers[i].linear.{weight,bias}`` lands.
+
+    Uses ``ColParallelLinear`` (TP-sharded along ``out_features``) so the
+    projection ``silu(audio) @ W`` produces a TP-sharded output directly. This
+    lets the downstream per-token expansion (matmul with a precomputed
+    SP-sharded indicator matrix in ``WanS2VTransformer3DModel``) produce a
+    naturally 2D-sharded modulation tensor entirely on-device — no per-clip
+    H→D upload of the ~40 MB expanded tensors. State-dict format is identical
+    to plain ``Linear``: weight shape ``[in_features, out_features]`` with
+    ``_prepare_torch_state`` transposing from torch's ``[out, in]``.
     """
 
     def __init__(
@@ -429,12 +557,41 @@ class AdaLayerNormZero(Module):
         dim: int,
         adain_dim: int,
         mesh_device: ttnn.MeshDevice,
+        tp_mesh_axis: int,
     ) -> None:
         super().__init__()
         self.dim = dim
         self.adain_dim = adain_dim
         self.mesh_device = mesh_device
-        self.linear = Linear(adain_dim, dim * 2, bias=True, mesh_device=mesh_device)
+        self.tp_mesh_axis = tp_mesh_axis
+        self.tp_factor = mesh_device.shape[tp_mesh_axis]
+        self.linear = ColParallelLinear(
+            adain_dim,
+            dim * 2,
+            bias=True,
+            mesh_device=mesh_device,
+            mesh_axis=tp_mesh_axis,
+        )
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        # Reference layout for ``proj = silu(audio) @ W``:
+        #   proj[..., 0:dim]   → shift
+        #   proj[..., dim:2*dim] → scale
+        # ColParallelLinear shards the last (out) axis contiguously across
+        # ``tp_factor`` chips → chip i holds proj[..., i*2*dim/tp : (i+1)*2*dim/tp].
+        # A naive ``chunk(proj, 2, dim=-1)`` on that local slice would split
+        # each chip's chunk into halves that mix shift/scale incorrectly
+        # (chips 0..tp/2-1 hold only shift, chips tp/2..tp-1 only scale).
+        # Pre-interleave the projection rows so each chip's local slice is
+        # ``[shift_dev_i (dim/tp cols) | scale_dev_i (dim/tp cols)]``; then
+        # ``chunk(_, 2, dim=-1)`` correctly produces (local_shift, local_scale).
+        # Mirrors the ``norm1_linear`` pattern in ``blocks/transformer_block.py``.
+        prepare_chunked_linear_output(
+            state,
+            prefix="linear",
+            device_count=self.tp_factor,
+            chunks=2,
+        )
 
     def forward(self, *_args, **_kwargs):
         raise NotImplementedError("AdaLayerNormZero is a parameter holder; call .linear directly")
@@ -506,8 +663,10 @@ class AudioInjector_WAN(Module):
 
         if enable_adain:
             adain_dim = adain_dim or dim
+            tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
             self.injector_adain_layers = ModuleList(
-                AdaLayerNormZero(dim=dim, adain_dim=adain_dim, mesh_device=mesh_device) for _ in range(n_inject)
+                AdaLayerNormZero(dim=dim, adain_dim=adain_dim, mesh_device=mesh_device, tp_mesh_axis=tp_mesh_axis)
+                for _ in range(n_inject)
             )
         else:
             self.injector_adain_layers = ModuleList()

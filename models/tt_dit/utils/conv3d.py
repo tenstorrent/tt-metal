@@ -194,7 +194,14 @@ _BLOCKINGS = {
     (4, 8, 192, 192, (3, 3, 3), 83, 60, 52): (96, 96, 3, 16, 2),  # up2_res — 7547us
     (4, 8, 192, 96, (1, 3, 3), 81, 120, 104): (192, 96, 1, 8, 4),  # up2_spatial — table 5755us
     (4, 8, 96, 96, (3, 3, 3), 83, 120, 104): (96, 96, 7, 4, 8),  # up3_res — 6839us
-    (4, 8, 96, 3, (3, 3, 3), 83, 120, 104): (96, 32, 8, 4, 4),  # conv_out — 4986us
+    # NOTE: do NOT use T_out_block > 1 here. The original swept (8, 4, 4)
+    # blocking shows a visible twitch around pixel frame 24 (start of the
+    # 3rd T-block when T_block=8). Setting (1, 4, 4) also misbehaved
+    # silently — ref-image identity was lost in the decoded video — so
+    # ad-hoc tweaks of any of these tile values can hit untested code paths
+    # in ttnn.experimental.conv3d. (1, 8, 4) copied from the 4x8 480p
+    # t_chunk=1 entry below is the safe, swept choice.
+    (4, 8, 96, 3, (3, 3, 3), 83, 120, 104): (96, 32, 1, 8, 4),  # conv_out — avoids twitch; copied from t_chunk=1
     # ===================================================================
     # BH Galaxy 4x8, 720p, 81 frames full-T (latent T=21)
     # Per-device (H,W): stage0(23,20) stage1(46,40) stage2(92,80) stage3(184,160)

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import statistics
 
 import numpy as np
@@ -227,7 +228,7 @@ def test_pipeline_performance(
     ]
 
     num_frames = 81
-    num_inference_steps = 40
+    num_inference_steps = int(os.environ.get("WAN_STEPS", "40"))
 
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
@@ -252,21 +253,21 @@ def test_pipeline_performance(
         qc = getattr(QuantConfig, quant_config_name)()
         set_quant_config(pipeline, qc)
 
-    # Warmup run (not timed)
+    # Warmup run (not timed). Always run a warmup pass so per-step measurements
+    # reflect steady-state, not first-call program build.
     logger.info("Running warmup iteration...")
 
     with benchmark_profiler("run", iteration=0):
-        if traced:
-            with torch.no_grad():
-                pipeline(
-                    prompt=prompts[0],
-                    image_prompt=image_prompt,
-                    height=height,
-                    width=width,
-                    num_frames=num_frames,
-                    num_inference_steps=2,  # Small number of steps to reduce test time.
-                    traced=traced,
-                )
+        with torch.no_grad():
+            pipeline(
+                prompt=prompts[0],
+                image_prompt=image_prompt,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                num_inference_steps=2,  # Small number of steps to reduce test time.
+                traced=traced,
+            )
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 

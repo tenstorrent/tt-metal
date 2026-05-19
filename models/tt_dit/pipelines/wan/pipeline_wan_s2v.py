@@ -53,6 +53,8 @@ Any non-default S2V option raises :class:`NotImplementedError`:
 from __future__ import annotations
 
 import os
+import tempfile
+import wave
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,8 +75,10 @@ from models.perf.benchmarking_utils import BenchmarkProfiler  # noqa: F401  (kep
 
 from ...encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder
 from ...encoders.wav2vec2.audio_preprocess import (
+    S2V_AUDIO_SAMPLES_PER_CLIP,
     S2V_VIDEO_RATE,
     WAV2VEC2_HZ,
+    WAV2VEC2_SAMPLE_RATE,
     get_audio_embed_bucket_fps,
     linear_interpolation,
     load_audio_to_input_values,
@@ -151,7 +155,7 @@ class WanPipelineS2V(WanPipeline):
         height: int = 0,
         width: int = 0,
         num_frames: int = 81,
-        run_warmup: bool = False,
+        run_warmup: bool = True,
         audio_inject_layers: tuple[int, ...] | None = None,
     ):
         # Skip the parent __init__ — it's hard-wired to Diffusers loaders we
@@ -397,6 +401,14 @@ class WanPipelineS2V(WanPipeline):
         self.latent_buffer = None
         self.condition_buffer = None
 
+        # Lazy multi-clip warmup tracking. ``__init__`` only warms the 1-clip
+        # path (drop_first_motion=True). The first ``__call__`` that requests
+        # num_clips>1 triggers a one-shot warmup of the clip-1+ shape
+        # (drop_first_motion=False with motion latents). ``_warming_up`` guards
+        # against re-entrancy when the lazy warmup recursively invokes self.
+        self._multi_clip_warmed: bool = False
+        self._warming_up: bool = False
+
         # ------------------------------------------------------------------
         # 10. Load weights: text encoder + VAE via the existing cache helpers;
         #     S2V transformer via the native loader + mapper; audio encoder
@@ -448,10 +460,12 @@ class WanPipelineS2V(WanPipeline):
                 "sp_axis": 1,
                 "tp_axis": 0,
                 "num_links": 2,
-                "dynamic_load": True,
-                "topology": ttnn.Topology.Linear,
+                "dynamic_load": False,
+                "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
-                "vae_t_chunk_size": 1,
+                # Full-T single pass on 4×8 (matches t2v decoder choice); sp_factor=8
+                # halves per-device H vs 2×4, giving headroom for the full latent T=21.
+                "vae_t_chunk_size": None,
             }
             # BH Loud Box (2x4, 8 chips): mirror the 4x8 config; sp_factor=4 / tp_factor=2.
             device_configs[(2, 4)] = {
@@ -566,6 +580,67 @@ class WanPipelineS2V(WanPipeline):
             get_torch_state_dict=lambda: self.vae.state_dict(),
         )
 
+    def warmup_buffers(
+        self,
+        height: int,
+        width: int,
+        image_prompt: Optional[Image.Image] = None,
+        num_clips: int = 1,
+    ) -> None:
+        """Warm program caches for every S2V subsystem.
+
+        The base ``WanPipeline.warmup_buffers`` calls ``run_single_prompt`` with
+        only text + image inputs — that signature is invalid for S2V which
+        requires ``audio_prompt``. This override synthesizes a black reference
+        image and silent audio, then runs the full pipeline once with
+        ``num_inference_steps=2``.
+
+        Two distinct shape signatures exist:
+        - Clip 0 (``drop_first_motion=True``, N_motion=0)
+        - Clip 1+ (``drop_first_motion=False``, N_motion>0)
+
+        The per-clip caches (frame_packer programs, ``_mask_constant_cache``,
+        ``_mask_noisy_cache``, ``_adain_E_cache``) are keyed by
+        ``(padded_noisy, padded_const, N_ref, N_motion)``. Default
+        ``num_clips=1`` only warms the clip-0 signature — fast init for the
+        common single-clip case. Multi-clip callers pay the second-shape
+        warmup lazily via ``__call__``'s dispatcher.
+        """
+        sample_rate = WAV2VEC2_SAMPLE_RATE
+        num_samples = num_clips * S2V_AUDIO_SAMPLES_PER_CLIP
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            warmup_audio_path = tmp.name
+        try:
+            with wave.open(warmup_audio_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(b"\x00\x00" * num_samples)
+
+            warmup_image = image_prompt if image_prompt is not None else Image.new("RGB", (width, height))
+            self._warming_up = True
+            try:
+                self(
+                    prompt="warmup",
+                    image_prompt=warmup_image,
+                    audio_prompt=warmup_audio_path,
+                    height=height,
+                    width=width,
+                    num_clips=num_clips,
+                    num_inference_steps=2,
+                    seed=0,
+                    output_type="uint8",
+                )
+            finally:
+                self._warming_up = False
+            if num_clips >= 2:
+                self._multi_clip_warmed = True
+        finally:
+            try:
+                os.remove(warmup_audio_path)
+            except OSError:
+                pass
+
     def _load_s2v_transformer(self, s2v_snapshot: Path) -> None:
         ref_sd = load_s2v_state_dict(s2v_snapshot)
         tt_sd = translate_s2v_state_dict(ref_sd)
@@ -614,14 +689,10 @@ class WanPipelineS2V(WanPipeline):
     # Pre-denoise plumbing for S2V — invoked by __call__() once per clip.
     # ----------------------------------------------------------------------
 
-    def _encode_normalized(self, pixels_BCTHW: torch.Tensor, *, encoder_t_chunk_size: int = 4) -> torch.Tensor:
+    def _encode_normalized(self, pixels_BCTHW: torch.Tensor, *, encoder_t_chunk_size: int = 16) -> torch.Tensor:
         """TT VAE encode + ``(mu - latents_mean) / latents_std`` normalization.
 
         ``pixels_BCTHW`` → ``[B, z_dim=16, T_lat, H_lat, W_lat]``.
-
-        The default ``encoder_t_chunk_size=4`` bounds the peak VAE-encoder
-        intermediate; multi-clip's 73-frame motion encode trips a DRAM OOM
-        at the larger chunk sizes that worked for single-frame ref encoding.
         """
         pixels_BTHWC = pixels_BCTHW.to(torch.float32).permute(0, 2, 3, 4, 1)
         pixels_BTHWC = conv_pad_in_channels(pixels_BTHWC)
@@ -653,25 +724,58 @@ class WanPipelineS2V(WanPipeline):
         )
 
     def _prepare_audio_full(self, audio_prompt: str) -> tuple[torch.Tensor, int]:
-        """Run wav2vec2 + bucket the full audio file to per-clip windows.
+        """Run wav2vec2 + bucket the audio file to per-clip windows.
 
         Mirrors ``wan/speech2video.py:283-294``: wav2vec2 outputs at 50 Hz
         → linear_interpolation to 30 Hz → ``get_audio_embed_bucket_fps``
         evenly samples one feature per video frame at 16 fps, padding to
         ``num_repeat * INFER_FRAMES_PIXEL`` frames.
 
+        Per-clip canonical chunking: ``load_audio_to_input_values`` snaps
+        every audio file to an integer multiple of ``S2V_AUDIO_SAMPLES_PER_CLIP``
+        (= 80 video frames worth of audio = 80 000 samples). We then invoke
+        ``tt_audio_encoder`` once per 80 000-sample chunk so every wav2vec2
+        forward sees the SAME input shape regardless of total audio length,
+        and the warmup primes that canonical shape exactly. Reference
+        semantics are preserved at the per-clip slice level (each clip
+        downstream still gets exactly 80 audio frames via the unchanged
+        bucketing logic on the concatenated features).
+
         Returns ``(audio_BLNF_full, num_repeat)`` where ``audio_BLNF_full``
         has shape ``[1, num_layers, audio_dim, num_repeat * 80]``.
         """
         input_values = load_audio_to_input_values(audio_prompt, self.audio_processor)
-        all_hidden = self.tt_audio_encoder(input_values, output_hidden_states=True)
+        T_raw = input_values.shape[-1]
+        assert T_raw % S2V_AUDIO_SAMPLES_PER_CLIP == 0, (
+            f"load_audio_to_input_values must snap to a multiple of " f"{S2V_AUDIO_SAMPLES_PER_CLIP}; got T_raw={T_raw}"
+        )
+        n_chunks = T_raw // S2V_AUDIO_SAMPLES_PER_CLIP
+
+        # Per-chunk wav2vec2: every call has the canonical clip length so the
+        # on-device program cache hits the same shape for every chunk and
+        # every audio file. Each chunk returns ``num_layers`` ttnn tensors.
+        per_chunk_hidden_dev: list[list] = []
+        for c in range(n_chunks):
+            start = c * S2V_AUDIO_SAMPLES_PER_CLIP
+            end = start + S2V_AUDIO_SAMPLES_PER_CLIP
+            chunk = input_values[..., start:end]
+            per_chunk_hidden_dev.append(self.tt_audio_encoder(chunk, output_hidden_states=True))
+
+        # Bring each layer to host then concat along time across chunks so the
+        # bucketing below sees ``[1, num_layers, T_50Hz_total, audio_dim]`` —
+        # exactly the layout the single-call path produced.
+        num_layers = len(per_chunk_hidden_dev[0])
+        per_layer_chunks: list[list[torch.Tensor]] = [[] for _ in range(num_layers)]
+        for chunk_hidden in per_chunk_hidden_dev:
+            for layer_idx, h in enumerate(chunk_hidden):
+                per_layer_chunks[layer_idx].append(
+                    fast_device_to_host(h, self.mesh_device, [None, None], ccl_manager=self.encoder_ccl_manager).float()
+                )
         hidden_torch = torch.stack(
-            [
-                fast_device_to_host(h, self.mesh_device, [None, None], ccl_manager=self.encoder_ccl_manager).float()
-                for h in all_hidden
-            ],
+            [torch.cat(per_layer_chunks[layer_idx], dim=1) for layer_idx in range(num_layers)],
             dim=1,
-        )  # [1, num_layers, T_50Hz, audio_dim]
+        )
+
         num_repeat: Optional[int] = None
         bucketed_per_layer = []
         for layer_idx in range(hidden_torch.shape[1]):
@@ -877,6 +981,13 @@ class WanPipelineS2V(WanPipeline):
         output_type: str = "uint8",
         return_dict: bool = True,
         max_sequence_length: int = 512,
+        # Match t2v at 4×8: traced=False. T2V only enables trace at 4×32
+        # (test_performance_wan.py:191). ``ttnn.embedding(layout=TILE_LAYOUT)``
+        # in the t5 forward writes during trace capture, which fails on 4×8
+        # regardless of trace_region_size / fabric_router_config — a ttnn op-
+        # level constraint, not a pipeline-config gap. The s2v denoise loop
+        # without trace runs in 25.9 s / 5 steps; further gains come from
+        # matmul tuning + the AdaIN-fused norm1 path, not trace.
         traced: bool = False,
         profiler: Optional[BenchmarkProfiler] = None,
         profiler_iteration: int = 0,
@@ -950,6 +1061,24 @@ class WanPipelineS2V(WanPipeline):
                 f"S2V multi-clip: {num_clips} clips × {self._INFER_FRAMES_PIXEL} pixels = "
                 f"{num_clips * self._INFER_FRAMES_PIXEL - self._S2V_VAE_CLIP0_TRIM} final frames"
             )
+
+            # Lazy second-shape warmup. __init__ only warmed the 1-clip path
+            # (drop_first_motion=True). On the first real call that needs
+            # num_clips>1, run a one-shot 2-clip warmup to populate the
+            # clip-1+ shape caches (drop_first_motion=False, N_motion>0).
+            # Subsequent calls hit fully-warm caches. ``_warming_up`` guards
+            # recursion when this dispatcher is reached from inside the
+            # warmup invocation itself. The recursive call mutates several
+            # self.* fields set at the top of __call__ — restore them after.
+            if num_clips > 1 and not self._multi_clip_warmed and not self._warming_up:
+                logger.info("Lazy multi-clip warmup: warming clip-1+ shape signature")
+                self.warmup_buffers(height=height, width=width, num_clips=2)
+                self._s2v_profiler = profiler
+                self._s2v_profiler_iteration = profiler_iteration
+                self.transformer_states[0].guidance_scale = guidance_scale
+                self.transformer_states[1].guidance_scale = (
+                    guidance_scale if guidance_scale_2 is None else guidance_scale_2
+                )
 
             # 4. Initialize motion state. Clip 0 always has ``drop_first_motion=True``
             # which prepends ``ref_latents_for_decode`` instead of ``motion_latents``

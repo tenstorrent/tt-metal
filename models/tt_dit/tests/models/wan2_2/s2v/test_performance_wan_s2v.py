@@ -29,7 +29,7 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_dit.pipelines.wan.pipeline_wan_s2v import WanPipelineS2V
 
-from .....utils.test import line_params
+from .....utils.test import line_params, ring_params_8k
 
 # Inputs are expected at the repo root (same pattern as test_pipeline_wan_i2v.py).
 # Override with env vars when needed.
@@ -69,6 +69,18 @@ _NEGATIVE_PROMPT = (
             False,
             id="bh_2x4sp1tp0",
         ),
+        pytest.param(
+            (4, 8),
+            (4, 8),
+            1,
+            0,
+            2,
+            False,
+            ring_params_8k,
+            ttnn.Topology.Ring,
+            False,
+            id="bh_4x8sp1tp0",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -79,8 +91,8 @@ _NEGATIVE_PROMPT = (
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    [5, 40],
-    ids=["steps5", "steps40"],
+    [1, 5, 40],
+    ids=["steps1", "steps5", "steps40"],
 )
 @pytest.mark.parametrize(
     "num_clips",
@@ -181,9 +193,6 @@ def test_s2v_pipeline_performance(
     per_clip_vae_decode = [_dur(f"s2v_clip_{r}_vae_decode") for r in range(num_clips)]
     per_clip_vae_encode_motion = [_dur(f"s2v_clip_{r}_vae_encode_motion") for r in range(num_clips)]
 
-    # Audio cross-attn injection accumulator (cumulative across the whole run).
-    audio_inject_seconds = float(getattr(pipeline.transformer, "_audio_inject_sec_accum", 0.0))
-
     sum_denoise = sum(per_clip_denoise)
     sum_vae_decode = sum(per_clip_vae_decode)
     sum_vae_encode_motion = sum(per_clip_vae_encode_motion)
@@ -253,15 +262,6 @@ def test_s2v_pipeline_performance(
     print(
         f"  Total denoise:                       {sum_denoise:8.3f}s   {sum_denoise / total_denoise_steps:6.3f}s/step"
     )
-    print(
-        f"  Audio cross-attn (cumulative):       {audio_inject_seconds:8.3f}s   "
-        f"{audio_inject_seconds / total_denoise_steps:6.4f}s/step  "
-        f"({100.0 * audio_inject_seconds / max(sum_denoise, 1e-9):4.1f}% of denoise)"
-    )
-    block_other = sum_denoise - audio_inject_seconds
-    print(
-        f"  Block-stack (non-audio, cumulative): {block_other:8.3f}s   {block_other / total_denoise_steps:6.4f}s/step"
-    )
 
     if total > 0:
         print()
@@ -275,7 +275,6 @@ def test_s2v_pipeline_performance(
             ("per-clip prepare_audio_emb (sum)", sum_prep_audio),
             ("per-clip prepare_cond_emb (sum)", sum_prep_cond),
             ("per-clip denoise (sum)", sum_denoise),
-            ("  ↳ audio injection", audio_inject_seconds),
             ("per-clip vae_decode (sum)", sum_vae_decode),
             ("per-clip vae_encode_motion (sum)", sum_vae_encode_motion),
         ]:

@@ -15,7 +15,21 @@ if TYPE_CHECKING:
 
 WAV2VEC2_SAMPLE_RATE = 16000
 WAV2VEC2_HZ = 50  # wav2vec2 outputs hidden states at 50 Hz (16 kHz / 320 stride).
+WAV2VEC2_FE_STRIDE = 320  # feature extractor stride (raw samples → 50 Hz hidden states)
 S2V_VIDEO_RATE = 30  # reference WAN 2.2 S2V resamples wav2vec2 features to 30 Hz before bucketing.
+
+# Canonical audio sequence length for S2V, sized to one clip.
+#   _INFER_FRAMES_PIXEL = 80 video frames per clip (pipeline_wan_s2v.py:642)
+#   S2V_VIDEO_FPS       = 16 fps
+#   → one clip duration = 80 / 16 = 5.0 s
+#   → one clip audio    = 5.0 s × 16 kHz = 80 000 samples
+# All wav2vec2 forward passes are normalized to an integer multiple of this
+# length so the on-device transformer always sees a shape it has already
+# warmed (250 features × N) and reuses the program cache instead of
+# rebuilding programs for every audio-file length variation.
+S2V_INFER_FRAMES_PIXEL = 80
+S2V_VIDEO_FPS = 16
+S2V_AUDIO_SAMPLES_PER_CLIP = S2V_INFER_FRAMES_PIXEL * WAV2VEC2_SAMPLE_RATE // S2V_VIDEO_FPS  # 80 000
 
 
 def load_audio_to_input_values(
@@ -32,7 +46,21 @@ def load_audio_to_input_values(
 
     waveform, _sr = librosa.load(audio_path, sr=target_sr, mono=True)
     inputs = processor(waveform, sampling_rate=target_sr, return_tensors="pt")
-    return inputs.input_values
+    iv = inputs.input_values
+    # Snap to the nearest multiple of S2V_AUDIO_SAMPLES_PER_CLIP so the
+    # wav2vec2 transformer always sees an integer number of canonical clips
+    # (each = 80 video frames worth of audio). This guarantees that warmup —
+    # which uses exactly one canonical clip — primes the same program shape
+    # the production audio path uses.
+    canonical = S2V_AUDIO_SAMPLES_PER_CLIP
+    T_raw = iv.shape[-1]
+    n_clips = max(1, round(T_raw / canonical))
+    target_len = n_clips * canonical
+    if target_len > T_raw:
+        iv = torch.nn.functional.pad(iv, (0, target_len - T_raw))
+    elif target_len < T_raw:
+        iv = iv[..., :target_len]
+    return iv
 
 
 def linear_interpolation(
