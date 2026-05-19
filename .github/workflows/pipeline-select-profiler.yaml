@@ -132,8 +132,6 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      use-artifacts-from-run: 26122026777
-
 
   galaxy-profiler-tests:
     needs: [determine-tests, build-artifact]
