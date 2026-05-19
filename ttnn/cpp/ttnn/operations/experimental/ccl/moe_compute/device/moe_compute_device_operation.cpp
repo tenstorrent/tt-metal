@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "hostdevcommon/config.hpp"
+#include "ttnn/operations/ccl/common/host/moe_core_placement.hpp"
 #include "kernels/moe_ring_common.h"
 #include "moe_compute_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.hpp"
@@ -124,6 +124,14 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const uint32_t tiles_per_step = (tiles_per_step_raw + 1) & ~1u;
     TT_FATAL(
         tiles_per_step >= 2 && tiles_per_step % 2 == 0, "tiles_per_step ({}) must be even and >= 2", tiles_per_step);
+
+    // Validate that dynamic core placement succeeds for this hidden size and combine grid.
+    ttnn::operations::ccl::common::select_moe_compute_cores(
+        mesh_device,
+        combine_token_parallel_cores,
+        combine_data_parallel_cores,
+        hidden_size,
+        args.combine_params.mux_core_range_set);
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
@@ -339,7 +347,12 @@ std::vector<ttnn::Tensor> moe_compute(
     }
 
     auto* mesh_device = tilize_input_tensor.device();
-    const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
+    const auto& combine_cores = get_moe_combine_cores(
+        mesh_device,
+        num_token_parallel_cores,
+        num_data_parallel_cores,
+        hidden_size,
+        mux_core_range_set.value_or(CoreRangeSet{}));
 
     ttnn::experimental::prim::SelectiveReduceCombineParams combine_params{
         .hidden_size = hidden_size,

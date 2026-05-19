@@ -79,6 +79,15 @@ struct MoEComputeMeshWorkloadFactory {
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     ttnn::MeshDevice* mesh_device,
     const uint32_t combine_token_parallel_cores,
-    const uint32_t combine_data_parallel_cores);
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set = CoreRangeSet());
+
+ttnn::CoreCoord get_moe_tilize_drain_core(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set = CoreRangeSet());
 
 }  // namespace ttnn::experimental::prim

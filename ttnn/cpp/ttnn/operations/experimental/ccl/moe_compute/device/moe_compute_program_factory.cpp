@@ -23,6 +23,7 @@
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/ccl/common/host/moe_core_placement.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace {
@@ -46,9 +47,6 @@ uint32_t get_num_rows_st(const ttnn::Tensor& tensor) {
     return logical_volume / hidden_size;
 }
 
-const CoreRangeSet max_combine_core_range_set = CoreRangeSet(CoreRange({5, 0}, {6, 7}));
-const std::vector<CoreCoord> max_tilize_cores = {CoreCoord(6, 9), CoreCoord(6, 8), CoreCoord(5, 9), CoreCoord(5, 8)};
-
 std::tuple<
     std::vector<CoreCoord>,  // T cores
     std::vector<CoreCoord>,  // MM cores
@@ -65,76 +63,23 @@ get_cores(
     ttnn::MeshDevice* mesh_device,
     const uint32_t combine_token_parallel_cores,
     uint32_t combine_data_parallel_cores,
-    uint32_t hidden_size) {
-    /*
-     * - First tilize core is the drain sync
-     * - First ((total_tilize_cores + 1) / 2) tilize cores are primary mcast group
-     * - Remaining cores are secondary mcast group (with the first of them being the secondary mcaster)
-     */
-
-    // Calculate number of tilize cores based on hidden dimension
-    const uint32_t hidden_tiles = hidden_size / TILE_WIDTH;
-
-    // Find the maximum number of tilize cores that evenly divides hidden_tiles
-    // Start from max possible (4 cores) and work down
-    std::vector<CoreCoord> tilize_cores = max_tilize_cores;
-    while (tilize_cores.size() > 1 && hidden_tiles % tilize_cores.size() != 0) {
-        tilize_cores.pop_back();
-    }
-
-    const auto matmul_cores =
-        mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
-
-    // CoreRangeSets
-    const CoreRangeSet tilize_core_range_set = CoreRangeSet(tilize_cores);
-    const CoreRangeSet matmul_core_range_set = CoreRangeSet(matmul_cores);
-    const CoreRangeSet tilize_matmul_core_range_set = tilize_core_range_set.merge(matmul_core_range_set);
-
-    // Bounding boxes
-    const CoreRange tilize_bounding_box = tilize_core_range_set.bounding_box();
-    const CoreRange matmul_bounding_box = matmul_core_range_set.bounding_box();
-
-    // Verify none of the bounding boxes overlap
-    TT_FATAL(!tilize_bounding_box.intersects(matmul_bounding_box), "tilize and matmul bounding boxes cannot overlap");
-
-    // Combine cores (16 max), that don't overlap with any of the tilize or matmul bounding boxes
-    const auto combine_core_range_set = select_from_corerangeset(
-        max_combine_core_range_set,
-        /*start_index=*/0,
-        (combine_token_parallel_cores * combine_data_parallel_cores) - 1);
-
-    const CoreRange combine_bounding_box = combine_core_range_set.bounding_box();
-
-    // consistent order matters for the list of combine cores so produce them as a sorted vector
-    auto combine_cores = corerange_to_cores(combine_core_range_set);
-    std::sort(combine_cores.begin(), combine_cores.end(), [](const auto& ca, const auto& cb) {
-        if (ca.x != cb.x) {
-            return ca.x < cb.x;
-        }
-        return ca.y < cb.y;
-    });
-
-    // MatMul + combine CoreRangeSet, needed for semaphores
-    const auto combine_matmul_core_range_set = combine_core_range_set.merge(matmul_core_range_set);
-
-    // All worker cores (tilize + matmul + combine)
-    const CoreRangeSet all_worker_cores_range_set = tilize_matmul_core_range_set.merge(combine_core_range_set);
-
-    TT_FATAL(!combine_bounding_box.intersects(tilize_bounding_box), "combine and tilize bounding boxes cannot overlap");
-    TT_FATAL(!combine_bounding_box.intersects(matmul_bounding_box), "combine and matmul bounding boxes cannot overlap");
+    uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set) {
+    const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
+        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, mux_core_range_set);
 
     return {
-        tilize_cores,
-        matmul_cores,
-        tilize_core_range_set,
-        matmul_core_range_set,
-        tilize_matmul_core_range_set,
-        combine_core_range_set,
-        combine_matmul_core_range_set,
-        all_worker_cores_range_set,
-        combine_cores,
-        tilize_bounding_box,
-        matmul_bounding_box};
+        selection.tilize_cores,
+        selection.matmul_cores,
+        selection.tilize_core_range_set,
+        selection.matmul_core_range_set,
+        selection.tilize_matmul_core_range_set,
+        selection.combine_core_range_set,
+        selection.combine_matmul_core_range_set,
+        selection.all_worker_cores_range_set,
+        selection.combine_cores,
+        selection.tilize_bounding_box,
+        selection.matmul_bounding_box};
 }
 
 std::string serialize_physical_core_coords(const std::vector<ttnn::CoreCoord>& cores, const ttnn::MeshDevice& device) {
@@ -157,16 +102,31 @@ namespace ttnn::experimental::prim {
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     ttnn::MeshDevice* mesh_device,
     const uint32_t combine_token_parallel_cores,
-    const uint32_t combine_data_parallel_cores) {
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set) {
     constexpr auto combine_cores_return_index = 8;
 
-    // Use dummy hidden_size since we only need combine cores (which don't depend on hidden_size)
-    // This function is only for getting combine cores, not tilize cores
-    constexpr uint32_t dummy_hidden_size = 7168;  // DeepSeek default
-    const auto get_cores_return =
-        get_cores(mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, dummy_hidden_size);
+    const auto get_cores_return = get_cores(
+        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, mux_core_range_set);
 
     return std::get<combine_cores_return_index>(get_cores_return);
+}
+
+ttnn::CoreCoord get_moe_tilize_drain_core(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set) {
+    constexpr auto tilize_cores_return_index = 0;
+
+    const auto get_cores_return = get_cores(
+        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, mux_core_range_set);
+
+    const auto& tilize_cores = std::get<tilize_cores_return_index>(get_cores_return);
+    TT_FATAL(!tilize_cores.empty(), "moe_compute tilize drain core selection returned no tilize cores");
+    return tilize_cores.at(0);
 }
 
 MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFactory::create_mesh_workload(
@@ -187,7 +147,8 @@ MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFact
         mesh_device,
         args.combine_params.num_token_parallel_cores,
         args.combine_params.num_data_parallel_cores,
-        hidden_size);
+        hidden_size,
+        args.combine_params.mux_core_range_set);
 
     const auto& combine_core_range_set = std::get<combine_core_range_set_return_index>(core_ret);
 
@@ -335,7 +296,12 @@ MoEComputeMeshWorkloadFactory::create_at(
          combine_cores,
          tilize_bounding_box,
          matmul_bounding_box] =
-            get_cores(mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size);
+            get_cores(
+                mesh_device,
+                combine_token_parallel_cores,
+                combine_data_parallel_cores,
+                hidden_size,
+                args.combine_params.mux_core_range_set);
 
     const uint32_t tilize_num_cores = tilize_core_range_set.num_cores();
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
@@ -425,7 +391,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     // that metadata is ready and task splitting can proceed.
     // Allocate on full rectangle of usable cores so we can multicast without clobbering.
     const auto tilize_combine_sync_semaphore_id =
-        tt::tt_metal::CreateSemaphore(program, max_combine_core_range_set, INVALID);
+        tt::tt_metal::CreateSemaphore(program, combine_core_range_set, INVALID);
 
     // Matmul dm1 signals combine cores when data is written; combine writer waits on this semaphore.
     // For double buffering, combine cores will also use this semaphore to signal matmul when buffer segments are free

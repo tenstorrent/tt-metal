@@ -64,6 +64,7 @@ void py_module(nb::module_& mod) {
     ccl::bind_all_to_all_dispatch_metadata(mod);
     ccl::bind_moe_compute(mod);
     ccl::bind_get_moe_combine_cores(mod);
+    ccl::bind_get_moe_tilize_drain_core(mod);
     ccl::moe::bind_selective_reduce_combine(mod);
 }
 
