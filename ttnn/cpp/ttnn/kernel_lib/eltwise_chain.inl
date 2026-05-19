@@ -91,12 +91,17 @@ ALWI constexpr uint32_t window_2d(uint32_t Ht, uint32_t Wt) noexcept {
 // reference an arbitrary tile in the caller-staged window, so streaming wait/pop
 // would under-wait or pop the wrong slot. Caller-managed lifecycle (NoWaitNoPop)
 // is the canonical pairing.
+//
+// WaitAndPopPerBlock rejects RowBcast/ColBcast (window > BlockSize — producer
+// can't have only one chunk staged) and BlockIterOffset (caller-managed window
+// shape contradicts chain-owned chunked pop).
 template <CopyTilePolicy P, CbIndexMode M>
 inline constexpr bool valid_policy_mode_2d_v =
-    !(is_bcast_mode_v<M> && (P == CopyTilePolicy::WaitAndPop)) &&
+    !(is_bcast_mode_v<M> &&
+      (P == CopyTilePolicy::WaitAndPop || P == CopyTilePolicy::WaitAndPopPerBlock)) &&
     !(M == CbIndexMode::BlockIterOffset &&
       (P == CopyTilePolicy::WaitAndPop || P == CopyTilePolicy::WaitNoPop ||
-       P == CopyTilePolicy::NoWaitPop));
+       P == CopyTilePolicy::NoWaitPop || P == CopyTilePolicy::WaitAndPopPerBlock));
 
 // =============================================================================
 // A. Chain typed-list machinery
@@ -294,6 +299,14 @@ struct CopyTile : CopyTileTag {
         }
     }
 
+    /// Per-outer-iter wait of `inner_count` tiles (chunked streaming).
+    /// inner_count == BlockSize for steady iters, == tail size for the last iter.
+    ALWI void wait_per_block(uint32_t inner_count) const {
+        if constexpr (Policy == CopyTilePolicy::WaitAndPopPerBlock) {
+            cb_wait_front(Cb, inner_count);
+        }
+    }
+
     ALWI void wait_upfront(uint32_t n) const {
         if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                       Policy == CopyTilePolicy::WaitUpfrontNoPop) {
@@ -338,6 +351,13 @@ struct CopyTile : CopyTileTag {
     ALWI void pop_per_tile(uint32_t /*i*/) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::NoWaitPop) {
             cb_pop_front(Cb, 1);
+        }
+    }
+
+    /// Per-outer-iter pop of `inner_count` tiles (chunked streaming).
+    ALWI void pop_per_block(uint32_t inner_count) const {
+        if constexpr (Policy == CopyTilePolicy::WaitAndPopPerBlock) {
+            cb_pop_front(Cb, inner_count);
         }
     }
 
@@ -387,6 +407,7 @@ struct PackTile : PackTileTag {
     static constexpr uint32_t          pack_cb_id()        { return Cb; }
     static constexpr Dst               pack_dst_slot       = DstSlot;
     static constexpr bool              is_upfront          = (Policy == PackTilePolicy::UpfrontReservePushAtEnd);
+    static constexpr bool              uses_per_block_pack = (Policy == PackTilePolicy::PerBlockReserveAndPush);
     static constexpr PackTileIndexMode index_mode          = IndexMode;
 
     // Prev-CB fold (D2): PackTile writes pack-side; mark Cb under reconfig only when
@@ -411,6 +432,13 @@ struct PackTile : PackTileTag {
         if constexpr (Policy == PackTilePolicy::PerTileReserveAndPush ||
                       Policy == PackTilePolicy::PerTileReserveNoPush) {
             cb_reserve_back(Cb, 1);
+        }
+    }
+
+    /// Per-outer-iter reserve of `inner_count` tiles (chunked streaming).
+    ALWI void reserve_per_block(uint32_t inner_count) const {
+        if constexpr (Policy == PackTilePolicy::PerBlockReserveAndPush) {
+            cb_reserve_back(Cb, inner_count);
         }
     }
 
@@ -464,6 +492,13 @@ struct PackTile : PackTileTag {
         }
     }
 
+    /// Per-outer-iter push of `inner_count` tiles (chunked streaming).
+    ALWI void push_per_block(uint32_t inner_count) const {
+        if constexpr (Policy == PackTilePolicy::PerBlockReserveAndPush) {
+            cb_push_back(Cb, inner_count);
+        }
+    }
+
     ALWI void push_at_end(uint32_t n) const {
         if constexpr (Policy == PackTilePolicy::NoReservePushAtEnd ||
                       Policy == PackTilePolicy::UpfrontReservePushAtEnd) {
@@ -496,6 +531,7 @@ struct PackTileBlock : PackTileTag {
     static constexpr Dst      pack_dst_slot = FirstSlot;
     static constexpr uint32_t n_tiles      = NTiles;
     static constexpr bool     is_upfront   = (Policy == PackTilePolicy::UpfrontReservePushAtEnd);
+    static constexpr bool     uses_per_block_pack = (Policy == PackTilePolicy::PerBlockReserveAndPush);
 
     // Prev-CB fold (D2): PackTileBlock writes pack-side.
     static constexpr uint32_t reconfig_srca_cb = NO_PREV_CB;
@@ -511,6 +547,11 @@ struct PackTileBlock : PackTileTag {
         if constexpr (Policy == PackTilePolicy::PerTileReserveAndPush ||
                       Policy == PackTilePolicy::PerTileReserveNoPush) {
             cb_reserve_back(Cb, NTiles);
+        }
+    }
+    ALWI void reserve_per_block(uint32_t inner_count) const {
+        if constexpr (Policy == PackTilePolicy::PerBlockReserveAndPush) {
+            cb_reserve_back(Cb, inner_count * NTiles);
         }
     }
     ALWI void reserve_upfront(uint32_t n) const {
@@ -540,6 +581,11 @@ struct PackTileBlock : PackTileTag {
     ALWI void push_per_tile(uint32_t /*i*/, uint32_t /*block_size*/) const {
         if constexpr (Policy == PackTilePolicy::PerTileReserveAndPush) {
             cb_push_back(Cb, NTiles);
+        }
+    }
+    ALWI void push_per_block(uint32_t inner_count) const {
+        if constexpr (Policy == PackTilePolicy::PerBlockReserveAndPush) {
+            cb_push_back(Cb, inner_count * NTiles);
         }
     }
     ALWI void push_at_end(uint32_t n) const {
@@ -583,6 +629,12 @@ struct BinaryFpu : BinaryFpuTag {
                   "BinaryFpu: A-side RowBcast / ColBcast index require non-streaming APolicy");
     static_assert(detail::valid_policy_mode_2d_v<BPolicy, BIndex>,
                   "BinaryFpu: B-side RowBcast / ColBcast index require non-streaming BPolicy");
+    // Per-block streaming uses chunk-local CB front. When the two sides use
+    // DIFFERENT regimes (one per-block → chunk-local index `j`; the other upfront /
+    // caller-managed → absolute index `base_tile + j`), the chain dispatcher
+    // resolves them separately via the 3-arg exec / exec_2d overloads gated by
+    // `needs_per_side_idx`. Same-regime hits the 2-arg fast path identical to
+    // pre-extension behaviour.
 
     static constexpr uint32_t      cb_a_id()  { return CbA; }
     static constexpr uint32_t      cb_b_id()  { return CbB; }
@@ -599,6 +651,14 @@ struct BinaryFpu : BinaryFpuTag {
                                                 (BPolicy == CopyTilePolicy::CumulativeWaitPopAtEnd);
     static constexpr bool          clashes_with_fpu = true;
     static constexpr bool          same_cb    = (CbA == CbB);
+
+    // Per-side local-vs-absolute index resolution. When the two operands declare
+    // DIFFERENT regimes (A=PerBlock + B=Upfront, or vice versa), the chain calls
+    // the 3-arg exec / exec_2d overload and passes both indices; each side picks.
+    // Same-regime falls through to the 2-arg forwarder identical to today's code.
+    static constexpr bool a_uses_local_idx = (APolicy == CopyTilePolicy::WaitAndPopPerBlock);
+    static constexpr bool b_uses_local_idx = (BPolicy == CopyTilePolicy::WaitAndPopPerBlock);
+    static constexpr bool needs_per_side_idx = (a_uses_local_idx != b_uses_local_idx);
 
     // Prev-CB fold (D2): BinaryFpu touches srca (CbA) and srcb (CbB) only. Pack-side
     // reconfig is owned by the downstream PackTile element (`PackTileReconfig::Output`)
@@ -664,6 +724,17 @@ struct BinaryFpu : BinaryFpuTag {
         }
     }
 
+    /// Per-outer-iter chunked wait. Per-side: A waits `inner_count` if APolicy is
+    /// per-block; same for B (same_cb dedup).
+    ALWI void wait_per_block(uint32_t inner_count) const {
+        if constexpr (APolicy == CopyTilePolicy::WaitAndPopPerBlock) {
+            cb_wait_front(CbA, inner_count);
+        }
+        if constexpr (!same_cb && BPolicy == CopyTilePolicy::WaitAndPopPerBlock) {
+            cb_wait_front(CbB, inner_count);
+        }
+    }
+
     ALWI void wait_upfront(uint32_t n) const {
         if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                       APolicy == CopyTilePolicy::WaitUpfrontNoPop) {
@@ -688,22 +759,27 @@ struct BinaryFpu : BinaryFpuTag {
         }
     }
 
-    ALWI void exec(uint32_t i, uint32_t slot_offset) const {
-        // Per-side index mode. AIndex drives a_idx, BIndex drives b_idx. The
-        // canonical bcast walk is A=BlockIter (walks the tile range) + B=FirstTile
-        // (pins the scaler/vector operand at tile 0). BlockIterOffset adds a
-        // runtime base from the ctor (a_tile_idx_ / b_tile_idx_) to the per-iter
-        // index — used by per-outer-iter chains that pass `wt` as base.
+    // Per-side index mode. AIndex drives a_idx, BIndex drives b_idx. The canonical
+    // bcast walk is A=BlockIter (walks the tile range) + B=FirstTile (pins the
+    // scaler/vector operand at tile 0). BlockIterOffset adds a runtime base from
+    // the ctor (a_tile_idx_ / b_tile_idx_) to the per-iter index — used by
+    // per-outer-iter chains that pass `wt` as base. The 3-arg overload accepts a
+    // chunk-local index (`i_local`) and an absolute index (`i_abs`); each side
+    // picks via `a_uses_local_idx` / `b_uses_local_idx`. The 2-arg overload is
+    // the same-regime fast path and forwards with i_local == i_abs.
+    ALWI void exec(uint32_t i_local, uint32_t i_abs, uint32_t slot_offset) const {
+        const uint32_t a_i = a_uses_local_idx ? i_local : i_abs;
+        const uint32_t b_i = b_uses_local_idx ? i_local : i_abs;
         const uint32_t a_idx = [&]() -> uint32_t {
             if constexpr      (AIndex == CbIndexMode::FirstTile)        return 0;
-            else if constexpr (AIndex == CbIndexMode::BlockIter)        return i;
-            else if constexpr (AIndex == CbIndexMode::BlockIterOffset)  return a_tile_idx_ + i;
+            else if constexpr (AIndex == CbIndexMode::BlockIter)        return a_i;
+            else if constexpr (AIndex == CbIndexMode::BlockIterOffset)  return a_tile_idx_ + a_i;
             else                                                        return a_tile_idx_;  // Pinned / Absolute
         }();
         const uint32_t b_idx = [&]() -> uint32_t {
             if constexpr      (BIndex == CbIndexMode::FirstTile)        return 0;
-            else if constexpr (BIndex == CbIndexMode::BlockIter)        return i;
-            else if constexpr (BIndex == CbIndexMode::BlockIterOffset)  return b_tile_idx_ + i;
+            else if constexpr (BIndex == CbIndexMode::BlockIter)        return b_i;
+            else if constexpr (BIndex == CbIndexMode::BlockIterOffset)  return b_tile_idx_ + b_i;
             else                                                        return b_tile_idx_;  // Pinned / Absolute
         }();
         const uint32_t dst = to_u32(DstSlot) + slot_offset;
@@ -712,14 +788,14 @@ struct BinaryFpu : BinaryFpuTag {
             else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles(CbA, CbB, a_idx, b_idx, dst);
             else                                       mul_tiles(CbA, CbB, a_idx, b_idx, dst);
         } else {
-            // Broadcast variants via the generic `add/sub/mul_tiles_bcast<BroadcastType>` template
-            // — these forward to `any_tiles_bcast<EltwiseBinaryType, BroadcastType>` internally.
             constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Bcast));
             if constexpr      (Op == BinaryFpuOp::Add) add_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
             else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
             else                                       mul_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
         }
     }
+
+    ALWI void exec(uint32_t i, uint32_t slot_offset) const { exec(i, i, slot_offset); }
 
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 
@@ -729,6 +805,15 @@ struct BinaryFpu : BinaryFpuTag {
         }
         if constexpr (!same_cb && (BPolicy == CopyTilePolicy::WaitAndPop || BPolicy == CopyTilePolicy::NoWaitPop)) {
             cb_pop_front(CbB, 1);
+        }
+    }
+
+    ALWI void pop_per_block(uint32_t inner_count) const {
+        if constexpr (APolicy == CopyTilePolicy::WaitAndPopPerBlock) {
+            cb_pop_front(CbA, inner_count);
+        }
+        if constexpr (!same_cb && BPolicy == CopyTilePolicy::WaitAndPopPerBlock) {
+            cb_pop_front(CbB, inner_count);
         }
     }
 
@@ -743,11 +828,24 @@ struct BinaryFpu : BinaryFpuTag {
         }
     }
 
-    // 2D variants — per-side index + window.
-    ALWI void exec_2d(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
-        const uint32_t a_idx = detail::idx_2d<AIndex>(i_flat, ht, wt, a_tile_idx_);
-        const uint32_t b_idx = detail::idx_2d<BIndex>(i_flat, ht, wt, b_tile_idx_);
-        const uint32_t dst   = to_u32(DstSlot) + slot_offset;
+    // 2D variants — per-side index + window. 3-arg form takes both chunk-local
+    // (`i_local`) and absolute (`i_abs`) flat indices; each side picks via the
+    // per-side traits. `ht` is unchanged (always absolute row); `wt_local` /
+    // `wt_abs` cover the per-side column index when needed. Same-regime fast
+    // path forwards through the 2-arg overload.
+    ALWI void exec_2d(uint32_t i_flat_local,
+                      uint32_t i_flat_abs,
+                      uint32_t ht,
+                      uint32_t wt_local,
+                      uint32_t wt_abs,
+                      uint32_t slot_offset) const {
+        const uint32_t a_flat = a_uses_local_idx ? i_flat_local : i_flat_abs;
+        const uint32_t b_flat = b_uses_local_idx ? i_flat_local : i_flat_abs;
+        const uint32_t a_wt   = a_uses_local_idx ? wt_local     : wt_abs;
+        const uint32_t b_wt   = b_uses_local_idx ? wt_local     : wt_abs;
+        const uint32_t a_idx  = detail::idx_2d<AIndex>(a_flat, ht, a_wt, a_tile_idx_);
+        const uint32_t b_idx  = detail::idx_2d<BIndex>(b_flat, ht, b_wt, b_tile_idx_);
+        const uint32_t dst    = to_u32(DstSlot) + slot_offset;
         if constexpr (Bcast == BroadcastDim::None) {
             if constexpr      (Op == BinaryFpuOp::Add) add_tiles(CbA, CbB, a_idx, b_idx, dst);
             else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles(CbA, CbB, a_idx, b_idx, dst);
@@ -758,6 +856,10 @@ struct BinaryFpu : BinaryFpuTag {
             else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
             else                                       mul_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
         }
+    }
+
+    ALWI void exec_2d(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
+        exec_2d(i_flat, i_flat, ht, wt, wt, slot_offset);
     }
 
     ALWI void pop_upfront_end_2d(uint32_t Ht, uint32_t Wt) const {
@@ -840,6 +942,11 @@ struct DestReuseBinary : DestReuseBinaryTag {
             cb_wait_front(Cb, cumulative_count);
         }
     }
+    ALWI void wait_per_block(uint32_t inner_count) const {
+        if constexpr (Policy == CopyTilePolicy::WaitAndPopPerBlock) {
+            cb_wait_front(Cb, inner_count);
+        }
+    }
     ALWI void wait_upfront(uint32_t n) const {
         if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                       Policy == CopyTilePolicy::WaitUpfrontNoPop) {
@@ -891,6 +998,11 @@ struct DestReuseBinary : DestReuseBinaryTag {
     ALWI void pop_per_tile(uint32_t /*i*/) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::NoWaitPop) {
             cb_pop_front(Cb, 1);
+        }
+    }
+    ALWI void pop_per_block(uint32_t inner_count) const {
+        if constexpr (Policy == CopyTilePolicy::WaitAndPopPerBlock) {
+            cb_pop_front(Cb, inner_count);
         }
     }
     ALWI void pop_upfront_end(uint32_t n) const {
@@ -952,6 +1064,11 @@ struct UnaryBcast : UnaryBcastTag {
             cb_wait_front(Cb, cumulative_count);
         }
     }
+    ALWI void wait_per_block(uint32_t inner_count) const {
+        if constexpr (Policy == CopyTilePolicy::WaitAndPopPerBlock) {
+            cb_wait_front(Cb, inner_count);
+        }
+    }
     ALWI void wait_upfront(uint32_t n) const {
         if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                       Policy == CopyTilePolicy::WaitUpfrontNoPop) {
@@ -986,6 +1103,11 @@ struct UnaryBcast : UnaryBcastTag {
     ALWI void pop_per_tile(uint32_t /*i*/) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::NoWaitPop) {
             cb_pop_front(Cb, 1);
+        }
+    }
+    ALWI void pop_per_block(uint32_t inner_count) const {
+        if constexpr (Policy == CopyTilePolicy::WaitAndPopPerBlock) {
+            cb_pop_front(Cb, inner_count);
         }
     }
     ALWI void pop_upfront_end(uint32_t n) const {
@@ -1127,7 +1249,8 @@ constexpr bool policy_supports_block(CopyTilePolicy p) {
            p == CopyTilePolicy::WaitUpfrontNoPop ||
            p == CopyTilePolicy::CumulativeWaitPopAtEnd ||
            p == CopyTilePolicy::CumulativeWaitNoPop ||
-           p == CopyTilePolicy::NoWaitNoPop;
+           p == CopyTilePolicy::NoWaitNoPop ||
+           p == CopyTilePolicy::WaitAndPopPerBlock;
 }
 
 template <class E>
@@ -1152,6 +1275,47 @@ struct chain_supports_block<EltwiseChain<Es...>>
 
 template <class Chain>
 inline constexpr bool chain_supports_block_v = chain_supports_block<Chain>::value;
+
+// element_uses_per_block_index_v — true when the element's CB front is chunk-
+// local (per-block streaming reader or pack), so the pipeline passes `j`
+// instead of `base_tile + j` as the tile index seen by `exec`. SFINAE on each
+// element kind. False for elements that don't read/write CBs (DEST-only ops).
+namespace detail {
+
+template <class E, class = void>
+struct elem_per_block_reader : std::false_type {};
+
+template <class E>
+struct elem_per_block_reader<E, std::enable_if_t<is_cb_reader_op_v<E>>>
+    : std::bool_constant<(E::a_policy() == CopyTilePolicy::WaitAndPopPerBlock) ||
+                         (E::b_policy() == CopyTilePolicy::WaitAndPopPerBlock)> {};
+
+template <class E, class = void>
+struct elem_per_block_pack : std::false_type {};
+
+template <class E>
+struct elem_per_block_pack<E, std::void_t<decltype(E::uses_per_block_pack)>>
+    : std::bool_constant<E::uses_per_block_pack> {};
+
+template <class E>
+inline constexpr bool element_uses_per_block_index_v =
+    elem_per_block_reader<E>::value || elem_per_block_pack<E>::value;
+
+// elem_needs_per_side_idx_v — true when the element wants per-side
+// local-vs-absolute index resolution (BinaryFpu when A/B policies disagree on
+// the per-block regime). SFINAE-tolerant: absence of `needs_per_side_idx`
+// static member defaults to false.
+template <class E, class = void>
+struct elem_needs_per_side_idx : std::false_type {};
+
+template <class E>
+struct elem_needs_per_side_idx<E, std::void_t<decltype(E::needs_per_side_idx)>>
+    : std::bool_constant<E::needs_per_side_idx> {};
+
+template <class E>
+inline constexpr bool elem_needs_per_side_idx_v = elem_needs_per_side_idx<E>::value;
+
+}  // namespace detail
 
 // chain_has_duplicate_upfront_cbs / chain_pack_writes_collide:
 // defined as a runtime fold for now — every CB-reader / CB-writer pair is checked.
@@ -1249,6 +1413,57 @@ ALWI void elem_pop_upfront_end(const E& e, uint32_t n) {
 template <class E>
 ALWI void elem_push_at_end(const E& e, uint32_t n) {
     if constexpr (is_cb_writer_op_v<E>) e.push_at_end(n);
+}
+
+// SFINAE wrappers for the per-block lifecycle hooks — user-defined chain elements
+// (custom CbReaderTag / PackTileTag types declared in individual kernel sources)
+// may not provide wait_per_block / pop_per_block / reserve_per_block / push_per_block.
+// These no-op when the method is absent so the chain pipeline keeps working with
+// elements that pre-date the WaitAndPopPerBlock / PerBlockReserveAndPush policies.
+
+template <class E, class = void>
+struct has_wait_per_block : std::false_type {};
+template <class E>
+struct has_wait_per_block<E, std::void_t<decltype(std::declval<const E&>().wait_per_block(0u))>>
+    : std::true_type {};
+
+template <class E, class = void>
+struct has_pop_per_block : std::false_type {};
+template <class E>
+struct has_pop_per_block<E, std::void_t<decltype(std::declval<const E&>().pop_per_block(0u))>>
+    : std::true_type {};
+
+template <class E, class = void>
+struct has_reserve_per_block : std::false_type {};
+template <class E>
+struct has_reserve_per_block<E, std::void_t<decltype(std::declval<const E&>().reserve_per_block(0u))>>
+    : std::true_type {};
+
+template <class E, class = void>
+struct has_push_per_block : std::false_type {};
+template <class E>
+struct has_push_per_block<E, std::void_t<decltype(std::declval<const E&>().push_per_block(0u))>>
+    : std::true_type {};
+
+template <class E>
+ALWI void elem_wait_per_block(const E& e, uint32_t inner_count) {
+    if constexpr (has_wait_per_block<E>::value) e.wait_per_block(inner_count);
+    else (void)e, (void)inner_count;
+}
+template <class E>
+ALWI void elem_pop_per_block(const E& e, uint32_t inner_count) {
+    if constexpr (has_pop_per_block<E>::value) e.pop_per_block(inner_count);
+    else (void)e, (void)inner_count;
+}
+template <class E>
+ALWI void elem_reserve_per_block(const E& e, uint32_t inner_count) {
+    if constexpr (has_reserve_per_block<E>::value) e.reserve_per_block(inner_count);
+    else (void)e, (void)inner_count;
+}
+template <class E>
+ALWI void elem_push_per_block(const E& e, uint32_t inner_count) {
+    if constexpr (has_push_per_block<E>::value) e.push_per_block(inner_count);
+    else (void)e, (void)inner_count;
 }
 
 // init() dispatch — CRTP bases (DestOnly) have static init()s that take no args.
@@ -1361,6 +1576,10 @@ ALWI void elem_apply_compute(
     uint32_t inner_count,
     uint32_t chain_lane_width,
     uint32_t n_tiles) {
+    // Per-block streaming readers see a chunk-local CB front: pass `j` to exec
+    // (so `copy_tile(cb, j)` reads the j-th tile of the just-waited window).
+    // All other lifecycle policies see the absolute tile index `base_tile + j`.
+    constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_pack_tile_op_v<ElemT>) {
         (void)elem; (void)i_outer; (void)base_tile; (void)inner_count; (void)chain_lane_width; (void)n_tiles;
     } else if constexpr (is_cb_reader_op_v<ElemT>) {
@@ -1368,6 +1587,7 @@ ALWI void elem_apply_compute(
         // tiles in CB. At BlockSize=1 this equals i_outer+1 (legacy shape). At BlockSize>1
         // this grows in block chunks so cumulative tracks producer streaming progress.
         elem.wait_per_tile(base_tile + inner_count);
+        elem_wait_per_block(elem, inner_count);
         elem.wait_upfront(n_tiles);
         if constexpr (EmitInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();
@@ -1375,10 +1595,20 @@ ALWI void elem_apply_compute(
         }
         // Lane j writes DEST[dst_slot + j * chain_lane_width]; tile index =
         // base_tile + j (absolute, tail-safe — i_outer * BlockSize, not * inner_count).
+        // Per-side path: when the element declares disagreeing regimes (e.g.
+        // BinaryFpu A=PerBlock + B=Upfront-BlockIter), pass BOTH indices and let
+        // the element pick per side. All other elements take the single-index path.
+        constexpr bool per_side = elem_needs_per_side_idx_v<ElemT>;
         for (uint32_t j = 0; j < inner_count; ++j) {
-            elem.exec(base_tile + j, j * chain_lane_width);
+            if constexpr (per_side) {
+                elem.exec(/*i_local=*/j, /*i_abs=*/(base_tile + j), j * chain_lane_width);
+            } else {
+                const uint32_t i_arg = use_local_idx ? j : (base_tile + j);
+                elem.exec(i_arg, j * chain_lane_width);
+            }
         }
         elem.pop_per_tile(i_outer);
+        elem_pop_per_block(elem, inner_count);
     } else if constexpr (is_dest_only_op_v<ElemT>) {
         if constexpr (EmitInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();
@@ -1398,13 +1628,17 @@ ALWI void elem_apply_pack(
     uint32_t inner_count,
     uint32_t chain_lane_width,
     uint32_t n_tiles) {
+    constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_pack_tile_op_v<ElemT>) {
         elem.reserve_per_tile(i_outer);
+        elem_reserve_per_block(elem, inner_count);
         elem.reserve_upfront(n_tiles);
         for (uint32_t j = 0; j < inner_count; ++j) {
-            elem.exec(base_tile + j, j * chain_lane_width);
+            const uint32_t i_arg = use_local_idx ? j : (base_tile + j);
+            elem.exec(i_arg, j * chain_lane_width);
         }
         elem.push_per_tile(i_outer);
+        elem_push_per_block(elem, inner_count);
     } else {
         (void)elem; (void)i_outer; (void)base_tile; (void)inner_count; (void)chain_lane_width; (void)n_tiles;
     }
@@ -1569,21 +1803,38 @@ ALWI void elem_apply_compute_2d(
     uint32_t chain_lane_width,
     uint32_t Ht,
     uint32_t Wt) {
+    // Per-block streaming: pass chunk-local index `j` to exec_2d so BlockIter
+    // returns the local CB-front offset (the just-waited window).
+    constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_pack_tile_op_v<ElemT>) {
         (void)elem; (void)i_flat; (void)ht; (void)wt; (void)inner_count;
         (void)chain_lane_width; (void)Ht; (void)Wt;
     } else if constexpr (is_cb_reader_op_v<ElemT>) {
         // Streaming wait fires per-tile (Block walks); upfront wait is idempotent.
         elem.wait_per_tile(i_flat + inner_count);
+        elem_wait_per_block(elem, inner_count);
         elem.wait_upfront_2d(Ht, Wt);
         if constexpr (EmitInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();
             ElemT::init();
         }
+        constexpr bool per_side = elem_needs_per_side_idx_v<ElemT>;
         for (uint32_t j = 0; j < inner_count; ++j) {
-            elem.exec_2d(i_flat + j, ht, wt + j, j * chain_lane_width);
+            if constexpr (per_side) {
+                // Per-side path: chain hands both indices; element picks per operand.
+                elem.exec_2d(/*i_flat_local=*/j,
+                             /*i_flat_abs=*/(i_flat + j),
+                             ht,
+                             /*wt_local=*/j,
+                             /*wt_abs=*/(wt + j),
+                             j * chain_lane_width);
+            } else {
+                const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
+                elem.exec_2d(i_arg, ht, wt + j, j * chain_lane_width);
+            }
         }
         elem.pop_per_tile(i_flat);
+        elem_pop_per_block(elem, inner_count);
     } else if constexpr (is_dest_only_op_v<ElemT>) {
         if constexpr (EmitInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();
@@ -1605,13 +1856,17 @@ ALWI void elem_apply_pack_2d(
     uint32_t chain_lane_width,
     uint32_t Ht,
     uint32_t Wt) {
+    constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_pack_tile_op_v<ElemT>) {
         elem.reserve_per_tile(i_flat);
+        elem_reserve_per_block(elem, inner_count);
         elem.reserve_upfront_2d(Ht, Wt);
         for (uint32_t j = 0; j < inner_count; ++j) {
-            elem.exec_2d(i_flat + j, ht, wt + j, j * chain_lane_width);
+            const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
+            elem.exec_2d(i_arg, ht, wt + j, j * chain_lane_width);
         }
         elem.push_per_tile(i_flat);
+        elem_push_per_block(elem, inner_count);
     } else {
         (void)elem; (void)i_flat; (void)ht; (void)wt; (void)inner_count;
         (void)chain_lane_width; (void)Ht; (void)Wt;

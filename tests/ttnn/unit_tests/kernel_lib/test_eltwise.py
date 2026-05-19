@@ -1195,3 +1195,267 @@ def _run_2d_bcast_sub(device, Ht, Wt, b_index_mode, fp32_dest_acc=False):
 def test_2d_chain_bcast_sub(device, Ht, Wt, b_index_mode, fp32_dest_acc):
     """2D chain: A (Ht*Wt tiles) - B (Ht/Wt/1 tiles depending on bcast mode)."""
     _run_2d_bcast_sub(device, Ht, Wt, b_index_mode, fp32_dest_acc)
+
+
+# =============================================================================
+# BinaryFpu per-side local-vs-absolute index toggle
+# Proposal: ttnn/cpp/ttnn/kernel_lib/agents/binary_fpu_per_side_idx_proposal.md
+# Test plan: ttnn/cpp/ttnn/kernel_lib/agents/binary_fpu_per_side_idx_test_plan.md
+# =============================================================================
+
+_PER_SIDE_KERNEL_A_LOCAL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/binary_fpu_per_side_idx_a_local.cpp"
+_PER_SIDE_KERNEL_B_LOCAL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/binary_fpu_per_side_idx_b_local.cpp"
+_PER_SIDE_KERNEL_BCAST = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/binary_fpu_per_side_idx_bcast.cpp"
+
+
+@pytest.mark.parametrize("num_tiles", [4, 8, 16, 64])
+@pytest.mark.parametrize("fp32_dest_acc", [False, True])
+@pytest.mark.parametrize("block_size", [2, 4])
+@pytest.mark.parametrize(
+    "op_name,torch_op,pcc",
+    [
+        ("Add", torch.add, 0.9999),
+        ("Sub", torch.sub, 0.9999),
+        ("Mul", torch.mul, 0.9999),
+    ],
+)
+def test_binary_fpu_per_side_idx_a_local(device, num_tiles, fp32_dest_acc, block_size, op_name, torch_op, pcc):
+    """A=WaitAndPopPerBlock+BlockIter (chunk-local), B=WaitUpfrontPopAtEnd+BlockIter (absolute)."""
+    if num_tiles % block_size != 0:
+        pytest.skip("num_tiles must be divisible by block_size")
+    _run_binary_with_kernel(
+        device,
+        num_tiles,
+        _PER_SIDE_KERNEL_A_LOCAL,
+        {"BLOCK_SIZE": str(block_size), "BINARY_OP_NAME": op_name},
+        torch_op,
+        (-2.0, 2.0),
+        (-2.0, 2.0),
+        pcc,
+        fp32_dest_acc,
+        label=f"per_side_idx_a_local {op_name} N={block_size}",
+        single_core=True,
+        cb_pages=max(num_tiles, block_size * 2),
+    )
+
+
+@pytest.mark.parametrize("num_tiles", [4, 8, 16, 64])
+@pytest.mark.parametrize("fp32_dest_acc", [False, True])
+@pytest.mark.parametrize("block_size", [2, 4])
+@pytest.mark.parametrize(
+    "op_name,torch_op,pcc",
+    [
+        ("Add", torch.add, 0.9999),
+        ("Sub", torch.sub, 0.9999),
+        ("Mul", torch.mul, 0.9999),
+    ],
+)
+def test_binary_fpu_per_side_idx_b_local(device, num_tiles, fp32_dest_acc, block_size, op_name, torch_op, pcc):
+    """A=WaitUpfrontPopAtEnd+BlockIter (absolute), B=WaitAndPopPerBlock+BlockIter (chunk-local)."""
+    if num_tiles % block_size != 0:
+        pytest.skip("num_tiles must be divisible by block_size")
+    _run_binary_with_kernel(
+        device,
+        num_tiles,
+        _PER_SIDE_KERNEL_B_LOCAL,
+        {"BLOCK_SIZE": str(block_size), "BINARY_OP_NAME": op_name},
+        torch_op,
+        (-2.0, 2.0),
+        (-2.0, 2.0),
+        pcc,
+        fp32_dest_acc,
+        label=f"per_side_idx_b_local {op_name} N={block_size}",
+        single_core=True,
+        cb_pages=max(num_tiles, block_size * 2),
+    )
+
+
+def _run_per_side_bcast(device, Ht, Wt, block_size, fp32_dest_acc):
+    """A=PerBlock+BlockIter, B=Upfront+RowBcast 2D add. B has Wt tiles, replicated across rows."""
+    n_a_tiles = Ht * Wt
+    n_b_tiles = Wt
+
+    shape_a = [1, 1, n_a_tiles * 32, 32]
+    shape_b = [1, 1, n_b_tiles * 32, 32]
+    data_a = (torch.rand(shape_a) * 4 - 2).to(torch.bfloat16)
+    data_b = (torch.rand(shape_b) * 4 - 2).to(torch.bfloat16)
+    dram = ttnn.DRAM_MEMORY_CONFIG
+
+    a = ttnn.from_torch(data_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
+    b = ttnn.from_torch(data_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
+    out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape_a), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
+
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    cb_a = _make_cb(0, core_grid, n_pages=max(n_a_tiles, 2))
+    cb_b = _make_cb(1, core_grid, n_pages=max(n_b_tiles, 2))
+    cb_out = _make_cb(16, core_grid, n_pages=max(block_size * 2, 2))
+
+    reader_compile_args = (
+        ttnn.TensorAccessorArgs(a).get_compile_time_args() + ttnn.TensorAccessorArgs(b).get_compile_time_args()
+    )
+    writer_compile_args = [16] + ttnn.TensorAccessorArgs(out).get_compile_time_args()
+
+    rd_rt = ttnn.RuntimeArgs()
+    wr_rt = ttnn.RuntimeArgs()
+    rd_rt[0][0] = [a.buffer_address(), b.buffer_address(), n_a_tiles, n_b_tiles]
+    wr_rt[0][0] = [out.buffer_address(), n_a_tiles, 0]
+
+    reader_kd = ttnn.KernelDescriptor(
+        kernel_source=BCAST_2D_READER,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_grid,
+        compile_time_args=reader_compile_args,
+        runtime_args=rd_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    writer_kd = ttnn.KernelDescriptor(
+        kernel_source=WRITER_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_grid,
+        compile_time_args=writer_compile_args,
+        runtime_args=wr_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    defines = {
+        "TEST_HT": str(Ht),
+        "TEST_WT": str(Wt),
+        "BLOCK_SIZE": str(block_size),
+    }
+    compute_kd = ttnn.KernelDescriptor(
+        kernel_source=_PER_SIDE_KERNEL_BCAST,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_grid,
+        compile_time_args=[],
+        defines=list(defines.items()),
+        config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest_acc),
+    )
+    pd = ttnn.ProgramDescriptor(kernels=[reader_kd, writer_kd, compute_kd], semaphores=[], cbs=[cb_a, cb_b, cb_out])
+
+    out_tensor = ttnn.generic_op([a, b, out], pd)
+    out_torch = ttnn.to_torch(out_tensor).to(torch.float32)
+
+    a_tiles = data_a.to(torch.float32).reshape(Ht, Wt, 32, 32)
+    b_tiles = data_b.to(torch.float32).reshape(1, Wt, 32, 32)
+    golden_tiles = a_tiles + b_tiles
+    golden = golden_tiles.reshape(1, 1, n_a_tiles * 32, 32)
+    label = f"per_side_idx_bcast Ht={Ht} Wt={Wt} blk={block_size}"
+    _check_pcc(out_torch, golden, 0.9999, label)
+
+
+@pytest.mark.parametrize(
+    "Ht,Wt",
+    [
+        (1, 4),
+        (2, 8),
+        (4, 16),
+    ],
+)
+@pytest.mark.parametrize("block_size", [2, 4])
+@pytest.mark.parametrize("fp32_dest_acc", [False, True])
+def test_binary_fpu_per_side_idx_bcast(device, Ht, Wt, block_size, fp32_dest_acc):
+    """2D add: A=PerBlock+BlockIter (chunk-local), B=Upfront+RowBcast (Wt-wide weight)."""
+    if Wt % block_size != 0:
+        pytest.skip("Wt must be divisible by block_size")
+    _run_per_side_bcast(device, Ht, Wt, block_size, fp32_dest_acc)
+
+
+# =============================================================================
+# SFPU binary chain composition (proposal: binary_sfpu_helper_proposal.md v2)
+# Step 0 smoke test: CopyTile<cb_a, Dst::D0> + CopyTile<cb_b, Dst::D1>
+# + AddBinary<D0, D1, D0> + PackTile<cb_out, Dst::D0> at chain_lane_width=2.
+# =============================================================================
+
+_SFPU_COMPOSE_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/binary_sfpu_compose.cpp"
+
+
+@pytest.mark.parametrize("num_tiles", [4, 8, 16, 64])
+@pytest.mark.parametrize("block_size", [1, 2, 4])
+@pytest.mark.parametrize("fp32_dest_acc", [False, True])
+def test_binary_sfpu_compose(device, num_tiles, block_size, fp32_dest_acc):
+    """CopyTile×2 + AddBinary + PackTile, chain_lane_width=2 implicit."""
+    if num_tiles % block_size != 0:
+        pytest.skip("num_tiles must be divisible by block_size")
+    # chain_lane_width=2 with fp32_dest_acc halves DEST → max BlockSize=2.
+    if fp32_dest_acc and block_size > 2:
+        pytest.skip("BlockSize * chain_lane_width exceeds DEST_AUTO_LIMIT (fp32_dest_acc)")
+    _run_binary_with_kernel(
+        device,
+        num_tiles,
+        _SFPU_COMPOSE_KERNEL,
+        {"BLOCK_SIZE": str(block_size)},
+        torch.add,
+        (-2.0, 2.0),
+        (-2.0, 2.0),
+        0.9999,
+        fp32_dest_acc,
+        label=f"binary_sfpu_compose N={block_size}",
+        single_core=True,
+        cb_pages=max(num_tiles, block_size * 2),
+    )
+
+
+_SFPU_PER_FAMILY_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/binary_sfpu_per_family.cpp"
+
+
+@pytest.mark.parametrize("num_tiles", [4, 16])
+@pytest.mark.parametrize("fp32_dest_acc", [False, True])
+@pytest.mark.parametrize(
+    "family,torch_op,pcc",
+    [
+        ("FAMILY_ADD_FLOAT", lambda a, b: a + b, 0.9999),
+        # LT outputs 0/1 mask; bf16 boundary precision flips PCC on small tensors with
+        # close-valued inputs. Threshold relaxed to 0.99 to allow occasional edge flips.
+        ("FAMILY_LT_FLOAT", lambda a, b: (a < b).to(torch.bfloat16), 0.99),
+    ],
+)
+def test_binary_sfpu_per_family(device, num_tiles, fp32_dest_acc, family, torch_op, pcc):
+    """Per-family struct coverage. bf16 + compare-mask paths are runtime-validated.
+
+    Integer-dtype families (AddIntBinary, BitwiseAndBinary, BinaryMaxUint32, comparison int
+    variants) compile-validated via the binary_ng SFPU kernel migration commits; this test
+    only exercises the bf16 paths the existing test infra supports.
+    """
+    block_size = 2
+    _run_binary_with_kernel(
+        device,
+        num_tiles,
+        _SFPU_PER_FAMILY_KERNEL,
+        {"BLOCK_SIZE": str(block_size), "SFPU_FAMILY": family},
+        torch_op,
+        (-2.0, 2.0),
+        (-2.0, 2.0),
+        pcc,
+        fp32_dest_acc,
+        label=f"binary_sfpu_per_family {family}",
+        single_core=True,
+        cb_pages=max(num_tiles, block_size * 2),
+    )
+
+
+_SFPU_PER_SIDE_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/binary_sfpu_per_side_idx.cpp"
+
+
+@pytest.mark.parametrize("num_tiles", [4, 16])
+@pytest.mark.parametrize("block_size", [2, 4])
+@pytest.mark.parametrize("fp32_dest_acc", [False, True])
+@pytest.mark.parametrize("side", ["SIDE_A_LOCAL", "SIDE_B_LOCAL"])
+def test_binary_sfpu_per_side_idx(device, num_tiles, block_size, fp32_dest_acc, side):
+    """Composition + per-side regime: one CB streams chunk-local, other staged upfront."""
+    if num_tiles % block_size != 0:
+        pytest.skip("num_tiles must be divisible by block_size")
+    if fp32_dest_acc and block_size > 2:
+        pytest.skip("BlockSize * chain_lane_width exceeds DEST_AUTO_LIMIT (fp32_dest_acc)")
+    _run_binary_with_kernel(
+        device,
+        num_tiles,
+        _SFPU_PER_SIDE_KERNEL,
+        {"BLOCK_SIZE": str(block_size), "SIDE": side},
+        torch.add,
+        (-2.0, 2.0),
+        (-2.0, 2.0),
+        0.9999,
+        fp32_dest_acc,
+        label=f"binary_sfpu_per_side_idx {side} N={block_size}",
+        single_core=True,
+        cb_pages=max(num_tiles, block_size * 2),
+    )

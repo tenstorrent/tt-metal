@@ -30,99 +30,19 @@
 #include "experimental/circular_buffer.h"
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
 
-#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
-namespace {
-// Stride-2 DEST scratch chain elements (lhs in 2j, rhs in 2j+1, out from 2j).
-template <uint32_t Cb, uint32_t OldCb, uint32_t BlockSize>
-struct BlockCopyTileStride2Lhs : compute_kernel_lib::CopyTileTag {
-    static constexpr uint32_t cb = Cb;
-    static constexpr uint32_t cb_a_id() { return Cb; }
-    static constexpr uint32_t cb_b_id() { return 0; }
-    static constexpr compute_kernel_lib::Dst dst_slot = compute_kernel_lib::Dst::D0;
-    static constexpr compute_kernel_lib::CopyTilePolicy a_policy() {
-        return compute_kernel_lib::CopyTilePolicy::NoWaitNoPop;  // outer scope handles wait/pop
-    }
-    static constexpr compute_kernel_lib::CopyTilePolicy b_policy() {
-        return compute_kernel_lib::CopyTilePolicy::NoWaitNoPop;
-    }
-    static constexpr bool is_upfront = false;
-    static constexpr bool clashes_with_fpu = true;
-    static constexpr uint32_t block_size = BlockSize;
-
-    static ALWI void init() { copy_tile_to_dst_init_short_with_dt(OldCb, Cb); }
-    ALWI void wait_per_tile(uint32_t /*i*/) const {}
-    ALWI void wait_upfront(uint32_t /*n*/) const {}
-    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const {
-        for (uint32_t j = 0; j < BlockSize; ++j) {
-            copy_tile(Cb, j, j * 2);
-        }
-    }
-    ALWI void pop_per_tile(uint32_t /*i*/) const {}
-    ALWI void pop_upfront_end(uint32_t /*n*/) const {}
-};
-
-template <uint32_t Cb, uint32_t OldCb, uint32_t BlockSize>
-struct BlockCopyTileStride2Rhs : compute_kernel_lib::CopyTileTag {
-    static constexpr uint32_t cb = Cb;
-    static constexpr uint32_t cb_a_id() { return Cb; }
-    static constexpr uint32_t cb_b_id() { return 0; }
-    static constexpr compute_kernel_lib::Dst dst_slot = compute_kernel_lib::Dst::D1;
-    static constexpr compute_kernel_lib::CopyTilePolicy a_policy() {
-        return compute_kernel_lib::CopyTilePolicy::NoWaitNoPop;
-    }
-    static constexpr compute_kernel_lib::CopyTilePolicy b_policy() {
-        return compute_kernel_lib::CopyTilePolicy::NoWaitNoPop;
-    }
-    static constexpr bool is_upfront = false;
-    static constexpr bool clashes_with_fpu = true;
-    static constexpr uint32_t block_size = BlockSize;
-
-    static ALWI void init() { copy_tile_to_dst_init_short_with_dt(OldCb, Cb); }
-    ALWI void wait_per_tile(uint32_t /*i*/) const {}
-    ALWI void wait_upfront(uint32_t /*n*/) const {}
-    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const {
-        for (uint32_t j = 0; j < BlockSize; ++j) {
-            copy_tile(Cb, j, j * 2 + 1);
-        }
-    }
-    ALWI void pop_per_tile(uint32_t /*i*/) const {}
-    ALWI void pop_upfront_end(uint32_t /*n*/) const {}
-};
-
-template <uint32_t BlockSize>
-struct LocalBlockSfpuBinary : compute_kernel_lib::DestOnlyTag {
-    static constexpr bool is_upfront = false;
-    static constexpr bool clashes_with_fpu = false;
-    static constexpr uint32_t block_size = BlockSize;
-    static ALWI void init() {}  // BINARY_SFPU_INIT done at kernel top
-    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const {
-        for (uint32_t j = 0; j < BlockSize; ++j) {
-            BINARY_SFPU_OP(j * 2, j * 2 + 1, j * 2);
-        }
+// Local BINARY_SFPU_OP / BINARY_SFPU_INIT macro wrapper.
+struct SfpuBinMacroOp : compute_kernel_lib::BinaryOp<
+                            SfpuBinMacroOp,
+                            compute_kernel_lib::Dst::D0,
+                            compute_kernel_lib::Dst::D1,
+                            compute_kernel_lib::Dst::D0> {
+    static ALWI void init() { BINARY_SFPU_INIT; }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        BINARY_SFPU_OP(0 + slot_offset, 1 + slot_offset, 0 + slot_offset);
     }
 };
-
-template <uint32_t Cb, uint32_t BlockSize>
-struct BlockPackTileStride2 : compute_kernel_lib::PackTileTag {
-    static constexpr uint32_t cb = Cb;
-    static constexpr uint32_t pack_cb_id() { return Cb; }
-    static constexpr compute_kernel_lib::Dst pack_dst_slot = compute_kernel_lib::Dst::D0;
-    static constexpr bool is_upfront = false;
-    static constexpr uint32_t block_size = BlockSize;
-    static ALWI void init() {}
-    ALWI void reserve_per_tile(uint32_t /*i*/) const {}  // outer scope reserves
-    ALWI void reserve_upfront(uint32_t /*n*/) const {}
-    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const {
-        for (uint32_t j = 0; j < BlockSize; ++j) {
-            pack_tile(j * 2, Cb, j);
-        }
-    }
-    ALWI void push_per_tile(uint32_t /*i*/) const {}  // outer scope pushes
-    ALWI void push_at_end(uint32_t /*n*/) const {}
-};
-}  // namespace
-#endif
 
 void kernel_main() {
     using namespace compute_kernel_lib;
@@ -190,15 +110,32 @@ void kernel_main() {
         PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, num_tiles_per_cycle);
         exp_cb_post_rhs.wait_front(num_tiles_per_cycle);
 
-        exp_cb_out.reserve_back(num_tiles_per_cycle);
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
-        // Migrated stage: stride-2 DEST scratch chain.
-        using LhsLoad = BlockCopyTileStride2Lhs<cb_post_lhs, cb_post_rhs, num_tiles_per_cycle>;
-        using RhsLoad = BlockCopyTileStride2Rhs<cb_post_rhs, cb_post_lhs, num_tiles_per_cycle>;
-        using SfpuStage = LocalBlockSfpuBinary<num_tiles_per_cycle>;
-        using PackStage = BlockPackTileStride2<cb_out, num_tiles_per_cycle>;
-        eltwise_chain(1u, LhsLoad{}, RhsLoad{}, SfpuStage{}, PackStage{});
+        // No-activations fast path — composed chain. CB lifecycles for cb_post_lhs /
+        // cb_post_rhs / cb_out are owned by the outer scope (wait/pop on lhs/rhs already
+        // done; chain reserves/pushes cb_out via PerBlockReserveAndPush absorbing the
+        // outer exp_cb_out.reserve/push pair).
+        using ATile = CopyTile<
+            cb_post_lhs,
+            Dst::D0,
+            CopyTilePolicy::NoWaitNoPop,
+            CbIndexMode::BlockIter,
+            CopyTileReconfig::Input>;
+        using BTile = CopyTile<
+            cb_post_rhs,
+            Dst::D1,
+            CopyTilePolicy::NoWaitNoPop,
+            CbIndexMode::BlockIter,
+            CopyTileReconfig::Input>;
+        using PackElt = PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerBlockReserveAndPush,
+            PackTileIndexMode::BlockIter,
+            PackTileReconfig::Output>;
+        eltwise_chain<num_tiles_per_cycle>(num_tiles_per_cycle, ATile{}, BTile{}, SfpuBinMacroOp{}, PackElt{});
 #else
+        exp_cb_out.reserve_back(num_tiles_per_cycle);
 #if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
         BINARY_SFPU_INIT
 #endif
@@ -210,7 +147,6 @@ void kernel_main() {
         copy_tile_to_dst_init_short_with_dt(cb_post_lhs, cb_post_rhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_rhs, i, i * 2 + 1);
-
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT
 #endif
@@ -218,16 +154,14 @@ void kernel_main() {
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
         tile_regs_commit();
-
         tile_regs_wait();
-
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             pack_tile(i * 2, cb_out);
         }
         tile_regs_release();
+        exp_cb_out.push_back(num_tiles_per_cycle);
 #endif
 
-        exp_cb_out.push_back(num_tiles_per_cycle);
         exp_cb_post_lhs.pop_front(num_tiles_per_cycle);
         exp_cb_post_rhs.pop_front(num_tiles_per_cycle);
     }

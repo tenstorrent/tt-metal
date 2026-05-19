@@ -95,8 +95,10 @@ void kernel_main() {
         exp_cb_post_rhs.wait_front(num_tiles_per_cycle);
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
-        // ---- Migrated stage: streaming BinaryFpu + PackTile (auto-block infra).
+        // ---- Migrated stage: chunked-streaming BinaryFpu + PackTile.
         //      CB lifecycle for inputs is owned by the outer scope (PREPROCESS / cb_post_*).
+        //      PerBlockReserveAndPush coalesces num_tiles_per_cycle reserve/push into a
+        //      single pair (vs. per-tile reserve/push at BlockSize=1).
         using BinElt = BinaryFpu<
             cb_post_lhs,
             cb_post_rhs,
@@ -104,15 +106,17 @@ void kernel_main() {
             BroadcastDim::None,
             BinaryDataFormatReconfig::None,
             CopyTilePolicy::NoWaitNoPop,
-            CopyTilePolicy::NoWaitNoPop>;
+            CopyTilePolicy::NoWaitNoPop,
+            CbIndexMode::BlockIter,
+            Dst::D0,
+            CbIndexMode::BlockIter>;
         using PackElt = PackTile<
             cb_out,
             Dst::D0,
-            PackTilePolicy::PerTileReserveAndPush,
-            PackTileIndexMode::FirstTile,
+            PackTilePolicy::PerBlockReserveAndPush,
+            PackTileIndexMode::BlockIter,
             PackTileReconfig::None>;
-        // BinaryFpu::init() emits the appropriate add/sub/mul_tiles_init internally.
-        eltwise_chain(num_tiles_per_cycle, BinElt{}, PackElt{});
+        eltwise_chain<num_tiles_per_cycle>(num_tiles_per_cycle, BinElt{}, PackElt{});
 #else
         // Activations path — keep raw (PROCESS_POST_ACTIVATIONS macro injection).
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);

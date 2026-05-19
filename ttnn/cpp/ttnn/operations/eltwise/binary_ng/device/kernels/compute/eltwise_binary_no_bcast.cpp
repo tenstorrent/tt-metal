@@ -92,17 +92,27 @@ void kernel_main() {
         process_tiles(remainder);
     }
 #else
-    // No-activations fast path — streaming chain over all tiles. Per-tile streaming
-    // (WaitAndPop) preserves reader-pushes-one-at-a-time semantics from prior block
-    // model; num_tiles_per_cycle is unused.
-    (void)num_tiles_per_cycle;
-    using BinElt = BinaryFpu<cb_post_lhs, cb_post_rhs, FPU_OP, BroadcastDim::None, BinaryDataFormatReconfig::None>;
+    // No-activations fast path — chunked streaming chain over `num_tiles` tiles in
+    // outer iterations of `num_tiles_per_cycle` tiles each. Wait/pop and reserve/push
+    // happen per-chunk (matches the chunked shape of the activations path above).
+    // Tail tiles (when num_tiles % num_tiles_per_cycle != 0) are handled by the chain.
+    using BinElt = BinaryFpu<
+        cb_post_lhs,
+        cb_post_rhs,
+        FPU_OP,
+        BroadcastDim::None,
+        BinaryDataFormatReconfig::None,
+        CopyTilePolicy::WaitAndPopPerBlock,
+        CopyTilePolicy::WaitAndPopPerBlock,
+        CbIndexMode::BlockIter,
+        Dst::D0,
+        CbIndexMode::BlockIter>;
     using PackElt = PackTile<
         cb_out,
         Dst::D0,
-        PackTilePolicy::PerTileReserveAndPush,
-        PackTileIndexMode::FirstTile,
+        PackTilePolicy::PerBlockReserveAndPush,
+        PackTileIndexMode::BlockIter,
         PackTileReconfig::None>;
-    eltwise_chain(num_tiles, BinElt{}, PackElt{});
+    eltwise_chain<num_tiles_per_cycle>(num_tiles, BinElt{}, PackElt{});
 #endif
 }

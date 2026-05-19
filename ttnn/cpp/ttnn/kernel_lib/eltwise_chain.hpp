@@ -379,6 +379,21 @@ enum class CopyTilePolicy : uint8_t {
                              // when downstream stages (e.g. a sum reduce after the x² stage)
                              // still need the same CB. Caller is responsible for the final
                              // pop after the consuming stage(s) finish.
+    WaitAndPopPerBlock,      // per-outer-iter wait `inner_count` + pop `inner_count`.
+                             // Chunked-streaming middle ground between WaitAndPop
+                             // (1 tile in flight) and WaitUpfrontPopAtEnd (all N upfront):
+                             // producer only needs `BlockSize` tiles ahead at any time.
+                             // Pipeline passes the chunk-local index `j` (not `base_tile + j`)
+                             // to exec — `copy_tile(cb, j)` reads the j-th tile of the
+                             // just-waited window. CB front advances one block per outer iter,
+                             // so the visible window is always `[0 .. inner_count)`.
+                             // Index modes: BlockIter (canonical — yields j), FirstTile
+                             // (always slot 0 — useful when reusing the same chunk-local
+                             // tile across lanes). Pinned/Absolute are also accepted but the
+                             // runtime k must lie in `[0, inner_count)` — using them under
+                             // per-block is unusual; prefer BlockIter unless you specifically
+                             // need a chunk-local fixed offset. RowBcast/ColBcast and
+                             // BlockIterOffset are rejected (see valid_policy_mode_2d_v).
 };
 
 /// CB-input tile indexing.
@@ -402,7 +417,9 @@ enum class CopyTilePolicy : uint8_t {
 /// `binary_op_helpers`' ROW/COL static_assert.
 enum class CbIndexMode : uint8_t {
     FirstTile,        // always tile 0 of the CB
-    BlockIter,        // 2D: tile (ht*Wt + wt) ; 1D: tile i. Requires non-streaming policy.
+    BlockIter,        // 2D: tile (ht*Wt + wt) ; 1D: tile i. Requires non-streaming policy
+                      // (WaitUpfrontPopAtEnd / Cumulative* / NoWaitNoPop) OR
+                      // WaitAndPopPerBlock (i = j chunk-local; CB front advances per block).
     Pinned,           // fixed runtime k. Under single-tile-window policies, k must be 0.
     Absolute,         // runtime idx ∈ caller's window. Requires non-streaming policy.
     RowBcast,         // 2D only: tile wt (B replicated across rows). Requires non-streaming.
@@ -476,19 +493,31 @@ enum class UnaryBcastReconfig : uint8_t {
     Input,  // reconfigure_unary_bcast(old_icb, new_icb, old_ocb, new_ocb)
 };
 
-/// Pack-side lifecycle. Five values cover all observed pack patterns from the TSV survey.
+/// Pack-side lifecycle. Six values cover all observed pack patterns from the TSV survey.
 enum class PackTilePolicy : uint8_t {
     PerTileReserveAndPush,    // cb_reserve_back(1); pack; cb_push_back(1)              (default)
     PerTileReserveNoPush,     // reserve happens; push deferred to caller
     NoReservePushAtEnd,       // pack into pre-reserved CB; push N at end
     NoReserveNoPush,          // caller owns reserve+push
     UpfrontReservePushAtEnd,  // reserve N upfront; pack sequentially; push N at end
+    PerBlockReserveAndPush,   // per-outer-iter reserve `inner_count` + push `inner_count`.
+                              // Chunked-streaming counterpart of `WaitAndPopPerBlock` —
+                              // downstream consumer only needs `BlockSize` slots free, not
+                              // the full N. Pipeline passes chunk-local index `j` so
+                              // `pack_tile(dst, cb, j)` writes the j-th slot of the just-
+                              // reserved window. IndexMode::BlockIter is the canonical
+                              // pairing (writes slots [0..inner_count) of the back of the
+                              // CB); FirstTile is legal but degenerate (every lane writes
+                              // slot 0 — only sensible at BlockSize=1). Pinned/Absolute
+                              // require runtime k in `[0, inner_count)`. BlockIterOffset
+                              // is rejected by the existing assert.
 };
 
 /// PackTile output-tile-index mode (mirrors CbIndexMode).
 enum class PackTileIndexMode : uint8_t {
     FirstTile,        // always output index 0
-    BlockIter,        // i (loop var). Requires UpfrontReservePushAtEnd / NoReserve* with caller-managed window.
+    BlockIter,        // i (loop var). Requires UpfrontReservePushAtEnd / NoReserve* with
+                      // caller-managed window, or PerBlockReserveAndPush (i = j chunk-local).
     Pinned,           // fixed runtime k.
     Absolute,         // runtime idx.
     BlockIterOffset,  // runtime k + i (1D) or runtime k + i_flat (2D). Requires

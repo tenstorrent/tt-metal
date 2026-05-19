@@ -27,8 +27,27 @@
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
-FORCE_INLINE void process_sfpu_tiles(
+
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
+
+// Local BINARY_SFPU_OP / BINARY_SFPU_INIT macro wrapper as a DestOnly chain
+// element. The chain composes CopyTile<cb_a, D0> + CopyTile<cb_b, D1> +
+// SfpuBinMacroOp + PackTile<cb_out, D0> at chain_lane_width=2.
+struct SfpuBinMacroOp : compute_kernel_lib::BinaryOp<
+                            SfpuBinMacroOp,
+                            compute_kernel_lib::Dst::D0,
+                            compute_kernel_lib::Dst::D1,
+                            compute_kernel_lib::Dst::D0> {
+    static ALWI void init() { BINARY_SFPU_INIT; }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        BINARY_SFPU_OP(0 + slot_offset, 1 + slot_offset, 0 + slot_offset);
+    }
+};
+
+FORCE_INLINE void process_sfpu_tiles_raw(
     uint32_t n, uint32_t cb_pre_lhs, uint32_t cb_post_lhs, uint32_t cb_pre_rhs, uint32_t cb_post_rhs, uint32_t cb_out) {
+    // Raw-LLK path for activations branches (PREPROCESS / PROCESS_POST_ACTIVATIONS macros).
     PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, n);
     cb_wait_front(cb_post_lhs, n);
 
@@ -89,15 +108,38 @@ void kernel_main() {
     BINARY_SFPU_INIT
 #endif
 
-    // Process full chunks
+#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
+    // Activations path — keep raw (PREPROCESS / PROCESS_POST_ACTIVATIONS macros).
     uint32_t num_full_chunks = num_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
-        process_sfpu_tiles(num_tiles_per_cycle, cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out);
+        process_sfpu_tiles_raw(num_tiles_per_cycle, cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out);
     }
-
-    // Process remainder
     uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
-        process_sfpu_tiles(remainder, cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out);
+        process_sfpu_tiles_raw(remainder, cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out);
     }
+#else
+    // No-activations fast path — chunked-streaming chain composing
+    // CopyTile<cb_a, D0> + CopyTile<cb_b, D1> + SFPU bin op + PackTile<cb_out, D0>.
+    using namespace compute_kernel_lib;
+    using ATile = CopyTile<
+        cb_post_lhs,
+        Dst::D0,
+        CopyTilePolicy::WaitAndPopPerBlock,
+        CbIndexMode::BlockIter,
+        CopyTileReconfig::Input>;
+    using BTile = CopyTile<
+        cb_post_rhs,
+        Dst::D1,
+        CopyTilePolicy::WaitAndPopPerBlock,
+        CbIndexMode::BlockIter,
+        CopyTileReconfig::Input>;
+    using PackElt = PackTile<
+        cb_out,
+        Dst::D0,
+        PackTilePolicy::PerBlockReserveAndPush,
+        PackTileIndexMode::BlockIter,
+        PackTileReconfig::Output>;
+    eltwise_chain<num_tiles_per_cycle>(num_tiles, ATile{}, BTile{}, SfpuBinMacroOp{}, PackElt{});
+#endif
 }

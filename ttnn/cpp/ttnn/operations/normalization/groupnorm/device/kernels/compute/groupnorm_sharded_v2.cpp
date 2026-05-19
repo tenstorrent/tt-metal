@@ -416,7 +416,7 @@ void kernel_main() {
                         cb_eps_id,
                         BinaryFpuOp::Add,
                         BroadcastDim::None,
-                        BinaryDataFormatReconfig::Input,
+                        BinaryDataFormatReconfig::None,
                         CopyTilePolicy::WaitAndPop,
                         CopyTilePolicy::NoWaitNoPop,
                         CbIndexMode::FirstTile,
@@ -427,7 +427,7 @@ void kernel_main() {
                         Dst::D0,
                         PackTilePolicy::PerTileReserveAndPush,
                         PackTileIndexMode::FirstTile,
-                        PackTileReconfig::Output>{});
+                        PackTileReconfig::None>{});
             }
             //  (x - Ex) * 1/[sqrt(Var + eps)]
             index_h_offset = 0;

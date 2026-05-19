@@ -11,6 +11,24 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
+namespace eltwise_binary_scalar_kernel_detail {
+template <ckernel::EltwiseBinaryType T>
+struct FpuOpForBinaryType;
+template <>
+struct FpuOpForBinaryType<ckernel::EltwiseBinaryType::ELWADD> {
+    static constexpr auto value = compute_kernel_lib::BinaryFpuOp::Add;
+};
+template <>
+struct FpuOpForBinaryType<ckernel::EltwiseBinaryType::ELWSUB> {
+    static constexpr auto value = compute_kernel_lib::BinaryFpuOp::Sub;
+};
+template <>
+struct FpuOpForBinaryType<ckernel::EltwiseBinaryType::ELWMUL> {
+    static constexpr auto value = compute_kernel_lib::BinaryFpuOp::Mul;
+};
+}  // namespace eltwise_binary_scalar_kernel_detail
+constexpr auto FPU_OP_SCALAR = eltwise_binary_scalar_kernel_detail::FpuOpForBinaryType<ckernel::BINARY_OP_TYPE>::value;
+
 void kernel_main() {
     using namespace compute_kernel_lib;
 
@@ -70,41 +88,29 @@ void kernel_main() {
     }
     cb_pop_front(cb_post_rhs, 1);
 #else
-    // v6 Q4 collapse regression (disposition (c)):
-    //
-    // The no-activations fast path previously used `BlockBinaryFpu<...,
-    // CbIndexMode::BlockIter, CbIndexMode::FirstTile>` (A=block-walk, B=pin scalar
-    // tile at idx 0). After the v6 collapse to a single Index template parameter
-    // there is no symmetric mode covering both — we revert to the raw LLK shape
-    // already used by the activations branch (above). The block-mode optimisation
-    // (single acquire/release wrapping the inner block) is preserved.
-    binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
+    // No-activations fast path — chunked-streaming chain. A streams chunks of
+    // `num_tiles_per_cycle` tiles (WaitAndPopPerBlock + BlockIter is chunk-local —
+    // copy reads tile `j` of the just-waited window); B is the pinned scalar tile
+    // (caller manages — single cb_wait_front before chain, cb_pop_front after).
     cb_wait_front(cb_post_rhs, 1);
-    auto process_tiles_no_act = [&](uint32_t n) {
-        cb_wait_front(cb_post_lhs, n);
-        cb_reserve_back(cb_out, n);
-        binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
-        tile_regs_acquire();
-        for (uint32_t i = 0; i < n; ++i) {
-            BINARY_OP(cb_post_lhs, cb_post_rhs, i, 0, i);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < n; ++i) {
-            pack_tile(i, cb_out);
-        }
-        tile_regs_release();
-        cb_pop_front(cb_post_lhs, n);
-        cb_push_back(cb_out, n);
-    };
-    uint32_t full_chunks = num_tiles / num_tiles_per_cycle;
-    for (uint32_t chunk = 0; chunk < full_chunks; ++chunk) {
-        process_tiles_no_act(num_tiles_per_cycle);
-    }
-    uint32_t remainder = num_tiles % num_tiles_per_cycle;
-    if (remainder > 0) {
-        process_tiles_no_act(remainder);
-    }
+    using BinElt = BinaryFpu<
+        cb_post_lhs,
+        cb_post_rhs,
+        FPU_OP_SCALAR,
+        BroadcastDim::None,
+        BinaryDataFormatReconfig::None,
+        CopyTilePolicy::WaitAndPopPerBlock,
+        CopyTilePolicy::NoWaitNoPop,
+        CbIndexMode::BlockIter,
+        Dst::D0,
+        CbIndexMode::FirstTile>;
+    using PackElt = PackTile<
+        cb_out,
+        Dst::D0,
+        PackTilePolicy::PerBlockReserveAndPush,
+        PackTileIndexMode::BlockIter,
+        PackTileReconfig::None>;
+    eltwise_chain<num_tiles_per_cycle>(num_tiles, BinElt{}, PackElt{});
     cb_pop_front(cb_post_rhs, 1);
 #endif
 }

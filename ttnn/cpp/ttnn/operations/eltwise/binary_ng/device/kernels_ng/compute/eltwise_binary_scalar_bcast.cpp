@@ -83,8 +83,7 @@ ALWI void process_tile(uint32_t freq, uint32_t tile_start) {
         cb_wait_front(CB_POST_OTHER, num_tiles_per_cycle);
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
-        // Migrated stage: streaming BinaryFpu + PackTile (auto-block infra).
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
+        // Chain owns the per-chunk reserve/push (PerBlockReserveAndPush).
         using BinElt = BinaryFpu<
             (uint32_t)cb_post_lhs,
             (uint32_t)cb_post_rhs,
@@ -99,11 +98,10 @@ ALWI void process_tile(uint32_t freq, uint32_t tile_start) {
         using PackElt = PackTile<
             (uint32_t)cb_out,
             Dst::D0,
-            PackTilePolicy::NoReserveNoPush,
+            PackTilePolicy::PerBlockReserveAndPush,
             PackTileIndexMode::BlockIter,
             PackTileReconfig::None>;
         eltwise_chain<num_tiles_per_cycle>(num_tiles_per_cycle, BinElt{}, PackElt{});
-        cb_push_back(cb_out, num_tiles_per_cycle);
 #else
         cb_reserve_back(cb_out, num_tiles_per_cycle);
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);

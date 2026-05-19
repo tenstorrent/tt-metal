@@ -28,17 +28,31 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp"
 
-ALWI void process_tile(
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
+
+// Local BINARY_SFPU_OP / BINARY_SFPU_INIT macro wrapper.
+struct SfpuBinMacroOp : compute_kernel_lib::BinaryOp<
+                            SfpuBinMacroOp,
+                            compute_kernel_lib::Dst::D0,
+                            compute_kernel_lib::Dst::D1,
+                            compute_kernel_lib::Dst::D0> {
+    static ALWI void init() { BINARY_SFPU_INIT; }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        BINARY_SFPU_OP(0 + slot_offset, 1 + slot_offset, 0 + slot_offset);
+    }
+};
+
+template <
+    uint32_t num_tiles_per_cycle,
     tt::CBIndex cb_bcast,
     tt::CBIndex cb_llk_post,
     tt::CBIndex cb_pre_lhs,
     tt::CBIndex cb_post_lhs,
     tt::CBIndex cb_pre_rhs,
     tt::CBIndex cb_post_rhs,
-    tt::CBIndex cb_out,
-    uint32_t freq,
-    uint32_t tile_start,
-    uint32_t num_tiles_per_cycle) {
+    tt::CBIndex cb_out>
+ALWI void process_tile(uint32_t freq, uint32_t tile_start) {
     using namespace ckernel;
 
 #if BCAST_INPUT
@@ -76,8 +90,9 @@ ALWI void process_tile(
         PREPROCESS(OTHER_OP, CB_PRE_OTHER, CB_POST_OTHER, cb_out, num_tiles_per_cycle);
         cb_wait_front(CB_POST_OTHER, num_tiles_per_cycle);
 
+#if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
+        // Activations path — keep raw.
         cb_reserve_back(cb_out, num_tiles_per_cycle);
-
 #if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
         BINARY_SFPU_INIT
 #endif
@@ -89,7 +104,6 @@ ALWI void process_tile(
         copy_tile_to_dst_init_short_with_dt(cb_post_lhs, cb_post_rhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_rhs, i, i * 2 + 1);
-
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT
 #endif
@@ -97,15 +111,39 @@ ALWI void process_tile(
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
         tile_regs_commit();
-
         tile_regs_wait();
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             pack_tile(i * 2, cb_out);
         }
         tile_regs_release();
-
         cb_push_back(cb_out, num_tiles_per_cycle);
         cb_pop_front(CB_POST_OTHER, num_tiles_per_cycle);
+#else
+        // No-activations fast path — composed chain. A=streaming chunk (CB_POST_OTHER),
+        // B=upfront bcast operand (CB_POST_BCAST, caller pops outside chain).
+        {
+            using namespace compute_kernel_lib;
+            using ATile = CopyTile<
+                CB_POST_OTHER,
+                Dst::D0,
+                CopyTilePolicy::WaitAndPopPerBlock,
+                CbIndexMode::BlockIter,
+                CopyTileReconfig::Input>;
+            using BTile = CopyTile<
+                CB_POST_BCAST,
+                Dst::D1,
+                CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::BlockIter,
+                CopyTileReconfig::Input>;
+            using PackElt = PackTile<
+                cb_out,
+                Dst::D0,
+                PackTilePolicy::PerBlockReserveAndPush,
+                PackTileIndexMode::BlockIter,
+                PackTileReconfig::Output>;
+            eltwise_chain<num_tiles_per_cycle>(num_tiles_per_cycle, ATile{}, BTile{}, SfpuBinMacroOp{}, PackElt{});
+        }
+#endif
     }
     cb_pop_front(CB_POST_BCAST, num_tiles_per_cycle);
     cb_pop_front(cb_bcast, num_tiles_per_cycle);
@@ -154,30 +192,26 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(
+        process_tile<
+            num_tiles_per_cycle,
             cb_bcast,
             cb_llk_post,
             cb_pre_lhs,
             cb_post_lhs,
             cb_pre_rhs,
             cb_post_rhs,
-            cb_out,
-            tile_freq,
-            tile_start,
-            num_tiles_per_cycle);
+            cb_out>(tile_freq, tile_start);
     }
 
     if (remaining_iterations > 0) {
-        process_tile(
+        process_tile<
+            num_tiles_per_cycle,
             cb_bcast,
             cb_llk_post,
             cb_pre_lhs,
             cb_post_lhs,
             cb_pre_rhs,
             cb_post_rhs,
-            cb_out,
-            remaining_iterations,
-            tile_start,
-            num_tiles_per_cycle);
+            cb_out>(remaining_iterations, tile_start);
     }
 }

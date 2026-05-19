@@ -129,6 +129,12 @@ void kernel_main() {
         /*
          * x * 1/sqrt(stdev)
          */
+        // A-side input streams in chunks of `blk` (WaitAndPopPerBlock); B-side
+        // operands (cb_recip_sqrt_var / cb_gamma / cb_beta) are caller-staged
+        // and read with absolute index. The chain dispatches via the per-side
+        // 3-arg exec so A reads chunk-local `j` and B reads `base_tile + j`
+        // (or 0 for FirstTile). Pack matches the streaming shape with
+        // PerBlockReserveAndPush.
         cb_wait_front(cb_recip_sqrt_var, 1);
         {
             using namespace compute_kernel_lib;
@@ -140,7 +146,7 @@ void kernel_main() {
                     BinaryFpuOp::Mul,
                     BroadcastDim::Col,
                     BinaryDataFormatReconfig::Input,
-                    CopyTilePolicy::WaitUpfrontPopAtEnd,
+                    CopyTilePolicy::WaitAndPopPerBlock,
                     CopyTilePolicy::NoWaitNoPop,
                     CbIndexMode::BlockIter,
                     Dst::D0,
@@ -148,7 +154,7 @@ void kernel_main() {
                 PackTile<
                     normed_output_cb,
                     Dst::D0,
-                    PackTilePolicy::UpfrontReservePushAtEnd,
+                    PackTilePolicy::PerBlockReserveAndPush,
                     PackTileIndexMode::BlockIter,
                     PackTileReconfig::Output>{});
         }
@@ -156,7 +162,7 @@ void kernel_main() {
 
         if constexpr (do_gamma) {
             /*
-             * x_normed * gamma   (cb_gamma walks BlockIter — index = 0..Wt-1)
+             * x_normed * gamma   (cb_gamma walks BlockIter — absolute 0..Wt-1)
              */
             cb_wait_front(cb_gamma, Wt);  // gamma is reused across NCHt — wait once per row
             using namespace compute_kernel_lib;
@@ -168,7 +174,7 @@ void kernel_main() {
                     BinaryFpuOp::Mul,
                     BroadcastDim::Row,
                     BinaryDataFormatReconfig::Input,
-                    CopyTilePolicy::WaitUpfrontPopAtEnd,
+                    CopyTilePolicy::WaitAndPopPerBlock,
                     CopyTilePolicy::NoWaitNoPop,
                     CbIndexMode::BlockIter,
                     Dst::D0,
@@ -176,13 +182,13 @@ void kernel_main() {
                 PackTile<
                     cb_times_gamma_out,
                     Dst::D0,
-                    PackTilePolicy::UpfrontReservePushAtEnd,
+                    PackTilePolicy::PerBlockReserveAndPush,
                     PackTileIndexMode::BlockIter,
                     PackTileReconfig::Output>{});
 
             if constexpr (do_beta) {
                 /*
-                 * (x_normed * gamma) + beta   (cb_beta walks BlockIter — 0..Wt-1)
+                 * (x_normed * gamma) + beta   (cb_beta walks BlockIter — absolute 0..Wt-1)
                  */
                 cb_wait_front(cb_beta, Wt);
                 eltwise_chain<blk>(
@@ -193,7 +199,7 @@ void kernel_main() {
                         BinaryFpuOp::Add,
                         BroadcastDim::Row,
                         BinaryDataFormatReconfig::Input,
-                        CopyTilePolicy::WaitUpfrontPopAtEnd,
+                        CopyTilePolicy::WaitAndPopPerBlock,
                         CopyTilePolicy::NoWaitNoPop,
                         CbIndexMode::BlockIter,
                         Dst::D0,
@@ -201,7 +207,7 @@ void kernel_main() {
                     PackTile<
                         cb_out,
                         Dst::D0,
-                        PackTilePolicy::UpfrontReservePushAtEnd,
+                        PackTilePolicy::PerBlockReserveAndPush,
                         PackTileIndexMode::BlockIter,
                         PackTileReconfig::Output>{});
             }
