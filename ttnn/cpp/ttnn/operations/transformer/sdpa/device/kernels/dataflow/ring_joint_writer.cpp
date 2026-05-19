@@ -192,7 +192,7 @@ void save_accumulators_with_trid(
     }
 
     noc_async_write_flushed_with_trid(save_trid);
-    // Reset TRID to 0 to avoid leaking it to unrelated writes (e.g. write_out_row_by_row_no_pop on last ring iter).
+    // Reset TRID to 0 to avoid leaking it to unrelated writes (e.g. write_block_row_grouped_trid on last ring iter).
     // Without this, subsequent noc_async_write calls would inflate save_trid's outstanding count,
     // causing noc_async_write_barrier_with_trid(save_trid) to wait for unrelated writes.
     // cb_out was already popped per-group inside write_block_row_grouped_trid.
@@ -657,7 +657,7 @@ void kernel_main() {
                     prefetch_intra_ring(q_index + 1);
                 }
             }
-            // Hoisted DRAM-arrival barrier: on the last ring iter, write_out_row_by_row_no_pop
+            // Hoisted DRAM-arrival barrier: on the last ring iter, write_block_row_grouped_trid
             // issued N untagged NOC writes (one per Q on this core). Wait once at the end of the
             // Q loop for all of them to land in DRAM, before the outer ring-iter loop advances
             // or the op teardown runs. Previously this was a per-Q barrier inside the loop.

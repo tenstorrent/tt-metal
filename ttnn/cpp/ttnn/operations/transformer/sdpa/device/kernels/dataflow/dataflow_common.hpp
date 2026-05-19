@@ -928,7 +928,9 @@ inline void issue_block_reads(
 }
 
 // Zero-fill a (num_rows × cols) tile block in L1. Same dst arithmetic as issue_block_reads.
-// reader is used only to derive the per-tile page size.
+// reader is used only to derive the per-tile page size. No periodic barrier: fills source
+// from local L1 (MEM_ZEROS_BASE) and completes fast, so they don't push the NIU outstanding
+// counter the way DRAM reads do. Caller's trailing noc_async_read_barrier() handles visibility.
 template <typename ReaderType>
 inline void zero_fill_block(
     const ReaderType& reader,
@@ -937,9 +939,7 @@ inline void zero_fill_block(
     uint32_t dst_row_origin,
     uint32_t dst_addr,
     uint32_t outer_stride,
-    uint32_t inner_stride,
-    uint32_t barrier_threshold,
-    uint32_t& barrier_count) {
+    uint32_t inner_stride) {
     for (uint32_t r = 0; r < num_rows; ++r) {
         uint32_t dst = dst_addr + (dst_row_origin + r) * outer_stride;
         for (uint32_t col = 0; col < cols; ++col) {
@@ -949,10 +949,6 @@ inline void zero_fill_block(
                 fill_zeros_async(dst, reader.page_size);
             }
             dst += inner_stride;
-            if (barrier_threshold > 0 && ++barrier_count == barrier_threshold) {
-                noc_async_read_barrier();
-                barrier_count = 0;
-            }
         }
     }
 }
@@ -1026,9 +1022,11 @@ struct CatAddrGenerator {
     // Issue async NoC reads for a slice to L1. No barrier — caller must
     // noc_async_read_barrier(). Splits [slice.d2_start, slice.d2_end) into up to four segments
     // (first tensor / gap / second tensor / tail); each valid segment hoists id_of once.
+    // end_seq_tile is unused: bounds come from first_shape/second_shape; signature kept for
+    // API symmetry with PaddedAddrGenerator (fetch_block dispatches generically).
     void issue_reads(
         const Slice& slice,
-        uint32_t end_seq_tile,
+        uint32_t /*end_seq_tile*/,
         uint32_t dst_addr,
         uint32_t outer_stride,
         uint32_t inner_stride,
@@ -1062,15 +1060,7 @@ struct CatAddrGenerator {
         const uint32_t s1_end = std::min(d2_end, gap_end);
         if (s1_start < s1_end) {
             zero_fill_block(
-                first_reader,
-                s1_end - s1_start,
-                cols,
-                s1_start - d2_start,
-                dst_addr,
-                outer_stride,
-                inner_stride,
-                barrier_threshold,
-                barrier_count);
+                first_reader, s1_end - s1_start, cols, s1_start - d2_start, dst_addr, outer_stride, inner_stride);
         }
         // Segment 2: second tensor (d2 shifted by first_seq_padded).
         const uint32_t s2_start = std::max(d2_start, gap_end);
@@ -1093,24 +1083,16 @@ struct CatAddrGenerator {
         const uint32_t s3_start = std::max(d2_start, second_end);
         if (s3_start < d2_end) {
             zero_fill_block(
-                first_reader,
-                d2_end - s3_start,
-                cols,
-                s3_start - d2_start,
-                dst_addr,
-                outer_stride,
-                inner_stride,
-                barrier_threshold,
-                barrier_count);
+                first_reader, d2_end - s3_start, cols, s3_start - d2_start, dst_addr, outer_stride, inner_stride);
         }
     }
 
     // Issue async NoC writes for a slice from L1. No barrier — caller must
     // noc_async_write_barrier(). Same segment split as issue_reads; gap and tail produce no
-    // writes (those rows aren't mapped to either tensor).
+    // writes (those rows aren't mapped to either tensor). end_seq_tile unused (see issue_reads).
     void issue_writes(
         const Slice& slice,
-        uint32_t end_seq_tile,
+        uint32_t /*end_seq_tile*/,
         uint32_t src_addr,
         uint32_t outer_stride,
         uint32_t inner_stride) const {
@@ -1202,9 +1184,7 @@ struct PaddedAddrGenerator {
             /*dst_row_origin=*/valid_rows,
             dst_addr,
             outer_stride,
-            inner_stride,
-            barrier_threshold,
-            barrier_count);
+            inner_stride);
     }
 
     // Issue async NoC writes for a slice from L1. No barrier — caller must
