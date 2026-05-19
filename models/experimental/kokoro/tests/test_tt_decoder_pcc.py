@@ -386,9 +386,15 @@ def test_tt_decoder_full_forward_fallback_pcc(device):
     _load_trained_weights(ref, ckpt_path)
     asr, F0_curve, N_curve, s = _setup_realistic_decoder_inputs(seed=2)
 
+    # Build TTDecoder params (exercises full preprocess path including generator weights).
+    # Must be done before _torch_random_zeros so weight upload is unaffected.
+    params = preprocess_tt_decoder(ref, device, time_len_asr=_T_MEL)
+
     # Run the reference decode chain manually to obtain x_dec — the exact input the Generator
     # receives in the reference forward.  We also compute y_ref so PCC is measured against the
     # same reference as the full-decoder test.
+    # TTGenerator is constructed inside the same zeros context so self._noise_raw /
+    # self._out_noise_raw match the zeros noise used by the reference forward.
     with torch.no_grad(), _torch_random_zeros():
         F0_ref = ref.F0_conv(F0_curve.unsqueeze(1))  # [1, 1, T_mel]
         N_ref = ref.N_conv(N_curve.unsqueeze(1))  # [1, 1, T_mel]
@@ -404,19 +410,15 @@ def test_tt_decoder_full_forward_fallback_pcc(device):
             if block.upsample_type != "none":
                 res = False
         y_ref = ref.generator(x_dec, s, F0_curve)  # [1, 1, audio_len]
-
-    # Build TTDecoder params (exercises full preprocess path including generator weights).
-    params = preprocess_tt_decoder(ref, device, time_len_asr=_T_MEL)
-
-    # Create TTGenerator from the Decoder's generator params with fallbacks enabled.
-    gen = TTGenerator(
-        device,
-        params.generator,
-        use_torch_stft_fallback=True,
-        use_torch_phase_fallback=True,
-        use_torch_linear_fallback=True,
-        use_torch_tanh_fallback=True,
-    )
+        # Create TTGenerator from the Decoder's generator params with fallbacks enabled.
+        gen = TTGenerator(
+            device,
+            params.generator,
+            use_torch_stft_fallback=True,
+            use_torch_phase_fallback=True,
+            use_torch_linear_fallback=True,
+            use_torch_tanh_fallback=True,
+        )
 
     mc = ttnn.DRAM_MEMORY_CONFIG
     # x_dec is [1, 512, T_mel*2] BCL → transpose to NLC [1, T_mel*2, 512]
