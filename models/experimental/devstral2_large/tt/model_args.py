@@ -198,6 +198,18 @@ class Devstral2Args:
     def attn_scale(self) -> float:
         return self.head_dim**-0.5
 
+    # ---- Activation memory (avoid DRAM ↔ L1 tilize round-trips) ----
+
+    def get_activation_mem_config(self, mode: str, mesh_device) -> ttnn.MemoryConfig:
+        """L1 interleaved for prefill; width-sharded L1 for decode (see ``mem_config``)."""
+        from models.experimental.devstral2_large.tt.mem_config import get_activation_mem_config
+
+        return get_activation_mem_config(self, mode, mesh_device)
+
+    def get_ccl_output_mem_config(self, mode: str, mesh_device) -> ttnn.MemoryConfig:
+        """Where all-reduce should leave activations."""
+        return self.get_activation_mem_config(mode, mesh_device)
+
     # ---- Weight loading helpers ----
 
     def state_dict_prefix(self, module: str = "", layer_idx: Optional[int] = None) -> str:
@@ -211,13 +223,19 @@ class Devstral2Args:
 
 
 def is_blackhole_mesh(mesh_device) -> bool:
-    """Best-effort cluster type check; falls back to False when ttnn doesn't expose the API."""
+    """True on Blackhole / BH Galaxy meshes (used for kernel and program-config selection)."""
     try:
-        return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY or any(
-            a == "blackhole" for a in (getattr(mesh_device, "arch", lambda: None)(),)
-        )
+        if mesh_device is not None and hasattr(mesh_device, "arch"):
+            return mesh_device.arch() == ttnn.device.Arch.BLACKHOLE
     except Exception:
-        return False
+        pass
+    try:
+        return ttnn.device.is_blackhole(mesh_device)
+    except Exception:
+        pass
+    from models.common.utility_functions import is_blackhole
+
+    return is_blackhole()
 
 
 def torch_default_dtype_for(t_dtype: ttnn.DataType) -> torch.dtype:

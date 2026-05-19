@@ -216,7 +216,7 @@ class TtRotaryEmbedding:
                 device=mesh_device,
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
 
@@ -230,7 +230,7 @@ class TtRotaryEmbedding:
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
@@ -274,7 +274,7 @@ class TtRotaryEmbedding:
                 device=self.mesh_device,
                 dtype=self.dtype,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 

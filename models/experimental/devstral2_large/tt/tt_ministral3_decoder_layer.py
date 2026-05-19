@@ -75,9 +75,12 @@ class TtDecoderLayer:
         current_pos_host: Optional[torch.Tensor] = None,
         user_id: int = 0,
     ) -> ttnn.Tensor:
+        mesh_device = self.self_attn.mesh_device
+        act_mem = self.args.get_activation_mem_config(mode, mesh_device)
+
         # Attention sub-block.
         residual = x
-        h = self.input_layernorm(x)
+        h = self.input_layernorm(x, memory_config=act_mem)
         h = self.self_attn(
             h,
             mode=mode,
@@ -85,14 +88,14 @@ class TtDecoderLayer:
             current_pos_host=current_pos_host,
             user_id=user_id,
         )
-        h = ttnn.add(h, residual)
+        h = ttnn.add(h, residual, memory_config=act_mem)
         ttnn.deallocate(residual)
 
         # MLP sub-block.
         residual = h
-        h2 = self.post_attention_layernorm(h)
-        h2 = self.mlp(h2)
-        out = ttnn.add(h2, residual)
+        h2 = self.post_attention_layernorm(h, memory_config=act_mem)
+        h2 = self.mlp(h2, mode=mode)
+        out = ttnn.add(h2, residual, memory_config=act_mem)
         ttnn.deallocate(residual)
         ttnn.deallocate(h2)
         return out

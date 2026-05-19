@@ -23,6 +23,7 @@ from typing import Optional
 import torch
 import ttnn
 
+from models.experimental.devstral2_large.tt.mem_config import get_compute_kernel_config
 from models.experimental.devstral2_large.tt.model_args import (
     DEVSTRAL2_LARGE_L1_SMALL_SIZE,
     Devstral2Args,
@@ -88,19 +89,15 @@ class TtRMSNorm:
             mesh_device,
             dtype or args.weight_dtype,
         )
-        self._compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        self._compute_kernel_config = get_compute_kernel_config(mesh_device)
 
     def __call__(self, x: ttnn.Tensor, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor:
+        out_mem = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
         return ttnn.rms_norm(
             x,
             epsilon=self.eps,
             weight=self.weight,
-            memory_config=memory_config,
+            memory_config=out_mem,
             compute_kernel_config=self._compute_kernel_config,
         )
 
