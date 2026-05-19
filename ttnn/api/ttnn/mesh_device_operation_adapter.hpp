@@ -22,11 +22,8 @@
 #include <unordered_map>
 #include <variant>
 #include <vector>
-<<<<<<< dgomez/mesh-workload-descriptor
 #include <array>
 #include <tuple>
-=======
->>>>>>> main
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/metal2_artifacts.hpp"
