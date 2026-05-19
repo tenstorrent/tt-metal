@@ -165,9 +165,16 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
                 const auto processor = static_cast<DataMovementProcessor>(0);
 
                 log_info(tt::LogTest, "    running on {}", processor);
-                string locinfo =
-                    fmt::format("sender: [{}], receiver: [{}], processor: [{}]", sender_core, receiver_core, processor);
-                // bool passed = run_test_stress(
+                string locinfo = fmt::format(
+                    "sdev: [{}], rdev: [{}]"
+                    ", score: [{}], rcore: [{}]"
+                    ", processor: [{}]",
+                    sender_device->id(),
+                    receiver_device->id(),
+                    sender_core,
+                    receiver_core,
+                    processor);
+
                 run_test_stress(
                     this,
                     sender_mesh_device,
@@ -192,8 +199,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
 
     bool pass = true;
 
-    pass &= bandwidth_check_cores(cores);
-    pass &= data_check_cores(cores);
+    pass &= test_check_cores(cores);
 
     log_info(tt::LogTest, "Ran {} tests", n);
     ASSERT_TRUE(pass);

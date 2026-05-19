@@ -707,25 +707,17 @@ static bool tensix_compare_dram_banks(
 }
 
 [[maybe_unused]]
-bool bandwidth_check_cores(std::span<struct core_setup> cores) {
+bool test_check_cores(std::span<struct core_setup> cores) {
     bool pass = true;
 
+    std::string prev = "";
     for (const auto& cs : cores) {
-        log_info(tt::LogTest, "bandwidth_check: {}", cs.locinfo);
+        if (prev != cs.locinfo) {
+            log_info(tt::LogTest, "core_check: {}", cs.locinfo);
+        }
+        prev = cs.locinfo;
         auto* const dev = cs.mesh_device->get_devices()[0];
         pass &= bandwidth_check(dev, cs.core, cs.delta_time_addr, cs.total_transferred, cs.bw_threshold);
-    }
-
-    return pass;
-}
-
-[[maybe_unused]]
-bool data_check_cores(std::span<struct core_setup> cores) {
-    bool pass = true;
-
-    for (const auto& cs : cores) {
-        log_info(tt::LogTest, "data_check: {}", cs.locinfo);
-        auto* const dev = cs.mesh_device->get_devices()[0];
         pass &= data_check(dev, cs.core, cs.recv_l1_address, cs.inp);
     }
 
