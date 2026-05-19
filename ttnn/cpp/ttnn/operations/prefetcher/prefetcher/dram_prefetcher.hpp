@@ -20,6 +20,7 @@ ttnn::Tensor dram_prefetcher(
     const std::optional<const GlobalCircularBuffer>& global_cb,
     bool enable_performance_mode = false,
     bool run_on_dram_cores = false,
-    const std::optional<const DramSenderGlobalCircularBuffer>& dram_sender_global_cb = std::nullopt);
+    const std::optional<const DramSenderGlobalCircularBuffer>& dram_sender_global_cb = std::nullopt,
+    uint32_t dram_core_k_block_w_tiles = 1);
 
 }  // namespace ttnn

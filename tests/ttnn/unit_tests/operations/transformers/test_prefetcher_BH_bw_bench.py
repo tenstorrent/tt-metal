@@ -71,20 +71,24 @@ _TILE_BYTES = {"bfloat8_b": 1088, "bfloat16": 2048}[_DTYPE_NAME]
 _BF8_TILE_BYTES = _TILE_BYTES  # kept for backward-compat in derivations below
 
 
+_DRAM_CORE_K_BLOCK_W_TILES = int(os.environ.get("BENCH_DRAM_CORE_K_BLOCK_W", "1"))
+
+
 def _expected_push_geometry(path: str):
     """Returns (num_iters_per_layer, page_size_bytes) for each prefetcher path."""
-    n_tiles_per_bank = (_N // _NUM_BANKS) // ttnn.TILE_SIZE  # 16
-    n_tiles_per_recv = n_tiles_per_bank // _NUM_RECV_PER_BANK  # 8
-    k_tiles = _K // ttnn.TILE_SIZE  # 64
+    n_tiles_per_bank = (_N // _NUM_BANKS) // ttnn.TILE_SIZE
+    n_tiles_per_recv = n_tiles_per_bank // _NUM_RECV_PER_BANK
+    k_tiles = _K // ttnn.TILE_SIZE
     if path == "dram_core":
-        # DRISC kernel hardcodes kInBlockWTiles=1.
-        num_iters = k_tiles
-        page_size = 1 * n_tiles_per_recv * _BF8_TILE_BYTES
+        kbw = _DRAM_CORE_K_BLOCK_W_TILES
+        assert k_tiles % kbw == 0, f"k_tiles ({k_tiles}) must be divisible by kbw ({kbw})"
+        num_iters = k_tiles // kbw
+        page_size = kbw * n_tiles_per_recv * _TILE_BYTES
     elif path == "worker_core":
         num_blocks = _NUM_BANKS * _NUM_RECV_PER_BANK  # = num_senders * num_recv_per_sender
-        block_tiles = k_tiles * n_tiles_per_bank // num_blocks  # 64 * 16 / 16 = 64
+        block_tiles = k_tiles * n_tiles_per_bank // num_blocks
         num_iters = num_blocks
-        page_size = block_tiles * _BF8_TILE_BYTES // _NUM_RECV_PER_BANK
+        page_size = block_tiles * _TILE_BYTES // _NUM_RECV_PER_BANK
     else:
         raise ValueError(path)
     return num_iters, page_size
@@ -182,13 +186,18 @@ def test_bw_dram_core_prefetcher(device):
     gcb = ttnn.create_dram_sender_global_circular_buffer(device, bank_to_receivers, gcb_size)
 
     logger.info(
-        f"[dram_core_bw] K={_K} N={_N} bf8_b ring={_NUM_RECEIVERS} num_layers={num_layers} "
-        f"iters/layer={num_iters_per_layer} page_size={page_size} gcb_size={gcb_size}"
+        f"[dram_core_bw] K={_K} N={_N} {_DTYPE_NAME} ring={_NUM_RECEIVERS} num_layers={num_layers} "
+        f"k_block_w={_DRAM_CORE_K_BLOCK_W_TILES} iters/layer={num_iters_per_layer} "
+        f"page_size={page_size} gcb_size={gcb_size}"
     )
 
     def sender_fn():
         ttnn.dram_prefetcher(
-            [tt_weight, addrs], num_layers=num_layers, run_on_dram_cores=True, dram_sender_global_cb=gcb
+            [tt_weight, addrs],
+            num_layers=num_layers,
+            run_on_dram_cores=True,
+            dram_sender_global_cb=gcb,
+            dram_core_k_block_w_tiles=_DRAM_CORE_K_BLOCK_W_TILES,
         )
 
     def consumer_fn():

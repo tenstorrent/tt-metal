@@ -115,13 +115,15 @@ ttnn::Tensor dram_prefetcher(
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const bool enable_performance_mode,
     const bool run_on_dram_cores,
-    const std::optional<const tt::tt_metal::experimental::DramSenderGlobalCircularBuffer>& dram_sender_global_cb) {
+    const std::optional<const tt::tt_metal::experimental::DramSenderGlobalCircularBuffer>& dram_sender_global_cb,
+    const uint32_t dram_core_k_block_w_tiles) {
     auto operation_attributes = DramPrefetcherParams{
         .num_layers = num_layers,
         .enable_performance_mode = enable_performance_mode,
         .global_cb = global_cb,
         .run_on_dram_cores = run_on_dram_cores,
         .dram_sender_global_cb = dram_sender_global_cb,
+        .dram_core_k_block_w_tiles = dram_core_k_block_w_tiles,
     };
     auto tensor_args = DramPrefetcherInputs{.input_tensors = tensors};
 

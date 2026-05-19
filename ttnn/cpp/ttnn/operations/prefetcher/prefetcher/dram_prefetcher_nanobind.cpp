@@ -37,7 +37,8 @@ void bind_dram_prefetcher_operation(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("enable_performance_mode") = false,
         nb::arg("run_on_dram_cores") = false,
-        nb::arg("dram_sender_global_cb") = std::nullopt);
+        nb::arg("dram_sender_global_cb") = std::nullopt,
+        nb::arg("dram_core_k_block_w_tiles") = 1);
 }
 
 void bind_dram_prefetcher(nb::module_& mod) { bind_dram_prefetcher_operation(mod); }

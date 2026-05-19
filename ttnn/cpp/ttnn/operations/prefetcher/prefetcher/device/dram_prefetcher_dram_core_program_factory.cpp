@@ -54,11 +54,13 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
             "All senders must have the same receiver count for the DRAM-core prototype");
     }
 
-    // Prototype block sizing assumes the downstream matmul uses in0_block_w_tiles=1 (one K-tile
-    // per matmul iteration) — this is the common gather_in0 / 1d-mcast config for prefetcher
-    // tests. Each block delivers 1 K-tile worth of per-receiver weight stripe. num_blocks counts
-    // K-tile chunks across the whole K dimension (per tensor).
-    constexpr uint32_t kInBlockWTiles = 1;
+    // K-block-width in tiles. Default 1 = match the gather_in0 matmul's in0_block_w_tiles=1
+    // assumption (one K-tile per receiver block). >1 trades fewer-but-bigger pushes for the
+    // same total bytes, which can reduce per-push NoC overhead at the cost of DRISC L1
+    // footprint (2 stage buffers each kInBlockWTiles * n_tiles_per_bank * tile_bytes).
+    // Override via op param `dram_core_k_block_w_tiles` for bandwidth experiments.
+    const uint32_t kInBlockWTiles = args.dram_core_k_block_w_tiles;
+    TT_FATAL(kInBlockWTiles > 0, "dram_core_k_block_w_tiles must be > 0");
 
     // Per-tensor block geometry (all tensors are assumed to share the same K split for the
     // prototype; we pick from the first tensor).
@@ -73,6 +75,11 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
             "n_tiles_per_bank ({}) must divide num_receivers ({})",
             n_tiles_per_bank,
             num_receivers);
+        TT_FATAL(
+            k_tiles % kInBlockWTiles == 0,
+            "k_tiles ({}) must be divisible by kInBlockWTiles ({})",
+            k_tiles,
+            kInBlockWTiles);
         const uint32_t n_tiles_per_receiver = n_tiles_per_bank / num_receivers;
         const uint32_t num_blocks = k_tiles / kInBlockWTiles;
         // Per-block DMA size (read from GDDR): in0_block_w tiles tall * full N width of the bank.
@@ -113,7 +120,20 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
     cursor += max_block_size;
     cursor = align_up(cursor, l1_alignment);
     const uint32_t stage_b_addr = cursor;
+    const uint32_t stage_b_end = cursor + max_block_size;
     const uint32_t kNumBlocks = first_num_blocks;
+
+    // Validate the L1 layout fits in DRISC L1 (128 KB total, reserved regions take ~50 KB).
+    const uint32_t drisc_l1_total = hal::get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE) +
+                                    hal::get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE);
+    TT_FATAL(
+        stage_b_end <= drisc_l1_total,
+        "DRISC kernel L1 layout would extend past total DRISC L1: stage_b ends at 0x{:x}, total = 0x{:x}. "
+        "Reduce dram_core_k_block_w_tiles (current = {}, max_block_size = {} bytes per stage).",
+        stage_b_end,
+        drisc_l1_total,
+        kInBlockWTiles,
+        max_block_size);
 
     // Build one kernel per sender DRAM core.
     for (uint32_t s = 0; s < num_senders; ++s) {
