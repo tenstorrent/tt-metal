@@ -219,7 +219,7 @@ async function run() {
           await octokit.rest.actions.createWorkflowDispatch({
             owner: github.context.repo.owner,
             repo: github.context.repo.repo,
-            workflow_id: 'auto-triage.yml',
+            workflow_id: 'regression-handling.yml',
             ref: dispatchRef,
             inputs: {
               workflow_name: workflowFileName,
