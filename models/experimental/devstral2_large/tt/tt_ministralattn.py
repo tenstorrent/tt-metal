@@ -235,7 +235,13 @@ class TtAttention:
             memory_config=self._act_mem(mode),
             activation=activation,
             program_config=get_linear_program_config(
-                self.args, self.mesh_device, mode=mode, kind=kind, seq_len=seq_len
+                self.args,
+                self.mesh_device,
+                mode=mode,
+                kind=kind,
+                seq_len=seq_len,
+                k=int(weight.shape[-2]),
+                n=int(weight.shape[-1]),
             ),
             compute_kernel_config=self._compute_kernel_config,
         )

@@ -131,6 +131,108 @@ def get_dram_sharded_matmul_program_config(
     )
 
 
+def _largest_divisor_at_most(n: int, cap: int) -> int:
+    """Largest ``d`` such that ``n % d == 0`` and ``1 ≤ d ≤ cap``."""
+    cap = max(1, cap)
+    for d in range(min(cap, n), 0, -1):
+        if n % d == 0:
+            return d
+    return 1
+
+
+def _pick_1d_grid(mesh_device, *, n_tiles: int) -> tuple[int, int]:
+    """For 1D-on-N (``mcast_in0=True``) matmul: pick ``(grid_x, grid_y)`` to maximize parallelism.
+
+    Strategy:
+      - If ``n_tiles ≤ max_x * max_y``: find the **smallest** rectangle ``(gx, gy)`` with
+        ``gx*gy ≥ n_tiles`` that fits ``(max_x, max_y)``. This drives ``per_core_N`` toward 1
+        (maximum parallelism) with at most a few idle cores. Prefer wider grids
+        (larger ``gx``) at equal core count.
+      - If ``n_tiles > max_x * max_y``: use the full worker grid; ``per_core_N`` becomes
+        ``ceil(n_tiles / num_cores)``.
+
+    The previous version only accepted rectangles that *exactly divided* ``n_tiles``, which
+    bottlenecked Q (Nt=96) at 48 cores because 96 has no rectangular divisor inside (11, 10):
+    (12, 8) violates gx ≤ 11 and (8, 12) violates gy ≤ 10. Allowing ``gx*gy ≥ n_tiles`` lifts
+    that to (11, 9) = 99 cores at per_core_N=1 — roughly 2× more parallelism on Q.
+
+    Must cap with :meth:`MeshDevice.compute_with_storage_grid_size` (not a fixed BH 13×10):
+    that size is the legal tensix rectangle **excluding dispatch cores**; a larger grid
+    places kernels on dispatch cores and fails ``validate_kernel_placement`` at runtime.
+    """
+    grid = mesh_device.compute_with_storage_grid_size()
+    max_x, max_y = int(grid.x), int(grid.y)
+    max_cores = max_x * max_y
+    if n_tiles >= max_cores:
+        return max_x, max_y
+    # Smallest cores ≥ n_tiles that forms a valid rectangle inside (max_x, max_y).
+    for cores in range(n_tiles, max_cores + 1):
+        for gx in range(min(max_x, cores), 0, -1):
+            if cores % gx == 0 and cores // gx <= max_y:
+                return gx, cores // gx
+    return max_x, max_y
+
+
+def get_matmul_1d_program_config(
+    args: Devstral2Args,
+    mesh_device,
+    *,
+    m: int,
+    k: int,
+    n: int,
+    fused_activation: Optional[str] = None,
+) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    """1D-on-N (``mcast_in0=True``) multicast matmul. ``in0`` is multicast to every compute core;
+    each core handles a slice of ``N``. The 2D variant is bounded by ``grid_y ≤ Mt`` (so just 4
+    rows at ``M=128``); the 1D variant flattens the grid and goes up to ``Nt`` cores.
+
+    Predicted configs on BH P150 when ``compute_with_storage_grid_size`` is 11×10:
+
+    +---------+-----+--------------+---------+---------------------+
+    | Linear  | Nt  | Grid (gx×gy) | Cores   | per_core_N (ceil)   |
+    +=========+=====+==============+=========+=====================+
+    | Q       | 96  | 11×9 = 99    | 99      | 1 (3 cores idle)    |
+    | KV      | 16  | 8×2 = 16     | 16      | 1                   |
+    | WO      | 384 | 11×10 = 110  | 110     | 4 (14 cores idle)   |
+    | W1/W3   | 224 | 11×10 = 110  | 110     | 3                   |
+    | W2      | 384 | 11×10 = 110  | 110     | 4 (14 cores idle)   |
+    +---------+-----+--------------+---------+---------------------+
+
+    Before this round, the strict-divisor variant gave: Q→48, KV→16, WO→64, W1/W3→56, W2→64.
+    """
+    _ = args
+    m_tiles = max(1, math.ceil(m / ttnn.TILE_SIZE))
+    n_tiles = max(1, math.ceil(n / ttnn.TILE_SIZE))
+    k_tiles = max(1, math.ceil(k / ttnn.TILE_SIZE))
+    grid_x, grid_y = _pick_1d_grid(mesh_device, n_tiles=n_tiles)
+    num_cores = grid_x * grid_y
+    per_core_M = m_tiles  # full M on each core (1D-on-N)
+    # ceil so the case num_cores > n_tiles (grid slightly larger than n_tiles) → per_core_N=1
+    # rather than 0. With num_cores ≤ n_tiles this matches the previous floor behavior.
+    per_core_N = max(1, math.ceil(n_tiles / num_cores))
+    # L1 CB budgets: in0 ≤ ~256 KB, in1 ≤ ~512 KB (BF16, double-buf, 2 KB/tile).
+    cap = min(
+        8,
+        max(1, 64 // per_core_M),
+        max(1, 128 // per_core_N),
+    )
+    in0_block_w = _largest_divisor_at_most(k_tiles, cap)
+    # BH fp32_dest_acc_en=True caps out_subblock_h × out_subblock_w ≤ 4.
+    out_subblock_w = _largest_divisor_at_most(per_core_N, 4)
+    out_subblock_h = _largest_divisor_at_most(per_core_M, max(1, 4 // out_subblock_w))
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=fused_activation,
+        mcast_in0=True,
+    )
+
+
 def get_linear_program_config(
     args: Devstral2Args,
     mesh_device,
@@ -138,32 +240,17 @@ def get_linear_program_config(
     mode: str,
     kind: LinearKind,
     seq_len: int = 1,
+    k: Optional[int] = None,
+    n: Optional[int] = None,
 ) -> Optional[ttnn.ProgramConfig]:
-    """Return a program config when it helps; ``None`` lets TTNN autoselect.
-
-    Prefill multicast configs are disabled: hand-tuned ``per_core_M`` / ``per_core_N`` grids
-    can reference logical cores that do not exist on Blackhole (e.g. ``(23, 0)``).
+    """Return a 1D-on-N multicast matmul config. ``k``/``n`` should be supplied by the caller
+    (``weight.shape[-2]`` / ``weight.shape[-1]``); the ``kind`` argument is kept for backward
+    compatibility but is no longer needed for shape derivation. Returns ``None`` if shape info
+    is missing (TTNN auto-picks instead).
     """
-    _ = seq_len
-    if mode != "decode" or args.num_devices <= 1:
+    _ = (mode, kind)
+    if k is None or n is None:
         return None
-    # DRAM-sharded decode matmuls help on multi-device WH; on BH use TTNN defaults until tuned.
-    if is_blackhole_mesh(mesh_device):
-        return None
-    m = ttnn.TILE_SIZE
-    k = args.hidden_size
-    if kind == "qkv":
-        n = (args.n_local_heads + 2 * args.n_local_kv_heads) * args.head_dim
-        return get_dram_sharded_matmul_program_config(args, m=m, k=k, n=n)
-    if kind == "o_proj":
-        return get_dram_sharded_matmul_program_config(
-            args, m=m, k=args.n_local_heads * args.head_dim, n=args.hidden_size
-        )
-    if kind in ("gate", "up"):
-        n = args.intermediate_size // args.tp
-        return get_dram_sharded_matmul_program_config(args, m=m, k=k, n=n)
-    if kind == "down":
-        return get_dram_sharded_matmul_program_config(
-            args, m=m, k=args.intermediate_size // args.tp, n=args.hidden_size
-        )
-    return None
+    s = max(1, int(seq_len))
+    m = max(ttnn.TILE_SIZE, math.ceil(s / ttnn.TILE_SIZE) * ttnn.TILE_SIZE)
+    return get_matmul_1d_program_config(args, mesh_device, m=m, k=k, n=n)
