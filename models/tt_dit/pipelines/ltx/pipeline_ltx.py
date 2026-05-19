@@ -17,6 +17,7 @@ Reference: LTX-2/packages/ltx-pipelines/ + Wan pipeline_wan.py
 from __future__ import annotations
 
 import math
+import os
 from typing import TYPE_CHECKING
 
 import torch
@@ -28,6 +29,7 @@ from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
 from ...models.transformers.ltx.ltx_transformer import LTXTransformerModel
 from ...parallel.config import DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
+from ...utils import cache as cache_module
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 if TYPE_CHECKING:
@@ -200,11 +202,45 @@ class LTXPipeline:
         self._cached_prompt: ttnn.Tensor | None = None
         self._cached_negative_prompt: ttnn.Tensor | None = None
 
+        # Checkpoint identifiers (Wan-style). Set by create_pipeline; consumed by the
+        # _prepare_* methods (transformer, vae, connectors) and the reference encode
+        # helpers. Either a local path or a HuggingFace repo string; auto-resolved on use.
+        self.checkpoint_name: str | None = None
+        self.gemma_path: str | None = None
+
+    @staticmethod
+    def _resolve_checkpoint_file(checkpoint: str, default_filename: str = "ltx-2.3-22b-dev.safetensors") -> str:
+        """Resolve a checkpoint reference to a local file path.ß"""
+        if os.path.exists(checkpoint):
+            return checkpoint
+        from huggingface_hub import hf_hub_download
+
+        if ":" in checkpoint:
+            repo_id, filename = checkpoint.split(":", 1)
+        else:
+            repo_id, filename = checkpoint, default_filename
+        logger.info(f"Resolving HuggingFace checkpoint {repo_id}:{filename} (auto-download if missing)")
+        return hf_hub_download(repo_id=repo_id, filename=filename)
+
+    @staticmethod
+    def _resolve_gemma_dir(gemma: str) -> str:
+        """Resolve a Gemma reference to a local directory path.
+
+        Accepts a local directory or a HuggingFace repo ID. Auto-snapshot-downloads if needed.
+        """
+        if os.path.isdir(gemma):
+            return gemma
+        from huggingface_hub import snapshot_download
+
+        logger.info(f"Resolving HuggingFace Gemma repo {gemma} (auto-download if missing)")
+        return snapshot_download(repo_id=gemma)
+
     @staticmethod
     def create_pipeline(
         mesh_device: ttnn.MeshDevice,
         *,
-        checkpoint_path: str | None = None,
+        checkpoint_name: str | None = None,
+        gemma_path: str | None = None,
         sp_axis: int | None = None,
         tp_axis: int | None = None,
         num_links: int | None = None,
@@ -216,7 +252,8 @@ class LTXPipeline:
     ) -> "LTXPipeline":
         """Factory method matching Wan's create_pipeline pattern.
 
-        Auto-configures parallel settings from mesh shape and loads checkpoint.
+        Auto-configures parallel settings from mesh shape. `checkpoint_name` and `gemma_path`
+        accept either local paths or HuggingFace repo strings (auto-downloaded on first use).
         """
         mesh_shape = tuple(mesh_device.shape)
         device_configs: dict[tuple[int, int], dict] = {}
@@ -225,7 +262,9 @@ class LTXPipeline:
                 "sp_axis": 1,
                 "tp_axis": 0,
                 "num_links": 2,
-                # Match Wan BH 2x4: avoid holding DiT+VAE in DRAM at once on LB.
+                # DIAGNOSTIC: was True in merge 87c799a7c54 to match Wan BH 2x4 pattern, but
+                # produced 11s/step + noise output (race symptom). Reverted to False to
+                # isolate whether dynamic_load is the cause.
                 "dynamic_load": True,
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
@@ -289,15 +328,43 @@ class LTXPipeline:
         pipeline.is_fsdp = is_fsdp
         pipeline.dynamic_load = dynamic_load
 
-        if checkpoint_path:
-            pipeline.load_from_checkpoint(checkpoint_path)
+        if checkpoint_name is not None:
+            pipeline.checkpoint_name = LTXPipeline._resolve_checkpoint_file(checkpoint_name)
+            pipeline._load_config_from_checkpoint()
+        if gemma_path is not None:
+            pipeline.gemma_path = LTXPipeline._resolve_gemma_dir(gemma_path)
 
         return pipeline
 
-    def prepare_vae_config_from_checkpoint(self, checkpoint_path: str) -> None:
-        """Read VAE decoder metadata from a safetensors checkpoint for lazy loading."""
+    def _load_config_from_checkpoint(self) -> None:
+        """Parse the safetensors header to detect model variant + VAE config. No tensor loads."""
         import json
 
+        from safetensors import safe_open
+
+        assert self.checkpoint_name is not None
+        checkpoint_path = self.checkpoint_name
+
+        # Transformer + connector detection (key scan + one tensor-shape read).
+        with safe_open(checkpoint_path, framework="pt") as f:
+            keys = list(f.keys())
+            adaln_key = "model.diffusion_model.adaln_single.linear.weight"
+            if adaln_key in keys:
+                self._cross_attention_adaln = f.get_tensor(adaln_key).shape[0] > 6 * self.inner_dim
+            else:
+                self._cross_attention_adaln = True
+            self._has_gate = any("to_gate_logits" in k for k in keys)
+        logger.info(f"Detected: has_gate={self._has_gate}, cross_attention_adaln={self._cross_attention_adaln}")
+
+        has_connectors = any(
+            k.startswith("text_embedding_projection.")
+            or k.startswith("model.diffusion_model.video_embeddings_connector.")
+            for k in keys
+        )
+        if has_connectors:
+            self._connector_checkpoint_path = checkpoint_path
+
+        # VAE config from JSON metadata header.
         with open(checkpoint_path, "rb") as f:
             header_size = int.from_bytes(f.read(8), "little")
             header = json.loads(f.read(header_size))
@@ -306,30 +373,66 @@ class LTXPipeline:
         self._vae_decoder_blocks = vae_cfg.get("decoder_blocks", [])
         self._vae_causal = vae_cfg.get("causal_decoder", False)
         self._vae_base_channels = vae_cfg.get("decoder_base_channels", 128)
+        if self._vae_decoder_blocks:
+            logger.info(f"VAE config: {len(self._vae_decoder_blocks)} blocks, causal={self._vae_causal}")
 
-    def load_transformer_from_checkpoint(self, checkpoint_path: str) -> None:
-        """Load only the diffusion transformer weights and stash VAE config."""
+    def _transformer_state_dict(self) -> dict[str, torch.Tensor]:
+        """Lazy state dict provider for the transformer. Invoked only on cache miss.
+
+        Mirrors Wan's `lambda: state.torch_model.state_dict()` but for safetensors —
+        Wan keeps the torch model in host RAM; LTX reads the safetensors on demand.
+        """
         from safetensors.torch import load_file
 
-        raw = load_file(checkpoint_path)
+        logger.info(f"Transformer cache miss — loading safetensors: {self.checkpoint_name}")
+        raw = load_file(self.checkpoint_name)
         prefix = "model.diffusion_model."
-        transformer_sd = {k[len(prefix) :]: v for k, v in raw.items() if k.startswith(prefix)}
-        del raw
-        self.prepare_vae_config_from_checkpoint(checkpoint_path)
-        self.load_transformer(transformer_sd)
+        return {k[len(prefix) :]: v for k, v in raw.items() if k.startswith(prefix)}
+
+    def _prepare_transformer(self) -> None:
+        """Push transformer weights onto the mesh. Cached when `TT_DIT_CACHE_DIR` is set.
+
+        Mirrors Wan's `_prepare_transformer`. Construction flags + Module instantiation
+        happen once in `create_pipeline` via `_load_config_from_checkpoint`; this method
+        only handles weight transfer.
+        """
+        if self.transformer is None:
+            self.transformer = LTXTransformerModel(
+                num_attention_heads=self.num_attention_heads,
+                attention_head_dim=self.attention_head_dim,
+                in_channels=self.in_channels,
+                out_channels=self.out_channels,
+                num_layers=self.num_layers,
+                cross_attention_dim=self.cross_attention_dim,
+                mesh_device=self.mesh_device,
+                ccl_manager=self.ccl_manager,
+                parallel_config=self.parallel_config,
+                has_audio=self.mode == "av",
+                apply_gated_attention=self._has_gate,
+                cross_attention_adaln=self._cross_attention_adaln,
+            )
+        cache_module.load_model(
+            self.transformer,
+            model_name=os.path.basename(self.checkpoint_name).removesuffix(".safetensors"),
+            subfolder="transformer",
+            parallel_config=self.parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            is_fsdp=self.is_fsdp,
+            get_torch_state_dict=self._transformer_state_dict,
+        )
+        logger.info(f"Loaded LTX transformer ({self.mode} mode) with {self.num_layers} layers")
 
     def load_transformer(self, state_dict: dict[str, torch.Tensor]) -> None:
-        """Load transformer weights from a state dict."""
+        """Direct state-dict load (used by tests with random weights, no caching).
+
+        For the cache-aware production path, use `_prepare_transformer` instead.
+        Auto-detects model variant flags from the state dict.
+        """
         has_gate = any("to_gate_logits" in k for k in state_dict)
-        # Auto-detect cross_attention_adaln from adaln_single.linear weight shape.
-        # 9-output (22B): adaln_single.linear.weight has shape (9*dim, dim)
-        # 6-output (19B distilled): adaln_single.linear.weight has shape (6*dim, dim)
+        # 9-output (22B): adaln_single.linear.weight has shape (9*dim, dim).
+        # 6-output (19B distilled): shape (6*dim, dim).
         adaln_weight = state_dict.get("adaln_single.linear.weight")
-        cross_attention_adaln = True
-        if adaln_weight is not None:
-            adaln_out = adaln_weight.shape[0]
-            cross_attention_adaln = adaln_out > 6 * self.inner_dim
-            logger.info(f"AdaLN output dim: {adaln_out} → cross_attention_adaln={cross_attention_adaln}")
+        cross_attention_adaln = True if adaln_weight is None else adaln_weight.shape[0] > 6 * self.inner_dim
 
         self.transformer = LTXTransformerModel(
             num_attention_heads=self.num_attention_heads,
@@ -735,16 +838,10 @@ class LTXPipeline:
 
         return results
 
-    def encode_prompts_reference(
-        self,
-        prompts: list[str],
-        checkpoint_path: str,
-        gemma_path: str,
-    ) -> list:
-        """Encode prompts using the official LTX-2 reference pipeline (recommended for AV mode).
-
-        Returns list of encoding results with .video_encoding and .audio_encoding attributes.
-        """
+    def encode_prompts_reference(self, prompts: list[str]) -> list:
+        """Encode prompts using the official LTX-2 reference pipeline (recommended for AV mode)."""
+        assert self.checkpoint_name is not None, "checkpoint_name must be set before encode_prompts_reference"
+        assert self.gemma_path is not None, "gemma_path must be set before encode_prompts_reference"
         try:
             import sys
 
@@ -760,9 +857,8 @@ class LTXPipeline:
 
         # Check embedding cache to skip expensive Gemma encoding
         import hashlib
-        import os
 
-        cache_dir = os.environ.get("TT_DIT_CACHE_DIR", os.path.expanduser("~/.cache"))
+        cache_dir = os.environ.get("TT_DIT_CACHE_DIR") or os.path.expanduser("~/.cache/tt-dit")
         embed_cache_dir = os.path.join(cache_dir, "ltx-embeddings")
         os.makedirs(embed_cache_dir, exist_ok=True)
 
@@ -776,8 +872,8 @@ class LTXPipeline:
         # PromptEncoder owns Gemma text encoder + embeddings processor lifecycle:
         # builds Gemma, encodes, frees, then builds the embeddings processor.
         prompt_encoder = PromptEncoder(
-            checkpoint_path=checkpoint_path,
-            gemma_root=gemma_path,
+            checkpoint_path=self.checkpoint_name,
+            gemma_root=self.gemma_path,
             dtype=torch.bfloat16,
             device=torch.device("cpu"),
         )
@@ -826,97 +922,51 @@ class LTXPipeline:
             self.vae_decoder.load_state_dict(state_dict)
             logger.info("Loaded torch-only VAE decoder")
 
-    def load_from_checkpoint(self, checkpoint_path: str) -> None:
-        """Load transformer and VAE decoder from a single safetensors checkpoint file.
-
-        This is the recommended way to load the 22B model. It handles:
-        - Extracting diffusion model keys for the transformer
-        - Extracting VAE decoder keys and config from checkpoint metadata
-        - Setting up the 22B decoder_blocks config
-        """
-        import json
-
-        from safetensors.torch import load_file
-
-        raw = load_file(checkpoint_path)
-
-        # Transformer
-        prefix = "model.diffusion_model."
-        transformer_sd = {k[len(prefix) :]: v for k, v in raw.items() if k.startswith(prefix)}
-        self.load_transformer(transformer_sd)
-        del transformer_sd
-
-        # VAE decoder — extract config from metadata
-
-        with open(checkpoint_path, "rb") as f:
-            header_size = int.from_bytes(f.read(8), "little")
-            header = json.loads(f.read(header_size))
-        metadata = header.get("__metadata__", {})
-        config = json.loads(metadata.get("config", "{}"))
-        vae_config = config.get("vae", {})
-        decoder_blocks = vae_config.get("decoder_blocks", [])
-        causal = vae_config.get("causal_decoder", False)
-        base_channels = vae_config.get("decoder_base_channels", 128)
-
-        vae_state = {}
-        for k, v in raw.items():
-            if k.startswith("vae.decoder."):
-                vae_state[k[len("vae.decoder.") :]] = v
-            elif k.startswith("vae.per_channel_statistics."):
-                vae_state[k[len("vae.") :]] = v
-
-        # Embeddings connector keys (for lazy loading alongside Gemma encoder)
-        has_connectors = any(
-            k.startswith("text_embedding_projection.")
-            or k.startswith("model.diffusion_model.video_embeddings_connector.")
-            for k in raw
-        )
-        if has_connectors:
-            self._connector_checkpoint_path = checkpoint_path
-            logger.info("Embeddings connector weights detected in checkpoint (saved for lazy loading)")
-
-        del raw
-
-        # Store VAE config for lazy loading (avoids exceeding DRAM when both
-        # transformer and VAE are loaded simultaneously)
-        self._vae_checkpoint_path = checkpoint_path
-        self._vae_decoder_blocks = decoder_blocks
-        self._vae_causal = causal
-        self._vae_base_channels = base_channels
-        if decoder_blocks:
-            logger.info(f"VAE config saved for lazy loading ({len(decoder_blocks)} blocks, causal={causal})")
-
-    def load_vae_from_checkpoint(self) -> None:
-        """Load VAE decoder from saved config. Call after transformer weights are freed if needed."""
+    def _prepare_vae(self) -> None:
+        """Push VAE decoder onto the mesh. Cached when `TT_DIT_CACHE_DIR` is set."""
         if not self._vae_decoder_blocks:
             return
-        from safetensors.torch import load_file
 
         from ...models.vae.vae_ltx import LTXVideoDecoder
 
-        raw = load_file(self._vae_checkpoint_path)
-        vae_state = {}
-        for k, v in raw.items():
-            if k.startswith("vae.decoder."):
-                vae_state[k[len("vae.decoder.") :]] = v
-            elif k.startswith("vae.per_channel_statistics."):
-                # Only keep mean-of-means and std-of-means (required by TTNN VAE).
-                # Skip extra stats (channel, mean-of-stds, etc.) from some checkpoints.
-                short_key = k[len("vae.") :]
-                if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
-                    vae_state[short_key] = v
-        del raw
         self.vae_decoder = LTXVideoDecoder(
             decoder_blocks=self._vae_decoder_blocks,
             causal=self._vae_causal,
             base_channels=self._vae_base_channels,
             mesh_device=self.mesh_device,
         )
-        self.vae_decoder.load_torch_state_dict(vae_state)
+
+        def _vae_state_provider() -> dict[str, torch.Tensor]:
+            from safetensors.torch import load_file
+
+            logger.info(f"VAE cache miss — loading safetensors: {self._vae_checkpoint_path}")
+            raw = load_file(self._vae_checkpoint_path)
+            vae_state = {}
+            for k, v in raw.items():
+                if k.startswith("vae.decoder."):
+                    vae_state[k[len("vae.decoder.") :]] = v
+                elif k.startswith("vae.per_channel_statistics."):
+                    short_key = k[len("vae.") :]
+                    if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
+                        vae_state[short_key] = v
+            return vae_state
+
+        if self.checkpoint_name is not None:
+            cache_module.load_model(
+                self.vae_decoder,
+                model_name=os.path.basename(self.checkpoint_name).removesuffix(".safetensors"),
+                subfolder="vae",
+                parallel_config=self.parallel_config,
+                mesh_shape=tuple(self.mesh_device.shape),
+                get_torch_state_dict=_vae_state_provider,
+            )
+        else:
+            self.vae_decoder.load_torch_state_dict(_vae_state_provider())
+
         logger.info(f"Loaded TTNN VAE decoder ({len(self._vae_decoder_blocks)} blocks)")
 
-    def load_connectors_from_checkpoint(self) -> None:
-        """Load embeddings connectors from saved checkpoint. Call after Gemma encoder is loaded."""
+    def _prepare_connectors(self) -> None:
+        """Load embeddings connectors. Call after Gemma encoder is loaded."""
         if not hasattr(self, "_connector_checkpoint_path"):
             logger.warning("No connector checkpoint path saved — skipping connector loading")
             return
@@ -1454,22 +1504,18 @@ class LTXPipeline:
         logger.info(f"AV done. video: {video_lat.shape}, audio: ({B},{audio_N_real},{self.in_channels})")
         return video_lat, audio_lat[:, :audio_N_real, :]
 
-    def decode_audio_reference(
-        self, audio_latent: torch.Tensor, checkpoint_path: str, num_frames: int, fps: float = 24.0
-    ):
+    def decode_audio_reference(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0):
         """Decode audio latent using reference audio VAE + vocoder (CPU torch).
-
-        Matches the reference ti2vid pipeline: unpatchify → audio_decoder → vocoder → trim.
 
         Args:
             audio_latent: (1, audio_N, 128) raw audio latent from call_av()
-            checkpoint_path: path to safetensors checkpoint
             num_frames: video frame count (for duration trimming)
             fps: video frame rate
 
         Returns:
             Audio object with .waveform and .sampling_rate, or None on failure
         """
+        assert self.checkpoint_name is not None, "checkpoint_name must be set before decode_audio_reference"
         try:
             import sys
 
@@ -1494,7 +1540,7 @@ class LTXPipeline:
             # Loading both audio_decoder and vocoder in fp32 sidesteps this; the
             # audio VAE + vocoder are small relative to the 22B transformer.
             audio_block = AudioDecoder(
-                checkpoint_path=checkpoint_path,
+                checkpoint_path=self.checkpoint_name,
                 dtype=torch.float32,
                 device=torch.device("cpu"),
             )

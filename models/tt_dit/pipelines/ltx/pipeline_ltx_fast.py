@@ -127,10 +127,7 @@ class LTXFastPipeline(LTXAVPipeline):
 
         return video_lat, audio_lat[:, :audio_N_real, :]
 
-    @staticmethod
-    def _upsample_latent_reference(
-        video_latent: torch.Tensor, upsampler_path: str, checkpoint_path: str
-    ) -> torch.Tensor:
+    def _upsample_latent_reference(self, video_latent: torch.Tensor, upsampler_path: str) -> torch.Tensor:
         import sys
 
         sys.path.insert(0, "LTX-2/packages/ltx-core/src")
@@ -144,7 +141,7 @@ class LTXFastPipeline(LTXAVPipeline):
         # production pipelines do — and what the bare `upsampler(latent)`
         # call previously was missing.
         upsampler_block = VideoUpsampler(
-            checkpoint_path=checkpoint_path,
+            checkpoint_path=self.checkpoint_name,
             upsampler_path=upsampler_path,
             dtype=torch.bfloat16,
             device=torch.device("cpu"),
@@ -160,9 +157,7 @@ class LTXFastPipeline(LTXAVPipeline):
         prompt: str,
         *,
         output_path: str,
-        checkpoint_path: str,
         upsampler_path: str,
-        gemma_path: str,
         num_frames: int = 121,
         height: int = 512,
         width: int = 768,
@@ -178,13 +173,13 @@ class LTXFastPipeline(LTXAVPipeline):
         total_t0 = time.time()
 
         t0 = time.time()
-        results = self.encode_prompts_reference([prompt], checkpoint_path, gemma_path)
+        results = self.encode_prompts_reference([prompt])
         logger.info(f"Encoding: {time.time() - t0:.1f}s")
 
         v_embeds = results[0].video_encoding.float()
         a_embeds = results[0].audio_encoding.float()
 
-        self.load_transformer_from_checkpoint(checkpoint_path)
+        self._prepare_transformer()
         gc.collect()
 
         logger.info(f"Stage 1: {s1_height}x{s1_width}, {len(DISTILLED_SIGMA_VALUES) - 1} steps")
@@ -206,12 +201,12 @@ class LTXFastPipeline(LTXAVPipeline):
         latent_frames = (num_frames - 1) // 8 + 1
         s1_h, s1_w = s1_height // 32, s1_width // 32
         s1_spatial = s1_video.reshape(1, latent_frames, s1_h, s1_w, 128).permute(0, 4, 1, 2, 3)
-        upsampled = self._upsample_latent_reference(s1_spatial, upsampler_path, checkpoint_path)
+        upsampled = self._upsample_latent_reference(s1_spatial, upsampler_path)
         upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
             1, latent_frames * (height // 32) * (width // 32), 128
         )
 
-        self.load_transformer_from_checkpoint(checkpoint_path)
+        self._prepare_transformer()
         gc.collect()
 
         logger.info(f"Stage 2: {height}x{width}, {len(STAGE_2_DISTILLED_SIGMA_VALUES) - 1} steps")
@@ -232,10 +227,10 @@ class LTXFastPipeline(LTXAVPipeline):
         self.transformer = None
         gc.collect()
 
-        self.load_vae_from_checkpoint()
+        self._prepare_vae()
         latent_h, latent_w = height // 32, width // 32
         video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w)
-        audio_obj = self.decode_audio_reference(s2_audio, checkpoint_path, num_frames, fps=fps)
+        audio_obj = self.decode_audio_reference(s2_audio, num_frames, fps=fps)
         self.export_video(video_pixels, output_path, fps=fps, audio=audio_obj)
 
         logger.info(f"Total: {time.time() - total_t0:.1f}s | Output: {output_path}")

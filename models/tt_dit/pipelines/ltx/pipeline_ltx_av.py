@@ -40,8 +40,6 @@ class LTXAVPipeline(LTXPipeline):
         prompt: str,
         *,
         output_path: str,
-        checkpoint_path: str,
-        gemma_path: str,
         negative_prompt: str | None = None,
         num_frames: int = 121,
         height: int = 512,
@@ -64,6 +62,7 @@ class LTXAVPipeline(LTXPipeline):
             # Official LTX gradient-estimation sampling; enable on BH by default for quality.
             ge_gamma = 2.0 if ttnn.device.is_blackhole() else 0.0
             logger.info(f"ge_gamma={ge_gamma} (arch default)")
+
         import sys
 
         sys.path.insert(0, "LTX-2/packages/ltx-core/src")
@@ -90,7 +89,7 @@ class LTXAVPipeline(LTXPipeline):
         total_t0 = time.time()
 
         t0 = time.time()
-        results = self.encode_prompts_reference([prompt, neg], checkpoint_path, gemma_path)
+        results = self.encode_prompts_reference([prompt, neg])
         logger.info(f"Encoding: {time.time() - t0:.1f}s")
 
         v_embeds = results[0].video_encoding.float()
@@ -98,7 +97,7 @@ class LTXAVPipeline(LTXPipeline):
         neg_v = results[1].video_encoding.float()
         neg_a = results[1].audio_encoding.float()
 
-        self.load_transformer_from_checkpoint(checkpoint_path)
+        self._prepare_transformer()
         gc.collect()
 
         t0 = time.time()
@@ -131,7 +130,7 @@ class LTXAVPipeline(LTXPipeline):
         gc.collect()
 
         t0 = time.time()
-        self.load_vae_from_checkpoint()
+        self._prepare_vae()
         logger.info(f"VAE loaded in {time.time() - t0:.0f}s")
 
         latent_frames = (num_frames - 1) // 8 + 1
@@ -141,7 +140,7 @@ class LTXAVPipeline(LTXPipeline):
         video_pixels = self.decode_latents(video_latent, latent_frames, latent_h, latent_w)
         logger.info(f"VAE decode: {time.time() - t0:.1f}s — {video_pixels.shape}")
 
-        audio_obj = self.decode_audio_reference(audio_latent, checkpoint_path, num_frames, fps=fps)
+        audio_obj = self.decode_audio_reference(audio_latent, num_frames, fps=fps)
         self.export_video(video_pixels, output_path, fps=fps, audio=audio_obj)
 
         total_time = time.time() - total_t0
