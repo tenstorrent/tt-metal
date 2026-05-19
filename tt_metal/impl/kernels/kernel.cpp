@@ -1021,13 +1021,13 @@ void QuasarComputeKernel::init_trisc_binary_groups() {
     trisc_binary_groups_.clear();
     std::vector<std::vector<QuasarComputeProcessor>> buckets(QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
     for (QuasarComputeProcessor p : compute_processors_) {
-        const size_t trisc_slot =
+        const size_t trisc =
             static_cast<size_t>(enchantum::to_underlying(p) % QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
-        buckets[trisc_slot].push_back(p);
+        buckets[trisc].push_back(p);
     }
-    for (size_t trisc_slot = 0; trisc_slot < buckets.size(); ++trisc_slot) {
-        if (!buckets[trisc_slot].empty()) {
-            trisc_binary_groups_.push_back(std::move(buckets[trisc_slot]));
+    for (size_t trisc = 0; trisc < buckets.size(); ++trisc) {
+        if (!buckets[trisc].empty()) {
+            trisc_binary_groups_.push_back(std::move(buckets[trisc]));
         }
     }
 }
@@ -1189,19 +1189,14 @@ void QuasarComputeKernel::generate_binaries(IDevice* device, JitBuildOptions&) c
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-
-    // One compile per TRISC slot (UNPACK/MATH/PACK/ISOLATE_SFPU), multiple links for each NEO that uses that slot.
     std::vector<const JitBuildState*> targets;
+    targets.reserve(this->trisc_binary_groups_.size());
     for (const auto& group : this->trisc_binary_groups_) {
-        targets.clear();
-        targets.reserve(group.size());
-        for (QuasarComputeProcessor p : group) {
-            const int processor_id = static_cast<int>(enchantum::to_underlying(p));
-            targets.push_back(&BuildEnvManager::get_instance().get_kernel_build_state(
-                device->build_id(), tensix_core_type, compute_class_idx, processor_id));
-        }
-        jit_build_for_processors(targets, this);
+        const int trisc_id = static_cast<std::underlying_type_t<QuasarComputeProcessor>>(group[0]);
+        targets.push_back(&BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), tensix_core_type, compute_class_idx, trisc_id));
     }
+    jit_build_for_processors(targets, this);
 }
 
 void QuasarComputeKernel::read_binaries(IDevice* device, const std::string& binary_root) {
@@ -1210,20 +1205,15 @@ void QuasarComputeKernel::read_binaries(IDevice* device, const std::string& bina
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-    // One loaded image per TRISC slot; link used is the canonical (first) processor in the slot's group.
-    for (const auto& group : this->trisc_binary_groups_) {
-        const int processor_id = static_cast<std::underlying_type_t<QuasarComputeProcessor>>(group[0]);
+    for (std::size_t i = 0; i < this->trisc_binary_groups_.size(); ++i) {
+        const int trisc_id =
+            static_cast<std::underlying_type_t<QuasarComputeProcessor>>(this->trisc_binary_groups_[i][0]);
         auto load_type = MetalContext::instance()
                              .hal()
-                             .get_jit_build_config(tensix_core_type, compute_class_idx, processor_id)
+                             .get_jit_build_config(tensix_core_type, compute_class_idx, trisc_id)
                              .memory_load;
         const auto binary_path = BuildEnvManager::get_instance().get_kernel_binary_path(
-            device->build_id(),
-            tensix_core_type,
-            compute_class_idx,
-            processor_id,
-            binary_root,
-            this->kernel_full_name_);
+            device->build_id(), tensix_core_type, compute_class_idx, trisc_id, binary_root, this->kernel_full_name_);
         const ll_api::memory& binary_mem = llrt::get_risc_binary(binary_path, load_type);
         binaries.push_back(&binary_mem);
     }
@@ -1251,13 +1241,12 @@ bool QuasarComputeKernel::configure(
     const uint32_t dm_count = MetalContext::instance().hal().get_processor_types_count(
         HalProgrammableCoreType::TENSIX, enchantum::to_underlying(HalProcessorClassType::DM));
     for (size_t i = 0; i < this->trisc_binary_groups_.size(); ++i) {
-        for (QuasarComputeProcessor p : this->trisc_binary_groups_[i]) {
-            llrt::write_binary_to_address(
-                *binaries[i],
-                device_id,
-                worker_core,
-                base_address + offsets[dm_count + static_cast<std::underlying_type_t<QuasarComputeProcessor>>(p)]);
-        }
+        const QuasarComputeProcessor canonical = this->trisc_binary_groups_[i][0];
+        llrt::write_binary_to_address(
+            *binaries[i],
+            device_id,
+            worker_core,
+            base_address + offsets[dm_count + static_cast<std::underlying_type_t<QuasarComputeProcessor>>(canonical)]);
     }
 
     return true;
