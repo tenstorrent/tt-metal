@@ -21,7 +21,8 @@ Table 1 — Already on TTNN (inside or wired with the 5 Hz LM handler)
 +------------------------------------+----------+-----------------------------------------------+
 | Causal LM forward (optional)       | TTNN     | ``--experimental-5hz-ttnn-causal-lm``:      |
 |                                    |          | ``ttnn_impl/five_hz_causal_lm_experimental`` |
-|                                    |          | wraps ``ace_step_ds_r1_qwen``;              |
+|                                    |          | wraps ``qwen_tt_transformers_lm``           |
+|                                    |          | (stock ``tt_transformers.Transformer``);    |
 |                                    |          | **batch=1** only; use ``--guidance-scale 1``|
 +------------------------------------+----------+-----------------------------------------------+
 
@@ -32,8 +33,9 @@ Table 2 — Still PyTorch / host today, but possible to move to TTNN later
 | Component                          | Feasibility | Notes / tt-metal direction               |
 +------------------------------------+-------------+--------------------------------------------+
 | Causal LM forward (all layers,     | Optional  | ``--experimental-5hz-ttnn-causal-lm`` uses |
-| KV cache, lm_head)                 | TTNN exp. | ``ace_step_ds_r1_qwen.QwenModel``; prod.   |
-|                                    | or HF     | remains ``AutoModelForCausalLM``.         |
+| KV cache, lm_head)                 | TTNN exp. | ``qwen_tt_transformers_lm.QwenModel-       |
+|                                    | or HF     | TtTransformers`` (stock ``tt_transformers``|
+|                                    |           | graph); prod remains ``AutoModelForCausalLM``.|
 +------------------------------------+-------------+--------------------------------------------+
 | Full-vocab CFG (cond/uncond        | Partial     | Full [B,V] matmuls on device are memory-   |
 | without narrow mask)             |             | heavy; narrow path already TTNN.          |

@@ -4,11 +4,13 @@ ACE-Step v1.5 demo: end-to-end on-device pipeline (LM + DiT + VAE on TTNN by def
 Default backends (no flags required):
 
 - **5 Hz LM (`acestep-5Hz-lm-1.7B` by default)**: experimental TTNN causal LM
-  (``ttnn_impl/five_hz_causal_lm_experimental.py`` → ``ttnn_impl/ace_step_ds_r1_qwen.QwenModel``).
-  All matmuls (Q/K/V/O, MLP gate/up/down, lm_head) run on TTNN with HF-grade compute kernel config
-  (``HiFi4 / fp32_dest_acc_en=True``); residual stream is fp32; RoPE / softmax / KV cache stay on
-  the host for HF-faithful semantics. Disable with ``--no-experimental-5hz-ttnn-causal-lm`` (falls
-  back to host PyTorch HF Qwen 1.7B forward).
+  (``ttnn_impl/five_hz_causal_lm_experimental.py`` →
+  ``ttnn_impl/qwen_tt_transformers_lm.QwenModelTtTransformers``).
+  The whole decoder (Embedding, ``Attention`` with fused QKV / paged SDPA, ``MLP``,
+  ``DistributedNorm(RMSNorm)``, ``HfRotarySetup``, ``LMHead``) is built from the stock
+  ``models/tt_transformers`` graph via
+  :func:`models.tt_transformers.tt.common.create_tt_model`. Disable with
+  ``--no-experimental-5hz-ttnn-causal-lm`` (falls back to host PyTorch HF Qwen 1.7B forward).
 
 - **DiT condition embedding** (``prepare_condition``): TTNN
   (``ttnn_impl/condition_encoder.TtAceStepInstrumentalConditionEncoder``). Disable with
@@ -377,8 +379,8 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "Load the 5 Hz LM via the demo TTNN causal stack "
-            "(models/demos/ace_step_v1_5/ttnn_impl/ace_step_ds_r1_qwen.py). Default: on. "
+            "Load the 5 Hz LM via the stock tt_transformers TTNN causal stack "
+            "(models/demos/ace_step_v1_5/ttnn_impl/qwen_tt_transformers_lm.py). Default: on. "
             "Opens TTNN before LM init; requires guidance_scale==1 (forced when default). "
             "LM classifier-free guidance uses lm_cfg_scale (default 2); this path forces lm_cfg_scale=1. "
             "Pass --no-experimental-5hz-ttnn-causal-lm to fall back to the host PyTorch HF "

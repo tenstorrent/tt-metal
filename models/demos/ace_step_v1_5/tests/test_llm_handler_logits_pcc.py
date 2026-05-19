@@ -42,14 +42,14 @@ from models.demos.ace_step_v1_5.ttnn_impl.lm_logits_ttnn import cfg_linear_combi
 _PCC = 0.99
 # Experimental causal LM vs HF (``comp_pcc``).
 #
-# The experimental TTNN causal LM (``QwenModel`` in ``ace_step_ds_r1_qwen.py``) cannot match
-# HF's bf16 reference bit-exactly: TTNN's tile-based bf16 matmul rounds at different boundaries
-# than torch's BLAS GEMM, and that error compounds across 28 layers of Qwen3 1.7B. With every
-# practical precision knob applied (HF-grade ``HiFi4 / fp32_dest_acc_en=True / approx=False``
-# compute kernel config on every Q/K/V/O/MLP/lm_head matmul, fp32 residual stream, fp32 RMSNorm
-# weight, host RoPE / softmax / KV cache via HF helpers), the achievable prefill PCC at
-# ``L=24`` on Qwen3 1.7B is ``~0.984``. Floor is set just under that. Override via
-# ``ACE_STEP_EXPERIMENTAL_LM_PCC`` if you want a stricter (or looser) gate.
+# The experimental TTNN causal LM (``QwenModelTtTransformers`` in ``qwen_tt_transformers_lm.py``)
+# cannot match HF's bf16 reference bit-exactly: TTNN's tile-based bf16 matmul rounds at different
+# boundaries than torch's BLAS GEMM, and that error compounds across 28 layers of Qwen3 1.7B.
+# With every practical precision knob applied (HF-grade ``HiFi4 / fp32_dest_acc_en=True /
+# approx=False`` compute kernel config on every Q/K/V/O/MLP/lm_head matmul, fp32 residual stream,
+# fp32 RMSNorm weight, HF RoPE / paged SDPA / paged KV cache via ``tt_transformers`` primitives),
+# the achievable prefill PCC at ``L=24`` on Qwen3 1.7B is ``~0.984``. Floor is set just under that.
+# Override via ``ACE_STEP_EXPERIMENTAL_LM_PCC`` if you want a stricter (or looser) gate.
 _PCC_EXPERIMENTAL_LM = float(os.environ.get("ACE_STEP_EXPERIMENTAL_LM_PCC", "0.98"))
 
 
@@ -240,7 +240,7 @@ def test_llm_handler_experimental_causal_lm_prefill_decode_pcc_vs_torch(device, 
     ids_pre = full[:, :L].contiguous()
     ids_next = full[:, L : L + 1].contiguous()
 
-    # --- PyTorch reference (same HF stack as ``LocalFiveHzLMHandler`` / ``QwenModelFullDevice`` weights) ---
+    # --- PyTorch reference (same HF stack as ``LocalFiveHzLMHandler`` / ``QwenModelTtTransformers`` weights) ---
     hf = AutoModelForCausalLM.from_pretrained(
         str(lm_dir),
         torch_dtype=torch.bfloat16,
