@@ -380,6 +380,8 @@ class PaliGemmaBackboneTTNN:
         position_ids: Optional[ttnn.Tensor] = None,
         past_key_values: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
         use_cache: bool = False,
+        cos_override: Optional[ttnn.Tensor] = None,
+        sin_override: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through VLM backbone using TTNN.
@@ -390,6 +392,10 @@ class PaliGemmaBackboneTTNN:
             position_ids: Position indices (TTNN tensor)
             past_key_values: Cached KV from previous forward
             use_cache: Whether to return updated cache
+            cos_override/sin_override: Optional pre-gathered RoPE tables
+                shaped [1, 1, seq_len, head_dim] — used by upstream-openpi
+                compat to apply cumsum(pad)-1 positions instead of the
+                default sequential [0..seq_len-1].
 
         Returns:
             Tuple of (output, optional_new_cache)
@@ -400,8 +406,8 @@ class PaliGemmaBackboneTTNN:
             past_kv = past_key_values[i] if past_key_values else None
             hidden_states, new_kv = block.forward(
                 hidden_states,
-                None,  # cos - unused, native TTNN RoPE uses cos_meta stored in block
-                None,  # sin - unused, native TTNN RoPE uses sin_meta stored in block
+                cos_override,  # cos override (None → block uses self.cos_meta)
+                sin_override,
                 attention_mask,
                 position_ids,
                 past_kv,
@@ -640,7 +646,16 @@ class Pi0_5PaliGemmaBackboneTTNN(PaliGemmaBackboneTTNN):
         precomputed_block_mods: Optional[List[Tuple["ttnn.Tensor", ...]]] = None,
         precomputed_final_mod: Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]] = None,
         keep_padded: bool = False,
+        cos_override: Optional["ttnn.Tensor"] = None,
+        sin_override: Optional["ttnn.Tensor"] = None,
     ) -> Tuple["ttnn.Tensor", Optional[List[Tuple["ttnn.Tensor", "ttnn.Tensor"]]]]:
+        # `cos_override`/`sin_override`: pre-gathered RoPE tables shaped
+        # [1, 1, suffix_padded, head_dim] at absolute positions
+        # `prefix_offset + [0..suffix_padded-1]`. Required for openpi-trained
+        # checkpoints (upstream pi05_libero) where suffix Q attends to prefix
+        # K with absolute-position-aware RoPE. Sequential suffix positions
+        # [0..suffix_padded-1] (the default) yields wrong cross-attention
+        # scores against the prefix KV cache for the upstream model.
         new_cache = [] if use_cache else None
 
         for i, block in enumerate(self.expert_blocks):
@@ -648,8 +663,8 @@ class Pi0_5PaliGemmaBackboneTTNN(PaliGemmaBackboneTTNN):
             block_mod = precomputed_block_mods[i] if precomputed_block_mods is not None else None
             hidden_states, new_kv = block.forward(
                 hidden_states,
-                None,
-                None,
+                cos_override,
+                sin_override,
                 adarms_cond,
                 attention_mask,
                 position_ids,

@@ -492,25 +492,37 @@ class GemmaAttentionTTNN:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        # OPTIMIZATION 3: Apply RoPE using native TTNN (split-half pattern)
-        # Slice cos/sin to match actual sequence length
-        cos_sliced = ttnn.slice(
-            self.cos_meta,
-            [0, 0, 0, 0],
-            [1, 1, seq_len, self.head_dim],
-        )
-        sin_sliced = ttnn.slice(
-            self.sin_meta,
-            [0, 0, 0, 0],
-            [1, 1, seq_len, self.head_dim],
-        )
+        # OPTIMIZATION 3: Apply RoPE using native TTNN (split-half pattern).
+        # If the caller passed in `cos`/`sin` overrides (position-aware tables
+        # gathered at cumsum-based or offset positions for upstream-openpi
+        # compat), use them directly. Otherwise fall back to slicing the
+        # default cos_meta/sin_meta at sequential positions [0..seq_len-1].
+        if cos is not None and sin is not None:
+            # Caller-supplied: already shaped [1, 1, seq_len, head_dim]
+            # at the right positions; no slice + no deallocate (caller owns them).
+            cos_for_rope = cos
+            sin_for_rope = sin
+            _own_rope_tensors = False
+        else:
+            cos_for_rope = ttnn.slice(
+                self.cos_meta,
+                [0, 0, 0, 0],
+                [1, 1, seq_len, self.head_dim],
+            )
+            sin_for_rope = ttnn.slice(
+                self.sin_meta,
+                [0, 0, 0, 0],
+                [1, 1, seq_len, self.head_dim],
+            )
+            _own_rope_tensors = True
 
         # ttnn.experimental.rotary_embedding uses split-half pattern like Gemma
-        q_rope_padded = ttnn.experimental.rotary_embedding(q, cos_sliced, sin_sliced)
-        k_rope_padded = ttnn.experimental.rotary_embedding(k, cos_sliced, sin_sliced)
+        q_rope_padded = ttnn.experimental.rotary_embedding(q, cos_for_rope, sin_for_rope)
+        k_rope_padded = ttnn.experimental.rotary_embedding(k, cos_for_rope, sin_for_rope)
 
-        ttnn.deallocate(cos_sliced)
-        ttnn.deallocate(sin_sliced)
+        if _own_rope_tensors:
+            ttnn.deallocate(cos_for_rope)
+            ttnn.deallocate(sin_for_rope)
 
         if keep_padded:
             # Expert/suffix fast path: q/k are already tile-aligned (logical=physical),
