@@ -72,8 +72,8 @@ def test_wrapped_vision_model_inference(
     torch_model = DropInVisionTransformer(reference_model, model_args)
 
     # Run reference model
-    reference_output, deepstack_visual_embeds = reference_model(pt_pixel_values, image_grid_thw)
-    tt_output, tt_deepstack_visual_embeds = torch_model(pt_pixel_values, image_grid_thw)
+    reference_output = reference_model(pt_pixel_values, image_grid_thw).pooler_output
+    tt_output = torch_model(pt_pixel_values, image_grid_thw)
 
     # Reassemble the hidden dimension that was mesh-partitioned by the wrapper.
     tt_output_torch = ttnn.to_torch(

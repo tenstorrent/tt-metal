@@ -10,8 +10,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
-from models.demos.qwen3_vl.tt.patch_merger import PatchMerger
+from models.demos.qwen35_27b.tt.vision.patch_merger import PatchMerger
+from models.demos.qwen35_27b.tt.vision.vision_model_config import VisionModelArgs
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
 
 
@@ -19,7 +19,7 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -56,7 +56,7 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, reset_seeds, ensu
     )
 
     # Input shape should match context_dim
-    torch_input = torch.randn(batch_size, 1, rows, model_args.hf_config.vision_config.hidden_size)
+    torch_input = torch.randn(batch_size, 1, rows, model_args.hf_config.vision_config.hidden_size, dtype=torch.bfloat16)
     reference_output = reference_model(torch_input)
 
     tt_input = ttnn.from_torch(
