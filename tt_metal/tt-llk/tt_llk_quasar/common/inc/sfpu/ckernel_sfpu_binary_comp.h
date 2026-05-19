@@ -90,7 +90,9 @@ inline void calculate_binary_comp(
     }
     else
     {
-        static_assert(FMT == DataFormat::Int32, "Only DataFormat::Int32 is currently supported for binary comparison on Quasar");
+        // Dependent static_assert: the condition is always false here, but must
+        // depend on FMT to satisfy C++17 rules for if-constexpr else branches.
+        static_assert(FMT == DataFormat::Int32 && false, "Only DataFormat::Int32 is currently supported for binary comparison on Quasar");
     }
 }
 

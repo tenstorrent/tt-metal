@@ -130,9 +130,10 @@ _COMP_OP_NAMES: frozenset[str] = frozenset({"GT", "LT", "LE", "GE"})
 class SFPU_INT_OP(TemplateParameter):
     """Emit compile-time constants to select the integer SFPU operation in a shared C++ test source.
 
-    For comparison ops (GT, LT, LE, GE) a ``constexpr SfpuType SFPU_COMP_OP`` and a
-    ``#define SFPU_COMP_ENABLED`` sentinel are emitted so the C++ test can call the unified
-    ``calculate_binary_comp<…, SFPU_COMP_OP, COMP_DATA_FORMAT>`` entry point.
+    For comparison ops (GT, LT, LE, GE) a ``constexpr SfpuType SFPU_COMP_OP`` constant is
+    emitted. The companion ``COMP_DATA_FORMAT`` parameter must also be added to the template
+    list; it emits both the format constant and the ``#define SFPU_COMP_ENABLED`` sentinel that
+    activates the comparison code path in the C++ test source.
 
     For other ops (e.g. "MUL") the legacy ``#define SFPU_INT_OP_{OP}`` form is kept.
 
@@ -146,7 +147,7 @@ class SFPU_INT_OP(TemplateParameter):
             return ""
         op_upper = self.op.upper()
         if op_upper in _COMP_OP_NAMES:
-            return f"constexpr auto SFPU_COMP_OP = SfpuType::{op_upper.lower()};"
+            return f"constexpr auto SFPU_COMP_OP = SfpuType::{self.op.lower()};"
         return f"#define SFPU_INT_OP_{op_upper}"
 
 
