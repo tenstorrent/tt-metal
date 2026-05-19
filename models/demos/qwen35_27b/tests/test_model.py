@@ -9,9 +9,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.qwen3_vl.reference.functional import qwen3_vision_transformer_preprocess
-from models.demos.qwen3_vl.tt.model import VisionTransformer
-from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
+from models.demos.qwen35_27b.tt.vision.functional import qwen3_5_vision_transformer_preprocess
+from models.demos.qwen35_27b.tt.vision.model import VisionTransformer
+from models.demos.qwen35_27b.tt.vision.vision_model_config import VisionModelArgs
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_rope_style_hf_to_meta,
@@ -23,7 +23,7 @@ from models.tt_transformers.tt.load_checkpoints import (
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -97,7 +97,7 @@ def test_vision_model_inference(
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
 
     # Get the necessary preprocessing for vision model
-    cu_seqlens, position_embeddings = qwen3_vision_transformer_preprocess(
+    cu_seqlens, position_embeddings = qwen3_5_vision_transformer_preprocess(
         seq_len=ref_seq_len,
         grid_thw=image_grid_thw,
         head_dim=model_args.head_dim,
@@ -144,10 +144,10 @@ def test_vision_model_inference(
     tt_input = tt_model.prepare_input(patch_input, seq_len)
 
     # Run reference model
-    reference_output, reference_deepstack_visual_embeds = reference_model(pt_pixel_values, image_grid_thw)
+    reference_output = reference_model(pt_pixel_values, image_grid_thw).pooler_output
 
     # Run TT model
-    tt_out, tt_deepstack_visual_embeds = tt_model(
+    tt_out = tt_model(
         tt_input,
         unpadded_seq_len=ref_seq_len,
         rot_mats=rot_mats,
@@ -158,49 +158,18 @@ def test_vision_model_inference(
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
     )
 
-    tt_deepstack_visual_embeds = [
-        ttnn.to_torch(
-            tt_deepstack_visual_embeds[i],
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
-        )
-        for i in range(len(tt_deepstack_visual_embeds))
-    ]
-
     tt_output_torch = tt_out[:, 0:1, :, : model_args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0)
-    tt_deepstack_visual_embeds_torch = [
-        tt_deepstack_visual_embeds[i][:, 0:1, :, : model_args.hf_config.vision_config.out_hidden_size]
-        .squeeze(0)
-        .squeeze(0)
-        for i in range(len(tt_deepstack_visual_embeds))
-    ]
 
     # Compare outputs
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC of output: {pcc_message}")
-    deepstack_visual_embeds_passing = True
-    for i in range(len(tt_deepstack_visual_embeds)):
-        deepstack_visual_embeds_passing_i, pcc_message = comp_pcc(
-            reference_deepstack_visual_embeds[i],
-            tt_deepstack_visual_embeds_torch[i],
-            pcc,
-        )
-        deepstack_visual_embeds_passing &= deepstack_visual_embeds_passing_i
-        logger.info(comp_allclose(reference_deepstack_visual_embeds[i], tt_deepstack_visual_embeds_torch[i]))
-        logger.info(f"PCC of deepstack visual embeds {i}: {pcc_message}")
 
     # Generate test summary message
     test_desc = f"Vision Transformer Model ({num_layers} layers)"
 
-    if passing and deepstack_visual_embeds_passing:
+    if passing:
         logger.info(f"{test_desc} Passed!")
     elif not passing:
         logger.warning(f"{test_desc} Failed! PCC value is lower than {pcc} for some of the outputs. Check Warnings!")
-    elif not deepstack_visual_embeds_passing:
-        logger.warning(
-            f"{test_desc} Failed! PCC value is lower than {pcc} for some of the deepstack visual embeds. Check Warnings!",
-        )
     assert passing, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
-    assert (
-        deepstack_visual_embeds_passing
-    ), f"PCC value is lower than {pcc} for some of the deepstack visual embeds. Check Warnings!"

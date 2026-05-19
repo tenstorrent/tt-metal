@@ -472,6 +472,7 @@ class ModelArgs:
         "Phi-4": "models/tt_transformers/model_params/phi-4",
         "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
         "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
+        "Qwen3.5-27B": "models/tt_transformers/model_params/Qwen3.5-27B",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
