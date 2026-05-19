@@ -39,9 +39,20 @@ ttnn/cpp/ttnn/kernel_lib/
   agents/                 <- this directory (pipeline docs + agent prompts)
 ```
 
+## Cycle Kickoff — read-only by default
+
+A pipeline cycle is **read-only against helper surface by default**. To land new helper surface in a cycle, that cycle MUST be declared as an "API-design cycle" on kickoff and recorded in the cycle's planning artifact.
+
+| Cycle mode | Effect |
+|---|---|
+| Read-only (default) | Kernels whose Step 2 audit finds a missing helper feature are logged into the gap map and skipped for this cycle with a `BLOCKED-CYCLE-<id>` annotation. PRs touching `kernel_lib/` headers are rejected on sight. |
+| API-design (opt-in) | Works through the accumulated gap map via Gate 0 / Gate 1 / Gate 2 as normal. Migration of unblocked kernels still proceeds under the read-only rules. |
+
+Read-only is the default so that extending the helper requires an explicit kickoff declaration. This makes accretion visible at the planning level instead of in commit-by-commit drift. A read-only cycle is also a forcing function that exposes which gaps are real (they re-appear next cycle) vs which were one-kernel idiosyncrasies that should have lived on raw LLK.
+
 ## Approval Gates
 
-Two BLOCKING gates between phases of any pipeline run. Both gates require an
+Three BLOCKING gates between phases of any pipeline run. Each gate requires an
 **explicit go-ahead from the human**. These gates exist because a previous
 helper-creation run conflated a scope answer ("yes, full surface migration")
 with API approval and shipped a 24-file design + a 12-test pytest with no
@@ -96,6 +107,21 @@ artifact is harder to redline once it exists than to design on paper.
 
 Compression modes (caveman, ultra, terse) do NOT override these gates.
 
+### Gate 0 — Shipped-helper changes re-enter Gate 1
+
+> BLOCKING REQUIREMENT — any change to a **shipped** helper's surface MUST go through a delta proposal before any `.hpp` / `.inl` / kernel / test edits land. Gate 1 was easy to default-interpret as "for new helpers"; Gate 0 closes the gap.
+
+A "shipped" helper is one currently exported from `compute_kernel_lib::*_helpers.hpp` and imported by at least one kernel outside `ttnn/cpp/ttnn/kernel_lib/tests/`. Any one of the following triggers Gate 0:
+
+- Add a new value to a public enum.
+- Change a default value on a struct / template / function signature.
+- Add / remove / reorder a template parameter on a public CRTP struct or function template.
+- Rename, retype, or repurpose any public symbol (struct, enum, free function, alias, namespace).
+- Change the signature, contract, or invocation order of a convenience-wrapper entry point.
+- Move a responsibility across the helper boundary (e.g. caller-owns-startup ↔ helper-owns-startup).
+
+How: write the delta in `{helper}_helper_proposal.md` as a **diff** against the current API (not a full rewrite), post the artifact, end the turn. No `.hpp` / `.inl` / kernel / test edits until the human approves the delta per Gate 1.
+
 ### Commit the artifact on acceptance
 
 The moment a proposal artifact (Gate 1: `{category}_helper_proposal.md`) or a test plan artifact (Gate 2: `{category}_test_plan.md`) clears its gate, **commit the approved file before starting the next phase**. The commit message names the gate and the user's approval message.
@@ -134,6 +160,14 @@ Reason: kernels mid-transition to `experimental::CircularBuffer` and legacy kern
 
 Where the helper queries CB metadata (page size, num pages, dtype), prefer compile-time `static_assert` paths when the metadata is reachable through the `experimental::CircularBuffer` constructed from the id, falling back to runtime reads when it is not. `if constexpr` selects between paths.
 
+### Enums stay orthogonal
+
+Audit trigger: a public enum reaches **6 values**, OR any two values share a substring of ≥6 characters (e.g. `*PopAtEnd`, `*NoPop`, `WaitUpfront*`). The audit asks one question: is this enum encoding N orthogonal axes as their cartesian product?
+
+If yes, the next value does NOT land — the enum is refactored into N orthogonal enums (or a struct of N enum fields) first. The audit runs at every Gate 1 approval and at every pipeline close-out; if it fires, close-out blocks until the refactor lands in a follow-up proposal.
+
+Concrete in-tree example: `CopyTilePolicy` currently encodes `WaitShape × PopShape` as a flat 9-value enum (`WaitUpfront*`, `Cumulative*Wait*`, `*NoPop`, `*PopAtEnd` overlaps). Refactor before value #10 lands.
+
 ### Reconfig is a first-class helper capability
 
 Every helper that bridges init / dtype / format state must expose reconfiguring as an in-helper option (policy enum, not caller-side fixup). Use `with_dt_tree`-style decomposition to map each reconfig variant to its underlying LLK calls — the mapping is the canonical reference for migration and pattern matching.
@@ -155,13 +189,15 @@ covered surface:
 When a new surface is added (new enum value, new policy, new op struct, new
 reconfig path) the update MUST:
 
-1. Add or extend a test kernel that exercises the exact new path.
+1. Add a **dedicated** test kernel at `ttnn/cpp/ttnn/kernel_lib/tests/<helper>/kernels/<surface>.cpp` and a dedicated pytest at `tests/ttnn/unit_tests/kernel_lib/test_<helper>_<surface>.py`. The surface name matches the enum value, op struct, or wrapper being validated. The test kernel exercises ONLY the new path — no extraneous helper composition.
 2. Parameterize over at least `num_tiles ∈ {1, 8, 64}` — single tile, fits in
    DEST, and spans multiple DEST windows. These three cover most off-by-one
    and batching regressions.
 3. Include a torch golden using `comp_pcc(...)` (>= 0.9999 for bf16-only
-   paths; >= 0.999 when fp32 mixed dtypes are involved).
+   paths; >= 0.999 when fp32 mixed dtypes are involved). Cover `fp32_dest_acc_en ∈ {False, True}` if the path touches DEST format.
 4. Skip Blackhole unless the feature is explicitly Blackhole-tested.
+
+A migration / op pytest that happens to consume the new surface is a **downstream signal**, not a substitute. A surface validated only by a migration pytest is treated as untested — the migration pytest tests the kernel, not the helper, and pins one shape / one dtype / one composition.
 
 Run via:
 ```
@@ -220,6 +256,10 @@ For the kernel being migrated, enumerate:
   - Interleaved op classes in one DEST window (e.g. FPU+SFPU, matmul+eltwise) → only migratable if the target helper exposes a fusion / post-op extension point. Otherwise split into separate helper calls with an intermediate CB.
 
 ### Step 3 — Gate-check against the helper API
+
+> BLOCKING REQUIREMENT — a migration commit MUST NOT introduce new helper surface. If the audit finds a gap, migration of this kernel **stops on the spot**. The gap goes through Gate 0 → Gate 1 → implementation → Gate 2 → dedicated test, each as its own commit. Migration of the kernel resumes only after the gap-fill chain has landed, as a **separate** commit that touches no helper headers.
+
+Banned commit shape: a single diff that touches both `ttnn/cpp/ttnn/kernel_lib/` (new enum value / new template arg / new op struct / new signature) and a kernel outside `ttnn/cpp/ttnn/kernel_lib/tests/` (first caller of the new surface). Reviewer rejects on sight.
 
 If the audit turns up ANY of these, return to a prior step before writing the migration:
 
@@ -368,6 +408,7 @@ Before trusting a passing test:
 
 ### Anti-patterns (do NOT do these during migration)
 
+- **Single commit that adds helper surface AND its first caller.** Split: the gap-fill chain (Gate 0 → Gate 1 → impl → Gate 2 → dedicated test) lands first; migration of the caller is a separate, header-free commit. See Step 3.
 - **Hand-coding around a helper gap.** If an op, policy, or fusion point is missing, fix the helper (Helper Update / Helper Creation) — do not inline a workaround in the kernel.
 - **Batching migrations of unrelated kernels in one commit.** One kernel per commit so failures bisect to a single change.
 - **Silently dropping FP32_DEST_ACC-guarded reconfig calls.** Verify the helper emits an equivalent reconfig (or flag the gap and leave the path on raw LLK).
@@ -378,6 +419,20 @@ Before trusting a passing test:
 ## Pipeline Self-Maintenance
 
 Rules below govern the migration pipeline / orchestration layer itself. These are the easy-to-miss process failures that ship even when every per-kernel step passed.
+
+### Commit-message taxonomy
+
+Helper-touching commits MUST use one of these subject prefixes. Reviewer-enforced (no hook); malformed subjects are rejected on sight.
+
+| Prefix | Means | Body MUST include |
+|---|---|---|
+| `helper-add(name): <surface added>` | Additive only — new enum value, new op struct, opt-in policy | Proposal artifact path + sign-off line |
+| `helper-fix(name): <bug>` | Bug fix — no surface change | Repro test commit sha |
+| `helper-break(name): <change> — N callers updated` | Schema change to shipped surface | Proposal path + sign-off + caller list + deprecation cutover commit |
+| `helper-deprecate(name): <symbol> — removed in <sha>` | Schedule symbol removal | Cutover commit reference |
+| `migrate(op): <kernel>` | Kernel migration — does not touch `kernel_lib/` headers | Pytest manifest row reference |
+
+Banned subjects (reviewer rejects): `wip`, `WIP`, `tmp`, `temp`, `scratch`, `experimental`, `try`, `attempt`, `sanity`, `partial fix`, `quick fix`, `nit`, `cleanup`, and single-word subjects (`bh fix`-style). Squash trial commits into a single conforming commit, or drop, before requesting review — a reviewer seeing a `2 try` / `sanity partial fix` commit can hold the entire review until the history is rewritten.
 
 ### HQ doc carries helper-agnostic blockers only
 
