@@ -88,15 +88,21 @@ jobs:
         id: apply-mode-filter
         # Entries with no `mode` always run. Entries with `mode` run only when
         # test-mode matches (or test-mode == "all").
+        # Inputs are passed via env vars (not inline ${{ }} substitution) so
+        # single quotes / shell metacharacters inside the matrix JSON (e.g.
+        # `awk '{print $1}'` in cmd fields) can't break the shell parser.
+        env:
+          MATRIX_JSON: ${{ steps.build-matrix.outputs.matrix }}
+          TEST_MODE: ${{ inputs.test-mode }}
+          ENABLED_SKUS: ${{ inputs.enabled-skus }}
         run: |
-          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
-          if [ "${{ inputs.test-mode }}" = "all" ]; then
-            FILTERED="$MATRIX"
+          if [ "$TEST_MODE" = "all" ]; then
+            FILTERED="$MATRIX_JSON"
           else
-            FILTERED=$(echo "$MATRIX" | jq -c --arg m "${{ inputs.test-mode }}" '[.[] | select(.mode == null or .mode == $m)]')
+            FILTERED=$(jq -c --arg m "$TEST_MODE" '[.[] | select(.mode == null or .mode == $m)]' <<<"$MATRIX_JSON")
           fi
           if [ "$FILTERED" = "[]" ]; then
-            echo "::error::No tests match enabled-skus='${{ inputs.enabled-skus }}' + test-mode='${{ inputs.test-mode }}'."
+            echo "::error::No tests match enabled-skus='$ENABLED_SKUS' + test-mode='$TEST_MODE'."
             exit 1
           fi
           {
