@@ -1198,7 +1198,6 @@ protected:
 
 // Fixed core layout used by the SD spoof-prefetch execution path
 inline constexpr CoreCoord sd_spoof_prefetch_core = {0, 0};
-inline constexpr CoreCoord sd_dispatch_core = {4, 0};
 
 inline CoreCoord dispatch_core(const tt_metal::IDevice* device) {
     return (device->arch() == tt::ARCH::QUASAR) ? CoreCoord{0, 0} : CoreCoord{4, 0};
