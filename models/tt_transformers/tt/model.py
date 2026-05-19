@@ -619,7 +619,8 @@ class Transformer(LightweightModule):
         if sampling_on_device and self.sampling is not None:
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
             if capture_sampling_trace:
-                return tt_logits
+                return ttnn.to_memory_config(tt_logits, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+
             tt_toks, tt_log_probs = self.sampling.sample(
                 tt_logits,
                 tt_out_tok=x,
