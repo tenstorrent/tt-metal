@@ -342,6 +342,7 @@ def run_tt(
     vision_square_pixels: int | None,
     cpu_sampling: bool,
     clear_weight_cache: bool = False,
+    perf: bool = False,
 ) -> None:
     if not image_path.is_file():
         raise FileNotFoundError(f"TT multimodal path requires an image file; missing {image_path}.")
@@ -421,6 +422,14 @@ def run_tt(
         lm_head_dtype = ttnn.bfloat8_b
         embed_dtype = ttnn.bfloat16
 
+        # Default to ``DecodersPrecision.accuracy`` (BF16/BFP8) so multimodal captions
+        # stay coherent. The BFP4 BH-QB recipe (``--perf``) trades quality for tok/s.
+        _opt = _devstral_bh_qb_decoders_precision if perf else None
+        if perf:
+            logger.info("Using BH-QB perf precision recipe (BFP4 MLP, BFP8 attn/KV).")
+        else:
+            logger.info("Using default accuracy precision recipe (omit --perf for quality).")
+
         model_args = ModelArgs(
             mesh_device,
             max_batch_size=1,
@@ -428,7 +437,7 @@ def run_tt(
             dummy_weights=False,
             use_hf_rope=True,
             cache_hf=True,
-            optimizations=_devstral_bh_qb_decoders_precision,
+            optimizations=_opt,
         )
         # Confirm the precision recipe survives ``ModelArgs`` construction.
         # If this prints `accuracy` or `performance`, the recipe never reached
@@ -936,6 +945,12 @@ def main() -> None:
         help="Delete the TT weight cache before loading. Use after changing the precision recipe "
         "(BFP4/BFP8/BF16) so stale tile files don't bypass re-quantization.",
     )
+    parser.add_argument(
+        "--perf",
+        action="store_true",
+        help="TT only: enable BFP4/BFP8 BH-QB decode recipe (~18 tok/s). Default uses accuracy "
+        "recipe for coherent image captions.",
+    )
     parser.add_argument("--greedy", action="store_true")
     parser.add_argument("--temperature", type=float, default=float(REFERENCE_GENERATE_KWARGS["temperature"]))
     parser.add_argument("--lm-head-cpu", action="store_true")
@@ -991,6 +1006,7 @@ def main() -> None:
             vision_square_pixels=args.vision_square_pixels,
             cpu_sampling=args.cpu_sampling,
             clear_weight_cache=args.clear_weight_cache,
+            perf=args.perf,
         )
 
 

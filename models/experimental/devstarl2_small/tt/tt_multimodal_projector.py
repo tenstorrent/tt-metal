@@ -64,24 +64,17 @@ class TTMistral3MultiModalProjector(LightweightModule):
         self.linear_2_weight = as_linear_weight(
             "linear_2", ttnn.ShardTensorToMesh(mesh_device, dim=-1), cache_suffix=".sharded_dim_-1"
         )
+        # See ``tt_patchmerger.py`` for the rationale: ``mcast_in0=True`` only handles
+        # M_tiles <= per_core_M correctly. We use the explicit fast path for tiny grids
+        # and fall back to ttnn auto-selected matmul for larger images.
+        self._linear_2_small_m_per_core_tiles = 8
         self.linear_2_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(11, 10),
             in0_block_w=32,
             out_subblock_h=8,
             out_subblock_w=1,
-            per_core_M=8,
+            per_core_M=self._linear_2_small_m_per_core_tiles,
             per_core_N=1,
-            fuse_batch=False,
-            fused_activation=None,
-            mcast_in0=True,
-        )
-        self.linear_2_large_m_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(11, 10),
-            in0_block_w=8,
-            out_subblock_h=1,
-            out_subblock_w=2,
-            per_core_M=16,
-            per_core_N=10,
             fuse_batch=False,
             fused_activation=None,
             mcast_in0=True,
@@ -95,20 +88,16 @@ class TTMistral3MultiModalProjector(LightweightModule):
         x = ttnn.linear(x, self.linear_1_weight, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.gelu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.typecast(x, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        m_tiles = (x.shape[0] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-        n_tiles = (self.linear_2_weight.shape[-1] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-        linear_2_program_config = (
-            self.linear_2_large_m_program_config
-            if ((m_tiles + 7) // 8) * n_tiles > 110
-            else self.linear_2_program_config
-        )
-        x = ttnn.linear(
-            x,
-            self.linear_2_weight,
+        m_rows = int(x.shape[0])
+        m_tiles = (m_rows + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+        use_small_config = m_tiles <= self._linear_2_small_m_per_core_tiles
+        linear_kwargs = dict(
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=linear_2_program_config,
         )
+        if use_small_config:
+            linear_kwargs["program_config"] = self.linear_2_program_config
+        x = ttnn.linear(x, self.linear_2_weight, **linear_kwargs)
         return x
 
 
