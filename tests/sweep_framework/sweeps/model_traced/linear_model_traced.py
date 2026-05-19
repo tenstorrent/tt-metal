@@ -293,7 +293,7 @@ def run(
     # Use build_op_kwargs to parse dict values for op kwargs (compute_kernel_config, etc.).
     # Exclude program_config (handled above), activation (used for golden too),
     # and output_tile (a Tile object that can't be auto-parsed from dict).
-    parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile", "global_cb"})
+    parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile", "global_cb", "compute_kernel_config"})
 
     # Parse master's output_tile (a Tile object that build_op_kwargs can't auto-
     # parse). Format: {"type": "Tile", "value": "Tile with shape: [32, 32]"}.
@@ -587,8 +587,6 @@ def run(
                 linear_kwargs["global_cb"] = _GLOBAL_CB
             else:
                 _pc = linear_kwargs.get("program_config")
-                if _pc is not None and hasattr(_pc, "num_global_cb_receivers"):
-                    _pc.num_global_cb_receivers = 1
 
         # Master traced ttnn.linear with two call forms: 26 cfgs used the kwarg
         # `input_tensor_b=` (vectors carry input_tensor_b_shape), 3 cfgs used

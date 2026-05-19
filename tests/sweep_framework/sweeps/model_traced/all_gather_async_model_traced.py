@@ -797,7 +797,7 @@ def run(
                         # use_optimal_ccl_for_llama: honour the vector value; only
                         # default to False when the key is truly absent.
                         if "use_optimal_ccl_for_llama" not in op_kwargs:
-                            op_kwargs["use_optimal_ccl_for_llama"] = False
+                            op_kwargs["use_optimal_ccl_for_llama"] = kwargs.get("use_optimal_ccl_for_llama", False)
                         tt_out_tensor = ttnn.experimental.all_gather_async(
                             tt_input, _dim, **op_kwargs
                         )
