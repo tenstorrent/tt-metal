@@ -32,10 +32,33 @@ SAVE_DIR = Path(__file__).resolve().parent.parent / "reference"
 
 def _remove_stale_reference_tensors(save_dir: Path) -> None:
     """Delete known script outputs to avoid mixing artifacts across runs."""
-    for name in ("inputs.safetensors", "outputs.safetensors", "intermediates.safetensors"):
+    for name in (
+        "inputs.safetensors",
+        "outputs.safetensors",
+        "intermediates.safetensors",
+        "config_runtime.json",
+    ):
         target = save_dir / name
         if target.exists():
             target.unlink()
+
+
+def _write_or_assert_config(save_dir: Path, config_dict: dict) -> None:
+    """Write config.json if it doesn't exist; assert it matches if it does."""
+    config_path = save_dir / "config.json"
+    if config_path.exists():
+        with open(config_path, encoding="utf-8") as f:
+            existing = json.load(f)
+        if existing != config_dict:
+            raise RuntimeError(
+                "Generated config does not match committed reference/config.json. "
+                "If this is intentional, delete reference/config.json and re-run."
+            )
+        print("  config.json unchanged — matches committed provenance.")
+    else:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config_dict, f, indent=2)
+        print("  config.json written.")
 
 
 def main():
@@ -191,7 +214,7 @@ def main():
     save_safetensors(main_outputs,        str(SAVE_DIR / "outputs.safetensors"))
     save_safetensors(captured_contiguous, str(SAVE_DIR / "intermediates.safetensors"))
 
-    # ── Save static provenance config (committed, never changes) ─────────────
+    # ── Write or assert static provenance config ──────────────────────────────
     config_dict = {
         "model_id":                        MODEL_ID,
         "model_revision":                  MODEL_REVISION,
@@ -217,8 +240,7 @@ def main():
         "embedding_dimension":             cfg.embedding_dimension,
         "past_len":                        past_len,
     }
-    with open(SAVE_DIR / "config.json", "w", encoding="utf-8") as f:
-        json.dump(config_dict, f, indent=2)
+    _write_or_assert_config(SAVE_DIR, config_dict)
 
     # ── Save runtime environment (gitignored, not committed) ──────────────────
     config_runtime = {
