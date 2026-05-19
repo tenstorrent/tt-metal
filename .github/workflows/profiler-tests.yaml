@@ -93,8 +93,6 @@ on:
         required: false
         type: boolean
         default: false
-  push:
-    branches: ["main", "tdowdall/profiler-reorg"]
 
 jobs:
   build-artifact-profiler:
@@ -109,19 +107,44 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
+  # Build the enabled-skus string here (not via inline ternaries) so the impl
+  # receives a clean, comma-separated list with no trailing/empty commas.
+  compute-skus:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled-skus: ${{ steps.build.outputs.value }}
+    steps:
+      - name: Determine enabled SKUs
+        id: build
+        run: |
+          set -e
+          # push/schedule events don't carry workflow_dispatch inputs, so the
+          # run_*_profiler booleans evaluate as empty. Hardcode a full SKU
+          # set for those triggers instead.
+          if [[ "${{ github.event_name }}" == "push" || "${{ github.event_name }}" == "schedule" ]]; then
+            skus="wh_llmbox,wh_galaxy,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu,wh_n300_civ2,wh_n150_civ2"
+          else
+            parts=()
+            [[ "${{ inputs.run_t3k_profiler }}" == "true" ]] && parts+=("wh_llmbox")
+            [[ "${{ inputs.run_galaxy_profiler }}" == "true" ]] && parts+=("wh_galaxy")
+            [[ "${{ inputs.run_blackhole_profiler }}" == "true" ]] && parts+=("bh_p100a_civ2_viommu" "bh_p150b_civ2_viommu")
+            [[ "${{ inputs.run_n300_profiler }}" == "true" ]] && parts+=("wh_n300_civ2")
+            [[ "${{ inputs.run_n150_profiler }}" == "true" ]] && parts+=("wh_n150_civ2")
+            skus=$(IFS=,; echo "${parts[*]}")
+          fi
+          if [[ -z "$skus" ]]; then
+            echo "::error::No SKUs selected. Tick at least one run_*_profiler input."
+            exit 1
+          fi
+          echo "Enabled SKUs: $skus"
+          echo "value=$skus" >> "$GITHUB_OUTPUT"
+
   profiler-tests:
-    needs: build-artifact-profiler
+    needs: [build-artifact-profiler, compute-skus]
     secrets: inherit
     uses: ./.github/workflows/profiler-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      # Comma-join the SKUs for each enabled run_* flag. Trailing / empty
-      # commas are filtered by prepare_test_matrix.py's split-and-strip.
-      enabled-skus: >-
-        ${{ inputs.run_t3k_profiler && 'wh_llmbox' || '' }},
-        ${{ inputs.run_galaxy_profiler && 'wh_galaxy' || '' }},
-        ${{ inputs.run_blackhole_profiler && 'bh_p100a_civ2_viommu,bh_p150b_civ2_viommu' || '' }},
-        ${{ inputs.run_n300_profiler && 'wh_n300_civ2' || '' }},
-        ${{ inputs.run_n150_profiler && 'wh_n150_civ2' || '' }}
+      enabled-skus: ${{ needs.compute-skus.outputs.enabled-skus }}

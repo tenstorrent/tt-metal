@@ -22,9 +22,9 @@ on:
         required: true
         type: string
       enabled-skus:
-        required: false
+        required: true
         type: string
-        description: "Comma-separated SKU list to run. Empty = ALL_SKUS_IN_TESTS."
+        description: "Comma-separated SKU list to run. Must resolve to at least one SKU after sanitization."
       test-mode:
         required: false
         type: string
@@ -82,7 +82,7 @@ jobs:
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            ${{ inputs.enabled-skus || 'ALL_SKUS_IN_TESTS' }} \
+            "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
       - name: Apply mode filter
         id: apply-mode-filter
