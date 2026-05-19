@@ -85,6 +85,8 @@ class Pi0_5LiberoAdapter:
         # ttnn_gemma._get_sharded_norm. 224 (gives 480) triggered an L1 CB clash
         # because the sub-block sizing for 15 M-tiles doesn't fit the per-core
         # L1 budget on BH; 256 (gives 512 = 16 M-tiles) is the validated path.
+        action_horizon: int = 50,
+        state_in_prompt: bool = True,
     ):
         self.backend = backend
         self.ttnn_device = ttnn_device
@@ -93,29 +95,52 @@ class Pi0_5LiberoAdapter:
         self.chunk_size = chunk_size
         self.max_token_len = max_token_len
         self.image_size = 224
+        # `state_in_prompt=True` (default, lerobot pi05_libero_finetuned convention):
+        # state is normalized → discretized to 256 bins → embedded in the language
+        # prompt as text. `state_in_prompt=False` (upstream openpi pi05_libero with
+        # discrete_state_input=False): prompt is task description only; the model
+        # was trained to infer state implicitly from vision and never sees a state
+        # token. The model architecture (no state_proj weight in either variant)
+        # is identical; only the prompt construction differs.
+        self.state_in_prompt = state_in_prompt
 
         # Tokenizer
         self.sp = sentencepiece.SentencePieceProcessor()
         self.sp.load(tokenizer_path)
 
-        # Normalizer stats. The pi05_libero finetune was trained with MEAN_STD
-        # (see policy_preprocessor.json: norm_map={"ACTION": "MEAN_STD", "STATE": "MEAN_STD"})
-        # — not QUANTILES. The safetensors file contains BOTH; using the wrong
-        # one silently produces actions in the wrong scale/offset.
-        stats_path = os.path.join(
-            checkpoint_dir,
-            "policy_preprocessor_step_2_normalizer_processor.safetensors",
+        # Normalizer stats. Supports both formats:
+        #  - lerobot finetune: policy_preprocessor_step_2_normalizer_processor.safetensors
+        #  - openpi upstream (converted): assets/physical-intelligence/libero/norm_stats.json
+        # Both use MEAN_STD for pi05_libero (per policy_preprocessor.json /
+        # norm_stats.json — the safetensors file contains BOTH MEAN_STD and
+        # QUANTILE stats; using the wrong one silently produces actions in the
+        # wrong scale/offset).
+        upstream_json = os.path.join(checkpoint_dir, "assets", "physical-intelligence", "libero", "norm_stats.json")
+        lerobot_safetensors = os.path.join(
+            checkpoint_dir, "policy_preprocessor_step_2_normalizer_processor.safetensors"
         )
-        flat = load_file(stats_path)
-        self.action_mean = flat["action.mean"].float().numpy()  # (7,)
-        self.action_std = flat["action.std"].float().numpy()
-        self.state_mean = flat["observation.state.mean"].float().numpy()  # (8,)
-        self.state_std = flat["observation.state.std"].float().numpy()
+        if os.path.exists(upstream_json):
+            import json as _json
+
+            with open(upstream_json) as f:
+                ns = _json.load(f)["norm_stats"]
+            self.action_mean = np.asarray(ns["actions"]["mean"], dtype=np.float32)
+            self.action_std = np.asarray(ns["actions"]["std"], dtype=np.float32)
+            self.state_mean = np.asarray(ns["state"]["mean"], dtype=np.float32)
+            self.state_std = np.asarray(ns["state"]["std"], dtype=np.float32)
+        else:
+            flat = load_file(lerobot_safetensors)
+            self.action_mean = flat["action.mean"].float().numpy()  # (7,)
+            self.action_std = flat["action.std"].float().numpy()
+            self.state_mean = flat["observation.state.mean"].float().numpy()  # (8,)
+            self.state_std = flat["observation.state.std"].float().numpy()
         self.real_action_dim = len(self.action_mean)
         self.real_state_dim = len(self.state_mean)
 
-        # Model
-        cfg = Pi0_5ModelConfig()
+        # Model — pass action_horizon explicitly so callers can match the value
+        # the checkpoint was trained for (lerobot pi05_libero_finetuned = 50,
+        # upstream openpi pi05_libero = 10).
+        cfg = Pi0_5ModelConfig(action_horizon=action_horizon)
         loader = Pi0_5WeightLoader(checkpoint_dir)
         if backend == "pytorch":
             self.model = Pi0_5Model(cfg, loader)
@@ -184,12 +209,24 @@ class Pi0_5LiberoAdapter:
 
     # --- prompt + tokenize ---
     def _make_tokens(self, task_desc: str, state: np.ndarray):
-        """Returns (tokens (max_token_len,), mask (max_token_len,)) as torch tensors."""
-        s_norm = self._state_normalize(state)
-        bins = self._discretize_state(s_norm)
-        state_str = " ".join(str(int(b)) for b in bins)
+        """Returns (tokens (max_token_len,), mask (max_token_len,)) as torch tensors.
+
+        Two prompt formats are supported:
+         - `state_in_prompt=True` (lerobot pi05_libero_finetuned convention):
+           "Task: <desc>, State: 128 200 145 ...; Action: " — state quantized
+           to 256 bins and embedded as text. The model learns to read it.
+         - `state_in_prompt=False` (upstream openpi pi05_libero, discrete_state_input=False):
+           "Task: <desc>; Action: " — state is NOT included; the model was
+           trained to infer state implicitly from vision.
+        """
         cleaned = task_desc.strip().replace("_", " ").replace("\n", " ")
-        full = f"Task: {cleaned}, State: {state_str};\nAction: "
+        if self.state_in_prompt:
+            s_norm = self._state_normalize(state)
+            bins = self._discretize_state(s_norm)
+            state_str = " ".join(str(int(b)) for b in bins)
+            full = f"Task: {cleaned}, State: {state_str};\nAction: "
+        else:
+            full = f"Task: {cleaned};\nAction: "
         tokens = self.sp.encode(full, add_bos=True)
         L = len(tokens)
         if L < self.max_token_len:
@@ -531,18 +568,72 @@ def main():
         default=20,
         help="Playback FPS for episode videos (sim runs at 20 Hz; set 10 for slow-mo).",
     )
+    ap.add_argument(
+        "--device-id",
+        type=int,
+        default=0,
+        help="TTNN device id to use (--backend ttnn only). Default 0; use a high "
+        "id (e.g. 31) to avoid colliding with another session on the same host. "
+        "When TT_VISIBLE_DEVICES=<phys_id> is set, this is the logical index "
+        "after filtering (typically 0).",
+    )
+    ap.add_argument(
+        "--action-horizon",
+        type=int,
+        default=50,
+        help="Action chunk size = number of actions the model predicts per call. "
+        "Default 50 (lerobot pi05_libero_finetuned). Upstream openpi pi05_libero "
+        "was trained with action_horizon=10 — pass --action-horizon 10 when "
+        "running that converted checkpoint, otherwise position embeddings beyond "
+        "10 are untrained and the policy outputs garbage for those tokens.",
+    )
+    ap.add_argument(
+        "--state-in-prompt",
+        choices=["true", "false"],
+        default="true",
+        help="Whether to embed robot state into the language prompt as 256 discrete "
+        "bins. Default 'true' (lerobot pi05_libero_finetuned convention). Pass "
+        "'false' for upstream openpi pi05_libero (which was trained with "
+        "discrete_state_input=False and never saw state in the prompt).",
+    )
+    ap.add_argument(
+        "--tasks",
+        nargs="+",
+        default=None,
+        metavar="SUITE:IDX",
+        help="Explicit list of (suite, task_idx) pairs to run, e.g. "
+        "'libero_spatial:4 libero_object:6 libero_object:9'. Overrides "
+        "--suites/--task-range entirely. Useful for re-running only "
+        "previously-failed tasks for fast A/B iteration on policy changes.",
+    )
     args = ap.parse_args()
     if args.video_dir:
         os.makedirs(args.video_dir, exist_ok=True)
         import imageio  # noqa: F401  (validate available before the rollout)
 
-    suites = args.suites if args.suites else [args.suite]
-    if args.task_range is not None:
-        task_idxs = list(range(args.task_range[0], args.task_range[1] + 1))
+    # --tasks (explicit SUITE:IDX list) overrides --suites/--task-range entirely.
+    explicit_tasks: List[Tuple[str, int]] = []
+    if args.tasks:
+        for entry in args.tasks:
+            if ":" not in entry:
+                raise ValueError(f"--tasks entries must be SUITE:IDX, got {entry!r}")
+            suite_name, idx_str = entry.split(":", 1)
+            explicit_tasks.append((suite_name.strip(), int(idx_str)))
+        suites = sorted({s for s, _ in explicit_tasks}, key=[s for s, _ in explicit_tasks].index)
+        task_idxs = None  # not used when explicit_tasks set
     else:
-        task_idxs = [args.task_idx]
-    print(f"\n📦 Plan: suites={suites}, tasks={task_idxs}, N={args.steps_sweep}, eps/task={args.num_episodes}")
-    print(f"   total episodes = {len(suites) * len(task_idxs) * len(args.steps_sweep) * args.num_episodes}")
+        suites = args.suites if args.suites else [args.suite]
+        if args.task_range is not None:
+            task_idxs = list(range(args.task_range[0], args.task_range[1] + 1))
+        else:
+            task_idxs = [args.task_idx]
+    if explicit_tasks:
+        print(f"\n📦 Plan: explicit tasks={explicit_tasks}, N={args.steps_sweep}, eps/task={args.num_episodes}")
+        print(f"   total episodes = {len(explicit_tasks) * len(args.steps_sweep) * args.num_episodes}")
+    else:
+        print(f"\n📦 Plan: suites={suites}, tasks={task_idxs}, N={args.steps_sweep}, eps/task={args.num_episodes}")
+        print(f"   total episodes = {len(suites) * len(task_idxs) * len(args.steps_sweep) * args.num_episodes}")
+    print(f"   action_horizon={args.action_horizon}  " f"state_in_prompt={args.state_in_prompt}")
 
     print(f"\n📋 Loading PI0.5 LIBERO adapter (backend={args.backend}) from {args.checkpoint}")
     t0 = time.time()
@@ -551,12 +642,19 @@ def main():
         import ttnn
 
         ttnn_device = ttnn.open_device(
-            device_id=0,
+            device_id=args.device_id,
             l1_small_size=24576,
             trace_region_size=134_217_728,
         )
-        print(f"   ttnn device opened in {time.time() - t0:.1f}s")
-    adapter = Pi0_5LiberoAdapter(args.checkpoint, backend=args.backend, ttnn_device=ttnn_device)
+        print(f"   ttnn device opened in {time.time() - t0:.1f}s (device_id={args.device_id})")
+    adapter = Pi0_5LiberoAdapter(
+        args.checkpoint,
+        backend=args.backend,
+        ttnn_device=ttnn_device,
+        chunk_size=args.action_horizon,
+        action_horizon=args.action_horizon,
+        state_in_prompt=(args.state_in_prompt == "true"),
+    )
     print(
         f"   adapter loaded in {time.time() - t0:.1f}s "
         f"(real action dim = {adapter.real_action_dim}, state = {adapter.real_state_dim})"
@@ -567,48 +665,53 @@ def main():
     try:
         for N in args.steps_sweep:
             print(f"\n{'#' * 72}\n#  N={N} denoise steps\n{'#' * 72}")
-            for suite_name in suites:
+            # Build (suite, task_idx) sequence: explicit pairs (--tasks) or
+            # cross-product of suites × task_idxs.
+            if explicit_tasks:
+                pairs = list(explicit_tasks)
+            else:
+                pairs = [(s, t) for s in suites for t in task_idxs]
+            for suite_name, task_idx in pairs:
                 max_steps = args.max_steps if args.max_steps else SUITE_MAX_STEPS.get(suite_name, 220)
-                for task_idx in task_idxs:
-                    print(f"\n🤖 {suite_name} / task {task_idx}  (max_steps={max_steps})")
-                    env, task, initial_states = make_libero_env(suite_name, task_idx)
-                    task_desc = task.language
-                    print(f"   task: {task_desc!r}")
-                    stats = []
-                    try:
-                        for ep in range(args.num_episodes):
-                            t_ep = time.time()
-                            m = run_episode(
-                                env,
-                                adapter,
-                                task_desc,
-                                N,
-                                max_steps=max_steps,
-                                chunk_action_horizon=args.replan_steps,
-                                initial_state=initial_states[ep % len(initial_states)],
-                                seed=ep,
-                                record_frames=bool(args.video_dir),
-                            )
-                            stats.append({k: v for k, v in m.items() if k != "frames"})
-                            if args.video_dir and m.get("frames"):
-                                import imageio
+                print(f"\n🤖 {suite_name} / task {task_idx}  (max_steps={max_steps})")
+                env, task, initial_states = make_libero_env(suite_name, task_idx)
+                task_desc = task.language
+                print(f"   task: {task_desc!r}")
+                stats = []
+                try:
+                    for ep in range(args.num_episodes):
+                        t_ep = time.time()
+                        m = run_episode(
+                            env,
+                            adapter,
+                            task_desc,
+                            N,
+                            max_steps=max_steps,
+                            chunk_action_horizon=args.replan_steps,
+                            initial_state=initial_states[ep % len(initial_states)],
+                            seed=ep,
+                            record_frames=bool(args.video_dir),
+                        )
+                        stats.append({k: v for k, v in m.items() if k != "frames"})
+                        if args.video_dir and m.get("frames"):
+                            import imageio
 
-                                video_subdir = os.path.join(args.video_dir, f"N{N}", suite_name)
-                                os.makedirs(video_subdir, exist_ok=True)
-                                suffix = "success" if m["success"] else "failure"
-                                safe_task = "".join(c if c.isalnum() else "_" for c in task_desc)[:60]
-                                fname = f"task{task_idx:02d}_ep{ep+1:02d}_{safe_task}_{suffix}.mp4"
-                                fpath = os.path.join(video_subdir, fname)
-                                imageio.mimwrite(fpath, m["frames"], fps=args.video_fps, codec="libx264")
-                            print(
-                                f"   ep {ep+1}: success={m['success']} steps={m['steps']} "
-                                f"avg_chunk={1000*m['avg_chunk_pred_time']:.0f}ms "
-                                f"wall={time.time()-t_ep:.1f}s",
-                                flush=True,
-                            )
-                    finally:
-                        env.close()
-                    results[N][(suite_name, task_idx)] = stats
+                            video_subdir = os.path.join(args.video_dir, f"N{N}", suite_name)
+                            os.makedirs(video_subdir, exist_ok=True)
+                            suffix = "success" if m["success"] else "failure"
+                            safe_task = "".join(c if c.isalnum() else "_" for c in task_desc)[:60]
+                            fname = f"task{task_idx:02d}_ep{ep+1:02d}_{safe_task}_{suffix}.mp4"
+                            fpath = os.path.join(video_subdir, fname)
+                            imageio.mimwrite(fpath, m["frames"], fps=args.video_fps, codec="libx264")
+                        print(
+                            f"   ep {ep+1}: success={m['success']} steps={m['steps']} "
+                            f"avg_chunk={1000*m['avg_chunk_pred_time']:.0f}ms "
+                            f"wall={time.time()-t_ep:.1f}s",
+                            flush=True,
+                        )
+                finally:
+                    env.close()
+                results[N][(suite_name, task_idx)] = stats
 
         # Summary
         print("\n" + "=" * 84)
