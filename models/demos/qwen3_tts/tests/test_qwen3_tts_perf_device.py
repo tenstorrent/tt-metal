@@ -38,13 +38,15 @@ ARCH_GOLDENS = {
         "prefill_ms_upper": 30.0,
     },
     "WORMHOLE_B0": {
-        # N150 (TP=1): ~117 ms/frame, ~27 ms prefill (single chip, 8x8 grid).
-        # N300 (TP=2): ~111 ms/frame, ~24 ms prefill (DRAM-sharded MLP, 2-chip).
-        # Single golden covers both configs: TP=2 with DRAM-sharded MLP lands in
-        # [105, 129] alongside N150. Tighten when more measurements are available.
-        "steady_ms_per_frame": 113.0,
+        # N150 (TP=1): ~117 ms/frame, prefill 15–36 ms (high variance).
+        # N300 (TP=2): ~105 ms/frame, prefill 23–37 ms (DRAM-sharded attn+MLP).
+        # Single golden covers both: TP=2 with DRAM-sharded paths lands in
+        # [95, 131] alongside N150. Tighten when more measurements are available.
+        # Prefill upper bound is deliberately wide (observed 15–37 ms swing across
+        # runs due to trace-cache state and JIT bucket warmth).
+        "steady_ms_per_frame": 110.0,
         "steady_margin": 0.10,
-        "prefill_ms_upper": 35.0,
+        "prefill_ms_upper": 50.0,
     },
 }
 
