@@ -678,7 +678,8 @@ class Qwen35Attention(LightweightModule):
         k = ttnn.multiply(_rms_norm_dev(k), tw["k_norm"])
 
         # ---- Partial RoPE using caller-provided chunk-sliced cos/sin ----
-        cos_tt, sin_tt = rot_mats[0], rot_mats[1]
+        cos_tt = rot_mats[0][:, :, chunk_start_idx : chunk_start_idx + seq_len, :]
+        sin_tt = rot_mats[1][:, :, chunk_start_idx : chunk_start_idx + seq_len, :]
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV)
 
