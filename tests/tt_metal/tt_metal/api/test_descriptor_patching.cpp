@@ -356,7 +356,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyResolvedBindings_RepeatedApplic
 // Buffer* calls must produce empty ResolvedBindings, so the adapter falls through
 // to the slow path.  Before the fix, CB-only bindings made empty() return false,
 // causing the fast path to activate for factories that never opted in.
-TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbOnlyBuffers_ReturnsEmpty) {
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbOnly_PopulatesCbs_RtArgsEmpty) {
     auto buf_dram = MakeDramBuffer(device());
     auto buf_l1 = MakeL1Buffer(device());
 
@@ -382,10 +382,15 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbOnlyBuffers_Return
     Program program{desc};
     ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{buf_l1.get()});
 
-    // No rt_arg bindings were declared, so both rt_args and cbs must be empty.
+    // resolve_bindings is policy-free: every CB `.buffer = ...` binding is
+    // resolved, even when no rt-arg buffer bindings are declared.  The caller
+    // (the adapter) decides whether to fast-path with a CB-only ResolvedBindings
+    // or to take a slow-path rebuild for factories that still bind raw uint32
+    // runtime args.  See DescriptorMeshWorkloadAdapter::apply_descriptor.
     EXPECT_TRUE(resolved.rt_args.empty());
-    EXPECT_TRUE(resolved.cbs.empty());
-    EXPECT_TRUE(resolved.empty());
+    EXPECT_EQ(resolved.cbs.size(), 1u);
+    EXPECT_EQ(resolved.cbs[0].tensor_buffer_idx, 0u);
+    EXPECT_FALSE(resolved.empty());
 }
 
 // Regression: when tensor_buffers contains the same Buffer* more than once
@@ -420,8 +425,11 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_DuplicateBuffer_Retu
     EXPECT_TRUE(resolved.cbs.empty());
 }
 
-// resolve_bindings fires TT_FATAL when a binding buffer is not in tensor_buffers.
-TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_BufferNotInTensorList_Throws) {
+// resolve_bindings fires TT_FATAL when a runtime-arg binding buffer is not in
+// tensor_buffers — RT-arg bindings are the only mechanism that lets the fast
+// path patch a changing input/output address on cache hits, so a missing
+// buffer is genuinely unrecoverable.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_RtArgBufferNotInTensorList_Throws) {
     auto buf_a = MakeDramBuffer(device());
     auto buf_other = MakeDramBuffer(device());
 
@@ -435,6 +443,56 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_BufferNotInTensorLis
 
     // buf_a is not in the tensor list — should throw.
     EXPECT_ANY_THROW(resolve_bindings(program, desc, std::vector<Buffer*>{buf_other.get()}));
+}
+
+// Regression: CB `.buffer = ...` bindings whose buffer is NOT in tensor_buffers
+// must be silently skipped (not fatal).  Such buffers come from workload-scoped
+// resources the factory injects directly into a CBDescriptor — for example,
+// `dram_prefetcher`'s reader CB pegged to a `GlobalCircularBuffer`'s backing
+// buffer that arrives via `operation_attributes`, not tensor_args.  These
+// buffers have stable addresses across dispatches, so the fast path doesn't
+// need a binding for them.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbBufferNotInTensorList_SkipsBindingNoThrow) {
+    auto buf_l1_pegged = MakeL1Buffer(device());   // simulates GlobalCircularBuffer's backing buffer
+    auto buf_l1_in_args = MakeL1Buffer(device());  // a CB buffer that IS in tensor_args
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+    // First CB: backed by a non-tensor buffer (should be skipped silently).
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2048,
+        .core_ranges = CoreRangeSet{CoreRange{{0, 0}}},
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = 0,
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = 2048,
+        }}},
+        .buffer = buf_l1_pegged.get(),
+    });
+    // Second CB: backed by a tensor-arg buffer (should be resolved normally).
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2048,
+        .core_ranges = CoreRangeSet{CoreRange{{0, 0}}},
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = 1,
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = 2048,
+        }}},
+        .buffer = buf_l1_in_args.get(),
+    });
+
+    Program program{desc};
+
+    // tensor_buffers contains only buf_l1_in_args.  buf_l1_pegged is the
+    // workload-scoped resource — must NOT throw, just skip.
+    ResolvedBindings resolved;
+    ASSERT_NO_THROW(resolved = resolve_bindings(program, desc, std::vector<Buffer*>{buf_l1_in_args.get()}));
+
+    // The CB backed by the in-args buffer should be resolved; the pegged one omitted.
+    EXPECT_TRUE(resolved.rt_args.empty());
+    ASSERT_EQ(resolved.cbs.size(), 1u);
+    EXPECT_EQ(resolved.cbs[0].tensor_buffer_idx, 0u);
 }
 
 // Regression: a scalar runtime arg whose value happens to numerically equal a

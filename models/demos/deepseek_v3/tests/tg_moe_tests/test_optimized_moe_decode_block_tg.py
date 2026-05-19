@@ -15,7 +15,12 @@ import random
 import pytest
 import torch
 from loguru import logger
-from ttnn.experimental.moe_compute_utils import prepare_w0_w1_tensor_for_moe_compute, prepare_w2_tensor_for_moe_compute
+from ttnn.experimental.moe_compute_utils import (
+    get_weight_core_shard_maps,
+    get_weight_mem_configs,
+    prepare_w0_w1_tensor_for_moe_compute,
+    prepare_w2_tensor_for_moe_compute,
+)
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
@@ -73,66 +78,6 @@ def create_torch_w2_tensors(L, E, N, H):
 
     # [E, L, 1, N, H]
     return torch_w2_tensors
-
-
-def determine_compute_matmul_cores(mesh_device):
-    MATMUL_FULL_CORES = {0, 3, 6, 9}
-    MATMUL_PAD_CORES = {1, 2, 4, 5, 7, 8, 10, 11}
-
-    in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
-    core2dram = {}
-    for dram_bank_id, core_coords in enumerate(in0_core_coords):
-        core2dram[core_coords] = dram_bank_id
-
-    in0_num_cores = len(in0_core_coords)
-
-    # Make a new list of core coords that are sorted in decreasing order by y coordinate and then x coordinate.
-    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
-
-    ring2cores = {}
-    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
-        # key: ring_pos, value: (core_coord, dram_bank_id, pad_flag)
-        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in MATMUL_PAD_CORES else 0)
-
-    dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
-    dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
-    dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
-
-    return ring2cores, dram_core_range_set
-
-
-def create_torch_prepared_compute_matmul_weight_tensors(
-    torch_w0, torch_w1, torch_w2, num_layers, experts_per_device, hidden_size, N, ring2cores
-):
-    # Convert ring2cores dict to shard_map lists expected by prepare functions
-    # ring2cores format: {ring_pos: (core_coord, dram_bank_id, pad_flag)}
-    # Extract shard sizes based on pad_flag (6 tiles for non-pad, 5 for pad cores)
-    w0_w1_shard_map = [6 if ring2cores[i][2] == 0 else 5 for i in range(len(ring2cores))]
-
-    # For w2, use DeepSeek-specific values
-    # Non-pad cores: (2, 2) - 2 tiles in last group, 2 padding tiles
-    # Pad cores: (3, 1) - 3 tiles in last group, 1 padding tile
-    w2_shard_map = []
-    for i in range(len(ring2cores)):
-        pad_flag = ring2cores[i][2]
-        if pad_flag == 0:
-            # Non-pad cores
-            w2_shard_map.append((2, 2))
-        else:
-            # Pad cores
-            w2_shard_map.append((3, 1))
-
-    # Prepare w0_w1 tensor (interleaved, padded, and reordered)
-    torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
-        torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
-    )
-
-    # Prepare w2 tensor (padded and reordered)
-    torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
-        torch_w2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
-    )
-
-    return torch_w0_w1_reordered, torch_w2_reordered
 
 
 def create_torch_expert_mapping_tensor(
@@ -571,7 +516,6 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("matmul_N", [2048])
 @pytest.mark.parametrize("scheme", ["random_sequential_experts"])
 @pytest.mark.parametrize("compute_output_height_shard_dim", [4])
-@pytest.mark.parametrize("compute_output_width_shard_dim", [4])
 @pytest.mark.parametrize("combine_mux_core_range", [((3, 0), (4, 7))])
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
@@ -604,7 +548,6 @@ def test_optimized_moe_decode_block(
     matmul_N,
     scheme,
     compute_output_height_shard_dim,
-    compute_output_width_shard_dim,
     combine_mux_core_range,
     combine_token_parallel_core_dim,
     combine_data_parallel_core_dim,
@@ -692,7 +635,9 @@ def test_optimized_moe_decode_block(
     torch_w1_tensors = create_torch_w1_tensors(num_layers, experts, hidden_size, matmul_N)
     torch_w2_tensors = create_torch_w2_tensors(num_layers, experts, matmul_N, hidden_size)
 
-    ring2cores, compute_matmul_dram_core_range_set = determine_compute_matmul_cores(mesh_device)
+    w0_w1_shard_map, w2_shard_map, compute_matmul_dram_core_range_set = get_weight_core_shard_maps(
+        mesh_device, hidden_size, matmul_N
+    )
 
     # Merge the weight tensors that belong to different experts on the same device
     # Then reorder the merged weights into their sharded format
@@ -704,8 +649,11 @@ def test_optimized_moe_decode_block(
         torch_w1 = torch.cat([torch_w1_tensors[e], torch_w1_tensors[e + 1]], dim=1)  # [L, 1, H, N] -> [L, E/D, H, N]
         torch_w2 = torch.cat([torch_w2_tensors[e], torch_w2_tensors[e + 1]], dim=1)  # [L, 1, N, H] -> [L, E/D, N, H]
 
-        torch_w0_w1_reordered, torch_w2_reordered = create_torch_prepared_compute_matmul_weight_tensors(
-            torch_w0, torch_w1, torch_w2, num_layers, experts_per_device, hidden_size, matmul_N, ring2cores
+        torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
+            torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, matmul_N, w0_w1_shard_map
+        )
+        torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
+            torch_w2, num_layers, experts_per_device, matmul_N, hidden_size, w2_shard_map, w0_w1_shard_map
         )
 
         linearized_mesh_coord = get_linearized_mesh_coord(
@@ -719,16 +667,16 @@ def test_optimized_moe_decode_block(
     torch_w2_reordered_tensor = torch.cat(torch_w2_reordered_tensors, dim=0)
 
     # ------------------------------------------------------------------------
-    # Create DRAM shard spec for w0_w1
-    # Tensor shape: (num_layers, experts_per_device, hidden_size, 4608) -> padded and reordered to (12, num_layers, experts_per_device, 6, hidden_size, 64)
+    # Create DRAM memory configs for w0_w1 and w2
     # ------------------------------------------------------------------------
-    w0_w1_shard_height = num_layers * experts_per_device * 3 * hidden_size
-    w0_w1_shard_width = 4 * ttnn.TILE_SIZE
-    w0_w1_shard_spec = ttnn.ShardSpec(
-        compute_matmul_dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
-    )
-    w0_w1_memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec
+    w0_w1_mem_config, w2_mem_config, _, _ = get_weight_mem_configs(
+        num_layers,
+        experts_per_device,
+        hidden_size,
+        matmul_N,
+        w0_w1_shard_map,
+        w2_shard_map,
+        compute_matmul_dram_core_range_set,
     )
     w0_w1_dtype = ttnn.bfloat4_b
     tt_w0_w1 = ttnn.from_torch(
@@ -736,27 +684,17 @@ def test_optimized_moe_decode_block(
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=w0_w1_dtype,
-        memory_config=w0_w1_memory_config,
+        memory_config=w0_w1_mem_config,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
-    # ------------------------------------------------------------------------
-    # Create DRAM shard spec for w2
-    # Tensor shape: (num_layers, experts_per_device, N, hidden_size) -> padded and reordered to (12, num_layers, experts_per_device, 5, N + 192, 128)
-    # ------------------------------------------------------------------------
-    w2_shard_height = num_layers * experts_per_device * 5 * (matmul_N + 192)
-    w2_shard_width = 4 * ttnn.TILE_SIZE
-    w2_shard_spec = ttnn.ShardSpec(
-        compute_matmul_dram_core_range_set, (w2_shard_height, w2_shard_width), ttnn.ShardOrientation.ROW_MAJOR
-    )
-    w2_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
     w2_dtype = ttnn.bfloat4_b
     tt_w2 = ttnn.from_torch(
         torch_w2_reordered_tensor,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=w2_dtype,
-        memory_config=w2_memory_config,
+        memory_config=w2_mem_config,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
@@ -1078,6 +1016,7 @@ def test_optimized_moe_decode_block(
             tt_w2,
             layer_id=layer_id,
             output_height_shard_dim=compute_output_height_shard_dim,
+            intermediate_size=matmul_N,
             has_bias=False,
             cluster_axis=cluster_axis,
             mux_core_range_set=combine_mux_cores,
