@@ -12,7 +12,7 @@ Requires: `pip install huggingface_hub` (or `transformers` with hub support).
 
 CLI example:
   python models/experimental/seamless_m4t_v2_large/scripts/download_weights.py
-  python .../download_weights.py --destination /tmp/seamless-m4t-v2-large
+  python .../download_weights.py --destination models/experimental/seamless_m4t_v2_large/weights/my-copy
 """
 
 from __future__ import annotations
@@ -38,6 +38,33 @@ def get_seamless_m4t_v2_large_weights_dir() -> Path:
     if env:
         return Path(env) / "models/experimental/seamless_m4t_v2_large/weights/seamless-m4t-v2-large"
     return Path(__file__).resolve().parent.parent / "weights" / "seamless-m4t-v2-large"
+
+
+def _allowed_weights_roots() -> list[Path]:
+    """Safelist parents for user-supplied checkpoint directories (Cycode path traversal)."""
+    default_ckpt = get_seamless_m4t_v2_large_weights_dir().resolve()
+    roots = {default_ckpt.parent, default_ckpt}
+    env = os.environ.get("TT_METAL_HOME")
+    if env:
+        roots.add((Path(env) / "models/experimental/seamless_m4t_v2_large/weights").resolve())
+    roots.add((_REPO_ROOT / "models/experimental/seamless_m4t_v2_large/weights").resolve())
+    return sorted(roots)
+
+
+def _resolve_weights_directory(directory: Optional[Path]) -> Path:
+    """Resolve ``directory`` to an absolute path under an allowed weights root."""
+    if directory is None:
+        return get_seamless_m4t_v2_large_weights_dir()
+
+    d = Path(directory).expanduser().resolve()
+    for root in _allowed_weights_roots():
+        try:
+            d.relative_to(root)
+            return d
+        except ValueError:
+            continue
+    allowed = ", ".join(str(r) for r in _allowed_weights_roots())
+    raise ValueError(f"Weights directory must be under one of: {allowed}; got {d}")
 
 
 def _is_safetensors_checkpoint_complete(directory: Path) -> bool:
@@ -68,7 +95,7 @@ def ensure_seamless_m4t_v2_large_weights(
         RuntimeError: if the checkpoint is still incomplete after download.
         ImportError: if ``huggingface_hub`` is not installed.
     """
-    d = Path(directory) if directory is not None else get_seamless_m4t_v2_large_weights_dir()
+    d = _resolve_weights_directory(directory)
     d.mkdir(parents=True, exist_ok=True)
 
     if _is_safetensors_checkpoint_complete(d):
