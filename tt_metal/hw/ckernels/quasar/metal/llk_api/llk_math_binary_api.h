@@ -126,6 +126,10 @@ inline void llk_math_eltwise_binary(
     [[maybe_unused]] const std::uint32_t operand_B,
     uint dst_index,
     const bool clear_fp32_dst_acc) {
+    static_assert(
+        eltwise_binary_type == EltwiseBinaryType::ELWMUL || math_fidelity == MathFidelity::LoFi,
+        "Math fidelity must be LoFi for non-ELWMUL ops");
+
     WAYPOINT("MBIW");
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
         const std::uint32_t operand_id = get_operand_id(operand_A);
