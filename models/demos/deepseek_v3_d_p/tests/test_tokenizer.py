@@ -133,7 +133,7 @@ def test_first_token_from_reference(input_path, model_path, config_only, tokeniz
     # LM HEAD loading
     from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
     from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
-    from models.demos.deepseek_v3_d_p.utils.hf_model_utils import dequantize_state_dict
+    from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
 
     lazy_sd = LazyStateDict(Path(model_path))
     # lm_head_sd = sub_state_dict(lazy_sd, "model.embed_tokens.")

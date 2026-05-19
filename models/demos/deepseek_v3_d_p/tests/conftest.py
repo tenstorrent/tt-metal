@@ -20,8 +20,7 @@ from transformers import AutoConfig, AutoTokenizer
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
-from models.demos.deepseek_v3.utils.test_utils import load_state_dict
-from models.demos.deepseek_v3_d_p.utils.hf_model_utils import dequantize_state_dict
+from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, load_state_dict
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
 
 
