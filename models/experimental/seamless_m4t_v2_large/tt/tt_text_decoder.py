@@ -13,6 +13,7 @@ import torch
 import ttnn
 
 from models.common.utility_functions import is_blackhole, nearest_32
+from models.experimental.seamless_m4t_v2_large.tt.common import build_ln_sharded_config, core_grid, sdpa_program_config
 
 
 def _num_to_corerange(batch: int) -> ttnn.CoreRange:
@@ -20,11 +21,6 @@ def _num_to_corerange(batch: int) -> ttnn.CoreRange:
     num_x = min(batch, 8)
     num_y = max(1, (batch + num_x - 1) // num_x)
     return ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_x - 1, num_y - 1))
-
-
-def _core_grid(device: ttnn.Device) -> ttnn.CoreGrid:
-    grid = device.compute_with_storage_grid_size()
-    return ttnn.CoreGrid(y=grid.y, x=grid.x)
 
 
 # Drain on-device profiler markers every N decoder layers when device profiling is on.
@@ -405,31 +401,8 @@ class TTSeamlessM4Tv2Decoder:
         return cached
 
     def _sdpa_program_config(self, seq_q: int, seq_k: int, *, large_chunks: bool = True) -> ttnn.SDPAProgramConfig:
-        """Chunk sizes for ``ttnn.transformer.scaled_dot_product_attention``.
-
-        Long sequences use Whisper-style 64-wide chunks to limit bf16 drift. Short encoder keys
-        (speech after adaptor subsampling, often ``< 32``) must not force ``k_chunk=64`` against a
-        narrow key sequence; that schedule misaligns SDPA with PyTorch and tanks full-model speech PCC.
-        """
-        key = (seq_q, seq_k, large_chunks)
-        cached = self._sdpa_pc_cache.get(key)
-        if cached is not None:
-            return cached
-
-        if large_chunks:
-            q_chunk = max(64, min(256, nearest_32(seq_q)))
-            k_chunk = max(64, min(256, nearest_32(seq_k)))
-        else:
-            q_chunk = max(32, min(256, nearest_32(seq_q)))
-            k_chunk = max(32, min(256, nearest_32(seq_k)))
-        out = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
-            q_chunk_size=q_chunk,
-            k_chunk_size=k_chunk,
-            exp_approx_mode=False,
-        )
-        self._sdpa_pc_cache[key] = out
-        return out
+        """See ``common.sdpa_program_config`` — ``large_chunks=False`` for short speech encoder keys."""
+        return sdpa_program_config(self.device, seq_q, seq_k, self._sdpa_pc_cache, large_chunks=large_chunks)
 
     _PROJECTION_1D_SEQ_THRESHOLD = 384
     # Width-sharded LN on a single decode token still feeds matmuls with M=32 tile rows.
@@ -562,55 +535,14 @@ class TTSeamlessM4Tv2Decoder:
             x,
             weight,
             bias=bias,
-            core_grid=_core_grid(self.device),
+            core_grid=core_grid(self.device),
             memory_config=memory_config,
             compute_kernel_config=ck,
             activation=activation,
         )
 
     def _build_ln_sharded_config(self, m_tiles: int, n_tiles: int):
-        key = (m_tiles, n_tiles)
-        cached = self._ln_sharded_cache.get(key)
-        if cached is not None:
-            return cached
-
-        device_grid = self.device.compute_with_storage_grid_size()
-        grid_x = device_grid.x
-        while grid_x > 1 and n_tiles % grid_x != 0:
-            grid_x -= 1
-        block_w = n_tiles // grid_x
-
-        grid_y = min(device_grid.y, m_tiles)
-        while grid_y > 1 and m_tiles % grid_y != 0:
-            grid_y -= 1
-        block_h = m_tiles // grid_y
-
-        subblock_w = min(block_w, 4)
-        while block_w % subblock_w != 0:
-            subblock_w -= 1
-
-        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(grid_x, grid_y),
-            subblock_w=subblock_w,
-            block_h=block_h,
-            block_w=block_w,
-            inplace=False,
-        )
-
-        shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}),
-            [block_h * 32, block_w * 32],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED if grid_y == 1 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            ttnn.BufferType.L1,
-            shard_spec,
-        )
-
-        cached = (memory_config, program_config)
-        self._ln_sharded_cache[key] = cached
-        return cached
+        return build_ln_sharded_config(self.device, m_tiles, n_tiles, self._ln_sharded_cache)
 
     def _layer_norm_sharded(
         self,

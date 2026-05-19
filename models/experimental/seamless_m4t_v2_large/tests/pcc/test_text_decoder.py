@@ -16,13 +16,13 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_text_decoder impo
 )
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
 from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_text_decoder_parameters
-from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import (
-    _build_causal_with_padding_4d,
-    _build_cross_attn_mask_4d,
-    _ones_mask,
-    _pad_input_ids_to,
-    _tile_align,
-    _tt_position_ids,
+from models.experimental.seamless_m4t_v2_large.tt.common import (
+    build_causal_with_padding_4d,
+    build_cross_attn_mask_4d,
+    ones_mask,
+    pad_input_ids_to,
+    tile_align,
+    tt_position_ids,
 )
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
     TTSeamlessM4Tv2Decoder,
@@ -217,13 +217,13 @@ def test_seamless_m4t_v2_text_decoder_kv_cache_pcc(device, reset_seeds, cache_dt
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    padded_prefill = _tile_align(prefill_len)
-    ids_padded = _pad_input_ids_to(prefill_ids_tt, padded_prefill, cfg.pad_token_id, device)
+    padded_prefill = tile_align(prefill_len)
+    ids_padded = pad_input_ids_to(prefill_ids_tt, padded_prefill, cfg.pad_token_id, device)
     if ids_padded is not prefill_ids_tt:
         ttnn.deallocate(prefill_ids_tt)
-    attn_2d = _ones_mask(batch, padded_prefill, device)
-    pos_prefill = _tt_position_ids(ids_padded, cfg.pad_token_id)
-    causal_prefill = _build_causal_with_padding_4d(attn_2d, batch, padded_prefill, device)
+    attn_2d = ones_mask(batch, padded_prefill, device)
+    pos_prefill = tt_position_ids(ids_padded, cfg.pad_token_id)
+    causal_prefill = build_causal_with_padding_4d(attn_2d, batch, padded_prefill, device)
     ttnn.deallocate(attn_2d)
     enc_mask_tt = ttnn.from_torch(
         enc_mask.to(torch.int32),
@@ -232,7 +232,7 @@ def test_seamless_m4t_v2_text_decoder_kv_cache_pcc(device, reset_seeds, cache_dt
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    cross_prefill = _build_cross_attn_mask_4d(enc_mask_tt, tgt_seq=padded_prefill, device=device)
+    cross_prefill = build_cross_attn_mask_4d(enc_mask_tt, tgt_seq=padded_prefill, device=device)
     warm_text_decoder_kv_cache_prefill(
         tt_dec,
         ids_padded,
