@@ -1,0 +1,127 @@
+name: "Profiler tests"
+
+# Single top-level entry point for all profiler test suites (galaxy + T3000
+# + single-card). Tick each topology/HW you want included; the impl filters
+# the matrix in tests/pipeline_reorg/profiler_tests.yaml by SKU accordingly.
+#
+# GitHub Actions has no "select-many" dropdown, so each topology/HW is its
+# own boolean.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_t3k_profiler:
+        description: "T3K profiler"
+        required: false
+        type: boolean
+        default: true
+      run_galaxy_profiler:
+        description: "Galaxy profiler"
+        required: false
+        type: boolean
+        default: false
+      run_blackhole_profiler:
+        description: "Blackhole profiler"
+        required: false
+        type: boolean
+        default: true
+      run_n300_profiler:
+        description: "N300 profiler"
+        required: false
+        type: boolean
+        default: true
+      run_n150_profiler:
+        description: "N150 profiler"
+        required: false
+        type: boolean
+        default: true
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+  workflow_call:
+    inputs:
+      run_t3k_profiler:
+        required: false
+        type: boolean
+        default: true
+      run_galaxy_profiler:
+        required: false
+        type: boolean
+        default: false
+      run_blackhole_profiler:
+        required: false
+        type: boolean
+        default: true
+      run_n300_profiler:
+        required: false
+        type: boolean
+        default: true
+      run_n150_profiler:
+        required: false
+        type: boolean
+        default: true
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+  push:
+    branches: ["main", "tdowdall/profiler-reorg"]
+
+jobs:
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      tracy: true
+      build-wheel: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+
+  profiler-tests:
+    needs: build-artifact-profiler
+    secrets: inherit
+    uses: ./.github/workflows/profiler-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      # Comma-join the SKUs for each enabled run_* flag. Trailing / empty
+      # commas are filtered by prepare_test_matrix.py's split-and-strip.
+      enabled-skus: >-
+        ${{ inputs.run_t3k_profiler && 'wh_llmbox' || '' }},
+        ${{ inputs.run_galaxy_profiler && 'wh_galaxy' || '' }},
+        ${{ inputs.run_blackhole_profiler && 'bh_p100a_civ2_viommu,bh_p150b_civ2_viommu' || '' }},
+        ${{ inputs.run_n300_profiler && 'wh_n300_civ2' || '' }},
+        ${{ inputs.run_n150_profiler && 'wh_n150_civ2' || '' }}

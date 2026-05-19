@@ -85,15 +85,22 @@ ttnn:
     bh_p300: 145
     bh_quietbox_2: 145
   integration:
-    wh_llmbox: 30
-    # Placeholder allocation for wh_galaxy under integration, based on the
-    # current expected runtime of galaxy_integration_tests (~340 min) and
-    # galaxy_profiler_tests (~45 min: 30 min device + 15 min cross-reference).
-    # This comment is bookkeeping only; time-budget verification does not
-    # enforce a combined cap across multiple test YAML files. Final team /
-    # test-framework assignment tracked in
+    # Placeholder allocations for the merged profiler_tests.yaml matrix.
+    # Each SKU's budget covers ALL entries with that SKU (including both
+    # post-commit and full mode variants of test_device_profiler.py, which
+    # don't run together but are summed by the budget verifier).
+    # Final team / test-framework assignment tracked in
     # https://github.com/tenstorrent/tt-metal/issues/44285
-    wh_galaxy: 385
+    wh_llmbox: 185        # 30 t3k_integration + ~153 T3000 profiler entries
+    wh_galaxy: 385        # 340 galaxy_integration + ~45 galaxy profiler entries
+    # Single-card SKUs (profiler-only at this category): ~95 min sum each
+    # (5 mid-run + 30 device PC + 30 device full + 10 perf-op + 20 realtime).
+    # Budget bumped to 120 to give ~25% headroom while per-entry timeouts are
+    # still estimates pending first observed wall-clock data.
+    wh_n150_civ2: 120
+    wh_n300_civ2: 120
+    bh_p100a_civ2_viommu: 120
+    bh_p150b_civ2_viommu: 120
 
 shield:
   e2e:

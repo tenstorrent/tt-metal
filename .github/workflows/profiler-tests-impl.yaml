@@ -1,46 +1,130 @@
-name: "[internal] profiler tests impl"
+name: "[internal] Profiler tests impl"
+
+# Single shared impl for all profiler test suites (galaxy + T3000 + single-card).
+# Each matrix entry in tests/pipeline_reorg/profiler_tests.yaml carries its
+# own SKU(s), arch, and cmd, so this impl is fully data-driven — no
+# per-pipeline forks required.
+#
+# Mode filtering: matrix entries may carry a `mode` field ("post-commit" or
+# "full"). Callers pass `test-mode` to select; entries with no `mode` run in
+# all modes.
 
 on:
   workflow_call:
     inputs:
-      build-artifact-name:
+      docker-image:
         required: true
         type: string
       wheel-artifact-name:
         required: true
         type: string
-      docker-image:
+      build-artifact-name:
         required: true
         type: string
-      topology:
-        required: true
-        type: string
-      test-script:
-        required: true
-        type: string
-      extra-tag:
+      enabled-skus:
         required: false
         type: string
-        default: "in-service"
+        description: "Comma-separated SKU list to run. Empty = ALL_SKUS_IN_TESTS."
+      test-mode:
+        required: false
+        type: string
+        default: "post-commit"
+        description: "Which mode-tagged entries to include: post-commit, full, or all."
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)."
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
+      enable-lightweight-kernel-asserts:
+        required: false
+        type: boolean
+        default: false
+      enable-llk-asserts:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
+  load-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.apply-mode-filter.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/profiler_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: |
+          pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        # The "integration" pipeline category is a placeholder pending final
+        # team / test-framework assignment, see
+        # https://github.com/tenstorrent/tt-metal/issues/44285
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "integration"
+      - name: Build unified test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ${{ inputs.enabled-skus || 'ALL_SKUS_IN_TESTS' }} \
+            ./.github/sku_config.yaml
+      - name: Apply mode filter
+        id: apply-mode-filter
+        # Entries with no `mode` always run. Entries with `mode` run only when
+        # test-mode matches (or test-mode == "all").
+        run: |
+          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
+          if [ "${{ inputs.test-mode }}" = "all" ]; then
+            FILTERED="$MATRIX"
+          else
+            FILTERED=$(echo "$MATRIX" | jq -c --arg m "${{ inputs.test-mode }}" '[.[] | select(.mode == null or .mode == $m)]')
+          fi
+          if [ "$FILTERED" = "[]" ]; then
+            echo "::error::No tests match enabled-skus='${{ inputs.enabled-skus }}' + test-mode='${{ inputs.test-mode }}'."
+            exit 1
+          fi
+          {
+            echo "matrix<<EOF"
+            echo "$FILTERED"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
   profiler-tests:
+    needs: load-test-matrix
     strategy:
       fail-fast: false
-    name: "profiler tests"
-    runs-on:
-      - arch-wormhole_b0
-      - ${{ inputs.topology }}
-      - ${{ inputs.extra-tag }}
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ inputs.docker-image }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: wormhole_b0
+        # ARCH_NAME is per-test, driven by the matrix entry's arch field
+        # (mirrors the pattern in galaxy_health_tests.yaml). Values:
+        # "wormhole_b0" or "blackhole".
+        ARCH_NAME: ${{ matrix.test-group.arch }}
         LOGURU_LEVEL: INFO
-        PROFILER_SCRIPTS_ROOT: /work/tt_metal/tools/profiler
+        PROFILER_SCRIPTS_ROOT: /work/tools/tracy
         PROFILER_TEST_SCRIPTS_ROOT: /work/tests/tt_metal/tools/profiler
         PROFILER_ARTIFACTS_DIR: /work/generated/profiler
         PROFILER_OUTPUT_DIR: /work/generated/profiler/reports
@@ -56,20 +140,27 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
           path: docker-job
+      - name: Mark repository as safe directory
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run profiler regression tests
-        timeout-minutes: 35
+          enable-watcher: ${{ inputs.enable-watcher }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+      - name: ${{ matrix.test-group.name }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          ${{ inputs.test-script }}
+          ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
