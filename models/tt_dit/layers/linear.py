@@ -110,6 +110,7 @@ class ColParallelLinear(Module):
         mesh_device=None,
         mesh_axis=0,
         fsdp_mesh_axis=None,
+        fsdp_topology=None,
         ccl_manager=None,
         chunks=None,
     ):
@@ -128,6 +129,7 @@ class ColParallelLinear(Module):
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
+        self.fsdp_topology = fsdp_topology
         self.ccl_manager = ccl_manager
         self.chunks = chunks
 
@@ -192,7 +194,7 @@ class ColParallelLinear(Module):
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = self.ccl_manager.all_gather_persistent_buffer(
-                unsqueezed_weight, dim=2, mesh_axis=self.fsdp_mesh_axis
+                unsqueezed_weight, dim=2, mesh_axis=self.fsdp_mesh_axis, topology=self.fsdp_topology
             )
 
             weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
@@ -281,6 +283,7 @@ class RowParallelLinear(Module):
         mesh_device=None,
         mesh_axis=0,
         fsdp_mesh_axis=None,
+        fsdp_topology=None,
         ccl_manager=None,
     ):
         super().__init__()
@@ -290,6 +293,7 @@ class RowParallelLinear(Module):
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
+        self.fsdp_topology = fsdp_topology
         self.ccl_manager = ccl_manager
 
         if self.fsdp_mesh_axis is not None:
@@ -349,7 +353,7 @@ class RowParallelLinear(Module):
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = self.ccl_manager.all_gather_persistent_buffer(
-                unsqueezed_weight, dim=3, mesh_axis=self.fsdp_mesh_axis
+                unsqueezed_weight, dim=3, mesh_axis=self.fsdp_mesh_axis, topology=self.fsdp_topology
             )
 
             weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
@@ -403,7 +407,7 @@ class RowParallelLinear(Module):
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = self.ccl_manager.all_gather_persistent_buffer(
-                unsqueezed_weight, dim=3, mesh_axis=self.fsdp_mesh_axis
+                unsqueezed_weight, dim=3, mesh_axis=self.fsdp_mesh_axis, topology=self.fsdp_topology
             )
             weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
         else:

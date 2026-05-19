@@ -60,6 +60,7 @@ class WanTransformerBlock(Module):
         self.parallel_config = parallel_config
 
         fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
+        fsdp_topology = self.parallel_config.sequence_parallel.topology if is_fsdp else None
 
         self.norm1 = DistributedLayerNorm(
             dim,
@@ -117,6 +118,7 @@ class WanTransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            fsdp_topology=fsdp_topology,
         )
 
         self.norm3 = DistributedLayerNorm(

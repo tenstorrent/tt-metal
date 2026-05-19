@@ -59,6 +59,7 @@ class ParallelFeedForward(Module):
         mesh_device=None,
         mesh_axis=0,
         fsdp_mesh_axis=None,
+        fsdp_topology=None,
         ccl_manager=None,
     ):
         super().__init__()
@@ -74,6 +75,7 @@ class ParallelFeedForward(Module):
         self.bias = bias
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
+        self.fsdp_topology = fsdp_topology
 
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
@@ -86,6 +88,7 @@ class ParallelFeedForward(Module):
             activation_fn=activation_fn,
             mesh_axis=mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            fsdp_topology=fsdp_topology,
             ccl_manager=ccl_manager,
         )
         self.ff2 = RowParallelLinear(
@@ -95,6 +98,7 @@ class ParallelFeedForward(Module):
             mesh_device=mesh_device,
             mesh_axis=mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            fsdp_topology=fsdp_topology,
             ccl_manager=ccl_manager,
         )
 

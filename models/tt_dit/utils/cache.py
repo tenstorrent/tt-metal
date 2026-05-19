@@ -13,6 +13,7 @@ from loguru import logger
 import ttnn
 
 from ..layers.module import Module
+from ..parallel.config import ParallelFactor
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -32,7 +33,11 @@ def config_id(parallel_config):
     config_id = ""
     for n, v in parallel_config._asdict().items():
         if v is not None:
-            config_id += f"{''.join([w[0].upper() for w in n.split('_')])}{v.factor}_{v.mesh_axis}_"
+            abbrev = "".join(w[0].upper() for w in n.split("_"))
+            if isinstance(v, ParallelFactor):
+                config_id += f"{abbrev}{v.factor}_{v.mesh_axis}_"
+            else:
+                config_id += f"{abbrev}{v}_"
     return config_id
 
 

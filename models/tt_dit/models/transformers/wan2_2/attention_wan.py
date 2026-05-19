@@ -61,6 +61,7 @@ class WanAttention(Module):
         self.n_local_heads = self.num_heads // self.parallel_config.tensor_parallel.factor
 
         fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
+        fsdp_topology = self.parallel_config.sequence_parallel.topology if is_fsdp else None
 
         rms_kwargs = {
             "embedding_dim": dim,
@@ -80,6 +81,7 @@ class WanAttention(Module):
             "mesh_device": mesh_device,
             "mesh_axis": parallel_config.tensor_parallel.mesh_axis,
             "fsdp_mesh_axis": fsdp_mesh_axis,
+            "fsdp_topology": fsdp_topology,
             "ccl_manager": ccl_manager,
         }
 
@@ -109,6 +111,7 @@ class WanAttention(Module):
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            fsdp_topology=fsdp_topology,
             ccl_manager=ccl_manager,
         )
 
@@ -241,7 +244,7 @@ class WanAttention(Module):
         if to_out.fsdp_mesh_axis is not None and to_out.mesh_device.shape[to_out.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(to_out.weight.data)
             weight = self.ccl_manager.all_gather_persistent_buffer(
-                unsqueezed_weight, dim=2, mesh_axis=to_out.fsdp_mesh_axis
+                unsqueezed_weight, dim=2, mesh_axis=to_out.fsdp_mesh_axis, topology=to_out.fsdp_topology
             )
             weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
         else:
@@ -407,6 +410,11 @@ class WanAttention(Module):
                         v_BHNE = ttnn.typecast(v_BHNE, sdpa_input_dtype)
                     if dummy_joint.dtype != sdpa_input_dtype:
                         dummy_joint = ttnn.typecast(dummy_joint, sdpa_input_dtype)
+                sp_topology = (
+                    self.parallel_config.sequence_parallel.topology
+                    if self.parallel_config.sequence_parallel.topology is not None
+                    else self.ccl_manager.topology
+                )
 
                 # HACK: pass null joint inputs to take advantage of ring attention, even though this is self-attention.
                 if self.use_exp_ring_sdpa:
@@ -434,7 +442,7 @@ class WanAttention(Module):
                         num_links=self.ccl_manager.num_links,
                         cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
                         mesh_device=self.mesh_device,
-                        topology=self.ccl_manager.topology,
+                        topology=sp_topology,
                         subdevice_id=self.ccl_manager.ccl_sub_device_id,
                         num_workers_per_link=5,
                         num_buffers_per_channel=32,
@@ -464,7 +472,7 @@ class WanAttention(Module):
                         num_links=self.ccl_manager.num_links,
                         cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
                         mesh_device=self.mesh_device,
-                        topology=self.ccl_manager.topology,
+                        topology=sp_topology,
                         subdevice_id=self.ccl_manager.ccl_sub_device_id,
                         ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
                         use_column_major_ccl=True,

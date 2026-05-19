@@ -41,7 +41,7 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ub
         case tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE:
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: {
             if (is_ubb_galaxy) {
-                return FabricType::TORUS_XY;
+                return FabricType::TORUS_X;
             }
             return FabricType::MESH;
         }

@@ -10,6 +10,7 @@ import ttnn
 class ParallelFactor(NamedTuple):
     factor: int
     mesh_axis: int
+    topology: ttnn.Topology | None = None
 
 
 class DiTParallelConfig(NamedTuple):

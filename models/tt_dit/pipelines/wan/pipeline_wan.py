@@ -922,6 +922,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         prepared_prompts = [False, False]
 
         sp_axis = self.transformer_states[0].model.parallel_config.sequence_parallel.mesh_axis
+        sp_topology = self.transformer_states[0].model.parallel_config.sequence_parallel.topology
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 warmup_t2 = i == 1 and len(timesteps) == 2  # Ensure transformer_2 is also warmed up
@@ -1014,7 +1015,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self._current_timestep = None
 
         permuted_latent_tt = ts.model.ccl_manager.all_gather_persistent_buffer(
-            permuted_latent_tt, dim=2, mesh_axis=sp_axis
+            permuted_latent_tt, dim=2, mesh_axis=sp_axis, topology=sp_topology
         )
         permuted_latent = local_device_to_torch(permuted_latent_tt)
 

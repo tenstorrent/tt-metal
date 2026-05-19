@@ -413,7 +413,14 @@ class CCLManager:
                 ttnn.reset_global_semaphore_value(sem, 0)
 
     def all_gather_persistent_buffer(
-        self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None, use_hyperparams: bool = False
+        self,
+        tensor: ttnn.Tensor,
+        /,
+        *,
+        dim: int,
+        mesh_axis: int | None,
+        use_hyperparams: bool = False,
+        topology: ttnn.Topology | None = None,
     ) -> ttnn.Tensor:
         """
         Helper function to all-gather a tensor with a persistent output buffer.
@@ -424,6 +431,7 @@ class CCLManager:
             mesh_axis=mesh_axis,
             use_hyperparams=use_hyperparams,
             use_persistent_buffer=True,
+            topology=topology,
         )
 
     def all_gather(
@@ -435,6 +443,7 @@ class CCLManager:
         mesh_axis: int | None,
         use_hyperparams: bool,
         use_persistent_buffer: bool = False,
+        topology: ttnn.Topology | None = None,
     ) -> ttnn.Tensor:
         if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
             return tensor
@@ -462,7 +471,7 @@ class CCLManager:
             dim=dim,
             multi_device_global_semaphore=self.get_ag_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,
-            topology=self.topology,
+            topology=topology if topology is not None else self.topology,
             cluster_axis=mesh_axis,
             **params,
         )

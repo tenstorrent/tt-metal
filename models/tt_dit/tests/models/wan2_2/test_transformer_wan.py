@@ -43,10 +43,12 @@ ROPE_MAX_SEQ_LEN = 1024
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _make_parallel_config(mesh_device, sp_axis, tp_axis):
+def _make_parallel_config(mesh_device, sp_axis, tp_axis, sp_topology=None):
     return DiTParallelConfig(
         tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tuple(mesh_device.shape)[tp_axis]),
-        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=tuple(mesh_device.shape)[sp_axis]),
+        sequence_parallel=ParallelFactor(
+            mesh_axis=sp_axis, factor=tuple(mesh_device.shape)[sp_axis], topology=sp_topology
+        ),
         cfg_parallel=None,
     )
 
@@ -408,3 +410,163 @@ def test_wan_transformer_inner_step(
     torch_output = torch_output[0]
 
     assert_quality(torch_output, tt_output, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
+
+
+# ---------------------------------------------------------------------------
+# Mesh sweep at 1536x2048 to mirror WAN2.1 test_mesh_sweep_1536p
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    [
+        # SP=2, TP=2 — Linear (SP=2 uses linear all-gather)
+        [(4, 8), (2, 2), 1, 0, 4, False, line_params, ttnn.Topology.Linear, True],
+        # SP=1, TP=4 — Linear (no ring with SP=1)
+        [(4, 8), (1, 4), 0, 1, 4, False, line_params, ttnn.Topology.Linear, True],
+        # SP=4, TP=1
+        [(4, 8), (1, 4), 1, 0, 4, False, line_params, ttnn.Topology.Linear, True],
+        # SP=2, TP=4 — Linear
+        [(4, 8), (2, 4), 0, 1, 4, True, line_params, ttnn.Topology.Linear, True],
+        # SP=4, TP=2
+        [(4, 8), (2, 4), 1, 0, 4, True, line_params, ttnn.Topology.Linear, True],
+        # SP=4, TP=4
+        [(4, 8), (4, 4), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
+        # SP=4, TP=8
+        [(4, 8), (4, 8), 0, 1, 4, False, ring_params, ttnn.Topology.Ring, True],
+        # SP=8, TP=4
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
+        #### BH
+        # SP=2, TP=2 — Linear (SP=2 uses linear all-gather)
+        [(4, 8), (2, 2), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        # SP=1, TP=4 — Linear (no ring with SP=1)
+        [(4, 8), (1, 4), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
+        # SP=4, TP=1
+        [(4, 8), (1, 4), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        # SP=2, TP=4 — Linear
+        [(4, 8), (2, 4), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
+        # SP=4, TP=2
+        [(4, 8), (2, 4), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        # SP=4, TP=4
+        [(4, 8), (4, 4), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        # SP=4, TP=8
+        [(4, 8), (4, 8), 0, 1, 2, False, ring_params, ttnn.Topology.Ring, False],
+        # SP=8, TP=4
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+    ],
+    ids=[
+        "wh_sweep_2x2",
+        "wh_sweep_1x4_sp0tp1",
+        "wh_sweep_1x4_sp1tp0",
+        "wh_sweep_2x4_sp0tp1",
+        "wh_sweep_2x4_sp1tp0",
+        "wh_sweep_4x4",
+        "wh_sweep_4x8_sp0tp1",
+        "wh_sweep_4x8_sp1tp0",
+        "bh_sweep_2x2",
+        "bh_sweep_1x4_sp0tp1",
+        "bh_sweep_1x4_sp1tp0",
+        "bh_sweep_2x4_sp0tp1",
+        "bh_sweep_2x4_sp1tp0",
+        "bh_sweep_4x4",
+        "bh_sweep_4x8_sp0tp1",
+        "bh_sweep_4x8_sp1tp0",
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_mesh_sweep_1536p_wan22_block(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    mesh_shape: tuple,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    dynamic_load: bool,  # unused, kept for fixture parity
+    topology: ttnn.Topology,
+    is_fsdp: bool,
+    reset_seeds,
+):
+    """
+    Run a single WanTransformerBlock at logical 1536x2048 resolution across the same
+    mesh/SP/TP shapes as WAN2.1 mesh_sweep_1536p, to collect internal op shapes.
+    """
+    import os
+
+    from ....utils.mochi import stack_cos_sin
+    from ....utils.padding import pad_vision_seq_parallel
+    from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch
+
+    # Per-invocation tag for shape trace context
+    os.environ["TT_SHAPE_TRACE"] = os.environ.get("TT_SHAPE_TRACE", "1")
+    os.environ[
+        "TT_SHAPE_TRACE_TAG"
+    ] = f"wan2_2_block|mesh={mesh_shape}|sp_axis={sp_axis}|tp_axis={tp_axis}|links={num_links}|topo={topology.name}"
+
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis, ttnn.Topology.Linear)
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+
+    parent_torch_model = TorchWanTransformer3DModel.from_pretrained(
+        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
+    )
+    torch_model = parent_torch_model.blocks[0]
+    torch_model.eval()
+
+    # 1536x2048 @ 1 frame -> latent T=1, H=256, W=192 with PATCH_SIZE=(1,2,2)
+    B = 1
+    T, H, W = 1, 256, 192
+    prompt_seq_len = 512
+    p_t, p_h, p_w = PATCH_SIZE
+    spatial_seq_len = (T // p_t) * (H // p_h) * (W // p_w)
+
+    # Build 1-layer WanTransformerBlock to exercise attention + linears
+    tt_block = WanTransformerBlock(
+        dim=DIM,
+        ffn_dim=FFN_DIM,
+        num_heads=NUM_HEADS,
+        cross_attention_norm=CROSS_ATTN_NORM,
+        eps=EPS,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+    )
+    tt_block.load_torch_state_dict(torch_model.state_dict())
+
+    # Random inputs
+    torch.manual_seed(0)
+    spatial_input = torch.randn((B, spatial_seq_len, DIM), dtype=torch.float32)
+    prompt_input = torch.randn((B, prompt_seq_len, DIM), dtype=torch.float32)
+    temb_input = torch.randn((B, 6, DIM), dtype=torch.float32)
+
+    # ROPE features
+    rope_cos = torch.randn(B, spatial_seq_len, 1, HEAD_DIM // 2)
+    rope_sin = torch.randn(B, spatial_seq_len, 1, HEAD_DIM // 2)
+    torch_rope_cos, torch_rope_sin = stack_cos_sin(rope_cos, rope_sin)
+    rope_cos_stack = torch_rope_cos.permute(0, 2, 1, 3)
+    rope_sin_stack = torch_rope_sin.permute(0, 2, 1, 3)
+
+    # Pad across SP devices like pipeline
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    spatial_padded = pad_vision_seq_parallel(spatial_input.unsqueeze(0), num_devices=sp_factor)
+    rope_cos_padded = pad_vision_seq_parallel(rope_cos_stack, num_devices=sp_factor)
+    rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, num_devices=sp_factor)
+
+    # Move to TT device
+    tt_spatial = bf16_tensor_2dshard(spatial_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
+    tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
+    tt_temb = from_torch(temb_input.unsqueeze(0), device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., tp_axis])
+    tt_rope_cos = from_torch(rope_cos_padded, device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None])
+    tt_rope_sin = from_torch(rope_sin_padded, device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None])
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+
+    # Execute block to trigger traced ops
+    _ = tt_block(
+        spatial_1BND=tt_spatial,
+        prompt_1BLP=tt_prompt,
+        temb_1BTD=tt_temb,
+        N=spatial_seq_len,
+        rope_cos=tt_rope_cos,
+        rope_sin=tt_rope_sin,
+        trans_mat=tt_trans_mat,
+    )
