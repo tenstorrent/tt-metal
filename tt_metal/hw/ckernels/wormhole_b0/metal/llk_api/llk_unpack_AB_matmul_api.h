@@ -61,11 +61,12 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     // CB) left them holding the wrong values, the matmul addressing breaks.
     // These writes must come AFTER _llk_unpack_AB_matmul_init_ so they are
     // the last touch of these GPRs before the op runs.
-    // GPR naming follows the unpacker (unpA <- In0, unpB <- In1).
-    const uint32_t unpA_operand_id = get_operand_id(operandA);
-    const uint32_t unpB_operand_id = get_operand_id(operandB);
-    const uint32_t unpA_tile_size = get_local_cb_interface(unpA_operand_id).fifo_page_size;
-    const uint32_t unpB_tile_size = get_local_cb_interface(unpB_operand_id).fifo_page_size;
+    // Matmul convention: In0 -> SrcB, In1 -> SrcA. The GPRs follow the unpacker
+    // and mirror hw_configure (called as hw_configure(in1, in0)):
+    //   TILE_SIZE_A := In1's tile size  (already-swapped operandA_id)
+    //   TILE_SIZE_B := In0's tile size  (already-swapped operandB_id)
+    const uint32_t unpA_tile_size = get_local_cb_interface(operandA_id).fifo_page_size;
+    const uint32_t unpB_tile_size = get_local_cb_interface(operandB_id).fifo_page_size;
     TT_SETDMAREG(0, LOWER_HALFWORD(unpA_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
     TT_SETDMAREG(0, LOWER_HALFWORD(unpB_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B));
 }
