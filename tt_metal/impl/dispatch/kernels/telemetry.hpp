@@ -21,7 +21,7 @@ FORCE_INLINE void init_telemetry() {
     Telemetry telemetry{};
     if constexpr (!enabled) {
         // If disabled, invalidate the signature. This prevents reading stale telemetry values.
-        telemetry.signature = 0;
+        telemetry.signature = tt::tt_metal::INVALID_TELEMETRY_SIGNATURE;
     }
     write_to_l1(telemetry_addr, telemetry);
 }

@@ -25,6 +25,9 @@ constexpr uint32_t DISPATCH_TELEMETRY_VERSION = 1;
 constexpr uint32_t PREFETCH_TELEMETRY_SIGNATURE = pack("PREF");
 constexpr uint32_t PREFETCH_TELEMETRY_VERSION = 1;
 
+// Used to invalidate the telemetry buffer
+constexpr uint32_t INVALID_TELEMETRY_SIGNATURE = 0;
+
 /**
  * @brief Telemetry for prefetch.
  */

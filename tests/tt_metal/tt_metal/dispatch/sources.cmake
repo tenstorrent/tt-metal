@@ -9,6 +9,7 @@ set(UNIT_TESTS_DISPATCH_SMOKE_SOURCES
     dispatch_program/test_sub_device.cpp
     dispatch_program/test_kernel_config_buffer.cpp
     dispatch_util/test_device_command.cpp
+    dispatch_util/test_dispatch_telemetry.cpp
     dispatch_util/test_dispatch_settings.cpp
     dispatch_util/test_simple_trace_allocator.cpp
 )
