@@ -108,7 +108,15 @@ partial ingestion, infra aborts, etc. Do NOT treat Snowflake's `last_failing_sha
 
 4. Establish from actual log data:
    - **True `last_failing_sha`**: latest `head_sha` where the test explicitly FAILs.
-   - **True `first_passing_sha`**: earliest `head_sha` after that where the test PASSes.
+   - **True `first_passing_sha`**: earliest `head_sha` after that where the test **explicitly PASSes**.
+
+   ⚠️ **A pipeline existing at a SHA does NOT mean the job ran.**
+   Jobs are sometimes omitted from a pipeline (scheduling changes, workflow restructuring, machine
+   unavailability). If the job name is absent from the `first_passing_sha` pipeline's job list,
+   that "pass" is a scheduling gap, not a real fix — treat the escape as unverifiable and skip it.
+
+   Always confirm: the `first_passing_sha` pipeline contains a job matching the same name as the
+   failing job, AND that job's log shows the test explicitly PASSED.
 
 5. Recompute the range:
    ```
