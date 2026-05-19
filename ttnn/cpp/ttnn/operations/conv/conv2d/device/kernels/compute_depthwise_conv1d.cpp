@@ -101,7 +101,7 @@ inline void mul_and_accumulate_coalesced_block(
                 const uint32_t act_tile_idx = h * in0_block_w + tap * in_channels_ntiles + c;
                 const uint32_t weight_tile_idx =
                     tap * act_block_h_ntiles * in_channels_ntiles + h * in_channels_ntiles + c;
-                mul_tiles_init(in0_cb_id, in1_cb_id, tap != 0 ? 1U : 0U);
+                mul_tiles_init(in0_cb_id, in1_cb_id, tap != 0 ? 1U : 0U, __builtin_LINE());
                 mul_tiles(in0_cb_id, in1_cb_id, act_tile_idx, weight_tile_idx, 0);
             }
 

@@ -7,6 +7,21 @@
 #include "api/compile_time_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
+template <uint32_t read_bytes>
+FORCE_INLINE void read_activation_stick(Noc noc, uint32_t l1_write_addr, uint32_t l1_read_addr) {
+    if constexpr (read_bytes <= NOC_MAX_BURST_SIZE) {
+        experimental::read_with_state<read_bytes>(noc, l1_write_addr, l1_read_addr);
+    } else {
+        UnicastEndpoint self_ep;
+        noc.async_read(
+            self_ep,
+            CoreLocalMem<uint32_t>(l1_write_addr),
+            read_bytes,
+            experimental::local_addr(l1_read_addr, noc.get_noc_id()),
+            {});
+    }
+}
+
 // conv1D reader kernel
 void kernel_main() {
     constexpr uint32_t stride_w = get_compile_time_arg_val(2);
@@ -63,13 +78,14 @@ void kernel_main() {
     static_assert(!coalesce_kw_reads || weight_size_h == 1);
     static_assert(!coalesce_kw_reads || window_outer == 1);
     static_assert(!coalesce_kw_reads || window_inner == weight_size_w);
-    static_assert(!coalesce_kw_reads || coalesced_read_bytes <= NOC_MAX_BURST_SIZE);
 
     reader_offset_idx = 0;
     uint32_t act_l1_offset = 0;
     uint32_t act_l1_read_addr = sharded_act_cb.get_read_ptr();
 
-    experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
+    if constexpr (coalesced_read_bytes <= NOC_MAX_BURST_SIZE) {
+        experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
+    }
     uint32_t start_reader_idx = 0;
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
         for (uint32_t outer = 0; outer < window_outer; outer++) {
@@ -93,7 +109,7 @@ void kernel_main() {
 
                 for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
                     act_l1_offset = reader_offset + (ind * conv_act_c_read_bytes);
-                    experimental::read_with_state<coalesced_read_bytes>(noc, l1_write_addr_act, act_l1_offset);
+                    read_activation_stick<coalesced_read_bytes>(noc, l1_write_addr_act, act_l1_offset);
                     l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
                 }
             }
