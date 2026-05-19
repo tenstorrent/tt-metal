@@ -41,9 +41,21 @@ class TtDecoderLayer:
         self.args = args
         self.layer_idx = layer_idx
         prefix = args.state_dict_prefix("", layer_idx)
-        self.input_layernorm = TtRMSNorm(args, mesh_device, state_dict, prefix + "input_layernorm.weight", dtype=dtype)
+        self.input_layernorm = TtRMSNorm(
+            args,
+            mesh_device,
+            state_dict,
+            prefix + "input_layernorm.weight",
+            dtype=dtype,
+            weight_cache_path=weight_cache_path,
+        )
         self.post_attention_layernorm = TtRMSNorm(
-            args, mesh_device, state_dict, prefix + "post_attention_layernorm.weight", dtype=dtype
+            args,
+            mesh_device,
+            state_dict,
+            prefix + "post_attention_layernorm.weight",
+            dtype=dtype,
+            weight_cache_path=weight_cache_path,
         )
         self.self_attn = TtAttention(
             args,

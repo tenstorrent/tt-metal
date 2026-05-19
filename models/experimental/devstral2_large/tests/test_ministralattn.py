@@ -23,8 +23,8 @@ from transformers.models.ministral3.modeling_ministral3 import (
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstral2_large.tests._devstral_weights import (
-    load_hf_tensors_for_keys,
-    load_text_config,
+    require_attention_weights,
+    require_text_config,
     replicated_tt_to_torch,
 )
 from models.experimental.devstral2_large.tt.model_args import (
@@ -56,29 +56,15 @@ def _mesh_shape_from_env() -> tuple[int, int]:
     indirect=True,
 )
 def test_attention_prefill_pcc_real_weights(mesh_device, seq_len):
-    try:
-        text_cfg = load_text_config()
-    except Exception as exc:
-        pytest.skip(f"Could not load Devstral-2-123B HF config: {exc}")
-
+    text_cfg = require_text_config()
     layer = 0
-    keys = [
-        f"model.layers.{layer}.self_attn.q_proj.weight",
-        f"model.layers.{layer}.self_attn.k_proj.weight",
-        f"model.layers.{layer}.self_attn.v_proj.weight",
-        f"model.layers.{layer}.self_attn.o_proj.weight",
-    ]
-    try:
-        raw = load_hf_tensors_for_keys(keys)
-    except Exception as exc:
-        pytest.skip(f"Could not download Devstral-2-123B layer-0 attention weights: {exc}")
-    state_dict = raw
+    state_dict = require_attention_weights(layer)
 
     ref = Ministral3Attention(text_cfg, layer_idx=layer).to(torch.bfloat16).eval()
-    ref.q_proj.weight.data.copy_(state_dict[keys[0]])
-    ref.k_proj.weight.data.copy_(state_dict[keys[1]])
-    ref.v_proj.weight.data.copy_(state_dict[keys[2]])
-    ref.o_proj.weight.data.copy_(state_dict[keys[3]])
+    ref.q_proj.weight.data.copy_(state_dict[f"model.layers.{layer}.self_attn.q_proj.weight"])
+    ref.k_proj.weight.data.copy_(state_dict[f"model.layers.{layer}.self_attn.k_proj.weight"])
+    ref.v_proj.weight.data.copy_(state_dict[f"model.layers.{layer}.self_attn.v_proj.weight"])
+    ref.o_proj.weight.data.copy_(state_dict[f"model.layers.{layer}.self_attn.o_proj.weight"])
 
     ref_rope = Ministral3RotaryEmbedding(text_cfg).eval()
 

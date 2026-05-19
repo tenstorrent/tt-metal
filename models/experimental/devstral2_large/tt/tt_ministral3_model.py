@@ -27,6 +27,11 @@ from models.experimental.devstral2_large.tt.model_args import Devstral2Args
 from models.experimental.devstral2_large.tt.tt_ministral3_decoder_layer import TtDecoderLayer
 from models.experimental.devstral2_large.tt.tt_ministral_rotary_emb import TtRotaryEmbedding
 from models.experimental.devstral2_large.tt.tt_ministralrmsnorm import TtRMSNorm
+from models.experimental.devstral2_large.tt.weight_loading import (
+    resolve_weight_cache_path,
+    upload_embedding_weight,
+    upload_matmul_weight,
+)
 
 __all__ = ["TtEmbedTokens", "TtMinistral3Model", "TtMinistral3ForCausalLM"]
 
@@ -41,17 +46,15 @@ class TtEmbedTokens:
         embed_weight,
         *,
         dtype: ttnn.DataType,
+        weight_cache_path: Optional[str] = None,
     ) -> None:
         self.args = args
         self.mesh_device = mesh_device
-        # ``ttnn.embedding`` weight layout: ``(vocab_size, hidden_size)``, row-major on device.
-        self.weight = ttnn.from_torch(
+        self.weight = upload_embedding_weight(
             embed_weight,
-            device=mesh_device,
+            mesh_device,
             dtype=dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            weight_cache_path=weight_cache_path,
         )
 
     def __call__(self, input_ids: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
@@ -83,14 +86,17 @@ class TtMinistral3Model:
         self.dtype = dtype or args.weight_dtype
         self.num_layers = int(num_layers if num_layers is not None else args.num_hidden_layers)
 
+        cache_path = resolve_weight_cache_path(weight_cache_path, args, num_layers=self.num_layers)
+        self.weight_cache_path = cache_path
         embed_w = state_dict["model.embed_tokens.weight"]
         self.embed_tokens = TtEmbedTokens(
             args,
             mesh_device,
             embed_w,
             dtype=self.dtype,
+            weight_cache_path=cache_path,
         )
-        self.rotary_emb = TtRotaryEmbedding(args, mesh_device, dtype=self.dtype)
+        self.rotary_emb = TtRotaryEmbedding(args, mesh_device, dtype=self.dtype, weight_cache_path=cache_path)
         self.layers = [
             TtDecoderLayer(
                 args,
@@ -100,11 +106,18 @@ class TtMinistral3Model:
                 tt_ccl=tt_ccl,
                 rotary_emb=self.rotary_emb,
                 dtype=self.dtype,
-                weight_cache_path=weight_cache_path,
+                weight_cache_path=cache_path,
             )
             for i in range(self.num_layers)
         ]
-        self.norm = TtRMSNorm(args, mesh_device, state_dict, "model.norm.weight", dtype=self.dtype)
+        self.norm = TtRMSNorm(
+            args,
+            mesh_device,
+            state_dict,
+            "model.norm.weight",
+            dtype=self.dtype,
+            weight_cache_path=cache_path,
+        )
 
     def _reshape_embeddings(self, hidden_states: ttnn.Tensor, input_ids: ttnn.Tensor, *, mode: str) -> ttnn.Tensor:
         """``(batch, seq, hidden)`` → ``(1, 1, seq, hidden)`` prefill or ``(1, 1, batch, hidden)`` decode."""
@@ -155,20 +168,17 @@ class TtMinistral3ForCausalLM:
         self.model = TtMinistral3Model(args, mesh_device, state_dict, tt_ccl, **kwargs)
         self.args = args
         self.mesh_device = mesh_device
+        cache_path = self.model.weight_cache_path
 
         lm_w_key = "lm_head.weight" if "lm_head.weight" in state_dict else "model.embed_tokens.weight"
-        lm_w = state_dict[lm_w_key]
-        if args.cluster_axis == 1:
-            dims = (None, -1)
-        else:
-            dims = (-1, None)
-        self.lm_head = ttnn.from_torch(
-            lm_w.T.contiguous(),
-            device=mesh_device,
+        self.lm_head = upload_matmul_weight(
+            state_dict[lm_w_key],
+            mesh_device,
+            args,
             dtype=args.weight_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=args.mesh_shape),
+            shard_dim=-1,
+            weight_cache_path=cache_path,
+            cache_key=lm_w_key.replace(".", "_"),
         )
 
     def __call__(self, *fwd_args, **fwd_kwargs) -> ttnn.Tensor:
