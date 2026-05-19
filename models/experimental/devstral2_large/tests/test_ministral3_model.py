@@ -66,6 +66,30 @@ def _shallow_config(text_cfg: Ministral3Config, num_layers: int = NUM_LAYERS) ->
     return Ministral3Config(**cfg_dict)
 
 
+def _input_ids_to_tt(input_ids: torch.Tensor, mesh_device) -> ttnn.Tensor:
+    """Upload token indices ``[batch, seq]`` for ``ttnn.embedding`` on device."""
+    return ttnn.from_torch(
+        input_ids,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _current_pos_to_tt(positions: torch.Tensor, mesh_device) -> ttnn.Tensor:
+    """Upload decode position indices ``[batch]`` as int32 on device."""
+    pos = positions.reshape(-1).to(torch.int32)
+    return ttnn.from_torch(
+        pos,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
 def _tt_hidden_to_torch_ref_shape(
     tt_out: ttnn.Tensor,
     mesh_device,
@@ -177,7 +201,8 @@ def test_ministral3_model_pcc_devstral2_large_partial_weights_one_layer_prefill(
         use_cache=False,
     ).last_hidden_state
 
-    tt_out = tt_model(input_ids, mode="prefill", start_pos=0)
+    tt_input_ids = _input_ids_to_tt(input_ids, mesh_device)
+    tt_out = tt_model(tt_input_ids, mode="prefill", start_pos=0)
     tt_torch = _tt_hidden_to_torch_ref_shape(tt_out, mesh_device, text_cfg.hidden_size, ref_out.shape)
 
     _assert_pcc(ref_out, tt_torch, label="Ministral3Model partial Hub weights, prefill")
@@ -235,12 +260,12 @@ def test_ministral3_model_pcc_devstral2_large_partial_weights_one_layer_decode(
         use_cache=False,
     ).last_hidden_state[:, -1:, :]
 
-    tt_model(input_ids_prefill, mode="prefill", start_pos=0)
-    current_pos_host = torch.tensor([decode_pos], dtype=torch.long)
+    tt_model(_input_ids_to_tt(input_ids_prefill, mesh_device), mode="prefill", start_pos=0)
+    current_pos_tt = _current_pos_to_tt(torch.tensor([decode_pos], dtype=torch.long), mesh_device)
     tt_out = tt_model(
-        input_ids_decode,
+        _input_ids_to_tt(input_ids_decode, mesh_device),
         mode="decode",
-        current_pos_host=current_pos_host,
+        current_pos=current_pos_tt,
     )
     tt_torch = _tt_hidden_to_torch_ref_shape(tt_out, mesh_device, text_cfg.hidden_size, ref_decode.shape)
 

@@ -13,16 +13,14 @@ HF reference (``Ministral3Model`` + ``Ministral3ForCausalLM``)::
     # CausalLM-only:
     logits = lm_head(h)
 
-Embedding is run on the host (cheap, vocab-bound; avoids embed-vocab-sized device weight on every
-chip) and uploaded directly to L1. Activations stay in L1 between norm / linear / residual ops to
-avoid DRAM tilize. Final norm runs on device. ``lm_head`` is optional and column-parallel.
+``__call__`` takes ``input_ids`` and optional decode ``current_pos`` as ``ttnn.Tensor`` values only.
+Weight upload uses host tensors at construction time; the forward path is device ops only.
 """
 
 from __future__ import annotations
 
 from typing import Optional
 
-import torch
 import ttnn
 
 from models.experimental.devstral2_large.tt.model_args import Devstral2Args
@@ -30,29 +28,39 @@ from models.experimental.devstral2_large.tt.tt_ministral3_decoder_layer import T
 from models.experimental.devstral2_large.tt.tt_ministral_rotary_emb import TtRotaryEmbedding
 from models.experimental.devstral2_large.tt.tt_ministralrmsnorm import TtRMSNorm
 
-__all__ = ["TtMinistral3Model", "TtMinistral3ForCausalLM"]
+__all__ = ["TtEmbedTokens", "TtMinistral3Model", "TtMinistral3ForCausalLM"]
 
 
-def _embed_host(
-    input_ids: torch.Tensor,
-    state_dict: dict,
-    args: Devstral2Args,
-    mesh_device,
-    *,
-    dtype: ttnn.DataType,
-) -> ttnn.Tensor:
-    """Look up ``embed_tokens.weight`` host-side and upload the resulting activation (replicated)."""
-    embed_w = state_dict["model.embed_tokens.weight"].to(torch.bfloat16)
-    h = torch.nn.functional.embedding(input_ids, embed_w)  # (B, S, dim)
-    h = h.reshape(1, 1, -1, args.hidden_size)
-    return ttnn.from_torch(
-        h,
-        device=mesh_device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+class TtEmbedTokens:
+    """Device ``embed_tokens`` via ``ttnn.embedding`` (replicated across the mesh)."""
+
+    def __init__(
+        self,
+        args: Devstral2Args,
+        mesh_device,
+        embed_weight,
+        *,
+        dtype: ttnn.DataType,
+    ) -> None:
+        self.args = args
+        self.mesh_device = mesh_device
+        # ``ttnn.embedding`` weight layout: ``(vocab_size, hidden_size)``, row-major on device.
+        self.weight = ttnn.from_torch(
+            embed_weight,
+            device=mesh_device,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    def __call__(self, input_ids: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
+        return ttnn.embedding(
+            input_ids,
+            self.weight,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=memory_config,
+        )
 
 
 class TtMinistral3Model:
@@ -71,11 +79,17 @@ class TtMinistral3Model:
     ) -> None:
         self.args = args
         self.mesh_device = mesh_device
-        self.state_dict = state_dict
         self.tt_ccl = tt_ccl
         self.dtype = dtype or args.weight_dtype
         self.num_layers = int(num_layers if num_layers is not None else args.num_hidden_layers)
 
+        embed_w = state_dict["model.embed_tokens.weight"]
+        self.embed_tokens = TtEmbedTokens(
+            args,
+            mesh_device,
+            embed_w,
+            dtype=self.dtype,
+        )
         self.rotary_emb = TtRotaryEmbedding(args, mesh_device, dtype=self.dtype)
         self.layers = [
             TtDecoderLayer(
@@ -92,27 +106,36 @@ class TtMinistral3Model:
         ]
         self.norm = TtRMSNorm(args, mesh_device, state_dict, "model.norm.weight", dtype=self.dtype)
 
+    def _reshape_embeddings(self, hidden_states: ttnn.Tensor, input_ids: ttnn.Tensor, *, mode: str) -> ttnn.Tensor:
+        """``(batch, seq, hidden)`` → ``(1, 1, seq, hidden)`` prefill or ``(1, 1, batch, hidden)`` decode."""
+        hidden_size = self.args.hidden_size
+        if mode == "decode":
+            batch_size = int(input_ids.shape[0])
+            return ttnn.reshape(hidden_states, (1, 1, batch_size, hidden_size))
+        seq_len = int(input_ids.shape[-1])
+        return ttnn.reshape(hidden_states, (1, 1, seq_len, hidden_size))
+
     def __call__(
         self,
-        input_ids: torch.Tensor,
+        input_ids: ttnn.Tensor,
         *,
         mode: str = "prefill",
         start_pos: int = 0,
-        current_pos_host: Optional[torch.Tensor] = None,
+        current_pos: Optional[ttnn.Tensor] = None,
         user_id: int = 0,
     ) -> ttnn.Tensor:
         act_mem = self.args.get_activation_mem_config(mode, self.mesh_device)
-        h = _embed_host(input_ids, self.state_dict, self.args, self.mesh_device, dtype=self.args.activation_dtype)
+        hidden_states = self.embed_tokens(input_ids, memory_config=act_mem)
+        hidden_states = self._reshape_embeddings(hidden_states, input_ids, mode=mode)
         for layer in self.layers:
-            h = layer(
-                h,
+            hidden_states = layer(
+                hidden_states,
                 mode=mode,
                 start_pos=start_pos,
-                current_pos_host=current_pos_host,
+                current_pos=current_pos,
                 user_id=user_id,
             )
-        h = self.norm(h, memory_config=act_mem)
-        return h
+        return self.norm(hidden_states, memory_config=act_mem)
 
     def forward(self, *args, **kwargs):
         return self(*args, **kwargs)
@@ -133,15 +156,14 @@ class TtMinistral3ForCausalLM:
         self.args = args
         self.mesh_device = mesh_device
 
-        # lm_head: ``(vocab_size, hidden_size)`` HF → ``(hidden_size, vocab_size)`` TT, colwise TP on out.
         lm_w_key = "lm_head.weight" if "lm_head.weight" in state_dict else "model.embed_tokens.weight"
-        lm_w = state_dict[lm_w_key].to(torch.bfloat16).T.contiguous()  # (hidden, vocab)
+        lm_w = state_dict[lm_w_key]
         if args.cluster_axis == 1:
             dims = (None, -1)
         else:
             dims = (-1, None)
         self.lm_head = ttnn.from_torch(
-            lm_w,
+            lm_w.T.contiguous(),
             device=mesh_device,
             dtype=args.weight_dtype,
             layout=ttnn.TILE_LAYOUT,
@@ -150,14 +172,13 @@ class TtMinistral3ForCausalLM:
         )
 
     def __call__(self, *fwd_args, **fwd_kwargs) -> ttnn.Tensor:
-        h = self.model(*fwd_args, **fwd_kwargs)
-        logits = ttnn.linear(
-            h,
+        hidden_states = self.model(*fwd_args, **fwd_kwargs)
+        return ttnn.linear(
+            hidden_states,
             self.lm_head,
             dtype=self.args.activation_dtype,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        return logits
 
     def forward(self, *args, **kwargs):
         return self(*args, **kwargs)

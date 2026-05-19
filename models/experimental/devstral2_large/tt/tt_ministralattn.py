@@ -220,15 +220,6 @@ class TtAttention:
         self._compute_kernel_config = get_compute_kernel_config(mesh_device)
         self._sdpa_decode_program_config = get_sdpa_decode_program_config(mesh_device)
         self._sdpa_decode_compute_kernel_config = get_sdpa_decode_compute_kernel_config(mesh_device)
-        self._cur_pos_host = torch.zeros(args.max_batch_size, dtype=torch.int32)
-        self._pos_tt = ttnn.from_torch(
-            self._cur_pos_host,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
 
     # --- Projections (shared by prefill / decode) ---
 
@@ -268,18 +259,6 @@ class TtAttention:
         q = self._linear(x, self.q_proj, mode="decode", kind="qkv")
         kv = self._linear(x, self.kv_proj, mode="decode", kind="qkv")
         return ttnn.concat([q, kv], dim=-1, memory_config=self._act_mem("decode"))
-
-    def _sync_pos_tensor(self, current_pos_host: torch.Tensor) -> ttnn.Tensor:
-        n = int(current_pos_host.shape[0])
-        self._cur_pos_host[:n].copy_(current_pos_host.to(torch.int32))
-        host_slice = ttnn.from_torch(
-            self._cur_pos_host[:n],
-            device=None,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        ttnn.copy_host_to_device_tensor(host_slice, self._pos_tt)
-        return self._pos_tt
 
     def _project_o(self, attn_out_flat: ttnn.Tensor, *, mode: str, seq_len: int = 1) -> ttnn.Tensor:
         dense = self._linear(attn_out_flat, self.o_proj, mode=mode, kind="o_proj", seq_len=seq_len)
@@ -360,10 +339,10 @@ class TtAttention:
     def forward_decode(
         self,
         x: ttnn.Tensor,
-        current_pos_host: torch.Tensor,
+        current_pos: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        """``x``: ``(1, 1, 1, hidden_size)`` or ``(1, B, 1, hidden_size)``; ``current_pos_host`` shape ``[B]``."""
-        batch_size = int(current_pos_host.shape[0])
+        """``x``: ``(1, 1, B, hidden_size)``; ``current_pos`` device int32 tensor ``[B]``."""
+        batch_size = int(current_pos.shape[0])
         act_mem = self._act_mem("decode")
         Hq_local = self.args.n_local_heads
         Hkv_local = self.args.n_local_kv_heads
@@ -384,14 +363,14 @@ class TtAttention:
         )
         ttnn.deallocate(xqkv)
 
-        cos_q, sin_q, cos_k, sin_k = self.rotary_emb.get_decode_tables(current_pos_host)
+        cos_q, sin_q, cos_k, sin_k = self.rotary_emb.get_decode_tables(current_pos)
         cos_q, sin_q = _shard_decode_rope_tables(cos_q, sin_q, batch_size=batch_size, head_dim=self.args.head_dim)
         cos_k, sin_k = _shard_decode_rope_tables(cos_k, sin_k, batch_size=batch_size, head_dim=self.args.head_dim)
         trans_mat = _shard_decode_trans_mat(self.rotary_emb.trans_mat, batch_size=batch_size)
         q_heads = ttnn.experimental.rotary_embedding_llama(q_heads, cos_q, sin_q, trans_mat, is_decode_mode=True)
         k_heads = ttnn.experimental.rotary_embedding_llama(k_heads, cos_k, sin_k, trans_mat, is_decode_mode=True)
 
-        pos_tt = self._sync_pos_tensor(current_pos_host)
+        pos_tt = current_pos
         # Separate updates: fused op requires K/V head tensors on non-overlapping core grids, but
         # ``nlp_create_qkv_heads_decode`` places them on the same height-sharded L1 cores.
         ttnn.experimental.paged_update_cache(self.k_cache, k_heads, update_idxs_tensor=pos_tt, page_table=None)
@@ -429,15 +408,15 @@ class TtAttention:
         *,
         mode: str = "decode",
         start_pos: int = 0,
-        current_pos_host: Optional[torch.Tensor] = None,
+        current_pos: Optional[ttnn.Tensor] = None,
         user_id: int = 0,
     ) -> ttnn.Tensor:
         if mode == "prefill":
             return self.forward_prefill(x, start_pos=start_pos, user_id=user_id)
         if mode == "decode":
-            if current_pos_host is None:
-                raise ValueError("decode mode requires current_pos_host")
-            return self.forward_decode(x, current_pos_host)
+            if current_pos is None:
+                raise ValueError("decode mode requires current_pos")
+            return self.forward_decode(x, current_pos)
         raise ValueError(f"Unknown mode {mode!r}")
 
     def forward(self, *args, **kwargs):

@@ -252,14 +252,17 @@ class TtRotaryEmbedding:
 
     def get_decode_tables(
         self,
-        current_pos_host: torch.Tensor,
+        current_pos,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        """``current_pos_host`` is a host int tensor of shape ``[batch]``.
+        """``current_pos`` is a device or host int tensor of shape ``[batch]``.
 
         Indexed on the host and uploaded fresh; mirrors HF semantics (``forward(x, position_ids)``
         rebuilds the table for given positions) and avoids on-device gather.
         """
-        positions = current_pos_host.long()
+        if isinstance(current_pos, ttnn.Tensor):
+            positions = ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0]).reshape(-1).long()
+        else:
+            positions = current_pos.long()
         batch = int(positions.shape[0])
         head_dim = self.args.head_dim
 
