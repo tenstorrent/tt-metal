@@ -232,7 +232,8 @@ class TtQwen3EncoderMLP:
         self.w_gate = as_w("gate_proj")
         self.w_up = as_w("up_proj")
         self.w_down = as_w("down_proj")
-        # 6144-wide cond MLPs + reuse-mcast-1d matmul CBS exhaust L1 if activations live in L1.
+        # Wide cond MLPs (e.g. timbre 6144×2048 gate/up): L1 linear outputs clash with matmul
+        # static CBs (L1 buffer @ 1096832 vs CB end @ 1167872 on Blackhole). Keep DRAM activations.
         self._mlp_keep_dram_activations = int(intermediate_size) >= 4608
 
     def _l1_activation(self, t: ttnn.Tensor) -> ttnn.Tensor:

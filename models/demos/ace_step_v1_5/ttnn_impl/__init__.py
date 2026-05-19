@@ -1,5 +1,7 @@
 from .config import AceConfigTTNN, AttentionImplTTNN
-from .modules import (
+
+# Legacy exports (deprecated — see modules.py module docstring).
+from .modules import (  # noqa: F401
     AdaLNZeroTTNN,
     GEGLUMLPTTNN,
     MultiHeadSelfAttentionSDPATTNN,
@@ -10,6 +12,7 @@ from .modules import (
 __all__ = [
     "AceConfigTTNN",
     "AttentionImplTTNN",
+    # Deprecated — use dit_decoder_core for inference.
     "AdaLNZeroTTNN",
     "GEGLUMLPTTNN",
     "MultiHeadSelfAttentionTTNN",

@@ -1,3 +1,10 @@
+"""DEPRECATED: legacy unit-test scaffolding — production E2E uses ``dit_decoder_core``.
+
+``AdaLNZeroTTNN`` / ``TransformerBlockTTNN`` do not match HF ``AceStepDiTLayer`` (wrong norm,
+modulation layout, gates, cross-attn). Prefer ``TtAceStepDiTCore`` and PCC tests under
+``tests/test_pcc_dit_decoder_core.py`` et al.
+"""
+
 from __future__ import annotations
 
 import math

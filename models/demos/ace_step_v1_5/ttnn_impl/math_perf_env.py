@@ -137,7 +137,7 @@ def ace_step_safe_deallocate(ttnn: Any, *tensors: Any) -> None:
 
 
 def ace_step_add_one(ttnn: Any, tensor: Any, **kwargs: Any) -> Any:
-    """``tensor + 1`` via scalar add — avoids per-call ``ones_like`` / ``full`` allocation."""
+    """``tensor + 1`` via ``ttnn.add(tensor, 1.0)`` — avoids per-call ``ones_like`` / ``full``."""
     return ttnn.add(tensor, 1.0, **kwargs)
 
 
@@ -263,6 +263,12 @@ def _mcast_1d_linear_program_config(
         out_subblock_h -= 1
 
     # Default ``out_block_w`` is ``per_core_N``; TTNN requires ``out_block_w % out_subblock_w == 0``.
+    # Round per_core_N up to a multiple of the requested subblock width instead of shrinking the
+    # subblock to 1×1 (e.g. 64 N-tiles / 10 cores → 7 → snap to 8 so 1×2 subblocks are valid).
+    out_subblock_w_target = min(int(out_subblock_w), max(1, int(per_core_n)))
+    if out_subblock_w_target > 1 and per_core_n % out_subblock_w_target != 0:
+        per_core_n = ((per_core_n + out_subblock_w_target - 1) // out_subblock_w_target) * out_subblock_w_target
+
     out_subblock_w_eff = min(int(out_subblock_w), max(1, int(per_core_n)))
     while per_core_n % out_subblock_w_eff != 0 and out_subblock_w_eff > 1:
         out_subblock_w_eff -= 1
@@ -289,6 +295,18 @@ def ace_step_dit_attn_linear_program_config(
     batch_size: int = 1,
 ):
     """``MatmulMultiCoreReuseMultiCast1DProgramConfig`` for square DiT ``q`` / ``o`` (e.g. 256×1024×1024)."""
+    pc = _mcast_1d_linear_program_config(
+        device,
+        seq_len=seq_len,
+        in_dim=in_dim,
+        out_dim=out_dim,
+        batch_size=batch_size,
+        in0_block_w_cap=2,
+        out_subblock_h_cap=4,
+        out_subblock_w=2,
+    )
+    if pc is not None:
+        return pc
     return _mcast_1d_linear_program_config(
         device,
         seq_len=seq_len,

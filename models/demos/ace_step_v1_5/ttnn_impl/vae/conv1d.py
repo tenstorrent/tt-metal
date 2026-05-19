@@ -107,19 +107,16 @@ class TtConv1d:
             self._bias_host_tt = ttnn.as_tensor(b, dtype=self.weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
             self._has_bias = True
 
+        # Low-channel layers tolerate act_block_h=64 (fewer weight passes); wide layers stay at 32 for L1 CB budget.
+        _act_block_h = 64 if self.in_channels <= 512 else 32
         self.conv_config = ttnn.Conv1dConfig(
             weights_dtype=self.weights_dtype,
             shard_layout=None,
             deallocate_activation=bool(self._vae_conv_perf),
-            # act_block_h_override=32 forces the minimum activation block height (must be a multiple of 32).
-            # Smaller value → smaller per-core circular buffers → fits within Blackhole L1 (1.5 MB).
-            # Default (0) lets TTNN auto-pick, which chooses a large block that overflows L1 for
-            # the high-channel-count layers in the Oobleck decoder (up to 2048 ch).
-            act_block_h_override=32,
-            # Store persistent conv config tensors in DRAM instead of L1_SMALL to free up the small arena.
+            act_block_h_override=_act_block_h,
             config_tensors_in_dram=True,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -309,14 +306,15 @@ class TtConvTranspose1d:
             self._bias_host_tt = ttnn.as_tensor(b, dtype=self.weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
             self._has_bias = True
 
+        _act_block_h = 64 if self.in_channels <= 512 else 32
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=self.weights_dtype,
             shard_layout=None,
             deallocate_activation=bool(self._vae_conv_perf),
-            act_block_h_override=32,
+            act_block_h_override=_act_block_h,
             config_tensors_in_dram=True,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),

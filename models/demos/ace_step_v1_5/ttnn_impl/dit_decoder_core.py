@@ -74,6 +74,7 @@ def _ace_step_log_ttnn_tensor(tag: str, t, *, ttnn) -> None:
 
 from ._ttnn import get_ttnn
 from .math_perf_env import (
+    _mcast_1d_linear_program_config,
     ace_step_add_one,
     ace_step_binary_kwargs,
     ace_step_dit_attn_linear_program_config,
@@ -611,6 +612,9 @@ class TtAceStepAttentionSDPA:
         self._linear_out_l1 = linear_output_l1_memory_config
         self._fused_kv_dim = int(self.n_kv * self.d_head) * 2
         self._wkv_pc_cache: dict = {}
+        # Tile-pad SDPA masks: B/S/W are fixed for a given E2E run → build once, reuse all steps.
+        self._self_pad_mask_cache: dict = {}
+        self._cross_pad_mask_cache: dict = {}
 
     def _l1_activation(self, t):
         if self._act_l1 is None:
@@ -628,6 +632,17 @@ class TtAceStepAttentionSDPA:
             out_dim=int(out_dim),
             batch_size=int(batch_size),
         )
+        if pc is None:
+            pc = _mcast_1d_linear_program_config(
+                self.mesh_device,
+                seq_len=int(seq_len),
+                in_dim=int(in_dim),
+                out_dim=int(out_dim),
+                batch_size=int(batch_size),
+                in0_block_w_cap=2,
+                out_subblock_h_cap=4,
+                out_subblock_w=1,
+            )
         if pc is not None:
             kw["program_config"] = pc
         if self._linear_out_l1 is not None:
@@ -907,20 +922,26 @@ class TtAceStepAttentionSDPA:
                 v = _pad_seq_dim2_bh_sd(v, tgt_k)
                 W = tgt_k
             if W > s_enc_log:
-                pad_np = np.zeros((B, 1, S_q0, W), dtype=np.float32)
-                pad_np[:, :, :, s_enc_log:W] = -1e9
-                _mask_mc = ace_step_sdpa_mask_memory_config(ttnn)
-                mapper_m = (
-                    ttnn.ReplicateTensorToMesh(self.mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
-                )
-                pad_m = ttnn.as_tensor(
-                    pad_np,
-                    device=self.mesh_device,
-                    dtype=self.dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=_mask_mc,
-                    mesh_mapper=mapper_m,
-                )
+                _cross_key = (B, S_q0, W, s_enc_log)
+                pad_m = self._cross_pad_mask_cache.get(_cross_key)
+                if pad_m is None:
+                    pad_np = np.zeros((B, 1, S_q0, W), dtype=np.float32)
+                    pad_np[:, :, :, s_enc_log:W] = -1e9
+                    _mask_mc = ace_step_sdpa_mask_memory_config(ttnn)
+                    mapper_m = (
+                        ttnn.ReplicateTensorToMesh(self.mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+                    )
+                    pad_m = ttnn.as_tensor(
+                        pad_np,
+                        device=self.mesh_device,
+                        dtype=self.dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=_mask_mc,
+                        mesh_mapper=mapper_m,
+                    )
+                    self._cross_pad_mask_cache[_cross_key] = pad_m
+                else:
+                    _mask_mc = ace_step_sdpa_mask_memory_config(ttnn)
                 if sdpa_attn_mask is None:
                     sdpa_attn_mask = pad_m
                 else:
@@ -941,21 +962,27 @@ class TtAceStepAttentionSDPA:
                 k = _pad_seq_dim2_bh_sd(k, target_sdpa)
                 v = _pad_seq_dim2_bh_sd(v, target_sdpa)
                 # Additive mask (0 keep, -1e9 on invalid keys); SDPA adds this to QK (see ttnn sdpa.cpp).
-                pad_np = np.zeros((B, 1, target_sdpa, target_sdpa), dtype=np.float32)
-                pad_np[:, :, :, S_rope:] = -1e9
-                _mask_mc = ace_step_sdpa_mask_memory_config(ttnn)
-                mapper_m = (
-                    ttnn.ReplicateTensorToMesh(self.mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
-                )
-                # Match Q/K/V dtype so SDPA uniform-dataformat paths accept the mask tensor.
-                pad_m = ttnn.as_tensor(
-                    pad_np,
-                    device=self.mesh_device,
-                    dtype=self.dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=_mask_mc,
-                    mesh_mapper=mapper_m,
-                )
+                _self_key = (B, S_rope, target_sdpa)
+                pad_m = self._self_pad_mask_cache.get(_self_key)
+                if pad_m is None:
+                    pad_np = np.zeros((B, 1, target_sdpa, target_sdpa), dtype=np.float32)
+                    pad_np[:, :, :, S_rope:] = -1e9
+                    _mask_mc = ace_step_sdpa_mask_memory_config(ttnn)
+                    mapper_m = (
+                        ttnn.ReplicateTensorToMesh(self.mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+                    )
+                    # Match Q/K/V dtype so SDPA uniform-dataformat paths accept the mask tensor.
+                    pad_m = ttnn.as_tensor(
+                        pad_np,
+                        device=self.mesh_device,
+                        dtype=self.dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=_mask_mc,
+                        mesh_mapper=mapper_m,
+                    )
+                    self._self_pad_mask_cache[_self_key] = pad_m
+                else:
+                    _mask_mc = ace_step_sdpa_mask_memory_config(ttnn)
                 if sdpa_attn_mask is None:
                     sdpa_attn_mask = pad_m
                 else:
