@@ -134,6 +134,13 @@ def build_cross_attn_mask_4d(encoder_pad_mask_2d: ttnn.Tensor, *, tgt_seq: int, 
     src_seq = int(encoder_pad_mask_2d.shape[1])
     add_2d = key_padding_additive(encoder_pad_mask_2d, device=device)
     add_4d = ttnn.reshape(add_2d, [batch, 1, 1, src_seq])
+    if tgt_seq == 1:
+        # ``ttnn.expand`` from ``[B, 1, 1, S]`` to ``[B, 1, 1, S]`` is a no-op view that shares
+        # storage with ``add_2d``. Deallocating ``add_2d`` afterwards would free the returned
+        # mask and trip SDPA's internal ``multiply(mask, scale)`` on the first decode step.
+        # ``ensure_tile_bf16_sdpa_mask`` either returns ``add_4d`` as-is (already TILE bf16) or
+        # allocates a tile-converted copy and deallocates ``add_4d`` itself — both ownership-safe.
+        return ensure_tile_bf16_sdpa_mask(add_4d)
     expanded = ttnn.expand(add_4d, [batch, 1, tgt_seq, src_seq], memory_config=ttnn.DRAM_MEMORY_CONFIG)
     out = ensure_tile_bf16_sdpa_mask(expanded)
     ttnn.deallocate(add_2d)
@@ -148,6 +155,13 @@ def build_encoder_self_mask_4d(attention_mask_2d: ttnn.Tensor, *, device: ttnn.D
     seq = int(attention_mask_2d.shape[1])
     add_2d = key_padding_additive(attention_mask_2d, device=device)
     add_4d = ttnn.reshape(add_2d, [batch, 1, 1, seq])
+    if seq == 1:
+        # Same use-after-free guard as ``build_cross_attn_mask_4d``: when ``seq == 1`` the
+        # ``ttnn.expand`` becomes a no-op view that shares storage with ``add_2d``, so a
+        # later ``deallocate(add_2d)`` would free the returned mask. Defer ownership to
+        # ``ensure_tile_bf16_sdpa_mask`` which either returns ``add_4d`` as-is or copies
+        # and deallocates the input — both ownership-safe.
+        return ensure_tile_bf16_sdpa_mask(add_4d)
     expanded = ttnn.expand(add_4d, [batch, 1, seq, seq], memory_config=ttnn.DRAM_MEMORY_CONFIG)
     out = ensure_tile_bf16_sdpa_mask(expanded)
     ttnn.deallocate(add_2d)
