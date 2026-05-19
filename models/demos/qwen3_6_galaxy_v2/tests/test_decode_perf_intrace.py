@@ -31,6 +31,7 @@ Run:
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import time
 
@@ -49,7 +50,9 @@ _LLAMA70B_PROMPT_FILE = pathlib.Path(
 )
 
 _B = 1
-_T_PREFILL = 128
+# QWEN36_PERF_T_PREFILL env var overrides ISL (default 128).  Common values
+# for benchmarking: 128, 2048, 4096, 8192.
+_T_PREFILL = int(os.environ.get("QWEN36_PERF_T_PREFILL", "128"))
 _H = 5120
 _N_LAYERS = 64
 _DECODE_STEPS = 32  # generate this many tokens via trace replay
@@ -57,7 +60,8 @@ _PATTERN = (["linear_attention"] * 3 + ["full_attention"]) * 16
 
 # Paged-attention config — block_size=32 is the tile-aligned default.
 _PAGED_BLOCK_SIZE = 32
-_PAGED_MAX_NUM_BLOCKS = 32  # 32 blocks * 32 tokens / 1 user = 1024-token horizon
+# Ensure enough blocks to hold T_PREFILL + a margin for decode steps.
+_PAGED_MAX_NUM_BLOCKS = max(32, (_T_PREFILL + _DECODE_STEPS + _PAGED_BLOCK_SIZE - 1) // _PAGED_BLOCK_SIZE + 4)
 
 
 @pytest.fixture(scope="module")
