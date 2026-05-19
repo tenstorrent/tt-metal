@@ -45,11 +45,8 @@ FORCE_INLINE void fabric_symmetric_handshake(
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;
-    while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE
-#ifndef ARCH_WORMHOLE
-           && !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)
-#endif
-    ) {
+    while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE &&
+           !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
 
@@ -67,13 +64,9 @@ FORCE_INLINE void fabric_symmetric_handshake(
     // With Fix A (early init), the erase race is eliminated. This final send remains
     // as belt-and-suspenders for the case where one side exits slightly before the
     // other has entered the loop.
-#ifndef ARCH_WORMHOLE
     if (!tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)) {
         internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
     }
-#else
-    internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
-#endif
 }
 
 // Legacy fabric_sender_side_handshake — DEPRECATED, use prepare_handshake_state() + fabric_symmetric_handshake().
