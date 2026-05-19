@@ -354,7 +354,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
 
         if sample_on_device:
-            self._sample_tokens_device(decode_logits, enable_trace=enable_trace)
+            # Warmup already compiles this path when tracing; avoid double precompile.
+            self._sample_tokens_device(decode_logits, enable_trace=enable_trace, skip_precompile=True)
         else:
             self._sample_on_host(decode_logits)
 
@@ -894,6 +895,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         logits: ttnn.Tensor,
         enable_trace: bool = False,
         user_slots: list[int] | None = None,
+        skip_precompile: bool = False,
     ) -> ttnn.Tensor:
         sampling_batch_size = self.sampling_generator.tt_sampling.max_batch_size
         sampling_logits = logits
@@ -939,7 +941,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.sampling_generator.seed_manager.get_new_values(user_slots)
         self.sampling_generator.enable_internal_trace = enable_trace
         try:
-            tt_out = self.sampling_generator.sample(sampling_logits, enable_trace=enable_trace)
+            tt_out = self.sampling_generator.sample(
+                sampling_logits, enable_trace=enable_trace, skip_precompile=skip_precompile
+            )
         finally:
             if sampling_logits is not logits:
                 if sampling_logits is not self._sampling_trace_logits_device:
@@ -1969,15 +1973,12 @@ class DeepseekGenerator(WarmupForwardMixin):
         num_of_users = tokens_batched.shape[0]
 
         # Run one or more prefill+decode batches
+        pred_tokens_device: ttnn.Tensor | None = None
         stop_token_ids = self._get_stop_token_ids() if stop_at_eos and teacher_forcing is None else set()
         for batch_idx in range(repeat_batches):
             if self.sample_on_device:
                 # reset sampling state for each repeat batch, o/p tokens will be different for each repeat batch
                 assert self.sampling_params is not None, "sampling_params must be set when sampling on device"
-                if self.enable_trace and batch_idx > 0:
-                    # Previous batch deallocates trace-owned sampling output tensors.
-                    # Reset trace so the next batch captures fresh outputs.
-                    self.sampling_generator.reset_trace()
                 self._reset_sampling_state(
                     self.sampling_params,
                     self.batch_size,
@@ -2172,7 +2173,6 @@ class DeepseekGenerator(WarmupForwardMixin):
 
                 # Generate remaining tokens with decode (each decode call produces the next token)
                 profiler.start("inference_decode")
-                pred_tokens_device: ttnn.Tensor | None = None
                 decode_step_idx = 0
                 decode_step_active_masks: List[List[bool]] = []
                 decode_step_user_tokens: List[List[int]] = []
@@ -2224,7 +2224,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                         self.ccl.reset_sem_counters()
                         if self.sample_on_device:
                             pred_tokens_device = self._sample_tokens_device(
-                                decode_logits, enable_trace=self.enable_trace
+                                decode_logits, enable_trace=self.enable_trace, skip_precompile=True
                             )
                             pred_tokens = self._tokens_from_device(
                                 pred_tokens_device, self.mesh_device, batch_size_per_row=self.batch_size_per_row
@@ -2266,9 +2266,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                         decode_step_active_masks.append(step_active_mask)
                         decode_step_user_tokens.append(step_user_tokens)
 
-                # Trace path: deallocate once after replay loop completes.
-                if self.sample_on_device and self.enable_trace and pred_tokens_device is not None:
-                    ttnn.deallocate(pred_tokens_device)
                 profiler.end("inference_decode")
                 decode_steps_for_stats = decode_step_idx
                 decode_step_active_masks_for_stats = decode_step_active_masks
@@ -2277,6 +2274,9 @@ class DeepseekGenerator(WarmupForwardMixin):
             if early_print_first_user:
                 logger.info("\n===== Done =====")
 
+        # Trace path: deallocate once after replay loop completes.
+        if self.sample_on_device and self.enable_trace and pred_tokens_device is not None:
+            ttnn.deallocate(pred_tokens_device)
         profiler.end("run")
         # Calculate statistics
         prefill_time = profiler.get_duration("inference_prefill") if not self.profile_decode else 0
@@ -3088,6 +3088,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         user_id = 0
         original_sample_on_device = getattr(self, "sample_on_device", False)
+        original_sampling_params = getattr(self, "sampling_params", None)
         if sample_on_device is None or self.vllm_context:
             sample_on_device_list = [False, True] if can_sample_on_device else [False]
         else:
@@ -3108,12 +3109,15 @@ class DeepseekGenerator(WarmupForwardMixin):
                 )
                 if sample_on_device:
                     self._validate_and_initialize_sampling(
-                        None,
+                        original_sampling_params,
                         sample_on_device,
                         enable_trace=enable_trace,
                     )
 
-                    sampled_tokens = self._sample_tokens_device(prefill_logits, user_slots=[user_id])
+                    # Warmup precompile happens at this flow; skip sampling-module precompile.
+                    sampled_tokens = self._sample_tokens_device(
+                        prefill_logits, user_slots=[user_id], skip_precompile=True
+                    )
                     try:
                         if sampled_tokens is not None:
                             ttnn.deallocate(sampled_tokens)
@@ -3128,7 +3132,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         if getattr(self, "sample_on_device", False) != original_sample_on_device:
             # Warmup may initialize sampling internals; restore the caller's expected mode.
             self._validate_and_initialize_sampling(
-                None,
+                original_sampling_params,
                 original_sample_on_device,
                 enable_trace=enable_trace,
             )
