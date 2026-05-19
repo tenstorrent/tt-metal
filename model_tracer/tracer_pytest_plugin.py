@@ -47,11 +47,48 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
-    """Flip the ttnn operation tracer flag when ``--trace-params`` is set."""
+    """Flip the ttnn operation tracer flag when ``--trace-params`` is set,
+    and install the per-module-attribution capture so the perf pipeline
+    can build a node-graph view of the model coloured by Tracy metrics.
+    """
     if config.getoption("--trace-params", default=False):
         import ttnn.operation_tracer
 
         ttnn.operation_tracer._ENABLE_TRACE = True
+
+        # Install nn.Module hooks that record which submodule each op
+        # came from. Generates `ttnn_module_hierarchy.json` next to the
+        # tracer master. Failure is non-fatal — we still get the per-op
+        # data, just without per-module attribution.
+        try:
+            from model_tracer.module_hierarchy import install_module_hierarchy_capture
+
+            install_module_hierarchy_capture()
+        except Exception as exc:
+            from loguru import logger
+
+            logger.warning("module_hierarchy capture failed to install: {}", exc)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Flush the module-hierarchy sidecar at the end of the session.
+
+    We write into the directory that ``TTNN_OPERATION_TRACE_DIR`` points
+    at (the same place ``ttnn_operations_master.json`` ends up). This
+    lets ``tt_hw_planner perf collect`` find the sidecar through its
+    existing ``_locate_outputs`` glob with zero new wiring.
+    """
+    if not session.config.getoption("--trace-params", default=False):
+        return
+    base = os.environ.get("TTNN_OPERATION_TRACE_DIR")
+    if not base:
+        return
+    try:
+        from model_tracer.module_hierarchy import export_module_hierarchy
+
+        export_module_hierarchy(Path(base) / "ttnn_module_hierarchy.json")
+    except Exception as exc:
+        logger.warning("module_hierarchy: failed to write sidecar: {}", exc)
 
 
 # Private stash key — separate from the top-level conftest's so this plugin

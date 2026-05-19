@@ -1,0 +1,238 @@
+/*
+ * SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Dark Nsight-style theme for the tt_hw_planner perf dashboard.
+ *
+ * Dash auto-loads any file in the `assets/` folder. The selectors here
+ * target Dash's default class names plus the explicit ids set in
+ * layouts.py / inspector.py. We keep the rules narrow so we never
+ * fight Dash's own component-level inline styles.
+ */
+
+/* ---------- base ---------- */
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+
+/* Hide the noisy default scrollbar in the dark theme. */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #0d1117; }
+::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #484f58; }
+
+/* ---------- tabs ---------- */
+
+.dash-tabs-container .tab {
+  background: #0d1117 !important;
+  color: #8b949e !important;
+  border: none !important;
+  border-bottom: 2px solid transparent !important;
+  padding: 8px 16px !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.02em;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.dash-tabs-container .tab:hover {
+  color: #c9d1d9 !important;
+}
+
+.dash-tabs-container .tab--selected {
+  color: #58a6ff !important;
+  border-bottom-color: #1f6feb !important;
+  background: #0d1117 !important;
+}
+
+.dash-tabs-container {
+  border-bottom: 1px solid #30363d !important;
+}
+
+/* ---------- dropdown (reference selector) ---------- */
+
+.Select-control {
+  background: #161b22 !important;
+  border: 1px solid #30363d !important;
+  color: #c9d1d9 !important;
+  border-radius: 4px !important;
+  min-height: 28px !important;
+  font-size: 11px !important;
+}
+
+.Select-value-label,
+.Select-input > input,
+.Select-placeholder {
+  color: #c9d1d9 !important;
+  line-height: 26px !important;
+}
+
+.Select-menu-outer {
+  background: #161b22 !important;
+  border: 1px solid #30363d !important;
+  color: #c9d1d9 !important;
+}
+
+.Select-option {
+  background: #161b22 !important;
+  color: #c9d1d9 !important;
+  padding: 6px 10px !important;
+  font-size: 11px !important;
+}
+
+.Select-option.is-focused {
+  background: #1f6feb33 !important;
+  color: #58a6ff !important;
+}
+
+/* ---------- left rail (optimizer catalog) ---------- */
+
+[id^="{"][id*="catalog-block"]:hover {
+  background: #1f6feb22 !important;
+  border-left: 2px solid #1f6feb;
+  padding-left: 10px !important;
+}
+
+/* ---------- buttons ---------- */
+
+button {
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+button:hover {
+  background: #1f6feb44 !important;
+  border-color: #58a6ff !important;
+}
+
+/* ---------- cytoscape container ---------- */
+
+#module-graph {
+  /* Subtle gradient base so the graph "floats" above the dark surface. */
+  background: radial-gradient(ellipse at center,
+                              #0f141a 0%, #0d1117 100%) !important;
+}
+
+/* Cytoscape labels render inside the canvas so CSS can't directly style
+ * them; we set them via the JS stylesheet in cytoscape_layout.py.
+ * What we CAN style is the wrapper. The line below removes the harsh
+ * 1px outline browsers add to canvas-on-focus. */
+canvas { outline: none !important; }
+
+/* ---------- inspector ---------- */
+
+#inspector-body {
+  font-size: 12px;
+}
+
+#inspector-body em {
+  color: #8b949e;
+  font-style: italic;
+}
+
+/* The Apply / Dry-run buttons inside the inspector. */
+#cyto-btn-apply,
+#cyto-btn-dryrun {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+#cyto-btn-apply:hover {
+  background: #1f6feb88 !important;
+  color: #f0f6fc !important;
+}
+
+/* ---------- general ---------- */
+
+/* Stop content from bleeding past panels. */
+.dash-graph { background: transparent !important; }
+
+/* Selection highlight on text. */
+::selection { background: #1f6feb55; color: #f0f6fc; }
+
+/* ---------- light mode overrides ---------- */
+
+#dashboard-root.theme-light .dash-tabs-container .tab {
+  background: #ffffff !important;
+  color: #4b5563 !important;
+  border-bottom: 2px solid transparent !important;
+}
+
+#dashboard-root.theme-light .dash-tabs-container .tab:hover {
+  color: #111827 !important;
+}
+
+#dashboard-root.theme-light .dash-tabs-container .tab--selected {
+  color: #1d4ed8 !important;
+  border-bottom-color: #2563eb !important;
+  background: #ffffff !important;
+}
+
+#dashboard-root.theme-light .dash-tabs-container {
+  border-bottom: 1px solid #d1d5db !important;
+}
+
+#dashboard-root.theme-light #dashboard-topbar,
+#dashboard-root.theme-light #left-rail,
+#dashboard-root.theme-light #inspector-pane,
+#dashboard-root.theme-light #module-graph-toolbar {
+  color: #111827 !important;
+}
+
+#dashboard-root.theme-light #dashboard-topbar span,
+#dashboard-root.theme-light #left-rail h4,
+#dashboard-root.theme-light #inspector-pane h3,
+#dashboard-root.theme-light #inspector-pane h4,
+#dashboard-root.theme-light #selected-block-label,
+#dashboard-root.theme-light #selected-node-label,
+#dashboard-root.theme-light #action-result-banner,
+#dashboard-root.theme-light #action-log,
+#dashboard-root.theme-light #status-pill {
+  color: #111827 !important;
+}
+
+#dashboard-root.theme-light .Select-control {
+  background: #ffffff !important;
+  border: 1px solid #d1d5db !important;
+  color: #111827 !important;
+}
+
+#dashboard-root.theme-light .Select-value-label,
+#dashboard-root.theme-light .Select-input > input,
+#dashboard-root.theme-light .Select-placeholder {
+  color: #111827 !important;
+}
+
+#dashboard-root.theme-light .Select-menu-outer {
+  background: #ffffff !important;
+  border: 1px solid #d1d5db !important;
+  color: #111827 !important;
+}
+
+#dashboard-root.theme-light .Select-option {
+  background: #ffffff !important;
+  color: #111827 !important;
+}
+
+#dashboard-root.theme-light .Select-option.is-focused {
+  background: #dbeafe !important;
+  color: #1d4ed8 !important;
+}
+
+#dashboard-root.theme-light button:hover {
+  background: #dbeafe !important;
+  border-color: #60a5fa !important;
+}
+
+#dashboard-root.theme-light #module-graph {
+  background: #ffffff !important;
+}

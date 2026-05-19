@@ -1,0 +1,149 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Curated from real QB2 run:
+#   run_id: run_20260518T221616Z
+#   model: Qwen/Qwen2.5-7B-Instruct
+#   box:   QB2
+#   mesh:  [1, 4]
+#
+# NOTE:
+# This run did not emit per-op model_tracer argument JSON, so module
+# attribution was reconstructed from inferred block scopes + op-role
+# classification (decoder.layers.*.<role>). It is still a real hardware
+# profile and is preferred over synthetic fallback for Qwen-family runs.
+
+schema_version: 1
+
+provenance:
+  model_id: "Qwen/Qwen2.5-7B-Instruct"
+  arch_family: "qwen"
+  box: "QB2"
+  mesh_shape: [1, 4]
+  dtype: "bfp8_b"
+  source_run_id: "run_20260518T221616Z"
+  curator: "tt_hw_planner"
+  notes: |
+    Real hardware profile on QB2 (4-chip). module_path was reconstructed as
+    decoder.layers.*.<role> from block inference + Tracy op-code role mapping
+    because this run's model_tracer master file was not emitted by the demo.
+
+modules:
+  - role_path: "decoder.layers.*.matmul"
+    module_class: "BlockScope"
+    role: "matmul"
+    metrics:
+      runtime_ms_p50: 0.1221
+      fpu_util_pct: 18.18
+      dram_bw_util_pct: 0.0
+      noc_util_pct: 0.0
+    config_summary:
+      source: "run_20260518T221616Z"
+      attribution: "block_scope_fallback"
+    optimizer_blocks_applied:
+      - "program_config_tuner"
+      - "layout_unifier"
+
+  - role_path: "decoder.layers.*.sdpa"
+    module_class: "BlockScope"
+    role: "attention_sdpa"
+    metrics:
+      runtime_ms_p50: 0.0129
+      fpu_util_pct: 5.32
+      dram_bw_util_pct: 0.0
+      noc_util_pct: 0.0
+    config_summary:
+      source: "run_20260518T221616Z"
+    optimizer_blocks_applied:
+      - "layout_unifier"
+
+  - role_path: "decoder.layers.*.qkv_heads"
+    module_class: "BlockScope"
+    role: "attention_qkv_heads"
+    metrics:
+      runtime_ms_p50: 0.0159
+      fpu_util_pct: 0.01
+      dram_bw_util_pct: 0.0
+      noc_util_pct: 0.0
+    config_summary:
+      source: "run_20260518T221616Z"
+    optimizer_blocks_applied:
+      - "layout_unifier"
+
+  - role_path: "decoder.layers.*.concat_heads"
+    module_class: "BlockScope"
+    role: "attention_concat_heads"
+    metrics:
+      runtime_ms_p50: 0.0122
+      fpu_util_pct: 0.01
+      dram_bw_util_pct: 0.0
+      noc_util_pct: 0.0
+    config_summary:
+      source: "run_20260518T221616Z"
+    optimizer_blocks_applied:
+      - "layout_unifier"
+
+  - role_path: "decoder.layers.*.norm"
+    module_class: "BlockScope"
+    role: "layernorm"
+    metrics:
+      runtime_ms_p50: 0.0512
+      fpu_util_pct: 0.00
+      dram_bw_util_pct: 0.0
+      noc_util_pct: 0.0
+    config_summary:
+      source: "run_20260518T221616Z"
+    optimizer_blocks_applied:
+      - "math_fidelity_downcast"
+
+  - role_path: "decoder.layers.*.rotary"
+    module_class: "BlockScope"
+    role: "rotary"
+    metrics:
+      runtime_ms_p50: 0.0049
+      fpu_util_pct: 0.02
+      dram_bw_util_pct: 0.0
+      noc_util_pct: 0.0
+    config_summary:
+      source: "run_20260518T221616Z"
+    optimizer_blocks_applied:
+      - "layout_unifier"
+
+  - role_path: "decoder.layers.*.layout_move"
+    module_class: "BlockScope"
+    role: "layout_move"
+    metrics:
+      runtime_ms_p50: 0.0006
+      fpu_util_pct: 0.13
+      dram_bw_util_pct: 0.0
+      noc_util_pct: 0.0
+    config_summary:
+      source: "run_20260518T221616Z"
+    optimizer_blocks_applied:
+      - "layout_unifier"
+
+  - role_path: "decoder.layers.*.all_gather"
+    module_class: "BlockScope"
+    role: "collective_all_gather"
+    metrics:
+      runtime_ms_p50: 0.0196
+      fpu_util_pct: 30.17
+      dram_bw_util_pct: 0.0
+      noc_util_pct: 0.0
+    config_summary:
+      source: "run_20260518T221616Z"
+    optimizer_blocks_applied:
+      - "tp_strategy_picker"
+
+  - role_path: "decoder.layers.*.reduce_scatter"
+    module_class: "BlockScope"
+    role: "collective_reduce_scatter"
+    metrics:
+      runtime_ms_p50: 0.0299
+      fpu_util_pct: 19.98
+      dram_bw_util_pct: 0.0
+      noc_util_pct: 0.0
+    config_summary:
+      source: "run_20260518T221616Z"
+    optimizer_blocks_applied:
+      - "tp_strategy_picker"

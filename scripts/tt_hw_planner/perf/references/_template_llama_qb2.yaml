@@ -1,0 +1,155 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Template reference: copy this file to <name>.yaml (drop the leading
+# underscore) and fill in the FIXME fields from your real reference run.
+# Files starting with "_" are ignored by the reference loader so this
+# template never accidentally pollutes the suggestion engine.
+#
+# Suggested workflow:
+#   1. Pick a peer model you know runs well on QB2 (e.g. Llama 3.1 8B).
+#   2. Run a clean perf-collect, apply any known-good optimizer blocks,
+#      run another clean perf-collect. Note the run_id.
+#   3. Inspect joined.json from that run. For each distinct submodule
+#      role (q_proj, k_proj, v_proj, o_proj, sdpa, gate_proj, up_proj,
+#      down_proj, rms_norm, residual_add, lm_head, embed_tokens), pick
+#      a representative layer (e.g. layer 5 of 32) and copy the median
+#      runtime + utilization from its joined rows into a new entry.
+#   4. Copy this file to e.g. `llama_3.1_8b_qb2_bfp8.yaml`, drop the
+#      leading underscore, and fill in the FIXMEs.
+#   5. Verify with: `tt_hw_planner perf suggest <test-run-id>` on a
+#      similar-family model. You should see your reference's metrics
+#      and config in the recommendations.
+
+schema_version: 1
+
+provenance:
+  model_id: "meta-llama/Llama-3.1-8B-Instruct"
+  arch_family: "llama"
+  box: "QB2"
+  mesh_shape: [1, 4]
+  dtype: "bfp8_b"
+  source_run_id: "FIXME-run_YYYYMMDDTHHMMSSZ"
+  curator: "FIXME-your-handle"
+  notes: |
+    FIXME — describe what optimizer blocks were applied in what order,
+    any known caveats, what tt-metal commit this was measured on, etc.
+
+modules:
+
+  # ---------------------------------------------------------------
+  # Attention block
+  # ---------------------------------------------------------------
+  - role_path: "decoder.layers.*.self_attn.q_proj"
+    module_class: "Linear"
+    role: "attention_qkv_projection"
+    metrics:
+      runtime_ms_p50: 0.0   # FIXME
+      fpu_util_pct: 0.0     # FIXME
+      dram_bw_util_pct: 0.0
+      noc_util_pct: 0.0
+    config_summary:
+      compute_kernel: "FIXME"
+      math_fidelity: "HiFi2"
+    optimizer_blocks_applied:
+      - "matmul_tuner@in1_block_w=4"
+    expected_speedup_from_baseline: "FIXME"
+    notes: ""
+
+  - role_path: "decoder.layers.*.self_attn.k_proj"
+    module_class: "Linear"
+    role: "attention_qkv_projection"
+    metrics:
+      runtime_ms_p50: 0.0
+      fpu_util_pct: 0.0
+    config_summary: {}
+    optimizer_blocks_applied: []
+
+  - role_path: "decoder.layers.*.self_attn.v_proj"
+    module_class: "Linear"
+    role: "attention_qkv_projection"
+    metrics:
+      runtime_ms_p50: 0.0
+      fpu_util_pct: 0.0
+    config_summary: {}
+    optimizer_blocks_applied: []
+
+  - role_path: "decoder.layers.*.self_attn.o_proj"
+    module_class: "Linear"
+    role: "attention_output_projection"
+    metrics:
+      runtime_ms_p50: 0.0
+      fpu_util_pct: 0.0
+    config_summary: {}
+    optimizer_blocks_applied: []
+
+  - role_path: "decoder.layers.*.self_attn"
+    module_class: "LlamaAttention"
+    role: "attention_block_compound"
+    metrics:
+      runtime_ms_p50: 0.0
+      fpu_util_pct: 0.0
+    config_summary: {}
+    optimizer_blocks_applied: []
+
+  # ---------------------------------------------------------------
+  # MLP block
+  # ---------------------------------------------------------------
+  - role_path: "decoder.layers.*.mlp.gate_proj"
+    module_class: "Linear"
+    role: "mlp_gate"
+    metrics:
+      runtime_ms_p50: 0.0
+      fpu_util_pct: 0.0
+    config_summary: {}
+    optimizer_blocks_applied:
+      - "matmul_tuner@in1_block_w=8"
+
+  - role_path: "decoder.layers.*.mlp.up_proj"
+    module_class: "Linear"
+    role: "mlp_up"
+    metrics:
+      runtime_ms_p50: 0.0
+      fpu_util_pct: 0.0
+    config_summary: {}
+    optimizer_blocks_applied: []
+
+  - role_path: "decoder.layers.*.mlp.down_proj"
+    module_class: "Linear"
+    role: "mlp_down"
+    metrics:
+      runtime_ms_p50: 0.0
+      fpu_util_pct: 0.0
+    config_summary: {}
+    optimizer_blocks_applied: []
+
+  # ---------------------------------------------------------------
+  # Norms, residuals, head
+  # ---------------------------------------------------------------
+  - role_path: "decoder.layers.*.input_layernorm"
+    module_class: "LlamaRMSNorm"
+    role: "rms_norm_pre"
+    metrics:
+      runtime_ms_p50: 0.0
+      fpu_util_pct: 0.0
+    config_summary: {}
+    optimizer_blocks_applied: []
+
+  - role_path: "decoder.layers.*.post_attention_layernorm"
+    module_class: "LlamaRMSNorm"
+    role: "rms_norm_post"
+    metrics:
+      runtime_ms_p50: 0.0
+      fpu_util_pct: 0.0
+    config_summary: {}
+    optimizer_blocks_applied: []
+
+  - role_path: "lm_head"
+    module_class: "Linear"
+    role: "language_modeling_head"
+    metrics:
+      runtime_ms_p50: 0.0
+      fpu_util_pct: 0.0
+    config_summary: {}
+    optimizer_blocks_applied:
+      - "matmul_tuner@in1_block_w=4"

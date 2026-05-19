@@ -33,7 +33,7 @@ from .discovery import ModelDiscovery, discover_model
 from .hardware import HARDWARE, find_box
 from .kernel_constraints import KernelReport, Severity, evaluate_kernels
 from .probe import probe_model
-from .verdict import FitRow, evaluate_all
+from .verdict import FitRow, FitVerdict, evaluate_all, pick_best
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -372,6 +372,40 @@ class BringupError(RuntimeError):
     should surface a clean error message to the user)."""
 
 
+def _filter_rows_by_feasibility(
+    rows: List[FitRow],
+    kernel_report: Optional[KernelReport],
+) -> List[FitRow]:
+    """Drop rows whose mesh fails kernel divisibility at its TP, or whose
+    mesh has no corresponding MESH_DEVICE label in the demo's parametrize.
+
+    Model-agnostic: the predicates are the per-TP `KernelFinding`s (e.g.
+    `num_key_value_heads % TP`, `n_heads % TP`, `hidden_size % TP`) plus
+    the demo-side label mapping. Used by `prepare_bringup` so the
+    recommendation is always one the rest of the toolchain can act on.
+    """
+    if not rows:
+        return []
+    out: List[FitRow] = []
+    for row in rows:
+        tp = max(1, int(row.mesh_shape[1]))
+        blocked_by_kernel = False
+        if kernel_report is not None:
+            for f in kernel_report.findings_by_tp.get(tp, []):
+                if not f.passes and f.severity == Severity.BLOCKER:
+                    blocked_by_kernel = True
+                    break
+        if blocked_by_kernel:
+            continue
+        label, _ = mesh_device_for(row.box.arch, row.mesh_shape)
+        if label is None:
+            continue
+        if not row.fits:
+            continue
+        out.append(row)
+    return out
+
+
 def prepare_bringup(
     *,
     model_id: str,
@@ -404,7 +438,6 @@ def prepare_bringup(
         )
 
     compat = check_compatibility(model_id, probe.raw_config)
-    kernels: Optional[KernelReport] = evaluate_kernels(probe.raw_config)
 
     boxes = [find_box(box_override)] if box_override else HARDWARE
     if mesh_override is not None and mesh_override not in boxes[0].mesh_shapes:
@@ -417,15 +450,40 @@ def prepare_bringup(
     else:
         dtypes = ["bf16", "bfp8_b"] if probe.category in ("LLM", "VLM") else ["bf16"]
 
-    verdict = evaluate_all(
+    # Evaluate kernels at every TP factor any candidate mesh could use, so the
+    # divisibility filter below can reason about all candidate (mesh -> TP)
+    # pairs. Without this, kernels would only be checked at TP=1 and the filter
+    # would silently pass-through divisibility-blocked meshes.
+    candidate_tps = sorted({max(1, r * c) for b in boxes for (r, c) in b.mesh_shapes} | {1})
+    kernels: Optional[KernelReport] = evaluate_kernels(probe.raw_config, tp_grid=candidate_tps)
+
+    # Always enumerate every canonical mesh in the verdict so divisibility
+    # filtering has the full pool to bump the recommendation to. The displayed
+    # `verdict.rows` stays narrow only when the user did not pass --mesh and
+    # did not pass --all-meshes; here we operate on `all_mesh_verdict`.
+    all_mesh_verdict = evaluate_all(
         model=probe.memory_model,
         boxes=boxes,
         dtypes=dtypes,
         batch=batch,
         seq=seq_for_planning,
         kv_dtype_bytes=2.0,
-        all_meshes=mesh_override is not None,
+        all_meshes=True,
         explore_pp=False,
+    )
+    verdict = (
+        all_mesh_verdict
+        if mesh_override is not None
+        else evaluate_all(
+            model=probe.memory_model,
+            boxes=boxes,
+            dtypes=dtypes,
+            batch=batch,
+            seq=seq_for_planning,
+            kv_dtype_bytes=2.0,
+            all_meshes=False,
+            explore_pp=False,
+        )
     )
 
     best: Optional[FitRow]
@@ -434,7 +492,35 @@ def prepare_bringup(
         fitting = [r for r in rows if r.fits]
         best = min(fitting, key=lambda r: r.per_chip_gb) if fitting else (rows[0] if rows else None)
     else:
-        best = verdict.best
+        # Filter the candidate pool (every canonical mesh) by per-TP kernel
+        # divisibility AND by demo-runnable MESH_DEVICE label, then pick the
+        # best. This is the same predicate `cmd_plan` uses; without it,
+        # `prepare` would recommend memory-greedy meshes that the kernel
+        # constraint table is going to refuse moments later.
+        feasible = _filter_rows_by_feasibility(all_mesh_verdict.rows, kernels)
+        if feasible:
+            new_best = pick_best(feasible)
+            if (
+                new_best is not None
+                and verdict.best is not None
+                and (new_best.mesh_shape != verdict.best.mesh_shape or new_best.box.name != verdict.best.box.name)
+            ):
+                verdict = FitVerdict(
+                    rows=verdict.rows,
+                    best=new_best,
+                    notes=list(verdict.notes)
+                    + [
+                        f"recommendation bumped to {new_best.box.name} mesh "
+                        f"[{new_best.mesh_shape[0]},{new_best.mesh_shape[1]}]: "
+                        f"original best [{verdict.best.mesh_shape[0]},"
+                        f"{verdict.best.mesh_shape[1]}] fails kernel "
+                        f"divisibility at TP={verdict.best.mesh_shape[1]} or "
+                        f"lacks a MESH_DEVICE label in the demo."
+                    ],
+                )
+            best = new_best
+        else:
+            best = verdict.best
 
     if best is None:
         hint = "try --explore-pp, --dtype bfp4_b, or a larger --box"
@@ -442,6 +528,47 @@ def prepare_bringup(
             f"planner found no fitting configuration for {model_id} on "
             f"{[b.name for b in boxes]} at dtypes {dtypes}. {hint}."
         )
+
+    # Utilization audit: if the chosen mesh uses fewer chips than the box's
+    # max canonical mesh, surface WHY the larger options were rejected. This
+    # makes the underutilization explicit instead of silently picking a
+    # smaller mesh and leaving the user wondering. Model-agnostic.
+    chosen_chips = best.mesh_shape[0] * best.mesh_shape[1]
+    box_max_chips = max(r * c for (r, c) in best.box.mesh_shapes)
+    underutil_notes: List[str] = []
+    if chosen_chips < box_max_chips and mesh_override is None and kernels is not None:
+        # Look at every canonical mesh on the chosen box at or above
+        # chosen_chips, and explain its rejection reason.
+        for shape in best.box.mesh_shapes:
+            shape_chips = shape[0] * shape[1]
+            if shape_chips <= chosen_chips or shape == best.mesh_shape:
+                continue
+            tp = max(1, int(shape[1]))
+            blockers = [
+                f"TP={tp}: {f.op}.{f.field}={f.value}"
+                for f in kernels.findings_by_tp.get(tp, [])
+                if (not f.passes) and f.severity == Severity.BLOCKER
+            ]
+            label, _ = mesh_device_for(best.box.arch, shape)
+            if label is None and blockers:
+                reason = f"no MESH_DEVICE label AND kernel blocker ({blockers[0]})"
+            elif label is None:
+                reason = (
+                    f"no MESH_DEVICE label in simple_text_demo.py for " f"{best.box.arch} shape [{shape[0]},{shape[1]}]"
+                )
+            elif blockers:
+                reason = f"kernel divisibility: {blockers[0]}"
+            else:
+                # Should not happen — it would have been picked.
+                continue
+            underutil_notes.append(f"mesh [{shape[0]},{shape[1]}] ({shape_chips} chips) " f"unavailable: {reason}")
+        if underutil_notes:
+            underutil_notes.insert(
+                0,
+                f"UNDERUTILIZATION: chosen mesh uses {chosen_chips} of "
+                f"{box_max_chips} chips on {best.box.name}. Larger meshes were "
+                "rejected as follows:",
+            )
 
     arch = best.box.arch
     mesh_device, mesh_note = mesh_device_for(arch, best.mesh_shape)
@@ -542,6 +669,11 @@ def prepare_bringup(
         notes.insert(0, f"ARCH-INCOMPATIBLE: {arch_blocker}")
     if mesh_label_blocker is not None:
         notes.insert(0, f"MESH-LABEL-MISSING: {mesh_label_blocker}")
+    # Append underutilization audit at the end of notes so it's visible in
+    # `prepare` output and stored in run_meta. This is the single source of
+    # truth for "why didn't you use all my chips".
+    for un in underutil_notes:
+        notes.append(un)
 
     return BringupPlan(
         model_id=model_id,

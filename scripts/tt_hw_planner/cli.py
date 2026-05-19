@@ -143,33 +143,16 @@ def cmd_plan(args) -> int:
 
 def _filter_verdict_by_divisibility(verdict, kernel_report, all_mesh_verdict=None):
     """Drop the planner's `best` if its chosen mesh has BLOCKER findings at
-    that TP, and re-pick from rows that pass all divisibility constraints
-    AND have a demo-runnable MESH_DEVICE label.
-
-    This stops `plan` from ever recommending a mesh `prepare` is going to
-    refuse — the same constraint table is now used by both, and we never
-    point users at a shape the demo cannot open (e.g. [2,2] on Blackhole
-    today has no env-var mapping in simple_text_demo.py).
-
-    `all_mesh_verdict` is consulted for picking a fallback when the
-    user-displayed table is narrowed.
+    that TP, and re-pick from rows that pass divisibility AND have a
+    demo-runnable MESH_DEVICE label. Single source of truth lives in
+    `bringup._filter_rows_by_feasibility`; this is the cmd_plan wrapper that
+    also preserves the displayed `verdict.rows` table while bumping `best`.
     """
-    from .bringup import mesh_device_for
-    from .kernel_constraints import Severity
+    from .bringup import _filter_rows_by_feasibility
     from .verdict import FitVerdict, pick_best
 
-    def row_passes(row) -> bool:
-        tp = max(1, int(row.mesh_shape[1]))
-        for f in kernel_report.findings_by_tp.get(tp, []):
-            if not f.passes and f.severity == Severity.BLOCKER:
-                return False
-        label, _ = mesh_device_for(row.box.arch, row.mesh_shape)
-        if label is None:
-            return False
-        return True
-
     pool = all_mesh_verdict.rows if all_mesh_verdict is not None else verdict.rows
-    feasible = [r for r in pool if row_passes(r)]
+    feasible = _filter_rows_by_feasibility(pool, kernel_report)
     if not feasible:
         return verdict
     new_best = pick_best(feasible)
@@ -183,7 +166,8 @@ def _filter_verdict_by_divisibility(verdict, kernel_report, all_mesh_verdict=Non
             f"recommendation bumped to {new_best.box.name} mesh "
             f"[{new_best.mesh_shape[0]},{new_best.mesh_shape[1]}]: original best "
             f"[{verdict.best.mesh_shape[0]},{verdict.best.mesh_shape[1]}] fails "
-            f"kernel divisibility at TP={verdict.best.mesh_shape[1]}."
+            f"kernel divisibility at TP={verdict.best.mesh_shape[1]} or lacks "
+            f"a MESH_DEVICE label in the demo."
         )
     return FitVerdict(rows=verdict.rows, best=new_best, notes=notes)
 

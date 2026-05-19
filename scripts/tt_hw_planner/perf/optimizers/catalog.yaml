@@ -1,0 +1,178 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# User-facing metadata for every optimizer block. The implementation
+# lives in scripts/tt_hw_planner/perf/optimizers/l*_*.py and is keyed by
+# the `name` field below.
+
+version: 1
+blocks:
+  - name: op_coverage_guard
+    level: 0
+    module: scripts.tt_hw_planner.perf.optimizers.l0_op_coverage_guard
+    class: OpCoverageGuard
+    requires: []
+    when: |
+      Run contains rows with missing kernel identity or model_tracer cannot
+      map some device ops, indicating coverage gaps before deeper tuning.
+    what: |
+      Flags coverage blockers and unmapped ops with module scope so you can
+      prioritize decomposition, substitution, or kernel bring-up.
+    safety: |
+      Diagnostic only. No patches are emitted.
+    expected_gain: Enables bring-up triage; prevents wasted tuning on unsupported paths
+    examples: unknown/missing kernel signatures, tracer-op mapping gaps
+
+  - name: math_fidelity_downcast
+    level: 1
+    module: scripts.tt_hw_planner.perf.optimizers.l1_math_fidelity_downcast
+    class: MathFidelityDowncast
+    requires: []
+    when: |
+      Cluster's FPU util is well below peak AND its math_fidelity is
+      higher than LoFi. Most ttnn ops are fine at HiFi2 or even LoFi;
+      compute peaks roughly double per fidelity step.
+    what: |
+      Rewrites `math_fidelity=HiFi4` -> `HiFi2` (and HiFi2 -> LoFi where
+      accuracy allows). Per-cluster, so it can be tightened safely.
+    safety: |
+      verify() re-runs the accuracy gate from `model_targets.yaml`.
+      Reverts automatically if PCC/loss drops below the model's tolerance.
+    expected_gain: 1.1x - 2.0x per affected cluster
+    examples: tt_transformers Llama-3.1-8B, Qwen2.5-7B
+
+  - name: dram_l1_promoter
+    level: 2
+    module: scripts.tt_hw_planner.perf.optimizers.l2_dram_l1_promoter
+    class: DramL1Promoter
+    requires: []
+    when: |
+      Cluster is bandwidth-bound (Region E) AND the tensor it reads/writes
+      fits in (box.l1_per_core * cores) AND the tensor is reused ≥2x.
+    what: |
+      Rewrites `memory_config=DRAM_INTERLEAVED` -> `ShardedL1(...)` with
+      a shard shape derived from the input shape and the box core grid.
+    safety: |
+      Refuses if the tensor doesn't fit L1 on the recommended box, or if
+      the shard shape violates ttnn constraints. verify() reverts on
+      kernel-time regression.
+    expected_gain: 1.2x - 3x per affected matmul cluster
+    examples: deepseek_v3 (12 clusters), llama-3.1-8b (8 clusters)
+
+  - name: program_config_tuner
+    level: 3
+    module: scripts.tt_hw_planner.perf.optimizers.l3_program_config_tuner
+    class: ProgramConfigTuner
+    requires: []
+    when: |
+      Cluster is compute-bound at HiFi2/4 AND a faster `program_config`
+      exists at the same (op, shape, box) signature in the reference DB.
+    what: |
+      Replaces program_config kwargs (per_core_M, per_core_N, in0_block_w,
+      etc.) with the reference DB's best-known values.
+    safety: |
+      Falls back gracefully when the reference DB has no entry for the
+      shape; runs a small local search across plausible values.
+    expected_gain: 1.3x - 2.5x per matmul cluster
+    examples: tt_transformers matmul shapes, ffn down/up
+
+  - name: layout_unifier
+    level: 4
+    module: scripts.tt_hw_planner.perf.optimizers.l4_layout_unifier
+    class: LayoutUnifier
+    requires: [dram_l1_promoter, program_config_tuner]
+    when: |
+      A chain of ops alternates reshard/tilize/untilize between them
+      because the producer and consumer disagree on layout.
+    what: |
+      Pick one layout that flows through the chain and rewrite the
+      contributing op kwargs to use it.
+    safety: |
+      Only rewrites layout kwargs the runner can revert. Conservative:
+      refuses if multiple incompatible producers feed the same consumer.
+    expected_gain: 5-15% on chain runtime
+    examples: tt_transformers attention prefill chain
+
+  - name: fusion_rewriter
+    level: 5
+    module: scripts.tt_hw_planner.perf.optimizers.l5_fusion_rewriter
+    class: FusionRewriter
+    requires: [program_config_tuner]
+    when: |
+      Three or more adjacent ops form a known pattern (matmul + bias +
+      activation; RMSNorm; RoPE) that has a fused ttnn primitive.
+    what: |
+      v1: emits a unified diff for manual review and apply (AST
+      rewriting is too heavy here). v2 will land AST application.
+    safety: |
+      Patches are dry-run by default in v1.
+    expected_gain: 1.2x - 1.6x on the fused chain
+    examples: matmul+bias+gelu, RMSNorm, fused RoPE
+
+  - name: trace_capturer
+    level: 6
+    module: scripts.tt_hw_planner.perf.optimizers.l6_trace_capturer
+    class: TraceCapturer
+    requires: []
+    when: |
+      OP-TO-OP latency dominates kernel time (Region F) for the inner
+      iteration loop. Common symptom: small kernels, fast hardware, but
+      decode TPS limited by dispatch.
+    what: |
+      Adds `--enable_trace` to the demo invocation and wraps the
+      iteration loop in `ttnn.tracy_message + create_device_trace`.
+    safety: |
+      Requires the model's inner loop to be shape-stable across iters.
+      verify() falls back to disable_trace if program_cache_hit drops.
+    expected_gain: 2x - 5x for decode-bound runs
+    examples: tt_transformers --enable_trace
+
+  - name: cache_warmer
+    level: 6
+    module: scripts.tt_hw_planner.perf.optimizers.l6_cache_warmer
+    class: CacheWarmer
+    requires: []
+    when: |
+      `program_cache_hit` is below 99%, or shape thrash is detected
+      (PROGRAM HASH instability across iterations of the same loop).
+    what: |
+      Inserts one or more warm-up iterations before measurement, or
+      fixes the iteration to use a stable shape.
+    safety: |
+      The patch only affects the measurement harness, not model behavior.
+    expected_gain: removes 1-2 second startup cliff; fixes flaky perf
+    examples: tt_transformers warm-up loop
+
+  - name: tp_strategy_picker
+    level: 7
+    module: scripts.tt_hw_planner.perf.optimizers.l7_tp_strategy_picker
+    class: TPStrategyPicker
+    requires: [program_config_tuner, layout_unifier]
+    when: |
+      Mesh under-utilization: total device time across chips < 1/N of
+      the single-chip baseline, OR collective comm (all-gather, all-
+      reduce) sits on the critical path.
+    what: |
+      Picks a TP factor and a collective topology (ring vs hierarchical)
+      based on `BoxSpec.mesh_shape` and op shapes.
+    safety: |
+      Conservative — refuses if it can't prove the chosen TP factor
+      divides every relevant dim evenly.
+    expected_gain: up to 1/N theoretical speedup
+    examples: T3K all-gather optimization
+
+  - name: async_dispatch_inserter
+    level: 8
+    module: scripts.tt_hw_planner.perf.optimizers.l8_async_dispatch_inserter
+    class: AsyncDispatchInserter
+    requires: [trace_capturer, tp_strategy_picker]
+    when: |
+      Host bubbles visible in the op-to-op waterfall: gap > 50% of
+      kernel time for a sustained run. Often indicates the dispatch
+      pipe could be deeper or the iteration loop could overlap.
+    what: |
+      Inserts async dispatch wrappers and/or double-buffers the CB.
+    safety: |
+      v1 emits the diff; v2 applies it.
+    expected_gain: 5-15% on host-bound chains
+    examples: long iteration loops with small kernels

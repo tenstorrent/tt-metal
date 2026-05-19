@@ -14,13 +14,39 @@ import sys
 import os
 from datetime import datetime
 from functools import wraps
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from loguru import logger
 import ttnn
 
 
 # Global counter for operation numbering in trace files
 _OPERATION_COUNTER = 0
+
+# Observers invoked AFTER a successful serialize_operation_parameters call.
+# Receive (operation_counter, operation_name). Used by the tt_hw_planner perf
+# pipeline (model_tracer.module_hierarchy) to attribute each traced op to the
+# enclosing nn.Module stack so per-module performance can be reported. Kept
+# light: a list of callables that any plugin can append to; we swallow
+# exceptions from observers so a buggy observer never breaks tracing.
+_POST_TRACE_OBSERVERS: List[Callable[[int, str], None]] = []
+
+
+def register_post_trace_observer(cb: Callable[[int, str], None]) -> None:
+    """Add a callback fired after every successfully traced op.
+
+    Signature: ``cb(op_counter, operation_name)``. Exceptions raised by the
+    observer are caught and logged at debug level — observers must not be
+    able to break op tracing.
+    """
+    _POST_TRACE_OBSERVERS.append(cb)
+
+
+def unregister_post_trace_observer(cb: Callable[[int, str], None]) -> None:
+    try:
+        _POST_TRACE_OBSERVERS.remove(cb)
+    except ValueError:
+        pass
+
 
 # Flag to enable parameter tracing (set by pytest when --trace-params is used)
 # This is accessed from decorators.py, so we expose it here
@@ -454,6 +480,15 @@ def serialize_operation_parameters(
         except (OSError, IOError) as e:
             logger.error(f"Failed to write trace file {file_path}: {e}")
             raise
+
+        # Notify any registered post-trace observers (e.g. module_hierarchy
+        # capture). We do this inside the IS_SERIALIZING guard so observers
+        # that themselves call ttnn ops won't recurse.
+        for cb in _POST_TRACE_OBSERVERS:
+            try:
+                cb(_OPERATION_COUNTER, operation_name)
+            except Exception as exc:
+                logger.debug(f"post_trace_observer raised: {exc}")
     finally:
         # Always reset serialization flag, even if an exception occurs
         _IS_SERIALIZING = False

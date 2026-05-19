@@ -1,0 +1,93 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Module-class reference schema.
+#
+# One file per (reference_model, box, mesh, dtype) combination. The file
+# describes what a WELL-OPTIMIZED version of this model looks like at
+# the per-submodule level. The suggestion engine uses these entries to
+# tell a user-run "your block X is N ms slower than the reference; apply
+# optimizer block Y to close the gap."
+#
+# This file (schema.yaml) is itself NEVER loaded by the DB — it's a
+# documentation template. Files starting with "_" are also ignored, so
+# you can keep WIP drafts as `_my_draft.yaml`. To make a reference
+# active, copy the structure below into `<name>.yaml`.
+#
+# See README.md for the full curation workflow.
+
+schema_version: 1
+
+# ---------------------------------------------------------------------------
+# Provenance: identifies the run this reference was distilled from.
+# Used by the matcher to (a) prefer same-family references and
+# (b) flag mesh/dtype mismatches in the inspector.
+# ---------------------------------------------------------------------------
+provenance:
+  model_id: ""              # full HF id, e.g. "meta-llama/Llama-3.1-8B-Instruct"
+  arch_family: ""           # short tag; one of: llama, qwen, qwen2, mistral,
+                            # phi, gemma, mamba, gpt2, gptj, ...
+                            # See `_FAMILY_ALIASES` in reference_db.py for the
+                            # canonical list of cross-family aliases the
+                            # matcher already understands.
+  box: ""                   # "QB2", "n300", "n150", ...
+  mesh_shape: []            # [rows, cols], e.g. [1, 4]
+  dtype: ""                 # "bfp8_b", "bfloat16", "float32", ...
+  source_run_id: ""         # perf-data run id this was distilled from
+  curator: ""               # your github handle (so people can ask questions)
+  notes: |
+    Multi-line free-form notes. Capture anything that influenced the
+    config: which optimizer blocks were applied in what order, known
+    caveats, etc.
+
+# ---------------------------------------------------------------------------
+# Modules: one entry per distinct submodule role in the model.
+# Repeat per layer is NOT needed — use "*" in role_path to match all layers.
+# ---------------------------------------------------------------------------
+modules:
+
+  # Worked example: Llama / Qwen attention QKV projection
+  - role_path: "decoder.layers.*.self_attn.q_proj"
+    # ^ Dot-separated attribute path. "*" matches a single segment
+    # (typically the layer index). The matcher is anchor-loose at the
+    # start, so this matches "model.decoder.layers.0.self_attn.q_proj"
+    # even though "model." is omitted.
+
+    module_class: "Linear"
+    # ^ The Python class name of the nn.Module. Acts as a secondary
+    # match when role_path doesn't match exactly.
+
+    role: "attention_qkv_projection"
+    # ^ Short logical tag; used in the inspector for grouping. Free
+    # text but conventionally lowercase with underscores.
+
+    metrics:
+      runtime_ms_p50: 0.0   # median wall-time for one call, in ms
+      fpu_util_pct: 0.0     # mean FPU utilization
+      dram_bw_util_pct: 0.0
+      noc_util_pct: 0.0
+
+    config_summary:
+      # Free-form key:value describing the compute-kernel config that
+      # produced these metrics. The inspector renders this as-is.
+      compute_kernel: "large_block_matmul_1d"
+      in1_block_w: 4
+      out_subblock_h: 1
+      out_subblock_w: 4
+      math_fidelity: "HiFi2"
+
+    optimizer_blocks_applied:
+      # Names from the optimizer-block catalog. The suggestion engine
+      # presents these as "apply this to close the gap" when the user's
+      # equivalent module's runtime is worse than this reference's.
+      - "matmul_tuner@in1_block_w=4"
+      - "matmul_tuner@out_subblock_w=4"
+
+    expected_speedup_from_baseline: "1.8x"
+    # ^ Free-text estimate captured at curation time. Optional.
+
+    notes: ""
+
+  # Add more module entries as needed. The matcher is happy to use a
+  # PARTIAL catalog: any user-module without a reference entry just
+  # shows "no reference match" in the inspector.

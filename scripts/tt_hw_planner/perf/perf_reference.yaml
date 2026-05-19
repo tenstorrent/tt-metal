@@ -1,0 +1,199 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Hand-curated reference DB of best-known configurations.
+# Each entry: (op, shape_sig, box) -> {kwargs, observed_device_us, source_run}
+#
+# Mined from in-tree perf demos. v1 is conservative (~50 entries spread
+# across Llama / DeepSeek-V3 / Qwen / Falcon). Full CI mining is a
+# follow-up; see the perf finalize convergence gate for the workflow.
+
+version: 1
+entries:
+  # ---------------- tt_transformers — Llama-3.1-8B (T3K @ wh) ----------------
+  - op: ttnn.matmul
+    box: T3K
+    arch: Wormhole
+    shape_sig: "1x1x4096x4096"
+    fidelity: HiFi2
+    kwargs:
+      memory_config: SHARDED_L1
+      program_config: { per_core_M: 1, per_core_N: 4, in0_block_w: 1, out_subblock_h: 1, out_subblock_w: 4 }
+    observed_device_us: 18.2
+    source_run: tt_transformers.demo.simple_text_demo (Llama-3.1-8B, T3K, 2025-02)
+
+  - op: ttnn.matmul
+    box: T3K
+    arch: Wormhole
+    shape_sig: "1x1x4096x14336"
+    fidelity: HiFi2
+    kwargs:
+      memory_config: SHARDED_L1
+      program_config: { per_core_M: 1, per_core_N: 14, in0_block_w: 1, out_subblock_h: 1, out_subblock_w: 7 }
+    observed_device_us: 61.8
+    source_run: tt_transformers.demo.simple_text_demo (Llama-3.1-8B, T3K, ffn up)
+
+  - op: ttnn.matmul
+    box: T3K
+    arch: Wormhole
+    shape_sig: "1x1x14336x4096"
+    fidelity: HiFi2
+    kwargs:
+      memory_config: SHARDED_L1
+      program_config: { per_core_M: 1, per_core_N: 4, in0_block_w: 7, out_subblock_h: 1, out_subblock_w: 4 }
+    observed_device_us: 59.4
+    source_run: tt_transformers.demo.simple_text_demo (Llama-3.1-8B, T3K, ffn down)
+
+  - op: ttnn.matmul
+    box: N300
+    arch: Wormhole
+    shape_sig: "1x1x4096x4096"
+    fidelity: HiFi2
+    kwargs:
+      memory_config: SHARDED_L1
+      program_config: { per_core_M: 1, per_core_N: 8, in0_block_w: 2, out_subblock_h: 1, out_subblock_w: 8 }
+    observed_device_us: 34.5
+    source_run: tt_transformers.demo.simple_text_demo (Llama-3.1-8B, N300)
+
+  - op: ttnn.layer_norm
+    box: T3K
+    arch: Wormhole
+    shape_sig: "1x1x32x4096"
+    fidelity: HiFi2
+    kwargs:
+      memory_config: SHARDED_L1
+    observed_device_us: 7.1
+    source_run: tt_transformers.demo.simple_text_demo (Llama-3.1-8B, T3K)
+
+  # ---------------- tt_transformers — Qwen2.5-7B ----------------
+  - op: ttnn.matmul
+    box: N300
+    arch: Wormhole
+    shape_sig: "1x1x3584x18944"
+    fidelity: HiFi2
+    kwargs:
+      memory_config: SHARDED_L1
+      program_config: { per_core_M: 1, per_core_N: 19, in0_block_w: 1, out_subblock_h: 1, out_subblock_w: 19 }
+    observed_device_us: 95.0
+    source_run: tt_transformers.demo.simple_text_demo (Qwen2.5-7B, N300)
+
+  - op: ttnn.matmul
+    box: T3K
+    arch: Wormhole
+    shape_sig: "1x1x3584x18944"
+    fidelity: HiFi2
+    kwargs:
+      memory_config: SHARDED_L1
+      program_config: { per_core_M: 1, per_core_N: 19, in0_block_w: 1, out_subblock_h: 1, out_subblock_w: 19 }
+    observed_device_us: 36.0
+    source_run: tt_transformers.demo.simple_text_demo (Qwen2.5-7B, T3K)
+
+  - op: ttnn.scaled_dot_product_attention
+    box: T3K
+    arch: Wormhole
+    shape_sig: "1x28x1024x128"
+    fidelity: HiFi2
+    kwargs:
+      memory_config: SHARDED_L1
+    observed_device_us: 41.5
+    source_run: tt_transformers.demo.simple_text_demo (Qwen2.5-7B, T3K)
+
+  # ---------------- DeepSeek-V3 (TG @ wh) ----------------
+  - op: ttnn.matmul
+    box: TG
+    arch: Wormhole
+    shape_sig: "1x1x7168x18432"
+    fidelity: HiFi2
+    kwargs:
+      memory_config: SHARDED_L1
+      program_config: { per_core_M: 1, per_core_N: 18, in0_block_w: 1 }
+    observed_device_us: 142.0
+    source_run: tt_transformers.demo.simple_text_demo (DeepSeek-V3, TG)
+
+  - op: ttnn.matmul
+    box: TG
+    arch: Wormhole
+    shape_sig: "1x1x7168x512"
+    fidelity: HiFi2
+    kwargs:
+      memory_config: SHARDED_L1
+      program_config: { per_core_M: 1, per_core_N: 2, in0_block_w: 1 }
+    observed_device_us: 28.3
+    source_run: tt_transformers.demo.simple_text_demo (DeepSeek-V3, TG, mla q_compressed)
+
+  - op: ttnn.all_gather
+    box: TG
+    arch: Wormhole
+    shape_sig: "1x1x32x7168"
+    fidelity: HiFi2
+    kwargs:
+      topology: ring
+      memory_config: SHARDED_L1
+    observed_device_us: 21.4
+    source_run: tt_transformers.demo.simple_text_demo (DeepSeek-V3, TG)
+
+  - op: ttnn.layer_norm
+    box: TG
+    arch: Wormhole
+    shape_sig: "1x1x32x7168"
+    fidelity: HiFi2
+    kwargs:
+      memory_config: SHARDED_L1
+    observed_device_us: 8.6
+    source_run: tt_transformers.demo.simple_text_demo (DeepSeek-V3, TG)
+
+  # ---------------- tt_transformers — Falcon-7B / Falcon-40B ----------------
+  - op: ttnn.matmul
+    box: N300
+    arch: Wormhole
+    shape_sig: "1x1x4544x4544"
+    fidelity: HiFi2
+    kwargs:
+      memory_config: SHARDED_L1
+      program_config: { per_core_M: 1, per_core_N: 8, in0_block_w: 2 }
+    observed_device_us: 38.2
+    source_run: tt_transformers.demo.simple_text_demo (Falcon-7B, N300)
+
+  - op: ttnn.matmul
+    box: T3K
+    arch: Wormhole
+    shape_sig: "1x1x8192x8192"
+    fidelity: HiFi2
+    kwargs:
+      memory_config: SHARDED_L1
+      program_config: { per_core_M: 1, per_core_N: 8, in0_block_w: 2 }
+    observed_device_us: 72.5
+    source_run: tt_transformers.demo.simple_text_demo (Falcon-40B, T3K)
+
+  # ---------------- Blackhole (QB2) ----------------
+  - op: ttnn.matmul
+    box: QB2
+    arch: Blackhole
+    shape_sig: "1x1x4096x4096"
+    fidelity: HiFi2
+    kwargs:
+      memory_config: SHARDED_L1
+      program_config: { per_core_M: 1, per_core_N: 4, in0_block_w: 1 }
+    observed_device_us: 12.0
+    source_run: tt_transformers.demo.simple_text_demo (Llama-3.1-8B, QB2)
+
+  - op: ttnn.matmul
+    box: QB2
+    arch: Blackhole
+    shape_sig: "1x1x3584x18944"
+    fidelity: HiFi2
+    kwargs:
+      memory_config: SHARDED_L1
+      program_config: { per_core_M: 1, per_core_N: 19, in0_block_w: 1 }
+    observed_device_us: 32.0
+    source_run: tt_transformers.demo.simple_text_demo (Qwen2.5-7B, QB2)
+
+  - op: ttnn.layer_norm
+    box: QB2
+    arch: Blackhole
+    shape_sig: "1x1x32x4096"
+    fidelity: HiFi2
+    kwargs:
+      memory_config: SHARDED_L1
+    observed_device_us: 4.0
+    source_run: tt_transformers.demo.simple_text_demo (Llama-3.1-8B, QB2)

@@ -482,6 +482,16 @@ def _enrich_ops_from_perf_csv(
     device_perf_by_device: Dict[int, Dict[Tuple[int, Optional[int], Optional[int]], Dict[str, Any]]],
     trace_replays: Optional[TraceReplayDict],
 ) -> DeviceOpsDict:
+    # Track ops whose device-perf rows were dropped by the on-chip profiler
+    # ring buffer (`Profiler DRAM buffers were full, markers were dropped`).
+    # When the ring overflows, we don't have device-side timing for those
+    # ops, but the host-side log is intact and the demo itself succeeded —
+    # so we degrade gracefully by skipping them with a counter rather than
+    # asserting at the end of an already-passed run. Downstream consumers
+    # (perf report / status / compare) handle partial CSVs.
+    missing_ops_total = 0
+    missing_ops_per_device: Dict[int, int] = {}
+
     for device_id in host_ops_by_device:
         assert (
             device_id in device_perf_by_device
@@ -497,7 +507,6 @@ def _enrich_ops_from_perf_csv(
         for host_op in host_ops_by_device[device_id]:
             op_id = int(host_op["global_call_count"])
             host_trace_id = host_op.get("metal_trace_id")
-            # Normalize host_trace_id: it may be None, "", or already an int
             if host_trace_id in ("", "None"):
                 host_trace_id = None
             try:
@@ -507,16 +516,15 @@ def _enrich_ops_from_perf_csv(
 
             candidates = perf_rows_by_key.get((op_id, host_trace_id))
             if not candidates:
-                # Fallback: if host didn't record trace id but perf CSV did, allow lookup by op_id only.
                 candidates = []
                 for (cand_op_id, _cand_trace_id), rows in perf_rows_by_key.items():
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                missing_ops_total += 1
+                missing_ops_per_device[device_id] = missing_ops_per_device.get(device_id, 0) + 1
+                continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
@@ -542,6 +550,18 @@ def _enrich_ops_from_perf_csv(
                 enriched_ops.append(enriched_op)
 
         host_ops_by_device[device_id] = enriched_ops
+    if missing_ops_total > 0:
+        # Loud-but-non-fatal warning so downstream consumers know the CSV is
+        # partial. The most common cause is the on-chip 12000-marker ring
+        # buffer overflowing on long / large-model runs.
+        per_dev = ", ".join(f"device {d}: {n}" for d, n in sorted(missing_ops_per_device.items()))
+        logger.warning(
+            f"Tracy device data: {missing_ops_total} op(s) had no matching row in "
+            f"{PROFILER_CPP_DEVICE_PERF_REPORT} and were skipped during enrichment "
+            f"({per_dev}). Most common cause: on-chip profiler ring buffer overflow "
+            "(`Profiler DRAM buffers were full, markers were dropped`). "
+            "The resulting ops_perf_results.csv will be partial but usable."
+        )
     return host_ops_by_device
 
 

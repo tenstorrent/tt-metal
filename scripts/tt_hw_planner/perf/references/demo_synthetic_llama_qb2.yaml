@@ -1,0 +1,93 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# SYNTHETIC reference — placeholder so `perf suggest` produces output
+# before a real reference has been curated. The metrics here are
+# fabricated; do NOT use this for actual optimization decisions.
+#
+# DELETE this file once you have a real reference. The provenance
+# `curator: synthetic` makes it identifiable in CLI / dashboard output.
+
+schema_version: 1
+
+provenance:
+  model_id: "synthetic/llama-shaped"
+  arch_family: "llama"
+  box: "QB2"
+  mesh_shape: [1, 4]
+  dtype: "bfp8_b"
+  source_run_id: ""
+  curator: "synthetic"
+  notes: |
+    DEMO ONLY. These metrics are placeholders chosen to be PLAUSIBLE
+    targets — they are intentionally generous so a real run that
+    "matches" still leaves headroom in real comparisons. Replace this
+    file with a curated reference distilled from a real perf-data run.
+
+modules:
+
+  - role_path: "decoder.layers.*.self_attn.q_proj"
+    module_class: "Linear"
+    role: "attention_qkv_projection"
+    metrics:
+      runtime_ms_p50: 0.30
+      fpu_util_pct: 78.0
+      dram_bw_util_pct: 35.0
+    config_summary:
+      compute_kernel: "synthetic_large_block_matmul_1d"
+      in1_block_w: 4
+      math_fidelity: "HiFi2"
+    optimizer_blocks_applied:
+      - "program_config_tuner"
+
+  - role_path: "decoder.layers.*.self_attn.k_proj"
+    module_class: "Linear"
+    role: "attention_qkv_projection"
+    metrics:
+      runtime_ms_p50: 0.30
+      fpu_util_pct: 78.0
+    optimizer_blocks_applied: ["program_config_tuner"]
+
+  - role_path: "decoder.layers.*.self_attn.v_proj"
+    module_class: "Linear"
+    role: "attention_qkv_projection"
+    metrics:
+      runtime_ms_p50: 0.30
+      fpu_util_pct: 78.0
+    optimizer_blocks_applied: ["program_config_tuner"]
+
+  - role_path: "decoder.layers.*.self_attn.o_proj"
+    module_class: "Linear"
+    role: "attention_output_projection"
+    metrics:
+      runtime_ms_p50: 0.32
+      fpu_util_pct: 76.0
+    optimizer_blocks_applied: ["program_config_tuner"]
+
+  - role_path: "decoder.layers.*.mlp.gate_proj"
+    module_class: "Linear"
+    role: "mlp_gate"
+    metrics:
+      runtime_ms_p50: 0.55
+      fpu_util_pct: 84.0
+      dram_bw_util_pct: 28.0
+    config_summary:
+      compute_kernel: "synthetic_matmul_1d_dram_sharded"
+      in1_block_w: 8
+    optimizer_blocks_applied: ["program_config_tuner", "dram_l1_promoter"]
+
+  - role_path: "decoder.layers.*.mlp.up_proj"
+    module_class: "Linear"
+    role: "mlp_up"
+    metrics:
+      runtime_ms_p50: 0.55
+      fpu_util_pct: 84.0
+    optimizer_blocks_applied: ["program_config_tuner"]
+
+  - role_path: "decoder.layers.*.mlp.down_proj"
+    module_class: "Linear"
+    role: "mlp_down"
+    metrics:
+      runtime_ms_p50: 0.50
+      fpu_util_pct: 82.0
+    optimizer_blocks_applied: ["program_config_tuner"]
