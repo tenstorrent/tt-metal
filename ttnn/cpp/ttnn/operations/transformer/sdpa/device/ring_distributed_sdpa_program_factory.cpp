@@ -199,6 +199,8 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     } scale_union{};
     scale_union.f = scale.value_or(1.0f);
 
+    constexpr bool use_zigzag_balancing = true;
+
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
         B,
@@ -234,6 +236,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     reader_compile_time_args.push_back(0);  // receiver_semaphore_id
     reader_compile_time_args.push_back(0);  // valid_semaphore_id
     reader_compile_time_args.push_back(0);  // mcast_enabled
+    reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 31
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -270,6 +273,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         0,      // arg 21: use_streaming_compute — always false for ring distributed (causal)
         0,      // arg 22: out_subblock_h — unused when streaming is off
         0,      // arg 23: k_partial_col — non-streaming, no partial mask emitted
+        static_cast<uint32_t>(use_zigzag_balancing),  // arg 24
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
@@ -307,6 +311,9 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         0,          //(std::uint32_t)use_attention_sink,
         0,          //(std::uint32_t)use_streaming_compute — always false for ring distributed (causal)
         valid_Skt,  // arg 31: unpadded K tiles for streaming padded_k_tiles
+        0,          // arg 32: uniform_dataformat — unused when streaming is off
+        0,          // arg 33: k_partial_col — non-streaming, no partial mask emitted
+        static_cast<uint32_t>(use_zigzag_balancing),  // arg 34
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
@@ -317,10 +324,6 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    uint32_t balanced_q_parallel = (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0);
-    if (balanced_q_parallel) {
-        defines["BALANCED_Q_PARALLEL"] = "1";
-    }
 
     auto reader_kernels_id = CreateKernel(
         program,

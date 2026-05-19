@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
+
+#include <string_view>
+
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
@@ -57,6 +60,37 @@ bool get_broadcast_batch(
     return broadcast_batch;
 }
 
+// Warns if a caller of MatmulDeviceOperation's static API hasn't populated allowed_worker_cores
+// on a program_config variant that supports the field. ttnn::prim::matmul() normalizes its
+// attributes before launch, but direct callers (e.g. CCL fused ops in
+// ttnn/operations/experimental/ccl) need to invoke
+// ttnn::operations::matmul::normalize_program_config() themselves. Downstream code in this file
+// auto-populates via normalize_program_config on the chosen_program_config local, so this is
+// currently advisory.
+// TODO(#44529): convert this back to TT_FATAL once all callers have been updated.
+void warn_if_allowed_worker_cores_missing(
+    const std::optional<operations::matmul::MatmulProgramConfig>& program_config, std::string_view entry_point) {
+    if (!program_config.has_value()) {
+        return;
+    }
+    std::visit(
+        [&](const auto& pc) {
+            if constexpr (requires { pc.allowed_worker_cores; }) {
+                if (!pc.allowed_worker_cores.has_value()) {
+                    log_warning(
+                        tt::LogOp,
+                        "{}: program_config.allowed_worker_cores not populated on a MatmulProgramConfig variant "
+                        "that supports the field. Auto-populating from compute_with_storage_grid_size. Callers "
+                        "that bypass ttnn::prim::matmul() should invoke "
+                        "ttnn::operations::matmul::normalize_program_config() on the program config first. "
+                        "This will become a hard error in a future release.",
+                        entry_point);
+                }
+            }
+        },
+        program_config.value());
+}
+
 }  // namespace
 
 MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_factory(
@@ -95,6 +129,8 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
 void MatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
     using namespace tt::constants;
+    warn_if_allowed_worker_cores_missing(
+        attributes.program_config, "MatmulDeviceOperation::validate_on_program_cache_miss");
 
     const auto& input_tensors = args.input_tensors;
     const auto& input_tensor_a = args.input_tensors.at(0);
@@ -236,6 +272,10 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         attributes.transpose_b,
         bias_single_tile_size,
         attributes);
+    // Soft-normalize so downstream variant code can safely read allowed_worker_cores; the warning
+    // for missing allowed_worker_cores was emitted at the entry point above.
+    operations::matmul::normalize_program_config(
+        chosen_program_config, input_tensor_a.device()->compute_with_storage_grid_size());
 
     // Validate batch dimensions for non-bcast matmul
     if (!attributes.bcast_batch.value()) {
@@ -1160,6 +1200,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
     const operation_attributes_t& attributes, const tensor_args_t& args) {
     using namespace tt::tt_metal;
     using namespace tt::constants;
+    warn_if_allowed_worker_cores_missing(attributes.program_config, "MatmulDeviceOperation::compute_output_specs");
     const auto& optional_output_tensors = args.optional_output_tensors;
     const auto& input_tensors = args.input_tensors;
     const auto& optional_input_tensors = args.optional_input_tensors;
@@ -1210,6 +1251,10 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
             attributes.transpose_b,
             bias_single_tile_size,
             attributes);
+        // Soft-normalize so downstream variant code can safely read allowed_worker_cores; the warning
+        // for missing allowed_worker_cores was emitted at the entry point above.
+        operations::matmul::normalize_program_config(
+            chosen_program_config, input_tensor_a.device()->compute_with_storage_grid_size());
         return std::visit(
             [&](const auto& program_config) -> MatmulDeviceOperation::spec_return_value_t {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -1430,6 +1475,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
 
 MatmulDeviceOperation::tensor_return_value_t MatmulDeviceOperation::create_output_tensors(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
+    warn_if_allowed_worker_cores_missing(attributes.program_config, "MatmulDeviceOperation::create_output_tensors");
     const auto& optional_output_tensors = args.optional_output_tensors;
     const auto& input_tensors = args.input_tensors;
     tensor_return_value_t output_tensors;
