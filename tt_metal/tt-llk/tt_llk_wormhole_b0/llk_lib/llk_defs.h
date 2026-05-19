@@ -28,12 +28,6 @@ enum class ReduceDim : std::uint8_t
     REDUCE_SCALAR,
 };
 
-enum class TileDim : std::uint8_t
-{
-    R_IDX = 0,
-    C_IDX = 1,
-};
-
 enum class PoolType : std::uint8_t
 {
     SUM,
@@ -84,33 +78,6 @@ enum class Transpose : std::uint8_t
     IntraFace = 1,
     InterFace = 2,
     Both      = 3,
-};
-
-enum class src_op_id_e : std::uint8_t
-{
-    OP_SRC0 = 0,
-    OP_SRC1 = 1,
-    OP_SRC2 = 2,
-    OP_SRC3 = 3,
-    OP_SRC4 = 4,
-};
-
-enum class local_op_id_e : std::uint8_t
-{
-    OP_LOCAL0 = 0,
-    OP_LOCAL1 = 1,
-    OP_LOCAL2 = 2,
-    OP_LOCAL3 = 3,
-    OP_LOCAL4 = 4,
-};
-
-enum class out_op_id_e : std::uint8_t
-{
-    OUT_ID0 = 0,
-    OUT_ID1 = 1,
-    OUT_ID2 = 2,
-    OUT_ID3 = 3,
-    OUT_ID4 = 4,
 };
 
 enum ReluType

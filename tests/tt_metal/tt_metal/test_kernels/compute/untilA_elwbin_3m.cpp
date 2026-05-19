@@ -27,10 +27,11 @@ void core_agnostic_main() {
     for (uint32_t block = 0; block < per_core_num_blocks; block++) {
         for (uint32_t r = 0; r < per_core_block_r_tiles; r++) {
             // Untilize
-            llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0);
+            llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0 /*operand*/);
             for (uint32_t c = 0; c < per_core_block_c_tiles; c++) {
                 llk_math_wait_for_dest_available();
-                llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0);
+                llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(
+                    0 /*dst_index*/);
                 llk_math_dest_section_done<DST_ACCUM_MODE>();
             }
 
@@ -42,7 +43,7 @@ void core_agnostic_main() {
                     BroadcastType::NONE,
                     DST_ACCUM_MODE,
                     MATH_FIDELITY,
-                    EltwiseBinaryReuseDestType::NONE>(0);
+                    EltwiseBinaryReuseDestType::NONE>(0 /*dst_index*/);
                 llk_math_dest_section_done<DST_ACCUM_MODE>();
             }
         }

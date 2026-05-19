@@ -20,14 +20,16 @@ void kernel_main() {
             llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>();
             for (uint32_t c = 0; c < per_core_block_c_tiles; c++) {
                 llk_math_wait_for_dest_available();
-                llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0);
+                llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(
+                    0 /*dst_index*/);
                 llk_math_dest_section_done<DST_ACCUM_MODE>();
             }
 
             llk_math_eltwise_binary_init<ELWADD, BroadcastType::NONE, MathFidelity::LoFi>();
             for (uint32_t c = 0; c < per_core_block_c_tiles; c++) {
                 llk_math_wait_for_dest_available();
-                llk_math_eltwise_binary<ELWADD, BroadcastType::NONE, DST_ACCUM_MODE, MATH_FIDELITY, false>(0);
+                llk_math_eltwise_binary<ELWADD, BroadcastType::NONE, DST_ACCUM_MODE, MATH_FIDELITY, false>(
+                    0 /*dst_index*/);
                 llk_math_dest_section_done<DST_ACCUM_MODE>();
             }
         }
