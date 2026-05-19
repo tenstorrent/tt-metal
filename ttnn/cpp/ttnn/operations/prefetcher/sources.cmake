@@ -6,4 +6,5 @@ set(TTNN_OP_PREFETCHER_SRCS
     prefetcher/device/dram_prefetcher_dram_core_program_factory.cpp
     prefetcher/device/dram_prefetcher_program_factory.cpp
     prefetcher/dram_prefetcher.cpp
+    prefetcher_consumer/dram_prefetcher_consumer.cpp
 )

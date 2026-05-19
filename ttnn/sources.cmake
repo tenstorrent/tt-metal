@@ -279,6 +279,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/pool/rotate/rotate_nanobind.cpp
     cpp/ttnn/operations/pool/upsample/upsample_nanobind.cpp
     cpp/ttnn/operations/prefetcher/prefetcher/dram_prefetcher_nanobind.cpp
+    cpp/ttnn/operations/prefetcher/prefetcher_consumer/dram_prefetcher_consumer_nanobind.cpp
     cpp/ttnn/operations/prefetcher/prefetcher_nanobind.cpp
     cpp/ttnn/operations/reduction/reduction_nanobind.cpp
     cpp/ttnn/operations/reduction/generic/std_var_reductions_nanobind.cpp

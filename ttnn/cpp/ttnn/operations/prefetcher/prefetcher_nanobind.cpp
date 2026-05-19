@@ -7,9 +7,13 @@
 #include <nanobind/nanobind.h>
 
 #include "prefetcher/dram_prefetcher_nanobind.hpp"
+#include "prefetcher_consumer/dram_prefetcher_consumer_nanobind.hpp"
 
 namespace ttnn::operations::prefetcher {
 
-void py_module(nb::module_& mod) { dram_prefetcher::detail::bind_dram_prefetcher(mod); }
+void py_module(nb::module_& mod) {
+    dram_prefetcher::detail::bind_dram_prefetcher(mod);
+    dram_prefetcher_consumer::detail::bind_dram_prefetcher_consumer(mod);
+}
 
 }  // namespace ttnn::operations::prefetcher
