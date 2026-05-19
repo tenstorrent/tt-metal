@@ -1,10 +1,9 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """Profile Pi0.5 inference with Tracy."""
 
 import sys
-import os
 import time
 from pathlib import Path
 
@@ -17,10 +16,7 @@ from models.experimental.pi0_5.common.configs import PI0ModelConfig, SigLIPConfi
 from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
 from models.experimental.pi0_5.tt.ttnn_pi0_model import PI0ModelTTNN
 
-CHECKPOINT_PATH = os.path.join(
-    os.environ.get("TT_METAL_HOME", "/home/ttuser/experiments/pi0_5/tt-metal"),
-    "models/experimental/pi0_5/weights/pi05_base",
-)
+CHECKPOINT_PATH = "lerobot/pi05_base"
 
 
 def main():
@@ -72,7 +68,7 @@ def main():
     with torch.no_grad():
         ttnn.tracy_message("inference_start")
         t0 = time.time()
-        result = model.sample_actions(
+        model.sample_actions(
             images=images_ttnn,
             img_masks=img_masks,
             lang_tokens=lang_tokens_ttnn,

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -38,7 +38,7 @@ from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
 
 
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME", "/home/ttuser/experiments/pi0_5/tt-metal")
-CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0_5/weights/pi05_base")
+CHECKPOINT_PATH = "lerobot/pi05_base"
 BATCH_SIZE = 1
 SEED = 42
 PCC_THRESHOLD = 0.93
@@ -102,7 +102,7 @@ def main():
     print("=" * 80)
 
     checkpoint_path = Path(CHECKPOINT_PATH)
-    if not checkpoint_path.exists():
+    if checkpoint_path.is_absolute() and not checkpoint_path.exists():
         print(f"\n❌ Checkpoint not found: {checkpoint_path}")
         return 1
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -254,10 +254,6 @@ def actions_to_env(actions_32: torch.Tensor, chunk: int, stats: dict) -> np.ndar
 # ---------- backends ----------
 
 
-# Number of image patches per camera in our Pi0.5 config: (224/14)^2 = 256
-_NUM_IMG_PATCHES_PER_CAM = 256
-
-
 class TorchBackend:
     def __init__(self, weight_loader):
         # NB: AdaRMS chunk order in tt-metal's torch_gemma is (scale, shift, gate),
@@ -469,8 +465,8 @@ def main():
             # current MjData object so subsequent sim.forward() calls update it.
             try:
                 v._user_scn  # touch attr to ensure handle is alive
-            except Exception:
-                pass
+            except Exception as e:  # attribute may not exist on all viewer versions
+                print(f"Viewer probe failed (non-fatal): {e}", file=sys.stderr)
             # Start synchronized
             v.sync()
             print(f"   🖥️  MuJoCo viewer opened on DISPLAY={os.environ.get('DISPLAY')}")
@@ -551,8 +547,8 @@ def main():
                     if viewer is not None:
                         try:
                             viewer.close()
-                        except Exception:
-                            pass
+                        except Exception as e:  # ignore errors during viewer cleanup
+                            print(f"Viewer close failed (non-fatal): {e}", file=sys.stderr)
                         viewer = None
                     if args.render:
                         viewer = launch_viewer(env)
@@ -592,8 +588,8 @@ def main():
                 if viewer is not None:
                     try:
                         viewer.close()
-                    except Exception:
-                        pass
+                    except Exception as e:  # ignore errors during viewer cleanup
+                        print(f"Viewer close failed (non-fatal): {e}", file=sys.stderr)
                 env.close()
 
         # Aggregate

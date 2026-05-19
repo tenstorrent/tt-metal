@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -75,8 +75,8 @@ def adarms_norm_ttnn(
     use_fused: bool = True,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
     # Use fused C++ op if available (source build custom op)
-    if use_fused and hasattr(ttnn.experimental, "fused_adarms"):
-        return ttnn.experimental.fused_adarms(x, dense_weight, dense_bias, cond, eps)
+    if use_fused and hasattr(ttnn.experimental, "fused_adaptive_rms"):
+        return ttnn.experimental.fused_adaptive_rms(x, dense_weight, dense_bias, cond, eps)
     """
     Adaptive RMSNorm (Pi0.5) using TTNN operations.
 
@@ -96,8 +96,6 @@ def adarms_norm_ttnn(
         Tuple of (normed output, gate tensor)
     """
     batch_size = x.shape[0]
-    seq_len = x.shape[1]
-    hidden_dim = x.shape[2]
 
     # Project conditioning: cond (B, cond_dim) -> modulation (B, hidden_dim * 3)
     cond_2d = ttnn.reshape(cond, (batch_size, 1, -1)) if len(cond.shape) == 2 else cond

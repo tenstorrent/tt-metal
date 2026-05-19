@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -40,7 +40,6 @@ def precompute_sinusoidal_scaling_factor(
     dimension: int,
     min_period: float,
     max_period: float,
-    device: ttnn.Device,
     indices: ttnn.Tensor,
 ) -> ttnn.Tensor:
     """Pre-compute the scaling factor for sinusoidal embeddings (constant across timesteps)."""
@@ -87,9 +86,6 @@ def create_sinusoidal_pos_embedding_ttnn(
     if dimension % 2 != 0:
         raise ValueError(f"dimension ({dimension}) must be divisible by 2")
 
-    if device is None:
-        device = time.device()
-
     half_dim = dimension // 2
 
     if precomputed_scaling_factor is not None:
@@ -114,7 +110,7 @@ def create_sinusoidal_pos_embedding_ttnn(
         ttnn.deallocate(period)
         ttnn.deallocate(inv_period)
 
-    # Only 4 ops per call when scaling_factor is pre-computed:
+    # Only 5 ops per call when scaling_factor is pre-computed:
     # reshape + matmul + sin + cos + concat
     time_reshaped = ttnn.reshape(time, (-1, 1))
     sin_input = ttnn.matmul(time_reshaped, scaling_factor)

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -150,6 +150,4 @@ class PI0ModelConfig:
     siglip_config: SigLIPConfig = field(default_factory=SigLIPConfig)
 
     def __post_init__(self):
-        self.vlm_config = GemmaConfig.gemma_2b()
         self.expert_config = GemmaConfig.gemma_300m(use_adarms=self.pi05)
-        self.siglip_config = SigLIPConfig()

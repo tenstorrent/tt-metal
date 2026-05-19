@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
@@ -24,11 +24,11 @@ from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_confi
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME")
 if not TT_METAL_HOME:
     raise EnvironmentError("TT_METAL_HOME environment variable is not set")
-CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0_5/weights/pi0_base")
+CHECKPOINT_PATH = "lerobot/pi0_base"
 
 
 def create_pi0_pipeline_model(ttnn_model, device, inputs):
-    """Wrapper to adapt PI0 model inputsfor pipeline interface."""
+    """Wrapper to adapt PI0 model inputs for pipeline interface."""
 
     def run(pipeline_input):
         with torch.no_grad():
@@ -126,7 +126,7 @@ def create_test_inputs(config: PI0ModelConfig, device, batch_size: int = 1):
 )
 def test_perf_pi0_ttnn(device, num_iterations, batch_size, expected_compile_time, expected_throughput_fps):
     checkpoint_path = Path(CHECKPOINT_PATH)
-    if not checkpoint_path.exists():
+    if checkpoint_path.is_absolute() and not checkpoint_path.exists():
         pytest.skip(f"Checkpoint not found: {checkpoint_path}")
 
     # Create config and inputs
@@ -198,7 +198,7 @@ def test_perf_pi0_ttnn(device, num_iterations, batch_size, expected_compile_time
     pipeline.preallocate_output_tensors_on_host(num_iterations)
 
     start = time.time()
-    outputs = pipeline.enqueue(host_inputs).pop_all()
+    pipeline.enqueue(host_inputs).pop_all()
     end = time.time()
 
     pipeline.cleanup()

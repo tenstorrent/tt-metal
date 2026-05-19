@@ -29,7 +29,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/allocator_state.hpp>
+#include "tt_metal/impl/allocator/allocator_state.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/maybe_remote.hpp>

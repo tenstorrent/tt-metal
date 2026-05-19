@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -262,8 +262,6 @@ class PI0ModelTTNN:
         Returns:
             Sampled actions (PyTorch)
         """
-        batch_size = lang_tokens.shape[0]
-
         # Convert inputs to TTNN
         lang_tokens_ttnn = lang_tokens
         lang_masks_ttnn = lang_masks

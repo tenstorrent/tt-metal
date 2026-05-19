@@ -309,5 +309,5 @@ huggingface-cli download lerobot/pi05_base \
 
 ## License
 
-SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 SPDX-License-Identifier: Apache-2.0

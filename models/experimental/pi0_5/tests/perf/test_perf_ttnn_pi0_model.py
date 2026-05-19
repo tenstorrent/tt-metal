@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -44,7 +44,7 @@ from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME")
 if not TT_METAL_HOME:
     raise EnvironmentError("TT_METAL_HOME environment variable is not set")
-CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0_5/weights/pi0_base")
+CHECKPOINT_PATH = "lerobot/pi0_base"
 BATCH_SIZE = 1
 SEED = 42
 NUM_INFERENCE_ITERATIONS = 50
@@ -154,7 +154,7 @@ def run_pi0_inference(
 ):
     """Run PI0 inference and measure performance."""
     checkpoint_path = Path(CHECKPOINT_PATH)
-    if not checkpoint_path.exists():
+    if checkpoint_path.is_absolute() and not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
     # Create config and inputs
@@ -246,7 +246,7 @@ def test_pi0_inference_perf_ttnn(device):
     Pytest: PI0 inference performance test using tt/ structure.
     """
     checkpoint_path = Path(CHECKPOINT_PATH)
-    if not checkpoint_path.exists():
+    if checkpoint_path.is_absolute() and not checkpoint_path.exists():
         pytest.skip(f"Checkpoint not found: {checkpoint_path}")
 
     results = run_pi0_inference(
@@ -275,7 +275,7 @@ def main():
     print("=" * 80)
 
     checkpoint_path = Path(CHECKPOINT_PATH)
-    if not checkpoint_path.exists():
+    if checkpoint_path.is_absolute() and not checkpoint_path.exists():
         print(f"\n❌ Checkpoint not found: {checkpoint_path}")
         return 1
 

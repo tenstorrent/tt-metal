@@ -117,6 +117,14 @@ ttnn::Tensor rotary_embedding_to_cache(
         "Input and output cache must have the same dtype for fused rotary→cache write");
 
     uint32_t seq_len = input_tensor.padded_shape()[-2];
+    TT_FATAL(
+        update_idx + seq_len <= output_cache.padded_shape()[-2],
+        "update_idx ({}) + seq_len ({}) = {} exceeds output_cache padded seq dim ({})",
+        update_idx,
+        seq_len,
+        update_idx + seq_len,
+        output_cache.padded_shape()[-2]);
+
     auto arch = input_tensor.device()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);

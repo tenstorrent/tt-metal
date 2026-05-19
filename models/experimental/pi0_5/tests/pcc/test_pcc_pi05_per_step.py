@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -44,10 +44,7 @@ from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]  # tt-metal repo root
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME", str(_REPO_ROOT))
-CHECKPOINT_PATH = os.environ.get(
-    "PI0_CHECKPOINT",
-    os.path.join(TT_METAL_HOME, "models/experimental/pi0_5/weights/pi05_base"),
-)
+CHECKPOINT_PATH = os.environ.get("PI0_CHECKPOINT", "lerobot/pi05_base")
 BATCH_SIZE = 1
 SEED = 42
 PER_STEP_PCC_THRESHOLD = 0.99

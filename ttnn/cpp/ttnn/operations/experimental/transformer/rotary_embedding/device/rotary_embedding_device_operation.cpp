@@ -148,8 +148,10 @@ Tensor RotaryEmbeddingDeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t RotaryEmbeddingDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // dst_tile_offset is excluded: override_runtime_arguments updates the runtime arg,
+    // so different offsets share the same compiled program.
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RotaryEmbeddingDeviceOperation>(
-        args.seq_len, args.output_mem_config, args.dst_tile_offset,
+        args.seq_len, args.output_mem_config,
         tensor_args.input, tensor_args.cos, tensor_args.sin, tensor_args.output_tensor.has_value());
     return hash;
 }

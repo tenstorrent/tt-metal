@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -182,10 +182,6 @@ class PrefixEmbeddingTTNN:
         # Concatenate using TTNN
         prefix_embs = ttnn.concat(embs, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         prefix_pad_masks = ttnn.concat(pad_masks, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        # Create attention mask (all zeros for bidirectional prefix attention)
-        total_tokens = sum(num_tokens_list)
-        batch_size = prefix_embs.shape[0]
 
         # Create zeros mask directly on device (no host transfer needed)
         prefix_att_masks = self.prefix_att_masks

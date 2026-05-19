@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -64,7 +64,7 @@ class PI0Config:
         """Load config from JSON file (ignores unknown fields)."""
         import dataclasses
 
-        with open(json_path, "r") as f:
+        with open(Path(json_path).resolve(), "r") as f:
             data = json.load(f)
         # Filter to only known fields
         known_fields = {f.name for f in dataclasses.fields(cls)}
@@ -88,29 +88,19 @@ def load_pi0_state_dict(
     """
     model_path = Path(model_path)
 
-    # Check if it's a local path
-    if model_path.exists():
-        safetensors_path = model_path / "model.safetensors"
-        if safetensors_path.exists():
-            state_dict = safetensors_load_file(str(safetensors_path))
-        else:
-            raise FileNotFoundError(f"No model.safetensors found in {model_path}")
-    else:
-        # Try to download from HuggingFace
-        try:
-            from huggingface_hub import hf_hub_download
+    if not model_path.exists():
+        from huggingface_hub import snapshot_download
 
-            # Download safetensors file
-            safetensors_path = hf_hub_download(
-                repo_id=str(model_path),
-                filename="model.safetensors",
-                token=os.environ.get("HF_TOKEN"),
-            )
-            state_dict = safetensors_load_file(safetensors_path)
-        except Exception as e:
-            raise RuntimeError(f"Failed to load model from {model_path}: {e}")
+        local_dir = snapshot_download(
+            repo_id=str(model_path),
+            token=os.environ.get("HF_TOKEN"),
+        )
+        model_path = Path(local_dir)
 
-    return state_dict
+    safetensors_path = model_path / "model.safetensors"
+    if not safetensors_path.exists():
+        raise FileNotFoundError(f"No model.safetensors found in {model_path}")
+    return safetensors_load_file(str(safetensors_path))
 
 
 def categorize_weights(state_dict: Dict[str, torch.Tensor]) -> Dict[str, Dict[str, torch.Tensor]]:
@@ -308,12 +298,20 @@ class PI0WeightLoader:
             model_path: Path to model directory or HuggingFace model ID
             cache_path: Optional path for caching converted weights
         """
-        self.model_path = Path(model_path) if isinstance(model_path, str) else model_path
+        model_path = Path(model_path) if isinstance(model_path, str) else model_path
+        if not model_path.exists():
+            from huggingface_hub import snapshot_download
+
+            local_dir = snapshot_download(
+                repo_id=str(model_path),
+                token=os.environ.get("HF_TOKEN"),
+            )
+            model_path = Path(local_dir)
+        self.model_path = model_path
         self.cache_path = cache_path
 
-        # Load config
-        config_path = self.model_path / "config.json" if self.model_path.exists() else None
-        if config_path and config_path.exists():
+        config_path = self.model_path / "config.json"
+        if config_path.exists():
             self.config = PI0Config.from_json(config_path)
         else:
             self.config = PI0Config()

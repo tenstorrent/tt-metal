@@ -1,7 +1,7 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "fused_adarms.hpp"
+#include "fused_adaptive_rms.hpp"
 
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/rmsnorm/rmsnorm.hpp"
@@ -11,7 +11,7 @@
 
 namespace ttnn::experimental {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor> fused_adarms(
+std::tuple<ttnn::Tensor, ttnn::Tensor> fused_adaptive_rms(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& dense_weight,
     const ttnn::Tensor& dense_bias,
@@ -22,6 +22,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> fused_adarms(
 
     const uint32_t hidden_dim = input_tensor.logical_shape()[-1];
     const uint32_t batch_size = input_tensor.logical_shape()[0];
+
+    TT_FATAL(
+        dense_bias.logical_shape()[-1] == hidden_dim * 3,
+        "dense_bias last dim {} must equal hidden_dim * 3 = {}",
+        dense_bias.logical_shape()[-1],
+        hidden_dim * 3);
 
     // Linear projection: cond → modulation [batch, 1, hidden_dim * 3]
     auto modulation = ttnn::linear(

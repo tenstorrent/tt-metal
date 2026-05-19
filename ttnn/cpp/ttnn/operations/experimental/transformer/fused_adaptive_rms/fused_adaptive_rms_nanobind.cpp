@@ -1,7 +1,7 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "fused_adarms_nanobind.hpp"
+#include "fused_adaptive_rms_nanobind.hpp"
 
 #include <optional>
 
@@ -9,15 +9,15 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/tuple.h>
 
-#include "fused_adarms.hpp"
+#include "fused_adaptive_rms.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
-void bind_fused_adarms(nb::module_& mod) {
+void bind_fused_adaptive_rms(nb::module_& mod) {
     const char* doc = R"doc(
-        fused_adarms(input_tensor, dense_weight, dense_bias, cond, epsilon=1e-6, *, memory_config=None)
+        fused_adaptive_rms(input_tensor, dense_weight, dense_bias, cond, epsilon=1e-6, *, memory_config=None)
 
         Fused adaptive RMSNorm for Pi0.5 transformer blocks.
 
@@ -48,11 +48,11 @@ void bind_fused_adarms(nb::module_& mod) {
             Tuple[ttnn.Tensor, ttnn.Tensor]: (normed, gate)
     )doc";
 
-    ttnn::bind_function<"fused_adarms", "ttnn.experimental.">(
+    ttnn::bind_function<"fused_adaptive_rms", "ttnn.experimental.">(
         mod,
         doc,
         ttnn::overload_t(
-            &ttnn::experimental::fused_adarms,
+            &ttnn::experimental::fused_adaptive_rms,
             nb::arg("input_tensor"),
             nb::arg("dense_weight"),
             nb::arg("dense_bias"),

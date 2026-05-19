@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -25,7 +25,7 @@ namespace ttnn::experimental {
 // Note: dense_bias should have the +1 offset pre-baked into the scale
 // portion (first hidden_dim elements), so `scale` from the slice already
 // represents (1 + learned_scale).
-std::tuple<ttnn::Tensor, ttnn::Tensor> fused_adarms(
+std::tuple<ttnn::Tensor, ttnn::Tensor> fused_adaptive_rms(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& dense_weight,
     const ttnn::Tensor& dense_bias,

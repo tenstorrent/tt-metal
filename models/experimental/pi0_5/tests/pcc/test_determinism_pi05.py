@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -24,7 +24,7 @@ from pathlib import Path
 import torch
 import ttnn
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
 from models.experimental.pi0_5.tt.ttnn_pi0_model import PI0ModelTTNN
 from models.experimental.pi0_5.common.configs import PI0ModelConfig, SigLIPConfig
@@ -33,10 +33,7 @@ from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]  # tt-metal repo root
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME", str(_REPO_ROOT))
-CHECKPOINT_PATH = os.environ.get(
-    "PI0_CHECKPOINT",
-    os.path.join(TT_METAL_HOME, "models/experimental/pi0_5/weights/pi05_base"),
-)
+CHECKPOINT_PATH = os.environ.get("PI0_CHECKPOINT", "lerobot/pi05_base")
 BATCH_SIZE = 1
 SEED = 42
 DEFAULT_RUNS = 5
