@@ -7,7 +7,9 @@
 #include "common_globals.h"
 #ifdef TRISC_PACK
 #include "llk_pack_tile_api.h"
+#ifndef ARCH_QUASAR
 #include "llk_pack_rows_api.h"
+#endif
 #endif
 
 namespace ckernel {
@@ -64,7 +66,7 @@ namespace ckernel {
 template <bool out_of_order_output = false>
 ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0) {
 #ifndef ARCH_QUASAR
-    PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, false>(ifrom_dst, icb, output_tile_index)));
+    PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
 #else
     PACK((llk_pack<out_of_order_output>(ifrom_dst, icb, output_tile_index)));
 #endif
@@ -104,7 +106,7 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
 // clang-format on
 ALWI void pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
 #ifndef ARCH_QUASAR
-    PACK((llk_matmul_pack<DST_ACCUM_MODE, false, false>(ifrom_dst, icb, ntiles)));
+    PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
 #else
     PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
 #endif
@@ -133,11 +135,7 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
 #ifndef ARCH_QUASAR
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_cb_id)));
     if constexpr (is_tile_dim_reconfig_en) {
-        PACK((llk_pack_init<
-              false /* untilize */,
-              false /* zero_output */,
-              false /* tilize */,
-              true /* skip_addrmod_config */>(new_cb_id)));
+        PACK((llk_pack_init<PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(new_cb_id)));
     }
 #endif  // TODO: AM; add Quasar implementation
 }
@@ -168,11 +166,7 @@ ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new
 #ifndef ARCH_QUASAR
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_cb_id, new_cb_id)));
     if constexpr (is_tile_dim_reconfig_en) {
-        PACK((llk_pack_init<
-              false /* untilize */,
-              false /* zero_output */,
-              false /* tilize */,
-              true /* skip_addrmod_config */>(new_cb_id)));
+        PACK((llk_pack_init<PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(new_cb_id)));
     }
 #endif  // TODO: AM; add Quasar implementation
 }
@@ -220,7 +214,11 @@ ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) {
  * | Function   | num_rows | Number of rows to pack from dest to L1 (each row = 16 datums)  | uint32_t | 1 to 64     | True     |
  */
 // clang-format on
-ALWI void pack_rows_init(uint32_t num_rows) { PACK((llk_pack_rows_init(num_rows))); }
+ALWI void pack_rows_init(uint32_t num_rows) {
+#ifndef ARCH_QUASAR
+    PACK((llk_pack_rows_init(num_rows)));
+#endif
+}
 
 // clang-format off
 /**
@@ -246,7 +244,9 @@ ALWI void pack_rows_init(uint32_t num_rows) { PACK((llk_pack_rows_init(num_rows)
  */
 // clang-format on
 ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
+#ifndef ARCH_QUASAR
     PACK((llk_pack_rows(idst, ocb, output_index)));
+#endif
 }
 
 // clang-format off
@@ -262,7 +262,11 @@ ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
  * Return value: None
  */
 // clang-format on
-ALWI void pack_rows_uninit() { PACK((llk_pack_rows_uninit())); }
+ALWI void pack_rows_uninit() {
+#ifndef ARCH_QUASAR
+    PACK((llk_pack_rows_uninit()));
+#endif
+}
 
 /**
  * Configures packer ReLU activation at runtime.

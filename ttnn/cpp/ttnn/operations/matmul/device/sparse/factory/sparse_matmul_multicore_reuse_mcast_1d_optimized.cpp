@@ -6,6 +6,7 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "tt-metalium/work_split.hpp"
@@ -47,6 +48,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         /*transpose_b=*/false,
         /*bias_single_tile_size=*/0,
         matmul_attributes);
+    operations::matmul::normalize_program_config(
+        chosen_program_config, tensor_args.input_tensors.at(0).device()->compute_with_storage_grid_size());
 
     const auto& a = tensor_args.input_tensors.at(0);
     const auto& b = tensor_args.input_tensors.at(1);
@@ -54,7 +57,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const auto& output_tensor = tensor_return_value.at(0);
     auto program_config =
         std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
-    auto compute_with_storage_grid_size = program_config.compute_with_storage_grid_size;
+    auto compute_with_storage_grid_size = program_config.allowed_worker_cores.value().bounding_box().grid_size();
     auto in0_block_w = program_config.in0_block_w;
     auto out_subblock_h = program_config.out_subblock_h;
     auto out_subblock_w = program_config.out_subblock_w;
@@ -396,7 +399,11 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(),
+        num_cores,
+        mm_kernel_defines,
+        ttnn::get_throttle_level(operation_attributes.compute_kernel_config));
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
@@ -533,6 +540,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,

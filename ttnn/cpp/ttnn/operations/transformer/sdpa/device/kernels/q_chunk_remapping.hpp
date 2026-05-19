@@ -10,11 +10,11 @@
 /**
  * Convert linear flat index to zigzag flat index for per-head load balancing.
  *
- * In causal attention with is_balanced=true, Q chunks in the first half of each head
- * (positions 0 to num_q_chunks/2-1) process fewer KV chunks than Q chunks in the
- * second half. This creates work imbalance when cores process consecutive Q chunks.
+ * In causal attention, Q chunks in the first half of each head process fewer KV
+ * chunks than Q chunks in the second half. This creates work imbalance when
+ * cores process consecutive Q chunks.
  *
- * Per-head zigzag interleaves light and heavy work within each core:
+ * Per-head zigzag interleaves light and heavy work:
  *   - Even positions (0, 2, 4, ...) map to forward indices: 0, 1, 2, 3, ...
  *   - Odd positions (1, 3, 5, ...) map to backward indices: N-1, N-2, N-3, ...
  *

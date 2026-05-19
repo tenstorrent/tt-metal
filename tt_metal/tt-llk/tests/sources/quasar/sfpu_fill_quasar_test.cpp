@@ -132,7 +132,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // SFPU iterates SFP_ROWS rows at a time; one face is FACE_R_DIM rows tall.
     constexpr int num_sfpu_iterations = static_cast<int>(FACE_R_DIM / SFP_ROWS);
 
-    _llk_math_eltwise_unary_sfpu_init_();
+    _llk_math_eltwise_sfpu_init_();
 
     if (is_int_fill)
     {

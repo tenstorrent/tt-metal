@@ -109,6 +109,9 @@ void enqueue_sanity_program(
 }
 
 TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
+    // Skipped due to issue #44657: real-time profiler is disabled by default
+    // (TT_METAL_ENABLE_REALTIME_PROFILER kill switch).
+    GTEST_SKIP() << "Real-time profiler disabled by default — see issue #44657";
     constexpr int kDeviceId = 0;
 
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(

@@ -96,29 +96,62 @@ static program_factory_t select_program_factory(
     const operation_attributes_t&, const tensor_args_t&);
 ```
 
-**Optional `prepare_resources` hook (multi-variant only):**
+**Mesh-workload ops with workload-scoped state — `WorkloadDescriptor` pattern:**
 
-If `create_descriptor` needs a device-side resource that isn't in `tensor_args` or
-the output tensor (e.g., a config tensor that must be allocated once and kept alive
-across cache hits), add a `prepare_resources` static method on the factory struct:
+Most ops only need `create_descriptor`. But mesh-workload ops that allocate
+`GlobalSemaphore`s or call `Synchronize` need to do that **once per workload**
+(not once per coord, not once per dispatch). For those ops, define a
+declarative `WorkloadDescriptor` that owns both the workload-scoped resources
+**and** the per-coord program descriptors:
 
 ```cpp
-struct ProgramFactory {
-    static tt::tt_metal::DeviceStorage prepare_resources(
-        const operation_attributes_t&,
-        const tensor_args_t&,
-        tensor_return_value_t&);
+struct MyMeshFactory {
+    // Op-defined struct holding the entire workload:
+    //   - workload-scoped resources (GlobalSemaphores, Synchronize tokens,
+    //     anything that must outlive the per-coord programs)
+    //   - a `programs` vector with one ProgramDescriptor per coord (or per
+    //     coord-range, if multiple coords share the same program).
+    //
+    // GlobalSemaphore has no default constructor; wrap each in
+    // std::optional<> so WorkloadDescriptor is value-initialisable.
+    struct WorkloadDescriptor {
+        std::optional<ttnn::GlobalSemaphore> semaphore;
+        // ... any other workload-wide resources
+        std::vector<std::pair<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramDescriptor>> programs;
+    };
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    // Builds the entire workload in one call. Invoked ONCE per workload
+    // (cache miss). The right place to:
+    //   1. Allocate GlobalSemaphores / run Synchronize.
+    //   2. Loop over `tensor_coords` and push a ProgramDescriptor per coord
+    //      into `programs`.
+    // The framework iterates `programs` verbatim to build the MeshWorkload.
+    static WorkloadDescriptor create_workload_descriptor(
         const operation_attributes_t&,
         const tensor_args_t&,
         tensor_return_value_t&,
-        tt::tt_metal::DeviceStorage& resources);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 ```
 
-Most operations do NOT need this. It was needed for Conv2d because it allocates
-sliding-window config tensors that must live as long as the cached program.
+When the framework adapter sees `T::WorkloadDescriptor` + `T::create_workload_descriptor`
++ a `programs` field on the descriptor, it dispatches through this contract:
+
+1. **Cache miss**: calls `create_workload_descriptor` ONCE. The factory allocates
+   resources and populates `programs`. The adapter then turns each
+   `(MeshCoordinateRange, ProgramDescriptor)` pair into a `Program` and adds
+   it to the cached `MeshWorkload`.
+2. **Cache hit**: the factory is **not** invoked. The framework's
+   `BufferBinding` fast path patches buffer addresses directly into the
+   cached programs. Declarative factories MUST use `emplace_runtime_args()`
+   with `Buffer*` args for every position that can change between dispatches
+   — there is no rebuild fallback for declarative ops (a rebuild would
+   reallocate GlobalSemaphores).
+
+> Single-device ops without workload-scoped state continue to use just
+> `create_descriptor` (no workload concept). Only ops that need to allocate
+> something once per workload (`GlobalSemaphore`s, halo lookup tables uploaded
+> to device, etc.) need the declarative `WorkloadDescriptor` pattern above.
 
 ### 1.3 Program factory implementation (`create_descriptor`)
 
@@ -366,5 +399,8 @@ See the Bernoulli operation for another complete example:
 - Factory: `ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_program_factory.cpp`
 - Header: `ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_device_operation.hpp`
 
-See the Conv2d operation for an example with `prepare_resources`:
-- Factory: `ttnn/cpp/ttnn/operations/conv/conv2d/device/factory/sharded_descriptor.cpp`
+See `pool/generic` for a complete declarative `WorkloadDescriptor` example
+whose descriptor carries device-uploaded helper tensors (halo lookup
+table, avg-pool scalar config) alongside the per-coord programs:
+- Header: `ttnn/cpp/ttnn/operations/pool/generic/device/pool_op.hpp`
+- Factory: `ttnn/cpp/ttnn/operations/pool/generic/device/pool_multi_core_program_factory.cpp`
