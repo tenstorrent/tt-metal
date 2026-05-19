@@ -147,14 +147,26 @@ class BgeM3Attention(LightweightModule):
         if seq_len > _MAX_QKV_MM_CHUNK_SEQ_LEN:
             qkv_fused = ttnn.reshape(qkv_fused, [batch_size, 1, seq_len, -1])
 
-        # Stage 2: split Q/K/V heads
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            qkv_fused,
-            num_heads=self.config.num_heads,
-            num_kv_heads=self.config.num_heads,
-            transpose_k_heads=False,
-            memory_config=self.config.create_heads_memcfg,
-        )
+        # Stage 2: split Q/K/V heads.
+        # B1/S512: head-split kernels for higher core utilization (16 → 256 work units).
+        # Other shapes: stock ttnn ops.
+        if self.config.max_batch_size == 1 and self.config.max_seq_len == 512:
+            from models.demos.wormhole.bge_m3.tt.custom_ops.fused_qkv_heads.op import bge_qkv_heads_headsplit
+
+            q, k, v = bge_qkv_heads_headsplit(
+                qkv_fused,
+                num_heads=self.config.num_heads,
+                head_groups=self.config.num_heads,
+                out_memcfg=self.config.create_heads_memcfg,
+            )
+        else:
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                qkv_fused,
+                num_heads=self.config.num_heads,
+                num_kv_heads=self.config.num_heads,
+                transpose_k_heads=False,
+                memory_config=self.config.create_heads_memcfg,
+            )
         ttnn.deallocate(qkv_fused)
 
         # Stage 3: optional cast to score dtype
@@ -207,8 +219,13 @@ class BgeM3Attention(LightweightModule):
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Stage 5: concat heads
-        context = ttnn.experimental.nlp_concat_heads(context, memory_config=self.config.output_memcfg)
+        # Stage 5: concat heads. B1/S512: head-split with groups=4.
+        if self.config.max_batch_size == 1 and self.config.max_seq_len == 512:
+            from models.demos.wormhole.bge_m3.tt.custom_ops.fused_concat_heads.op import bge_concat_heads_headsplit
+
+            context = bge_concat_heads_headsplit(context, head_groups=4, out_memcfg=self.config.output_memcfg)
+        else:
+            context = ttnn.experimental.nlp_concat_heads(context, memory_config=self.config.output_memcfg)
 
         # WO chunking for very long sequences
         if seq_len > _MAX_WO_MM_CHUNK_SEQ_LEN:
