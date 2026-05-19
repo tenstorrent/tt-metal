@@ -75,24 +75,6 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             "{}: math_op must be SUM (mean lowered from AVG) or MAX, got {}",
             path_name,
             operation_attributes.math_op);
-        // W RM path: allow HEIGHT_SHARDED only; H RM path: allow WIDTH_SHARDED only.
-        const auto in_layout = tensor_args.memory_config().memory_layout();
-        const auto out_layout = operation_attributes.output_mem_config.memory_layout();
-        const auto allowed_sharded_layout = operation_attributes.row_major_w_dense_path
-                                                ? TensorMemoryLayout::HEIGHT_SHARDED
-                                                : TensorMemoryLayout::WIDTH_SHARDED;
-        TT_FATAL(
-            in_layout == TensorMemoryLayout::INTERLEAVED || in_layout == allowed_sharded_layout,
-            "{}: sharded input must use {} layout, got {}",
-            path_name,
-            allowed_sharded_layout,
-            in_layout);
-        TT_FATAL(
-            out_layout == TensorMemoryLayout::INTERLEAVED || out_layout == allowed_sharded_layout,
-            "{}: sharded output must use {} layout, got {}",
-            path_name,
-            allowed_sharded_layout,
-            out_layout);
     } else {
         TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to reduce must be tilized");
         TT_FATAL(
