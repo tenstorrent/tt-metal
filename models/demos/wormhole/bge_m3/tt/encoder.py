@@ -62,7 +62,18 @@ class BgeM3TransformerBlock(LightweightModule):
             and self.attention_norm.config.sharded_memcfg is not None
         )
 
-    def forward(self, hidden_states: ttnn.Tensor, attention_mask: ttnn.Tensor | None = None) -> ttnn.Tensor:
+    def forward(
+        self,
+        hidden_states: ttnn.Tensor,
+        attention_mask: ttnn.Tensor | None = None,
+        residual_sharded: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        """
+        residual_sharded (B1/S512 only): pre-sharded copy of hidden_states from the
+        previous block's LN2. Saves the residual I->S reshard in attention_norm.
+        When sharded handoff is active, returns (hidden_states, next_residual_sharded).
+        Otherwise returns hidden_states only.
+        """
         attention_output = self.attention(hidden_states, attention_mask=attention_mask)
 
         # When both LNs have sharded configs (B1/S512), ask LN1 to also return
@@ -72,11 +83,16 @@ class BgeM3TransformerBlock(LightweightModule):
 
         if self.attention_norm is not None:
             if use_handoff:
+                # Use pre-sharded residual from previous block if available
+                # (saves another I->S reshard, -1.1 us/call).
+                attn_residual = residual_sharded if residual_sharded is not None else hidden_states
                 hidden_states, mlp_in_sharded = self.attention_norm(
                     attention_output,
-                    residual_input_tensor=hidden_states,
+                    residual_input_tensor=attn_residual,
                     return_sharded=True,
                 )
+                if residual_sharded is not None:
+                    ttnn.deallocate(residual_sharded)
             else:
                 hidden_states = self.attention_norm(attention_output, residual_input_tensor=hidden_states)
                 mlp_in_sharded = None
@@ -87,15 +103,26 @@ class BgeM3TransformerBlock(LightweightModule):
 
         mlp_in = hidden_states
         mlp_output = self.feed_forward(mlp_in)
+        next_residual_sharded = None
         if self.feed_forward_norm is not None:
-            residual = mlp_in_sharded if mlp_in_sharded is not None else mlp_in
-            hidden_states = self.feed_forward_norm(mlp_output, residual_input_tensor=residual)
-            if mlp_in_sharded is not None:
-                ttnn.deallocate(mlp_in_sharded)
+            if use_handoff:
+                residual = mlp_in_sharded if mlp_in_sharded is not None else mlp_in
+                hidden_states, next_residual_sharded = self.feed_forward_norm(
+                    mlp_output, residual_input_tensor=residual, return_sharded=True
+                )
+                if mlp_in_sharded is not None:
+                    ttnn.deallocate(mlp_in_sharded)
+            else:
+                residual = mlp_in_sharded if mlp_in_sharded is not None else mlp_in
+                hidden_states = self.feed_forward_norm(mlp_output, residual_input_tensor=residual)
+                if mlp_in_sharded is not None:
+                    ttnn.deallocate(mlp_in_sharded)
         else:
             hidden_states = ttnn.add(mlp_in, mlp_output)
         ttnn.deallocate(mlp_output)
 
+        if use_handoff:
+            return hidden_states, next_residual_sharded
         return hidden_states
 
 
