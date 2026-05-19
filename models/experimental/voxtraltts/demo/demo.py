@@ -4,7 +4,7 @@
 """Voxtral TTS demo — **fully on TT, zero reference model**.
 
 All neural-network forward passes (text, acoustic, audio tokenizer decode) run on the
-Tenstorrent device via ``VoxtralTTSPipeline.generate()``.  The only CPU work is:
+Tenstorrent device via ``VoxtralTTSPipeline.forward()``.  The only CPU work is:
 
 - Mistral-common **tokenization** (equivalent to ``AutoTokenizer.encode()``)
 - Voice-embedding file load (a single ``torch.load`` of a small ``.pt`` file)
@@ -13,7 +13,7 @@ Tenstorrent device via ``VoxtralTTSPipeline.generate()``.  The only CPU work is:
 Modes
 -----
 ``text`` (default)
-    ``text`` + ``voice`` in JSON → ``pipe.generate()`` → ``.wav``
+    ``text`` + ``voice`` in JSON → ``pipe.forward()`` → ``.wav``
 
 ``codes``
     Pre-computed ``[1,37,T]`` codes tensor → ``pipe.decode_waveform_from_codes_tt()``
@@ -205,7 +205,7 @@ def run_text_mode(
 ) -> None:
     """Full TT TTS: text → acoustic codes → waveform. Logs TTFT and throughput."""
     t0 = perf_counter()
-    out = pipe.generate_with_codes(text=text, voice=voice, max_tokens=max_tokens, seed=seed)
+    out = pipe.forward(text=text, voice=voice, max_tokens=max_tokens, seed=seed)
     wav = out.waveform
     t1 = perf_counter()
     total_s = t1 - t0
@@ -301,6 +301,7 @@ def run_demo(args: DemoArgs) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     mesh, original = _open_device()
+    pipe: VoxtralTTSPipeline | None = None
     try:
         logger.info(f"Loading VoxtralTTSPipeline from {args.model.model_name_or_path!r} …")
         t0 = perf_counter()
@@ -323,7 +324,7 @@ def run_demo(args: DemoArgs) -> None:
 
                     if is_warmup:
                         # Short warmup — only 4 acoustic frames
-                        pipe.generate(text=text, voice=voice, max_tokens=4, seed=args.data.seed)
+                        pipe.forward(text=text, voice=voice, max_tokens=4, seed=args.data.seed)
                         continue
 
                     run_text_mode(
@@ -368,6 +369,8 @@ def run_demo(args: DemoArgs) -> None:
                     run_latents_mode(pipe, lat, sample_rate, out_dir / f"{tag}_item{pid}.wav")
 
     finally:
+        if pipe is not None:
+            pipe.cleanup_all()
         ttnn.SetDefaultDevice(original)
         ttnn.close_device(mesh)
 
