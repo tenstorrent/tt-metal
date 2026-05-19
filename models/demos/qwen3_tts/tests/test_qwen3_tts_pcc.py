@@ -55,16 +55,23 @@ def _assert_pcc(name: str, pcc: float) -> None:
 # -----------------------------------------------------------------------------
 @pytest.fixture(scope="module")
 def device():
-    # (1,1) mesh device is portable across arches:
-    #  - BH P150: single-chip, exposes the full BH compute grid.
-    #  - WH N150 (true single-chip board): nebula_x1 descriptor, 8x8 grid.
-    #  - WH N300 / T3K (multi-chip boards): tt-metal still selects the
-    #    nebula_x1 descriptor because we ask for a 1-chip mesh — 8x8 grid —
-    #    instead of the nebula_x2 layout (8x7) that plain
-    #    ttnn.open_device(device_id=0) would pick on a multi-chip board.
-    d = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1))
+    """Open a mesh device parameterized by MESH_DEVICE env (N150 / N300 / T3K).
+
+    Default (unset) is (1,1) — N150-style single chip with 8x8 worker grid.
+    For TP testing set MESH_DEVICE=N300 (1,2) or T3K (1,8).
+    Multi-chip meshes need FABRIC_1D so all_reduce / all_gather can run.
+    """
+    import os
+
+    mesh_shape = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 1))
+    multi_chip = mesh_shape != (1, 1)
+    if multi_chip:
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    d = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape))
     yield d
     ttnn.close_mesh_device(d)
+    if multi_chip:
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 @pytest.fixture(scope="module")

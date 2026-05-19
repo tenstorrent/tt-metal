@@ -117,6 +117,10 @@ def run_full_ttnn_tts(
     _mesh_shape = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(os.environ.get("MESH_DEVICE"))
     if _mesh_shape is not None:
         print(f"\nOpening TT mesh device {_mesh_shape} (MESH_DEVICE={os.environ['MESH_DEVICE']})...")
+        # Multi-chip meshes need fabric initialized before open for CCL (all_reduce / all_gather).
+        # Skip for (1,1) — single chip needs no fabric and FABRIC_1D init would be wasted.
+        if _mesh_shape != (1, 1):
+            ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
         device = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(*_mesh_shape),
             l1_small_size=32768,
@@ -327,6 +331,8 @@ def run_full_ttnn_tts(
     finally:
         if _mesh_shape is not None:
             ttnn.close_mesh_device(device)
+            if _mesh_shape != (1, 1):
+                ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
         else:
             ttnn.close_device(device)
         print("\nDevice closed")
