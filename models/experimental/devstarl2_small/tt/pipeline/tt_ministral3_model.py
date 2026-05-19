@@ -28,6 +28,7 @@ def _ensure_fp8_scalar_compat() -> None:
 
 _ensure_fp8_scalar_compat()
 
+import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
@@ -159,6 +160,14 @@ class TtMinistral3Model(LightweightModule):
             rot_mats = self.tt_rotary_embedding.slice_rot_mats_prefill(rope_start_pos, seq_len)
         h = self.embed_tokens(input_ids_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         h = ttnn.unsqueeze_to_4D(h)
+        if self.args.is_multichip:
+            h = ttnn.all_gather(
+                h,
+                dim=3,
+                num_links=self.tt_ccl.get_num_links(),
+                topology=self.args.ccl_topology(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         return self.forward_prefill_from_embeddings(h, rot_mats, position_ids, rope_start_pos)
 
     def forward_decode_from_device_tensors(
@@ -201,8 +210,7 @@ class TtMinistral3Model(LightweightModule):
         if self.tt_rotary_embedding is None:  # not trace-safe; prefer forward_decode_from_device_tensors
             raise ValueError("forward_decode requires tt_rotary_embedding (pass ministral_text_config to __init__).")
 
-        _torch = __import__("torch")
-        _pos_torch = _torch.tensor([[decode_pos]], dtype=_torch.int32)
+        _pos_torch = torch.tensor([[decode_pos]], dtype=torch.int32)
         _common_kwargs = dict(
             device=self.mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,

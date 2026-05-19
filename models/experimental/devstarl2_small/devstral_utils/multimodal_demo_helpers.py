@@ -24,6 +24,8 @@ except ImportError:  # minimal fallback if tests package not on PYTHONPATH
 
 DEFAULT_MODEL_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 
+_HF_TRUST_PATCHES_APPLIED = False
+
 
 def text_model_root(multimodal_inner: Mistral3Model):
     lm = multimodal_inner.language_model
@@ -31,15 +33,17 @@ def text_model_root(multimodal_inner: Mistral3Model):
 
 
 def apply_devstral_hf_trust_patches():
+    global _HF_TRUST_PATCHES_APPLIED
+    if _HF_TRUST_PATCHES_APPLIED:
+        return
     from models.tt_transformers.tt import model_config as mc
 
     orig_set = mc.ModelArgs._set_hf_params
+    orig_get_hf_model_cls = mc.ModelArgs.get_hf_model_cls
 
     def _set_hf_params_trust(self, checkpoint_dir: str):
         self.trust_remote_code_hf = True
         return orig_set(self, checkpoint_dir)
-
-    mc.ModelArgs._set_hf_params = _set_hf_params_trust  # type: ignore[method-assign]
 
     def _get_hf_model_cls_devstral_safe(self):
         from transformers import AutoModelForCausalLM
@@ -53,7 +57,11 @@ def apply_devstral_hf_trust_patches():
             f"Demo supports multimodal configs in AutoModelForImageTextToText only; got {type(self.hf_config)}"
         )
 
+    mc.ModelArgs._set_hf_params = _set_hf_params_trust  # type: ignore[method-assign]
     mc.ModelArgs.get_hf_model_cls = _get_hf_model_cls_devstral_safe  # type: ignore[method-assign]
+    mc.ModelArgs._devstral_orig_set_hf_params = orig_set  # type: ignore[attr-defined]
+    mc.ModelArgs._devstral_orig_get_hf_model_cls = orig_get_hf_model_cls  # type: ignore[attr-defined]
+    _HF_TRUST_PATCHES_APPLIED = True
 
 
 _tt_prefill_target_seqlen_cache: dict = {}
@@ -398,6 +406,11 @@ class TtDecodeTraceContext:
     sampling: Optional[SamplingGenerator] = None
 
 
+# Reused [1,1] host staging for decode buffer updates (avoids per-step torch alloc).
+_DECODE_STAGING_TOK = torch.zeros((1, 1), dtype=torch.int32)
+_DECODE_STAGING_POS = torch.zeros((1, 1), dtype=torch.int32)
+
+
 def tt_alloc_decode_input_buffers(mesh_device) -> TtDecodeInputBuffers:
     """Allocate the three small DRAM buffers consumed by traced decode steps."""
     zero = torch.tensor([[0]], dtype=torch.int32)
@@ -412,11 +425,6 @@ def tt_alloc_decode_input_buffers(mesh_device) -> TtDecodeInputBuffers:
         pos_uint32=ttnn.from_torch(zero, dtype=ttnn.uint32, **common),
         pos_int32=ttnn.from_torch(zero, dtype=ttnn.int32, **common),
     )
-
-
-# Reused [1,1] host staging for decode buffer updates (avoids per-step torch alloc).
-_DECODE_STAGING_TOK = torch.zeros((1, 1), dtype=torch.int32)
-_DECODE_STAGING_POS = torch.zeros((1, 1), dtype=torch.int32)
 
 
 def tt_update_decode_input_buffers(

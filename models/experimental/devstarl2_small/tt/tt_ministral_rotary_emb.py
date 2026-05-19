@@ -224,16 +224,8 @@ class TtMinistral3RotaryEmbedding(HfRotarySetup):
                 f"RoPE prefill needs positions through {required_end} but cos_matrix_prefill length is {mat_len}; "
                 "build TtMinistral3RotaryEmbedding with a larger max_seq_len."
             )
-        prefill_start_pos = start_pos
-        slice_end = min(mat_len, required_end)
-        cos_slice = self.cos_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
-        sin_slice = self.sin_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
-        pad_len = max(0, required_end - mat_len)
-        if pad_len > 0:
-            padding = [(0, 0)] * 4
-            padding[2] = (0, pad_len)
-            cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
-            sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
+        cos_slice = self.cos_matrix_prefill[:, :, start_pos:required_end, :]
+        sin_slice = self.sin_matrix_prefill[:, :, start_pos:required_end, :]
         return [cos_slice, sin_slice]
 
     @property

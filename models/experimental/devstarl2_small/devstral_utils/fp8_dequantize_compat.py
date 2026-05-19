@@ -55,8 +55,11 @@ def _apply_convert_patch() -> None:
     def convert_compat(self: Any, input_dict: dict[str, Any], full_layer_name: str | None = None, **kwargs: Any):
         if len(input_dict) < 2:
             return _ORIGINAL_CONVERT(self, input_dict, full_layer_name=full_layer_name, **kwargs)
-        quantized = input_dict["weight$"][0]
-        scales = input_dict["weight_scale_inv"][0]
+        try:
+            quantized = input_dict["weight$"][0]
+            scales = input_dict["weight_scale_inv"][0]
+        except (KeyError, IndexError, TypeError):
+            return _ORIGINAL_CONVERT(self, input_dict, full_layer_name=full_layer_name, **kwargs)
         if getattr(scales, "ndim", None) != 0:
             return _ORIGINAL_CONVERT(self, input_dict, full_layer_name=full_layer_name, **kwargs)
         deq = _scalar_scale_dequantize(self, quantized, scales)

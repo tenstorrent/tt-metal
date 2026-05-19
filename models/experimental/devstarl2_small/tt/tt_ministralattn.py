@@ -39,10 +39,12 @@ class TtMinistralAttention(Attention):
 
         def rotary_embedding_prefill_wrapped(q, k, rot_mats):
             q, k = _prefill_rope(q, k, rot_mats)
-            return self._apply_llama4_query_scale_prefill(q), k
+            pos_tt = self._prefill_position_ids_for_llama4_scale
+            return self._apply_llama4_query_scale_prefill(q, pos_tt), k
 
         self.rotary_embedding_decode = rotary_embedding_decode_wrapped
         self.rotary_embedding_prefill = rotary_embedding_prefill_wrapped
+        self._prefill_position_ids_for_llama4_scale: ttnn.Tensor | None = None
 
     def _hf_rope_prefill_legacy(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
         """Legacy HF prefill rope (full TILE cos/sin from TtMinistral3RotaryEmbedding)."""
@@ -156,10 +158,10 @@ class TtMinistralAttention(Attention):
             ttnn.deallocate(q_bf16)
         return out
 
-    def _apply_llama4_query_scale_prefill(self, q_heads):
+    def _apply_llama4_query_scale_prefill(self, q_heads, position_ids: ttnn.Tensor | None = None):
         if not self._llama4_scaling_enabled():
             return q_heads
-        pos_tt = getattr(self, "_ministral_prefill_position_ids_tt", None)
+        pos_tt = position_ids
         if pos_tt is None:
             return q_heads
 
@@ -199,7 +201,7 @@ class TtMinistralAttention(Attention):
         position_ids: ttnn.Tensor | None = None,
     ):
         """Prefill with optional device position_ids for Llama-4 Q scaling."""
-        self._ministral_prefill_position_ids_tt = position_ids
+        self._prefill_position_ids_for_llama4_scale = position_ids
         try:
             return super().forward_prefill(
                 x_11SH,
@@ -211,7 +213,7 @@ class TtMinistralAttention(Attention):
                 kv_cache=kv_cache,
             )
         finally:
-            self._ministral_prefill_position_ids_tt = None
+            self._prefill_position_ids_for_llama4_scale = None
 
     def forward(
         self,
@@ -250,7 +252,8 @@ class TtMinistralAttention(Attention):
         )
 
 
-# Checkpoint prefix: layers.{i}.attention.*
+# ModelArgs.get_state_dict_prefix(self.__class__.__name__, layer_num) expects "Attention"
+# (checkpoint keys are layers.{i}.attention.*, not TtMinistralAttention).
 TtMinistralAttention.__name__ = "Attention"
 TtMinistralAttention.__qualname__ = "Attention"
 

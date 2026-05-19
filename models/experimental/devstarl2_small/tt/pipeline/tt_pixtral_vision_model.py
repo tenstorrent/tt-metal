@@ -47,10 +47,11 @@ class TtPixtralVisionModel(LightweightModule):
             bias=False,
         )
 
+        ln_eps = float(getattr(vision_config, "rms_norm_eps", getattr(vision_config, "norm_eps", 1e-5)))
         self.ln_pre = TtPixtralRMSNorm(
             mesh_device,
             state_dict,
-            eps=1e-5,
+            eps=ln_eps,
             weight_key=f"{vision_prefix}ln_pre.weight",
             dtype=dtype,
         )
@@ -70,6 +71,11 @@ class TtPixtralVisionModel(LightweightModule):
 
     def forward(self, pixel_values, image_sizes: list[tuple[int, int]], position_ids_tt: ttnn.Tensor):
         """pixel_values: torch ``[N,C,H,W]`` bf16; image_sizes aligned with batch; position_ids_tt ``[1,seq]`` uint32."""
+        if len(image_sizes) > 1 and len({tuple(sz) for sz in image_sizes}) > 1:
+            raise ValueError(
+                "TtPixtralVisionModel supports one image size per batch; " f"got mixed image_sizes={image_sizes!r}"
+            )
+
         patch_embeds = self.patch_conv(pixel_values)
         patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
         bsz = patch_embeds.shape[0]
