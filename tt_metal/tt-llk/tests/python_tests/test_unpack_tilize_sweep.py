@@ -31,6 +31,50 @@ from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
 
+def _narrow_path(
+    src_A, input_dimensions, formats, num_faces, tile_dimensions, torch_format
+):
+    # TilizeGolden hardcodes 32x32; narrow tiles need tilize_block directly.
+    golden_tensor = (
+        tilize_block(
+            src_A,
+            input_dimensions,
+            formats.output_format,
+            num_faces=num_faces,
+            tile_dimensions=tile_dimensions,
+        )
+        .flatten()
+        .to(torch_format)
+    )
+    num_narrow_tiles = input_dimensions[0] // 32
+    input_dim_runtime = INPUT_DIMENSIONS(
+        full_rt_dim=num_narrow_tiles,
+        full_ct_dim=1,
+        block_ct_dim=1,
+        block_rt_dim=num_narrow_tiles,
+    )
+    stimuli_extra = {
+        "tile_dimensions": tile_dimensions,
+        "use_dense_tile_dimensions": True,
+    }
+    return golden_tensor, input_dim_runtime, stimuli_extra
+
+
+def _regular_path(src_A, input_dimensions, formats, num_faces, torch_format):
+    tilize_function = get_golden_generator(TilizeGolden)
+    golden_tensor = tilize_function(
+        src_A,
+        input_dimensions,
+        formats.output_format,
+        num_faces,
+    ).to(torch_format)
+    return (
+        golden_tensor,
+        generate_input_dim(input_dimensions, input_dimensions),
+        {},
+    )
+
+
 # narrow_tile=Yes covers [32, 16] tiles (2 vertical 16x16 faces, num_faces=2).
 # BH narrow_tile unimplemented for non-8-bit formats (tt-llk#1281).
 @parametrize(
@@ -131,7 +175,7 @@ def test_unpack_tilize_comprehensive(
     tile_dimensions = [32, 16] if is_narrow else None
 
     stimuli_kwargs = {"tile_dimensions": tile_dimensions} if is_narrow else {}
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -141,43 +185,13 @@ def test_unpack_tilize_comprehensive(
 
     torch_format = format_dict[formats.output_format]
 
-    if is_narrow:
-        # TilizeGolden hardcodes 32x32; narrow tiles need tilize_block directly.
-        golden_tensor = (
-            tilize_block(
-                src_A,
-                input_dimensions,
-                formats.output_format,
-                num_faces=num_faces,
-                tile_dimensions=tile_dimensions,
-            )
-            .flatten()
-            .to(torch_format)
+    golden_tensor, input_dim_runtime, stimuli_extra = (
+        _narrow_path(
+            src_A, input_dimensions, formats, num_faces, tile_dimensions, torch_format
         )
-    else:
-        tilize_function = get_golden_generator(TilizeGolden)
-        golden_tensor = tilize_function(
-            src_A,
-            input_dimensions,
-            formats.output_format,
-            num_faces,
-        ).to(torch_format)
-
-    if is_narrow:
-        num_narrow_tiles = input_dimensions[0] // 32
-        input_dim_runtime = INPUT_DIMENSIONS(
-            full_rt_dim=num_narrow_tiles,
-            full_ct_dim=1,
-            block_ct_dim=1,
-            block_rt_dim=num_narrow_tiles,
-        )
-        stimuli_extra = {
-            "tile_dimensions": tile_dimensions,
-            "use_dense_tile_dimensions": True,
-        }
-    else:
-        input_dim_runtime = generate_input_dim(input_dimensions, input_dimensions)
-        stimuli_extra = {}
+        if is_narrow
+        else _regular_path(src_A, input_dimensions, formats, num_faces, torch_format)
+    )
 
     configuration = TestConfig(
         "sources/unpack_tilize_sweep_test.cpp",
