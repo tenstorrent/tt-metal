@@ -117,7 +117,7 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
         enchantum::to_string(logits->get_value().dtype()).data(),
         enchantum::to_string(global_max.dtype()).data());
     std::fflush(stderr);
-    auto shifted = ttnn::subtract(logits->get_value(), global_max);
+    auto shifted = ttnn::subtract(logits->get_value(), global_max, ttnn::DataType::FLOAT32);
     std::fprintf(
         stderr,
         "[ce-loss] subtract dispatch returned; shifted.dtype=%s\n",
