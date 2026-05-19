@@ -7,8 +7,13 @@ from enum import Enum
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
+from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat
-from helpers.golden_generators import BinarySFPUGolden, get_golden_generator
+from helpers.golden_generators import (
+    BinarySFPUGolden,
+    BroadcastGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import BroadcastType as LlkBroadcastType
 from helpers.llk_params import DestAccumulation, MathOperation, format_dict
 from helpers.param_config import input_output_formats, parametrize
@@ -38,9 +43,9 @@ from helpers.utils import passed_test
     ),
     bcast_dim=[
         LlkBroadcastType.None_,
-        # LlkBroadcastType.Row,
-        # LlkBroadcastType.Column,
-        # LlkBroadcastType.Scalar,
+        LlkBroadcastType.Row,
+        LlkBroadcastType.Column,
+        LlkBroadcastType.Scalar,
     ],
     mathop=[
         MathOperation.SfpuElwadd,
@@ -80,11 +85,15 @@ def test_sfpu_binary_float(
     if (
         TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
         and bcast_dim == LlkBroadcastType.Row
-        and dest_acc == DestAccumulation.Yes
-        and formats.input_format in (DataFormat.Float16_b, DataFormat.Bfp8_b)
+        and (
+            dest_acc == DestAccumulation.Yes
+            or is_format_combination_outlier(
+                formats.input_format, formats.output_format, dest_acc
+            )
+        )
     ):
         pytest.skip(
-            "Row broadcast with dest_acc=Yes broken on Wormhole for Float16_b/Bfp8_b"
+            "Row broadcast with FP32 dest broken on Wormhole: B2D datacopy uses MOVB2D which can't handle FP32 dest format conversion"
         )
 
     sfpu_binary(
@@ -225,15 +234,17 @@ def sfpu_binary(
 
     golden_src = src_A
     if broadcast_type is not None and broadcast_type != LlkBroadcastType.None_:
-        tile_0 = src_A.flatten()[:1024].reshape(32, 32)
-        tile_1 = src_A.flatten()[1024:2048].reshape(32, 32)
-        if broadcast_type == LlkBroadcastType.Row:
-            tile_0 = tile_0[0:1].expand(32, 32).contiguous()
-            tile_1 = tile_1[0:1].expand(32, 32).contiguous()
-        else:
-            tile_0 = tile_0[:, 0:1].expand(32, 32).contiguous()
-            tile_1 = tile_1[:, 0:1].expand(32, 32).contiguous()
-        golden_src = torch.cat([tile_0.flatten(), tile_1.flatten()])
+        generate_broadcast_golden = get_golden_generator(BroadcastGolden)
+        golden_src = generate_broadcast_golden(
+            broadcast_type,
+            src_A,
+            (
+                formats.input_format
+                if formats.input_format != DataFormat.Bfp8_b
+                else DataFormat.Float16_b
+            ),
+            tile_cnt=tile_cnt_A,
+        )
 
     generate_golden = get_golden_generator(BinarySFPUGolden)
     golden_tensor = generate_golden(
@@ -407,16 +418,6 @@ def test_sfpu_binary_bcast(
     ):
         pytest.skip(
             "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
-        )
-
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
-        and bcast_dim == BroadcastType.ROW
-        and dest_acc == DestAccumulation.Yes
-        and formats.input_format in (DataFormat.Float16_b, DataFormat.Bfp8_b)
-    ):
-        pytest.skip(
-            "Row broadcast with dest_acc=Yes broken on Wormhole for Float16_b/Bfp8_b"
         )
 
     # Mirror sfpu_binary(): on Blackhole, Float16/Float32 inputs require
