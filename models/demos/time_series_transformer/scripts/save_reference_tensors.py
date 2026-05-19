@@ -55,7 +55,10 @@ def _write_or_assert_config(save_dir: Path, config_dict: dict) -> None:
         if existing != config_dict:
             raise RuntimeError(
                 "Generated config does not match committed reference/config.json. "
-                "If this is intentional, delete reference/config.json and re-run."
+                "If this provenance change is intentional, update the pinned constants "
+                "(MODEL_ID, MODEL_REVISION, DATASET_REPO, DATASET_FILE, DATASET_REVISION) "
+                "as needed, re-run this script, and review/update the committed "
+                "reference/config.json via git."
             )
         print("  config.json unchanged — matches committed provenance.")
     else:
