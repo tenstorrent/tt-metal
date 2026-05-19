@@ -217,7 +217,7 @@ jobs:
         working-directory: /tmp
         timeout-minutes: 30
         run: |
-          MAX_RECOVERY_ATTEMPTS=3
+          MAX_RECOVERY_ATTEMPTS=5
 
           echo "--- Pre-check: tt-smi visibility on all hosts ---"
           mpirun --pernode --tag-output \
@@ -246,8 +246,36 @@ jobs:
               continue
             fi
 
-            echo "--- Sleeping 5s after reset to allow links/services to settle ---"
-            sleep 5
+            echo "--- Waiting for post-reset chip readiness on all hosts ---"
+            if ! mpirun --pernode --tag-output bash -lc '
+              MAX_READY_POLLS=12
+              READY_POLL_INTERVAL_SEC=10
+              for poll in $(seq 1 "$MAX_READY_POLLS"); do
+                status="$(tt-smi -s 2>&1 || true)"
+                if [[ "$status" == *"In Progress"* ]]; then
+                  echo "$(hostname): chip init still in progress ($poll/$MAX_READY_POLLS)"
+                  sleep "$READY_POLL_INTERVAL_SEC"
+                  continue
+                fi
+                if [[ "$status" == *"Detected Chips"* ]]; then
+                  echo "$(hostname): chip init complete"
+                  exit 0
+                fi
+                echo "$(hostname): tt-smi status unavailable ($poll/$MAX_READY_POLLS)"
+                sleep "$READY_POLL_INTERVAL_SEC"
+              done
+              echo "$(hostname): timed out waiting for chip initialization"
+              exit 1
+            '; then
+              echo "WARNING: Post-reset chip readiness check failed on attempt $attempt"
+              if [ "$attempt" -lt "$MAX_RECOVERY_ATTEMPTS" ]; then
+                echo "Sleeping 30s before retry..."
+                sleep 30
+                continue
+              fi
+              echo "ERROR: Chip readiness failed after $MAX_RECOVERY_ATTEMPTS attempts"
+              exit 1
+            fi
 
             echo "--- Running cluster validation ---"
             if mpirun --pernode --mca btl_tcp_if_include ens5f0np0 --tag-output \
