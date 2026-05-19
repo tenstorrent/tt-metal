@@ -281,4 +281,79 @@ TEST_F(DispatchContextFixture, AsyncSdStatePreservedAcrossFdTransition) {
     EXPECT_TRUE(experimental::DispatchContext::get().is_asynchronous_slow_dispatch_enabled(mesh_device_.get()));
 }
 
+// Launch SD, transit to FD and write a buffer to L1 + launch a blank kernel workload
+TEST_F(DispatchContextFixture, SDFDTransitionLaunchWorkload) {
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.get_fast_dispatch()) {
+        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
+    }
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP()
+            << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";
+    }
+
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+    const uint32_t num_tiles = 64;
+
+    CoreRangeSet shard_grid(CoreRange({0, 0}, {1, 1}));
+    const uint32_t num_cores = 4;
+    const uint32_t tiles_per_shard = num_tiles / num_cores;
+    std::array<uint32_t, 2> shard_shape = {tiles_per_shard * single_tile_size, 1};
+    std::array<uint32_t, 2> page_shape = {single_tile_size, 1};
+    std::array<uint32_t, 2> tensor2d_shape = {num_tiles, 1};
+    ShardSpecBuffer shard_spec(shard_grid, shard_shape, ShardOrientation::ROW_MAJOR, page_shape, tensor2d_shape);
+
+    DeviceLocalBufferConfig fd_l1_config{
+        .page_size = single_tile_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false};
+    ReplicatedBufferConfig fd_l1_global{.size = num_tiles * single_tile_size};
+
+    // sharded L1 buffer
+    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+
+    auto fd_buf = MeshBuffer::create(fd_l1_global, fd_l1_config, mesh_device_.get());
+    std::vector<uint32_t> fd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
+    std::iota(fd_src_vec.begin(), fd_src_vec.end(), 100);
+    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), fd_buf, fd_src_vec);
+    Finish(mesh_device_->mesh_command_queue());
+
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        std::vector<uint32_t> dst;
+        ReadShard(mesh_device_->mesh_command_queue(), dst, fd_buf, coord);
+        EXPECT_EQ(dst, fd_src_vec) << ": sharded L1 readback failed in FD mode at " << coord;
+    }
+
+    std::cout << "shared l1 buffer done \n";
+
+    // Launch a blank kernel on a single Tensix BRISC processor.
+    Program program = CreateProgram();
+    CreateKernel(
+        program,
+        "tt_metal/kernels/dataflow/blank.cpp",
+        CoreCoord{0, 0},
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    MeshWorkload workload;
+    workload.add_program(
+        MeshCoordinateRange(
+            MeshCoordinate{0, 0}, MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1}),
+        std::move(program));
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, true);
+    Finish(mesh_device_->mesh_command_queue());
+
+    // Verify FD buffer is uncorrupted after running workloads.
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        std::vector<uint32_t> dst;
+        ReadShard(mesh_device_->mesh_command_queue(), dst, fd_buf, coord);
+        EXPECT_EQ(dst, fd_src_vec) << ": FD buffer corrupted after running workloads at " << coord;
+    }
+
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+}
+
 }  // namespace tt::tt_metal::distributed::test
