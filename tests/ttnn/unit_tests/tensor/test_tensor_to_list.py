@@ -17,6 +17,7 @@ def get_types_from_binding_framwork():
         ALL_TYPES = [
             dtype
             for _, dtype in ttnn.DataType._member_map_.items()
+            # skipping FP8_E4M3 for now, until it is fully supported in tt-metal
             if dtype != ttnn.DataType.INVALID and dtype != ttnn.DataType.FP8_E4M3
         ]
     else:
