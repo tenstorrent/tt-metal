@@ -19,7 +19,8 @@
   cmd: |
     echo "============= SP1 superpod: copy ttrun.py and rank files ============="
     wget https://raw.githubusercontent.com/tenstorrent/tt-metal/main/ttnn/ttnn/distributed/ttrun.py
-    cp /mnt/models/ref_data/rank_bindings/*_single_pod* .
+    cp /mnt/models/ref_data/rank_bindings/rev_c_rank_binding_single_pod.yaml .
+    cp /mnt/models/ref_data/rank_bindings/rev_c_rank_file_single_pod .
     echo "============= SP4 superpod: copied rank bindings ============="
     for file in "$RANK_BINDINGS_SRC"/*; do
       dst_file="./$(basename "$file")"
