@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.hpp"
 
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -825,6 +826,13 @@ void add_kernel_descriptors(
         {"cb_xmm", tt::CBIndex::c_18},
         {"cb_ex2pe", tt::CBIndex::c_20},
         {"cb_x", tt::CBIndex::c_24},
+        // Welford-fp32 alias of cb_x (c_0 in non-fused mode, c_24 in fused mode). When the
+        // alias is active the kernel reads cb_x_welford for the welford section so the unpacker
+        // takes the UnpackToDest fp32 path; the post-welford eltwise still reads cb_x via SrcA.
+        // When inactive cb_x_welford collapses onto cb_x at the kernel side (see
+        // layernorm_sharded_welford.cpp) so the named arg can stay present unconditionally.
+        {"cb_x_welford", tt::CBIndex::c_29},
+        {"welford_fp32_alias", static_cast<uint8_t>(kernel_config.welford_fp32_alias ? 1 : 0)},
     };
 
     // Reader sender kernel
@@ -912,6 +920,17 @@ void add_kernel_descriptors(
 
     // Compute kernel (all-to-all cores)
     KernelDescriptor compute_all_to_all_kernel_desc;
+    // Welford-fp32 alias index gets UnpackToDest fp32 mode so the welford section reads full
+    // fp32 into DEST via cb_x_welford (c_29). cb_x itself (c_0 non-fused, c_24 fused) stays at
+    // Default mode so the post-welford FPU eltwise (sub_tiles_bcast_cols) keeps reading via
+    // SrcA Tf32. Same multi-buffer-index aliasing pattern as the matmul shared output+interm CB.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (kernel_config.welford_fp32_alias) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_29)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     compute_all_to_all_kernel_desc.kernel_source = kernel_config.compute_path;
     compute_all_to_all_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_all_to_all_kernel_desc.core_ranges = core_ranges.all_to_all_cores;
@@ -923,6 +942,7 @@ void add_kernel_descriptors(
         .math_fidelity = kernel_config.math_fidelity,
         .fp32_dest_acc_en = kernel_config.fp32_dest_acc_en,
         .dst_full_sync_en = kernel_config.dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = kernel_config.math_approx_mode};
     program_descriptor.kernels.push_back(std::move(compute_all_to_all_kernel_desc));
 
@@ -940,6 +960,7 @@ void add_kernel_descriptors(
             .math_fidelity = kernel_config.math_fidelity,
             .fp32_dest_acc_en = kernel_config.fp32_dest_acc_en,
             .dst_full_sync_en = kernel_config.dst_full_sync_en,
+            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
             .math_approx_mode = kernel_config.math_approx_mode};
         program_descriptor.kernels.push_back(std::move(compute_not_all_to_all_kernel_desc));
     }
@@ -965,14 +986,27 @@ void add_cb_descriptors(
         return cb_desc;
     };
 
-    // CB 0: in0 sharded
-    program_descriptor.cbs.push_back(make_cb_descriptor(
-        cb_config.in0_CB_size,
-        core_ranges.all_cores,
-        tt::CBIndex::c_0,
-        cb_config.in_data_format,
-        cb_config.in_single_tile_size,
-        cb_config.a_buffer));
+    // CB 0: in0 sharded. In non-fused welford-fp32 mode we also register c_29 as a second
+    // buffer index on the same allocation so the welford section can read with
+    // unpack_to_dest_mode=UnpackToDestFp32 while the post-welford eltwise keeps reading c_0
+    // via SrcA. In fused mode c_0 carries the raw input which welford never reads -- welford
+    // reads the post-add result in c_24 instead -- so the alias goes there (see CB 24 below).
+    {
+        auto cb0_desc = make_cb_descriptor(
+            cb_config.in0_CB_size,
+            core_ranges.all_cores,
+            tt::CBIndex::c_0,
+            cb_config.in_data_format,
+            cb_config.in_single_tile_size,
+            cb_config.a_buffer);
+        if (cb_config.welford_fp32_alias && !cb_config.has_b) {
+            cb0_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
+                .data_format = cb_config.in_data_format,
+                .page_size = cb_config.in_single_tile_size});
+        }
+        program_descriptor.cbs.push_back(std::move(cb0_desc));
+    }
 
     // CB 1: in1 sharded (if b)
     if (cb_config.has_b) {
@@ -1014,13 +1048,25 @@ void add_cb_descriptors(
             cb_config.beta_single_tile_size));
     }
 
-    // CB 24: x
-    program_descriptor.cbs.push_back(make_cb_descriptor(
-        cb_config.x_CB_size,
-        core_ranges.all_cores,
-        tt::CBIndex::c_24,
-        cb_config.cb_data_format,
-        cb_config.single_tile_size));
+    // CB 24: x. In fused welford-fp32 mode we add c_29 as a second buffer index on c_24
+    // (the post-add result), backed by the same allocation, configured with
+    // unpack_to_dest_mode=UnpackToDestFp32 for the welford section. The post-welford eltwise
+    // still reads c_24 via SrcA (Tf32).
+    {
+        auto cbx_desc = make_cb_descriptor(
+            cb_config.x_CB_size,
+            core_ranges.all_cores,
+            tt::CBIndex::c_24,
+            cb_config.cb_data_format,
+            cb_config.single_tile_size);
+        if (cb_config.welford_fp32_alias && cb_config.has_b) {
+            cbx_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
+                .data_format = cb_config.cb_data_format,
+                .page_size = cb_config.single_tile_size});
+        }
+        program_descriptor.cbs.push_back(std::move(cbx_desc));
+    }
 
     // CB 18: xmm
     program_descriptor.cbs.push_back(make_cb_descriptor(

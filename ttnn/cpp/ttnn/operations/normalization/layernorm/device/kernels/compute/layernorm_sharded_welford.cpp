@@ -163,6 +163,18 @@ void kernel_main() {
 #endif
     CircularBuffer cb_in_obj(cb_in);
 
+    // Welford-fp32 alias of cb_in. When welford_fp32_alias is true, cb_x_welford_named points
+    // to c_29, a separate buffer index sharing cb_in's L1 allocation but configured with
+    // unpack_to_dest_mode=UnpackToDestFp32 so the welford section's transpose_wh_tile takes
+    // the UnpackToDest path and preserves full fp32 into DEST. When false, fall back to cb_in
+    // so the welford section reads via the same SrcA Tf32 path as before. The two indices
+    // have independent semaphores so the fused path pushes both side by side; the non-fused
+    // path reads c_0 (sharded buffer) without semaphore manipulation, and so does the alias.
+    constexpr auto cb_x_welford_named = get_named_compile_time_arg_val("cb_x_welford");
+    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
+    constexpr auto cb_x_welford = welford_fp32_alias ? cb_x_welford_named : cb_in;
+    CircularBuffer cb_x_welford_obj(cb_x_welford);
+
     // ---------------------------------------------------------------------------
     // Derived quantities
     // ---------------------------------------------------------------------------
@@ -242,6 +254,13 @@ void kernel_main() {
     reconfig_data_format_srcb(cb_in0, cb_in1);
     add_tiles_init(cb_in0, cb_in1);
     cb_in_obj.reserve_back(num_tiles_per_block);
+    if constexpr (welford_fp32_alias) {
+        // cb_x_welford shares cb_in's L1 allocation but has its own semaphore. Compute is the
+        // producer of cb_in (post-add result) on the fused path, so reserve and push both
+        // indices side by side. pack_tile writes once via cb_in's wr_ptr; the alias
+        // semaphore lets the welford section wait_front on c_29 independently.
+        cb_x_welford_obj.reserve_back(num_tiles_per_block);
+    }
     for (uint32_t i = 0; i < block_ht; i++) {
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -262,14 +281,27 @@ void kernel_main() {
     }
     cb_in_obj.push_back(num_tiles_per_block);
     cb_in_obj.wait_front(num_tiles_per_block);
+    if constexpr (welford_fp32_alias) {
+        cb_x_welford_obj.push_back(num_tiles_per_block);
+        cb_x_welford_obj.wait_front(num_tiles_per_block);
+    }
 #endif
 
     // ---------------------------------------------------------------------------
     // Compute E[x] and Var[x] using Welford's algorithm
     // ---------------------------------------------------------------------------
-    reconfig_data_format_srca(cb_in);
+    reconfig_data_format_srca(cb_x_welford);
     cb_ex_partial_obj.reserve_back(num_block_ht_result_tiles);
-    transpose_wh_init_short(cb_in);
+    // Full transpose_wh hw init when the alias is active. cb_x_welford's buffer index isn't
+    // visible to binary_op_init_common / unary_op_init_common at the top of kernel_main (only
+    // cb_in0 / cb_in is), so we run the full init once to program all hw config registers
+    // (pack, math hw_configure) for it. For the non-alias path cb_x_welford == cb_in and
+    // transpose_wh_init_short suffices.
+    if constexpr (welford_fp32_alias) {
+        transpose_wh_init(cb_x_welford, cb_ex_partial);
+    } else {
+        transpose_wh_init_short(cb_x_welford);
+    }
     welford_init();
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_ht; i++) {
@@ -279,13 +311,34 @@ void kernel_main() {
 
         // Do the full Welford tiles
         for (uint32_t w = 0; w < num_full_welford_tiles; w++) {
-            transpose_wh_tile(cb_in, w + index_h_offset, welford_input_dst);
+            if constexpr (welford_fp32_alias) {
+                // welford_init / the previous iteration's welford_reinit left SFPU replay
+                // slot 0 holding the welford recurrence. The fp32 transpose_wh_tile uses a MOP
+                // that references slot 0 for its transpose instructions, so re-init transpose
+                // state to put transpose code back into slot 0 before this iteration's
+                // transpose.
+                transpose_wh_init_short(cb_x_welford);
+            }
+            transpose_wh_tile(cb_x_welford, w + index_h_offset, welford_input_dst);
+            if constexpr (welford_fp32_alias) {
+                // transpose_wh_tile took the UnpackToDest fp32 path which clobbered the
+                // welford recurrence in slot 0. Restore welford state before welford_update.
+                welford_reinit(cb_x_welford);
+                MATH((llk_math_welfords_sfpu_init()));
+            }
             welford_update<per_core_recip_lut_size>(welford_input_dst, sample_idx, *p_reciprocals);
             sample_idx += tile_width;
         }
         // Do the partial Welford tile, if any
         if (partial_welford_tile_w > 0) {
-            transpose_wh_tile(cb_in, block_wt - 1, welford_input_dst);
+            if constexpr (welford_fp32_alias) {
+                transpose_wh_init_short(cb_x_welford);
+            }
+            transpose_wh_tile(cb_x_welford, block_wt - 1, welford_input_dst);
+            if constexpr (welford_fp32_alias) {
+                welford_reinit(cb_x_welford);
+                MATH((llk_math_welfords_sfpu_init()));
+            }
             welford_update_rows<per_core_recip_lut_size>(
                 welford_input_dst, sample_idx, 0, partial_welford_tile_w, *p_reciprocals);
         }

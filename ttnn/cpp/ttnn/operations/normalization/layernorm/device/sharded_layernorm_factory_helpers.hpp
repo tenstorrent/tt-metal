@@ -300,6 +300,14 @@ struct KernelConfig {
     bool fp32_dest_acc_en = false;
     bool dst_full_sync_en = false;
     bool math_approx_mode = false;
+
+    // Welford-fp32 alias: enable a multi-buffer-index alias on cb_x (c_0 non-fused, c_24 fused)
+    // configured with unpack_to_dest_mode=UnpackToDestFp32 so the welford section's
+    // transpose_wh_tile preserves full fp32 into DEST while the post-welford eltwise still
+    // reads cb_x via SrcA (Tf32). Set true only for fp32 input + fp32_dest_acc_en + use_welford
+    // + !rms_norm.
+    bool welford_fp32_alias = false;
+    bool has_b = false;
 };
 
 // Struct to hold CB configuration for building CB descriptors
@@ -361,6 +369,8 @@ struct CBConfig {
     bool is_pre_all_gather = false;
     bool is_post_all_gather = false;
     bool skip_write_back = false;
+    // See KernelConfig::welford_fp32_alias.
+    bool welford_fp32_alias = false;
 };
 
 //////////////////////////////////////////////////////////////////////////////
