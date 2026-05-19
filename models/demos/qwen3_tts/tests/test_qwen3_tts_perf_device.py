@@ -46,7 +46,7 @@ ARCH_GOLDENS = {
         # runs due to trace-cache state and JIT bucket warmth).
         "steady_ms_per_frame": 110.0,
         "steady_margin": 0.10,
-        "prefill_ms_upper": 50.0,
+        "prefill_ms_upper": 40.0,
     },
 }
 
