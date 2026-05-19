@@ -336,9 +336,9 @@ def _upsample_nearest_axis1(x_nlc: ttnn.Tensor, *, scale: int, memory_config: tt
 class TTGenerator:
     """TTNN port of ``Generator`` (``TorchSTFT`` only).
 
-    ``use_torch_stft_fallback=True`` routes the STFT ``transform`` call through CPU
-    ``torch.stft``, bypassing the BH BF16 MAC ceiling in the harmonic-source STFT and raising
-    the full-forward PCC from ~0.58 to > 0.99.  Everything else (iSTFT, decoder) stays on-device.
+    ``use_torch_stft_fallback=True`` routes the entire STFT ``transform`` through CPU ``torch.stft``.
+    ``use_torch_stft_conv_fallback=True`` runs only the strided conv on CPU — see
+    :class:`~models.experimental.kokoro.tt.tt_torch_stft.TTTorchSTFT`.
     """
 
     def __init__(
@@ -347,6 +347,7 @@ class TTGenerator:
         params: TTGeneratorParams,
         *,
         use_torch_stft_fallback: bool = False,
+        use_torch_stft_conv_fallback: bool = False,
         use_torch_phase_fallback: bool = False,
         use_torch_linear_fallback: bool = False,
         use_torch_tanh_fallback: bool = False,
@@ -370,7 +371,12 @@ class TTGenerator:
             use_torch_linear_fallback=use_torch_linear_fallback,
             use_torch_tanh_fallback=use_torch_tanh_fallback,
         )
-        self._stft = TTTorchSTFT(device, params.stft, use_torch_stft_fallback=use_torch_stft_fallback)
+        self._stft = TTTorchSTFT(
+            device,
+            params.stft,
+            use_torch_stft_fallback=use_torch_stft_fallback,
+            use_torch_stft_conv_fallback=use_torch_stft_conv_fallback,
+        )
         # Keep the full harmonic-source path (SineGen + Source linear + STFT) on the same
         # precision profile as the rest of the generator to avoid mixed-fidelity phase drift.
         self._m_source.compute_kernel_config = self.compute_kernel_config
