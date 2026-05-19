@@ -1,6 +1,9 @@
 name: "(Profiler) Choose your pipeline"
 
 on:
+  push:
+    branches:
+      - tdowdall/profiler-reorg
   workflow_dispatch:
     inputs:
       run_t3k_profiler:
@@ -76,11 +79,23 @@ jobs:
         id: logic
         run: |
           set -e
-          galaxy="${{ inputs.run_galaxy_profiler }}"
-          t3k="${{ inputs.run_t3k_profiler }}"
-          bh="${{ inputs.run_blackhole_profiler }}"
-          n300="${{ inputs.run_n300_profiler }}"
-          n150="${{ inputs.run_n150_profiler }}"
+          # Push events don't carry workflow_dispatch inputs, so the run_*
+          # booleans evaluate as empty. Mirror the workflow_dispatch defaults
+          # (t3k + bh + n300 + n150 on, galaxy off) so a push runs the same
+          # set a developer gets clicking "Run workflow" without changes.
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            galaxy=false
+            t3k=true
+            bh=true
+            n300=true
+            n150=true
+          else
+            galaxy="${{ inputs.run_galaxy_profiler }}"
+            t3k="${{ inputs.run_t3k_profiler }}"
+            bh="${{ inputs.run_blackhole_profiler }}"
+            n300="${{ inputs.run_n300_profiler }}"
+            n150="${{ inputs.run_n150_profiler }}"
+          fi
 
           parts=()
           [[ "$bh" == "true" ]]   && parts+=("bh_p100a_civ2_viommu" "bh_p150b_civ2_viommu")
@@ -150,4 +165,5 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.determine-tests.outputs.single-card-skus }}
-      test-mode: ${{ inputs.single-card-mode }}
+      # `inputs.single-card-mode` is unset on push; fall back to post-commit.
+      test-mode: ${{ inputs.single-card-mode || 'post-commit' }}
