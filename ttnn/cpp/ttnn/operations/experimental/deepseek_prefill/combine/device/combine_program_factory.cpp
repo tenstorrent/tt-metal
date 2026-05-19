@@ -711,6 +711,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     }
 
     std::map<std::string, std::string> writer_defines = fabric_defines;
+    writer_defines["INIT_ZEROS"] = operation_attributes.init_zeros ? "1" : "0";
 
     // zero_init_writer kernel is launched whenever either:
     //   (a) init_zeros=True — it does the per-bank zero-init of the output tensor
