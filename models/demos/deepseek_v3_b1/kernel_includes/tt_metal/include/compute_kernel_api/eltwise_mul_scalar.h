@@ -61,7 +61,7 @@ ALWI void deepseek_binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_lin
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, binary_reuse_dest>(false, false, icb0)));
     MATH(
         (llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(
-            false)));
+            false /*acc_to_dest*/)));
 }
 
 /**
@@ -78,7 +78,7 @@ ALWI void deepseek_binary_dest_reuse_tiles(uint32_t icb, uint32_t in_tile_index,
           BroadcastType::NONE,
           fp32_dest_acc_en,
           MATH_FIDELITY,
-          binary_reuse_dest>(icb, icb, idst, true)));
+          binary_reuse_dest>(icb, icb, idst, true /*clear_fp32_dst_acc*/)));
 }
 
 }  // namespace ckernel

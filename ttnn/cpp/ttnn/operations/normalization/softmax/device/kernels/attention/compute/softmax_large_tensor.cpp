@@ -149,7 +149,8 @@ void apply_fused_attn_mask(
             reconfig_data_format_srca(cb_mask_padded);
             binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_mask_padded);
             cb_mask_padded_obj.wait_front(1);
-            binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_mask_padded, 0, blk - 1);
+            binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                cb_mask_padded, 0 /*in_tile_index*/, blk - 1);
         }
         tile_regs_commit();
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {

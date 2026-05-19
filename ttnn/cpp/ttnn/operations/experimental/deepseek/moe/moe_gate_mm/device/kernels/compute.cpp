@@ -207,7 +207,8 @@ void kernel_main() {
 
     // Wait for the partial to come, add it
     cb_wait_front(cb_w2c_in2, 1);
-    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2, 0, 0);
+    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+        cb_w2c_in2, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
     cb_pop_front(cb_w2c_in2, 1);
 
     //-------------------------------------------------------------------------

@@ -55,15 +55,15 @@ inline auto eltwise_binary_func(std::uint8_t clr_src, std::uint8_t acc_to_dest, 
 {
     if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWADD)
     {
-        return TT_OP_ELWADD(clr_src, acc_to_dest, broadcast_type, addr_mod, 0);
+        return TT_OP_ELWADD(clr_src, acc_to_dest, broadcast_type, addr_mod, 0 /*dst*/);
     }
     else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWSUB)
     {
-        return TT_OP_ELWSUB(clr_src, acc_to_dest, broadcast_type, addr_mod, 0);
+        return TT_OP_ELWSUB(clr_src, acc_to_dest, broadcast_type, addr_mod, 0 /*dst*/);
     }
     else
     {
-        return TT_OP_ELWMUL(clr_src, acc_to_dest, broadcast_type, addr_mod, 0);
+        return TT_OP_ELWMUL(clr_src, acc_to_dest, broadcast_type, addr_mod, 0 /*dst*/);
     }
 }
 
@@ -109,7 +109,7 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
 
     if constexpr ((eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB))
     {
-        ckernel_template tmp(outerloop, innerloop, eltwise_binary_func<eltwise_binary_type>(0, acc_to_dest, broadcast_type, addr_mod));
+        ckernel_template tmp(outerloop, innerloop, eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc_to_dest, broadcast_type, addr_mod));
         if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
         {
             // For partial faces (face_r_dim < 16), we still need to increment counters by MAX_FPU_ROWS
@@ -123,9 +123,12 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
     {
         if constexpr (high_fidelity)
         {
-            ckernel_template tmp(to_underlying(math_fidelity), innerloop, eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0, 0, broadcast_type, addr_mod));
-            tmp.set_last_inner_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0, 0, broadcast_type, ADDR_MOD_2));
-            tmp.set_last_outer_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(CLR_SRC, 0, broadcast_type, ADDR_MOD_3));
+            ckernel_template tmp(
+                to_underlying(math_fidelity),
+                innerloop,
+                eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0 /*clr_src*/, 0 /*acc_to_dest*/, broadcast_type, addr_mod));
+            tmp.set_last_inner_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0 /*clr_src*/, 0 /*acc_to_dest*/, broadcast_type, ADDR_MOD_2));
+            tmp.set_last_outer_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(CLR_SRC, 0 /*acc_to_dest*/, broadcast_type, ADDR_MOD_3));
             // HiFi partial face advancement is handled by runtime INCRWC between face MOP runs,
             // NOT by end_op (which would incorrectly advance dest between fidelity phases)
             tmp.program();
@@ -138,14 +141,15 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
             ckernel_template tmp(
                 outerloop,
                 innerloop,
-                eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0, 0, broadcast_type, addr_mod),
+                eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0 /*clr_src*/, 0 /*acc_to_dest*/, broadcast_type, addr_mod),
                 TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
             tmp.set_end_op(TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program();
         }
         else
         {
-            ckernel_template tmp(outerloop, innerloop, eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0, 0, broadcast_type, addr_mod));
+            ckernel_template tmp(
+                outerloop, innerloop, eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0 /*clr_src*/, 0 /*acc_to_dest*/, broadcast_type, addr_mod));
             tmp.set_end_op(TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program();
         }
@@ -341,7 +345,7 @@ inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc
 
     if constexpr ((eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB))
     {
-        ckernel_template tmp(outerloop, innerloop, eltwise_binary_func<eltwise_binary_type>(0, acc_to_dest, broadcast_type, addr_mod));
+        ckernel_template tmp(outerloop, innerloop, eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc_to_dest, broadcast_type, addr_mod));
         if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
         {
             // For partial faces, still increment by MAX_FPU_ROWS to maintain 16-row face spacing
@@ -354,9 +358,12 @@ inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc
     {
         if constexpr (high_fidelity)
         {
-            ckernel_template tmp(to_underlying(math_fidelity), innerloop, eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0, 0, broadcast_type, addr_mod));
-            tmp.set_last_inner_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0, 0, broadcast_type, ADDR_MOD_2));
-            tmp.set_last_outer_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(CLR_SRC, 0, broadcast_type, ADDR_MOD_3));
+            ckernel_template tmp(
+                to_underlying(math_fidelity),
+                innerloop,
+                eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0 /*clr_src*/, 0 /*acc_to_dest*/, broadcast_type, addr_mod));
+            tmp.set_last_inner_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0 /*clr_src*/, 0 /*acc_to_dest*/, broadcast_type, ADDR_MOD_2));
+            tmp.set_last_outer_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(CLR_SRC, 0 /*acc_to_dest*/, broadcast_type, ADDR_MOD_3));
 
             if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
             {
@@ -371,14 +378,15 @@ inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc
             ckernel_template tmp(
                 outerloop,
                 innerloop,
-                eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0, 0, broadcast_type, addr_mod),
+                eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0 /*clr_src*/, 0 /*acc_to_dest*/, broadcast_type, addr_mod),
                 TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
             tmp.set_end_op(TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program();
         }
         else
         {
-            ckernel_template tmp(outerloop, innerloop, eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0, 0, broadcast_type, addr_mod));
+            ckernel_template tmp(
+                outerloop, innerloop, eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0 /*clr_src*/, 0 /*acc_to_dest*/, broadcast_type, addr_mod));
             tmp.set_end_op(TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program();
         }

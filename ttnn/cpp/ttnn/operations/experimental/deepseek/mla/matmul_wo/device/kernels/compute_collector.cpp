@@ -46,7 +46,7 @@ void kernel_main() {
         tile_regs_acquire();
         for (uint32_t k = 0; k < num_cores; ++k) {
             binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                cb_s2c_in2, k, 0);
+                cb_s2c_in2, k, 0 /*dst_tile_index*/);
         }
         tile_regs_commit();
 

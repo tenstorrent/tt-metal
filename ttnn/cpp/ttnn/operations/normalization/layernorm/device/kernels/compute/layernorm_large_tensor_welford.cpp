@@ -421,7 +421,7 @@ void kernel_main() {
             binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
             for (auto i : block.local()) {
                 binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                    cb_ex2pe, 0, i);
+                    cb_ex2pe, 0 /*in_tile_index*/, i);
             }
             tile_regs_commit();
 

@@ -176,7 +176,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             dest_sync2,
             false,
             ckernel::MathFidelity::LoFi,
-            EltwiseBinaryReuseDestType::NONE>(ckernel::DEFAULT_TENSOR_SHAPE, 0, false);
+            EltwiseBinaryReuseDestType::NONE>(ckernel::DEFAULT_TENSOR_SHAPE, 0 /*dst_index*/, false /*clear_fp32_dst_acc*/);
         _llk_math_dest_section_done_<dest_sync2, false>();
     }
     // Operation 3: Math Setup
