@@ -34,13 +34,20 @@ constexpr uint32_t NOC_L1_TO_DRAM_ALIGNMENT = 0;
 static_assert(false, "Unsupported architecture");
 #endif
 
+// Default no-op guard. DevicePrintDispatch is generic and makes no assumptions about
+// the caller's NOC cmd_buf state; callers that need to snapshot/restore cmd_buf state
+// around the dispatch's NOC traffic pass their own RAII type as the NocCmdBufGuard
+// template argument.
+struct EmptyNocCmdBufGuard {};
+
 }  // namespace device_print_dispatch
 
 template <
     bool EnableNocLocationCache = true,
     uint32_t MaxNocLocations = device_print_dispatch::DEFAULT_MAX_NOC_LOCATIONS,
     uint32_t NocL1ToL1Alignment = device_print_dispatch::NOC_L1_TO_L1_ALIGNMENT,
-    uint32_t NocL1ToDramAlignment = device_print_dispatch::NOC_L1_TO_DRAM_ALIGNMENT>
+    uint32_t NocL1ToDramAlignment = device_print_dispatch::NOC_L1_TO_DRAM_ALIGNMENT,
+    typename NocCmdBufGuard = device_print_dispatch::EmptyNocCmdBufGuard>
 class DevicePrintDispatch {
     static constexpr uint32_t rw_pointers_entry_size =
         std::max(NocL1ToL1Alignment, static_cast<uint32_t>(sizeof(uint32_t) * 2));
@@ -117,6 +124,8 @@ public:
         // Initialize cache for noc addresses if enabled
         if constexpr (EnableNocLocationCache) {
             for (uint32_t i = 0; i < noc_locations_count; i++) {
+                cache_x[i] = noc_locations[i].x;
+                cache_y[i] = noc_locations[i].y;
                 rw_noc_addresses[i] =
                     get_noc_addr64(noc_locations[i].x, noc_locations[i].y, noc_locations[i].rw_ptr_addr);
                 cache_buffer_offsets[i] = noc_locations[i].buf_offset;
@@ -131,6 +140,8 @@ public:
         if (!enabled) {
             return;
         }
+
+        NocCmdBufGuard guard;
 
         // Execute last full dispatch to drain any remaining buffers in DRAM before shutdown.
         read_rw_pointers();
@@ -153,6 +164,8 @@ public:
 
         // Execute stall detection if needed
         if (force_stall || (get_timestamp() >= next_stall_detection_timestamp)) {
+            NocCmdBufGuard guard;
+
             read_rw_pointers();
             find_noc_locations_to_process<true>();
             process_noc_locations();
@@ -164,6 +177,8 @@ public:
         // Execute full dispatch if needed
         uint64_t current_timestamp = get_timestamp();
         if (enabled && current_timestamp >= next_full_dispatch_timestamp) {
+            NocCmdBufGuard guard;
+
             // Check if we should execute fetch read/write pointers or we can reuse what stall detection read recently.
             if (current_timestamp - last_rw_pointers_read_timestamp >= cycles_for_full_dispatch / 2) {
                 read_rw_pointers();
@@ -353,8 +368,13 @@ private:
                 (volatile tt_l1_ptr device_print_dispatch::DramStreamMessageHeader*)current_l1_buffer_address;
             bool buffer_wrapped = write_position < read_position;
 
-            header->x = noc_location->x;
-            header->y = noc_location->y;
+            if constexpr (EnableNocLocationCache) {
+                header->x = cache_x[location_index];
+                header->y = cache_y[location_index];
+            } else {
+                header->x = noc_location->x;
+                header->y = noc_location->y;
+            }
             header->align = buffer_l1_alignment;
             header->buffer_wrapped = buffer_wrapped;
             header->length = remote_buffer_size;
@@ -531,6 +551,8 @@ private:
     uint64_t rw_noc_addresses[EnableNocLocationCache ? MaxNocLocations : 0];
     uint16_t cache_buffer_offsets[EnableNocLocationCache ? MaxNocLocations : 0];
     uint16_t cache_buffer_sizes[EnableNocLocationCache ? MaxNocLocations : 0];
+    uint8_t cache_x[EnableNocLocationCache ? MaxNocLocations : 0];
+    uint8_t cache_y[EnableNocLocationCache ? MaxNocLocations : 0];
 };
 
 // TODO: Check if we should have separate implementation of process_noc_locations for D2H sockets...
