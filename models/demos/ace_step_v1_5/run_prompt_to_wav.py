@@ -107,13 +107,20 @@ def _configure_ttnn_runtime(*, no_ttnn_strict: bool) -> None:
         os.environ["TTNN_CONFIG_OVERRIDES"] = '{"throw_exception_on_fallback": true}'
 
 
-def _open_tt_device(ttnn: Any, *, device_id: int) -> Any:
-    """Open device with L1 small arena sized for conv/VAE (same default as ``tests/conftest.py`` / ign/ACE_perf)."""
-    return ttnn.open_device(
+def _open_tt_device(ttnn: Any, *, device_id: int, num_command_queues: int = 1) -> Any:
+    """Open device with L1 small arena sized for conv/VAE (same default as ``tests/conftest.py`` / ign/ACE_perf).
+
+    Pass ``num_command_queues=2`` to enable the host->device copy on CQ 1 / ``execute_trace``
+    on CQ 0 pattern required by ``_E2EDenoiseTrace.replay`` (``--use-trace``).
+    """
+    open_kwargs = dict(
         device_id=int(device_id),
         l1_small_size=int(os.environ.get("ACE_STEP_L1_SMALL_SIZE", "98304")),
         trace_region_size=128 << 20,
     )
+    if int(num_command_queues) > 1:
+        open_kwargs["num_command_queues"] = int(num_command_queues)
+    return ttnn.open_device(**open_kwargs)
 
 
 def _build_t_schedule(*, shift: float, infer_steps: int, timesteps: str | None, variant: str) -> list[float]:
@@ -392,6 +399,21 @@ def main() -> None:
         ),
     )
     ap.add_argument(
+        "--use-trace",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Wrap the per-step DiT body (patch_embed + DiT core + output_head) in a captured "
+            "TTNN trace + 2CQ replay (delegates to ``run_ttnn_denoise_loop`` with a "
+            "``_E2EDenoiseTrace`` from ``ttnn_impl/e2e_model_tt.py``). Default: on. "
+            "Opens the TTNN device with ``num_command_queues=2`` so host->device copies on CQ 1 "
+            "can overlap ``execute_trace`` on CQ 0. Trace is captured lazily after two eager "
+            "Euler steps. Use ``--no-use-trace`` to fall back to the legacy single-CQ eager "
+            "DiT loop in this script (useful for A/B vs. trace, or when Tracy device profiling "
+            "is enabled, since trace and TT_METAL_DEVICE_PROFILER are mutually exclusive)."
+        ),
+    )
+    ap.add_argument(
         "--vae-chunk-latents",
         type=int,
         default=32,
@@ -518,13 +540,26 @@ def main() -> None:
             from models.demos.ace_step_v1_5.ttnn_impl.five_hz_lm import LocalFiveHzLMHandler
         except ModuleNotFoundError as e:
             raise RuntimeError(
-                "--use-official-lm requires AceStepHandler and its deps "
-                f"(missing {e.name!r}). pip install torchaudio (match your PyTorch build)."
+                "--use-official-lm requires the upstream ACE-Step ``acestep`` package "
+                "(``acestep.handler.AceStepHandler`` + ``acestep.inference.generate_music``).\n"
+                f"  Missing module: {e.name!r}.\n"
+                "Fix one of:\n"
+                "  1. Keep the vendored copy at "
+                "models/demos/ace_step_v1_5/torch_ref/_vendored_acestep/ in place "
+                "(it ships with this demo by default).\n"
+                "  2. Point --ace-step-repo-root / $ACE_STEP_REPO_ROOT at an external clone "
+                "of https://github.com/ace-step/ACE-Step-1.5.\n"
+                "  3. Run without --use-official-lm (the default TTNN path doesn't need "
+                "acestep.inference)."
             ) from e
 
-        import acestep.model_downloader as _mdl
-
-        _mdl.MAIN_MODEL_COMPONENTS = [args.variant, "vae", "Qwen3-Embedding-0.6B", args.lm_variant]
+        # Note: weights are already downloaded by ``_ensure_variant`` earlier in main()
+        # via ``huggingface_hub.snapshot_download``; the ACE-Step handler's own download
+        # paths (``acestep.model_downloader``) are no-ops by the time they run because
+        # every file exists on disk. The historical ``_mdl.MAIN_MODEL_COMPONENTS = [...]``
+        # mutation here was informational only (declaring which sub-components live in
+        # the main repo); it has been removed because the handler's defaults already
+        # cover the same set.
 
         dit_handler = AceStepHandler()
         llm_handler = LocalFiveHzLMHandler()
@@ -636,7 +671,11 @@ def main() -> None:
         if not qwen_safetensors.is_file():
             raise FileNotFoundError(f"Missing Qwen embedding weights at {qwen_safetensors}")
 
-        dev = _open_tt_device(ttnn, device_id=int(args.device_id))
+        dev = _open_tt_device(
+            ttnn,
+            device_id=int(args.device_id),
+            num_command_queues=(2 if bool(args.use_trace) else 1),
+        )
         if hasattr(dev, "enable_program_cache"):
             dev.enable_program_cache()
         dev_opened_for_ttnn_text_encoder = True
@@ -765,16 +804,31 @@ def main() -> None:
 
     except ModuleNotFoundError as e:
         raise RuntimeError(
-            "Default preprocessing imports AceStepHandler, which pulls ACE-Step training code "
-            f"(e.g. torchaudio). Missing module: {e.name!r}. "
-            "Fix: pip install torchaudio (match your torch/CUDA build from pytorch.org)."
+            "The default preprocessing path needs the upstream ACE-Step ``acestep`` package "
+            "(``acestep.handler.AceStepHandler`` owns ``preprocess_batch`` and "
+            "``prepare_condition``).\n"
+            f"  Missing module: {e.name!r}.\n"
+            "Fix one of:\n"
+            "  1. Keep the vendored copy at "
+            "models/demos/ace_step_v1_5/torch_ref/_vendored_acestep/ in place "
+            "(it ships with this demo by default).\n"
+            "  2. Point --ace-step-repo-root / $ACE_STEP_REPO_ROOT at an external clone "
+            "of https://github.com/ace-step/ACE-Step-1.5.\n"
+            "  3. Pass --fast-preprocess to run the lightweight tokenizer + TTNN Qwen3 "
+            "encoder path that does not depend on acestep.handler (note: this skips the "
+            "5 Hz LM and lyric/timbre encoders, so audio quality differs).\n"
+            "  4. If e.name == 'torchaudio': pip install torchaudio (match your torch/CUDA "
+            "build from pytorch.org)."
         ) from e
-
-    import acestep.model_downloader as _mdl
 
     from models.demos.ace_step_v1_5.acestep_preprocess_shim import GenerationConfig, GenerationParams
 
-    _mdl.MAIN_MODEL_COMPONENTS = [args.variant, "vae", "Qwen3-Embedding-0.6B", args.lm_variant]
+    # Note: weights are already downloaded by ``_ensure_variant`` earlier in main()
+    # via ``huggingface_hub.snapshot_download``; the historical
+    # ``import acestep.model_downloader as _mdl; _mdl.MAIN_MODEL_COMPONENTS = [args.variant,
+    # "vae", "Qwen3-Embedding-0.6B", args.lm_variant]`` mutation here was informational
+    # only and has been removed. The handler's defaults already cover the same set, and
+    # by the time the handler tries to download anything every file exists on disk.
 
     tt_dev_early = None
     if getattr(args, "experimental_5hz_ttnn_causal_lm", False):
@@ -791,7 +845,11 @@ def main() -> None:
             and hasattr(_ttnn_pre_lm.CONFIG, "throw_exception_on_fallback")
         ):
             _ttnn_pre_lm.CONFIG.throw_exception_on_fallback = True
-        tt_dev_early = _open_tt_device(_ttnn_pre_lm, device_id=int(args.device_id))
+        tt_dev_early = _open_tt_device(
+            _ttnn_pre_lm,
+            device_id=int(args.device_id),
+            num_command_queues=(2 if bool(args.use_trace) else 1),
+        )
         if hasattr(tt_dev_early, "enable_program_cache"):
             tt_dev_early.enable_program_cache()
 
@@ -872,7 +930,11 @@ def main() -> None:
         dev = tt_dev_early
         dev_opened_for_ttnn_text_encoder = True
     else:
-        dev = _open_tt_device(ttnn, device_id=int(args.device_id))
+        dev = _open_tt_device(
+            ttnn,
+            device_id=int(args.device_id),
+            num_command_queues=(2 if bool(args.use_trace) else 1),
+        )
         if hasattr(dev, "enable_program_cache"):
             dev.enable_program_cache()
         dev_opened_for_ttnn_text_encoder = True
@@ -943,7 +1005,11 @@ def main() -> None:
         ttnn.CONFIG.throw_exception_on_fallback = True
 
     if not dev_opened_for_ttnn_text_encoder:
-        dev = _open_tt_device(ttnn, device_id=int(args.device_id))
+        dev = _open_tt_device(
+            ttnn,
+            device_id=int(args.device_id),
+            num_command_queues=(2 if bool(args.use_trace) else 1),
+        )
         if hasattr(dev, "enable_program_cache"):
             dev.enable_program_cache()
 
@@ -1000,29 +1066,34 @@ def main() -> None:
         c_lat = 64
 
         # ``ttnn.rand`` is uniform in [from,to] (default [0,1]); ACE-Step uses standard-normal latents.
-        # Use ``ttnn.randn`` for parity with ``torch.randn`` / prior NumPy Gaussian noise.
+        # Use ``ttnn.randn`` for parity with ``torch.randn`` / prior NumPy Gaussian noise. Both
+        # the inline and trace paths need this (``run_ttnn_denoise_loop`` calls ``ttnn.randn`` too).
         if not hasattr(ttnn, "randn"):
             raise RuntimeError(
                 "This demo needs ``ttnn.randn`` (Gaussian) for latent init; ``ttnn.rand`` is uniform-only."
             )
-        xt_tt = ttnn.randn(
-            (1, frames_i, c_lat),
-            dev,
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=mem,
-            seed=int(np.uint32(int(args.seed))),
-        )
 
-        encoder_keep_np_single = np.asarray(enc_mask.detach().cpu().numpy(), dtype=np.float32)
-        if encoder_keep_np_single.ndim != 2:
-            raise ValueError(f"encoder_attention_mask must be rank-2 [B,S], got {encoder_keep_np_single.shape}")
-        encoder_keep_np_single = (encoder_keep_np_single > np.float32(0.0)).astype(np.bool_)
-        encoder_attn_1d_bk_np = (
-            np.concatenate([encoder_keep_np_single, encoder_keep_np_single], axis=0)
-            if do_cfg
-            else encoder_keep_np_single
-        )
+        xt_tt: Any = None
+        encoder_attn_1d_bk_np: Any = None
+        if not bool(args.use_trace):
+            xt_tt = ttnn.randn(
+                (1, frames_i, c_lat),
+                dev,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=mem,
+                seed=int(np.uint32(int(args.seed))),
+            )
+
+            encoder_keep_np_single = np.asarray(enc_mask.detach().cpu().numpy(), dtype=np.float32)
+            if encoder_keep_np_single.ndim != 2:
+                raise ValueError(f"encoder_attention_mask must be rank-2 [B,S], got {encoder_keep_np_single.shape}")
+            encoder_keep_np_single = (encoder_keep_np_single > np.float32(0.0)).astype(np.bool_)
+            encoder_attn_1d_bk_np = (
+                np.concatenate([encoder_keep_np_single, encoder_keep_np_single], axis=0)
+                if do_cfg
+                else encoder_keep_np_single
+            )
 
         if condition_tensors_on_device:
             if enc_hs_tt_one is None or ctx_tt_one is None:
@@ -1080,103 +1151,166 @@ def main() -> None:
             enc_tt_pipe = bf16_row_from_numpy_bc(_as_host_numpy_f32(enc_hs), device=dev, dram=mem)
             ctx_tt_pipe = bf16_row_from_numpy_bc(_as_host_numpy_f32(ctx_lat), device=dev, dram=mem)
 
-        momentum_ttnn = TtnnMomentumBufferApg() if do_cfg and not use_adg else None
+        if bool(args.use_trace):
+            # --- Trace + 2CQ path -----------------------------------------------------------------
+            # Delegate the per-step DiT body (patch_embed + DiT core + output_head) to the shared
+            # ``run_ttnn_denoise_loop`` from ``ttnn_impl/e2e_model_tt.py`` with a fresh
+            # ``_E2EDenoiseTrace``. The function precomputes ``temb_per_step`` / ``tp_per_step`` on
+            # the host-control side, runs two eager warmup Euler steps, then captures the DiT body
+            # into a TTNN trace and replays it for every remaining step. ``ctx_tt_pipe`` /
+            # ``enc_tt_pipe`` are consumed (deallocated) by the function on exit.
+            from models.demos.ace_step_v1_5.ttnn_impl.e2e_model_tt import _E2EDenoiseTrace, run_ttnn_denoise_loop
 
-        def _diffusion_iterate(*, step_idx: int, t_curr_f: float, euler_dt: float, log_line: str) -> None:
-            nonlocal xt_tt
-            xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
-            if do_cfg:
-                xt_pipe_in = concat_duplicate_batch(xt_row)
-                try:
-                    ttnn.deallocate(xt_row)
-                except Exception:
-                    pass
-            else:
-                xt_pipe_in = xt_row
-
-            acoustic = pipe.forward(
-                xt_bt64=xt_pipe_in,
-                context_latents_bt128=ctx_tt_pipe,
-                timestep_index=int(step_idx),
-                encoder_hidden_states_btd=enc_tt_pipe,
-                attention_mask_1d_bt=None,
-                encoder_attention_mask_1d_bk=encoder_attn_1d_bk_np,
-            )
-
-            if do_cfg:
-                apply_cfg_now = cfg_lo <= t_curr_f <= cfg_hi
-                vpc_rm = slice_batch_btc(acoustic, 0, 1, frames_i, c_lat)
-                vpu_rm = slice_batch_btc(acoustic, 1, 2, frames_i, c_lat)
-                if apply_cfg_now:
-                    if use_adg:
-                        vt_tt = adg_guidance_velocity_ttnn(
-                            xt_tt,
-                            vpc_rm,
-                            vpu_rm,
-                            float(t_curr_f),
-                            float(gs),
-                            device=dev,
-                            dram=mem,
-                        )
-                    else:
-                        vt_tt = apg_guidance_velocity_ttnn(
-                            vpc_rm,
-                            vpu_rm,
-                            float(gs),
-                            momentum_buffer=momentum_ttnn,
-                            dims=[1],
-                            dram=mem,
-                        )
+            def _trace_progress(step_idx: int, n_steps: int, t_curr: float, euler_dt: float) -> None:
+                if step_idx >= n_steps - 1:
+                    print(f"[ttnn] final t={t_curr:.5f}", flush=True)
                 else:
+                    print(
+                        f"[ttnn] step {step_idx + 1}/{n_steps - 1} t={t_curr:.5f} dt={euler_dt:.5f}",
+                        flush=True,
+                    )
+
+            trace_state = _E2EDenoiseTrace()
+            try:
+                _trace_result = run_ttnn_denoise_loop(
+                    pipe=pipe,
+                    device=dev,
+                    act_dtype=act_dtype,
+                    mem=mem,
+                    t_schedule=t_schedule,
+                    frames=int(frames),
+                    enc_mask=enc_mask,
+                    do_cfg=do_cfg,
+                    seed=int(args.seed),
+                    use_adg=use_adg,
+                    guidance_scale=float(gs),
+                    cfg_interval_start=float(args.cfg_interval_start),
+                    cfg_interval_end=float(args.cfg_interval_end),
+                    enc_tt_pipe=enc_tt_pipe,
+                    ctx_tt_pipe=ctx_tt_pipe,
+                    return_device_latents=(tt_vae is not None),
+                    progress_fn=_trace_progress,
+                    trace_state=trace_state,
+                )
+            finally:
+                trace_state.release(dev)
+
+            # ``run_ttnn_denoise_loop`` deallocated ``enc_tt_pipe`` / ``ctx_tt_pipe`` on exit;
+            # mark them consumed so the bottom-of-block cleanup does not double-free.
+            enc_tt_pipe = None
+            ctx_tt_pipe = None
+
+            if tt_vae is not None:
+                # Device-VAE path: returned tensor is the on-device latent tile.
+                xt_tt = _trace_result
+            else:
+                # Host-VAE path: returned tensor is host torch latents; ``xt_tt`` was freed
+                # inside ``run_ttnn_denoise_loop``.
+                xt_tt = None
+                pred_latents = _trace_result
+        else:
+            # --- Legacy eager DiT loop (single CQ, no trace) -----------------------------------
+            momentum_ttnn = TtnnMomentumBufferApg() if do_cfg and not use_adg else None
+
+            def _diffusion_iterate(*, step_idx: int, t_curr_f: float, euler_dt: float, log_line: str) -> None:
+                nonlocal xt_tt
+                xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
+                if do_cfg:
+                    xt_pipe_in = concat_duplicate_batch(xt_row)
                     try:
-                        ttnn.deallocate(vpu_rm)
+                        ttnn.deallocate(xt_row)
                     except Exception:
                         pass
-                    vt_tt = typecast_bf16_any_to_fp32_tile(vpc_rm, dram=mem)
-            else:
-                vt_tt = typecast_bf16_any_to_fp32_tile(acoustic, dram=mem)
+                else:
+                    xt_pipe_in = xt_row
 
-            try:
-                ttnn.deallocate(xt_pipe_in)
-            except Exception:
-                pass
-            try:
-                ttnn.deallocate(acoustic)
-            except Exception:
-                pass
+                acoustic = pipe.forward(
+                    xt_bt64=xt_pipe_in,
+                    context_latents_bt128=ctx_tt_pipe,
+                    timestep_index=int(step_idx),
+                    encoder_hidden_states_btd=enc_tt_pipe,
+                    attention_mask_1d_bt=None,
+                    encoder_attention_mask_1d_bk=encoder_attn_1d_bk_np,
+                )
 
-            xt_old = xt_tt
-            xt_tt = euler_subtract_v_dt(xt=xt_tt, vt=vt_tt, dt=float(euler_dt), dram=mem)
-            try:
-                ttnn.deallocate(vt_tt)
-            except Exception:
-                pass
-            try:
-                ttnn.deallocate(xt_old)
-            except Exception:
-                pass
-            print(log_line, flush=True)
+                if do_cfg:
+                    apply_cfg_now = cfg_lo <= t_curr_f <= cfg_hi
+                    vpc_rm = slice_batch_btc(acoustic, 0, 1, frames_i, c_lat)
+                    vpu_rm = slice_batch_btc(acoustic, 1, 2, frames_i, c_lat)
+                    if apply_cfg_now:
+                        if use_adg:
+                            vt_tt = adg_guidance_velocity_ttnn(
+                                xt_tt,
+                                vpc_rm,
+                                vpu_rm,
+                                float(t_curr_f),
+                                float(gs),
+                                device=dev,
+                                dram=mem,
+                            )
+                        else:
+                            vt_tt = apg_guidance_velocity_ttnn(
+                                vpc_rm,
+                                vpu_rm,
+                                float(gs),
+                                momentum_buffer=momentum_ttnn,
+                                dims=[1],
+                                dram=mem,
+                            )
+                    else:
+                        try:
+                            ttnn.deallocate(vpu_rm)
+                        except Exception:
+                            pass
+                        vt_tt = typecast_bf16_any_to_fp32_tile(vpc_rm, dram=mem)
+                else:
+                    vt_tt = typecast_bf16_any_to_fp32_tile(acoustic, dram=mem)
 
-        for step_idx in range(num_steps - 1):
-            t_curr_f = float(t_schedule[step_idx])
-            t_next_f = float(t_schedule[step_idx + 1])
-            dt = t_curr_f - t_next_f
+                try:
+                    ttnn.deallocate(xt_pipe_in)
+                except Exception:
+                    pass
+                try:
+                    ttnn.deallocate(acoustic)
+                except Exception:
+                    pass
+
+                xt_old = xt_tt
+                xt_tt = euler_subtract_v_dt(xt=xt_tt, vt=vt_tt, dt=float(euler_dt), dram=mem)
+                try:
+                    ttnn.deallocate(vt_tt)
+                except Exception:
+                    pass
+                try:
+                    ttnn.deallocate(xt_old)
+                except Exception:
+                    pass
+                print(log_line, flush=True)
+
+            for step_idx in range(num_steps - 1):
+                t_curr_f = float(t_schedule[step_idx])
+                t_next_f = float(t_schedule[step_idx + 1])
+                dt = t_curr_f - t_next_f
+                _diffusion_iterate(
+                    step_idx=step_idx,
+                    t_curr_f=t_curr_f,
+                    euler_dt=dt,
+                    log_line=f"[ttnn] step {step_idx+1}/{num_steps-1} t={t_curr_f:.5f} dt={dt:.5f}",
+                )
+
+            t_curr_final = float(t_schedule[-1])
             _diffusion_iterate(
-                step_idx=step_idx,
-                t_curr_f=t_curr_f,
-                euler_dt=dt,
-                log_line=f"[ttnn] step {step_idx+1}/{num_steps-1} t={t_curr_f:.5f} dt={dt:.5f}",
+                step_idx=num_steps - 1,
+                t_curr_f=t_curr_final,
+                euler_dt=t_curr_final,
+                log_line=f"[ttnn] final t={t_curr_final:.5f}",
             )
-
-        t_curr_final = float(t_schedule[-1])
-        _diffusion_iterate(
-            step_idx=num_steps - 1,
-            t_curr_f=t_curr_final,
-            euler_dt=t_curr_final,
-            log_line=f"[ttnn] final t={t_curr_final:.5f}",
-        )
+            if momentum_ttnn is not None:
+                momentum_ttnn.reset()
 
         if tt_vae is not None:
+            if xt_tt is None:
+                raise RuntimeError("Internal error: TTNN VAE branch reached without on-device latents.")
             vae_cs = int(os.environ.get("ACE_STEP_VAE_CHUNK_LATENTS", str(int(args.vae_chunk_latents))))
             vae_ov = int(os.environ.get("ACE_STEP_VAE_OVERLAP_LATENTS", str(int(args.vae_overlap_latents))))
             wav_tt = tt_vae.decode_tiled(xt_tt, chunk_size=vae_cs, overlap=vae_ov)
@@ -1186,17 +1320,22 @@ def main() -> None:
             except Exception:
                 pass
             wav_bct_cpu = wav_ntc.permute(0, 2, 1).detach().cpu()
-        else:
+        elif pred_latents is None:
+            # Non-trace + torch-VAE: bring DiT latents to host. (Trace + torch-VAE path already
+            # populated ``pred_latents`` via ``run_ttnn_denoise_loop(return_device_latents=False)``.)
             pred_latents = ttnn.to_torch(xt_tt, dtype=torch.float32).contiguous()
 
         try:
-            ttnn.deallocate(enc_tt_pipe)
-            ttnn.deallocate(ctx_tt_pipe)
-            ttnn.deallocate(xt_tt)
+            if enc_tt_pipe is not None:
+                ttnn.deallocate(enc_tt_pipe)
+            if ctx_tt_pipe is not None:
+                ttnn.deallocate(ctx_tt_pipe)
+            if xt_tt is not None:
+                ttnn.deallocate(xt_tt)
         except Exception:
             pass
-        if momentum_ttnn is not None:
-            momentum_ttnn.reset()
+        # ``momentum_ttnn.reset()`` is already invoked inside the non-trace branch above;
+        # the trace branch does not allocate a momentum buffer.
     finally:
         for _maybe_tt in (enc_hs_tt_one, ctx_tt_one, null_emb_tt):
             if _maybe_tt is not None:
