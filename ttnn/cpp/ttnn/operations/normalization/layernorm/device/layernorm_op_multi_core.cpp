@@ -420,6 +420,25 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         }
     }
 
+    // For Float32 input on the Welford path: expose the input tile data under TWO CB indices
+    // backed by the SAME L1 allocation (multi-buffer-index CB pattern). cb_x retains the
+    // default unpack_dst_format so post-welford FPU binary ops keep reading via SrcA; the
+    // welford-alias index gets unpack_to_dest_mode=UnpackToDestFp32 so welford's
+    // transpose_wh_tile reads full fp32 into DEST. Same pattern as matmul's shared
+    // output+interm CB (see matmul_multicore_reuse_optimized_program_factory.cpp:515-530).
+    //
+    // We deliberately disable the alias for the fused-pre-add + large_tensor combination:
+    // cb_x = c_23 there holds the post-add result, which already lost precision through the
+    // FPU add (SrcA Tf32), so an fp32-preserving unpack on the welford side would not recover
+    // any real information. Skipping the alias also avoids the per-block welford_save_state /
+    // welford_restore_state pattern in layernorm_large_tensor_welford.cpp's fused path from
+    // having to be retrofitted with welford_reinit + sfpu_init recovery after every
+    // transpose_wh_tile. The same trade-off is made in
+    // layernorm_pre_all_gather_welford_program_factory.cpp (search for "Leave all CBs in
+    // Default mode when fusing").
+    const bool welford_fp32_alias = use_welford_and_not_rms_norm && in_data_format == tt::DataFormat::Float32 &&
+                                    !(fuse_pre_add && large_tensor_needed);
+
     // Named compile-time args for CB indices - enables kernel chaining/fusion
     KernelDescriptor::NamedCompileTimeArgs cb_named_args = {
         {"cb_in", tt::CBIndex::c_0},
@@ -440,6 +459,15 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         {"cb_accumulate", tt::CBIndex::c_26},
         {"cb_in_rm", tt::CBIndex::c_27},
         {"cb_out_rm", tt::CBIndex::c_28},
+        // cb_x_welford: alias of cb_x backed by the same L1 memory. When the alias is active
+        // (welford_fp32_alias=true), it has its own buffer index (c_29) with UnpackToDestFp32
+        // mode for the welford section. Otherwise it falls back to whatever cb_x is on this
+        // path so the welford section reads the right buffer: c_0 for non-fused (cb_x=cb_in),
+        // c_23 for fused pre-add (cb_x is the post-add intermediate). Keeping the named arg
+        // present unconditionally lets the kernel reference it without compile-time branches.
+        {"cb_x_welford",
+         welford_fp32_alias ? tt::CBIndex::c_29 : (fuse_pre_add ? tt::CBIndex::c_23 : tt::CBIndex::c_0)},
+        {"welford_fp32_alias", static_cast<uint8_t>(welford_fp32_alias ? 1 : 0)},
     };
 
     // Select reader kernel path
@@ -479,6 +507,13 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (float32_reduction) {
         unpack_to_dest_mode[large_tensor_acc_cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    // Welford-fp32 alias index: shares L1 memory with cb_x but has UnpackToDestFp32 mode so the
+    // welford section reads full fp32 from DEST. The original cb_x index stays at default
+    // (TF32 SrcA path) for the post-welford FPU binary ops.
+    if (welford_fp32_alias) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_29)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     // Select compute kernel path.
@@ -625,9 +660,21 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         return cb_desc;
     };
 
-    // CB 0: Input buffer
-    program_descriptor.cbs.push_back(
-        make_cb_descriptor(in0_t * in_single_tile_size, tt::CBIndex::c_0, in_data_format, in_single_tile_size));
+    // CB 0: Input buffer (non-fused: also serves as cb_x for welford and post-welford eltwise)
+    {
+        auto cb0_desc =
+            make_cb_descriptor(in0_t * in_single_tile_size, tt::CBIndex::c_0, in_data_format, in_single_tile_size);
+        // Non-fused welford-fp32: register c_29 as a second buffer index backed by the SAME
+        // allocation so welford can read via UnpackToDest fp32 while eltwise reads via SrcA.
+        // Same pattern as matmul shared output+interm CB.
+        if (welford_fp32_alias && !fuse_pre_add) {
+            cb0_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size});
+        }
+        program_descriptor.cbs.push_back(std::move(cb0_desc));
+    }
 
     // CB 16: Output buffer
     program_descriptor.cbs.push_back(
@@ -712,10 +759,18 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
     // CB 23 and CB 1 (if b - fused pre-add)
     if (b) {
-        // CB 23: Intermediate 6 (if not rms_norm)
+        // CB 23: Intermediate 6 (if not rms_norm). Fused: x = a + b. Compute writes here and
+        // welford reads. Add the welford-fp32 alias here when applicable.
         if (!rms_norm) {
-            program_descriptor.cbs.push_back(
-                make_cb_descriptor(im6_t * single_tile_size, tt::CBIndex::c_23, cb_data_format, single_tile_size));
+            auto cb23_desc =
+                make_cb_descriptor(im6_t * single_tile_size, tt::CBIndex::c_23, cb_data_format, single_tile_size);
+            if (welford_fp32_alias) {
+                cb23_desc.format_descriptors.push_back(CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
+                    .data_format = cb_data_format,
+                    .page_size = single_tile_size});
+            }
+            program_descriptor.cbs.push_back(std::move(cb23_desc));
         }
         // CB 1: Input buffer for b
         program_descriptor.cbs.push_back(

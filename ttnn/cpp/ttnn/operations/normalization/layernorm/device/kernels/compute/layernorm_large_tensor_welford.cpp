@@ -107,7 +107,13 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         reconfig_data_format_srca(cb_ex2, cb_interm_pre_add);
         transpose_wh_init_short(cb_interm_pre_add);
         for (auto i : block.local()) {
-            // Welford's needs transposed input tile
+            // Welford's needs transposed input tile. The fused-pre-add path intentionally does
+            // not enable UnpackToDestFp32 on cb_interm_pre_add: c_23 carries the post-add result
+            // which already lost precision through the FPU add (SrcA Tf32), so routing the
+            // welford read through UnpackToDest would preserve fp32 bytes that no longer carry
+            // fp32 information. Keeping cb_interm_pre_add in Default unpack mode also avoids the
+            // SFPU replay-slot conflict between transpose_dest and welford -- the SrcA path
+            // doesn't touch slot 0 -- so no welford_reinit / sfpu_init re-arming is needed here.
             transpose_wh_tile(cb_interm_pre_add, i, input_dst);
 
             // Welford over this tile: include only valid elements, never padding.
@@ -167,6 +173,9 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
  */
 template <
     uint32_t cb_in,
+    uint32_t cb_x_welford,
+    bool welford_fp32_alias,
+    uint32_t cb_ex,
     uint32_t input_dst,
     uint32_t mean_dst,
     uint32_t Wt,
@@ -175,6 +184,7 @@ template <
     uint32_t blk>
 void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_x_welford_obj(cb_x_welford);
 
     // The number of valid columns in the last tile in width dimension.
     // Because the Welford's llk is given transposed data, skip some rows when
@@ -184,19 +194,48 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     constexpr bool is_last_tile_full = (last_tile_rows == 0);
 
     uint32_t sample_idx = 0;
-    reconfig_data_format_srca(cb_in);
-    transpose_wh_init_short(cb_in);
+    reconfig_data_format_srca(cb_x_welford);
+    // Full transpose_wh hw init when the alias is active. cb_x_welford's buffer index isn't
+    // visible to compute_kernel_hw_startup at the top of kernel_main (only cb_in is), so we
+    // run the full init once to program all hw config registers for it. The non-alias path
+    // (cb_x_welford == cb_in) uses transpose_wh_init_short since cb_in's hw config is
+    // already programmed.
+    if constexpr (welford_fp32_alias) {
+        transpose_wh_init(cb_x_welford, cb_ex);
+    } else {
+        transpose_wh_init_short(cb_x_welford);
+    }
     tile_regs_acquire();
     welford_init();
 
     // Process all but the last tile
     for (uint32_t wt = 0; wt < (Wt - 1); ++wt) {
-        cb_in_obj.wait_front(1);
+        if constexpr (welford_fp32_alias) {
+            cb_x_welford_obj.wait_front(1);
+            // welford_init / the previous iteration's welford_reinit left SFPU replay slot 0
+            // holding the welford recurrence. The fp32 transpose_wh_tile uses a MOP that
+            // references slot 0 for its transpose instructions, so re-init transpose state
+            // to put transpose code back into slot 0.
+            transpose_wh_init_short(cb_x_welford);
+        } else {
+            cb_in_obj.wait_front(1);
+        }
         // Welford's needs transposed input tile
-        transpose_wh_tile(cb_in, 0, input_dst);
+        transpose_wh_tile(cb_x_welford, 0, input_dst);
+        if constexpr (welford_fp32_alias) {
+            // transpose_wh_tile took the UnpackToDest fp32 path which clobbered the welford
+            // recurrence in SFPU replay slot 0. Restore welford state before welford_update.
+            // welford_reinit also reprograms unpack-A for an UnpackToDest (transpose=0) read;
+            // the next iteration's transpose_wh_init_short switches it back.
+            welford_reinit(cb_x_welford);
+            MATH((llk_math_welfords_sfpu_init()));
+        }
         welford_update<W>(input_dst, sample_idx, reciprocal_lut);
 
         // Pop the input
+        if constexpr (welford_fp32_alias) {
+            cb_x_welford_obj.pop_front(1);
+        }
         cb_in_obj.pop_front(1);
         sample_idx += tile_width;
     }
@@ -205,8 +244,17 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     // Reader is sending full blocks, so we need to stay in sync.
     // wait/pop the last tile + any remaining in the last block
     const auto num_to_sync = generic::blocks(Wt, blk).back().remainder() + 1;
-    cb_in_obj.wait_front(num_to_sync);
-    transpose_wh_tile(cb_in, 0, input_dst);
+    if constexpr (welford_fp32_alias) {
+        cb_x_welford_obj.wait_front(num_to_sync);
+        transpose_wh_init_short(cb_x_welford);
+    } else {
+        cb_in_obj.wait_front(num_to_sync);
+    }
+    transpose_wh_tile(cb_x_welford, 0, input_dst);
+    if constexpr (welford_fp32_alias) {
+        welford_reinit(cb_x_welford);
+        MATH((llk_math_welfords_sfpu_init()));
+    }
 
     if constexpr (is_last_tile_full) {
         welford_update<W>(input_dst, sample_idx, reciprocal_lut);
@@ -219,6 +267,9 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
     tile_regs_commit();
 
+    if constexpr (welford_fp32_alias) {
+        cb_x_welford_obj.pop_front(num_to_sync);
+    }
     cb_in_obj.pop_front(num_to_sync);
 }
 
@@ -234,6 +285,13 @@ void kernel_main() {
     constexpr uint32_t W = get_compile_time_arg_val(5);
     constexpr uint32_t tile_width = get_compile_time_arg_val(6);
     constexpr bool fuse_pre_add = static_cast<bool>(get_compile_time_arg_val(8));
+    // welford_fp32_alias mirrors layernorm_welford.cpp: when true, cb_x_welford is a multi-
+    // buffer-index alias of cb_x configured with unpack_to_dest_mode=UnpackToDestFp32 so the
+    // welford section reads full fp32 into DEST while the post-welford eltwise still reads
+    // cb_x via SrcA (Tf32). When false, cb_x_welford collapses onto cb_x and the alias-side
+    // wait/pop ops are skipped via if constexpr to avoid double-counting cb_x's semaphore.
+    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
+    constexpr auto cb_x_welford = get_named_compile_time_arg_val("cb_x_welford");
 
     // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
     // CB indices - configurable via named compile-time args for kernel chaining support
@@ -303,7 +361,17 @@ void kernel_main() {
                 W,
                 blk>(*p_reciprocals);
         } else {
-            welford_no_fuse_pre_add<cb_in, input_dst, mean_dst, Wt, tile_width, W, blk>(*p_reciprocals);
+            welford_no_fuse_pre_add<
+                cb_in,
+                cb_x_welford,
+                welford_fp32_alias,
+                cb_ex,
+                input_dst,
+                mean_dst,
+                Wt,
+                tile_width,
+                W,
+                blk>(*p_reciprocals);
         }
         // We should expect that either of the two would have have populated dst regs with mean and
         // variance in mean_dst and var_dst respectively.

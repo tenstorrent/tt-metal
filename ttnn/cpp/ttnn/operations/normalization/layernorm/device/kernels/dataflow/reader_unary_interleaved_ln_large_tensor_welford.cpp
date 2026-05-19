@@ -24,9 +24,16 @@ void kernel_main() {
                        cb_id_in1 = get_named_compile_time_arg_val("cb_inb");
     constexpr uint32_t cb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
     constexpr uint32_t cb_id_beta = get_named_compile_time_arg_val("cb_beta");
+    // Welford-fp32 alias of cb_in (non-fused) -- shares L1 memory with cb_in0 but has its own
+    // semaphore. The compute kernel waits on cb_x_welford for the welford section because that
+    // buffer index is configured with unpack_to_dest_mode=UnpackToDestFp32. When the alias is
+    // inactive cb_x_welford collapses onto cb_in or cb_x; the gate below avoids double-counting.
+    constexpr uint32_t cb_id_x_welford = get_named_compile_time_arg_val("cb_x_welford");
+    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
 
     Noc noc;
     CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_x_welford(cb_id_x_welford);
 #ifdef FUSE_PRE_ADD
     CircularBuffer cb_in1(cb_id_in1);
 #endif
@@ -76,6 +83,16 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
             layernorm_dataflow_utils::read_block_to_cb(
                 noc, cb_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block);
+#else
+            // Non-fused welford-fp32 alias: cb_x_welford shares cb_in0's memory but has its own
+            // semaphore. After the data lands in cb_in0 (and therefore in shared memory), push
+            // cb_x_welford by the same amount so compute can wait_front on the alias separately
+            // for welford reads. Skipped when no alias is active (cb_x_welford == cb_in0; the
+            // duplicate push would double-count cb_in0's semaphore).
+            if constexpr (welford_fp32_alias) {
+                cb_x_welford.reserve_back(block.full_block_size());
+                cb_x_welford.push_back(block.full_block_size());
+            }
 #endif
         }  // wt loop
 
