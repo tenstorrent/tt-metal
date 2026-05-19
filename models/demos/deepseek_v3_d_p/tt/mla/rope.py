@@ -71,19 +71,28 @@ class RotarySetup:
         self.is_balanced = is_balanced
         self.sp_factor = mesh_device.shape[sp_axis]
 
-    def get_rope_tensors(self, seq_len: int) -> dict[str, ttnn.Tensor]:
+    def get_rope_tensors(self, seq_len: int, start_pos: int = 0) -> dict[str, ttnn.Tensor]:
         """Get cos, sin, and transformation matrices sharded over SP axis.
+
+        Args:
+            seq_len: number of tokens to build rope for.
+            start_pos: global position of the first token (used for chunked prefill,
+                where each chunk needs rope values for its absolute global positions).
 
         If is_balanced, cos/sin are reordered according to balanced chunk order
         before sharding so each SP device gets rope values matching its chunk positions.
         """
         cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config)
 
+        end_pos = start_pos + seq_len
         assert (
-            seq_len <= self.hf_config.max_seq_len
-        ), f"seq_len {seq_len} must be less than or equal to max_seq_len {self.hf_config.max_seq_len}"
-        cos_matrix_torch = cos_matrix_torch[..., :seq_len, :]
-        sin_matrix_torch = sin_matrix_torch[..., :seq_len, :]
+            end_pos <= self.hf_config.max_seq_len
+        ), f"end_pos {end_pos} must be less than or equal to max_seq_len {self.hf_config.max_seq_len}"
+        assert (
+            not self.is_balanced or start_pos == 0
+        ), "is_balanced=True is only supported for start_pos=0 (single-shot prefill)"
+        cos_matrix_torch = cos_matrix_torch[..., start_pos:end_pos, :]
+        sin_matrix_torch = sin_matrix_torch[..., start_pos:end_pos, :]
 
         if self.is_balanced:
             chunk_order = create_balanced_chunk_order(self.sp_factor)
