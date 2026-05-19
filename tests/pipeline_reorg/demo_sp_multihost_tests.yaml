@@ -32,12 +32,16 @@
     which python3
     ls ./ttrun.py
 
-    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
+    echo "============= SP1 superpod: generated rank files ============="
+    ls -la ./blitz_decode_pipeline_rank_file_single_pod_ci ./blitz_decode_pipeline_rank_binding_single_pod_ci.yaml
+    echo "rankfile entries: $(wc -l < ./blitz_decode_pipeline_rank_file_single_pod_ci)"
+    echo "rank binding entries: $(grep -c '^  - rank:' ./blitz_decode_pipeline_rank_binding_single_pod_ci.yaml)"
+
     # todo)) add proper stress test that can run for 2 hours -- repeat batches?
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 ./ttrun.py \
       --tcp-interface ens5f0np0 \
-      --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
-      --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
+      --mpi-args "--hostfile /ci/ttrun/hostfile --map-by rankfile:file=/ci/tt-metal/blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --tag-output --wdir /home/user/tt-metal" \
+      --rank-binding /ci/tt-metal/blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 128000 \
         --weights real \
