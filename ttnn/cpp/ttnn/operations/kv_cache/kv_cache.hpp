@@ -9,7 +9,8 @@
 
 namespace ttnn {
 
-ttnn::Tensor fill_cache_for_user_(const ttnn::Tensor& cache, const ttnn::Tensor& input, uint32_t batch_index);
+ttnn::Tensor fill_cache_for_user_(
+    const ttnn::Tensor& cache, const ttnn::Tensor& input, uint32_t batch_index, uint32_t update_idx = 0);
 
 ttnn::Tensor update_cache_for_token_(
     const ttnn::Tensor& cache,
@@ -25,7 +26,8 @@ ttnn::Tensor update_cache(
     uint32_t batch_offset = 0,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
-ttnn::Tensor fill_cache(const ttnn::Tensor& cache_tensor, const ttnn::Tensor& input_tensor, uint32_t batch_idx);
+ttnn::Tensor fill_cache(
+    const ttnn::Tensor& cache_tensor, const ttnn::Tensor& input_tensor, uint32_t batch_idx, uint32_t update_idx = 0);
 
 ttnn::Tensor zero_cache_range(const ttnn::Tensor& cache, uint32_t start_token, uint32_t end_token);
 
