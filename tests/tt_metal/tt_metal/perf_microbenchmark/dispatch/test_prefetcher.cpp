@@ -518,7 +518,8 @@ protected:
         const uint32_t num_pages = get_num_pages();
 
         // Setup target worker cores
-        const CoreRange worker_range(default_worker_start, default_worker_start);
+        const CoreCoord first_worker = this->worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/false);
 
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
@@ -548,9 +549,8 @@ protected:
         const uint32_t num_pages = get_num_pages();
 
         // Setup target worker cores
-        const CoreCoord first_worker = default_worker_start;
-        const CoreCoord last_worker = first_worker;  // {first_worker.x + 1, first_worker.y + 1};
-        const CoreRange worker_range = {first_worker, last_worker};
+        const CoreCoord first_worker = this->worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/false);
 
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
@@ -577,9 +577,8 @@ protected:
         const uint32_t num_iterations = get_num_iterations();
         const uint32_t dram_data_size_words = get_dram_data_size_words();
 
-        const CoreCoord first_worker = default_worker_start;
-        const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
-        const CoreRange worker_range = {first_worker, last_worker};
+        const CoreCoord first_worker = this->worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/true);
 
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
@@ -1238,9 +1237,8 @@ public:
         }
 
         // Setup target worker cores
-        const CoreCoord first_worker = default_worker_start;
-        const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
-        const CoreRange worker_range = {first_worker, last_worker};
+        const CoreCoord first_worker = this->worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/true);
 
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
         const CoreCoord phys_worker_core = device_->worker_core_from_logical_core(first_worker);
@@ -1285,9 +1283,8 @@ public:
         const uint32_t dram_data_size_words = get_dram_data_size_words();
 
         // Setup target worker cores
-        const CoreCoord first_worker = default_worker_start;
-        const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
-        const CoreRange worker_range = {first_worker, last_worker};
+        const CoreCoord first_worker = this->worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/true);
 
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
@@ -1381,7 +1378,7 @@ protected:
                 uint32_t words = (page_size_words > length_words - i) ? length_words - i : page_size_words;
 
                 DeviceDataUpdater::update_read(
-                    default_worker_start, device_data, bank_core, dram_bank_id, bank_offset, words);
+                    this->worker_start(), device_data, bank_core, dram_bank_id, bank_offset, words);
 
                 page_idx++;
             }
@@ -1449,9 +1446,8 @@ public:
         const uint32_t dram_data_size_words = Common::DRAM_DATA_SIZE_WORDS;
 
         // Setup target worker cores
-        const CoreCoord first_worker = default_worker_start;
-        const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
-        const CoreRange worker_range = {first_worker, last_worker};
+        const CoreCoord first_worker = this->worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/true);
 
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
         const auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
@@ -1472,9 +1468,8 @@ public:
         const uint32_t dram_data_size_words = get_dram_data_size_words();
 
         // Setup target worker cores
-        const CoreCoord first_worker = default_worker_start;
-        const CoreCoord last_worker = first_worker;
-        const CoreRange worker_range = {first_worker, last_worker};
+        const CoreCoord first_worker = this->worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/false);
 
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
@@ -1561,9 +1556,8 @@ public:
         helper.add_paged_dram_read(worker_range, 3, 128, page_size, length / page_size, 160);
 
         // Section 5: Inline packed writes
-        const CoreCoord first_worker_2x2 = default_worker_start;
-        const CoreCoord last_worker_2x2 = {first_worker_2x2.x + 1, first_worker_2x2.y + 1};
-        const CoreRange worker_range_2x2 = {first_worker_2x2, last_worker_2x2};
+        const CoreCoord first_worker_2x2 = this->worker_start();
+        const CoreRange worker_range_2x2 = this->worker_range(first_worker_2x2, /*multi_core=*/true);
         // Pick worker cores once for all commands
         std::vector<CoreCoord> worker_cores{first_worker_2x2};
         helper.add_packed_write(worker_cores, 4);
@@ -1577,7 +1571,9 @@ public:
         helper.add_packed_write(worker_cores, 12, true);
         worker_cores.clear();
         worker_cores.push_back(first_worker_2x2);
-        worker_cores.push_back(last_worker_2x2);
+        if (worker_range_2x2.end_coord != worker_range_2x2.start_coord) {
+            worker_cores.push_back(worker_range_2x2.end_coord);
+        }
         helper.add_packed_write(worker_cores, 156);
 
         // Section 6: Linear read -> Linear write test
@@ -1714,9 +1710,8 @@ public:
     void run_linear_packed_read_test() {
         const uint32_t num_iterations = 1;
 
-        const CoreCoord first_worker = default_worker_start;
-        const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
-        const CoreRange worker_range = {first_worker, last_worker};
+        const CoreCoord first_worker = this->worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/true);
 
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
         const auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
@@ -1801,7 +1796,7 @@ public:
 
                 uint32_t words = (page_size_words > length_words - i) ? length_words - i : page_size_words;
                 DeviceDataUpdater::update_read(
-                    default_worker_start, device_data, bank_core, dram_bank_id, bank_offset, words);
+                    this->worker_start(), device_data, bank_core, dram_bank_id, bank_offset, words);
 
                 page_idx++;
             }
@@ -1883,9 +1878,8 @@ public:
         const uint32_t dram_data_size_words = get_dram_data_size_words();
 
         // Setup target worker cores
-        const CoreCoord first_worker = default_worker_start;
-        const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
-        const CoreRange worker_range = {first_worker, last_worker};
+        const CoreCoord first_worker = this->worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/true);
 
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
         const auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
@@ -2135,7 +2129,7 @@ public:
         std::vector<HostMemDeviceCommand> commands_per_iteration;
 
         // Source: L1 on MMIO device worker core (pre-populated with data)
-        const CoreCoord first_worker = default_worker_start;
+        const CoreCoord first_worker = this->worker_start();
         const CoreCoord first_virt_worker =
             mmio_device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
         const uint32_t src_noc_xy =
@@ -2415,7 +2409,7 @@ protected:
                     }
 
                     if (worker_cores.empty()) {
-                        worker_cores.push_back(default_worker_start);
+                        worker_cores.push_back(this->worker_start());
                     }
                     const uint32_t num_sub_cmds = static_cast<uint32_t>(worker_cores.size());
                     const uint32_t sub_cmds_bytes =
@@ -2480,9 +2474,8 @@ public:
         const uint32_t dram_data_size_words = get_dram_data_size_words();
 
         // Setup target worker cores
-        const CoreCoord first_worker = default_worker_start;
-        const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
-        const CoreRange worker_range = {first_worker, last_worker};
+        const CoreCoord first_worker = this->worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/true);
 
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
@@ -3092,9 +3085,8 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
     const uint32_t dram_data_size_words = get_dram_data_size_words();
 
     // Setup dummy worker cores (not actually used for writes, but needed for DeviceData init)
-    const CoreCoord first_worker = default_worker_start;
-    const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
-    const CoreRange worker_range = {first_worker, last_worker};
+    const CoreCoord first_worker = this->worker_start();
+    const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/true);
 
     const uint32_t l1_base = remote_device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
     const auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
@@ -3143,9 +3135,8 @@ TEST_P(PrefetcherLinearPackedHTestFixture, RelayLinearPackedHTest) {
     const uint32_t dram_data_size_words = get_dram_data_size_words();
 
     // Setup worker cores
-    const CoreCoord first_worker = default_worker_start;
-    const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
-    const CoreRange worker_range = {first_worker, last_worker};
+    const CoreCoord first_worker = this->worker_start();
+    const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/true);
 
     const uint32_t l1_base = mmio_device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
     const auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
@@ -3225,9 +3216,8 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
     TT_FATAL(page_size_bytes % sizeof(uint32_t) == 0U, "page_size_bytes must be a multiple of 4");
 
     // Dummy worker range (not the destination of this test) for DeviceData init.
-    constexpr CoreCoord first_worker = default_worker_start;
-    constexpr CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
-    const CoreRange worker_range = {first_worker, last_worker};
+    const CoreCoord first_worker = this->worker_start();
+    const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/true);
 
     const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
     const uint32_t dram_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
