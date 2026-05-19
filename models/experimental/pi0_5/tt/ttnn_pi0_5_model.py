@@ -28,6 +28,18 @@ from models.experimental.pi0_5.tt.ttnn_prefix import PrefixEmbeddingTTNN
 from models.experimental.pi0_5.reference.torch_siglip_hf import use_hf_siglip
 
 
+def use_upstream_masks() -> bool:
+    """`PI0_UPSTREAM_MASKS=1` (or implicitly when PI0_SIGLIP_HF=1) -> plumb
+    cumsum-based position_ids and a logical-pad attention mask through VLM and
+    expert. Decoupling from PI0_SIGLIP_HF lets us A/B test the device-side
+    ttnn_siglip with HF-compatible mask handling, isolating the SigLIP
+    semantic gap from the mask/RoPE plumbing gap.
+    """
+    import os as _os
+
+    return use_hf_siglip() or _os.environ.get("PI0_UPSTREAM_MASKS", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _precompute_rope_table_torch(head_dim: int, max_seq_len: int, base: float = 10000.0):
     """Host-side RoPE table in TTNN split-half format.
 
@@ -490,12 +502,14 @@ class Pi0_5ModelTTNN:
         if prefix_embs.layout != ttnn.TILE_LAYOUT:
             prefix_embs = ttnn.to_layout(prefix_embs, ttnn.TILE_LAYOUT)
 
-        # UPSTREAM-OPENPI COMPAT (gated by PI0_SIGLIP_HF=1): build attention
-        # masks + position-aware RoPE tables on host. The lerobot finetune
-        # was trained with our defaults (no prefix mask, sequential RoPE for
-        # suffix) so leave it untouched there.
+        # UPSTREAM-OPENPI COMPAT (gated by PI0_SIGLIP_HF=1 or
+        # PI0_UPSTREAM_MASKS=1): build attention masks + position-aware RoPE
+        # tables on host. The lerobot finetune was trained with our defaults
+        # (no prefix mask, sequential RoPE for suffix) so leave it untouched
+        # there. PI0_UPSTREAM_MASKS=1 (independent of PI0_SIGLIP_HF) lets us
+        # A/B test the mask plumbing in isolation.
         upstream_artifacts = None
-        if use_hf_siglip():
+        if use_upstream_masks():
             # Image masks may arrive as torch bool, ttnn (bf16), or scalars
             # depending on caller (lerobot adapter pre-uploads to ttnn).
             def _to_torch_mask(m):
