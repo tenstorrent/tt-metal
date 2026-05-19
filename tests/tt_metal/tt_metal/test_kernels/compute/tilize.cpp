@@ -38,7 +38,9 @@ void kernel_main() {
         dfb_out.push_back(per_core_block_tile_cnt);
     }
 
-#ifdef FAST_TILIZE
+#ifndef FAST_TILIZE
+    tilize_uninit(dfb_in.get_id(), dfb_out.get_id());
+#else
     fast_tilize_uninit(dfb_in.get_id(), dfb_out.get_id(), per_core_block_tile_cnt);
 #endif
 }
