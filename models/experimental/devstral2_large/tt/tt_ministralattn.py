@@ -83,11 +83,6 @@ def _shard_decode_rope_tables(
     return ttnn.interleaved_to_sharded(cos, mem_config), ttnn.interleaved_to_sharded(sin, mem_config)
 
 
-def _shard_decode_trans_mat(trans_mat: ttnn.Tensor, *, batch_size: int) -> ttnn.Tensor:
-    mem_config = _decode_height_shard_mem_config(batch_size, height=ttnn.TILE_SIZE, width=ttnn.TILE_SIZE)
-    return ttnn.interleaved_to_sharded(trans_mat, mem_config)
-
-
 # --- Weight loading ---
 
 
@@ -363,7 +358,7 @@ class TtAttention:
         cos_q, sin_q, cos_k, sin_k = self.rotary_emb.get_decode_tables(current_pos)
         cos_q, sin_q = _shard_decode_rope_tables(cos_q, sin_q, batch_size=batch_size, head_dim=self.args.head_dim)
         cos_k, sin_k = _shard_decode_rope_tables(cos_k, sin_k, batch_size=batch_size, head_dim=self.args.head_dim)
-        trans_mat = _shard_decode_trans_mat(self.rotary_emb.trans_mat, batch_size=batch_size)
+        trans_mat = self.rotary_emb.get_sharded_trans_mat(batch_size)
         q_heads = ttnn.experimental.rotary_embedding_llama(q_heads, cos_q, sin_q, trans_mat, is_decode_mode=True)
         k_heads = ttnn.experimental.rotary_embedding_llama(k_heads, cos_k, sin_k, trans_mat, is_decode_mode=True)
 
