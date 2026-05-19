@@ -1490,6 +1490,26 @@ GAP_R12_FAIL_COUNT=$(echo "$GAP_R12_FAILURES" | grep -c . 2>/dev/null; :)
 # Log: "GAP-R14 (#42429): quiesce_and_restart_fabric_workers: Device N session_id=..."
 GAP_R14_FIRES=$(grep -cE 'GAP-R14.*quiesce_and_restart_fabric_workers' "$CLEAN" 2>/dev/null; :)
 
+# GAP-R15 (#42429): Phase 3 inline handshake_bypass readback mismatches.
+# Log: "GAP-R15 (#42429): Phase 3 handshake_bypass readback MISMATCH"
+GAP_R15_MISMATCHES=$(grep -cE 'GAP-R15.*readback MISMATCH' "$CLEAN" 2>/dev/null; :)
+
+# GAP-R16 (#42429): Deferred Phase 3 handshake_bypass readback mismatches.
+# Log: "GAP-R16 (#42429): deferred Phase 3 handshake_bypass readback MISMATCH"
+GAP_R16_MISMATCHES=$(grep -cE 'GAP-R16.*readback MISMATCH' "$CLEAN" 2>/dev/null; :)
+
+# GAP-R17 (#42429): Phase 2.5 force-reset failures with edm_status snapshot.
+# Log: "GAP-R17 (#42429):"
+GAP_R17_FIRES=$(grep -cE 'GAP-R17' "$CLEAN" 2>/dev/null; :)
+
+# GAP-R18 (#42429): Phase 3 newly-dead channel edm_status snapshots.
+# Log: "GAP-R18 (#42429)"
+GAP_R18_FIRES=$(grep -cE 'GAP-R18' "$CLEAN" 2>/dev/null; :)
+
+# GAP-R19 (#42429): Quiesce Phase 3 l1_barrier threw.
+# Log: "GAP-R19 (#42429):"
+GAP_R19_FIRES=$(grep -cE 'GAP-R19' "$CLEAN" 2>/dev/null; :)
+
 if [[ "${HAS_DISPATCH_CASCADE:-0}" -gt 0 ]]; then
     DIAGNOSIS="500ms dispatch cascade (FIX PA/PB/PC pattern): ${HAS_DISPATCH_CASCADE} Timeout(500ms)
 events on ETH dispatch cores. Root cause: fw_launch_addr not cleared after fabric teardown
@@ -2689,6 +2709,26 @@ if [ "${GAP_R12_FAIL_COUNT:-0}" -gt 0 ]; then
 fi
 if [ "${GAP_R14_FIRES:-0}" -gt 0 ]; then
     echo "  => [GAP-R14] Quiesce entry logs: ${GAP_R14_FIRES} quiesce cycle(s) observed."
+fi
+if [ "${GAP_R15_MISMATCHES:-0}" -gt 0 ]; then
+    echo "  => [GAP-R15] Phase 3 inline handshake_bypass readback MISMATCH: ${GAP_R15_MISMATCHES} occurrence(s)."
+    echo "     *** Dropped bypass write → ERISC may attempt full ETH handshake → STARTED-STARTED deadlock ***"
+fi
+if [ "${GAP_R16_MISMATCHES:-0}" -gt 0 ]; then
+    echo "  => [GAP-R16] Deferred Phase 3 handshake_bypass readback MISMATCH: ${GAP_R16_MISMATCHES} occurrence(s)."
+    echo "     *** Non-MMIO relay dropped bypass write → ETH handshake deadlock likely ***"
+fi
+if [ "${GAP_R17_FIRES:-0}" -gt 0 ]; then
+    echo "  => [GAP-R17] Phase 2.5 force-reset FAILED with edm_status snapshot: ${GAP_R17_FIRES} occurrence(s)."
+    echo "     *** ERISC could not be halted before Phase 3 L1 overwrite — data corruption risk ***"
+fi
+if [ "${GAP_R18_FIRES:-0}" -gt 0 ]; then
+    echo "  => [GAP-R18] Phase 3 newly-dead channels with edm_status snapshots: ${GAP_R18_FIRES} event(s)."
+    echo "     Check edm_status values: 0xDEADDEAD=unreachable, 0x0=never started, other=unexpected state."
+fi
+if [ "${GAP_R19_FIRES:-0}" -gt 0 ]; then
+    echo "  => [GAP-R19] Quiesce Phase 3 l1_barrier threw: ${GAP_R19_FIRES} occurrence(s)."
+    echo "     *** L1 write ordering not guaranteed — launch_msg may race with ConfigureDeviceWithProgram ***"
 fi
 
 # ─── FIX TF (test_tt_fabric degraded skip) ───
