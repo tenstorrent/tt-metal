@@ -1,3 +1,5 @@
+
+
 // SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -11,6 +13,14 @@
 #include "api/dataflow/dataflow_buffer.h"
 #else
 #include "api/dataflow/circular_buffer.h"
+#endif
+
+#ifdef ARCH_QUASAR
+using Buffer = DataflowBuffer;
+inline uint32_t get_buffer_id(const Buffer& b) { return b.get_id(); }
+#else
+using Buffer = CircularBuffer;
+inline uint32_t get_buffer_id(const Buffer& b) { return b.get_cb_id(); }
 #endif
 
 void kernel_main() {
@@ -27,25 +37,14 @@ void kernel_main() {
     const uint32_t num_blocks = get_compile_time_arg_val(10);
     const uint32_t last_block_id = num_blocks - 1;
 
-#ifdef ARCH_QUASAR
-    DataflowBuffer cb_in0(in0_cb);
-    DataflowBuffer cb_in1(in1_cb);
-    DataflowBuffer cb_partials(partials_cb);
-    DataflowBuffer cb_out(out_cb);
-    const uint32_t in0_id = cb_in0.get_id();
-    const uint32_t in1_id = cb_in1.get_id();
-    const uint32_t out_id = cb_out.get_id();
-    const uint32_t partials_id = cb_partials.get_id();
-#else
-    CircularBuffer cb_in0(in0_cb);
-    CircularBuffer cb_in1(in1_cb);
-    CircularBuffer cb_partials(partials_cb);
-    CircularBuffer cb_out(out_cb);
-    const uint32_t in0_id = in0_cb;
-    const uint32_t in1_id = in1_cb;
-    const uint32_t out_id = out_cb;
-    const uint32_t partials_id = partials_cb;
-#endif
+    Buffer cb_in0(in0_cb);
+    Buffer cb_in1(in1_cb);
+    Buffer cb_partials(partials_cb);
+    Buffer cb_out(out_cb);
+    const uint32_t in0_id = get_buffer_id(cb_in0);
+    const uint32_t in1_id = get_buffer_id(cb_in1);
+    const uint32_t out_id = get_buffer_id(cb_out);
+    const uint32_t partials_id = get_buffer_id(cb_partials);
 
     // out = in0[r x k]*in1[k x c]
     mm_init(in0_id, in1_id, partials_id);
