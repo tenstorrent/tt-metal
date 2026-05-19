@@ -33,19 +33,45 @@ def load_audio_detokenizer_weights_np(safetensors_path: str) -> Dict[str, np.nda
     return out
 
 
+_FSQ_LEVELS: tuple[int, ...] = (8, 8, 8, 5, 5, 5)
+_FSQ_MAX_AUDIO_CODE: int = int(np.prod(_FSQ_LEVELS)) - 1  # 64000 - 1
+
+
 def parse_audio_code_string(code_str: str) -> list[int]:
-    max_audio_code = 63999
-    return [max(0, min(int(x), max_audio_code)) for x in re.findall(r"<\|audio_code_(\d+)\|>", code_str or "")]
+    """Parse ``<|audio_code_NNN|>`` tokens out of a serialized LM string.
+
+    Stays on host because the upstream LM handler emits the audio-code stream as decoded
+    text. Eliminating this step would require changing the LM-to-detokenizer handshake to
+    pass raw token IDs plus a tokenizer-side audio-code-ID mapping (vendored
+    ``acestep.core.generation.handler.audio_codes`` API). The regex parse itself is O(N)
+    over a short string (~75 tokens for 15 s @ 5 Hz) and runs in microseconds.
+    """
+    return [max(0, min(int(x), _FSQ_MAX_AUDIO_CODE)) for x in re.findall(r"<\|audio_code_(\d+)\|>", code_str or "")]
 
 
 def fsq_codes_from_indices_np(indices: np.ndarray) -> np.ndarray:
-    """Match ``ResidualFSQ(...levels=[8,8,8,5,5,5], num_quantizers=1).get_codes_from_indices``."""
-    levels = np.asarray([8, 8, 8, 5, 5, 5], dtype=np.int64)
+    """Match ``ResidualFSQ(...levels=[8,8,8,5,5,5], num_quantizers=1).get_codes_from_indices``.
+
+    Retained for tests / A-B reference (``TtAceStepAudioCodeDetokenizer`` no longer calls this on
+    the hot path; the FSQ unpack is done on device via ``ttnn.embedding`` against a precomputed
+    codebook in :meth:`TtAceStepAudioCodeDetokenizer.forward`).
+    """
+    levels = np.asarray(_FSQ_LEVELS, dtype=np.int64)
     basis = np.cumprod(np.asarray([1, *levels[:-1]], dtype=np.int64), dtype=np.int64)
     idx = np.asarray(indices, dtype=np.int64)[..., None]
     level_indices = (idx // basis) % levels
     codes = level_indices.astype(np.float32) * (2.0 / (levels.astype(np.float32) - 1.0)) - 1.0
     return codes.astype(np.float32)
+
+
+def _build_fsq_codebook_np() -> np.ndarray:
+    """Materialize the full ``[prod(levels), len(levels)] = [64000, 6]`` FSQ codebook once.
+
+    Each row is ``fsq_codes_from_indices_np(np.array([i]))[0]`` for ``i in [0, 63999]``.
+    Cheap (~64k * 6 fp32 ≈ 1.5 MB on host, uploaded once to TTNN as bf16 ≈ 768 KB).
+    """
+    n = int(np.prod(_FSQ_LEVELS))
+    return fsq_codes_from_indices_np(np.arange(n, dtype=np.int64))
 
 
 def _as_weight(weights_np: Dict[str, np.ndarray], key: str, *, device, dtype, mem, mapper):
@@ -183,23 +209,54 @@ class TtAceStepAudioCodeDetokenizer:
             sin_np, device=device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT, memory_config=self.mem, mesh_mapper=mapper
         )
 
+        # Precomputed FSQ codebook for on-device unpack. Replaces ``fsq_codes_from_indices_np``
+        # in the hot path: per call we only upload a [1, N] uint32 index tensor and run
+        # ``ttnn.embedding(idx, codebook)`` to materialize [1, N, 6] codes on device.
+        self._fsq_mapper = mapper
+        self.fsq_codebook_tt = ttnn.as_tensor(
+            _build_fsq_codebook_np(),
+            device=device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.mem,
+            mesh_mapper=mapper,
+        )
+
     def forward(self, code_str: str) -> ttnn.Tensor | None:
         code_ids = parse_audio_code_string(code_str)
         if not code_ids:
             return None
-        code_np = fsq_codes_from_indices_np(np.asarray(code_ids, dtype=np.int64)).reshape(1, len(code_ids), 6)
-        mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        mapper = (
+            self._fsq_mapper
+            if self._fsq_mapper is not None
+            else (ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None)
+        )
         _sr = ace_step_reshape_kwargs(ttnn)
-        x = ttnn.as_tensor(
-            code_np,
+        # Move FSQ "code-id -> 6-dim code vector" onto the device: upload a [1, N] uint32
+        # index tensor and let ``ttnn.embedding`` gather rows from the precomputed codebook.
+        # Replaces the previous host ``fsq_codes_from_indices_np`` divmod + float upload.
+        ids_np = np.asarray(code_ids, dtype=np.uint32).reshape(1, len(code_ids))
+        ids_tt = ttnn.as_tensor(
+            ids_np,
             device=self.device,
-            dtype=self.dtype,
+            dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=self.mem,
             mesh_mapper=mapper,
         )
+        x = ttnn.embedding(
+            ids_tt,
+            self.fsq_codebook_tt,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=self.dtype,
+            memory_config=self.mem,
+        )
+        try:
+            ttnn.deallocate(ids_tt)
+        except Exception:
+            pass
+        # ``ttnn.embedding`` returns [1, N, 6]; reshape to [1, 1, N, 6] for the linear ops.
         x = ttnn.reshape(x, (1, 1, len(code_ids), 6), **_sr)
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         q = ttnn.linear(x, self.quantizer_project_out_w, bias=self.quantizer_project_out_b, transpose_b=True)
         q = ttnn.linear(q, self.embed_w, bias=self.embed_b, transpose_b=True)
         q = ttnn.reshape(q, (1, len(code_ids), 1, 2048), **_sr)
