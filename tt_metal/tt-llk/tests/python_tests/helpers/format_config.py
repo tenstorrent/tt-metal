@@ -373,39 +373,6 @@ MX_INT_MAX = {
 }
 
 # ============================================================================
-# MX SrcS Slice L1 Layout
-# ============================================================================
-# Each SrcS slice is 8×16 = 128 elements.  In L1 a slice is stored as
-# [scales padded to 16 B][elements padded to 16 B].
-
-
-def l1_align(size: int) -> int:
-    """Align *size* to the next 16B boundary."""
-    l1_alignment = 16
-    return (size + l1_alignment - 1) // l1_alignment * l1_alignment
-
-
-# Per SrcS slice (8×16 = 128 elements, each 8-bit in L1):
-#   scales:   128 / 32 = 4 bytes   → padded to 16 B
-#   elements: 128 × 1 = 128 bytes  → already 16 B-aligned
-#   total: 16 + 128 = 144 bytes per slice
-MXFP8_SLICE_SCALE_BYTES = SRCS_SLICE_ELEMENT_COUNT // MX_FORMAT_BLOCK_SIZE  # 4
-MXFP8_SLICE_ELEMENT_BYTES = SRCS_SLICE_ELEMENT_COUNT  # 128
-MXFP8_SRCS_SLICE_PACKED_BYTE_LEN = l1_align(MXFP8_SLICE_SCALE_BYTES) + l1_align(
-    MXFP8_SLICE_ELEMENT_BYTES
-)
-
-# 32-bit SrcS mode (dest_acc): 4x16 = 64 elements per slice
-#   scales:   64 / 32 = 2 bytes   -> padded to 16 B
-#   elements: 64 x 1  = 64 bytes  -> already 16 B-aligned
-#   total: 16 + 64 = 80 bytes per slice
-MXFP8_SLICE_32B_SCALE_BYTES = SRCS_SLICE_32B_ELEMENT_COUNT // MX_FORMAT_BLOCK_SIZE  # 2
-MXFP8_SLICE_32B_ELEMENT_BYTES = SRCS_SLICE_32B_ELEMENT_COUNT  # 64
-MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN = l1_align(MXFP8_SLICE_32B_SCALE_BYTES) + l1_align(
-    MXFP8_SLICE_32B_ELEMENT_BYTES
-)  # 80
-
-# ============================================================================
 # MX (Microscaling) Format Utilities
 # ============================================================================
 
