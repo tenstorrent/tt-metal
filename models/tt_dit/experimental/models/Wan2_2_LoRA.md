@@ -35,8 +35,7 @@ See [../../models/Wan2_2.md](../../models/Wan2_2.md) for the base model architec
 ## API
 
 ```python
-from models.tt_dit.experimental.utils.lora import LoRASpec
-from models.tt_dit.experimental.pipelines.pipeline_wan_lora import WanPipelineI2VLora
+from models.tt_dit.experimental.pipelines.pipeline_wan_lora import LoRASpec, WanPipelineI2VLora
 
 # Single-LoRA, both experts
 pipe = WanPipelineI2VLora.create_pipeline(
