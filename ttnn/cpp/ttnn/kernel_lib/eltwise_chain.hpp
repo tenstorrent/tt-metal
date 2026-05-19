@@ -124,9 +124,8 @@
  *   );
  *
  *   // Streaming binary — A + B → out
- *   //   (3rd template arg is CbOut)
  *   eltwise_chain(num_tiles,
- *       BinaryFpu<cb_a, cb_b, cb_out, BinaryFpuOp::Add>{},
+ *       BinaryFpu<cb_a, cb_b, BinaryFpuOp::Add>{},
  *       PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{}
  *   );
  *
@@ -156,14 +155,14 @@
  *
  *   // Asymmetric bcast walk — A streams the tile range, B pinned at tile 0
  *   //   (softmax-style: out[t] = exp(in[t] - max), max pinned at tile 0)
- *   //   BinaryFpu's 9th template arg is AIndex; 12th (trailing) is BIndex (defaults to AIndex).
+ *   //   BinaryFpu's 8th template arg is AIndex; 10th (trailing) is BIndex (defaults to AIndex).
  *   eltwise_chain(num_tiles,
- *       BinaryFpu<cb_in, cb_max, cb_tmp, BinaryFpuOp::Sub, BroadcastDim::COL,
+ *       BinaryFpu<cb_in, cb_max, BinaryFpuOp::Sub, BroadcastDim::COL,
  *                 BinaryDataFormatReconfig::None,
  *                 CopyTilePolicy::WaitUpfrontPopAtEnd,   // A: wait N upfront, pop at end
  *                 CopyTilePolicy::WaitNoPop,             // B: wait 1, never pop
  *                 CbIndexMode::BlockIter,                // AIndex — A walks 0..num_tiles-1
- *                 Dst::D0, false,
+ *                 Dst::D0,
  *                 CbIndexMode::FirstTile>{},             // BIndex — B pinned at tile 0
  *       Exp<>{},
  *       PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{}
@@ -183,9 +182,7 @@
  *  - CopyTileReconfig::Input         → fold emits `reconfig_data_format_srca(curr)` (compile-time-elided when prev ==
  * curr).
  *  - BinaryDataFormatReconfig::Input → fold emits `reconfig_data_format_srca / _srcb` per side (compile-time-elided per
- * side).
- *  - BinaryDataFormatReconfig::Output → fold emits `pack_reconfig_data_format(CbOut)` (compile-time-elided when
- * prev_pack == CbOut).
+ * side). Pack reconfig for binary chains is owned by the downstream PackTile element.
  *  - DestReuseReconfig::Input        → fold emits per-side reconfig (srca OR srcb depending on ReuseType).
  *  - PackTileReconfig::Output        → fold emits `pack_reconfig_data_format(new_cb)`.
  *  - PackTileReconfig::OutputConditional → currently emits same as ::Output; future extension may
@@ -364,9 +361,7 @@ enum class BinaryFpuOp : uint8_t { Add, Sub, Mul };
 /// FPU binary dtype-reconfig.
 enum class BinaryDataFormatReconfig : uint8_t {
     None,
-    Input,           // srca and/or srcb on entry
-    Output,          // pack reconfig on entry
-    InputAndOutput,  // both — default (safest, no skip)
+    Input,  // srca and/or srcb on entry (default). Pack reconfig is owned by PackTile.
 };
 
 /// FPU broadcast dimension. Caller MUST pass explicitly — no inference.
@@ -597,16 +592,15 @@ template <
     Dst DstSlot = Dst::D0,
     CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
     CbIndexMode IndexMode = CbIndexMode::FirstTile,
-    CopyTileReconfig Reconfig = CopyTileReconfig::None>
+    CopyTileReconfig Reconfig = CopyTileReconfig::Input>
 struct CopyTile;
 
 template <
     uint32_t CbA,
     uint32_t CbB,
-    uint32_t CbOut = 0,
     BinaryFpuOp Op = BinaryFpuOp::Add,
     BroadcastDim Bcast = BroadcastDim::None,
-    BinaryDataFormatReconfig DfReconfig = BinaryDataFormatReconfig::InputAndOutput,
+    BinaryDataFormatReconfig DfReconfig = BinaryDataFormatReconfig::Input,
     CopyTilePolicy APolicy = CopyTilePolicy::WaitAndPop,
     CopyTilePolicy BPolicy = CopyTilePolicy::WaitAndPop,
     CbIndexMode AIndex = CbIndexMode::FirstTile,
@@ -620,7 +614,7 @@ template <
     DestReuseType ReuseType,
     Dst DstIn = Dst::D0,
     Dst DstOut = Dst::D0,
-    DestReuseReconfig Reconfig = DestReuseReconfig::None,
+    DestReuseReconfig Reconfig = DestReuseReconfig::Input,
     CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
     CbIndexMode IndexMode = CbIndexMode::FirstTile>
 struct DestReuseBinary;
@@ -631,7 +625,7 @@ template <
     uint32_t CbOut = 0,
     Dst DstSlot = Dst::D0,
     CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
-    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::None>
+    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::Input>
 struct UnaryBcast;
 
 template <
@@ -639,7 +633,7 @@ template <
     Dst DstSlot = Dst::D0,
     PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
     PackTileIndexMode IndexMode = PackTileIndexMode::FirstTile,
-    PackTileReconfig Reconfig = PackTileReconfig::None>
+    PackTileReconfig Reconfig = PackTileReconfig::Output>
 struct PackTile;
 
 template <
@@ -647,7 +641,7 @@ template <
     Dst FirstSlot,
     uint32_t NTiles,
     PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
-    PackTileReconfig Reconfig = PackTileReconfig::None>
+    PackTileReconfig Reconfig = PackTileReconfig::Output>
 struct PackTileBlock;
 
 // Fill / Rand forward declarations — implementations live in eltwise_fill.hpp / eltwise_rand.hpp.

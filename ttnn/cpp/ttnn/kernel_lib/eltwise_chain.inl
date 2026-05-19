@@ -409,7 +409,6 @@ struct PackTileBlock : PackTileTag {
 
 template <uint32_t CbA,
           uint32_t CbB,
-          uint32_t CbOut,
           BinaryFpuOp Op,
           BroadcastDim Bcast,
           BinaryDataFormatReconfig DfReconfig,
@@ -445,19 +444,12 @@ struct BinaryFpu : BinaryFpuTag {
     static constexpr bool          clashes_with_fpu = true;
     static constexpr bool          same_cb    = (CbA == CbB);
 
-    // Prev-CB fold (D2): BinaryFpu touches both srca (CbA), srcb (CbB), and pack (CbOut)
-    // when the corresponding reconfig is opted in. F-PERF-3 strips the per-element pack
-    // reconfig from init(); the chain's compile-time-elided fold drives both input-side
-    // and output-side reconfig before this element runs.
+    // Prev-CB fold (D2): BinaryFpu touches srca (CbA) and srcb (CbB) when input
+    // reconfig is opted in. Pack reconfig is owned by the downstream PackTile element.
     static constexpr uint32_t      reconfig_srca_cb =
-        (DfReconfig == BinaryDataFormatReconfig::Input || DfReconfig == BinaryDataFormatReconfig::InputAndOutput)
-            ? CbA : NO_PREV_CB;
+        (DfReconfig == BinaryDataFormatReconfig::Input) ? CbA : NO_PREV_CB;
     static constexpr uint32_t      reconfig_srcb_cb =
-        (DfReconfig == BinaryDataFormatReconfig::Input || DfReconfig == BinaryDataFormatReconfig::InputAndOutput)
-            ? CbB : NO_PREV_CB;
-    static constexpr uint32_t      reconfig_pack_cb =
-        ((DfReconfig == BinaryDataFormatReconfig::Output || DfReconfig == BinaryDataFormatReconfig::InputAndOutput)
-         && CbOut != 0) ? CbOut : NO_PREV_CB;
+        (DfReconfig == BinaryDataFormatReconfig::Input) ? CbB : NO_PREV_CB;
 
     constexpr BinaryFpu() noexcept = default;
     constexpr BinaryFpu(uint32_t a_tile_idx, uint32_t b_tile_idx) noexcept
