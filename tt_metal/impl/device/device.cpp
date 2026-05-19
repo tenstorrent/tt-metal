@@ -995,11 +995,23 @@ void Device::configure_fabric(
             }
         }
 
+        // GAP-R11 (#42429): Count SA-A failures (FW_READY timeouts) for summary.
+        // all_dead_channels_storage was modified in-place by SA-A timeout marking.
+        // SA-A failures = current dead size - dead size before SA loop.
+        // We can approximate: SA-A failures are channels in deferred_deassert that
+        // ended up in all_dead_channels_storage.
+        uint32_t sa_a_timeout_count = 0;
+        for (const auto& dc : health.deferred_deassert_channels) {
+            if (all_dead_channels_storage.count(dc)) {
+                sa_a_timeout_count++;
+            }
+        }
         log_info(
             tt::LogMetal,
             "FIX SA (#42429): Strategy A complete for Device {} — {} deferred channel(s) "
-            "deasserted and go_msg sent",
-            this->id_, health.deferred_deassert_channels.size());
+            "processed, {} SA-A FW_READY timeouts, session_id=0x{:08X}",
+            this->id_, health.deferred_deassert_channels.size(),
+            sa_a_timeout_count, this->fabric_session_id_);
     }
     // =========================================================================
     // End FIX SA (Strategy A)
@@ -1519,6 +1531,20 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
     const auto& active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 
     MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
+
+    // GAP-R14 (#42429): Log session_id unconditionally at quiesce entry.
+    // The FIX V11-QS89 bump only logs under #ifdef STRATEGY9_SESSION_ID.
+    // Without this, post-mortem has no session context when the ifdef is disabled.
+    log_info(
+        tt::LogMetal,
+        "GAP-R14 (#42429): quiesce_and_restart_fabric_workers: Device {} session_id=0x{:08X} "
+        "relay_broken={} mmio={} channels_not_ready={} stale_base_umd={}",
+        this->id(),
+        fabric_session_id_,
+        fabric_relay_path_broken_.load(),
+        this->is_mmio_capable(),
+        fabric_channels_not_ready_for_traffic_,
+        fabric_stale_base_umd_channels_);
 
     // Diagnostic entry snapshot (#42429): read every active ERISC channel's edm_status_address
     // BEFORE any phase runs.  This lets us distinguish "prior test left channels in bad state"
@@ -2437,47 +2463,98 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
 
 #ifdef STRATEGY7_HANDSHAKE_BYPASS
                 // Step 2: FIX V11-QS7 — write handshake_bypass=1.
+                // GAP-R10 (#42429): readback verify — mirrors FIX NO pattern on SA path.
                 {
                     std::vector<uint32_t> bypass_qs = {1};
                     detail::WriteToDeviceL1(
                         this, CoreCoord(lc_qs.x, lc_qs.y),
                         handshake_bypass_l1_addr_qs89, bypass_qs, CoreType::ETH);
-                    log_info(
-                        tt::LogMetal,
-                        "FIX V11-QS7 (#42429): handshake_bypass=1 at L1[0x{:08X}] for "
-                        "Device {} chan={} (force-reset, inline quiesce path)",
-                        handshake_bypass_l1_addr_qs89, this->id(), eth_chan_qs);
+                    std::vector<uint32_t> bypass_rb_qs(1, 0xFFFFFFFF);
+                    try {
+                        detail::ReadFromDeviceL1(
+                            this, CoreCoord(lc_qs.x, lc_qs.y),
+                            handshake_bypass_l1_addr_qs89, sizeof(uint32_t), bypass_rb_qs, CoreType::ETH);
+                    } catch (...) {
+                        bypass_rb_qs[0] = 0xDEADDEAD;
+                    }
+                    if (bypass_rb_qs[0] != 1) {
+                        log_warning(
+                            tt::LogMetal,
+                            "GAP-R10 (#42429): V11-QS7 handshake_bypass readback MISMATCH — "
+                            "wrote 1 to L1[0x{:08X}] Device {} chan={} but read 0x{:08X}",
+                            handshake_bypass_l1_addr_qs89, this->id(), eth_chan_qs, bypass_rb_qs[0]);
+                    } else {
+                        log_info(
+                            tt::LogMetal,
+                            "FIX V11-QS7 (#42429): handshake_bypass=1 at L1[0x{:08X}] for "
+                            "Device {} chan={} (force-reset, inline quiesce path) — readback verified [GAP-R10]",
+                            handshake_bypass_l1_addr_qs89, this->id(), eth_chan_qs);
+                    }
                 }
 #endif  // STRATEGY7_HANDSHAKE_BYPASS
 
 #ifdef STRATEGY8_BOOT_FENCE
                 // Step 3: FIX V11-QS89 — write BOOT_FENCE_READY to unblock ERISC.
+                // GAP-R10 (#42429): readback verify — mirrors FIX S8 on SA path.
                 {
                     std::vector<uint32_t> bf_qs = {BOOT_FENCE_READY_VALUE};
                     detail::WriteToDeviceL1(
                         this, CoreCoord(lc_qs.x, lc_qs.y),
                         boot_fence_addr_qs89, bf_qs, CoreType::ETH);
-                    log_info(
-                        tt::LogMetal,
-                        "FIX V11-QS89 (#42429): boot_fence=0x{:08X} at L1[0x{:08X}] for "
-                        "Device {} chan={} (force-reset, inline quiesce path)",
-                        BOOT_FENCE_READY_VALUE, boot_fence_addr_qs89, this->id(), eth_chan_qs);
+                    std::vector<uint32_t> bf_rb_qs(1, 0);
+                    try {
+                        detail::ReadFromDeviceL1(
+                            this, CoreCoord(lc_qs.x, lc_qs.y),
+                            boot_fence_addr_qs89, sizeof(uint32_t), bf_rb_qs, CoreType::ETH);
+                    } catch (...) {
+                        bf_rb_qs[0] = 0xDEADDEAD;
+                    }
+                    if (bf_rb_qs[0] != BOOT_FENCE_READY_VALUE) {
+                        log_warning(
+                            tt::LogMetal,
+                            "GAP-R10 (#42429): V11-QS89 boot_fence readback MISMATCH — "
+                            "wrote 0x{:08X} to L1[0x{:08X}] Device {} chan={} but read 0x{:08X}",
+                            BOOT_FENCE_READY_VALUE, boot_fence_addr_qs89, this->id(), eth_chan_qs, bf_rb_qs[0]);
+                    } else {
+                        log_info(
+                            tt::LogMetal,
+                            "FIX V11-QS89 (#42429): boot_fence=0x{:08X} at L1[0x{:08X}] for "
+                            "Device {} chan={} (force-reset, inline quiesce path) — readback verified [GAP-R10]",
+                            BOOT_FENCE_READY_VALUE, boot_fence_addr_qs89, this->id(), eth_chan_qs);
+                    }
                 }
 #endif  // STRATEGY8_BOOT_FENCE
 
 #ifdef STRATEGY9_SESSION_ID
                 // Step 4: FIX V11-QS89 — write session_id.
+                // GAP-R10 (#42429): readback verify — mirrors FIX S9 on SA path.
                 {
                     const uint32_t sid_qs = this->fabric_session_id_;
                     std::vector<uint32_t> sid_buf_qs = {sid_qs};
                     detail::WriteToDeviceL1(
                         this, CoreCoord(lc_qs.x, lc_qs.y),
                         session_id_addr_qs89, sid_buf_qs, CoreType::ETH);
-                    log_info(
-                        tt::LogMetal,
-                        "FIX V11-QS89 (#42429): session_id=0x{:08X} at L1[0x{:08X}] for "
-                        "Device {} chan={} (force-reset, inline quiesce path)",
-                        sid_qs, session_id_addr_qs89, this->id(), eth_chan_qs);
+                    std::vector<uint32_t> sid_rb_qs(1, 0);
+                    try {
+                        detail::ReadFromDeviceL1(
+                            this, CoreCoord(lc_qs.x, lc_qs.y),
+                            session_id_addr_qs89, sizeof(uint32_t), sid_rb_qs, CoreType::ETH);
+                    } catch (...) {
+                        sid_rb_qs[0] = 0xDEADDEAD;
+                    }
+                    if (sid_rb_qs[0] != sid_qs) {
+                        log_warning(
+                            tt::LogMetal,
+                            "GAP-R10 (#42429): V11-QS89 session_id readback MISMATCH — "
+                            "wrote 0x{:08X} to L1[0x{:08X}] Device {} chan={} but read 0x{:08X}",
+                            sid_qs, session_id_addr_qs89, this->id(), eth_chan_qs, sid_rb_qs[0]);
+                    } else {
+                        log_info(
+                            tt::LogMetal,
+                            "FIX V11-QS89 (#42429): session_id=0x{:08X} at L1[0x{:08X}] for "
+                            "Device {} chan={} (force-reset, inline quiesce path) — readback verified [GAP-R10]",
+                            sid_qs, session_id_addr_qs89, this->id(), eth_chan_qs);
+                    }
                 }
 #endif  // STRATEGY9_SESSION_ID
 
@@ -2562,6 +2639,11 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     continue;
                 }
             }
+
+            // GAP-R9 (#42429): Per-channel elapsed timer for Phase 3 ETH relaunch.
+            // Without this, post-mortem cannot tell if one channel's launch sequence
+            // took 5ms vs 5000ms — critical for diagnosing relay-timeout cascades.
+            auto gap_r9_launch_start = std::chrono::steady_clock::now();
 
             auto* kg = fabric_program_->impl().kernels_on_core(logical_core, pct_idx);
             dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
@@ -2694,13 +2776,19 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                 go_msg,
                 /* send_go= */ true);  // FIX SENDGO: was hal.get_dev_addr (uint64_t→bool implicit conversion)
 
-            log_info(
-                tt::LogMetal,
-                "quiesce_and_restart_fabric_workers: Device {} Phase 3: "
-                "write_launch_msg_to_core ETH logical ({},{}) done",
-                this->id(),
-                logical_core.x,
-                logical_core.y);
+            // GAP-R9 (#42429): Log per-channel elapsed time for Phase 3 ETH relaunch.
+            {
+                auto gap_r9_launch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - gap_r9_launch_start).count();
+                log_info(
+                    tt::LogMetal,
+                    "GAP-R9 (#42429): Device {} Phase 3 ETH launch — logical ({},{}) "
+                    "pre_read+gate+launch took {}ms (inline quiesce path)",
+                    this->id(),
+                    logical_core.x,
+                    logical_core.y,
+                    gap_r9_launch_ms);
+            }
 
             // FIX IJ quiesce (#42429): DISABLED — now redundant after FIX MM.
             // FIX MM in configure_fabric_cores() unconditionally restores fw_launch_addr
