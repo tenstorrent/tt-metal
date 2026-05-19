@@ -78,6 +78,12 @@ _FIFO_PAGES = 4  # FIFO sized to 4 pages (= 32 KB)
 # path; the 2-galaxy variant is the cross-host smoke and is FIFO-capped.
 _TOPOLOGY_CONFIG = {
     "1galaxy": {"num_pages": 256, "wait_for_acks": True},
+    # 2-galaxy: cross-host ack credit return is still broken even with the
+    # dual-fwd-link sender that matches production d2d_exchange.cpp's pattern.
+    # The data path is verified bit-exact, but `fabric_socket_notify_sender_stateful`
+    # inline writes from receiver → sender don't update the sender's L1
+    # bytes_acked. FIFO-cap to _FIFO_PAGES pages and skip socket_barrier until
+    # that's resolved.
     "2galaxy": {"num_pages": _FIFO_PAGES, "wait_for_acks": False},
 }
 
@@ -85,11 +91,12 @@ _DATA_CB_INDEX = 0
 _PACKET_HEADER_CB_INDEX = 1
 
 
-def _packet_header_cb(core_range_set):
-    """Two-slot CB for fabric packet headers (data header + socket-notify header)."""
+def _packet_header_cb(core_range_set, num_slots):
+    """N-slot CB for fabric packet headers. Sender uses 3 (2 data + 1 notify);
+    receiver uses 1 (just the ack notify header)."""
     packet_header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
     return ttnn.CBDescriptor(
-        total_size=2 * packet_header_size,
+        total_size=num_slots * packet_header_size,
         core_ranges=core_range_set,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
@@ -141,21 +148,25 @@ def _build_sender_program(
         config=ttnn.WriterConfigDescriptor(),
     )
 
+    # 3-slot packet header CB: 2 for the dual-link data writes, 1 for the
+    # socket-notify-receiver write. Matches production d2d_exchange.cpp.
     program = ttnn.ProgramDescriptor(
         kernels=[sender_kernel],
         semaphores=[],
-        cbs=[_data_cb(core_range_set, page_size), _packet_header_cb(core_range_set)],
+        cbs=[_data_cb(core_range_set, page_size), _packet_header_cb(core_range_set, num_slots=3)],
     )
 
     cx, cy = send_core.core_coord.x, send_core.core_coord.y
     program.kernels[0].runtime_args[cx][cy] = [source_tensor.buffer_address(), mesh_socket.get_config_buffer_address()]
 
+    # Open 2 forward fabric links (matches production d2d_exchange num_fwd_links=2).
     sender_fabric_node_id = mesh_device.get_fabric_node_id(send_core.device_coord)
     recv_fabric_node_id = mesh_socket.get_fabric_node_id(ttnn.SocketEndpoint.RECEIVER, recv_core.device_coord)
-    fabric_args = ttnn.setup_fabric_connection(
-        sender_fabric_node_id, recv_fabric_node_id, 0, program, send_core.core_coord
-    )
-    program.kernels[0].runtime_args[cx][cy].extend(fabric_args)
+    for link_idx in range(2):
+        fabric_args = ttnn.setup_fabric_connection(
+            sender_fabric_node_id, recv_fabric_node_id, link_idx, program, send_core.core_coord
+        )
+        program.kernels[0].runtime_args[cx][cy].extend(fabric_args)
 
     return program
 
@@ -178,7 +189,7 @@ def _build_receiver_program(mesh_device, mesh_socket, send_core, recv_core, dest
     program = ttnn.ProgramDescriptor(
         kernels=[receiver_kernel],
         semaphores=[],
-        cbs=[_packet_header_cb(core_range_set)],
+        cbs=[_packet_header_cb(core_range_set, num_slots=1)],
     )
 
     cx, cy = recv_core.core_coord.x, recv_core.core_coord.y
