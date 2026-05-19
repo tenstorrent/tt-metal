@@ -439,6 +439,26 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     const bool welford_fp32_alias = use_welford_and_not_rms_norm && in_data_format == tt::DataFormat::Float32 &&
                                     !(fuse_pre_add && large_tensor_needed);
 
+    // Separate alias on cb_ex (c_18) and cb_ex2 (c_19) for the mean / M2 sliding-window
+    // accumulators in layernorm_large_tensor_welford.cpp::welford_fuse_pre_add. That function
+    // spills LREG4/5 to cb_ex / cb_ex2 between blocks and restores them via copy_tile at the
+    // top of the next block. With cb_ex / cb_ex2 in Default unpack mode, copy_tile takes the
+    // SrcA path and silently truncates Float32 to Tf32 on every restore, compounding error
+    // across N = Wt / block_size blocks (≈32 for W=4096). Exposing the same allocations under
+    // a second buffer index with unpack_to_dest_mode=UnpackToDestFp32 lets copy_tile take the
+    // UnpackToDest fp32 path (the LLK gate requires both src and dst formats to be Float32 --
+    // see is_32bit_input in tt-llk cunpack_common.h). The original c_18 / c_19 indices stay in
+    // Default mode for the SrcA/SrcB consumers (the post-welford transpose_wh_tile that
+    // converts mean/var from row to column format, and sub_tiles_bcast_cols's SrcB read of
+    // mean in the (x - E[x]) step). Issue #33694 in the tenstorrent/tt-metal repo tracks the
+    // precision regression this fixes.
+    //
+    // copy_tile's UnpackToDest fp32 path doesn't record into SFPU replay slot 0 (the welford
+    // recurrence stays intact), so no welford_reinit / sfpu_init re-arming is needed here --
+    // unlike the cb_x_welford alias above which has to work around transpose_wh_tile's MOP.
+    const bool welford_state_fp32_alias = use_welford_and_not_rms_norm && fuse_pre_add && large_tensor_needed &&
+                                          cb_data_format == tt::DataFormat::Float32;
+
     // Named compile-time args for CB indices - enables kernel chaining/fusion
     KernelDescriptor::NamedCompileTimeArgs cb_named_args = {
         {"cb_in", tt::CBIndex::c_0},
@@ -468,6 +488,13 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         {"cb_x_welford",
          welford_fp32_alias ? tt::CBIndex::c_29 : (fuse_pre_add ? tt::CBIndex::c_23 : tt::CBIndex::c_0)},
         {"welford_fp32_alias", static_cast<uint8_t>(welford_fp32_alias ? 1 : 0)},
+        // Mean / M2 spill aliases. When welford_state_fp32_alias is active these point to
+        // c_30 / c_31 (separate buffer indices, same allocations as c_18 / c_19) configured
+        // for UnpackToDest fp32. When inactive they collapse onto c_18 / c_19 so the kernel's
+        // copy_tile calls fall through to the existing SrcA Tf32 path.
+        {"cb_ex_welford", welford_state_fp32_alias ? tt::CBIndex::c_30 : tt::CBIndex::c_18},
+        {"cb_ex2_welford", welford_state_fp32_alias ? tt::CBIndex::c_31 : tt::CBIndex::c_19},
+        {"welford_state_fp32_alias", static_cast<uint8_t>(welford_state_fp32_alias ? 1 : 0)},
     };
 
     // Select reader kernel path
@@ -508,9 +535,22 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     if (float32_reduction) {
         unpack_to_dest_mode[large_tensor_acc_cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    // Welford-fp32 alias index: shares L1 memory with cb_x but has UnpackToDestFp32 mode so the
-    // welford section reads full fp32 from DEST. The original cb_x index stays at default
-    // (TF32 SrcA path) for the post-welford FPU binary ops.
+    // Welford mean / M2 spill aliases (c_30 / c_31): share L1 with cb_ex (c_18) / cb_ex2 (c_19)
+    // but use UnpackToDestFp32 so the per-block copy_tile reload of LREG4/5 in
+    // layernorm_large_tensor_welford.cpp::welford_fuse_pre_add takes the Dst fp32 path and
+    // preserves all 23 mantissa bits across the spill/restore cycle. The primary indices
+    // c_18 / c_19 stay at default Tf32 so the post-Welford SrcA / SrcB consumers
+    // (transpose_wh_tile on cb_ex / cb_ex2 for the row->column transpose, and the SrcB read of
+    // mean in sub_tiles_bcast_cols) still work -- fp32 -> fp32 via SrcA/SrcB is undefined.
+    if (welford_state_fp32_alias) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_30)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_31)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    // Welford input alias index (c_29): shares L1 with cb_x but has UnpackToDestFp32 mode so
+    // the welford section's transpose_wh_tile reads full fp32 into DEST. The original cb_x
+    // index stays at default Tf32 SrcA for the post-welford FPU sub_tiles_bcast_cols.
     if (welford_fp32_alias) {
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_29)] =
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
@@ -680,10 +720,21 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     program_descriptor.cbs.push_back(
         make_cb_descriptor(out0_t * out_single_tile_size, tt::CBIndex::c_16, out_data_format, out_single_tile_size));
 
-    // CB 18: Intermediate 1 (if not rms_norm)
+    // CB 18: Intermediate 1 (if not rms_norm). c_18 holds the running E[x] (mean) spilled
+    // between blocks in layernorm_large_tensor_welford.cpp's fused welford path. When
+    // welford_state_fp32_alias is active, register c_30 as a second buffer index on the same
+    // allocation with UnpackToDestFp32 mode so copy_tile reads can take the fp32 Dst path and
+    // preserve all 23 mantissa bits across the spill/restore cycle.
     if (!rms_norm) {
-        program_descriptor.cbs.push_back(
-            make_cb_descriptor(im1_t * single_tile_size, tt::CBIndex::c_18, cb_data_format, single_tile_size));
+        auto cb18_desc =
+            make_cb_descriptor(im1_t * single_tile_size, tt::CBIndex::c_18, cb_data_format, single_tile_size);
+        if (welford_state_fp32_alias) {
+            cb18_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_30),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size});
+        }
+        program_descriptor.cbs.push_back(std::move(cb18_desc));
     }
 
     // CB 2: Scaler for reduce (if not use_welford)
@@ -696,9 +747,20 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     program_descriptor.cbs.push_back(make_cb_descriptor(
         in3_t * bfloat16_tile_size, tt::CBIndex::c_3, tt::DataFormat::Float16_b, bfloat16_tile_size));
 
-    // CB 19: Intermediate 2
-    program_descriptor.cbs.push_back(
-        make_cb_descriptor(im2_t * single_tile_size, tt::CBIndex::c_19, cb_data_format, single_tile_size));
+    // CB 19: Intermediate 2. c_19 holds the running M2 (sum of squared deviations) spilled
+    // between blocks in layernorm_large_tensor_welford.cpp's fused welford path. Same
+    // aliasing rationale as CB 18 above.
+    {
+        auto cb19_desc =
+            make_cb_descriptor(im2_t * single_tile_size, tt::CBIndex::c_19, cb_data_format, single_tile_size);
+        if (welford_state_fp32_alias) {
+            cb19_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_31),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size});
+        }
+        program_descriptor.cbs.push_back(std::move(cb19_desc));
+    }
 
     // CB 24: Intermediate 0
     if (!rms_norm || fuse_pre_add || large_tensor_needed) {
