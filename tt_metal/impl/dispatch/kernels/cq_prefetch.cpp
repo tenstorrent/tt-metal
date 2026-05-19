@@ -1326,14 +1326,20 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
     // DEVICE_PRINT("relay_linear: cmd_ptr={} length={} read_addr={} noc_xy_addr={}\n", cmd_ptr, wlength, read_addr,
     // noc_xy_addr);
 
+    // TRIDs for the two scratch DB halves (unique from fetch_q's 2-5 and exec_buf's 1).
+    // Each TRID is barriered before the next read to the same half, so the max outstanding
+    // per TRID is ceil(scratch_db_half_size / NOC_MAX_BURST_SIZE).
+    static_assert((scratch_db_half_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE <= NOC_MAX_TRANSACTION_ID_COUNT);
+    static constexpr uint32_t RELAY_LINEAR_TRIDS[2] = {6U, 7U};
+
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
     uint32_t amt_to_read = (scratch_db_half_size > wlength) ? wlength : scratch_db_half_size;
+    noc_async_read_set_trid(RELAY_LINEAR_TRIDS[0]);
     noc_read_64bit_any_len<true>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
 
     read_addr += amt_to_read;
     wlength -= amt_to_read;
-    noc_async_read_barrier();
 
     // Second step - read into DB[x], write from DB[x], toggle x, iterate
     // Writes are fast, reads are slow
@@ -1344,8 +1350,6 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
         uint32_t read_length = (wlength > max_batch_size) ? max_batch_size : wlength;
         wlength -= read_length;
         while (read_length != 0) {
-            // This ensures that writes from prior iteration are done
-            // TODO(pgk); we can do better on WH w/ tagging
             noc_async_writes_flushed();
 
             db_toggle ^= 1;
@@ -1354,23 +1358,23 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
 
             uint32_t amt_to_write = amt_to_read;
             amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
+            noc_async_read_set_trid(RELAY_LINEAR_TRIDS[db_toggle]);
             noc_read_64bit_any_len<false>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
             read_addr += amt_to_read;
 
-            // Third step - write from DB
+            noc_async_read_barrier_with_trid(RELAY_LINEAR_TRIDS[db_toggle ^ 1]);
+
             uint32_t npages =
                 write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
 
             DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
 
             read_length -= amt_to_read;
-
-            // TODO(pgk); we can do better on WH w/ tagging
-            noc_async_read_barrier();
         }
     }
 
-    // Third step - write from DB
+    noc_async_read_barrier_with_trid(RELAY_LINEAR_TRIDS[db_toggle]);
+
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_to_read;
     uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
@@ -1379,6 +1383,7 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH
     DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
+    noc_async_read_set_trid(0U);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -2223,19 +2228,26 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     // downstream_data_ptr:0x{:08x}\n",
     //              cmd_ptr, wlength, read_addr, noc_xy_addr, downstream_data_ptr);
 
+    // TRIDs for the two scratch DB halves (same as process_relay_linear_cmd).
+    // Each TRID is barriered before the next read to the same half, so the max outstanding
+    // per TRID is ceil(scratch_db_half_size / NOC_MAX_BURST_SIZE).
+    static_assert((scratch_db_half_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE <= NOC_MAX_TRANSACTION_ID_COUNT);
+    static constexpr uint32_t RELAY_LINEAR_TRIDS[2] = {6U, 7U};
+
     // First step - read into DB0
     uint32_t amt_to_read =
         (scratch_db_half_size - start_offset > wlength) ? wlength : scratch_db_half_size - start_offset;
+    noc_async_read_set_trid(RELAY_LINEAR_TRIDS[0]);
     noc_read_64bit_any_len<true>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
 
     read_addr += amt_to_read;
     wlength -= amt_to_read;
-    noc_async_read_barrier();
 
     // Second step - read into DB[x], write from DB[x], toggle x, iterate
     // Writes are fast, reads are slow
     uint32_t scratch_write_start_addr = scratch_db_top[0];
     uint32_t scratch_read_start_addr = scratch_db_top[1];
+    uint32_t db_toggle = 0;
     // Add back start_offset to amt_to_read to ensure all bytes from scratch_db are transferred
     amt_to_read += start_offset;
     // Calculate the largest multiple of scratch_db_half_size that can fit in a uint32_t. This allows most of the math
@@ -2245,30 +2257,31 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
         uint32_t read_length = (wlength > max_batch_size) ? max_batch_size : wlength;
         wlength -= read_length;
         while (read_length != 0) {
-            // This ensures that writes from prior iteration are done
             noc_async_writes_flushed();
 
+            db_toggle ^= 1;
             uint32_t scratch_read_addr = scratch_read_start_addr;
             uint32_t scratch_write_addr = scratch_write_start_addr;
             std::swap(scratch_read_start_addr, scratch_write_start_addr);
 
             uint32_t amt_to_write = amt_to_read;
             amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
+            noc_async_read_set_trid(RELAY_LINEAR_TRIDS[db_toggle]);
             noc_read_64bit_any_len<false>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
             read_addr += amt_to_read;
 
-            // Third step - write from DB. amt_to_write is greater than a page, so we don't need to test for nonzero.
+            noc_async_read_barrier_with_trid(RELAY_LINEAR_TRIDS[db_toggle ^ 1]);
+
             relay_linear_to_downstream<false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
             read_length -= amt_to_read;
-
-            // TODO(pgk); we can do better on WH w/ tagging
-            noc_async_read_barrier();
         }
     }
 
-    // Third step - write from DB
+    noc_async_read_barrier_with_trid(RELAY_LINEAR_TRIDS[db_toggle]);
+
     uint32_t amt_to_write = amt_to_read;
     relay_linear_to_downstream<true>(downstream_data_ptr, scratch_write_start_addr, amt_to_write);
+    noc_async_read_set_trid(0U);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // RelayLinearH is a large command.

@@ -722,29 +722,40 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     }
 
     // Validate compute kernel unpack_to_dest_mode entries.
-    // Policy:
-    //   - Each entry must reference a DFB the kernel actually binds.
-    //   - For non-FP32 DFBs, the only meaningful mode is Default — UnpackToDestFp32
-    //     is specifically for unpacking Float32 data with full precision, and makes
-    //     no sense for other formats. We allow entries for non-FP32 DFBs only if
-    //     the value is Default (so existing code that spells it out keeps working;
-    //     pure-busywork specifications get flagged if they specify the wrong value).
-    //   - For FP32 DFBs, an entry is REQUIRED. The choice between Default and
-    //     UnpackToDestFp32 matters for FP32 data (precision vs SRCA/B compatibility),
-    //     so the user must make it explicitly.
+    //
+    // UnpackToDestMode only has a meaningful effect when the kernel CONSUMES the
+    // DFB (endpoint_type == CONSUMER), the DFB data format is Float32, and
+    // fp32_dest_acc_en is true. Only in that configuration is there a real choice:
+    //   - Default          → unpack via SrcA/B (~19-bit, full FPU access)
+    //   - UnpackToDestFp32 → direct Unpacker0 → Dest (full FP32, no SrcA/B for this DFB)
+    // Anywhere else, the value is dead config (non-consumer / non-FP32) or
+    // incoherent (UnpackToDestFp32 with fp32_dest_acc_en=false — Dest is 16-bit).
+    //
+    // Rules enforced:
+    //   - Every entry references a DFB the kernel binds.
+    //   - No duplicate entries for the same DFB.
+    //   - UnpackToDestFp32 is allowed only when the (CONSUMER + FP32 + fp32_dest_acc_en)
+    //     triple holds for that DFB binding.
+    //   - When the triple holds for a DFB, an explicit entry is REQUIRED — the two
+    //     values have very different runtime semantics, so we surface the choice in source.
+    //   - Default is silently assumed everywhere else (no entry required, no busywork).
     for (const auto& kernel : spec.kernels) {
         if (!kernel.is_compute_kernel()) {
             continue;
         }
         const auto& compute_config = std::get<ComputeConfiguration>(kernel.config_spec);
 
-        // Quick lookup of DFBs this kernel binds.
+        // Index the kernel's DFB bindings: which are bound, which are consumed.
         std::unordered_set<DFBSpecName> bound_dfbs;
+        std::unordered_set<DFBSpecName> consumed_dfbs;
         for (const auto& binding : kernel.dfb_bindings) {
             bound_dfbs.insert(binding.dfb_spec_name);
+            if (binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
+                consumed_dfbs.insert(binding.dfb_spec_name);
+            }
         }
 
-        // Check each user-supplied entry against the policy.
+        // Validate each user-supplied entry.
         std::unordered_set<DFBSpecName> entries_seen;
         for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
             TT_FATAL(
@@ -752,38 +763,69 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 "Kernel '{}' unpack_to_dest_mode entry references DFB '{}', which the kernel does not bind",
                 kernel.unique_id,
                 dfb_name);
-            entries_seen.insert(dfb_name);
+            TT_FATAL(
+                entries_seen.insert(dfb_name).second,
+                "Kernel '{}' has duplicate unpack_to_dest_mode entries for DFB '{}'",
+                kernel.unique_id,
+                dfb_name);
 
-            const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
+            if (mode == UnpackToDestMode::Default) {
+                continue;  // Default is always allowed.
+            }
+            // mode == UnpackToDestFp32 — require the meaningfulness triple.
+            TT_FATAL(
+                consumed_dfbs.contains(dfb_name),
+                "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
+                "but the kernel does not have a CONSUMER endpoint on this DFB. UnpackToDestFp32 "
+                "configures the unpack path, which is only exercised by consumer bindings. "
+                "Use Default or omit the entry.",
+                kernel.unique_id,
+                dfb_name);
             // If data_format_metadata isn't set, the separate "compute endpoint requires
             // data_format_metadata" check (below) will fail. Defer to that check.
+            const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
             if (!dfb_spec->data_format_metadata.has_value()) {
                 continue;
             }
-            const bool is_fp32 = (dfb_spec->data_format_metadata.value() == tt::DataFormat::Float32);
             TT_FATAL(
-                is_fp32 || mode == UnpackToDestMode::Default,
-                "Kernel '{}' unpack_to_dest_mode entry for non-FP32 DFB '{}' specifies UnpackToDestFp32. "
-                "UnpackToDestFp32 is only meaningful for FP32 data; non-FP32 DFBs must use Default "
-                "(or omit the entry — Default is the implicit value).",
+                dfb_spec->data_format_metadata.value() == tt::DataFormat::Float32,
+                "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
+                "but the DFB data format is not Float32. UnpackToDestFp32 is only meaningful for "
+                "FP32 data. Use Default or omit the entry.",
+                kernel.unique_id,
+                dfb_name);
+            TT_FATAL(
+                compute_config.fp32_dest_acc_en,
+                "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
+                "but fp32_dest_acc_en is false. Full-precision FP32 in the Dest register requires "
+                "fp32_dest_acc_en=true (otherwise Dest is 16-bit and the mode is incoherent).",
                 kernel.unique_id,
                 dfb_name);
         }
 
-        // Every FP32 DFB the kernel binds must have an explicit entry.
+        // Require an explicit entry where the choice is real:
+        // CONSUMER binding + FP32 data format + fp32_dest_acc_en=true.
+        if (!compute_config.fp32_dest_acc_en) {
+            continue;
+        }
         for (const auto& binding : kernel.dfb_bindings) {
+            if (binding.endpoint_type != KernelSpec::DFBEndpointType::CONSUMER) {
+                continue;
+            }
             const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(binding.dfb_spec_name);
             if (!dfb_spec->data_format_metadata.has_value()) {
-                continue;  // Will be caught by the data_format-required check.
+                continue;  // Deferred to the data_format-required check.
             }
             if (dfb_spec->data_format_metadata.value() != tt::DataFormat::Float32) {
                 continue;
             }
             TT_FATAL(
                 entries_seen.contains(binding.dfb_spec_name),
-                "Kernel '{}' binds FP32 DFB '{}' but has no unpack_to_dest_mode entry for it. "
-                "FP32 DFBs require an explicit choice between UnpackToDestMode::Default and "
-                "UnpackToDestMode::UnpackToDestFp32.",
+                "Kernel '{}' consumes FP32 DFB '{}' with fp32_dest_acc_en=true, but has no "
+                "unpack_to_dest_mode entry for it. This configuration requires an explicit choice "
+                "between UnpackToDestMode::Default (unpack via SrcA/B — enables binary FPU ops, "
+                "precision reduced to ~19 bits) and UnpackToDestMode::UnpackToDestFp32 (unpack "
+                "direct to Dest — full FP32 precision, SrcA/B access disabled for this DFB).",
                 kernel.unique_id,
                 binding.dfb_spec_name);
         }
