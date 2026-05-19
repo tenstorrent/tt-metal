@@ -298,6 +298,16 @@ int main() {
             // Smaller debug shape that fits comfortably and runs fast.
             {"debug_h512_i1024_e4_uniform_512tok", 4, 512, 1024, uniform_counts(4, /*tokens=*/512, /*K=*/2)},
 
+            // tt-train tiny_deepseek_char: dim=1536, moe_inter_dim=768, E=32, top-K=4.
+            // Single sequence (T=2048) and batch=2 (T=4096) under uniform dispatch.
+            {"tiny_deepseek_h1536_i768_e32_uniform_2ktok", 32, 1536, 768, uniform_counts(32, /*tokens=*/2048, /*K=*/4)},
+            {"tiny_deepseek_h1536_i768_e32_uniform_4ktok", 32, 1536, 768, uniform_counts(32, /*tokens=*/4096, /*K=*/4)},
+            {"tiny_deepseek_h1536_i768_e32_skewed40_4ktok",
+             32,
+             1536,
+             768,
+             skewed_counts(32, /*tokens=*/4096, /*K=*/4, 0.4F)},
+
             // Trailing-pad path comparison: same shape, with vs without slack.
             // Slack mirrors moe_group's worst-case formula: per-expert (32 + 7·N) rows
             // for WH N=72 → ~17 tile-rows per expert. E=12 → 12·17 ≈ 204 tile-rows.
