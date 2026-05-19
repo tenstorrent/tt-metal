@@ -367,7 +367,6 @@ class VoxtralTTAcousticModel:
                 r3,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.dtype,
-                use_legacy=True,
             )
             out4 = ttnn.reshape(out3, (h4_shape[0], 1, h4_shape[2], h4_shape[3]))
             ttnn.deallocate(h3)
