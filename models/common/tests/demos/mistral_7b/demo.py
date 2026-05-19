@@ -62,8 +62,7 @@ from models.tt_transformers.tt.common import encode_prompt_hf
 # the "Performance" and "Accuracy" tables). PERF.md publishes N150 / N300 / T3K for
 # this checkpoint. The TTTv1 production stack runs Mistral-7B with BFP8 attention +
 # BFP4/BFP8 MLP in "Performance" and BFP8 MLP + BF16 attention in "Accuracy"; the
-# TTTv2 module defaults sit close to "Accuracy" for this model (see
-# ``models/common/models/mistral_7b/REFERENCE.md`` TTTv1 numerical-truth table).
+# TTTv2 module defaults sit close to "Accuracy" for this model.
 EXPECTED_METRICS = {
     "performance": {
         "N150": {"top1": 95, "top5": 99, "tok_s_u": 29.75, "ttft_ms": 100.24},
