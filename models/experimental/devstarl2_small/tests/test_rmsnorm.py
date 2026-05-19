@@ -14,8 +14,11 @@ from transformers.models.ministral3.modeling_ministral3 import Ministral3RMSNorm
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.experimental.devstarl2_small.devstral_utils import apply_fp8_dequantize_compat
 from models.experimental.devstarl2_small.tt.tt_rmsnorm import RMSNorm
 from models.tt_transformers.tt.model_config import ModelArgs
+
+apply_fp8_dequantize_compat()
 
 DEVSTRAL_REPO_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 

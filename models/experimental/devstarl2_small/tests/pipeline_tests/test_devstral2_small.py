@@ -152,7 +152,7 @@ def test_devstral2_small_projected_image_features_pcc(mesh_device, monkeypatch, 
         tt_torch = tt_torch.squeeze(0)
     tt_torch = tt_torch[: ref.shape[0], : ref.shape[1]]
 
-    pcc_required = 0.94
+    pcc_required = 0.99
     passing, msg = comp_pcc(ref.float(), tt_torch, pcc_required)
     logger.info(comp_allclose(ref.float(), tt_torch))
     logger.info(f"PCC devstral2_small image pipeline: {msg}")

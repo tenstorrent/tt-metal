@@ -40,7 +40,6 @@ from models.experimental.devstarl2_small.devstral_utils import (
     tt_sampling_output_token_id,
     tt_update_decode_input_buffers,
 )
-from models.experimental.devstarl2_small.devstral_utils.chat_reference import REFERENCE_GENERATE_KWARGS
 from models.experimental.devstarl2_small.tt.pipeline.tt_devstral2_small_model import TtDevstral2SmallModel
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
@@ -58,6 +57,8 @@ from models.tt_transformers.tt.model_config import (
 _DEFAULT_MODEL_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 _DEMO_DIR = Path(__file__).resolve().parent
 _RES_DIR = _DEMO_DIR.parent / "resource"
+
+_DEFAULT_SAMPLE_TEMPERATURE = 0.15
 
 MODEL_LOADING_MESSAGES = [
     {
@@ -327,9 +328,8 @@ def run_tt(
     os.environ["HF_MODEL"] = model_id
     _tt_demo.apply_devstral_hf_trust_patches()
 
-    ref_do_sample = bool(REFERENCE_GENERATE_KWARGS["do_sample"])
-    do_sample = ref_do_sample if not greedy else False
-    gen_temperature = temperature if not greedy else float(REFERENCE_GENERATE_KWARGS["temperature"])
+    do_sample = not greedy
+    gen_temperature = temperature if not greedy else _DEFAULT_SAMPLE_TEMPERATURE
 
     processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
     image = Image.open(image_path).convert("RGB")
@@ -766,7 +766,7 @@ def main() -> None:
         "recipe for coherent image captions.",
     )
     parser.add_argument("--greedy", action="store_true")
-    parser.add_argument("--temperature", type=float, default=float(REFERENCE_GENERATE_KWARGS["temperature"]))
+    parser.add_argument("--temperature", type=float, default=_DEFAULT_SAMPLE_TEMPERATURE)
     parser.add_argument("--lm-head-cpu", action="store_true")
     parser.add_argument("--lm-head-max-device-cols", type=int, default=None)
     parser.add_argument(

@@ -196,7 +196,7 @@ def test_ministral3_model_pcc_devstral_weights(
     if tt_torch.shape != ref_out.shape:
         tt_torch = tt_torch.reshape(ref_out.shape)
 
-    pcc_required = 0.90
+    pcc_required = 0.99
     passing, pcc_message = comp_pcc(ref_out, tt_torch, pcc_required)
     logger.info(comp_allclose(ref_out, tt_torch))
     logger.info(f"PCC: {pcc_message}")

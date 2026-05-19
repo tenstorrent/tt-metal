@@ -99,7 +99,6 @@ Then run the Python code for the function for n=5 and give the answer.
 
 **`devstral_utils/` modules**
 
-- `chat_reference.py` — chat template constants (`SP`, `REFERENCE_MESSAGES`, `REFERENCE_TOOLS`, `REFERENCE_GENERATE_KWARGS`, …).
 - `multimodal_demo_helpers.py` — mesh open/close, TT prefill padding, LM head helpers, traced decode buffers, multimodal scatter prefill.
 - `fp8_dequantize_compat.py` — HF FP8 scalar-scale shim for Devstral checkpoints across `transformers` versions.
 - `pixtral_seq_chunk.py` — vision matmul sequence chunk sizing (`pixtral_vision_seq_chunk_len`; env `PIXTRAL_VISION_MM_SEQ_CHUNK*`).
@@ -115,6 +114,7 @@ Then run the Python code for the function for n=5 and give the answer.
   - `tt_pixtral_vision_model.py` — Pixtral vision tower.
   - `tt_multimodal_projector.py` — patch merger + projector into text hidden size.
 - **`tt/`** — subgraph building blocks, e.g. `tt_ministral3_decoder_layer`, `tt_ministralattn`, `tt_ministralmlp`, `tt_ministralrmsnorm`, `tt_ministral_rotary_emb`, `tt_pixtralattn`, `tt_pixtralmlp`, `tt_pixtral_transformer`, `tt_patchmerger`, `tt_rmsnorm`, …
+- **`demo/`** — prompts and default generation settings (`DEFAULT_GENERATE_KWARGS` in `tt_text_demo.py`, `MODEL_LOADING_MESSAGES` in `tt_image_demo.py`).
 - **`devstral_utils/`** — cross-cutting demo/test utilities (see table above); demos import from here rather than duplicating mesh/prefill/trace logic.
 
 **Model and limits**
