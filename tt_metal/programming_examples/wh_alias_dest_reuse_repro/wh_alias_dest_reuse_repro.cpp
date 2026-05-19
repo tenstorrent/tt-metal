@@ -336,12 +336,15 @@ bool run_case(
     };
 
     bool pass = true;
-    // Tolerance is set wide enough to accept the TF32-precision rounding that the
-    // dest-reuse ELWMUL produces (it reads cb_bcast_b via SrcA, which masks the fp32
-    // bcast_b down to TF32). On a correct arch this gives ~0.1% relative error per
-    // element, well within tol. The bug we're after produces structural failures
-    // (zero tiles or 2x+ over-scaling), which the structural metrics below catch.
-    constexpr float tol = 0.02f;
+    // Mixed absolute + relative tolerance. The dest-reuse ELWMUL reads cb_bcast_b via
+    // SrcA, which masks the fp32 broadcast value to TF32 (~10-bit mantissa). On a
+    // correct arch this yields up to ~0.3% relative error per element, so a 1%
+    // relative budget is comfortably above noise. The absolute floor (1e-3) handles
+    // elements where the expected magnitude is tiny. The bug produces zero-output
+    // tiles and ~2.4x over-scaled tiles (>=140% relative error), well outside this
+    // band.
+    constexpr float abs_tol = 1e-3f;
+    constexpr float rel_tol = 0.01f;
     uint32_t printed_mismatches = 0;
 
     // Per-tile ratio summary: pick the element at (row=0, col=0) of each tile
@@ -381,7 +384,8 @@ bool run_case(
                 float b_v = 0.7f + 0.001f * static_cast<float>(r);
                 float expected = (x_v - a_v) * b_v;
                 float actual = val_at(result, t, r, c);
-                if (std::abs(expected - actual) > tol) {
+                const float elem_tol = std::max(abs_tol, rel_tol * std::abs(expected));
+                if (std::abs(expected - actual) > elem_tol) {
                     pass = false;
                     if (printed_mismatches < 8) {
                         fmt::print(
