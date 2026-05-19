@@ -72,18 +72,10 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
     const uint32_t datum_size = tt::datum_size(dst_cb_data_format);
 
     tt_metal::IDevice* device = a.device();
-    const uint32_t src_rm_page_size = a.buffer()->page_size();
     const uint32_t src_datum_size = tt::datum_size(src0_cb_data_format);
-    const uint32_t logical_row_bytes = W_logical * src_datum_size;
     const uint32_t chunk_row_bytes = wt_tiles_per_chunk * tile_width * src_datum_size;
     const uint32_t rm_rows_per_tile = tile_height;
     const uint32_t rm_staging_page_size = rm_rows_per_tile * chunk_row_bytes;
-    TT_FATAL(
-        logical_row_bytes <= src_rm_page_size,
-        "Reduce W (dense RM): logical row size {} bytes exceeds RM page size {} (W_logical={}, dtype)",
-        logical_row_bytes,
-        src_rm_page_size,
-        W_logical);
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_rows = NC * H;

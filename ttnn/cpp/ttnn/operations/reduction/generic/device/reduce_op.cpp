@@ -125,22 +125,12 @@ Tensor reduce(
          input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) &&
         (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM ||
          reduce_math == tt::tt_metal::ReduceOpMath::MAX);
-    const auto in_mem_layout = input_tensor.memory_config().memory_layout();
-    const auto out_mem_layout = output_mem_config.memory_layout();
-    // W-reduce: interleaved I/O, or HEIGHT_SHARDED input (output may be interleaved or HEIGHT_SHARDED).
-    // MAX is excluded: REDUCE_ROW chunked accumulation does not support MAX (see comment above).
+    // W-reduce: MAX is excluded: REDUCE_ROW chunked accumulation does not support MAX (see comment above).
     const bool use_rm_dense_w = rm_base_eligible && reduce_math != tt::tt_metal::ReduceOpMath::MAX &&
-                                reduce_dim == tt::tt_metal::ReduceOpDim::W &&
-                                ((!input_tensor.memory_config().is_sharded() && !output_mem_config.is_sharded()) ||
-                                 (in_mem_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
-                                  (out_mem_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED ||
-                                   out_mem_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED)));
-    // H-reduce: interleaved or WIDTH_SHARDED (both sides must agree). MAX is supported here
+                                reduce_dim == tt::tt_metal::ReduceOpDim::W;
+    // H-reduce: MAX is supported here
     // (REDUCE_COL accumulation is compatible with MAX).
-    const bool use_rm_dense_h = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
-                                ((!input_tensor.memory_config().is_sharded() && !output_mem_config.is_sharded()) ||
-                                 (in_mem_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED &&
-                                  out_mem_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED));
+    const bool use_rm_dense_h = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::H;
     const bool use_rm_dense = use_rm_dense_w || use_rm_dense_h;
 
     // High-level mean uses AVG with scaler (1/N). On the tiled path, GMPOOL AVG matches that intent. On the dense
