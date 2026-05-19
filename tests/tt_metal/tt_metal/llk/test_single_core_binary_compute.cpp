@@ -247,10 +247,10 @@ static std::map<std::string, std::string> build_binary_defines(const SingleCoreB
     return defines;
 }
 
-/// @brief Does Dramx2 --> Reader --> CB --> Binary Compute --> CB --> Writer --> Dram
-/// @param device
-/// @param test_config - Configuration of the test -- see struct
-/// @return
+/// @brief Does Dramx2 --> Reader --> DFB --> Binary Compute --> DFB --> Writer --> Dram
+/// @param mesh_device - The mesh device on which to run the test
+/// @param test_config - Configuration of the test -- see SingleCoreBinaryConfig
+/// @return true if the test passed, false otherwise
 bool single_core_binary(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SingleCoreBinaryConfig& test_config) {
     const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
