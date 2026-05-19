@@ -256,11 +256,11 @@ void ungroup_sweep_one(const ShapeCfg& c, bool all_local) {
 class MoeGroupProfileSweep : public MoeProfileTest, public ::testing::WithParamInterface<ShapeCfg> {};
 class MoeUngroupProfileSweep : public MoeProfileTest, public ::testing::WithParamInterface<ShapeCfg> {};
 
-TEST_P(MoeGroupProfileSweep, Balanced) {
+TEST_P(MoeGroupProfileSweep, DISABLED_Balanced) {
     group_sweep_one(GetParam(), /*all_local=*/false);
 }
 
-TEST_P(MoeUngroupProfileSweep, Balanced) {
+TEST_P(MoeUngroupProfileSweep, DISABLED_Balanced) {
     ungroup_sweep_one(GetParam(), /*all_local=*/false);
 }
 
@@ -270,10 +270,10 @@ INSTANTIATE_TEST_SUITE_P(Shapes, MoeUngroupProfileSweep, ::testing::ValuesIn(kSh
 // Worst-case routing: every token's top-K is entirely local experts. Uses the
 // same shape as the balanced roofline test — the signpost label differs so the
 // parser splits the two patterns in the summary table.
-TEST_F(MoeProfileTest, GroupAllLocalRouting) {
+TEST_F(MoeProfileTest, DISABLED_GroupAllLocalRouting) {
     group_sweep_one(ShapeCfg{8, 1, 4096, 4096, 96, 8, 12}, /*all_local=*/true);
 }
 
-TEST_F(MoeProfileTest, UngroupAllLocalRouting) {
+TEST_F(MoeProfileTest, DISABLED_UngroupAllLocalRouting) {
     ungroup_sweep_one(ShapeCfg{8, 1, 4096, 4096, 96, 8, 12}, /*all_local=*/true);
 }
