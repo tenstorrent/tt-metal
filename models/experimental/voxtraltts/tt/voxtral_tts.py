@@ -14,17 +14,9 @@ import torch.nn.functional as F
 import ttnn
 
 from models.experimental.voxtraltts.reference.audio_tokenizer_ops import (
-    audio_tokenizer_decode_reference,
     audio_tokenizer_encode_tokens_reference,
 )
 from models.experimental.voxtraltts.reference.cpu_flow_matching_acoustic import AudioSpecialTokens
-from models.experimental.voxtraltts.reference.functional import (
-    VoxtralTextConfig,
-    compute_rope_frequencies as reference_compute_rope_frequencies,
-    extract_layer_weights,
-    rms_norm as reference_rms_norm,
-    text_decoder_layer as reference_text_decoder_layer,
-)
 from models.experimental.voxtraltts.reference.voxtral_config import (
     DEFAULT_VOXTRAL_MODEL,
     load_voxtral_config,
@@ -44,46 +36,80 @@ from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_
 ACOUSTIC_CFG_ALPHA_DEFAULT = 1.2
 
 
-def _prefill_tile_start(token_index: int) -> int:
-    return (int(token_index) // 32) * 32
+def _safe_deallocate_ttnn_tensor(tensor: ttnn.Tensor) -> None:
+    try:
+        ttnn.deallocate(tensor)
+    except Exception:
+        pass
 
 
-def reference_text_last_token_logits(state_dict: dict, args: Any, tokens: torch.Tensor) -> torch.Tensor:
-    """Last-token logits from the in-repo PyTorch text backbone (same construction as ``test_text_model``)."""
-    seq_len = tokens.shape[1]
-    ref_cfg = VoxtralTextConfig(
-        hidden_size=args.dim,
-        num_hidden_layers=args.n_layers,
-        num_attention_heads=args.n_heads,
-        num_key_value_heads=args.n_kv_heads,
-        head_dim=args.head_dim,
-        intermediate_size=args.hidden_dim,
-        vocab_size=args.vocab_size,
-        max_position_embeddings=args.max_seq_len,
-        rope_theta=args.rope_theta,
-        rms_norm_eps=args.norm_eps,
-    )
-    ref_hidden = F.embedding(tokens, state_dict["tok_embeddings.weight"])
-    ref_cos, ref_sin = reference_compute_rope_frequencies(
-        head_dim=ref_cfg.head_dim,
-        max_seq_len=seq_len,
-        theta=ref_cfg.rope_theta,
-        device=ref_hidden.device,
-    )
-    ref_attn_mask = torch.full((1, 1, seq_len, seq_len), float("-inf"), dtype=torch.float32)
-    ref_attn_mask = torch.triu(ref_attn_mask, diagonal=1)
-    for layer_idx in range(ref_cfg.num_hidden_layers):
-        layer_weights = extract_layer_weights(state_dict, layer_idx, prefix="layers.")
-        ref_hidden = reference_text_decoder_layer(
-            hidden_states=ref_hidden,
-            layer_weights=layer_weights,
-            cos=ref_cos,
-            sin=ref_sin,
-            config=ref_cfg,
-            attention_mask=ref_attn_mask,
-        )
-    ref_hidden = reference_rms_norm(ref_hidden, state_dict["norm.weight"], eps=ref_cfg.rms_norm_eps)
-    return F.linear(ref_hidden[:, -1, :], state_dict["output.weight"]).squeeze(0).float()
+def _cleanup_ttnn_tensors(obj: Any, seen_objects: set[int], seen_tensors: set[int]) -> None:
+    """Best-effort cleanup of TT tensors owned by nested model modules."""
+    if obj is None:
+        return
+
+    obj_id = id(obj)
+    if isinstance(obj, ttnn.Tensor):
+        if obj_id not in seen_tensors:
+            seen_tensors.add(obj_id)
+            _safe_deallocate_ttnn_tensor(obj)
+        return
+
+    if obj_id in seen_objects:
+        return
+    seen_objects.add(obj_id)
+
+    if isinstance(obj, (str, bytes, int, float, bool, torch.Tensor, ttnn.Device, ttnn.MeshDevice)):
+        return
+
+    if isinstance(obj, dict):
+        for key, value in list(obj.items()):
+            if isinstance(value, ttnn.Tensor):
+                _cleanup_ttnn_tensors(value, seen_objects, seen_tensors)
+                obj[key] = None
+            else:
+                _cleanup_ttnn_tensors(value, seen_objects, seen_tensors)
+        return
+
+    if isinstance(obj, list):
+        for index, value in enumerate(obj):
+            if isinstance(value, ttnn.Tensor):
+                _cleanup_ttnn_tensors(value, seen_objects, seen_tensors)
+                obj[index] = None
+            else:
+                _cleanup_ttnn_tensors(value, seen_objects, seen_tensors)
+        return
+
+    if isinstance(obj, tuple):
+        for value in obj:
+            _cleanup_ttnn_tensors(value, seen_objects, seen_tensors)
+        return
+
+    if isinstance(obj, set):
+        for value in list(obj):
+            _cleanup_ttnn_tensors(value, seen_objects, seen_tensors)
+        return
+
+    attrs = getattr(obj, "__dict__", None)
+    if attrs is None:
+        return
+
+    skip_attrs = {
+        "mesh_device",
+        "device",
+        "tt_ccl",
+        "ccl",
+        "_compute_kernel_config",
+        "compute_kernel_config",
+    }
+    for name, value in list(attrs.items()):
+        if name in skip_attrs:
+            continue
+        if isinstance(value, ttnn.Tensor):
+            _cleanup_ttnn_tensors(value, seen_objects, seen_tensors)
+            setattr(obj, name, None)
+        else:
+            _cleanup_ttnn_tensors(value, seen_objects, seen_tensors)
 
 
 @dataclass
@@ -100,7 +126,7 @@ class VoxtralTTSGenerateOutput:
 class VoxtralTTSPipeline:
     """Loads and wires ``VoxtralTTTextModel``, ``VoxtralTTAcousticModel``, and ``VoxtralTTAudioTokenizer``.
 
-    ``generate(text, voice)`` runs the full TTS pipeline entirely on TT:
+    ``forward(text, voice)`` runs the full TTS pipeline entirely on TT:
     1. Mistral-common tokenization (CPU, tokenization only — not model inference).
     2. Voice-embedding injection + prefill on TT text transformer.
     3. Autoregressive TT acoustic decode loop (hidden → codes).
@@ -232,14 +258,14 @@ class VoxtralTTSPipeline:
     # ------------------------------------------------------------------
 
     @torch.no_grad()
-    def generate(
+    def forward(
         self,
         text: str,
         voice: str = "casual_male",
         max_tokens: int = 2500,
         seed: int = 0,
-    ) -> torch.Tensor:
-        """Full TT TTS pipeline: text → audio waveform.
+    ) -> VoxtralTTSGenerateOutput:
+        """Full TT TTS pipeline: text → acoustic codes → audio waveform.
 
         All neural-network forward passes run on TT:
         - text prefill + each decode step uses ``VoxtralTTTextModel``.
@@ -249,19 +275,9 @@ class VoxtralTTSPipeline:
         Tokenization (mistral-common) and embedding lookup / voice-file I/O run on CPU —
         these are not model inference, equivalent to a tokenizer ``encode()`` call.
 
-        Returns a float32 waveform tensor ``[1, 1, T*patch]`` on CPU.
+        Returns ``VoxtralTTSGenerateOutput`` with the final float32 waveform
+        ``[1, 1, T*patch]`` plus generated code diagnostics.
         """
-        return self.generate_with_codes(text=text, voice=voice, max_tokens=max_tokens, seed=seed).waveform
-
-    @torch.no_grad()
-    def generate_with_codes(
-        self,
-        text: str,
-        voice: str = "casual_male",
-        max_tokens: int = 2500,
-        seed: int = 0,
-    ) -> VoxtralTTSGenerateOutput:
-        """Run the same free-running path as :meth:`generate`, returning generated codes for diagnostics."""
         torch.manual_seed(seed)
 
         request = compose_speech_request(text, self.model_name_or_path, voice=voice)
@@ -330,6 +346,30 @@ class VoxtralTTSPipeline:
             hit_end_audio=hit_end_audio,
         )
 
+    __call__ = forward
+
+    @torch.no_grad()
+    def generate(
+        self,
+        text: str,
+        voice: str = "casual_male",
+        max_tokens: int = 2500,
+        seed: int = 0,
+    ) -> torch.Tensor:
+        """Compatibility wrapper returning only the final waveform."""
+        return self.forward(text=text, voice=voice, max_tokens=max_tokens, seed=seed).waveform
+
+    @torch.no_grad()
+    def generate_with_codes(
+        self,
+        text: str,
+        voice: str = "casual_male",
+        max_tokens: int = 2500,
+        seed: int = 0,
+    ) -> VoxtralTTSGenerateOutput:
+        """Run the same free-running path as :meth:`generate`, returning generated codes for diagnostics."""
+        return self.forward(text=text, voice=voice, max_tokens=max_tokens, seed=seed)
+
     def decode_waveform_from_codes_tt(self, codes_b37t: torch.Tensor) -> torch.Tensor:
         """``[B,37,T]`` int CPU codes → float32 waveform (TT latent + decoder + pretransform)."""
         latent_tt = self.audio_tokenizer.latent_from_codes(codes_b37t)
@@ -338,10 +378,6 @@ class VoxtralTTSPipeline:
         wav = self.audio_tokenizer.pretransform_decode_torch(mel_tt)
         ttnn.deallocate(mel_tt)
         return wav
-
-    def decode_waveform_from_codes_reference(self, codes_b37t: torch.Tensor) -> torch.Tensor:
-        """PyTorch bf16 golden waveform for the same codes (``audio_tokenizer_decode_reference``)."""
-        return audio_tokenizer_decode_reference(codes_b37t, self.audio_tokenizer_sd, self.config.audio_tokenizer_args)
 
     def acoustic_codes_forward(
         self,
@@ -355,89 +391,59 @@ class VoxtralTTSPipeline:
             )
         return self.acoustic.forward(llm_hidden_bf16, cfg_alpha)
 
-    def text_decode_multistep_compare_reference(
-        self,
-        *,
-        prompt_tokens: torch.Tensor,
-        decode_tokens: torch.Tensor,
-        pcc: float = 0.98,
-    ) -> None:
-        """Teacher-forced decode steps: TT last-token logits vs :func:`reference_text_last_token_logits` each step.
+    def cleanup_all(self) -> None:
+        """Release the minimum device-side state needed to make ``close_device`` not segfault.
 
-        Mirrors ``tests/test_text_model.py::test_text_model_decode_multistep_reference_pcc`` /
-        ``models/tt_transformers/tests/test_model.py`` (run reference then compare PCC to TT).
+        Only ``tt_transformers.TT_CCL``'s ``GlobalSemaphore`` handles are actively
+        problematic at profiler-enabled ``close_device`` time; everything else
+        (weight tensors, KV caches, rope matrices, audio-tokenizer weights) is
+        released naturally during the device-close path. Releasing tensors here
+        manually was suppressing the implicit device-profiler dump during close,
+        so we now leave them alone.
         """
-        from models.common.utility_functions import comp_pcc
+        try:
+            ttnn.synchronize_device(self.mesh_device)
+        except Exception:
+            pass
 
-        model = self.text
-        args = model.inner.args
-        state_dict = args.load_state_dict()
-        prompt_len = int(prompt_tokens.shape[1])
-        decode_steps = int(decode_tokens.shape[1])
+        self._release_tt_ccl_handles()
 
-        tt_prompt_x, prompt_rot_global, prompt_rot_local, _, _ = model.prepare_inputs_prefill(
-            prompt_tokens, start_pos=0
-        )
-        _ = model.inner.ttnn_prefill_forward(
-            tt_prompt_x,
-            rot_mats_global=prompt_rot_global,
-            rot_mats_local=prompt_rot_local,
-            get_last_token=-1,
-        )
+        try:
+            ttnn.synchronize_device(self.mesh_device)
+        except Exception:
+            pass
 
-        for step in range(decode_steps):
-            current_pos = prompt_len + step
-            step_token = decode_tokens[:, step]
-            tt_tokens, tt_current_pos, tt_rope_idxs, tt_page_table = model.prepare_inputs_decode(
-                step_token, torch.tensor([current_pos], dtype=torch.int64)
-            )
-            tt_decode_logits, _ = model.inner.ttnn_decode_forward(
-                tt_tokens,
-                tt_current_pos,
-                rot_mat_idxs=tt_rope_idxs,
-                page_table=tt_page_table,
-                kv_cache=None,
-                sampling_on_device=False,
-            )
-            tt_last_logits = model.inner.process_output_decode(tt_decode_logits, B=1, S=1, is_tokens=False)[
-                0, 0
-            ].float()
+    def _release_tt_ccl_handles(self) -> None:
+        """Drop ``GlobalSemaphore`` lists held by ``tt_transformers.TT_CCL``.
 
-            ref_tokens = torch.cat([prompt_tokens, decode_tokens[:, : step + 1]], dim=1)
-            ref_last_logits = reference_text_last_token_logits(state_dict, args, ref_tokens)
+        These survive ``_cleanup_ttnn_tensors`` because they are not ``ttnn.Tensor``;
+        the list-walk only ``None``s out entries whose ``isinstance(value, ttnn.Tensor)``
+        check passes, so the C++ handles stay alive and crash ``close_device`` when the
+        profiler is enabled.
+        """
+        inner = getattr(self.text, "inner", None) if self.text is not None else None
+        ccl = getattr(inner, "tt_ccl", None) if inner is not None else None
+        if ccl is None:
+            return
 
-            passing, msg = comp_pcc(ref_last_logits, tt_last_logits, pcc=pcc)
-            assert passing, f"text decode step={step} pos={current_pos} PCC failed: {msg}"
+        for attr in ("barrier_semaphore_handles", "ag_semaphore_handles", "rs_semaphore_handles"):
+            container = getattr(ccl, attr, None)
+            if not isinstance(container, list):
+                continue
+            for sub in container:
+                if isinstance(sub, list):
+                    for i in range(len(sub)):
+                        sub[i] = None
+                    sub.clear()
+            container.clear()
 
+        try:
+            setattr(inner, "tt_ccl", None)
+        except Exception:
+            pass
 
-def main() -> None:
-    import argparse
-    import os
+    def __enter__(self) -> "VoxtralTTSPipeline":
+        return self
 
-    p = argparse.ArgumentParser(description="Load Voxtral TT pipeline (text + acoustic + audio tokenizer).")
-    p.add_argument("--model", type=str, default=os.environ.get("VOXTRAL_TTS_MODEL") or DEFAULT_VOXTRAL_MODEL)
-    cli = p.parse_args()
-    try:
-        from tests.scripts.common import get_updated_device_params
-    except ImportError as exc:
-        raise SystemExit(f"Run from tt-metal with tests on PYTHONPATH: {exc}") from exc
-
-    did = 0
-    if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG:
-        did = 4
-    updated = get_updated_device_params({})
-    orig = ttnn.GetDefaultDevice()
-    dev = ttnn.CreateDevice(device_id=did, **updated)
-    ttnn.SetDefaultDevice(dev)
-    try:
-        pipe = VoxtralTTSPipeline.from_model_name(dev, model_name_or_path=cli.model)
-        print(f"Loaded VoxtralTTSPipeline for {cli.model!r}")
-        print(f"  text layers={pipe.text.inner.args.n_layers} dim={pipe.text.inner.args.dim}")
-        print("  acoustic + audio_tokenizer OK")
-    finally:
-        ttnn.SetDefaultDevice(orig)
-        ttnn.close_device(dev)
-
-
-if __name__ == "__main__":
-    main()
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.cleanup_all()

@@ -11,11 +11,13 @@ from typing import Literal
 
 import pytest
 import torch
+import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.audio_tokenizer_ops import (
+    audio_tokenizer_decode_reference,
     audio_tokenizer_latent_from_codes,
     decoder_blocks_stack_reference,
     output_proj_mel_ncl_reference_bf16,
@@ -26,6 +28,13 @@ from models.experimental.voxtraltts.reference.cpu_flow_matching_acoustic import 
     build_audio_model_args_from_voxtral_config,
 )
 from models.experimental.voxtraltts.reference.cpu_reference import VoxtralCPUReference
+from models.experimental.voxtraltts.reference.functional import (
+    VoxtralTextConfig,
+    compute_rope_frequencies as reference_compute_rope_frequencies,
+    extract_layer_weights,
+    rms_norm as reference_rms_norm,
+    text_decoder_layer as reference_text_decoder_layer,
+)
 from models.experimental.voxtraltts.reference.voxtral_config import load_voxtral_config
 from models.experimental.voxtraltts.reference.voxtral_request import compose_speech_request
 from models.experimental.voxtraltts.tests.common import resolve_voxtral_model_name_or_skip
@@ -114,6 +123,87 @@ def _align_to_ref_shape(ref_t: torch.Tensor, tt_t: torch.Tensor) -> torch.Tensor
     return out.reshape(ref_t.shape)
 
 
+def _reference_text_last_token_logits(state_dict: dict, args, tokens: torch.Tensor) -> torch.Tensor:
+    seq_len = tokens.shape[1]
+    ref_cfg = VoxtralTextConfig(
+        hidden_size=args.dim,
+        num_hidden_layers=args.n_layers,
+        num_attention_heads=args.n_heads,
+        num_key_value_heads=args.n_kv_heads,
+        head_dim=args.head_dim,
+        intermediate_size=args.hidden_dim,
+        vocab_size=args.vocab_size,
+        max_position_embeddings=args.max_seq_len,
+        rope_theta=args.rope_theta,
+        rms_norm_eps=args.norm_eps,
+    )
+    ref_hidden = F.embedding(tokens, state_dict["tok_embeddings.weight"])
+    ref_cos, ref_sin = reference_compute_rope_frequencies(
+        head_dim=ref_cfg.head_dim,
+        max_seq_len=seq_len,
+        theta=ref_cfg.rope_theta,
+        device=ref_hidden.device,
+    )
+    ref_attn_mask = torch.full((1, 1, seq_len, seq_len), float("-inf"), dtype=torch.float32)
+    ref_attn_mask = torch.triu(ref_attn_mask, diagonal=1)
+    for layer_idx in range(ref_cfg.num_hidden_layers):
+        layer_weights = extract_layer_weights(state_dict, layer_idx, prefix="layers.")
+        ref_hidden = reference_text_decoder_layer(
+            hidden_states=ref_hidden,
+            layer_weights=layer_weights,
+            cos=ref_cos,
+            sin=ref_sin,
+            config=ref_cfg,
+            attention_mask=ref_attn_mask,
+        )
+    ref_hidden = reference_rms_norm(ref_hidden, state_dict["norm.weight"], eps=ref_cfg.rms_norm_eps)
+    return F.linear(ref_hidden[:, -1, :], state_dict["output.weight"]).squeeze(0).float()
+
+
+def _text_decode_multistep_compare_reference(
+    pipe: VoxtralTTSPipeline,
+    *,
+    prompt_tokens: torch.Tensor,
+    decode_tokens: torch.Tensor,
+    pcc: float,
+) -> None:
+    model = pipe.text
+    args = model.inner.args
+    state_dict = args.load_state_dict()
+    prompt_len = int(prompt_tokens.shape[1])
+    decode_steps = int(decode_tokens.shape[1])
+
+    tt_prompt_x, prompt_rot_global, prompt_rot_local, _, _ = model.prepare_inputs_prefill(prompt_tokens, start_pos=0)
+    _ = model.inner.ttnn_prefill_forward(
+        tt_prompt_x,
+        rot_mats_global=prompt_rot_global,
+        rot_mats_local=prompt_rot_local,
+        get_last_token=-1,
+    )
+
+    for step in range(decode_steps):
+        current_pos = prompt_len + step
+        step_token = decode_tokens[:, step]
+        tt_tokens, tt_current_pos, tt_rope_idxs, tt_page_table = model.prepare_inputs_decode(
+            step_token, torch.tensor([current_pos], dtype=torch.int64)
+        )
+        tt_decode_logits, _ = model.inner.ttnn_decode_forward(
+            tt_tokens,
+            tt_current_pos,
+            rot_mat_idxs=tt_rope_idxs,
+            page_table=tt_page_table,
+            kv_cache=None,
+            sampling_on_device=False,
+        )
+        tt_last_logits = model.inner.process_output_decode(tt_decode_logits, B=1, S=1, is_tokens=False)[0, 0].float()
+
+        ref_tokens = torch.cat([prompt_tokens, decode_tokens[:, : step + 1]], dim=1)
+        ref_last_logits = _reference_text_last_token_logits(state_dict, args, ref_tokens)
+
+        passing, msg = comp_pcc(ref_last_logits, tt_last_logits, pcc=pcc)
+        assert passing, f"text decode step={step} pos={current_pos} PCC failed: {msg}"
+
+
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 def test_voxtral_tts_pipeline_loads(device, reset_seeds):
@@ -144,7 +234,7 @@ def test_voxtral_tts_pipeline_waveform_codes_pcc(device, reset_seeds):
     codes = torch.cat([semantic, acoustic], dim=1).long()
 
     try:
-        ref_wav = pipe.decode_waveform_from_codes_reference(codes)
+        ref_wav = audio_tokenizer_decode_reference(codes, pipe.audio_tokenizer_sd, pipe.config.audio_tokenizer_args)
         tt_wav = pipe.decode_waveform_from_codes_tt(codes)
     except RuntimeError as exc:
         if "requires the full decoder stack" in str(exc) or "output_proj" in str(exc):
@@ -181,7 +271,9 @@ def test_voxtral_tts_pipeline_generate_path_smoke_and_waveform_pcc(device, reset
     assert out.waveform.shape == (1, 1, out.codes_b37t.shape[2] * pipe._downsample_factor)
     assert torch.isfinite(out.waveform).all(), "generate path produced non-finite waveform samples"
 
-    ref_wav = pipe.decode_waveform_from_codes_reference(out.codes_b37t)
+    ref_wav = audio_tokenizer_decode_reference(
+        out.codes_b37t, pipe.audio_tokenizer_sd, pipe.config.audio_tokenizer_args
+    )
     ref_wav = ref_wav.reshape(1, 1, -1)[:, :, : out.waveform.shape[-1]]
     ok, msg = comp_pcc(ref_wav.float(), out.waveform.float(), pcc=WAVEFORM_PCC)
     _log_stage_header("SHORT GENERATE PATH - tokenizer self-consistency")
@@ -266,7 +358,8 @@ def test_voxtral_tts_pipeline_text_multistep_decode_pcc(device, reset_seeds, dec
         f"  prompt_len={prompt_tokens.shape[1]} decode_steps={decode_steps} "
         f"logits_pcc_target>={TEXT_DECODE_STEP_PCC:.4f}"
     )
-    pipe.text_decode_multistep_compare_reference(
+    _text_decode_multistep_compare_reference(
+        pipe,
         prompt_tokens=prompt_tokens,
         decode_tokens=decode_tokens,
         pcc=TEXT_DECODE_STEP_PCC,
@@ -409,7 +502,7 @@ def _run_pipeline_inference_pcc_loop(
     audio_tokens = shifted - 2
     codes_b37t = audio_tokens.T.unsqueeze(0).long()
 
-    ref_wav = pipe.decode_waveform_from_codes_reference(codes_b37t)
+    ref_wav = audio_tokenizer_decode_reference(codes_b37t, pipe.audio_tokenizer_sd, pipe.config.audio_tokenizer_args)
     tt_wav = pipe.decode_waveform_from_codes_tt(codes_b37t)
     ref_wav = ref_wav.reshape(1, 1, -1)
     tt_wav = tt_wav.reshape(1, 1, -1)[:, :, : ref_wav.shape[-1]]
@@ -504,7 +597,9 @@ def test_voxtral_tts_pipeline_generate_smoke(device, reset_seeds):
     pcc_target = _waveform_pcc_target_for_frames(num_frames)
     if num_frames > FULL_GENERATE_SHORT_MAX_FRAMES:
         _log_generated_code_tokenizer_diagnostics(pipe, out.codes_b37t)
-    ref_wav = pipe.decode_waveform_from_codes_reference(out.codes_b37t)
+    ref_wav = audio_tokenizer_decode_reference(
+        out.codes_b37t, pipe.audio_tokenizer_sd, pipe.config.audio_tokenizer_args
+    )
     ref_wav = ref_wav.reshape(1, 1, -1)[:, :, : out.waveform.shape[-1]]
     ok, msg = comp_pcc(ref_wav.float(), out.waveform.float(), pcc=pcc_target)
     _log_stage_header("FULL GENERATE - output-complete tokenizer self-consistency")
