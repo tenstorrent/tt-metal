@@ -1171,6 +1171,10 @@ def generate_codes_ttnn(
             _trace_logits = model.talker.get_codec_logits(_trace_h)
         finally:
             ttnn.end_trace_capture(device, _trace_id, cq_id=0)
+        # Execute once after capture to warm up trace dispatch. Without this,
+        # the timed prefill in STEP 4 runs the trace cold (dispatch-path miss)
+        # adding ~10-15 ms of variance to the prefill measurement.
+        ttnn.execute_trace(device, _trace_id, cq_id=0, blocking=True)
         ttnn.synchronize_device(device)
         talker_prefill_traces[_bucket] = {
             "trace_id": _trace_id,
@@ -1178,7 +1182,7 @@ def generate_codes_ttnn(
             "hidden_out": _trace_h,
             "logits_out": _trace_logits,
         }
-        print(f"    bucket={_bucket}: trace captured")
+        print(f"    bucket={_bucket}: trace captured + warmed")
 
     # === STEP 4: Run Talker prefill (non-traced, standard path) ===
     # Standard prefill: attention over seq_len (not full cache), much faster.
