@@ -65,11 +65,32 @@ build_Release/programming_examples/wh_alias_dest_reuse_repro
 
 | Arch | Case A | Case B |
 |------|--------|--------|
-| WH   | FAIL (striped pattern) | FAIL (striped pattern) |
-| BH   | PASS   | PASS   |
+| WH   | FAIL (striped pattern: 5 zero-output tiles, 8 over-scaled tiles) | FAIL (same striped pattern) |
+| BH   | PASS (ratio ≈ 0.9989 throughout — TF32 SrcA rounding only) | PASS (same) |
 
-A passing result prints `ratio ≈ 1.0` for every tile. The striped failure pattern
-makes the per-block alternation visible in the printed table.
+Cases A and B fail identically on WH — **multi-buffer-index aliasing is NOT
+required** to trigger the bug. They produce identical correct output on BH
+(modulo TF32 SrcA rounding on the dest-reuse mul).
+
+PASS/FAIL is decided by structural metrics:
+- `num_zero_tiles == 0` (tiles whose output is ~0 but expected is non-trivial)
+- `num_overscaled_tiles == 0` (tiles where actual/expected > 2)
+
+A loose per-element tolerance (~2%) is also applied to catch any other catastrophic
+divergence, but the structural metrics are what reliably distinguish "bug
+triggered" from "correct output with TF32 rounding".
+
+### Empirical BH output for comparison
+
+On Blackhole, every tile prints a ratio of ~0.9989 (a ~0.1% TF32 rounding loss
+because `cb_bcast_b` is read via SrcA in the dest-reuse mul). No zero-output
+tiles, no over-scaling. Both cases pass.
+
+On Wormhole-B0, the per-block ratio pattern is:
+```
+Block N (even index): tile 0 correct, tiles 1-3 zero
+Block N (odd index):  all 4 tiles scaled by (1 + bcast_b) / bcast_b ≈ 2.4286
+```
 
 ## Suspected root cause
 

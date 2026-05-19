@@ -114,7 +114,7 @@ bool run_case(
     fmt::print(
         "\n==== Case {} ({}) ====\n",
         case_name,
-        alias_shares_allocation ? "alias shares cb_primary L1 (bug repro)" : "alias has SEPARATE L1 (control)");
+        alias_shares_allocation ? "multi-buffer-index alias on shared L1" : "no aliasing, separate L1 allocations");
 
     // ------------------------------------------------------------------
     // Inputs
@@ -336,7 +336,12 @@ bool run_case(
     };
 
     bool pass = true;
-    constexpr float tol = 1e-3f;
+    // Tolerance is set wide enough to accept the TF32-precision rounding that the
+    // dest-reuse ELWMUL produces (it reads cb_bcast_b via SrcA, which masks the fp32
+    // bcast_b down to TF32). On a correct arch this gives ~0.1% relative error per
+    // element, well within tol. The bug we're after produces structural failures
+    // (zero tiles or 2x+ over-scaling), which the structural metrics below catch.
+    constexpr float tol = 0.02f;
     uint32_t printed_mismatches = 0;
 
     // Per-tile ratio summary: pick the element at (row=0, col=0) of each tile
@@ -398,8 +403,14 @@ bool run_case(
         num_zero_tiles,
         num_overscaled_tiles,
         kNTiles);
-    fmt::print("Case {} result: {}\n", case_name, pass ? "PASS" : "FAIL");
-    return pass;
+    // Verdict is driven by the structural metrics (zero-output, over-scaling) rather
+    // than per-element tolerance: the bug always produces those structural failures,
+    // and using them avoids false negatives from architecturally-correct precision
+    // differences (e.g. TF32 SrcA rounding on the dest-reuse mul).
+    bool structural_pass = (num_zero_tiles == 0) && (num_overscaled_tiles == 0);
+    bool overall_pass = pass && structural_pass;
+    fmt::print("Case {} result: {}\n", case_name, overall_pass ? "PASS" : "FAIL");
+    return overall_pass;
 }
 
 }  // namespace
@@ -423,15 +434,28 @@ int main(int /*argc*/, char** /*argv*/) {
     mesh_device->close();
 
     fmt::print("\n===== Overall =====\n");
-    fmt::print("  Case A (control, separate L1 alloc):  {}\n", case_a_pass ? "PASS" : "FAIL");
-    fmt::print("  Case B (alias shares cb_primary L1):  {}\n", case_b_pass ? "PASS" : "FAIL");
-    if (case_a_pass && !case_b_pass) {
-        fmt::print("\nDiagnosis: alias-on-same-L1 is the additional necessary condition.\n");
-        fmt::print("Expected on WH; LLK team please investigate. On BH both should pass.\n");
+    fmt::print("  Case A (no aliasing, separate L1 allocs): {}\n", case_a_pass ? "PASS" : "FAIL");
+    fmt::print("  Case B (multi-buffer-index alias, shared L1): {}\n", case_b_pass ? "PASS" : "FAIL");
+    if (!case_a_pass && !case_b_pass) {
+        fmt::print(
+            "\nBoth cases fail with the same striped pattern -- aliasing is NOT a required\n"
+            "trigger condition. The bug is purely about the UnpackToDest-fp32-read +\n"
+            "binary_dest_reuse_tiles<ELWMUL, DEST_TO_SRCB> + fp32_dest_acc_en=true sequence.\n"
+            "Expected on Wormhole-B0. On Blackhole both cases should pass.\n");
     } else if (case_a_pass && case_b_pass) {
-        fmt::print("\nBoth cases passed. On WH this means the minimal repro is INCOMPLETE.\n");
+        fmt::print(
+            "\nBoth cases pass. This is the expected outcome on Blackhole and on any arch\n"
+            "where the bug has been fixed. On Wormhole-B0 a PASS here would mean the\n"
+            "repro no longer triggers -- check that fp32_dest_acc_en=true is plumbed\n"
+            "correctly into the compute kernel config.\n");
+    } else if (case_a_pass && !case_b_pass) {
+        fmt::print(
+            "\nOnly Case B fails. This would mean multi-buffer-index aliasing IS a required\n"
+            "trigger condition on this arch -- different from what we observed on WH.\n");
     } else {
-        fmt::print("\nUnexpected combination. See per-tile output above.\n");
+        fmt::print(
+            "\nOnly Case A fails. Unusual -- aliasing somehow masks the bug. See per-tile\n"
+            "output above.\n");
     }
     return (case_a_pass && case_b_pass) ? 0 : 1;
 }
