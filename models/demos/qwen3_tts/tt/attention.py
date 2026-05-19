@@ -347,66 +347,54 @@ class Attention(LightweightModule):
             fp32_dest_acc_en=_fp32_linear,
         )
 
-        # === Decode-only DRAM-sharded QKV / O projections (TP=1 only) ===
-        # qkv_2d rows are reordered into KV-group-interleaved layout (shard i =
-        # [q_{2i}, q_{2i+1}, k_i, v_i]) so the sharded nlp_create_qkv_heads kernel
-        # can split the matmul output without an intermediate L1 copy.
-        # TP>1: skip — the TP path uses self.wqkv/self.wo with all_reduce; none of
-        # the DRAM-sharded machinery is needed or correct across chips.
-        self._fused_qkv = _fused_qkv
-        num_q_per_kv = num_heads // num_kv_heads
-        if self.tp_size > 1:
-            # Stub out all the optimised-decode attributes so forward can always
-            # access them without NameError, but they won't be used.
-            self.wqkv_dram_sharded = None
-            self.wo_dram_sharded = None
-            self._decode_wqkv_dramshard_progcfg = None
-            self._decode_wo_dramshard_progcfg = None
-            self._decode_wqkv_n_padded = _local_fused_qkv
-            self._decode_wo_n_padded = hidden_size
-            self._decode_wqkv_in0_memcfg = None
-            self._decode_wqkv_out_memcfg = None
-            self._decode_wo_in0_memcfg = None
-            self._decode_wo_out_memcfg = None
-            self._decode_concat_heads_in_memcfg = None
-            self._decode_concat_heads_out_memcfg = None
-            self._decode_qkv_split_in_memcfg = None
-            self._decode_qkv_split_q_out_memcfg = None
-            self._decode_qkv_split_k_out_memcfg = None
-            self._decode_qkv_split_v_out_memcfg = None
-            self._prefill_concat_configs = {}
-            TILE = 32
-            kv_shard_height = ((self.num_kv_heads + TILE - 1) // TILE) * TILE
-            _k_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-            _v_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))})
-            self.paged_k_input_mem_config = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(_k_grid, [kv_shard_height, head_dim], ttnn.ShardOrientation.ROW_MAJOR),
-            )
-            self.paged_v_input_mem_config = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(_v_grid, [kv_shard_height, head_dim], ttnn.ShardOrientation.ROW_MAJOR),
-            )
-            self.paged_input_mem_config = self.paged_k_input_mem_config
-            return
-        # --- TP=1 path: DRAM-sharded weights + sharded-NLP configs below ---
-        row_perm = []
-        for i in range(num_kv_heads):
+        # === Decode-only DRAM-sharded QKV / O projections ===
+        # qkv_2d rows are reordered into KV-group-interleaved layout so the sharded
+        # nlp_create_qkv_heads kernel can split without an intermediate L1 copy.
+        # TP>1: apply the permutation per-chip (each chip has its own local-head slice),
+        # then stack and distribute via build_dram_sharded_weight_tp.
+        # Use local head counts for _fused_qkv since the sharded weight and NLP head
+        # configs all operate on the per-chip head slice.
+        self._fused_qkv = _local_fused_qkv  # local for TP>1; same as _fused_qkv for TP=1
+        num_q_per_kv = self.num_heads // self.num_kv_heads  # same ratio for TP=1 and TP=2
+
+        # Build KV-group-interleaved row permutation (relative indices within local heads).
+        row_perm_local = []
+        for i in range(self.num_kv_heads):
             for q_in_group in range(num_q_per_kv):
                 q_head_idx = i * num_q_per_kv + q_in_group
-                row_perm.extend(range(q_head_idx * head_dim, (q_head_idx + 1) * head_dim))
-            k_off = num_heads * head_dim
-            row_perm.extend(range(k_off + i * head_dim, k_off + (i + 1) * head_dim))
-            v_off = (num_heads + num_kv_heads) * head_dim
-            row_perm.extend(range(v_off + i * head_dim, v_off + (i + 1) * head_dim))
-        qkv_2d_kvgi = qkv_2d.index_select(0, torch.tensor(row_perm, dtype=torch.long)).contiguous()
-        wqkv_kn = qkv_2d_kvgi.transpose(-2, -1).contiguous()
-        self.wqkv_dram_sharded, k_q, n_padded_q = build_dram_sharded_weight(wqkv_kn, device, dtype=weight_dtype)
+                row_perm_local.extend(range(q_head_idx * head_dim, (q_head_idx + 1) * head_dim))
+            k_off = self.num_heads * head_dim
+            row_perm_local.extend(range(k_off + i * head_dim, k_off + (i + 1) * head_dim))
+            v_off = (self.num_heads + self.num_kv_heads) * head_dim
+            row_perm_local.extend(range(v_off + i * head_dim, v_off + (i + 1) * head_dim))
+        perm_t = torch.tensor(row_perm_local, dtype=torch.long)
+
+        if self.tp_size == 1:
+            # TP=1: permute the full fused QKV and upload as a single DRAM-sharded tensor.
+            qkv_2d_kvgi = qkv_2d.index_select(0, perm_t).contiguous()
+            wqkv_kn = qkv_2d_kvgi.transpose(-2, -1).contiguous()
+            self.wqkv_dram_sharded, k_q, n_padded_q = build_dram_sharded_weight(wqkv_kn, device, dtype=weight_dtype)
+        else:
+            # TP>1: apply permutation per chip, stack, and distribute via TP-aware helper.
+            from models.demos.qwen3_tts.tt.dram_sharded_matmul import build_dram_sharded_weight_tp
+
+            q_per_chip = list(torch.chunk(q_proj_weight, self.tp_size, dim=0))
+            k_per_chip = list(torch.chunk(k_proj_weight, self.tp_size, dim=0))
+            v_per_chip = list(torch.chunk(v_proj_weight, self.tp_size, dim=0))
+            per_chip_kvgi_kn = []
+            for i in range(self.tp_size):
+                qkv_chip = torch.cat([q_per_chip[i], k_per_chip[i], v_per_chip[i]], dim=0)
+                qkv_chip_kvgi = qkv_chip.index_select(0, perm_t).contiguous()
+                per_chip_kvgi_kn.append(qkv_chip_kvgi.transpose(-2, -1).contiguous())  # [K, N_local]
+            wqkv_kn_full = torch.cat(per_chip_kvgi_kn, dim=1)  # [K, N_total]
+            self.wqkv_dram_sharded, k_q, n_padded_q = build_dram_sharded_weight_tp(
+                wqkv_kn_full, device, self.tp_size, split_dim=1, dtype=weight_dtype
+            )
+
         self._decode_wqkv_n_padded = n_padded_q
         k_tiles_q, n_tiles_q = k_q // 32, n_padded_q // 32
-        rows_q, cols_q = find_grid_k_n(k_tiles_q, n_tiles_q)
+        _cg = device.compute_with_storage_grid_size()
+        rows_q, cols_q = find_grid_k_n(k_tiles_q, n_tiles_q, max_rows=_cg.y, max_cols=_cg.x)
         self._decode_wqkv_dramshard_progcfg = dram_sharded_program_config(
             m=32, k=k_q, n=n_padded_q, num_cores=rows_q * cols_q
         )
@@ -417,11 +405,20 @@ class Attention(LightweightModule):
             m_tiles=1, k_tiles=n_tiles_q, num_cores_x=cols_q, num_cores_y=rows_q
         )
 
-        wo_kn = o_proj_weight.transpose(-2, -1).contiguous()
-        self.wo_dram_sharded, k_o, n_padded_o = build_dram_sharded_weight(wo_kn, device, dtype=weight_dtype)
+        if self.tp_size == 1:
+            wo_kn = o_proj_weight.transpose(-2, -1).contiguous()
+            self.wo_dram_sharded, k_o, n_padded_o = build_dram_sharded_weight(wo_kn, device, dtype=weight_dtype)
+        else:
+            from models.demos.qwen3_tts.tt.dram_sharded_matmul import build_dram_sharded_weight_tp
+
+            wo_kn_full = o_proj_weight.transpose(-2, -1).contiguous()  # [hidden_in, hidden_out]
+            self.wo_dram_sharded, k_o, n_padded_o = build_dram_sharded_weight_tp(
+                wo_kn_full, device, self.tp_size, split_dim=0, dtype=weight_dtype
+            )
+
         self._decode_wo_n_padded = n_padded_o
         k_tiles_o, n_tiles_o = k_o // 32, n_padded_o // 32
-        rows_o, cols_o = find_grid_k_n(k_tiles_o, n_tiles_o)
+        rows_o, cols_o = find_grid_k_n(k_tiles_o, n_tiles_o, max_rows=_cg.y, max_cols=_cg.x)
         self._decode_wo_dramshard_progcfg = dram_sharded_program_config(
             m=32, k=k_o, n=n_padded_o, num_cores=rows_o * cols_o
         )
@@ -436,14 +433,16 @@ class Attention(LightweightModule):
         # nlp_concat_heads HEIGHT_SHARDED input over num_heads cores (1 head/shard).
         # nlp_create_qkv_heads WIDTH_SHARDED input with shard_width=(Q/KV+2)*head_dim
         # over fused_qkv/shard_width cores (= num_kv_heads).
+        # self.num_heads / self.num_kv_heads are already local for TP>1 so these
+        # configs automatically use the per-chip head counts.
         _compute_grid = device.compute_with_storage_grid_size()
-        concat_grid = ttnn.num_cores_to_corerangeset(num_heads, _compute_grid, True)
+        concat_grid = ttnn.num_cores_to_corerangeset(self.num_heads, _compute_grid, True)
         qkv_shard_width = (num_q_per_kv + 2) * head_dim
-        qkv_num_cores = _fused_qkv // qkv_shard_width
-        assert _fused_qkv % qkv_shard_width == 0, "fused_qkv must divide qkv_shard_width"
+        qkv_num_cores = self._fused_qkv // qkv_shard_width
+        assert self._fused_qkv % qkv_shard_width == 0, "fused_qkv must divide qkv_shard_width"
         qkv_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(qkv_num_cores - 1, 0))})
-        q_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_heads - 1, 0))})
-        kv_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_kv_heads - 1, 0))})
+        q_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.num_heads - 1, 0))})
+        kv_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.num_kv_heads - 1, 0))})
 
         def _build_sharded_nlp_memcfgs(m: int):
             return {
@@ -482,8 +481,10 @@ class Attention(LightweightModule):
         self._decode_qkv_split_k_out_memcfg = _dec["k_out"]
         self._decode_qkv_split_v_out_memcfg = self._decode_qkv_split_k_out_memcfg
 
-        # Per-bucket prefill sharded NLPConcat memcfgs.
-        self._prefill_concat_configs = {m: _build_sharded_nlp_memcfgs(m) for m in _PREFILL_SEQS}
+        # Per-bucket prefill sharded NLPConcat memcfgs (TP=1 only; prefill DRAM-sharded not yet ported for TP>1).
+        self._prefill_concat_configs = (
+            {} if self.tp_size > 1 else {m: _build_sharded_nlp_memcfgs(m) for m in _PREFILL_SEQS}
+        )
 
         # Pre-compute HEIGHT_SHARDED memory configs for paged_update_cache inputs.
         # paged_update_cache requires input in [1, batch, kv_heads, head_dim] HEIGHT_SHARDED on batch cores.
@@ -493,7 +494,7 @@ class Attention(LightweightModule):
         # requires their input shards to live on DISJOINT cores (it parallelizes across
         # them). We give K core (0,0) and V core (1,0) so the fused kernel can run.
         TILE = 32
-        kv_shard_height = ((num_kv_heads + TILE - 1) // TILE) * TILE  # ceil to tile: 8→32
+        kv_shard_height = ((self.num_kv_heads + TILE - 1) // TILE) * TILE  # ceil to tile: 4 or 8→32
         _k_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
         _v_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))})
         self.paged_k_input_mem_config = ttnn.MemoryConfig(
@@ -569,9 +570,7 @@ class Attention(LightweightModule):
         # CP_prefill (seq=2) also takes the sharded fast path → 16-core
         # nlp_create_qkv_heads instead of single-core. Larger prefill buckets
         # (64, 128) need separate per-m shard configs to engage — TODO.
-        # TP>1: disable every optimised single-chip path; the forward uses
-        # self.wqkv / self.wo (per-chip column/row-parallel) + all_reduce.
-        use_dram_shard_qkv = (self.tp_size == 1) and (seq_len <= 32)
+        use_dram_shard_qkv = seq_len <= 32
         # Sharded nlp_create_qkv_heads engages downstream of the DRAM-sharded QKV
         # since wqkv was rearranged to KV-group-interleaved layout.
         sharded_qkv_split = use_dram_shard_qkv
@@ -961,10 +960,10 @@ class Attention(LightweightModule):
             ttnn.deallocate(attn_output_f32)
 
         # Hoist use_dram_shard_o so it can also gate the direct concat→wo reshard below.
-        use_dram_shard_o = (self.tp_size == 1) and is_decode and seq_len == 1
+        use_dram_shard_o = is_decode and seq_len == 1
         # Pick decode (m=32) vs prefill bucket-size sharded NLPConcat memcfgs.
-        sharded_concat_decode = (self.tp_size == 1) and is_decode
-        sharded_concat_prefill = (self.tp_size == 1) and (not is_decode) and (seq_len in self._prefill_concat_configs)
+        sharded_concat_decode = is_decode
+        sharded_concat_prefill = (not is_decode) and (seq_len in self._prefill_concat_configs)
         use_sharded_concat = sharded_concat_decode or sharded_concat_prefill
         if sharded_concat_prefill:
             _pre = self._prefill_concat_configs[seq_len]
@@ -1050,11 +1049,17 @@ class Attention(LightweightModule):
                 program_config=wo_progcfg,
             )
             ttnn.deallocate(attn_output)
-            # Row-parallel O-proj on TP>1: each chip holds a partial sum over
-            # local_hidden.  all_reduce restores the full [B, 1, S, hidden].
-            if self.tp_size > 1:
-                from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce
 
-                output = tp_all_reduce(output, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Row-parallel O-proj on TP>1: each chip holds a partial sum over local_hidden.
+        # all_reduce restores the full [B, 1, S, hidden] — applies to BOTH the
+        # DRAM-sharded decode path (which sets output in the if-branch above) and the
+        # regular non-DRAM path (else-branch). The one exception is DRAM-sharded with
+        # wo_n_unpadded=True (only possible on TP=1 where n_padded==hidden), which
+        # returns a width-sharded tensor for the caller's residual add — in that case
+        # tp_size==1 so the guard below is never entered.
+        if self.tp_size > 1 and not (use_dram_shard_o and self._decode_wo_n_padded == self.hidden_size):
+            from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce
+
+            output = tp_all_reduce(output, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         return output, updated_kv_cache
