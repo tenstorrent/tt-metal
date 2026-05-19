@@ -2024,12 +2024,27 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                             this->id(),
                             eth_chan_id);
                     } catch (const std::exception& e) {
+                        // GAP-R17 (#42429): Capture last-known edm_status when force-reset
+                        // fails — helps distinguish "channel truly unreachable" (PCIe fail)
+                        // from "ERISC in unexpected state" (wrong edm_status).
+                        uint32_t last_status_r17 = 0xDEADDEAD;
+                        try {
+                            std::vector<uint32_t> r17_buf(1, 0);
+                            detail::ReadFromDeviceL1(
+                                this, eth_logical_core, router_sync_addr, 4, r17_buf, CoreType::ETH);
+                            last_status_r17 = r17_buf[0];
+                        } catch (...) {
+                            // PCIe read also failed — truly unreachable
+                        }
                         log_warning(
                             tt::LogMetal,
                             "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
-                            "force-reset failed — Phase 3 L1 overwrite may be unsafe: {}",
+                            "force-reset failed — Phase 3 L1 overwrite may be unsafe. "
+                            "last_edm_status=0x{:08X} ({}) GAP-R17 (#42429): {}",
                             this->id(),
                             eth_chan_id,
+                            last_status_r17,
+                            edm_status_str(last_status_r17),
                             e.what());
                     }
                 }
@@ -2158,21 +2173,60 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
         this->id(),
         quiesce_health.newly_dead_channels.size());
     if (!quiesce_health.newly_dead_channels.empty()) {
+        // GAP-R18 (#42429): Per-channel edm_status snapshot for newly-dead channels.
+        // When a channel dies during quiesce configure_fabric_cores, knowing the ERISC
+        // state helps distinguish "channel unreachable" vs "ERISC in unexpected state."
+        const auto& builder_ctx_r18 = MetalContext::instance().get_control_plane()
+            .get_fabric_context().get_builder_context();
+        const auto erisc_sync_addr_r18 = builder_ctx_r18.get_fabric_router_sync_address_and_status().first;
+        const auto& soc_desc_r18 = env_impl.get_cluster().get_soc_desc(this->id());
         std::string newly_dead_str;
         for (auto ch : quiesce_health.newly_dead_channels) {
-            newly_dead_str += fmt::format("{} ", ch);
+            uint32_t status_r18 = 0xDEADDEAD;
+            try {
+                auto lc_r18 = soc_desc_r18.get_eth_core_for_channel(ch, CoordSystem::LOGICAL);
+                std::vector<uint32_t> r18_buf(1, 0);
+                detail::ReadFromDeviceL1(
+                    this, CoreCoord(lc_r18.x, lc_r18.y),
+                    erisc_sync_addr_r18, 4, r18_buf, CoreType::ETH);
+                status_r18 = r18_buf[0];
+            } catch (...) {
+                // Read failed — channel truly unreachable
+            }
+            newly_dead_str += fmt::format("{}(edm=0x{:08X}) ", ch, status_r18);
         }
         log_warning(
             tt::LogMetal,
             "quiesce_and_restart_fabric_workers: Device {} Phase 3: configure_fabric_cores newly-dead "
-            "channels: [{}] — write_launch_msg will be skipped for these",
+            "channels: [{}] — write_launch_msg will be skipped for these GAP-R18 (#42429)",
             this->id(),
             newly_dead_str);
     }
     detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
     detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
 
-    env_impl.get_cluster().l1_barrier(this->id());
+    // GAP-R19 (#42429): Wrap l1_barrier in try/catch for the quiesce Phase 3 path.
+    // configure_fabric() already skips l1_barrier when dead channels are present, but the
+    // quiesce path did not handle l1_barrier exceptions — an unhandled throw here crashes the
+    // entire quiesce instead of degrading gracefully.  l1_membar/wait_for_non_mmio_flush can
+    // throw if the relay ERISC is unresponsive or if a non-MMIO device has a dead relay path.
+    try {
+        env_impl.get_cluster().l1_barrier(this->id());
+    } catch (const std::exception& e) {
+        log_warning(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} Phase 3: l1_barrier threw — "
+            "proceeding with launch messages despite potential L1 write ordering issue. "
+            "GAP-R19 (#42429): {}",
+            this->id(),
+            e.what());
+    } catch (...) {
+        log_warning(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} Phase 3: l1_barrier threw "
+            "(non-std exception) — proceeding with launch messages. GAP-R19 (#42429)",
+            this->id());
+    }
 
     std::vector<std::vector<CoreCoord>> logical_cores_used = fabric_program_->impl().logical_cores();
     const auto& hal = env_impl.get_hal();
@@ -2774,11 +2828,36 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                 std::vector<uint32_t> bypass_qs7 = {1};
                 detail::WriteToDeviceL1(
                     this, logical_core, hs_bypass_addr_qs7, bypass_qs7, CoreType::ETH);
-                log_info(
-                    tt::LogMetal,
-                    "FIX V11-QS7 (#42429): handshake_bypass=1 at L1[0x{:08X}] for "
-                    "Device {} ETH logical ({},{}) (inline quiesce Phase 3)",
-                    hs_bypass_addr_qs7, this->id(), logical_core.x, logical_core.y);
+                // GAP-R15 (#42429): Readback verify handshake_bypass on inline Phase 3 path.
+                // The force-reset Pass-0 path (GAP-R10) already has readback, but the normal
+                // Phase 3 path did not — a silently dropped write means ERISC attempts full
+                // ETH handshake on every quiesce cycle, causing STARTED→STARTED deadlocks.
+                {
+                    std::vector<uint32_t> bypass_rb_r15(1, 0xFFFFFFFF);
+                    try {
+                        detail::ReadFromDeviceL1(
+                            this, logical_core, hs_bypass_addr_qs7, sizeof(uint32_t),
+                            bypass_rb_r15, CoreType::ETH);
+                    } catch (...) {
+                        bypass_rb_r15[0] = 0xDEADDEAD;
+                    }
+                    if (bypass_rb_r15[0] != 1) {
+                        log_warning(
+                            tt::LogMetal,
+                            "GAP-R15 (#42429): Phase 3 handshake_bypass readback MISMATCH — "
+                            "wrote 1 to L1[0x{:08X}] Device {} ETH logical ({},{}) "
+                            "but read 0x{:08X} — ERISC may attempt full ETH handshake",
+                            hs_bypass_addr_qs7, this->id(), logical_core.x, logical_core.y,
+                            bypass_rb_r15[0]);
+                    } else {
+                        log_info(
+                            tt::LogMetal,
+                            "FIX V11-QS7 (#42429): handshake_bypass=1 at L1[0x{:08X}] for "
+                            "Device {} ETH logical ({},{}) (inline quiesce Phase 3) — "
+                            "readback verified [GAP-R15]",
+                            hs_bypass_addr_qs7, this->id(), logical_core.x, logical_core.y);
+                    }
+                }
             }
 #endif  // STRATEGY7_HANDSHAKE_BYPASS
 
@@ -3423,11 +3502,36 @@ void Device::launch_eth_cores_for_quiesce() {
                 std::vector<uint32_t> bypass_dqs7 = {1};
                 detail::WriteToDeviceL1(
                     this, logical_core, hs_bypass_addr_dqs7, bypass_dqs7, CoreType::ETH);
-                log_info(
-                    tt::LogMetal,
-                    "FIX V11-QS7 (#42429): handshake_bypass=1 at L1[0x{:08X}] for "
-                    "Device {} ETH logical ({},{}) (deferred quiesce Phase 3)",
-                    hs_bypass_addr_dqs7, this->id(), logical_core.x, logical_core.y);
+                // GAP-R16 (#42429): Readback verify handshake_bypass on deferred quiesce path.
+                // This path uses the non-MMIO relay where dropped writes are MORE likely due
+                // to relay congestion.  Without readback, a silently dropped bypass=1 means
+                // ERISC attempts full ETH handshake → STARTED→STARTED deadlock.
+                {
+                    std::vector<uint32_t> bypass_rb_r16(1, 0xFFFFFFFF);
+                    try {
+                        detail::ReadFromDeviceL1(
+                            this, logical_core, hs_bypass_addr_dqs7, sizeof(uint32_t),
+                            bypass_rb_r16, CoreType::ETH);
+                    } catch (...) {
+                        bypass_rb_r16[0] = 0xDEADDEAD;
+                    }
+                    if (bypass_rb_r16[0] != 1) {
+                        log_warning(
+                            tt::LogMetal,
+                            "GAP-R16 (#42429): deferred Phase 3 handshake_bypass readback MISMATCH — "
+                            "wrote 1 to L1[0x{:08X}] Device {} ETH logical ({},{}) "
+                            "but read 0x{:08X} — ERISC may attempt full ETH handshake",
+                            hs_bypass_addr_dqs7, this->id(), logical_core.x, logical_core.y,
+                            bypass_rb_r16[0]);
+                    } else {
+                        log_info(
+                            tt::LogMetal,
+                            "FIX V11-QS7 (#42429): handshake_bypass=1 at L1[0x{:08X}] for "
+                            "Device {} ETH logical ({},{}) (deferred quiesce Phase 3) — "
+                            "readback verified [GAP-R16]",
+                            hs_bypass_addr_dqs7, this->id(), logical_core.x, logical_core.y);
+                    }
+                }
             }
 #endif  // STRATEGY7_HANDSHAKE_BYPASS
 
