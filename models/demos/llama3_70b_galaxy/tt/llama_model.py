@@ -178,6 +178,7 @@ class TtTransformer(LightweightModule):
         self.mesh_sub_device_manager_id_prefill = self.prefetcher_setup.mesh_sub_device_manager_id_prefill
         self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
         if mesh_sub_device_manager_id_prefill is None:
+            # If creating from scratch
             self.tt_ccl = TT_CCL(
                 self.mesh_device,
                 self.args,
@@ -203,6 +204,7 @@ class TtTransformer(LightweightModule):
             [self.prefetcher_setup.prefetcher_sub_device_id, self.prefetcher_setup.worker_sub_device_id]
         )
         if mesh_sub_device_manager_id_decode is None:
+            # If creating from scratch
             self.tt_ccl = TT_CCL(
                 self.mesh_device,
                 self.args,
@@ -542,7 +544,10 @@ class TtTransformer(LightweightModule):
                 last_token_idx_i = last_token_idx[i]
             else:
                 last_token_idx_i = last_token_idx
-            x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+            with ttnn.corruptible_allocation_scope(self.mesh_device):
+                x = x[
+                    :, :, last_token_idx_i : last_token_idx_i + 1, :
+                ]  # this compiles a new program cache variant for each last token index TODO fix properly
             # lm_head returns logits in sharded format (same as decode before all-gather)
             tt_logits = self.lm_head(x, None, mode="prefill")
             tt_logits = tt_logits[0]
@@ -551,6 +556,7 @@ class TtTransformer(LightweightModule):
                 ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
                 ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
             )
+            tt_logits = ttnn.typecast(tt_logits, dtype=ttnn.bfloat16)
             logits_list.append(tt_logits)
 
         return logits_list
@@ -583,8 +589,10 @@ class TtTransformer(LightweightModule):
                 last_token_idx_i = last_token_idx[i]
             else:
                 last_token_idx_i = last_token_idx
-
-            x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+            with ttnn.corruptible_allocation_scope(self.mesh_device):
+                x = x[
+                    :, :, last_token_idx_i : last_token_idx_i + 1, :
+                ]  # this compiles a new program cache variant for each last token index TODO fix properly
             tt_logits = self.lm_head(x, None, mode="prefill")
             # Gather the output across all devices and untilize the tensor (for argmax)
             tt_logits = self.tt_ccl.line_all_gather(
@@ -733,10 +741,12 @@ class TtTransformer(LightweightModule):
 
             return tt_logits, None
 
+        tt_logits = tt_logits[0]
+
         # Save output logits to global python object
         if tt_out_logits_saved is not None:
             tt_out_logits = ttnn.to_torch(
-                tt_logits[0],
+                tt_logits,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
                     self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
                 ),
@@ -746,10 +756,11 @@ class TtTransformer(LightweightModule):
             tt_out_logits_saved.copy_(tt_out_logits)
 
         if capture_sampling_trace:
+            tt_logits = ttnn.typecast(tt_logits, dtype=ttnn.bfloat16, sub_core_grids=self.args.sub_core_grids)
             return tt_logits
 
         tt_toks, tt_log_probs = self.sampling.sample(
-            tt_logits[0],
+            tt_logits,
             tt_out_tok=x,
             enable_trace=False,
         )
