@@ -270,7 +270,7 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
     experimental::metal2_host_api::KernelSpec dm_spec{
         .unique_id = DM_KERNEL_NAME,
         .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{rta_crta_kernel_path},
-        .num_threads = static_cast<uint8_t>(num_dms_),
+        .num_threads = is_quasar ? static_cast<uint8_t>(num_dms_) : uint8_t{1},
         .runtime_arguments_schema =
             {.num_runtime_varargs = default_rtas.size(), .num_common_runtime_varargs = default_crtas.size()},
         .config_spec = dm_cfg,
