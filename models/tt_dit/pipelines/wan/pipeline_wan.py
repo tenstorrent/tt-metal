@@ -375,6 +375,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         height: int = 0,
         width: int = 0,
         num_frames: int = 81,
+        boundary_ratio: Optional[float] = None,
+        **extra_kwargs,
     ):
         device_configs = {}
         if ttnn.device.is_blackhole():
@@ -471,7 +473,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             vae_parallel_config=vae_parallel_config,
             encoder_parallel_config=encoder_parallel_config,
             num_links=num_links or config["num_links"],
-            boundary_ratio=0.875,
+            boundary_ratio=0.875 if boundary_ratio is None else boundary_ratio,
             scheduler=scheduler,
             dynamic_load=dynamic_load if dynamic_load is not None else config["dynamic_load"],
             topology=topology or config["topology"],
@@ -484,6 +486,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             height=height,
             width=width,
             num_frames=num_frames,
+            **extra_kwargs,
         )
 
     def _prepare_text_encoder(self):
@@ -772,6 +775,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         traced: bool = False,
         profiler: BenchmarkProfiler = None,
         profiler_iteration: int = 0,
+        return_last_latent: bool = False,
     ):
         r"""
         The call function to the pipeline for generation.
@@ -1024,6 +1028,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             profiler.end("denoising", profiler_iteration)
             profiler.start("vae", profiler_iteration)
 
+        # SVI / clip-chaining needs the post-denoise pre-rescale latent to splice
+        # into the next clip's I2V conditioning. Capture before VAE std-scaling.
+        last_latent_out = latents.detach().cpu().clone() if return_last_latent else None
+
         if not output_type == "latent":
             latents = latents.to(self.vae.dtype)
             latents = latents * self._vae_latents_std + self._vae_latents_mean
@@ -1084,9 +1092,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             profiler.end("vae", profiler_iteration)
 
         if not return_dict:
-            return (video,)
+            return (video, last_latent_out) if return_last_latent else (video,)
 
-        return WanPipelineOutput(frames=video)
+        output = WanPipelineOutput(frames=video)
+        if return_last_latent:
+            output.last_latent = last_latent_out
+        return output
 
     def run_single_prompt(self, *args, **kwargs):
         return self.__call__(*args, **kwargs).frames

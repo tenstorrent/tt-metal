@@ -286,25 +286,53 @@ _BLOCKINGS = {
     # Per-device (H,W): stage0(30,26) stage1(60,52) stage2(120,104) stage3(240,208)
     # Cached T: cur_T grows 7 → 14 → 28 across stages
     # Swept 2026-04-10 on BH Loud Box 2x4; results stored in sweep_results_h2w4_480p_t7/
-    # Note: lat_mid_res, up0_tconv, up1_res0/res, up2_res, up3_res, conv_out are
-    # partial sweeps (device hangs after first T>1 combos — see CONV3D_BLOCKING_SWEEP_BH2X4_480P.md).
+    #
+    # 2026-05-19: lat_mid_res, up0_tconv, up1_res0, up1_res, conv_out entries
+    # COMMENTED OUT — they were partial-sweep / inferred (the original sweep
+    # hung on device after first T>1 combos) and never validated against
+    # chunk_size=1. test_wan_decoder_chunked_consistency at 480p/T=21/bf16/2x4
+    # showed max_abs_diff=1.58 (output clamp is [-1,1]) with these entries in,
+    # vs PASSING when chunk_size=2/4 hit the fallback _DEFAULT_BLOCKINGS table.
+    # Without exact entries these conv layers fall back to defaults that
+    # produce correct output. Re-sweep cleanly on real hardware to recover any
+    # perf the partial blockings claimed.
     # ===================================================================
+    # Bisection on 2026-05-19 against test_wan_decoder_chunked_consistency
+    # (480p / T=21 / bf16 / 2x4 mesh):
+    #   * conv_out: original (96, 32, 4, 16, 2) was CATASTROPHIC
+    #     (max_abs_diff=1.578 vs chunk_size=1 baseline). Root cause: with
+    #     T_out_block=4 and input T=30, the device conv kernel leaves a
+    #     2-frame T-leftover; that leftover-handling path interacts buggily
+    #     with unaligned C_out=3 (padded to C_out_block=32). Other entries
+    #     with T-leftover (up2_res/up3_res, T_out_block=7 on T=30) are fine
+    #     because their C_out is aligned (96). FIX: T_out_block 4 → 1, which
+    #     removes the leftover-handling path entirely. W_out_block=2 is fine.
+    #     Verified: with this fix, chunk=7 produces clean SVI output.
+    #   * lat_mid_res, up0_tconv (partials), up1_res0, up1_res (partial +
+    #     inferred-copy), up1_tconv, up1_spatial: each adds a "subtle"
+    #     ~0.03 max diff. Not visible in SVI output but above 1e-3 test
+    #     tolerance. Different bug class from conv_out (most have
+    #     T_out_block=1, so not the T-leftover issue). Likely bf16
+    #     accumulation order or H/W kernel pipeline mismatch. Disabled here,
+    #     fall back to _DEFAULT_BLOCKINGS. Could be re-swept later.
+    # The other 5 chunk=7 entries (conv_in, up0_spatial, up2_res,
+    # up2_spatial, up3_res) are confirmed good by R2/R5.
     # Stage 0 (cur_T=7): T_res=9, T_tconv=9, T_spatial=14
     (2, 4, 32, 384, (3, 3, 3), 9, 30, 26): (32, 128, 7, 2, 2),  # conv_in — swept 244us
-    (2, 4, 384, 384, (3, 3, 3), 9, 30, 26): (96, 96, 1, 32, 4),  # lat_mid_res — partial 1009us
-    (2, 4, 384, 768, (3, 1, 1), 9, 30, 26): (192, 256, 1, 16, 2),  # up0_tconv — partial 417us
+    # (2, 4, 384, 384, (3, 3, 3), 9, 30, 26): (96, 96, 1, 32, 4),  # lat_mid_res — partial; subtle 0.03 (R7)
+    # (2, 4, 384, 768, (3, 1, 1), 9, 30, 26): (192, 256, 1, 16, 2),  # up0_tconv — partial; subtle 0.03 (R7)
     (2, 4, 384, 192, (1, 3, 3), 14, 60, 52): (192, 96, 1, 32, 4),  # up0_spatial — table wins 1034us
     # Stage 1 (cur_T=14): T_res=16, T_tconv=16, T_spatial=28
-    (2, 4, 192, 384, (3, 3, 3), 16, 60, 52): (96, 96, 7, 16, 2),  # up1_res0 — partial 2446us
-    (2, 4, 384, 384, (3, 3, 3), 16, 60, 52): (96, 96, 7, 16, 2),  # up1_res — inferred from up1_res0
-    (2, 4, 384, 768, (3, 1, 1), 16, 60, 52): (192, 768, 1, 8, 4),  # up1_tconv — swept 1442us
-    (2, 4, 384, 192, (1, 3, 3), 28, 120, 104): (384, 96, 1, 4, 8),  # up1_spatial — swept 6809us
+    # (2, 4, 192, 384, (3, 3, 3), 16, 60, 52): (96, 96, 7, 16, 2),  # up1_res0 — partial; subtle 0.03 (R9)
+    # (2, 4, 384, 384, (3, 3, 3), 16, 60, 52): (96, 96, 7, 16, 2),  # up1_res — inferred; subtle 0.03 (R9)
+    # (2, 4, 384, 768, (3, 1, 1), 16, 60, 52): (192, 768, 1, 8, 4),  # up1_tconv — swept; subtle 0.03 (R3)
+    # (2, 4, 384, 192, (1, 3, 3), 28, 120, 104): (384, 96, 1, 4, 8),  # up1_spatial — swept; subtle 0.03 (R4)
     # Stage 2 (cur_T=28): T_res=30, T_spatial=28 (no temporal upsample)
     (2, 4, 192, 192, (3, 3, 3), 30, 120, 104): (96, 96, 7, 4, 8),  # up2_res — swept 9400us
     (2, 4, 192, 96, (1, 3, 3), 28, 240, 208): (192, 96, 1, 4, 16),  # up2_spatial — swept 6509us
     # Stage 3 (cur_T=28): T_res=30 (no temporal upsample)
     (2, 4, 96, 96, (3, 3, 3), 30, 240, 208): (96, 96, 7, 2, 16),  # up3_res — swept 9364us
-    (2, 4, 96, 3, (3, 3, 3), 30, 240, 208): (96, 32, 4, 16, 2),  # conv_out — partial 5990us
+    (2, 4, 96, 3, (3, 3, 3), 30, 240, 208): (96, 32, 1, 16, 2),  # conv_out — T_out_block 4→1 (see header)
     # ===================================================================
     # BH Galaxy 4x8, 720p image encoder, T=33 output frames
     # h_factor=4, w_factor=8. Per-device H/W are unpadded output dims.

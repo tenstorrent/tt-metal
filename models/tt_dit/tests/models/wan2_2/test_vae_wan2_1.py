@@ -1859,21 +1859,39 @@ def test_wan_decoder_chunked_consistency(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
         width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
     )
-    tt_model = WanDecoder(
-        base_dim=base_dim,
-        z_dim=z_dim,
-        dim_mult=dim_mult,
-        num_res_blocks=num_res_blocks,
-        attn_scales=attn_scales,
-        temperal_downsample=temperal_downsample,
-        out_channels=out_channels,
-        is_residual=False,
-        mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-        dtype=dtype,
-    )
-    tt_model.load_torch_state_dict(torch_model.state_dict())
+    # Use production height/width so the decoder constructs ConvDims with real
+    # values and get_conv3d_config hits the precomputed _BLOCKINGS table (the
+    # bespoke per-(h_factor,w_factor,T,H,W) entries in conv3d.py:144). Without
+    # this, the test falls back to _DEFAULT_BLOCKINGS for every conv and
+    # bypasses exactly the production code path we're trying to validate.
+    # 480p: H_lat=60 -> H_pix=480; W_lat=104 -> W_pix=832. 720p analogous.
+    pixel_height = H * 8
+    pixel_width = W * 8
+
+    # Build a separate model per chunk_size so the constructor's blocking table
+    # lookup uses that chunk_size's stage dims. (compute_decoder_dims derives
+    # cur_T from t_chunk_size, so each chunk size gets its own _BLOCKINGS keys.)
+    def _build_model(t_chunk_size_for_init):
+        m = WanDecoder(
+            base_dim=base_dim,
+            z_dim=z_dim,
+            dim_mult=dim_mult,
+            num_res_blocks=num_res_blocks,
+            attn_scales=attn_scales,
+            temperal_downsample=temperal_downsample,
+            out_channels=out_channels,
+            is_residual=False,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            dtype=dtype,
+            height=pixel_height,
+            width=pixel_width,
+            t_chunk_size=t_chunk_size_for_init,
+            cached=t_chunk_size_for_init is not None,
+        )
+        m.load_torch_state_dict(torch_model.state_dict())
+        return m
 
     # Prepare input
     torch_input = torch.randn(B, C, T, H, W, dtype=torch.float32)
@@ -1886,6 +1904,10 @@ def test_wan_decoder_chunked_consistency(
     concat_dims[w_axis] = 4
 
     def run_decoder(t_chunk_size):
+        # Build a fresh model so the constructor's _BLOCKINGS lookup uses this
+        # chunk_size's stage_t.T_res values. Otherwise we'd be running every
+        # chunk size against the model built for the previous one's blockings.
+        model = _build_model(t_chunk_size_for_init=t_chunk_size)
         tt_input_tensor = typed_tensor_2dshard(
             tt_input_host,
             mesh_device,
@@ -1893,7 +1915,7 @@ def test_wan_decoder_chunked_consistency(
             shard_mapping={h_axis: 2, w_axis: 3},
             dtype=ttnn.float32 if dtype == ttnn.DataType.FLOAT32 else ttnn.bfloat16,
         )
-        tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
+        tt_output, new_logical_h = model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
         return ttnn.to_torch(
             tt_output,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
@@ -1905,7 +1927,12 @@ def test_wan_decoder_chunked_consistency(
     logger.info(f"Baseline output shape: {baseline.shape}")
 
     # Compare each chunk size against the baseline
-    for t_chunk_size in [2, 4, 8, 16, T]:
+    # NOTE: chunk_size=7 is a production-shipped value on BH 2x4 (vae_t_chunk_size=7
+    # in pipeline_wan.create_pipeline) but was missing from this list, which is why
+    # SVI Pro saw a visible chunk-boundary distortion at pixel frame 24/25 (latent
+    # frame 6/7 boundary). Adding it here so the partial/inferred conv blockings at
+    # conv3d.py:284-307 are bit-checked against the chunk_size=1 ground truth.
+    for t_chunk_size in [2, 4, 7, 8, 16, T]:
         if t_chunk_size > T:
             continue
         logger.info(f"Running t_chunk_size={t_chunk_size} (T={T})")
