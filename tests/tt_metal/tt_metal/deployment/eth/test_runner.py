@@ -1,0 +1,398 @@
+from typing import Optional, AsyncIterator, Iterator
+from dataclasses import dataclass, asdict
+from dateutil import parser
+from enum import Enum, auto
+import fileinput
+import asyncio
+import pprint
+import json
+import re
+
+# # with open("testlog2", "r") as f:
+# with open("testfifo", "r") as f:
+#     for l in f:
+#         print(f"l: {l.strip()}")
+
+timeregex = "\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+"
+# 2026-05-18 10:55:52.314 | info     |            Test | Running test using Fast Dispatch (mesh_dispatch_fixture.hpp:119)
+teststart = re.compile("\[\s+RUN\s+\] (.*)")
+# [       OK ] MeshDispatchFixture.TensixDeploymentEthernet00LinkUp (492 ms)
+testend = re.compile("\[\s+([^ ]*)\s+\] (.*) \(.*\)")
+testdevices = re.compile(f"({timeregex}).*Test \| sender device id: (.*), receiver device id: (.*) .*")
+testcores = re.compile(f"({timeregex}).*Test \|   sender core: (.*), receiver core: (.*) .*")
+testprocs = re.compile(f"({timeregex}).*Test \|     running on (.*) .*")
+testruns = re.compile(f"({timeregex}).*Test \| Ran (\d+) tests .*")
+testbw = re.compile(f"({timeregex}).*Test \|       Bandwidth (.*) Gbps, (.*) ms .*")
+testbwfail = re.compile(f"({timeregex}).*Test \|       Expected at least: (.*) Gbps, got (.*) Gbps .*")
+testsetup = re.compile(f"({timeregex}).*Test \|       set up .*")
+testdatacmp = re.compile(
+    f"({timeregex}).*Test \|       done comparing bank (.*) and (.*) with (\d+) "
+    + "mismatched words starting at (.*), ending at (.*) .*"
+)
+locinfo = "sdev: \[(.*)\], rdev: \[(.*)\], score: \[(.*)\], rcore: \[(.*)\], processor: \[(.*)\]"
+testcheck = re.compile(f"({timeregex}).*Test \| core_check: {locinfo} .*")
+
+
+class TestCase(str, Enum):
+    LINK_UP = "LinkUp"
+    BANDWIDTH = "Bandwidth"
+    BANDWIDTH_BIDIR = "BandwidthBidir"
+    DATA_INTEGRITY = "DataIntegrityDram"
+    DATA_INTEGRITY_BIDIR = "DataIntegrityDramBidir"
+    STRESS_TEST = "StressTest"
+
+
+@dataclass
+class TestedLink:
+    src_dev: str
+    src_core: str
+
+    dst_dev: str
+    dst_core: str
+
+    proc: str
+    bw: dict
+    errors: list
+
+    def to_dict(self):
+        return self.__dict__
+
+
+@dataclass
+class TestRun:
+    name: str
+    links: list[TestedLink]
+    status: str
+
+    def to_dict(self):
+        return {
+            "name": self.name,
+            "links": [l.to_dict() for l in self.links],
+            "status": self.status,
+        }
+
+
+def runs_to_json(runs: list[TestRun], **kwargs) -> str:
+    return json.dumps([r.to_dict() for r in runs], **kwargs)
+
+
+def runs_to_jsonf(fname: str, runs: list[TestRun], **kwargs) -> None:
+    with open(fname, "w") as f:
+        json.dump([r.to_dict() for r in runs], f, **kwargs)
+
+
+class EventType(Enum):
+    TESTSTART = auto()
+    TESTEND = auto()
+    DEVICES = auto()
+    CORES = auto()
+    PROCS = auto()
+    RUNS = auto()
+    BW = auto()
+    BWFAIL = auto()
+    DATACMP = auto()
+    TESTSETUP = auto()
+    TESTCHECK = auto()
+
+
+@dataclass
+class Event:
+    typ: EventType
+    extra: dict
+
+    def to_dict(self):
+        return {"typ": self.typ.name, "extra": self.extra}
+
+
+def parse_teststart(l: str) -> Optional[Event]:
+    m = teststart.match(l)
+    if m is None:
+        return None
+
+    testname = m.group(1)
+    # print(f"\tTESTSTART '{testname}'")
+
+    return Event(EventType.TESTSTART, {"name": testname})
+
+
+def parse_testend(l: str) -> Optional[Event]:
+    m = testend.match(l)
+    if m is None:
+        return None
+
+    status = m.group(1)
+    testname = m.group(2)
+    # print(f"\tTESTEND '{testname}' '{status}'")
+
+    return Event(EventType.TESTEND, {"name": testname, "status": status})
+
+
+def parse_testdevices(l: str) -> Optional[Event]:
+    m = testdevices.match(l)
+    if m is None:
+        return None
+
+    sdev = m.group(2)
+    rdev = m.group(3)
+    # print(f"\tDEVICES s: {sdev}, r: {rdev}")
+
+    return Event(EventType.DEVICES, {"sdev": sdev, "rdev": rdev})
+
+
+def parse_cores(l: str) -> Optional[Event]:
+    m = testcores.match(l)
+    if m is None:
+        return None
+
+    score = m.group(2)
+    rcore = m.group(3)
+    # print(f"\tCORES s: {score}, r: {rcore}")
+    return Event(EventType.CORES, {"score": score, "rcore": rcore})
+
+
+def parse_procs(l: str) -> Optional[Event]:
+    m = testprocs.match(l)
+    if m is None:
+        return None
+
+    proc = m.group(2)
+    # print(f"\tPROCS '{proc}'")
+    return Event(EventType.PROCS, {"proc": proc})
+
+
+def parse_runs(l: str) -> Optional[Event]:
+    m = testruns.match(l)
+    if m is None:
+        return None
+
+    runs = int(m.group(2))
+    # print(f"\tRUNS {runs}")
+    return Event(EventType.RUNS, {"runs": runs})
+
+
+def parse_bw(l: str) -> Optional[Event]:
+    m = testbw.match(l)
+    if m is None:
+        return None
+
+    bw = float(m.group(2))
+    elapsed_ms = float(m.group(3))
+    # print(f"\tBANDWIDTH {bw} Gbps, {elapsed_ms} ms")
+    return Event(EventType.BW, {"bw": bw, "elapsed_ms": elapsed_ms})
+
+
+def parse_bwfail(l: str) -> Optional[Event]:
+    m = testbwfail.match(l)
+    if m is None:
+        return None
+
+    expected = float(m.group(2))
+    actual = float(m.group(3))
+    # print(f"\tBWFAIL {expected} Gbps, {actual} ms")
+    return Event(EventType.BWFAIL, {"expected": expected, "actual": actual})
+
+
+def parse_datacmp(l: str) -> Optional[Event]:
+    m = testdatacmp.match(l)
+    if m is None:
+        return None
+
+    bank0 = int(m.group(2))
+    bank1 = int(m.group(3))
+    errors = int(m.group(4))
+    starting = m.group(5)
+    ending = m.group(6)
+    # print(f"\tDATACMP {bank0}, {bank1}, {errors}, {starting}, {ending}")
+    return Event(
+        EventType.DATACMP,
+        {
+            "bank0": bank0,
+            "bank1": bank1,
+            "errors": errors,
+            "starting": starting,
+            "ending": ending,
+        },
+    )
+
+
+def parse_check(l: str) -> Optional[Event]:
+    m = testcheck.match(l)
+    if m is None:
+        return None
+
+    sdev = m.group(2)
+    rdev = m.group(3)
+    score = m.group(4)
+    rcore = m.group(5)
+    proc = m.group(6)
+    # print(f"\tTESTCHECK '{sdev}' '{rdev}' '{score}' '{rcore}' '{proc}'")
+    return Event(
+        EventType.TESTCHECK,
+        {
+            "sdev": sdev,
+            "rdev": rdev,
+            "score": score,
+            "rcore": rcore,
+            "proc": proc,
+        },
+    )
+
+
+def parse_setup(l: str) -> Optional[Event]:
+    m = testsetup.match(l)
+    if m is None:
+        return None
+
+    # print(f"\tSETUP")
+    return Event(EventType.TESTSETUP, {})
+
+
+def parse_line(l: str) -> Optional[Event]:
+    print(f"l: {l}")
+
+    parsers = [
+        parse_testdevices,
+        parse_teststart,
+        parse_testend,
+        parse_datacmp,
+        parse_bwfail,
+        parse_cores,
+        parse_check,
+        parse_setup,
+        parse_procs,
+        parse_runs,
+        parse_bw,
+    ]
+
+    for p in parsers:
+        if r := p(l):
+            return r
+
+    # print(f"l: {l}")
+    return None
+
+
+async def parse_logs_stream(inf: asyncio.StreamReader) -> AsyncIterator[Event]:
+    while True:
+        l = await inf.readline()
+        if l == b"":
+            break
+
+        line = l.decode("utf-8").strip()
+        r = parse_line(line)
+        if r is not None:
+            yield r
+
+
+async def parse_logs(inf: asyncio.StreamReader) -> list[Event]:
+    evs = []
+    async for e in parse_logs_stream(inf):
+        evs.append(e)
+
+    return evs
+
+
+def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
+    test: str = ""
+    sdev: str = ""
+    rdev: str = ""
+    score: str = ""
+    rcore: str = ""
+    proc: str = ""
+    bw: dict = {}
+
+    runs: list[TestRun] = []
+    links: list[TestedLink] = []
+    errors: list = []
+
+    stresstest = "MeshDispatchFixture.TensixDeploymentEthernet05StressTest"
+    drambidir = "MeshDispatchFixture.TensixDeploymentEthernet04DataIntegrityDramBidir"
+    noprocs = [drambidir]
+
+    it = iter(evs)
+    for e in it:
+        if e.typ == EventType.TESTSTART:
+            test = e.extra["name"]
+            sdev = rdev = score = rcore = proc = ""
+            links = []
+            errors = []
+            bw = {}
+        elif e.typ == EventType.TESTEND:
+            if proc != "":
+                links.append(TestedLink(sdev, score, rdev, rcore, proc, bw, errors))
+            runs.append(TestRun(test, links, e.extra["status"]))
+            test = sdev = rdev = score = rcore = proc = ""
+            links = []
+            errors = []
+            bw = {}
+        elif e.typ == EventType.DEVICES:
+            sdev = e.extra["sdev"]
+            rdev = e.extra["rdev"]
+            score = rcore = proc = ""
+            errors = []
+            bw = {}
+        elif e.typ == EventType.CORES:
+            if test in noprocs and score != "":
+                links.append(TestedLink(sdev, score, rdev, rcore, proc, bw, errors))
+            score = e.extra["score"]
+            rcore = e.extra["rcore"]
+            proc = ""
+            errors = []
+            bw = {}
+        elif e.typ == EventType.PROCS:
+            if proc != "" and test != stresstest:
+                links.append(TestedLink(sdev, score, rdev, rcore, proc, bw, errors))
+            proc = e.extra["proc"]
+            bw = {}
+        elif e.typ == EventType.BW:
+            bw = e.extra
+        elif e.typ == EventType.BWFAIL:
+            errors.append({"bw": e.extra})
+        elif e.typ == EventType.DATACMP:
+            errors.append({"data": e.extra})
+        elif e.typ == EventType.TESTSETUP:
+            sdev = rdev = score = rcore = proc = ""
+            links = []
+            errors = []
+            bw = {}
+        elif e.typ == EventType.TESTCHECK:
+            if sdev != "":
+                links.append(TestedLink(sdev, score, rdev, rcore, proc, bw, errors))
+            sdev = e.extra["sdev"]
+            rdev = e.extra["rdev"]
+            score = e.extra["score"]
+            rcore = e.extra["rcore"]
+            proc = e.extra["proc"]
+            errors = []
+            bw = {}
+
+    yield from runs
+
+
+def prepare_filter(tests: list[TestCase]) -> str:
+    return ":".join(map(lambda x: f"*TensixDeploymentEthernet*{x}", tests))
+
+
+async def main():
+    # print("running")
+    filters = prepare_filter([TestCase.BANDWIDTH_BIDIR])
+    filters = prepare_filter([TestCase.STRESS_TEST])
+    # filters = prepare_filter([TestCase.BANDWIDTH_BIDIR, TestCase.DATA_INTEGRITY_BIDIR, TestCase.STRESS_TEST])
+    filters = prepare_filter([t for t in TestCase])
+    # print(filters)
+    program = "build/test/tt_metal/unit_tests_deployment"
+    args = [f"--gtest_filter={filters}"]
+
+    proc = await asyncio.create_subprocess_exec(program, *args, stdout=asyncio.subprocess.PIPE)
+
+    p, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout))
+
+    # pprint.pp(evs)
+    runs = list(parse_evs(evs))
+    # pprint.pp(runs)
+    # print(runs_to_json(runs, sort_keys=True, indent=4))
+    runs_to_jsonf("out.json", runs, sort_keys=True, indent=4)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
