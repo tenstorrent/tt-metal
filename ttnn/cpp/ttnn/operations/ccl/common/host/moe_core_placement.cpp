@@ -13,29 +13,23 @@
 
 namespace ttnn::operations::ccl::common {
 
-void CoreCoordSet::insert(const CoreCoord& core) { coords.insert({core.x, core.y}); }
-
-bool CoreCoordSet::contains(const CoreCoord& core) const { return coords.contains({core.x, core.y}); }
-
-void CoreCoordSet::merge(const CoreCoordSet& other) { coords.insert(other.coords.begin(), other.coords.end()); }
-
-CoreCoordSet CoreCoordSet::from_cores(const std::vector<CoreCoord>& cores) {
-    CoreCoordSet result;
+CoreCoordPairSet core_coords_to_pair_set(const std::vector<CoreCoord>& cores) {
+    CoreCoordPairSet result;
     for (const auto& core : cores) {
-        result.insert(core);
+        result.insert({core.x, core.y});
     }
     return result;
 }
 
 std::vector<CoreCoord> pick_worker_cores_avoiding(
-    const CoreCoordSet& avoid, const CoreCoord& worker_grid, uint32_t num_cores) {
+    const CoreCoordPairSet& avoid, const CoreCoord& worker_grid, uint32_t num_cores) {
     std::vector<CoreCoord> picked;
     picked.reserve(num_cores);
 
     for (int y = static_cast<int>(worker_grid.y) - 1; y >= 0 && picked.size() < num_cores; --y) {
         for (int x = static_cast<int>(worker_grid.x) - 1; x >= 0 && picked.size() < num_cores; --x) {
             CoreCoord candidate(static_cast<uint32_t>(x), static_cast<uint32_t>(y));
-            if (!avoid.contains(candidate)) {
+            if (!avoid.contains({candidate.x, candidate.y})) {
                 picked.push_back(candidate);
             }
         }
@@ -45,14 +39,14 @@ std::vector<CoreCoord> pick_worker_cores_avoiding(
 }
 
 std::vector<CoreCoord> pick_worker_cores_row_major_avoiding(
-    const CoreCoordSet& avoid, const CoreCoord& worker_grid, uint32_t num_cores) {
+    const CoreCoordPairSet& avoid, const CoreCoord& worker_grid, uint32_t num_cores) {
     std::vector<CoreCoord> picked;
     picked.reserve(num_cores);
 
     for (uint32_t y = 0; y < worker_grid.y && picked.size() < num_cores; ++y) {
         for (uint32_t x = 0; x < worker_grid.x && picked.size() < num_cores; ++x) {
             CoreCoord candidate(x, y);
-            if (!avoid.contains(candidate)) {
+            if (!avoid.contains({candidate.x, candidate.y})) {
                 picked.push_back(candidate);
             }
         }
@@ -62,7 +56,7 @@ std::vector<CoreCoord> pick_worker_cores_row_major_avoiding(
 }
 
 std::vector<CoreCoord> pick_worker_cores_row_major_avoiding(
-    const CoreCoordSet& avoid, const CoreCoord& worker_grid, uint32_t num_cores, uint32_t max_y_inclusive) {
+    const CoreCoordPairSet& avoid, const CoreCoord& worker_grid, uint32_t num_cores, uint32_t max_y_inclusive) {
     std::vector<CoreCoord> picked;
     picked.reserve(num_cores);
 
@@ -70,7 +64,7 @@ std::vector<CoreCoord> pick_worker_cores_row_major_avoiding(
     for (uint32_t y = 0; y < y_limit && picked.size() < num_cores; ++y) {
         for (uint32_t x = 0; x < worker_grid.x && picked.size() < num_cores; ++x) {
             CoreCoord candidate(x, y);
-            if (!avoid.contains(candidate)) {
+            if (!avoid.contains({candidate.x, candidate.y})) {
                 picked.push_back(candidate);
             }
         }
@@ -79,44 +73,15 @@ std::vector<CoreCoord> pick_worker_cores_row_major_avoiding(
     return picked;
 }
 
-std::vector<CoreCoord> pick_tilize_cores_avoiding_matmul_bbox(
-    const CoreCoordSet& matmul_avoid,
-    const CoreRange& matmul_bounding_box,
-    const CoreCoord& worker_grid,
-    uint32_t num_cores) {
-    std::vector<CoreCoord> picked;
-    picked.reserve(num_cores);
-
-    for (int y = static_cast<int>(worker_grid.y) - 1; y >= 0 && picked.size() < num_cores; --y) {
-        for (int x = static_cast<int>(worker_grid.x) - 1; x >= 0 && picked.size() < num_cores; --x) {
-            CoreCoord candidate(static_cast<uint32_t>(x), static_cast<uint32_t>(y));
-            if (matmul_avoid.contains(candidate)) {
-                continue;
-            }
-
-            std::vector<CoreCoord> trial = picked;
-            trial.push_back(candidate);
-            const CoreRange trial_bounding_box = CoreRangeSet(trial).bounding_box();
-            if (trial_bounding_box.intersects(matmul_bounding_box)) {
-                continue;
-            }
-
-            picked.push_back(candidate);
-        }
-    }
-
-    return picked;
-}
-
 std::vector<CoreCoord> pick_tilize_cores_in_upper_rows(
-    const CoreCoordSet& avoid, const CoreCoord& worker_grid, uint32_t num_cores, uint32_t min_y) {
+    const CoreCoordPairSet& avoid, const CoreCoord& worker_grid, uint32_t num_cores, uint32_t min_y) {
     std::vector<CoreCoord> picked;
     picked.reserve(num_cores);
 
     for (int y = static_cast<int>(worker_grid.y) - 1; y >= static_cast<int>(min_y) && picked.size() < num_cores; --y) {
         for (int x = static_cast<int>(worker_grid.x) - 1; x >= 0 && picked.size() < num_cores; --x) {
             CoreCoord candidate(static_cast<uint32_t>(x), static_cast<uint32_t>(y));
-            if (!avoid.contains(candidate)) {
+            if (!avoid.contains({candidate.x, candidate.y})) {
                 picked.push_back(candidate);
             }
         }
@@ -126,13 +91,13 @@ std::vector<CoreCoord> pick_tilize_cores_in_upper_rows(
 }
 
 std::optional<CoreRange> find_worker_rectangle_avoiding(
-    const CoreCoordSet& avoid, const CoreCoord& worker_grid, uint32_t width, uint32_t height) {
+    const CoreCoordPairSet& avoid, const CoreCoord& worker_grid, uint32_t width, uint32_t height) {
     for (uint32_t sy = 0; sy + height <= worker_grid.y; ++sy) {
         for (uint32_t sx = 0; sx + width <= worker_grid.x; ++sx) {
             bool valid = true;
             for (uint32_t dy = 0; dy < height && valid; ++dy) {
                 for (uint32_t dx = 0; dx < width && valid; ++dx) {
-                    if (avoid.contains(CoreCoord(sx + dx, sy + dy))) {
+                    if (avoid.contains({sx + dx, sy + dy})) {
                         valid = false;
                     }
                 }
@@ -146,7 +111,7 @@ std::optional<CoreRange> find_worker_rectangle_avoiding(
 }
 
 std::optional<CoreRange> find_combine_strip_avoiding(
-    const CoreCoordSet& avoid, const CoreCoord& worker_grid, uint32_t strip_height, uint32_t max_y_inclusive) {
+    const CoreCoordPairSet& avoid, const CoreCoord& worker_grid, uint32_t strip_height, uint32_t max_y_inclusive) {
     if (kMoEComputeCombineStripWidth > worker_grid.x || strip_height == 0) {
         return std::nullopt;
     }
@@ -159,7 +124,7 @@ std::optional<CoreRange> find_combine_strip_avoiding(
             bool valid = true;
             for (uint32_t dy = 0; dy < strip_height && valid; ++dy) {
                 for (uint32_t dx = 0; dx < kMoEComputeCombineStripWidth && valid; ++dx) {
-                    if (avoid.contains(CoreCoord(static_cast<uint32_t>(sx) + dx, sy + dy))) {
+                    if (avoid.contains({static_cast<uint32_t>(sx) + dx, sy + dy})) {
                         valid = false;
                     }
                 }
@@ -179,7 +144,7 @@ std::vector<CoreCoord> pick_combine_cores_from_strip(const CoreRange& strip, uin
     return corerange_to_cores(strip_range_set, num_cores, /*row_wise=*/true);
 }
 
-std::optional<CoreRange> find_tilize_2x2_block_avoiding(const CoreCoordSet& avoid, const CoreCoord& worker_grid) {
+std::optional<CoreRange> find_tilize_2x2_block_avoiding(const CoreCoordPairSet& avoid, const CoreCoord& worker_grid) {
     constexpr uint32_t kTilizeBlockWidth = 2;
     constexpr uint32_t kTilizeBlockHeight = 2;
 
@@ -194,7 +159,7 @@ std::optional<CoreRange> find_tilize_2x2_block_avoiding(const CoreCoordSet& avoi
         bool valid = true;
         for (uint32_t dy = 0; dy < kTilizeBlockHeight && valid; ++dy) {
             for (uint32_t dx = 0; dx < kTilizeBlockWidth && valid; ++dx) {
-                if (avoid.contains(CoreCoord(static_cast<uint32_t>(sx) + dx, sy + dy))) {
+                if (avoid.contains({static_cast<uint32_t>(sx) + dx, sy + dy})) {
                     valid = false;
                 }
             }
@@ -228,10 +193,12 @@ std::vector<CoreCoord> pick_tilize_cores_from_2x2_legacy_order(const CoreRange& 
     return std::vector<CoreCoord>(legacy_order.begin(), legacy_order.begin() + num_cores);
 }
 
-CoreCoordSet build_moe_compute_avoid_set(const CoreCoordSet& matmul_avoid_set, const CoreRangeSet& mux_core_range_set) {
-    CoreCoordSet avoid_set = matmul_avoid_set;
+CoreCoordPairSet build_moe_compute_avoid_set(
+    const CoreCoordPairSet& matmul_avoid_set, const CoreRangeSet& mux_core_range_set) {
+    CoreCoordPairSet avoid_set = matmul_avoid_set;
     if (!mux_core_range_set.empty()) {
-        avoid_set.merge(CoreCoordSet::from_cores(corerange_to_cores(mux_core_range_set)));
+        const auto mux_pairs = core_coords_to_pair_set(corerange_to_cores(mux_core_range_set));
+        avoid_set.insert(mux_pairs.begin(), mux_pairs.end());
     }
     return avoid_set;
 }
@@ -261,8 +228,8 @@ MoEComputeCoreSelection select_moe_compute_cores(
     const auto matmul_cores =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
 
-    const CoreCoordSet matmul_avoid_set = CoreCoordSet::from_cores(matmul_cores);
-    const CoreCoordSet placement_avoid_set = build_moe_compute_avoid_set(matmul_avoid_set, mux_core_range_set);
+    const CoreCoordPairSet matmul_avoid_set = core_coords_to_pair_set(matmul_cores);
+    const CoreCoordPairSet placement_avoid_set = build_moe_compute_avoid_set(matmul_avoid_set, mux_core_range_set);
     const CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
     const CoreRangeSet matmul_core_range_set = CoreRangeSet(matmul_cores);
     const CoreRange matmul_bounding_box = matmul_core_range_set.bounding_box();
@@ -299,8 +266,9 @@ MoEComputeCoreSelection select_moe_compute_cores(
             continue;
         }
 
-        CoreCoordSet combine_and_matmul_avoid_set = placement_avoid_set;
-        combine_and_matmul_avoid_set.merge(CoreCoordSet::from_cores(combine_cores));
+        CoreCoordPairSet combine_and_matmul_avoid_set = placement_avoid_set;
+        const auto combine_pairs = core_coords_to_pair_set(combine_cores);
+        combine_and_matmul_avoid_set.insert(combine_pairs.begin(), combine_pairs.end());
 
         const auto tilize_block_opt = find_tilize_2x2_block_avoiding(combine_and_matmul_avoid_set, worker_grid);
         if (tilize_block_opt.has_value()) {
