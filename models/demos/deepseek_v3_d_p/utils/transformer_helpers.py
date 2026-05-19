@@ -54,7 +54,7 @@ P64TOK_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_64tok.json")
 P960TOK_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_960tok.json")
 PIE960_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_pie_960tok.json")
 
-TRACE_DIR_BASE = Path(os.getenv("DEEPSEEK_V3_TRACE_DIR", "/mnt/MLPerf/deepseek-prefill-cache"))
+TRACE_DIR_BASE = Path(os.getenv("DEEPSEEK_V3_TRACE_DIR", "/mnt/MLPerf/deepseek-prefill-cache")).resolve()
 ILLIAD_1024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2"
 ILLIAD_25024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2_25024"
 ABC_1K_PAD_RIGHT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_right_1024"
@@ -109,9 +109,9 @@ def check_first_token_match(trace, trace_dir: Path, first_token_id: int, first_t
     ref_token_text = trace.metadata.get("next_token_text")
 
     if ref_token_id is None or ref_token_text is None:
-        output_meta_path = trace_dir / "output_metadata.json"
+        output_meta_path = (trace_dir / "output_metadata.json").resolve()
         if output_meta_path.exists():
-            with open(output_meta_path) as f:
+            with open(output_meta_path) as f:  # noqa: S108
                 output_meta = json.load(f)
             ref_token_id = ref_token_id or output_meta.get("next_token_id")
             ref_token_text = ref_token_text or output_meta.get("next_token_text")
