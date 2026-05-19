@@ -5,10 +5,12 @@
 #include <gtest/gtest.h>
 
 #include "autograd/auto_context.hpp"
+#include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/minimal_matmul.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 
 namespace {
@@ -24,6 +26,76 @@ float max_abs_error(const ttnn::Tensor& a, const ttnn::Tensor& b) {
         max_err = std::max(max_err, std::abs(a_vec[i] - b_vec[i]));
     }
     return max_err;
+}
+
+// Element-wise tolerance check (numpy-style):
+//     |a - b| <= atol + rtol * |b|
+// Used to compare variable_matmul against minimal_matmul: same algorithm, same fidelity
+// (HiFi4 + fp32 dest + packer_l1_acc), so results should be near-bit-identical even at
+// BF16 — well under 1e-2 rtol / atol.
+::testing::AssertionResult assert_allclose(
+    const ttnn::Tensor& a, const ttnn::Tensor& b, float rtol = 1e-2F, float atol = 1e-2F) {
+    const auto a_vec = ttml::core::to_vector<float>(a);
+    const auto b_vec = ttml::core::to_vector<float>(b);
+    if (a_vec.size() != b_vec.size()) {
+        return ::testing::AssertionFailure() << "size mismatch: " << a_vec.size() << " vs " << b_vec.size();
+    }
+    float max_abs = 0.F;
+    float max_rel = 0.F;
+    size_t bad_count = 0;
+    size_t worst_idx = 0;
+    float worst_a = 0.F;
+    float worst_b = 0.F;
+    float worst_diff = 0.F;
+    for (size_t i = 0; i < a_vec.size(); ++i) {
+        const float ai = a_vec[i];
+        const float bi = b_vec[i];
+        const float diff = std::abs(ai - bi);
+        const float tol = atol + rtol * std::abs(bi);
+        max_abs = std::max(max_abs, diff);
+        if (std::abs(bi) > 0.F) {
+            max_rel = std::max(max_rel, diff / std::abs(bi));
+        }
+        if (diff > tol) {
+            if (bad_count == 0 || diff > worst_diff) {
+                worst_idx = i;
+                worst_a = ai;
+                worst_b = bi;
+                worst_diff = diff;
+            }
+            ++bad_count;
+        }
+    }
+    if (bad_count == 0) {
+        return ::testing::AssertionSuccess();
+    }
+    return ::testing::AssertionFailure() << bad_count << "/" << a_vec.size() << " elements outside (rtol=" << rtol
+                                         << ", atol=" << atol << "); max_abs=" << max_abs << " max_rel=" << max_rel
+                                         << "; worst: idx=" << worst_idx << " a=" << worst_a << " b=" << worst_b
+                                         << " |a-b|=" << worst_diff;
+}
+
+// Run minimal_matmul with HiFi4 + fp32_acc + packer_l1_acc — matches variable_matmul's
+// defaults — and the same block sizes / grid. Used as the BF16-precision reference.
+ttnn::Tensor minimal_matmul_hifi4(
+    const ttnn::Tensor& input, const ttnn::Tensor& weight, const VariableMatmulConfig& cfg) {
+    const ttnn::experimental::prim::MinimalMatmulConfig mm_cfg{
+        .M_block_size = cfg.M_block_size,
+        .K_block_size = cfg.K_block_size,
+        .N_block_size = cfg.N_block_size,
+        .subblock_h = cfg.subblock_h,
+        .subblock_w = cfg.subblock_w,
+        .compute_with_storage_grid_size = cfg.compute_with_storage_grid_size,
+    };
+    return ttnn::experimental::minimal_matmul(
+        input,
+        weight,
+        /*bias=*/std::nullopt,
+        /*fused_activation=*/std::nullopt,
+        /*config=*/mm_cfg,
+        /*memory_config=*/std::nullopt,
+        /*dtype=*/std::nullopt,
+        /*compute_kernel_config=*/ttml::core::ComputeKernelConfig::matmul());
 }
 
 ttnn::Tensor create_random_device_tensor(uint32_t M, uint32_t K, ttnn::distributed::MeshDevice* device) {
@@ -1338,4 +1410,83 @@ TEST_F(VariableMatmulTest, TransposeBoth_Correctness_128x128x512) {
 
     float err = max_abs_error(result, ref);
     EXPECT_LT(err, 2.0F) << "transpose_a+b max_abs_error: " << err;
+}
+
+// ---------------------------------------------------------------------------
+// HiFi4-vs-HiFi4 minimal_matmul parity tests. variable_matmul is derived from
+// minimal_matmul; with the same fidelity (HiFi4 + fp32 dst + packer_l1_acc) and same
+// block sizes / grid, the two should agree to within a few BF16 ULPs even on large K.
+// rtol=1e-2 atol=1e-2 is achievable here precisely because we're not bounded by
+// ttnn::matmul's different reduction order — both implementations sum in the same order.
+// ---------------------------------------------------------------------------
+
+TEST_F(VariableMatmulTest, MinimalParity_NoTranspose) {
+    const uint32_t M = 128, K = 128, N = 512;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M, K, device);
+    auto weight = create_random_device_tensor(K, N, device);
+
+    auto result = ttml::metal::variable_matmul(input, weight, kConfig);
+    auto ref = minimal_matmul_hifi4(input, weight, kConfig);
+
+    EXPECT_TRUE(assert_allclose(result, ref)) << "variable vs minimal (no transpose)";
+}
+
+TEST_F(VariableMatmulTest, MinimalParity_TransposeB) {
+    const uint32_t M = 128, K = 128, N = 512;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M, K, device);
+    auto weight_nk = create_random_device_tensor(N, K, device);  // stored [N, K]
+
+    auto cfg = kConfig;
+    cfg.transpose_b = true;
+    auto result = ttml::metal::variable_matmul(input, weight_nk, cfg);
+    // minimal_matmul has no transpose flag; pre-transpose the weight to compare apples-to-apples.
+    auto weight_kn = ttnn::transpose(weight_nk, -2, -1);
+    auto ref = minimal_matmul_hifi4(input, weight_kn, kConfig);
+
+    EXPECT_TRUE(assert_allclose(result, ref)) << "variable(transpose_b) vs minimal";
+}
+
+TEST_F(VariableMatmulTest, MinimalParity_TransposeA) {
+    const uint32_t M = 128, K = 128, N = 512;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input_km = create_random_device_tensor(K, M, device);  // stored [K, M]
+    auto weight = create_random_device_tensor(K, N, device);
+
+    auto cfg = kConfig;
+    cfg.transpose_a = true;
+    auto result = ttml::metal::variable_matmul(input_km, weight, cfg);
+    auto input_mk = ttnn::transpose(input_km, -2, -1);
+    auto ref = minimal_matmul_hifi4(input_mk, weight, kConfig);
+
+    EXPECT_TRUE(assert_allclose(result, ref)) << "variable(transpose_a) vs minimal";
+}
+
+// Production-scale parity at moe_ffn dW_down shape (transpose_a; K=1024).
+// Even at K=1024, two HiFi4 reductions in the same order should agree well within rtol=1e-2.
+TEST_F(VariableMatmulTest, MinimalParity_MixtralDWDown_TransposeA) {
+    const VariableMatmulConfig cfg{
+        .M_block_size = 4,
+        .K_block_size = 8,
+        .N_block_size = 8,
+        .subblock_h = 2,
+        .subblock_w = 2,
+        .compute_with_storage_grid_size = {10, 10},
+        .transpose_a = true,
+    };
+    const uint32_t M = 14336, K = 1024, N = 4096;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input_km = create_random_device_tensor(K, M, device);
+    auto weight = create_random_device_tensor(K, N, device);
+
+    auto result = ttml::metal::variable_matmul(input_km, weight, cfg);
+    auto input_mk = ttnn::transpose(input_km, -2, -1);
+    auto ref = minimal_matmul_hifi4(input_mk, weight, cfg);
+
+    EXPECT_TRUE(assert_allclose(result, ref)) << "variable(MixtralDWDown,tA) vs minimal";
 }
