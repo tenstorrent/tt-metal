@@ -123,6 +123,22 @@ class EN_DEST_REUSE(TemplateParameter):
         return "#define EN_DEST_REUSE"
 
 
+@dataclass
+class SFPU_INT_OP(TemplateParameter):
+    """Emit a #define to select the integer SFPU operation in a shared C++ test source.
+
+    Supported values: "MUL", "GT", "LT", "LE", "GE".  When omitted the C++ source
+    falls through to its default (add_int) path.
+    """
+
+    op: str = ""
+
+    def convert_to_cpp(self) -> str:
+        if self.op:
+            return f"#define SFPU_INT_OP_{self.op.upper()}"
+        return ""
+
+
 def _generate_operation_constants(mathop: MathOperation) -> list[str]:
     """Generate the appropriate operation constants based on the math operation type."""
     constants = []
