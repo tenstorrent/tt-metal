@@ -35,8 +35,9 @@ void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     // Number of physical DRAM banks the HEIGHT_SHARDED weight tensor lives on. WH=12 (1:1
-    // with ring N=12). BH=8 always; ring N can be 8, 12, or 16 -> on BH N=12/16 we walk a
-    // ring core's slice across multiple banks via the bank-run loop below.
+    // with ring N=12). BH=8 always; ring N can be 8, 12, or 16. When N exceeds num_banks
+    // each ring core's slice is smaller than a bank, but may straddle one bank boundary;
+    // the bank-run loop below handles up to two banks per slice.
     constexpr uint32_t num_banks = get_named_compile_time_arg_val("num_banks");
     // Per-ring-core total tile-page count (across ALL layers and ALL experts). Derived from
     // the HEIGHT_SHARDED weight tensor's total page count divided by num_cores (the prepare
@@ -147,8 +148,11 @@ void kernel_main() {
     // and it runs for `pages_per_logical_shard` consecutive pages.
     //
     // For a global page id `gp`:
-    //     bank_id      = gp / pages_per_bank_total
-    //     in_bank_page = gp - bank_id * pages_per_bank_total
+    //     shard_idx    = gp / pages_per_bank_total
+    //     in_bank_page = gp - shard_idx * pages_per_bank_total
+    // `shard_idx` is the placement-order index in [0, num_banks); the chip bank id is
+    // obtained via `shard_to_bank[shard_idx]` (host computes this from the actual
+    // buffer placement returned by `buffer()->get_buffer_page_mapping()`).
     constexpr uint32_t w0_w1_pages_per_logical_shard = Cfg::w0_w1_blocks_per_expert * w0_w1_tiles_per_block;
     constexpr uint32_t w0_w1_pages_total = num_cores * w0_w1_pages_per_ring_core_total;
     static_assert(w0_w1_pages_total % num_banks == 0, "w0_w1 pages_total must be divisible by num_banks");
@@ -221,7 +225,7 @@ void kernel_main() {
     // We reserve one to kick start the pipeline, and then it is steady state
     cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
-    // Pre-set state for this ring core's first bank (M1 fast path for WH where
+    // Pre-set state for this ring core's first bank (WH fast path: when
     // pages_per_ring_core_total <= pages_per_bank_total). The bank-run loop below will
     // re-set_state only when shard_idx changes.
     const uint32_t initial_shard_idx_w0 =

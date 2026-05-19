@@ -480,7 +480,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     const auto combine_data_parallel_cores = args.num_data_parallel_cores;
 
     // Derived tile counts from generalized intermediate_size API (PR #43932).
-    // Replaces dchen's per-(hidden_size, config_type) lookup machinery -- formula-driven now.
+    // Replaces the pre-#43932 per-(hidden_size, config_type) lookup machinery -- formula-driven now.
     const uint32_t intermediate_size = args.intermediate_size;
     const uint32_t hidden_tiles = hidden_size / 32;
     const uint32_t intermediate_tiles = intermediate_size / 32;
@@ -505,7 +505,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
 
     // a2a_cb_pages = IN2_TILES_PER_STEP = ceil(intermediate_tiles / matmul_num_cores), even-rounded
-    // (formula-driven, replaces dchen's per-config table). WH always has matmul_num_cores=12.
+    // (formula-driven, replaces the pre-#43932 per-config table). WH always has matmul_num_cores=12.
     // BH supports 8/12/16; the kernel's bank-run loop walks each ring core's slice across multiple
     // banks when N != bank count.
     const uint32_t expected_matmul_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? args.bh_ring_size : 12u;
@@ -598,8 +598,9 @@ MoEComputeMeshWorkloadFactory::create_at(
     // that metadata is ready and task splitting can proceed.
     // Allocate on full rectangle of usable cores so we can multicast without clobbering.
     // In ComputeOnly mode, the kernel-side increment is gated off via the compute_only CT arg, so
-    // the semaphore is unused by anyone -- but dm1 still calls get_semaphore() on it (a local L1
-    // address lookup), so we still need it to be allocated on at least the matmul core range set.
+    // the semaphore is unused by anyone -- but tilize_reader still calls get_semaphore() on it
+    // (a local L1 address lookup), so we still need it to be allocated on at least the matmul
+    // core range set.
     const auto tilize_combine_sync_semaphore_id = tt::tt_metal::CreateSemaphore(
         program,
         args.path == MoEComputePath::ComputeOnly ? matmul_core_range_set
@@ -997,8 +998,10 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"mesh_rows", mesh_view.num_rows()},
         {"mesh_cols", mesh_view.num_cols()},
         {"linearized_mesh_coord", linearized_mesh_coord},
-        // ComputeOnly path has no combine_params, so cluster_axis() is nullopt; default to 1
-        // (the kernel CT arg is consumed only by the combine path, harmless on ComputeOnly).
+        // ComputeOnly path has no combine_params, so cluster_axis() is nullopt; default to 1.
+        // The CT arg is consumed by tilize_reader/tilize_writer (to derive dispatch_devices /
+        // dispatch_index) — harmless on a 1x1 mesh because both axis values resolve to the same
+        // dispatch_devices=1. Non-1x1 ComputeOnly callers would need cluster_axis threaded through.
         {"cluster_axis", (uint32_t)args.cluster_axis().value_or(1)},
 
         // Coordinates for non-drain-sync to drain-sync synchronization
@@ -1276,7 +1279,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t output_shard_width_tiles = hidden_size / tile_width / combine_data_parallel_cores;
     // num_banks: number of physical DRAM banks the HEIGHT_SHARDED weight tensor lives on.
     // WH=12 (one bank per ring core, 1:1). BH=8 always; ring N may be 8/12/16, so on
-    // BH N=12/16 each ring core's slice spans multiple banks → kernel walks via the
+    // BH N=12/16 each ring core's slice may straddle one bank boundary → kernel walks via the
     // bank-run loop in dm0.cpp.
     const uint32_t num_dram_banks = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? 8u : 12u;
     // pages_per_ring_core_total / w2_pages_per_ring_core_total: number of tile-pages each

@@ -889,7 +889,7 @@ def get_weight_mem_configs(
     - W2: N dimension grows by 1 tile (for bias) and is padded to align with 7-tile reads
 
     Memory layout: always HEIGHT_SHARDED with leading dim = num_banks. On WH (12 banks)
-    the ring is N=12 so num_cores == num_banks (1:1, byte-identical M1 baseline). On BH
+    the ring is N=12 so num_cores == num_banks (1:1). On BH
     (8 banks) num_cores can be 8/12/16; when num_cores != 8 the prepare functions reshape
     the leading dim from num_cores → 8 (byte-equivalent regrouping). The kernel then walks
     each ring core's contiguous slice across the 1-or-more banks it covers via the

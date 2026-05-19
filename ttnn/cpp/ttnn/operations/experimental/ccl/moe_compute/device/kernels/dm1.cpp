@@ -310,7 +310,7 @@ void kernel_main() {
                     noc_semaphore_inc</*posted=*/true>(neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, vchannel);
                     ++semaphore_value;
 #else
-                    // WH: original stateful path (byte-identical to M1).
+                    // WH: original stateful path.
                     noc_inline_dw_write_with_state<
                         /*update_addr_lo=*/false,
                         /*update_counter=*/true,
@@ -345,13 +345,14 @@ void kernel_main() {
                     combine_shard_width_tiles - dest_width_offset_tiles, output_width_tiles_core - width_tiles_sent);
                 const uint32_t width_transfer_bytes = width_transfer_tiles * tile_width_size_bytes;
 
-                // In production: wait for combine to signal that the buffer segment is available.
-                // The wait also acts as an implicit barrier between chunks -- `noc_async_write_one_packet_set_state`
-                // sets a global size state for subsequent posted writes, and consecutive chunks may use
-                // different `width_transfer_bytes`. Without the inter-chunk barrier, queued writes from a
-                // prior chunk could be issued with the next chunk's state.
-                // In compute_only there's no consumer to wait for, so we explicitly flush previous chunk's
-                // writes before reissuing set_state for this chunk.
+                // In production: at each expert's first chunk, wait for combine to signal that the
+                // buffer segment is available. The wait also acts as an implicit barrier between
+                // experts -- `noc_async_write_one_packet_set_state` sets a global size state for
+                // subsequent posted writes, and consecutive experts may use different
+                // `width_transfer_bytes`. Without the inter-expert barrier, queued writes from a
+                // prior expert could be issued with the next expert's state.
+                // In compute_only there's no consumer to wait for, so we explicitly flush previous
+                // chunk's writes before reissuing set_state for this chunk.
                 if constexpr (compute_only) {
                     noc_async_writes_flushed(/*noc=*/1);  // non-posted in compute_only; use NON-posted flush API
                 } else if (chunk == 0) {

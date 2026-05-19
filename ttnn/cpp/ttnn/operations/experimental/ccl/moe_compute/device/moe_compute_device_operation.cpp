@@ -118,7 +118,7 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     //   - WH: ring = num DRAM banks = 12 (1:1, no padding). args.bh_ring_size is forced to 12
     //     in invoke() for WH, so reading either source returns the same value.
     //   - BH: ring = bh_ring_size (8 / 12 / 16). program_factory.cpp pads the 8 DRAM-adjacent
-    //     cores up to bh_ring_size via kBhMatmulExtras (lines 200-225 in that file). Using the
+    //     cores up to bh_ring_size via `kBhMatmulExtras` (see program_factory.cpp). Using the
     //     raw DRAM bank count here (=8 on BH always) would under-report and reject shapes
     //     whose width_shard_dim divides bh_ring_size but not 8 — e.g. GPT-OSS at hidden=2880
     //     forces output_width_shard_dim=3, valid at N=12 (12%3=0) but the early validate using
@@ -415,7 +415,7 @@ std::vector<ttnn::Tensor> moe_compute(
 
     const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
 
-    // Resolve BH ring size (WH always uses 12; BH supports {8, 12, 16}, default 16 or env TT_MOE_BH_N).
+    // Resolve BH ring size (WH always uses 12; BH supports {8, 12, 16}, default 12 or env TT_MOE_BH_N).
     const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE)
                                 ? ttnn::experimental::prim::resolve_bh_ring_size(bh_ring_size)
                                 : 12u;
