@@ -22,9 +22,13 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
         exp_base_scale_factor);
 }
 
-template <bool APPROXIMATION_MODE, uint32_t scale = 0x3F800000, bool CLAMP_NEGATIVE = true>
+template <
+    bool APPROXIMATION_MODE,
+    uint32_t scale = 0x3F800000,
+    bool CLAMP_NEGATIVE = true,
+    bool is_fp32_dest_acc_en = false>
 void exp_init() {
-    _init_exponential_<APPROXIMATION_MODE, scale, CLAMP_NEGATIVE>();
+    _init_exponential_<APPROXIMATION_MODE, scale, CLAMP_NEGATIVE, is_fp32_dest_acc_en>();
 }
 
 }  // namespace sfpu
