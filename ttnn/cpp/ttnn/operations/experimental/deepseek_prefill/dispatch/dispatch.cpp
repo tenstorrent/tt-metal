@@ -17,6 +17,7 @@ std::array<ttnn::Tensor, 2> dispatch(
     const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& expert_offsets_tensor,
+    const ttnn::Tensor& expert_histograms_tensor,
     const ttnn::Tensor& expert_dispatch_table_tensor,
     uint32_t dispatch_group_size,
     uint32_t experts_per_chip,
@@ -30,7 +31,8 @@ std::array<ttnn::Tensor, 2> dispatch(
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
     bool use_l1_small_for_semaphores,
-    bool use_fp8_dispatch) {
+    bool use_fp8_dispatch,
+    uint32_t num_untilizers_per_sender) {
     auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
@@ -62,6 +64,7 @@ std::array<ttnn::Tensor, 2> dispatch(
         weights_tensor,
         indices_tensor,
         expert_offsets_tensor,
+        expert_histograms_tensor,
         expert_dispatch_table_tensor,
         dispatch_group_size,
         experts_per_chip,
@@ -75,7 +78,8 @@ std::array<ttnn::Tensor, 2> dispatch(
         memory_config_,
         subdevice_core_range_set,
         use_l1_small_for_semaphores,
-        use_fp8_dispatch);
+        use_fp8_dispatch,
+        num_untilizers_per_sender);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch

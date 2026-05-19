@@ -43,9 +43,15 @@ void bind_dispatch(nb::module_& mod) {
                 Shape per device: (1, seq_len_per_chip, num_experts_per_tok).
             indices_tensor (ttnn.Tensor): Top-k expert indices for each token.
                 Shape per device: (1, seq_len_per_chip, num_experts_per_tok).
-            expert_offsets_tensor (ttnn.Tensor): Starting token index per source device per expert
-                in the destination device's flat dispatch buffer.
+            expert_offsets_tensor (ttnn.Tensor): Starting token index per source device per
+                expert in the destination device's flat dispatch buffer. Consumed by u1
+                (left-to-right, increments).
                 Shape per device: (1, num_routed_experts).
+            expert_histograms_tensor (ttnn.Tensor): Per-expert token count from this source
+                device. u2 (the right-to-left untilizer) computes its starting (exclusive end)
+                write pointer in L1 as expert_offsets_tensor[e] + expert_histograms_tensor[e],
+                so u1 and u2 grow page_idx from opposite ends of each expert's token range.
+                Shape per device: (1, num_routed_experts) or (num_routed_experts,).
             expert_dispatch_table_tensor (ttnn.Tensor): Maps each expert ID to the destination
                 chip ID within the dispatch group. Values >= 0 are destination chip IDs; -1
                 means the expert is absent from this dispatch group.
@@ -69,8 +75,16 @@ void bind_dispatch(nb::module_& mod) {
                 Defaults to 1.
             topology (ttnn.Topology, optional): Fabric topology for remote writes.
                 Defaults to Linear.
-            fp8_output (bool, optional): Output dtype for the dispatched buffer.
-                Defaults to False.
+            use_l1_small_for_semaphores (bool, optional): Allocate the workload's
+                GlobalSemaphores in L1_SMALL instead of L1. Defaults to False.
+            use_fp8_dispatch (bool, optional): Pack the dispatched buffer as Fp8_e4m3
+                (DRAM allocated as UINT8). Requires TILE input layout, not supported on
+                Wormhole_B0. Defaults to False.
+            num_untilizers_per_sender (int, optional): Number of untilize cores per
+                sender on the tile-layout path. Currently only 2 is supported (u1 reads
+                expert_offsets_tensor incrementing, u2 reads expert_offsets_tensor and
+                expert_histograms_tensor and writes decrementing from offsets+histograms).
+                Defaults to 2.
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -86,6 +100,7 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("weights_tensor").noconvert(),
         nb::arg("indices_tensor").noconvert(),
         nb::arg("expert_offsets_tensor").noconvert(),
+        nb::arg("expert_histograms_tensor").noconvert(),
         nb::arg("expert_dispatch_table_tensor").noconvert(),
         nb::kw_only(),
         nb::arg("dispatch_group_size"),
@@ -100,7 +115,8 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("num_links") = 1,
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("use_l1_small_for_semaphores") = false,
-        nb::arg("use_fp8_dispatch") = false);
+        nb::arg("use_fp8_dispatch") = false,
+        nb::arg("num_untilizers_per_sender") = 2);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch::detail

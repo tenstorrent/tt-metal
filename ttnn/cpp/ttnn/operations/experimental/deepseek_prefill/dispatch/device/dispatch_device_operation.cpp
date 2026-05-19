@@ -46,6 +46,14 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         "Expert offsets tensor must be INT32 or UINT32, got {}",
         tensor_args.expert_offsets_tensor.dtype());
     TT_FATAL(
+        tensor_args.expert_histograms_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        "Expert histograms tensor must be ROW_MAJOR layout");
+    TT_FATAL(
+        tensor_args.expert_histograms_tensor.dtype() == DataType::INT32 ||
+            tensor_args.expert_histograms_tensor.dtype() == DataType::UINT32,
+        "Expert histograms tensor must be INT32 or UINT32, got {}",
+        tensor_args.expert_histograms_tensor.dtype());
+    TT_FATAL(
         tensor_args.expert_dispatch_table_tensor.dtype() == DataType::INT32,
         "Expert dispatch table tensor must be INT32, got {}",
         tensor_args.expert_dispatch_table_tensor.dtype());
@@ -141,6 +149,7 @@ prefill_dispatch(
     const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& expert_offsets_tensor,
+    const ttnn::Tensor& expert_histograms_tensor,
     const ttnn::Tensor& expert_dispatch_table_tensor,
     uint32_t dispatch_group_size,
     uint32_t experts_per_chip,
@@ -154,7 +163,8 @@ prefill_dispatch(
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
     bool use_l1_small_for_semaphores,
-    bool use_fp8_dispatch) {
+    bool use_fp8_dispatch,
+    uint32_t num_untilizers_per_sender) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -170,12 +180,14 @@ prefill_dispatch(
             .output_mem_config = memory_config,
             .worker_core_range_set = worker_core_range_set,
             .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
-            .use_fp8_dispatch = use_fp8_dispatch},
+            .use_fp8_dispatch = use_fp8_dispatch,
+            .num_untilizers_per_sender = num_untilizers_per_sender},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weights_tensor = weights_tensor,
             .indices_tensor = indices_tensor,
             .expert_offsets_tensor = expert_offsets_tensor,
+            .expert_histograms_tensor = expert_histograms_tensor,
             .expert_dispatch_table_tensor = expert_dispatch_table_tensor});
 }
 }  // namespace ttnn::prim

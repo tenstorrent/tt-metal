@@ -3,26 +3,36 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //
-// Writer kernel for idle (worker) cores in the dispatch op.
-// Runs on the data-movement RISC opposite the reader so that the reader can
-// prefetch the next batch's DRAM tiles into cb_input_id while this kernel is
-// waiting for compute / the owning sender and performing the NOC write.
+// Untilize core RISCV_0 — data movement.
 //
-// Each idle core is permanently bound to ONE sender core (its owning sender).
-// Token batches are distributed round-robin across total_workers (k_s idle
-// cores + the sender itself).  Core i processes batches i, i+total_workers, …
+// At startup: receive the L1 base addresses of the owning sender's writer CBs
+// (c_4/c_5/c_6) via addr-handshake semaphores written by the sender's writer RISC
+// (RISCV_0 — tile-layout has no sender reader RISC).
 //
-// For each assigned batch:
-//   1. Wait for compute to finish (cb_wait_front on cb_untilize_id).
-//   2. Wait for the owning sender's "send now" signal (start_semaphore).
-//      The sender also writes a route table to cb_mailbox_id before signaling,
-//      so the table is ready to read immediately after the semaphore fires.
-//   3. For each local route entry in the mailbox: write output data and metadata
-//      directly to DRAM using NOC1, bypassing the sender entirely.
-//   4. Bulk-write the full untilized batch to the sender's receive buffer so
-//      the sender can forward cross-device tokens via the fabric writer.
-//   5. Signal the sender that data has landed (data_ready_semaphore).
-//   6. Release the untilize CB (cb_pop_front).
+// Per batch: drain the per-batch route plan published by the reader (this same core,
+// RISCV_1) on c_14 and execute the data movement:
+//
+//   * Local entries: noc_async_write_page payload + metadata directly to DRAM.
+//   * Cross-device entries: per-entry into sender writer CBs (c_4/c_5/c_6, writer_cb_size
+//     slots deep — = read_batch_size = 32, one batch worth).
+//     Synchronization:
+//       data_avail  (sender L1, init=0):              untilize NOC-incs per entry written.
+//       space_avail (this core's L1, init=writer_cb_size): sender writer NOC-incs per entry
+//         that has been fabric-sent (slot free to overwrite). The full-depth seed lets this
+//         core prefill all slots before the first credit lands.
+//     Per-data-entry steps:
+//       1. noc_semaphore_wait_min(local space_avail, produced + 1)
+//       2. slot = produced % writer_cb_size
+//       3. Build route_info[4] in local L1 scratch (c_15, 16B), then one noc_async_write
+//          of 16B → sender c_4 slot [route,distance,page_idx,0]
+//       4. noc_async_write payload → sender c_5 slot
+//       5. Build metadata in c_13, noc_async_write metadata → sender c_6 slot
+//       6. noc_async_write_barrier (no atomic_barrier — no atomics, only async writes)
+//       7. noc_semaphore_inc(sender data_avail, 1)
+//       8. produced++
+//
+// After the last cross-device entry: write ROUTE_INFO_SENTINEL into the next available
+// slot. Sender writer sees SENTINEL and exits the fabric send loop.
 //
 
 #include <cstdint>
@@ -36,6 +46,14 @@
 #define DPRINT_DISPATCH(...)
 #endif
 
+constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
+constexpr uint32_t PLAN_FLAG_LOCAL = 0x1u;
+constexpr uint32_t PLAN_FLAG_END = 0x80000000u;
+constexpr uint32_t PLAN_ENTRY_U32S = 8;
+// Transaction ID for cross-device NOC writes — lets the per-entry barrier wait only on
+// the c_4/c_5/c_6 writes for this entry, while in-flight local DRAM writes keep flying.
+constexpr uint32_t TRID_NON_LOCAL_WRITE = 1;
+
 void kernel_main() {
     // ===== Compile-time args =====
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(0);
@@ -44,137 +62,200 @@ void kernel_main() {
     constexpr uint32_t total_batches = get_compile_time_arg_val(3);
     constexpr uint32_t core_id = get_compile_time_arg_val(4);
     constexpr uint32_t total_workers = get_compile_time_arg_val(5);
-    // New: direct-DRAM-write support
-    constexpr uint32_t cb_mailbox_id = get_compile_time_arg_val(6);
-    constexpr uint32_t cb_metadata_scratch_id = get_compile_time_arg_val(7);
-    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(8);
-    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(9);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(10);
-    constexpr auto output_args = TensorAccessorArgs<11>();
-    constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t total_transfer_size = read_batch_size * aligned_output_page_size;
+    constexpr uint32_t cb_metadata_scratch_id = get_compile_time_arg_val(6);
+    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_plan_id = get_compile_time_arg_val(8);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(9);
+
+    // Per-entry CB protocol on sender side (sender writer CBs, writer_cb_size slots deep).
+    constexpr uint32_t route_info_slot_stride = get_compile_time_arg_val(10);    // l1_alignment
+    constexpr uint32_t writer_cb_size = get_compile_time_arg_val(11);            // = read_batch_size = 32
+    constexpr uint32_t cb_route_info_scratch_id = get_compile_time_arg_val(12);  // 16B local scratch
+    constexpr uint32_t meta_scratch_slots = get_compile_time_arg_val(13);
+
+    constexpr auto output_args = TensorAccessorArgs<14>();
+    constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
     // ===== Runtime args =====
     uint32_t rt_idx = 0;
-    uint32_t data_ready_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
-    uint32_t start_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
     uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_idx++);
     uint32_t sender_noc_y = get_arg_val<uint32_t>(rt_idx++);
     uint32_t addr_ready_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
-    uint32_t addr_value_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
-    // New:
+    uint32_t cross_c4_addr_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t cross_c5_addr_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t cross_c6_addr_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t data_avail_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t space_avail_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
     uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_idx++);
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_idx++);
-    uint32_t mbox_ready_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
-    uint32_t mbox_scratch_addr_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
 
-    uint64_t sender_data_ready_noc_addr =
-        get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_ready_semaphore_id));
-    volatile tt_l1_ptr uint32_t* start_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(start_semaphore_id));
+    const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address);
+    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
 
-    // ===== Startup: receive buffer address exchange (existing) =====
+    // ===== Startup: wait for sender to multicast c_4/c_5/c_6 L1 base addresses =====
     volatile tt_l1_ptr uint32_t* addr_ready_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(addr_ready_semaphore_id));
     noc_semaphore_wait(addr_ready_sem_ptr, 1);
     noc_semaphore_set(addr_ready_sem_ptr, 0);
-    volatile tt_l1_ptr uint32_t* addr_value_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(addr_value_semaphore_id));
-    uint32_t sender_receive_buf_l1_addr = *addr_value_ptr;
-    uint64_t sender_receive_buf_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_receive_buf_l1_addr);
 
-    // ===== Startup: NOC-write mailbox L1 address into sender's scratch slot =====
-    // addr_ready also signals that the sender has multicast its rt_scratch_base into the
-    // mbox_scratch_addr semaphore slot on every core.  We read it here, then use
-    // noc_inline_dw_write to push our mailbox address into the sender's scratch buffer at
-    // slot [core_id * 4].  noc_inline_dw_write is ordered before the subsequent
-    // noc_semaphore_inc on the NOC, so the sender's local L1 read is safe after mbox_ready fires.
-    uint32_t mailbox_l1_addr = get_write_ptr(cb_mailbox_id);
-    volatile tt_l1_ptr uint32_t* mbox_scratch_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(mbox_scratch_addr_semaphore_id));
-    uint32_t sender_scratch_base = *mbox_scratch_addr_ptr;
-    uint64_t sender_scratch_slot_noc_addr =
-        get_noc_addr(sender_noc_x, sender_noc_y, sender_scratch_base + core_id * sizeof(uint32_t));
-    noc_inline_dw_write(sender_scratch_slot_noc_addr, mailbox_l1_addr);
-    noc_async_write_barrier();  // ensure mailbox L1 addr has landed before atomic wakes sender
-    uint64_t sender_mbox_ready_noc_addr =
-        get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(mbox_ready_semaphore_id));
-    noc_semaphore_inc(sender_mbox_ready_noc_addr, 1);
-    noc_async_atomic_barrier();
+    uint32_t sender_c4_l1_addr =
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(cross_c4_addr_semaphore_id));
+    uint32_t sender_c5_l1_addr =
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(cross_c5_addr_semaphore_id));
+    uint32_t sender_c6_l1_addr =
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(cross_c6_addr_semaphore_id));
 
-    // ===== Addr gens for direct DRAM writes =====
-    const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address);
-    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
+    uint64_t sender_c4_base_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_c4_l1_addr);
+    uint64_t sender_c5_base_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_c5_l1_addr);
+    uint64_t sender_c6_base_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_c6_l1_addr);
+    uint64_t sender_data_avail_noc_addr =
+        get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_avail_semaphore_id));
+
+    volatile tt_l1_ptr uint32_t* space_avail_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(space_avail_semaphore_id));
+
     uint32_t metadata_scratch_addr = get_write_ptr(cb_metadata_scratch_id);
+    // Cross-device entries get a dedicated scratch slot past the local ring so their
+    // per-entry barrier doesn't have to fight with in-flight local NoC reads of slot 0.
+    uint32_t xdev_metadata_scratch_addr = metadata_scratch_addr + meta_scratch_slots * aligned_metadata_page_size;
+    uint32_t route_info_scratch_addr = get_write_ptr(cb_route_info_scratch_id);
+    volatile tt_l1_ptr uint32_t* route_info_scratch =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(route_info_scratch_addr);
+    // Per-entry CB credits: sender writer NOC-incs space_avail per entry consumed by fabric.
+    // Before producing slot N (= produced_count), wait for space_avail >= produced_count + 1.
+    uint32_t produced_count = 0;
+    // Per-batch local-entry index into the metadata scratch ring (meta_scratch_slots deep,
+    // sized for worst-case local entries per batch). Reset after the batch-end flush.
+    uint32_t local_count = 0;
 
+    DPRINT_DISPATCH << "Writer untilize: handshake done c4=" << sender_c4_l1_addr << " c5=" << sender_c5_l1_addr
+                    << " c6=" << sender_c6_l1_addr << ENDL();
+
+    // ===== Per-batch loop — drains the route plan published by the reader RISC =====
     for (uint32_t batch_idx = core_id; batch_idx < total_batches; batch_idx += total_workers) {
-        // 1. Wait for compute to finish untilizing this batch
+        // Wait for compute to finish untilizing this batch
         cb_wait_front(cb_untilize_id, read_batch_size);
-
-        // 2. Wait for the sender's "send now" signal
-        //    The sender writes the route table to cb_mailbox_id before incrementing this semaphore,
-        //    so the table is guaranteed to be visible once we clear the semaphore.
-        noc_semaphore_wait(start_sem_ptr, 1);
-        noc_semaphore_set(start_sem_ptr, 0);
 
         uint32_t untilize_read_ptr = get_read_ptr(cb_untilize_id);
 
-        // 3. Write local-expert tokens directly to DRAM (NOC1), skipping the sender.
-        //    Mailbox layout: [entry_count | has_non_local_flag (u32)] [entry_0..entry_N]
-        //    Each entry: token_t, page_idx, token_idx, k, routed_expert, weight (6 × u32)
-        //    High bit of mbox[0]: 1 = cross-device tokens exist → must bulk-send back to sender.
-        //                         0 = all local → skip bulk-send entirely.
-        volatile tt_l1_ptr uint32_t* mbox = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_l1_addr);
-        uint32_t raw = mbox[0];
-        bool has_non_local = (raw & 0x80000000u) != 0;
-        uint32_t entry_count = raw & 0x7FFFFFFFu;
-        for (uint32_t e = 0; e < entry_count; e++) {
-            uint32_t base = 1 + e * 6;
-            uint32_t token_t = mbox[base + 0];
-            uint32_t page_idx = mbox[base + 1];
-            int32_t token_idx = (int32_t)mbox[base + 2];
-            int32_t k = (int32_t)mbox[base + 3];
-            int32_t routed_exp = (int32_t)mbox[base + 4];
-            int16_t weight = (int16_t)mbox[base + 5];
+        // Wait for reader to publish the per-batch route plan
+        cb_wait_front(cb_plan_id, 1);
+        uint32_t plan_addr = get_read_ptr(cb_plan_id);
+        volatile tt_l1_ptr uint32_t* plan = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_addr);
+        uint32_t entry_count = plan[0];
 
-            uint32_t src_addr = untilize_read_ptr + token_t * aligned_output_page_size;
+        {
+            for (uint32_t e = 0; e < entry_count; e++) {
+                uint32_t base = 8 + e * PLAN_ENTRY_U32S;
+                uint32_t flags = plan[base + 0];
+                uint32_t token_t = plan[base + 1];
+                uint32_t routed_expert = plan[base + 2];
+                uint32_t page_idx = plan[base + 3];
+                uint32_t token_idx = plan[base + 4];
+                uint32_t kw = plan[base + 5];
+                uint32_t k = kw >> 16;
+                int16_t weight = (int16_t)(kw & 0xFFFF);
 
-            noc_async_write_page(page_idx, output_addr_gen, src_addr);
+                uint32_t src_addr = untilize_read_ptr + token_t * aligned_output_page_size;
+                bool is_local = (flags & PLAN_FLAG_LOCAL) != 0;
 
-            volatile tt_l1_ptr int32_t* meta = reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_scratch_addr);
-            meta[0] = (int32_t)linearized_mesh_coord;
-            meta[1] = token_idx;
-            meta[2] = k;
-            meta[3] = routed_exp;
-            meta[4] = (int32_t)weight;
-            noc_async_write_page(page_idx, metadata_addr_gen, metadata_scratch_addr);
-            noc_async_writes_flushed();
-        }
+                if (is_local) {
+                    //  Local: NOC1 write payload + metadata directly to DRAM.
+                    //  No in-loop flush — payload source (src_addr) is unique per token,
+                    //  and metadata source rotates through meta_scratch_slots ring slots.
+                    //  Single noc_async_writes_flushed() at batch end covers reuse.
+                    noc_async_write_page(page_idx, output_addr_gen, src_addr);
+                    uint32_t meta_addr =
+                        metadata_scratch_addr + (local_count % meta_scratch_slots) * aligned_metadata_page_size;
+                    volatile tt_l1_ptr int32_t* meta = reinterpret_cast<volatile tt_l1_ptr int32_t*>(meta_addr);
+                    meta[0] = (int32_t)linearized_mesh_coord;
+                    meta[1] = (int32_t)token_idx;
+                    meta[2] = (int32_t)k;
+                    meta[3] = (int32_t)routed_expert;
+                    meta[4] = (int32_t)weight;
+                    noc_async_write_page(page_idx, metadata_addr_gen, meta_addr);
+                    local_count++;
+                } else {
+                    uint32_t route = plan[base + 6];
+                    uint32_t distance = plan[base + 7];
 
-        // 4. Bulk-write full untilized batch to sender's receive buffer (cross-device tokens).
-        //    Skipped entirely when all tokens are local — no round-trip to sender needed.
-        if (has_non_local) {
-            uint32_t off = 0;
-            while (off < total_transfer_size) {
-                uint32_t chunk = (total_transfer_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
-                                     ? (uint32_t)NOC_MAX_BURST_SIZE
-                                     : (total_transfer_size - off);
-                noc_async_write(untilize_read_ptr + off, sender_receive_buf_noc_addr + off, chunk);
-                off += chunk;
+                    // Per-entry credit: wait until the sender has fabric-sent the slot we're
+                    // about to overwrite (sender writer inc's space_avail once per slot freed).
+                    noc_semaphore_wait_min(space_avail_sem_ptr, produced_count + 1);
+
+                    uint32_t slot = produced_count % writer_cb_size;
+
+                    // Build route_info (4 × u32) in local scratch, send as one NOC write.
+                    route_info_scratch[0] = route;
+                    route_info_scratch[1] = distance;
+                    route_info_scratch[2] = page_idx;
+                    route_info_scratch[3] = 0;
+                    uint64_t c4_slot = sender_c4_base_noc_addr + slot * route_info_slot_stride;
+                    noc_async_write_one_packet_with_trid(
+                        route_info_scratch_addr, c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);
+
+                    // Payload: chunk to NOC_MAX_BURST_SIZE packets, each tagged with TRID.
+                    uint64_t c5_slot = sender_c5_base_noc_addr + slot * aligned_output_page_size;
+                    uint32_t off = 0;
+                    while (off < aligned_output_page_size) {
+                        uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
+                                             ? (uint32_t)NOC_MAX_BURST_SIZE
+                                             : (aligned_output_page_size - off);
+                        noc_async_write_one_packet_with_trid(
+                            src_addr + off, c5_slot + off, chunk, TRID_NON_LOCAL_WRITE);
+                        off += chunk;
+                    }
+
+                    volatile tt_l1_ptr int32_t* meta =
+                        reinterpret_cast<volatile tt_l1_ptr int32_t*>(xdev_metadata_scratch_addr);
+                    meta[0] = (int32_t)linearized_mesh_coord;
+                    meta[1] = (int32_t)token_idx;
+                    meta[2] = (int32_t)k;
+                    meta[3] = (int32_t)routed_expert;
+                    meta[4] = (int32_t)weight;
+                    uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
+                    noc_async_write_one_packet_with_trid(
+                        xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);
+
+                    // Wait only on this entry's cross-device writes — in-flight local
+                    // DRAM writes are tagged-out by TRID and keep flying.
+                    noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
+
+                    noc_semaphore_inc<true>(sender_data_avail_noc_addr, 1);
+
+                    produced_count++;
+                }
             }
-            noc_async_write_barrier();
-
-            // 5. Signal the sender that all data has landed
-            noc_semaphore_inc(sender_data_ready_noc_addr, 1);
-            noc_async_atomic_barrier();
         }
 
-        // 6. Release untilize CB
+        // Drain all local NOC writes issued during this batch before the scratch ring or
+        // untilize CB get reused. Cross-device entries already barriered per-entry.
+        noc_async_writes_flushed();
+        local_count = 0;
+
+        cb_pop_front(cb_plan_id, 1);
         cb_pop_front(cb_untilize_id, read_batch_size);
     }
-    // Ensure all in-flight NOC traffic has landed before kernel exit. The all-local path only
-    // calls noc_async_writes_flushed (departure-from-source); without this barrier its
-    // noc_async_write_page DRAM writes can still be in flight at program end.
+
+    // After the last data entry: write ROUTE_INFO_SENTINEL as one final entry into the
+    // next slot. Must wait for space_avail like any regular entry.
+    cb_wait_front(cb_plan_id, 1);
+    cb_pop_front(cb_plan_id, 1);
+
+    noc_semaphore_wait_min(space_avail_sem_ptr, produced_count + 1);
+
+    uint32_t sentinel_slot = produced_count % writer_cb_size;
+    route_info_scratch[0] = ROUTE_INFO_SENTINEL;
+    route_info_scratch[1] = 0;
+    route_info_scratch[2] = 0;
+    route_info_scratch[3] = 0;
+    uint64_t sentinel_c4_slot = sender_c4_base_noc_addr + sentinel_slot * route_info_slot_stride;
+    noc_async_write_one_packet_with_trid(
+        route_info_scratch_addr, sentinel_c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);
+    noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
+    noc_semaphore_inc(sender_data_avail_noc_addr, 1);
+
+    // noc_async_full_barrier flushes everything in-flight (including the inc) before exit.
     noc_async_full_barrier();
 }

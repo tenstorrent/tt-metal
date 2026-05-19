@@ -66,6 +66,7 @@ class TtDispatchModule(LightweightModule):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         fp8_output: bool = False,
         subdevice_id=None,
+        num_untilizers_per_sender: int = 2,
     ):
         """
         Initialize dispatch module with configuration parameters.
@@ -87,6 +88,13 @@ class TtDispatchModule(LightweightModule):
             num_links: Number of fabric links for remote token writes.
             topology: Fabric topology for remote token writes.
             fp8_output: Output dtype for the dispatched buffer.
+            num_untilizers_per_sender: Number of untilizer cores per sender (default 2).
+                With 2 untilizers, u1 reads even batches (0,2,4,...) starting from
+                tt_expert_offsets and increments; u2 reads odd batches (1,3,5,...) starting
+                from tt_expert_offsets + tt_expert_histograms (computed in L1 from the same
+                two tensors u1 and the routing setup already produce) and decrements.
+                Eliminates synchronization on the offset tensor since the two cores write
+                into non-overlapping halves.
         """
         if fp8_output and "blackhole" not in ttnn.get_arch_name():
             raise ValueError("fp8_output requires Blackhole hardware")
@@ -104,6 +112,7 @@ class TtDispatchModule(LightweightModule):
         self.topology = topology
         self.fp8_output = fp8_output
         self.subdevice_id = subdevice_id
+        self.num_untilizers_per_sender = num_untilizers_per_sender
 
     @staticmethod
     def shard_expert_offsets(
@@ -195,6 +204,7 @@ class TtDispatchModule(LightweightModule):
         weights: ttnn.Tensor,
         indices: ttnn.Tensor,
         tt_expert_offsets: ttnn.Tensor,
+        tt_expert_histograms: ttnn.Tensor,
         tt_expert_dispatch_table: ttnn.Tensor,
     ):
         """
@@ -216,6 +226,11 @@ class TtDispatchModule(LightweightModule):
             tt_expert_offsets: Starting token index per source device per expert in the
                 destination device's flat dispatch buffer. Produced by TtMoERoutingSetup.forward().
                 Shape per device: (1, num_routed_experts)
+            tt_expert_histograms: Per-expert token count from this source device (the same
+                histogram TtMoERoutingSetup.forward() emits). The dispatch kernel's right-to-left
+                untilizer derives its starting (exclusive end) pointer in L1 as
+                tt_expert_offsets[e] + tt_expert_histograms[e].
+                Shape per device: (1, num_routed_experts) or (num_routed_experts,)
             tt_expert_dispatch_table: Maps each expert ID to the destination chip ID within the
                 dispatch group. Produced by shard_expert_dispatch_table().
                 Shape per device: (1, num_routed_experts)
@@ -227,17 +242,31 @@ class TtDispatchModule(LightweightModule):
                 Shape per device: (1, 1, max_dispatch_buffer_token_size, emb_dim)
                 Token at index i belongs to the expert whose region covers index i; regions are
                 TILE_HEIGHT-aligned and laid out by the expert region offsets from offset_cumsum.
-            metadata: Per-token metadata written alongside dispatched_buffer.
+            metadata: Per-token routing metadata written alongside dispatched_buffer.
                 Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=5),
                 int32, ROW_MAJOR.
                 Fields per token: [linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight].
-                Used by TtCombineModule to route processed tokens back to their origin.
+
+                INVARIANT: dispatched_buffer[i] and metadata[i] must always describe the same
+                original token. TtCombineModule iterates i in lockstep — it reads expert_output[i]
+                (dispatched_buffer[i] after expert processing) and metadata[i] together to
+                reconstruct the origin device and token index, then scatters the weighted result
+                back. There is no secondary index structure.
+
+                With two untilizers (round-robin): each untilizer must write the token embedding
+                and its metadata to the same write_pos it computed. u1 writes even batches
+                (0,2,4,...) at write_pos = start + (batch/2)*batch_size + k, incrementing;
+                u2 writes odd batches (1,3,5,...) at write_pos = end - ((batch+1)/2)*batch_size + k,
+                decrementing. Both local (NOC) and remote (fabric) writes must target the same
+                write_pos for token and metadata — the address is embedded in each packet by the
+                sending untilizer core.
         """
         logger.debug(f"[TtDispatchModule.forward] INPUT SHAPES:")
         logger.debug(f"  x.shape={x.shape}")
         logger.debug(f"  weights.shape={weights.shape}")
         logger.debug(f"  indices.shape={indices.shape}")
         logger.debug(f"  tt_expert_offsets.shape={tt_expert_offsets.shape}")
+        logger.debug(f"  tt_expert_histograms.shape={tt_expert_histograms.shape}")
         logger.debug(f"  tt_expert_dispatch_table.shape={tt_expert_dispatch_table.shape}")
         logger.debug(f"[TtDispatchModule.forward] CONFIG:")
         logger.debug(f"  dispatch_group_size={self.dispatch_group_size}, experts_per_chip={self.experts_per_chip}")
@@ -255,6 +284,7 @@ class TtDispatchModule(LightweightModule):
             weights_tensor=weights,
             indices_tensor=indices,
             expert_offsets_tensor=tt_expert_offsets,
+            expert_histograms_tensor=tt_expert_histograms,
             expert_dispatch_table_tensor=tt_expert_dispatch_table,
             dispatch_group_size=self.dispatch_group_size,
             experts_per_chip=self.experts_per_chip,
@@ -267,6 +297,7 @@ class TtDispatchModule(LightweightModule):
             topology=self.topology,
             use_fp8_dispatch=self.fp8_output,
             subdevice_id=self.subdevice_id,
+            num_untilizers_per_sender=self.num_untilizers_per_sender,
         )
 
         if tt_dispatched_buffer.dtype == ttnn.uint8:

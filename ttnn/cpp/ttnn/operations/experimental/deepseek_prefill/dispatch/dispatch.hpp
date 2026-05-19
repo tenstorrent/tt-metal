@@ -18,6 +18,7 @@ std::array<ttnn::Tensor, 2> dispatch(
     const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& expert_offsets_tensor,
+    const ttnn::Tensor& expert_histograms_tensor,
     const ttnn::Tensor& expert_dispatch_table_tensor,
     uint32_t dispatch_group_size,
     uint32_t experts_per_chip,
@@ -31,7 +32,8 @@ std::array<ttnn::Tensor, 2> dispatch(
     std::optional<uint32_t> num_links = 1,
     std::optional<tt::tt_fabric::Topology> topology = tt::tt_fabric::Topology::Linear,
     bool use_l1_small_for_semaphores = false,
-    bool use_fp8_dispatch = false);
+    bool use_fp8_dispatch = false,
+    uint32_t num_untilizers_per_sender = 2);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch
 
