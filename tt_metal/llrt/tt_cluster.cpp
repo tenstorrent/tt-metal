@@ -994,7 +994,25 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    if (this->supports_dma_operations(chip_id, size_in_bytes)) {
+    // FIX YA (#42429): Mirror write_core (FIX NX/BW): on first relay failure for a remote chip,
+    // mark relay_broken_chips_ so subsequent is_relay_broken() / FIX NZ guards fire immediately.
+    // Previously read_core only had the "already broken → throw early" guard (FIX NZ, line 976)
+    // but never SET relay_broken_chips_ when read_from_device itself threw — so the second call
+    // still paid the full 5 s UMD timeout instead of short-circuiting at the FIX NZ guard.
+    if (this->cluster_desc_->is_chip_remote(chip_id)) {
+        try {
+            this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogDevice,
+                "FIX YA: read_core(chip {}) threw: {}. Marking relay broken.",
+                chip_id,
+                e.what());
+            this->driver_->mark_relay_broken(chip_id);
+            this->relay_broken_chips_.insert(chip_id);
+            throw;
+        }
+    } else if (this->supports_dma_operations(chip_id, size_in_bytes)) {
         this->driver_->dma_read_from_device(mem_ptr, size_in_bytes, core.chip, core_coord, addr);
     } else {
         this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);

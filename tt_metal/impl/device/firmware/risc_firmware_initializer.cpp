@@ -1755,22 +1755,38 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
                         propagate_dead_mmio_peers();
                     }
                 }
-                // FIX PF (GAP-51): When erisc_app_still_running() returns true on an MMIO device,
-                // the non-zero fw_launch_addr may be a stale artifact from initialize_firmware()
-                // that was never cleared after the prior process exited. If UMD base firmware is
-                // actively running (heartbeat in 0xABCDxxxx format on BH/QA, or incrementing on WH),
-                // Metal ETH dispatch is NOT running — sending it a Metal exit signal is pointless
-                // (UMD doesn't understand the protocol) and causes a 500ms wait_until_cores_done()
-                // timeout per channel × many channels × many tests = cascade of hangs.
-                // For MMIO devices: read_reg() goes through PCIe — safe even with a broken relay.
-                if (still_running && !relay_dead && device_id == mmio_host) {
+                // FIX PF (GAP-51): When erisc_app_still_running() returns true, the non-zero
+                // fw_launch_addr may be a stale artifact from a prior crashed Metal session that
+                // never cleared it. If UMD base firmware is actually running (heartbeat in
+                // 0xABCDxxxx format), Metal ETH dispatch is NOT running — sending it a Metal exit
+                // signal is pointless (UMD doesn't understand the protocol) and causes a 500ms
+                // wait_until_cores_done() timeout per channel.
+                //
+                // For MMIO devices: read_reg() goes through PCIe — always safe.
+                // For non-MMIO devices (FIX PF extension, #42429): read heartbeat via relay.
+                //   This is safe in Pass 1 of run_launch_phase (relay guaranteed alive).
+                //   If the relay read throws, fall through to the normal exit-signal path
+                //   (exit signal will also fail and core goes to force-reset, which is correct).
+                if (still_running && !relay_dead) {
                     const uint32_t hb_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
                     if (hb_addr != 0u) {
                         uint32_t hb_val = 0;
+                        bool hb_read_ok = false;
                         try {
-                            cluster_.read_reg(&hb_val, tt_cxy_pair(device_id, virtual_core), hb_addr);
-                        } catch (...) { /* PCIe read failed — fall through to normal exit path */ }
-                        if ((hb_val >> 16) == 0xABCDu) {
+                            if (device_id == mmio_host) {
+                                // MMIO: PCIe path — always safe
+                                cluster_.read_reg(&hb_val, tt_cxy_pair(device_id, virtual_core), hb_addr);
+                            } else {
+                                // Non-MMIO: relay path — safe in Pass 1
+                                auto hb_data = cluster_.read_core(
+                                    device_id, virtual_core, hb_addr, sizeof(uint32_t));
+                                hb_val = hb_data[0];
+                            }
+                            hb_read_ok = true;
+                        } catch (...) {
+                            // Relay dead or PCIe error — fall through to normal exit path
+                        }
+                        if (hb_read_ok && (hb_val >> 16) == 0xABCDu) {
                             // UMD base firmware confirmed running. Clear stale fw_launch_addr
                             // and bypass exit signal + 500ms wait entirely.
                             std::vector<uint32_t> clear_flag{0};
