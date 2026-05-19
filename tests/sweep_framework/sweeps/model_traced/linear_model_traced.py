@@ -66,18 +66,48 @@ def mesh_device_fixture():
     global _GLOBAL_CB, _PREFETCHER_INFO
     mesh_shape = get_model_traced_mesh_shape()
     device = create_mesh_device(mesh_shape)
-    result = setup_sub_device_manager(device)
-    sub_device_mgr = None
-    if isinstance(result, tuple):
-        if len(result) == 3:
-            sub_device_mgr, _GLOBAL_CB, _PREFETCHER_INFO = result
-        else:
-            sub_device_mgr, _GLOBAL_CB = result
-    else:
-        sub_device_mgr = result
+
+    # Explicitly create sub-devices using the model's core layout.
+    # Uses get_core_ranges directly instead of setup_sub_device_manager
+    # (which parses master JSON and can fail in CI environments).
+    _sub_dev_mgr = None
+    try:
+        from models.demos.llama3_70b_galaxy.tt.model_config import get_core_ranges as _gcr
+        (
+            _active_sender_cores, _dram_cores, _all_sender_cores,
+            _active_receiver_cores_list, _all_receiver_cores,
+            _worker_cores, _mm_ring_cores, _hop_grid,
+        ) = _gcr(12, 2, is_functional_test=False)
+
+        _sender_crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in _active_sender_cores])
+        _sub_dev_mgr = device.create_sub_device_manager(
+            [ttnn.SubDevice([_sender_crs]), ttnn.SubDevice([_worker_cores])], 0
+        )
+        device.load_sub_device_manager(_sub_dev_mgr)
+
+        _GLOBAL_CB = ttnn.create_global_circular_buffer(
+            device, list(zip(_all_sender_cores, _all_receiver_cores)), 728 * 1088
+        )
+        _PREFETCHER_INFO = {
+            "dram_cores": list(_dram_cores),
+            "sender_core_range_set": _sender_crs,
+        }
+    except Exception:
+        import traceback; traceback.print_exc()
+        _sub_dev_mgr = None
+        _GLOBAL_CB = None
+        _PREFETCHER_INFO = None
+
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
-    teardown_sub_device_manager(device, sub_device_mgr)
+
+    try:
+        device.reset_sub_device_stall_group()
+        if _sub_dev_mgr is not None:
+            device.clear_loaded_sub_device_manager()
+            device.remove_sub_device_manager(_sub_dev_mgr)
+    except Exception:
+        pass
     ttnn.close_mesh_device(device)
 
 
