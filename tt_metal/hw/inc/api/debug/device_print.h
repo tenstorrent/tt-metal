@@ -126,23 +126,19 @@ struct dp_typed_array_t {
 #endif
 
 #if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && defined(USE_DEVICE_PRINT)
-#define DEVICE_PRINT_GET_STRING_INFO_ADDRESS(variable_name, updated_format)                                    \
-    std::uintptr_t variable_name = 0;                                                                          \
-    {                                                                                                          \
-        static const auto allocated_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = \
-            updated_format.to_array();                                                                         \
-        static const auto allocated_file_string                                                                \
-            __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = []() {                         \
-                device_print_detail::helpers::static_string<sizeof(__FILE__)> file_str;                        \
-                for (std::size_t i = 0; i < sizeof(__FILE__); ++i) {                                           \
-                    file_str.push_back(__FILE__[i]);                                                           \
-                }                                                                                              \
-                return file_str.to_array();                                                                    \
-            }();                                                                                               \
-        static device_print_detail::structures::DevicePrintStringInfo allocated_string_info                    \
-            __attribute__((section(DEVICE_PRINT_STRINGS_INFO_SECTION_NAME), used)) = {                         \
-                allocated_string.data(), allocated_file_string.data(), __LINE__};                              \
-        variable_name = reinterpret_cast<std::uintptr_t>(&allocated_string_info);                              \
+#define DEVICE_PRINT_GET_STRING_INFO_ADDRESS(variable_name, updated_format)                         \
+    std::uintptr_t variable_name = 0;                                                               \
+    {                                                                                               \
+        constexpr auto _device_print_format_array = updated_format.to_array();                      \
+        constexpr auto _device_print_file_array = []() {                                            \
+            device_print_detail::helpers::static_string<sizeof(__FILE__)> file_str;                 \
+            for (std::size_t i = 0; i < sizeof(__FILE__); ++i) {                                    \
+                file_str.push_back(__FILE__[i]);                                                    \
+            }                                                                                       \
+            return file_str.to_array();                                                             \
+        }();                                                                                        \
+        variable_name = device_print_detail::                                                       \
+            register_string_info<_device_print_format_array, _device_print_file_array, __LINE__>(); \
     }
 
 #define DEVICE_PRINT(format, ...)                                                                                  \
@@ -226,6 +222,22 @@ namespace device_print_detail {
 template <typename F, typename... Args>
 __attribute__((always_inline)) inline auto invoke_by_value(F&& f, Args... args) -> decltype(auto) {
     return f(static_cast<Args&&>(args)...);
+}
+
+// Helper function to solve linkage problem. Marked `static` so the template — and therefore
+// every instantiation and every static local inside it — has internal linkage. Without
+// internal linkage, statics inside a DEVICE_PRINT expanded in a vague-linkage caller (inline
+// header function, function template, in-class member, lambda-in-template) inherit COMDAT linkage;
+// that conflicts with the named-section attribute and silently sends them to `.data` instead
+// of `.device_print_strings_info`.
+template <auto FormatArr, auto FileArr, std::size_t Line>
+static std::uintptr_t register_string_info() {
+    static const auto allocated_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = FormatArr;
+    static const auto allocated_file_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = FileArr;
+    static structures::DevicePrintStringInfo allocated_string_info
+        __attribute__((section(DEVICE_PRINT_STRINGS_INFO_SECTION_NAME), used)) = {
+            allocated_string.data(), allocated_file_string.data(), Line};
+    return reinterpret_cast<std::uintptr_t>(&allocated_string_info);
 }
 
 template <typename BufferType>

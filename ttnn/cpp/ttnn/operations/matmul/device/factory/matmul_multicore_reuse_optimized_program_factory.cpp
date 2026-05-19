@@ -188,7 +188,17 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         num_blocks_per_core_group_1 *= batch_scale_factor;
         num_blocks_per_core_group_2 *= batch_scale_factor;
     } else {
-        CoreCoord grid = program_config.allowed_worker_cores.value().bounding_box().grid_size();
+        if (!program_config.allowed_worker_cores.has_value()) {
+            log_warning(
+                tt::LogOp,
+                "MatmulMultiCoreReuseOptimizedProgramFactory: program_config.allowed_worker_cores not populated; "
+                "falling back to compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() should "
+                "invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This "
+                "will become a hard error in a future release.");
+        }
+        CoreCoord grid = program_config.allowed_worker_cores.has_value()
+                             ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
+                             : program_config.compute_with_storage_grid_size;
         std::tie(
             num_cores,
             all_cores,
