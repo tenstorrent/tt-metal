@@ -33,21 +33,22 @@ import pytest
 # enforce an upper bound — catches regressions, ignores favorable variance.
 ARCH_GOLDENS = {
     "BLACKHOLE": {
+        # BH P150: 2CQ is faster (no fabric overhead, H2D overlap helps).
         "steady_ms_per_frame": 59.2,
         "steady_margin": 0.05,
         "prefill_ms_upper": 30.0,
+        "use_2cq": True,
     },
     "WORMHOLE_B0": {
-        # N150 (TP=1): ~117 ms/frame, prefill 15–36 ms (high variance).
-        # N300 (TP=2): ~105 ms/frame, prefill 23–37 ms (DRAM-sharded attn+MLP).
-        # Single golden covers both: TP=2 with DRAM-sharded paths lands in
-        # [95, 131] alongside N150. Tighten when more measurements are available.
-        # Prefill upper bound is deliberately wide (observed 15–37 ms swing across
-        # runs due to trace-cache state and JIT bucket warmth).
-        # Updated after CP bf16 + DRAM-sharded MLP: steady now ~95-100 ms.
-        "steady_ms_per_frame": 100.0,
+        # WH: 1CQ is faster than 2CQ (event sync overhead > H2D overlap benefit).
+        # N150 TP=1 1CQ: ~103 ms/frame.  N300 TP=2 1CQ: ~91-95 ms/frame.
+        # Golden covers the N300 TP=2 path (primary test target); N150 is close
+        # to the upper bound.
+        # Prefill: 23-32 ms typical (40 ms cap for cold-cache outliers).
+        "steady_ms_per_frame": 97.0,
         "steady_margin": 0.10,
         "prefill_ms_upper": 40.0,
+        "use_2cq": False,
     },
 }
 
@@ -63,8 +64,30 @@ OUTPUT_WAV = "/tmp/qwen3_tts_perf_device.wav"
 
 @pytest.fixture(scope="module")
 def demo_run():
-    """Run run_full_ttnn_tts once and return the timing dict."""
+    """Run run_full_ttnn_tts once and return the timing dict.
+
+    use_2cq is read from ARCH_GOLDENS after a brief device probe so each arch
+    gets its optimal CQ mode: BH uses 2CQ (H2D overlap helps on single chip),
+    WH uses 1CQ (event sync overhead > H2D benefit on both N150 and N300).
+    """
+    # Detect arch to pick the right CQ mode without running the full demo twice.
+    import os
+
+    import ttnn
     from models.demos.qwen3_tts.demo.demo_full_ttnn_tts import run_full_ttnn_tts
+
+    mesh_shape_map = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}
+    mesh_shape = mesh_shape_map.get(os.environ.get("MESH_DEVICE"), (1, 1))
+    if mesh_shape != (1, 1):
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    probe = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape))
+    arch_name = probe.arch().name
+    ttnn.close_mesh_device(probe)
+    if mesh_shape != (1, 1):
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+    g = ARCH_GOLDENS.get(arch_name, ARCH_GOLDENS["WORMHOLE_B0"])
+    _use_2cq = g.get("use_2cq", False)
 
     result = run_full_ttnn_tts(
         text=TARGET_TEXT,
@@ -72,7 +95,7 @@ def demo_run():
         ref_text=REF_TEXT,
         output_path=OUTPUT_WAV,
         seed=42,
-        use_2cq=True,
+        use_2cq=_use_2cq,
     )
     assert isinstance(result, dict), f"run_full_ttnn_tts must return a dict; got {type(result)}"
     return result
