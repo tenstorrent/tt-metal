@@ -164,7 +164,7 @@ TT_METAL_SLOW_DISPATCH_MODE=1 python_env/bin/tt-run \
   --mpi-args "--host ${HOSTSP} --map-by slot --bind-to none --oversubscribe --tag-output" \
   python_env/bin/python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \
     --decoder-layer-indices $LAYERS \
-    --hidden-states-dir-template "$TRACE_ROOT/layer_{layer:02d}" \
+    --hidden-states-dir "$TRACE_ROOT" \
     --prompt "$PROMPT" \
     --validate-kv-cache-cross-trace \
     --pcc-threshold 0.97 \

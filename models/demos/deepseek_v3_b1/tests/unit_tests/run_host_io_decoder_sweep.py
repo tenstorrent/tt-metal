@@ -462,7 +462,7 @@ def _init_rank_context_or_error() -> tuple[int, int]:
 
     rank = os.environ.get("OMPI_COMM_WORLD_RANK")
     world_size = os.environ.get("OMPI_COMM_WORLD_SIZE")
-    return rank, world_size
+    return int(rank), int(world_size)
 
 
 def _validate_layer_world_size(layer_ids: list[int], *, world_size: int) -> None:
