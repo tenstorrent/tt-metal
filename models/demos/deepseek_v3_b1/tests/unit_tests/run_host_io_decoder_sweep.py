@@ -39,12 +39,14 @@ Mode A (single slot), one prompt, dump everything to ``./dumps``::
 
 Mode B (8 replication slots), two-prompt multi-turn, validate everything
 (including cross-trace PCC of both hidden states AND KV cache against the
-GPU/HF reference), no dumps::
+GPU/HF reference), no dumps.  For single-layer runs the ``--hidden-states-dir``
+must point directly at the directory containing ``<prompt>.pt`` and
+``kv_cache_reference_<prompt>.pt`` files (e.g. the layer-specific subdirectory)::
 
     TT_METAL_SLOW_DISPATCH_MODE=1 \\
-    DEEPSEEK_V3_HIDDEN_STATES_DIR=/data/gpu_reference \\
     python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
         --decoder-layer-indices 4 \\
+        --hidden-states-dir /data/gpu_reference/layer_04 \\
         --prompt q_what_is_python q_quick_brown_fox \\
         --num-replication-slots 8 \\
         --validate-hidden-states-cross-trace \\
