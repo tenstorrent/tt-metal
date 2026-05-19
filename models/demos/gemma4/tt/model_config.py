@@ -24,6 +24,12 @@ from transformers import AutoConfig, AutoModelForCausalLM
 
 import ttnn
 
+# Fallback model id when the adapter is invoked without an explicit path and
+# the HuggingFace config does not carry `_name_or_path`. Sourced from upstream
+# commit d026c855941 ("Default Gemma4 demos to instruct sampling") so the
+# cherry-picked vLLM adapter (098ac1456aa) can import it on this branch.
+DEFAULT_GEMMA4_MODEL = "google/gemma-4-26B-A4B-it"
+
 
 @dataclass
 class Gemma4ModelArgs:

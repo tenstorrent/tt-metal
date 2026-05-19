@@ -135,7 +135,13 @@ class Gemma4ForCausalLM:
         max_batch_size,
         max_seq_len,
         paged_attention_config,
+        **kwargs,
     ):
+        # **kwargs accepts the `vllm_config`/`prefix` kwargs that vLLM's
+        # `VllmModel` Protocol requires for `_check_vllm_model_init` (via
+        # `supports_kw(..., allow_var_kwargs=True)`). They are unused — the TT
+        # plugin always constructs the adapter through `initialize_vllm_model`.
+        _ = kwargs
         self.model = model
         self.model_args = model_args
         self.mesh_device = mesh_device
@@ -145,6 +151,31 @@ class Gemma4ForCausalLM:
         self.max_seq_len = max_seq_len
         self.paged_attention_config = paged_attention_config
         self._sampling_params = None
+
+    # --- vLLM `VllmModelForTextGeneration` Protocol stubs -------------------
+    # vLLM's `is_text_generation_model` uses `@runtime_checkable Protocol` to
+    # tag the class as a text-generation model. The TT plugin's runtime path
+    # (TTModelRunner / TTWorker) never invokes these methods — it always calls
+    # `prefill_forward` / `decode_forward` on the adapter instance. The stubs
+    # exist only so the Protocol classification succeeds and vLLM accepts
+    # `--runner generate` / skips multimodal config init.
+    def embed_input_ids(self, input_ids, *args, **kwargs):  # noqa: D401
+        raise NotImplementedError(
+            "Gemma4ForCausalLM.embed_input_ids should not be invoked: the TT "
+            "plugin drives generation through prefill_forward/decode_forward."
+        )
+
+    def forward(self, input_ids, positions, *args, **kwargs):  # noqa: D401
+        raise NotImplementedError(
+            "Gemma4ForCausalLM.forward should not be invoked: the TT plugin "
+            "drives generation through prefill_forward/decode_forward."
+        )
+
+    def compute_logits(self, hidden_states, *args, **kwargs):  # noqa: D401
+        raise NotImplementedError(
+            "Gemma4ForCausalLM.compute_logits should not be invoked: the TT "
+            "plugin produces logits directly from prefill_forward/decode_forward."
+        )
 
     @classmethod
     def initialize_vllm_model(
