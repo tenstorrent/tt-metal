@@ -31,8 +31,9 @@ Mode A (single slot), one prompt, dump everything to ``./dumps``::
         --num-replication-slots 1 \\
         --dump-dir ./dumps
 
-Mode B (8 replication slots), two-prompt multi-turn, validate everything,
-no dumps, use real GPU reference traces for cross-trace PCC::
+Mode B (8 replication slots), two-prompt multi-turn, validate everything
+(including cross-trace PCC of both hidden states AND KV cache against the
+GPU/HF reference), no dumps::
 
     TT_METAL_SLOW_DISPATCH_MODE=1 \\
     DEEPSEEK_V3_HIDDEN_STATES_DIR=/data/gpu_reference \\
@@ -41,7 +42,15 @@ no dumps, use real GPU reference traces for cross-trace PCC::
         --prompt q_what_is_python q_quick_brown_fox \\
         --num-replication-slots 8 \\
         --validate-hidden-states-cross-trace \\
+        --validate-kv-cache-cross-trace \\
+        --pcc-threshold 0.97 --kv-cache-pcc-threshold 0.97 \\
         --no-dump-hidden-states --no-dump-kv-cache
+
+Note: ``--validate-kv-cache-cross-trace`` requires
+``kv_cache_reference_{prompt}.pt`` files in ``--hidden-states-dir``;
+they are slot-agnostic and stored in the
+HF/split-halves RoPE layout (the harness applies the permutation to TT's
+interleaved layout in-memory before the compare).
 
 Dry-run (print resolved config and exit, no device opened)::
 
@@ -174,6 +183,23 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=0.97,
         help="PCC threshold used only when --validate-hidden-states-cross-trace is set.",
     )
+    val.add_argument(
+        "--validate-kv-cache-cross-trace",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Per-(prompt, slot) PCC of the on-device KV-cache slice against a "
+            "kv_cache_reference_<prompt>.pt sibling in --hidden-states-dir "
+            "(produced by convert_bit_sculpt_trace.py). Forces the host KV-cache "
+            "pull even when no KV-cache dump is requested."
+        ),
+    )
+    val.add_argument(
+        "--kv-cache-pcc-threshold",
+        type=float,
+        default=0.97,
+        help="PCC threshold used only when --validate-kv-cache-cross-trace is set.",
+    )
 
     # --- dump knobs ---
     dump = parser.add_argument_group("dumps")
@@ -282,6 +308,8 @@ def _config_from_args(args: argparse.Namespace) -> HostIoDecoderSweepConfig:
         validate_kv_cache_cross_slot=args.validate_kv_cache_cross_slot,
         validate_hidden_states_cross_trace=args.validate_hidden_states_cross_trace,
         pcc_threshold=args.pcc_threshold,
+        validate_kv_cache_cross_trace=args.validate_kv_cache_cross_trace,
+        kv_cache_pcc_threshold=args.kv_cache_pcc_threshold,
         dump_hidden_states=args.dump_hidden_states,
         dump_kv_cache=args.dump_kv_cache,
         dump_dir=dump_dir,
@@ -322,6 +350,8 @@ def _log_resolved_config(config: HostIoDecoderSweepConfig) -> None:
         ("validate_kv_cache_cross_slot", config.validate_kv_cache_cross_slot),
         ("validate_hidden_states_cross_trace", config.validate_hidden_states_cross_trace),
         ("pcc_threshold", config.pcc_threshold),
+        ("validate_kv_cache_cross_trace", config.validate_kv_cache_cross_trace),
+        ("kv_cache_pcc_threshold", config.kv_cache_pcc_threshold),
         ("dump_hidden_states", config.dump_hidden_states),
         ("dump_kv_cache", config.dump_kv_cache),
         ("dump_dir", config.dump_dir),
@@ -369,6 +399,23 @@ def main(argv: list[str] | None = None) -> int:
         logger.info(f"kv_cache shape: {tuple(result.kv_cache.shape)} dtype={result.kv_cache.dtype}")
     else:
         logger.info("kv_cache: not pulled (no KV-cache validation, no KV-cache dump)")
+    # Per-validation-gate summary so the CLI tail makes it obvious which gates
+    # actually ran and (where applicable) what threshold they used.
+    logger.info(
+        f"validation gates: "
+        f"metadata_roundtrip={config.validate_metadata_roundtrip}, "
+        f"hidden_states_cross_slot={config.validate_hidden_states_cross_slot}, "
+        f"hidden_states_cross_trace={config.validate_hidden_states_cross_trace}"
+        f"{f' (threshold={config.pcc_threshold})' if config.validate_hidden_states_cross_trace else ''}, "
+        f"kv_cache_cross_slot={config.validate_kv_cache_cross_slot}, "
+        f"kv_cache_cross_trace={config.validate_kv_cache_cross_trace}"
+        f"{f' (threshold={config.kv_cache_pcc_threshold})' if config.validate_kv_cache_cross_trace else ''}"
+    )
+    if result.kv_cache_references is not None:
+        logger.info(
+            f"kv_cache_references loaded for {len(result.kv_cache_references)} prompt(s): "
+            f"{sorted(result.kv_cache_references.keys())}"
+        )
     if config.dump_dir is not None and (config.dump_hidden_states or config.dump_kv_cache):
         logger.info(f"dumps written under: {config.dump_dir}")
     logger.info("=" * 80)
