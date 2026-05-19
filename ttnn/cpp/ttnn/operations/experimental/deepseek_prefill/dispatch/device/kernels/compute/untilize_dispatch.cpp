@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "api/debug/dprint.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 #define ENABLE_DISPATCH_DEBUG 0
 
@@ -48,16 +49,20 @@ void kernel_main() {
 
     while (true) {
         cb_reserve_back(cb_untilize_id, read_batch_size);
-        cb_wait_front(cb_signal_id, 1);
-        uint32_t val = read_tile_value(cb_signal_id, 0, 0);
-        cb_pop_front(cb_signal_id, 1);
-        if (val == ROUTE_INFO_SENTINEL) {
-            break;
+        {
+            DeviceZoneScopedN("compute_is_waiting") cb_wait_front(cb_signal_id, 1);
+            uint32_t val = read_tile_value(cb_signal_id, 0, 0);
+            cb_pop_front(cb_signal_id, 1);
+            if (val == ROUTE_INFO_SENTINEL) {
+                break;
+            }
         }
-        for (uint32_t block = 0; block < num_blocks; block++) {
-            cb_wait_front(cb_in_id, block_ct_dim);
-            pack_untilize_block<block_ct_dim, full_ct_dim>(cb_in_id, 1, cb_untilize_id, block);
-            cb_pop_front(cb_in_id, block_ct_dim);
+        {
+            DeviceZoneScopedN("pack_untilize_block") for (uint32_t block = 0; block < num_blocks; block++) {
+                cb_wait_front(cb_in_id, block_ct_dim);
+                pack_untilize_block<block_ct_dim, full_ct_dim>(cb_in_id, 1, cb_untilize_id, block);
+                cb_pop_front(cb_in_id, block_ct_dim);
+            }
         }
 
         cb_push_back(cb_untilize_id, read_batch_size);
