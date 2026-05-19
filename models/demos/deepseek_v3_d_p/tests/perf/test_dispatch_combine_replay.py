@@ -207,28 +207,55 @@ def test_dispatch_combine_replay(mesh_device, num_links, topology, capture_file,
         f"seq_len_per_chip={sl} emb_dim={emb_dim}  num_links={num_links}  topology={topology}"
     )
 
-    # --- 1. Build dispatch_table.
-    #   8x1: use col k's row of the (4, 256) full table → (1, 256) with 192 -1 entries (col-k 1:1 replay).
-    #   8x4: use the full (4, 256) table → all 4 cols dispatch simultaneously with contention.
+    # --- 1. Build dispatch_table + (LB only) remap indices.
+    #
+    # 8x4: use the full (4, 256) table; indices as-is. Each col on the mesh has its proper
+    #      first_expert_id (= col*64), so combine reads the right buffer slots per chip.
+    #
+    # 8x1 (LB): combine kernel always uses first_expert_id=0 on a single-col mesh, so
+    #      metadata expert_id in [k*64, (k+1)*64) (for col k > 0) would index out of the
+    #      8-slot expert_token_counts the kernel checks → combine silently skips, giving
+    #      bogus ~1ms timings for col1/2/3. (Confirmed: LB sweep showed col0 Combine ~9ms
+    #      [correct], col1/2/3 Combine ~1.1ms [no work done].)
+    #
+    #      Fix: remap indices so col-k routings get values in [0, 64) (combine sees them
+    #      at the expected slots) and out-of-col routings get a sentinel value that maps
+    #      to -1 in the dispatch_table (kernel skip mechanism preserved). Use col 0's row
+    #      of the Galaxy table as the LB dispatch_table — same chip_id mapping function
+    #      `expert_id // 8` applies for any col after the shift. True 1:1 workload with
+    #      Galaxy col k; only labels differ.
     full_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=nre,
         dispatch_group_size=dgs,
         num_dispatch_groups=ndg_galaxy,
     )  # (4, 256)
+
     if is_full_8x4:
         col_table = full_table.contiguous()  # (4, 256) — full Galaxy table
         logger.info(f"[replay] 8x4: full dispatch_table {tuple(col_table.shape)} pushed to all 4 cols simultaneously")
     else:
-        col_table = full_table[galaxy_col : galaxy_col + 1].contiguous()  # (1, 256) — col k only
+        # Always use col 0's row on LB; the indices remap below moves col-k data into
+        # [0, 64) so col-0's chip_id mapping applies correctly.
+        col_table = full_table[0:1].contiguous()  # (1, 256) — col 0: chip_ids for [0, 64), -1 for [64, 256)
+        SENTINEL = nre - 1  # 255 — any value in [64, 256) works since table[v >= 64] = -1
+        in_col_mask = (indices >= galaxy_col * 64) & (indices < (galaxy_col + 1) * 64)
+        indices = torch.where(
+            in_col_mask,
+            indices - galaxy_col * 64,  # in-col: shift to [0, 64) → combine reads slots 0..7
+            torch.tensor(SENTINEL, dtype=indices.dtype),  # out-of-col: table[SENTINEL] = -1 → skip
+        )
+        n_in = int(in_col_mask.sum().item())
+        n_out = int((~in_col_mask).sum().item())
         n_valid = int((col_table >= 0).sum().item())
         logger.info(
-            f"[replay] 8x1 col{galaxy_col} dispatch_table: {n_valid} valid entries / {nre} total "
-            f"({nre - n_valid} entries are -1 → kernel skips those routings)"
+            f"[replay] 8x1 col{galaxy_col} indices remap: in-col={n_in:,} → [0, 64);  "
+            f"out-of-col={n_out:,} → {SENTINEL} (→ table -1, skipped)"
+        )
+        logger.info(
+            f"[replay] 8x1 col{galaxy_col} dispatch_table (= col 0's row): " f"{n_valid} valid entries / {nre} total"
         )
 
     # --- 2. Compute offsets/counts/region_offsets from indices + table.
-    #   8x1: slice the (4, dgs, nre) gate output to col-k's slice → (1, dgs, nre) → per-device (1, 1, nre).
-    #   8x4: keep full (4, dgs, nre) → mesh shards dim 0 (=4) across mesh axis 1 (=4) → per-device (1, 1, nre).
     logger.info(f"[replay] computing gate outputs ({'full 4 cols' if is_full_8x4 else f'col{galaxy_col}'})...")
     col_offsets_full, col_counts_full, col_region_offsets_full, _ = get_gate_outputs(
         indices=indices,
@@ -237,7 +264,7 @@ def test_dispatch_combine_replay(mesh_device, num_links, topology, capture_file,
         experts_per_chip=epc,
         seq_len_per_chip=sl,
         num_experts_per_tok=nept,
-        expert_dispatch_table=col_table if is_full_8x4 else col_table,
+        expert_dispatch_table=col_table,
     )  # each (4, dgs, nre)
     if is_full_8x4:
         col_offsets = col_offsets_full.contiguous()
