@@ -1543,8 +1543,8 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
         fabric_session_id_,
         fabric_relay_path_broken_.load(),
         this->is_mmio_capable(),
-        fabric_channels_not_ready_for_traffic_,
-        fabric_stale_base_umd_channels_);
+        fabric_channels_not_ready_for_traffic_.load(),
+        fabric_stale_base_umd_channels_.load());
 
     // Diagnostic entry snapshot (#42429): read every active ERISC channel's edm_status_address
     // BEFORE any phase runs.  This lets us distinguish "prior test left channels in bad state"
