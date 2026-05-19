@@ -202,23 +202,29 @@ class _TtAceStepTinyEncoder:
         sin_tt = ttnn.slice(self.sin_tt, (0, 0, 0, 0), (1, 1, s, int(self.sin_tt.shape[-1])))
         mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
         bias_cache: dict[str, ttnn.Tensor] = {}
-        for layer, attn_type in zip(self.layers, self.layer_attention_types):
-            use_sliding = attn_type == "sliding_attention" and self.sliding_window is not None
-            cache_key = "sliding" if use_sliding else "full"
-            if cache_key not in bias_cache:
-                bias_np = _bidirectional_attn_bias_np(
-                    mask_np,
-                    sliding_window=self.sliding_window if use_sliding else None,
-                )
-                bias_cache[cache_key] = ttnn.as_tensor(
-                    bias_np,
-                    device=self.device,
-                    dtype=self.dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=self.mem,
-                    mesh_mapper=mapper,
-                )
-            h = layer(h, cos_tt, sin_tt, bias_cache[cache_key])
+        try:
+            for layer, attn_type in zip(self.layers, self.layer_attention_types):
+                use_sliding = attn_type == "sliding_attention" and self.sliding_window is not None
+                cache_key = "sliding" if use_sliding else "full"
+                if cache_key not in bias_cache:
+                    bias_np = _bidirectional_attn_bias_np(
+                        mask_np,
+                        sliding_window=self.sliding_window if use_sliding else None,
+                    )
+                    bias_cache[cache_key] = ttnn.as_tensor(
+                        bias_np,
+                        device=self.device,
+                        dtype=self.dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=self.mem,
+                        mesh_mapper=mapper,
+                    )
+                h = layer(h, cos_tt, sin_tt, bias_cache[cache_key])
+        finally:
+            ttnn.deallocate(cos_tt)
+            ttnn.deallocate(sin_tt)
+            for bias_tt in bias_cache.values():
+                ttnn.deallocate(bias_tt)
         h = ttnn.to_layout(h, ttnn.TILE_LAYOUT)
         h = ttnn.rms_norm(h, weight=self.norm_w, epsilon=float(1e-6), memory_config=self.mem)
         if output_first_token:
