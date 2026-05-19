@@ -4469,14 +4469,17 @@ void Device::wait_for_fabric_workers_ready() {
     // handshake (sender writes MAGIC to receiver's local_value via eth_send_packet, receiver
     // responds by copying its scratch to sender's local_value).
     //
-    // We poll the master ERISC channel for LOCAL_HANDSHAKE_COMPLETE, then write
-    // READY_FOR_TRAFFIC — exactly what wait_for_fabric_router_sync() does at initial startup.
+    // STRATEGY_HSB: We poll the master ERISC channel for REMOTE_HANDSHAKE_COMPLETE, then write
+    // READY_FOR_TRAFFIC to every active channel directly (ring sync eliminated).
     // After that, a final per-channel health check confirms all channels are healthy.
     {
-        // FIX DZ3 (#42429): Pass use_fix_m_nonce=true for FIX M devices so the host uses nonce=0,
-        // matching the firmware's session_nonce_effective=0 on the FIX M path.
-        const auto [router_sync_addr, sync_status] =
-            builder_ctx.get_fabric_router_sync_address_and_status(this->is_fabric_stale_base_umd_channels());
+        // STRATEGY_HSB (#42429): Poll for REMOTE_HANDSHAKE_COMPLETE. Firmware (compiled with
+        // STRATEGY_HOST_SEQUENCED_BARRIER=1) skips ring sync and never writes LOCAL_HANDSHAKE_COMPLETE.
+        // Nonce encoding (FIX DZ2/DZ3) is not needed — REMOTE_HANDSHAKE_COMPLETE is written before
+        // ring sync would start and carries no session-specific encoding.
+        const uint32_t router_sync_addr = builder_ctx.get_fabric_router_sync_address_and_status().first;
+        constexpr uint32_t sync_status =
+            static_cast<uint32_t>(tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE);
         constexpr uint32_t expected_ready =
             static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
         // FIX BO (#42429): When stale base-UMD channels are present in the cluster (set by
@@ -4605,7 +4608,7 @@ void Device::wait_for_fabric_workers_ready() {
             log_info(
                 tt::LogMetal,
                 "wait_for_fabric_workers_ready: Device {} Phase 5: polling master chan {} for "
-                "LOCAL_HANDSHAKE_COMPLETE (expected=0x{:08x})",
+                "REMOTE_HANDSHAKE_COMPLETE (expected=0x{:08x}) [STRATEGY_HSB]",
                 this->id(),
                 master_chan,
                 sync_status);
@@ -4654,7 +4657,7 @@ void Device::wait_for_fabric_workers_ready() {
                     log_info(
                         tt::LogMetal,
                         "wait_for_fabric_workers_ready: Device {} Phase 5: still waiting for "
-                        "LOCAL_HANDSHAKE_COMPLETE on master chan {} after {}ms — "
+                        "REMOTE_HANDSHAKE_COMPLETE on master chan {} after {}ms [STRATEGY_HSB] — "
                         "current status=0x{:08x} ({}) (expected=0x{:08x})",
                         this->id(),
                         master_chan,
@@ -4719,7 +4722,7 @@ void Device::wait_for_fabric_workers_ready() {
                         log_warning(
                             tt::LogMetal,
                             "wait_for_fabric_workers_ready: Device {} (mmio={}) Phase 5: timeout ({}ms) "
-                            "waiting for LOCAL_HANDSHAKE_COMPLETE on master chan {} — status "
+                            "waiting for REMOTE_HANDSHAKE_COMPLETE on master chan {} [STRATEGY_HSB] — status"
                             "still 0x0.  Setting fabric_relay_path_broken_=true "
                             "to skip Phase 5b health check and relay ops in subsequent quiesce.  (FIX-1: #42429)",
                             this->id(),
@@ -4730,7 +4733,7 @@ void Device::wait_for_fabric_workers_ready() {
                         log_warning(
                             tt::LogMetal,
                             "wait_for_fabric_workers_ready: Device {} Phase 5: timeout ({}ms) waiting "
-                            "for LOCAL_HANDSHAKE_COMPLETE on master chan {} (status=0x{:08x} {}, "
+                            "for REMOTE_HANDSHAKE_COMPLETE on master chan {} [STRATEGY_HSB] (status=0x{:08x} {}, "
                             "expected=0x{:08x}). Continuing to health check.",
                             this->id(),
                             kSyncTimeoutMs,
@@ -4749,43 +4752,82 @@ void Device::wait_for_fabric_workers_ready() {
                 }
             }
 
-            // Write READY_FOR_TRAFFIC to master channel — master firmware distributes to all
-            // subordinates via notify_subordinate_routers(), matching wait_for_fabric_router_sync().
+            // STRATEGY_HSB (#42429): Write READY_FOR_TRAFFIC to every active channel.
+            // Firmware (STRATEGY_HOST_SEQUENCED_BARRIER=1) skips ring sync — each ERISC
+            // waits for host to write READY_FOR_TRAFFIC to its own edm_status_ptr.
+            // Master is included (master confirmed above); subordinates are polled first to
+            // avoid the overwrite race (firmware writes REMOTE_HANDSHAKE_COMPLETE AFTER
+            // READY_FOR_TRAFFIC → firmware then spins forever waiting for READY_FOR_TRAFFIC).
             if (sync_buf[0] == sync_status || sync_buf[0] == expected_ready) {
                 auto ready_sig = builder_ctx.get_fabric_router_ready_address_and_signal();
                 if (ready_sig) {
-                    std::vector<uint32_t> ready_buf(1, static_cast<uint32_t>(ready_sig->second));
-                    // Phase 5 already confirmed LOCAL_HANDSHAKE_COMPLETE — this write is
-                    // best-effort.  For non-MMIO devices it goes through the UMD ETH relay; if
-                    // the relay is in a degraded state this could throw.  Catch and log rather
-                    // than rethrowing: the successful Phase 5 handshake result must not be masked
-                    // by a best-effort write failure.
-                    try {
-                        detail::WriteToDeviceL1(this, master_logical_core, ready_sig->first, ready_buf, CoreType::ETH);
-                    } catch (const std::exception& e) {
-                        log_warning(
-                            tt::LogMetal,
-                            "wait_for_fabric_workers_ready: Device {} Phase 5: READY_FOR_TRAFFIC "
-                            "write to master chan {} failed (best-effort, ignoring): {}",
-                            this->id(),
-                            master_chan,
-                            e.what());
-                    } catch (...) {
-                        log_warning(
-                            tt::LogMetal,
-                            "wait_for_fabric_workers_ready: Device {} Phase 5: READY_FOR_TRAFFIC "
-                            "write to master chan {} failed with unknown exception (best-effort, ignoring)",
-                            this->id(),
-                            master_chan);
+                    const std::vector<uint32_t> ready_buf(1, static_cast<uint32_t>(ready_sig->second));
+                    const uint32_t ready_addr = ready_sig->first;
+                    const auto fabric_node_id_p5 =
+                        control_plane.get_fabric_node_id_from_physical_chip_id(this->id());
+                    const auto& active_chans_p5 =
+                        control_plane.get_active_fabric_eth_channels(fabric_node_id_p5);
+                    for (const auto& [eth_chan_id, direction] : active_chans_p5) {
+                        const auto eth_lcore =
+                            soc_desc_p5.get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+                        if (eth_chan_id != master_chan) {
+                            // Poll subordinate for REMOTE_HANDSHAKE_COMPLETE before writing.
+                            constexpr uint32_t kSubPollMs = 2000;
+                            std::vector<uint32_t> sub_buf(1, 0);
+                            auto sub_start = std::chrono::steady_clock::now();
+                            bool sub_ready = false;
+                            while (true) {
+                                try {
+                                    detail::ReadFromDeviceL1(
+                                        this, eth_lcore, router_sync_addr, 4, sub_buf, CoreType::ETH);
+                                } catch (const std::exception&) {
+                                    break;
+                                }
+                                if (sub_buf[0] == sync_status || sub_buf[0] == expected_ready) {
+                                    sub_ready = true;
+                                    break;
+                                }
+                                const auto elapsed_sub =
+                                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::steady_clock::now() - sub_start)
+                                        .count();
+                                if (elapsed_sub > kSubPollMs) {
+                                    log_warning(
+                                        tt::LogMetal,
+                                        "wait_for_fabric_workers_ready: Device {} Phase 5: "
+                                        "subordinate chan={} stuck at 0x{:08x} after {}ms — "
+                                        "skipping READY_FOR_TRAFFIC write. (STRATEGY_HSB)",
+                                        this->id(),
+                                        eth_chan_id,
+                                        sub_buf[0],
+                                        elapsed_sub);
+                                    break;
+                                }
+                            }
+                            if (!sub_ready) {
+                                continue;
+                            }
+                        }
+                        try {
+                            detail::WriteToDeviceL1(this, eth_lcore, ready_addr, ready_buf, CoreType::ETH);
+                        } catch (const std::exception& e) {
+                            log_warning(
+                                tt::LogMetal,
+                                "wait_for_fabric_workers_ready: Device {} Phase 5: READY_FOR_TRAFFIC "
+                                "write to chan {} failed (best-effort): {} (STRATEGY_HSB)",
+                                this->id(),
+                                eth_chan_id,
+                                e.what());
+                        }
                     }
+                    log_info(
+                        tt::LogMetal,
+                        "wait_for_fabric_workers_ready: Device {} Phase 5: master chan {} sync "
+                        "complete (0x{:08x}), READY_FOR_TRAFFIC written to all active channels [STRATEGY_HSB]",
+                        this->id(),
+                        master_chan,
+                        sync_buf[0]);
                 }
-                log_info(
-                    tt::LogMetal,
-                    "wait_for_fabric_workers_ready: Device {} Phase 5: master chan {} sync "
-                    "complete (0x{:08x}), READY_FOR_TRAFFIC written",
-                    this->id(),
-                    master_chan,
-                    sync_buf[0]);
             }
 
             // FIX AM (#42429): STARTED early-exit shortcut.

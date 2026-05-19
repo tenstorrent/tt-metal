@@ -1131,6 +1131,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // STRATEGY7 (#42429): Enable handshake bypass — firmware checks handshake_info.handshake_bypass
     // at fabric_symmetric_handshake() entry and returns immediately if host wrote 1.
     named_args["STRATEGY7_HANDSHAKE_BYPASS"] = 1;
+    // STRATEGY_HSB (#42429): Host-Sequenced Barrier — ring sync eliminated.
+    // Host polls every ERISC for REMOTE_HANDSHAKE_COMPLETE, then writes READY_FOR_TRAFFIC
+    // to each directly. Firmware skips master/subordinate NOC ring coordination.
+    named_args["STRATEGY_HOST_SEQUENCED_BARRIER"] = 1;
     named_args["HANDSHAKE_ADDR"] = static_cast<uint32_t>(this->handshake_address);
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
     named_args["FABRIC_TENSIX_EXTENSION_MUX_MODE"] = this->has_tensix_extension;

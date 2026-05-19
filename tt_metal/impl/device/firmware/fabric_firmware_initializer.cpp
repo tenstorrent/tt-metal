@@ -2956,12 +2956,14 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
         const auto master_router_logical_core =
             cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(master_router_chan, CoordSystem::LOGICAL);
 
-        // FIX DZ3 (#42429): FIX M path channels have stale CT args (EDM_SESSION_NONCE is from
-        // the previous session).  Firmware uses session_nonce_effective=0 on that path; host
-        // must use nonce=0 too.  is_fabric_stale_base_umd_channels() identifies FIX M devices.
-        const bool use_fix_m_nonce = dev->is_fabric_stale_base_umd_channels();
-        const auto [router_sync_address, expected_status] =
-            builder_context.get_fabric_router_sync_address_and_status(use_fix_m_nonce);
+        // STRATEGY_HSB (#42429): Poll for REMOTE_HANDSHAKE_COMPLETE instead of
+        // LOCAL_HANDSHAKE_COMPLETE. Firmware (STRATEGY_HOST_SEQUENCED_BARRIER=1) skips ring
+        // sync and never writes LOCAL_HANDSHAKE_COMPLETE — it writes REMOTE_HANDSHAKE_COMPLETE
+        // after ETH handshake and waits for host to write READY_FOR_TRAFFIC directly.
+        // No nonce needed (REMOTE_HANDSHAKE_COMPLETE is written before ring sync would start).
+        const uint32_t router_sync_address = builder_context.get_fabric_router_sync_address_and_status().first;
+        constexpr uint32_t expected_status =
+            static_cast<uint32_t>(tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE);
         std::vector<std::uint32_t> master_router_status{0};
 
         auto start_time = std::chrono::steady_clock::now();
@@ -3121,9 +3123,72 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
 
         auto ready_address_and_signal = builder_context.get_fabric_router_ready_address_and_signal();
         if (ready_address_and_signal) {
-            std::vector<uint32_t> ready_signal(1, ready_address_and_signal->second);
-            detail::WriteToDeviceL1(
-                dev, master_router_logical_core, ready_address_and_signal->first, ready_signal, CoreType::ETH);
+            const std::vector<uint32_t> ready_signal(1, ready_address_and_signal->second);
+            const uint32_t ready_addr = ready_address_and_signal->first;
+            // STRATEGY_HSB (#42429): Write READY_FOR_TRAFFIC to every active channel, not
+            // just master. Firmware skips ring sync — each ERISC waits for host to write
+            // READY_FOR_TRAFFIC directly to its own edm_status_ptr.
+            //
+            // For each non-master channel, first poll for REMOTE_HANDSHAKE_COMPLETE to
+            // ensure firmware has passed the write (line 3706) before we overwrite — if host
+            // writes READY_FOR_TRAFFIC before firmware writes REMOTE_HANDSHAKE_COMPLETE, the
+            // firmware overwrites READY_FOR_TRAFFIC and spins indefinitely.
+            const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+            const auto& all_active_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
+            for (const auto& [eth_chan_id, direction] : all_active_channels) {
+                const auto eth_logical_core =
+                    cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+                if (eth_chan_id != master_router_chan) {
+                    // Poll this subordinate channel for REMOTE_HANDSHAKE_COMPLETE before writing.
+                    // Use a short timeout — all channels on the same device run the same firmware
+                    // and should complete ETH handshake within ~1ms of each other.
+                    constexpr uint32_t kSubordPollTimeoutMs = 2000;
+                    std::vector<uint32_t> sub_status(1, 0);
+                    auto sub_start = std::chrono::steady_clock::now();
+                    bool sub_ready = false;
+                    while (true) {
+                        try {
+                            detail::ReadFromDeviceL1(
+                                dev, eth_logical_core, router_sync_address, 4, sub_status, CoreType::ETH);
+                        } catch (const std::exception&) {
+                            break;  // can't read this channel; skip
+                        }
+                        if (sub_status[0] == expected_status ||
+                            sub_status[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC)) {
+                            sub_ready = true;
+                            break;
+                        }
+                        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                 std::chrono::steady_clock::now() - sub_start)
+                                                 .count();
+                        if (elapsed > kSubordPollTimeoutMs) {
+                            log_warning(
+                                tt::LogMetal,
+                                "wait_for_fabric_router_sync: Device {} subordinate chan={} stuck at "
+                                "0x{:08x} after {}ms — skipping READY_FOR_TRAFFIC write. (STRATEGY_HSB)",
+                                dev->id(),
+                                eth_chan_id,
+                                sub_status[0],
+                                elapsed);
+                            break;
+                        }
+                    }
+                    if (!sub_ready) {
+                        continue;
+                    }
+                }
+                try {
+                    detail::WriteToDeviceL1(dev, eth_logical_core, ready_addr, ready_signal, CoreType::ETH);
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "wait_for_fabric_router_sync: Device {} chan={} READY_FOR_TRAFFIC write "
+                        "failed (best-effort, ignoring): {} (STRATEGY_HSB)",
+                        dev->id(),
+                        eth_chan_id,
+                        e.what());
+                }
+            }
         }
     };
 

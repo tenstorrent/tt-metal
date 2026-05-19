@@ -3707,6 +3707,13 @@ void kernel_main() {
         asm volatile("nop");
 
         if constexpr (wait_for_host_signal) {
+#if STRATEGY_HOST_SEQUENCED_BARRIER
+            // STRATEGY_HSB (#42429): Ring sync eliminated. Host polls every ERISC for
+            // REMOTE_HANDSHAKE_COMPLETE (written above), then writes READY_FOR_TRAFFIC
+            // directly to each channel. No master/subordinate NOC ring coordination needed.
+            wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
+                (uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC, termination_signal_ptr);
+#else
             if constexpr (is_local_handshake_master) {
                 wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
                     (uint32_t)edm_local_sync_ptr, num_local_edms - 1, termination_signal_ptr);
@@ -3749,6 +3756,7 @@ void kernel_main() {
                     (uint32_t)edm_status_ptr,
                     tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
             }
+#endif  // STRATEGY_HOST_SEQUENCED_BARRIER
         }
     }
 
