@@ -119,6 +119,7 @@ UNPACK_FORMATS = input_output_formats(
         DataFormat.MxFp4,
         DataFormat.MxInt8,
         DataFormat.MxInt4,
+        DataFormat.MxInt2,
     ]
 )
 ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
