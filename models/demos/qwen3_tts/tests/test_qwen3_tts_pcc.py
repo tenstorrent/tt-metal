@@ -44,6 +44,19 @@ def compute_pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return (ac * bc).sum().item() / denom.item()
 
 
+def tt_to_torch(t: ttnn.Tensor, device) -> torch.Tensor:
+    """Convert a ttnn tensor to torch, handling multi-device meshes.
+
+    For a (1, N) mesh the tensor is replicated across chips; we extract chip-0's
+    view (taking the first slice along the stacked axis from ConcatMeshToTensor).
+    For a plain Device (or (1,1) mesh) the result is the usual single-chip conversion.
+    """
+    if device.__class__.__name__ == "MeshDevice" and device.get_num_devices() > 1:
+        stacked = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
+        return stacked[0:1]  # chip-0 slice; shape unchanged except leading dim=1
+    return ttnn.to_torch(t)
+
+
 def _assert_pcc(name: str, pcc: float) -> None:
     threshold = EXPECTED_PCC[name] - TOLERANCE
     print(f"[{name}] measured PCC = {pcc:.6f}  expected = {EXPECTED_PCC[name]:.4f}  threshold = {threshold:.4f}")
@@ -116,7 +129,7 @@ def test_mlp_decode_pcc(device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     y_tt = mlp(x_tt, mode="decode")
-    y = ttnn.to_torch(y_tt).squeeze(1)
+    y = tt_to_torch(y_tt, device).squeeze(1)
     pcc = compute_pcc(ref, y)
     ttnn.deallocate(x_tt)
     ttnn.deallocate(y_tt)
@@ -226,7 +239,7 @@ def test_attention_decode_pcc(device):
 
     kv_caches = create_kv_cache_list(device, tt_cfg, max_batch_size=1, max_seq_len=32)
     y_tt, _ = attn(x_tt, cos_tt, sin_tt, trans_tt, kv_cache=kv_caches[0], start_pos=0, mode="decode")
-    y = ttnn.to_torch(y_tt).squeeze(1)
+    y = tt_to_torch(y_tt, device).squeeze(1)
     pcc = compute_pcc(ref, y)
 
     ttnn.deallocate(x_tt)
@@ -304,7 +317,7 @@ def test_code_predictor_step_pcc(device, state_dict):
         mode="prefill",
         return_hidden_state=True,
     )
-    y = ttnn.to_torch(hidden_tt).squeeze(1).float()  # [1, 2, cp_hidden]
+    y = tt_to_torch(hidden_tt, device).squeeze(1).float()  # [1, 2, cp_hidden]
     pcc = compute_pcc(ref_hidden, y)
 
     ttnn.deallocate(inp)
@@ -405,7 +418,7 @@ def test_talker_chain_pcc(device, state_dict):
             hidden_tt, cos_tt, sin_tt, trans_mat, attention_mask=None, kv_cache=None, start_pos=0, mode="prefill"
         )
     hidden_tt = ttnn.rms_norm(hidden_tt, epsilon=tt_cfg.rms_norm_eps, weight=final_norm_tt)
-    x_tt = ttnn.to_torch(hidden_tt).squeeze(1).float()[:, :seq_len, :]
+    x_tt = tt_to_torch(hidden_tt, device).squeeze(1).float()[:, :seq_len, :]
 
     ttnn.deallocate(hidden_tt)
 
