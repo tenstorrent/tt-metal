@@ -12,11 +12,6 @@ from typing import Union
 import torch
 from transformers import SeamlessM4Tv2Config, SeamlessM4Tv2Model
 
-try:
-    from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import SeamlessM4Tv2CodeHifiGan
-except ImportError:  # pragma: no cover
-    SeamlessM4Tv2CodeHifiGan = None  # type: ignore[misc, assignment]
-
 
 def forward_torch_code_hifigan_reference(
     vocoder,
@@ -111,7 +106,7 @@ def compute_hifigan_output_lengths(unit_lengths: torch.Tensor, config: SeamlessM
                 input_lengths = _conv_out_length(
                     input_lengths, kernel_size, 1, (kernel_size - 1) * dil // 2, dilation=dil
                 )
-            for dil in dilation:
+            for _ in dilation:
                 input_lengths = _conv_out_length(input_lengths, kernel_size, 1, (kernel_size - 1) // 2, dilation=1)
 
     input_lengths = _conv_out_length(input_lengths, 7, 1, 3)

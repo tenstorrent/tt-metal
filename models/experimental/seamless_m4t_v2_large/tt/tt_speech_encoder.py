@@ -673,7 +673,6 @@ class TTSeamlessM4Tv2SpeechEncoder:
         seq_len: int,
         prebuilt_self_attn_4d: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
-        hsz = self.hidden_size
         use_prebuilt_attn = prebuilt_self_attn_4d is not None
 
         res_branch = self._layer_norm(
