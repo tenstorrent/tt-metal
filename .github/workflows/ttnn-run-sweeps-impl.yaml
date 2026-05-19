@@ -124,6 +124,18 @@ jobs:
           python3 tests/sweep_framework/split_vectors_by_axis.py
           echo "::group::COL partition"; ls tests/sweep_framework/vectors_export_col/ | head -20; echo "::endgroup::"
           echo "::group::ROW partition"; ls tests/sweep_framework/vectors_export_row/ | head -20; echo "::endgroup::"
+      - name: Perform ETH link retrain (Galaxy 6U only)
+        if: contains(matrix.tt_smi_cmd, 'glx_reset')
+        run: |
+          python3 -c "
+          import tt_umd
+          print('Performing 6U ETH link retrain after reset...')
+          options = tt_umd.TopologyDiscoveryOptions()
+          options.perform_6u_eth_retrain = True
+          options.eth_fw_heartbeat_failure = tt_umd.TopologyDiscoveryOptions.Action.IGNORE
+          tt_umd.TopologyDiscovery.discover(options)
+          print('ETH retrain completed successfully')
+          "
       - name: Run ttnn sweeps (batch)
         run: |
           MODULE_SELECTOR="${{ matrix.module_selector }}"
