@@ -489,7 +489,7 @@ inline simde__m256i simd_convert_to_bfp8_b_8(simde__m256i input, uint32_t shared
 }
 
 // Pack 16 fp32 values (one full face row) into 4 BFP8_b output dwords using
-// SIMD. Writes 4 dwords starting at `out_dwords`.
+// SIMD. Writes the 4 dwords (16 bytes) as a single 128-bit store.
 inline void simd_pack_face_row_bfp8_b(const uint32_t* row16, uint32_t shared_exp, uint32_t* out_dwords) {
     simde__m256i lo = simde_mm256_loadu_si256(reinterpret_cast<const simde__m256i*>(row16));
     simde__m256i hi = simde_mm256_loadu_si256(reinterpret_cast<const simde__m256i*>(row16 + 8));
@@ -498,25 +498,30 @@ inline void simd_pack_face_row_bfp8_b(const uint32_t* row16, uint32_t shared_exp
     simde__m256i bfp_hi = simd_convert_to_bfp8_b_8(hi, shared_exp);
 
     // Pack 4 lanes per output dword: dword0 = bfp_lo[0..3], dword1 = bfp_lo[4..7],
-    //                               dword2 = bfp_hi[0..3], dword3 = bfp_hi[4..7].
+    //                                dword2 = bfp_hi[0..3], dword3 = bfp_hi[4..7].
     // Each lane currently holds an 8-bit value in bits [7:0]. Shift the 4 lanes
-    // by 0/8/16/24 then OR-reduce the 4 dwords inside the 128-bit halves.
+    // by 0/8/16/24 then OR-reduce the 4 dwords inside each 128-bit half.
     const simde__m256i v_shift_low4 = simde_mm256_set_epi32(24, 16, 8, 0, 24, 16, 8, 0);
     bfp_lo = simde_mm256_sllv_epi32(bfp_lo, v_shift_low4);
     bfp_hi = simde_mm256_sllv_epi32(bfp_hi, v_shift_low4);
 
-    // Horizontal OR within each 128-bit half: lanes [0..3] -> dword, lanes [4..7] -> dword.
-    auto reduce_half = [](simde__m128i v) -> uint32_t {
-        // OR-reduce 4 dwords into one.
-        simde__m128i s = simde_mm_or_si128(v, simde_mm_shuffle_epi32(v, 0x4E));
-        s = simde_mm_or_si128(s, simde_mm_shuffle_epi32(s, 0xB1));
-        return static_cast<uint32_t>(simde_mm_cvtsi128_si32(s));
+    // Reduce 4 dwords -> 1 dword in lane 0 (other lanes left as don't-care).
+    auto reduce_to_lane0 = [](simde__m128i v) -> simde__m128i {
+        simde__m128i s = simde_mm_or_si128(v, simde_mm_shuffle_epi32(v, 0x4E));  // OR halves
+        return simde_mm_or_si128(s, simde_mm_shuffle_epi32(s, 0xB1));            // OR pairs
     };
 
-    out_dwords[0] = reduce_half(simde_mm256_castsi256_si128(bfp_lo));
-    out_dwords[1] = reduce_half(simde_mm256_extracti128_si256(bfp_lo, 1));
-    out_dwords[2] = reduce_half(simde_mm256_castsi256_si128(bfp_hi));
-    out_dwords[3] = reduce_half(simde_mm256_extracti128_si256(bfp_hi, 1));
+    simde__m128i r0 = reduce_to_lane0(simde_mm256_castsi256_si128(bfp_lo));     // dword0 in lane 0
+    simde__m128i r1 = reduce_to_lane0(simde_mm256_extracti128_si256(bfp_lo, 1));  // dword1
+    simde__m128i r2 = reduce_to_lane0(simde_mm256_castsi256_si128(bfp_hi));     // dword2
+    simde__m128i r3 = reduce_to_lane0(simde_mm256_extracti128_si256(bfp_hi, 1));  // dword3
+
+    // Assemble [dword0, dword1, dword2, dword3] in one __m128i without going
+    // through scalar registers, then issue a single 16-byte store.
+    simde__m128i p01 = simde_mm_unpacklo_epi32(r0, r1);  // [d0, d1, *, *]
+    simde__m128i p23 = simde_mm_unpacklo_epi32(r2, r3);  // [d2, d3, *, *]
+    simde__m128i packed = simde_mm_unpacklo_epi64(p01, p23);  // [d0, d1, d2, d3]
+    simde_mm_storeu_si128(reinterpret_cast<simde__m128i*>(out_dwords), packed);
 }
 
 // Compile-time predicate: SIMD path is only built for the input types we know
@@ -534,13 +539,13 @@ inline void gather_face_row_16_fp32(const T* src, uint32_t* dst) {
         std::memcpy(dst, src, 16 * sizeof(uint32_t));
     } else if constexpr (std::is_same_v<T, bfloat16>) {
         // bfloat16 -> fp32 is just `(uint32_t)bits << 16`. Read 16 bf16 values
-        // (32 bytes) as one AVX2 load, widen to two epi32 vectors, shift left.
-        const simde__m128i bf = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(src));
-        const simde__m128i bf_hi = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(src) + 1);
-        simde__m256i lo = simde_mm256_cvtepu16_epi32(bf);
-        simde__m256i hi = simde_mm256_cvtepu16_epi32(bf_hi);
-        lo = simde_mm256_slli_epi32(lo, 16);
-        hi = simde_mm256_slli_epi32(hi, 16);
+        // (32 bytes) as one 256-bit AVX2 load, split into two 128-bit halves,
+        // widen each half to epi32, then shift left by 16.
+        const simde__m256i bf = simde_mm256_loadu_si256(reinterpret_cast<const simde__m256i*>(src));
+        const simde__m128i bf_lo = simde_mm256_castsi256_si128(bf);
+        const simde__m128i bf_hi = simde_mm256_extracti128_si256(bf, 1);
+        simde__m256i lo = simde_mm256_slli_epi32(simde_mm256_cvtepu16_epi32(bf_lo), 16);
+        simde__m256i hi = simde_mm256_slli_epi32(simde_mm256_cvtepu16_epi32(bf_hi), 16);
         simde_mm256_storeu_si256(reinterpret_cast<simde__m256i*>(dst), lo);
         simde_mm256_storeu_si256(reinterpret_cast<simde__m256i*>(dst + 8), hi);
     } else {
@@ -634,89 +639,91 @@ inline void pack_one_tile(
     }();
     const bool use_simd = simd_eligible_format && (face_W == 16) && !is_exp_a && !simd_disabled_by_env;
 
-    auto scalar_gather_row = [&](const T* src) {
-        for (uint32_t j = 0; j < face_W; ++j) {
-            single_row[j] = element_to_u32_bits<T>(src[j]);
+    // Helper: compute the start-of-row pointer in the input buffer for either
+    // layout. `fp32_element_index` is captured by reference and advanced in
+    // the non-row-major path.
+    auto row_pointer = [&](uint32_t tr, uint32_t tc, uint32_t i) -> const T* {
+        if (row_major_input) {
+            const uint32_t row_base = (tr * face_H + i) * tile_W + (tc * face_W);
+            return tile_in + row_base;
         }
+        const T* p = tile_in + fp32_element_index;
+        fp32_element_index += face_W;
+        return p;
     };
 
-    auto scalar_max_exp = [&]() -> uint8_t {
-        uint32_t max_exp = 0;
-        for (uint32_t k = 0; k < face_W; ++k) {
-            uint32_t exp = (single_row[k] & 0x7f800000u) >> 23;
-            if (is_exp_a) {
-                int32_t se = static_cast<int32_t>(exp) - 127 + 15;
-                if (se > 31) {
-                    se = 31;
-                } else if (se < 0) {
-                    se = 0;
-                }
-                exp = static_cast<uint32_t>(se);
-            }
-            if (exp > max_exp) {
-                max_exp = exp;
-            }
-        }
-        return static_cast<uint8_t>(max_exp);
-    };
-
-    auto scalar_pack_row = [&](uint8_t shared_exp) {
-        // Bit ordering matches create_packed_bfp_packed_as_u32: the first
-        // input lands in the LSBs of the output dword.
-        for (uint32_t base = 0; base < face_W; base += num_mantissas_in_dword) {
-            uint32_t packed = 0;
-            for (int k = static_cast<int>(num_mantissas_in_dword) - 1; k >= 0; --k) {
-                const uint32_t conv =
-                    convert_u32_to_bfp<BfpFormat, false>(single_row[base + k], shared_exp, is_exp_a);
-                packed = (packed << MANTISSA_OUT_BITS) | (conv & MANTISSA_OUT_MASK);
-            }
-            mantissa_out[mantissa_dword_idx++] = packed;
-        }
-    };
-
-    for (uint32_t tr = 0; tr < subtiles_in_tile_row; ++tr) {
-        for (uint32_t tc = 0; tc < subtiles_in_tile_col; ++tc) {
-            for (uint32_t i = 0; i < face_H; ++i) {
-                // 1. Gather one face row of inputs into the scratch buffer.
-                const T* row_src = nullptr;
-                if (row_major_input) {
-                    const uint32_t row_base = (tr * face_H + i) * tile_W + (tc * face_W);
-                    row_src = tile_in + row_base;
-                } else {
-                    row_src = tile_in + fp32_element_index;
-                    fp32_element_index += face_W;
-                }
-                if constexpr (simd_eligible_format) {
-                    if (use_simd) {
+    // ---- SIMD loop --------------------------------------------------------
+    // Hoisted out of the per-row branch so the compiler sees a straight-line,
+    // fully-vectorisable loop body (no `if (use_simd)` / `if constexpr` checks
+    // inside the hot inner loop). Only entered when use_simd is true; we
+    // verified that simd_eligible_format holds at compile time too.
+    if constexpr (simd_eligible_format) {
+        if (use_simd) {
+            for (uint32_t tr = 0; tr < subtiles_in_tile_row; ++tr) {
+                for (uint32_t tc = 0; tc < subtiles_in_tile_col; ++tc) {
+                    for (uint32_t i = 0; i < face_H; ++i) {
+                        const T* row_src = row_pointer(tr, tc, i);
                         gather_face_row_16_fp32<T>(row_src, single_row);
-                    } else {
-                        scalar_gather_row(row_src);
-                    }
-                } else {
-                    scalar_gather_row(row_src);
-                }
-
-                // 2. Compute shared exponent. SIMD horizontal reduction for
-                // the 16-lane production case; scalar otherwise.
-                uint8_t shared_exp;
-                if constexpr (simd_eligible_format) {
-                    shared_exp = use_simd ? simd_get_max_exp_16_fp32_b(single_row) : scalar_max_exp();
-                } else {
-                    shared_exp = scalar_max_exp();
-                }
-                exp_buf[exp_idx++] = shared_exp;
-
-                // 3. Pack mantissas. SIMD path writes 4 dwords per face row in
-                // one vectorised pass; scalar path packs num_mantissas_in_dword
-                // mantissas at a time.
-                if constexpr (simd_eligible_format) {
-                    if (use_simd) {
+                        const uint8_t shared_exp = simd_get_max_exp_16_fp32_b(single_row);
+                        exp_buf[exp_idx++] = shared_exp;
                         simd_pack_face_row_bfp8_b(single_row, shared_exp, mantissa_out + mantissa_dword_idx);
                         mantissa_dword_idx += 4;  // face_W=16, 4 mantissas/dword -> 4 dwords/row
-                        continue;
                     }
                 }
-                scalar_pack_row(shared_exp);
+            }
+        }
+    }
+
+    // ---- Scalar loop ------------------------------------------------------
+    // Runs when the SIMD fast path is not applicable (BFP4/2, is_exp_a=true,
+    // non-16 face_W, integer input types, or SIMD disabled by env var). Kept
+    // as a single straight-line loop body for the same reason - no inner
+    // branches over the dispatch decision.
+    const bool run_scalar_loop = !(simd_eligible_format && use_simd);
+    if (run_scalar_loop) {
+        for (uint32_t tr = 0; tr < subtiles_in_tile_row; ++tr) {
+            for (uint32_t tc = 0; tc < subtiles_in_tile_col; ++tc) {
+                for (uint32_t i = 0; i < face_H; ++i) {
+                    const T* row_src = row_pointer(tr, tc, i);
+
+                    // Gather one face row into single_row.
+                    for (uint32_t j = 0; j < face_W; ++j) {
+                        single_row[j] = element_to_u32_bits<T>(row_src[j]);
+                    }
+
+                    // Compute shared exponent (scalar reduction).
+                    uint32_t max_exp = 0;
+                    for (uint32_t k = 0; k < face_W; ++k) {
+                        uint32_t exp = (single_row[k] & 0x7f800000u) >> 23;
+                        if (is_exp_a) {
+                            int32_t se = static_cast<int32_t>(exp) - 127 + 15;
+                            if (se > 31) {
+                                se = 31;
+                            } else if (se < 0) {
+                                se = 0;
+                            }
+                            exp = static_cast<uint32_t>(se);
+                        }
+                        if (exp > max_exp) {
+                            max_exp = exp;
+                        }
+                    }
+                    const uint8_t shared_exp = static_cast<uint8_t>(max_exp);
+                    exp_buf[exp_idx++] = shared_exp;
+
+                    // Pack mantissas. Bit ordering matches
+                    // create_packed_bfp_packed_as_u32: the first input lands in
+                    // the LSBs of the output dword.
+                    for (uint32_t base = 0; base < face_W; base += num_mantissas_in_dword) {
+                        uint32_t packed = 0;
+                        for (int k = static_cast<int>(num_mantissas_in_dword) - 1; k >= 0; --k) {
+                            const uint32_t conv =
+                                convert_u32_to_bfp<BfpFormat, false>(single_row[base + k], shared_exp, is_exp_a);
+                            packed = (packed << MANTISSA_OUT_BITS) | (conv & MANTISSA_OUT_MASK);
+                        }
+                        mantissa_out[mantissa_dword_idx++] = packed;
+                    }
+                }
             }
         }
     }
