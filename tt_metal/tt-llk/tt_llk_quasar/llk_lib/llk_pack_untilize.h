@@ -11,7 +11,6 @@
 #include "llk_pack_common.h"
 
 using namespace ckernel;
-using namespace ckernel::pack;
 
 /**
  * @brief MOP configuration for pack untilize of contiguous tiles
@@ -49,7 +48,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint8_t buf_desc_id)
 template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM, std::uint32_t C_DIM_FACES>
 inline void _llk_pack_untilize_init_(const std::uint8_t buf_desc_id, const TileShape& tile_shape)
 {
-    pack_untilize_stride_cfg_u pk_cfg = {};
+    ckernel::pack::pack_untilize_stride_cfg_u pk_cfg = {};
 
     pk_cfg.f.src_z_stride    = tile_shape.num_faces * tile_shape.face_r_dim; // inc MATH DEST REG ptr by 64 16-datum rows
     pk_cfg.f.dst_z_stride    = C_DIM_FACES;                                  // inc L1 SRC ptr by 2 16-datum rows
@@ -180,7 +179,7 @@ inline void _llk_pack_untilize_strided_init_(const std::uint8_t buf_desc_id, con
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_VAL_SOURCE_RMW, 0); // sel STRIDE_OFFSET_0
     if constexpr (FACE_R_DIM != 1)
     {
-        pack_untilize_stride_cfg_u stride_cfg               = {};
+        ckernel::pack::pack_untilize_stride_cfg_u stride_cfg = {};
         stride_cfg.f.stride_offset_0                        = C_DIM_FACES * FULL_CT_DIM; // stride each row by 2*FULL_CT_DIM 16-datum rows
         cfg[THCON_PACKER0_REG1_PACK_STRIDE_OFFSET_0_ADDR32] = stride_cfg.val[1];
     }

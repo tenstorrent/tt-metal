@@ -10,7 +10,6 @@
 #include "cunpack_common.h"
 #include "llk_unpack_common.h"
 using namespace ckernel;
-using namespace ckernel::unpack;
 
 /**
  * @brief MOP configuration for upk tilize for full 32x32 tiles using the fused HW instruction
@@ -77,7 +76,7 @@ template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t C_DIM_FACES>
 inline void _llk_unpack_tilize_init_(const std::uint32_t buf_desc_id, const std::uint32_t full_ct_dim, const std::uint32_t block_ct_dim)
 {
     // Pack all UNPACK_TILIZE stride fields into a single struct to perform a direct 32-bit cfg write
-    unpack_tilize_cfg_u unpk_cfg = {};
+    ckernel::unpack::unpack_tilize_cfg_u unpk_cfg = {};
     unpk_cfg.f.src_z_stride      = C_DIM_FACES; // col dim of a tile in L1 in units of 16 datums (1 face). This is used for
                                                 // Src (L1) counter increments in the UNPACR_TILIZE instruction
     unpk_cfg.f.dst_z_stride      = 1;           // col dim of a tile in dest reg (1 face)
@@ -168,7 +167,7 @@ inline void _llk_unpack_tilize_block_mop_config_(const std::uint32_t buf_desc_id
 template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM, std::uint32_t C_DIM_FACES, std::uint32_t NUM_FACES>
 inline void _llk_unpack_tilize_block_init_(const std::uint32_t buf_desc_id)
 {
-    unpack_tilize_cfg_u unpk_cfg = {};
+    ckernel::unpack::unpack_tilize_cfg_u unpk_cfg = {};
     unpk_cfg.f.src_z_stride      = C_DIM_FACES; // col dim of a tile in L1 in units of 16 datums (1 face)
     // Z stride unit = FACE_R_DIM datums (1 face row = 16 datums). Each tile = NUM_FACES faces × FACE_R_DIM rows per face.
     unpk_cfg.f.dst_z_stride      = NUM_FACES * FACE_R_DIM; // stride between tiles in DEST
