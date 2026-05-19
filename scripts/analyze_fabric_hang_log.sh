@@ -1459,10 +1459,36 @@ GAP_R5_MAX_MS=$(grep -oP 'configure_fabric: Device [0-9]+ complete.*total elapse
 # Also early-return logs with "elapsed NNNms"
 GAP_R6_FIRES=$(grep -cE 'quiesce_and_restart_fabric_workers: Device [0-9]+ (SUMMARY.*total_elapsed=|early-return.*elapsed)' "$CLEAN" 2>/dev/null; :)
 GAP_R6_MAX_MS=$(grep -oP 'quiesce_and_restart_fabric_workers:.*total_elapsed=\K[0-9]+' "$CLEAN" 2>/dev/null | sort -rn | head -1)
-# GAP-R8 (#42429): Phase 2.5 force-reset summary — force_reset_count/active_channels.
-# Log: "Phase 2.5 summary: force_reset_count=N/M active_channels"
-GAP_R8_FIRES=$(grep -cE 'Phase 2\.5 summary: force_reset_count=' "$CLEAN" 2>/dev/null; :)
-GAP_R8_ANY_FORCED=$(grep -oP 'force_reset_count=\K[0-9]+' "$CLEAN" 2>/dev/null | awk '$1>0{c++}END{print c+0}')
+# GAP-R8/R13 (#42429): Phase 2.5 summary — per-outcome breakdown.
+# Old format: "Phase 2.5 summary: force_reset_count=N/M active_channels"
+# New format (GAP-R13): "Phase 2.5 summary: active=N clean_skip=N term_ok=N force_reset=N relay_skip=N relay_broken=N"
+GAP_R8_FIRES=$(grep -cE 'Phase 2\.5 summary:' "$CLEAN" 2>/dev/null; :)
+GAP_R8_ANY_FORCED=$(grep -oP 'force_reset(?:_count)?=\K[0-9]+' "$CLEAN" 2>/dev/null | awk '$1>0{c++}END{print c+0}')
+# GAP-R13: Extract max force_reset and relay_skip counts.
+GAP_R13_MAX_FORCE=$(grep -oP 'force_reset=\K[0-9]+' "$CLEAN" 2>/dev/null | sort -rn | head -1)
+GAP_R13_MAX_RELAY_SKIP=$(grep -oP 'relay_skip=\K[0-9]+' "$CLEAN" 2>/dev/null | sort -rn | head -1)
+
+# GAP-R9 (#42429): Phase 3 ETH relaunch per-channel elapsed timer.
+# Log: "GAP-R9 (#42429): Device N Phase 3 ETH launch ... took NNNms"
+GAP_R9_FIRES=$(grep -cE 'GAP-R9.*Phase 3 ETH launch.*took [0-9]+ms' "$CLEAN" 2>/dev/null; :)
+GAP_R9_MAX_MS=$(grep -oP 'GAP-R9.*took \K[0-9]+' "$CLEAN" 2>/dev/null | sort -rn | head -1)
+
+# GAP-R10 (#42429): V11-QS89 readback verification warnings.
+# Log: "GAP-R10 ... READBACK MISMATCH"
+GAP_R10_MISMATCHES=$(grep -cE 'GAP-R10.*READBACK MISMATCH' "$CLEAN" 2>/dev/null; :)
+
+# GAP-R11 (#42429): FIX SA summary with SA-A timeout count.
+# Log: "FIX SA (#42429): Strategy A complete ... N SA-A FW_READY timeouts, session_id=0xNNNNNNNN"
+GAP_R11_SA_TIMEOUTS=$(grep -oP 'FIX SA.*?(\d+) SA-A FW_READY timeouts' "$CLEAN" 2>/dev/null | grep -oP '\d+(?= SA-A)' | awk '{s+=$1}END{print s+0}')
+
+# GAP-R12 (#42429): Test name tracking in record_test.
+# Log: "[GAP-R12] record_test: rc=N test=TESTNAME"
+GAP_R12_FAILURES=$(grep -E 'GAP-R12.*record_test: rc=[1-9]' "$CLEAN" 2>/dev/null | grep -oP 'test=\K\S+' | sort -u)
+GAP_R12_FAIL_COUNT=$(echo "$GAP_R12_FAILURES" | grep -c . 2>/dev/null; :)
+
+# GAP-R14 (#42429): Quiesce entry unconditional session_id + flags log.
+# Log: "GAP-R14 (#42429): quiesce_and_restart_fabric_workers: Device N session_id=..."
+GAP_R14_FIRES=$(grep -cE 'GAP-R14.*quiesce_and_restart_fabric_workers' "$CLEAN" 2>/dev/null; :)
 
 if [[ "${HAS_DISPATCH_CASCADE:-0}" -gt 0 ]]; then
     DIAGNOSIS="500ms dispatch cascade (FIX PA/PB/PC pattern): ${HAS_DISPATCH_CASCADE} Timeout(500ms)
@@ -2639,8 +2665,30 @@ if [ "${GAP_R6_FIRES:-0}" -gt 0 ]; then
     fi
 fi
 if [ "${GAP_R8_ANY_FORCED:-0}" -gt 0 ]; then
-    echo "  => [GAP-R8] Phase 2.5 force-resets detected in ${GAP_R8_ANY_FORCED} device(s)."
+    echo "  => [GAP-R8/R13] Phase 2.5 force-resets detected in ${GAP_R8_ANY_FORCED} device(s)."
+    echo "     Max force_reset=${GAP_R13_MAX_FORCE:-n/a}, max relay_skip=${GAP_R13_MAX_RELAY_SKIP:-n/a}."
     echo "     ERISCs failed to self-terminate within 2000ms budget. Check if this is routine or regression."
+fi
+if [ "${GAP_R9_FIRES:-0}" -gt 0 ]; then
+    echo "  => [GAP-R9] Phase 3 ETH relaunch: ${GAP_R9_FIRES} channel(s), max elapsed ${GAP_R9_MAX_MS:-n/a}ms."
+    if [ "${GAP_R9_MAX_MS:-0}" -gt 5000 ]; then
+        echo "     *** Phase 3 ETH relaunch >5s — investigate write_launch_msg_to_core bottleneck ***"
+    fi
+fi
+if [ "${GAP_R10_MISMATCHES:-0}" -gt 0 ]; then
+    echo "  => [GAP-R10] V11-QS89 readback mismatches: ${GAP_R10_MISMATCHES} occurrence(s)."
+    echo "     *** L1 writes in quiesce force-reset path did not persist — check UMD relay integrity ***"
+fi
+if [ "${GAP_R11_SA_TIMEOUTS:-0}" -gt 0 ]; then
+    echo "  => [GAP-R11] FIX SA Strategy A: ${GAP_R11_SA_TIMEOUTS} total SA-A FW_READY timeouts."
+    echo "     Channels where ERISC firmware did not reach 0xFEED1AB5 after deassert."
+fi
+if [ "${GAP_R12_FAIL_COUNT:-0}" -gt 0 ]; then
+    echo "  => [GAP-R12] Test failures by name (${GAP_R12_FAIL_COUNT} distinct):"
+    echo "$GAP_R12_FAILURES" | while read -r t; do [ -n "$t" ] && echo "     - $t"; done
+fi
+if [ "${GAP_R14_FIRES:-0}" -gt 0 ]; then
+    echo "  => [GAP-R14] Quiesce entry logs: ${GAP_R14_FIRES} quiesce cycle(s) observed."
 fi
 
 # ─── FIX TF (test_tt_fabric degraded skip) ───
