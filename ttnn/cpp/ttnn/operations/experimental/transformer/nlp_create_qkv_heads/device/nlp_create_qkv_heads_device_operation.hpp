@@ -10,6 +10,7 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/memory_config/memory_config.hpp"
 
 #include <tt-metalium/program_descriptors.hpp>
 
