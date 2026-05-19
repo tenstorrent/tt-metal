@@ -24,7 +24,7 @@ import torch
 import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.perf.benchmarking_utils import BenchmarkProfiler, perf_target_check
 from models.tt_transformers.tt.common import get_base_model_name
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 
@@ -572,12 +572,16 @@ def test_multimodal_demo_text(
         for i, (p, r, f) in enumerate(zip(P0, R0, F10)):
             logger.info(f"BERTScore P/R/F1 for sample {i}: {p.item():.3f}/{r.item():.3f}/{f.item():.3f}")
         # TODO: create separate targets for different samples, investigate different outputs for different batch_size (4 vs 16)
-        assert (
-            F10.min().item() > _BERTSCORE_MIN_F1
-        ), f"min BERTScore F1 ({F10.min().item()}) is lower than expected ({_BERTSCORE_MIN_F1})."
-        assert (
-            F10.mean().item() > _BERTSCORE_MEAN_F1
-        ), f"mean BERTScore F1 ({F10.mean().item()}) is lower than expected ({_BERTSCORE_MEAN_F1})."
+        min_f1 = F10.min().item()
+        mean_f1 = F10.mean().item()
+        perf_target_check(
+            min_f1 > _BERTSCORE_MIN_F1,
+            f"min BERTScore F1 ({min_f1}) is lower than expected ({_BERTSCORE_MIN_F1}).",
+        )
+        perf_target_check(
+            mean_f1 > _BERTSCORE_MEAN_F1,
+            f"mean BERTScore F1 ({mean_f1}) is lower than expected ({_BERTSCORE_MEAN_F1}).",
+        )
 
     # Calculate measurements
     compile_prefill_time = profiler.get_duration("compile_prefill")
