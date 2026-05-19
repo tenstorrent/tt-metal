@@ -378,6 +378,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         height: int = 0,
         width: int = 0,
         num_frames: int = 81,
+        boundary_ratio: Optional[float] = None,
         **extra_kwargs,
     ):
         device_configs = {}
@@ -475,7 +476,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             vae_parallel_config=vae_parallel_config,
             encoder_parallel_config=encoder_parallel_config,
             num_links=num_links or config["num_links"],
-            boundary_ratio=0.875,
+            boundary_ratio=0.875 if boundary_ratio is None else boundary_ratio,
             scheduler=scheduler,
             dynamic_load=dynamic_load if dynamic_load is not None else config["dynamic_load"],
             topology=topology or config["topology"],

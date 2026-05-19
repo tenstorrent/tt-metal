@@ -45,7 +45,6 @@ LoRA weights: HF ``vita-video-gen/svi-model``.
 from pathlib import Path
 from typing import List, Literal, Optional, Union
 
-import numpy as np
 import PIL
 import torch
 from loguru import logger
@@ -226,27 +225,16 @@ class WanPipelineSVI(WanPipelineI2VLora):
         - exact-zeros the remaining image-latent slots (frames
           num_motion_latent+1..end) to match upstream's
           ``padding = torch.zeros(...)``.
-
-        Falls back to the base behavior when neither ``anchor_image`` nor
-        ``prev_last_latent`` is set (so this method stays usable as a
-        vanilla I2V prepare_latents).
         """
         if anchor_image is None:
             anchor_image = getattr(self, "_svi_anchor_image", None)
         if prev_last_latent is None:
             prev_last_latent = getattr(self, "_svi_prev_last_latent", None)
 
-        if anchor_image is None and prev_last_latent is None:
-            return super().prepare_latents(
-                batch_size=batch_size,
-                image_prompt=image_prompt,
-                num_channels_latents=num_channels_latents,
-                height=height,
-                width=width,
-                num_frames=num_frames,
-                dtype=dtype,
-                device=device,
-                latents=latents,
+        if anchor_image is None:
+            raise ValueError(
+                "WanPipelineSVI requires an anchor_image. Call "
+                "generate_long_video(...) or pass anchor_image= to __call__."
             )
 
         # Encoder runs once with the anchor at frame 0, producing the correct
@@ -312,8 +300,7 @@ class WanPipelineSVI(WanPipelineI2VLora):
         ``List[str]`` of length ``num_clips`` (one per clip, mirrors
         upstream's per-clip ``prompt.txt``).
 
-        Returns a tensor (or numpy array, depending on the inner
-        ``output_type``) of shape::
+        Returns a tensor of shape::
 
             (num_clips * num_frames - (num_clips - 1) * num_overlap_frame,
              ...spatial dims..., 3)
@@ -383,14 +370,12 @@ def _unwrap_image(image_prompt) -> PIL.Image.Image:
     return image_prompt
 
 
-def _concat_with_overlap(clips: List[torch.Tensor], *, overlap: int):
+def _concat_with_overlap(clips: List[torch.Tensor], *, overlap: int) -> torch.Tensor:
     """Temporal-concat decoded clips, dropping ``overlap`` boundary frames
-    between adjacent clips. Accepts torch.Tensor or numpy.ndarray clips."""
+    between adjacent clips."""
     if not clips:
         raise ValueError("no clips to concatenate")
     if len(clips) == 1:
         return clips[0]
     pieces = [clips[0]] + [c[overlap:] if overlap > 0 else c for c in clips[1:]]
-    if isinstance(pieces[0], torch.Tensor):
-        return torch.cat(pieces, dim=0)
-    return np.concatenate(pieces, axis=0)
+    return torch.cat(pieces, dim=0)

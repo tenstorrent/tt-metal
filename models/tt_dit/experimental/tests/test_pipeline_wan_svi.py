@@ -11,7 +11,6 @@ env-configurable to support experimentation.
 """
 import os
 
-import numpy as np
 import PIL
 import pytest
 import torch
@@ -143,38 +142,28 @@ def test_long_video(
     logger.info(f"Concat shape: {tuple(video.shape)} (expected T={expected_T})")
     assert actual_T == expected_T, f"Expected {expected_T} frames, got {actual_T}"
 
-    if isinstance(video, np.ndarray):
-        assert not np.isnan(video.astype(np.float32)).any(), "video contains NaN"
-    else:
-        assert not torch.isnan(video.float()).any(), "video contains NaN"
+    assert not torch.isnan(video.float()).any(), "video contains NaN"
 
     output_basename = f"wan_svi_{regime}_{num_clips}clips_{width}x{height}"
-
-    # Save the raw tensor first so a downstream export bug doesn't lose the run.
-    if isinstance(video, torch.Tensor):
-        torch.save(video.detach().cpu(), f"{output_basename}.pt")
-        logger.info(f"Saved raw tensor to: {output_basename}.pt")
+    torch.save(video.detach().cpu(), f"{output_basename}.pt")
+    logger.info(f"Saved raw tensor to: {output_basename}.pt")
 
     try:
         from models.tt_dit.utils.video import export_to_video
 
         # output_type='pt' returns (T, C, H, W) float; export_to_video wants
         # (T, H, W, C) uint8.
-        if isinstance(video, torch.Tensor):
-            arr = video.detach().cpu()
-            if arr.ndim == 4 and arr.shape[1] in (1, 3):
-                arr = arr.permute(0, 2, 3, 1).contiguous()
-            if arr.dtype != torch.uint8:
-                arr = arr.float()
-                if arr.min().item() < 0:
-                    arr = (arr + 1.0) * 127.5
-                elif arr.max().item() <= 1.0 + 1e-3:
-                    arr = arr * 255.0
-                arr = arr.clamp(0, 255).to(torch.uint8)
-            arr = arr.numpy()
-        else:
-            arr = video
-        export_to_video(arr, f"{output_basename}.mp4", fps=16)
+        arr = video.detach().cpu()
+        if arr.ndim == 4 and arr.shape[1] in (1, 3):
+            arr = arr.permute(0, 2, 3, 1).contiguous()
+        if arr.dtype != torch.uint8:
+            arr = arr.float()
+            if arr.min().item() < 0:
+                arr = (arr + 1.0) * 127.5
+            elif arr.max().item() <= 1.0 + 1e-3:
+                arr = arr * 255.0
+            arr = arr.clamp(0, 255).to(torch.uint8)
+        export_to_video(arr.numpy(), f"{output_basename}.mp4", fps=16)
         logger.info(f"Saved video to: {output_basename}.mp4")
     except ImportError:
         logger.info("Could not export video - imageio_ffmpeg not available")
