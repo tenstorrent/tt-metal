@@ -56,8 +56,9 @@ TRIAGE_JSON="${TRIAGE_JSON_DIR}/triage.json"
 #   {source, pid, started_at_ms, wait_ms, run_ms, test_path, exit_code}
 # wait_ms = script entry → flock acquired (contention)
 # run_ms  = flock acquired → script exit  (device occupied)
-# Skipped on sim mode (no flock contention) and when the script exits before
-# acquiring the lock (TT_TIMING_LOCK_ACQUIRED_MS stays 0).
+# On sim, flock is skipped so we seed TT_TIMING_LOCK_ACQUIRED_MS=entry below;
+# wait_ms is 0 and run_ms is the full pytest wall-clock. Skipped only when the
+# script exits before that seed runs.
 TT_TIMING_ENTRY_MS=$(date +%s%3N)
 TT_TIMING_LOCK_ACQUIRED_MS=0
 TT_TIMING_SOURCE="run_safe_pytest"
@@ -93,6 +94,9 @@ if [[ -n "${TT_METAL_SIMULATOR:-}" ]]; then
     # pending work before the sim _Exit(1)'s). User-set env wins.
     : "${TTSIM_HANG_WATCHDOG_CLOCKS:=50000}"
     export TTSIM_HANG_WATCHDOG_CLOCKS
+    # No flock on sim, but we still want device_timings: seed the marker so the
+    # exit trap emits with wait_ms=0 and run_ms=full wall-clock.
+    TT_TIMING_LOCK_ACQUIRED_MS=$TT_TIMING_ENTRY_MS
 fi
 PYTEST_STDOUT_LOG="/tmp/safe-pytest-stdout-$$.log"
 
