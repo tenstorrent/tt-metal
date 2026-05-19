@@ -2609,6 +2609,23 @@ class TestStoreCapturedGraph:
 class TestBeginGraphCaptureClearing:
     """Tests for begin_graph_capture clearing behavior."""
 
+    @pytest.fixture(autouse=True)
+    def isolate_outer_graph_capture(self):
+        """Root conftest may start capture before these tests; reset for outermost begin behavior."""
+        with ttnn.manage_config("enable_graph_report", False):
+            while ttnn.graph.is_graph_capture_active():
+                ttnn.graph.end_graph_capture()
+            yield
+
+    @pytest.fixture(autouse=True)
+    def restore_python_stack_trace_state(self):
+        was_enabled = ttnn.graph.is_python_stack_trace_enabled()
+        yield
+        if was_enabled:
+            ttnn.graph.enable_python_stack_traces()
+        else:
+            ttnn.graph.disable_python_stack_traces()
+
     def test_clears_python_io_when_not_active(self):
         ttnn.graph._python_io_data = [{"name": "stale"}]
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
@@ -2721,7 +2738,6 @@ class TestBeginGraphCaptureClearing:
                 assert len(entry["python_stack_trace"]) > 0
             finally:
                 ttnn.graph.end_graph_capture()
-            ttnn.graph.disable_python_stack_traces()
 
     def test_configure_stack_traces_defaults_false_when_config_attr_missing(self):
         import types

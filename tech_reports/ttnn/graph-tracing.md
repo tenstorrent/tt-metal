@@ -382,10 +382,10 @@ Graph capture overhead has several independently controllable layers:
 ```python
 # Python stack traces during begin_graph_capture (opt-in; still records args / tensor IDs either way)
 import ttnn
-ttnn.CONFIG.enable_graph_python_stack_traces = True
-ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-# ... your operations ...
-ttnn.graph.end_graph_capture_to_file("report_with_python_stacks.json")
+with ttnn.manage_config("enable_graph_python_stack_traces", True):
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    # ... your operations ...
+    ttnn.graph.end_graph_capture_to_file("report_with_python_stacks.json")
 ```
 
 ```python
