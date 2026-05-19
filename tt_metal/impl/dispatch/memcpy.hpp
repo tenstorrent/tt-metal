@@ -167,9 +167,13 @@ void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n
     constexpr uint32_t inner_loop = 8;
     constexpr uint32_t inner_blk_size = inner_loop * 32;  // 256 bytes
 
+    // 2 KB: hides DRAM latency per thread; dense cadence (per 32 B) keeps each thread's pipeline independent.
+    constexpr uint32_t prefetch_distance = 2048;
+
     size_t num_lines = n / inner_blk_size;
     for (size_t i = 0; i < num_lines; ++i) {
         for (size_t j = 0; j < inner_loop; ++j) {
+            __builtin_prefetch(src8 + prefetch_distance, 0, 0);
             nt_v256 chunk;
             __builtin_memcpy(&chunk, src8, 32);
             __builtin_nontemporal_store(chunk, (nt_v256*)dst8);
@@ -181,6 +185,7 @@ void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n
 
     num_lines = n / 32;
     for (size_t i = 0; i < num_lines; ++i) {
+        __builtin_prefetch(src8 + prefetch_distance, 0, 0);
         nt_v256 chunk;
         __builtin_memcpy(&chunk, src8, 32);
         __builtin_nontemporal_store(chunk, (nt_v256*)dst8);
