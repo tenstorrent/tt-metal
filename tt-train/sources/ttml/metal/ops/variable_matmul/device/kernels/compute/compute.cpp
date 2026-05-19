@@ -9,6 +9,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
@@ -339,6 +340,45 @@ void matmul_blocks(
     }
 }
 
+// Write zero tiles to `out_cb` for a single M×N output block. Used in the K=0 path
+// (empty K-axis OffsetsRole expert): without this the M×N pack would copy uninitialized
+// DST → garbage gradients added to weights downstream. fill_tile is an SFPU op that
+// writes the param0 value to every element of a DST tile.
+void zero_blocks(
+    const uint32_t out_cb,
+    const uint32_t M_block_tiles,
+    const uint32_t N_block_tiles,
+    const uint32_t full_N_block_tiles,
+    const uint32_t subblock_h,
+    const uint32_t subblock_w) {
+    fill_tile_init();
+    for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
+        for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
+            tile_regs_acquire();
+            uint32_t dst_index = 0;
+            for (uint32_t h = 0; h < subblock_h; h++) {
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    fill_tile(dst_index, 0.0F);
+                    dst_index++;
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            uint32_t write_dst_index = 0;
+            for (uint32_t h = 0; h < subblock_h; h++) {
+                uint32_t h_tile_id = M_start + h;
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    uint32_t w_tile_id = N_start + w;
+                    uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
+                    pack_tile<true>(write_dst_index, out_cb, out_tile_id);
+                    write_dst_index++;
+                }
+            }
+            tile_regs_release();
+        }
+    }
+}
+
 void kernel_main() {
     // Index 0 (K_num_blocks): kept for arg layout compat; actual value from runtime args.
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(1);
@@ -453,6 +493,16 @@ void kernel_main() {
             // was left in L1 by an earlier program (e.g. ttnn::multiply or swiglu_bw).
             PACK((llk_pack_reconfig_l1_acc(0)));
             cb_reserve_back(intermediate_cb, out_block_num_tiles);
+            if (K_num_blocks == 0U) {
+                // Empty K-axis offset (e.g. empty expert in moe_ffn): the K-loop below
+                // would skip everything but leave intermediate_cb pointing at uninitialized
+                // DST/L1 → garbage gradients added to weights. Fill the FULL M_block ×
+                // N_block region (not just current_M × current_N, since copy_block later
+                // reads the full block) with zeros so downstream `add_grad` contributes
+                // nothing for empty experts. Per-device decision; works under DDP+TP
+                // batch-sharded where the host can't gate the call uniformly.
+                zero_blocks(intermediate_cb, M_block_tiles, N_block_tiles, N_block_tiles, subblock_h, subblock_w);
+            }
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
                 if constexpr (transpose_a) {
                     // Mirror the dataflow's skip-push pattern: dataflow skips pushing in0 at

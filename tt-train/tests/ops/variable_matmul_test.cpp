@@ -1834,3 +1834,61 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
     }
     EXPECT_EQ(untouched_err, 0.0F) << "variable(InputAndOutputRow) corrupted untouched rows";
 }
+
+// ---- Empty-expert probe: K-axis offset where count_e = 0 must produce all-zero output. ----
+
+namespace {
+const ttml::metal::VariableMatmulConfig kMoeFfnConfig{
+    .M_block_size = 4,
+    .K_block_size = 8,
+    .N_block_size = 8,
+    .subblock_h = 2,
+    .subblock_w = 2,
+    .compute_with_storage_grid_size = {10, 10},
+};
+}  // namespace
+
+TEST_F(VariableMatmulTest, EmptyExpertProbe_InputAndWeightK_TransposeA) {
+    auto cfg = kMoeFfnConfig;
+    cfg.transpose_a = true;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    const uint32_t H_tiles = 48, I_tiles = 24, T_cap_tiles = 64;
+    const uint32_t H = H_tiles * 32, I = I_tiles * 32, T_cap = T_cap_tiles * 32;
+
+    auto dY = create_random_device_tensor(T_cap, H, device);
+    auto act = create_random_device_tensor(T_cap, I, device);
+
+    // offsets where index 1 → count=0 (offsets[1]==offsets[2]).
+    std::vector<uint32_t> offsets_host = {0U, 128U, 128U, 256U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+
+    auto result = ttml::metal::variable_matmul(
+        dY,
+        act,
+        cfg,
+        std::nullopt,
+        0,
+        0,
+        0,
+        0,
+        std::nullopt,
+        0,
+        offsets,
+        ttml::metal::OffsetsRole::InputAndWeightK,
+        /*start=*/1U);
+
+    const auto vec = ttml::core::to_vector<float>(result);
+    float max_abs = 0.0F;
+    size_t non_finite = 0;
+    for (float v : vec) {
+        if (!std::isfinite(v)) {
+            ++non_finite;
+        } else {
+            max_abs = std::max(max_abs, std::abs(v));
+        }
+    }
+    EXPECT_EQ(non_finite, 0U) << "empty-expert output has non-finite values";
+    EXPECT_EQ(max_abs, 0.0F) << "empty-expert output non-zero; max_abs=" << max_abs;
+}
