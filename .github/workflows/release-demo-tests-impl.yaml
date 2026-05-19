@@ -158,7 +158,7 @@ jobs:
         with:
           governor: performance
       - name: Download Llama model weights from LFC
-        if: ${{ contains(matrix.test-group.name, 'llama') && (contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') || contains(join(matrix.test-group.runs_on, ' '), 'BH-LLMBox')) }}
+        if: ${{ contains(matrix.test-group.name, 'llama') && contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') }}
         timeout-minutes: 15
         run: |
           set -e
