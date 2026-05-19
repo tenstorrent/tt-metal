@@ -4,10 +4,6 @@
   "dataset_repo": "hf-internal-testing/tourism-monthly-batch",
   "dataset_file": "train-batch.pt",
   "dataset_revision": "81c7ee3cf3317e51beb97327df55926cd5bbfadb",
-  "python_version": "3.12.3 (main, Mar 23 2026, 19:04:32) [GCC 13.3.0]",
-  "torch_version": "2.11.0+cu130",
-  "transformers_version": "5.8.0",
-  "huggingface_hub_version": "1.14.0",
   "context_length": 24,
   "prediction_length": 24,
   "num_time_features": 2,
@@ -46,6 +42,5 @@
   "embedding_dimension": [
     6
   ],
-  "batch_size": 64,
   "past_len": 61
 }

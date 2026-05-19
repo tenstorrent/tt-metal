@@ -21,7 +21,8 @@ time_series_transformer/
 ├── scripts/
 │   └── save_reference_tensors.py
 └── reference/
-    └── config.json
+    ├── config.json           # committed — static provenance only
+    └── config_runtime.json   # gitignored — runtime environment versions
 ```
 
 ## Setup
@@ -43,4 +44,5 @@ per-layer attention/FC1/FC2 tensors, and final `loc`, `scale`, and
 
 Model pinned to revision `2a40ad41f6ffe61e7bef6099b08c6c2fce36ac35`.
 Dataset pinned to revision `81c7ee3cf3317e51beb97327df55926cd5bbfadb`.
-See `reference/config.json` for exact package versions used to generate tensors.
+See `reference/config.json` for static provenance (pinned model/dataset revisions and architecture).
+Runtime package versions are recorded in `reference/config_runtime.json` (generated locally, not committed).

@@ -1,2 +1,3 @@
-# Reference tensors are generated locally — do not commit
+# Generated locally — do not commit
 *.pt
+config_runtime.json
