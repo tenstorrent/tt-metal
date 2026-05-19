@@ -140,7 +140,11 @@ void kernel_main() {
                 // Reserve, write to all receivers. Each receiver gets `push_page_size` bytes
                 // (its N-tile slice of this K-block) from the stage buffer.
                 experimental::remote_cb_reserve_back(remote_cb_id, 1);
-                experimental::remote_cb_push_back_and_write_pages<false>(
+                // skip_ptr_update=true => posted NoC writes (no per-write ack). Safe here
+                // because the kernel uses noc_async_posted_writes_flushed() below and the
+                // GCB end-of-stream barrier waits on pages_acked. Worker writer gates this
+                // behind enable_performance_mode for multi-chip safety; single-chip BH is fine.
+                experimental::remote_cb_push_back_and_write_pages<true>(
                     remote_cb_id,
                     stage_buf,
                     /*num_pages=*/1,
