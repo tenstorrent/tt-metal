@@ -35,4 +35,21 @@ public:
     static std::vector<uint64_t> snapshot(int device_id);
 };
 
+// Padding-region registry for the Tensor-Padding-Violation sanitizer.
+// Populated by Buffer::set_logical_size when a caller declares a logical size
+// smaller than the physical allocation; removed by Buffer::deallocate_impl.
+// Each entry describes the padded byte range [logical_end, physical_end) of
+// one L1 buffer — the sanitizer inside __emule_local_l1_to_ptr aborts on any
+// access that lands inside one of these ranges. set() is keyed by the
+// buffer's physical start address so re-declaring the logical size for the
+// same buffer overwrites the previous entry; clear() also keys by start.
+// snapshot() returns packed (logical_end << 32) | physical_end pairs so the
+// kernel-side scan is a flat array of uint64_t (matching LiveL1Ranges).
+class LiveL1PaddingRanges {
+public:
+    static void set(int device_id, uint32_t start, uint32_t logical_end, uint32_t physical_end);
+    static void clear(int device_id, uint32_t start);
+    static std::vector<uint64_t> snapshot(int device_id);
+};
+
 }  // namespace tt::tt_metal::emule

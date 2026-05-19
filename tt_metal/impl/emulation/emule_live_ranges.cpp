@@ -88,4 +88,72 @@ std::vector<uint64_t> LiveDramRanges::snapshot(int device_id) {
     return snapshot_of(dram_registry(), device_id);
 }
 
+namespace {
+
+// Padding registry storage. Keyed by (device_id, start_address) — the buffer's
+// physical start uniquely identifies the entry while it is allocated. The
+// kernel-side check only needs the (logical_end, physical_end) pair, but we
+// keep `start` so clear() can find the entry by its buffer address.
+struct PaddingEntry {
+    uint32_t start;
+    uint32_t logical_end;
+    uint32_t physical_end;
+};
+
+struct PaddingRegistry {
+    std::mutex mu;
+    std::unordered_map<int, std::vector<PaddingEntry>> per_device;
+};
+
+PaddingRegistry& padding_registry() {
+    static PaddingRegistry r;
+    return r;
+}
+
+}  // namespace
+
+void LiveL1PaddingRanges::set(int device_id, uint32_t start, uint32_t logical_end, uint32_t physical_end) {
+    auto& reg = padding_registry();
+    std::lock_guard<std::mutex> g(reg.mu);
+    auto& v = reg.per_device[device_id];
+    auto match = std::find_if(
+        v.begin(), v.end(), [start](const PaddingEntry& e) { return e.start == start; });
+    if (match != v.end()) {
+        match->logical_end = logical_end;
+        match->physical_end = physical_end;
+    } else {
+        v.push_back(PaddingEntry{start, logical_end, physical_end});
+    }
+}
+
+void LiveL1PaddingRanges::clear(int device_id, uint32_t start) {
+    auto& reg = padding_registry();
+    std::lock_guard<std::mutex> g(reg.mu);
+    auto it = reg.per_device.find(device_id);
+    if (it == reg.per_device.end()) {
+        return;
+    }
+    auto& v = it->second;
+    auto match = std::find_if(
+        v.begin(), v.end(), [start](const PaddingEntry& e) { return e.start == start; });
+    if (match != v.end()) {
+        v.erase(match);
+    }
+}
+
+std::vector<uint64_t> LiveL1PaddingRanges::snapshot(int device_id) {
+    auto& reg = padding_registry();
+    std::lock_guard<std::mutex> g(reg.mu);
+    auto it = reg.per_device.find(device_id);
+    if (it == reg.per_device.end()) {
+        return {};
+    }
+    std::vector<uint64_t> out;
+    out.reserve(it->second.size());
+    for (const auto& e : it->second) {
+        out.push_back(pack(e.logical_end, e.physical_end));
+    }
+    return out;
+}
+
 }  // namespace tt::tt_metal::emule

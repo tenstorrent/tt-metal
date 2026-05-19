@@ -150,6 +150,15 @@ thread_local uint32_t __emule_dram_unreserved_base = 0;
 thread_local const uint64_t* __emule_dram_tensor_ranges = nullptr;
 thread_local uint32_t __emule_dram_tensor_ranges_count = 0;
 
+// Per-kernel-thread tensor-padding sanitizer state. Populated below when
+// emule_strict_padding_enabled() returns true; otherwise the pointer is left
+// null and the inline check in __emule_local_l1_to_ptr is a no-op. Each
+// uint64_t entry is packed (logical_end << 32) | physical_end — an access
+// that falls in [logical_end, physical_end) is reported as a padding
+// violation.
+thread_local const uint64_t* __emule_l1_padding_ranges = nullptr;
+thread_local uint32_t __emule_l1_padding_ranges_count = 0;
+
 // Per-kernel-thread CB-boundary sanitizer state. Two windows per CB:
 //   __emule_cb_reserved_pages[i] — active write reservation: page count
 //       starting at cb.write_idx (mod num_pages). Bumped on cb_reserve_back,
@@ -288,6 +297,21 @@ static bool emule_strict_tensor_enabled() {
 static bool emule_strict_cb_boundary_enabled() {
     static const bool enabled = []() {
         const char* v = std::getenv("TT_EMULE_STRICT_CB_BOUNDARY");
+        return v != nullptr && v[0] != '\0' && v[0] != '0';
+    }();
+    return enabled;
+}
+
+// TT_EMULE_STRICT_PADDING: when set, populate the L1 padding-range thread_locals
+// before each kernel launch so __emule_local_l1_to_ptr aborts on accesses
+// that land inside a buffer's declared padding region [logical_end, physical_end).
+// Independent of STRICT_TENSOR: padding-only checks can be enabled without
+// requiring every buffer to be registered as a live tensor. Padding regions
+// are populated by Buffer::set_logical_size — buffers that never call it
+// have no padding entry and contribute nothing to the check.
+static bool emule_strict_padding_enabled() {
+    static const bool enabled = []() {
+        const char* v = std::getenv("TT_EMULE_STRICT_PADDING");
         return v != nullptr && v[0] != '\0' && v[0] != '0';
     }();
     return enabled;
@@ -1599,6 +1623,11 @@ struct EmuleOobTensorState {
     const uint64_t* dram_tensor_ranges = nullptr;
     uint32_t dram_tensor_ranges_count = 0;
     bool cb_boundary_strict = false;
+    // Tensor-padding sanitizer state. Independent of (tensor_ranges,
+    // dram_tensor_ranges) above: STRICT_PADDING can be enabled without
+    // STRICT_TENSOR. Null means "no padding check this launch".
+    const uint64_t* l1_padding_ranges = nullptr;
+    uint32_t l1_padding_ranges_count = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -1691,6 +1720,8 @@ static void launch_cores(
                             __emule_dram_unreserved_base = oob_state.dram_unreserved_base;
                             __emule_dram_tensor_ranges = oob_state.dram_tensor_ranges;
                             __emule_dram_tensor_ranges_count = oob_state.dram_tensor_ranges_count;
+                            __emule_l1_padding_ranges = oob_state.l1_padding_ranges;
+                            __emule_l1_padding_ranges_count = oob_state.l1_padding_ranges_count;
                             for (uint32_t i = 0; i < EMULE_NUM_CBS; ++i) {
                                 __emule_cb_reserved_pages[i] = 0;
                                 __emule_cb_waited_pages[i] = 0;
@@ -1762,6 +1793,8 @@ static void launch_cores(
                             __emule_dram_unreserved_base = 0;
                             __emule_dram_tensor_ranges = nullptr;
                             __emule_dram_tensor_ranges_count = 0;
+                            __emule_l1_padding_ranges = nullptr;
+                            __emule_l1_padding_ranges_count = 0;
                             for (uint32_t i = 0; i < EMULE_NUM_CBS; ++i) {
                                 __emule_cb_reserved_pages[i] = 0;
                                 __emule_cb_waited_pages[i] = 0;
@@ -1894,6 +1927,7 @@ void execute_program_emulated(IDevice* device, Program& program) {
     EmuleOobTensorState oob_state;
     std::vector<uint64_t> live_ranges_snapshot;
     std::vector<uint64_t> dram_live_ranges_snapshot;
+    std::vector<uint64_t> padding_ranges_snapshot;
     // Sentinel for the "no live ranges" case — vector::data() on an empty
     // vector may return nullptr, which would short-circuit the check and let
     // accesses through. A non-null sentinel with count=0 forces the check to
@@ -1915,6 +1949,17 @@ void execute_program_emulated(IDevice* device, Program& program) {
             ? &kEmptyRange
             : dram_live_ranges_snapshot.data();
         oob_state.dram_tensor_ranges_count = static_cast<uint32_t>(dram_live_ranges_snapshot.size());
+    }
+    if (emule_strict_padding_enabled()) {
+        padding_ranges_snapshot = tt::tt_metal::emule::LiveL1PaddingRanges::snapshot(device_id);
+        // Padding check is per-range only — no buffer means no padding to
+        // check. Leave the pointer null in that case so the inline check is a
+        // pure no-op (unlike the OOB-tensor check which must trap on accesses
+        // when no tensor is live, the padding check has nothing to validate).
+        if (!padding_ranges_snapshot.empty()) {
+            oob_state.l1_padding_ranges = padding_ranges_snapshot.data();
+            oob_state.l1_padding_ranges_count = static_cast<uint32_t>(padding_ranges_snapshot.size());
+        }
     }
     oob_state.cb_boundary_strict = emule_strict_cb_boundary_enabled();
 
