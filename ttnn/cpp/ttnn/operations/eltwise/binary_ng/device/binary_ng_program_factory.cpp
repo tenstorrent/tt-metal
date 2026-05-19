@@ -316,7 +316,15 @@ bool is_llk_bcast(
     const SubtileBroadcastType subtile_broadcast_type,
     const DataType a_dtype,
     const DataType b_dtype,
-    [[maybe_unused]] const DataType c_dtype) {
+    const DataType c_dtype) {
+    // HACK (diagnostic): force software-broadcast path whenever the output
+    // dtype doesn't match the input dtypes. Hypothesis: the LLK unary_bcast
+    // path is unsafe when fp32_dest_acc_en is enabled because c_dtype=FLOAT32
+    // but the input CBs are BFLOAT16 (the known "unary_bcast + fp32_acc_to_dest
+    // + bfloat16 CB" LLK bug). Original code ignored c_dtype entirely.
+    if (a_dtype != c_dtype || b_dtype != c_dtype) {
+        return false;
+    }
     auto all_match = [&](DataType dt) { return a_dtype == dt && b_dtype == dt; };
 
     if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
