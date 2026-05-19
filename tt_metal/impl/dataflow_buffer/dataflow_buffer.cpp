@@ -360,6 +360,10 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         TT_FATAL(
             it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
         const uint32_t alloc_addr = it->second.second;
+        TT_FATAL(
+            !this->borrows_memory() || alloc_addr != 0,
+            "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
+            this->id);
 
         std::vector<uint8_t> data;
         data.reserve(4 * sizeof(uint32_t));
@@ -377,6 +381,10 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
     auto it = this->core_lookup_.find(core);
     TT_FATAL(it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
     const auto& [group_idx, alloc_addr] = it->second;
+    TT_FATAL(
+        !this->borrows_memory() || alloc_addr != 0,
+        "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
+        this->id);
     const DfbGroup* core_group = &this->groups[group_idx];
 
     const auto& hw_risc_configs = core_group->hw_risc_configs;
@@ -1346,7 +1354,9 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
     for (auto& dfb : this->dataflow_buffers_) {
         uint32_t alloc_addr;
         if (dfb->borrows_memory()) {
-            alloc_addr = static_cast<uint32_t>(dfb->config.borrowed_buffer->address());
+            // Address is not known at allocation time; caller must invoke
+            // set_borrowed_memory_base_addr() before launching the program.
+            alloc_addr = 0;
         } else {
             uint64_t computed_addr = base_dfb_address;
             for (const CoreRange& core_range : dfb->core_ranges.ranges()) {

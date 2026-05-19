@@ -17,7 +17,6 @@ namespace tt {
 enum class DataFormat : uint8_t;
 namespace tt_metal {
 class Program;
-class Buffer;
 }  // namespace tt_metal
 }  // namespace tt
 
@@ -46,8 +45,10 @@ struct DataflowBufferConfig {
     std::optional<Tile> tile = std::nullopt;
     // Set only when both producer and consumer are the same compute kernel
     std::optional<TensixScope> tensix_scope = std::nullopt;
-    // When set, the DFB borrows memory from this buffer instead of allocating its own L1 region.
-    const tt::tt_metal::Buffer* borrowed_buffer = nullptr;
+    // When true, the DFB borrows L1 memory from an externally managed buffer
+    // instead of allocating its own L1 region. The actual base address must be
+    // supplied before launch via DataflowBufferImpl::set_borrowed_memory_base_addr.
+    bool borrows_memory = false;
 };
 
 // Note: This API and the DataflowBufferConfig are placeholder only, the final DataflowBuffer APIs will conform with

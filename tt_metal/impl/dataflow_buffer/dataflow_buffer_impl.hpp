@@ -15,7 +15,6 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
-#include <tt-metalium/buffer.hpp>
 
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 
@@ -78,12 +77,12 @@ struct DataflowBufferImpl {
     // Flag to track if this DFB uses remapper (set during finalization)
     bool use_remapper = false;
 
-    bool borrows_memory() const { return config.borrowed_buffer != nullptr; }
+    bool borrows_memory() const { return config.borrows_memory; }
 
-    // Redirects the DFB ring to a new base address without re-running allocation.
-    // This DFB must have been created with a borrowed_buffer.
-    void update_borrowed_memory_base_addr(uint32_t new_addr) {
-        TT_FATAL(borrows_memory(), "Cannot update address of DFB {} that does not borrow memory", id);
+    // Sets the L1 base address for a borrowed-memory DFB, updating all core entries.
+    // Must be called before launch whenever the DFB was configured with borrows_memory = true.
+    void set_borrowed_memory_base_addr(uint32_t new_addr) {
+        TT_FATAL(borrows_memory(), "Cannot set borrowed address on DFB {} that does not borrow memory", id);
         for (auto& group : groups) {
             for (auto& [core, addr] : group.l1_by_core) {
                 addr = new_addr;
