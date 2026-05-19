@@ -35,6 +35,13 @@ import torch
 import ttnn
 
 from models.experimental.devstral2_large.tt.ccl_helpers import all_reduce_replicate
+from models.experimental.devstral2_large.tt.mem_config import (
+    get_compute_kernel_config,
+    get_linear_program_config,
+    get_sdpa_decode_compute_kernel_config,
+    get_sdpa_decode_output_mem_config,
+    get_sdpa_decode_program_config,
+)
 from models.experimental.devstral2_large.tt.model_args import Devstral2Args
 from models.experimental.devstral2_large.tt.tt_ministral_rotary_emb import (
     TtRotaryEmbedding,
@@ -210,42 +217,72 @@ class TtAttention:
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-        self._compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+        self._compute_kernel_config = get_compute_kernel_config(mesh_device)
+        self._sdpa_decode_program_config = get_sdpa_decode_program_config(mesh_device)
+        self._sdpa_decode_compute_kernel_config = get_sdpa_decode_compute_kernel_config(mesh_device)
+        self._cur_pos_host = torch.zeros(args.max_batch_size, dtype=torch.int32)
+        self._pos_tt = ttnn.from_torch(
+            self._cur_pos_host,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
     # --- Projections (shared by prefill / decode) ---
 
-    def _project_qkv(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Return ``(q, kv_fused)`` so callers can pass them to ``nlp_create_qkv_heads`` directly."""
-        q = ttnn.linear(
+    def _act_mem(self, mode: str) -> ttnn.MemoryConfig:
+        return self.args.get_activation_mem_config(mode, self.mesh_device)
+
+    def _linear(
+        self,
+        x: ttnn.Tensor,
+        weight: ttnn.Tensor,
+        *,
+        mode: str,
+        kind: str,
+        seq_len: int = 1,
+        activation: Optional[str] = None,
+    ) -> ttnn.Tensor:
+        return ttnn.linear(
             x,
-            self.q_proj,
+            weight,
             dtype=self.args.activation_dtype,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=self._act_mem(mode),
+            activation=activation,
+            program_config=get_linear_program_config(
+                self.args, self.mesh_device, mode=mode, kind=kind, seq_len=seq_len
+            ),
             compute_kernel_config=self._compute_kernel_config,
         )
-        kv = ttnn.linear(
-            x,
-            self.kv_proj,
-            dtype=self.args.activation_dtype,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self._compute_kernel_config,
-        )
+
+    def _project_qkv_prefill(self, x: ttnn.Tensor, *, seq_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Return ``(q, kv_fused)`` for ``nlp_create_qkv_heads``."""
+        q = self._linear(x, self.q_proj, mode="prefill", kind="qkv", seq_len=seq_len)
+        kv = self._linear(x, self.kv_proj, mode="prefill", kind="qkv", seq_len=seq_len)
         return q, kv
 
-    def _project_o(self, attn_out_flat: ttnn.Tensor) -> ttnn.Tensor:
-        dense = ttnn.linear(
-            attn_out_flat,
-            self.o_proj,
-            dtype=self.args.activation_dtype,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self._compute_kernel_config,
+    def _project_qkv_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Fused QKV activation for ``nlp_create_qkv_heads_decode`` (Q and KV matmuls + concat)."""
+        q = self._linear(x, self.q_proj, mode="decode", kind="qkv")
+        kv = self._linear(x, self.kv_proj, mode="decode", kind="qkv")
+        return ttnn.concat([q, kv], dim=-1, memory_config=self._act_mem("decode"))
+
+    def _sync_pos_tensor(self, current_pos_host: torch.Tensor) -> ttnn.Tensor:
+        n = int(current_pos_host.shape[0])
+        self._cur_pos_host[:n].copy_(current_pos_host.to(torch.int32))
+        host_slice = ttnn.from_torch(
+            self._cur_pos_host[:n],
+            device=None,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        # Each device produced a partial sum (rowwise TP); reduce + replicate.
+        ttnn.copy_host_to_device_tensor(host_slice, self._pos_tt)
+        return self._pos_tt
+
+    def _project_o(self, attn_out_flat: ttnn.Tensor, *, mode: str, seq_len: int = 1) -> ttnn.Tensor:
+        dense = self._linear(attn_out_flat, self.o_proj, mode=mode, kind="o_proj", seq_len=seq_len)
         return all_reduce_replicate(
             dense,
             mesh_device=self.mesh_device,
@@ -253,6 +290,7 @@ class TtAttention:
             dim=3,
             cluster_axis=self.args.cluster_axis,
             topology=self.args.ccl_topology,
+            memory_config=self.args.get_ccl_output_mem_config(mode, self.mesh_device),
         )
 
     # --- Prefill: full sequence, populates KV cache from ``start_pos`` ---
@@ -271,7 +309,8 @@ class TtAttention:
         Hq_local = self.args.n_local_heads
         Hkv_local = self.args.n_local_kv_heads
 
-        q, kv = self._project_qkv(x)
+        act_mem = self._act_mem("prefill")
+        q, kv = self._project_qkv_prefill(x, seq_len=S)
         # Split into heads. ``input`` = Q (..., Hq_local*D); ``input_kv`` = fused [K|V] (..., 2*Hkv_local*D).
         q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
             q,
@@ -279,7 +318,7 @@ class TtAttention:
             num_heads=Hq_local,
             num_kv_heads=Hkv_local,
             transpose_k_heads=False,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=act_mem,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(kv)
@@ -303,16 +342,16 @@ class TtAttention:
             is_causal=True,
             scale=self.args.attn_scale,
             compute_kernel_config=self._compute_kernel_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=act_mem,
         )
         ttnn.deallocate(q_heads)
         ttnn.deallocate(k_heads)
         ttnn.deallocate(v_heads)
 
         # (B, Hq_local, S, D) -> (1, 1, S, Hq_local*D)
-        attn_flat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn_flat = ttnn.experimental.nlp_concat_heads(attn, memory_config=act_mem)
         ttnn.deallocate(attn)
-        out = self._project_o(attn_flat)
+        out = self._project_o(attn_flat, mode="prefill", seq_len=S)
         ttnn.deallocate(attn_flat)
         return out
 
@@ -324,30 +363,27 @@ class TtAttention:
         current_pos_host: torch.Tensor,
     ) -> ttnn.Tensor:
         """``x``: ``(1, 1, 1, hidden_size)`` or ``(1, B, 1, hidden_size)``; ``current_pos_host`` shape ``[B]``."""
-        B = self.args.max_batch_size
+        batch_size = int(current_pos_host.shape[0])
+        act_mem = self._act_mem("decode")
         Hq_local = self.args.n_local_heads
         Hkv_local = self.args.n_local_kv_heads
 
         hidden = int(x.shape[-1])
         # ``nlp_create_qkv_heads_decode`` expects ``(1, seq_len, batch, fused_qkv_dim)``.
-        x = ttnn.reshape(x, (1, 1, B, hidden))
+        x = ttnn.reshape(x, (1, 1, batch_size, hidden))
 
-        q, kv = self._project_qkv(x)
-        fused = ttnn.concat([q, kv], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(q)
-        ttnn.deallocate(kv)
-        fused_dim = int(fused.shape[-1])
-        fused = ttnn.reshape(fused, (1, 1, B, fused_dim))
+        xqkv = self._project_qkv_decode(x)
+        fused_dim = int(xqkv.shape[-1])
+        xqkv = ttnn.reshape(xqkv, (1, 1, batch_size, fused_dim))
 
         q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads_decode(
-            fused,
+            xqkv,
             num_heads=Hq_local,
             num_kv_heads=Hkv_local,
             memory_config=_DECODE_QKV_HEADS_MEM_CONFIG,
         )
-        ttnn.deallocate(fused)
+        ttnn.deallocate(xqkv)
 
-        batch_size = int(current_pos_host.shape[0])
         cos_q, sin_q, cos_k, sin_k = self.rotary_emb.get_decode_tables(current_pos_host)
         cos_q, sin_q = _shard_decode_rope_tables(cos_q, sin_q, batch_size=batch_size, head_dim=self.args.head_dim)
         cos_k, sin_k = _shard_decode_rope_tables(cos_k, sin_k, batch_size=batch_size, head_dim=self.args.head_dim)
@@ -355,38 +391,33 @@ class TtAttention:
         q_heads = ttnn.experimental.rotary_embedding_llama(q_heads, cos_q, sin_q, trans_mat, is_decode_mode=True)
         k_heads = ttnn.experimental.rotary_embedding_llama(k_heads, cos_k, sin_k, trans_mat, is_decode_mode=True)
 
-        # Update K/V cache at ``current_pos`` for each user.
-        pos_tt = ttnn.from_torch(
-            current_pos_host.to(torch.int32),
-            device=self.mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
+        pos_tt = self._sync_pos_tensor(current_pos_host)
+        # Separate updates: fused op requires K/V head tensors on non-overlapping core grids, but
+        # ``nlp_create_qkv_heads_decode`` places them on the same height-sharded L1 cores.
         ttnn.experimental.paged_update_cache(self.k_cache, k_heads, update_idxs_tensor=pos_tt, page_table=None)
         ttnn.experimental.paged_update_cache(self.v_cache, v_heads, update_idxs_tensor=pos_tt, page_table=None)
         ttnn.deallocate(k_heads)
         ttnn.deallocate(v_heads)
 
-        padded_heads = ((Hq_local + 31) // 32) * 32
-        sdpa_mem_config = _decode_height_shard_mem_config(batch_size, height=padded_heads, width=self.args.head_dim)
+        sdpa_out_mem = get_sdpa_decode_output_mem_config(self.args, batch_size)
         attn = ttnn.transformer.scaled_dot_product_attention_decode(
             q_heads,
             self.k_cache,
             self.v_cache,
             cur_pos_tensor=pos_tt,
             scale=self.args.attn_scale,
-            compute_kernel_config=self._compute_kernel_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            program_config=self._sdpa_decode_program_config,
+            compute_kernel_config=self._sdpa_decode_compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(q_heads)
-        attn = ttnn.to_memory_config(attn, sdpa_mem_config)
+        attn = ttnn.to_memory_config(attn, sdpa_out_mem)
 
         # (1, B, Hq_local, D) -> (1, 1, B, Hq_local*D)
         attn_flat = ttnn.experimental.nlp_concat_heads_decode(attn, num_heads=Hq_local)
         ttnn.deallocate(attn)
-        out = self._project_o(attn_flat)
+        attn_flat = ttnn.to_memory_config(attn_flat, act_mem)
+        out = self._project_o(attn_flat, mode="decode", seq_len=1)
         ttnn.deallocate(attn_flat)
         return out
 

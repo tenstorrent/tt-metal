@@ -27,6 +27,7 @@ import torch
 import ttnn
 
 from models.experimental.devstral2_large.tt.ccl_helpers import all_reduce_replicate
+from models.experimental.devstral2_large.tt.mem_config import get_compute_kernel_config, get_linear_program_config
 from models.experimental.devstral2_large.tt.model_args import Devstral2Args
 
 __all__ = ["TtMLP"]
@@ -117,47 +118,34 @@ class TtMLP:
         self.up_proj = _load_colwise(up_w, mesh_device, args, self.dtype)
         self.down_proj = _load_rowwise(down_w, mesh_device, args, self.dtype)
 
-        self._compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        self._compute_kernel_config = get_compute_kernel_config(mesh_device)
 
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # Per-device shard width for the intermediate is ``intermediate_size / TP``.
-        gate = ttnn.linear(
-            x,
-            self.gate_proj,
-            dtype=self.args.activation_dtype,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self._compute_kernel_config,
-        )
-        up = ttnn.linear(
-            x,
-            self.up_proj,
-            dtype=self.args.activation_dtype,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self._compute_kernel_config,
-        )
-        # Fused activation in the next matmul would skip the explicit mul, but ttnn.linear's
-        # ``activation`` arg only takes ``silu``/``gelu`` on the *output* of THIS matmul, not on one
-        # input. Keep the explicit silu+mul; one extra L1 traversal in exchange for clarity.
-        gate = ttnn.silu(gate, memory_config=ttnn.L1_MEMORY_CONFIG)
-        inner = ttnn.mul(gate, up, memory_config=ttnn.L1_MEMORY_CONFIG)
+    def __call__(self, x: ttnn.Tensor, *, mode: str = "decode") -> ttnn.Tensor:
+        act_mem = self.args.get_activation_mem_config(mode, self.mesh_device)
+        seq_len = max(1, int(x.shape[-2]))
+
+        def _linear(inp, weight, *, kind: str, activation: Optional[str] = None) -> ttnn.Tensor:
+            return ttnn.linear(
+                inp,
+                weight,
+                dtype=self.args.activation_dtype,
+                memory_config=act_mem,
+                activation=activation,
+                program_config=get_linear_program_config(
+                    self.args, self.mesh_device, mode=mode, kind=kind, seq_len=seq_len
+                ),
+                compute_kernel_config=self._compute_kernel_config,
+            )
+
+        gate = _linear(x, self.gate_proj, kind="gate", activation="silu")
+        up = _linear(x, self.up_proj, kind="up")
+        inner = ttnn.mul(gate, up, memory_config=act_mem)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
 
-        down = ttnn.linear(
-            inner,
-            self.down_proj,
-            dtype=self.args.activation_dtype,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self._compute_kernel_config,
-        )
+        down = _linear(inner, self.down_proj, kind="down")
         ttnn.deallocate(inner)
 
-        # All-reduce along the TP axis so every device leaves with the full sum (replicated).
         return all_reduce_replicate(
             down,
             mesh_device=self.mesh_device,
@@ -165,7 +153,8 @@ class TtMLP:
             dim=3,
             cluster_axis=self.args.cluster_axis,
             topology=self.args.ccl_topology,
+            memory_config=self.args.get_ccl_output_mem_config(mode, self.mesh_device),
         )
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return self(x)
+    def forward(self, x: ttnn.Tensor, *, mode: str = "decode") -> ttnn.Tensor:
+        return self(x, mode=mode)

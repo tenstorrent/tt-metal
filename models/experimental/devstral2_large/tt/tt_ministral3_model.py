@@ -14,7 +14,8 @@ HF reference (``Ministral3Model`` + ``Ministral3ForCausalLM``)::
     logits = lm_head(h)
 
 Embedding is run on the host (cheap, vocab-bound; avoids embed-vocab-sized device weight on every
-chip). Final norm runs on device. ``lm_head`` is optional and column-parallel.
+chip) and uploaded directly to L1. Activations stay in L1 between norm / linear / residual ops to
+avoid DRAM tilize. Final norm runs on device. ``lm_head`` is optional and column-parallel.
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ def _embed_host(
         device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
@@ -100,6 +101,7 @@ class TtMinistral3Model:
         current_pos_host: Optional[torch.Tensor] = None,
         user_id: int = 0,
     ) -> ttnn.Tensor:
+        act_mem = self.args.get_activation_mem_config(mode, self.mesh_device)
         h = _embed_host(input_ids, self.state_dict, self.args, self.mesh_device, dtype=self.args.activation_dtype)
         for layer in self.layers:
             h = layer(
@@ -109,7 +111,7 @@ class TtMinistral3Model:
                 current_pos_host=current_pos_host,
                 user_id=user_id,
             )
-        h = self.norm(h)
+        h = self.norm(h, memory_config=act_mem)
         return h
 
     def forward(self, *args, **kwargs):
