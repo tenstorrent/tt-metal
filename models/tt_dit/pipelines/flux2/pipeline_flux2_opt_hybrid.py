@@ -208,12 +208,15 @@ class Flux2Pipeline:
         self.ts._tt_prompt_rope_cos.update(prompt_rope_cos, False, device=self._mesh_device)
         self.ts._tt_prompt_rope_sin.update(prompt_rope_sin, False, device=self._mesh_device)
 
-        self.warmup()  # E2E warmup
+        self.warmup(warmup_info="e2e warmup")  # E2E warmup. Preallocate buffers
         if trace_warmup:  # warmup for trace capture
-            self.warmup(traced=True)
+            self.warmup(traced=True, warmup_info="trace warmup")  # warmup for trace capture
+            self.warmup(
+                traced=True, warmup_info="steady state trace warmup for VAE"
+            )  # TODO: INVESTIGATE. For some reason, the VAE time still incures some overhead without this extra trace
 
-    def warmup(self, traced: bool = False) -> None:
-        logger.info(f"Warming up pipeline with trace {'enabled' if traced else 'disabled'}...")
+    def warmup(self, traced: bool = False, warmup_info="warmup") -> None:
+        logger.info(f"Warming up pipeline___ {warmup_info}...")
         self.__call__(
             prompts=["warmup"],
             num_inference_steps=2,
@@ -423,7 +426,7 @@ class Flux2Pipeline:
                     memory_config=tt_latents.memory_config(),
                 )
 
-            tt_decoded_output = self._vae_decoder.forward(tt_latents)
+            tt_decoded_output = self._vae_decoder.forward(tt_latents, traced=traced)
             decoded_output = fast_device_to_host(
                 tt_decoded_output,
                 self._mesh_device,

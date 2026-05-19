@@ -365,6 +365,12 @@ class Conv2d(Module):
         self.ccl_manager = ccl_manager
         self.use_barrier = use_barrier
 
+        # Prepared (device-resident) weight/bias tensors.  Populated lazily on the first
+        # forward call so they are ready before any trace capture begins.  Stored as plain
+        # attributes (not Parameter) because their shape differs from the raw OIHW weights.
+        self._prepared_weight: ttnn.Tensor | None = None
+        self._prepared_bias: ttnn.Tensor | None = None
+
     @classmethod
     def from_torch(
         cls,
@@ -395,12 +401,30 @@ class Conv2d(Module):
         return model
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        # Invalidate any previously prepared device tensors so they are re-prepared on the
+        # next forward call with the new weights.
+        if self._prepared_weight is not None:
+            ttnn.deallocate(self._prepared_weight)
+            self._prepared_weight = None
+        if self._prepared_bias is not None:
+            ttnn.deallocate(self._prepared_bias)
+            self._prepared_bias = None
+
         bias = state.pop("bias", None)
         if bias is not None:
             (out_dim,) = bias.shape
             bias = bias.reshape([1, 1, 1, out_dim])
             bias_zeros = torch.zeros([self.in_mesh_axis_size - 1, 1, 1, out_dim])
             state["bias"] = torch.cat([bias, bias_zeros])
+
+    def deallocate_weights(self) -> None:
+        if self._prepared_weight is not None:
+            ttnn.deallocate(self._prepared_weight)
+            self._prepared_weight = None
+        if self._prepared_bias is not None:
+            ttnn.deallocate(self._prepared_bias)
+            self._prepared_bias = None
+        super().deallocate_weights()
 
     def forward(self, x: ttnn.Tensor, /, *, use_persistent_buffer: bool = True) -> ttnn.Tensor:
         """Forward pass of the Conv2d layer with support for tensor parallelism.
@@ -452,13 +476,53 @@ class Conv2d(Module):
             else None
         )
 
+        in_channels = self.in_channels // self.in_mesh_axis_size
+        out_channels = self.weight.data.shape[0]
+        conv_config = ttnn.Conv2dConfig(act_block_h_override=32, weights_dtype=self.weight.dtype)
+
+        if self._prepared_weight is None:
+            base_kwargs = {
+                "in_channels": in_channels,
+                "out_channels": out_channels,
+                "batch_size": b,
+                "input_height": h,
+                "input_width": w,
+                "kernel_size": self.kernel_size,
+                "stride": self.stride,
+                "padding": self.padding,
+                "dilation": self.dilation,
+                "groups": 1,
+                "device": self.mesh_device,
+                "conv_config": conv_config,
+            }
+            self._prepared_weight = ttnn.prepare_conv_weights(
+                weight_tensor=self.weight.data,
+                weights_format="OIHW",
+                input_memory_config=x.memory_config(),
+                input_layout=x.get_layout(),
+                has_bias=self.bias is not None,
+                input_dtype=x.dtype,
+                slice_config=slice_config,
+                **base_kwargs,
+            )
+            self._prepared_weight = ttnn.to_device(self._prepared_weight, self.mesh_device)
+            if self.bias is not None:
+                self._prepared_bias = ttnn.prepare_conv_bias(
+                    bias_tensor=self.bias.data,
+                    input_memory_config=x.memory_config(),
+                    input_layout=x.get_layout(),
+                    input_dtype=x.dtype,
+                    **base_kwargs,
+                )
+                self._prepared_bias = ttnn.to_device(self._prepared_bias, self.mesh_device)
+
         try:
             x, (out_height, out_width), (self._prepared_weight, self._prepared_bias) = ttnn.conv2d(
                 input_tensor=x,
-                weight_tensor=self._prepared_weight or self.weight.data,
-                bias_tensor=(self._prepared_bias or self.bias.data) if self.bias is not None else None,
-                in_channels=self.in_channels // self.in_mesh_axis_size,
-                out_channels=self.weight.data.shape[0],
+                weight_tensor=self._prepared_weight,
+                bias_tensor=self._prepared_bias,
+                in_channels=in_channels,
+                out_channels=out_channels,
                 device=self.mesh_device,
                 kernel_size=self.kernel_size,
                 stride=self.stride,
@@ -466,7 +530,7 @@ class Conv2d(Module):
                 batch_size=b,
                 input_height=h,
                 input_width=w,
-                conv_config=ttnn.Conv2dConfig(act_block_h_override=32),
+                conv_config=conv_config,
                 compute_config=self.compute_config,
                 slice_config=slice_config,
                 return_output_dim=True,
