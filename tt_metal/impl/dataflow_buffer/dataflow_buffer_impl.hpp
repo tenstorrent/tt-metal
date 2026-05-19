@@ -78,9 +78,21 @@ struct DataflowBufferImpl {
     // Flag to track if this DFB uses remapper (set during finalization)
     bool use_remapper = false;
 
-    // When non-null, the DFB borrows L1 memory from this buffer instead of allocating its own.
-    const tt::tt_metal::Buffer* borrowed_buffer = nullptr;
-    bool borrows_memory() const { return borrowed_buffer != nullptr; }
+    bool borrows_memory() const { return config.borrowed_buffer != nullptr; }
+
+    // Redirects the DFB ring to a new base address without re-running allocation.
+    // This DFB must have been created with a borrowed_buffer.
+    void update_borrowed_memory_base_addr(uint32_t new_addr) {
+        TT_FATAL(borrows_memory(), "Cannot update address of DFB {} that does not borrow memory", id);
+        for (auto& group : groups) {
+            for (auto& [core, addr] : group.l1_by_core) {
+                addr = new_addr;
+            }
+        }
+        for (auto& [core, pair] : core_lookup_) {
+            pair.second = new_addr;
+        }
+    }
 
     uint32_t total_size() const { return config.entry_size * config.num_entries; }
     uint32_t serialized_size() const;

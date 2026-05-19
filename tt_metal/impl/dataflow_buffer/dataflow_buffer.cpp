@@ -646,7 +646,6 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
 
     dfb->core_ranges = core_range_set.merge_ranges();
     dfb->config = config;
-    dfb->borrowed_buffer = config.borrowed_buffer;
 
     dfb->entry_size = config.entry_size;
 
@@ -1349,7 +1348,7 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
     for (auto& dfb : this->dataflow_buffers_) {
         uint32_t alloc_addr;
         if (dfb->borrows_memory()) {
-            alloc_addr = static_cast<uint32_t>(dfb->borrowed_buffer->address());
+            alloc_addr = static_cast<uint32_t>(dfb->config.borrowed_buffer->address());
         } else {
             uint64_t computed_addr = base_dfb_address;
             for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
