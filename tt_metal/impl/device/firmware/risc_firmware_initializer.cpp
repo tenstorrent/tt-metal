@@ -335,6 +335,64 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             }
         }
 
+        // FIX UU (#42429): Probe non-MMIO ETH relay bridges before Pass 2a.
+        //
+        // Root cause of run 26117958073 failure:
+        //   Pass 1 force-resets stale non-MMIO ETH cores (detected via FIX ZA heartbeat
+        //   check or Metal exit-signal timeout). The relay BRIDGE core on the non-MMIO
+        //   device (the ETH core that forwards relay commands from the MMIO device) may be
+        //   one of those force-reset cores. After force-reset, the bridge reboots to UMD
+        //   base firmware — a process that takes ~1-2 seconds. If Pass 2a writes start
+        //   before the bridge reboot completes, the UMD relay times out (5s) per device.
+        //
+        // FIX TV (above) confirms MMIO ETH channels (relay TX side) are ready. But that
+        // is only HALF the relay: the non-MMIO bridge ETH core (relay RX side) is the
+        // other half. FIX TV cannot see the non-MMIO bridge state.
+        //
+        // Fix: for each non-MMIO device, attempt a relay read from any ETH core. If the
+        // bridge core is mid-reboot, this read blocks until the bridge comes back up (or
+        // the UMD 5s hard timeout fires). A successful read proves the relay bridge is
+        // servicing requests and Pass 2a writes will succeed. A failure causes FIX YA
+        // (inside read_core) to mark relay_broken_chips_, which FIX NZ will skip in Pass
+        // 2a — avoiding further 5s stalls.
+        //
+        // Overhead in the common case (no force-resets in Pass 1): each relay read returns
+        // in <1ms (bridge already running UMD base). Total probe cost is negligible.
+        if (hal_.get_eth_fw_is_cooperative() && get_control_plane_) {
+            for (tt::ChipId device_id : device_ids) {
+                if (mmio_ids_set.count(device_id)) continue;    // MMIO handled by FIX TV
+                if (cluster_.is_relay_broken(device_id)) continue;  // already known-broken
+                const auto& eth_cores =
+                    this->get_control_plane_().get_active_ethernet_cores(device_id);
+                if (eth_cores.empty()) continue;
+                // Probe the first active ETH core. A successful relay read (any location)
+                // proves the relay bridge is alive; a throw causes FIX YA to mark broken.
+                const auto& logical_core = *eth_cores.begin();
+                CoreCoord virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                    device_id, logical_core, CoreType::ETH);
+                const uint32_t hb_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
+                if (hb_addr == 0u) continue;  // arch doesn't wire heartbeat — skip
+                try {
+                    auto hb_data = cluster_.read_core(device_id, virt, hb_addr, sizeof(uint32_t));
+                    log_info(
+                        tt::LogAlways,
+                        "run_launch_phase: FIX UU — device {} relay bridge ready "
+                        "(heartbeat=0x{:08x}). (#42429)",
+                        device_id,
+                        hb_data[0]);
+                } catch (const std::exception& e) {
+                    // FIX YA (inside read_core) already marked relay_broken_chips_.
+                    // FIX NZ will skip initialize_and_launch_firmware for this device.
+                    log_warning(
+                        tt::LogAlways,
+                        "run_launch_phase: FIX UU — device {} relay bridge read failed: {}. "
+                        "Pass 2a will be skipped for this device. (#42429)",
+                        device_id,
+                        e.what());
+                }
+            }
+        }
+
         // ── Pass 2a: initialize non-MMIO devices (relay still alive) ──
         for (tt::ChipId device_id : device_ids) {
             if (mmio_ids_set.count(device_id)) continue;
@@ -1775,12 +1833,27 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
                     if (hb_addr != 0u) {
                         try {
                             auto hb_data = cluster_.read_core(device_id, virtual_core, hb_addr, sizeof(uint32_t));
-                            if ((hb_data[0] >> 16) != 0xABCDu) {
+                            if (hb_data[0] == 0u) {
+                                // Heartbeat == 0: core is mid-reboot (firmware hasn't written
+                                // its stamp yet). Do NOT force-reset — that would restart the
+                                // reboot timer and make Pass 2a wait longer.
+                                // FIX UU (run_launch_phase) will poll for bridge readiness
+                                // before Pass 2a begins.
+                                log_debug(
+                                    tt::LogAlways,
+                                    "FIX ZA (#42429): device {} core {} fw_launch_addr==0 and "
+                                    "heartbeat==0 (mid-reboot). Leaving alone — FIX UU will wait.",
+                                    device_id,
+                                    virtual_core.str());
+                            } else if ((hb_data[0] >> 16) != 0xABCDu) {
+                                // Non-zero bad heartbeat: core is running unknown firmware —
+                                // not Metal (fw_launch_addr==0) and not UMD base (no ABCD stamp).
+                                // Force-reset it so FIX UU can wait for clean UMD base reboot.
                                 log_warning(
                                     tt::LogAlways,
                                     "FIX ZA (#42429): device {} core {} fw_launch_addr==0 but "
                                     "heartbeat=0x{:08x} (expected 0xABCDxxxx for UMD base). "
-                                    "ETH core in bad/unknown state — forcing reset.",
+                                    "ETH core running unknown firmware — forcing reset.",
                                     device_id,
                                     virtual_core.str(),
                                     hb_data[0]);
