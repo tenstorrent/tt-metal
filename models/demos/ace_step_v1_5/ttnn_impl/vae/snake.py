@@ -63,10 +63,14 @@ class TtSnake1d:
 
         # sin(alpha*x)^2 loses too much precision in bfloat16 for pretrained Oobleck alphas
         # (|alpha*x| reaches O(10–50) at deeper layers; bf16's 8-bit mantissa aliases sin into noise).
-        # Keep Snake parameters and compute in fp32 if the build supports it.
+        # float32 is required for correct audio quality — raise if unavailable rather than silently
+        # degrading to bf16.
         compute_dtype = getattr(ttnn, "float32", None)
         if compute_dtype is None:
-            compute_dtype = self.dtype
+            raise RuntimeError(
+                "TtSnake1d requires ttnn.float32 for numerically stable sin(alpha*x)^2 computation. "
+                "This TTNN build does not expose float32. Build TTNN with float32 support."
+            )
         self.compute_dtype = compute_dtype
 
         alpha = _snake_param_to_btc(alpha_host)
