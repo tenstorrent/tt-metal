@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
-# SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <cstdint>
-#include <limits>
 
 #include "sfpi.h"
 #include "ckernel_sfpu_polyval.h"
@@ -47,19 +46,13 @@ inline void _calculate_exp2_()
             sfpi::vBool is_nan = sfpi::isnan(x);
 
             // For normal finite values, compute exp2 directly
-            sfpi::vFloat abs_x = sfpi::v_abs(x);
-            sfpi::vBool will_overflow = sfpi::v_ge(abs_x, sfpi::vConstF(128.0f)); // 2^128 overflows FP32
+            sfpi::vBool will_overflow = sfpi::v_ge(sfpi::v_abs(x), sfpi::vConstF(128.0f)); // 2^128 overflows FP32
             sfpi::vBool will_underflow = sfpi::v_lt(x, sfpi::vConstF(-126.0f)); // 2^-126 underflows to 0 in FP32
 
             // Start with zero result
             result = sfpi::vConst0;
 
-            // Handle special cases
-            sfpi::vBool is_special = sfpi::v_or(sfpi::v_or(is_inf, is_nan), sfpi::v_or(will_overflow, will_underflow));
-
             // For normal values, compute 2^x = 2^(n+f) = 2^n * 2^f
-            sfpi::vBool is_normal = sfpi::v_not(is_special);
-
             // If normal, compute directly
             sfpi::vFloat n = sfpi::floor(x);           // integer part
             sfpi::vFloat f = sfpi::v_sub(x, n);        // fractional part in [0,1)
@@ -88,18 +81,13 @@ inline void _calculate_exp2_()
             sfpi::vBool is_inf = sfpi::isinf(x);
             sfpi::vBool is_neg_inf = sfpi::v_and(sfpi::isinf(x), sfpi::v_lt(x, sfpi::vConst0));
             sfpi::vBool is_nan = sfpi::isnan(x);
-            sfpi::vFloat abs_x = sfpi::v_abs(x);
-            sfpi::vBool will_overflow = sfpi::v_ge(abs_x, sfpi::vConstF(128.0f)); // Conservative for BF16
+            sfpi::vBool will_overflow = sfpi::v_ge(sfpi::v_abs(x), sfpi::vConstF(128.0f)); // Conservative for BF16
             sfpi::vBool will_underflow = sfpi::v_lt(x, sfpi::vConstF(-126.0f));
-
-            // Handle special cases
-            sfpi::vBool is_special = sfpi::v_or(sfpi::v_or(is_inf, is_nan), sfpi::v_or(will_overflow, will_underflow));
-            sfpi::vBool is_normal = sfpi::v_not(is_special);
 
             // Start with zero
             result = sfpi::vConst0;
 
-            // If normal, compute 2^x = 2^n * 2^f
+            // Compute 2^x = 2^n * 2^f
             sfpi::vFloat n = sfpi::floor(x);
             sfpi::vFloat f = sfpi::v_sub(x, n);
 
