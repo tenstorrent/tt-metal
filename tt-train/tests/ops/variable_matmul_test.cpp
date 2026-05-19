@@ -1444,3 +1444,202 @@ TEST_F(VariableMatmulTest, MinimalParity_MixtralDWDown_TransposeA) {
 
     EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(MixtralDWDown,tA) vs minimal not bit-exact";
 }
+
+// ---------------------------------------------------------------------------
+// K-axis OffsetsRole bit-exact parity. variable_matmul with a K-offset reads only the
+// K[a..b] tile range of the parent — that's the same math as pre-slicing the parent and
+// matmul-ing the slice. With matched HiFi4 settings, results MUST be bit-identical to
+// minimal_matmul on the slice. Covers both host-known offsets and on-device offsets.
+// ---------------------------------------------------------------------------
+
+TEST_F(VariableMatmulTest, MinimalParity_KOffset_In0_NoTranspose) {
+    const uint32_t M = 128, K_parent = 512, K_w = 128, N = 256;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto parent = create_random_device_tensor(M, K_parent, device);
+    auto weight = create_random_device_tensor(K_w, N, device);
+
+    constexpr uint32_t k_lo = 128;
+    constexpr uint32_t k_hi = k_lo + K_w;  // = 256
+    constexpr uint32_t k_offset_tiles = k_lo / 32;
+
+    auto result = ttml::metal::variable_matmul(
+        parent,
+        weight,
+        kConfig,
+        /*bias=*/std::nullopt,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/0,
+        /*in0_k_offset_tiles=*/k_offset_tiles);
+
+    auto sliced = ttnn::slice(
+        parent,
+        ttsl::SmallVector<uint32_t>{0, 0, 0, k_lo},
+        ttsl::SmallVector<uint32_t>{1, 1, M, k_hi},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto ref = minimal_matmul_hifi4(sliced, weight, kConfig);
+
+    EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(K-offset in0) vs minimal not bit-exact";
+}
+
+TEST_F(VariableMatmulTest, MinimalParity_KOffset_In1_NoTranspose) {
+    const uint32_t M = 128, K = 128, N = 256, K_w_parent = 512;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M, K, device);
+    auto weight_parent = create_random_device_tensor(K_w_parent, N, device);
+
+    constexpr uint32_t k_lo = 128;
+    constexpr uint32_t k_hi = k_lo + K;
+    constexpr uint32_t k_offset_tiles = k_lo / 32;
+
+    auto result = ttml::metal::variable_matmul(
+        input,
+        weight_parent,
+        kConfig,
+        /*bias=*/std::nullopt,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/0,
+        /*in0_k_offset_tiles=*/0,
+        /*in1_k_offset_tiles=*/k_offset_tiles);
+
+    auto sliced = ttnn::slice(
+        weight_parent,
+        ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
+        ttsl::SmallVector<uint32_t>{1, 1, k_hi, N},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto ref = minimal_matmul_hifi4(input, sliced, kConfig);
+
+    EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(K-offset in1) vs minimal not bit-exact";
+}
+
+TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputK_TransposeA) {
+    const uint32_t K_parent = 512, K_w = 128, M = 128, N = 256;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto parent_km = create_random_device_tensor(K_parent, M, device);
+    auto weight = create_random_device_tensor(K_w, N, device);
+
+    const std::vector<uint32_t> offsets_host = {0U, 64U, 128U, 256U, 384U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    constexpr uint32_t kStart = 2U;  // offsets[2..4) = [128, 256) → K_w = 128
+    constexpr uint32_t k_lo = 128;
+
+    auto cfg = kConfig;
+    cfg.transpose_a = true;
+    auto result = ttml::metal::variable_matmul(
+        parent_km,
+        weight,
+        cfg,
+        /*bias=*/std::nullopt,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/0,
+        /*in0_k_offset_tiles=*/0,
+        /*in1_k_offset_tiles=*/0,
+        /*output_tensor=*/std::nullopt,
+        /*out_row_offset_tiles=*/0,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::InputK,
+        /*offsets_start_index=*/kStart);
+
+    auto sliced_km = ttnn::slice(
+        parent_km,
+        ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
+        ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_w, M},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto sliced_mk = ttnn::transpose(sliced_km, -2, -1);
+    auto ref = minimal_matmul_hifi4(sliced_mk, weight, kConfig);
+
+    EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(InputK,tA) vs minimal not bit-exact";
+}
+
+TEST_F(VariableMatmulTest, MinimalParity_OnDeviceWeightK_TransposeA) {
+    const uint32_t M = 128, K = 128, N = 256, K_w_parent = 512;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input_km = create_random_device_tensor(K, M, device);
+    auto weight_parent = create_random_device_tensor(K_w_parent, N, device);
+
+    const std::vector<uint32_t> offsets_host = {0U, 64U, 128U, 256U, 384U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    constexpr uint32_t kStart = 2U;  // offsets[2..4) = [128, 256) → K = 128
+    constexpr uint32_t k_lo = 128;
+
+    auto cfg = kConfig;
+    cfg.transpose_a = true;
+    auto result = ttml::metal::variable_matmul(
+        input_km,
+        weight_parent,
+        cfg,
+        /*bias=*/std::nullopt,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/0,
+        /*in0_k_offset_tiles=*/0,
+        /*in1_k_offset_tiles=*/0,
+        /*output_tensor=*/std::nullopt,
+        /*out_row_offset_tiles=*/0,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::WeightK,
+        /*offsets_start_index=*/kStart);
+
+    auto sliced = ttnn::slice(
+        weight_parent,
+        ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
+        ttsl::SmallVector<uint32_t>{1, 1, k_lo + K, N},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto input_mk = ttnn::transpose(input_km, -2, -1);
+    auto ref = minimal_matmul_hifi4(input_mk, sliced, kConfig);
+
+    EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(WeightK,tA) vs minimal not bit-exact";
+}
+
+// InputAndWeightK: both in0_k and in1_k overridden from the same offsets entry. Mirrors
+// the moe_ffn dW_down/dW_gate/dW_up backward call pattern.
+TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA) {
+    const uint32_t K_parent_in0 = 512, M = 128, K_parent_in1 = 512, N = 256;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto in0_km = create_random_device_tensor(K_parent_in0, M, device);
+    auto in1 = create_random_device_tensor(K_parent_in1, N, device);
+
+    const std::vector<uint32_t> offsets_host = {0U, 64U, 128U, 256U, 384U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    constexpr uint32_t kStart = 2U;
+    constexpr uint32_t k_lo = 128;
+    constexpr uint32_t K_active = 128;
+
+    auto cfg = kConfig;
+    cfg.transpose_a = true;
+    auto result = ttml::metal::variable_matmul(
+        in0_km,
+        in1,
+        cfg,
+        /*bias=*/std::nullopt,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/0,
+        /*in0_k_offset_tiles=*/0,
+        /*in1_k_offset_tiles=*/0,
+        /*output_tensor=*/std::nullopt,
+        /*out_row_offset_tiles=*/0,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
+        /*offsets_start_index=*/kStart);
+
+    auto in0_sliced_km = ttnn::slice(
+        in0_km,
+        ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
+        ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_active, M},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto in0_sliced_mk = ttnn::transpose(in0_sliced_km, -2, -1);
+    auto in1_sliced = ttnn::slice(
+        in1,
+        ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
+        ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_active, N},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto ref = minimal_matmul_hifi4(in0_sliced_mk, in1_sliced, kConfig);
+
+    EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(InputAndWeightK,tA) vs minimal not bit-exact";
+}
