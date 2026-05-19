@@ -66,6 +66,8 @@ def test_ttnn_text_condition_embedding_pcc_vs_torch(device):
     tokens = tok(text_prompt, padding="max_length", truncation=True, max_length=256, return_tensors="pt")
     input_ids = tokens["input_ids"]
     attn = tokens["attention_mask"]
+    real_len = int(attn[0].sum().item())
+    assert real_len > 0, "tokenizer produced no real tokens; check the prompt"
 
     ref_qwen = AutoModel.from_pretrained(str(text_dir), torch_dtype=torch.bfloat16).eval()
     with safe_open(str(model_path), framework="pt", device="cpu") as sf:
@@ -80,13 +82,29 @@ def test_ttnn_text_condition_embedding_pcc_vs_torch(device):
 
     with torch.inference_mode():
         text_ref_hf = ref_qwen(input_ids=input_ids, attention_mask=attn).last_hidden_state.float()
+    # Free the HF reference before any heavy TTNN work so we don't double-hold the weights.
+    del ref_qwen
 
     text_tt_torch = ttnn.to_torch(text_tt).float()
     if text_tt_torch.ndim == 4:
         text_tt_torch = text_tt_torch.squeeze(1)
 
-    # Qwen encoder parity (separate from projector; HF vs TTNN BF16 stack).
-    assert_pcc_print("ttnn_qwen3_hidden_vs_hf", text_ref_hf, text_tt_torch, pcc=0.98)
+    # ``AceStepQwen3Encoder.forward`` ignores ``attention_mask`` by design (it pads input_ids
+    # to ``max_seq_len`` and lets the stock causal mask in ``Attention.forward_prefill`` do
+    # the rest). HF's ``AutoModel`` honours ``attention_mask`` and therefore produces
+    # **different** hidden states at the pad positions (where it deliberately avoids
+    # attending to other pads). For right-padded input with causal attention, real positions
+    # ``0..real_len-1`` are unaffected by the difference; pad positions diverge legitimately.
+    # Compare only the real positions so the PCC reflects encoder parity rather than
+    # pad-mask handling.
+    text_ref_real = text_ref_hf[:, :real_len, :].contiguous()
+    text_tt_real = text_tt_torch[:, :real_len, :].contiguous()
+    print(
+        f"[ttnn_text_condition_embedding_pcc] real_len={real_len}/{int(input_ids.shape[1])} "
+        f"H={int(text_ref_hf.shape[-1])} - comparing first {real_len} positions only",
+        flush=True,
+    )
+    assert_pcc_print("ttnn_qwen3_hidden_vs_hf", text_ref_real, text_tt_real, pcc=0.98)
 
     # Projector PCC: same TTNN Qwen hidden states as production (``run_prompt_to_wav`` path).
     with torch.inference_mode():
