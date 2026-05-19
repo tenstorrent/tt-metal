@@ -5,15 +5,18 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/compute/common.h"
 #include "api/debug/dprint.h"
+#include "experimental/kernel_args.h"
+
+// Quick check that DFBAccessor implicitly converts to uint32_t.
+// This is a shim to enable DFB to work with WH/BH LLK compute APIs that expect raw CB ids.
+// NOTE: This check is piggybacking along on an unrelated test kernel.
+constexpr uint32_t implicit_id = dfb::in;  // copy-init invokes the conversion
+static_assert(implicit_id == dfb::in.id, "DFBAccessor must implicitly convert to its underlying uint32_t id");
 
 void kernel_main() {
-    const uint32_t num_entries = get_compile_time_arg_val(0);
-
-    uint32_t logical_dfb_in = get_arg_val<uint32_t>(0);
-    uint32_t logical_dfb_out = get_arg_val<uint32_t>(1);
-
-    DataflowBuffer dfb_in(logical_dfb_in);
-    DataflowBuffer dfb_out(logical_dfb_out);
+    constexpr uint32_t num_entries = get_arg(args::num_entries);
+    DataflowBuffer dfb_in(dfb::in);
+    DataflowBuffer dfb_out(dfb::out);
 
     for (uint32_t tile_id = 0; tile_id < num_entries; tile_id++) {
         // DPRINT << "rbw" << ENDL();

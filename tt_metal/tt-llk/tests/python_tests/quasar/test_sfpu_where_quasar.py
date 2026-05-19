@@ -16,7 +16,11 @@ from helpers.llk_params import (
     UnpackerEngine,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import (
+    input_output_formats,
+    is_invalid_quasar_sfpu_format_combination,
+    parametrize,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -32,38 +36,6 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
 )
 from helpers.utils import passed_test
-
-
-def _is_invalid_quasar_combination(
-    fmt: FormatConfig, dest_acc: DestAccumulation
-) -> bool:
-    """
-    Check if format combination is invalid for Quasar.
-    """
-    in_fmt = fmt.input_format
-    out_fmt = fmt.output_format
-
-    # Quasar packer does not support non-Float32 to Float32 conversion when dest_acc=No
-    if (
-        in_fmt != DataFormat.Float32
-        and out_fmt == DataFormat.Float32
-        and dest_acc == DestAccumulation.No
-    ):
-        return True
-
-    # Quasar SFPU with Float32 input and Float16 output requires dest_acc=Yes
-    if (
-        in_fmt == DataFormat.Float32
-        and out_fmt == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
-    ):
-        return True
-
-    # Integer and float formats cannot be mixed in input/output
-    if in_fmt.is_integer() != out_fmt.is_integer():
-        return True
-
-    return False
 
 
 def generate_sfpu_where_combinations(
@@ -87,7 +59,7 @@ def generate_sfpu_where_combinations(
             else (DestAccumulation.No, DestAccumulation.Yes)
         )
         for dest_acc in dest_acc_modes:
-            if _is_invalid_quasar_combination(fmt, dest_acc):
+            if is_invalid_quasar_sfpu_format_combination(fmt, dest_acc):
                 continue
 
             for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:

@@ -210,12 +210,25 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
             kernel_params.named_common_runtime_args.size());
     }
 
-    // Validate that all registered kernels have parameters
+    // Validate that all registered kernels with a non-empty RTA/CRTA schema have parameters.
+    // Kernels whose schema declares no named RTAs, no named CRTAs, no vararg RTAs, and no
+    // vararg CRTAs have nothing to supply per enqueue and do not need a kernel_run_params entry.
     std::vector<KernelSpecName> registered_names = program_impl.get_registered_kernel_names();
     for (const KernelSpecName& name : registered_names) {
+        if (kernels_with_params.contains(name)) {
+            continue;
+        }
+        const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(name);
+        if (schema == nullptr) {
+            continue;
+        }
+        const bool has_anything_to_supply =
+            !schema->named_runtime_args.empty() || !schema->named_common_runtime_args.empty() ||
+            !schema->num_runtime_varargs_per_node.empty() || schema->num_common_runtime_varargs > 0;
         TT_FATAL(
-            kernels_with_params.contains(name),
-            "Kernel '{}' is registered in the Program but has no runtime parameters specified in ProgramRunParams",
+            !has_anything_to_supply,
+            "Kernel '{}' is registered in the Program with a non-empty RTA/CRTA schema but has no "
+            "runtime parameters specified in ProgramRunParams",
             name);
     }
 

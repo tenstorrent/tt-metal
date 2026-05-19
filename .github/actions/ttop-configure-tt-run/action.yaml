@@ -83,7 +83,6 @@ runs:
             sudo tee -a ${{ inputs.directory }}/rank_bindings.yaml > /dev/null <<EOF
           - rank: $i
             mesh_id: 0
-            mesh_host_rank: $i
 
         EOF
           done
