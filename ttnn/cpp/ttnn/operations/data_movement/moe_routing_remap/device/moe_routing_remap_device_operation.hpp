@@ -7,6 +7,8 @@
 #include <variant>
 #include <optional>
 
+#include <tt-metalium/program_descriptors.hpp>
+
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
@@ -37,31 +39,14 @@ struct MoeRoutingRemapDeviceOperation {
     using tensor_return_value_t = ttnn::Tensor;
 
     struct SingleCore {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-            ttnn::CoreCoord utilized_core;
-        };
-        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-        static cached_mesh_workload_t create_mesh_workload(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinate& mesh_coordinate,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_workload,
+        // Mesh-coord-aware overload: each program in the workload bakes in a per-device
+        // weight-count offset derived from cluster_axis + mesh_coordinate, so the
+        // descriptor framework dispatches one descriptor per coordinate.
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
     };
 
     using program_factory_t = std::variant<SingleCore>;
