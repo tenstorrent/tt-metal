@@ -23,12 +23,8 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-<<<<<<< HEAD
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
-=======
-from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
->>>>>>> 927351d4f1f (Removing cache changes for faster testing)
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
@@ -260,12 +256,9 @@ def test_prefill_block(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-<<<<<<< HEAD
         weight_cache_path=cache_dir,
         capacity_factor=32,
         is_balanced=is_balanced,
-=======
->>>>>>> 927351d4f1f (Removing cache changes for faster testing)
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
