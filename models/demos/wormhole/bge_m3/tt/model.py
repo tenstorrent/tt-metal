@@ -214,15 +214,31 @@ class BgeM3Model(LightweightModule):
 
         prepared_attention_mask = self._prepare_attention_mask(input_ids=input_ids, attention_mask=attention_mask)
 
-        hidden_states = self.embeddings(
-            input_ids=input_ids,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-        )
-        if self.embedding_norm is not None:
-            hidden_states = self.embedding_norm(hidden_states)
-
         residual_sharded = None
+        if self.embedding_norm is not None:
+            # Fold the position-embedding add into the embedding LayerNorm as residual.
+            # Saves 1 BinaryNg add (~10 us) per forward.
+            main, position = self.embeddings(
+                input_ids=input_ids,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                defer_position_add=True,
+            )
+            # B1/S512: also return sharded output to seed layer 0's residual,
+            # saving the first attention_norm residual I->S reshard (-1.1 us).
+            if self.embedding_norm.config.sharded_memcfg is not None:
+                hidden_states, residual_sharded = self.embedding_norm(
+                    main, residual_input_tensor=position, return_sharded=True
+                )
+            else:
+                hidden_states = self.embedding_norm(main, residual_input_tensor=position)
+        else:
+            hidden_states = self.embeddings(
+                input_ids=input_ids,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+            )
+
         for layer in self.layers:
             result = layer(
                 hidden_states=hidden_states,

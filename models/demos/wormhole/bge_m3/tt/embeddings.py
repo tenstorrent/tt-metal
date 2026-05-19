@@ -101,7 +101,8 @@ class BgeM3Embedding(LightweightModule):
         input_ids: ttnn.Tensor,
         token_type_ids: ttnn.Tensor | None = None,
         position_ids: ttnn.Tensor | None = None,
-    ) -> ttnn.Tensor:
+        defer_position_add: bool = False,
+    ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Public forward API.
 
@@ -109,9 +110,11 @@ class BgeM3Embedding(LightweightModule):
             input_ids: rank-2 IDs tensor with shape [B, S].
             token_type_ids: optional rank-2 IDs tensor with shape [B, S].
             position_ids: optional rank-2 IDs tensor with shape [B, S].
+            defer_position_add: when True, return (word+token_type, position) separately
+                so the caller can fold the add into the next LayerNorm as residual.
 
         Returns:
-            Embedding activations with shape [B, 1, S, D].
+            Embedding activations with shape [B, 1, S, D] (or tuple if defer_position_add).
         """
         if token_type_ids is None:
             token_type_ids = ttnn.subtract(input_ids, input_ids)
@@ -138,9 +141,7 @@ class BgeM3Embedding(LightweightModule):
 
         if self._fold_token_type:
             # token_type[0] already baked into word_embeddings_weight
-            embeddings = ttnn.add(word_embeddings, position_embeddings)
-            ttnn.deallocate(word_embeddings)
-            ttnn.deallocate(position_embeddings)
+            main = word_embeddings
         else:
             token_type_embeddings = ttnn.embedding(
                 token_type_ids,
@@ -148,13 +149,19 @@ class BgeM3Embedding(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=self.config.embedding_memcfg,
             )
-            word_plus_token = ttnn.add(word_embeddings, token_type_embeddings)
-            embeddings = ttnn.add(word_plus_token, position_embeddings)
+            main = ttnn.add(word_embeddings, token_type_embeddings)
             ttnn.deallocate(word_embeddings)
             ttnn.deallocate(token_type_embeddings)
-            ttnn.deallocate(position_embeddings)
-            ttnn.deallocate(word_plus_token)
+            word_embeddings = None  # noqa: F841
 
+        if defer_position_add:
+            main = ttnn.unsqueeze(main, dim=1)
+            position_embeddings = ttnn.unsqueeze(position_embeddings, dim=1)
+            return main, position_embeddings
+
+        embeddings = ttnn.add(main, position_embeddings)
+        ttnn.deallocate(main)
+        ttnn.deallocate(position_embeddings)
         embeddings = ttnn.unsqueeze(embeddings, dim=1)
         return embeddings
 
