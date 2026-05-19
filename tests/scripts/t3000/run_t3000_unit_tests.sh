@@ -327,6 +327,9 @@ except Exception as e:
   # GTEST_OUTPUT env var), parse the skip count and treat non-zero skips as failure.
   # This catches the case where T3K fixtures call GTEST_SKIP() when topology is
   # degraded mid-run but exit 0 (GTest exits 0 on all-skipped by default).
+  # GAP-R12 (#42429): Track last test command name for record_test diagnostics.
+  # Without this, post-mortem cannot map which tt-smi -r reset was for which test.
+  _LAST_TEST_NAME=""
   record_test() {
     local rc=$?
     # Check GTest XML for skip-only passes if the XML output file is present.
@@ -336,15 +339,18 @@ except Exception as e:
       total_skipped=$(grep -oP '(?<=skipped=")[0-9]+' /tmp/gtest_last_result.xml \
                         | awk '{s+=$1} END {print s+0}' 2>/dev/null || echo 0)
       if [[ "${total_skipped:-0}" -gt 0 ]]; then
-        echo "LOG_METAL: ERROR — exit 0 but ${total_skipped} test(s) SKIPPED in GTest XML." >&2
+        echo "LOG_METAL: ERROR — exit 0 but ${total_skipped} test(s) SKIPPED in GTest XML (test=${_LAST_TEST_NAME:-unknown})." >&2
         echo "LOG_METAL: T3K topology may have degraded mid-run — treating as failure." >&2
         rc=1
       fi
       rm -f /tmp/gtest_last_result.xml
     fi
+    # GAP-R12: Log test name + rc for every record_test call — enables post-mortem
+    # mapping of which reset was triggered by which test failure.
+    echo "LOG_METAL: [GAP-R12] record_test: rc=$rc test=${_LAST_TEST_NAME:-unknown}"
     fail+=$rc
     if [[ $rc -ne 0 ]]; then
-      echo "LOG_METAL: test returned rc=$rc — resetting hardware via tt-smi"
+      echo "LOG_METAL: test '${_LAST_TEST_NAME:-unknown}' returned rc=$rc — resetting hardware via tt-smi"
       timeout 30 tt-smi -r || true
       # FIX GS-3 (#42429): warm-up after per-test reset to prevent base-UMD reset cycle.
       # After tt-smi -r, non-MMIO ETH channels reload base-UMD firmware. If the next
@@ -405,12 +411,12 @@ except Exception as e:
   # GTEST_SKIP() rather than hang. If the env var is ever removed this is the
   # canary that catches the regression immediately.
   # See tests/scripts/t3000/repro_ccl_cq0_hang.sh for full repro instructions.
-  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" ${TT_METAL_HOME}/tests/scripts/t3000/repro_ccl_cq0_hang.sh --solo ; record_test
+  _LAST_TEST_NAME="repro_ccl_cq0_hang" GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" ${TT_METAL_HOME}/tests/scripts/t3000/repro_ccl_cq0_hang.sh --solo ; record_test
 
   # CCL operation binaries — AllGather, ReduceScatter, and multi-tensor CCL.
-  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; record_test
-  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor ; record_test
-  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_ops ; record_test
+  _LAST_TEST_NAME="unit_tests_ttnn_ccl" GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; record_test
+  _LAST_TEST_NAME="unit_tests_ttnn_ccl_multi_tensor" GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor ; record_test
+  _LAST_TEST_NAME="unit_tests_ttnn_ccl_ops" GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_ops ; record_test
 
   # test_ccl_multi_cq_multi_device: chip-3 CQ0 AllGather hang investigation.
   # - Split each TEST_F into its own subprocess so predecessor state cannot bleed
@@ -428,6 +434,7 @@ except Exception as e:
       "MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0" \
       "MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0CQ1" \
       "MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksMultithreadCQ0"; do
+      _LAST_TEST_NAME="ccl_mcq_${ccl_mcq_test}"
       echo "LOG_METAL: running test_ccl_multi_cq_multi_device --gtest_filter=${ccl_mcq_test}"
       GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 600 ./build/test/ttnn/test_ccl_multi_cq_multi_device --gtest_filter="${ccl_mcq_test}"
       record_test
@@ -451,19 +458,19 @@ except Exception as e:
     print(f'[FIX GS-3] WARNING: pre-GAP21 warm-up failed ({e})', file=sys.stderr)
 " 2>&1 || true
   sleep 5
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap21_rapid_allgather_quiesce_stress.py::test_rapid_allgather_quiesce_stress ; record_test
+  _LAST_TEST_NAME="gap21_rapid_allgather_quiesce_stress" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap21_rapid_allgather_quiesce_stress.py::test_rapid_allgather_quiesce_stress ; record_test
   # GAP-22: AllGather interrupted mid-flight by mesh close (FIX AO/AP/AD)
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap22_allgather_inflight_close.py::test_allgather_inflight_close ; record_test
+  _LAST_TEST_NAME="gap22_allgather_inflight_close" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap22_allgather_inflight_close.py::test_allgather_inflight_close ; record_test
   # GAP-23: Partial-mesh quiesce cycling with AllGather (FIX AK/AM/AE)
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap23_partial_mesh_quiesce_cycling.py::test_partial_mesh_quiesce_cycling ; record_test
+  _LAST_TEST_NAME="gap23_partial_mesh_quiesce_cycling" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap23_partial_mesh_quiesce_cycling.py::test_partial_mesh_quiesce_cycling ; record_test
   # GAP-25: Back-to-back AllGather without explicit sync (FIX AE/AF)
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap25_back_to_back_allgather_nosync.py::test_back_to_back_allgather_nosync ; record_test
+  _LAST_TEST_NAME="gap25_back_to_back_allgather_nosync" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap25_back_to_back_allgather_nosync.py::test_back_to_back_allgather_nosync ; record_test
   # GAP-38: AllGather correctness after FIX BA teardown chain (FIX BA + FIX AC + FIX AY).
   # GAP-37 verifies the second open is FAST. GAP-38 verifies the second session AllGather
   # produces numerically correct output (PCC >= 0.9999). These are orthogonal: a regression
   # where FIX BA cleans up timing but leaves stale EDM routing tables would pass GAP-37 but
   # fail GAP-38 (wrong AllGather output or hang).
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap38_fixba_allgather_correctness_after_cleanup.py::test_gap38_fixba_allgather_correctness_after_cleanup ; record_test
+  _LAST_TEST_NAME="gap38_fixba_allgather_correctness" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap38_fixba_allgather_correctness_after_cleanup.py::test_gap38_fixba_allgather_correctness_after_cleanup ; record_test
 
   # ===========================================================================
   # BATCH 2: Broader TTNN and TT-Metal tests.
@@ -475,18 +482,18 @@ except Exception as e:
   # same dispatch hang as AsyncExecutionWorksCQ0 (unsafe NOC access at 0x880030060 on
   # non-MMIO chips).  The skip guard already exists in test_generic_op.cpp:1221; we just
   # need to set the env var so it fires.
-  TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP=1 GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 900 ./build/test/ttnn/unit_tests_ttnn ; record_test
-  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 600 ./build/test/ttnn/unit_tests_ttnn_tensor ; record_test
+  _LAST_TEST_NAME="unit_tests_ttnn" TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP=1 GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 900 ./build/test/ttnn/unit_tests_ttnn ; record_test
+  _LAST_TEST_NAME="unit_tests_ttnn_tensor" GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 600 ./build/test/ttnn/unit_tests_ttnn_tensor ; record_test
   # Disabled: ManualPagesIterationInterleaved rank_6+ hangs with unsafe NOC read on T3K (issue #42195)
   # timeout 300 ./build/test/ttnn/unit_tests_ttnn_accessor ; record_test
-  pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; record_test
-  pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_events.py ; record_test
-  pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; record_test
-  pytest tests/ttnn/unit_tests/base_functionality/test_multi_device.py ; record_test
-  pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_async.py ; record_test
-  pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; record_test
-  pytest tests/ttnn/distributed/test_data_parallel_example.py ; record_test
-  pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; record_test
+  _LAST_TEST_NAME="test_multi_device_trace" pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; record_test
+  _LAST_TEST_NAME="test_multi_device_events" pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_events.py ; record_test
+  _LAST_TEST_NAME="test_prefetcher_multi_device" pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; record_test
+  _LAST_TEST_NAME="test_multi_device" pytest tests/ttnn/unit_tests/base_functionality/test_multi_device.py ; record_test
+  _LAST_TEST_NAME="test_multi_device_async" pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_async.py ; record_test
+  _LAST_TEST_NAME="test_tensor_parallel_T3000" pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; record_test
+  _LAST_TEST_NAME="test_data_parallel" pytest tests/ttnn/distributed/test_data_parallel_example.py ; record_test
+  _LAST_TEST_NAME="test_hybrid_data_tensor_parallel_T3000" pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; record_test
 
   # ===========================================================================
   # BATCH 3: ETH/ERISC infrastructure regression tests.
@@ -546,31 +553,31 @@ except Exception as e:
   #   (6 ETH channels × 5s UMD timeout each). FIX NY caches the first failure in
   #   relay_broken_chips_ so channels 2-6 return immediately (0ms). Primary check
   #   is TIMING (35s budget); FIX NX regression shows as exit non-zero.
-  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 900 ./build/test/tt_metal/distributed/distributed_unit_tests \
+  _LAST_TEST_NAME="distributed_unit_tests" GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 900 ./build/test/tt_metal/distributed/distributed_unit_tests \
     --gtest_filter='Gap1ThreePassEthLaunchFixture.*:LaunchGateLiveEriscFixture.*:ERISCHeartbeatFixture.*:PartialMeshQuiesceFixture.*:RelayBrokenTeardownFixture.*:Phase25RelayBrokenCascadeFixture.*:MmioPhase5RelayBrokenFixture.*:InitRouterSyncDeadRelayFixture.*:ParallelHeartbeatPollFixture.*:ChannelsNotReadyLifecycleFixture.*:RelayTimeoutToleranceFixture.*:TeardownReopenEthOrderingFixture.*:AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*:FixAvRelayBrokenSysmemGuardFixture.*:ClusterTeardownHangRelayBrokenFixture.*:FixAyDeferredNonMmioResetFixture.*:FixAzL1BarrierSkipNoPriorFabricFixture.*:EthCoordPreservedOnAqSkipFixture.*:MmioEthCoordBeforeRelayGuardFixture.*:AsyncBuildPhaseRelayGuardFixture.*:WriteCorRelayGuardFixture.*:EthTrainingFabricEriscsFixture.*:RelayBrokenChipsCacheFixture.*:ReadCoreRelayGuardFixture.*:FwLaunchAddrForceResetFixture.*:FwLaunchAddrRescueFixture.*:FwLaunchAddrQuiesceFixture.*:TeardownNullControlPlaneFixture.*:UmdHeartbeatSkipExitFixture.*:Phase25RelayRetryFixture.*:FixE2AyProbeDeadFayTriggerFixture.*:FixM2DeadPeerEriscResetFixture.*:FixPlBarrierGuardDeadRelayFixture.*:FixQcNonMmioResetCoresSkipFixture.*:FixQbResetLoopEarlyBreakFixture.*:FixPyPzPhase25TopologyTimeoutFixture.*:FixQdDeadRouterMmioSkipFixture.*:FixQuReassertFlagsFixture.*:FixNyRelayMuxClusterGuardFixture.*:FixTbTopologyMapperUnknownAsicFixture.*:FixQvPhase4SkipFixture.*:FixRzStaleBaseUmdFlagFixture.*:FixTf2dFabricHeaderArgsGuardFixture.*:FixTgControlPlaneHostRankGuardFixture.*:FixThRelayMuxNoLinksGuardFixture.*:FixTkDegradedClusterChipFilterFixture.*:FixTlDegradedClusterBailBeforeCreateMeshesFixture.*:FixTiRingSyncFastSkipFixture.*:Gap74BaseFixtureTeardownGuardFixture.*:FixQwbStaleBaseUmdSkipGuardFixture.*:FixTg2BaseUmdPartialL1ClearFixture.*:FixPhYamlEthCoordGracefulSkip.*:Gap75SetUpNotActiveSkipGuard.*:Gap76FixSbIdleEthInitFabricGuard.*' ; record_test
 
   # Remaining GAP regression tests — infrastructure / ETH hang fixes.
   # GAP-24: Rapid mesh close/reopen cycling under FABRIC_2D (FIX AD/AC/AL/AQ)
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap24_rapid_close_reopen_cycling.py::test_rapid_close_reopen_cycling ; record_test
+  _LAST_TEST_NAME="gap24_rapid_close_reopen_cycling" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap24_rapid_close_reopen_cycling.py::test_rapid_close_reopen_cycling ; record_test
   # GAP-26: FIX AS canary poll timeout → newly-dead graceful degradation (FIX AS sad-path)
-  timeout 180 pytest -svv tests/nightly/t3000/ccl/test_gap26_fixas_canary_timeout_graceful.py::test_gap26_fixas_canary_timeout_graceful ; record_test
+  _LAST_TEST_NAME="gap26_fixas_canary_timeout_graceful" timeout 180 pytest -svv tests/nightly/t3000/ccl/test_gap26_fixas_canary_timeout_graceful.py::test_gap26_fixas_canary_timeout_graceful ; record_test
   # GAP-27: FIX AV — non-MMIO sysmem_manager reset prevents stale in-flight counter
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap27_fixav_nonmmio_sysmem_reset.py::test_gap27_fixav_nonmmio_sysmem_reset ; record_test
+  _LAST_TEST_NAME="gap27_fixav_nonmmio_sysmem_reset" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap27_fixav_nonmmio_sysmem_reset.py::test_gap27_fixav_nonmmio_sysmem_reset ; record_test
   # GAP-30: FIX AL — STARTED early-exit timing (kStartedTimeoutMs=3000ms) bounds quiesce wait
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap30_fixal_started_early_exit_timing.py::test_gap30_fixal_started_early_exit_timing ; record_test
+  _LAST_TEST_NAME="gap30_fixal_started_early_exit_timing" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap30_fixal_started_early_exit_timing.py::test_gap30_fixal_started_early_exit_timing ; record_test
   # GAP-34: FIX AM — Phase 5b skipped when master chan at STARTED (out-of-mesh peer);
   #   saves ~2s per device vs FIX AL alone; caught TestMeshWidthShardedCopy3D timeout in CI run 25048641877
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap34_fixam_phase5b_skip_timing.py::test_gap34_fixam_phase5b_skip_timing ; record_test
+  _LAST_TEST_NAME="gap34_fixam_phase5b_skip_timing" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap34_fixam_phase5b_skip_timing.py::test_gap34_fixam_phase5b_skip_timing ; record_test
   # GAP-35: FIX AT — Phase 5 handshake poll skipped when MMIO master chan was FIX AS Pass-0
   #   timeout'd (WH BRISC boot >500ms → status=0x0, no firmware loaded). Without FIX AT:
   #   Phase 5 polls for 10s per MMIO device = 20s overhead per cycle (2 MMIO devices on T3K).
   #   Caught AsyncExecutionWorksCQ0 timeout in CI run 25054499947.
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap35_fixat_fixas_mmio_phase5_skip.py ; record_test
+  _LAST_TEST_NAME="gap35_fixat_fixas_mmio_phase5_skip" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap35_fixat_fixas_mmio_phase5_skip.py ; record_test
   # GAP-36: FIX AV — device_relay_dead per-device early-exit in FIX AY loop when relay is
   #   dead after FIX AC PCIe-reset. Without FIX AV: 4 ETH cores × 2 non-MMIO devices × 5s
   #   timeout = 40s teardown → CI SIGALRM. With FIX AV: 1 throw × 2 devices × 5s = 10s.
   #   Root CI failure: run 25060970918 (job 73417098227).
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap36_fixav_relay_dead_per_device_skip.py::test_gap36_fixav_relay_dead_per_device_skip ; record_test
+  _LAST_TEST_NAME="gap36_fixav_relay_dead_per_device_skip" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap36_fixav_relay_dead_per_device_skip.py::test_gap36_fixav_relay_dead_per_device_skip ; record_test
   # GAP-37: FIX BA — STARTED-state non-MMIO devices must be cleaned up at teardown.
   #   Without FIX BA: FIX AM sets channels_not_ready=true but relay_broken=false, so
   #   teardown Step 1 skips these devices. Non-MMIO ERISCs remain in FABRIC STARTED state.
@@ -578,50 +585,50 @@ except Exception as e:
   #   per device → ALL subsequent tests fail (observed: run 25066686656, all 359 failed).
   #   With FIX BA: STARTED-state devices added to relay_broken_non_mmio → FIX AC + FIX AY
   #   clean up ERISCs. Second open in this test must complete < 15s.
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap37_fixba_started_state_nonmmio_cleanup.py::test_gap37_fixba_started_state_nonmmio_cleanup ; record_test
+  _LAST_TEST_NAME="gap37_fixba_started_state_nonmmio_cleanup" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap37_fixba_started_state_nonmmio_cleanup.py::test_gap37_fixba_started_state_nonmmio_cleanup ; record_test
   # GAP-39: FIX NS — Single topology discovery per open.
   # Verifies that MetalEnvImpl::initialize_base_objects() does NOT trigger a redundant
   # topology discovery before Cluster creation, which would fill relay queues to 4/4
   # capacity on systems with stale FABRIC-mode ERISCs (14m40s hang observed in CI).
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap39_fixns_single_topology_discovery.py::test_gap39_fixns_single_topology_discovery ; record_test
+  _LAST_TEST_NAME="gap39_fixns_single_topology_discovery" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap39_fixns_single_topology_discovery.py::test_gap39_fixns_single_topology_discovery ; record_test
   # GAP-40: FIX AE — Catch flush timeouts in write_core/write_reg/noc_multicast_write
   # and pre-mark remote chips relay-broken in ~Cluster() before close_device().
   # Verifies: (1) no 5s-per-call cascade from dead-relay mid-session writes; and
   # (2) no heap corruption from racing ~Cluster() + Cluster() UMD global state access
   # (FIX AE supersedes FIX AW background-thread approach).
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap40_fixae_flush_timeout_catch.py::test_gap40_fixae_flush_timeout_catch ; record_test
+  _LAST_TEST_NAME="gap40_fixae_flush_timeout_catch" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap40_fixae_flush_timeout_catch.py::test_gap40_fixae_flush_timeout_catch ; record_test
 
   # Additional GAP regression tests — previously added to tests/ but missing from runner.
   # GAP-11: Phase 2.5 force-reset + Pass-0 canary chain validation (FIX AS/PG)
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_phase25_force_reset_pass0_chain.py::test_phase25_force_reset_pass0_chain ; record_test
+  _LAST_TEST_NAME="phase25_force_reset_pass0_chain" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_phase25_force_reset_pass0_chain.py::test_phase25_force_reset_pass0_chain ; record_test
   # GAP-12: Cross-device relay_broken race in Phase 5 concurrent quiesce (FIX AN)
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_cross_device_relay_broken_race.py::test_cross_device_relay_broken_race ; record_test
+  _LAST_TEST_NAME="cross_device_relay_broken_race" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_cross_device_relay_broken_race.py::test_cross_device_relay_broken_race ; record_test
   # GAP-13: L1 corruption cascade across 3+ sequential sessions (FIX AE/AC)
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_l1_corruption_cascade.py::test_l1_corruption_cascade_broken ; record_test
+  _LAST_TEST_NAME="l1_corruption_cascade" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_l1_corruption_cascade.py::test_l1_corruption_cascade_broken ; record_test
   # GAP-14: Phase 4 MUX timeout force-reset does not leave device in bad state (FIX AC)
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_phase4_mux_timeout_recovery.py::test_phase4_mux_timeout_recovery ; record_test
+  _LAST_TEST_NAME="phase4_mux_timeout_recovery" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_phase4_mux_timeout_recovery.py::test_phase4_mux_timeout_recovery ; record_test
   # GAP-15: ENTRY snapshot deadline false positive does not permanently degrade fabric
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_snapshot_deadline_false_positive.py::test_snapshot_deadline_false_positive ; record_test
+  _LAST_TEST_NAME="snapshot_deadline_false_positive" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_snapshot_deadline_false_positive.py::test_snapshot_deadline_false_positive ; record_test
   # GAP-16: 3-pass ETH launch ordering prevents simultaneous handshake deadlock (FIX AE/AF)
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_3pass_eth_launch_ordering.py::test_3pass_eth_launch_no_deadlock ; record_test
+  _LAST_TEST_NAME="3pass_eth_launch_ordering" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_3pass_eth_launch_ordering.py::test_3pass_eth_launch_no_deadlock ; record_test
   # GAP-17: Partial-mesh quiesce — FIX AK non-fatal REMOTE_HANDSHAKE_COMPLETE
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_partial_mesh_handshake_tolerance.py::test_partial_mesh_quiesce_nonfatal ; record_test
+  _LAST_TEST_NAME="partial_mesh_handshake_tolerance" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_partial_mesh_handshake_tolerance.py::test_partial_mesh_quiesce_nonfatal ; record_test
   # GAP-18: Router sync graceful degradation on dead-relay neighbor (FIX AL)
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_router_sync_graceful_degradation.py::test_router_sync_no_sigabrt ; record_test
+  _LAST_TEST_NAME="router_sync_graceful_degradation" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_router_sync_graceful_degradation.py::test_router_sync_no_sigabrt ; record_test
   # GAP-19: channels_not_ready_for_traffic_ flag cleared on re-init (FIX AM lifecycle)
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_channels_not_ready_flag_lifecycle.py::test_channels_not_ready_cleared_on_reinit ; record_test
+  _LAST_TEST_NAME="channels_not_ready_flag_lifecycle" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_channels_not_ready_flag_lifecycle.py::test_channels_not_ready_cleared_on_reinit ; record_test
   # GAP-20: Teardown parallel heartbeat poll converges within budget (FIX AD)
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_teardown_parallel_heartbeat_poll.py::test_teardown_heartbeat_poll_parallel ; record_test
+  _LAST_TEST_NAME="teardown_parallel_heartbeat_poll" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_teardown_parallel_heartbeat_poll.py::test_teardown_heartbeat_poll_parallel ; record_test
   # GAP-79: FIX XY-2 — relay_broken cleared after ERISC force-reset → AllGather correctness
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap79_fixxy2_relay_broken_cleared_allgather.py::test_relay_broken_cleared_allgather_correctness ; record_test
+  _LAST_TEST_NAME="gap79_fixxy2_relay_broken_cleared_allgather" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap79_fixxy2_relay_broken_cleared_allgather.py::test_relay_broken_cleared_allgather_correctness ; record_test
   # GAP-80: FIX DT-1 — dispatch ERISC teardown timeout in warm-up triggers remedial tt-smi -r
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap80_fixdt1_dispatch_erisc_timeout_warmup_allgather.py::test_gap80_fixdt1_dispatch_erisc_timeout_warmup_allgather ; record_test
+  _LAST_TEST_NAME="gap80_fixdt1_dispatch_erisc_timeout_warmup_allgath" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap80_fixdt1_dispatch_erisc_timeout_warmup_allgather.py::test_gap80_fixdt1_dispatch_erisc_timeout_warmup_allgather ; record_test
   # GAP-81: FIX UP3 — dispatch-ERISC timeout loop in warm-up → skip warm-up path
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap81_fixup3_dispatch_erisc_loop_warmup_skip_allgather.py::test_gap81_fixup3_dispatch_erisc_loop_warmup_skip_allgather ; record_test
+  _LAST_TEST_NAME="gap81_fixup3_dispatch_erisc_loop_warmup_skip_allga" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap81_fixup3_dispatch_erisc_loop_warmup_skip_allgather.py::test_gap81_fixup3_dispatch_erisc_loop_warmup_skip_allgather ; record_test
   # GAP-82: FIX SC-ADDR — ETH cores in not_done_cores use per-core-type go_msg address
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap82_fixscaddr_eth_not_done_cores_allgather.py::test_gap82_fixscaddr_eth_not_done_cores_allgather ; record_test
+  _LAST_TEST_NAME="gap82_fixscaddr_eth_not_done_cores_allgather" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap82_fixscaddr_eth_not_done_cores_allgather.py::test_gap82_fixscaddr_eth_not_done_cores_allgather ; record_test
   # GAP-83: FIX RR/RS — MMIO ROM-postcode channel recovery → recovered channels load firmware → AllGather succeeds
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap83_fixrr_rs_mmio_rompostcode_recovered_allgather.py::test_gap83_fixrr_rs_mmio_rompostcode_recovered_allgather ; record_test
+  _LAST_TEST_NAME="gap83_fixrr_rs_mmio_rompostcode_recovered_allgathe" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap83_fixrr_rs_mmio_rompostcode_recovered_allgather.py::test_gap83_fixrr_rs_mmio_rompostcode_recovered_allgather ; record_test
 
   # Record the end time
   end_time=$(date +%s)
@@ -847,17 +854,18 @@ except Exception as e:
   # ===========================================================================
   echo "LOG_METAL: [BATCH 1/2] AllGather tests"
 
-  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" ${TT_METAL_HOME}/tests/scripts/t3000/repro_ccl_cq0_hang.sh --solo ; record_test
+  _LAST_TEST_NAME="repro_ccl_cq0_hang" GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" ${TT_METAL_HOME}/tests/scripts/t3000/repro_ccl_cq0_hang.sh --solo ; record_test
 
-  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; record_test
-  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor ; record_test
-  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_ops ; record_test
+  _LAST_TEST_NAME="unit_tests_ttnn_ccl" GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; record_test
+  _LAST_TEST_NAME="unit_tests_ttnn_ccl_multi_tensor" GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor ; record_test
+  _LAST_TEST_NAME="unit_tests_ttnn_ccl_ops" GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_ops ; record_test
 
   sleep 2
   for ccl_mcq_test in \
       "MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0" \
       "MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0CQ1" \
       "MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksMultithreadCQ0"; do
+      _LAST_TEST_NAME="ccl_mcq_${ccl_mcq_test}"
       echo "LOG_METAL: running test_ccl_multi_cq_multi_device --gtest_filter=${ccl_mcq_test}"
       GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 600 ./build/test/ttnn/test_ccl_multi_cq_multi_device --gtest_filter="${ccl_mcq_test}"
       record_test
@@ -877,50 +885,50 @@ except Exception as e:
     print(f'[FIX GS-3] WARNING: pre-GAP21 warm-up failed ({e})', file=sys.stderr)
 " 2>&1 || true
   sleep 5
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap21_rapid_allgather_quiesce_stress.py::test_rapid_allgather_quiesce_stress ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap22_allgather_inflight_close.py::test_allgather_inflight_close ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap23_partial_mesh_quiesce_cycling.py::test_partial_mesh_quiesce_cycling ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap25_back_to_back_allgather_nosync.py::test_back_to_back_allgather_nosync ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap38_fixba_allgather_correctness_after_cleanup.py::test_gap38_fixba_allgather_correctness_after_cleanup ; record_test
+  _LAST_TEST_NAME="gap21_rapid_allgather_quiesce_stress" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap21_rapid_allgather_quiesce_stress.py::test_rapid_allgather_quiesce_stress ; record_test
+  _LAST_TEST_NAME="gap22_allgather_inflight_close" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap22_allgather_inflight_close.py::test_allgather_inflight_close ; record_test
+  _LAST_TEST_NAME="gap23_partial_mesh_quiesce_cycling" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap23_partial_mesh_quiesce_cycling.py::test_partial_mesh_quiesce_cycling ; record_test
+  _LAST_TEST_NAME="gap25_back_to_back_allgather_nosync" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap25_back_to_back_allgather_nosync.py::test_back_to_back_allgather_nosync ; record_test
+  _LAST_TEST_NAME="gap38_fixba_allgather_correctness" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap38_fixba_allgather_correctness_after_cleanup.py::test_gap38_fixba_allgather_correctness_after_cleanup ; record_test
 
   # ===========================================================================
   # BATCH 2: ETH/ERISC infrastructure regression tests.
   # ===========================================================================
   echo "LOG_METAL: [BATCH 2/2] ETH/ERISC infrastructure regression tests"
 
-  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 900 ./build/test/tt_metal/distributed/distributed_unit_tests \
+  _LAST_TEST_NAME="distributed_unit_tests" GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 900 ./build/test/tt_metal/distributed/distributed_unit_tests \
     --gtest_filter='Gap1ThreePassEthLaunchFixture.*:LaunchGateLiveEriscFixture.*:ERISCHeartbeatFixture.*:PartialMeshQuiesceFixture.*:RelayBrokenTeardownFixture.*:Phase25RelayBrokenCascadeFixture.*:MmioPhase5RelayBrokenFixture.*:InitRouterSyncDeadRelayFixture.*:ParallelHeartbeatPollFixture.*:ChannelsNotReadyLifecycleFixture.*:RelayTimeoutToleranceFixture.*:TeardownReopenEthOrderingFixture.*:AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*:FixAvRelayBrokenSysmemGuardFixture.*:ClusterTeardownHangRelayBrokenFixture.*:FixAyDeferredNonMmioResetFixture.*:FixAzL1BarrierSkipNoPriorFabricFixture.*:EthCoordPreservedOnAqSkipFixture.*:MmioEthCoordBeforeRelayGuardFixture.*:AsyncBuildPhaseRelayGuardFixture.*:WriteCorRelayGuardFixture.*:EthTrainingFabricEriscsFixture.*:RelayBrokenChipsCacheFixture.*:ReadCoreRelayGuardFixture.*:FwLaunchAddrForceResetFixture.*:FwLaunchAddrRescueFixture.*:FwLaunchAddrQuiesceFixture.*:TeardownNullControlPlaneFixture.*:UmdHeartbeatSkipExitFixture.*:Phase25RelayRetryFixture.*:FixE2AyProbeDeadFayTriggerFixture.*:FixM2DeadPeerEriscResetFixture.*:FixPlBarrierGuardDeadRelayFixture.*:FixQcNonMmioResetCoresSkipFixture.*:FixQbResetLoopEarlyBreakFixture.*:FixPyPzPhase25TopologyTimeoutFixture.*:FixQdDeadRouterMmioSkipFixture.*:FixQuReassertFlagsFixture.*:FixNyRelayMuxClusterGuardFixture.*:FixTbTopologyMapperUnknownAsicFixture.*:FixQvPhase4SkipFixture.*:FixRzStaleBaseUmdFlagFixture.*:FixTf2dFabricHeaderArgsGuardFixture.*:FixTgControlPlaneHostRankGuardFixture.*:FixThRelayMuxNoLinksGuardFixture.*:FixTkDegradedClusterChipFilterFixture.*:FixTlDegradedClusterBailBeforeCreateMeshesFixture.*:FixTiRingSyncFastSkipFixture.*:Gap74BaseFixtureTeardownGuardFixture.*:FixQwbStaleBaseUmdSkipGuardFixture.*:FixTg2BaseUmdPartialL1ClearFixture.*:FixPhYamlEthCoordGracefulSkip.*:Gap75SetUpNotActiveSkipGuard.*:Gap76FixSbIdleEthInitFabricGuard.*' ; record_test
 
   # GAP-84 runs FIRST in BATCH 2 — probes whether OPTION C leaves relays marginal before any other
   # ETH/ERISC test can mask the symptom.  Timeout = V_TOTAL_BUDGET(120) + P_BUDGET(90) + K(60) + slack.
-  timeout 360 pytest -svv tests/nightly/t3000/ccl/test_gap84_optc_probe_no_marginal_state.py::test_gap84_optc_probe_no_marginal_state ; record_test
+  _LAST_TEST_NAME="gap84_optc_probe_no_marginal_state" timeout 360 pytest -svv tests/nightly/t3000/ccl/test_gap84_optc_probe_no_marginal_state.py::test_gap84_optc_probe_no_marginal_state ; record_test
 
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap24_rapid_close_reopen_cycling.py::test_rapid_close_reopen_cycling ; record_test
-  timeout 180 pytest -svv tests/nightly/t3000/ccl/test_gap26_fixas_canary_timeout_graceful.py::test_gap26_fixas_canary_timeout_graceful ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap27_fixav_nonmmio_sysmem_reset.py::test_gap27_fixav_nonmmio_sysmem_reset ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap30_fixal_started_early_exit_timing.py::test_gap30_fixal_started_early_exit_timing ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap34_fixam_phase5b_skip_timing.py::test_gap34_fixam_phase5b_skip_timing ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap35_fixat_fixas_mmio_phase5_skip.py ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap36_fixav_relay_dead_per_device_skip.py::test_gap36_fixav_relay_dead_per_device_skip ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap37_fixba_started_state_nonmmio_cleanup.py::test_gap37_fixba_started_state_nonmmio_cleanup ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap39_fixns_single_topology_discovery.py::test_gap39_fixns_single_topology_discovery ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap40_fixae_flush_timeout_catch.py::test_gap40_fixae_flush_timeout_catch ; record_test
+  _LAST_TEST_NAME="gap24_rapid_close_reopen_cycling" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap24_rapid_close_reopen_cycling.py::test_rapid_close_reopen_cycling ; record_test
+  _LAST_TEST_NAME="gap26_fixas_canary_timeout_graceful" timeout 180 pytest -svv tests/nightly/t3000/ccl/test_gap26_fixas_canary_timeout_graceful.py::test_gap26_fixas_canary_timeout_graceful ; record_test
+  _LAST_TEST_NAME="gap27_fixav_nonmmio_sysmem_reset" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap27_fixav_nonmmio_sysmem_reset.py::test_gap27_fixav_nonmmio_sysmem_reset ; record_test
+  _LAST_TEST_NAME="gap30_fixal_started_early_exit_timing" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap30_fixal_started_early_exit_timing.py::test_gap30_fixal_started_early_exit_timing ; record_test
+  _LAST_TEST_NAME="gap34_fixam_phase5b_skip_timing" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap34_fixam_phase5b_skip_timing.py::test_gap34_fixam_phase5b_skip_timing ; record_test
+  _LAST_TEST_NAME="gap35_fixat_fixas_mmio_phase5_skip" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap35_fixat_fixas_mmio_phase5_skip.py ; record_test
+  _LAST_TEST_NAME="gap36_fixav_relay_dead_per_device_skip" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap36_fixav_relay_dead_per_device_skip.py::test_gap36_fixav_relay_dead_per_device_skip ; record_test
+  _LAST_TEST_NAME="gap37_fixba_started_state_nonmmio_cleanup" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap37_fixba_started_state_nonmmio_cleanup.py::test_gap37_fixba_started_state_nonmmio_cleanup ; record_test
+  _LAST_TEST_NAME="gap39_fixns_single_topology_discovery" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap39_fixns_single_topology_discovery.py::test_gap39_fixns_single_topology_discovery ; record_test
+  _LAST_TEST_NAME="gap40_fixae_flush_timeout_catch" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap40_fixae_flush_timeout_catch.py::test_gap40_fixae_flush_timeout_catch ; record_test
 
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_phase25_force_reset_pass0_chain.py::test_phase25_force_reset_pass0_chain ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_cross_device_relay_broken_race.py::test_cross_device_relay_broken_race ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_l1_corruption_cascade.py::test_l1_corruption_cascade_broken ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_phase4_mux_timeout_recovery.py::test_phase4_mux_timeout_recovery ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_snapshot_deadline_false_positive.py::test_snapshot_deadline_false_positive ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_3pass_eth_launch_ordering.py::test_3pass_eth_launch_no_deadlock ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_partial_mesh_handshake_tolerance.py::test_partial_mesh_quiesce_nonfatal ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_router_sync_graceful_degradation.py::test_router_sync_no_sigabrt ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_channels_not_ready_flag_lifecycle.py::test_channels_not_ready_cleared_on_reinit ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_teardown_parallel_heartbeat_poll.py::test_teardown_heartbeat_poll_parallel ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap79_fixxy2_relay_broken_cleared_allgather.py::test_relay_broken_cleared_allgather_correctness ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap80_fixdt1_dispatch_erisc_timeout_warmup_allgather.py::test_gap80_fixdt1_dispatch_erisc_timeout_warmup_allgather ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap81_fixup3_dispatch_erisc_loop_warmup_skip_allgather.py::test_gap81_fixup3_dispatch_erisc_loop_warmup_skip_allgather ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap82_fixscaddr_eth_not_done_cores_allgather.py::test_gap82_fixscaddr_eth_not_done_cores_allgather ; record_test
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap83_fixrr_rs_mmio_rompostcode_recovered_allgather.py::test_gap83_fixrr_rs_mmio_rompostcode_recovered_allgather ; record_test
+  _LAST_TEST_NAME="phase25_force_reset_pass0_chain" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_phase25_force_reset_pass0_chain.py::test_phase25_force_reset_pass0_chain ; record_test
+  _LAST_TEST_NAME="cross_device_relay_broken_race" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_cross_device_relay_broken_race.py::test_cross_device_relay_broken_race ; record_test
+  _LAST_TEST_NAME="l1_corruption_cascade" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_l1_corruption_cascade.py::test_l1_corruption_cascade_broken ; record_test
+  _LAST_TEST_NAME="phase4_mux_timeout_recovery" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_phase4_mux_timeout_recovery.py::test_phase4_mux_timeout_recovery ; record_test
+  _LAST_TEST_NAME="snapshot_deadline_false_positive" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_snapshot_deadline_false_positive.py::test_snapshot_deadline_false_positive ; record_test
+  _LAST_TEST_NAME="3pass_eth_launch_ordering" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_3pass_eth_launch_ordering.py::test_3pass_eth_launch_no_deadlock ; record_test
+  _LAST_TEST_NAME="partial_mesh_handshake_tolerance" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_partial_mesh_handshake_tolerance.py::test_partial_mesh_quiesce_nonfatal ; record_test
+  _LAST_TEST_NAME="router_sync_graceful_degradation" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_router_sync_graceful_degradation.py::test_router_sync_no_sigabrt ; record_test
+  _LAST_TEST_NAME="channels_not_ready_flag_lifecycle" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_channels_not_ready_flag_lifecycle.py::test_channels_not_ready_cleared_on_reinit ; record_test
+  _LAST_TEST_NAME="teardown_parallel_heartbeat_poll" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_teardown_parallel_heartbeat_poll.py::test_teardown_heartbeat_poll_parallel ; record_test
+  _LAST_TEST_NAME="gap79_fixxy2_relay_broken_cleared_allgather" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap79_fixxy2_relay_broken_cleared_allgather.py::test_relay_broken_cleared_allgather_correctness ; record_test
+  _LAST_TEST_NAME="gap80_fixdt1_dispatch_erisc_timeout_warmup_allgath" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap80_fixdt1_dispatch_erisc_timeout_warmup_allgather.py::test_gap80_fixdt1_dispatch_erisc_timeout_warmup_allgather ; record_test
+  _LAST_TEST_NAME="gap81_fixup3_dispatch_erisc_loop_warmup_skip_allga" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap81_fixup3_dispatch_erisc_loop_warmup_skip_allgather.py::test_gap81_fixup3_dispatch_erisc_loop_warmup_skip_allgather ; record_test
+  _LAST_TEST_NAME="gap82_fixscaddr_eth_not_done_cores_allgather" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap82_fixscaddr_eth_not_done_cores_allgather.py::test_gap82_fixscaddr_eth_not_done_cores_allgather ; record_test
+  _LAST_TEST_NAME="gap83_fixrr_rs_mmio_rompostcode_recovered_allgathe" timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap83_fixrr_rs_mmio_rompostcode_recovered_allgather.py::test_gap83_fixrr_rs_mmio_rompostcode_recovered_allgather ; record_test
 
   end_time=$(date +%s)
   duration=$((end_time - start_time))
@@ -1040,9 +1048,9 @@ run_t3000_ccl_tests() {
 
   # all gather: 1 ring, 1 line, 1 2d, 1 sharded should be covered
   # width sharded to interleaved case using linear - using i2s_shape0 which is perf with fabric_linear
-  pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-Layout.TILE-DataType.BFLOAT16-mesh_device0]
+  _LAST_TEST_NAME="minimal_all_gather_async" pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-Layout.TILE-DataType.BFLOAT16-mesh_device0]
   # 10 iteration trace test with fabric ring (dit_shape now in test_ttnn_all_gather, no barrier parameters)
-  pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-dit_shape-perf-1link-mesh_device0]
+  _LAST_TEST_NAME="minimal_all_gather_async" pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-dit_shape-perf-1link-mesh_device0]
   # 2D fabric case – hanging on main? tracking with issue #30250
   # pytest tests/nightly/t3000/2d_ccl/test_minimal_all_gather_async.py::test_all_gather_async_training_shapes[wormhole_b0-fabric_2d_dynamic_linear-check-mem_config_input0-mem_config_ag0-tt_training_test_one-mesh_device0-1link]
   # training shapes - Re-enable this test when we have more T3K availability
@@ -1050,41 +1058,41 @@ run_t3000_ccl_tests() {
 
   # reduce scatter: 1 ring, 1 line, 1 2d, 1 sharded should be covered
   # sharded intermediate case with cluster axis 1
-  pytest tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_minimal_async_linear_sharded
+  _LAST_TEST_NAME="minimal_reduce_scatter_async" pytest tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_minimal_async_linear_sharded
   # composite case
-  pytest tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_training_shapes[wormhole_b0-fabric_linear-random-mem_config_input0-mem_config_rs0-tt_training_test_one-check-mesh_device0-1link]
+  _LAST_TEST_NAME="minimal_reduce_scatter_async" pytest tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_training_shapes[wormhole_b0-fabric_linear-random-mem_config_input0-mem_config_rs0-tt_training_test_one-check-mesh_device0-1link]
   # long trace test on dim=1 with ring, currently hanging when run in the suite even though it passes when run in isolation - Re-enable this test when we have more T3K availability
   # pytest tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-fabric_ring-random-mem_config_input0-mem_config_rs0-scatter_dim_1_test_one-perf-no_barrier_with_persistent-1link-mesh_device0]
   # long running dim = 3 trace test without barrier and with persistent buffers
-  pytest tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-fabric_ring-random-mem_config_input0-mem_config_rs0-padded_dim_2_test_two-perf-no_barrier_with_persistent-1link-mesh_device0]
+  _LAST_TEST_NAME="minimal_reduce_scatter_async" pytest tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-fabric_ring-random-mem_config_input0-mem_config_rs0-padded_dim_2_test_two-perf-no_barrier_with_persistent-1link-mesh_device0]
 
   # all reduce: 1 test should be enough
   # 4 chip test with bfloat8_b
-  pytest tests/nightly/t3000/ccl/test_all_reduce.py::test_ring_all_reduce_post_commit -k "2x4x2048x32-bfloat8_b-DRAM-4-1"
+  _LAST_TEST_NAME="all_reduce" pytest tests/nightly/t3000/ccl/test_all_reduce.py::test_ring_all_reduce_post_commit -k "2x4x2048x32-bfloat8_b-DRAM-4-1"
 
   # p2p: 1 test should be enough
   # trace test with device delay
-  pytest tests/nightly/t3000/ccl/test_point_to_point.py::test_point_to_point_with_device_delay -k tile
-  pytest tests/ttnn/unit_tests/operations/debug/test_generic_op.py::test_point_to_point
+  _LAST_TEST_NAME="point_to_point" pytest tests/nightly/t3000/ccl/test_point_to_point.py::test_point_to_point_with_device_delay -k tile
+  _LAST_TEST_NAME="generic_op" pytest tests/ttnn/unit_tests/operations/debug/test_generic_op.py::test_point_to_point
 
   # all broadcast: row major + tile test
   # both rm and tile test are called here
-  pytest tests/nightly/t3000/ccl/test_new_all_broadcast.py::test_all_broadcast_trace
+  _LAST_TEST_NAME="new_all_broadcast" pytest tests/nightly/t3000/ccl/test_new_all_broadcast.py::test_all_broadcast_trace
 
   # all to all dispatch: 1 test for 2d and 1 for 1d linear should be enough
   # fabric 1d linear test on cluster axis 0 as other CCL tests aren't testing on this axis
-  pytest tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-dram-dram-s128-7168-8-8-8-cluster_axis_0-2x4_grid-True-fabric_1d_linear]
+  _LAST_TEST_NAME="all_to_all_dispatch" pytest tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-dram-dram-s128-7168-8-8-8-cluster_axis_0-2x4_grid-True-fabric_1d_linear]
   # fabric 2d test on cluster axis 1
-  pytest tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_no_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-b1s3-l1-7168-8-8-cluster_col-2x4_grid-False-fabric_2d]
+  _LAST_TEST_NAME="all_to_all_dispatch" pytest tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_no_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-b1s3-l1-7168-8-8-cluster_col-2x4_grid-False-fabric_2d]
 
   # all to all combine: 1 test for 1d ring and 1 for 2d should be enough
-  pytest tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_1d_ring_axis_1]
+  _LAST_TEST_NAME="all_to_all_combine" pytest tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_1d_ring_axis_1]
   # fabric 2d test on cluster axis 0 - Re-enable this test when we have more T3K availability
   # pytest tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_2d_axis_0]
 
   # neighbor pad: 1D correctness check + 2D correctness check
-  pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "zeros_width_dim-check"
-  pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "small_5d_h0w1"
+  _LAST_TEST_NAME="neighbor_pad_async" pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "zeros_width_dim-check"
+  _LAST_TEST_NAME="neighbor_pad_async" pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "small_5d_h0w1"
 
   # Record the end time
   end_time=$(date +%s)
