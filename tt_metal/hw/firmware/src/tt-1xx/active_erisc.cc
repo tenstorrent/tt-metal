@@ -321,6 +321,15 @@ int __attribute__((noinline)) main(void) {
             // to reset its launch message read pointer.
             if (flag_disable[0] != 1) {
                 return 0;
+            } else if (go_message_signal == RUN_MSG_SOFT_QUIESCE) {
+                // STRATEGY_G (#42429): Soft-reset-free quiesce ACK.
+                // The fabric router kernel has already exited (TERMINATED). Host sent
+                // RUN_MSG_SOFT_QUIESCE to request an in-band state reset before restart.
+                // Reset launch_msg_rd_ptr so the next RUN_MSG_GO picks up a fresh launch
+                // message, then clear signal to DONE to ACK the host.
+                // No RISC reset needed — ETH PHY stays connected, no retraining.
+                mailboxes->launch_msg_rd_ptr = 0;
+                mailboxes->go_messages[0].signal = RUN_MSG_DONE;
             } else if (
                 go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST ||
                 go_message_signal == RUN_MSG_REPLAY_TRACE) {

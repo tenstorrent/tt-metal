@@ -186,6 +186,13 @@ public:
     // The mesh-level caller must then invoke launch_eth_cores_for_quiesce() to complete the ETH
     // launch in the correct cross-device order (MMIO before non-MMIO, then non-MMIO sequentially).
     void quiesce_and_restart_fabric_workers(bool defer_eth_launch = false);
+    // STRATEGY_G (#42429): Soft-reset-free quiesce prototype (MMIO, single channel N300).
+    // Terminates the fabric router via TERMINATE signal, then restarts it via RUN_MSG_SOFT_QUIESCE
+    // + RUN_MSG_GO — skipping configure_fabric_cores entirely. No assert/deassert RISC reset,
+    // no ETH PHY disruption, no link retraining. Returns false if conditions for soft restart
+    // are not met (non-MMIO, not single channel, no fabric_program_, etc.) so caller can fall
+    // back to the full quiesce_and_restart_fabric_workers() path.
+    bool soft_restart_fabric_workers();
     // FIX AE: Completes the deferred ETH write_launch_msg from quiesce_and_restart_fabric_workers.
     // Must be called after quiesce_and_restart_fabric_workers(defer_eth_launch=true).
     // No-op if no ETH launch is pending (e.g. Phase 3 was skipped due to relay broken).

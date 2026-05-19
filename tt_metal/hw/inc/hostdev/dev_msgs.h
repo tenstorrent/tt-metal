@@ -87,6 +87,10 @@ struct profiler_msg_t {
 // Messages for host to tell brisc to go
 constexpr uint32_t RUN_MSG_INIT = 0x40;
 constexpr uint32_t RUN_MSG_GO = 0x80;
+// STRATEGY_G (#42429): Soft-reset-free quiesce — host sends this after fabric router
+// terminates cleanly (TERMINATED) to request in-band state reset before RUN_MSG_GO restart.
+// ERISC ACKs by clearing back to RUN_MSG_DONE. No RISC reset, no ETH PHY disruption.
+constexpr uint32_t RUN_MSG_SOFT_QUIESCE = 0xa0;
 constexpr uint32_t RUN_MSG_RESET_READ_PTR = 0xc0;
 constexpr uint32_t RUN_MSG_RESET_READ_PTR_FROM_HOST = 0xe0;
 constexpr uint32_t RUN_MSG_REPLAY_TRACE = 0xf0;

@@ -3178,7 +3178,14 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
                     }
                 }
                 try {
-                    detail::WriteToDeviceL1(dev, eth_logical_core, ready_addr, ready_signal, CoreType::ETH);
+                    detail::WriteToDeviceL1(
+                        dev,
+                        eth_logical_core,
+                        ready_addr,
+                        std::span<const uint8_t>(
+                            reinterpret_cast<const uint8_t*>(ready_signal.data()),
+                            ready_signal.size() * sizeof(uint32_t)),
+                        CoreType::ETH);
                 } catch (const std::exception& e) {
                     log_warning(
                         tt::LogMetal,

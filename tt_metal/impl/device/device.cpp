@@ -3001,6 +3001,246 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
     }
 }
 
+// STRATEGY_G (#42429): Soft-reset-free quiesce prototype.
+//
+// Replaces the full quiesce_and_restart_fabric_workers() Phase 3 for the simple case:
+//   - MMIO device only (non-MMIO already skips reset via FIX N/FIX AD)
+//   - Single active ETH channel (N300 prototype target)
+//   - Clean TERMINATED state (fabric router exited normally)
+//   - fabric_program_ present (re-used without L1 reload)
+//
+// After a clean TERMINATED, ERISC BRISC is alive in the base-UMD dispatch loop
+// polling go_messages[0].signal. No RISC reset is needed:
+//   1. Send RUN_MSG_SOFT_QUIESCE → ERISC resets launch_msg_rd_ptr + ACKs with RUN_MSG_DONE
+//   2. write_launch_msg_to_core with send_go=true → ERISC picks up new kernel and starts
+//
+// Skips entirely: configure_fabric_cores() (assert/deassert RISC reset), WriteRuntimeArgs,
+// ConfigureDeviceWithProgram, l1_barrier — none needed since ERISC is already alive and
+// kernel_main() reinitializes all L1 state in Object Setup on every launch.
+//
+// Returns false if conditions are not met; caller falls back to quiesce_and_restart_fabric_workers().
+bool Device::soft_restart_fabric_workers() {
+    const auto sg_start = std::chrono::steady_clock::now();
+
+    // Early-out: MMIO only (non-MMIO already uses reset-free path via FIX N/FIX AD)
+    if (!this->is_mmio_capable()) {
+        return false;
+    }
+    // Early-out: need a fabric program to re-launch from
+    if (!fabric_program_) {
+        return false;
+    }
+    // Early-out: relay path broken → fall back to hard quiesce
+    if (fabric_relay_path_broken_) {
+        return false;
+    }
+
+    auto fabric_config = MetalContext::instance().get_fabric_config();
+    if (!tt_fabric::is_tt_fabric_config(fabric_config)) {
+        return false;
+    }
+
+    const auto& control_plane = MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& builder_ctx = fabric_context.get_builder_context();
+
+    if (builder_ctx.get_num_fabric_initialized_routers(this->id()) == 0) {
+        return false;
+    }
+
+    const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(this->id());
+    const auto& active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+
+    // Prototype: single-channel N300 only — multi-channel requires sequenced handshake logic
+    if (active_channels.size() != 1) {
+        log_debug(
+            tt::LogMetal,
+            "STRATEGY_G: Device {} — {} active channels (prototype supports 1 only) — falling back",
+            this->id(),
+            active_channels.size());
+        return false;
+    }
+
+    MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
+    auto& cluster = env_impl.get_cluster();
+    const auto& hal = env_impl.get_hal();
+    const auto& soc_desc = cluster.get_soc_desc(this->id());
+    const auto& logical_cores_used = fabric_program_->impl().logical_cores();
+
+    const auto [erisc_sync_addr, erisc_sync_status_unused] = builder_ctx.get_fabric_router_sync_address_and_status();
+    const auto [erisc_term_addr, erisc_term_signal] =
+        builder_ctx.get_fabric_router_termination_address_and_signal();
+    constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+    constexpr HalProgrammableCoreType aeth_type = HalProgrammableCoreType::ACTIVE_ETH;
+    const uint64_t go_addr = hal.get_dev_noc_addr(aeth_type, HalL1MemAddrType::GO_MSG);
+
+    for (const auto& [eth_chan_id, direction] : active_channels) {
+        const auto eth_logical_umd = soc_desc.get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+        const CoreCoord lc(eth_logical_umd.x, eth_logical_umd.y);
+        const auto phys_core = this->virtual_core_from_logical_core(lc, CoreType::ETH);
+        const tt_cxy_pair core_loc(this->id(), phys_core);
+
+        // ── Step 1: Confirm TERMINATED (or send TERMINATE and wait) ──────────────────
+        {
+            std::vector<uint32_t> status_buf(1, 0);
+            try {
+                detail::ReadFromDeviceL1(this, lc, erisc_sync_addr, sizeof(uint32_t), status_buf, CoreType::ETH);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "STRATEGY_G: Device {} chan={} edm_status read threw: {} — falling back",
+                    this->id(), eth_chan_id, e.what());
+                return false;
+            }
+
+            if (status_buf[0] != terminated_val) {
+                log_info(
+                    tt::LogMetal,
+                    "STRATEGY_G: Device {} chan={} pre_status=0x{:08x} — not TERMINATED, sending TERMINATE",
+                    this->id(), eth_chan_id, status_buf[0]);
+
+                // Send TERMINATE signal
+                std::vector<uint32_t> term_buf(1, erisc_term_signal);
+                try {
+                    detail::WriteToDeviceL1(this, lc, erisc_term_addr, term_buf, CoreType::ETH);
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "STRATEGY_G: Device {} chan={} TERMINATE write threw: {} — falling back",
+                        this->id(), eth_chan_id, e.what());
+                    return false;
+                }
+
+                // Wait for TERMINATED
+                constexpr uint32_t term_timeout_ms = 2000;
+                auto term_start = std::chrono::steady_clock::now();
+                bool terminated = false;
+                while (!terminated) {
+                    try {
+                        detail::ReadFromDeviceL1(
+                            this, lc, erisc_sync_addr, sizeof(uint32_t), status_buf, CoreType::ETH);
+                    } catch (...) {
+                        break;
+                    }
+                    if (status_buf[0] == terminated_val) {
+                        terminated = true;
+                        break;
+                    }
+                    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - term_start).count();
+                    if (elapsed_ms > term_timeout_ms) {
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                if (!terminated) {
+                    log_warning(
+                        tt::LogMetal,
+                        "STRATEGY_G: Device {} chan={} TERMINATE timeout (status=0x{:08x}) — falling back",
+                        this->id(), eth_chan_id, status_buf[0]);
+                    return false;
+                }
+                log_info(
+                    tt::LogMetal,
+                    "STRATEGY_G: Device {} chan={} TERMINATED after TERMINATE signal",
+                    this->id(), eth_chan_id);
+            } else {
+                log_info(
+                    tt::LogMetal,
+                    "STRATEGY_G: Device {} chan={} already TERMINATED — skipping TERMINATE signal",
+                    this->id(), eth_chan_id);
+            }
+        }
+
+        // ── Step 2: Send RUN_MSG_SOFT_QUIESCE and wait for RUN_MSG_DONE ACK ─────────
+        // ERISC resets launch_msg_rd_ptr=0 then writes go_messages[0].signal=RUN_MSG_DONE.
+        {
+            auto sq_msg = hal.get_dev_msgs_factory(aeth_type).create<dev_msgs::go_msg_t>();
+            sq_msg.view().signal() = static_cast<uint8_t>(dev_msgs::RUN_MSG_SOFT_QUIESCE);
+            cluster.write_core_immediate(
+                sq_msg.data(), sq_msg.size(), {static_cast<size_t>(this->id()), phys_core}, go_addr);
+
+            // Poll go_msg until signal == RUN_MSG_DONE
+            constexpr uint32_t ack_timeout_ms = 500;
+            auto ack_start = std::chrono::steady_clock::now();
+            bool acked = false;
+            while (!acked) {
+                auto ack_msg = hal.get_dev_msgs_factory(aeth_type).create<dev_msgs::go_msg_t>();
+                cluster.read_core(
+                    ack_msg.data(), ack_msg.size(), core_loc, go_addr & ~0x3ULL);
+                if (ack_msg.view().signal() == static_cast<uint8_t>(dev_msgs::RUN_MSG_DONE)) {
+                    acked = true;
+                    break;
+                }
+                auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - ack_start).count();
+                if (elapsed_ms > ack_timeout_ms) {
+                    log_warning(
+                        tt::LogMetal,
+                        "STRATEGY_G: Device {} chan={} RUN_MSG_SOFT_QUIESCE ACK timeout "
+                        "(signal=0x{:02x} after {}ms) — falling back",
+                        this->id(), eth_chan_id,
+                        static_cast<uint32_t>(ack_msg.view().signal()),
+                        elapsed_ms);
+                    return false;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            log_info(
+                tt::LogMetal,
+                "STRATEGY_G: Device {} chan={} RUN_MSG_SOFT_QUIESCE ACKed (launch_msg_rd_ptr reset)",
+                this->id(), eth_chan_id);
+        }
+
+        // ── Step 3: write_launch_msg_to_core with send_go=true ───────────────────────
+        // No firmware reload, no L1 clear — kernel_main() reinitializes all state in Object Setup.
+        {
+            bool found = false;
+            for (uint32_t pct_idx = 0; pct_idx < logical_cores_used.size(); pct_idx++) {
+                if (hal.get_core_type(pct_idx) != CoreType::ETH) {
+                    continue;
+                }
+                for (const auto& logical_core : logical_cores_used[pct_idx]) {
+                    if (logical_core.x != lc.x || logical_core.y != lc.y) {
+                        continue;
+                    }
+                    auto* kg = fabric_program_->impl().kernels_on_core(logical_core, pct_idx);
+                    dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
+                    dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();
+                    msg.kernel_config().host_assigned_id() = fabric_program_->get_runtime_id();
+                    tt::llrt::write_launch_msg_to_core(
+                        this->id(), phys_core, msg, go_msg, /* send_go= */ true);
+                    log_info(
+                        tt::LogMetal,
+                        "STRATEGY_G: Device {} chan={} write_launch_msg_to_core done (soft restart)",
+                        this->id(), eth_chan_id);
+                    found = true;
+                    break;
+                }
+                if (found) {
+                    break;
+                }
+            }
+            if (!found) {
+                log_warning(
+                    tt::LogMetal,
+                    "STRATEGY_G: Device {} chan={} ETH logical ({},{}) not found in fabric_program_ — falling back",
+                    this->id(), eth_chan_id, lc.x, lc.y);
+                return false;
+            }
+        }
+    }
+
+    auto sg_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - sg_start).count();
+    log_info(
+        tt::LogMetal,
+        "STRATEGY_G: Device {} soft_restart_fabric_workers complete — {} channel(s) "
+        "restarted without RISC reset in {}ms",
+        this->id(), active_channels.size(), sg_elapsed);
+    return true;
+}
+
 // FIX AE (#42429): Deferred ETH write_launch_msg for quiesce.
 //
 // This method is the second half of Phase 3 when called with defer_eth_launch=true.
@@ -4809,7 +5049,14 @@ void Device::wait_for_fabric_workers_ready() {
                             }
                         }
                         try {
-                            detail::WriteToDeviceL1(this, eth_lcore, ready_addr, ready_buf, CoreType::ETH);
+                            detail::WriteToDeviceL1(
+                                this,
+                                eth_lcore,
+                                ready_addr,
+                                std::span<const uint8_t>(
+                                    reinterpret_cast<const uint8_t*>(ready_buf.data()),
+                                    ready_buf.size() * sizeof(uint32_t)),
+                                CoreType::ETH);
                         } catch (const std::exception& e) {
                             log_warning(
                                 tt::LogMetal,
