@@ -251,10 +251,11 @@ class MLP(LightweightModule):
         seq_len = x.shape[-2]
         is_decode = mode == "decode" or seq_len == 1
 
-        if mode == "decode" or seq_len <= 256:
-            mem_cfg = ttnn.L1_MEMORY_CONFIG
-        else:
-            mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+        # Keep activations in L1 for all sequence lengths. Very long sequences
+        # (seq >= 1024) are split into 1024-tile chunks via ttnn.reshape below, so
+        # the per-chunk tensor is always ≤ local_intermediate × 1024 × 2 bytes ≈ 6 MB
+        # on TP=2 (local_intermediate=3072) or 12 MB on TP=1 — both well within L1.
+        mem_cfg = ttnn.L1_MEMORY_CONFIG
         if is_decode:
             gate_up_progcfg = self._decode_gate_up_progcfg
             down_progcfg = self._decode_down_progcfg

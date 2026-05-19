@@ -304,10 +304,10 @@ class DecoderLayer(LightweightModule):
             x = self.post_attention_layernorm(x)
         x = self.mlp(x, mode=mode)
         # Second residual add: this is the layer's *output*, returned to the caller.
-        # Decode-trace replay needs DRAM for stable addresses across iterations.
-        # Prefill is non-traced — keep the layer output in L1 so the next layer's
-        # input_layernorm doesn't pay a DRAM round-trip on the residual stream.
-        out_memcfg = ttnn.L1_MEMORY_CONFIG if mode == "prefill" else ttnn.DRAM_MEMORY_CONFIG
-        x = ttnn.add(residual, x, memory_config=out_memcfg)
+        # Keep in L1 for all modes — the decode path returns ~4 KB/token (Talker) or
+        # ~2 KB/token (CP), and the next layer reads it immediately, so DRAM round-trips
+        # waste bandwidth. tt-metal trace guarantees L1 address stability for deterministic
+        # op sequences (allocation pattern is identical across steps), so L1 is trace-safe.
+        x = ttnn.add(residual, x, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         return x, updated_kv_cache
