@@ -74,6 +74,7 @@ def _ace_step_log_ttnn_tensor(tag: str, t, *, ttnn) -> None:
 
 from ._ttnn import get_ttnn
 from .math_perf_env import (
+    ace_step_add_one,
     ace_step_binary_kwargs,
     ace_step_dit_attn_linear_program_config,
     ace_step_dit_fused_wkv_linear_program_config,
@@ -1334,8 +1335,7 @@ class TtAceStepDiTLayer:
             memory_config=_el_mc,
         )
         x_norm = _l1_act(x_norm)
-        ones = ttnn.ones_like(scale_msa, memory_config=_el_mc)
-        one_plus = ttnn.add(scale_msa, ones, **_bin_kw)
+        one_plus = ace_step_add_one(ttnn, scale_msa, **_bin_kw)
         x_scaled = ttnn.multiply(x_norm, one_plus, **_bin_kw)
         h = ttnn.add(x_scaled, shift_msa, **_bin_kw)
         if debug is not None and debug.get("enabled", False):
@@ -1391,8 +1391,7 @@ class TtAceStepDiTLayer:
         if debug is not None and debug.get("enabled", False):
             debug[f"{core_pfx}mlp_norm_out"] = x3
         x3 = _l1_act(x3)
-        ones2 = ttnn.ones_like(c_scale, memory_config=_el_mc)
-        one_plus2 = ttnn.add(c_scale, ones2, **_bin_kw)
+        one_plus2 = ace_step_add_one(ttnn, c_scale, **_bin_kw)
         x3_scaled = ttnn.multiply(x3, one_plus2, **_bin_kw)
         h3 = ttnn.add(x3_scaled, c_shift, **_bin_kw)
         if debug is not None and debug.get("enabled", False):

@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 import ttnn
 from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
+    ace_step_add_one,
     ace_step_binary_kwargs,
     ace_step_ensure_l1_activation,
     ace_step_linear_l1_memory_config,
@@ -173,8 +174,7 @@ class TtAceStepDiTOutputHead:
 
         shift_t = _l1(ttnn.to_layout(shift, ttnn.TILE_LAYOUT))
         scale_t = _l1(ttnn.to_layout(scale, ttnn.TILE_LAYOUT))
-        ones = ttnn.ones_like(scale_t, memory_config=_el_mc)
-        one_plus_scale = ttnn.add(scale_t, ones, **_bin_kw)
+        one_plus_scale = ace_step_add_one(ttnn, scale_t, **_bin_kw)
         scaled = ttnn.multiply(normed, one_plus_scale, **_bin_kw)
         modulated = ttnn.add(scaled, shift_t, **_bin_kw)
         modulated_rm = ttnn.to_layout(modulated, ttnn.ROW_MAJOR_LAYOUT)

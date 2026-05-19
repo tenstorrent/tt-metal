@@ -125,6 +125,22 @@ def ace_step_dit_linear_l1_memory_config(ttnn: Any):
     return ace_step_linear_l1_memory_config(ttnn)
 
 
+def ace_step_safe_deallocate(ttnn: Any, *tensors: Any) -> None:
+    """Best-effort ``ttnn.deallocate`` for optional / already-freed tensors."""
+    for t in tensors:
+        if t is None:
+            continue
+        try:
+            ttnn.deallocate(t)
+        except Exception:
+            pass
+
+
+def ace_step_add_one(ttnn: Any, tensor: Any, **kwargs: Any) -> Any:
+    """``tensor + 1`` via scalar add — avoids per-call ``ones_like`` / ``full`` allocation."""
+    return ttnn.add(tensor, 1.0, **kwargs)
+
+
 def ace_step_nlp_concat_heads(ttnn: Any, ctx: Any, *, l1_mc: Any | None = None) -> Any:
     """Replace output permute+reshape with ``ttnn.experimental.nlp_concat_heads``.
 

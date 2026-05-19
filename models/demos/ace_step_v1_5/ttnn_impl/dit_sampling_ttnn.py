@@ -201,6 +201,16 @@ def apg_guidance_velocity_ttnn(
 
 
 def _const_tile_bc(shape: tuple[int, int, int], value: float, *, device: Any, dram: Any) -> ttnn.Tensor:
+    """Fill a TILE FP32 tensor on device (no host ``numpy`` + H2D per ADG step)."""
+    if hasattr(ttnn, "full"):
+        return ttnn.full(
+            shape,
+            float(value),
+            device=device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=dram,
+        )
     b_, t_, c_ = shape
     arr = np.full((b_, t_, c_), float(value), dtype=np.float32)
     rm = ttnn.as_tensor(
@@ -296,12 +306,10 @@ def adg_guidance_velocity_ttnn(
     ratio = ttnn.div(sin_nn, denom_s)
 
     perp_btc = ttnn.reshape(perp_flat, (b_, t__, c__), **_sr)
-    # ratio / sin_theta are [B, T, 1] (see apg_guidance.adg_forward); broadcast to C like PyTorch.
-    ratio_btc = ttnn.repeat_interleave(ratio, int(c__), dim=2)
-    prim = ttnn.multiply(perp_btc, ratio_btc, memory_config=dram)
+    # ratio / sin_theta are [B, T, 1]; multiply/compare broadcast on dim 2 like PyTorch.
+    prim = ttnn.multiply(perp_btc, ratio, memory_config=dram)
 
-    sin_btc = ttnn.repeat_interleave(sin_theta, int(c__), dim=2)
-    ms = ttnn.le(sin_btc, float(1e-3))
+    ms = ttnn.le(sin_theta, float(1e-3))
     alt = ttnn.multiply(perp_btc, float(w_eff), memory_config=dram)
     latent_p = ttnn.where(ms, alt, prim, memory_config=dram)
     latent_new = ttnn.add(latent_v_new, latent_p, memory_config=dram)

@@ -427,6 +427,8 @@ class AceStepE2EModel:
         self._condition_encoder: Optional[TtAceStepInstrumentalConditionEncoder] = None
         self._tt_vae: Optional[TtOobleckVaeDecoder] = None
         self._ctx_bt128_cached: Optional[ttnn.Tensor] = None
+        # CFG null embedding expanded to encoder seq length; keyed by (hidden_dim, seq_len).
+        self._null_rep_by_shape: dict[tuple[int, int], ttnn.Tensor] = {}
 
         self._load_silence_latent()
 
@@ -496,6 +498,24 @@ class AceStepE2EModel:
         else:
             raise RuntimeError(f"Unexpected silence_latent shape: {tuple(silence.shape)}")
         self._silence_np = silence.contiguous().numpy()
+
+    def _expanded_null_emb(self, null_emb_tt: ttnn.Tensor, *, s_enc: int, d_enc: int) -> ttnn.Tensor:
+        """Expand null condition embedding to ``[1, s_enc, d_enc]`` (cached per shape)."""
+        key = (d_enc, s_enc)
+        cached = self._null_rep_by_shape.get(key)
+        if cached is not None:
+            return cached
+        _sr = ace_step_reshape_kwargs(ttnn)
+        null_4d = ttnn.reshape(null_emb_tt, (1, 1, 1, d_enc), **_sr)
+        null_rep_4d = ttnn.repeat(null_4d, (1, 1, s_enc, 1))
+        null_rep = ttnn.reshape(null_rep_4d, (1, s_enc, d_enc), **_sr)
+        try:
+            ttnn.deallocate(null_4d)
+            ttnn.deallocate(null_rep_4d)
+        except Exception:
+            pass
+        self._null_rep_by_shape[key] = null_rep
+        return null_rep
 
     def encode_text(self, prompt: str) -> tuple[ttnn.Tensor, np.ndarray]:
         """Encode a text prompt with TTNN Qwen (HF tokenizer → NumPy tokens only).
@@ -655,17 +675,11 @@ class AceStepE2EModel:
         if do_cfg:
             d_enc = int(enc_hs_tt_one.shape[-1])
             s_enc = int(enc_hs_tt_one.shape[1])
-            _sr = ace_step_reshape_kwargs(ttnn)
-            null_4d = ttnn.reshape(null_emb_tt, (1, 1, 1, d_enc), **_sr)
-            null_rep_4d = ttnn.repeat(null_4d, (1, 1, s_enc, 1))
-            null_rep = ttnn.reshape(null_rep_4d, (1, s_enc, d_enc), **_sr)
+            null_rep = self._expanded_null_emb(null_emb_tt, s_enc=s_enc, d_enc=d_enc)
             enc_tt_pipe = ttnn.concat([enc_hs_tt_one, null_rep], dim=0)
             ctx_tt_pipe = concat_duplicate_batch(ctx_tt_one)
             try:
                 ttnn.deallocate(enc_hs_tt_one)
-                ttnn.deallocate(null_4d)
-                ttnn.deallocate(null_rep_4d)
-                ttnn.deallocate(null_rep)
             except Exception:
                 pass
         else:

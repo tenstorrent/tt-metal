@@ -110,12 +110,5 @@ class TtOobleckResidualUnit:
             if pad > 0:
                 x = x[:, pad : pad + y_T, :]
 
-        x4 = ttnn.unsqueeze(x, 1)
-        y4 = ttnn.unsqueeze(y, 1)
-        x4 = ttnn.to_layout(x4, ttnn.TILE_LAYOUT)
-        y4 = ttnn.to_layout(y4, ttnn.TILE_LAYOUT)
-        z4 = ttnn.add(x4, y4)
-        ttnn.deallocate(y4)
-        z = ttnn.squeeze(z4, 1)
-        z = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT)
-        return z
+        # Both branches are ROW_MAJOR [B,T,C] after snake/conv; elementwise add needs no TILE rank-4 path.
+        return ttnn.add(x, y)
