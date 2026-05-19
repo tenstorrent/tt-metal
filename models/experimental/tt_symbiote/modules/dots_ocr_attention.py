@@ -130,17 +130,17 @@ class TTNNDotsOCRAttention(TTNNModule):
                 k_chunk_size=512,
                 exp_approx_mode=True,
             )
-            # self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
-            #     compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
-            #     q_chunk_size=0,
-            #     k_chunk_size=0,
-            #     exp_approx_mode=True,
-            # )
+            self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                q_chunk_size=0,
+                k_chunk_size=0,
+                exp_approx_mode=True,
+            )
             self.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
-                packer_l1_acc=False,
+                packer_l1_acc=True,
             )
             # Decode SDPA: HiFi2 (was LoFi in commit d1b17d1a3c6 -- swapped back
             # because LoFi at the per-token batch=1 K/V cache reads produces
@@ -152,7 +152,7 @@ class TTNNDotsOCRAttention(TTNNModule):
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
-                packer_l1_acc=False,
+                packer_l1_acc=True,
             )
 
         # Override QKV compute config: HiFi2 for decode

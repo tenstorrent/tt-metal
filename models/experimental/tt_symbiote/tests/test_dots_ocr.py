@@ -314,6 +314,7 @@ def test_dots_ocr_decode_full_decoder_l1_boundaries(mesh_device):
     seen_boundaries = {layer_idx: {"attn": False, "mlp": False} for layer_idx in range(len(decoder_layers))}
 
     for layer_idx, layer in enumerate(decoder_layers):
+        tracy.signpost("layer_forward_start", layer_idx)
         original_attn_forward = layer.self_attn.forward
         original_mlp_forward = layer.mlp.forward
 

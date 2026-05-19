@@ -407,7 +407,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
             input_tensor,
             self.tt_weight,
             bias=fused_bias,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             memory_config=_decode_linear_output_memory_config(self.device, input_shape),
             compute_kernel_config=self.compute_kernel_config,
             program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
