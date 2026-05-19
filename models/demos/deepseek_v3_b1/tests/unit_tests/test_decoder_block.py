@@ -532,8 +532,10 @@ def skip_known_decoder_moe_failure(
     ],
 )
 # SRAM placement scenario. "default" runs in CI and resolves SRAM IDs through the
-# same code path as the production demo (resolve_sram_expert_ids → SRAM_PLACEMENT
-# / DEFAULT_SRAM_EXPERT_IDS). All explicit scenarios are opt-in (skip_post_commit).
+# same code path as the production demo: prepare_moe_layer_weights builds sram_slots
+# from sram_hot_experts (routing-frequency ranking), and the final sram_expert_ids
+# is derived from sram_slots.slot_experts post-L1-fit. All explicit scenarios are
+# opt-in (skip_post_commit).
 @pytest.mark.parametrize(
     "sram_scenario",
     [
@@ -649,14 +651,6 @@ def test_decoder(
     if use_real_weights and not os.getenv("DEEPSEEK_V3_HF_MODEL"):
         pytest.skip("DEEPSEEK_V3_HF_MODEL must be set to run real MTP layer tests")
 
-    # Force-disable standalone reference runs for clean MoE profiling. Standalone
-    # AttentionBlock.op / MoeOp.op use different programs whose zone names collide
-    # with the fused decoder kernel's zones (RMSNORM, ELTWISE_ADD, etc). Only the
-    # fused DecoderBlock.execute run produces measurable MoE timings.
-    # Revert before merging.
-    validate_standalone_mla = False
-    validate_standalone_moe = False
-
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     device_grid_size = submesh.compute_with_storage_grid_size()
 
@@ -699,11 +693,16 @@ def test_decoder(
             state_dict, submesh, ROUTED_EXPERT_LAYER_IDX
         )
 
-    # SRAM placement scenarios (independent of sram_hot_experts above; feeds the
-    # SRAM kernel pipeline via sram_expert_ids). All paths go through
-    # resolve_sram_expert_ids (the same helper the demo's WeightProvider uses),
-    # with an override list per scenario. "default" passes None so
-    # SRAM_PLACEMENT / DEFAULT_SRAM_EXPERT_IDS decides — matching production exactly.
+    # SRAM placement scenarios — feeds the SRAM kernel pipeline via sram_expert_ids.
+    #   "default":  no override; sram_hot_experts (built above when 256-experts) is
+    #               used by prepare_moe_layer_weights to build sram_slots, and the
+    #               final sram_expert_ids is derived from sram_slots.slot_experts
+    #               *after* prepare returns (post-L1-fit truncation).
+    #   "no_sram":  explicitly disable SRAM (clear sram_hot_experts so sram_slots
+    #               isn't built, and override=[] so kernel pipeline allocates nothing).
+    #   explicit (t1_picked, t8_*, ...):  override list wins; sram_hot_experts may
+    #               still build sram_slots but the kernel pipeline + indices use
+    #               the override.
     #
     # Rigged: scenarios split TopK winners vs non-winners so *_picked fires at runtime
     #         and *_not_picked stays idle (exercises the is_sram_expert filter).
@@ -713,6 +712,10 @@ def test_decoder(
         sram_override = None
     elif sram_scenario == "no_sram":
         sram_override = []
+        # Disable sram_slots build so SRAM truly doesn't fire.
+        sram_hot_experts = None
+        sram_core_grids = None
+        sram_assigner = None
     elif rigged_expert_ids is not None:
         winners = [grp * 32 + e for grp in rigged_group_ids for e in rigged_expert_ids[grp]]
         non_winners = [eid for eid in range(256) if eid not in winners]
@@ -760,8 +763,11 @@ def test_decoder(
             "t8_all_picked": 8,
         }[sram_scenario]
         sram_override = list(range(scenario_count))
-    sram_expert_ids = resolve_sram_expert_ids(ROUTED_EXPERT_LAYER_IDX, sram_override)
-    logger.info(f"SRAM scenario {sram_scenario!r}: sram_expert_ids={sram_expert_ids}")
+    sram_expert_ids = resolve_sram_expert_ids(ROUTED_EXPERT_LAYER_IDX, sram_override, is_moe=True)
+    logger.info(
+        f"SRAM scenario {sram_scenario!r}: initial sram_expert_ids={sram_expert_ids} "
+        f"(may be replaced by sram_slots.slot_experts post-prepare for 'default' scenario)"
+    )
 
     # Log BSPM precision distribution for SRAM-placed experts. Helps explain PCC:
     # if all tiles are bfp8, the BSPM would be near bf16 quality; if many bfp0/bfp2,
@@ -810,6 +816,16 @@ def test_decoder(
         bspm_dir=_optional_bspm_dir(),
         sram_expert_ids=sram_expert_ids,
     )
+
+    # When no explicit override (the "default" scenario) and sram_slots got built,
+    # the kernel-pipeline weights are for sram_slots.slot_experts (L1-fit-truncated
+    # from sram_hot_experts). Use that same list for create_gate_indices_tensor's
+    # bit-15 encoding so indices and weights agree.
+    if not sram_expert_ids and layer_weights.sram_slots is not None:
+        sram_expert_ids = list(layer_weights.sram_slots.slot_experts)
+        logger.info(
+            f"SRAM scenario {sram_scenario!r}: final sram_expert_ids from sram_slots.slot_experts = {sram_expert_ids}"
+        )
 
     logger.info("Creating decoder block tensors...")
     d = create_decoder_block_tensors(
