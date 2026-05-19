@@ -23,6 +23,7 @@ from models.experimental.pi0_5.common.configs import (
     SuffixConfig,
 )
 from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader as PI0WeightLoader
+from models.experimental.pi0_5.tt.ttnn_common import denoise_loop_fp32
 from models.experimental.pi0_5.tt.ttnn_prefix import PrefixEmbeddingTTNN
 
 from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
@@ -405,15 +406,30 @@ class Pi0_5ModelTTNN:
             x_t_ttnn = self.x_t_ttnn
         fast_path = batch_size == 1
 
+        # PI0_DENOISE_FP32=1 keeps the Euler accumulator in fp32 across the
+        # 10 denoise steps. bf16+bf16=bf16 accumulates ~bf16_eps · ||x_t||
+        # rounding per step; fp32 staging eliminates that. Adds 2 typecasts
+        # per step (bf16→fp32 for velocity, fp32→bf16 for embed_actions input).
+        fp32_loop = denoise_loop_fp32()
+        if fp32_loop:
+            x_t_fp32 = ttnn.typecast(x_t_ttnn, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+
         for i in range(num_steps):
             t = timesteps[i]
             t_next = timesteps[i + 1]
             dt = t_next - t
 
+            if fp32_loop:
+                # embed_actions / expert / project_output run in bf16 — cast a
+                # transient view of x_t back to bf16 just for this step's forward.
+                x_t_bf16 = ttnn.typecast(x_t_fp32, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            else:
+                x_t_bf16 = x_t_ttnn
+
             if fast_path:
                 # OPTIMIZATION: adarms_cond is precomputed at init (deterministic
                 # per step); only the action embedding depends on x_t.
-                suffix_embs = self.suffix_embedding.embed_actions(x_t_ttnn)
+                suffix_embs = self.suffix_embedding.embed_actions(x_t_bf16)
                 adarms_cond = self._adarms_cond_per_step_bs1[i]
                 precomputed_block_mods = self._block_mods_per_step[i]
                 precomputed_final_mod = self._final_mod_per_step[i]
@@ -421,9 +437,12 @@ class Pi0_5ModelTTNN:
                 assert timesteps_ttnn is not None
                 t_tensor = ttnn.slice(timesteps_ttnn, [0, i], [batch_size, i + 1])
                 t_tensor = ttnn.reshape(t_tensor, (batch_size,))
-                suffix_embs, _, _, adarms_cond = self.embed_suffix(state, x_t_ttnn, t_tensor)
+                suffix_embs, _, _, adarms_cond = self.embed_suffix(state, x_t_bf16, t_tensor)
                 precomputed_block_mods = None
                 precomputed_final_mod = None
+
+            if fp32_loop:
+                ttnn.deallocate(x_t_bf16)
 
             expert_output, _ = self.backbone.forward_expert(
                 suffix_embs,
@@ -439,12 +458,27 @@ class Pi0_5ModelTTNN:
             velocity = self.suffix_embedding.project_output(expert_output)
             ttnn.deallocate(expert_output)
 
-            velocity_scaled = ttnn.mul(velocity, dt, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(velocity)
+            if fp32_loop:
+                # Cast velocity to fp32 so the multiply-add accumulates without
+                # bf16 rounding noise.
+                velocity_fp32 = ttnn.typecast(velocity, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(velocity)
+                velocity_scaled = ttnn.mul(velocity_fp32, dt, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(velocity_fp32)
+                x_t_new = ttnn.add(x_t_fp32, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(velocity_scaled)
+                ttnn.deallocate(x_t_fp32)
+                x_t_fp32 = x_t_new
+            else:
+                velocity_scaled = ttnn.mul(velocity, dt, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(velocity)
+                x_t_new = ttnn.add(x_t_ttnn, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(velocity_scaled)
+                x_t_ttnn = x_t_new
 
-            x_t_new = ttnn.add(x_t_ttnn, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(velocity_scaled)
-            x_t_ttnn = x_t_new
+        if fp32_loop:
+            x_t_ttnn = ttnn.typecast(x_t_fp32, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(x_t_fp32)
 
         # Slice off the phantom rows (we always host-pad x_t to ah_padded
         # at init / sample-call time, regardless of keep_padded).
