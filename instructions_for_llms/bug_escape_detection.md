@@ -216,6 +216,7 @@ pass_streaks AS (
   FROM island_summary
   WHERE SUCCESS = TRUE
     AND streak_length >= 10  -- require 10+ consecutive passes after fix
+    AND (streak_length <= 1 OR DATEDIFF('hour', streak_start_ts, streak_end_ts) / NULLIF(streak_length - 1, 0) <= 24)  -- passes must be dense (avg ≤24h between runs) — filters scheduling gaps
 ),
 transitions AS (
   SELECT
@@ -232,6 +233,7 @@ transitions AS (
     ON fs.CICD_TEST_CASE_ID = ps.CICD_TEST_CASE_ID
     -- True adjacency: pass streak begins on the very next run after the fail streak ends
     AND ps.first_pass_rn = fs.last_fail_rn + 1
+  WHERE DATEDIFF('hour', fs.last_fail_ts, ps.first_pass_ts) <= 72  -- gap > 72h likely a scheduling pause, not a fix
 ),
 -- Most recent transition per test, joined back to get test metadata
 result AS (
@@ -239,13 +241,27 @@ result AS (
     t.CICD_TEST_CASE_ID,
     r.test_name,
     r.test_filepath,
+    CASE
+      WHEN r.test_filepath LIKE '%models/%' OR r.test_filepath LIKE '%demos/%' THEN 4
+      WHEN r.test_filepath LIKE '%ttnn/%' OR r.test_filepath LIKE '%tt_eager%' THEN 3
+      WHEN r.test_filepath LIKE '%tt_metal/%' AND r.test_filepath NOT LIKE '%tt_metal/hw/%' THEN 2
+      WHEN r.test_filepath LIKE '%tt_metal/hw/%' THEN 1
+      ELSE 0
+    END AS test_layer,
     t.last_failing_sha,
     t.first_passing_sha,
     t.consecutive_fail_count,
     t.consecutive_pass_count,
     t.last_fail_ts,
     t.first_pass_ts,
-    t.norm_signature
+    DATEDIFF('hour', t.last_fail_ts, t.first_pass_ts) AS gap_hours,
+    t.norm_signature,
+    CASE
+      WHEN t.norm_signature LIKE '%tt_metal/hw/%' THEN 1
+      WHEN t.norm_signature LIKE '%tt_metal/%' THEN 2
+      WHEN t.norm_signature LIKE '%ttnn/%' THEN 3
+      ELSE NULL
+    END AS error_layer_hint  -- hints at fix layer from error message; if error_layer_hint < test_layer, strong vertical escape signal
   FROM transitions t
   JOIN (SELECT DISTINCT CICD_TEST_CASE_ID, test_name, test_filepath FROM runs) r
     ON t.CICD_TEST_CASE_ID = r.CICD_TEST_CASE_ID
@@ -253,6 +269,7 @@ result AS (
 )
 SELECT *
 FROM result
+WHERE test_layer >= 3  -- only L3 (ttnn) and L4 (models/demos) — L1/L2 tests that fail are unlikely to be vertical escapes
 ORDER BY last_fail_ts DESC
 LIMIT 50;
 ```
