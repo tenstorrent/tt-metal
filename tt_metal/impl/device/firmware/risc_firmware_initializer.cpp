@@ -217,42 +217,8 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             reset_cores(device_id);
         }
 
-        // ── Pass 2a: initialize non-MMIO devices (relay still alive) ──
-        for (tt::ChipId device_id : device_ids) {
-            if (mmio_ids_set.count(device_id)) continue;
-            // FIX NZ (#42429): skip if relay is already broken (detected during Pass 1 reset_cores).
-            if (cluster_.is_relay_broken(device_id)) {
-                log_warning(
-                    tt::LogAlways,
-                    "run_launch_phase: FIX NZ — skipping initialize_and_launch_firmware for "
-                    "non-MMIO device {} (relay broken). Firmware will be loaded on next clean init. (#42429)",
-                    device_id);
-                continue;
-            }
-            // FIX BX (#42429): belt-and-suspenders — catch relay failures that arise during
-            // initialize_and_launch_firmware itself (FIX BW marks relay_broken and re-throws).
-            try {
-                initialize_and_launch_firmware(device_id);
-            } catch (const std::exception& e) {
-                log_warning(
-                    tt::LogAlways,
-                    "run_launch_phase: FIX BX — initialize_and_launch_firmware threw for "
-                    "non-MMIO device {} (relay likely broken mid-init): {}. "
-                    "Skipping — fabric init will handle on next session. (#42429)",
-                    device_id,
-                    e.what());
-            }
-        }
-
-        // ── Pass 2b: initialize MMIO devices (may write fw_launch_addr → kills relay) ──
-        // All non-MMIO reset_cores and init_firmware calls are done; relay death is now safe.
-        for (tt::ChipId device_id : device_ids) {
-            if (!mmio_ids_set.count(device_id)) continue;
-            initialize_and_launch_firmware(device_id);
-        }
-
-        // FIX TV (#42429): Wait for MMIO ETH channels to complete rebooting to base-UMD
-        // firmware after reset_cores() may have PCIe-force-reset them.
+        // FIX TV (#42429): Wait for MMIO ETH channels to confirm base-UMD firmware before
+        // Pass 2a writes any non-MMIO firmware (relay path goes through MMIO ETH channels).
         //
         // Root cause of probe_dead regression (run 25295860739):
         //   Session N left MMIO ETH channels running FABRIC firmware (degraded-cluster
@@ -266,10 +232,11 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
         //   probe_dead on MMIO devices.  probe_dead on MMIO cascades to relay_timeout on
         //   non-MMIO (relay path not yet established) → all ETH channels dead.
         //
-        // Fix: poll MMIO ETH heartbeat after the reset_cores() loop.  If channels are
-        // already running base-UMD (no force-reset happened), they respond in <1 poll
-        // interval (~10ms, negligible overhead).  If they were force-reset, we wait up to
-        // kMmioEthRebootMs for the heartbeat to become non-zero and start incrementing.
+        // PLACEMENT (#42429 follow-up): Must run HERE (between Pass 1 and Pass 2a), NOT
+        // after Pass 2b.  Pass 2a writes to non-MMIO devices route through MMIO ETH relay
+        // channels.  If those channels are still mid-reboot when Pass 2a begins, the relay
+        // writes time out exactly as terminate_stale_erisc_routers does.  Confirming MMIO
+        // ETH readiness here ensures the relay is fully servicing before any non-MMIO I/O.
         if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
             hal_.get_eth_fw_is_cooperative() && get_control_plane_) {
             const uint32_t hb_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
@@ -367,6 +334,41 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                 }
             }
         }
+
+        // ── Pass 2a: initialize non-MMIO devices (relay still alive) ──
+        for (tt::ChipId device_id : device_ids) {
+            if (mmio_ids_set.count(device_id)) continue;
+            // FIX NZ (#42429): skip if relay is already broken (detected during Pass 1 reset_cores).
+            if (cluster_.is_relay_broken(device_id)) {
+                log_warning(
+                    tt::LogAlways,
+                    "run_launch_phase: FIX NZ — skipping initialize_and_launch_firmware for "
+                    "non-MMIO device {} (relay broken). Firmware will be loaded on next clean init. (#42429)",
+                    device_id);
+                continue;
+            }
+            // FIX BX (#42429): belt-and-suspenders — catch relay failures that arise during
+            // initialize_and_launch_firmware itself (FIX BW marks relay_broken and re-throws).
+            try {
+                initialize_and_launch_firmware(device_id);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogAlways,
+                    "run_launch_phase: FIX BX — initialize_and_launch_firmware threw for "
+                    "non-MMIO device {} (relay likely broken mid-init): {}. "
+                    "Skipping — fabric init will handle on next session. (#42429)",
+                    device_id,
+                    e.what());
+            }
+        }
+
+        // ── Pass 2b: initialize MMIO devices (may write fw_launch_addr → kills relay) ──
+        // All non-MMIO reset_cores and init_firmware calls are done; relay death is now safe.
+        for (tt::ChipId device_id : device_ids) {
+            if (!mmio_ids_set.count(device_id)) continue;
+            initialize_and_launch_firmware(device_id);
+        }
+
     }
     initialized_ = true;
 }
@@ -1753,6 +1755,42 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
                             mmio_host,
                             device_id);
                         propagate_dead_mmio_peers();
+                    }
+                }
+                // FIX ZA (#42429): erisc_app_still_running() returns false when fw_launch_addr==0,
+                // but a zero flag does NOT confirm that UMD base firmware is actually running.
+                // An ETH core in a bad intermediate state (process killed mid-reboot, firmware
+                // hung before writing heartbeat, etc.) also has fw_launch_addr==0.  If such a
+                // core is used as the relay bridge in Pass 2a of run_launch_phase, the first
+                // write_core_immediate() to it blocks for the full 5-second UMD timeout before
+                // throwing — degrading init by ~5s × (non-MMIO device count) = ~20s on T3K.
+                //
+                // Guard: for non-MMIO cores where still_running==false, probe the heartbeat
+                // register via the relay (safe in Pass 1 — relay guaranteed alive, no
+                // fw_launch_addr written yet).  UMD base firmware stamps 0xABCDxxxx into this
+                // register; anything else means the core is not in a known-good relay state.
+                // Force-reset it so Pass 2a writes have a healthy relay to route through.
+                if (!still_running && !relay_dead && device_id != mmio_host) {
+                    const uint32_t hb_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
+                    if (hb_addr != 0u) {
+                        try {
+                            auto hb_data = cluster_.read_core(device_id, virtual_core, hb_addr, sizeof(uint32_t));
+                            if ((hb_data[0] >> 16) != 0xABCDu) {
+                                log_warning(
+                                    tt::LogAlways,
+                                    "FIX ZA (#42429): device {} core {} fw_launch_addr==0 but "
+                                    "heartbeat=0x{:08x} (expected 0xABCDxxxx for UMD base). "
+                                    "ETH core in bad/unknown state — forcing reset.",
+                                    device_id,
+                                    virtual_core.str(),
+                                    hb_data[0]);
+                                still_running = true;
+                            }
+                        } catch (...) {
+                            // Relay read failed — treat as dead relay
+                            relay_dead = true;
+                            still_running = true;
+                        }
                     }
                 }
                 // FIX PF (GAP-51): When erisc_app_still_running() returns true, the non-zero
