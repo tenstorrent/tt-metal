@@ -107,7 +107,7 @@ class LocalFiveHzLMHandler:
         # (narrow valid-audio slice in codes phase, or full-vocab in other CFG branches). Strict TTNN.
         # Wired from run_prompt_to_wav after the same TTNN device is opened for Qwen caption encoding.
         self._ttnn_logits_device = None
-        # Optional: experimental TTNN causal LM (ace_step_ds_r1_qwen); requires ttnn_causal_device at initialize.
+        # Optional: experimental TTNN causal LM (qwen_tt_transformers_lm); requires ttnn_causal_device at initialize.
         self._ttnn_causal_device = None
         self._experimental_ttnn_causal_lm = False
         # True only after successful load of AceStepFiveHzExperimentalTtnnCausalLM (batch=1; no LM CFG).
