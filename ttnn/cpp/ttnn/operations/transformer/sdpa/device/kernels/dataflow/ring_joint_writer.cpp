@@ -34,7 +34,7 @@ void read_prev_output_and_lse(
     const uint32_t nb,
     const uint32_t nq,
     const uint32_t Sq_chunk_t,
-    const Slice out_slice,
+    const Slice& out_slice,
     const uint32_t end_seq_tile,
     const uint32_t stats_seq_start_tile,
     const uint32_t stats_seq_end_tile,
@@ -68,7 +68,7 @@ void issue_restore_reads(
     const uint32_t nb,
     const uint32_t nq,
     const uint32_t Sq_chunk_t,
-    const Slice out_slice,
+    const Slice& out_slice,
     const uint32_t stats_seq_start_tile,
     const uint32_t stats_seq_end_tile,
     const uint32_t sum_offset,
@@ -77,30 +77,26 @@ void issue_restore_reads(
     const uint32_t cb_sum_in,
     const uint32_t tile_bytes,
     const uint32_t stats_tile_bytes) {
-    // All accumulator tiles are valid (we wrote them); pass end_seq_tile=UINT32_MAX so
-    // issue_reads' bound = shape and no zero-fill tail fires. Decouples restore from
-    // ring_id, enabling cross-ring prefetch.
-    constexpr uint32_t end_seq_tile = 0xFFFFFFFF;
-
-    // Issue output reads (reserve + async reads, no barrier).
+    // All accumulator tiles are valid (we wrote them) — bypass issue_reads' bound/valid_rows
+    // compute and the zero-fill stub; dispatch directly to issue_block_reads. Decouples
+    // restore from ring_id, enabling cross-ring prefetch.
     const uint32_t out_rows = out_slice.get_d2_size();
     const uint32_t out_cols = out_slice.get_d3_size();
     const uint32_t out_num_tiles = out_rows * out_cols;
     cb_reserve_back(cb_prev_out, out_num_tiles);
-    uint32_t barrier_count = 0;
-    cat_out_generator.issue_reads(
-        out_slice.d0,
-        out_slice.d1,
-        out_slice.d2_start,
-        out_slice.d3_start,
+    uint32_t out_barrier_count = 0;
+    issue_block_reads(
+        cat_out_generator.reader,
+        cat_out_generator.tensor_shape.id_of(out_slice.d0, out_slice.d1, out_slice.d2_start, out_slice.d3_start),
+        cat_out_generator.tensor_shape.strides[2],
         out_rows,
         out_cols,
-        end_seq_tile,
+        /*dst_row_origin=*/0,
         get_write_ptr(cb_prev_out),
         /*outer_stride=*/out_cols * tile_bytes,
         /*inner_stride=*/tile_bytes,
         /*barrier_threshold=*/0,
-        barrier_count);
+        out_barrier_count);
 
     // Stats drains: single-column linear reads. Hoist id_of once per drain; advance by
     // strides[2] per row. All tiles assumed valid (no bounds clamp needed).
@@ -231,7 +227,7 @@ void write_output_and_lse(
     const uint32_t nb,
     const uint32_t nq,
     const uint32_t Sq_chunk_t,
-    const Slice out_slice,
+    const Slice& out_slice,
     const uint32_t end_seq_tile,
     const uint32_t stats_seq_start_tile,
     const uint32_t stats_seq_end_tile,

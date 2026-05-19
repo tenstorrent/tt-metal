@@ -982,6 +982,24 @@ inline void issue_block_writes(
     }
 }
 
+struct Slice {
+    uint32_t d0;  // batch dimension
+    uint32_t d1;  // head dimension
+
+    uint32_t d2_start;  // sequence start
+    uint32_t d2_end;    // sequence end
+    uint32_t d3_start;  // feature start
+    uint32_t d3_end;    // feature end
+
+    Slice() = default;
+
+    Slice(uint32_t d0, uint32_t d1, uint32_t d2_start, uint32_t d2_end, uint32_t d3_start, uint32_t d3_end) :
+        d0(d0), d1(d1), d2_start(d2_start), d2_end(d2_end), d3_start(d3_start), d3_end(d3_end) {}
+
+    uint32_t get_d2_size() const { return d2_end - d2_start; }
+    uint32_t get_d3_size() const { return d3_end - d3_start; }
+};
+
 template <typename FirstReaderType, typename SecondReaderType>
 struct CatAddrGenerator {
     FirstReaderType first_reader;
@@ -1005,33 +1023,30 @@ struct CatAddrGenerator {
         first_seq_padded(first_seq_padded),
         second_seq_padded(second_seq_padded) {}
 
-    // Issue async NoC reads for a (rows × cols) block to L1. No barrier — caller must
-    // noc_async_read_barrier(). Splits [d2_start, d2_start+rows) into up to four segments
+    // Issue async NoC reads for a slice to L1. No barrier — caller must
+    // noc_async_read_barrier(). Splits [slice.d2_start, slice.d2_end) into up to four segments
     // (first tensor / gap / second tensor / tail); each valid segment hoists id_of once.
     void issue_reads(
-        uint32_t d0,
-        uint32_t d1,
-        uint32_t d2_start,
-        uint32_t d3_start,
-        uint32_t rows,
-        uint32_t cols,
+        const Slice& slice,
         uint32_t end_seq_tile,
         uint32_t dst_addr,
         uint32_t outer_stride,
         uint32_t inner_stride,
-        uint32_t barrier_threshold,
-        uint32_t& barrier_count) const {
-        const uint32_t d2_end = d2_start + rows;
+        uint32_t barrier_threshold) const {
+        const uint32_t d2_start = slice.d2_start;
+        const uint32_t d2_end = slice.d2_end;
+        const uint32_t cols = slice.get_d3_size();
         const uint32_t first_end = first_shape.shape[2];
         const uint32_t gap_end = first_seq_padded;
         const uint32_t second_end = first_seq_padded + second_shape.shape[2];
+        uint32_t barrier_count = 0;
 
         // Segment 0: first tensor.
         const uint32_t s0_end = std::min(d2_end, first_end);
         if (d2_start < s0_end) {
             issue_block_reads(
                 first_reader,
-                first_shape.id_of(d0, d1, d2_start, d3_start),
+                first_shape.id_of(slice.d0, slice.d1, d2_start, slice.d3_start),
                 first_shape.strides[2],
                 s0_end - d2_start,
                 cols,
@@ -1063,7 +1078,7 @@ struct CatAddrGenerator {
         if (s2_start < s2_end) {
             issue_block_reads(
                 second_reader,
-                second_shape.id_of(d0, d1, s2_start - first_seq_padded, d3_start),
+                second_shape.id_of(slice.d0, slice.d1, s2_start - first_seq_padded, slice.d3_start),
                 second_shape.strides[2],
                 s2_end - s2_start,
                 cols,
@@ -1090,21 +1105,18 @@ struct CatAddrGenerator {
         }
     }
 
-    // Issue async NoC writes for a (rows × cols) block from L1. No barrier — caller must
+    // Issue async NoC writes for a slice from L1. No barrier — caller must
     // noc_async_write_barrier(). Same segment split as issue_reads; gap and tail produce no
     // writes (those rows aren't mapped to either tensor).
     void issue_writes(
-        uint32_t d0,
-        uint32_t d1,
-        uint32_t d2_start,
-        uint32_t d3_start,
-        uint32_t rows,
-        uint32_t cols,
+        const Slice& slice,
         uint32_t end_seq_tile,
         uint32_t src_addr,
         uint32_t outer_stride,
         uint32_t inner_stride) const {
-        const uint32_t d2_end = d2_start + rows;
+        const uint32_t d2_start = slice.d2_start;
+        const uint32_t d2_end = slice.d2_end;
+        const uint32_t cols = slice.get_d3_size();
         const uint32_t first_end = first_shape.shape[2];
         const uint32_t gap_end = first_seq_padded;
         const uint32_t second_end = first_seq_padded + second_shape.shape[2];
@@ -1114,7 +1126,7 @@ struct CatAddrGenerator {
         if (d2_start < s0_end) {
             issue_block_writes(
                 first_reader,
-                first_shape.id_of(d0, d1, d2_start, d3_start),
+                first_shape.id_of(slice.d0, slice.d1, d2_start, slice.d3_start),
                 first_shape.strides[2],
                 s0_end - d2_start,
                 cols,
@@ -1130,7 +1142,7 @@ struct CatAddrGenerator {
         if (s2_start < s2_end) {
             issue_block_writes(
                 second_reader,
-                second_shape.id_of(d0, d1, s2_start - first_seq_padded, d3_start),
+                second_shape.id_of(slice.d0, slice.d1, s2_start - first_seq_padded, slice.d3_start),
                 second_shape.strides[2],
                 s2_end - s2_start,
                 cols,
@@ -1151,30 +1163,28 @@ struct PaddedAddrGenerator {
     PaddedAddrGenerator(const ReaderType& reader, TensorTileShape tensor_shape) :
         reader(reader), tensor_shape(tensor_shape) {}
 
-    // Issue async NoC reads for a (rows × cols) block to L1. No barrier — caller must
+    // Issue async NoC reads for a slice to L1. No barrier — caller must
     // noc_async_read_barrier(). Splits valid rows from the padded tail at loop level (no
     // in_bounds branch in the hot path); valid rows advance tile_id by arithmetic only.
     void issue_reads(
-        uint32_t d0,
-        uint32_t d1,
-        uint32_t d2_start,
-        uint32_t d3_start,
-        uint32_t rows,
-        uint32_t cols,
+        const Slice& slice,
         uint32_t end_seq_tile,
         uint32_t dst_addr,
         uint32_t outer_stride,
         uint32_t inner_stride,
-        uint32_t barrier_threshold,
-        uint32_t& barrier_count) const {
+        uint32_t barrier_threshold) const {
+        const uint32_t d2_start = slice.d2_start;
+        const uint32_t rows = slice.get_d2_size();
+        const uint32_t cols = slice.get_d3_size();
         const uint32_t shape_d2 = tensor_shape.shape[2];
         const uint32_t bound = shape_d2 < end_seq_tile ? shape_d2 : end_seq_tile;
         const uint32_t valid_rows = (d2_start >= bound) ? 0 : std::min(rows, bound - d2_start);
+        uint32_t barrier_count = 0;
 
         // Valid segment: real reads.
         issue_block_reads(
             reader,
-            tensor_shape.id_of(d0, d1, d2_start, d3_start),
+            tensor_shape.id_of(slice.d0, slice.d1, d2_start, slice.d3_start),
             tensor_shape.strides[2],
             valid_rows,
             cols,
@@ -1197,19 +1207,17 @@ struct PaddedAddrGenerator {
             barrier_count);
     }
 
-    // Issue async NoC writes for a (rows × cols) block from L1. No barrier — caller must
+    // Issue async NoC writes for a slice from L1. No barrier — caller must
     // noc_async_write_barrier(). Out-of-bound rows produce no writes.
     void issue_writes(
-        uint32_t d0,
-        uint32_t d1,
-        uint32_t d2_start,
-        uint32_t d3_start,
-        uint32_t rows,
-        uint32_t cols,
+        const Slice& slice,
         uint32_t end_seq_tile,
         uint32_t src_addr,
         uint32_t outer_stride,
         uint32_t inner_stride) const {
+        const uint32_t d2_start = slice.d2_start;
+        const uint32_t rows = slice.get_d2_size();
+        const uint32_t cols = slice.get_d3_size();
         const uint32_t shape_d2 = tensor_shape.shape[2];
         const uint32_t bound = shape_d2 < end_seq_tile ? shape_d2 : end_seq_tile;
         const uint32_t valid_rows = (d2_start >= bound) ? 0 : std::min(rows, bound - d2_start);
@@ -1217,7 +1225,7 @@ struct PaddedAddrGenerator {
         // Valid segment only; out-of-bound rows produce no writes.
         issue_block_writes(
             reader,
-            tensor_shape.id_of(d0, d1, d2_start, d3_start),
+            tensor_shape.id_of(slice.d0, slice.d1, d2_start, slice.d3_start),
             tensor_shape.strides[2],
             valid_rows,
             cols,
@@ -1226,24 +1234,6 @@ struct PaddedAddrGenerator {
             outer_stride,
             inner_stride);
     }
-};
-
-struct Slice {
-    uint32_t d0;        // batch dimension
-    uint32_t d1;        // head dimension
-
-    uint32_t d2_start;  // sequence start
-    uint32_t d2_end;    // sequence end
-    uint32_t d3_start;  // feature start
-    uint32_t d3_end;    // feature end
-
-    Slice() = default;
-
-    Slice(uint32_t d0, uint32_t d1, uint32_t d2_start, uint32_t d2_end, uint32_t d3_start, uint32_t d3_end) :
-        d0(d0), d1(d1), d2_start(d2_start), d2_end(d2_end), d3_start(d3_start), d3_end(d3_end) {}
-
-    uint32_t get_d2_size() const { return d2_end - d2_start; }
-    uint32_t get_d3_size() const { return d3_end - d3_start; }
 };
 
 // Fetch tiles via NOC reads into a given L1 address. No CB lifecycle — caller manages
@@ -1266,20 +1256,8 @@ void fetch_block(
     const uint32_t outer_ptr_stride = transpose ? tile_bytes : src_cols * tile_bytes;
     const uint32_t inner_ptr_stride = transpose ? tile_bytes * src_rows : tile_bytes;
 
-    uint32_t barrier_count = 0;
     cat_addr_generator.issue_reads(
-        src_slice.d0,
-        src_slice.d1,
-        src_slice.d2_start,
-        src_slice.d3_start,
-        src_rows,
-        src_cols,
-        end_seq_tile,
-        dst_addr,
-        outer_ptr_stride,
-        inner_ptr_stride,
-        barrier_threshold,
-        barrier_count);
+        src_slice, end_seq_tile, dst_addr, outer_ptr_stride, inner_ptr_stride, barrier_threshold);
     noc_async_read_barrier();
 }
 
@@ -1318,17 +1296,7 @@ void write_block(
     const uint32_t inner_ptr_stride = tile_bytes;
 
     cb_wait_front(cb_id, num_tiles);
-    cat_addr_generator.issue_writes(
-        dst_slice.d0,
-        dst_slice.d1,
-        dst_slice.d2_start,
-        dst_slice.d3_start,
-        dst_rows,
-        dst_cols,
-        end_seq_tile,
-        base_read_ptr,
-        outer_ptr_stride,
-        inner_ptr_stride);
+    cat_addr_generator.issue_writes(dst_slice, end_seq_tile, base_read_ptr, outer_ptr_stride, inner_ptr_stride);
     noc_async_write_barrier();
     cb_pop_front(cb_id, num_tiles);
 }
@@ -1443,17 +1411,14 @@ void write_block_row_grouped_trid(
         const uint32_t rows_this_group = (rg < num_full_groups) ? sbh : remainder_rows;
         const uint32_t tiles_this_group = rows_this_group * cols;
         cb_wait_front(cb_out, tiles_this_group);
-        cat_addr_generator.issue_writes(
+        const Slice group_slice(
             dst_slice.d0,
             dst_slice.d1,
             dst_slice.d2_start + rg * sbh,
+            dst_slice.d2_start + rg * sbh + rows_this_group,
             dst_slice.d3_start,
-            rows_this_group,
-            cols,
-            end_seq_tile,
-            get_read_ptr(cb_out),
-            outer_stride,
-            tile_bytes);
+            dst_slice.d3_end);
+        cat_addr_generator.issue_writes(group_slice, end_seq_tile, get_read_ptr(cb_out), outer_stride, tile_bytes);
         noc_async_write_flushed_with_trid(flush_trid);
         cb_pop_front(cb_out, tiles_this_group);
     }
