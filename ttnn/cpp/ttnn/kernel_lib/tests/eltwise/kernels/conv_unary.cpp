@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Convenience entry-point validation — `compute_kernel_lib::unary_op<Op>(n)`.
+// Convenience entry-point validation — `compute_kernel_lib::unary<Op>(n)`.
 
 #include <cstdint>
 
@@ -20,5 +20,6 @@ void kernel_main() {
     const uint32_t per_core_block_dim = get_compile_time_arg_val(1);
     const uint32_t num_tiles = per_core_block_count * per_core_block_dim;
 
-    unary_op<Exp<>, cb_in, cb_out>(num_tiles);
+    compute_kernel_hw_startup(cb_in, cb_out);
+    unary<Exp<>, cb_in, cb_out>(num_tiles);
 }

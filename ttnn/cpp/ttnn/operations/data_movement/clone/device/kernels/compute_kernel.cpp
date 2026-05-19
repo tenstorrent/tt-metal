@@ -11,5 +11,6 @@ void kernel_main() {
     constexpr uint32_t dst_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
 
+    compute_kernel_hw_startup(src_cb_id, dst_cb_id);
     compute_kernel_lib::copy<src_cb_id, dst_cb_id>(num_tiles);
 }

@@ -7,78 +7,110 @@
  * @file eltwise_convenience.hpp
  * @brief Thin convenience entry points — pure inline forwarders to `eltwise_chain`.
  *
- * These wrap the dominant TSV buckets in one-liner APIs. They have no policy enums of their own;
- * any non-default behavior should drop to `eltwise_chain` directly.
+ * These wrap the dominant per-tile streaming buckets in one-liner APIs. They are pure
+ * chain bodies — caller is responsible for `compute_kernel_hw_startup(...)` as the
+ * first statement of `MAIN()` per the D8 caller-init contract. Wrappers expose only the
+ * knobs callers actually toggle (`BroadcastDim`, `BinaryDataFormatReconfig`, `CbIndexMode`);
+ * other policies use the struct defaults. Drop to `eltwise_chain` for anything outside
+ * this surface.
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
 
 namespace compute_kernel_lib {
 
 // ---- FPU binary streaming (per-tile WaitAndPop on both inputs) ----
 
-template <BinaryFpuOp Op, uint32_t CbA, uint32_t CbB, uint32_t CbOut>
+template <
+    BinaryFpuOp Op,
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    BroadcastDim Bcast = BroadcastDim::None,
+    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
+    CbIndexMode Idx = CbIndexMode::FirstTile>
 ALWI void binary_op(uint32_t n_tiles) {
-    using BinElt = BinaryFpu<
-        CbA,
-        CbB,
-        Op,
-        BroadcastDim::None,
-        BinaryDataFormatReconfig::Input,
-        CopyTilePolicy::WaitAndPop,
-        CopyTilePolicy::WaitAndPop,
-        CbIndexMode::FirstTile,
-        Dst::D0>;
-    // D8: caller-side BIG init. The convenience wrapper boots the engine for the
-    // (CbA, CbB, CbOut) triple it owns, then runs the chain (per-element-init only).
-    // Pack-side reconfig lives on PackTile (BinaryFpu no longer owns it).
-    compute_kernel_hw_startup(CbA, CbB, CbOut);
     eltwise_chain(
         n_tiles,
-        BinElt{},
-        PackTile<
-            CbOut,
-            Dst::D0,
-            PackTilePolicy::PerTileReserveAndPush,
-            PackTileIndexMode::FirstTile,
-            PackTileReconfig::Output>{});
+        BinaryFpu<CbA, CbB, Op, Bcast, Reconfig, CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop, Idx>{},
+        PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
-template <uint32_t CbA, uint32_t CbB, uint32_t CbOut>
-ALWI void binary_add(uint32_t n_tiles) {
-    binary_op<BinaryFpuOp::Add, CbA, CbB, CbOut>(n_tiles);
+template <
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    BroadcastDim Bcast = BroadcastDim::None,
+    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
+    CbIndexMode Idx = CbIndexMode::FirstTile>
+ALWI void binary_add(uint32_t n) {
+    binary_op<BinaryFpuOp::Add, CbA, CbB, CbOut, Bcast, Reconfig, Idx>(n);
 }
 
-template <uint32_t CbA, uint32_t CbB, uint32_t CbOut>
-ALWI void binary_sub(uint32_t n_tiles) {
-    binary_op<BinaryFpuOp::Sub, CbA, CbB, CbOut>(n_tiles);
+template <
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    BroadcastDim Bcast = BroadcastDim::None,
+    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
+    CbIndexMode Idx = CbIndexMode::FirstTile>
+ALWI void binary_sub(uint32_t n) {
+    binary_op<BinaryFpuOp::Sub, CbA, CbB, CbOut, Bcast, Reconfig, Idx>(n);
 }
 
-template <uint32_t CbA, uint32_t CbB, uint32_t CbOut>
-ALWI void binary_mul(uint32_t n_tiles) {
-    binary_op<BinaryFpuOp::Mul, CbA, CbB, CbOut>(n_tiles);
+template <
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    BroadcastDim Bcast = BroadcastDim::None,
+    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
+    CbIndexMode Idx = CbIndexMode::FirstTile>
+ALWI void binary_mul(uint32_t n) {
+    binary_op<BinaryFpuOp::Mul, CbA, CbB, CbOut, Bcast, Reconfig, Idx>(n);
 }
 
-// ---- Unary SFPU streaming ----
-template <class SfpuOp, uint32_t CbIn, uint32_t CbOut>
-ALWI void unary_op(uint32_t n_tiles) {
-    // D8 caller-side BIG init.
-    compute_kernel_hw_startup(CbIn, CbIn, CbOut);
+// ---- SFPU unary streaming ----
+// SfpuOp must be a DEST-only SFPU element (UnaryOp CRTP child).
+template <
+    class SfpuOp,
+    uint32_t CbIn,
+    uint32_t CbOut,
+    CopyTileReconfig Reconfig = CopyTileReconfig::Input,
+    CbIndexMode Idx = CbIndexMode::FirstTile>
+ALWI void unary(uint32_t n_tiles) {
+    static_assert(is_dest_only_op_v<SfpuOp>, "unary<SfpuOp,...>: SfpuOp must be a DEST-only SFPU element");
     eltwise_chain(
         n_tiles,
-        CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop, Idx, Reconfig>{},
         SfpuOp{},
         PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
-// ---- Pure copy ----
-template <uint32_t CbIn, uint32_t CbOut>
-ALWI void copy(uint32_t n_tiles) {
-    // D8 caller-side BIG init.
-    compute_kernel_hw_startup(CbIn, CbIn, CbOut);
+// ---- SFPU binary streaming (two CB inputs, DEST-DEST SFPU op, one CB output) ----
+// SfpuBinOp must be a DEST-only SFPU binary element (BinaryOp CRTP child),
+// e.g. DivBinary, BinaryMax, BinaryMin.
+template <class SfpuBinOp, uint32_t CbA, uint32_t CbB, uint32_t CbOut, CbIndexMode Idx = CbIndexMode::FirstTile>
+ALWI void binary_sfpu(uint32_t n_tiles) {
+    static_assert(is_dest_only_op_v<SfpuBinOp>, "binary_sfpu<Op,...>: Op must be a DEST-only SFPU binary element");
     eltwise_chain(
         n_tiles,
-        CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<CbA, Dst::D0, CopyTilePolicy::WaitAndPop, Idx>{},
+        CopyTile<CbB, Dst::D1, CopyTilePolicy::WaitAndPop, Idx>{},
+        SfpuBinOp{},
+        PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+}
+
+// ---- Pure copy ----
+template <
+    uint32_t CbIn,
+    uint32_t CbOut,
+    CopyTileReconfig Reconfig = CopyTileReconfig::Input,
+    CbIndexMode Idx = CbIndexMode::FirstTile>
+ALWI void copy(uint32_t n_tiles) {
+    eltwise_chain(
+        n_tiles,
+        CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop, Idx, Reconfig>{},
         PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
