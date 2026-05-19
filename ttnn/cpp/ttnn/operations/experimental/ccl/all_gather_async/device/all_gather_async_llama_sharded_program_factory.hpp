@@ -5,38 +5,28 @@
 #pragma once
 
 #include "all_gather_async_device_operation_types.hpp"
-#include "ttnn/device_operation.hpp"
+
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 namespace ttnn::experimental::prim {
 
 struct LlamaShardedMeshWorkloadFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle worker_sender_reader_kernel_id;
-        tt::tt_metal::KernelHandle worker_sender_writer_kernel_id;
-        std::vector<tt::tt_metal::CoreCoord> sender_worker_cores;
-    };
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
-        const AllGatherAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const AllGatherAsyncInputs& tensor_args,
-        Tensor& output_tensor);
-
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+    // Contract (2): declarative WorkloadDescriptor.  Builds one
+    // ProgramDescriptor per coord (ring_index/forward/backward neighbours vary
+    // across the mesh).
+    //
+    // GlobalSemaphores (semaphore[0], barrier_semaphore) live on
+    // AllGatherAsyncParams — caller-allocated, so no workload-scoped semaphore
+    // allocation is needed here.  The absolute addresses are written into the
+    // writer runtime args every dispatch via the normal slow-path rebuild (the
+    // framework re-calls create_workload_descriptor on cache hit when there
+    // are no Buffer* bindings to patch).
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const AllGatherAsyncParams& operation_attributes,
         const AllGatherAsyncInputs& tensor_args,
-        Tensor& output_tensor);
-
-private:
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create_at(
-        const AllGatherAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const AllGatherAsyncInputs& tensor_args,
-        Tensor& output_tensor);
+        Tensor& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::experimental::prim
