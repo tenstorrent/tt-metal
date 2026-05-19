@@ -43,6 +43,15 @@
 // DFBAccessor can be transparently modified (kernel-side syntax stays unchanged).
 struct DFBAccessor {
     explicit constexpr DFBAccessor(uint16_t id) noexcept : id(id) {}
+
+    // DFBAccessor is implicitly convertible to uint32_t.
+    // On WH/BH, this allows a Metal 2.0 user to pass a DFBAccessor directly to
+    // LLK compute APIs that expect a raw CB id.
+    //
+    // NOTE: If we ever want to switch DFBAccessor from implicit CTA to implicit
+    // CRTA or RTA, we can update the conversion adaptor without affecting any
+    // kernel code that's passing DFBAccessors into LLK APIs.
+    constexpr operator uint32_t() const noexcept { return id; }
     uint16_t id;
 };
 

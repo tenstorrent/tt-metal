@@ -148,8 +148,9 @@ runs:
         echo "Enabling detection of timeout on fast dispatch and automatically call tt-triage"
         TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH=/work/generated/debug_bus_signal_groups.json
         TT_TRIAGE_OUTPUT_PATH=/work/generated/triage_output.txt
+        TT_TRIAGE_LLM_OUTPUT_PATH=/work/generated/triage_llm_output.txt
         HANG_REPORT="/opt/venv/bin/python3 $(pwd)/.github/scripts/utils/hang_report.py"
-        TRIAGE="/opt/venv/bin/python3 $(pwd)/tools/tt-triage.py --disable-progress --path=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH --triage-summary-path=generated/triage_summary.txt"
+        TRIAGE="/opt/venv/bin/python3 $(pwd)/tools/tt-triage.py --disable-progress --path=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH --triage-summary-path=generated/triage_summary.txt --llm-output-path=$TT_TRIAGE_LLM_OUTPUT_PATH"
         # Only run triage on the first hang of a job: the device isn't reset between
         # tests, so subsequent tests and hangs are on a poisoned device and produce unreliable triage.
         TRIAGE_SENTINEL=generated/.tt_triage_already_ran
@@ -158,4 +159,5 @@ runs:
         echo "TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS=1" >> $GITHUB_ENV
         echo "TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1" >> $GITHUB_ENV
         echo "TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH" >> $GITHUB_ENV
+        echo "TT_TRIAGE_LLM_OUTPUT_PATH=$TT_TRIAGE_LLM_OUTPUT_PATH" >> $GITHUB_ENV
       shell: bash
