@@ -1741,8 +1741,18 @@ class MoeRoutedExpertOp:
             _ct0_dn = sram_down_proj_weights_tensor[0]
             _first_coord_dn = next(iter(_ct0_dn._multi_device_data_per_core))
             _num_cores_dn = len(_ct0_dn._multi_device_data_per_core[_first_coord_dn])
-            _sram_num_tiles_k_dn = _ct0_dn._per_device_tiles_h // _num_cores_dn
-            _sram_per_core_n_dn = _ct0_dn._per_device_tiles_w
+            # SRAM down is WIDTH_SHARDED (K replicated across cores, N split). The
+            # per-device logical shape is (K, N_full) so per_device_tiles_h IS the
+            # K tile count (replicated, NOT divided by num_cores), and the per-core
+            # N tile count is per_device_tiles_w // num_cores. Gate/up are
+            # HEIGHT_SHARDED and use the opposite idiom (see _ct0 above).
+            _dn_layout = _ct0_dn._memory_config.memory_layout
+            if _dn_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+                _sram_num_tiles_k_dn = _ct0_dn._per_device_tiles_h
+                _sram_per_core_n_dn = _ct0_dn._per_device_tiles_w // _num_cores_dn
+            else:
+                _sram_num_tiles_k_dn = _ct0_dn._per_device_tiles_h // _num_cores_dn
+                _sram_per_core_n_dn = _ct0_dn._per_device_tiles_w
             _per_core_tensors_dn = list(_ct0_dn._multi_device_data_per_core[_first_coord_dn].values())
             _grid_cores_dn = [t.memory_config().shard_spec.grid.bounding_box().start for t in _per_core_tensors_dn]
             _grid_dn = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in _grid_cores_dn])

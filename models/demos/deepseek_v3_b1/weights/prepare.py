@@ -802,19 +802,49 @@ def build_sram_expert_weights(
     mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
     num_devices = mesh_rows * mesh_cols
 
-    sram_b_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            core_grid,
-            [sram_k_per_core * tile_w, sram_per_core_N * tile_w],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
+    # Layout selection:
+    #   k_parallel_factor = num_sram_cores // sram_n_parallel
+    #
+    #   k_parallel > 1  → cores split K AND N (gate/up at TP8: 8 K-slices × 8 N-slices = 64
+    #                     cores). HEIGHT_SHARDED with the per-core shards stacked along H
+    #                     (cat-along-K). Logical tensor shape (num_cores × K_per_core, N_per_core).
+    #
+    #   k_parallel == 1 → K is replicated across all cores (down at TP8: 112 cores each see
+    #                     full K=256, split N=7168 → 64-col slice per core). WIDTH_SHARDED
+    #                     with the per-core shards arranged along W. Logical tensor shape
+    #                     (K, num_cores × N_per_core) = the actual per-device (K, N_full),
+    #                     so no shuffle is needed — per-device data goes in as-is.
+    k_parallel_factor = num_sram_cores // sram_n_parallel
+    is_width_sharded = k_parallel_factor == 1
+
+    if is_width_sharded:
+        sram_b_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                core_grid,
+                [sram_k_per_core * tile_w, sram_per_core_N * tile_w],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+    else:
+        sram_b_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                core_grid,
+                [sram_k_per_core * tile_w, sram_per_core_N * tile_w],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
 
     def _shuffle_assignment_per_device(asg_per_dev: np.ndarray) -> np.ndarray:
-        """Reorder a (K_tiles, N_tiles) per-device BSPM assignment to match
-        the per-core slab cat-along-K layout used by the weight shuffling."""
+        """Reorder a (K_tiles, N_tiles) per-device BSPM assignment to match the
+        per-core layout. For WIDTH_SHARDED (K replicated), the per-device
+        assignment IS the logical layout; no shuffle. For HEIGHT_SHARDED, fold
+        the (k_slice, n_slice) shards cat-along-K."""
+        if is_width_sharded:
+            return asg_per_dev
         shards = []
         for i in range(num_sram_cores):
             k_idx = i // sram_n_parallel
@@ -828,35 +858,48 @@ def build_sram_expert_weights(
 
     sram_cts = []
     for eidx in sram_expert_ids:
-        # Per-device, slice the K×N tensor into per-core (k_slice, n_slice)
-        # shards in row-major (k-major) ordering. Concatenate along K axis
-        # to produce a HEIGHT_SHARDED-compatible single-device tensor of
-        # shape (num_cores × k_per_core × tile_w, per_core_N × tile_w).
         per_dev_shards = []
         for dev_idx in range(num_devices):
             b_full = full_torch_weights_per_device[eidx][dev_idx]
-            shards = []
-            for i in range(num_sram_cores):
-                k_idx = i // sram_n_parallel
-                n_idx = i % sram_n_parallel
-                k_start = k_idx * sram_k_per_core * tile_w
-                k_end = k_start + sram_k_per_core * tile_w
-                n_start = n_idx * sram_per_core_N * tile_w
-                n_end = n_start + sram_per_core_N * tile_w
-                shards.append(b_full[k_start:k_end, n_start:n_end])
-            per_dev_shards.append(torch.cat(shards, dim=0))
-        b_4d = torch.stack(per_dev_shards).reshape(
-            mesh_rows,
-            mesh_cols,
-            num_sram_cores * sram_k_per_core * tile_w,
-            sram_per_core_N * tile_w,
-        )
+            if is_width_sharded:
+                # Per-device data is already (K, N_full) = WIDTH_SHARDED logical
+                # shape. No reshuffling — the N-axis sharding across cores happens
+                # automatically when ttnn assigns the WIDTH_SHARDED memory_config.
+                per_dev_shards.append(b_full)
+            else:
+                # HEIGHT_SHARDED: slice into (k_slice, n_slice) per-core shards in
+                # row-major (k-major) ordering, cat along K to produce a single-device
+                # tensor of shape (num_cores × K_per_core, N_per_core).
+                shards = []
+                for i in range(num_sram_cores):
+                    k_idx = i // sram_n_parallel
+                    n_idx = i % sram_n_parallel
+                    k_start = k_idx * sram_k_per_core * tile_w
+                    k_end = k_start + sram_k_per_core * tile_w
+                    n_start = n_idx * sram_per_core_N * tile_w
+                    n_end = n_start + sram_per_core_N * tile_w
+                    shards.append(b_full[k_start:k_end, n_start:n_end])
+                per_dev_shards.append(torch.cat(shards, dim=0))
+        if is_width_sharded:
+            b_4d = torch.stack(per_dev_shards).reshape(
+                mesh_rows,
+                mesh_cols,
+                sram_k_per_core * tile_w,
+                num_sram_cores * sram_per_core_N * tile_w,
+            )
+        else:
+            b_4d = torch.stack(per_dev_shards).reshape(
+                mesh_rows,
+                mesh_cols,
+                num_sram_cores * sram_k_per_core * tile_w,
+                sram_per_core_N * tile_w,
+            )
         if per_expert_assignment_per_device is not None:
-            # BSPM path: shuffle each per-device assignment to match the per-core
-            # slab layout, then stack devices along K (folded into tiles_h).
             asg_per_dev_list = per_expert_assignment_per_device[eidx]
             shuffled = [_shuffle_assignment_per_device(asg) for asg in asg_per_dev_list]
-            full_assignment = np.concatenate(shuffled, axis=0)
+            # WIDTH_SHARDED: stack per-device assignments along W (no K-fold).
+            # HEIGHT_SHARDED: stack along H (matches the cat-along-K weight shuffle).
+            full_assignment = np.concatenate(shuffled, axis=(1 if is_width_sharded else 0))
             ct = CompressedTensor(
                 b_4d,
                 full_assignment,
@@ -2349,8 +2392,15 @@ def prepare_moe_layer_weights(
         sram_down_proj=sram_down,
     )
 
+    # Skip sram_slots build when caller passed an explicit ``sram_expert_ids``:
+    # the kernel pipeline already allocated weights for the override list above
+    # via ``_build_moe_sram_routed_weights``, and building sram_slots from
+    # ``sram_hot_experts`` would double-allocate per-core L1 for a *different*
+    # expert set. Override wins; sram_slots only builds when nothing was passed
+    # so the "default" path can derive its expert list from L1-fit-truncated
+    # ``sram_slots.slot_experts``.
     sram_expert_indices = (sram_hot_experts or {}).get(layer_idx)
-    if sram_expert_indices:
+    if sram_expert_indices and not sram_expert_ids:
         assert sram_core_grids is not None, "sram_core_grids required when sram_hot_experts specifies this layer"
         assert sram_assigner is not None, "sram_assigner required when sram_hot_experts specifies this layer"
         assert worker_l1_size is not None, "worker_l1_size required when sram_hot_experts specifies this layer"
@@ -2429,6 +2479,27 @@ def prepare_moe_layer_weights(
             cache_config=cache_config,
         )
         result = _dataclass_replace(result, sram_slots=sram_slots)
+
+        # If the caller didn't pass an explicit `sram_expert_ids`, alias the
+        # kernel-pipeline weight fields directly to the per-core L1 CTs that
+        # `prepare_compressed_sram_slots` already allocated.
+        # Layout compatibility:
+        #   gate/up: both paths produce HEIGHT_SHARDED `(K/k_par, N/n_par)` per
+        #            core on 64 cores. Identical metadata, alias is a no-op cast.
+        #   down:    both paths now produce WIDTH_SHARDED `(K, N_full/num_cores)`
+        #            per core on 112 cores. Identical metadata (after the
+        #            `build_sram_expert_weights` WIDTH_SHARDED branch).
+        # Single-allocation: kernel reads `sram_slots.*_proj` directly; no
+        # rebuild via `_build_moe_sram_routed_weights`. The empty-list call to
+        # `_build_moe_sram_routed_weights` at the top of `prepare_moe_layer_weights`
+        # early-returned ([],[],[]) so this aliasing is the first population.
+        if not sram_expert_ids and sram_slots.num_slots > 0:
+            result = _dataclass_replace(
+                result,
+                sram_gate_proj=sram_slots.gate_proj,
+                sram_up_proj=sram_slots.up_proj,
+                sram_down_proj=sram_slots.down_proj,
+            )
 
     logger.info("MoE layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
     return result

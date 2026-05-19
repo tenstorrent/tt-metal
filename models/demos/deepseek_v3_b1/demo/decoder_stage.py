@@ -910,7 +910,20 @@ class DecoderStage(StageKind):
         reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(4)]
         self._persistent_loop = PersistentLoop(mesh_device, available_cores, self._persistent_mode)
 
+        # Derive sram_expert_ids from the prepared weights so the bit-15 encoding
+        # in create_gate_indices_tensor flags exactly the experts whose SRAM
+        # weights were allocated. Without this, sram_*_proj is in L1 but no
+        # gate index has bit-15 set, so the SRAM kernel filter sees zero
+        # SRAM-flagged experts every iter and the SRAM path never fires.
         if self._is_moe:
+            # MoE: prepare_moe_layer_weights populates sram_slots.slot_experts with
+            # the L1-fit-truncated subset of sram_hot_experts. None when SRAM
+            # disabled (no --enable_sram_hot_experts).
+            sram_expert_ids = (
+                list(self._weights.sram_slots.slot_experts)
+                if getattr(self._weights, "sram_slots", None) is not None
+                else []
+            )
             d = create_decoder_block_tensors(
                 mesh_device,
                 mesh_device.shape[0],
@@ -923,8 +936,14 @@ class DecoderStage(StageKind):
                 weights=self._weights,
                 metadata=self._metadata,
                 num_slots=self._num_slots,
+                sram_expert_ids=sram_expert_ids,
             )
         else:
+            # Dense: every chunk is hot; resolve_sram_expert_ids(is_moe=False)
+            # defaulted to range(8). Use the allocated count as ground truth in
+            # case a future path returns fewer (e.g., L1-fit truncation inside
+            # _build_dense_sram_routed_weights).
+            sram_expert_ids = list(range(len(self._weights.sram_gate_proj)))
             d = create_decoder_block_tensors(
                 mesh_device,
                 mesh_device.shape[0],
@@ -938,6 +957,7 @@ class DecoderStage(StageKind):
                 metadata=self._metadata,
                 num_slots=self._num_slots,
                 is_moe=False,
+                sram_expert_ids=sram_expert_ids,
             )
         ttnn.synchronize_device(mesh_device)
 
