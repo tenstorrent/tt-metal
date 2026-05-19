@@ -38,10 +38,25 @@ import pytest
 import torch
 
 from models.demos.ace_step_v1_5.tests._dit_decoder_pcc_common import assert_pcc_print
-from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder import (
-    TtQwen3EmbeddingEncoder,
-    causal_padding_attn_bias_np,
-)
+
+# Legacy custom-encoder trace test: ``TtQwen3EmbeddingEncoder.forward_device`` and the
+# ``causal_padding_attn_bias_np`` host helper were removed when the encoder migrated to a
+# subclass of the stock ``tt_transformers`` ``Qwen3ForEmbedding`` in
+# ``ttnn_impl/qwen3_embedding_ace_step.py``. The stock path's trace + 2CQ characteristics
+# are exercised through ``Generator.prefill_forward_text(enable_trace=True)`` — porting
+# this test to that path is a follow-up. For now we skip cleanly if the legacy symbols
+# are not importable.
+try:
+    from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder import (  # type: ignore[attr-defined]
+        TtQwen3EmbeddingEncoder,
+        causal_padding_attn_bias_np,
+    )
+
+    _HAS_LEGACY_ENCODER = True
+except ImportError:
+    TtQwen3EmbeddingEncoder = None  # type: ignore[assignment]
+    causal_padding_attn_bias_np = None  # type: ignore[assignment]
+    _HAS_LEGACY_ENCODER = False
 
 _DEFAULT_QWEN_DIR = Path.home() / ".cache" / "huggingface" / "hub" / "ACE-Step-1.5-checkpoints" / "Qwen3-Embedding-0.6B"
 
@@ -69,6 +84,14 @@ _SKIP_REASON = (
 )
 
 
+@pytest.mark.skipif(
+    not _HAS_LEGACY_ENCODER,
+    reason=(
+        "Legacy TtQwen3EmbeddingEncoder.forward_device + causal_padding_attn_bias_np were removed "
+        "in the migration to AceStepQwen3Encoder(Qwen3ForEmbedding). Port this trace test to the "
+        "stock Generator.prefill_forward_text(enable_trace=True) path if/when needed."
+    ),
+)
 @pytest.mark.skipif(_ckpt_dir() is None, reason=_SKIP_REASON)
 def test_qwen3_encoder_trace_2cq(trace_device):
     """Trace + 2CQ replay of the Qwen3 text encoder, with PCC parity vs the no-trace compile pass."""

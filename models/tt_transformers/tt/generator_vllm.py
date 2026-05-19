@@ -9,20 +9,70 @@ import torch
 from loguru import logger
 from PIL.Image import Image
 from tqdm import tqdm
-from vllm.model_executor.models.gemma3_mm import (
-    Gemma3DummyInputsBuilder,
-    Gemma3MultiModalProcessor,
-    Gemma3ProcessingInfo,
-)
-from vllm.model_executor.models.interfaces import SupportsMultiModal
-from vllm.model_executor.models.mistral3 import (
-    Mistral3DummyInputsBuilder,
-    Mistral3MultiModalProcessor,
-    Mistral3ProcessingInfo,
-)
-from vllm.multimodal import MULTIMODAL_REGISTRY
-from vllm.multimodal.inputs import MultiModalDataDict
-from vllm.multimodal.processing import BaseDummyInputsBuilder
+
+# vLLM is an optional dependency of this module. Several helpers below
+# (``initialize_vllm_text_transformer``, ``allocate_vllm_kv_cache_per_layer``) are pure
+# ``tt_transformers`` code and never touch vLLM at runtime — they're used by non-vLLM
+# consumers like the ACE-Step Qwen3 embedding encoder
+# (``models/demos/ace_step_v1_5/ttnn_impl/qwen3_embedding_ace_step.py``) and by the
+# upstream ``Qwen3ForEmbedding`` reference in
+# ``models/demos/wormhole/qwen3_embedding_8b/demo/generator_vllm.py``.
+#
+# Keep the top-level import non-fatal so this module remains usable in environments
+# where vLLM isn't installed; the vLLM-specific classes lower in this file will still
+# be *defined* (so module load succeeds and the helpers above can be imported), but
+# only do useful work when vLLM is actually present at runtime.
+try:
+    from vllm.model_executor.models.gemma3_mm import (
+        Gemma3DummyInputsBuilder,
+        Gemma3MultiModalProcessor,
+        Gemma3ProcessingInfo,
+    )
+    from vllm.model_executor.models.interfaces import SupportsMultiModal
+    from vllm.model_executor.models.mistral3 import (
+        Mistral3DummyInputsBuilder,
+        Mistral3MultiModalProcessor,
+        Mistral3ProcessingInfo,
+    )
+    from vllm.multimodal import MULTIMODAL_REGISTRY
+    from vllm.multimodal.inputs import MultiModalDataDict
+    from vllm.multimodal.processing import BaseDummyInputsBuilder
+
+    _HAS_VLLM = True
+except ImportError:
+    _HAS_VLLM = False
+
+    # Class-like stubs so the ``class Foo(SupportsMultiModal): ...`` blocks below still
+    # parse / execute at module load time. Using plain ``object`` for inheritance is safe
+    # because nothing in this file relies on the actual vLLM types at *definition* time —
+    # only at runtime when vLLM-driven code path invokes them.
+    SupportsMultiModal = object  # type: ignore[assignment,misc]
+    BaseDummyInputsBuilder = object  # type: ignore[assignment,misc]
+    Gemma3DummyInputsBuilder = object  # type: ignore[assignment,misc]
+    Gemma3MultiModalProcessor = object  # type: ignore[assignment,misc]
+    Gemma3ProcessingInfo = object  # type: ignore[assignment,misc]
+    Mistral3DummyInputsBuilder = object  # type: ignore[assignment,misc]
+    Mistral3MultiModalProcessor = object  # type: ignore[assignment,misc]
+    Mistral3ProcessingInfo = object  # type: ignore[assignment,misc]
+    # Annotation-only types — alias to a built-in so ``-> MultiModalDataDict`` stays valid.
+    MultiModalDataDict = dict  # type: ignore[assignment,misc]
+
+    class _MissingVLLMRegistry:
+        """No-op stub for ``vllm.multimodal.MULTIMODAL_REGISTRY`` when vLLM is absent.
+
+        ``register_processor`` returns the class unchanged, so class-level decorators
+        below behave like a no-op pass-through. Any actual vLLM call site (which we
+        don't reach without vLLM installed) would simply hit ``AttributeError`` here.
+        """
+
+        @staticmethod
+        def register_processor(*_args, **_kwargs):
+            def _identity(cls):
+                return cls
+
+            return _identity
+
+    MULTIMODAL_REGISTRY = _MissingVLLMRegistry()  # type: ignore[assignment]
 
 import ttnn
 from models.common.llama_models import create_vision_mask
