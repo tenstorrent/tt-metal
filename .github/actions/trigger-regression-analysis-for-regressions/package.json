@@ -1,7 +1,7 @@
 {
-  "name": "trigger-auto-triage-for-regressions",
+  "name": "trigger-regression-analysis-for-regressions",
   "version": "1.0.0",
-  "description": "Triggers auto-triage for regressed workflows",
+  "description": "Triggers regression-analysis for regressed workflows",
   "main": "index.js",
   "dependencies": {
     "@actions/core": "^1.10.0",
