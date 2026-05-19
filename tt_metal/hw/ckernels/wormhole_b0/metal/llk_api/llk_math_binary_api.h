@@ -10,14 +10,28 @@
  * LLK ELTWISE BINARY
  *************************************************************************/
 
-// Version with operands
+/**
+ * @brief Initialize FPU to perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB.
+ * Derives the tensor shape from operand_A to support non-default tile dimensions.
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam src_b_bcast_type: Broadcast type for SrcB; one of {NONE, ROW, COL, SCALAR}.
+ * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication
+ *     when input is Tf32 format. Only applicable for ELWMUL operations.
+ * @tparam binary_reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB
+ * @param operand_A: Logical dataflow buffer id for input A, used to derive the tensor / tile shape
+ * @param operand_B: Unused.
+ * @param acc_to_dest: Flag to control if the result should be accumulated with the current dest.
+ */
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary_init(
-    const std::uint32_t operand_A, const std::uint32_t operand_B, const std::uint32_t acc_to_dest = 0) {
+    const std::uint32_t operand_A,
+    [[maybe_unused]] const std::uint32_t operand_B,
+    const std::uint32_t acc_to_dest = 0) {
     const std::uint32_t operand_id = get_operand_id(operand_A);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 

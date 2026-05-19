@@ -17,10 +17,11 @@
  * @brief Initialize FPU to perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB.
  * Derives the tensor shape from operand_A to support non-default tile dimensions.
  * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register
+ *
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam src_b_bcast_type: Broadcast type for SrcB; one of {NONE, ROW, COL, SCALAR}.
  * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication
- *     when input is Tf32 format. Only applicable to ELWMUL.
+ *     when input is Tf32 format. Only applicable for ELWMUL operations.
  * @tparam binary_reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB
  * @param operand_A: Logical dataflow buffer id for input A, used to derive the tensor / tile shape
  * @param operand_B: Unused on Quasar. Present for API compatibility.
