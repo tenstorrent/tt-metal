@@ -123,6 +123,9 @@ class EN_DEST_REUSE(TemplateParameter):
         return "#define EN_DEST_REUSE"
 
 
+# Comparison-op strings understood by SFPU_INT_OP.  These map directly to the
+# SfpuType enumerators defined in tt_llk_quasar/llk_lib/llk_defs.h (lower-cased).
+# If a new comparison op is added to SfpuType, add its upper-cased name here.
 _COMP_OP_NAMES: frozenset[str] = frozenset({"GT", "LT", "LE", "GE"})
 
 
