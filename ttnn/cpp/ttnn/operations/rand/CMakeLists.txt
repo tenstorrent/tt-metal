@@ -14,7 +14,7 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*)
+file(GLOB_RECURSE kernels device/kernels/*.cpp)
 
 target_sources(
     ttnn_op_rand

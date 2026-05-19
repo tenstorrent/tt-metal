@@ -16,7 +16,7 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*)
+file(GLOB_RECURSE kernels device/kernels/*.cpp)
 
 target_sources(
     ttnn_op_experimental_deepseek_moe_post_combine_tilize
