@@ -2695,19 +2695,20 @@ class TestBeginGraphCaptureClearing:
         assert len(python_io[0]["python_stack_trace"]) > 0
 
     def test_begin_graph_capture_default_no_python_stack_traces(self):
-        ttnn.graph.disable_python_stack_traces()
-        assert not ttnn.graph.is_python_stack_trace_enabled()
+        with ttnn.manage_config("enable_graph_python_stack_traces", False):
+            ttnn.graph.disable_python_stack_traces()
+            assert not ttnn.graph.is_python_stack_trace_enabled()
 
-        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-        try:
-            ttnn.graph.record_python_operation("ttnn.relu", (), {})
-            assert len(ttnn.graph._python_io_data) == 1
-            entry = ttnn.graph._python_io_data[0]
-            assert "python_stack_trace" not in entry
-        finally:
-            ttnn.graph.end_graph_capture()
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                ttnn.graph.record_python_operation("ttnn.relu", (), {})
+                assert len(ttnn.graph._python_io_data) == 1
+                entry = ttnn.graph._python_io_data[0]
+                assert "python_stack_trace" not in entry
+            finally:
+                ttnn.graph.end_graph_capture()
 
-        assert not ttnn.graph.is_python_stack_trace_enabled()
+            assert not ttnn.graph.is_python_stack_trace_enabled()
 
     def test_begin_graph_capture_respects_disable_graph_python_stack_traces_config(self):
         with ttnn.manage_config("enable_graph_python_stack_traces", False):
