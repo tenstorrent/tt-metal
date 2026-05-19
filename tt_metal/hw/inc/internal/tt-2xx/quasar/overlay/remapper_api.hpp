@@ -38,6 +38,8 @@
 #include "remapper_common.hpp"
 #include "overlay_addresses.h"
 
+namespace overlay {
+
 /**
  * @brief Generic API for Counter Remapper Configuration
  *
@@ -47,8 +49,8 @@
  */
 class RemapperAPI {
 private:
-    overlay::tClientR_Config_Reg_u clientR_configs[REMAP_NUM_PAIRS]{};
-    overlay::tClientL_Config_Reg_u clientL_configs[REMAP_NUM_PAIRS]{};
+    tClientR_Config_Reg_u clientR_configs[REMAP_NUM_PAIRS]{};
+    tClientL_Config_Reg_u clientL_configs[REMAP_NUM_PAIRS]{};
     uint32_t current_pair_idx;
 
 public:
@@ -164,7 +166,7 @@ public:
         for (uint32_t pair_idx = 0; pair_idx < REMAP_NUM_PAIRS; pair_idx++) {
             // Read ClientR configuration register from hardware
             uint32_t reg_val = READ_REG32(REMAP_CLIENT_R_CONFIG_REG_ADDR32(pair_idx));
-            overlay::tClientR_Config_Reg_u config;
+            tClientR_Config_Reg_u config;
             config.val = reg_val;
 
             // Check all 4 slots in this pair
@@ -321,7 +323,7 @@ public:
      *
      * @return Status register union
      */
-    overlay::tClientR_status_Reg_u read_clientR_status() { return read_clientR_status(current_pair_idx); }
+    tClientR_status_Reg_u read_clientR_status() { return read_clientR_status(current_pair_idx); }
 
     /**
      * @brief Read ClientR status register from hardware for a specific pair
@@ -329,8 +331,8 @@ public:
      * @param pair_idx Pair index (0-63)
      * @return Status register union
      */
-    overlay::tClientR_status_Reg_u read_clientR_status(uint32_t pair_idx) {
-        overlay::tClientR_status_Reg_u status;
+    tClientR_status_Reg_u read_clientR_status(uint32_t pair_idx) {
+        tClientR_status_Reg_u status;
         status.val = 0;
         if (pair_idx < REMAP_NUM_PAIRS) {
             status.val = READ_REG32(REMAP_CLIENT_R_STATUS_REG_ADDR32(pair_idx));
@@ -629,7 +631,7 @@ public:
      *
      * @return Status register union
      */
-    overlay::tClientL_status_Reg_u read_clientL_status() { return read_clientL_status(current_pair_idx); }
+    tClientL_status_Reg_u read_clientL_status() { return read_clientL_status(current_pair_idx); }
 
     /**
      * @brief Read ClientL status register from hardware for a specific pair
@@ -637,8 +639,8 @@ public:
      * @param pair_idx Pair index (0-63)
      * @return Status register union
      */
-    overlay::tClientL_status_Reg_u read_clientL_status(uint32_t pair_idx) {
-        overlay::tClientL_status_Reg_u status;
+    tClientL_status_Reg_u read_clientL_status(uint32_t pair_idx) {
+        tClientL_status_Reg_u status;
         status.val = 0;
         if (pair_idx < REMAP_NUM_PAIRS) {
             status.val = READ_REG32(REMAP_CLIENT_L_STATUS_REG_ADDR32(pair_idx));
@@ -746,7 +748,7 @@ public:
      * @param status ClientL status register
      * @return true if any error flags are set
      */
-    bool has_error(const overlay::tClientL_status_Reg_u& status) const {
+    bool has_error(const tClientL_status_Reg_u& status) const {
         return (status.f.err_inv_client_no != 0 || status.f.err_inv_client_id != 0 || status.f.err_inv_access != 0);
     }
 
@@ -764,7 +766,7 @@ public:
      * @return true if any error flags are set
      */
     bool check_clientL_errors(uint32_t pair_idx) {
-        overlay::tClientL_status_Reg_u status = read_clientL_status(pair_idx);
+        tClientL_status_Reg_u status = read_clientL_status(pair_idx);
         return has_error(status);
     }
 
@@ -777,7 +779,7 @@ public:
      * @param err_inv_access Output: Invalid access error
      */
     void get_error_details(
-        const overlay::tClientL_status_Reg_u& status,
+        const tClientL_status_Reg_u& status,
         bool& err_inv_client_no,
         bool& err_inv_client_id,
         bool& err_inv_access) const {
@@ -833,7 +835,7 @@ public:
      *
      * @return Reference to ClientR config union
      */
-    overlay::tClientR_Config_Reg_u& get_clientR_config_ref() { return get_clientR_config_ref(current_pair_idx); }
+    tClientR_Config_Reg_u& get_clientR_config_ref() { return get_clientR_config_ref(current_pair_idx); }
 
     /**
      * @brief Get direct reference to ClientR config register for a specific pair (for advanced use)
@@ -841,7 +843,7 @@ public:
      * @param pair_idx Pair index (0-63)
      * @return Reference to ClientR config union
      */
-    overlay::tClientR_Config_Reg_u& get_clientR_config_ref(uint32_t pair_idx) {
+    tClientR_Config_Reg_u& get_clientR_config_ref(uint32_t pair_idx) {
         if (pair_idx < REMAP_NUM_PAIRS) {
             return clientR_configs[pair_idx];
         }
@@ -854,7 +856,7 @@ public:
      *
      * @return Reference to ClientL config union
      */
-    overlay::tClientL_Config_Reg_u& get_clientL_config_ref() { return get_clientL_config_ref(current_pair_idx); }
+    tClientL_Config_Reg_u& get_clientL_config_ref() { return get_clientL_config_ref(current_pair_idx); }
 
     /**
      * @brief Get direct reference to ClientL config register for a specific pair (for advanced use)
@@ -862,7 +864,7 @@ public:
      * @param pair_idx Pair index (0-63)
      * @return Reference to ClientL config union
      */
-    overlay::tClientL_Config_Reg_u& get_clientL_config_ref(uint32_t pair_idx) {
+    tClientL_Config_Reg_u& get_clientL_config_ref(uint32_t pair_idx) {
         if (pair_idx < REMAP_NUM_PAIRS) {
             return clientL_configs[pair_idx];
         }
@@ -870,5 +872,7 @@ public:
         return clientL_configs[0];
     }
 };
+
+}  // namespace overlay
 
 #endif  // __DM__REMAPPER_API_HPP__
