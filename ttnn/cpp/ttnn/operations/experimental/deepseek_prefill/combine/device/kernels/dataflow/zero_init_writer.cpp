@@ -213,5 +213,6 @@ void kernel_main() {
         // 7. Release untilize CB
         cb_pop_front(cb_untilize_id, read_batch_size);
     }
+    noc_semaphore_set(counter_ready_sem_ptr, 0);
 #endif
 }

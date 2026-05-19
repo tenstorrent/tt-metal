@@ -181,10 +181,13 @@ void kernel_main() {
     // Signal ALL readers that global init exchange is done.
     // Each writer increments every reader's barrier sem so each reader
     // collects num_cores signals before proceeding.
+
+    // POTENCIJALNO SAMO ZA ZERO_INIT TREBA START
     for (uint32_t c = 0; c < num_cores; c++) {
         noc_semaphore_inc(all_core_barrier_noc_addrs[c], 1);
     }
     noc_async_atomic_barrier();
+    // POTENCIJALNO SAMO ZA ZERO_INIT TREBA END
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
