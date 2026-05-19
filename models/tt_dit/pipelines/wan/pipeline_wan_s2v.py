@@ -46,10 +46,8 @@ helper used by both the reference latent and the motion-latent paths.
 Not supported (production HF path only)
 ---------------------------------------
 Any non-default S2V option raises :class:`NotImplementedError`:
-``pose_video`` (only zero pose conditioning), multi-clip
-(``num_repeat > 1``), ``enable_tts``, ``init_first_frame=True``, and
-``adain_mode != "attn_norm"``. AdaIN modulation itself is gated off until
-the upstream ttnn ``binary_ng`` broadcast issue is resolved.
+``pose_video`` (only zero pose conditioning), ``enable_tts``,
+``init_first_frame=True``, and ``adain_mode != "attn_norm"``.
 """
 
 from __future__ import annotations

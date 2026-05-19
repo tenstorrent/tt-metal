@@ -162,3 +162,13 @@ models/experimental/petr/resources/*.pth
 
 # sweep results
 sweep_results_*/
+
+# WAN 2.2 S2V local test artifacts (inputs + outputs at repo root)
+/wan_s2v_*.mp4
+/*.mp3
+/*.m4a
+/prompt_image.png
+/prompt_audio.wav
+/girl-hoodie-glasses.png
+/jon-rap.png
+/colman-*.png
