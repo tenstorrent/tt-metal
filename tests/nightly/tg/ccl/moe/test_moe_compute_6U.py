@@ -39,6 +39,13 @@ MESH_GRAPH_DESC_1x16 = (
 MESH_GRAPH_DESC_1x8 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
 )
+MESH_GRAPH_DESC_BH_LB = "tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto"
+# 1x8 LINE flattening of the same BH LB hardware — exposes the 8 chips as a 1D mesh so
+# the moe op runs with EP=8 (every chip hosts experts), the natural BH analog of the
+# WH single-galaxy `test_moe_compute_1x8`. The `(2, 4)` BH-LB test on the other descriptor
+# above only puts experts on 4 of 8 chips (idle replica row); this descriptor closes that
+# coverage gap. Topology must be LINE because BH LB has no chassis-level wraparound.
+MESH_GRAPH_DESC_BH_LB_1x8 = "tt_metal/fabric/mesh_graph_descriptors/p150_x8_1x8_line_mesh_graph_descriptor.textproto"
 # FYI: These tests also work in a MESH_GRAPH_DESC_1x4 setting (~1 minute to set up), but not in a 1x2 setting.
 
 
@@ -405,6 +412,103 @@ def validate_e_t(mesh_device, total_tokens, experts_per_device, num_devices, e_t
                 e_t_all_passed = False
 
     return e_t_all_passed
+
+
+def validate_off_axis_devices_idle(
+    mesh_device,
+    mesh_shape,
+    cluster_axis,
+    output_tensor,
+    *,
+    tensor_name,
+    idle_value=0,
+):
+    """Assert that devices on the off-cluster (replicated) mesh axis produce *idle*
+    output for this test's input distribution.
+
+    Why this check exists. On a multi-axis mesh the data validators (`validate_matmul`,
+    `validate_combine`, ...) skip positions where the golden is empty. The test's
+    `gen_expert_mapping` always routes experts to devices in `[0, num_dispatch_devices)`
+    (cluster-axis chips only), so off-axis chips host *no* experts and contribute *no*
+    real data to the golden. Net effect: the data validators silently ignore every
+    off-axis chip's output — the op could write literal garbage on those chips and the
+    test would pass. This validator closes that hole at the level the test actually
+    cares about: confirms the op produces a clean *idle* state on off-axis chips (no
+    rogue writes, no stale data, no fabric leaks), which is the contract the test's
+    input distribution implies.
+
+    Why *not* a "byte-equal across replicas" check. That would only be the right contract
+    if the test pre-replicated `sparse_buffer` rows so the off-axis chips received the
+    same input as their dispatch-axis counterparts. It doesn't — those rows get
+    `torch.rand`-init garbage and the expert_mapping routes nothing to them, so the
+    correct off-axis output is *empty*, not a replica. We can revisit the byte-equality
+    check if/when the test grows real DP (different batch shard per replica row).
+
+    `idle_value` defaults to `0` (correct for numerical outputs: per_expert_total_tokens,
+    matmul_output, combine_output, expert_activation rows). For the e_t tensor pass
+    `idle_value=0xFFFFFFFF` (the sentinel `init_expert_activation_buffer_async()` writes
+    to mark uninitialized entries — see `tilize_reader.cpp:125`).
+
+    Returns True iff every off-axis device's tensor is uniformly `idle_value`. No-op
+    (returns True) when `num_replicated_devices == 1` (no off-axis axis to check).
+    """
+    if cluster_axis is None:
+        return True
+    num_devices = mesh_shape[0] * mesh_shape[1]
+    num_dispatch_devices = mesh_shape[cluster_axis]
+    num_replicated_devices = num_devices // num_dispatch_devices
+    if num_replicated_devices == 1:
+        logger.info(f"  [{tensor_name}] No off-axis devices (num_replicated_devices=1), skipping idle check")
+        return True
+
+    device_shards = [ttnn.to_torch(t, mesh_composer=None) for t in ttnn.get_device_tensors(output_tensor)]
+    if len(device_shards) != num_devices:
+        logger.warning(
+            f"  [{tensor_name}] Expected {num_devices} device shards, got {len(device_shards)}. "
+            f"Cannot check off-axis idle state."
+        )
+        return False
+
+    # Row-major linearization: device d at coord (d // cols, d % cols). An off-axis device
+    # is any device whose off-cluster-axis index > 0 (i.e., not in the "first row/col" of
+    # the dispatch line). The dispatch-axis goes through the index direction selected by
+    # `cluster_axis`; everything else is off-axis.
+    cols = mesh_shape[1]
+    all_passed = True
+    off_axis_count = 0
+    for d in range(num_devices):
+        m0 = d // cols
+        m1 = d % cols
+        off_axis_index = m0 if cluster_axis == 1 else m1
+        if off_axis_index == 0:
+            continue  # on-axis (the dispatch row/col itself) — validated by the other checks
+        off_axis_count += 1
+        shard = device_shards[d]
+        # `torch.equal` compares value+dtype+shape; we want elementwise value check at int level.
+        # For float dtypes a `0.0 == 0` check is fine because the op writes integer zero patterns.
+        ok = bool((shard == idle_value).all().item())
+        if not ok:
+            non_idle_mask = shard != idle_value
+            first_idx = non_idle_mask.nonzero(as_tuple=False)[0].tolist() if non_idle_mask.any() else None
+            non_idle_count = int(non_idle_mask.sum().item())
+            sample_val = shard[tuple(first_idx)].item() if first_idx is not None else None
+            logger.warning(
+                f"  [{tensor_name}] Off-axis device {d} (m0={m0}, m1={m1}) is NOT idle. "
+                f"Expected uniform {idle_value}, found {non_idle_count}/{shard.numel()} non-idle elements. "
+                f"First non-idle index: {first_idx}, value: {sample_val}"
+            )
+            all_passed = False
+        else:
+            logger.info(
+                f"  [{tensor_name}] Off-axis device {d} (m0={m0}, m1={m1}) is uniformly idle "
+                f"(all {shard.numel()} elements == {idle_value}) PASSED"
+            )
+
+    if off_axis_count == 0:
+        # Shouldn't happen given the early-return on num_replicated_devices==1, but be defensive.
+        logger.info(f"  [{tensor_name}] No off-axis devices found despite num_replicated_devices > 1")
+
+    return all_passed
 
 
 def prepare_output_tensor_from_combine_writer(
@@ -1844,6 +1948,7 @@ def run_moe_compute_test(
     e_t_all_passed = True
     matmul_all_passed = True
     combine_all_passed = True
+    replicated_axis_all_passed = True
     for i in range(num_iterations):
         for layer_id in range(num_layers):
             (
@@ -1911,6 +2016,46 @@ def run_moe_compute_test(
             ):
                 combine_all_passed = False
 
+            # ========== Off-axis Devices Idle Check ==========
+            # The data validators above skip devices/positions where the golden is empty.
+            # On a multi-axis mesh that means the entire off-cluster-axis replica devices
+            # never get their outputs checked — which leaves a hole big enough to hide
+            # "fabric leaked data into off-axis L1" or "off-axis chip wrote rogue output
+            # to a buffer it shouldn't have written" bugs. The test's input distribution
+            # (`gen_expert_mapping` routes all experts to dispatch-axis devices only)
+            # implies off-axis chips should produce a clean idle state on the tensors
+            # whose idle state is well-defined.
+            #
+            # Scope notes — what we check and why:
+            # - combine_output: idle == all zeros. The combine output is written per
+            #   device's sharded slot via the selective-reduce-combine kernel; off-axis
+            #   slots receive no reduce contribution (no expert lives there, no token
+            #   targets them). Any non-zero value here means the combine accidentally
+            #   wrote into an off-axis slot — a real op bug. This is the **load-bearing
+            #   check**: combine_output is the actual op output that downstream code
+            #   reads, so leakage here means the test result is silently wrong.
+            # - per_expert_total_tokens: NOT checked. has_bias=True on 2x4 surfaces
+            #   benign L1 leakage here (the metadata output buffer overlaps in L1 with
+            #   weight tiles on off-axis chips, so unused regions echo bias data
+            #   interpreted as uint32). The dispatch-axis values are still correct,
+            #   downstream code only reads dispatch-axis entries. Asserting this would
+            #   require either zero-init in the op (cost: per-launch latency) or a more
+            #   sophisticated check (cost: brittle). Documented as known noise.
+            # - e_t / expert_activation: NOT checked. Their idle state is the
+            #   `init_expert_activation_buffer_async()` init pattern (per-row sentinel +
+            #   k+1 flags + zero scores), not a uniform value — too noisy to assert in
+            #   bulk and not a meaningful coverage gap (diagnostic buffers).
+            # - matmul_output: NOT checked. ~24 MB buffer per chip is not zero-init by
+            #   the kernel; off-axis output has uninitialized L1 denormals (~130 of ~24M
+            #   elements != 0, values ~1.7e-38). Real leakage at meaningful magnitude
+            #   would propagate into combine_output and light up the check above.
+            # No-op on 1xN meshes (num_replicated_devices=1).
+            logger.info(f"\n========== Off-axis Devices Idle Check (Iteration {i} Layer {layer_id}) ==========")
+            if not validate_off_axis_devices_idle(
+                mesh_device, mesh_shape, cluster_axis, combine_output_tensor, tensor_name="combine_output", idle_value=0
+            ):
+                replicated_axis_all_passed = False
+
     # Asserts
     logger.info(f"\n========== Asserts ==========")
     logger.info(f"\nPer Expert Total Tokens Verification: {'PASSED' if per_expert_tokens_all_passed else 'FAILED'}")
@@ -1918,12 +2063,14 @@ def run_moe_compute_test(
     logger.info(f"\nE-T Tensor Verification: {'PASSED' if e_t_all_passed else 'FAILED'}")
     logger.info(f"\nMatmul Output Tensor Verification: {'PASSED' if matmul_all_passed else 'FAILED'}")
     logger.info(f"\nCombine Output Tensor Verification: {'PASSED' if combine_all_passed else 'FAILED'}")
+    logger.info(f"\nOff-axis Devices Idle Check: {'PASSED' if replicated_axis_all_passed else 'FAILED'}")
 
     assert per_expert_tokens_all_passed, "Per expert total tokens tensor verification failed!"
     assert activation_all_passed, "Expert activation tensor verification failed!"
     assert e_t_all_passed, "E-T tensor verification failed!"
     assert matmul_all_passed, "Matmul output tensor verification failed!"
     assert combine_all_passed, "Combine output tensor verification failed!"
+    assert replicated_axis_all_passed, "Off-axis devices were not uniformly idle as expected!"
 
 
 # ---------------------------------------------------------------------------
@@ -2093,6 +2240,98 @@ def test_moe_compute_bh_lb(
         # op default num_links=4 — appropriate for WH 6U — overshoots and trips the bounds
         # check at fabric.cpp:163 with "Requested link index 2 is out of bounds". Pin to 2.
         num_links=2,
+    )
+
+
+# ---------------------------------------------------------------------------
+# BH single Loudbox 1x8 LINE bring-up (EP=8) - #43444 companion to test_moe_compute_bh_lb
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_BH_LB_1x8),
+    reason=f"BH Loudbox 1x8 LINE test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_BH_LB_1x8}",
+)
+@pytest.mark.parametrize("device_params", [MOE_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 8), (1, 8))], indirect=["mesh_device"])
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize(
+    "has_bias",
+    [
+        False,
+        # Same cross-variant teardown leak as `test_moe_compute_bh_lb` — running
+        # has_bias=False then has_bias=True back-to-back in the same pytest session
+        # hangs the second one. Workaround is identical: gate True behind
+        # `TT_MOE_BH_LB_RUN_BIAS=1`, run variants in separate pytest invocations.
+        pytest.param(
+            True,
+            marks=pytest.mark.skipif(
+                os.environ.get("TT_MOE_BH_LB_RUN_BIAS") != "1",
+                reason="Run with TT_MOE_BH_LB_RUN_BIAS=1 in a fresh pytest invocation; "
+                "see comment on test_moe_compute_bh_lb's parametrize",
+            ),
+        ),
+    ],
+)
+def test_moe_compute_bh_lb_1x8(mesh_device, mesh_shape, cluster_axis, has_bias):
+    """BH single Loudbox EP=8 every-chip-active companion to `test_moe_compute_bh_lb`.
+
+    Same physical hardware (8x p150b), same Linear topology, same num_links=2 — the only
+    structural change is the mesh-graph descriptor exposes the chassis as a (1, 8) LINE
+    instead of (2, 4) LINE/LINE. That collapses the cluster-axis math back to the legacy
+    1xN path (num_dispatch_devices == num_devices, num_replicated_devices == 1) but
+    *every chip hosts experts* — none are idle. This is the natural BH analog of the
+    WH `test_moe_compute_1x8` (which uses a 1x8 RING because the WH galaxy has chassis
+    wraparound; BH LB does not, so LINE).
+
+    Why two BH-LB tests:
+      - test_moe_compute_bh_lb (2x4 cax=1)  : validates the **2D cluster-axis code path**
+                                              (the bug surface this branch actually fixed:
+                                              cluster-axis-aware experts_per_device,
+                                              combine output * num_replicated_devices, etc.).
+                                              Only 4 chips host experts; 4 are idle.
+      - test_moe_compute_bh_lb_1x8 (1x8)    : validates **every chip on BH LB does real work**
+                                              under the same Linear-fabric / num_links=2
+                                              constraints — closer to a production-shape
+                                              workload, no idle replicas.
+
+    Same per-shape config as test_moe_compute_bh_lb (GPT-OSS hidden=N=2880, K=8, SILU,
+    experts_per_device=2, tokens_per_device=8, num_layers=1, num_iterations=2). With
+    EP=8 the total expert count doubles to 16 (vs 8 in the 2x4 variant).
+    """
+    experts_per_device = 2
+    tokens_per_device = 8
+    N = 2880
+    hidden_size = 2880
+    output_height_shard_dim = 4
+    output_width_shard_dim = 3
+    dtype = ttnn.bfloat16
+    activation_type = MoEActivationFunction.SILU
+    selected_experts_k = 8
+    # Same num_layers/num_iterations env-var overrides as the (2, 4) test — multi-layer
+    # is gated by the same DRAM->L1 reshard hang, gate the same way.
+    num_layers = int(os.environ.get("TT_MOE_BH_LB_LAYERS", "1"))
+    num_iterations = int(os.environ.get("TT_MOE_BH_LB_ITERS", "2"))
+
+    run_moe_compute_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
+        experts_per_device=experts_per_device,
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=selected_experts_k,
+        num_layers=num_layers,
+        num_iterations=num_iterations,
+        N=N,
+        hidden_size=hidden_size,
+        output_height_shard_dim=output_height_shard_dim,
+        output_width_shard_dim=output_width_shard_dim,
+        dtype=dtype,
+        enable_trace=False,
+        activation_type=activation_type,
+        has_bias=has_bias,
+        topology=ttnn.Topology.Linear,  # BH LB has no chassis wraparound; 1x8 view is still LINE
+        num_links=2,  # BH LB has 2 eth channels per adjacent-chip link
     )
 
 
