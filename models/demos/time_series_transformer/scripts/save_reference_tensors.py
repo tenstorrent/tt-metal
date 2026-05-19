@@ -17,6 +17,7 @@ import huggingface_hub
 from pathlib import Path
 from transformers import TimeSeriesTransformerForPrediction
 from huggingface_hub import hf_hub_download
+from safetensors.torch import save_file as save_safetensors
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 MODEL_ID          = "huggingface/time-series-transformer-tourism-monthly"
@@ -29,8 +30,17 @@ DATASET_REVISION  = "81c7ee3cf3317e51beb97327df55926cd5bbfadb"
 SAVE_DIR = Path(__file__).resolve().parent.parent / "reference"
 
 
+def _remove_stale_reference_tensors(save_dir: Path) -> None:
+    """Delete existing .pt and .safetensors files to avoid mixing outputs across runs."""
+    for f in save_dir.glob("*.pt"):
+        f.unlink()
+    for f in save_dir.glob("*.safetensors"):
+        f.unlink()
+
+
 def main():
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
+    _remove_stale_reference_tensors(SAVE_DIR)
 
     # ── Load model ────────────────────────────────────────────────────────────
     print("Loading HuggingFace reference model...")
@@ -68,11 +78,11 @@ def main():
     # Require weights_only=True for safe deserialization — fail fast otherwise
     try:
         batch = torch.load(file, map_location="cpu", weights_only=True)
-    except TypeError:
+    except TypeError as e:
         raise RuntimeError(
             f"torch {torch.__version__} does not support weights_only=True. "
-            "Please upgrade to torch>=2.0.0 for this demo's safe deserialization path."
-        )
+            "Please upgrade to torch>=2.1.0 for this demo's safe deserialization path."
+        ) from e
 
     past_values                 = batch["past_values"]
     past_time_features          = batch["past_time_features"]
@@ -104,13 +114,18 @@ def main():
     print(f"  past_observed_mask:     {past_observed_mask.shape}")
     print(f"  future_time_features:   {future_time_features.shape}")
 
-    # ── Save inputs ───────────────────────────────────────────────────────────
-    torch.save(past_values,                 SAVE_DIR / "input_past_values.pt")
-    torch.save(past_time_features,          SAVE_DIR / "input_past_time_features.pt")
-    torch.save(future_time_features,        SAVE_DIR / "input_future_time_features.pt")
-    torch.save(past_observed_mask,          SAVE_DIR / "input_past_observed_mask.pt")
-    torch.save(static_categorical_features, SAVE_DIR / "input_static_categorical.pt")
-    torch.save(static_real_features,        SAVE_DIR / "input_static_real.pt")
+    # ── Save inputs (safetensors format for safe cross-machine sharing) ───────
+    save_safetensors(
+        {
+            "input_past_values":                past_values.contiguous(),
+            "input_past_time_features":         past_time_features.contiguous(),
+            "input_future_time_features":       future_time_features.contiguous(),
+            "input_past_observed_mask":         past_observed_mask.contiguous(),
+            "input_static_categorical_features": static_categorical_features.contiguous(),
+            "input_static_real_features":       static_real_features.contiguous(),
+        },
+        str(SAVE_DIR / "inputs.safetensors"),
+    )
     print("\nInputs saved.")
 
     # ── Register hooks ────────────────────────────────────────────────────────
@@ -153,21 +168,27 @@ def main():
         )
     print("Forward pass complete.")
 
-    # ── Save outputs ──────────────────────────────────────────────────────────
+    # ── Save outputs (safetensors format) ─────────────────────────────────────
     print("\nSaving outputs:")
 
-    torch.save(out.encoder_last_hidden_state.cpu(), SAVE_DIR / "encoder_last_hidden_state.pt")
-    torch.save(out.loc.cpu(),                       SAVE_DIR / "loc.pt")
-    torch.save(out.scale.cpu(),                     SAVE_DIR / "scale.pt")
-    torch.save(out.static_features.cpu(),           SAVE_DIR / "static_features.pt")
+    main_outputs = {
+        "encoder_last_hidden_state": out.encoder_last_hidden_state.cpu().contiguous(),
+        "loc":                       out.loc.cpu().contiguous(),
+        "scale":                     out.scale.cpu().contiguous(),
+        "static_features":           out.static_features.cpu().contiguous(),
+    }
     print(f"  encoder_last_hidden_state: {out.encoder_last_hidden_state.shape}")
     print(f"  loc:                       {out.loc.shape}")
     print(f"  scale:                     {out.scale.shape}")
     print(f"  static_features:           {out.static_features.shape}")
 
+    captured_contiguous = {}
     for name, tensor in captured.items():
-        torch.save(tensor, SAVE_DIR / f"{name}.pt")
+        captured_contiguous[name] = tensor.contiguous()
         print(f"  {name}: {tensor.shape}")
+
+    save_safetensors(main_outputs,        str(SAVE_DIR / "outputs.safetensors"))
+    save_safetensors(captured_contiguous, str(SAVE_DIR / "intermediates.safetensors"))
 
     # ── Save static provenance config (committed, never changes) ─────────────
     config_dict = {
@@ -195,7 +216,7 @@ def main():
         "embedding_dimension":             cfg.embedding_dimension,
         "past_len":                        past_len,
     }
-    with open(SAVE_DIR / "config.json", "w") as f:
+    with open(SAVE_DIR / "config.json", "w", encoding="utf-8") as f:
         json.dump(config_dict, f, indent=2)
 
     # ── Save runtime environment (gitignored, not committed) ──────────────────
@@ -206,7 +227,7 @@ def main():
         "transformers_version":    transformers.__version__,
         "huggingface_hub_version": huggingface_hub.__version__,
     }
-    with open(SAVE_DIR / "config_runtime.json", "w") as f:
+    with open(SAVE_DIR / "config_runtime.json", "w", encoding="utf-8") as f:
         json.dump(config_runtime, f, indent=2)
 
     print(f"\nAll reference tensors saved to {SAVE_DIR}/")
