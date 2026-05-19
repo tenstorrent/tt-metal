@@ -75,6 +75,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
+    bool tile_pack_row_major = false,
     CoreCoord sub_device_start_core = {0, 0}) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
@@ -114,7 +115,11 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     const bool in1_is_sharded = in1_is_width_sharded || in1_is_height_sharded;
     const bool output_is_sharded = out_buffer->buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // TILE_PACK_ROW_MAJOR: compute packs the last K-block per M-row-group at absolute CB offsets.
+    // The helper reserves/pushes per row-group (smaller than the full out_block), so the
+    // shared out/interm0 L1 region assumption — that interm0 fully drains before out_cb is
+    // written — no longer holds. Force separate regions when tile_pack_row_major is on.
+    bool do_not_inplace_interm0_out_CB = (output_is_sharded && (per_core_M != out_block_h)) || tile_pack_row_major;
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -619,6 +624,16 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["OUT_SHARDED"] = "1";
+    }
+
+    // TILE_PACK_ROW_MAJOR: compute packs tiles at absolute CB offsets row-first, writer reads
+    // per-M-row-group. Must be emitted to both compute and writer sides (sender + both receiver
+    // variants) so their CB consumption orders stay aligned.
+    if (tile_pack_row_major) {
+        mm_kernel_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_sender_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_receiver_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_receiver_writer_other_noc_setup_defines["TILE_PACK_ROW_MAJOR"] = "1";
     }
 
     // Intermediate CB read
@@ -3342,6 +3357,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
     auto per_core_M = program_config.per_core_M;
     auto per_core_N = program_config.per_core_N;
     auto transpose_mcast = program_config.transpose_mcast;
+    auto tile_pack_row_major = program_config.tile_pack_row_major;
 
     TT_FATAL(
         operation_attributes.compute_kernel_config.has_value(),
@@ -3445,6 +3461,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
         untilize_out,
         fused_op_signaler,
         fused_matmul_bias_row_broadcastable(bias),
+        tile_pack_row_major,
         sub_device_start_core);
 }
 

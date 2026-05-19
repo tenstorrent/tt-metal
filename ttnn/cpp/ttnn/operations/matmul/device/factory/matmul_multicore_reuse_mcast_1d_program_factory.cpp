@@ -2983,6 +2983,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
+    bool tile_pack_row_major = false,
     CoreCoord sub_device_start_core = {0, 0}) {
     using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
@@ -3008,7 +3009,8 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // TILE_PACK_ROW_MAJOR: see matmul_multicore_reuse_mcast_2d_program_factory for rationale.
+    bool do_not_inplace_interm0_out_CB = (output_is_sharded && (per_core_M != out_block_h)) || tile_pack_row_major;
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -3386,6 +3388,13 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 
     if (output_is_sharded) {
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
+    }
+
+    // TILE_PACK_ROW_MAJOR: compute packs tiles at absolute CB offsets row-first, writer reads
+    // per-M-row-group. mcast_in0 path has one sender/writer kernel; no receiver variant to emit.
+    if (tile_pack_row_major) {
+        mm_kernel_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_sender_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
     }
 
     // TODO: SKIP_MCAST flag isn't used for the sharded reader kernel because internal mcast logic already works without
@@ -4023,6 +4032,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     bool output_is_sharded,
     bool untilize_out,
     bool row_broadcast_bias = true,
+    bool tile_pack_row_major = false,
     CoreCoord sub_device_start_core = {0, 0}) {
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
@@ -4048,7 +4058,8 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // TILE_PACK_ROW_MAJOR: see matmul_multicore_reuse_mcast_2d_program_factory for rationale.
+    bool do_not_inplace_interm0_out_CB = (output_is_sharded && (per_core_M != out_block_h)) || tile_pack_row_major;
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -4347,6 +4358,14 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     if (output_is_sharded) {
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
+    }
+
+    // TILE_PACK_ROW_MAJOR: compute packs tiles at absolute CB offsets row-first, writer reads
+    // per-M-row-group. mcast_in1 has sender + receiver writer variants — both need the define.
+    if (tile_pack_row_major) {
+        mm_kernel_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_sender_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_receiver_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
     }
 
     mm_kernel_in0_sender_defines["SKIP_MCAST"] = "1";
@@ -5226,6 +5245,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     auto per_core_N = program_config.per_core_N;
     auto mcast_in0 = program_config.mcast_in0;
     auto gather_in0 = program_config.gather_in0;
+    auto tile_pack_row_major = program_config.tile_pack_row_major;
 
     TT_FATAL(!gather_in0, "create_descriptor does not support gather_in0 mode");
 
@@ -5344,6 +5364,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
             untilize_out,
             fused_op_signaler,
             fused_matmul_bias_row_broadcastable(bias),
+            tile_pack_row_major,
             sub_device_start_core);
     }
     return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1_descriptor(
@@ -5387,6 +5408,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
         output.memory_config().is_sharded(),
         untilize_out,
         fused_matmul_bias_row_broadcastable(bias),
+        tile_pack_row_major,
         sub_device_start_core);
 }
 
