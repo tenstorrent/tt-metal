@@ -765,7 +765,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 return false;
             }
 
-            ZoneScopedN("ProcessPage");
+            // ZoneScopedN("ProcessPage");
             dev_state.socket->read(page_buf.data(), 1);
             uint32_t* read_ptr = page_buf.data();
 
@@ -789,7 +789,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             // Skip records with id==0 (non-GO dispatch commands like SET_NUM_WORKER_SEMS):
             // they have no valid program and may carry stale end timestamps.
             if (start_id != 0) {
-                ZoneScopedN("InvokeCallbacks");
+                // ZoneScopedN("InvokeCallbacks");
                 tt::ProgramRealtimeRecord record;
                 record.program_id = start_id;
                 record.start_timestamp = start_time;
@@ -814,7 +814,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 continue;
             }
 
-            ZoneScopedN("PollLoop");
+            // ZoneScopedN("PollLoop");
             bool any_data = false;
 
             for (auto& dev_state : devices_) {
@@ -832,14 +832,14 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             }
 
             if (!any_data) {
-                ZoneScopedN("Idle");
+                // ZoneScopedN("Idle");
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
         }
 
         // Drain in-flight PCIe pages until all sockets stay empty for several rounds.
         {
-            ZoneScopedN("DrainShutdown");
+            // ZoneScopedN("DrainShutdown");
             constexpr uint32_t kDrainQuietRounds = 10;
             uint64_t drain_pages = 0;
             uint32_t quiet_rounds = 0;
