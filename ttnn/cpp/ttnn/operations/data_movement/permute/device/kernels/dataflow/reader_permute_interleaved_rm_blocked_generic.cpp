@@ -112,8 +112,6 @@ void kernel_main() {
             uint64_t addr_offset = base_addr_offset + x * X_stride;
             uint64_t src_noc_addr = s0.get_noc_addr(addr_offset, w_offset);
 
-            // TODO(#32019): rows split across BLOCK/WIDTH-sharded cores need
-            // tt::data_movement::common::noc_async_read_sharded instead.
             noc_async_read(src_noc_addr, src_buffer_l1_addr + page_offset, w_read_size_bytes);
 
             // Advance output pointer by one page size for next row

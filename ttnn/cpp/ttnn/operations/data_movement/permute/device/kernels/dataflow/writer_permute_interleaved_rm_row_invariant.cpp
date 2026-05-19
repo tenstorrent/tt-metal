@@ -53,8 +53,6 @@ void kernel_main() {
         cb.wait_front(1);
         uint32_t l1_read_addr = cb.get_read_ptr();
         uint64_t dst_noc_addr = s0.get_noc_addr(dest_linear_idx);
-        // TODO(#32019): rows split across BLOCK/WIDTH-sharded cores need
-        // tt::data_movement::common::noc_async_write_sharded instead.
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
         noc_async_write_barrier();
         cb.pop_front(1);

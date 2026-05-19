@@ -436,12 +436,6 @@ _RM = ttnn.ROW_MAJOR_LAYOUT
 def test_transpose_universal_io_row_major(shape, dim0, dim1, input_factory, output_factory, dtype, device):
     in_mc = input_factory(device)
     out_mc = output_factory(device)
-    # Interleaved → BLOCK/WIDTH-sharded RM: permute writer can't split rows across shards.
-    if in_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED and out_mc.memory_layout in (
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-    ):
-        pytest.xfail("permute writer doesn't split sharded RM rows across cores (#32019)")
     run_transpose_test(
         shape,
         dim0,
