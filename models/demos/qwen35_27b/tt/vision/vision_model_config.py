@@ -104,16 +104,13 @@ class VisionModelArgs(ModelArgs):
         return layer_prefix + module_map[module_name]
 
     def reference_vision_model(self, depth=None):
-        # Workaround until Qwen2.5-VL is fully integrated into a HF release
-        from transformers.models.qwen3_vl.modeling_qwen3_vl import (
-            Qwen3VLForConditionalGeneration as AutoModelForCausalLM,
-        )
+        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5ForConditionalGeneration as AutoModelForCausalLM
 
-        print("Loading Qwen3-VL model: ", AutoModelForCausalLM)
+        print("Loading Qwen3.5 model: ", AutoModelForCausalLM)
         config = AutoModelForCausalLM.config_class.from_pretrained(self.CKPT_DIR)
         config.vision_config.depth = depth if depth is not None else config.vision_config.depth
         model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, config=config)
-        return model.visual
+        return model.model.visual
 
     def reference_vision_block(self, layer_num=0):
         return self.reference_vision_model().blocks[layer_num]

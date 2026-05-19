@@ -6,11 +6,11 @@ import os
 import pytest
 import torch
 from loguru import logger
-from tt.vision.vision_layernorm import LayerNorm
-from tt.vision.vision_model_config import VisionModelArgs
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.qwen35_27b.tt.vision.vision_layernorm import LayerNorm
+from models.demos.qwen35_27b.tt.vision.vision_model_config import VisionModelArgs
 
 
 @torch.no_grad()
@@ -65,7 +65,7 @@ def test_rms_norm_inference(
     # # Not sure if distributed norm is supported for layer norm
     # tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl=tt_ccl, TG=model_args.is_galaxy)
 
-    input = torch.rand(1, 1, max_seq_len, model_args.dim)
+    input = torch.rand(1, 1, max_seq_len, model_args.dim, dtype=torch.bfloat16)
     reference_output = reference_model(input)
 
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)

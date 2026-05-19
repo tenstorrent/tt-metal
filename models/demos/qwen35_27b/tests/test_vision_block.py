@@ -6,12 +6,12 @@ import os
 import pytest
 import torch
 from loguru import logger
-from tt.vision.vision_model_config import VisionModelArgs
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.qwen3_vl.reference.functional import qwen3_vision_transformer_preprocess
-from models.demos.qwen3_vl.tt.vision_block import VisionBlock
+from models.demos.qwen35_27b.tt.vision.functional import qwen3_5_vision_transformer_preprocess
+from models.demos.qwen35_27b.tt.vision.vision_block import VisionBlock
+from models.demos.qwen35_27b.tt.vision.vision_model_config import VisionModelArgs
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, standardize_hf_keys_multimodal
 
@@ -65,12 +65,12 @@ def test_vision_block_inference(
         state_dict = {f"{state_dict_prefix}{k}": v for k, v in state_dict.items()}
 
         # Example inputs and preprocessing
-        pt_input = torch.randn(1, 1, ref_seq_len, model_args.dim)
+        pt_input = torch.randn(1, 1, ref_seq_len, model_args.dim, dtype=torch.bfloat16)
         # pt_input = torch.load(f"ref_x_{layer_num - 1}.pt").unsqueeze(0).unsqueeze(0)
         (
             cu_seqlens,
             position_embeddings,
-        ) = qwen3_vision_transformer_preprocess(
+        ) = qwen3_5_vision_transformer_preprocess(
             seq_len=ref_seq_len,
             grid_thw=image_grid_thw,
             head_dim=model_args.head_dim,

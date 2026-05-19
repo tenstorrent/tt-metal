@@ -8,7 +8,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import comp_pcc
-from models.demos.qwen3_vl.reference.functional import qwen3_vision_transformer_preprocess
+from models.demos.qwen35_27b.tt.vision.functional import qwen3_5_vision_transformer_preprocess
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
@@ -162,12 +162,6 @@ class DropInVisionTransformer(torch.nn.Module):
         self.model_args = model_args
         self.debug = debug
 
-        deepstack_indices = [
-            idx
-            for idx in model_args.hf_config.vision_config.deepstack_visual_indexes
-            if idx < model_args.hf_config.vision_config.depth
-        ]
-        self.deepstack_visual_indexes = deepstack_indices
         state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
         state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
         state_dict_prefix = model_args.get_state_dict_prefix("VisionTransformer")
@@ -191,7 +185,7 @@ class DropInVisionTransformer(torch.nn.Module):
 
     def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass mimicking the Qwen2_5_VisionTransformerPretrainedModel interface.
+        Forward pass mimicking the Qwen3_5_VisionTransformerPretrainedModel interface.
 
         Args:
             pixel_values (torch.Tensor): Input pixel values tensor (equivalent to hidden_states for the ref model start).
@@ -206,7 +200,6 @@ class DropInVisionTransformer(torch.nn.Module):
         all_pixel_values = pixel_values
         all_grid_thw = grid_thw
         final_outputs = []
-        deepstack_visual_embeds_list = [None] * len(self.deepstack_visual_indexes)
         # todo)) refactor this code to leverage tt-mesh's ttnn.ShardTensorToMesh(mesh_device, dim=batch_size_dim) for data parallelism
         for grid_thw in all_grid_thw:
             # --- pick out the pixel_values for this users' images (grid_thw.prod() pixels) ---
@@ -220,7 +213,7 @@ class DropInVisionTransformer(torch.nn.Module):
             seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
 
             # 2. Use preprocessing function from reference/functional to get indices and embeddings
-            cu_seqlens, position_embeddings = qwen3_vision_transformer_preprocess(
+            cu_seqlens, position_embeddings = qwen3_5_vision_transformer_preprocess(
                 seq_len=unpadded_seq_len,
                 grid_thw=grid_thw,
                 head_dim=self.model_args.head_dim,
@@ -267,7 +260,7 @@ class DropInVisionTransformer(torch.nn.Module):
             tt_input = self.tt_model.prepare_input(patch_input, seq_len)
 
             # --- TT Model Execution ---
-            tt_out, deepstack_visual_embeds = self.tt_model(
+            tt_out = self.tt_model(
                 tt_input,
                 unpadded_seq_len=unpadded_seq_len,
                 rot_mats=rot_mats,  # Use rot_mats generated in this forward pass
@@ -286,11 +279,6 @@ class DropInVisionTransformer(torch.nn.Module):
             # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims
             final_output = ttnn.reshape(tt_out[:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
             ttnn.deallocate(tt_out)
-            deepstack_visual_embeds_output = [
-                ttnn.reshape(deepstack_visual_embeds[i][:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
-                for i in range(len(deepstack_visual_embeds))
-            ]
-            [ttnn.deallocate(deepstack_visual_embeds[i]) for i in range(len(deepstack_visual_embeds))]
 
             if self.debug:
                 logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
@@ -302,23 +290,11 @@ class DropInVisionTransformer(torch.nn.Module):
             # TODO: Modify this once we implement TP+DP to use just convert to desired output sharding
             final_output_sharded = ttnn.mesh_partition(final_output, 1)
             ttnn.deallocate(final_output)
-            deepstack_visual_embeds_sharded = [
-                ttnn.mesh_partition(deepstack_visual_embeds_output[i], 1)
-                for i in range(len(deepstack_visual_embeds_output))
-            ]
-            [ttnn.deallocate(deepstack_visual_embeds_output[i]) for i in range(len(deepstack_visual_embeds_output))]
 
             # 3. Aggregate in batched users list
             final_outputs.append(final_output_sharded)
-            for i in range(len(deepstack_visual_embeds_list)):
-                if deepstack_visual_embeds_list[i] is None:
-                    deepstack_visual_embeds_list[i] = [deepstack_visual_embeds_sharded[i]]
-                else:
-                    deepstack_visual_embeds_list[i].append(deepstack_visual_embeds_sharded[i])
 
         # concatenate all the outputs
         tt_out = ttnn.concat(final_outputs, dim=0)
-        for i in range(len(deepstack_visual_embeds_list)):
-            deepstack_visual_embeds_list[i] = ttnn.concat(deepstack_visual_embeds_list[i], dim=0)
         (ttnn.deallocate(final_outputs[i]) for i in range(len(final_outputs)))
-        return tt_out, deepstack_visual_embeds_list
+        return tt_out

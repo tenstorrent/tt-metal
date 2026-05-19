@@ -7,11 +7,11 @@ import os
 import pytest
 import torch
 from loguru import logger
-from tt.vision.vision_mlp import MLP
-from tt.vision.vision_model_config import VisionModelArgs
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.qwen35_27b.tt.vision.vision_mlp import MLP
+from models.demos.qwen35_27b.tt.vision.vision_model_config import VisionModelArgs
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
 
 
@@ -54,7 +54,7 @@ def test_mlp_inference(rows, batch_size, mesh_device, reset_seeds, ensure_gc):
         weight_cache_path=None,  # Don't cache random weights
         layer_num=0,
     )
-    torch_input = torch.randn(1, 1, rows, model_args.hf_config.vision_config.hidden_size)
+    torch_input = torch.randn(1, 1, rows, model_args.hf_config.vision_config.hidden_size, dtype=torch.bfloat16)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input,
