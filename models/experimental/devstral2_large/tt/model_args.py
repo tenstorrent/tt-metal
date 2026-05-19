@@ -212,6 +212,15 @@ class Devstral2Args:
 
     # ---- Weight loading helpers ----
 
+    def get_weight_cache_path(self, *, num_layers: Optional[int] = None) -> str:
+        """Default on-disk cache for tiled TTNN weights (see ``weight_loading.resolve_weight_cache_path``)."""
+        from models.experimental.devstral2_large.tt.weight_loading import resolve_weight_cache_path
+
+        path = resolve_weight_cache_path(None, self, num_layers=num_layers)
+        if path is None:
+            raise RuntimeError("Weight cache disabled (DEVSTRAL2_DISABLE_WEIGHT_CACHE=1)")
+        return path
+
     def state_dict_prefix(self, module: str = "", layer_idx: Optional[int] = None) -> str:
         """Mirror HF state dict layout: ``model.layers.<i>.<module>.`` (or ``model.<module>.``)."""
         parts = ["model"]

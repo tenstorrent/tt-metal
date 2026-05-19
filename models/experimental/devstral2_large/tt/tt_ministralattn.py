@@ -47,6 +47,11 @@ from models.experimental.devstral2_large.tt.tt_ministral_rotary_emb import (
     TtRotaryEmbedding,
     permute_split_half_to_interleaved,
 )
+from models.experimental.devstral2_large.tt.weight_loading import (
+    resolve_weight_cache_path,
+    upload_kv_cache_buffer,
+    upload_matmul_weight,
+)
 
 __all__ = ["TtAttention"]
 
@@ -93,30 +98,18 @@ def _to_tt_weight(
     dtype: ttnn.DataType,
     *,
     shard_dim: Optional[int],
+    weight_cache_path: Optional[str] = None,
+    cache_key: str,
 ) -> ttnn.Tensor:
-    """Upload HF Linear weight ``(out, in)`` as TTNN ``(in, out)``, optionally TP-sharded.
-
-    ``shard_dim`` is in the TTNN ``(in, out)`` orientation:
-      - ``shard_dim = -1`` → column-parallel (split the output dim ``out``).
-      - ``shard_dim = -2`` → row-parallel (split the input dim ``in``).
-      - ``shard_dim = None`` → replicate.
-    """
-    w = w_hf.to(torch.bfloat16).T.contiguous()  # (in, out)
-    if shard_dim is None:
-        mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-    else:
-        if args.cluster_axis == 1:
-            dims = (None, shard_dim)
-        else:
-            dims = (shard_dim, None)
-        mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=args.mesh_shape)
-    return ttnn.from_torch(
-        w,
-        device=mesh_device,
+    """Upload HF Linear weight ``(out, in)`` as TTNN ``(in, out)``, optionally TP-sharded."""
+    return upload_matmul_weight(
+        w_hf,
+        mesh_device,
+        args,
         dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mapper,
+        shard_dim=shard_dim,
+        weight_cache_path=weight_cache_path,
+        cache_key=cache_key,
     )
 
 
@@ -161,7 +154,7 @@ class TtAttention:
         rotary_emb: TtRotaryEmbedding,
         *,
         dtype: Optional[ttnn.DataType] = None,
-        weight_cache_path: Optional[str] = None,  # noqa: ARG002  (reserved for cache hookup)
+        weight_cache_path: Optional[str] = None,
     ) -> None:
         self.args = args
         self.mesh_device = mesh_device
@@ -188,33 +181,37 @@ class TtAttention:
         # The naive ``cat([k_w, v_w], dim=0)`` would give device 0 all-K and device N-1 all-V.
         kv_w = _interleave_kv_for_tp(k_w, v_w, args.tp)
 
-        self.q_proj = _to_tt_weight(q_w, mesh_device, args, self.dtype, shard_dim=-1)
-        self.kv_proj = _to_tt_weight(kv_w, mesh_device, args, self.dtype, shard_dim=-1)
-        self.o_proj = _to_tt_weight(o_w, mesh_device, args, self.dtype, shard_dim=-2)
+        wp = resolve_weight_cache_path(weight_cache_path, args)
+        pfx = prefix
+        self.q_proj = _to_tt_weight(
+            q_w, mesh_device, args, self.dtype, shard_dim=-1, weight_cache_path=wp, cache_key=f"{pfx}q_proj"
+        )
+        self.kv_proj = _to_tt_weight(
+            kv_w, mesh_device, args, self.dtype, shard_dim=-1, weight_cache_path=wp, cache_key=f"{pfx}kv_proj"
+        )
+        self.o_proj = _to_tt_weight(
+            o_w, mesh_device, args, self.dtype, shard_dim=-2, weight_cache_path=wp, cache_key=f"{pfx}o_proj"
+        )
 
-        # Per-device KV cache: [batch, n_local_kv_heads, max_seq_len, head_dim], DRAM, zero-init.
         cache_shape = (
             args.max_batch_size,
             args.n_local_kv_heads,
             args.max_seq_len,
             args.head_dim,
         )
-        zeros = torch.zeros(cache_shape, dtype=torch.bfloat16)
-        self.k_cache = ttnn.from_torch(
-            zeros,
-            device=mesh_device,
+        self.k_cache = upload_kv_cache_buffer(
+            cache_shape,
+            mesh_device,
             dtype=args.kv_cache_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            weight_cache_path=wp,
+            cache_key=f"{pfx}k_cache",
         )
-        self.v_cache = ttnn.from_torch(
-            zeros,
-            device=mesh_device,
+        self.v_cache = upload_kv_cache_buffer(
+            cache_shape,
+            mesh_device,
             dtype=args.kv_cache_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            weight_cache_path=wp,
+            cache_key=f"{pfx}v_cache",
         )
 
         self._compute_kernel_config = get_compute_kernel_config(mesh_device)

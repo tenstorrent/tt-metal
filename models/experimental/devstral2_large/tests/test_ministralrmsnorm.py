@@ -5,8 +5,7 @@
 """PCC test: TT ``TtRMSNorm`` vs HF ``Ministral3RMSNorm`` on Devstral-2-123B layer-0 weights.
 
 Uses the real Hugging Face config and downloads only ``model.layers.0.input_layernorm.weight``
-(one safetensor shard) from ``mistralai/Devstral-2-123B-Instruct-2512``. Skips cleanly if the
-Hub is unreachable.
+(one safetensor shard) via :func:`require_hf_weights` (pytest skip if download fails).
 """
 
 from __future__ import annotations
@@ -21,8 +20,8 @@ from transformers.models.ministral3.modeling_ministral3 import Ministral3RMSNorm
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstral2_large.tests._devstral_weights import (
-    load_hf_tensors_for_keys,
-    load_text_config,
+    require_hf_weights,
+    require_text_config,
     replicated_tt_to_torch,
 )
 from models.experimental.devstral2_large.tt.model_args import (
@@ -52,20 +51,11 @@ def _mesh_shape_from_env() -> tuple[int, int]:
     indirect=True,
 )
 def test_rmsnorm_pcc_real_weights(mesh_device, seq_len):
-    try:
-        text_cfg = load_text_config()
-    except Exception as exc:
-        pytest.skip(f"Could not load Devstral-2-123B HF config: {exc}")
-
+    text_cfg = require_text_config()
     weight_key = "model.layers.0.input_layernorm.weight"
-    try:
-        weights = load_hf_tensors_for_keys([weight_key])
-    except Exception as exc:
-        pytest.skip(f"Could not download Devstral-2-123B layer-0 norm weight: {exc}")
+    state_dict = require_hf_weights([weight_key])
     ref = Ministral3RMSNorm(text_cfg.hidden_size, eps=text_cfg.rms_norm_eps).to(torch.bfloat16).eval()
-    ref.weight.data.copy_(weights[weight_key])
-
-    state_dict = {weight_key: weights[weight_key]}
+    ref.weight.data.copy_(state_dict[weight_key])
     args = Devstral2Args.from_hf_config(
         text_cfg,
         mesh_shape=tuple(mesh_device.shape),

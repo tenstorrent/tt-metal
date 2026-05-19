@@ -28,6 +28,11 @@ from models.experimental.devstral2_large.tt.model_args import (
     DEVSTRAL2_LARGE_L1_SMALL_SIZE,
     Devstral2Args,
 )
+from models.experimental.devstral2_large.tt.weight_loading import (
+    NORM_WEIGHT_MEM_CONFIG,
+    resolve_weight_cache_path,
+    upload_replicated_tile,
+)
 
 __all__ = ["DEVSTRAL2_LARGE_L1_SMALL_SIZE", "TtRMSNorm"]
 
@@ -38,23 +43,22 @@ def _load_weight(
     hidden_size: int,
     mesh_device,
     dtype: ttnn.DataType,
+    *,
+    weight_cache_path: Optional[str] = None,
 ) -> ttnn.Tensor:
     """Load (or zero-init) the per-feature scale and upload as a replicated, tile-padded tensor."""
     if weight_key in state_dict:
-        w = state_dict[weight_key].to(torch.bfloat16)
+        w = state_dict[weight_key]
     else:
-        # Tests load a random HF module and pass its state dict; if a layer is constructed without
-        # a matching key we still want construction to succeed (errors caught at forward time).
         w = torch.ones(hidden_size, dtype=torch.bfloat16)
-    # Pad to ``[1, 1, TILE, hidden_size]`` so a single tile row holds the per-channel scale.
     w_padded = w.reshape(1, 1, 1, hidden_size).expand(1, 1, ttnn.TILE_SIZE, hidden_size).contiguous()
-    return ttnn.from_torch(
+    return upload_replicated_tile(
         w_padded,
-        device=mesh_device,
+        mesh_device,
         dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=NORM_WEIGHT_MEM_CONFIG,
+        weight_cache_path=weight_cache_path,
+        cache_key=weight_key,
     )
 
 
@@ -78,16 +82,19 @@ class TtRMSNorm:
         weight_key: str,
         *,
         dtype: Optional[ttnn.DataType] = None,
+        weight_cache_path: Optional[str] = None,
     ) -> None:
         self.args = args
         self.eps = args.rms_norm_eps
         self.mesh_device = mesh_device
+        cache_path = resolve_weight_cache_path(weight_cache_path, args)
         self.weight = _load_weight(
             state_dict,
             weight_key,
             args.hidden_size,
             mesh_device,
             dtype or args.weight_dtype,
+            weight_cache_path=cache_path,
         )
         self._compute_kernel_config = get_compute_kernel_config(mesh_device)
 

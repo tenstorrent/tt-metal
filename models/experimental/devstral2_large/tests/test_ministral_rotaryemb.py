@@ -23,7 +23,7 @@ from transformers.models.ministral3.modeling_ministral3 import (
     apply_rotary_pos_emb,
 )
 
-from models.experimental.devstral2_large.tests._devstral_weights import load_text_config
+from models.experimental.devstral2_large.tests._devstral_weights import require_text_config
 from models.experimental.devstral2_large.tt.model_args import Devstral2Args
 from models.experimental.devstral2_large.tt.tt_ministral_rotary_emb import (
     compute_llama4_scale,
@@ -33,10 +33,7 @@ from models.experimental.devstral2_large.tt.tt_ministral_rotary_emb import (
 
 @pytest.fixture(scope="module")
 def text_cfg():
-    try:
-        return load_text_config()
-    except Exception as exc:
-        pytest.skip(f"Could not load Devstral-2-123B HF config: {exc}")
+    return require_text_config()
 
 
 @pytest.fixture(scope="module")

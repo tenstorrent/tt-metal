@@ -30,10 +30,9 @@ from transformers.models.ministral3.modeling_ministral3 import Ministral3Model
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstral2_large.tests._devstral_weights import (
-    load_hf_tensors_for_keys,
     load_ministral3_model_weights,
-    load_text_config,
-    model_prefill_weight_keys,
+    require_model_weights,
+    require_text_config,
 )
 from models.experimental.devstral2_large.tt.model_args import (
     DEVSTRAL2_LARGE_L1_SMALL_SIZE,
@@ -119,17 +118,9 @@ def _setup_devstral_ministral3_partial_one_layer(
     *,
     max_seq_len: int,
 ) -> _ModelPccFixtures:
-    try:
-        text_cfg = load_text_config()
-    except Exception as exc:
-        pytest.skip(f"Could not load Devstral-2-123B HF config: {exc}")
-
+    text_cfg = require_text_config()
     ref_cfg = _shallow_config(text_cfg, NUM_LAYERS)
-    keys = model_prefill_weight_keys(NUM_LAYERS)
-    try:
-        state_dict = load_hf_tensors_for_keys(keys)
-    except Exception as exc:
-        pytest.skip(f"Could not download Devstral-2-123B model weights ({NUM_LAYERS} layer(s)): {exc}")
+    state_dict = require_model_weights(NUM_LAYERS)
 
     ref_cfg._attn_implementation = "eager"
     ref = Ministral3Model(ref_cfg).to(dtype=torch.bfloat16).eval()

@@ -23,67 +23,14 @@ from __future__ import annotations
 
 from typing import Optional
 
-import torch
 import ttnn
 
 from models.experimental.devstral2_large.tt.ccl_helpers import all_reduce_replicate
 from models.experimental.devstral2_large.tt.mem_config import get_compute_kernel_config, get_linear_program_config
 from models.experimental.devstral2_large.tt.model_args import Devstral2Args
+from models.experimental.devstral2_large.tt.weight_loading import resolve_weight_cache_path, upload_matmul_weight
 
 __all__ = ["TtMLP"]
-
-
-def _shard_dim_n(t: torch.Tensor, dim: int, n: int) -> list[torch.Tensor]:
-    """Split ``t`` along ``dim`` into ``n`` contiguous shards."""
-    sz = t.shape[dim]
-    if sz % n != 0:
-        raise ValueError(f"Cannot shard dim {dim} of size {sz} into {n} pieces")
-    return list(torch.chunk(t, n, dim=dim))
-
-
-def _load_colwise(
-    weight: torch.Tensor,  # HF shape: (out_features, in_features)
-    mesh_device,
-    args: Devstral2Args,
-    dtype: ttnn.DataType,
-) -> ttnn.Tensor:
-    """Column-parallel: shard along ``out_features`` (HF dim 0); upload as ``(in, out_per_dev)`` per device."""
-    # ttnn.linear expects weights in (in, out) layout, so transpose post-shard.
-    w = weight.to(torch.bfloat16).T.contiguous()  # (in, out)
-    return ttnn.from_torch(
-        w,
-        device=mesh_device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device,
-            dims=(None, -1) if args.cluster_axis == 1 else (-1, None),
-            mesh_shape=args.mesh_shape,
-        ),
-    )
-
-
-def _load_rowwise(
-    weight: torch.Tensor,  # HF shape: (out_features, in_features)
-    mesh_device,
-    args: Devstral2Args,
-    dtype: ttnn.DataType,
-) -> ttnn.Tensor:
-    """Row-parallel: shard along ``in_features`` (HF dim 1); upload as ``(in_per_dev, out)`` per device."""
-    w = weight.to(torch.bfloat16).T.contiguous()  # (in, out)
-    return ttnn.from_torch(
-        w,
-        device=mesh_device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device,
-            dims=(None, -2) if args.cluster_axis == 1 else (-2, None),
-            mesh_shape=args.mesh_shape,
-        ),
-    )
 
 
 class TtMLP:
@@ -114,9 +61,28 @@ class TtMLP:
         up_w = state_dict[prefix + "up_proj.weight"]
         down_w = state_dict[prefix + "down_proj.weight"]
 
-        self.gate_proj = _load_colwise(gate_w, mesh_device, args, self.dtype)
-        self.up_proj = _load_colwise(up_w, mesh_device, args, self.dtype)
-        self.down_proj = _load_rowwise(down_w, mesh_device, args, self.dtype)
+        wp = resolve_weight_cache_path(weight_cache_path, args)
+        self.gate_proj = upload_matmul_weight(
+            gate_w,
+            mesh_device,
+            args,
+            dtype=self.dtype,
+            shard_dim=-1,
+            weight_cache_path=wp,
+            cache_key=f"{prefix}gate_proj",
+        )
+        self.up_proj = upload_matmul_weight(
+            up_w, mesh_device, args, dtype=self.dtype, shard_dim=-1, weight_cache_path=wp, cache_key=f"{prefix}up_proj"
+        )
+        self.down_proj = upload_matmul_weight(
+            down_w,
+            mesh_device,
+            args,
+            dtype=self.dtype,
+            shard_dim=-2,
+            weight_cache_path=wp,
+            cache_key=f"{prefix}down_proj",
+        )
 
         self._compute_kernel_config = get_compute_kernel_config(mesh_device)
 

@@ -35,6 +35,11 @@ import torch
 import ttnn
 
 from models.experimental.devstral2_large.tt.model_args import Devstral2Args, RopeParameters
+from models.experimental.devstral2_large.tt.weight_loading import (
+    ROPE_TABLE_MEM_CONFIG,
+    resolve_weight_cache_path,
+    upload_replicated_tile,
+)
 
 __all__ = ["TtRotaryEmbedding", "precompute_cos_sin", "compute_llama4_scale", "get_rot_transformation_mat"]
 
@@ -185,6 +190,7 @@ class TtRotaryEmbedding:
         *,
         max_position_embeddings: Optional[int] = None,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        weight_cache_path: Optional[str] = None,
     ) -> None:
         self.args = args
         self.mesh_device = mesh_device
@@ -208,30 +214,31 @@ class TtRotaryEmbedding:
         self._cos_q_host = cos_q
         self._sin_q_host = sin_q
         self._scale_host = scale
+        cache_path = resolve_weight_cache_path(weight_cache_path, args)
 
-        def _upload(t: torch.Tensor) -> ttnn.Tensor:
+        def _upload(t: torch.Tensor, name: str) -> ttnn.Tensor:
             tt = t.to(torch.bfloat16).reshape(1, 1, max_pos, args.head_dim)
-            return ttnn.from_torch(
+            return upload_replicated_tile(
                 tt,
-                device=mesh_device,
+                mesh_device,
                 dtype=dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                memory_config=ROPE_TABLE_MEM_CONFIG,
+                weight_cache_path=cache_path,
+                cache_key=f"rotary_{name}",
             )
 
-        self.cos_q = _upload(cos_q)
-        self.sin_q = _upload(sin_q)
-        self.cos_k = _upload(cos)
-        self.sin_k = _upload(sin)
+        self.cos_q = _upload(cos_q, "cos_q")
+        self.sin_q = _upload(sin_q, "sin_q")
+        self.cos_k = _upload(cos, "cos_k")
+        self.sin_k = _upload(sin, "sin_k")
 
-        self.trans_mat = ttnn.from_torch(
+        self.trans_mat = upload_replicated_tile(
             get_rot_transformation_mat(),
-            device=mesh_device,
+            mesh_device,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            memory_config=ROPE_TABLE_MEM_CONFIG,
+            weight_cache_path=cache_path,
+            cache_key="rotary_trans_mat",
         )
 
     # --- Prefill: returns (cos_q, sin_q, cos_k, sin_k) sliced to ``[start:start+seq_len]`` ---

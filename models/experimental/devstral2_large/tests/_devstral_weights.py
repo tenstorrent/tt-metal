@@ -9,24 +9,93 @@ scales. The TT path expects ``bf16`` host tensors. Loading the full checkpoint i
 for unit tests, so each test downloads only the safetensor shards it needs via the index file
 and dequantizes FP8 weights with their ``weight_scale_inv`` tensors when present.
 
-If Hub access fails (gated repo, offline CI, etc.) the helpers raise; tests are expected to
-``pytest.skip`` on that signal.
+By default helpers **download from the Hub** when tensors are not already cached. Tests should
+call :func:`require_text_config` and :func:`require_hf_weights` (or the layer/model wrappers),
+which invoke ``pytest.skip`` if config or weight download fails.
+
+Set ``DEVSTRAL2_HF_LOCAL_ONLY=1`` to forbid network access (CI with a pre-populated HF cache).
 """
 
 from __future__ import annotations
 
 import json
 import os
+from typing import TYPE_CHECKING
 
+import pytest
 import torch
 from transformers import AutoConfig
 from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
 
-DEVSTRAL2_LARGE_REPO_ID = "mistralai/Devstral-2-123B-Instruct-2512"
+from models.experimental.devstral2_large.tt.weight_loading import DEVSTRAL2_LARGE_REPO_ID
+
+if TYPE_CHECKING:
+    pass
 
 _FP8_DTYPES = tuple(
     dt for name in ("float8_e4m3fn", "float8_e5m2", "float8_e4m3fnuz") if (dt := getattr(torch, name, None)) is not None
 )
+
+
+def _hf_local_files_only() -> bool:
+    """When true, only use files already in the HF cache (no Hub download)."""
+    return os.getenv("DEVSTRAL2_HF_LOCAL_ONLY", "").lower() in ("1", "true", "yes")
+
+
+def _skip_download_failure(what: str, exc: BaseException) -> None:
+    pytest.skip(
+        f"Could not download {what} from {DEVSTRAL2_LARGE_REPO_ID} "
+        f"(set HF_TOKEN if gated, or pre-cache weights). Error: {exc}"
+    )
+
+
+def require_text_config() -> Ministral3Config:
+    """Load HF config, downloading if needed; ``pytest.skip`` on failure."""
+    try:
+        return load_text_config()
+    except Exception as exc:
+        _skip_download_failure("Ministral3Config", exc)
+
+
+def require_hf_weights(keys: list[str]) -> dict[str, torch.Tensor]:
+    """Download/dequantize the given state-dict keys; ``pytest.skip`` on failure."""
+    try:
+        return load_hf_tensors_for_keys(keys)
+    except Exception as exc:
+        _skip_download_failure(f"weights {keys!r}", exc)
+
+
+def require_layer_weights(layer_idx: int) -> dict[str, torch.Tensor]:
+    """Download all tensors for one decoder layer."""
+    return require_hf_weights(layer_decoder_weight_keys(layer_idx))
+
+
+def require_attention_weights(layer_idx: int = 0) -> dict[str, torch.Tensor]:
+    p = f"model.layers.{layer_idx}.self_attn"
+    return require_hf_weights(
+        [
+            f"{p}.q_proj.weight",
+            f"{p}.k_proj.weight",
+            f"{p}.v_proj.weight",
+            f"{p}.o_proj.weight",
+        ]
+    )
+
+
+def require_mlp_weights(layer_idx: int = 0) -> dict[str, torch.Tensor]:
+    p = f"model.layers.{layer_idx}.mlp"
+    return require_hf_weights(
+        [
+            f"{p}.gate_proj.weight",
+            f"{p}.up_proj.weight",
+            f"{p}.down_proj.weight",
+        ]
+    )
+
+
+def require_model_weights(num_layers: int) -> dict[str, torch.Tensor]:
+    """Download embed + ``num_layers`` decoder blocks + final norm."""
+    return require_hf_weights(model_prefill_weight_keys(num_layers))
 
 
 def load_text_config() -> Ministral3Config:
@@ -39,7 +108,7 @@ def load_text_config() -> Ministral3Config:
     hf_cfg = AutoConfig.from_pretrained(
         DEVSTRAL2_LARGE_REPO_ID,
         trust_remote_code=True,
-        local_files_only=os.getenv("CI") == "true",
+        local_files_only=_hf_local_files_only(),
     )
     text = getattr(hf_cfg, "text_config", None) or hf_cfg
     if not isinstance(text, Ministral3Config):
@@ -112,7 +181,7 @@ def load_hf_tensors_for_keys(keys: list[str]) -> dict[str, torch.Tensor]:
     index_path = hf_hub_download(
         repo_id=DEVSTRAL2_LARGE_REPO_ID,
         filename="model.safetensors.index.json",
-        local_files_only=os.getenv("CI") == "true",
+        local_files_only=_hf_local_files_only(),
     )
     with open(index_path, encoding="utf-8") as f:
         weight_map = json.load(f)["weight_map"]
@@ -133,7 +202,7 @@ def load_hf_tensors_for_keys(keys: list[str]) -> dict[str, torch.Tensor]:
         shard_path = hf_hub_download(
             repo_id=DEVSTRAL2_LARGE_REPO_ID,
             filename=weight_map[key],
-            local_files_only=os.getenv("CI") == "true",
+            local_files_only=_hf_local_files_only(),
         )
         with safetensors_safe_open(shard_path, framework="pt", device="cpu") as sf:
             if key not in sf.keys():

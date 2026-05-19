@@ -19,10 +19,9 @@ from transformers.models.ministral3.modeling_ministral3 import (
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstral2_large.tests._devstral_weights import (
-    layer_decoder_weight_keys,
-    load_hf_tensors_for_keys,
     load_ministral3_decoder_layer_weights,
-    load_text_config,
+    require_layer_weights,
+    require_text_config,
     replicated_tt_to_torch,
 )
 from models.experimental.devstral2_large.tt.model_args import (
@@ -54,17 +53,9 @@ def _mesh_shape_from_env() -> tuple[int, int]:
     indirect=True,
 )
 def test_decoder_layer_prefill_pcc_real_weights(mesh_device, seq_len):
-    try:
-        text_cfg = load_text_config()
-    except Exception as exc:
-        pytest.skip(f"Could not load Devstral-2-123B HF config: {exc}")
-
+    text_cfg = require_text_config()
     layer_idx = 0
-    keys = layer_decoder_weight_keys(layer_idx)
-    try:
-        state_dict = load_hf_tensors_for_keys(keys)
-    except Exception as exc:
-        pytest.skip(f"Could not download Devstral-2-123B layer-0 decoder weights: {exc}")
+    state_dict = require_layer_weights(layer_idx)
 
     ref = Ministral3DecoderLayer(text_cfg, layer_idx=layer_idx).to(torch.bfloat16).eval()
     load_ministral3_decoder_layer_weights(ref, state_dict, layer_idx)
