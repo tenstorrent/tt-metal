@@ -18,7 +18,7 @@ from diffusers.models import AutoencoderKLWan
 from diffusers.models import WanTransformer3DModel as TorchWanTransformer3DModel
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.pipelines.wan.pipeline_output import WanPipelineOutput
-from diffusers.schedulers import UniPCMultistepScheduler
+from diffusers.schedulers import FlowMatchEulerDiscreteScheduler, UniPCMultistepScheduler
 from diffusers.video_processor import VideoProcessor
 from loguru import logger
 from transformers import AutoTokenizer, UMT5EncoderModel
@@ -31,7 +31,7 @@ from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ...models.vae.vae_wan2_1 import WanDecoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...solvers import UniPCSolver
+from ...solvers import EulerSolver, UniPCSolver
 from ...utils import cache, tensor
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import (
@@ -297,7 +297,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         scheduler = scheduler or UniPCMultistepScheduler.from_pretrained(
             checkpoint_name, subfolder="scheduler", flow_shift=12.0
         )
-        self._solver = UniPCSolver(scheduler=scheduler)
+        # Dispatch solver based on scheduler type. Upstream SVI Python reference
+        # uses FlowMatchEulerDiscreteScheduler with a plain Euler step; UniPC's
+        # order-2 correction shifts denoised latents and produces visible
+        # boundary artifacts in SVI Pro output.
+        if isinstance(scheduler, FlowMatchEulerDiscreteScheduler):
+            self._solver = EulerSolver(scheduler=scheduler)
+        else:
+            self._solver = UniPCSolver(scheduler=scheduler)
 
         if self.dynamic_load:
             # setup models that cannot be loaded together with the corresponding model.
@@ -397,6 +404,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": True,
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
+                # chunk_size=7 — the partial/inferred chunk=7 conv blockings
+                # in conv3d.py have been disabled, forcing them to fall back
+                # to _DEFAULT_BLOCKINGS (same as chunk=2/4/8/16 use and pass).
+                # Verified by test_wan_decoder_chunked_consistency at
+                # 480p/T=21/bf16/2x4 mesh.
                 "vae_t_chunk_size": 7,
             }
             device_configs[(4, 8)] = {
