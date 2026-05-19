@@ -97,6 +97,37 @@ def find_trace_dir(
     return None
 
 
+def check_first_token_match(trace, trace_dir: Path, first_token_id: int, first_token_prob: float) -> bool | None:
+    """Check whether the produced first token matches the trace reference.
+
+    Looks up the expected token ID from trace metadata or output_metadata.json.
+
+    Returns:
+        True if match, False if mismatch, None if no reference available.
+    """
+    ref_token_id = trace.metadata.get("next_token_id")
+    ref_token_text = trace.metadata.get("next_token_text")
+
+    if ref_token_id is None or ref_token_text is None:
+        output_meta_path = trace_dir / "output_metadata.json"
+        if output_meta_path.exists():
+            with open(output_meta_path) as f:
+                output_meta = json.load(f)
+            ref_token_id = ref_token_id or output_meta.get("next_token_id")
+            ref_token_text = ref_token_text or output_meta.get("next_token_text")
+
+    if ref_token_text is None:
+        ref_token_text = "N/A"
+
+    token_match = first_token_id == ref_token_id if ref_token_id is not None else None
+    logger.info(
+        f"Trace first token: TT={first_token_id} (prob={first_token_prob:.4f}), "
+        f"Trace={ref_token_id} [{repr(ref_token_text)}], "
+        f"Match={'YES' if token_match else 'NO' if token_match is not None else 'N/A'}"
+    )
+    return token_match
+
+
 # Subset name -> JSONL filename on HuggingFace
 INFINITEBENCH_SUBSETS = {
     "passkey": "passkey.jsonl",
