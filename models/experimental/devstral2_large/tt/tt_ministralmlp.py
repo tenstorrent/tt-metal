@@ -26,7 +26,11 @@ from typing import Optional
 import ttnn
 
 from models.experimental.devstral2_large.tt.ccl_helpers import all_reduce_replicate
-from models.experimental.devstral2_large.tt.mem_config import get_compute_kernel_config, get_linear_program_config
+from models.experimental.devstral2_large.tt.mem_config import (
+    get_compute_kernel_config,
+    get_compute_kernel_config_hifi4,
+    get_linear_program_config,
+)
 from models.experimental.devstral2_large.tt.model_args import Devstral2Args
 from models.experimental.devstral2_large.tt.weight_loading import resolve_weight_cache_path, upload_matmul_weight
 
@@ -62,39 +66,63 @@ class TtMLP:
         down_w = state_dict[prefix + "down_proj.weight"]
 
         wp = resolve_weight_cache_path(weight_cache_path, args)
+        # Experiment: gate_proj quantized to bfloat8_b with HiFi4 fidelity.
+        self.gate_proj_weight_dtype = ttnn.bfloat8_b
+        self.gate_proj_output_dtype = ttnn.bfloat8_b
         self.gate_proj = upload_matmul_weight(
             gate_w,
             mesh_device,
             args,
-            dtype=self.dtype,
+            dtype=self.gate_proj_weight_dtype,
             shard_dim=-1,
             weight_cache_path=wp,
-            cache_key=f"{prefix}gate_proj",
+            cache_key=f"{prefix}gate_proj_bfp8",
         )
+        # Experiment: up_proj quantized to bfloat8_b with HiFi4 fidelity.
+        self.up_proj_weight_dtype = ttnn.bfloat8_b
+        self.up_proj_output_dtype = ttnn.bfloat8_b
         self.up_proj = upload_matmul_weight(
-            up_w, mesh_device, args, dtype=self.dtype, shard_dim=-1, weight_cache_path=wp, cache_key=f"{prefix}up_proj"
+            up_w,
+            mesh_device,
+            args,
+            dtype=self.up_proj_weight_dtype,
+            shard_dim=-1,
+            weight_cache_path=wp,
+            cache_key=f"{prefix}up_proj_bfp8",
         )
+        # Experiment: down_proj quantized to bfloat8_b with HiFi4 fidelity.
+        self.down_proj_weight_dtype = ttnn.bfloat8_b
+        self.down_proj_output_dtype = ttnn.bfloat8_b
         self.down_proj = upload_matmul_weight(
             down_w,
             mesh_device,
             args,
-            dtype=self.dtype,
+            dtype=self.down_proj_weight_dtype,
             shard_dim=-2,
             weight_cache_path=wp,
-            cache_key=f"{prefix}down_proj",
+            cache_key=f"{prefix}down_proj_bfp8",
         )
 
         self._compute_kernel_config = get_compute_kernel_config(mesh_device)
+        self._compute_kernel_config_hifi4 = get_compute_kernel_config_hifi4(mesh_device)
 
     def __call__(self, x: ttnn.Tensor, *, mode: str = "decode") -> ttnn.Tensor:
         act_mem = self.args.get_activation_mem_config(mode, self.mesh_device)
         seq_len = max(1, int(x.shape[-2]))
 
-        def _linear(inp, weight, *, kind: str, activation: Optional[str] = None) -> ttnn.Tensor:
+        def _linear(
+            inp,
+            weight,
+            *,
+            kind: str,
+            activation: Optional[str] = None,
+            output_dtype: Optional[ttnn.DataType] = None,
+            compute_kernel_config=None,
+        ) -> ttnn.Tensor:
             return ttnn.linear(
                 inp,
                 weight,
-                dtype=self.args.activation_dtype,
+                dtype=output_dtype if output_dtype is not None else self.args.activation_dtype,
                 memory_config=act_mem,
                 activation=activation,
                 program_config=get_linear_program_config(
@@ -106,16 +134,37 @@ class TtMLP:
                     k=int(weight.shape[-2]),
                     n=int(weight.shape[-1]),
                 ),
-                compute_kernel_config=self._compute_kernel_config,
+                compute_kernel_config=compute_kernel_config
+                if compute_kernel_config is not None
+                else self._compute_kernel_config,
             )
 
-        gate = _linear(x, self.gate_proj, kind="gate", activation="silu")
-        up = _linear(x, self.up_proj, kind="up")
+        gate = _linear(
+            x,
+            self.gate_proj,
+            kind="gate",
+            activation="silu",
+            output_dtype=self.gate_proj_output_dtype,
+            compute_kernel_config=self._compute_kernel_config_hifi4,
+        )
+        up = _linear(
+            x,
+            self.up_proj,
+            kind="up",
+            output_dtype=self.up_proj_output_dtype,
+            compute_kernel_config=self._compute_kernel_config_hifi4,
+        )
         inner = ttnn.mul(gate, up, memory_config=act_mem)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
 
-        down = _linear(inner, self.down_proj, kind="down")
+        down = _linear(
+            inner,
+            self.down_proj,
+            kind="down",
+            output_dtype=self.down_proj_output_dtype,
+            compute_kernel_config=self._compute_kernel_config_hifi4,
+        )
         ttnn.deallocate(inner)
 
         return all_reduce_replicate(
