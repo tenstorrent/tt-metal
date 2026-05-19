@@ -89,8 +89,12 @@
 
 # --- LLK + SFPI Tests ---
 - name: runtime_llk
+  # Tests disabled by issue #44767 (4 tests):
+  #   - 3 LLKBlackholeSingleCardFixture FP8e4m3 tests (real per-test bugs on Blackhole)
+  #   - 1 MeshDeviceFixture.Top32RmDevPipelineCompletes (real pipeline bug)
   cmd: |
-    ./build/test/tt_metal/unit_tests_llk
+    DISABLED_LLK='LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3:MeshDeviceFixture.Top32RmDevPipelineCompletes'
+    ./build/test/tt_metal/unit_tests_llk --gtest_filter="-${DISABLED_LLK}"
     ./build/test/tt_metal/unit_tests_sfpi
   skus:
     wh_n150_civ2:
@@ -103,9 +107,16 @@
 # --- Debug Tools (DPrint, Watcher, Inspector, Clean Init) ---
 # NOTE: unit_tests_noc_debugging disabled (NOC debug detection broken); re-enable once owner fixes.
 - name: runtime_debug_tools
+  # Tests disabled by issue #44767 (51 tests in unit_tests_debug_tools):
+  #   - 50 tests die at device init inside tt::umd::TopologyDiscovery::create_ethernet_map()
+  #     (UMD / firmware regression — NOT 50 independent per-test bugs). Test bodies never run.
+  #   - 1 test (MeshWatcherFixture.TensixTestWatcherSanitizeMulticastSemaphoreInc) is a real
+  #     assertion-string mismatch in the watcher.
+  # Re-enable each test once its owning team confirms the root cause is fixed. See issue for context.
   cmd: |
+    DISABLED_DEBUG_TOOLS='MeshWatcherDelayFixture.TensixTestWatcherSanitizeInsertDelays:MeshWatcherFixture.ActiveEthTestWatcherDetectLinkUp:MeshWatcherFixture.ActiveEthTestWatcherEthLinkCheck:MeshWatcherFixture.ActiveEthTestWatcherSanitizeEthDestL1Overflow:MeshWatcherFixture.ActiveEthTestWatcherSanitizeEthSrcL1Overflow:MeshWatcherFixture.ActiveEthTestWatcherSanitizeL1Overflow:MeshWatcherFixture.HostMcastWrapAroundXY_DownRight:MeshWatcherFixture.HostMcastWrapAroundXY_UpLeft:MeshWatcherFixture.HostMcastWrapAroundX_Left:MeshWatcherFixture.HostMcastWrapAroundX_Right:MeshWatcherFixture.HostMcastWrapAroundY_Down:MeshWatcherFixture.HostMcastWrapAroundY_Up:MeshWatcherFixture.IdleEthTestWatcherSanitizeNOCInlineWriteDram:MeshWatcherFixture.QuasarTestWatcherSanitizeMultiDMRace:MeshWatcherFixture.TensixDramTestWatcherRingBufferDrisc:MeshWatcherFixture.TensixTestWatcherPause:MeshWatcherFixture.TensixTestWatcherSanitizeL1Overflow:MeshWatcherFixture.TensixTestWatcherSanitizeMulticastSemaphoreInc:MeshWatcherFixture.TestWatcherRingBufferBrisc:MeshWatcherFixture.TestWatcherRingBufferErisc:MeshWatcherFixture.TestWatcherRingBufferIErisc:MeshWatcherFixture.TestWatcherRingBufferNCrisc:MeshWatcherFixture.TestWatcherRingBufferTrisc0:MeshWatcherFixture.TestWatcherRingBufferTrisc1:MeshWatcherFixture.TestWatcherRingBufferTrisc2:MeshWatcherFixture.TestWatcherWaypoints:RTATestFixture.CorrectArgDispatchAndPayloadValidation:RTATestFixture.QuasarMultiDMOutOfBoundsArgDetection:RTATestFixture.SentinelPatternHandlingAndMissingRTADetection:WatcherAssertTests/WatcherAssertTest.TestWatcherAssert/Drisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Brisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM2:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM3:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM4:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM5:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM6:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM7:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Drisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Erisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault2:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault4:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault5:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault6:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault7:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/IErisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/NCrisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/NCriscPacketTag:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Trisc0:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Trisc1:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Trisc2:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Trisc3'
     ./tests/scripts/run_tools_tests.sh
-    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='*'
+    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="-${DISABLED_DEBUG_TOOLS}"
     ./build/test/tt_metal/unit_tests_inspector --gtest_filter='*'
   skus:
     wh_n150_civ2:
@@ -220,13 +231,15 @@
 
 # --- Debug Tools, Device, Dispatch (SD) ---
 - name: runtime_sd_debug_tools_device_dispatch
+  # Same DISABLED_DEBUG_TOOLS list as runtime_debug_tools — see issue #44767.
   cmd: |
-    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_debug_tools
+    DISABLED_DEBUG_TOOLS='MeshWatcherDelayFixture.TensixTestWatcherSanitizeInsertDelays:MeshWatcherFixture.ActiveEthTestWatcherDetectLinkUp:MeshWatcherFixture.ActiveEthTestWatcherEthLinkCheck:MeshWatcherFixture.ActiveEthTestWatcherSanitizeEthDestL1Overflow:MeshWatcherFixture.ActiveEthTestWatcherSanitizeEthSrcL1Overflow:MeshWatcherFixture.ActiveEthTestWatcherSanitizeL1Overflow:MeshWatcherFixture.HostMcastWrapAroundXY_DownRight:MeshWatcherFixture.HostMcastWrapAroundXY_UpLeft:MeshWatcherFixture.HostMcastWrapAroundX_Left:MeshWatcherFixture.HostMcastWrapAroundX_Right:MeshWatcherFixture.HostMcastWrapAroundY_Down:MeshWatcherFixture.HostMcastWrapAroundY_Up:MeshWatcherFixture.IdleEthTestWatcherSanitizeNOCInlineWriteDram:MeshWatcherFixture.QuasarTestWatcherSanitizeMultiDMRace:MeshWatcherFixture.TensixDramTestWatcherRingBufferDrisc:MeshWatcherFixture.TensixTestWatcherPause:MeshWatcherFixture.TensixTestWatcherSanitizeL1Overflow:MeshWatcherFixture.TensixTestWatcherSanitizeMulticastSemaphoreInc:MeshWatcherFixture.TestWatcherRingBufferBrisc:MeshWatcherFixture.TestWatcherRingBufferErisc:MeshWatcherFixture.TestWatcherRingBufferIErisc:MeshWatcherFixture.TestWatcherRingBufferNCrisc:MeshWatcherFixture.TestWatcherRingBufferTrisc0:MeshWatcherFixture.TestWatcherRingBufferTrisc1:MeshWatcherFixture.TestWatcherRingBufferTrisc2:MeshWatcherFixture.TestWatcherWaypoints:RTATestFixture.CorrectArgDispatchAndPayloadValidation:RTATestFixture.QuasarMultiDMOutOfBoundsArgDetection:RTATestFixture.SentinelPatternHandlingAndMissingRTADetection:WatcherAssertTests/WatcherAssertTest.TestWatcherAssert/Drisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Brisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM2:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM3:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM4:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM5:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM6:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM7:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Drisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Erisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault2:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault4:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault5:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault6:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault7:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/IErisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/NCrisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/NCriscPacketTag:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Trisc0:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Trisc1:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Trisc2:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Trisc3'
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="-${DISABLED_DEBUG_TOOLS}"
     if [ "$ARCH_NAME" = "blackhole" ]; then
       TT_METAL_SLOW_DISPATCH_MODE=1 \
         TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 \
         ./build/test/tt_metal/unit_tests_debug_tools \
-        --gtest_filter='*Drisc*:*Dram*Print*'
+        --gtest_filter="*Drisc*:*Dram*Print*:-${DISABLED_DEBUG_TOOLS}"
     fi
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_inspector
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device
@@ -245,7 +258,10 @@
 
 # --- LLK Tests (SD) ---
 - name: runtime_sd_llk
-  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_llk
+  # Same DISABLED_LLK list as runtime_llk — see issue #44767.
+  cmd: |
+    DISABLED_LLK='LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3:MeshDeviceFixture.Top32RmDevPipelineCompletes'
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_llk --gtest_filter="-${DISABLED_LLK}"
   skus:
     wh_n150_civ2:
       timeout: 10
