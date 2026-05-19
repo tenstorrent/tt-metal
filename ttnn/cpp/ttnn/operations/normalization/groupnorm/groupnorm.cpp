@@ -10,6 +10,9 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 
+#include <stdexcept>
+#include <string_view>
+
 namespace {
 
 using ttnn::operations::normalization::compute_num_virtual_cols;
@@ -96,48 +99,57 @@ int64_t get_group_norm_cores_across_channel(
 
 namespace ttnn::operations::normalization {
 
-ttnn::Tensor get_mask_tensor(
-    const ttnn::Tensor& input_tensor,
-    const std::optional<ttnn::Tensor>& input_mask,
-    const std::optional<ttnn::Tensor>& negative_mask,
-    const CoreGrid& core_grid,
-    const int num_groups) {
-    ttnn::Tensor mask = input_mask.value_or(ttnn::Tensor());
-    if (!input_mask.has_value() and !negative_mask.has_value()) {
-        // create input mask
-        int64_t num_channel = input_tensor.padded_shape()[-1];
-        int64_t num_cores_across_channel;
-        if (input_tensor.memory_config().buffer_type() == BufferType::L1) {
-            const auto mem_layout = input_tensor.memory_config().memory_layout();
-            const auto shard_spec = input_tensor.memory_config().shard_spec();
-            std::optional<ShardOrientation> shard_orientation = std::nullopt;
-            if (shard_spec.has_value()) {
-                shard_orientation = shard_spec->orientation;
-            }
-            num_cores_across_channel = get_group_norm_cores_across_channel(mem_layout, core_grid, shard_orientation);
-        } else {
-            uint32_t num_virtual_cols =
-                compute_num_virtual_cols(core_grid.x, num_groups, static_cast<uint32_t>(num_channel));
-            TT_FATAL(
-                num_virtual_cols > 0,
-                "group_norm: Cannot determine num_virtual_cols for core_grid x={}, num_groups={}, "
-                "num_channels={}. num_virtual_cols must satisfy (num_channels / nvc) % TILE_SIZE == 0 "
-                "and num_groups % nvc == 0.",
-                core_grid.x,
-                num_groups,
-                num_channel);
-            num_cores_across_channel = static_cast<int64_t>(num_virtual_cols);
+static int64_t compute_num_cores_across_channel(
+    const ttnn::Tensor& input_tensor, const CoreGrid& core_grid, const int num_groups) {
+    int64_t num_channel = input_tensor.padded_shape()[-1];
+    if (input_tensor.memory_config().buffer_type() == BufferType::L1) {
+        const auto mem_layout = input_tensor.memory_config().memory_layout();
+        const auto shard_spec = input_tensor.memory_config().shard_spec();
+        std::optional<ShardOrientation> shard_orientation = std::nullopt;
+        if (shard_spec.has_value()) {
+            shard_orientation = shard_spec->orientation;
         }
-        mask = create_group_norm_input_mask(
-            num_channel,
+        return get_group_norm_cores_across_channel(mem_layout, core_grid, shard_orientation);
+    } else {
+        uint32_t num_virtual_cols =
+            compute_num_virtual_cols(core_grid.x, num_groups, static_cast<uint32_t>(num_channel));
+        TT_FATAL(
+            num_virtual_cols > 0,
+            "group_norm: Cannot determine num_virtual_cols for core_grid x={}, num_groups={}, "
+            "num_channels={}. num_virtual_cols must satisfy (num_channels / nvc) % TILE_SIZE == 0 "
+            "and num_groups % nvc == 0.",
+            core_grid.x,
             num_groups,
-            num_cores_across_channel,
-            tt::tt_metal::DataType::BFLOAT16,
-            input_tensor.tensor_spec().tile().get_height(),
-            input_tensor.tensor_spec().tile().get_width());
-        mask = mask.to_device(input_tensor.device());
+            num_channel);
+        return static_cast<int64_t>(num_virtual_cols);
     }
-    return mask;
+}
+
+ttnn::Tensor get_mask_tensor(const ttnn::Tensor& input_tensor, const CoreGrid& core_grid, const int num_groups) {
+    int64_t num_channel = input_tensor.padded_shape()[-1];
+    int64_t num_cores_across_channel = compute_num_cores_across_channel(input_tensor, core_grid, num_groups);
+    ttnn::Tensor mask = create_group_norm_input_mask(
+        num_channel,
+        num_groups,
+        num_cores_across_channel,
+        tt::tt_metal::DataType::BFLOAT16,
+        input_tensor.tensor_spec().tile().get_height(),
+        input_tensor.tensor_spec().tile().get_width());
+    return mask.to_device(input_tensor.device());
+}
+
+ttnn::Tensor get_negative_mask_tensor(
+    const ttnn::Tensor& input_tensor, const CoreGrid& core_grid, const int num_groups) {
+    int64_t num_channel = input_tensor.padded_shape()[-1];
+    int64_t num_cores_across_channel = compute_num_cores_across_channel(input_tensor, core_grid, num_groups);
+    ttnn::Tensor neg_mask = create_group_norm_input_negative_mask(
+        num_channel,
+        num_groups,
+        num_cores_across_channel,
+        tt::tt_metal::DataType::BFLOAT16,
+        input_tensor.tensor_spec().tile().get_height(),
+        input_tensor.tensor_spec().tile().get_width());
+    return neg_mask.to_device(input_tensor.device());
 }
 
 }  // namespace ttnn::operations::normalization
@@ -148,7 +160,6 @@ Tensor group_norm(
     const Tensor& input_tensor,
     const int num_groups,
     const float epsilon,
-    const std::optional<Tensor>& input_mask,
     const std::optional<Tensor>& weight,
     const std::optional<Tensor>& bias,
     const std::optional<Tensor>& reciprocals,
@@ -159,7 +170,6 @@ Tensor group_norm(
     std::optional<Layout> output_layout,
     std::optional<int> num_out_blocks,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<Tensor>& negative_mask,
     bool use_welford) {
     if (input_tensor.layout() == Layout::TILE and inplace.has_value()) {
         TT_FATAL(
@@ -347,17 +357,46 @@ Tensor group_norm(
         validate_dram_grid(core_grid.value(), W, Ht, num_groups, input_padded_shape[0]);
     }
 
-    // auto generate mask tensor if both input_mask and negative_mask are not provided
-    ttnn::Tensor mask = operations::normalization::get_mask_tensor(
-        input_tensor, input_mask, negative_mask, core_grid.value(), num_groups);
+    ttnn::Tensor mask = operations::normalization::get_mask_tensor(input_tensor, core_grid.value(), num_groups);
 
     if (input_tensor.is_sharded()) {
+        const Layout effective_output_layout = output_layout.value_or(input_tensor.layout());
         const ttnn::prim::GroupNormShardedMultiCoreProgramConfig program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
             .im_data_format = DataType::BFLOAT16,
             .out_data_format = DataType::BFLOAT16,
             .inplace = inplace.value_or(false),
-            .output_layout = output_layout.value_or(input_tensor.layout())};
+            .output_layout = effective_output_layout};
+
+        // negative_mask reduces L1 CB usage at a small perf cost; only valid for ROW_MAJOR in/out
+        const bool negative_mask_applicable =
+            input_tensor.layout() == Layout::ROW_MAJOR && effective_output_layout == Layout::ROW_MAJOR;
+
+        // First attempt: run without negative mask (better performance)
+        try {
+            return ttnn::prim::group_norm(
+                input_tensor,
+                epsilon,
+                static_cast<uint32_t>(num_groups),
+                output_mem_config,
+                program_config,
+                kernel_config_val,
+                use_welford,
+                gamma,
+                beta,
+                mask,
+                std::nullopt,
+                reciprocals);
+        } catch (const std::runtime_error& e) {
+            const bool is_l1_clash = std::string_view(e.what()).find("clash") != std::string_view::npos;
+            if (!negative_mask_applicable || !is_l1_clash) {
+                throw;
+            }
+        }
+
+        // Fallback: retry with negative mask to relax L1 CB constraints
+        ttnn::Tensor neg_mask =
+            operations::normalization::get_negative_mask_tensor(input_tensor, core_grid.value(), num_groups);
         return ttnn::prim::group_norm(
             input_tensor,
             epsilon,
@@ -369,7 +408,7 @@ Tensor group_norm(
             gamma,
             beta,
             mask,
-            negative_mask,
+            neg_mask,
             reciprocals);
     }
     // When the user did not pin a core grid, defer num_out_blocks to the program
@@ -393,7 +432,7 @@ Tensor group_norm(
         gamma,
         beta,
         mask,
-        negative_mask,
+        std::nullopt,
         reciprocals);
 }
 

@@ -15,7 +15,6 @@ Tensor group_norm(
     const Tensor& input_tensor,
     int num_groups,
     float epsilon,
-    const std::optional<Tensor>& input_mask = std::nullopt,
     const std::optional<Tensor>& weight = std::nullopt,
     const std::optional<Tensor>& bias = std::nullopt,
     const std::optional<Tensor>& reciprocals = std::nullopt,
@@ -26,7 +25,6 @@ Tensor group_norm(
     std::optional<Layout> output_layout = std::nullopt,
     std::optional<int> num_out_blocks = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<Tensor>& negative_mask = std::nullopt,
     bool use_welford = false);
 
 }  // namespace ttnn

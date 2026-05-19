@@ -139,9 +139,6 @@ def test_group_norm_sharded_ex_external_cb_gap(device, specify_grid):
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
-    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
-
     gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.y)
     beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.y)
 
@@ -178,7 +175,6 @@ def test_group_norm_sharded_ex_external_cb_gap(device, specify_grid):
         input_tensor,
         num_groups=num_groups,
         epsilon=eps,
-        input_mask=input_mask_tensor,
         weight=gamma_t,
         bias=beta_t,
         memory_config=sharded_mem_config,
