@@ -12,7 +12,12 @@ from transformers import AutoTokenizer
 
 import ttnn
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
-from models.experimental.tt_symbiote.models.dots_ocr import TTNNDotsOCRPipeline
+from models.experimental.tt_symbiote.models.dots_ocr import TTNNDotsOCRPipeline, _create_paged_kv_cache
+from models.experimental.tt_symbiote.modules.dots_ocr_decoder_layer import (
+    TTNNDotsOCRDecoderLayer,
+    TTNNDotsOCRLayerStack,
+)
+from models.experimental.tt_symbiote.utils.device_management import set_device
 
 
 MESH_DEVICE_MAP = {
@@ -81,6 +86,11 @@ def _resolve_model_path():
 
 
 DOTS_OCR_LOCAL_PATH = _resolve_model_path()
+
+
+def _assert_l1_resident(tensor, name: str):
+    assert isinstance(tensor, ttnn.Tensor), f"{name} should be a TTNN tensor"
+    assert tensor.memory_config().buffer_type == ttnn.BufferType.L1, f"{name} should reside in L1"
 
 
 def _dots_ocr_pipeline_batch_size():
@@ -173,6 +183,163 @@ def test_dots_ocr_text(mesh_device):
 
     DispatchManager.save_stats_to_file("dots_ocr_text_timing_stats.csv")
     pipeline.release()
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [_dots_ocr_device_params()],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [_resolve_mesh_device_shape()],
+    indirect=True,
+)
+def test_dots_ocr_decode_one_layer_l1_boundaries(mesh_device):
+    """Exercise one decoder layer in decode mode and require L1 attn/MLP boundaries."""
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    torch.manual_seed(0)
+    torch.set_grad_enabled(False)
+
+    model_config = AutoConfig.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
+    model_config.num_hidden_layers = 1
+    hf_model = AutoModelForCausalLM.from_config(model_config, trust_remote_code=True).to(dtype=torch.bfloat16).eval()
+    model_config = hf_model.config
+    layer = TTNNDotsOCRDecoderLayer.from_torch(hf_model.model.layers[0])
+    layer._unique_name = "model.layers.0"
+    layer.override_children_module_names()
+    del hf_model
+
+    set_device(layer, mesh_device, register_forward_hook=False, dump_visualization=False)
+    layer.preprocess_weights()
+    layer.move_weights_to_device()
+
+    paged_cache = _create_paged_kv_cache(model_config, mesh_device, batch_size=1)
+    hidden_states = ttnn.from_torch(
+        torch.randn(1, 1, model_config.hidden_size, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    cache_position = ttnn.from_torch(
+        torch.zeros(1, dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    seen_boundaries = {"attn": False, "mlp": False}
+    original_attn_forward = layer.self_attn.forward
+    original_mlp_forward = layer.mlp.forward
+
+    def checked_attn_forward(*args, **kwargs):
+        attn_input = kwargs["hidden_states"] if "hidden_states" in kwargs else args[0]
+        _assert_l1_resident(attn_input, "attention input")
+        output = original_attn_forward(*args, **kwargs)
+        _assert_l1_resident(output[0], "attention output")
+        seen_boundaries["attn"] = True
+        return output
+
+    def checked_mlp_forward(hidden_states):
+        _assert_l1_resident(hidden_states, "MLP input")
+        output = original_mlp_forward(hidden_states)
+        _assert_l1_resident(output, "MLP output")
+        seen_boundaries["mlp"] = True
+        return output
+
+    layer.self_attn.forward = checked_attn_forward
+    layer.mlp.forward = checked_mlp_forward
+
+    output = layer.forward(hidden_states, past_key_value=paged_cache, cache_position=cache_position)[0]
+    ttnn.synchronize_device(mesh_device)
+
+    _assert_l1_resident(output, "decoder layer output")
+    assert seen_boundaries == {"attn": True, "mlp": True}
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [_dots_ocr_device_params()],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [_resolve_mesh_device_shape()],
+    indirect=True,
+)
+def test_dots_ocr_decode_full_decoder_l1_boundaries(mesh_device):
+    """Exercise all decoder layers in decode mode and require L1 attn/MLP boundaries."""
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    torch.manual_seed(0)
+    torch.set_grad_enabled(False)
+
+    model_config = AutoConfig.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
+    assert model_config.num_hidden_layers == 28, "dots.ocr decoder should have 28 layers"
+    hf_model = AutoModelForCausalLM.from_config(model_config, trust_remote_code=True).to(dtype=torch.bfloat16).eval()
+
+    decoder_layers = []
+    for layer_idx, hf_layer in enumerate(hf_model.model.layers):
+        layer = TTNNDotsOCRDecoderLayer.from_torch(hf_layer)
+        layer._unique_name = f"model.layers.{layer_idx}"
+        layer.override_children_module_names()
+        decoder_layers.append(layer)
+    del hf_model
+
+    decoder_stack = TTNNDotsOCRLayerStack(decoder_layers)
+    decoder_stack._unique_name = "model.layer_stack"
+    set_device(decoder_stack, mesh_device, register_forward_hook=False, dump_visualization=False)
+    decoder_stack.preprocess_weights()
+    decoder_stack.move_weights_to_device()
+
+    paged_cache = _create_paged_kv_cache(model_config, mesh_device, batch_size=1)
+    hidden_states = ttnn.from_torch(
+        torch.randn(1, 1, model_config.hidden_size, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    cache_position = ttnn.from_torch(
+        torch.zeros(1, dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    seen_boundaries = {layer_idx: {"attn": False, "mlp": False} for layer_idx in range(len(decoder_layers))}
+
+    for layer_idx, layer in enumerate(decoder_layers):
+        original_attn_forward = layer.self_attn.forward
+        original_mlp_forward = layer.mlp.forward
+
+        def checked_attn_forward(*args, _layer_idx=layer_idx, _original_forward=original_attn_forward, **kwargs):
+            attn_input = kwargs["hidden_states"] if "hidden_states" in kwargs else args[0]
+            _assert_l1_resident(attn_input, f"layer {_layer_idx} attention input")
+            output = _original_forward(*args, **kwargs)
+            _assert_l1_resident(output[0], f"layer {_layer_idx} attention output")
+            seen_boundaries[_layer_idx]["attn"] = True
+            return output
+
+        def checked_mlp_forward(hidden_states, _layer_idx=layer_idx, _original_forward=original_mlp_forward):
+            _assert_l1_resident(hidden_states, f"layer {_layer_idx} MLP input")
+            output = _original_forward(hidden_states)
+            _assert_l1_resident(output, f"layer {_layer_idx} MLP output")
+            seen_boundaries[_layer_idx]["mlp"] = True
+            return output
+
+        layer.self_attn.forward = checked_attn_forward
+        layer.mlp.forward = checked_mlp_forward
+
+    output = decoder_stack.forward(hidden_states, past_key_value=paged_cache, cache_position=cache_position)
+    ttnn.synchronize_device(mesh_device)
+
+    _assert_l1_resident(output, "decoder stack output")
+    assert all(boundaries == {"attn": True, "mlp": True} for boundaries in seen_boundaries.values())
 
 
 @pytest.mark.parametrize(

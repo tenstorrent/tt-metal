@@ -42,6 +42,12 @@ def _use_bfp8_decoder_weights(layer_idx) -> bool:
     return layer_idx >= 7
 
 
+def _ensure_l1_decode_tensor(tensor, is_decode: bool):
+    if is_decode and tensor.memory_config().buffer_type != ttnn.BufferType.L1:
+        return ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
+    return tensor
+
+
 class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
     def forward(self, inp):
         original_shape = inp.shape
@@ -117,13 +123,18 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         if hs.dtype != ttnn.bfloat16:
             hs = ttnn.typecast(hs, ttnn.bfloat16)
 
-        # Attention block
-        residual = hs
-        hs = self.input_layernorm(hs)
+        # # Attention block
+        # residual = hs
+        # hs = self.input_layernorm(hs)
 
         seq_len = hs.shape[-2]
         is_decode = seq_len == 1
         decode_l1_mc = ttnn.L1_MEMORY_CONFIG if is_decode else None
+
+        # Attention block
+        residual = hs
+        hs = self.input_layernorm(hs)
+        hs = _ensure_l1_decode_tensor(hs, is_decode)
         attn_out, _ = self.self_attn(
             hidden_states=hs,
             position_embeddings=None,
@@ -133,6 +144,7 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
             decode_cur_pos_tt=kwargs.get("decode_cur_pos_tt"),
             decode_cos_sin=kwargs.get("decode_cos_sin"),
         )
+        attn_out = _ensure_l1_decode_tensor(attn_out, is_decode)
 
         hs = (
             ttnn.add(residual, attn_out, memory_config=decode_l1_mc)
@@ -144,7 +156,9 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         # MLP block
         residual = hs
         hs = self.post_attention_layernorm(hs)
+        hs = _ensure_l1_decode_tensor(hs, is_decode)
         mlp_out = self.mlp(hs)
+        mlp_out = _ensure_l1_decode_tensor(mlp_out, is_decode)
 
         hs = (
             ttnn.add(residual, mlp_out, memory_config=decode_l1_mc)

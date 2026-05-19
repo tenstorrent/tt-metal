@@ -27,7 +27,14 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
 
     def move_weights_to_device_impl(self):
         if not _tp_requires_ccl(self.device):
-            return super().move_weights_to_device_impl()
+            super().move_weights_to_device_impl()
+            self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            return
 
         num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
         intermediate = self._gate_weight_torch.shape[0]
@@ -237,6 +244,8 @@ class TTNNDotsOCRMLP(TTNNModule):
         seq_len = hidden_states.shape[1]
         is_decode = int(seq_len) == 1
         activation_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+        if is_decode and hidden_states.memory_config().buffer_type != ttnn.BufferType.L1:
+            hidden_states = ttnn.to_memory_config(hidden_states, activation_mc)
 
         gate_up = self.fused_gate_up_proj(hidden_states, output_memory_config=activation_mc if is_decode else None)
 

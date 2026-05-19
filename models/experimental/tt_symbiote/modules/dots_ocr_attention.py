@@ -130,17 +130,17 @@ class TTNNDotsOCRAttention(TTNNModule):
                 k_chunk_size=512,
                 exp_approx_mode=True,
             )
-            self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
-                q_chunk_size=0,
-                k_chunk_size=0,
-                exp_approx_mode=True,
-            )
+            # self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
+            #     compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+            #     q_chunk_size=0,
+            #     k_chunk_size=0,
+            #     exp_approx_mode=True,
+            # )
             self.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
-                packer_l1_acc=True,
+                packer_l1_acc=False,
             )
             # Decode SDPA: HiFi2 (was LoFi in commit d1b17d1a3c6 -- swapped back
             # because LoFi at the per-token batch=1 K/V cache reads produces
@@ -152,7 +152,7 @@ class TTNNDotsOCRAttention(TTNNModule):
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
-                packer_l1_acc=True,
+                packer_l1_acc=False,
             )
 
         # Override QKV compute config: HiFi2 for decode
@@ -160,7 +160,13 @@ class TTNNDotsOCRAttention(TTNNModule):
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
+        )
+        self.o_proj.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
         )
 
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
@@ -389,7 +395,6 @@ class TTNNDotsOCRAttention(TTNNModule):
             program_config=getattr(self.sdpa, "decode_program_config", self.sdpa.program_config),
             compute_kernel_config=getattr(self.sdpa, "decode_compute_kernel_config", self.sdpa.compute_kernel_config),
         )
-
         sdpa_output_memcfg = ttnn.create_sharded_memory_config(
             shape=(32, self.head_dim),
             core_grid=ttnn.CoreGrid(y=1, x=batch_size),
@@ -402,12 +407,15 @@ class TTNNDotsOCRAttention(TTNNModule):
             attn_output,
             num_heads=self.num_attention_heads,
         )
+
         if batch_size < 32:
             attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
             attn_output = ttnn.slice(attn_output, [0, 0, 0, 0], [1, 1, batch_size, int(attn_output.shape[-1])])
 
         attn_output = self.o_proj(attn_output)
         attn_output = ttnn.squeeze(attn_output, 1)
+        if attn_output.memory_config().buffer_type != ttnn.BufferType.L1:
+            attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
         return attn_output, None
 
     def forward(
