@@ -67,13 +67,6 @@ def test_sfpu_binary_float(
     bcast_dim,
 ):
     if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
-        and mathop == MathOperation.SfpuElwsub
-        and bcast_dim == LlkBroadcastType.None_
-    ):
-        pytest.skip("Not currently supported in tests")
-
-    if (
         TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
         and bcast_dim != LlkBroadcastType.None_
     ):
