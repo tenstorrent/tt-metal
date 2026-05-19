@@ -476,17 +476,30 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                 } else if (
                     !mmio_ids_set.count(device_id) && dev->is_fabric_channels_not_ready_for_traffic() &&
                     !relay_broken_non_mmio.count(device_id) && dev->is_fabric_ring_sync_timed_out()) {
-                    // FIX TK guard: log that FIX BA was skipped for this device because the
-                    // channels_not_ready state came from a ring sync timeout (FIX TI path),
-                    // not the FIX AM STARTED-state path.  Without this log, FIX BA being skipped
-                    // is invisible — the device has channels_not_ready but no FIX BA entry.
+                    // FIX TK-2 (#42429): Originally FIX TK logged a warning here and skipped
+                    // relay_broken_non_mmio, because triggering FIX AC (PCIe reset of all MMIO ETH
+                    // channels) in the ring-sync-timeout state caused ALL MMIO ETH heartbeats to
+                    // time out (5s × 24 cores), leaving 4/8 chips visible at topology check.
+                    // The assumption was "runner tt-smi reset will recover" — but tt-smi does NOT
+                    // run between consecutive test processes within the same CI job.  Non-MMIO ERISCs
+                    // stuck at REMOTE_HANDSHAKE_COMPLETE survive to the next process, making devices
+                    // 4-7 unreachable (dead relay, CI run 26095942354 on tt-metal-ci-vm-t3k-04).
+                    //
+                    // Now safe to add to relay_broken_non_mmio:
+                    //   - FIX DU pre-scans MMIO ETH heartbeats before FIX AC and skips channels
+                    //     already at UMD firmware (heartbeat >> 16 == 0xABCDu), so FIX AC only
+                    //     resets channels still running fabric firmware.
+                    //   - FIX DK-2 in FabricFirmwareInitializer sent IMMEDIATELY_TERMINATE to MMIO
+                    //     channels at REMOTE_HANDSHAKE_COMPLETE; those that responded have already
+                    //     exited to UMD base firmware and will be skipped by FIX DU.
+                    //   - FIX AY then write-only resets non-MMIO ETH ERISCs via restored MMIO relay.
                     log_warning(
                         tt::LogAlways,
-                        "teardown: FIX TK — non-MMIO device {} has fabric_channels_not_ready_for_traffic "
-                        "but fabric_ring_sync_timed_out is set (FIX TI path). Skipping FIX BA "
-                        "relay_broken_non_mmio — channels are mid-transition from base-UMD, not "
-                        "STARTED-state. Runner tt-smi reset will recover. (#42429)",
+                        "teardown: FIX TK-2 — non-MMIO device {} has fabric_channels_not_ready_for_traffic "
+                        "and fabric_ring_sync_timed_out (FIX TI path). Adding to relay_broken_non_mmio "
+                        "to trigger FIX AC + FIX AY cleanup. FIX DU prevents heartbeat timeout. (#42429)",
                         device_id);
+                    relay_broken_non_mmio.insert(device_id);
                 }
                 if (dev->is_fabric_teardown_timed_out()) {
                     any_teardown_timed_out = true;

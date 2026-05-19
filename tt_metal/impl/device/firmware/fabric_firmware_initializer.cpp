@@ -535,6 +535,57 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 "Device {} (likely UMD relay timeout) — channel will proceed to force-reset.",
                 dev->id());
         }
+
+        // FIX QL (#42429): Broadcast IMMEDIATELY_TERMINATE to all non-master active ETH channels.
+        // The master router TERMINATE write above only reaches one core.  Non-master channels
+        // stuck at REMOTE_HANDSHAKE_COMPLETE (waiting in wait_for_notification for READY_FOR_TRAFFIC)
+        // only exit via got_immediate_termination_signal — the master router does NOT propagate
+        // IMMEDIATELY_TERMINATE to subordinate channels in all firmware paths.  Without this
+        // broadcast, non-master channels that never receive the termination signal survive teardown
+        // running fabric firmware, leaving the relay dead for the next run (SUSPECT 3).
+        // Best-effort: writes to relay-dead non-MMIO channels may fail; those are handled by
+        // FIX DK-2 in the force-reset second pass or by FIX AC + FIX AY in RiscFirmwareInitializer.
+        {
+            const uint32_t ql_master_chan_id = builder_ctx.get_fabric_master_router_chan(dev->id());
+            try {
+                const auto ql_fabric_node_id =
+                    control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+                const auto& ql_active_channels =
+                    control_plane_.get_active_fabric_eth_channels(ql_fabric_node_id);
+                for (const auto& [ql_chan_id, ql_direction] : ql_active_channels) {
+                    if (ql_chan_id == ql_master_chan_id) {
+                        continue;  // master already written above
+                    }
+                    try {
+                        auto ql_non_master_logical =
+                            cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(
+                                ql_chan_id, CoordSystem::LOGICAL);
+                        detail::WriteToDeviceL1(
+                            dev,
+                            ql_non_master_logical,
+                            termination_signal_address,
+                            termination_signal,
+                            CoreType::ETH);
+                        log_debug(
+                            tt::LogMetal,
+                            "FIX QL (#42429): IMMEDIATELY_TERMINATE written to Device {} chan={} "
+                            "(non-master ETH channel)",
+                            dev->id(),
+                            ql_chan_id);
+                    } catch (...) {
+                        // Best-effort: relay-dead non-MMIO channels may fail.
+                        log_debug(
+                            tt::LogMetal,
+                            "FIX QL (#42429): TERMINATE write failed for Device {} chan={} "
+                            "(likely relay-dead non-MMIO); FIX DK-2 or FIX AC+AY will handle.",
+                            dev->id(),
+                            ql_chan_id);
+                    }
+                }
+            } catch (...) {
+                // If channel enumeration fails, skip broadcast — force-reset handles them.
+            }
+        }
     }
 
     // Fix B: Poll ALL active ETH router channels per device for EDMStatus::TERMINATED before
