@@ -70,6 +70,27 @@ _DTYPE = {"bfloat16": ttnn.bfloat16, "bfloat8_b": ttnn.bfloat8_b}[_DTYPE_NAME]
 _DTYPE_BYTES = {"bfloat16": 2, "bfloat8_b": 1088 / 1024.0}[_DTYPE_NAME]  # avg bytes/elem (bf8_b includes header)
 
 
+# Cap GCB to leave headroom in L1 for the matmul CBs (in1 double-buffered, in2 ring history,
+# in0, out, interm0). The worker-core path also requires gcb_size >= one full per-receiver
+# tensor, so we clamp from below to that.
+_L1_BANK_HEADROOM_BYTES = 256 * 1024  # leave 256 KB for matmul + activation + output L1
+
+
+def _gcb_size_capped(block_size_bytes: int, max_buffered_blocks: int = 4) -> int:
+    # Matmul receiver needs ~block_size_bytes of L1 for in1_CB (the per-receiver weight slice
+    # fully buffered for gather_in0). To fit GCB + in1_CB + other matmul CBs in ~1.4 MB L1,
+    # the GCB itself can't exceed ~(1.4 MB - block_size_bytes - matmul overhead).
+    upper_l1 = max(block_size_bytes, 1_400_000 - block_size_bytes - _L1_BANK_HEADROOM_BYTES)
+    upper_cb_pages_bytes = 65000 * 16  # 16 B page * <65535 pages = ~1 MB
+    upper = min(upper_l1, upper_cb_pages_bytes)
+    desired = block_size_bytes * max_buffered_blocks
+    sized = max(block_size_bytes, min(desired, upper))
+    sized = _round_up(sized, 4096)
+    if sized // 16 >= 65535:
+        sized = (65000 * 16 // 4096) * 4096
+    return sized
+
+
 def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, row_offset: int = 0):
     """Return the CoreRangeSet for bank `bank_idx`'s receivers, laid out as the
     contiguous row-major slice of the ring at positions [b*recv_per_bank, (b+1)*recv_per_bank).
@@ -180,7 +201,7 @@ def test_bench_dram_core_repeats(device):
 
     # bytes/elem: bf16=2, bf8_b≈1.0625 (1088B/tile / 1024 elems/tile)
     block_size_bytes = int((_K * (_N // num_dram_banks) // num_receivers_per_bank) * _DTYPE_BYTES)
-    gcb_size = _round_up(block_size_bytes * 4, 4096)
+    gcb_size = _gcb_size_capped(block_size_bytes)
     bank_to_receivers = [(b, _bank_receivers_row_major(b, num_receivers_per_bank)) for b in range(num_dram_banks)]
     gcb = ttnn.create_dram_sender_global_circular_buffer(device, bank_to_receivers, gcb_size)
 
@@ -281,7 +302,7 @@ def test_bench_workercore_repeats(device):
     ]
     # Per-sender, per-block bytes (each sender pushes its share of the weight).
     block_size_bytes = int((_K * (_N // num_senders) // _NUM_RECV_PER_BANK) * _DTYPE_BYTES)
-    gcb_size = _round_up(block_size_bytes * 4, 4096)
+    gcb_size = _gcb_size_capped(block_size_bytes)
     gcb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, gcb_size)
 
     torch.manual_seed(0xBE8)
