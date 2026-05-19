@@ -64,9 +64,7 @@ class TTMistral3MultiModalProjector(LightweightModule):
         self.linear_2_weight = as_linear_weight(
             "linear_2", ttnn.ShardTensorToMesh(mesh_device, dim=-1), cache_suffix=".sharded_dim_-1"
         )
-        # See ``tt_patchmerger.py`` for the rationale: ``mcast_in0=True`` only handles
-        # M_tiles <= per_core_M correctly. We use the explicit fast path for tiny grids
-        # and fall back to ttnn auto-selected matmul for larger images.
+        # Small grids: fast mcast_in0 path; large images: auto matmul (see tt_patchmerger).
         self._linear_2_small_m_per_core_tiles = 8
         self.linear_2_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(11, 10),

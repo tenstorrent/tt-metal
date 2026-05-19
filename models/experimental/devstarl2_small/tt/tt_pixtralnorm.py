@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# TT RMSNorm for Pixtral vision (HF ``PixtralRMSNorm`` / ``LlamaRMSNorm`` math). Loads the affine ``weight`` vector from an explicit checkpoint key (no Llama-style ``base_url`` / ``layer_num`` layout). The forward uses ``ttnn.rms_norm`` with ``pad_by_zero``, matching the path used by ``TtLlamaRMSNorm`` in ``models/experimental/llama/tt/llama_layer_norm.py``.
+# Pixtral vision RMSNorm (explicit weight key, ttnn.rms_norm).
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def _resolve_weight_state_dict_key(weight_key: str | None, state_dict_prefix: st
 
 
 class TtPixtralRMSNorm(LightweightModule):
-    # Pixtral/Llama-style RMSNorm on TTNN (rms_norm with gamma); use eps=1e-5 for Pixtral blocks.
+    # Pixtral RMSNorm (eps=1e-5).
 
     def __init__(
         self,

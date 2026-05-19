@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# This is the modified version of the rmsnorm for the Mistral-Small-3.1-24B-Instruct-2503 model. We introduced the `simplified_rms_norm` function to be compatible with the Mistral-Small-3.1-24B-Instruct-2503 model.
+# RMSNorm with optional simplified_rms path (Mistral-Small / Devstral vision).
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -11,8 +11,6 @@ SHARD_HEIGHT = TILE  # rms_norm expects shard height == one tile
 
 
 class RMSNorm(LightweightModule):
-    # RMSNorm for MeshDevice replication and optional sharded input/output.
-
     def __init__(
         self,
         device,
@@ -57,8 +55,7 @@ class RMSNorm(LightweightModule):
 
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
 
-        # Gamma last dim must be TILE (32); flat [1,1,dim] fails on BH/WH.
-        self.weight = ttnn.as_tensor(
+        self.weight = ttnn.as_tensor(  # gamma last dim must be TILE (32)
             torch_weight,
             device=device,
             dtype=weight_dtype,

@@ -51,7 +51,7 @@ from models.experimental.devstarl2_small.devstral_utils.chat_reference import (
     REFERENCE_MESSAGES,
     REFERENCE_TOOLS,
 )
-from models.experimental.devstarl2_small.tt.tt_ministral3_model import TtMinistral3Model
+from models.experimental.devstarl2_small.tt.pipeline.tt_ministral3_model import TtMinistral3Model
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.lm_head import LMHead

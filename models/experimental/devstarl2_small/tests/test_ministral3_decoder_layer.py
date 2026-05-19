@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# PCC: Hugging Face ``Ministral3DecoderLayer`` (layer 0) vs ``TtMinistral3DecoderLayer`` on Devstral weights. Applies the shared Devstral FP8 scalar-scale compat patch at import.
+# PCC: HF Ministral3DecoderLayer vs TtMinistral3DecoderLayer (layer 0, Devstral).
 
 from __future__ import annotations
 
@@ -195,7 +195,7 @@ def test_ministral3_decoder_layer_pcc_devstral_weights(
 
     tt_out = tt_layer.forward_prefill(x_tt, rot_mats, position_ids=pos_tt)
 
-    # Decoder-layer wrapper gathers intermediate fractured tensors, so final output is replicated per device.
+    # Final output is replicated per device after gathers.
     tt_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0]
     if tt_torch.shape != ref_out.shape:
         tt_torch = tt_torch.reshape(ref_out.shape)

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# PCC test: Hugging Face PixtralAttention vs TtMistralImageAttention using real weights from mistralai/Devstral-Small-2-24B-Instruct-2512 (vision tower layer 0). Weights are loaded via safetensors partial read so the full 24B checkpoint is not loaded into RAM. The test sets ``HF_MODEL`` to the Devstral repo id (via ``monkeypatch``) so ``ModelArgs`` matches text/vision hyperparameters and device layouts used elsewhere for this family of models.
+# PCC: HF PixtralAttention vs TtMistralImageAttention (layer 0, safetensors partial load).
 
 import os
 

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-# Tenstorrent SwiGLU FFN for Hugging Face Ministral3 (``Ministral3MLP``). Implementation follows ``models.tt_transformers.tt.mlp.MLP`` (same ``w1``/``w3``/``w2`` mapping and forward schedule) so Devstral text checkpoints continue to use ``layers.{i}.feed_forward.*`` meta keys without importing that class.
+# Ministral3 SwiGLU FFN (same w1/w3/w2 layout as tt_transformers MLP).
 
 from __future__ import annotations
 
@@ -14,8 +14,7 @@ from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
 class TtMinistralMLP(LightweightModule):
-    # Wide prefill FF1/FF3: use minimal_matmul + chunked M on non-Galaxy (L1); cap chunk below.
-    _PREFILL_MLP_M_CAP = 128
+    _PREFILL_MLP_M_CAP = 128  # non-Galaxy prefill M chunk cap
 
     def __init__(
         self,
@@ -106,7 +105,6 @@ class TtMinistralMLP(LightweightModule):
             self.prefetcher.register_callback(register_weights)
 
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
-        # HF SwiGLU: down(act(gate(x)) * up(x)); w1/w2/w3 map to gate/down/up.
         full_seq_len = int(x.shape[-2])
         TG = self.args.is_galaxy
         layer_num = max(self.layer_num, 0)
@@ -131,7 +129,6 @@ class TtMinistralMLP(LightweightModule):
 
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, cfg_seq, self.prefetcher)
 
-        # Non-Galaxy wide prefill/decode: minimal_matmul avoids L1 blow-up from ttnn.linear + reuse-mcast.
         x_to_deallocate_after_ff13 = None
         if mode == Mode.PREFILL and not TG:
             grid = self.args.mlp1_3_grid(cfg_seq)
@@ -158,7 +155,7 @@ class TtMinistralMLP(LightweightModule):
             if x_to_deallocate_after_ff13 is not None:
                 ttnn.deallocate(x_to_deallocate_after_ff13)
         elif mode == Mode.DECODE and not TG and self.prefetcher is None:
-            # DRAM inputs + minimal_matmul: decode FF1/FF3 avoids L1 overflow from dram-sharded linear layout.
+            # decode FF1/FF3 via minimal_matmul (DRAM-sharded weights)
             x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
             grid = self.args.mlp1_3_grid(cfg_seq)
             mmc_ff13 = ttnn.MinimalMatmulConfig(

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-# Tenstorrent text self-attention for Hugging Face Ministral3 (``Ministral3Attention``). Extends :class:`~models.tt_transformers.tt.attention.Attention` with Llama-4-style **query scaling after RoPE** (see ``get_llama_4_attn_scale`` in Hugging Face ``modeling_ministral3``). Weight layout and fused ``wqkv``/``wo`` handling are unchanged from the base TT Llama-family attention; HF checkpoints still map ``q_proj``/``k_proj``/``v_proj`` into ``wq``/``wk``/``wv`` via the usual loaders. Llama-4 scali...
+# Ministral3 attention: base TT Attention + Llama-4 post-RoPE Q scaling + legacy HF rope.
 
 from __future__ import annotations
 
@@ -13,22 +13,7 @@ from models.tt_transformers.tt.common import Mode
 
 
 class TtMinistralAttention(Attention):
-    """TT Ministral attention like base :class:`Attention` with Llama-4 post-RoPE Q scaling.
-
-    HF ``rope_parameters`` supply ``llama_4_scaling_beta`` and ``original_max_position_embeddings``; missing → no scaling.
-
-    Rope override: the upstream attention was switched in the TT-Transformers
-    rebase to the new ``ttnn.experimental.rotary_embedding_hf`` kernel (sharded
-    HF rope). That kernel pairs with the new ``HfRotarySetup`` cos/sin layout
-    (per-batch height-sharded slices). The devstral text path was validated
-    against the **legacy** ``ttnn.experimental.rotary_embedding`` op with full
-    ``[1, 1, max_seq_len, head_dim]`` cos/sin caches, and post-rebase the new
-    kernel silently misrotates Q/K for the devstral decoder (caption decoded
-    to repeating tokens like "pigeon"). To stay bit-for-bit consistent with
-    the pre-rebase known-good path, we override the rope hooks here to call
-    the legacy op, and pair this with
-    ``HfRotarySetupOld`` inside :class:`TtMinistral3RotaryEmbedding`.
-    """
+    """Ministral attention with Llama-4 Q scaling; legacy HF rope (not rotary_embedding_hf)."""
 
     def __init__(
         self,
@@ -41,10 +26,7 @@ class TtMinistralAttention(Attention):
         self.original_max_position_embeddings = original_max_position_embeddings
         super().__init__(*args, **kwargs)
 
-        # Replace the upstream HF rope hooks (which target the new sharded
-        # ``rotary_embedding_hf`` kernel) with the legacy implementations
-        # below. Non-HF paths (mllama / qk-fused) are untouched.
-        if self.use_hf_rope:
+        if self.use_hf_rope:  # legacy rotary_embedding, not rotary_embedding_hf
             self.rotary_embedding_decode = self._hf_rope_decode_legacy
             self.rotary_embedding_prefill = self._hf_rope_prefill_legacy
 
@@ -63,11 +45,7 @@ class TtMinistralAttention(Attention):
         self.rotary_embedding_prefill = rotary_embedding_prefill_wrapped
 
     def _hf_rope_prefill_legacy(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
-        """HF-style prefill rope via legacy ``ttnn.experimental.rotary_embedding``.
-
-        Pre-rebase behaviour: cos/sin are full ``[1, 1, seq_len, head_dim]``
-        TILE tensors built by :class:`TtMinistral3RotaryEmbedding`.
-        """
+        """Legacy HF prefill rope (full TILE cos/sin from TtMinistral3RotaryEmbedding)."""
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
         if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:
@@ -78,14 +56,7 @@ class TtMinistralAttention(Attention):
         return q_heads_1QSD, k_heads_1KSD
 
     def _hf_rope_decode_legacy(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
-        """HF-style decode rope via legacy ``ttnn.experimental.rotary_embedding``.
-
-        Pre-rebase behaviour: per-batch loop with ``token_idx=0`` because
-        cos/sin are already per-position slices from
-        ``HfRotarySetupOld.get_rot_mats`` (shape ``[1, 1, batch_padded,
-        head_dim]`` TILE). Merge in L1, then reshard back to the original Q/K
-        memory configs and reshape away the tile padding the legacy op adds.
-        """
+        """Legacy HF decode rope (per-batch slices from HfRotarySetupOld.get_rot_mats)."""
         cos, sin = rot_mats[0], rot_mats[1]
         B_iter = self.batch_size_per_device_group
 
@@ -127,9 +98,7 @@ class TtMinistralAttention(Attention):
         ttnn.deallocate(q_merged_il)
         ttnn.deallocate(k_merged_il)
 
-        # Legacy op pads head count axis up to 32 (tile alignment) — restate
-        # the logical head count, then slice to the real n_local_*_heads.
-        q_heads_1BQD = ttnn.reshape(
+        q_heads_1BQD = ttnn.reshape(  # legacy rope pads heads to 32 tiles
             q_heads_1BQD,
             (1, self.batch_size_per_device_group, self.n_local_heads, self.head_dim),
             (1, self.batch_size_per_device_group, 32, self.head_dim),
@@ -147,9 +116,7 @@ class TtMinistralAttention(Attention):
         return self.llama_4_scaling_beta is not None and self.original_max_position_embeddings is not None
 
     def _llama4_scale_factor_from_positions_ttnn(self, pos_tt: ttnn.Tensor) -> ttnn.Tensor:
-        """HF Llama-4 scale in TT float32 (shape matches ``pos_tt``).
-
-        Use ``ttnn.add(..., 1.0)`` not ``ones_like``—ROW_MAJOR ``ones_like`` can host-upload inside trace capture."""
+        """Llama-4 scale factor in float32 (use add(1.0), not ones_like, for trace safety)."""
         orig = float(self.original_max_position_embeddings)
         beta = float(self.llama_4_scaling_beta)
         pos_f = ttnn.typecast(pos_tt, ttnn.float32)
@@ -231,9 +198,7 @@ class TtMinistralAttention(Attention):
         kv_cache=None,
         position_ids: ttnn.Tensor | None = None,
     ):
-        """Optional device ``position_ids`` ``[batch,seq]`` or ``[seq]`` for Llama-4 prefill Q scaling.
-
-        Ignored when Llama-4 scaling params are absent."""
+        """Prefill with optional device position_ids for Llama-4 Q scaling."""
         self._ministral_prefill_position_ids_tt = position_ids
         try:
             return super().forward_prefill(
@@ -285,7 +250,7 @@ class TtMinistralAttention(Attention):
         )
 
 
-# Alias __name__ to Attention so checkpoint prefixes match layers.{i}.attention.* (see get_state_dict_prefix).
+# Checkpoint prefix: layers.{i}.attention.*
 TtMinistralAttention.__name__ = "Attention"
 TtMinistralAttention.__qualname__ = "Attention"
 

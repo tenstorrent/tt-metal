@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# PCC test: Hugging Face ``Mistral3PatchMerger`` vs ``TTMistral3PatchMerger`` on Devstral weights. Loads the full multimodal checkpoint via ``ModelArgs.load_state_dict()`` (same path as ``test_ministralattn.py``), resolves ``multi_modal_projector.patch_merger.*`` in the meta state dict, and compares merger output on synthetic patch tokens shaped like vision backbone features. Requirements: - Enough host RAM / VRAM to load Devstral (~24B parameters / FP8→BF16).
+# PCC: HF Mistral3PatchMerger vs TTMistral3PatchMerger (Devstral multimodal weights).
 
 from __future__ import annotations
 

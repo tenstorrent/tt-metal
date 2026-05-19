@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.devstarl2_small.tt.tt_pixtral_seq_chunk import pixtral_vision_seq_chunk_len
+from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import pixtral_vision_seq_chunk_len
 
 
 class MistralTTVisionMLP(LightweightModule):

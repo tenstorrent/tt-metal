@@ -1,35 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Multimodal image+text demo: default prompt ``Describe what you see in this image.`` with optional
-``resource/sample.jpeg``.
+Multimodal image+text demo (HF or TT). Default prompt describes ``resource/sample.jpeg``.
 
-- Multimodal message: one image placeholder + text
-  ``"Describe what you see in this image."``
-
-``--vision-square-pixels S`` resizes to ``S×S`` (LANCZOS) before ``processor`` and overrides
-``--vision-max-edge`` (e.g. ``1540`` for square HF-style sizing).
-
-**HF path** (``--backend hf``, default): ``AutoProcessor`` + ``AutoModelForImageTextToText``; same
-``--vision-max-edge`` / ``--vision-square-pixels`` as TT before ``processor`` (default max-edge ``0`` =
-no PIL resize). Default image ``resource/sample.jpeg``; ``max_new_tokens=100``.
-
-**TT path** (``--backend tt``): loads :class:`TtDevstral2SmallModel` (Pixtral vision + projector +
-``TtMinistral3Model``), runs TT vision/projector, merges features into text embeddings like HF
-``masked_scatter`` on ``image_token_id``, then ``language_model.forward_prefill_from_embeddings``.
-Generation knobs align with ``devstral_utils.chat_reference`` where relevant. Pixtral L1 grows with
-patch count; ``0`` max-edge = no thumbnail (fine on HF; may exceed device L1 on TT).
-
-Usage (repo root)::
-
-    python -m models.experimental.devstarl2_small.demo.tt_image_demo
-
-    python -m models.experimental.devstarl2_small.demo.tt_image_demo --backend tt --seed 0
-
-    python -m models.experimental.devstarl2_small.demo.tt_image_demo --backend tt \\
-        --image path/to.jpg --text-layers 1 --max-new-tokens 16 --lm-head-cpu
+Run: ``python -m models.experimental.devstarl2_small.demo.tt_image_demo [--backend tt]``.
 """
 
 from __future__ import annotations
@@ -66,7 +41,7 @@ from models.experimental.devstarl2_small.devstral_utils import (
     tt_update_decode_input_buffers,
 )
 from models.experimental.devstarl2_small.devstral_utils.chat_reference import REFERENCE_GENERATE_KWARGS
-from models.experimental.devstarl2_small.tt.tt_devstral2_small_model import TtDevstral2SmallModel
+from models.experimental.devstarl2_small.tt.pipeline.tt_devstral2_small_model import TtDevstral2SmallModel
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.lm_head import LMHead
@@ -112,12 +87,7 @@ def _prepare_vision_image(
     vision_max_edge: int,
     vision_square_pixels: int | None,
 ) -> Image.Image:
-    """
-    PIL preprocessing before ``processor``: optional exact square resize, otherwise max-edge thumbnail.
-
-    If ``vision_square_pixels`` > 0, resize with LANCZOS to ``S×S`` (ignores ``vision-max-edge``).
-    Else apply :func:`_resize_image_max_edge`.
-    """
+    """PIL preprocess: square ``S×S`` if ``vision_square_pixels`` > 0, else max-edge thumbnail."""
     image = image.convert("RGB")
     if vision_square_pixels is not None and vision_square_pixels > 0:
         s = vision_square_pixels
@@ -197,9 +167,7 @@ def _tt_prefill_from_merged_embeds(
     model_args,
     seq_len_keep: int,
 ) -> ttnn.Tensor:
-    """Pad merged embeddings to TT prefill length and call ``forward_prefill_from_embeddings``.
-
-    Uploads ``[1,1,S,D]`` TILE tensors matching embed path rank."""
+    """Pad merged embeds and run ``forward_prefill_from_embeddings`` ([1,1,S,D] TILE upload)."""
     sl = merged_embeds_bsh.shape[1]
     if int(current_ids.shape[1]) != sl or seq_len_keep != sl:
         raise RuntimeError("current_ids / merged_embeds / seq_len_keep length mismatch.")
@@ -221,8 +189,7 @@ def _tt_prefill_from_merged_embeds(
     else:
         inputs_pad = merged_embeds_bsh
 
-    # [1, S, D] -> [1, 1, S, D] (same rank as ``embed_tokens`` + ``unsqueeze_to_4D``, not 5D).
-    h4 = inputs_pad.unsqueeze(1).contiguous()
+    h4 = inputs_pad.unsqueeze(1).contiguous()  # [1,S,D] -> [1,1,S,D]
     h_tt = ttnn.from_torch(
         h4,
         device=mesh_device,
@@ -290,20 +257,7 @@ def run_hf(
 
 
 def _devstral_bh_qb_decoders_precision(args):
-    """BH-QB tuned per-decoder precision recipe for Devstral-Small-2.
-
-    Builds on `_default_settings` (BFP8 everywhere, HIFI2 for attention decode)
-    and overrides only what makes a measurable difference at decode batch=1
-    on a 4-chip Blackhole Quiet Box:
-
-    * MLP FF1/FF3 → BFP4 + LoFi   (largest weight surface; SwiGLU is robust)
-    * MLP FF2     → BFP8 + HIFI2_FP16
-    * WQKV / WO   → BFP8 + HIFI2  (vs. accuracy template's BF16 + HIFI4)
-    * KV cache    → BFP8          (halves SDPA-decode bandwidth)
-    * SDPA decode → HIFI2_NA      (drops packer_l1_acc + fp32 accum, fine at decode)
-
-    Returned object is a callable consumed by ``ModelArgs(..., optimizations=...)``.
-    """
+    """BH-QB perf recipe: BFP4 MLP FF1/FF3, BFP8 attn/KV, HIFI2 decode ops."""
     settings = {
         "TensorPrecision": {
             TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
@@ -348,13 +302,7 @@ def run_tt(
         raise FileNotFoundError(f"TT multimodal path requires an image file; missing {image_path}.")
 
     if clear_weight_cache:
-        # SAFETY: this flag refuses to run unless ``TT_CACHE_PATH`` is set to an
-        # explicit, fully-resolved path that is NOT the project root, the user
-        # home, or the filesystem root. A previous version of this block fell
-        # back to ``Path("")`` (which resolves to ``PosixPath('.')`` — the CWD)
-        # and ran ``shutil.rmtree('.', ignore_errors=True)``, silently wiping
-        # the project tree. We do not repeat that mistake; manual deletion is
-        # safer than any fallback we could pick automatically here.
+        # Requires explicit TT_CACHE_PATH (never CWD/home/root) to avoid wiping the tree.
         import shutil
 
         raw = os.environ.get("TT_CACHE_PATH", "").strip()
@@ -374,7 +322,6 @@ def run_tt(
             logger.info(f"--clear-weight-cache: {cache_root} does not exist; nothing to do.")
         else:
             logger.warning(f"--clear-weight-cache: removing {cache_root}")
-            # NOT ``ignore_errors=True`` — surface real failures instead of silent partial wipes.
             shutil.rmtree(cache_root)
 
     os.environ["HF_MODEL"] = model_id
@@ -404,31 +351,14 @@ def run_tt(
     extra_tokens = max(0, max_new_tokens)
     need = prompt_len + extra_tokens + 2048
     max_seq = max(4096, need)
-    # Round max_seq so SDPA decode k_chunk_size (pow2 divisor of seq, cap 512) stays ≥512.
-    max_seq = ((max_seq + 511) // 512) * 512
+    max_seq = ((max_seq + 511) // 512) * 512  # SDPA decode k_chunk_size needs seq aligned to 512
 
     mesh_device = _tt_demo.open_devstral_demo_mesh(max(1, min(mesh_width, ttnn.get_num_devices())))
     try:
         dtype_tt = ttnn.bfloat16
-        # LM head matmul fires every decode token and is the largest single weight
-        # read per step (vocab × hidden). BFP8 storage halves DRAM traffic with no
-        # measurable quality loss on LM heads of this size.
-        #
-        # NOTE: embedding *cannot* use BFP8 — ``ttnn.embedding`` requires a
-        # ROW_MAJOR_LAYOUT weights table, while bfloat8_b / bfloat4_b are only
-        # legal in TILE_LAYOUT (asserts in py_to_tt_tensor.cpp). The embedding
-        # row read is also a per-token cost of just ~10 KB, so storing the table
-        # in BFP8 wouldn't move the needle even if it were allowed.
-        lm_head_dtype = ttnn.bfloat8_b
+        lm_head_dtype = ttnn.bfloat8_b  # embedding stays bfloat16 (ROW_MAJOR; BFP8 is TILE-only)
         embed_dtype = ttnn.bfloat16
-
-        # Default to ``DecodersPrecision.accuracy`` (BF16/BFP8) so multimodal captions
-        # stay coherent. The BFP4 BH-QB recipe (``--perf``) trades quality for tok/s.
         _opt = _devstral_bh_qb_decoders_precision if perf else None
-        if perf:
-            logger.info("Using BH-QB perf precision recipe (BFP4 MLP, BFP8 attn/KV).")
-        else:
-            logger.info("Using default accuracy precision recipe (omit --perf for quality).")
 
         model_args = ModelArgs(
             mesh_device,
@@ -439,64 +369,7 @@ def run_tt(
             cache_hf=True,
             optimizations=_opt,
         )
-        # Confirm the precision recipe survives ``ModelArgs`` construction.
-        # If this prints `accuracy` or `performance`, the recipe never reached
-        # ``decoders_optimizations`` and every weight will load at default
-        # (usually BF16 for attention) — that's the most common cause of
-        # "I switched to BFP8 but tok/s didn't move".
-        _opt = model_args.optimizations
-        logger.info(f"Active precision recipe: {getattr(_opt, '__name__', repr(_opt))}")
-        # Print the per-layer-0 ``ModelOptimizations`` map so we can see exactly
-        # which tensor groups are BFP4/BFP8/BF16 and which math fidelity each
-        # decode op uses. Look for ``wqkv: BFP8`` / ``kv_cache: BFP8`` /
-        # ``ff1_ff3: BFP4`` here — if any of those are ``bf16`` then the recipe
-        # didn't apply.
-        try:
-            layer0_opt = _opt.decoder_optimizations[0]
-            logger.info(f"Layer 0 tensor precisions:  {layer0_opt._names['TensorPrecision']}")
-            logger.info(f"Layer 0 op fidelities:      {layer0_opt._names['OpFidelity']}")
-        except (AttributeError, KeyError, IndexError) as e:
-            logger.warning(f"Could not introspect layer 0 optimizations: {e}")
-        # Confirm we're really on 4 chips. A common pitfall is launching with
-        # ``--mesh-width 4`` while only 1 chip is visible (no env / probe);
-        # ``open_devstral_demo_mesh`` then clamps to 1 and you get a fully
-        # serial single-chip run masquerading as 4-chip TP.
-        _mesh_shape = list(mesh_device.shape)
-        _num_devices = int(mesh_device.get_num_devices())
-        logger.info(
-            f"Mesh shape: {_mesh_shape}, num devices: {_num_devices}, num_devices(model_args): {model_args.num_devices}"
-        )
-        # Surface the actual ethernet link count the fabric exposes for this
-        # mesh shape, so we can tell whether the ``num_links=self.tt_ccl.get_num_links()``
-        # bump in ``tt_ministral3_decoder_layer.forward_decode`` (5x per token
-        # in DECODE, 2x per token in PREFILL) actually picked up >1 links. If
-        # this prints ``1`` everywhere then the BH-QB submesh only exposes a
-        # single link in this configuration and option B was a no-op; the
-        # decode-time CCL bottleneck must then be attacked via reduce-scatter
-        # / async overlap instead.
-        try:
-            from models.tt_transformers.tt.ccl import get_num_links as _get_num_links
-
-            _nl_any = _get_num_links(mesh_device, None)
-            _nl_ax0 = _get_num_links(mesh_device, 0)
-            _nl_ax1 = _get_num_links(mesh_device, 1)
-            logger.info(
-                f"Fabric links: cluster_axis=None -> {_nl_any}, "
-                f"cluster_axis=0 (NS) -> {_nl_ax0}, cluster_axis=1 (EW) -> {_nl_ax1}"
-            )
-        except Exception as _e:  # pragma: no cover - diagnostic only
-            logger.warning(f"Could not query fabric link count: {_e}")
-        # The two model paths use different multi-chip tensor conventions at the
-        # norm boundary:
-        #   * PREFILL: ``forward_prefill`` in ``tt_ministral3_decoder_layer.py``
-        #     already issues an ``all_gather(dim=3)`` after attention and after
-        #     MLP, so the residual is full-width on every chip when it reaches
-        #     RMSNorm. We must use the replicated norm (full gamma).
-        #   * DECODE: tensors stay width-fractured across chips (the residual
-        #     mem config slices by ``dim/num_devices``), so RMSNorm input is
-        #     1/N of the full hidden dim per chip. We must use the distributed
-        #     norm (auto-sharded gamma + all-gather of stats).
-        # Single chip: both modes use the replicated path (no CCL needed).
+        # PREFILL: replicated norm (all_gather before RMSNorm). DECODE: distributed norm on multi-chip.
         model_args.is_distributed_norm = types.MethodType(
             lambda self, mode: self.is_multichip and mode == Mode.DECODE,
             model_args,
@@ -540,28 +413,6 @@ def run_tt(
             vision_n_layers=None,
             embed_dtype=embed_dtype,
         )
-        logger.info(f"TT embedding weight dtype: {embed_dtype} (BFP8 unsupported for ROW_MAJOR embedding tables).")
-
-        # ── Ground-truth: what dtype did the layer-0 weights actually load with? ──
-        # This is the definitive check. If you see ``bfloat16`` for w1/wqkv after
-        # asking for BFP4/BFP8 in the recipe, the recipe never reached the layer
-        # constructors. If you see the expected narrower dtypes, the recipe is
-        # active and any tok/s shortfall is somewhere else (CCL, sampling, etc.).
-        try:
-            l0 = tt_devstral.language_model.layers[0]
-            mlp = getattr(l0, "feed_forward", None) or getattr(l0, "mlp", None)
-            attn = getattr(l0, "attention", None) or getattr(l0, "attn", None)
-            logger.info(
-                "Layer 0 actual weight dtypes:  "
-                f"w1={getattr(getattr(mlp, 'w1', None), 'dtype', '?')}  "
-                f"w2={getattr(getattr(mlp, 'w2', None), 'dtype', '?')}  "
-                f"w3={getattr(getattr(mlp, 'w3', None), 'dtype', '?')}  "
-                f"wqkv={getattr(getattr(attn, 'wqkv', None), 'dtype', '?')}  "
-                f"wo={getattr(getattr(attn, 'wo', None), 'dtype', '?')}  "
-                f"kv_cache={getattr(getattr(attn, 'layer_past', [None])[0], 'dtype', '?')}"
-            )
-        except Exception as e:  # pragma: no cover - diagnostic only
-            logger.warning(f"Could not introspect layer 0 actual weight dtypes: {e}")
 
         pos_vision = _vision_position_ids_tt(hf_inner, pixel_values, image_sizes_list, mesh_device)
         img_tt = tt_devstral.get_projected_image_features(pixel_values, image_sizes_list, pos_vision)
@@ -594,7 +445,6 @@ def run_tt(
                 weight_cache_path=model_args.weight_cache_path(lm_head_dtype),
                 max_columns_per_device=lm_head_max_cols,
             )
-            logger.info(f"TT LM head weight dtype: {lm_head_dtype}.")
 
         use_device_sampling = (
             not lm_head_cpu
@@ -664,7 +514,6 @@ def run_tt(
 
         tt_lm = tt_devstral.language_model
 
-        # Timing: TTFT = wall prefill→first token; first_traced_step_s shows first execute_trace overhead.
         stats = {
             "merge_s": 0.0,
             "prefill_s": 0.0,
@@ -680,12 +529,7 @@ def run_tt(
         }
 
         def _sample_from_tt_out(tt_out, seq_last_idx):
-            """Sample next token from prefill hidden states at ``seq_last_idx``.
-
-            Returns the sampled ``[1, 1]`` token tensor and accumulates lm-head /
-            sample timings into ``stats``. Used only for the prefill-side
-            first-token sample; decode-loop sampling runs inside the trace.
-            """
+            """Sample next token at ``seq_last_idx``; update ``stats`` lm-head/sample timings."""
             if sampling is not None:
                 assert tt_lm_head is not None
                 tok_slot = seq_last_idx % 32
@@ -725,7 +569,6 @@ def run_tt(
                 stats["sample_post_s"] += time.perf_counter() - t0
             return nid
 
-        # Optional Tracy signposts (best-effort import; skip when Tracy unavailable).
         try:
             from tracy import signpost as _profiler_signpost  # type: ignore
         except Exception:  # pragma: no cover - optional dependency
@@ -733,7 +576,6 @@ def run_tt(
             def _profiler_signpost(_name: str) -> None:
                 return None
 
-        # Prefill path: merge embeddings, KV fill, first-token sample.
         run_t0 = time.perf_counter()
         sl = int(current_ids.shape[1])
 
@@ -754,26 +596,18 @@ def run_tt(
         stats["first_sample_s"] = time.perf_counter() - t0
         _profiler_signpost("prefill-end")
 
-        # TTFT = wall time from start of prefill to first new token on host.
         stats["ttft_s"] = time.perf_counter() - run_t0
-        stats["steps"] = 1  # first token comes from sampling the prefill output
+        stats["steps"] = 1
 
-        # ── Per-step state kept entirely in Python primitives ────────────────
-        # ``next_id_scalar`` is the only host-side representation of the most
-        # recent token. We append generated tokens into ``generated_ids`` once
-        # at the end (single ``torch.cat``) so the hot path doesn't pay for an
-        # O(prompt_len + steps) tensor reallocation on every step.
         eos_set = set(eos_ids) if eos_ids else set()
         next_id_scalar = int(next_id.item())
         generated_ids: list[int] = [next_id_scalar]
-        decode_pos = int(current_ids.shape[1])  # position of THIS first generated token
+        decode_pos = int(current_ids.shape[1])
 
-        # Decode trace capture (warmup inside helper).
         decode_trace_ctx = None
         if max_new_tokens > 1 and next_id_scalar not in eos_set:
             decode_buffers = tt_alloc_decode_input_buffers(mesh_device)
             tt_update_decode_input_buffers(mesh_device, decode_buffers, next_id_scalar, decode_pos)
-            logger.info("Capturing decode trace (warmup + capture)…")
             _profiler_signpost("trace-capture-start")
             t_capture = time.perf_counter()
             decode_trace_ctx = tt_capture_decode_trace(
@@ -786,11 +620,7 @@ def run_tt(
             )
             stats["trace_capture_s"] = time.perf_counter() - t_capture
             _profiler_signpost("trace-capture-end")
-            logger.info(
-                f"Decode trace captured in {stats['trace_capture_s']*1000:.1f} ms (warmup + decode + sampling)."
-            )
 
-        # Traced decode loop for remaining tokens.
         try:
             _profiler_signpost("decode-loop-start")
             for _step in range(1, max_new_tokens):
@@ -798,7 +628,6 @@ def run_tt(
                     break
 
                 if sampling is not None:
-                    # Refresh RNG seeds each step so traced sampling does not repeat one token.
                     sampling.seed_manager.get_new_values()
 
                 step_t0 = time.perf_counter()
@@ -807,7 +636,6 @@ def run_tt(
                 tt_execute_decode_trace(mesh_device, decode_trace_ctx)
                 stats["decode_s"] += time.perf_counter() - t0
 
-                # Blocking read syncs device before observing the sampled token (latency-dominated).
                 t0 = time.perf_counter()
                 if decode_trace_ctx.output_tokens is not None:
                     next_id_scalar = tt_read_decode_traced_token(decode_trace_ctx, batch_slot=0)
@@ -823,7 +651,6 @@ def run_tt(
                         next_id_scalar = int(logits_row.argmax(dim=-1).item())
                     stats["sample_post_s"] += time.perf_counter() - t0
                 else:
-                    # CPU LM head: clone trace hidden block, run host LM head + sample.
                     h_clone = tt_read_decode_traced_hidden(decode_trace_ctx, mesh_device, batch_slot=0)
                     nid = _sample_from_tt_out(h_clone, 0)
                     next_id_scalar = int(nid.item())
@@ -839,14 +666,12 @@ def run_tt(
             if decode_trace_ctx is not None:
                 tt_release_decode_trace(mesh_device, decode_trace_ctx)
 
-        # Materialize the final token sequence once, outside the hot loop.
         if generated_ids:
             tail = torch.tensor([generated_ids], dtype=current_ids.dtype, device=id_device)
             current_ids = torch.cat([current_ids, tail], dim=1)
 
         stats["wall_s"] = time.perf_counter() - run_t0
 
-        # Printed timing breakdown for prefill vs traced decode.
         wall_s = stats["wall_s"]
         steps = stats["steps"]
         decode_steps = max(steps - 1, 0)
@@ -898,17 +723,6 @@ def run_tt(
             print(f"  Steady-state decode latency / tok   {steady_per_tok_s*1000:>10.2f} ms")
             print(f"  Steady-state decode throughput      {steady_tok_s:>10.3f} tok/s")
         print(f"  End-to-end throughput               {thr:>10.3f} tok/s")
-        print("──────────────────────────────────────────────────────────────")
-
-        final_seq_len = int(current_ids.shape[1])
-        new_token_count = final_seq_len - prompt_len
-
-        print("  TT · generation done")
-        print("──────────────────────────────────────────────────────────────")
-        print(f"  Final sequence  {final_seq_len:,} tokens")
-        print(f"  New tokens      {new_token_count}")
-        print("──────────────────────────────────────────────────────────────")
-        print(f"  TT · output  ({new_token_count} new tokens)")
         print("──────────────────────────────────────────────────────────────")
 
         answer_ids = current_ids[0, prompt_len:]

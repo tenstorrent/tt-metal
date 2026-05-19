@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# PCC: truncated HF ``PixtralVisionModel`` vs ``TtPixtralVisionModel`` (first ``n_layers`` blocks).
+# PCC: HF PixtralVisionModel vs TtPixtralVisionModel (first n_layers).
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from transformers.utils.generic import is_flash_attention_requested
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.devstarl2_small.tt.tt_pixtral_vision_model import TtPixtralVisionModel
+from models.experimental.devstarl2_small.tt.pipeline.tt_pixtral_vision_model import TtPixtralVisionModel
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.load_checkpoints import (
     convert_vision_hf_to_meta,
