@@ -56,8 +56,18 @@ class CodePredictor(LightweightModule):
         TILE = ttnn.TILE_LAYOUT
         ROW = ttnn.ROW_MAJOR_LAYOUT
 
-        self.act_dtype = ttnn.float32
+        # Use bf16 for all activations so DRAM-sharded matmuls can run without
+        # fp32<->bf16 typecasts at MLP boundaries. fp32 is only used inside the
+        # SDPA chain (scores, softmax, attn × V) where QK-norm amplification
+        # (~68x gain) would overflow bf16 precision — those typecasts are explicit.
+        self.act_dtype = ttnn.bfloat16
         self.kcfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self.sdpa_kcfg = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
@@ -192,6 +202,61 @@ class CodePredictor(LightweightModule):
             )
 
         self.final_norm_w = norm_w_1d_to_tt(state_dict["talker.code_predictor.model.norm.weight"], H)
+
+        # === DRAM-sharded MLP program configs (bf16 activation path) ===
+        # With act_dtype=bfloat16, gate/up/down can use DRAM-sharded matmul and keep
+        # activations in WIDTH_SHARDED L1 throughout the MLP — no I/S reshards needed
+        # per matmul, and no fp32 typecasts at MLP boundaries.
+        from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
+            build_dram_sharded_weight_tp,
+            dram_sharded_program_config,
+            find_grid_k_n,
+            pad_n_for_dram_align,
+            width_sharded_l1_memcfg,
+        )
+
+        _cg = device.compute_with_storage_grid_size()
+        _dram_cores = device.dram_grid_size().x
+        _local_intermediate = config.intermediate_size // self.tp_size
+
+        _n_pad_gu = pad_n_for_dram_align(_local_intermediate, _dram_cores)
+        _k_tiles_gu = H // 32
+        _n_tiles_gu = _n_pad_gu // 32
+        _rows_gu, _cols_gu = find_grid_k_n(_k_tiles_gu, _n_tiles_gu, max_rows=_cg.y, max_cols=_cg.x)
+        self._cp_gate_up_dramshard_progcfg = dram_sharded_program_config(
+            m=32, k=H, n=_n_pad_gu, num_cores=_rows_gu * _cols_gu
+        )
+        self._cp_gate_up_in0_memcfg = width_sharded_l1_memcfg(1, _k_tiles_gu, _cols_gu, _rows_gu)
+        self._cp_gate_up_out_memcfg = width_sharded_l1_memcfg(1, _n_tiles_gu, _cols_gu, _rows_gu)
+        self._cp_gate_up_n_padded = _n_pad_gu
+
+        _n_pad_d = pad_n_for_dram_align(H, _dram_cores)
+        _k_tiles_d = _local_intermediate // 32
+        _n_tiles_d = _n_pad_d // 32
+        _rows_d, _cols_d = find_grid_k_n(_k_tiles_d, _n_tiles_d, max_rows=_cg.y, max_cols=_cg.x)
+        self._cp_down_dramshard_progcfg = dram_sharded_program_config(
+            m=32, k=_local_intermediate, n=_n_pad_d, num_cores=_rows_d * _cols_d
+        )
+        self._cp_down_in0_memcfg = width_sharded_l1_memcfg(1, _k_tiles_d, _cols_d, _rows_d)
+        self._cp_down_out_memcfg = width_sharded_l1_memcfg(1, _n_tiles_d, _cols_d, _rows_d)
+        self._cp_down_n_padded = _n_pad_d
+
+        # Build DRAM-sharded gate/up/down weights per layer.
+        for li, lw in enumerate(self.layers_w):
+            pfx = f"talker.code_predictor.model.layers.{li}."
+            lw_t = {k.replace(pfx, ""): v for k, v in state_dict.items() if k.startswith(pfx)}
+            gate_kn = lw_t["mlp.gate_proj.weight"].transpose(0, 1).contiguous()  # [H, interm]
+            up_kn = lw_t["mlp.up_proj.weight"].transpose(0, 1).contiguous()
+            lw["gate_ds"], _, _ = build_dram_sharded_weight_tp(
+                gate_kn, device, self.tp_size, split_dim=1, dtype=ttnn.bfloat16
+            )
+            lw["up_ds"], _, _ = build_dram_sharded_weight_tp(
+                up_kn, device, self.tp_size, split_dim=1, dtype=ttnn.bfloat16
+            )
+            down_kn = lw_t["mlp.down_proj.weight"].transpose(0, 1).contiguous()  # [interm, H]
+            lw["down_ds"], _, _ = build_dram_sharded_weight_tp(
+                down_kn, device, self.tp_size, split_dim=0, dtype=ttnn.bfloat16
+            )
 
         self.lm_heads = []
         for g in range(self.num_code_groups - 1):
@@ -338,15 +403,15 @@ class CodePredictor(LightweightModule):
             k_cache_alias = False
             updated_kv = None
 
-        if q.dtype != self.act_dtype:
-            q_f = ttnn.typecast(q, dtype=self.act_dtype)
-            ttnn.deallocate(q)
-            q = q_f
+        # SDPA runs in fp32 — QK-norm amplifies K by ~68x; bf16 max=65504 and
+        # q·k dot products can reach ~260*260*128 = overflow. Cast explicitly.
+        q_f32 = ttnn.typecast(q, dtype=ttnn.float32)
+        ttnn.deallocate(q)
 
-        # GQA: repeat KV heads.
+        # GQA: repeat KV heads (keep bf16, cast to fp32 after expand).
         if self.num_kv_groups > 1:
-            k_exp = ttnn.repeat_interleave(k_for_attn, self.num_kv_groups, dim=1)
-            v_exp = ttnn.repeat_interleave(v_for_attn, self.num_kv_groups, dim=1)
+            k_exp_bf16 = ttnn.repeat_interleave(k_for_attn, self.num_kv_groups, dim=1)
+            v_exp_bf16 = ttnn.repeat_interleave(v_for_attn, self.num_kv_groups, dim=1)
             if not k_cache_alias and kv_cache is not None:
                 ttnn.deallocate(k_for_attn)
                 ttnn.deallocate(v_for_attn)
@@ -354,21 +419,25 @@ class CodePredictor(LightweightModule):
                 ttnn.deallocate(k_for_attn)
                 ttnn.deallocate(v_for_attn)
         else:
-            k_exp = k_for_attn
-            v_exp = v_for_attn
+            k_exp_bf16 = k_for_attn
+            v_exp_bf16 = v_for_attn
+        k_exp = ttnn.typecast(k_exp_bf16, dtype=ttnn.float32)
+        v_exp = ttnn.typecast(v_exp_bf16, dtype=ttnn.float32)
+        if self.num_kv_groups > 1:
+            ttnn.deallocate(k_exp_bf16)
+        ttnn.deallocate(v_exp_bf16)
 
         # Manual fp32 SDPA chain.
         scores = ttnn.matmul(
-            q,
+            q_f32,
             k_exp,
             transpose_b=True,
-            dtype=self.act_dtype,
-            compute_kernel_config=self.kcfg,
+            dtype=ttnn.float32,
+            compute_kernel_config=self.sdpa_kcfg,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        ttnn.deallocate(q)
-        if self.num_kv_groups > 1:
-            ttnn.deallocate(k_exp)
+        ttnn.deallocate(q_f32)
+        ttnn.deallocate(k_exp)
         scores = ttnn.mul(scores, self.scale, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Mask: caller masks override; otherwise build causal mask if seq>1, or
@@ -409,16 +478,18 @@ class CodePredictor(LightweightModule):
 
         attn_weights = ttnn.softmax(scores, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(scores)
-        attn_out = ttnn.matmul(
+        attn_out_f32 = ttnn.matmul(
             attn_weights,
             v_exp,
-            dtype=self.act_dtype,
-            compute_kernel_config=self.kcfg,
+            dtype=ttnn.float32,
+            compute_kernel_config=self.sdpa_kcfg,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_weights)
-        if self.num_kv_groups > 1:
-            ttnn.deallocate(v_exp)
+        ttnn.deallocate(v_exp)
+        # Cast back to bf16 before O-proj.
+        attn_out = ttnn.typecast(attn_out_f32, dtype=ttnn.bfloat16)
+        ttnn.deallocate(attn_out_f32)
 
         attn_concat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
@@ -437,16 +508,60 @@ class CodePredictor(LightweightModule):
         residual2 = h_post  # we own h_post → free after MLP residual.
         h2 = ttnn.rms_norm(h_post, epsilon=self.rms_norm_eps, weight=lw["post_ln_w"], compute_kernel_config=self.kcfg)
 
-        gate_o = ttnn.matmul(h2, lw["gate"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
-        up_o = ttnn.matmul(h2, lw["up"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
-        ttnn.deallocate(h2)
-        gate_silu = ttnn.silu(gate_o)
+        # DRAM-sharded MLP: shard h2 into L1 WIDTH_SHARDED once, then gate/up read from
+        # their DRAM-banked weights in parallel. Output stays sharded — reshard to down's
+        # grid only once (16-core gate/up → 12-core down), then all_reduce.
+        if h2.memory_config() != self._cp_gate_up_in0_memcfg:
+            h2_sharded = ttnn.to_memory_config(h2, self._cp_gate_up_in0_memcfg)
+            ttnn.deallocate(h2)
+        else:
+            h2_sharded = h2
+        gate_o = ttnn.linear(
+            h2_sharded,
+            lw["gate_ds"],
+            compute_kernel_config=self.kcfg,
+            program_config=self._cp_gate_up_dramshard_progcfg,
+            memory_config=self._cp_gate_up_out_memcfg,
+        )
+        up_o = ttnn.linear(
+            h2_sharded,
+            lw["up_ds"],
+            compute_kernel_config=self.kcfg,
+            program_config=self._cp_gate_up_dramshard_progcfg,
+            memory_config=self._cp_gate_up_out_memcfg,
+        )
+        ttnn.deallocate(h2_sharded)
+        gate_silu = ttnn.silu(gate_o, memory_config=self._cp_gate_up_out_memcfg)
         ttnn.deallocate(gate_o)
-        gated = ttnn.mul(gate_silu, up_o, dtype=self.act_dtype)
+        gated = ttnn.mul(gate_silu, up_o, memory_config=self._cp_gate_up_out_memcfg)
         ttnn.deallocate(gate_silu)
         ttnn.deallocate(up_o)
-        mlp_o = ttnn.matmul(gated, lw["down"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
-        ttnn.deallocate(gated)
+        if self._cp_gate_up_out_memcfg != self._cp_down_in0_memcfg:
+            gated_d = ttnn.to_memory_config(gated, self._cp_down_in0_memcfg)
+            ttnn.deallocate(gated)
+        else:
+            gated_d = gated
+        mlp_o_sharded = ttnn.linear(
+            gated_d,
+            lw["down_ds"],
+            compute_kernel_config=self.kcfg,
+            program_config=self._cp_down_dramshard_progcfg,
+            memory_config=self._cp_down_out_memcfg,
+        )
+        ttnn.deallocate(gated_d)
+        if self._cp_down_n_padded != self.hidden_size:
+            mlp_o_il = ttnn.to_memory_config(mlp_o_sharded, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(mlp_o_sharded)
+            mlp_o = ttnn.slice(
+                mlp_o_il,
+                [0, 0, 0, 0],
+                [mlp_o_il.shape[0], mlp_o_il.shape[1], mlp_o_il.shape[2], self.hidden_size],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(mlp_o_il)
+        else:
+            mlp_o = ttnn.to_memory_config(mlp_o_sharded, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(mlp_o_sharded)
         if self.tp_size > 1:
             from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce
 

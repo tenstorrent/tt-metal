@@ -44,7 +44,8 @@ ARCH_GOLDENS = {
         # [95, 131] alongside N150. Tighten when more measurements are available.
         # Prefill upper bound is deliberately wide (observed 15–37 ms swing across
         # runs due to trace-cache state and JIT bucket warmth).
-        "steady_ms_per_frame": 110.0,
+        # Updated after CP bf16 + DRAM-sharded MLP: steady now ~95-100 ms.
+        "steady_ms_per_frame": 100.0,
         "steady_margin": 0.10,
         "prefill_ms_upper": 40.0,
     },
