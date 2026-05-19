@@ -14,6 +14,7 @@ optimal_topology = ttnn.Topology.Ring if (os.getenv("USE_TORUS_MODE") is not Non
 
 # Union type for all possible program configs used with ttnn.linear
 ProgramConfig = Union[
+    ttnn.MatmulMultiCoreReuseProgramConfig,
     ttnn.MatmulMultiCoreReuseMultiCastProgramConfig,
     ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
     ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig,

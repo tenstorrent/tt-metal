@@ -899,17 +899,19 @@ inline void send_init_semaphore_to_configured_targets(
         if (device_idx == LinearizedSrcMeshCoord) {
             continue;
         } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(device_idx)) {
+            // The receivers wait on this semaphore before issuing any later fabric commands. Flush the atomic
+            // increment so the init barrier cannot depend on a subsequent data or teardown packet for visibility.
             if constexpr (is_1d_topology<Topology>()) {
                 fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
                     LinearizedSrcMeshCoord,
                     Topology,
                     MeshRows,
-                    MeshCols>(fabric_connections, packet_header, device_idx, init_noc_semaphore_addr, 1, false);
+                    MeshCols>(fabric_connections, packet_header, device_idx, init_noc_semaphore_addr, 1, true);
             } else {
                 const auto& dest_chip_id = dest_chip_ids[device_idx];
                 const auto& dest_mesh_id = dest_mesh_ids[device_idx];
                 fabric_send_chip_unicast_noc_unicast_semaphore_only<SrcChipId, MeshRows, MeshCols>(
-                    fabric_connections, packet_header, dest_chip_id, dest_mesh_id, init_noc_semaphore_addr, 1, false);
+                    fabric_connections, packet_header, dest_chip_id, dest_mesh_id, init_noc_semaphore_addr, 1, true);
             }
         }
     }

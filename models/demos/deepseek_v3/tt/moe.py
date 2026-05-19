@@ -23,7 +23,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReduceScatterAsyncMinimalConfig,
     RepeatConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, is_quad_mesh
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -260,6 +260,9 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "all_to_all_combine_output_memory_config": memory_config,
                 "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
                 "mul_experts_output_with_weights": MulConfig(memory_config=memory_config),
+                # Work around https://github.com/tenstorrent/tt-metal/issues/44280: the generic FastReduceNC
+                # path used by ttnn.sum can hang on the QUAD 8 users/row prefill MoE expert-sum shape.
+                "sum_experts_with_pairwise_add": is_quad_mesh(mesh_device),
                 "input_memory_config": memory_config,
                 "output_memory_config": memory_config,
                 "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
@@ -503,7 +506,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             ttnn.deallocate(post_combine_output_tensor)
             ttnn.deallocate(topk_weights_chunk)
 
-            post_combine_output_tensor = ttnn.sum(post_combine_weighted_output_tensor, dim=0, keepdim=True)
+            post_combine_output_tensor = cls._sum_experts_output(post_combine_weighted_output_tensor, cfg)
             ttnn.deallocate(post_combine_weighted_output_tensor)
             output_chunks.append(post_combine_output_tensor)
 
@@ -517,6 +520,35 @@ class MoE(SharedStateAddOn, AbstractModule):
         ttnn.deallocate(x_rm)
         ttnn.deallocate(topk_experts_indices_rm)
         return post_combine_output_tensor
+
+    @classmethod
+    def _sum_experts_output(cls, expert_outputs: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+        if not cfg.get("sum_experts_with_pairwise_add", False):
+            return ttnn.sum(expert_outputs, dim=0, keepdim=True)
+
+        expert_count = expert_outputs.shape[0]
+        if expert_count == 0:
+            raise ValueError("MoE expert output reduction requires at least one expert")
+
+        output = ttnn.slice(
+            expert_outputs,
+            [0, 0, 0, 0],
+            [1, expert_outputs.shape[1], expert_outputs.shape[2], expert_outputs.shape[3]],
+            memory_config=expert_outputs.memory_config(),
+        )
+        for expert_idx in range(1, expert_count):
+            expert = ttnn.slice(
+                expert_outputs,
+                [expert_idx, 0, 0, 0],
+                [expert_idx + 1, expert_outputs.shape[1], expert_outputs.shape[2], expert_outputs.shape[3]],
+                memory_config=expert_outputs.memory_config(),
+            )
+            next_output = ttnn.add(output, expert, memory_config=cfg["sum_experts_output_memory_config"])
+            ttnn.deallocate(output)
+            ttnn.deallocate(expert)
+            output = next_output
+
+        return output
 
     @classmethod
     def _fwd_all_gather(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
