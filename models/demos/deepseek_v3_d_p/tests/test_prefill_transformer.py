@@ -53,6 +53,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PIE960_PATH,
     PROMPTS_PATH,
     ReferenceCacheKey,
+    check_first_token_match,
     check_reference_cache_exists,
     create_hf_model,
     download_infinitebench_subset,
@@ -134,7 +135,7 @@ def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_p
     [
         5,
         12,
-        pytest.param(61, marks=pytest.mark.skipif(False, reason="Testing entire-prefill only on Galaxy")),
+        pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="Testing entire-prefill only on Galaxy")),
     ],
     ids=["5_layers", "12_layers", "61_layers"],
 )
@@ -682,23 +683,7 @@ def test_prefill_transformer(
 
         # First-token match against trace metadata (full-layer trace only)
         if trace_full_model:
-            ref_token_id = trace.metadata.get("next_token_id")
-            ref_token_text = trace.metadata.get("next_token_text")
-            if ref_token_id is None or ref_token_text is None:
-                output_meta_path = trace_dir / "output_metadata.json"
-                if output_meta_path.exists():
-                    with open(output_meta_path) as f:
-                        output_meta = json.load(f)
-                    ref_token_id = ref_token_id or output_meta.get("next_token_id")
-                    ref_token_text = ref_token_text or output_meta.get("next_token_text")
-            if ref_token_text is None:
-                ref_token_text = "N/A"
-            token_match = first_token_id == ref_token_id if ref_token_id is not None else None
-            logger.info(
-                f"Trace first token: TT={first_token_id} (prob={first_token_prob:.4f}), "
-                f"Trace={ref_token_id} [{repr(ref_token_text)}], "
-                f"Match={'YES' if token_match else 'NO' if token_match is not None else 'N/A'}"
-            )
+            token_match = check_first_token_match(trace, trace_dir, first_token_id, first_token_prob)
             if token_match is False:
                 failures.append(("first_token_match", -1.0))
 
