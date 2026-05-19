@@ -618,6 +618,11 @@ def _normalize_for_hash(obj):
         if "shard_spec" in obj and obj["shard_spec"] is None:
             obj["shard_spec"] = "None"
 
+        # Fields added to program_configs after older master traces were captured.
+        # Drop them when null so historic hashes remain stable.
+        if "allowed_worker_cores" in obj and obj["allowed_worker_cores"] is None:
+            del obj["allowed_worker_cores"]
+
         for k in list(obj.keys()):
             v = obj[k]
             if isinstance(v, str):

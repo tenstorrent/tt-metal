@@ -470,49 +470,35 @@ def run(
             return False
 
     if is_mesh_device and input_a_tensor_placement:
-        # For SDPA decode: the kernel requires Q (or output) in L1 HEIGHT_SHARDED.
-        # The traced shard spec uses a model-specific core grid that may not
-        # distribute data correctly via to_memory_config on replicated tensors.
-        # Instead, build a standard HEIGHT_SHARDED Q layout matching the
-        # reference test: shard shape (padded_num_heads, head_dim) across b cores,
-        # where b = Q.shape[1] (num_users) and padded_num_heads is rounded up.
-        # This guarantees each shard holds one user's complete Q data.
+        # Use the master's exact memory_config and layout for Q.
+        # The master records Q in ROW_MAJOR_LAYOUT with a specific non-contiguous
+        # HEIGHT_SHARDED grid (e.g. {(1,0)-(3,1), (1,2)-(2,2)} with shard (8,128)).
+        # Using a custom contiguous grid or TILE_LAYOUT produces a different trace hash.
+        from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology as _apply_sdpa_topo
+
         if _is_sharded_memory_config(mem_config_a) and len(shape_a) == 4:
-            _q_num_users = shape_a[1]
-            _q_num_heads = shape_a[2]
-            _q_head_dim = shape_a[3]
-            # Pad num_heads to nearest power-of-2 of nearest multiple of 32
-            # (matching the reference SDPA decode test convention).
-            import math as _math_q
-            _q_padded_heads = 1 << _math_q.ceil(_math_q.log2(max(((_q_num_heads + 31) // 32) * 32, 1)))
-            # Build shard grid for b=_q_num_users cores, respecting the
-            # device's compute grid (COL dispatch has max_x=6, ROW has max_x=7).
-            _dev_grid = device.compute_with_storage_grid_size() if hasattr(device, "compute_with_storage_grid_size") else None
-            _max_x = _dev_grid.x if _dev_grid else 8
-            _shard_x = min(_q_num_users, _max_x)
-            _shard_y = (_q_num_users + _shard_x - 1) // _shard_x
-            _q_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(_shard_x - 1, _shard_y - 1),
-            )})
-            _q_shard_spec = ttnn.ShardSpec(
-                _q_shard_grid, (_q_padded_heads, _q_head_dim), ttnn.ShardOrientation.ROW_MAJOR
-            )
-            _q_sharded_memcfg = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _q_shard_spec
-            )
+            # Create Q with master's exact layout + memory_config via ReplicateTensorToMesh.
+            # from_torch to L1-sharded ROW_MAJOR directly works for decode Q shapes.
             tensor_a = ttnn.from_torch(
                 torch_input_a,
                 dtype=dtype_a,
-                layout=ttnn.TILE_LAYOUT,
+                layout=layout_a,  # ROW_MAJOR_LAYOUT from master
                 device=device,
-                memory_config=_q_sharded_memcfg,
+                memory_config=mem_config_a,  # Master's exact HEIGHT_SHARDED config
                 mesh_mapper=ttnn.ReplicateTensorToMesh(device),
             )
         else:
             tensor_a = create_tensor_on_mesh(
                 torch_input_a, device, dtype_a, layout_a, mem_config_a, input_a_tensor_placement
             )
+        # Apply tensor topology on Q to match master's placement metadata.
+        if input_a_tensor_placement:
+            try:
+                _mesh = device.shape
+                _apply_sdpa_topo(tensor_a, input_a_tensor_placement, (_mesh[0], _mesh[1]))
+            except Exception:
+                pass
+
         tensor_b = create_tensor_on_mesh(
             torch_input_b, device, dtype_b, layout_b, mem_config_b, input_b_tensor_placement
         )
@@ -620,78 +606,61 @@ def run(
             )
         op_kwargs["attention_sink"] = sink_tensor
 
-    # build_op_kwargs strips program_config; parse from raw kwargs.
-    # For the sweep, we override the traced program_config to use a standard
-    # grid layout (no sub_core_grids) that matches our standard Q shard grid.
-    # The traced sub_core_grids is specific to the model's dispatch layout and
-    # won't work with the sweep's Q shard placement.
+    # Parse the master's exact program_config, including sub_core_grids and
+    # CoreCoord grid size.  The master's string-repr format is:
+    #   SDPAProgramConfig(compute_with_storage_grid_size=8-6,
+    #     sub_core_grids={[1-0 - 3-9], [5-0 - 6-8]}, q_chunk_size=0, ...)
     if "program_config" not in op_kwargs:
         traced_pc = kwargs.get("program_config")
         if isinstance(traced_pc, dict) and traced_pc.get("type") == "SDPAProgramConfig":
-            import re
+            import re as _re_pc
 
             val = traced_pc.get("value", "")
-            gm = re.search(r"compute_with_storage_grid_size=(\d+)-(\d+)", val)
-            em = re.search(r"exp_approx_mode=(\w+)", val)
+            gm = _re_pc.search(r"compute_with_storage_grid_size=(\d+)-(\d+)", val)
+            qm = _re_pc.search(r"q_chunk_size=(\d+)", val)
+            km = _re_pc.search(r"k_chunk_size=(\d+)", val)
+            em = _re_pc.search(r"exp_approx_mode=(\w+)", val)
+            mcm = _re_pc.search(r"max_cores_per_head_batch=(\d+)", val)
 
-            # Build a clean program_config WITHOUT sub_core_grids.
-            # Use device compute grid clamped to the traced grid size.
             if gm:
                 _grid_x, _grid_y = int(gm.group(1)), int(gm.group(2))
             else:
-                _grid_x, _grid_y = 8, 6  # default
-
-            if hasattr(device, "compute_with_storage_grid_size"):
-                dev_grid = device.compute_with_storage_grid_size()
-                _grid_x = min(_grid_x, dev_grid.x)
-                _grid_y = min(_grid_y, dev_grid.y)
-
-            # Determine padded_num_heads for q_chunk_size (matching reference test)
-            import math as _math_pc
-            _pc_num_heads = shape_a[2] if len(shape_a) == 4 else 32
-            _pc_padded_heads = 1 << _math_pc.ceil(_math_pc.log2(max(((_pc_num_heads + 31) // 32) * 32, 1)))
+                _grid_x, _grid_y = 8, 6
 
             _sdpa_kwargs = dict(
-                compute_with_storage_grid_size=(_grid_x, _grid_y),
-                q_chunk_size=_pc_padded_heads,
-                k_chunk_size=_pc_padded_heads,
+                compute_with_storage_grid_size=ttnn.CoreCoord(_grid_x, _grid_y),
+                q_chunk_size=int(qm.group(1)) if qm else 0,
+                k_chunk_size=int(km.group(1)) if km else 0,
                 exp_approx_mode=em.group(1).lower() == "true" if em else False,
             )
+            if mcm:
+                _sdpa_kwargs["max_cores_per_head_batch"] = int(mcm.group(1))
+
+            # Parse sub_core_grids from the string repr.
+            # Format: sub_core_grids={[sx-sy - ex-ey], [sx-sy - ex-ey], ...}
+            scg_m = _re_pc.search(r"sub_core_grids=\{(.+?)\}", val)
+            if scg_m:
+                scg_ranges = _re_pc.findall(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", scg_m.group(1))
+                if scg_ranges:
+                    _sdpa_kwargs["sub_core_grids"] = ttnn.CoreRangeSet([
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(int(sx), int(sy)),
+                            ttnn.CoreCoord(int(ex), int(ey)),
+                        )
+                        for sx, sy, ex, ey in scg_ranges
+                    ])
 
             op_kwargs["program_config"] = ttnn.SDPAProgramConfig(**_sdpa_kwargs)
         elif traced_pc is not None and traced_pc != "__ABSENT__" and not isinstance(traced_pc, dict):
             op_kwargs["program_config"] = traced_pc
 
-    # For SDPA sweep: since we build Q with our own shard grid (not the
-    # model's traced grid), we must also override the output memory_config
-    # to use a compatible shard grid.  Use the same grid we built for Q.
-    if is_mesh_device and len(shape_a) == 4 and _is_sharded_memory_config(mem_config_a):
-        _q_num_users = shape_a[1]
-        _q_num_heads = shape_a[2]
-        _q_head_dim = shape_a[3]
-        import math as _math_out
-        _q_padded_heads = 1 << _math_out.ceil(_math_out.log2(max(((_q_num_heads + 31) // 32) * 32, 1)))
-        _dev_grid_out = device.compute_with_storage_grid_size() if hasattr(device, "compute_with_storage_grid_size") else None
-        _max_x_out = _dev_grid_out.x if _dev_grid_out else 8
-        _shard_x_out = min(_q_num_users, _max_x_out)
-        _shard_y_out = (_q_num_users + _shard_x_out - 1) // _shard_x_out
-        _out_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(
-            ttnn.CoreCoord(0, 0),
-            ttnn.CoreCoord(_shard_x_out - 1, _shard_y_out - 1),
-        )})
-        _out_shard_spec = ttnn.ShardSpec(
-            _out_shard_grid, (_q_padded_heads, _q_head_dim), ttnn.ShardOrientation.ROW_MAJOR
-        )
-        op_kwargs["memory_config"] = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _out_shard_spec
-        )
-    else:
-        # Pass memory_config from V2 vector when present (master records it).
-        v2_memory_config = kwargs.get("memory_config")
-        if v2_memory_config is not None and v2_memory_config != "__ABSENT__":
-            from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+    # Use master's exact output memory_config.  The V2 vector stores it as
+    # a parsed MemoryConfig or dict; use it directly so the trace matches.
+    v2_memory_config = kwargs.get("memory_config")
+    if v2_memory_config is not None and v2_memory_config != "__ABSENT__":
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 
-            op_kwargs.setdefault("memory_config", parse_dict_value("memory_config", v2_memory_config))
+        op_kwargs.setdefault("memory_config", parse_dict_value("memory_config", v2_memory_config))
 
     ttnn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
         tensor_a,  # Q

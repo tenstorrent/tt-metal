@@ -455,19 +455,25 @@ def run(
 
     if not is_host:
         if is_mesh_device and input_b_tensor_placement:
-            ttnn_b = create_tensor_on_mesh(
+            # For DRAM-sharded weights (global_cb path), create directly in the
+            # target memory_config to avoid a to_memory_config that may lose
+            # topology.  Replicate data, apply exact memory_config, then stamp
+            # topology -- matching the model's production flow.
+            _target_w_mc = weight_memory_config if weight_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+            ttnn_b = ttnn.from_torch(
                 torch_b,
-                device,
-                input_b_dtype,
-                input_b_layout,
-                ttnn.DRAM_MEMORY_CONFIG,
-                input_b_tensor_placement,
+                dtype=input_b_dtype,
+                layout=input_b_layout,
+                device=device,
+                memory_config=_target_w_mc,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
             )
-            if weight_memory_config is not None and weight_memory_config != ttnn.DRAM_MEMORY_CONFIG:
-                try:
-                    ttnn_b = ttnn.to_memory_config(ttnn_b, weight_memory_config)
-                except Exception:
-                    pass
+            # Re-apply topology after tensor creation to ensure it matches master.
+            try:
+                actual_mesh = device.shape
+                _apply_topo(ttnn_b, input_b_tensor_placement, (actual_mesh[0], actual_mesh[1]))
+            except Exception:
+                pass
         else:
             ttnn_b = ttnn.from_torch(
                 torch_b,
