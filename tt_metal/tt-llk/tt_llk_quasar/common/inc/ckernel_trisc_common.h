@@ -210,6 +210,9 @@ inline std::uint32_t _get_dest_buffer_base_()
 template <DstTileShape TILE_SHAPE>
 inline void _set_dst_write_addr_(const std::uint32_t tile_index)
 {
+    // The dest address stride is encoded as log2(rows occupied by one tile):
+    // 32x32 -> 64 rows -> shift 6, 32x16 -> 32 rows -> shift 5,
+    // and smaller tile shapes use the minimum 16-row dest stride -> shift 4.
     const std::uint32_t tile_shape_idx = (TILE_SHAPE == DstTileShape::Tile32x32) ? 6 : ((TILE_SHAPE == DstTileShape::Tile32x16) ? 5 : 4);
     const std::uint32_t dst_index      = (tile_index << tile_shape_idx) + _get_dest_buffer_base_();
     _set_dest_section_base_<TRISC_ID>(dst_index);
@@ -219,15 +222,17 @@ inline void _set_dst_write_addr_(const std::uint32_t tile_index)
  * @brief Sets destination register base address depending on tile idx and the
  * number of rows per tile for the TRISC this translation unit is compiled for
  * (TRISC role taken from ckernel::trisc::TRISC_ID).
- * @param num_rows_per_tile: Number of rows per tile, used to compute the per-tile stride.
+ * @param num_rows_per_tile: Number of rows per tile, used to compute the per-tile stride. Must be a power of two.
  * @param tile_index: Tile index in the dest reg.
  */
 inline void _set_dst_write_addr_by_rows_(const std::uint32_t num_rows_per_tile, const std::uint32_t tile_index)
 {
-    const std::uint32_t tile_shape_idx =
-        (num_rows_per_tile == 64)
-            ? 6
-            : ((num_rows_per_tile == 32) ? 5 : ((num_rows_per_tile == 16) ? 4 : ((num_rows_per_tile == 8) ? 3 : ((num_rows_per_tile == 4) ? 2 : 1))));
+    const std::uint32_t tile_shape_idx = (num_rows_per_tile == 64u)   ? 6u
+                                         : (num_rows_per_tile == 32u) ? 5u
+                                         : (num_rows_per_tile == 16u) ? 4u
+                                         : (num_rows_per_tile == 8u)  ? 3u
+                                         : (num_rows_per_tile == 4u)  ? 2u
+                                                                      : 1u;
     const std::uint32_t dst_index = (tile_index << tile_shape_idx) + _get_dest_buffer_base_();
     _set_dest_section_base_<TRISC_ID>(dst_index);
 }
