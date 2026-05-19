@@ -705,9 +705,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         }
     }
 
-    if (!dfb->borrows_memory()) {
-        this->local_dataflow_buffer_allocation_needed_ = true;
-    }
+    this->local_dataflow_buffer_allocation_needed_ = true;
 
     return dfb->id;
 }
