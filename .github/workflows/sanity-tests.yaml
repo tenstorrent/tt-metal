@@ -355,7 +355,7 @@ jobs:
   profiler-tests:
     needs: [resolve-artifacts, tests-to-run]
     if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.run-profiler-tests == 'true'}}
-    uses: ./.github/workflows/profiler-tests-impl.yaml
+    uses: ./.github/workflows/single-card-profiler-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}

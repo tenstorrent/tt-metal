@@ -1,0 +1,151 @@
+name: "(Profiler) Choose your pipeline"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_t3k_profiler:
+        description: "T3K profiler"
+        required: false
+        type: boolean
+        default: true
+      run_galaxy_profiler:
+        description: "Galaxy profiler"
+        required: false
+        type: boolean
+        default: false
+      run_blackhole_profiler:
+        description: "Blackhole profiler"
+        required: false
+        type: boolean
+        default: true
+      run_n300_profiler:
+        description: "N300 profiler"
+        required: false
+        type: boolean
+        default: true
+      run_n150_profiler:
+        description: "N150 profiler"
+        required: false
+        type: boolean
+        default: true
+      single-card-mode:
+        description: "Single-card mode filter (applies to blackhole / n300 / n150 entries only)"
+        required: false
+        type: choice
+        options:
+          - post-commit
+          - full
+          - all
+        default: post-commit
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+
+jobs:
+  determine-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      run-galaxy: ${{ steps.logic.outputs.run-galaxy }}
+      run-t3k: ${{ steps.logic.outputs.run-t3k }}
+      run-single-card: ${{ steps.logic.outputs.run-single-card }}
+      single-card-skus: ${{ steps.logic.outputs.single-card-skus }}
+      any-selected: ${{ steps.logic.outputs.any-selected }}
+    steps:
+      - name: Determine sub-pipeline selection
+        id: logic
+        run: |
+          set -e
+          galaxy="${{ inputs.run_galaxy_profiler }}"
+          t3k="${{ inputs.run_t3k_profiler }}"
+          bh="${{ inputs.run_blackhole_profiler }}"
+          n300="${{ inputs.run_n300_profiler }}"
+          n150="${{ inputs.run_n150_profiler }}"
+
+          parts=()
+          [[ "$bh" == "true" ]]   && parts+=("bh_p100a_civ2_viommu" "bh_p150b_civ2_viommu")
+          [[ "$n300" == "true" ]] && parts+=("wh_n300_civ2")
+          [[ "$n150" == "true" ]] && parts+=("wh_n150_civ2")
+          sc_skus=$(IFS=,; echo "${parts[*]}")
+
+          [[ -n "$sc_skus" ]] && run_sc=true || run_sc=false
+
+          any=false
+          { [[ "$galaxy" == "true" ]] || [[ "$t3k" == "true" ]] || [[ "$run_sc" == "true" ]]; } && any=true
+
+          if [[ "$any" != "true" ]]; then
+            echo "::error::No profiler sub-pipeline selected. Enable at least one of the run_*_profiler inputs."
+            exit 1
+          fi
+
+          echo "run-galaxy=$galaxy"        >> "$GITHUB_OUTPUT"
+          echo "run-t3k=$t3k"              >> "$GITHUB_OUTPUT"
+          echo "run-single-card=$run_sc"   >> "$GITHUB_OUTPUT"
+          echo "single-card-skus=$sc_skus" >> "$GITHUB_OUTPUT"
+          echo "any-selected=$any"         >> "$GITHUB_OUTPUT"
+
+  build-artifact:
+    needs: determine-tests
+    if: ${{ needs.determine-tests.outputs.any-selected == 'true' }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      tracy: true
+      build-wheel: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+
+  galaxy-profiler-tests:
+    needs: [determine-tests, build-artifact]
+    if: ${{ needs.determine-tests.outputs.run-galaxy == 'true' }}
+    uses: ./.github/workflows/galaxy-profiler-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+  t3000-profiler-tests:
+    needs: [determine-tests, build-artifact]
+    if: ${{ needs.determine-tests.outputs.run-t3k == 'true' }}
+    uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+  single-card-profiler-tests:
+    needs: [determine-tests, build-artifact]
+    if: ${{ needs.determine-tests.outputs.run-single-card == 'true' }}
+    uses: ./.github/workflows/single-card-profiler-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.determine-tests.outputs.single-card-skus }}
+      test-mode: ${{ inputs.single-card-mode }}

@@ -404,7 +404,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-wormhole-only) }}
-    uses: ./.github/workflows/profiler-tests-impl.yaml
+    uses: ./.github/workflows/single-card-profiler-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

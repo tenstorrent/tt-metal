@@ -305,7 +305,7 @@ jobs:
   profiler-tests:
     needs: [resolve-artifacts, generate-matrix]
     if: ${{ always() && !cancelled() && (inputs.run-profiler-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
-    uses: ./.github/workflows/profiler-tests-impl.yaml
+    uses: ./.github/workflows/single-card-profiler-tests-impl.yaml
     secrets: inherit
     strategy:
       fail-fast: false
