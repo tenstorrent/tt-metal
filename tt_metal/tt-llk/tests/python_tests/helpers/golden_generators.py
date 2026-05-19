@@ -1961,34 +1961,34 @@ class UnarySFPUGolden:
         return abs(x)
 
     def _atanh(self, x):
-        if x < -1.0 or x > 1.0:
+        result = torch.atanh(torch.tensor(x, dtype=torch.float32)).item()
+        if math.isinf(result) and not self.data_format.is_exponent_B():
             return math.nan
-        if x == -1.0:
-            return self.handle_infinite_numbers(-math.inf)
-        if x == 1.0:
-            return self.handle_infinite_numbers(math.inf)
-        return math.atanh(x)
+        return result
 
     def _asinh(self, x):
         return math.asinh(x)
 
     def _acosh(self, x):
-        if x < 1.0:
+        result = torch.acosh(torch.tensor(x, dtype=torch.float32)).item()
+        if math.isinf(result) and not self.data_format.is_exponent_B():
             return math.nan
-        return math.acosh(x)
+        return result
 
     def _cos(self, x):
         return math.cos(x)
 
     def _log(self, x):
-        if x == 0.0:
-            return self.handle_infinite_numbers(-math.inf)
-        return math.log(x)
+        result = torch.log(torch.tensor(x, dtype=torch.float32)).item()
+        if math.isinf(result) and not self.data_format.is_exponent_B():
+            return math.nan
+        return result
 
     def _log1p(self, x):
-        if x == -1.0:
-            return self.handle_infinite_numbers(-math.inf)
-        return math.log1p(x)
+        result = torch.log1p(torch.tensor(x, dtype=torch.float32)).item()
+        if math.isinf(result) and not self.data_format.is_exponent_B():
+            return math.nan
+        return result
 
     def _reciprocal(self, x):
         if x == 0.0:
@@ -2003,16 +2003,16 @@ class UnarySFPUGolden:
         return max(0.0, x)
 
     def _rsqrt(self, x):
-        if x < 0.0:
-            return self.handle_infinite_numbers(float("nan"))
-        if x == 0.0:
-            return self.handle_infinite_numbers(float("inf"))
-        return 1 / math.sqrt(x)
+        result = torch.rsqrt(torch.tensor(x, dtype=torch.float32)).item()
+        if math.isinf(result) and not self.data_format.is_exponent_B():
+            return math.nan
+        return result
 
     def _sqrt(self, x):
-        if x < 0.0:
+        result = torch.sqrt(torch.tensor(x, dtype=torch.float32)).item()
+        if math.isinf(result) and not self.data_format.is_exponent_B():
             return math.nan
-        return math.sqrt(x)
+        return result
 
     def _tanh(self, x):
         return math.tanh(x)
