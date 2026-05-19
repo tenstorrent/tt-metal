@@ -235,15 +235,15 @@ void kernel_main() {
         welford_finalize_to_row<W>(mean_dst, W - 1, *p_reciprocals);
         tile_regs_commit();
 
-        // Note: intentionally NOT popping cb_x_welford here. With multi-buffer-index CBs the
-        // underlying allocation appears to track a shared read pointer (matching matmul's
-        // shared output+interm pattern where the producer reuses freed slots). Popping the
-        // alias would also free cb_x's slot, making the subsequent eltwise see stale/zero
-        // data. The cb_x_welford semaphore just stays at produced=consumed offset; the data is
-        // logically released when cb_x is popped at the end of the eltwise section.
-        // TODO: verify whether multi-format CB allocations have shared or per-index read
-        // pointers; if per-index, we'd want to pop here to allow reader reuse across NCHt
-        // iterations on tight-L1 configurations.
+        // Pop cb_x_welford so its rd_ptr advances in lock-step with cb_x's pop in the eltwise
+        // loop below. Multi-buffer-index CB indices have INDEPENDENT fifo_rd_ptr / fifo_wr_ptr
+        // / semaphore state but share the underlying L1 allocation; popping the alias only
+        // advances cb_x_welford's own rd_ptr, leaving cb_x's state untouched. Without this
+        // pop, subsequent NCHt iterations would read stale tiles from the start of the buffer
+        // (the reader's push_back advances the wr_ptr, but the alias's rd_ptr stays at 0).
+        if constexpr (welford_fp32_alias) {
+            cb_x_welford_obj.pop_front(total_buffer_size);
+        }
 
         // Transpose mean and var back to columns
         cb_ex_obj.reserve_back(onetile);
