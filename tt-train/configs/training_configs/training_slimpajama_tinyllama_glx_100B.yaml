@@ -11,7 +11,8 @@ training_config:
   # SwiGLU activation [5, 2048, 5632] bf16 ~= 115 MiB which fits comfortably;
   # higher per-chip values hit DRAM OOM at this seq_len.
   # batch_size: 160
-  batch_size: 160
+  # batch_size: 160
+  batch_size: 5
   gradient_accumulation_steps: 1
   num_epochs: 1
   # 1 epoch (exact) through the SlimPajama-627B-tokenized train split:
@@ -27,7 +28,8 @@ training_config:
   #     read from disk, just not fed as input).
   #   max_steps = total_blocks / batch_size = 65,781,760 / 160 = 411,136
   #     (exact; zero blocks dropped, zero tokens re-read against wrap=True).
-  max_steps: 411136
+  # max_steps: 411136
+  max_steps: 1000
   # TinyLlama paper schedule (arxiv 2401.02385): linear warmup over
   # `lr_warmup_steps` optimizer steps, then cosine annealing from peak
   # `optimizer.lr` down to `lr_min`. Unset `lr_decay_steps` (or set <= 0) to
@@ -68,8 +70,8 @@ training_config:
     stochastic_rounding: true
 
 device_config:
-  enable_ddp: true
-  mesh_shape: [32, 1]
+  enable_ddp: false
+  mesh_shape: [1, 1]
 
 eval_config:
   repetition_penalty: 1.0

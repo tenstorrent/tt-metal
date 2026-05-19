@@ -83,6 +83,49 @@ Model = Union[NanoGPT, Llama, DeepSeek]
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
 
+# /proc/self/status keys we sample. VmRSS is the resident set (physical pages
+# currently mapped); VmData is anonymous + private heap-style mappings (closest
+# proxy for "memory the allocator is holding for this process"); VmSize is the
+# full virtual address-space footprint; RssAnon excludes file-backed mmaps
+# (filters out PackedTokenDataset shard mmaps so we can see true heap growth).
+# Distinguishes glibc/malloc retention (VmData rises, RssAnon rises) from page
+# cache pressure on dataset mmaps (VmRSS rises, RssAnon flat) — the two have
+# completely different remediations.
+_PROC_STATUS_KEYS = ("VmRSS", "VmData", "VmSize", "RssAnon", "RssFile")
+
+
+def sample_proc_status_mb() -> dict:
+    """Read /proc/self/status and return selected Vm*/Rss* fields in MiB.
+
+    Returns an empty dict on non-Linux or if /proc/self/status is unreadable
+    (caller must handle the missing-key case). Values are float MiB, matching
+    the unit wandb auto-collected ``Process Memory Available (MB)`` uses so
+    the curves are directly comparable on the same axis.
+    """
+    try:
+        with open("/proc/self/status", "r") as f:
+            status_text = f.read()
+    except OSError:
+        return {}
+    result = {}
+    for line in status_text.splitlines():
+        if ":" not in line:
+            continue
+        key, _, rest = line.partition(":")
+        key = key.strip()
+        if key not in _PROC_STATUS_KEYS:
+            continue
+        parts = rest.strip().split()
+        # Format is "<number> kB" — kernel always emits in kB regardless of
+        # the field, so parse the first integer and convert kB -> MiB.
+        if len(parts) >= 1:
+            try:
+                result[key] = float(parts[0]) / 1024.0
+            except ValueError:
+                pass
+    return result
+
+
 def get_device_peak_tflops_bf16() -> float:
     """Get theoretical peak BF16 TFLOPS for the current TT device.
 
@@ -2644,6 +2687,16 @@ def main():
                     log_data["perf/tflops"] = achieved_tflops
                 if mfu is not None:
                     log_data["perf/mfu_pct"] = mfu
+                # Process-level memory poll. wandb's auto-collected
+                # ``Process Memory Available (MB)`` tracks free system RAM,
+                # which conflates page-cache pressure with real process
+                # growth. These fields come straight from /proc/self/status
+                # and let us tell the two apart: rising VmRSS+RssAnon =>
+                # true process heap growth; rising VmRSS with flat RssAnon
+                # => mmap'd shard page cache (harmless, kernel reclaims
+                # under pressure).
+                for key, value in sample_proc_status_mb().items():
+                    log_data[f"mem/{key}_mb"] = value
                 wandb.log(log_data, step=global_step)
 
             if args.model_save_path and global_step % training_config.model_save_interval == 0:
