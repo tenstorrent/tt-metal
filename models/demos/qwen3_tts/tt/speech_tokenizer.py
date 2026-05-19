@@ -24,6 +24,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.reference.functional import SpeechTokenizerDecoderConfig
 from models.demos.qwen3_tts.reference.functional import speech_tokenizer_decoder_forward as reference_decoder_forward
+from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
 from models.demos.qwen3_tts.tt.ttnn_conv_decoder import TTNNConv1d, TTNNConvTranspose1d, ttnn_snake_activation
 
 
@@ -1186,7 +1187,7 @@ class TtSpeechTokenizerDecoder(LightweightModule):
 
         # 3. Conv decoder (TTNN path)
         audio_ttnn = self._conv_decoder_forward(hidden_states_ttnn)
-        audio = ttnn.to_torch(audio_ttnn, dtype=torch.float32).squeeze(-1).contiguous()
+        audio = _mesh_to_torch(audio_ttnn, dtype=torch.float32).squeeze(-1).contiguous()
 
         return audio
 

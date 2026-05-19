@@ -41,16 +41,24 @@ class MLP(LightweightModule):
         self.intermediate_size = intermediate_size
 
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
+        from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size
+
+        self.tp_size = get_tp_size(device) if is_mesh_device else 1
+        assert (
+            intermediate_size % self.tp_size == 0
+        ), f"intermediate_size={intermediate_size} must be divisible by tp_size={self.tp_size}"
+        # Per-chip intermediate after column-parallel gate/up split.
+        self.local_intermediate = intermediate_size // self.tp_size
 
         def get_cache_name(name):
             if weight_cache_path is None:
                 return None
             return weight_cache_path / f"{layer_prefix}_{name}".replace(".", "_")
 
-        _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
+        _mesh_mapper_replicate = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
         _dram = ttnn.DRAM_MEMORY_CONFIG
 
-        def _build_proj_weight(weight_key: str, cache_name: str):
+        def _build_proj_weight(weight_key: str, cache_name: str, mesh_mapper=None):
             # Host-side [out, in] -> [1, 1, in, out] for ttnn.linear; one upload at init.
             weight_host = state_dict[weight_key].transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
             cache_file = get_cache_name(cache_name)
@@ -62,7 +70,7 @@ class MLP(LightweightModule):
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=_dram,
                     cache_file_name=cache_file,
-                    mesh_mapper=_mesh_mapper,
+                    mesh_mapper=mesh_mapper,
                 )
             return ttnn.from_torch(
                 weight_host,
@@ -70,16 +78,103 @@ class MLP(LightweightModule):
                 dtype=weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=_dram,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=mesh_mapper,
             )
 
-        # Original (DRAM_INTERLEAVED) weights — used by prefill path.
-        self.gate_proj = _build_proj_weight(f"{layer_prefix}.mlp.gate_proj.weight", "gate_proj")
-        self.up_proj = _build_proj_weight(f"{layer_prefix}.mlp.up_proj.weight", "up_proj")
-        self.down_proj = _build_proj_weight(f"{layer_prefix}.mlp.down_proj.weight", "down_proj")
+        def _build_colpar_weight(weight_key: str, cache_name: str):
+            """Column-parallel: split N (output/intermediate) across TP chips."""
+            import torch
+
+            w_full = state_dict[weight_key]  # [out_features, in_features]
+            if self.tp_size == 1:
+                return _build_proj_weight(weight_key, cache_name, mesh_mapper=_mesh_mapper_replicate)
+            chunks = list(torch.chunk(w_full, self.tp_size, dim=0))  # split out_features
+            stacked = torch.stack(chunks, dim=0)  # [tp, local_out, in]
+            host = stacked.transpose(-2, -1).unsqueeze(0).contiguous()  # [1, tp, in, local_out]
+            return ttnn.from_torch(
+                host,
+                device=device,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=_dram,
+                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1),
+            )
+
+        def _build_rowpar_weight(weight_key: str, cache_name: str):
+            """Row-parallel: split K (input / local_intermediate) across TP chips."""
+            import torch
+
+            w_full = state_dict[weight_key]  # [out_features, in_features]
+            if self.tp_size == 1:
+                return _build_proj_weight(weight_key, cache_name, mesh_mapper=_mesh_mapper_replicate)
+            # After transpose, K is in_features; split that.
+            w_t = w_full.transpose(-2, -1).contiguous()  # [in, out]
+            chunks = list(torch.chunk(w_t, self.tp_size, dim=0))  # split in (=local_intermediate per chip)
+            stacked = torch.stack(chunks, dim=0).unsqueeze(0).contiguous()  # [1, tp, local_in, out]
+            return ttnn.from_torch(
+                stacked,
+                device=device,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=_dram,
+                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1),
+            )
+
+        # Prefill weights (DRAM_INTERLEAVED) — TP>1: column/row-parallel sharded.
+        self.gate_proj = _build_colpar_weight(f"{layer_prefix}.mlp.gate_proj.weight", "gate_proj")
+        self.up_proj = _build_colpar_weight(f"{layer_prefix}.mlp.up_proj.weight", "up_proj")
+        self.down_proj = _build_rowpar_weight(f"{layer_prefix}.mlp.down_proj.weight", "down_proj")
 
         # Decode-only DRAM-sharded weights + program/memory configs (M=1 tile).
         # gate_proj and up_proj share K=hidden, N=intermediate so they share configs.
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        grid = device.compute_with_storage_grid_size()
+        self.short_seq_limit = 32
+        _fp32 = self.compute_kernel_config.fp32_dest_acc_en
+        # 1D program configs: gate/up output = local_intermediate per chip; down input = local_intermediate.
+        self._decode_gate_up_progcfg = make_linear_1d_program_config(
+            m=1, k=hidden_size, n=self.local_intermediate, grid_x=grid.x, grid_y=grid.y, fp32_dest_acc_en=_fp32
+        )
+        self._decode_down_progcfg = make_linear_1d_program_config(
+            m=1, k=self.local_intermediate, n=hidden_size, grid_x=grid.x, grid_y=grid.y, fp32_dest_acc_en=_fp32
+        )
+        self._short_seq_gate_up_progcfg = make_linear_1d_program_config(
+            m=self.short_seq_limit,
+            k=hidden_size,
+            n=self.local_intermediate,
+            grid_x=grid.x,
+            grid_y=grid.y,
+            fp32_dest_acc_en=_fp32,
+        )
+        self._short_seq_down_progcfg = make_linear_1d_program_config(
+            m=self.short_seq_limit,
+            k=self.local_intermediate,
+            n=hidden_size,
+            grid_x=grid.x,
+            grid_y=grid.y,
+            fp32_dest_acc_en=_fp32,
+        )
+
+        # DRAM-sharded decode path (TP=1 only — skipped for TP>1).
+        if self.tp_size > 1:
+            self.gate_proj_dram_sharded = None
+            self.up_proj_dram_sharded = None
+            self.down_proj_dram_sharded = None
+            self._decode_gate_up_n_padded = self.local_intermediate
+            self._decode_down_n_padded = hidden_size
+            self._decode_gate_up_dramshard_progcfg = None
+            self._decode_down_dramshard_progcfg = None
+            self._decode_gate_up_in0_memcfg = None
+            self._decode_gate_up_out_memcfg = None
+            self._decode_down_in0_memcfg = None
+            self._decode_down_out_memcfg = None
+            return
+
         gate_w_kn = state_dict[f"{layer_prefix}.mlp.gate_proj.weight"].transpose(-2, -1).contiguous()
         up_w_kn = state_dict[f"{layer_prefix}.mlp.up_proj.weight"].transpose(-2, -1).contiguous()
         self.gate_proj_dram_sharded, k_gu, n_padded_gu = build_dram_sharded_weight(
@@ -116,39 +211,6 @@ class MLP(LightweightModule):
             m_tiles=1, k_tiles=n_tiles_d, num_cores_x=cols_d, num_cores_y=rows_d
         )
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-        # Prefill program configs (M>1, regular 1D matmul).
-        grid = device.compute_with_storage_grid_size()
-        self.short_seq_limit = 32
-        _fp32 = self.compute_kernel_config.fp32_dest_acc_en
-        self._decode_gate_up_progcfg = make_linear_1d_program_config(
-            m=1, k=hidden_size, n=intermediate_size, grid_x=grid.x, grid_y=grid.y, fp32_dest_acc_en=_fp32
-        )
-        self._decode_down_progcfg = make_linear_1d_program_config(
-            m=1, k=intermediate_size, n=hidden_size, grid_x=grid.x, grid_y=grid.y, fp32_dest_acc_en=_fp32
-        )
-        self._short_seq_gate_up_progcfg = make_linear_1d_program_config(
-            m=self.short_seq_limit,
-            k=hidden_size,
-            n=intermediate_size,
-            grid_x=grid.x,
-            grid_y=grid.y,
-            fp32_dest_acc_en=_fp32,
-        )
-        self._short_seq_down_progcfg = make_linear_1d_program_config(
-            m=self.short_seq_limit,
-            k=intermediate_size,
-            n=hidden_size,
-            grid_x=grid.x,
-            grid_y=grid.y,
-            fp32_dest_acc_en=_fp32,
-        )
-
     def forward(self, x: ttnn.Tensor, mode: str = "prefill") -> ttnn.Tensor:
         """Apply SwiGLU MLP.
 
@@ -175,8 +237,8 @@ class MLP(LightweightModule):
         if seq_len >= 1024:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
 
-        # Decode path: DRAM-sharded chain (gate → mul → down all stay sharded).
-        if is_decode and seq_len < 1024:
+        # Decode path: DRAM-sharded chain (TP=1 only; TP>1 falls through to prefill path below).
+        if self.tp_size == 1 and is_decode and seq_len < 1024:
             # Width-shard x once, reuse for both gate and up. Skip the I→S if the
             # caller already gave us a tensor in the matching shard config (e.g. piped
             # from a sharded layernorm in decoder_layer).
@@ -277,4 +339,9 @@ class MLP(LightweightModule):
         ttnn.deallocate(hidden)
         if seq_len >= 1024:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
+        # Row-parallel down-proj on TP>1: each chip has a partial sum; all_reduce gives full hidden.
+        if self.tp_size > 1:
+            from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce
+
+            output = tp_all_reduce(output, self.device, memory_config=mem_cfg)
         return output

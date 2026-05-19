@@ -26,6 +26,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
 
 
 @dataclass
@@ -95,7 +96,7 @@ class DecodeLoopState:
 
 def _read_device_token(token_tt: Any, index: int = 0) -> int:
     """Pull a single int token from a 1-element-or-shape ttnn tensor."""
-    return int(ttnn.to_torch(token_tt).flatten()[index].item())
+    return int(_mesh_to_torch(token_tt).flatten()[index].item())
 
 
 def ar_decode_loop(
@@ -169,7 +170,7 @@ def ar_decode_loop(
         _step_pc = time.perf_counter()
 
         # === CodePredictor: generate codes 1-15 ===
-        past_hidden_torch = ttnn.to_torch(talker_hidden_tt)[:, :, -1:, :].float()
+        past_hidden_torch = _mesh_to_torch(talker_hidden_tt)[:, :, -1:, :].float()
         token_id_buf[0, 0] = token_0
         code0_embed = F.embedding(token_id_buf, codec_embed_torch).unsqueeze(1)
         cp_input = torch.cat([past_hidden_torch, code0_embed], dim=2)
@@ -334,7 +335,7 @@ def ar_decode_loop(
             _t_after_codec0_d2h = time.perf_counter()
             _t_after_codec0_cpu = _t_after_codec0_d2h
         else:
-            _codec0_logits_torch = ttnn.to_torch(state.trace_codec_logits_out, dtype=torch.float32)
+            _codec0_logits_torch = _mesh_to_torch(state.trace_codec_logits_out, dtype=torch.float32)
             _t_after_codec0_d2h = time.perf_counter()
             token_0 = sample_token_fn(
                 _codec0_logits_torch.flatten(),

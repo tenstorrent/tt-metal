@@ -38,6 +38,33 @@ def get_tp_size(device) -> int:
     return max(rows, cols) if min(rows, cols) == 1 else cols
 
 
+def to_torch(t: ttnn.Tensor, device=None, **kwargs) -> "torch.Tensor":
+    """Drop-in for ttnn.to_torch that handles multi-device meshes.
+
+    On a (1, N) mesh all chips hold the same data after all_reduce, so we
+    extract chip-0's view via ConcatMeshToTensor and take the first slice.
+    On a plain Device or (1,1) mesh the call passes through unchanged.
+
+    The optional ``device`` argument is looked up on the tensor if not provided:
+    ``t.device()`` works for both Device and MeshDevice, but for older
+    codebases that pass the tensor only, we fall back to ``ttnn.to_torch(t)``.
+    """
+    import torch as _torch  # noqa — local import to avoid circular dependency
+
+    # Determine whether this is a multi-device tensor.
+    dev = device
+    if dev is None:
+        try:
+            dev = t.device()
+        except Exception:
+            return ttnn.to_torch(t, **kwargs)
+
+    if dev.__class__.__name__ == "MeshDevice" and dev.get_num_devices() > 1:
+        stacked = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(dev, dim=0), **kwargs)
+        return stacked[0:1]
+    return ttnn.to_torch(t, **kwargs)
+
+
 def tp_all_reduce(tensor: ttnn.Tensor, device, memory_config=None) -> ttnn.Tensor:
     """All-reduce ``tensor`` across the TP axis. No-op when tp_size==1.
 

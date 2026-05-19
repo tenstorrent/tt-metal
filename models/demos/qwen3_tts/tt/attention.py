@@ -57,12 +57,24 @@ class Attention(LightweightModule):
         super().__init__()
         self.device = device
         self.hidden_size = hidden_size
-        self.num_heads = num_heads
-        self.num_kv_heads = num_kv_heads
         self.head_dim = head_dim
-        self.num_kv_groups = num_heads // num_kv_heads
         self.scale = head_dim**-0.5
         self.rms_norm_eps = rms_norm_eps
+
+        is_mesh_device_flag = device.__class__.__name__ == "MeshDevice"
+        from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size
+
+        self.tp_size = get_tp_size(device) if is_mesh_device_flag else 1
+        if self.tp_size > 1:
+            assert num_heads % self.tp_size == 0
+            assert num_kv_heads % self.tp_size == 0
+        # For TP>1 override num_heads/num_kv_heads to per-chip (local) counts.
+        # num_kv_groups is the same ratio (local_heads / local_kv_heads == full ratio).
+        self.num_heads = num_heads // self.tp_size
+        self.num_kv_heads = num_kv_heads // self.tp_size
+        self.num_kv_groups = self.num_heads // self.num_kv_heads
+        # Derived local sizes used in forward (same as self.num_heads * head_dim etc.).
+        self._local_hidden = self.num_heads * head_dim
 
         def _permute_rope_head_dim_rows(weight_2d, local_heads: int, head_dim: int):
             # Convert each head block from non-interleaved [..., d0..d63, d64..d127]
@@ -84,7 +96,7 @@ class Attention(LightweightModule):
             out[1::2] = weight_1d[half_dim:]
             return out
 
-        is_mesh_device = device.__class__.__name__ == "MeshDevice"
+        is_mesh_device = is_mesh_device_flag
 
         def get_cache_name(name):
             if weight_cache_path is None:
@@ -114,13 +126,26 @@ class Attention(LightweightModule):
         #     mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         # )
 
-        _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
+        _mesh_mapper_replicate = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
         _dram = ttnn.DRAM_MEMORY_CONFIG
         _fused_qkv = (num_heads + 2 * num_kv_heads) * head_dim
-        # Fused QKV on host, single upload (same pattern as MLP): stable [1,1,hidden,fused] DRAM weights for traces.
+        _local_fused_qkv = (self.num_heads + 2 * self.num_kv_heads) * head_dim
+        # Fused QKV: column-parallel for TP>1 (per-chip [Q_local|K_local|V_local]),
+        # replicated for TP=1 (full [Q|K|V]).
         qkv_2d = torch.cat([q_proj_weight, k_proj_weight, v_proj_weight], dim=0)
         assert int(qkv_2d.shape[0]) == _fused_qkv
-        _wqkv_host = qkv_2d.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
+        if self.tp_size == 1:
+            _wqkv_host = qkv_2d.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
+            _wqkv_mapper = _mesh_mapper_replicate
+        else:
+            # Split Q, K, V separately by head count, then re-cat per chip.
+            q_chunks = list(torch.chunk(q_proj_weight, self.tp_size, dim=0))
+            k_chunks = list(torch.chunk(k_proj_weight, self.tp_size, dim=0))
+            v_chunks = list(torch.chunk(v_proj_weight, self.tp_size, dim=0))
+            per_chip = [torch.cat([q_chunks[i], k_chunks[i], v_chunks[i]], dim=0) for i in range(self.tp_size)]
+            # Stack on a new axis sharded across the mesh: [1, tp, hidden, local_fused].
+            _wqkv_host = torch.stack(per_chip, dim=0).transpose(-2, -1).unsqueeze(0).contiguous()
+            _wqkv_mapper = ttnn.ShardTensorToMesh(device, dim=1)
         _wqkv_cache = get_cache_name("wqkv")
         if _wqkv_cache is not None:
             self.wqkv = ttnn.as_tensor(
@@ -130,7 +155,7 @@ class Attention(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=_dram,
                 cache_file_name=_wqkv_cache,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=_wqkv_mapper,
             )
         else:
             self.wqkv = ttnn.from_torch(
@@ -139,7 +164,7 @@ class Attention(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=_dram,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=_wqkv_mapper,
             )
 
         # Torch reference (o_proj transpose on CPU, then as_tensor):
@@ -154,8 +179,17 @@ class Attention(LightweightModule):
         #     mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         # )
 
-        _o_rows = num_heads * head_dim
-        _wo_host = o_proj_weight.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
+        # O-projection: row-parallel for TP>1. Each chip owns a K-slice of the
+        # transposed weight (K = num_heads*head_dim, split by heads). The matmul
+        # per chip produces a partial sum that all_reduce completes.
+        if self.tp_size == 1:
+            _wo_host = o_proj_weight.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
+            _wo_mapper = _mesh_mapper_replicate
+        else:
+            wo_t = o_proj_weight.transpose(-2, -1).contiguous()  # [hidden_in, hidden_out]
+            per_chip_wo = list(torch.chunk(wo_t, self.tp_size, dim=0))  # split K
+            _wo_host = torch.stack(per_chip_wo, dim=0).unsqueeze(0).contiguous()  # [1, tp, local_hidden_in, hidden_out]
+            _wo_mapper = ttnn.ShardTensorToMesh(device, dim=1)
         _wo_cache = get_cache_name("wo")
         if _wo_cache is not None:
             self.wo = ttnn.as_tensor(
@@ -165,7 +199,7 @@ class Attention(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=_dram,
                 cache_file_name=_wo_cache,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=_wo_mapper,
             )
         else:
             self.wo = ttnn.from_torch(
@@ -174,7 +208,7 @@ class Attention(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=_dram,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=_wo_mapper,
             )
 
         # QK-norm weights (per-head RMSNorm)
@@ -196,7 +230,7 @@ class Attention(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=_qk_norm_gamma_memcfg,
                 cache_file_name=_qn_cache,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=_mesh_mapper_replicate,
             )
         else:
             self.q_norm_weight = ttnn.from_torch(
@@ -205,7 +239,7 @@ class Attention(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=_qk_norm_gamma_memcfg,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=_mesh_mapper_replicate,
             )
 
         _kn_cache = get_cache_name("k_norm")
@@ -217,7 +251,7 @@ class Attention(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=_qk_norm_gamma_memcfg,
                 cache_file_name=_kn_cache,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=_mesh_mapper_replicate,
             )
         else:
             self.k_norm_weight = ttnn.from_torch(
@@ -226,7 +260,7 @@ class Attention(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=_qk_norm_gamma_memcfg,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=_mesh_mapper_replicate,
             )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -279,10 +313,11 @@ class Attention(LightweightModule):
         self.short_seq_limit = 32
         _grid = device.compute_with_storage_grid_size()
         _fp32_linear = self.compute_kernel_config.fp32_dest_acc_en
+        # 1D program configs use per-chip sizes: QKV output = local_fused_qkv; O input = local_hidden.
         self._decode_wqkv_progcfg = make_linear_1d_program_config(
             m=1,
             k=hidden_size,
-            n=_fused_qkv,
+            n=_local_fused_qkv,
             grid_x=_grid.x,
             grid_y=_grid.y,
             fp32_dest_acc_en=_fp32_linear,
@@ -290,14 +325,14 @@ class Attention(LightweightModule):
         self._short_seq_wqkv_progcfg = make_linear_1d_program_config(
             m=self.short_seq_limit,
             k=hidden_size,
-            n=_fused_qkv,
+            n=_local_fused_qkv,
             grid_x=_grid.x,
             grid_y=_grid.y,
             fp32_dest_acc_en=_fp32_linear,
         )
         self._decode_wo_progcfg = make_linear_1d_program_config(
             m=1,
-            k=_o_rows,
+            k=self._local_hidden,
             n=hidden_size,
             grid_x=_grid.x,
             grid_y=_grid.y,
@@ -305,19 +340,58 @@ class Attention(LightweightModule):
         )
         self._short_seq_wo_progcfg = make_linear_1d_program_config(
             m=self.short_seq_limit,
-            k=_o_rows,
+            k=self._local_hidden,
             n=hidden_size,
             grid_x=_grid.x,
             grid_y=_grid.y,
             fp32_dest_acc_en=_fp32_linear,
         )
 
-        # === Decode-only DRAM-sharded QKV / O projections ===
+        # === Decode-only DRAM-sharded QKV / O projections (TP=1 only) ===
         # qkv_2d rows are reordered into KV-group-interleaved layout (shard i =
         # [q_{2i}, q_{2i+1}, k_i, v_i]) so the sharded nlp_create_qkv_heads kernel
         # can split the matmul output without an intermediate L1 copy.
+        # TP>1: skip — the TP path uses self.wqkv/self.wo with all_reduce; none of
+        # the DRAM-sharded machinery is needed or correct across chips.
         self._fused_qkv = _fused_qkv
         num_q_per_kv = num_heads // num_kv_heads
+        if self.tp_size > 1:
+            # Stub out all the optimised-decode attributes so forward can always
+            # access them without NameError, but they won't be used.
+            self.wqkv_dram_sharded = None
+            self.wo_dram_sharded = None
+            self._decode_wqkv_dramshard_progcfg = None
+            self._decode_wo_dramshard_progcfg = None
+            self._decode_wqkv_n_padded = _local_fused_qkv
+            self._decode_wo_n_padded = hidden_size
+            self._decode_wqkv_in0_memcfg = None
+            self._decode_wqkv_out_memcfg = None
+            self._decode_wo_in0_memcfg = None
+            self._decode_wo_out_memcfg = None
+            self._decode_concat_heads_in_memcfg = None
+            self._decode_concat_heads_out_memcfg = None
+            self._decode_qkv_split_in_memcfg = None
+            self._decode_qkv_split_q_out_memcfg = None
+            self._decode_qkv_split_k_out_memcfg = None
+            self._decode_qkv_split_v_out_memcfg = None
+            self._prefill_concat_configs = {}
+            TILE = 32
+            kv_shard_height = ((self.num_kv_heads + TILE - 1) // TILE) * TILE
+            _k_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+            _v_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))})
+            self.paged_k_input_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(_k_grid, [kv_shard_height, head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            self.paged_v_input_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(_v_grid, [kv_shard_height, head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            self.paged_input_mem_config = self.paged_k_input_mem_config
+            return
+        # --- TP=1 path: DRAM-sharded weights + sharded-NLP configs below ---
         row_perm = []
         for i in range(num_kv_heads):
             for q_in_group in range(num_q_per_kv):
@@ -495,7 +569,9 @@ class Attention(LightweightModule):
         # CP_prefill (seq=2) also takes the sharded fast path → 16-core
         # nlp_create_qkv_heads instead of single-core. Larger prefill buckets
         # (64, 128) need separate per-m shard configs to engage — TODO.
-        use_dram_shard_qkv = seq_len <= 32
+        # TP>1: disable every optimised single-chip path; the forward uses
+        # self.wqkv / self.wo (per-chip column/row-parallel) + all_reduce.
+        use_dram_shard_qkv = (self.tp_size == 1) and (seq_len <= 32)
         # Sharded nlp_create_qkv_heads engages downstream of the DRAM-sharded QKV
         # since wqkv was rearranged to KV-group-interleaved layout.
         sharded_qkv_split = use_dram_shard_qkv
@@ -885,10 +961,10 @@ class Attention(LightweightModule):
             ttnn.deallocate(attn_output_f32)
 
         # Hoist use_dram_shard_o so it can also gate the direct concat→wo reshard below.
-        use_dram_shard_o = is_decode and seq_len == 1
+        use_dram_shard_o = (self.tp_size == 1) and is_decode and seq_len == 1
         # Pick decode (m=32) vs prefill bucket-size sharded NLPConcat memcfgs.
-        sharded_concat_decode = is_decode
-        sharded_concat_prefill = not is_decode and seq_len in self._prefill_concat_configs
+        sharded_concat_decode = (self.tp_size == 1) and is_decode
+        sharded_concat_prefill = (self.tp_size == 1) and (not is_decode) and (seq_len in self._prefill_concat_configs)
         use_sharded_concat = sharded_concat_decode or sharded_concat_prefill
         if sharded_concat_prefill:
             _pre = self._prefill_concat_configs[seq_len]
@@ -974,5 +1050,11 @@ class Attention(LightweightModule):
                 program_config=wo_progcfg,
             )
             ttnn.deallocate(attn_output)
+            # Row-parallel O-proj on TP>1: each chip holds a partial sum over
+            # local_hidden.  all_reduce restores the full [B, 1, S, hidden].
+            if self.tp_size > 1:
+                from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce
+
+                output = tp_all_reduce(output, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         return output, updated_kv_cache

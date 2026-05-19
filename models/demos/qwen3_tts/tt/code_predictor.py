@@ -38,12 +38,17 @@ class CodePredictor(LightweightModule):
         self.num_layers = config.num_hidden_layers
         self.num_code_groups = config.num_code_groups
         self.vocab_size = config.vocab_size
-        self.num_heads = config.num_attention_heads
-        self.num_kv_heads = config.num_key_value_heads
         self.head_dim = config.head_dim
         self.rope_theta = config.rope_theta
         self.rms_norm_eps = config.rms_norm_eps
-        self.num_kv_groups = self.num_heads // self.num_kv_heads
+        # TP-aware head counts: divide by tp_size so each chip owns its head slice.
+        _is_mesh = device.__class__.__name__ == "MeshDevice"
+        from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size
+
+        self.tp_size = get_tp_size(device) if _is_mesh else 1
+        self.num_heads = config.num_attention_heads // self.tp_size
+        self.num_kv_heads = config.num_key_value_heads // self.tp_size
+        self.num_kv_groups = self.num_heads // self.num_kv_heads  # same ratio
         self.scale = 1.0 / (self.head_dim**0.5)
 
         DRAM = ttnn.DRAM_MEMORY_CONFIG
@@ -79,6 +84,37 @@ class CodePredictor(LightweightModule):
             w_host = w_2d.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
             return ttnn.from_torch(w_host, device=device, dtype=dt, layout=TILE, memory_config=DRAM)
 
+        def w_colpar_to_tt(w_2d, dt=ttnn.bfloat16):
+            """Column-parallel: split output features across TP chips. TP=1 → replicate."""
+            if self.tp_size == 1:
+                return w_to_tt(w_2d, dt)
+            chunks = list(torch.chunk(w_2d, self.tp_size, dim=0))  # [tp, local_out, in]
+            host = torch.stack(chunks, dim=0).transpose(-2, -1).unsqueeze(0).contiguous()  # [1, tp, in, local_out]
+            return ttnn.from_torch(
+                host,
+                device=device,
+                dtype=dt,
+                layout=TILE,
+                memory_config=DRAM,
+                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1),
+            )
+
+        def w_rowpar_to_tt(w_2d, dt=ttnn.bfloat16):
+            """Row-parallel: split input features across TP chips. TP=1 → replicate."""
+            if self.tp_size == 1:
+                return w_to_tt(w_2d, dt)
+            w_t = w_2d.transpose(0, 1).contiguous()  # [in, out]
+            chunks = list(torch.chunk(w_t, self.tp_size, dim=0))  # [tp, local_in, out]
+            host = torch.stack(chunks, dim=0).unsqueeze(0).contiguous()  # [1, tp, local_in, out]
+            return ttnn.from_torch(
+                host,
+                device=device,
+                dtype=dt,
+                layout=TILE,
+                memory_config=DRAM,
+                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1),
+            )
+
         def norm_w_1d_to_tt(w_1d, dim, *, permute_rope=False):
             w = _perm_rope_vec(w_1d, dim) if permute_rope else w_1d
             w_host = w.to(torch.bfloat16).view(1, 1, dim // 32, 32).contiguous()
@@ -111,24 +147,45 @@ class CodePredictor(LightweightModule):
         # (non-DRAM-sharded) nlp_create_qkv_heads kernel. Q/K rows are RoPE-permuted
         # so rotary_embedding_llama's interleaved format works directly.
         H = self.hidden_size
-        NH, NKV, HD = self.num_heads, self.num_kv_heads, self.head_dim
+        # Use full head counts for weight construction (config values, not local).
+        _NH_full = config.num_attention_heads
+        _NKV_full = config.num_key_value_heads
+        HD = self.head_dim
         self.layers_w = []
         for li in range(self.num_layers):
             pfx = f"talker.code_predictor.model.layers.{li}."
             lw_torch = {k.replace(pfx, ""): v for k, v in state_dict.items() if k.startswith(pfx)}
-            q_w = _perm_rope_rows(lw_torch["self_attn.q_proj.weight"], HD)
-            k_w = _perm_rope_rows(lw_torch["self_attn.k_proj.weight"], HD)
-            v_w = lw_torch["self_attn.v_proj.weight"]
-            wqkv_plain = torch.cat([q_w, k_w, v_w], dim=0).contiguous()
+            q_w = _perm_rope_rows(lw_torch["self_attn.q_proj.weight"], HD)  # [NH_full*HD, H]
+            k_w = _perm_rope_rows(lw_torch["self_attn.k_proj.weight"], HD)  # [NKV_full*HD, H]
+            v_w = lw_torch["self_attn.v_proj.weight"]  # [NKV_full*HD, H]
+            if self.tp_size == 1:
+                wqkv_tt = w_to_tt(torch.cat([q_w, k_w, v_w], dim=0).contiguous())
+            else:
+                # Column-parallel QKV: split Q, K, V separately by head count.
+                q_per_chip = list(torch.chunk(q_w, self.tp_size, dim=0))
+                k_per_chip = list(torch.chunk(k_w, self.tp_size, dim=0))
+                v_per_chip = list(torch.chunk(v_w, self.tp_size, dim=0))
+                per_chip = [
+                    torch.cat([q_per_chip[i], k_per_chip[i], v_per_chip[i]], dim=0) for i in range(self.tp_size)
+                ]
+                stacked = torch.stack(per_chip, dim=0).transpose(-2, -1).unsqueeze(0).contiguous()
+                wqkv_tt = ttnn.from_torch(
+                    stacked,
+                    device=device,
+                    dtype=ttnn.bfloat16,
+                    layout=TILE,
+                    memory_config=DRAM,
+                    mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1),
+                )
             self.layers_w.append(
                 {
                     "input_ln_w": norm_w_1d_to_tt(lw_torch["input_layernorm.weight"], H),
                     "post_ln_w": norm_w_1d_to_tt(lw_torch["post_attention_layernorm.weight"], H),
-                    "wqkv": w_to_tt(wqkv_plain),
-                    "o_proj": w_to_tt(lw_torch["self_attn.o_proj.weight"]),
-                    "gate": w_to_tt(lw_torch["mlp.gate_proj.weight"]),
-                    "up": w_to_tt(lw_torch["mlp.up_proj.weight"]),
-                    "down": w_to_tt(lw_torch["mlp.down_proj.weight"]),
+                    "wqkv": wqkv_tt,
+                    "o_proj": w_rowpar_to_tt(lw_torch["self_attn.o_proj.weight"]),
+                    "gate": w_colpar_to_tt(lw_torch["mlp.gate_proj.weight"]),
+                    "up": w_colpar_to_tt(lw_torch["mlp.up_proj.weight"]),
+                    "down": w_rowpar_to_tt(lw_torch["mlp.down_proj.weight"]),
                     "q_norm_w": norm_w_1d_to_tt(lw_torch["self_attn.q_norm.weight"], HD, permute_rope=True),
                     "k_norm_w": norm_w_1d_to_tt(lw_torch["self_attn.k_norm.weight"], HD, permute_rope=True),
                 }
@@ -368,6 +425,10 @@ class CodePredictor(LightweightModule):
 
         o = ttnn.matmul(attn_concat, lw["o_proj"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
         ttnn.deallocate(attn_concat)
+        if self.tp_size > 1:
+            from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce
+
+            o = tp_all_reduce(o, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Residual + post-norm. residual = caller's h_tt — DO NOT deallocate.
         h_post = ttnn.add(residual, o, dtype=self.act_dtype)
@@ -386,6 +447,10 @@ class CodePredictor(LightweightModule):
         ttnn.deallocate(up_o)
         mlp_o = ttnn.matmul(gated, lw["down"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
         ttnn.deallocate(gated)
+        if self.tp_size > 1:
+            from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce
+
+            mlp_o = tp_all_reduce(mlp_o, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
         out = ttnn.add(residual2, mlp_o, dtype=self.act_dtype)
         ttnn.deallocate(residual2)
         ttnn.deallocate(mlp_o)
