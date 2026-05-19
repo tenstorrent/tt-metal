@@ -4,6 +4,8 @@
 
 #include "intimg_device_operation.hpp"
 
+#include <array>
+
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/kernel_types.hpp>
