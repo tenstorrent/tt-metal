@@ -48,9 +48,9 @@ from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 supported_formats = [
-    # DataFormat.Int32,
-    # DataFormat.UInt32,
-    # DataFormat.UInt16,
+    DataFormat.Int32,
+    DataFormat.UInt32,
+    DataFormat.UInt16,
     DataFormat.Float32,
     DataFormat.Float16_b,
     DataFormat.Bfp8_b,
@@ -89,6 +89,17 @@ def test_unpack_bcast(
         DataFormat.UInt32,
     ):
         pytest.skip("32-bit formats require dest accumulation")
+
+    if (
+        get_chip_architecture() == ChipArchitecture.BLACKHOLE
+        and formats.input_format
+        in (
+            DataFormat.Float32,
+            DataFormat.Int32,
+            DataFormat.UInt32,
+        )
+    ):
+        pytest.skip("Unsupported for BH yet")
 
     # --- Skips from bugs --------------------------------------------------
 
