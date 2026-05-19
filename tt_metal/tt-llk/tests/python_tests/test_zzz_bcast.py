@@ -93,11 +93,7 @@ def test_unpack_bcast(
     if (
         get_chip_architecture() == ChipArchitecture.BLACKHOLE
         and formats.input_format
-        in (
-            DataFormat.Float32,
-            DataFormat.Int32,
-            DataFormat.UInt32,
-        )
+        in (DataFormat.Float32, DataFormat.Int32, DataFormat.UInt32, DataFormat.UInt16)
     ):
         pytest.skip("Unsupported for BH yet")
 

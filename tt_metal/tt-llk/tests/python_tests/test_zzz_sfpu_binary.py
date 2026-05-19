@@ -75,6 +75,12 @@ def test_sfpu_binary_float(
 
     if (
         TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and bcast_dim != LlkBroadcastType.None_
+    ):
+        pytest.skip("Broadcast not supported for SFPU binary on Blackhole")
+
+    if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
         and formats.input_format == DataFormat.Float16
         and dest_acc == DestAccumulation.No
     ):
