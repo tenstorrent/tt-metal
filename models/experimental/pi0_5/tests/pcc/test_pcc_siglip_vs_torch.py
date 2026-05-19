@@ -97,8 +97,10 @@ def test_pcc_siglip_vision_tower(device, use_pretrained):
         config = create_small_siglip_config()
         vision_weights = create_random_siglip_weights(config)
 
-    # Create input
-    pixel_values = torch.randn(1, 3, config.image_size, config.image_size)
+    # Create input — bs=2 matches the production pi0.5 SigLIP setup (wrist
+    # cam + base cam stacked). bs=1 hides a class of bug where the BS path
+    # flattens batch into seq and SDPA computes cross-image attention.
+    pixel_values = torch.randn(2, 3, config.image_size, config.image_size)
 
     # PyTorch forward
     model_torch = SigLIPVisionTowerTorch(config, vision_weights)
@@ -198,9 +200,10 @@ def main():
         vision_weights = weight_loader.get_vlm_vision_weights()
         print(f"   ✅ Loaded {len(vision_weights)} vision weight tensors")
 
-        # Create input
+        # Create input — bs=2 matches the production pi0.5 SigLIP setup
+        # (wrist cam + base cam stacked). See header note.
         print("\n2. Creating test input...")
-        pixel_values = torch.randn(1, 3, config.image_size, config.image_size)
+        pixel_values = torch.randn(2, 3, config.image_size, config.image_size)
         print(f"   Input: {pixel_values.shape}")
 
         # PyTorch

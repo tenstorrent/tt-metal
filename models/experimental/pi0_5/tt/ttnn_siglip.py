@@ -61,22 +61,20 @@ _SIGLIP_INTERMEDIATE_PADDED = _SIGLIP_INTERMEDIATE_PADDED_TILES * 32
 
 
 def _siglip_bs_enabled() -> bool:
-    """Master switch for SigLIP block-sharded encoder path.
+    """Master switch for SigLIP block-sharded encoder path. Default ON.
 
-    Default OFF. The block-sharded encoder is faster on paper (-0.30 ms
-    end-to-end) and PCC-neutral (0.9917 -> 0.9910 = inside 1 stdev), but
-    a 40-task LIBERO sim sweep on real pi05_libero weights showed a major
-    task-level regression: -42.5 pp at N=5, -60 pp at N=10 vs the
-    interleaved baseline. Two whole suites (object and goal) dropped to
-    near-zero success. Disabling by default until the directional drift
-    in vision features is understood / fixed.
+    History: was flipped OFF after a 40-task LIBERO sweep on pi05_libero
+    weights showed -42.5 pp at N=5 / -60 pp at N=10. Root cause was NOT
+    matmul precision but a structural bug — the BS path flattened the
+    batch dim into the M dim of SDPA, causing cross-image attention when
+    the SigLIP batch is 2 (production: wrist + base camera stacked).
+    Fixed by un-flattening batch around SDPA inside attention.forward_bs.
 
-    Set PI0_SIGLIP_BS=1 (or true/yes/on) to opt into the block-sharded
-    path for perf experiments.
+    Set PI0_SIGLIP_BS=0 to disable (e.g. to A/B against the baseline).
     """
     v = os.environ.get("PI0_SIGLIP_BS")
     if v is None:
-        return False
+        return True
     return v.strip().lower() in ("1", "true", "yes", "on")
 
 
@@ -468,11 +466,22 @@ class SigLIPAttentionTTNN:
         bs_memcfg_hidden: "ttnn.MemoryConfig",
         bs_memcfg_qkv: "ttnn.MemoryConfig",
         bs_memcfg_attn: "ttnn.MemoryConfig",
+        *,
+        n_batch: int,
+        n_seq: int,
     ) -> ttnn.Tensor:
         """ViT-BH-style attention with block-sharded data path.
 
         Round-trip: BS in → QKV(BS) → L1 → nlp_create_qkv_heads → DRAM →
         SDPA → L1 → nlp_concat_heads → BS → O-proj(BS) → BS out (4D).
+
+        The BS residual stream is (1, 1, n_batch*n_seq, hidden) — batch is
+        flattened into the M dim so matmuls run on the full token block.
+        SDPA, however, MUST see the un-flattened (n_batch, num_heads, n_seq, head_dim)
+        or it will attend across image boundaries (cross-image contamination
+        when n_batch>1 — confirmed against pi05_libero_finetuned at bs=2).
+        We therefore reshape around the nlp_create_qkv_heads → SDPA → concat
+        section, leaving the BS layout entry/exit shape intact.
         """
         gx, gy = _SIGLIP_BS_GRID
         b = int(hidden_states.shape[0])
@@ -499,8 +508,11 @@ class SigLIPAttentionTTNN:
             program_config=qkv_pcfg,
         )
 
-        # 2) BS → L1 interleaved for nlp_create_qkv_heads.
+        # 2) BS → L1 interleaved for nlp_create_qkv_heads. Then un-flatten
+        # the batch dim so SDPA computes attention per-image (not across).
         xqkv = ttnn.sharded_to_interleaved(xqkv, memory_config=ttnn.L1_MEMORY_CONFIG)
+        qkv_dim = int(xqkv.shape[-1])
+        xqkv = ttnn.reshape(xqkv, (n_batch, 1, n_seq, qkv_dim))
 
         q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
@@ -512,7 +524,11 @@ class SigLIPAttentionTTNN:
         ttnn.deallocate(xqkv)
 
         # 3) SDPA — runs on its own grid, accepts L1 inputs.
-        q_chunk, k_chunk = sdpa_prefill_chunk_sizes(seq_len, seq_len)
+        # Chunk sizes use the per-batch seq_len (n_seq) — production has
+        # n_seq=256 per image; the previous code used b*n_seq here, which was
+        # both wrong semantically and not consistent with the chunked
+        # attention's intended granularity.
+        q_chunk, k_chunk = sdpa_prefill_chunk_sizes(n_seq, n_seq)
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.grid_size,
             q_chunk_size=q_chunk,
@@ -533,9 +549,12 @@ class SigLIPAttentionTTNN:
         ttnn.deallocate(k_heads)
         ttnn.deallocate(v_heads)
 
-        # 4) Concat heads back to L1, then reshard to BS for O-proj.
+        # 4) Concat heads back to L1, re-flatten batch into M, then reshard
+        # to BS for the O-proj matmul.
         attn_concat = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
+        concat_dim = int(attn_concat.shape[-1])
+        attn_concat = ttnn.reshape(attn_concat, (1, 1, n_batch * n_seq, concat_dim))
         attn_concat = ttnn.to_memory_config(attn_concat, bs_memcfg_attn)
 
         # 5) O-proj — BS in → BS out.
@@ -1114,11 +1133,26 @@ class SigLIPBlockTTNN:
         bs_memcfg_qkv: "ttnn.MemoryConfig",
         bs_memcfg_attn: "ttnn.MemoryConfig",
         bs_memcfg_intermediate: "ttnn.MemoryConfig",
+        *,
+        n_batch: int,
+        n_seq: int,
     ) -> ttnn.Tensor:
         """Full block in BS: input 4D BS → output 4D BS. No internal reshards
-        except for the SDPA round-trip inside attention."""
+        except for the SDPA round-trip inside attention.
+
+        n_batch / n_seq plumbed through so attention.forward_bs can un-flatten
+        the batch dim around SDPA (otherwise SDPA computes attention across
+        the b stacked images instead of per-image — see attention.forward_bs).
+        """
         normed = self._sharded_layer_norm_bs(hidden_states, self.ln1_weight, self.ln1_bias, bs_memcfg_hidden)
-        attn = self.attention.forward_bs(normed, bs_memcfg_hidden, bs_memcfg_qkv, bs_memcfg_attn)
+        attn = self.attention.forward_bs(
+            normed,
+            bs_memcfg_hidden,
+            bs_memcfg_qkv,
+            bs_memcfg_attn,
+            n_batch=n_batch,
+            n_seq=n_seq,
+        )
         ttnn.deallocate(normed)
         # Residual add on BS — both operands share bs_memcfg_hidden.
         hidden_states = ttnn.add(hidden_states, attn, memory_config=bs_memcfg_hidden)
@@ -1384,8 +1418,19 @@ class SigLIPVisionTowerTTNN:
             mc_hidden, mc_qkv, mc_attn, mc_intermediate = self._get_bs_memcfgs(int(b), int(num_patches))
             hidden_states = ttnn.to_memory_config(hidden_states, mc_hidden, dtype=ttnn.bfloat16)
 
+            # Plumb (n_batch, n_seq) through so attention.forward_bs can un-flatten
+            # the batch dim around SDPA — otherwise SDPA attends across the b stacked
+            # images. See attention.forward_bs for the full reasoning.
             for block in self.blocks:
-                hidden_states = block.forward_bs(hidden_states, mc_hidden, mc_qkv, mc_attn, mc_intermediate)
+                hidden_states = block.forward_bs(
+                    hidden_states,
+                    mc_hidden,
+                    mc_qkv,
+                    mc_attn,
+                    mc_intermediate,
+                    n_batch=int(b),
+                    n_seq=int(num_patches),
+                )
 
             # Exit BS once: BS → L1 interleaved → 3D shape for post_ln + projector.
             hidden_states = ttnn.sharded_to_interleaved(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
