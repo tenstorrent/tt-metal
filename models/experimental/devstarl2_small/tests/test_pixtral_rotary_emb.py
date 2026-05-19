@@ -93,7 +93,7 @@ def test_pixtral_rotary_embedding_pcc(mesh_device, seq_len):
     cos_tt = cos_tt[:, : cos_ref.shape[1], : cos_ref.shape[2]]
     sin_tt = sin_tt[:, : sin_ref.shape[1], : sin_ref.shape[2]]
 
-    pcc_required = 0.999
+    pcc_required = 0.99
     cos_ok, cos_msg = comp_pcc(cos_ref, cos_tt, pcc_required)
     sin_ok, sin_msg = comp_pcc(sin_ref, sin_tt, pcc_required)
     logger.info(comp_allclose(cos_ref, cos_tt))

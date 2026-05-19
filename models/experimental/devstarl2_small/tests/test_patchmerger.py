@@ -145,7 +145,7 @@ def test_mistral3_patch_merger_pcc_devstral_weights(mesh_device, monkeypatch, tr
     tt_torch = tt_torch[: ref.shape[0], : ref.shape[1]]
 
     ref_f = ref.float()
-    pcc_required = 0.97
+    pcc_required = 0.99
     passing, msg = comp_pcc(ref_f, tt_torch, pcc_required)
     logger.info(comp_allclose(ref_f, tt_torch))
     logger.info(f"PCC patch merger: {msg}")

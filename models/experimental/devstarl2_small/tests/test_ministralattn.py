@@ -202,7 +202,7 @@ def test_ministral3_attention_pcc_devstral_weights(
     tt_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
     tt_torch = tt_torch.reshape(ref_out.shape)
 
-    pcc_required = 0.94
+    pcc_required = 0.99
     passing, pcc_message = comp_pcc(ref_out, tt_torch, pcc_required)
     logger.info(comp_allclose(ref_out, tt_torch))
     logger.info(f"PCC: {pcc_message}")

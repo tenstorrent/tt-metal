@@ -125,7 +125,7 @@ def test_mistral3_multimodal_projector_pcc_devstral_weights(mesh_device, monkeyp
         tt_torch = tt_torch.squeeze(0)
     tt_torch = tt_torch[: ref.shape[0], : ref.shape[1]]
 
-    pcc_required = 0.97
+    pcc_required = 0.99
     passing, msg = comp_pcc(ref.float(), tt_torch, pcc_required)
     logger.info(comp_allclose(ref.float(), tt_torch))
     logger.info(f"PCC multimodal projector: {msg}")

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 import types
 
 import torch
@@ -46,11 +47,6 @@ from models.experimental.devstarl2_small.devstral_utils import (
     tt_sampling_output_token_id,
     tt_update_decode_input_buffers,
 )
-from models.experimental.devstarl2_small.devstral_utils.chat_reference import (
-    REFERENCE_GENERATE_KWARGS,
-    REFERENCE_MESSAGES,
-    REFERENCE_TOOLS,
-)
 from models.experimental.devstarl2_small.tt.pipeline.tt_ministral3_model import TtMinistral3Model
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
@@ -59,11 +55,34 @@ from models.tt_transformers.tt.model_config import ModelArgs
 
 apply_fp8_dequantize_compat()
 
+# Default HF-style generation kwargs (--hf-generate and argparse defaults).
+DEFAULT_GENERATE_KWARGS = {
+    "max_new_tokens": 200,
+    "do_sample": True,
+    "temperature": 0.15,
+}
+
+
+def _tokenize_demo_prompt(tokenizer, prompt: str, system_prompt: str | None):
+    """Build input_ids from this demo's --prompt / --system-prompt (no tools)."""
+    if system_prompt:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": [{"type": "text", "text": prompt}]},
+        ]
+    else:
+        messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+    return tokenizer.apply_chat_template(
+        conversation=messages,
+        return_tensors="pt",
+        return_dict=True,
+    )
+
 
 def main():
-    ref_max = int(REFERENCE_GENERATE_KWARGS["max_new_tokens"])
-    ref_temp = float(REFERENCE_GENERATE_KWARGS["temperature"])
-    ref_do_sample = bool(REFERENCE_GENERATE_KWARGS["do_sample"])
+    ref_max = int(DEFAULT_GENERATE_KWARGS["max_new_tokens"])
+    ref_temp = float(DEFAULT_GENERATE_KWARGS["temperature"])
+    ref_do_sample = bool(DEFAULT_GENERATE_KWARGS["do_sample"])
 
     parser = argparse.ArgumentParser(
         description="Devstral-2 on TT: Ministral3 prefill + LMHead; on-device SamplingGenerator when supported, else CPU logits sampling."
@@ -75,18 +94,12 @@ def main():
             "Can you implement in Python a method to compute the fibonnaci sequence at the `n`th element "
             "with `n` a parameter passed to the function? Start the sequence from 1."
         ),
-        help="Only used with --simple-chat (single user turn).",
+        help="User message text (default prompt is defined in this file).",
     )
     parser.add_argument(
         "--system-prompt",
         default=None,
-        help="Optional system message for --simple-chat only.",
-    )
-    parser.add_argument(
-        "--simple-chat",
-        action="store_true",
-        help="Tokenize a minimal chat from --prompt/--system-prompt only. "
-        "Default: same messages+tools as ``devstral_utils/chat_reference.py``.",
+        help="Optional system message (default: none).",
     )
     parser.add_argument(
         "--text-layers",
@@ -104,12 +117,12 @@ def main():
         "--max-new-tokens",
         type=int,
         default=ref_max,
-        help=f"New tokens after prompt (default {ref_max}, from devstral_utils.chat_reference). 0 = skip generation.",
+        help=f"New tokens after prompt (default {ref_max}). 0 = skip generation.",
     )
     parser.add_argument(
         "--greedy",
         action="store_true",
-        help=f"Greedy argmax (default: sample with temperature {ref_temp}, from devstral_utils.chat_reference).",
+        help=f"Greedy argmax (default: sample with temperature {ref_temp}).",
     )
     parser.add_argument(
         "--temperature",
@@ -163,31 +176,7 @@ def main():
             trust_remote_code=True,
             local_files_only=os.getenv("CI") == "true",
         )
-        if args.simple_chat:
-            if args.system_prompt:
-                messages = [
-                    {"role": "system", "content": args.system_prompt},
-                    {"role": "user", "content": [{"type": "text", "text": args.prompt}]},
-                ]
-                tokenized = tokenizer.apply_chat_template(
-                    conversation=messages,
-                    return_tensors="pt",
-                    return_dict=True,
-                )
-            else:
-                messages = [{"role": "user", "content": [{"type": "text", "text": args.prompt}]}]
-                tokenized = tokenizer.apply_chat_template(
-                    conversation=messages,
-                    return_tensors="pt",
-                    return_dict=True,
-                )
-        else:
-            tokenized = tokenizer.apply_chat_template(
-                conversation=REFERENCE_MESSAGES,
-                tools=REFERENCE_TOOLS,
-                return_tensors="pt",
-                return_dict=True,
-            )
+        tokenized = _tokenize_demo_prompt(tokenizer, args.prompt, args.system_prompt)
 
         input_ids = tokenized["input_ids"]
         prompt_len = int(input_ids.shape[1])
@@ -375,7 +364,7 @@ def main():
             prompt_vec = tokenized["input_ids"][0]
             input_ids_gen = tokenized["input_ids"].to(gen_device)
             with torch.inference_mode():
-                out = hf_full.generate(input_ids_gen, **REFERENCE_GENERATE_KWARGS)
+                out = hf_full.generate(input_ids_gen, **DEFAULT_GENERATE_KWARGS)
             seq = out[0]
             answer_text = tokenizer.decode(seq[len(prompt_vec) :].tolist(), skip_special_tokens=False)
             logger.info(answer_text)
@@ -396,43 +385,76 @@ def main():
             # Keep token history on host: growing ids_tt_gen during trace risks allocator overlap with trace outputs.
             generated_token_ids: list[int] = []
 
+            stats = {
+                "prefill_s": 0.0,
+                "first_sample_s": 0.0,
+                "decode_s": 0.0,
+                "lmhead_s": 0.0,
+                "sample_post_s": 0.0,
+                "trace_capture_s": 0.0,
+                "steps": 0,
+                "ttft_s": None,
+                "first_traced_step_s": None,
+                "wall_s": 0.0,
+            }
+
             def _sample_from_prefill_out(tt_out: ttnn.Tensor, last_token_index: int) -> int:
-                """Single token sample from a prefill hidden-states block at ``last_token_index``."""
+                """Sample next token at ``last_token_index``; update ``stats`` lm-head/sample timings."""
+                tok_slot = last_token_index % 32
                 if sampling is not None:
                     assert tt_lm_head is not None
                     sampling.seed_manager.get_new_values()
+                    t0 = time.perf_counter()
                     logits_tt = tt_lm_head_logits_block(tt_out, last_token_index, model_args, tt_lm_head)
+                    stats["lmhead_s"] += time.perf_counter() - t0
+                    t0 = time.perf_counter()
                     sample_result = sampling.sample(logits_tt, enable_trace=False)
                     tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
-                    out = tt_sampling_output_token_id(tt_next, last_token_index % 32)
+                    out = tt_sampling_output_token_id(tt_next, tok_slot)
                     ttnn.deallocate(logits_tt)
-                    return out
-                if args.lm_head_cpu:
-                    assert lm_head_weight_cpu is not None
-                    logits_row = cpu_lm_head_logits_last_token(
-                        tt_out, last_token_index, mesh_device, lm_head_weight_cpu, int(model_args.vocab_size)
-                    )
+                    stats["sample_post_s"] += time.perf_counter() - t0
                 else:
-                    assert tt_lm_head is not None
-                    logits_row = tt_lm_head_logits_last_token(
-                        tt_out, last_token_index, mesh_device, model_args, tt_lm_head
-                    )
-                if do_sample:
-                    probs = torch.softmax(logits_row.float().squeeze(0) / max(args.temperature, 1e-6), dim=-1)
-                    return int(torch.multinomial(probs, num_samples=1).item())
-                return int(logits_row.argmax(dim=-1).item())
+                    t0 = time.perf_counter()
+                    if args.lm_head_cpu:
+                        assert lm_head_weight_cpu is not None
+                        logits_row = cpu_lm_head_logits_last_token(
+                            tt_out, last_token_index, mesh_device, lm_head_weight_cpu, int(model_args.vocab_size)
+                        )
+                    else:
+                        assert tt_lm_head is not None
+                        logits_row = tt_lm_head_logits_last_token(
+                            tt_out, last_token_index, mesh_device, model_args, tt_lm_head
+                        )
+                    stats["lmhead_s"] += time.perf_counter() - t0
+                    t0 = time.perf_counter()
+                    if do_sample:
+                        probs = torch.softmax(logits_row.float().squeeze(0) / max(args.temperature, 1e-6), dim=-1)
+                        out = int(torch.multinomial(probs, num_samples=1).item())
+                    else:
+                        out = int(logits_row.argmax(dim=-1).item())
+                    stats["sample_post_s"] += time.perf_counter() - t0
+                ttnn.deallocate(tt_out)
+                return out
 
             decode_trace_ctx = None
+            eos_set = set(eos_ids)
             try:
-                # Step 0: full TT prefill (fills KV).
+                run_t0 = time.perf_counter()
+
+                t0 = time.perf_counter()
                 tt_out = tt_forward_prefill_from_device_ids(
                     ids_tt_gen, gen_sl, pad_token_id, mesh_device, tt_model, model_args
                 )
-                next_scalar = _sample_from_prefill_out(tt_out, gen_sl - 1)
-                ttnn.deallocate(tt_out)
+                stats["prefill_s"] = time.perf_counter() - t0
 
-                if next_scalar in eos_ids or args.max_new_tokens <= 1:
-                    if next_scalar not in eos_ids:
+                t0 = time.perf_counter()
+                next_scalar = _sample_from_prefill_out(tt_out, gen_sl - 1)
+                stats["first_sample_s"] = time.perf_counter() - t0
+                stats["ttft_s"] = time.perf_counter() - run_t0
+                stats["steps"] = 1
+
+                if next_scalar in eos_set or args.max_new_tokens <= 1:
+                    if next_scalar not in eos_set:
                         generated_token_ids.append(next_scalar)
                         gen_sl += 1
                 else:
@@ -441,6 +463,7 @@ def main():
 
                     decode_buffers = tt_alloc_decode_input_buffers(mesh_device)
                     tt_update_decode_input_buffers(mesh_device, decode_buffers, int(next_scalar), gen_sl - 1)
+                    t_capture = time.perf_counter()
                     decode_trace_ctx = tt_capture_decode_trace(
                         mesh_device,
                         tt_model,
@@ -449,23 +472,34 @@ def main():
                         tt_lm_head=None if args.lm_head_cpu else tt_lm_head,
                         sampling=sampling,
                     )
+                    stats["trace_capture_s"] = time.perf_counter() - t_capture
 
                     for _step in range(1, args.max_new_tokens):
+                        if next_scalar in eos_set:
+                            break
+
                         decode_pos = gen_sl - 1  # absolute position of the just-appended token
                         if sampling is not None:
-                            # Refresh sampling RNG/seeds each traced step (no-op if unseeded).
                             sampling.seed_manager.get_new_values()
+
+                        step_t0 = time.perf_counter()
+                        t0 = time.perf_counter()
                         tt_update_decode_input_buffers(
                             mesh_device, decode_trace_ctx.buffers, int(next_scalar), decode_pos
                         )
                         tt_execute_decode_trace(mesh_device, decode_trace_ctx)
+                        stats["decode_s"] += time.perf_counter() - t0
 
+                        t0 = time.perf_counter()
                         if decode_trace_ctx.output_tokens is not None:
                             next_scalar = tt_read_decode_traced_token(decode_trace_ctx, batch_slot=0)
+                            stats["sample_post_s"] += time.perf_counter() - t0
                         elif decode_trace_ctx.output_logits is not None:
                             logits_row = tt_read_decode_traced_logits(
                                 decode_trace_ctx, mesh_device, model_args, batch_slot=0
                             )
+                            stats["lmhead_s"] += time.perf_counter() - t0
+                            t0 = time.perf_counter()
                             if do_sample:
                                 probs = torch.softmax(
                                     logits_row.float().squeeze(0) / max(args.temperature, 1e-6), dim=-1
@@ -473,19 +507,77 @@ def main():
                                 next_scalar = int(torch.multinomial(probs, num_samples=1).item())
                             else:
                                 next_scalar = int(logits_row.argmax(dim=-1).item())
+                            stats["sample_post_s"] += time.perf_counter() - t0
                         else:
                             h_clone = tt_read_decode_traced_hidden(decode_trace_ctx, mesh_device)
                             next_scalar = _sample_from_prefill_out(h_clone, 0)
-                            ttnn.deallocate(h_clone)
 
-                        if next_scalar in eos_ids:
+                        if stats["first_traced_step_s"] is None:
+                            stats["first_traced_step_s"] = time.perf_counter() - step_t0
+
+                        if next_scalar in eos_set:
                             break
                         generated_token_ids.append(next_scalar)
                         gen_sl += 1
+                        stats["steps"] += 1
+
+                stats["wall_s"] = time.perf_counter() - run_t0
+
+                wall_s = stats["wall_s"]
+                steps = stats["steps"]
+                decode_steps = max(steps - 1, 0)
+                ttft_s = stats["ttft_s"] or 0.0
+
+                def _pct(part: float) -> float:
+                    return 100.0 * part / wall_s if wall_s > 0 else 0.0
+
+                def _decode_avg_ms(part: float) -> float:
+                    return 1000.0 * part / decode_steps if decode_steps > 0 else 0.0
+
+                decode_loop_total_s = stats["decode_s"] + stats["lmhead_s"] + stats["sample_post_s"]
+                steady_per_tok_s = decode_loop_total_s / decode_steps if decode_steps > 0 else 0.0
+                steady_tok_s = 1.0 / steady_per_tok_s if steady_per_tok_s > 0 else 0.0
+                thr = steps / wall_s if wall_s > 0 else 0.0
+
+                print()
+                print("──────────────────────────────────────────────────────────────")
+                print(
+                    f"  TT · traced decode  ({steps} new token(s); {decode_steps} traced decode step(s); wall {wall_s:.2f} s)"
+                )
+                print("──────────────────────────────────────────────────────────────")
+                print(f"  {'Phase':<22} {'total':>14}     %")
+                print(f"  {'prefill (1x)':<22} {stats['prefill_s']*1000:>10.2f} ms  {_pct(stats['prefill_s']):>5.1f}%")
+                print(
+                    f"  {'first-token sample':<22} {stats['first_sample_s']*1000:>10.2f} ms  {_pct(stats['first_sample_s']):>5.1f}%"
+                )
+                print(
+                    f"  {'trace capture (1x)':<22} {stats['trace_capture_s']*1000:>10.2f} ms  {_pct(stats['trace_capture_s']):>5.1f}%   (warmup + decode + sampling)"
+                )
+                print(
+                    f"  {'traced decode submit':<22} {stats['decode_s']*1000:>10.2f} ms  {_pct(stats['decode_s']):>5.1f}%"
+                    f"   (avg {_decode_avg_ms(stats['decode_s']):.2f} ms / decoded tok)"
+                )
+                print(
+                    f"  {'lm head (decode)':<22} {stats['lmhead_s']*1000:>10.2f} ms  {_pct(stats['lmhead_s']):>5.1f}%"
+                    f"   (avg {_decode_avg_ms(stats['lmhead_s']):.2f} ms / decoded tok)"
+                )
+                print(
+                    f"  {'sample / post-decode':<22} {stats['sample_post_s']*1000:>10.2f} ms  {_pct(stats['sample_post_s']):>5.1f}%"
+                    f"   (avg {_decode_avg_ms(stats['sample_post_s']):.2f} ms / decoded tok)"
+                )
+                print("──────────────────────────────────────────────────────────────")
+                print(f"  TTFT (prompt -> 1st new tok)        {ttft_s*1000:>10.2f} ms")
+                if stats["first_traced_step_s"] is not None:
+                    print(f"  First traced decode step latency    {stats['first_traced_step_s']*1000:>10.2f} ms")
+                if decode_steps > 0:
+                    print(f"  Steady-state decode latency / tok   {steady_per_tok_s*1000:>10.2f} ms")
+                    print(f"  Steady-state decode throughput      {steady_tok_s:>10.3f} tok/s")
+                print(f"  End-to-end throughput               {thr:>10.3f} tok/s")
+                print("──────────────────────────────────────────────────────────────")
 
                 answer_ids = torch.tensor(generated_token_ids, dtype=torch.long)
                 answer_text = tokenizer.decode(answer_ids.tolist(), skip_special_tokens=False)
-                logger.info(answer_text)
+                print(answer_text)
             finally:
                 if decode_trace_ctx is not None:
                     tt_release_decode_trace(mesh_device, decode_trace_ctx)
