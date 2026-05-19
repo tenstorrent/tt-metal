@@ -64,6 +64,7 @@ def create_decoder_block_tensors(
     is_moe: bool = True,
     validate_debug_tensors: bool = False,
     torch_input=None,
+    sram_expert_ids: list[int] = (),
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -223,7 +224,16 @@ def create_decoder_block_tensors(
         input_core = ttnn.CoreCoord(device_grid_size.x - 1, RoutedExpert.INPUT_CORE_Y)
         input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(input_core, input_core)])
 
-        ttnn_gate_indices = create_gate_indices_tensor(submesh, input_core_grid, mesh_mapper=mesh_mapper)
+        # sram_expert_ids must match the slot ordering of weights.sram_{gate,up,down}_proj
+        # so the encoded bit-15 indices the kernel reads point at the correct SRAM slabs.
+        # Without this the gate indices stay as (eid, no bit-15) → DRAM kernel processes
+        # everything → SRAM chain runs n_sram_active=0 → SRAM path effectively skipped.
+        ttnn_gate_indices = create_gate_indices_tensor(
+            submesh,
+            input_core_grid,
+            sram_expert_ids=list(sram_expert_ids),
+            mesh_mapper=mesh_mapper,
+        )
 
         tile_1x16 = ttnn.Tile((1, 16))
         gate_output_shard_spec = ttnn.ShardSpec(input_core_grid, (1, 16), ttnn.ShardOrientation.ROW_MAJOR)
@@ -652,6 +662,12 @@ def create_decoder_block_tensors(
         "gate_proj_weights": routed_gate,
         "up_proj_weights": routed_up,
         "down_proj_weights": routed_down,
+        # Optional SRAM-resident routed weights — populated by the weight loader when
+        # SRAM placement is configured. None on weight objects without sram_* fields,
+        # which means n_sram_active stays 0 → SRAM chain skips uniformly.
+        "sram_gate_proj_weights": getattr(weights, "sram_gate_proj", None),
+        "sram_up_proj_weights": getattr(weights, "sram_up_proj", None),
+        "sram_down_proj_weights": getattr(weights, "sram_down_proj", None),
         "final_output_mem_config": final_output_mem_config,
         "final_output_total_width": final_output_total_width,
         # Shared expert weights
@@ -844,6 +860,9 @@ class DecoderStage(StageKind):
             gate_proj_weights_tensor=d["gate_proj_weights"],
             up_proj_weights_tensor=d["up_proj_weights"],
             down_proj_weights_tensor=d["down_proj_weights"],
+            sram_gate_proj_weights_tensor=d.get("sram_gate_proj_weights"),
+            sram_up_proj_weights_tensor=d.get("sram_up_proj_weights"),
+            sram_down_proj_weights_tensor=d.get("sram_down_proj_weights"),
             moe_final_output_tensor=None,
             rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
             shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
