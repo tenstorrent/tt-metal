@@ -54,19 +54,44 @@ class BgeM3TransformerBlock(LightweightModule):
             optimizations=optimizations,
         )
 
+    def _use_sharded_handoff(self) -> bool:
+        """True when both LNs have sharded configs (B1/S512 path)."""
+        return (
+            self.attention_norm is not None
+            and self.feed_forward_norm is not None
+            and self.attention_norm.config.sharded_memcfg is not None
+        )
+
     def forward(self, hidden_states: ttnn.Tensor, attention_mask: ttnn.Tensor | None = None) -> ttnn.Tensor:
         attention_output = self.attention(hidden_states, attention_mask=attention_mask)
 
+        # When both LNs have sharded configs (B1/S512), ask LN1 to also return
+        # its internal sharded output. Pass that to LN2's residual to skip the
+        # residual I->S reshard (-1.1 us/call).
+        use_handoff = self._use_sharded_handoff()
+
         if self.attention_norm is not None:
-            hidden_states = self.attention_norm(attention_output, residual_input_tensor=hidden_states)
+            if use_handoff:
+                hidden_states, mlp_in_sharded = self.attention_norm(
+                    attention_output,
+                    residual_input_tensor=hidden_states,
+                    return_sharded=True,
+                )
+            else:
+                hidden_states = self.attention_norm(attention_output, residual_input_tensor=hidden_states)
+                mlp_in_sharded = None
         else:
             hidden_states = ttnn.add(hidden_states, attention_output)
+            mlp_in_sharded = None
         ttnn.deallocate(attention_output)
 
         mlp_in = hidden_states
         mlp_output = self.feed_forward(mlp_in)
         if self.feed_forward_norm is not None:
-            hidden_states = self.feed_forward_norm(mlp_output, residual_input_tensor=mlp_in)
+            residual = mlp_in_sharded if mlp_in_sharded is not None else mlp_in
+            hidden_states = self.feed_forward_norm(mlp_output, residual_input_tensor=residual)
+            if mlp_in_sharded is not None:
+                ttnn.deallocate(mlp_in_sharded)
         else:
             hidden_states = ttnn.add(mlp_in, mlp_output)
         ttnn.deallocate(mlp_output)
@@ -149,6 +174,7 @@ def _build_mlp_config(args, mlp_weights, mesh_device, dtype, max_seq_len, max_ba
             activation_memcfg=mlp_opts.activation_memcfg,
             core_grid=mlp_opts.core_grid,
             wi_prg_config=mlp_opts.wi_prg_config,
+            wo_prg_config=mlp_opts.wo_prg_config,
             wi_minimal_config=mlp_opts.wi_minimal_config,
         )
     return config
