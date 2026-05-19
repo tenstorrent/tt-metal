@@ -244,52 +244,57 @@ MoEComputeCoreSelection select_moe_compute_cores(
     const uint32_t tilize_min_y =
         worker_grid.y >= 2 ? static_cast<uint32_t>(worker_grid.y) - 2 : static_cast<uint32_t>(worker_grid.y) - 1;
 
+    // Combine placement depends only on placement_avoid_set and worker_grid — compute once.
+    std::vector<CoreCoord> combine_cores;
+    const auto combine_strip_opt =
+        find_combine_strip_avoiding(placement_avoid_set, worker_grid, combine_strip_height, combine_max_y);
+
+    if (combine_strip_opt.has_value()) {
+        combine_cores = pick_combine_cores_from_strip(combine_strip_opt.value(), num_combine_cores);
+    } else {
+        combine_cores =
+            pick_worker_cores_row_major_avoiding(placement_avoid_set, worker_grid, num_combine_cores, combine_max_y);
+    }
+
+    TT_FATAL(
+        combine_cores.size() == num_combine_cores,
+        "Could not find {} combine cores on {}x{} worker grid (matmul_cores={}, mux_cores={})",
+        num_combine_cores,
+        worker_grid.x,
+        worker_grid.y,
+        matmul_cores.size(),
+        mux_core_range_set.num_cores());
+
+    CoreCoordPairSet tilize_avoid_set = placement_avoid_set;
+    const auto combine_pairs = core_coords_to_pair_set(combine_cores);
+    tilize_avoid_set.insert(combine_pairs.begin(), combine_pairs.end());
+
+    const CoreRange combine_bounding_box = CoreRangeSet(combine_cores).bounding_box();
+
+    // Retry tilize placement with decreasing core count until we find a non-overlapping layout.
     uint32_t target_tilize_num_cores = compute_moe_compute_tilize_num_cores(hidden_tiles);
     std::vector<CoreCoord> tilize_cores;
-    std::vector<CoreCoord> combine_cores;
     CoreRange tilize_bounding_box({0, 0}, {0, 0});
-    CoreRange combine_bounding_box({0, 0}, {0, 0});
     bool found_placement = false;
 
     for (uint32_t tilize_num_cores = target_tilize_num_cores; tilize_num_cores >= 1; --tilize_num_cores) {
-        const auto combine_strip_opt =
-            find_combine_strip_avoiding(placement_avoid_set, worker_grid, combine_strip_height, combine_max_y);
-
-        if (combine_strip_opt.has_value()) {
-            combine_cores = pick_combine_cores_from_strip(combine_strip_opt.value(), num_combine_cores);
-        } else {
-            combine_cores = pick_worker_cores_row_major_avoiding(
-                placement_avoid_set, worker_grid, num_combine_cores, combine_max_y);
-        }
-
-        if (combine_cores.size() != num_combine_cores) {
-            continue;
-        }
-
-        CoreCoordPairSet combine_and_matmul_avoid_set = placement_avoid_set;
-        const auto combine_pairs = core_coords_to_pair_set(combine_cores);
-        combine_and_matmul_avoid_set.insert(combine_pairs.begin(), combine_pairs.end());
-
-        const auto tilize_block_opt = find_tilize_2x2_block_avoiding(combine_and_matmul_avoid_set, worker_grid);
+        const auto tilize_block_opt = find_tilize_2x2_block_avoiding(tilize_avoid_set, worker_grid);
         if (tilize_block_opt.has_value()) {
             tilize_cores = pick_tilize_cores_from_2x2_legacy_order(tilize_block_opt.value(), tilize_num_cores);
         } else {
-            tilize_cores = pick_tilize_cores_in_upper_rows(
-                combine_and_matmul_avoid_set, worker_grid, tilize_num_cores, tilize_min_y);
+            tilize_cores =
+                pick_tilize_cores_in_upper_rows(tilize_avoid_set, worker_grid, tilize_num_cores, tilize_min_y);
         }
         if (tilize_cores.size() != tilize_num_cores) {
             continue;
         }
 
         const CoreRange trial_tilize_bounding_box = CoreRangeSet(tilize_cores).bounding_box();
-        const CoreRange trial_combine_bounding_box = CoreRangeSet(combine_cores).bounding_box();
-
-        if (trial_tilize_bounding_box.intersects(trial_combine_bounding_box)) {
+        if (trial_tilize_bounding_box.intersects(combine_bounding_box)) {
             continue;
         }
 
         tilize_bounding_box = trial_tilize_bounding_box;
-        combine_bounding_box = trial_combine_bounding_box;
         found_placement = true;
         break;
     }
