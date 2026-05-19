@@ -22,7 +22,7 @@ from __future__ import annotations
 import numpy as np
 
 from .._ttnn import get_ttnn
-from ..math_perf_env import ace_step_linear_l1_memory_config, ace_step_reshape_kwargs, ace_step_vae_conv_perf_enabled
+from ..math_perf_env import ace_step_reshape_kwargs
 
 
 def _require_ttnn():
@@ -82,8 +82,10 @@ class TtConv1d:
         if math_fidelity is None:
             math_fidelity = ttnn.MathFidelity.HiFi2
 
-        self._vae_conv_perf = ace_step_vae_conv_perf_enabled()
-        self._l1_mem = ace_step_linear_l1_memory_config(ttnn) if self._vae_conv_perf else None
+        self._vae_conv_perf = True
+        # DRAM activations only: L1 input + act_block_h_override=32 overflows static CB region on
+        # Blackhole (e.g. res_unit dilated conv: L1 buffer @ 139072 vs CB end @ 139328).
+        self._l1_mem = None
 
         w = _to_float32_numpy(weight_host)
         if w.ndim != 3 or w.shape[0] != self.out_channels or w.shape[1] != self.in_channels:
@@ -117,12 +119,11 @@ class TtConv1d:
             enable_act_double_buffer=False,
             enable_weights_double_buffer=False,
         )
-        # Oobleck convs feed into Snake (sin(alpha*x)^2). Keep fp32 dest for audio quality; HiFi2 for matmul.
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
         self._packed_for: tuple[int, int] | None = None
@@ -280,8 +281,8 @@ class TtConvTranspose1d:
         if math_fidelity is None:
             math_fidelity = ttnn.MathFidelity.HiFi2
 
-        self._vae_conv_perf = ace_step_vae_conv_perf_enabled()
-        self._l1_mem = ace_step_linear_l1_memory_config(ttnn) if self._vae_conv_perf else None
+        self._vae_conv_perf = True
+        self._l1_mem = None
 
         w = _to_float32_numpy(weight_host)
         if w.ndim != 3 or w.shape[0] != self.in_channels or w.shape[1] != self.out_channels:
@@ -315,7 +316,7 @@ class TtConvTranspose1d:
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
         self._weight_dev = self._weight_host_tt

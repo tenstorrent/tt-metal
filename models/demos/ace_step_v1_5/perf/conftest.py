@@ -9,8 +9,8 @@ which may yield a ``MeshDevice`` handle. ACE-Step VAE conv helpers are validated
 ``open_device`` entry point as ``run_prompt_to_wav.py``; this nearest ``conftest.py`` overrides
 ``device`` so Tracy/pytest runs match that path.
 
-L1 / HiFi2 throughput toggles are on by default in ``ttnn_impl/math_perf_env.py`` (same as demo and
-E2E). Set ``ACE_STEP_*_PERF=0`` only when debugging DRAM parity.
+L1 / HiFi2 throughput settings in ``ttnn_impl/math_perf_env.py`` are always enabled for this demo
+(same as the default ``run_prompt_to_wav.py`` path); they are not toggled via environment variables.
 """
 
 from __future__ import annotations

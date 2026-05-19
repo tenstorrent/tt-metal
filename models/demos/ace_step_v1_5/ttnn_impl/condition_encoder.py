@@ -24,7 +24,6 @@ import numpy as np
 import ttnn
 
 from .math_perf_env import (
-    ace_step_cond_linear_perf_enabled,
     ace_step_cond_linear_program_config,
     ace_step_init_hifi2_linear_compute_kernel_config,
     ace_step_linear_l1_memory_config,
@@ -124,7 +123,6 @@ class _TtAceStepTinyEncoder:
         mem,
         mapper,
         linear_compute_kernel_config=None,
-        linear_perf: bool = False,
         activation_l1_memory_config=None,
         linear_output_l1_memory_config=None,
     ) -> None:
@@ -136,7 +134,6 @@ class _TtAceStepTinyEncoder:
         self.max_seq_len = int(max_seq_len)
         self.sliding_window = None if sliding_window is None else int(sliding_window)
         self._linear_ck = linear_compute_kernel_config
-        self._linear_perf = bool(linear_perf)
         self._act_l1 = activation_l1_memory_config
         self._linear_out_l1 = linear_output_l1_memory_config
         self._embed_pc_cache: dict = {}
@@ -156,7 +153,6 @@ class _TtAceStepTinyEncoder:
         )
         _layer_kw = dict(
             linear_compute_kernel_config=linear_compute_kernel_config,
-            linear_perf=linear_perf,
             activation_l1_memory_config=activation_l1_memory_config,
             linear_output_l1_memory_config=linear_output_l1_memory_config,
         )
@@ -197,21 +193,20 @@ class _TtAceStepTinyEncoder:
         kw: dict = {}
         if self._linear_ck is not None:
             kw["compute_kernel_config"] = self._linear_ck
-        if self._linear_perf:
-            key = (int(batch_size), int(seq_len), int(self.input_dim))
-            pc = self._embed_pc_cache.get(key)
-            if pc is None:
-                pc = ace_step_cond_linear_program_config(
-                    self.device,
-                    seq_len=int(seq_len),
-                    in_dim=int(self.input_dim),
-                    out_dim=self.hidden_size,
-                    batch_size=int(batch_size),
-                )
-                if pc is not None:
-                    self._embed_pc_cache[key] = pc
+        key = (int(batch_size), int(seq_len), int(self.input_dim))
+        pc = self._embed_pc_cache.get(key)
+        if pc is None:
+            pc = ace_step_cond_linear_program_config(
+                self.device,
+                seq_len=int(seq_len),
+                in_dim=int(self.input_dim),
+                out_dim=self.hidden_size,
+                batch_size=int(batch_size),
+            )
             if pc is not None:
-                kw["program_config"] = pc
+                self._embed_pc_cache[key] = pc
+        if pc is not None:
+            kw["program_config"] = pc
         if self._linear_out_l1 is not None:
             kw["memory_config"] = self._linear_out_l1
         return kw
@@ -274,7 +269,7 @@ class _TtAceStepTinyEncoder:
                 )
             h = layer(h, cos_tt, sin_tt, bias_cache[cache_key])
         h = ttnn.to_layout(h, ttnn.TILE_LAYOUT)
-        h = ttnn.rms_norm(h, weight=self.norm_w, epsilon=float(1e-6), memory_config=self.mem)
+        h = ttnn.rms_norm(h, weight=self.norm_w, epsilon=float(1e-6), memory_config=self._linear_out_l1 or self.mem)
         if output_first_token:
             h = ttnn.slice(h, (0, 0, 0, 0), (b, 1, 1, self.hidden_size))
             return ttnn.reshape(h, (b, 1, self.hidden_size), **_sr)
@@ -293,29 +288,11 @@ class TtAceStepInstrumentalConditionEncoder:
         mapper = ttnn.ReplicateTensorToMesh(device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
         self.weights_np = load_condition_weights_np(str(checkpoint_safetensors_path))
         init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
-        cond_linear_perf = ace_step_cond_linear_perf_enabled()
+        linear_compute_kernel_config = ace_step_init_hifi2_linear_compute_kernel_config(device)
+        l1_mc = ace_step_linear_l1_memory_config(ttnn)
         sdpa_compute_kernel_config = None
-        linear_compute_kernel_config = None
-        l1_mc = ace_step_linear_l1_memory_config(ttnn) if cond_linear_perf else None
-        if cond_linear_perf:
-            linear_compute_kernel_config = ace_step_init_hifi2_linear_compute_kernel_config(device)
-            if callable(init_ck):
-                sdpa_compute_kernel_config = init_ck(
-                    device.arch(),
-                    math_fidelity=ttnn.MathFidelity.HiFi4,
-                    math_approx_mode=False,
-                    fp32_dest_acc_en=True,
-                    packer_l1_acc=True,
-                )
-        elif callable(init_ck):
+        if callable(init_ck):
             sdpa_compute_kernel_config = init_ck(
-                device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
-            linear_compute_kernel_config = init_ck(
                 device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
@@ -348,7 +325,6 @@ class TtAceStepInstrumentalConditionEncoder:
         )
         _enc_kw = dict(
             linear_compute_kernel_config=linear_compute_kernel_config,
-            linear_perf=cond_linear_perf,
             activation_l1_memory_config=l1_mc,
             linear_output_l1_memory_config=l1_mc,
         )

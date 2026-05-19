@@ -7,7 +7,7 @@ import numpy as np
 
 import ttnn
 
-from .math_perf_env import ace_step_reshape_kwargs
+from .math_perf_env import ace_step_ensure_l1_activation, ace_step_linear_l1_memory_config, ace_step_reshape_kwargs
 
 
 @dataclass(frozen=True)
@@ -287,6 +287,9 @@ class TtAceStepPatchEmbed1D:
         _sr = ace_step_reshape_kwargs(ttnn)
         out = ttnn.squeeze(out, 0)
         out = ttnn.reshape(out, (batch_size, out_length, out.shape[-1]), **_sr)
+        _l1_mc = ace_step_linear_l1_memory_config(ttnn)
+        if _l1_mc is not None:
+            out = ace_step_ensure_l1_activation(ttnn, out, _l1_mc)
         return out, meta
 
     def __call__(self, hidden_states: ttnn.Tensor) -> Tuple[ttnn.Tensor, PatchifyMetadata]:

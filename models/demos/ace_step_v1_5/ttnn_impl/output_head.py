@@ -9,7 +9,12 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import ttnn
-from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_reshape_kwargs
+from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
+    ace_step_binary_kwargs,
+    ace_step_ensure_l1_activation,
+    ace_step_linear_l1_memory_config,
+    ace_step_reshape_kwargs,
+)
 from models.demos.ace_step_v1_5.ttnn_impl.patchify import (
     PatchifyMetadata,
     TtAceStepDePatchify1D,
@@ -84,27 +89,30 @@ class TtAceStepDiTOutputHead:
                 f"scale_shift_table must be [1, 2, hidden_size], got {tuple(sst_host.shape)} vs expected (1, 2, {self.hidden_size})"
             )
 
+        _tbl_mc = ace_step_linear_l1_memory_config(ttnn)
+        if _tbl_mc is None:
+            _tbl_mc = ttnn.DRAM_MEMORY_CONFIG
         self.norm_weight = ttnn.as_tensor(
             norm_w_host,
             dtype=weights_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_tbl_mc,
         )
-        # Split so timestep broadcast matches HF: shift = sst[:,0:1], scale = sst[:,1:2], each + temb[:,None,:]
+        # Tiny tables (~4 KiB raw each): L1-interleaved TILE avoids DRAM ``in0`` on output-head BinaryNg.
         self.shift_table = ttnn.as_tensor(
             sst_host[:, 0:1, :],
             dtype=weights_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_tbl_mc,
         )
         self.scale_table = ttnn.as_tensor(
             sst_host[:, 1:2, :],
             dtype=weights_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_tbl_mc,
         )
 
         proj_prefix = _state_key(base_address, "proj_out")
@@ -144,25 +152,31 @@ class TtAceStepDiTOutputHead:
 
         x_tile = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         _sr = ace_step_reshape_kwargs(ttnn)
+        _el_mc = ace_step_linear_l1_memory_config(ttnn) or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        _bin_kw = ace_step_binary_kwargs(ttnn, _el_mc)
+
+        def _l1(t):
+            return ace_step_ensure_l1_activation(ttnn, t, _el_mc)
+
         normed = ttnn.rms_norm(
             x_tile,
             weight=self.norm_weight,
             epsilon=self.eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_el_mc,
         )
+        normed = _l1(normed)
 
-        temb_u = ttnn.reshape(temb, (b, 1, self.hidden_size), **_sr)
-        temb_u = ttnn.to_layout(temb_u, ttnn.ROW_MAJOR_LAYOUT)
+        temb_u = _l1(ttnn.reshape(temb, (b, 1, self.hidden_size), **_sr))
+        temb_u = ttnn.to_layout(temb_u, ttnn.TILE_LAYOUT)
+        shift = ttnn.add(temb_u, self.shift_table, **_bin_kw)
+        scale = ttnn.add(temb_u, self.scale_table, **_bin_kw)
 
-        shift = ttnn.add(self.shift_table, temb_u)
-        scale = ttnn.add(self.scale_table, temb_u)
-
-        shift_t = ttnn.to_layout(shift, ttnn.TILE_LAYOUT)
-        scale_t = ttnn.to_layout(scale, ttnn.TILE_LAYOUT)
-        ones = ttnn.ones_like(scale_t)
-        one_plus_scale = ttnn.add(scale_t, ones)
-
-        modulated = ttnn.add(ttnn.multiply(normed, one_plus_scale), shift_t)
+        shift_t = _l1(ttnn.to_layout(shift, ttnn.TILE_LAYOUT))
+        scale_t = _l1(ttnn.to_layout(scale, ttnn.TILE_LAYOUT))
+        ones = ttnn.ones_like(scale_t, memory_config=_el_mc)
+        one_plus_scale = ttnn.add(scale_t, ones, **_bin_kw)
+        scaled = ttnn.multiply(normed, one_plus_scale, **_bin_kw)
+        modulated = ttnn.add(scaled, shift_t, **_bin_kw)
         modulated_rm = ttnn.to_layout(modulated, ttnn.ROW_MAJOR_LAYOUT)
         if debug is not None and debug.get("enabled", False):
             debug["head.after_norm"] = normed

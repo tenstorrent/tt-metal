@@ -155,6 +155,9 @@ class TtAceStepAudioCodeDetokenizer:
                 sdpa_compute_kernel_config=sdpa_compute_kernel_config,
                 sdpa_program_config=sdpa_program_config,
                 linear_compute_kernel_config=linear_compute_kernel_config,
+                # Fused batch = number of audio-code rows; cond reuse-mcast-1D program_config
+                # drives per_core_M = B * ceil(S/32) and can exceed WH/BH static CB budgets.
+                use_cond_linear_program_config=False,
             )
             for i in range(2)
         ]

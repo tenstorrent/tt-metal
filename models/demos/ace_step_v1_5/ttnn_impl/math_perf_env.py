@@ -9,8 +9,12 @@ Stacked E2E summaries often show large DRAM-interleaved shares for:
 - ``PermuteDeviceOperation`` (~26 %)
 - ``ReshapeViewDeviceOperation`` (~22 %)
 
-Both ``ttnn.reshape`` and ``ttnn.permute`` accept ``memory_config``; placing outputs in L1 trims
-DRAM traffic. **On by default** for demo, E2E, and Tracy paths (set env vars to ``0`` to disable).
+Both ``ttnn.reshape`` and ``ttnn.permute`` accept ``memory_config``; this module **always** requests
+L1 outputs where supported so reshape/permute chains avoid unnecessary DRAM round-trips.
+
+E2E Tracy ``BinaryNgDeviceOperation (in0:dram_interleaved)`` (~24% device time) was dominated by
+**VAE Snake** in FP32 (``BF16→FP32`` typecast, ~784 μs FP32 ``multiply``/``add`` per layer).
+``TtSnake1d`` now always uses BF16 compute to match conv activations.
 
 DiT linears are often DRAM-bound at HiFi4 without tuning:
 
@@ -19,48 +23,19 @@ DiT linears are often DRAM-bound at HiFi4 without tuning:
 - ``256×3072×3072`` — MLP ``gate_proj`` / ``up_proj`` / ``down_proj``
 
 VAE decode exposes large-M matmuls inside ``conv1d`` / ``conv_transpose2d`` im2col (e.g.
-``1920×512×512``, ``30720×128×128``, ``61440×128×128``). Enable L1 activations via
-``ACE_STEP_VAE_CONV_PERF`` (TTNN picks matmul program config from conv + L1 geometry).
+``1920×512×512``, ``30720×128×128``, ``61440×128×128``). VAE conv uses **DRAM** activations
+(``act_block_h_override=32``); L1 conv inputs clash with circular buffers on Blackhole.
 
 Condition encoder linears (lyric/timbre, ``hidden_size=2048``) are often DRAM-bound:
 
 - ``32×2048×2048`` — attn ``q``/``k``/``v``/``o`` (short packed sequences)
 - ``32×6144×6144`` — MLP ``gate``/``up``
 - ``288×2048×2048`` — longer lyric windows
-
-``perf5.txt`` recommends L1 activations, ``in0_block_w≥2``, and HiFi2 when not FLOP-bound.
-
-Environment (all default **on**; set to ``0`` / ``false`` to disable for PCC/debug):
-
-- ``ACE_STEP_TM_OUTPUT_L1``: L1 for **both** reshape and permute outputs (shortcut).
-- ``ACE_STEP_RESHAPE_OUTPUT_L1``: L1 only for ``ttnn.reshape``.
-- ``ACE_STEP_PERMUTE_OUTPUT_L1``: L1 only for ``ttnn.permute``.
-- ``ACE_STEP_DIT_LINEAR_PERF``: HiFi2 + L1 + matmul program config on DiT attn + MLP gate/up/down.
-- ``ACE_STEP_COND_LINEAR_PERF``: same on condition lyric/timbre encoders and Qwen3 text encoder.
-- ``ACE_STEP_VAE_CONV_PERF``: L1 activations/outputs on Oobleck VAE convs.
 """
 
 from __future__ import annotations
 
-import os
 from typing import Any
-
-
-def _env_truthy(name: str, default: bool) -> bool:
-    raw = (os.environ.get(name) or "").strip().lower()
-    if raw == "":
-        return default
-    if raw in ("0", "false", "no", "off", "n"):
-        return False
-    if raw in ("1", "true", "yes", "on", "y"):
-        return True
-    return default
-
-
-def _l1_enabled_for(name: str) -> bool:
-    if _env_truthy("ACE_STEP_TM_OUTPUT_L1", True):
-        return True
-    return _env_truthy(name, True)
 
 
 def _l1_memory_kwargs(ttnn: Any) -> dict:
@@ -69,32 +44,28 @@ def _l1_memory_kwargs(ttnn: Any) -> dict:
 
 
 def ace_step_reshape_kwargs(ttnn: Any) -> dict:
-    """Keyword args for ``ttnn.reshape`` to steer outputs toward L1 when enabled."""
-    if not _l1_enabled_for("ACE_STEP_RESHAPE_OUTPUT_L1"):
-        return {}
+    """Keyword args for ``ttnn.reshape`` to place outputs in L1 when ``L1_MEMORY_CONFIG`` exists."""
     return _l1_memory_kwargs(ttnn)
 
 
 def ace_step_permute_kwargs(ttnn: Any) -> dict:
-    """Keyword args for ``ttnn.permute`` to steer outputs toward L1 when enabled."""
-    if not _l1_enabled_for("ACE_STEP_PERMUTE_OUTPUT_L1"):
-        return {}
+    """Keyword args for ``ttnn.permute`` to place outputs in L1 when ``L1_MEMORY_CONFIG`` exists."""
     return _l1_memory_kwargs(ttnn)
 
 
 def ace_step_dit_linear_perf_enabled() -> bool:
-    """When true, DiT ``TtAceStepAttentionSDPA`` uses tuned ``ttnn.linear`` kwargs."""
-    return _env_truthy("ACE_STEP_DIT_LINEAR_PERF", True)
+    """Deprecated: perf kwargs are always enabled. Kept for call-site compatibility."""
+    return True
 
 
 def ace_step_cond_linear_perf_enabled() -> bool:
-    """When true, condition lyric/timbre encoder layers use tuned ``ttnn.linear`` kwargs."""
-    return _env_truthy("ACE_STEP_COND_LINEAR_PERF", True)
+    """Deprecated: perf kwargs are always enabled. Kept for call-site compatibility."""
+    return True
 
 
 def ace_step_vae_conv_perf_enabled() -> bool:
-    """When true, Oobleck VAE ``TtConv1d`` / ``TtConvTranspose1d`` use L1 + HiFi2-oriented conv paths."""
-    return _env_truthy("ACE_STEP_VAE_CONV_PERF", True)
+    """Deprecated: VAE conv perf path is always enabled. Kept for call-site compatibility."""
+    return True
 
 
 def ace_step_vae_large_m_matmul_program_config(
@@ -152,6 +123,32 @@ def ace_step_linear_l1_memory_config(ttnn: Any):
 def ace_step_dit_linear_l1_memory_config(ttnn: Any):
     """Alias for :func:`ace_step_linear_l1_memory_config`."""
     return ace_step_linear_l1_memory_config(ttnn)
+
+
+def ace_step_eltwise_l1_memory_config(ttnn: Any):
+    """L1 config for BinaryNg / ``add`` / ``multiply`` / ``softmax`` activations (Tracy ``in0`` bucket)."""
+    return ace_step_linear_l1_memory_config(ttnn)
+
+
+def ace_step_sdpa_mask_memory_config(ttnn: Any):
+    """SDPA requires ``attn_mask`` buffers in DRAM (see ``sdpa_device_operation.cpp``)."""
+    return getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+
+
+def ace_step_ensure_l1_activation(ttnn: Any, tensor: Any, l1_mc: Any | None = None) -> Any:
+    """Move a device tensor to L1 interleaved so BinaryNg tags ``in0:l1_interleaved``."""
+    if tensor is None:
+        return tensor
+    mc = l1_mc if l1_mc is not None else ace_step_eltwise_l1_memory_config(ttnn)
+    if mc is None or not hasattr(ttnn, "to_memory_config"):
+        return tensor
+    return ttnn.to_memory_config(tensor, mc)
+
+
+def ace_step_binary_kwargs(ttnn: Any, l1_mc: Any | None = None) -> dict:
+    """``memory_config`` for ``add`` / ``multiply`` / ``softmax`` with L1 output."""
+    mc = l1_mc if l1_mc is not None else ace_step_eltwise_l1_memory_config(ttnn)
+    return {"memory_config": mc} if mc is not None else {}
 
 
 def ace_step_init_hifi2_linear_compute_kernel_config(device: Any):
