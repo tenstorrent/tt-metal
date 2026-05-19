@@ -310,8 +310,8 @@ targets:
               prefill_t/s: 112.52
               # decode targets lowered from 27 → 24 after observed regression
               # to 24.95 t/s in scheduled run 25778148259 (2026-05-13).
-              decode_t/s/u: 24.0
-              decode_t/s: 24.0
+              decode_t/s/u: 28.03
+              decode_t/s: 28.03
             accuracy: {}
 
   gemma-3-27b:
@@ -327,7 +327,7 @@ targets:
               # across runs, well beyond the validator's 15% upper-tolerance
               # band. The metric needs to be anchored to a fixed seq_len
               # (see PR #43982 description) before it can gate CI usefully.
-              decode_t/s/u: 11.04
+              decode_t/s/u: 13.75
               decode_t/s: 12.6
               decode_tolerance: 1.15
             accuracy: {}
@@ -391,6 +391,30 @@ targets:
   gpt-oss-20b:
     aliases: ["gpt-oss-20b", "openai/gpt-oss-20b", "T3K_gpt-oss-20b", "GLX_gpt-oss-20b"]
     skus:
+      bh_p150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_loudbox:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_quietbox_2:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
       wh_llmbox_perf:
         entries:
           - batch_size: 1
@@ -419,6 +443,22 @@ targets:
   gpt-oss-120b:
     aliases: ["gpt-oss-120b", "openai/gpt-oss-120b", "T3K_gpt-oss-120b", "GLX_gpt-oss-120b"]
     skus:
+      bh_quietbox_2:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_galaxy_perf:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
       wh_llmbox_perf:
         entries:
           - batch_size: 1
@@ -548,9 +588,9 @@ targets:
             #   measured decode 8.77 t/s, prefill >= 11 t/s (only decode regressed).
             # Set ~10% below observed for headroom.
             perf:
-              prefill_t/s: 13.9
-              decode_t/s/u: 5.28
-              decode_t/s: 5.28
+              prefill_t/s: 11.0
+              decode_t/s/u: 7.9
+              decode_t/s: 7.9
             accuracy: {}
   llama3.3-70b:
     aliases: ["Llama-3.3-70B", "meta-llama/Llama-3.3-70B-Instruct"]
@@ -619,6 +659,13 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 98.0
+              top5: 99.0
           - batch_size: 32
             seq_len: 1024
             status: active
