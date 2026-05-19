@@ -123,7 +123,11 @@ def _build_program_config(num_kernel_repeats: int) -> ttnn.MatmulMultiCoreReuseM
         mcast_in0=False,
         gather_in0=True,
         hop_cores=ttnn.CoreRangeSet([]),
-        num_global_cb_receivers=1,
+        # Each bank's N-width is split across `_NUM_RECV_PER_BANK` matmul receivers.
+        # Matmul sizes in1_CB as `N_per_bank_tiles / num_global_cb_receivers`, so this
+        # must match the actual receiver count per bank, otherwise in1_CB is oversized
+        # (causing OOM or sender stall via mismatched cb sizes).
+        num_global_cb_receivers=int(os.environ.get("BENCH_NUM_GCB_RECV", str(_NUM_RECV_PER_BANK))),
         untilize_out=False,
         num_kernel_repeats=num_kernel_repeats,
     )

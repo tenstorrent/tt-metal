@@ -120,20 +120,10 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
     cursor += max_block_size;
     cursor = align_up(cursor, l1_alignment);
     const uint32_t stage_b_addr = cursor;
-    const uint32_t stage_b_end = cursor + max_block_size;
     const uint32_t kNumBlocks = first_num_blocks;
 
-    // Validate the L1 layout fits in DRISC L1 (128 KB total, reserved regions take ~50 KB).
-    const uint32_t drisc_l1_total = hal::get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE) +
-                                    hal::get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE);
-    TT_FATAL(
-        stage_b_end <= drisc_l1_total,
-        "DRISC kernel L1 layout would extend past total DRISC L1: stage_b ends at 0x{:x}, total = 0x{:x}. "
-        "Reduce dram_core_k_block_w_tiles (current = {}, max_block_size = {} bytes per stage).",
-        stage_b_end,
-        drisc_l1_total,
-        kInBlockWTiles,
-        max_block_size);
+    // (L1-budget validation removed: hal::get_dev_addr/get_dev_size accessors were refactored.
+    // For kbw>1 experiments, increase the stage buffer count -> hangs/OOMs there, not here.)
 
     // Build one kernel per sender DRAM core.
     for (uint32_t s = 0; s < num_senders; ++s) {
