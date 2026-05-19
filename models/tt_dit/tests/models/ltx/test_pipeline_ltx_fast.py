@@ -20,30 +20,44 @@ from models.tt_dit.utils.test import (
 )
 
 
-def _default_checkpoint() -> str | None:
-    ckpt = os.environ.get(
-        "LTX_CHECKPOINT",
-        os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2-19b-distilled.safetensors"),
-    )
-    return ckpt if os.path.exists(ckpt) else None
+def _default_checkpoint() -> str:
+    """Resolve distilled checkpoint: env var > local file > HF repo string default."""
+    explicit = os.environ.get("LTX_CHECKPOINT")
+    if explicit:
+        return explicit
+    local = os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.3-22b-distilled-1.1.safetensors")
+    if os.path.exists(local):
+        return local
+    return "Lightricks/LTX-2.3:ltx-2.3-22b-distilled-1.1.safetensors"
 
 
-def _default_upsampler() -> str | None:
-    path = os.environ.get(
-        "LTX_UPSAMPLER",
-        os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2-spatial-upscaler-x2-1.0.safetensors"),
-    )
-    return path if os.path.exists(path) else None
+def _default_upsampler() -> str:
+    """Resolve spatial upsampler: env var > local file > HF (auto-downloaded here)."""
+    explicit = os.environ.get("LTX_UPSAMPLER")
+    if explicit:
+        return explicit
+    local = os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.3-spatial-upscaler-x2-1.1.safetensors")
+    if os.path.exists(local):
+        return local
+    from huggingface_hub import hf_hub_download
+
+    logger.info("Resolving HuggingFace upsampler Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors")
+    return hf_hub_download(repo_id="Lightricks/LTX-2.3", filename="ltx-2.3-spatial-upscaler-x2-1.1.safetensors")
 
 
-def _default_gemma() -> str | None:
-    gemma = os.environ.get("GEMMA_PATH", "")
-    if gemma and os.path.isdir(gemma):
-        return gemma
+def _default_gemma() -> str:
+    """Resolve Gemma path: env var > local HF snapshot > HF repo string default."""
+    explicit = os.environ.get("GEMMA_PATH")
+    if explicit:
+        return explicit
     import glob
 
-    candidates = glob.glob(os.path.expanduser("~/.cache/huggingface/hub/models--google--gemma-3-12b-it/snapshots/*/"))
-    return candidates[0].rstrip("/") if candidates else None
+    candidates = glob.glob(
+        os.path.expanduser("~/.cache/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized/snapshots/*/")
+    )
+    if candidates:
+        return candidates[0].rstrip("/")
+    return "google/gemma-3-12b-it-qat-q4_0-unquantized"
 
 
 @pytest.mark.parametrize(
@@ -77,18 +91,14 @@ def test_pipeline_av_fast(
     ckpt = _default_checkpoint()
     upsampler = _default_upsampler()
     gemma = _default_gemma()
-    if ckpt is None:
-        pytest.skip("Distilled checkpoint not found (set LTX_CHECKPOINT)")
-    if upsampler is None:
-        pytest.skip("Spatial upsampler not found (set LTX_UPSAMPLER)")
-    if gemma is None:
-        pytest.skip("Gemma model not found (set GEMMA_PATH)")
 
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
     pipeline = LTXFastPipeline.create_pipeline(
         mesh_device,
+        checkpoint_name=ckpt,
+        gemma_path=gemma,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         num_links=num_links,
@@ -117,9 +127,7 @@ def test_pipeline_av_fast(
         pipeline.generate(
             prompt,
             output_path=output_filename,
-            checkpoint_path=ckpt,
             upsampler_path=upsampler,
-            gemma_path=gemma,
             num_frames=num_frames,
             height=height,
             width=width,
