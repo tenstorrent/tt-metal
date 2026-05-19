@@ -273,6 +273,7 @@ def run_throughput_experts_component(
         mesh_mapper=mesh_mapper,
     )
 
+    # Extract TT experts from decoder layer
     tt_experts = decoder_layer.mlp.experts
     tt_output = tt_experts(
         hidden_states=tt_hidden_states,
@@ -283,6 +284,7 @@ def run_throughput_experts_component(
 
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
     tt_output = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)[..., :num_tokens, :hidden_size]
+    # Compare outputs
     passing, output = compare_tensors(tt_output, reference_output, mesh_device, pcc_threshold=pcc_threshold)
     if passing:
         logger.info(f"High Throughput Experts test passed. Output: {output}")
@@ -307,6 +309,7 @@ def run_fused_throughput_experts_component(
     cluster_axis = 0
     tokens_per_device = num_tokens // mesh_device.shape[cluster_axis]  # e.g., 128 // 4 = 32
 
+    # Extract TT experts from decoder layer
     tt_experts = decoder_layer.mlp.experts
     tt_config = tt_experts.config
 
@@ -401,6 +404,8 @@ def run_fused_throughput_experts_component(
             mesh_device=mesh_device,
         )
 
+        # After all_reduce across cols, all col devices in the same row have identical
+        # output [1, 1, M, H]. Pick col=0 from each row and concat tokens along dim -2.
         mesh_rows, mesh_cols = mesh_device.shape
         dev_tensors = ttnn.get_device_tensors(tt_output)
         per_row = [ttnn.to_torch(dev_tensors[r * mesh_cols]) for r in range(mesh_rows)]
@@ -409,6 +414,7 @@ def run_fused_throughput_experts_component(
         assert not torch.isnan(tt_output_torch).any(), "NaN detected in fused expert output"
         assert not torch.isinf(tt_output_torch).any(), "Inf detected in fused expert output"
 
+        # reference_output: [num_tokens, hidden_size]
         tt_flat = tt_output_torch.reshape(-1, hidden_size)[:num_tokens].float()
         ref_flat = reference_output.reshape(-1, hidden_size)[:num_tokens].float()
 
