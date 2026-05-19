@@ -222,48 +222,25 @@ ProgramDescriptor CloneOperation::create_descriptor(
         const auto& core = cores[i];
         uint32_t num_units_per_core = i < num_cores_group_1 ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
+        // Use emplace_runtime_args with the Buffer* directly so the framework
+        // registers a BufferBinding and patches just this arg position on cache
+        // hits. Passing raw input_buffer->address() falls off the fast path and
+        // forces a full descriptor rebuild every dispatch.
         if (is_sharded) {
             if (tilized) {
-                reader_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        static_cast<uint32_t>(input_buffer->address()), num_units_per_core});
-                writer_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        static_cast<uint32_t>(output_buffer->address()), num_units_per_core});
+                reader_desc.emplace_runtime_args(core, {input_buffer, num_units_per_core});
+                writer_desc.emplace_runtime_args(core, {output_buffer, num_units_per_core});
             } else {
-                reader_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        static_cast<uint32_t>(input_buffer->address()), input_unit_size, num_units_per_core});
-                writer_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        static_cast<uint32_t>(output_buffer->address()), output_unit_size, num_units_per_core});
+                reader_desc.emplace_runtime_args(core, {input_buffer, input_unit_size, num_units_per_core});
+                writer_desc.emplace_runtime_args(core, {output_buffer, output_unit_size, num_units_per_core});
             }
         } else {
             if (tilized) {
-                reader_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        static_cast<uint32_t>(input_buffer->address()), num_units_per_core, start_id});
-                writer_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        static_cast<uint32_t>(output_buffer->address()), num_units_per_core, start_id});
+                reader_desc.emplace_runtime_args(core, {input_buffer, num_units_per_core, start_id});
+                writer_desc.emplace_runtime_args(core, {output_buffer, num_units_per_core, start_id});
             } else {
-                reader_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        static_cast<uint32_t>(input_buffer->address()), input_unit_size, num_units_per_core, start_id});
-                writer_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        static_cast<uint32_t>(output_buffer->address()),
-                        output_unit_size,
-                        num_units_per_core,
-                        start_id});
+                reader_desc.emplace_runtime_args(core, {input_buffer, input_unit_size, num_units_per_core, start_id});
+                writer_desc.emplace_runtime_args(core, {output_buffer, output_unit_size, num_units_per_core, start_id});
             }
             start_id += num_units_per_core;
         }
