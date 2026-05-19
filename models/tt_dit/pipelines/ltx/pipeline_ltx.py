@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import shutil
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
@@ -33,7 +34,6 @@ from ...parallel.config import DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...utils import cache as _cache_utils
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from ...utils.tensor import to_torch as _tt_to_torch
 
 if TYPE_CHECKING:
     pass
@@ -310,17 +310,20 @@ class LTXPipeline:
 
         return pipeline
 
-    def _torch_cache_path(self, subfolder: str) -> str | None:
-        """Path to per-config torch-tensor cache for a subcomponent. None when cache is disabled.
+    def _ttbin_cache_dir(self, subfolder: str) -> str | None:
+        """Path to per-config ttbin cache directory. None when cache is disabled.
 
-        Stores a single .pt of host torch tensors per (checkpoint × parallel_config × mesh ×
-        source_hash). Sidesteps a `ttnn.dump_tensor(DISTRIBUTED_GATHER)` round-trip that
-        mis-distributes weights replicated on a non-CCL mesh axis (e.g. the Linear in
-        LTXAdaLayerNormSingle). The trailing source-file hash invalidates the cache whenever
-        any file in _CACHE_RELEVANT_FILES changes — Parameter.load_torch_tensor only checks
-        total_shape, so a stale cache from an earlier code version would otherwise load
-        silently with the wrong head interleaving, scale_shift reshape, or RoPE layout and
-        produce noise.
+        Layout: $TT_DIT_CACHE_DIR/{model}/{subfolder}/{parallel_key}mesh{mesh}_src{8hex}/
+
+        The directory holds one `.tensorbin` per Parameter (written by `Module.save`
+        → `ttnn.dump_tensor`), a small `host_state.pt` sidecar for non-Parameter host
+        tensors (gate weights, caption projections), and a `_complete` sentinel that
+        is written last for atomicity.
+
+        The trailing source-file hash invalidates the cache whenever any file in
+        _CACHE_RELEVANT_FILES changes — Parameter.load only checks dtype/layout/shape
+        so a stale cache from an earlier code version would otherwise load silently
+        with the wrong head interleaving, scale_shift reshape, or RoPE layout.
         """
         cache_root = os.environ.get("TT_DIT_CACHE_DIR")
         ckpt_path = getattr(self, "_vae_checkpoint_path", None)
@@ -329,20 +332,8 @@ class LTXPipeline:
         model_name = os.path.splitext(os.path.basename(ckpt_path))[0]
         parallel_key = _cache_utils.config_id(self.parallel_config)
         mesh_key = "x".join(str(x) for x in self.mesh_device.shape)
-        key = f"{parallel_key}mesh{mesh_key}_src{_ltx_cache_code_hash()}"
-        return os.path.join(cache_root, model_name, subfolder, key, "torch_state.pt")
-
-    @staticmethod
-    def _walk_parameters(model, prefix: str = ""):
-        """Recursively yield (qualified_name, Parameter) over a Module tree.
-
-        Mirrors the recursion pattern of Module.save (module.py:168) so the cache key
-        space matches what dump-tensor caching would have used.
-        """
-        for name, child in model.named_children():
-            yield from LTXPipeline._walk_parameters(child, f"{prefix}{name}.")
-        for name, p in model.named_parameters():
-            yield f"{prefix}{name}", p
+        dir_name = f"{parallel_key}mesh{mesh_key}_src{_ltx_cache_code_hash()}"
+        return os.path.join(cache_root, model_name, subfolder, dir_name)
 
     @staticmethod
     def _walk_host_state(model, prefix: str = ""):
@@ -351,8 +342,8 @@ class LTXPipeline:
         Some LTX modules populate plain attributes during _prepare_torch_state — e.g.
         attention_ltx._gate_weight_host (Tensor) and ltx_transformer._caption_proj_state
         (dict of Tensors) — that are used on the host path during forward(). These get
-        missed by named_parameters() but must be restored from cache, or warm-loaded
-        runs produce silently wrong attention/captioning outputs.
+        missed by Module.save's named_parameters traversal but must be restored from
+        cache, or warm-loaded runs produce silently wrong attention/captioning outputs.
 
         Yields qualified names prefixed by '@' so they can't collide with the parameter
         namespace. Dict entries get further qualified by their sub-key.
@@ -390,46 +381,99 @@ class LTXPipeline:
             setattr(target, attr_name, value)
         return True
 
-    def _try_load_torch_cache(self, model, cache_path: str | None) -> bool:
-        if not cache_path or not os.path.isfile(cache_path):
+    def _try_load_ttbin_cache(self, model, cache_dir: str | None) -> bool:
+        """Load model from a ttbin cache directory if it exists and is complete.
+
+        Uses Module.load → Parameter.load → ttnn.load_tensor for the on-device weights
+        (skips the from_torch repack), then restores the host-state sidecar.
+        """
+        if not cache_dir or not os.path.isdir(cache_dir):
             return False
-        logger.info(f"loading torch cache at '{cache_path}'.")
-        state = torch.load(cache_path, weights_only=True, map_location="cpu")
-        for name, p in self._walk_parameters(model):
-            if name not in state:
-                logger.warning(f"torch cache missing parameter '{name}', falling back to fresh load")
-                return False
-            p.load_torch_tensor(state[name])
-        # Restore non-Parameter host state populated by _prepare_torch_state (gate weights,
-        # caption projection, etc). Skipping this is what caused warm runs to produce noise.
-        host_keys = [k for k in state if "@" in k]
-        for k in host_keys:
-            if not self._restore_host_attr(model, k, state[k]):
+        complete_marker = os.path.join(cache_dir, "_complete")
+        host_sidecar = os.path.join(cache_dir, "host_state.pt")
+        if not os.path.isfile(complete_marker) or not os.path.isfile(host_sidecar):
+            return False
+
+        logger.info(f"loading ttbin cache at '{cache_dir}'.")
+        try:
+            model.load(cache_dir)
+        except Exception as e:
+            logger.warning(f"ttbin cache load failed ({e!r}), falling back to fresh load")
+            return False
+
+        state = torch.load(host_sidecar, weights_only=True, map_location="cpu")
+        restored = 0
+        for k, v in state.items():
+            if self._restore_host_attr(model, k, v):
+                restored += 1
+            else:
                 logger.warning(f"failed to restore host state '{k}'")
-        if host_keys:
-            logger.info(f"restored {len(host_keys)} host-side tensors from cache.")
-        model._is_loaded = True
+        if restored:
+            logger.info(f"restored {restored} host-side tensors from cache.")
+        ttnn.distributed_context_barrier()
         return True
 
-    def _write_torch_cache(self, model, cache_path: str | None) -> None:
-        if not cache_path:
+    def _write_ttbin_cache(self, model, cache_dir: str | None) -> None:
+        """Write a ttbin cache to `cache_dir` atomically.
+
+        Steps: write to a `.tmp-{pid}` sibling, drop in `host_state.pt`, then a
+        `_complete` sentinel containing the source hash, then `os.replace` to the
+        final name. Sweeps any sibling dirs that have a different source hash.
+        """
+        if not cache_dir:
             return
-        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-        state = {}
-        for name, p in self._walk_parameters(model):
-            t = _tt_to_torch(p.data, mesh_axes=p.mesh_axes, composer_device=p.device)
-            # Only downcast to bf16 when the Parameter's on-device dtype is bf16. AdaLN
-            # Linears use float32 on device for timestep-conditioning precision; casting
-            # them to bf16 here introduces rounding that breaks warm-load fidelity.
-            if t.dtype == torch.float32 and p.dtype == ttnn.bfloat16:
-                t = t.to(torch.bfloat16)
-            state[name] = t
-        host_count = 0
-        for name, t in self._walk_host_state(model):
-            state[name] = t.detach().clone()
-            host_count += 1
-        torch.save(state, cache_path)
-        logger.info(f"wrote torch cache to '{cache_path}' ({host_count} host-side tensors included).")
+        parent = os.path.dirname(cache_dir)
+        final_name = os.path.basename(cache_dir)
+        os.makedirs(parent, exist_ok=True)
+
+        # Clear incomplete leftover at the final path so os.replace succeeds.
+        if os.path.isdir(cache_dir):
+            complete = os.path.join(cache_dir, "_complete")
+            if not os.path.isfile(complete):
+                logger.info(f"removing incomplete cache dir '{cache_dir}'")
+                shutil.rmtree(cache_dir, ignore_errors=True)
+
+        tmp_dir = os.path.join(parent, f"{final_name}.tmp-{os.getpid()}")
+        if os.path.isdir(tmp_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        model.save(tmp_dir)
+
+        host_state = {name: t.detach().clone() for name, t in self._walk_host_state(model)}
+        torch.save(host_state, os.path.join(tmp_dir, "host_state.pt"))
+
+        with open(os.path.join(tmp_dir, "_complete"), "w") as f:
+            f.write(_ltx_cache_code_hash())
+
+        ttnn.distributed_context_barrier()
+        os.replace(tmp_dir, cache_dir)
+
+        self._sweep_stale_src_dirs(parent, final_name)
+        logger.info(f"wrote ttbin cache to '{cache_dir}' ({len(host_state)} host-side tensors).")
+
+    @staticmethod
+    def _sweep_stale_src_dirs(parent: str, current_name: str) -> None:
+        """Remove sibling cache dirs that share our parallel/mesh key but have a stale source hash.
+
+        Without this, every code edit doubles disk usage. Opt out with LTX_CACHE_KEEP_STALE=1.
+        """
+        if os.environ.get("LTX_CACHE_KEEP_STALE"):
+            return
+        src_idx = current_name.rfind("_src")
+        if src_idx < 0:
+            return
+        prefix = current_name[: src_idx + len("_src")]
+        try:
+            entries = os.listdir(parent)
+        except OSError:
+            return
+        for entry in entries:
+            if entry == current_name or not entry.startswith(prefix):
+                continue
+            full = os.path.join(parent, entry)
+            if os.path.isdir(full):
+                logger.info(f"sweeping stale cache dir '{full}'")
+                shutil.rmtree(full, ignore_errors=True)
 
     def load_transformer(self, state_dict: dict[str, torch.Tensor]) -> None:
         """Load transformer weights from a state dict."""
@@ -459,10 +503,10 @@ class LTXPipeline:
             cross_attention_adaln=cross_attention_adaln,
         )
 
-        cache_path = self._torch_cache_path("transformer")
-        if not self._try_load_torch_cache(self.transformer, cache_path):
+        cache_dir = self._ttbin_cache_dir("transformer")
+        if not self._try_load_ttbin_cache(self.transformer, cache_dir):
             self.transformer.load_torch_state_dict(state_dict)
-            self._write_torch_cache(self.transformer, cache_path)
+            self._write_ttbin_cache(self.transformer, cache_dir)
         logger.info(f"Loaded LTX transformer ({self.mode} mode) with {self.num_layers} layers")
 
     def load_text_encoder(
@@ -1031,10 +1075,10 @@ class LTXPipeline:
             mesh_device=self.mesh_device,
         )
 
-        cache_path = self._torch_cache_path("vae")
-        if not self._try_load_torch_cache(self.vae_decoder, cache_path):
+        cache_dir = self._ttbin_cache_dir("vae")
+        if not self._try_load_ttbin_cache(self.vae_decoder, cache_dir):
             self.vae_decoder.load_torch_state_dict(_load_vae_state_dict())
-            self._write_torch_cache(self.vae_decoder, cache_path)
+            self._write_ttbin_cache(self.vae_decoder, cache_dir)
         logger.info(f"Loaded TTNN VAE decoder ({len(self._vae_decoder_blocks)} blocks)")
 
     def load_connectors_from_checkpoint(self) -> None:
