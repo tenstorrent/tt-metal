@@ -118,6 +118,18 @@ class Pi0_5ModelTTNN:
         # docstring for the finite-mask hybrid rationale.
         self._sdpa_attn_mask: Optional["ttnn.Tensor"] = None
         self._sdpa_mask_kv_len: int = 0
+        # Upstream-compat artifact cache (mask + RoPE tables for the
+        # PI0_UPSTREAM_MASKS=1 / PI0_SIGLIP_HF=1 path). Two usage modes:
+        # (1) auto: sample_actions builds + caches on first call (keyed by
+        #     img_mask_tuple, lang_real_count, prefix_len) — costs a
+        #     device sync on subsequent calls to verify the key still matches.
+        # (2) explicit pre-stage via prepare_upstream_artifacts() — caller
+        #     takes responsibility for the key match. sample_actions uses
+        #     the cached artifacts WITHOUT ANY coercion/sync, so the call
+        #     stays trace-capture-safe.
+        self._cached_upstream_artifacts = None  # type: Optional[dict]
+        self._cached_upstream_key = None  # type: Optional[tuple]
+        self._upstream_artifacts_explicit = False
 
     def _precompute_bs1_timestep_tensors(self) -> None:
         num_steps = self.denoise_config.num_steps
@@ -284,6 +296,62 @@ class Pi0_5ModelTTNN:
                     host_pad_tile_upload(shift),
                 )
             )
+
+    @staticmethod
+    def _coerce_upstream_masks(img_masks, lang_masks):
+        """Normalize img_masks (list of torch/ttnn/scalar) and lang_masks
+        (torch/ttnn/numpy) into torch bool tensors suitable for the host
+        artifact builder. Shared by `sample_actions` and
+        `prepare_upstream_artifacts` so both follow the exact same coercion
+        rules and produce the same cache key.
+        """
+
+        def _img(m):
+            if isinstance(m, torch.Tensor):
+                return m
+            if isinstance(m, ttnn.Tensor):
+                return ttnn.to_torch(m).to(torch.bool).view(-1)
+            return torch.tensor([bool(m)])
+
+        ims = [_img(m) for m in img_masks]
+        if isinstance(lang_masks, ttnn.Tensor):
+            lm = ttnn.to_torch(lang_masks).to(torch.bool)
+        elif isinstance(lang_masks, torch.Tensor):
+            lm = lang_masks.to(torch.bool)
+        else:
+            lm = torch.from_numpy(lang_masks).to(torch.bool)
+        if lm.dim() == 1:
+            lm = lm.unsqueeze(0)
+        return ims, lm
+
+    @staticmethod
+    def _upstream_cache_key(img_masks, lang_masks, prefix_len: int):
+        """Stable hashable key over the inputs that determine the upstream
+        mask + RoPE artifacts. img_masks reduce to per-image True/False;
+        lang_masks reduce to a single "real token count". Anything else
+        (per-image embedding values, lang_token IDs themselves) does NOT
+        affect the artifacts, so we ignore it.
+        """
+        img_present = tuple(bool(m.any().item()) for m in img_masks)
+        lang_real = int(lang_masks.sum().item())
+        return (img_present, lang_real, int(prefix_len))
+
+    def prepare_upstream_artifacts(self, img_masks, lang_masks, prefix_len: int) -> None:
+        """Pre-stage the upstream-compat mask + RoPE tensors onto the model
+        so a subsequent `sample_actions` call performs zero host→device
+        transfers (required to capture the call inside a `ttnn` trace).
+
+        Idempotent: skips rebuilding if the cache key matches the prior
+        prepare. Call this BEFORE `ttnn.begin_trace_capture(...)`. Marks
+        the cache as 'explicit' so sample_actions bypasses its own
+        coerce+key-check path (which would otherwise sync the device).
+        """
+        ims, lm = self._coerce_upstream_masks(img_masks, lang_masks)
+        key = self._upstream_cache_key(ims, lm, prefix_len)
+        if self._cached_upstream_artifacts is None or self._cached_upstream_key != key:
+            self._cached_upstream_artifacts = self._build_upstream_attn_artifacts(ims, lm, prefix_len=prefix_len)
+            self._cached_upstream_key = key
+        self._upstream_artifacts_explicit = True
 
     def _build_upstream_attn_artifacts(
         self,
@@ -503,35 +571,30 @@ class Pi0_5ModelTTNN:
             prefix_embs = ttnn.to_layout(prefix_embs, ttnn.TILE_LAYOUT)
 
         # UPSTREAM-OPENPI COMPAT (gated by PI0_SIGLIP_HF=1 or
-        # PI0_UPSTREAM_MASKS=1): build attention masks + position-aware RoPE
-        # tables on host. The lerobot finetune was trained with our defaults
-        # (no prefix mask, sequential RoPE for suffix) so leave it untouched
-        # there. PI0_UPSTREAM_MASKS=1 (independent of PI0_SIGLIP_HF) lets us
-        # A/B test the mask plumbing in isolation.
+        # PI0_UPSTREAM_MASKS=1): get attention masks + position-aware RoPE
+        # tables. Three branches:
+        # (a) explicit pre-stage via prepare_upstream_artifacts(): trust the
+        #     caller, reuse the cached tensors WITHOUT any host/device sync
+        #     so we stay trace-capture-safe.
+        # (b) auto-cached: build the key on host, hit the cache if it
+        #     matches the prior call. Costs a device sync on the
+        #     ttnn img_mask but avoids re-uploading the 6 mask/RoPE tensors.
+        # (c) cold build: first call without pre-stage — build + cache.
         upstream_artifacts = None
         if use_upstream_masks():
-            # Image masks may arrive as torch bool, ttnn (bf16), or scalars
-            # depending on caller (lerobot adapter pre-uploads to ttnn).
-            def _to_torch_mask(m):
-                if isinstance(m, torch.Tensor):
-                    return m
-                if isinstance(m, ttnn.Tensor):
-                    return ttnn.to_torch(m).to(torch.bool).view(-1)
-                return torch.tensor([bool(m)])
-
-            ims = [_to_torch_mask(m) for m in img_masks]
-            if isinstance(lang_masks, ttnn.Tensor):
-                # ttnn-uploaded bf16 mask -> bool torch
-                lm = ttnn.to_torch(lang_masks).to(torch.bool)
-            elif isinstance(lang_masks, torch.Tensor):
-                lm = lang_masks.to(torch.bool)
+            if self._upstream_artifacts_explicit and self._cached_upstream_artifacts is not None:
+                upstream_artifacts = self._cached_upstream_artifacts
             else:
-                lm = torch.from_numpy(lang_masks).to(torch.bool)
-            # libero_rollout uploads lang_masks at (1, max_token_len). If we
-            # received a flattened (max_token_len,) version, re-add the batch.
-            if lm.dim() == 1:
-                lm = lm.unsqueeze(0)
-            upstream_artifacts = self._build_upstream_attn_artifacts(ims, lm, prefix_len=prefix_embs.shape[1])
+                ims_t, lm_t = self._coerce_upstream_masks(img_masks, lang_masks)
+                key = self._upstream_cache_key(ims_t, lm_t, prefix_embs.shape[1])
+                if self._cached_upstream_artifacts is not None and self._cached_upstream_key == key:
+                    upstream_artifacts = self._cached_upstream_artifacts
+                else:
+                    upstream_artifacts = self._build_upstream_attn_artifacts(
+                        ims_t, lm_t, prefix_len=prefix_embs.shape[1]
+                    )
+                    self._cached_upstream_artifacts = upstream_artifacts
+                    self._cached_upstream_key = key
 
         _, prefix_kv_cache = self.backbone.forward_vlm(
             prefix_embs,

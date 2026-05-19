@@ -118,6 +118,22 @@ def test_pi0_5_ttnn_full_e2e_trace(device):
     # trace replays by setting model.x_t_ttnn from host before each replay.
     model.resample_noise = False
 
+    # Pre-stage upstream-compat artifacts (mask + RoPE tables) before trace
+    # capture. When PI0_UPSTREAM_MASKS=1 or PI0_SIGLIP_HF=1, sample_actions
+    # would otherwise build these on host + upload them inside the captured
+    # region — which trace capture forbids. With the artifacts cached on the
+    # model, sample_actions consumes them by reference and the captured
+    # trace replays cleanly. No-op when neither env var is set.
+    from models.experimental.pi0_5.tt.ttnn_pi0_5_model import use_upstream_masks
+
+    if use_upstream_masks():
+        # The image is uploaded as (B, 3, 224, 224); prefix_len = 256 (one
+        # image) + LANG_SEQ_LEN. Match `_call_sample_actions`'s single-image
+        # signature for this test.
+        prefix_len = 256 + LANG_SEQ_LEN
+        model.prepare_upstream_artifacts([img_mask], lang_masks_ttnn, prefix_len=prefix_len)
+        print(f"   pre-staged upstream artifacts (prefix_len={prefix_len})")
+
     print(f"\n📷 Capturing trace of full sample_actions…")
     capture_start = time.perf_counter()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
