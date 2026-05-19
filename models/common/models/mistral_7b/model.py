@@ -102,6 +102,62 @@ class Mistral7BConfig:
     rope_table_len: int
 
 
+@dataclass(frozen=True)
+class Mistral7BPrecisionConfig:
+    """Per-layer precision + math-fidelity recipe for Mistral-7B-Instruct-v0.3.
+
+    Mirrors the fields TTTv1's ``DecodersPrecision`` actually distinguishes for Mistral-7B
+    (Llama-family group in ``model_config.py:130-159`` for ``accuracy()``, ``:208-218`` for
+    ``performance()``). Two module-level recipes are exposed: :data:`MISTRAL_ACCURACY` and
+    :data:`MISTRAL_PERFORMANCE`. Pass one to :meth:`Mistral7B.from_pretrained` via
+    ``precision=``; use ``dataclasses.replace(MISTRAL_ACCURACY, lm_head_dtype=...)`` to
+    customize a single field.
+
+    Attention compute-kernel configs (LI_QKV_*, LI_O_*, SDPA_*) are intentionally absent:
+    TTTv1 leaves them at engine defaults for Mistral-7B (HIFI2 QKV/O, HIFI4 SDPA prefill,
+    HIFI2 SDPA decode), which coincide with ``Attention1D``'s TTTv2 defaults. Add fields
+    here only when a future variant overrides them.
+    """
+
+    wqkv_dtype: ttnn.DataType = ttnn.bfloat8_b
+    wo_dtype: ttnn.DataType = ttnn.bfloat8_b
+    kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
+
+    mlp_w1_w3_dtype: ttnn.DataType = ttnn.bfloat8_b
+    mlp_w2_dtype: ttnn.DataType = ttnn.bfloat8_b
+    # ``None`` ⇒ MLP1D resolves to HIFI2_FP16 (matches TTTv1 ``LI_FF1_FF3`` / ``LI_FF2`` for accuracy).
+    mlp_ff1_3_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+    mlp_ff2_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+
+    # Not part of TTTv1's ``DecodersPrecision`` — TTTv2 accuracy mode tightens this to bf16
+    # to hit PERF.md top-1 thresholds.
+    lm_head_dtype: ttnn.DataType = ttnn.bfloat8_b
+
+
+_LOFI_COMPUTE_KERNEL_CFG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
+
+# TTTv1 ``DecodersPrecision.accuracy("Mistral-7B-Instruct-v0.3")`` (Llama-family group at
+# ``model_config.py:130-159``) keeps BFP8 attention + BFP8 KV cache + HIFI2_FP16 MLP; only
+# the LM head is tightened to bf16 (TTTv2 addition; required for top-1 in this stack).
+MISTRAL_ACCURACY = Mistral7BPrecisionConfig(
+    lm_head_dtype=ttnn.bfloat16,
+)
+
+# TTTv1 ``DecodersPrecision.performance("Mistral-7B-Instruct-v0.3")`` (``model_config.py:208-218``):
+# FF1_FF3 → BFP4 and LI_FF1_FF3 → LOFI. Everything else matches the accuracy base; LM head
+# stays BFP8 in perf mode. This single delta is the bulk of TTTv1's perf-mode throughput uplift.
+MISTRAL_PERFORMANCE = Mistral7BPrecisionConfig(
+    mlp_w1_w3_dtype=ttnn.bfloat4_b,
+    mlp_ff1_3_compute_kernel_cfg=_LOFI_COMPUTE_KERNEL_CFG,
+)
+
+
 def _slice_last_token_tile(x: ttnn.Tensor, last_token_idx: int) -> ttnn.Tensor:
     """Slice the 32-row tile containing ``last_token_idx`` from ``[1, 1, S, W]``."""
     floor = (last_token_idx // 32) * 32
@@ -198,9 +254,7 @@ def _build_decoder_layer(
     topology: Any,
     num_dev: int,
     torch_dtype: torch.dtype,
-    wqkv_dtype: ttnn.DataType,
-    mlp_w_dtype: ttnn.DataType,
-    kv_cache_dtype: ttnn.DataType,
+    precision: Mistral7BPrecisionConfig,
     executor_mode: bool,
     paged_cfg: Mistral7BPagedAttentionConfig | None,
     cache_path: Path | None,
@@ -210,8 +264,10 @@ def _build_decoder_layer(
     prefix = f"layer{idx}"
 
     wqkv, wo = weight_utils.attention_wqkv_wo_from_hf_layer(hf_layer.self_attn, num_dev)
-    lazy_wqkv = _lazy(wqkv, dtype=wqkv_dtype, cache=(cache_path / "attn", f"{prefix}_wqkv") if cache_path else None)
-    lazy_wo = _lazy(wo, dtype=wqkv_dtype, cache=(cache_path / "attn", f"{prefix}_wo") if cache_path else None)
+    lazy_wqkv = _lazy(
+        wqkv, dtype=precision.wqkv_dtype, cache=(cache_path / "attn", f"{prefix}_wqkv") if cache_path else None
+    )
+    lazy_wo = _lazy(wo, dtype=precision.wo_dtype, cache=(cache_path / "attn", f"{prefix}_wo") if cache_path else None)
 
     attn = Attention1D.from_config(
         Attention1DConfig(
@@ -228,22 +284,34 @@ def _build_decoder_layer(
             use_vllm_paged_kv_cache=executor_mode,
             paged_attention_config=paged_cfg,
             kv_cache=None,
-            kv_cache_dtype=kv_cache_dtype,
+            kv_cache_dtype=precision.kv_cache_dtype,
         )
     )
 
     w1, w2, w3 = weight_utils.mlp_weights_from_hf_layer(hf_layer.mlp)
     mlp = MLP1D.from_config(
         MLP1DConfig(
-            w1=_lazy(w1, dtype=mlp_w_dtype, cache=(cache_path / "mlp", f"{prefix}_w1") if cache_path else None),
-            w2=_lazy(w2, dtype=mlp_w_dtype, cache=(cache_path / "mlp", f"{prefix}_w2") if cache_path else None),
-            w3=_lazy(w3, dtype=mlp_w_dtype, cache=(cache_path / "mlp", f"{prefix}_w3") if cache_path else None),
+            w1=_lazy(
+                w1, dtype=precision.mlp_w1_w3_dtype, cache=(cache_path / "mlp", f"{prefix}_w1") if cache_path else None
+            ),
+            w2=_lazy(
+                w2, dtype=precision.mlp_w2_dtype, cache=(cache_path / "mlp", f"{prefix}_w2") if cache_path else None
+            ),
+            w3=_lazy(
+                w3, dtype=precision.mlp_w1_w3_dtype, cache=(cache_path / "mlp", f"{prefix}_w3") if cache_path else None
+            ),
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,
             topology=topology,
             max_batch_size=mcfg.max_batch_size,
             prefill_len_cutoff=wh.mlp_prefill_len_cutoff,
             decode_spill_w1_to_dram_before_w3=wh.mlp_decode_spill_w1_to_dram,
+            w1_w3_dtype=precision.mlp_w1_w3_dtype,
+            w2_dtype=precision.mlp_w2_dtype,
+            ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
+            decode_ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
+            ff2_compute_kernel_cfg=precision.mlp_ff2_compute_kernel_cfg,
+            decode_ff2_compute_kernel_cfg=precision.mlp_ff2_compute_kernel_cfg,
         )
     )
 
@@ -448,10 +516,7 @@ class Mistral7B(LightweightModule):
         max_seq_len: int = 4096,
         num_layers: int | None = None,
         cache_dir: Path | str | None = None,
-        wqkv_dtype: ttnn.DataType = ttnn.bfloat8_b,
-        mlp_w_dtype: ttnn.DataType = ttnn.bfloat8_b,
-        kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b,
-        lm_head_dtype: ttnn.DataType = ttnn.bfloat8_b,
+        precision: Mistral7BPrecisionConfig = MISTRAL_ACCURACY,
         block_size: int = 32,
         executor_mode: bool = False,
     ) -> Mistral7B:
@@ -465,11 +530,10 @@ class Mistral7B(LightweightModule):
             max_seq_len: KV cache sequence budget (per layer).
             num_layers: If set, truncate stack for smoke tests.
             cache_dir: Optional directory for ``LazyWeight`` tensor caches.
-            wqkv_dtype: WQKV/WO device dtype. Default BFP8 to match TTTv1 accuracy for Mistral-7B
-                (Llama-family group; see ``model_config.py:130-159``).
-            mlp_w_dtype: FF MLP weight dtype. BFP8 default.
-            kv_cache_dtype: Paged KV dtype. BFP8 default (matches TTTv1 accuracy for this model).
-            lm_head_dtype: LM head weight dtype. BFP8 default.
+            precision: Per-layer precision + math-fidelity recipe (see :class:`Mistral7BPrecisionConfig`).
+                Defaults to :data:`MISTRAL_ACCURACY` (mirrors TTTv1 ``DecodersPrecision.accuracy`` for
+                Mistral-7B). Use :data:`MISTRAL_PERFORMANCE` for TTTv1's perf recipe (BFP4 FF1/FF3 +
+                LOFI), or ``dataclasses.replace(...)`` to customize a single field.
             block_size: Paged attention block size (tokens per block).
             executor_mode: If True, use external paged KV (``set_kv_cache`` + shared executor).
                 If False, internal KV tensors (smoke / ``prefill_from_token_ids`` without executor).
@@ -567,9 +631,7 @@ class Mistral7B(LightweightModule):
                 topology=topology,
                 num_dev=num_dev,
                 torch_dtype=torch_dtype,
-                wqkv_dtype=wqkv_dtype,
-                mlp_w_dtype=mlp_w_dtype,
-                kv_cache_dtype=kv_cache_dtype,
+                precision=precision,
                 executor_mode=executor_mode,
                 paged_cfg=paged_cfg,
                 cache_path=cache_path,
@@ -597,7 +659,7 @@ class Mistral7B(LightweightModule):
             mesh_device=mesh_device,
             hf_lm_head=hf.lm_head,
             mcfg=mcfg,
-            lm_head_dtype=lm_head_dtype,
+            lm_head_dtype=precision.lm_head_dtype,
             cache_path=cache_path,
         )
 
@@ -613,7 +675,7 @@ class Mistral7B(LightweightModule):
                 max_seq_len=max_seq_len,
                 cluster_shape=list(mesh_device.shape),
                 model_cache_path=cache_path,
-                kv_cache_dtype=kv_cache_dtype,
+                kv_cache_dtype=precision.kv_cache_dtype,
             )
         return model
 
