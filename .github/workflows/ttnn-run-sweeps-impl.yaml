@@ -129,12 +129,12 @@ jobs:
         run: |
           python3 -c "
           import tt_umd
-          print('Performing 6U ETH link retrain after reset...')
+          print('Performing 6U ETH link retrain after pre-job reset...')
           options = tt_umd.TopologyDiscoveryOptions()
           options.perform_6u_eth_retrain = True
           options.eth_fw_heartbeat_failure = tt_umd.TopologyDiscoveryOptions.Action.IGNORE
           tt_umd.TopologyDiscovery.discover(options)
-          print('ETH retrain completed successfully')
+          print('6U ETH retrain completed successfully')
           "
       - name: Run ttnn sweeps (batch)
         run: |

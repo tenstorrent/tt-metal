@@ -36,6 +36,22 @@ def _perform_eth_retrain():
         logger.warning(f"SWEEPS: ETH retrain failed (non-fatal): {e}")
 
 
+def _umd_warm_reset_with_recovery():
+    """Use UMD WarmResetWithRecovery for WH 6U (Galaxy) machines.
+
+    This performs a UBB warm reset followed by topology discovery, retrying
+    up to 3 times if discovery fails. This is stronger than tt-smi and handles
+    the eRISC post-reset hang that causes POST_RESET failures on 6U.
+    """
+    import tt_umd
+
+    logger.info("SWEEPS: Performing UMD WarmResetWithRecovery (UBB) for 6U...")
+    success = tt_umd.WarmResetWithRecovery.ubb_warm_reset(max_attempts=3, timeout_s=100.0)
+    if not success:
+        raise RuntimeError("SWEEPS: UMD WarmResetWithRecovery.ubb_warm_reset failed after 3 attempts")
+    logger.info("SWEEPS: UMD WarmResetWithRecovery completed successfully")
+
+
 class ResetUtil:
     SUPPORTED_ARCHS = {"wormhole_b0", "blackhole"}
 
@@ -44,8 +60,8 @@ class ResetUtil:
             raise ValueError(f"SWEEPS: Unsupported Architecture for TT-SMI Reset: {arch}")
 
         self.arch = arch
-        self.command, self.args = self._find_command()
         self._is_6u = _is_galaxy_6u()
+        self.command, self.args = self._find_command()
 
     def _find_command(self):
         custom_command = os.getenv("TT_SMI_RESET_COMMAND")
@@ -63,15 +79,28 @@ class ResetUtil:
         logger.info(f"tt-smi executable: {executable}")
         return executable, ["-r"]
 
-    def reset(self):
-        """Execute the reset command, followed by ETH retrain on 6U."""
+    def _reset_via_tt_smi(self):
+        """Standard tt-smi reset with one retry."""
         result = subprocess.run([self.command, *self.args], stdout=subprocess.DEVNULL)
         if result.returncode != 0:
-            # give it one more try
             result = subprocess.run([self.command, *self.args])
             if result.returncode != 0:
                 raise RuntimeError(f"SWEEPS: TT-SMI Reset Failed with Exit Code: {result.returncode}")
         logger.info("TT-SMI Reset Complete Successfully")
+
+    def reset(self):
+        """Reset devices. Uses UMD WarmResetWithRecovery on WH 6U, tt-smi otherwise."""
+        if self._is_6u and self.arch == "wormhole_b0":
+            try:
+                _umd_warm_reset_with_recovery()
+                _perform_eth_retrain()
+                return
+            except ImportError:
+                logger.warning("SWEEPS: tt_umd not available, falling back to tt-smi")
+            except RuntimeError as e:
+                logger.warning(f"SWEEPS: UMD reset failed ({e}), falling back to tt-smi")
+
+        self._reset_via_tt_smi()
 
         if self._is_6u and self.arch == "wormhole_b0":
             _perform_eth_retrain()
