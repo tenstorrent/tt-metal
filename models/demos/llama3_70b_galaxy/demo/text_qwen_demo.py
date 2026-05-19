@@ -15,7 +15,7 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
 )
-from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
+from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData, perf_target_check
 from models.common.utility_functions import (
     comp_pcc,
 )
@@ -716,14 +716,17 @@ def test_qwen_demo_text(
                 f"Teacher forced token at prefill {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
             )
             if not apc_test:
-                assert does_pass, f"Prefill PCC check failed: {pcc_message}, while expected >= {expected_prefill_pcc}."
+                perf_target_check(
+                    does_pass,
+                    f"Prefill PCC check failed: {pcc_message}, while expected >= {expected_prefill_pcc}.",
+                )
         if apc_test:
             assert_message = (
                 f"Prefill PCC check failed: {pcc_message}, while expected {demo_targets['prefill_pcc']}.\n"
                 f"If it is expected to be different in Qwen model, please update the qwen_demo_targets.json file.\n"
                 f"See the comment on the text_qwen_demo.py by the assert for instructions."
             )
-            assert pcc_message == demo_targets["prefill_pcc"], assert_message
+            perf_target_check(pcc_message == demo_targets["prefill_pcc"], assert_message)
             # A 'Prefill PCC mismatch' indicates that a change in the underlying prefill operation is affecting the results.
             # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/llama3_70b_galaxy/demo/qwen_demo_targets.json.
             # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
@@ -855,9 +858,10 @@ def test_qwen_demo_text(
                         f"Teacher forced token at decode iteration {iteration} {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
                     )
                     if not apc_test:
-                        assert does_pass, (
+                        perf_target_check(
+                            does_pass,
                             f"Decode PCC check failed at iteration {iteration}: {pcc_message}, "
-                            f"while expected >= {expected_decode_pcc}."
+                            f"while expected >= {expected_decode_pcc}.",
                         )
                 if apc_test:
                     assert_message = (
@@ -865,7 +869,7 @@ def test_qwen_demo_text(
                         f"If any ops in Qwen model might be impacted, please update decode_pcc in the qwen_demo_targets.json file.\n"
                         f"See the comment on the text_qwen_demo.py by the assert for instructions."
                     )
-                    assert pcc_message == demo_targets["decode_pcc"], assert_message
+                    perf_target_check(pcc_message == demo_targets["decode_pcc"], assert_message)
                     # A 'Decode PCC mismatch' indicates that a change in the underlying prefill operation is affecting the results.
                     # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/llama3_70b_galaxy/demo/qwen_demo_targets.json.
                     # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.

@@ -12,6 +12,7 @@ from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
+from models.perf.benchmarking_utils import perf_target_check
 from models.demos.llama3_70b_galaxy.tt.llama_common import HostEmbedding
 
 
@@ -92,4 +93,4 @@ def test_llama_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensu
     else:
         logger.warning("Llama_embedding Failed!")
 
-    assert passing, f"Llama_embedding output does not meet PCC requirement {0.99}."
+    perf_target_check(passing, f"Llama_embedding output does not meet PCC requirement {0.99}.")

@@ -18,6 +18,7 @@ from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
+from models.perf.benchmarking_utils import perf_target_check
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 
@@ -259,4 +260,4 @@ def test_llama_decoder_inference(
         logger.info(f"All {generation_length} Llama decode iterations Passed!")
     else:
         logger.warning("One or more iterations of Llama decode Failed!")
-        assert all_tests_pass, f"PCC value is lower than {0.99} for some of the outputs. Check Warnings!"
+        perf_target_check(all_tests_pass, f"PCC value is lower than {0.99} for some of the outputs. Check Warnings!")

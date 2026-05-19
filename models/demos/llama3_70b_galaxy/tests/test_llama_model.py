@@ -19,6 +19,7 @@ from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
+from models.perf.benchmarking_utils import perf_target_check
 
 
 @torch.no_grad()
@@ -490,6 +491,12 @@ def test_llama_model_inference(
             logger.info(f"All {generation_length} Llama decode iterations Passed!")
         else:
             logger.warning("One or more iterations of Llama decode had bad PCC")
-            assert final_tests_pass, f"PCC value is lower than {final_model_pcc} for final output. Check Warnings!"
-            assert kv_cache_tests_pass, f"KV Cache PCC value is lower expected for some of the outputs. Check Warnings!"
-            assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+            perf_target_check(
+                final_tests_pass,
+                f"PCC value is lower than {final_model_pcc} for final output. Check Warnings!",
+            )
+            perf_target_check(
+                kv_cache_tests_pass,
+                "KV Cache PCC value is lower expected for some of the outputs. Check Warnings!",
+            )
+            perf_target_check(all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!")

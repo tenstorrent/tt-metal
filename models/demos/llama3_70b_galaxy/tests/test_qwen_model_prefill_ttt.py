@@ -23,6 +23,7 @@ from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
+from models.perf.benchmarking_utils import perf_target_check
 
 
 @torch.no_grad()
@@ -396,4 +397,4 @@ def test_qwen_model_prefill_inference(
         if all_tests_pass:
             logger.info("All PCC checks passed!")
         else:
-            assert all_tests_pass, f"PCC is lower than expected for some of the outputs. Check warnings!"
+            perf_target_check(all_tests_pass, "PCC is lower than expected for some of the outputs. Check warnings!")
