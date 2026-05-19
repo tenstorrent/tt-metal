@@ -631,7 +631,14 @@ def pack_mxfp4(
     finite_blocks = np.where(np.isfinite(blocks_raw), blocks_raw, 0.0)
     max_abs_values = np.max(np.abs(finite_blocks), axis=1)
 
-    max_abs_exp = np.where(max_abs_values == 0, 0, np.floor(np.log2(max_abs_values)))
+    # np.where evaluates both branches eagerly, so log2(0) is still computed
+    # for all-zero blocks even though the result is discarded by the mask.
+    # That raises a "divide by zero" RuntimeWarning — silence it since the
+    # mask handles the zero case correctly.
+    with np.errstate(divide="ignore"):
+        max_abs_exp = np.where(
+            max_abs_values == 0, 0, np.floor(np.log2(max_abs_values))
+        )
     shared_exp_adj = np.where(
         (max_abs_exp - elem_exp_max_unbiased) >= -127,
         max_abs_exp - elem_exp_max_unbiased,

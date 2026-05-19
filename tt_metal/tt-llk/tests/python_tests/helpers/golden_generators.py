@@ -1230,7 +1230,11 @@ class MatmulGolden(FidelityMasking):
         math_format: Optional[DataFormat] = None,
         dest_acc: Optional[DestAccumulation] = None,
     ):
-        if data_format == DataFormat.MxFp4:
+        # Route MX outputs through the KT-chunked path that honors math_format
+        # and dest_acc. The default path does a single fp32-internal torch.matmul
+        # which can disagree with HW's per-KT-tile rounding once results land
+        # near MxInt2/MxInt4 quantization bin boundaries.
+        if data_format.is_mx_format():
             return self._matmul_mxfp4(
                 operand1,
                 operand2,
@@ -3020,6 +3024,7 @@ class ReduceGapoolGolden(FidelityMasking):
         math_fidelity=MathFidelity.LoFi,
         tile_cnt=1,
         input_format=None,
+        dest_acc: Optional[DestAccumulation] = None,
     ):
         # Quantize MX format inputs to match hardware behavior
         if input_format is not None and input_format.is_mx_format():
@@ -3027,22 +3032,54 @@ class ReduceGapoolGolden(FidelityMasking):
 
         fidelity_iter_count = self.MATH_FIDELITY_TO_ITER_COUNT[math_fidelity]
 
-        return torch.cat(
+        # On Quasar with implied_math_format, HW dest precision is implied by
+        # the SrcA tag: Float16 → FP16A; Float16_b / MX inputs → BF16. For
+        # MX-output paths we preserve that precision through the gapool +
+        # face-accumulation chain rather than collapsing inputs to the output
+        # dtype (which would force fp16 → bf16 before any math).
+        # When dest_acc=Yes, HW accumulates in fp32 regardless of input —
+        # so the inter-face / inter-fidelity accumulators must follow.
+        out_is_mx = data_format.is_mx_format()
+        fp32_acc = dest_acc == DestAccumulation.Yes
+        if out_is_mx and input_format is not None:
+            compute_format = (
+                DataFormat.Float16_b if input_format.is_mx_format() else input_format
+            )
+        else:
+            compute_format = data_format
+
+        result = torch.cat(
             [
                 self._process_tile(
                     operand1,
                     operand2,
-                    data_format,
+                    compute_format,
                     reduce_dim,
                     fidelity_iter_count,
                     tile,
+                    fp32_acc=fp32_acc,
                 )
                 for tile in range(tile_cnt)
             ]
         )
 
+        # HW pack widens dest directly to an fp32-bus then MX-quantizes — no
+        # bf16 detour. Quantize the golden so it matches what HW physically
+        # stored in L1 for MX outputs.
+        if out_is_mx:
+            result = quantize_mx_tensor_chunked(result, data_format)
+
+        return result
+
     def _process_tile(
-        self, operand1, operand2, data_format, reduce_dim, fidelity_iter_count, tile_idx
+        self,
+        operand1,
+        operand2,
+        data_format,
+        reduce_dim,
+        fidelity_iter_count,
+        tile_idx,
+        fp32_acc=False,
     ):
         # Extract srcA tile and srcB face0 (only f0 unpacked for srcB)
         tile_start = tile_idx * ELEMENTS_PER_TILE
@@ -3059,20 +3096,32 @@ class ReduceGapoolGolden(FidelityMasking):
 
         # Compute gapool for each face across all fidelity iterations
         face_results = self._compute_gapool(
-            src_a, src_b, data_format, fidelity_iter_count
+            src_a, src_b, data_format, fidelity_iter_count, fp32_acc=fp32_acc
         )
 
         # Combine results based on reduce dimension
         return self._accumulate_gapool_results(
-            face_results, src_b, data_format, reduce_dim, fidelity_iter_count
+            face_results,
+            src_b,
+            data_format,
+            reduce_dim,
+            fidelity_iter_count,
+            fp32_acc=fp32_acc,
         )
 
     def _compute_gapool(
-        self, src_a, src_b, data_format, fidelity_iter_count, num_faces=FACES_PER_TILE
+        self,
+        src_a,
+        src_b,
+        data_format,
+        fidelity_iter_count,
+        num_faces=FACES_PER_TILE,
+        fp32_acc=False,
     ):
         """Compute D = srcB @ srcA for each face, accumulating across fidelity iterations."""
+        acc_dtype = torch.float32 if fp32_acc else src_a.dtype
         face_results = torch.zeros(
-            num_faces, FACE_DIM * FACE_DIM, dtype=src_a.dtype, device=src_a.device
+            num_faces, FACE_DIM * FACE_DIM, dtype=acc_dtype, device=src_a.device
         )
 
         for fidelity_iter in range(fidelity_iter_count + 1):
@@ -3082,15 +3131,27 @@ class ReduceGapoolGolden(FidelityMasking):
 
             a_faces = a_masked.view(num_faces, FACE_DIM, FACE_DIM)
             b_face = b_masked.view(1, FACE_DIM, FACE_DIM)
-            result = torch.matmul(b_face, a_faces)
+            # When dest_acc=Yes HW dest is fp32; promote operands to fp32 so
+            # the per-iter dot product is not rounded to bf16/fp16 before
+            # accumulating. Operand precision was already set by fidelity
+            # masking; this only affects the matmul's internal rounding.
+            if fp32_acc:
+                result = torch.matmul(b_face.float(), a_faces.float())
+            else:
+                result = torch.matmul(b_face, a_faces)
 
-            # Flatten and accumulate in-place
-            face_results += result.view(num_faces, -1)
+            face_results += result.view(num_faces, -1).to(acc_dtype)
 
         return face_results
 
     def _accumulate_gapool_results(
-        self, face_results, src_b, data_format, reduce_dim, fidelity_iter_count
+        self,
+        face_results,
+        src_b,
+        data_format,
+        reduce_dim,
+        fidelity_iter_count,
+        fp32_acc=False,
     ):
         """Place pooled results in output tile based on reduce dimension."""
         face_shape = (FACE_DIM, FACE_DIM)
@@ -3115,7 +3176,12 @@ class ReduceGapoolGolden(FidelityMasking):
             # Sum all faces, transpose, pool again to get single scalar
             all_faces = (f0 + f1 + f2 + f3).view(face_shape).T.flatten()
             pool_result = self._compute_gapool(
-                all_faces, src_b, data_format, fidelity_iter_count, num_faces=1
+                all_faces,
+                src_b,
+                data_format,
+                fidelity_iter_count,
+                num_faces=1,
+                fp32_acc=fp32_acc,
             )
             result[0] = pool_result[0][0]  # First element of a single face result
 

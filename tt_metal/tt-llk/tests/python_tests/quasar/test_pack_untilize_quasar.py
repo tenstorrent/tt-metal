@@ -96,6 +96,7 @@ PACK_UNTILIZE_FORMATS = input_output_formats(
         DataFormat.MxFp4,
         DataFormat.MxInt8,
         DataFormat.MxInt4,
+        DataFormat.MxInt2,
     ],
 )
 ALL_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(

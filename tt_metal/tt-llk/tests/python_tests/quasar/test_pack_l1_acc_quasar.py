@@ -56,6 +56,7 @@ PACK_L1_ACC_FORMATS = input_output_formats(
         DataFormat.UInt8,
         DataFormat.MxInt8,
         DataFormat.MxInt4,
+        DataFormat.MxInt2,
     ]
 )
 
