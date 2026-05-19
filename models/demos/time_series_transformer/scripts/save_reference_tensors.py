@@ -117,12 +117,12 @@ def main():
     # ── Save inputs (safetensors format for safe cross-machine sharing) ───────
     save_safetensors(
         {
-            "input_past_values":                past_values.contiguous(),
-            "input_past_time_features":         past_time_features.contiguous(),
-            "input_future_time_features":       future_time_features.contiguous(),
-            "input_past_observed_mask":         past_observed_mask.contiguous(),
+            "input_past_values":                 past_values.contiguous(),
+            "input_past_time_features":          past_time_features.contiguous(),
+            "input_future_time_features":        future_time_features.contiguous(),
+            "input_past_observed_mask":          past_observed_mask.contiguous(),
             "input_static_categorical_features": static_categorical_features.contiguous(),
-            "input_static_real_features":       static_real_features.contiguous(),
+            "input_static_real_features":        static_real_features.contiguous(),
         },
         str(SAVE_DIR / "inputs.safetensors"),
     )
@@ -183,7 +183,8 @@ def main():
     print(f"  static_features:           {out.static_features.shape}")
 
     captured_contiguous = {}
-    for name, tensor in captured.items():
+    for name in sorted(captured.keys()):
+        tensor = captured[name]
         captured_contiguous[name] = tensor.contiguous()
         print(f"  {name}: {tensor.shape}")
 
