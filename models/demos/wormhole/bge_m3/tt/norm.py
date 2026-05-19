@@ -67,7 +67,15 @@ class LayerNorm1D(LightweightModule):
         self,
         x: ttnn.Tensor | LazyWeight,
         residual_input_tensor: ttnn.Tensor | None = None,
-    ) -> ttnn.Tensor:
+        return_sharded: bool = False,
+    ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        """
+        If return_sharded=True and a sharded_memcfg is configured, returns a
+        tuple (interleaved_out, sharded_out). The caller can pass `sharded_out`
+        as `residual_input_tensor` to the NEXT LayerNorm to skip its residual
+        I->S reshard (-1.1 us/call). The sharded_out tensor is OWNED by the
+        caller, who must deallocate it after the next LN consumes it.
+        """
         self.load_device_weights()
         x = _load_input_device_tensor(x, self.config)
         assert self.weight is not None and self.bias is not None, "weights must be loaded before forward"
@@ -77,14 +85,28 @@ class LayerNorm1D(LightweightModule):
         memory_config = out_mem
 
         if self.config.sharded_memcfg is not None:
-            x = ttnn.to_memory_config(x, memory_config=self.config.sharded_memcfg)
+            # bfloat8_b + sharded LN: ttnn.layer_norm accumulates quantization
+            # error with bf8b inputs across 24 encoder layers (PCC ~0.50).
+            # Fix: fused typecast+reshard via interleaved_to_sharded(output_dtype=bf16).
+            # Single op, bit-identical to separate typecast + reshard.
+            # Non-sharded paths (e.g. B32) are unaffected.
+            if x.dtype == ttnn.bfloat8_b:
+                x = ttnn.interleaved_to_sharded(x, self.config.sharded_memcfg, output_dtype=ttnn.bfloat16)
+            else:
+                x = ttnn.to_memory_config(x, memory_config=self.config.sharded_memcfg)
             if residual_input_tensor is not None:
-                residual_input_tensor = ttnn.to_memory_config(
-                    residual_input_tensor, memory_config=self.config.sharded_memcfg
-                )
+                if residual_input_tensor.dtype == ttnn.bfloat8_b:
+                    residual_input_tensor = ttnn.interleaved_to_sharded(
+                        residual_input_tensor, self.config.sharded_memcfg, output_dtype=ttnn.bfloat16
+                    )
+                else:
+                    # to_memory_config is a no-op if already in sharded_memcfg
+                    residual_input_tensor = ttnn.to_memory_config(
+                        residual_input_tensor, memory_config=self.config.sharded_memcfg
+                    )
             memory_config = self.config.sharded_memcfg
 
-        output = ttnn.layer_norm(
+        sharded_output = ttnn.layer_norm(
             x,
             epsilon=self.config.eps,
             weight=self.weight,
@@ -96,8 +118,15 @@ class LayerNorm1D(LightweightModule):
         )
 
         if self.config.sharded_memcfg is not None and out_mem != memory_config:
-            output = ttnn.to_memory_config(output, memory_config=out_mem)
-        return output
+            interleaved_output = ttnn.to_memory_config(sharded_output, memory_config=out_mem)
+            if return_sharded:
+                return interleaved_output, sharded_output
+            ttnn.deallocate(sharded_output)
+            return interleaved_output
+        # No sharded handoff possible.
+        if return_sharded:
+            return sharded_output, None
+        return sharded_output
 
 
 # ──────────────────────────────────────────────────────────────────────────────
