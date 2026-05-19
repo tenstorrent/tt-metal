@@ -31,11 +31,11 @@ SAVE_DIR = Path(__file__).resolve().parent.parent / "reference"
 
 
 def _remove_stale_reference_tensors(save_dir: Path) -> None:
-    """Delete existing .pt and .safetensors files to avoid mixing outputs across runs."""
-    for f in save_dir.glob("*.pt"):
-        f.unlink()
-    for f in save_dir.glob("*.safetensors"):
-        f.unlink()
+    """Delete known script outputs to avoid mixing artifacts across runs."""
+    for name in ("inputs.safetensors", "outputs.safetensors", "intermediates.safetensors"):
+        target = save_dir / name
+        if target.exists():
+            target.unlink()
 
 
 def main():

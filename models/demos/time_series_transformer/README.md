@@ -32,7 +32,7 @@ pip install -r models/demos/time_series_transformer/requirements.txt
 ```
 
 ## Generate Reference Tensors
-Reference `.pt` tensors are generated locally and not committed to the repo.
+Reference `.safetensors` tensors are generated locally and not committed to the repo.
 Run from the repo root:
 ```bash
 python models/demos/time_series_transformer/scripts/save_reference_tensors.py
