@@ -157,29 +157,42 @@ def render_table(
             p(f"    {key:<10} {_format_overhead(o, r.box.hbm_per_chip_gb)}")
             p(f"               source: {o.source}")
 
-    # Detect if any row needs PP info; that widens the parallel column.
     show_parallel = any(r.parallel.pp != 1 or r.parallel.ep != 1 for r in verdict.rows)
+    display_rows: list[FitRow] = []
+    seen = set()
+    for r in verdict.rows:
+        key = (
+            r.box.name,
+            r.dtype,
+            r.parallel.label if show_parallel else "",
+            round(r.per_chip_gb, 4),
+            round(r.usable_per_chip_gb, 4),
+            round(r.headroom_gb, 4),
+            r.tightness.value,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        display_rows.append(r)
 
     p()
-    p("  " + "-" * (90 if show_parallel else 76))
+    p("  " + "-" * (86 if show_parallel else 72))
     if show_parallel:
-        hdr = (
-            f"  {'BOX':<8}  {'DTYPE':<8}  {'MESH':<8}  {'PARALLEL':<15}  "
-            f"{'PER-CHIP':>9}  {'USABLE':>9}  {'HEADROOM':>10}  VERDICT"
-        )
+        hdr = f"  {'BOX':<8}  {'DTYPE':<8}  {'PARALLEL':<15}  {'PER-CHIP':>9}  {'USABLE':>9}  {'HEADROOM':>10}  VERDICT"
     else:
-        hdr = f"  {'BOX':<8}  {'DTYPE':<8}  {'MESH':<8}  " f"{'PER-CHIP':>9}  {'USABLE':>9}  {'HEADROOM':>10}  VERDICT"
+        hdr = f"  {'BOX':<8}  {'DTYPE':<8}  {'PER-CHIP':>9}  {'USABLE':>9}  {'HEADROOM':>10}  VERDICT"
     p(hdr)
-    p("  " + "-" * (90 if show_parallel else 76))
+    p("  " + "-" * (86 if show_parallel else 72))
     last_box: Optional[str] = None
-    for r in verdict.rows:
+    for r in display_rows:
         if last_box is not None and last_box != r.box.name:
-            p("  " + " " * 6 + "-" * (84 if show_parallel else 70))
+            p("  " + " " * 6 + "-" * (80 if show_parallel else 66))
         last_box = r.box.name
-        mesh = f"[{r.mesh_shape[0]},{r.mesh_shape[1]}]"
-        prefix = f"  {r.box.name:<8}  {r.dtype:<8}  {mesh:<8}"
+        prefix = f"  {r.box.name:<8}  {r.dtype:<8}"
         if show_parallel:
-            prefix += f"  {r.parallel.label:<15}"
+            prefix += f"  {r.parallel.label:<15}  "
+        else:
+            prefix += "  "
         p(
             f"{prefix}  "
             f"{_fmt_gb(r.per_chip_gb):>7}G  "
@@ -187,21 +200,21 @@ def render_table(
             f"{_fmt_gb(r.headroom_gb):>8}G  "
             f"{r.tightness.value}"
         )
-    p("  " + "-" * (90 if show_parallel else 76))
+    p("  " + "-" * (86 if show_parallel else 72))
 
     # Recommendation
     p()
     if verdict.best:
         r = verdict.best
-        mesh = f"[{r.mesh_shape[0]},{r.mesh_shape[1]}]"
         parallel_note = f" ({r.parallel.label})" if r.parallel.pp != 1 or r.parallel.ep != 1 else ""
-        p(f"  RECOMMENDATION: {r.box.name} mesh {mesh}{parallel_note} with {r.dtype} weights")
+        p(f"  RECOMMENDATION: {r.box.name}{parallel_note} with {r.dtype} weights")
         p(f"                  per-chip={r.per_chip_gb:.1f} GB, headroom={r.headroom_gb:.1f} GB")
         p(f"                  verdict: {r.tightness.value}")
         p(f"                  {r.box.notes}")
         for note in verdict.notes:
             if note.startswith("recommendation bumped"):
                 p(f"                  NOTE: {note}")
+        p("                  Runtime mesh is selected in `prepare` after TP/divisibility and demo constraints.")
         if r.tightness == Tightness.TIGHT:
             p()
             p("  WARNING: this is a tight fit (< 10% headroom). Run a hardware")
@@ -336,23 +349,33 @@ def render_markdown(probe: ModelProbe, verdict: FitVerdict, batch: int, seq: int
     p("")
     p("### Per-box fit table")
     p("")
-    p("| Box | DTYPE | Mesh | Per-chip | Usable | Headroom | Verdict |")
-    p("|---|---|---|---|---|---|---|")
+    p("| Box | DTYPE | Per-chip | Usable | Headroom | Verdict |")
+    p("|---|---|---|---|---|---|")
+    seen_md = set()
     for r in verdict.rows:
-        mesh = f"[{r.mesh_shape[0]},{r.mesh_shape[1]}]"
+        key = (
+            r.box.name,
+            r.dtype,
+            round(r.per_chip_gb, 4),
+            round(r.usable_per_chip_gb, 4),
+            round(r.headroom_gb, 4),
+            r.tightness.value,
+        )
+        if key in seen_md:
+            continue
+        seen_md.add(key)
         p(
-            f"| {r.box.name} | {r.dtype} | {mesh} | "
+            f"| {r.box.name} | {r.dtype} | "
             f"{r.per_chip_gb:.1f} GB | {r.usable_per_chip_gb:.1f} GB | "
             f"{r.headroom_gb:+.1f} GB | {r.tightness.value} |"
         )
     p("")
     if verdict.best:
         r = verdict.best
-        mesh = f"[{r.mesh_shape[0]},{r.mesh_shape[1]}]"
         p(
-            f"**Recommendation**: `{r.box.name}` mesh `{mesh}` with `{r.dtype}` "
-            f"weights — {r.tightness.value}, headroom {r.headroom_gb:.1f} GB."
+            f"**Recommendation**: `{r.box.name}` with `{r.dtype}` weights — {r.tightness.value}, headroom {r.headroom_gb:.1f} GB."
         )
+        p("Runtime mesh is selected in `prepare` after TP/divisibility and demo constraints.")
     else:
         p("**Recommendation**: nothing fits.")
     p("")
