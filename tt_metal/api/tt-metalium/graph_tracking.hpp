@@ -191,9 +191,17 @@ private:
     GraphTracker() = default;
     ~GraphTracker() = default;
 
-    std::vector<std::shared_ptr<IGraphProcessor>> processors;
+    // Per-thread storage for the processor stack and hook so graph
+    // tracking is safe under multi-threaded use. The push -> run -> pop
+    // sequence is inherently scoped to the thread that performs the
+    // push; the calling thread is the only one whose dispatched ops
+    // should be observed by that capture. Per-thread storage matches
+    // that contract and lets the hot path stay lock-free: callers
+    // without a pushed processor / installed hook see empty state and
+    // return immediately.
+    static thread_local std::vector<std::shared_ptr<IGraphProcessor>> processors;
 
-    std::shared_ptr<IGraphHooks> hook;
+    static thread_local std::shared_ptr<IGraphHooks> hook;
 
     std::mutex hooked_buffers_mutex;
     std::unordered_set<const Buffer*> hooked_buffers;
