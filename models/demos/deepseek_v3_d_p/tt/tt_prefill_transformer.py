@@ -114,6 +114,7 @@ class TtPrefillTransformer(LightweightModule):
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
+        lm_head_is_column_parallel: bool = False,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -200,6 +201,7 @@ class TtPrefillTransformer(LightweightModule):
             topology=topology,
             is_balanced=is_balanced,
             weight_cache_path=weight_cache_path,
+            is_column_parallel=lm_head_is_column_parallel,
         )
 
         self.is_balanced = is_balanced
@@ -332,11 +334,11 @@ class TtPrefillTransformer(LightweightModule):
 
         logits, (device_id, token_offset) = self.lm_head(h, global_token_id)
 
-        logits_host = self.lm_head.logit_to_host(logits)
+        logits_host = self.lm_head.logit_to_host(logits, device_id)
         assert (
             logits_host.shape[-1] == self.lm_head.vocab_size
         ), f"Expected full vocab {self.lm_head.vocab_size}, got {logits_host.shape[-1]} — TP concat may be broken"
-        first_token_logits = self.lm_head.select_first_token(logits_host, device_id, token_offset)
+        first_token_logits = self.lm_head.select_first_token(logits_host, token_offset)
 
         logger.debug(f"[TtPrefillTransformer._extract] {logits.shape}")
         logger.debug(f"[TtPrefillTransformer._extract] {logits_host.shape}")
