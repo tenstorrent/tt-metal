@@ -13,6 +13,7 @@
 #include "metal_env_impl.hpp"
 #include "metal_env_accessor.hpp"
 #include "metal_context.hpp"
+#include "device/device_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
 #include "firmware_capability.hpp"
@@ -263,10 +264,20 @@ bool MetalEnvImpl::set_fabric_config(
 }
 
 void MetalEnvImpl::teardown_fabric_config() {
+    // When SetFabricConfig(DISABLED) is called while devices are still open, defer clear_fabric_context to the
+    // mesh->close() teardown path: FabricFirmwareInitializer::teardown (run from DeviceManager::close_devices in the
+    // correct dispatch-before-fabric order) dereferences control_plane_.get_fabric_context() to write the master
+    // fabric router termination signal. Clearing the context here would null it out and crash that path. Once the
+    // mesh closes the next SetFabricConfig call (or the destructor) will replace the stale fabric_context.
+    const bool devices_still_open = MetalContext::instance_exists() && MetalContext::instance().device_manager() &&
+                                    !MetalContext::instance().device_manager()->get_all_active_devices().empty();
+
     this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     this->get_cluster().configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
-    this->get_control_plane().clear_fabric_context();
+    if (!devices_still_open) {
+        this->get_control_plane().clear_fabric_context();
+    }
 }
 
 void MetalEnvImpl::initialize_fabric_config() {

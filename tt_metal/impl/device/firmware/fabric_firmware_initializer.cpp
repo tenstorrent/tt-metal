@@ -310,7 +310,6 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         !init_done.contains(InitializerKey::Dispatch),
         "FabricFirmwareInitializer must be torn down after DispatchKernelInitializer");
     if (descriptor_->is_mock_device()) {
-        log_info(tt::LogMetal, "Skipping fabric teardown for mock devices");
         init_done.erase(key);
         return;
     }
@@ -321,9 +320,11 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         return;
     }
 
-    tt_fabric::FabricConfig fabric_config = descriptor_->fabric_config();
-    if (!tt_fabric::is_tt_fabric_config(fabric_config)) {
-        devices_.clear();
+    // Gate on devices_.empty() rather than is_tt_fabric_config(descriptor_->fabric_config()): teardown can legitimately
+    // run via mesh->close() AFTER SetFabricConfig(DISABLED) has flipped fabric_config_ to DISABLED, and we still need
+    // to write the master fabric router termination signal to terminate the kernels that were started under the
+    // previous fabric config. devices_.empty() correctly captures "nothing was ever initialized".
+    if (devices_.empty()) {
         initialized_.clear();
         init_done.erase(key);
         return;
