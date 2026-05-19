@@ -1354,9 +1354,8 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
     for (auto& dfb : this->dataflow_buffers_) {
         uint32_t alloc_addr;
         if (dfb->borrows_memory()) {
-            // Address is not known at allocation time; caller must invoke
-            // set_borrowed_memory_base_addr() before launching the program.
-            alloc_addr = 0;
+            // Use the address latched by set_borrowed_memory_base_addr()
+            alloc_addr = dfb->borrowed_addr_;
         } else {
             uint64_t computed_addr = base_dfb_address;
             for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
