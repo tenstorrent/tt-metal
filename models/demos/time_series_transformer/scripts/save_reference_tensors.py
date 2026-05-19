@@ -31,16 +31,11 @@ SAVE_DIR = Path(__file__).resolve().parent.parent / "reference"
 
 
 def _remove_stale_reference_tensors(save_dir: Path) -> None:
-    """Delete known script outputs to avoid mixing artifacts across runs."""
-    for name in (
-        "inputs.safetensors",
-        "outputs.safetensors",
-        "intermediates.safetensors",
-        "config_runtime.json",
-    ):
-        target = save_dir / name
-        if target.exists():
-            target.unlink()
+    """Delete generated script outputs to avoid mixing artifacts across runs."""
+    for pattern in ("*.safetensors", "*.pt", "config_runtime.json"):
+        for target in save_dir.glob(pattern):
+            if target.is_file():
+                target.unlink()
 
 
 def _write_or_assert_config(save_dir: Path, config_dict: dict) -> None:
