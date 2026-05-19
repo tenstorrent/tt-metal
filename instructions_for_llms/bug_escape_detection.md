@@ -339,6 +339,83 @@ If verdict is not PROCEED_TO_BISECT → write escape ID to `seen-escapes.json` w
 **⚠️ DO NOT use `bisect-dispatch.yaml`** — that workflow finds *breaking* commits (regressions),
 not *fixing* commits. For bug escapes we want the first commit where the test started PASSING.
 
+#### Method selection
+
+Two dispatch methods are available. Choose based on the test type:
+
+**Method A — `test-dispatch.yaml`** (workflow ID 103409066)
+Use for tests that run in standard CI jobs (unit tests, fast-dispatch, etc.).
+Each run dispatches directly at a target commit with no build overhead if that commit has existing artifacts.
+
+**Method B — `perf-device-models.yaml` + artifact reuse** ← USE FOR DEVICE-PERF TESTS
+Use when Snowflake shows the failing job name is `device-perf / N300 WH B0 Set 2 device perf`
+(or any other `device-perf / *` job). These tests require a Tracy/profiler-enabled build and
+**cannot** use `test-dispatch.yaml`.
+
+Method B procedure:
+1. Find the device-perf merge gate run ID for the target bisect commit:
+   ```
+   GET /repos/tenstorrent/tt-metal/actions/runs?head_sha={target_sha}
+   ```
+   Look for a run named "Merge Gate" (or the scheduled device-perf run at that commit).
+   Note: the merge gate builds **non-profiler** artifacts — they cannot be reused here.
+   You need a prior **device-perf** run that built profiler artifacts at a nearby commit.
+
+2. Check the device-perf workflow runs near your target commit for profiler artifacts:
+   ```
+   GET /repos/tenstorrent/tt-metal/actions/workflows/76728129/runs?branch=main
+   ```
+   For each run, check `/artifacts` for names containing `_profiler_`.
+   The artifact name format is:
+   `TTMetal_build_any_22.04_amd64_x86_64-linux-clang-20-libstdcpp_profiler_{SHA}_{RUN_ID}`
+   and `ttnn-dist-cp310-Release-profiler-{SHA}-{RUN_ID}`
+
+3. If profiler artifacts exist for a **nearby commit** (within ~5 commits of target):
+   Dispatch `perf-device-models.yaml` on the `brain/efficientnet-bisect-probe` branch
+   with `use-artifacts-from-run = {that run ID}`. The test will run using that commit's
+   compiled code, not the branch's code.
+   ⚠️ This tests the artifact commit's code, not your probe branch — only use when the
+   artifact commit is close enough to the target that the difference is irrelevant.
+
+4. If NO profiler artifacts exist near the target commit:
+   - Update the `brain/efficientnet-bisect-probe` branch to base on the target commit
+     (keeping the workflow changes), push it, then dispatch with `use-artifacts-from-run = ""`.
+   - This triggers a full rebuild (~60 min) but correctly tests that exact commit.
+   - Command sequence:
+     ```bash
+     cd /workspace/group/worktrees/efficientnet-bisect-probe
+     # Save the workflow change commit hash first
+     WORKFLOW_COMMIT=$(git rev-parse HEAD)
+     git reset --hard {target_sha}
+     git cherry-pick $WORKFLOW_COMMIT
+     git push origin brain/efficientnet-bisect-probe --force
+     ```
+
+5. The overall job will likely **report failure** even when the specific pcc test passes
+   (perf regression on another model, infra issue, etc.). You MUST check actual test logs:
+   ```
+   GET /repos/tenstorrent/tt-metal/actions/runs/{run_id}/jobs
+   ```
+   Find the `device-perf / N300 WH B0 Set 2 device perf` job, then:
+   ```
+   GET /repos/tenstorrent/tt-metal/actions/jobs/{job_id}/logs
+   ```
+   Search for `test_efficientnetb0_model` and look for `PASSED` or `FAILED`.
+
+6. Dispatch inputs for `perf-device-models.yaml` (workflow ID 76728129):
+   ```json
+   {
+     "ref": "brain/efficientnet-bisect-probe",
+     "inputs": {
+       "architecture": "[\"wormhole_b0\"]",
+       "requested-models": "[\"efficientnetb0\"]",
+       "platform": "Ubuntu 22.04",
+       "build-type": "Release",
+       "use-artifacts-from-run": "{run_id or empty string}"
+     }
+   }
+   ```
+
 Use `test-dispatch.yaml` (workflow ID 103409066) to run the test at individual commits.
 
 **Algorithm:**
