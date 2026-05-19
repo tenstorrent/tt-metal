@@ -86,6 +86,7 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("weights_tensor").noconvert(),
         nb::arg("indices_tensor").noconvert(),
         nb::arg("expert_offsets_tensor").noconvert(),
+        nb::arg("expert_end_offsets_tensor").noconvert(),
         nb::arg("expert_dispatch_table_tensor").noconvert(),
         nb::kw_only(),
         nb::arg("dispatch_group_size"),
@@ -100,7 +101,8 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("num_links") = 1,
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("use_l1_small_for_semaphores") = false,
-        nb::arg("use_fp8_dispatch") = false);
+        nb::arg("use_fp8_dispatch") = false,
+        nb::arg("num_untilizers_per_sender") = 2);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch::detail

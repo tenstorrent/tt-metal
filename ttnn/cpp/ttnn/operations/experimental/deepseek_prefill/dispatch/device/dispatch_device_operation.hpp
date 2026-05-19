@@ -49,6 +49,7 @@ prefill_dispatch(
     const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& expert_offsets_tensor,
+    const ttnn::Tensor& expert_end_offsets_tensor,
     const ttnn::Tensor& expert_dispatch_table_tensor,
     uint32_t dispatch_group_size,
     uint32_t experts_per_chip,
@@ -62,5 +63,6 @@ prefill_dispatch(
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
     bool use_l1_small_for_semaphores = false,
-    bool use_fp8_dispatch = false);
+    bool use_fp8_dispatch = false,
+    uint32_t num_untilizers_per_sender = 2);
 }  // namespace ttnn::prim
