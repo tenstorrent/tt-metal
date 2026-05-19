@@ -180,6 +180,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // SFPU step: read Dest tile 0 (in0) and Dest tile 1 (in1), write Dest tile 2 (out).
     // dst_index_in0/in1/out are tile offsets relative to params.DST_INDEX.
     _llk_math_eltwise_sfpu_init_();
+    _init_binary_max_min_();
 
     // All integer formats route through the Int32 path (sfpmem::INT32); float and MX
     // formats use the DEFAULT path (sfpmem::DEFAULT, HW derives the mode from ACC_CTRL).
