@@ -64,17 +64,22 @@ Dry-run (print resolved config and exit, no device opened)::
         --decoder-layer-indices 4 \\
         --hidden-states-dir /tmp/x --prompt foo --dry-run
 
-Four-layer rank-parallel verification::
+Four-layer rank-parallel verification, one rank per host::
 
-    TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \\
+    export TRACE_ROOT=/data/username/pipeclean_traces/cache_design_gen8192
+    export PROMPT=cache_design_gen8192
+
+    TT_METAL_SLOW_DISPATCH_MODE=1 python -m ttnn.distributed.ttrun \\
+      --tcp-interface ens5f0np0 \\
       --rank-bindings-mapping decoder_verify_4x_rank_bindings_mapping.yaml \\
-      --mpi-args "--map-by rankfile:file=decoder_verify_4x_rank_file_single_pod --bind-to hwt:overload-allowed --host ${HOSTSP} --tag-output" \\
-      python_env/bin/python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
+      --mpi-args "--map-by rankfile:file=decoder_verify_4x_rank_file_current --bind-to none --tag-output" \\
+      python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
         --decoder-layer-indices 4 5 6 7 \\
-        --hidden-states-dir-template '/data/username/pipeclean_traces/cache_design_gen8192/layer_{layer:02d}' \\
-        --prompt cache_design_gen8192 \\
+        --hidden-states-dir "${TRACE_ROOT}" \\
+        --prompt "${PROMPT}" \\
         --validate-hidden-states-cross-trace \\
-        --validate-kv-cache-cross-trace
+        --validate-kv-cache-cross-trace \\
+        --pcc-threshold 0.97 --kv-cache-pcc-threshold 0.97
 
 """
 
@@ -145,18 +150,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             f"Directory containing per-prompt reference traces (*.pt files with bf16 {{'input', 'output'}} "
-            f"tensors). May contain {{layer}}, {{layer_idx}}, and/or {{rank}} format fields. Falls back to "
-            f"${HIDDEN_STATES_DIR_ENV} if omitted; required if neither this flag, --hidden-states-dir-template, "
-            f"nor the env var is set."
-        ),
-    )
-    required.add_argument(
-        "--hidden-states-dir-template",
-        type=str,
-        default=None,
-        help=(
-            "Per-layer reference trace directory template for rank-parallel verification. Supports "
-            "{layer}, {layer_idx}, and {rank}; for example /data/gpu_reference/layer_{layer:02d}."
+            f"tensors). In rank-parallel mode, this should be the root containing layer_<id> subdirectories. "
+            f"Falls back to ${HIDDEN_STATES_DIR_ENV} if omitted; required if neither this flag nor the env var "
+            f"is set."
         ),
     )
     required.add_argument(
@@ -338,20 +334,19 @@ def _format_path(raw: str | Path, *, layer_idx: int, rank: int) -> Path:
         ) from e
 
 
-def _resolve_hidden_states_dir(args: argparse.Namespace, *, layer_idx: int, rank: int) -> Path:
-    """Resolve trace dir for the selected layer/rank."""
-    if args.hidden_states_dir_template is not None and args.hidden_states_dir is not None:
-        raise ValueError("Pass only one of --hidden-states-dir or --hidden-states-dir-template")
-    if args.hidden_states_dir_template is not None:
-        return _format_path(args.hidden_states_dir_template, layer_idx=layer_idx, rank=rank)
+def _resolve_hidden_states_dir(args: argparse.Namespace, *, layer_idx: int, layer_parallel: bool) -> Path:
+    """Resolve trace dir for the selected layer."""
     if args.hidden_states_dir is not None:
-        return _format_path(args.hidden_states_dir, layer_idx=layer_idx, rank=rank)
-    raw = os.environ.get(HIDDEN_STATES_DIR_ENV)
-    if raw:
-        return _format_path(raw, layer_idx=layer_idx, rank=rank)
-    raise ValueError(
-        f"--hidden-states-dir or --hidden-states-dir-template is required (or set ${HIDDEN_STATES_DIR_ENV})"
-    )
+        resolved = Path(args.hidden_states_dir)
+    else:
+        raw = os.environ.get(HIDDEN_STATES_DIR_ENV)
+        if not raw:
+            raise ValueError(f"--hidden-states-dir is required (or set ${HIDDEN_STATES_DIR_ENV})")
+        resolved = Path(raw)
+
+    if layer_parallel:
+        return resolved / f"layer_{layer_idx:02d}"
+    return resolved
 
 
 def _resolve_dump_dir(
@@ -376,11 +371,11 @@ def _config_from_args_for_rank(
     args: argparse.Namespace,
     *,
     rank: int,
-    layer_idx: int,
-    layer_parallel: bool,
 ) -> HostIoDecoderSweepConfig:
     """Build a frozen config for either local single-layer or rank-selected layer mode."""
-    layer_indices = (layer_idx,)
+    layer_ids = _layer_ids_from_args(args)
+    layer_parallel = len(layer_ids) > 1
+    layer_idx = _layer_for_rank(layer_ids, rank=rank)
 
     num_replication_slots = args.num_replication_slots
     if num_replication_slots is None:
@@ -399,8 +394,8 @@ def _config_from_args_for_rank(
         validate_hidden_states_cross_trace = layer_parallel
 
     return HostIoDecoderSweepConfig(
-        decoder_layer_indices=layer_indices,
-        hidden_states_dir=_resolve_hidden_states_dir(args, layer_idx=layer_idx, rank=rank),
+        decoder_layer_index=layer_idx,
+        hidden_states_dir=_resolve_hidden_states_dir(args, layer_idx=layer_idx, layer_parallel=layer_parallel),
         prompt_names=tuple(args.prompt_names),
         max_seq_len=args.max_seq_len,
         num_slots=args.num_slots,
@@ -429,7 +424,7 @@ def _config_from_args(args: argparse.Namespace) -> HostIoDecoderSweepConfig:
     layer_ids = _layer_ids_from_args(args)
     if len(layer_ids) != 1:
         raise ValueError("_config_from_args expects exactly one --decoder-layer-indices value")
-    return _config_from_args_for_rank(args, rank=0, layer_idx=layer_ids[0], layer_parallel=False)
+    return _config_from_args_for_rank(args, rank=0)
 
 
 def _build_device_params(config: HostIoDecoderSweepConfig, *, layer_parallel: bool = False) -> dict:
@@ -447,18 +442,33 @@ def _build_device_params(config: HostIoDecoderSweepConfig, *, layer_parallel: bo
 
 
 def _init_rank_context_or_error() -> tuple[int, int]:
-    ttnn.init_distributed_context()
-    if ttnn.distributed_context_subcontext_id() is not None:
-        return int(ttnn.distributed_context_world_rank()), int(ttnn.distributed_context_world_size())
-    return int(ttnn.distributed_context_get_rank()), int(ttnn.distributed_context_get_size())
+    """Return launcher rank/size without initializing TTNN distributed context.
+
+    Rank-parallel verification runs independent single-stage decoder sweeps. If
+    we initialize TTNN distributed context here, PipelineBlock sees the launcher
+    world as a multi-stage pipeline and selects the embedding first-stage path
+    instead of the single-stage injected-hidden-states path.
+    """
+
+    rank = os.environ.get("OMPI_COMM_WORLD_RANK")
+    world_size = os.environ.get("OMPI_COMM_WORLD_SIZE")
+    return int(rank), int(world_size)
 
 
-def _layer_for_rank(layer_ids: list[int], *, rank: int, world_size: int) -> int:
+def _validate_layer_world_size(layer_ids: list[int], *, world_size: int) -> None:
     if len(layer_ids) != world_size:
         raise ValueError(
             f"Number of --decoder-layer-indices values ({len(layer_ids)}) must match launcher world size "
             f"({world_size}). Launch {len(layer_ids)} ranks or pass exactly {world_size} layers."
         )
+
+
+def _layer_for_rank(layer_ids: list[int], *, rank: int, world_size: int | None = None) -> int:
+    if world_size is None:
+        world_size = len(layer_ids)
+    _validate_layer_world_size(layer_ids, world_size=world_size)
+    if rank < 0 or rank >= world_size:
+        raise ValueError(f"Rank {rank} is outside launcher world size {world_size}.")
     return layer_ids[rank]
 
 
@@ -466,7 +476,7 @@ def _log_resolved_config(config: HostIoDecoderSweepConfig) -> None:
     """Render the resolved config in a human-readable block, before the run."""
     logger.info("Resolved HostIoDecoderSweepConfig:")
     for field, value in (
-        ("decoder_layer_indices", config.decoder_layer_indices),
+        ("decoder_layer_index", config.decoder_layer_index),
         ("hidden_states_dir", config.hidden_states_dir),
         ("prompt_names", list(config.prompt_names)),
         ("max_seq_len", config.max_seq_len),
@@ -508,27 +518,23 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if multi_layer_requested:
             rank, world_size = _init_rank_context_or_error()
-            layer_idx = _layer_for_rank(layer_ids, rank=rank, world_size=world_size)
+            _validate_layer_world_size(layer_ids, world_size=world_size)
             layer_parallel = True
             config = _config_from_args_for_rank(
                 args,
                 rank=rank,
-                layer_idx=layer_idx,
-                layer_parallel=layer_parallel,
             )
         else:
             config = _config_from_args_for_rank(
                 args,
                 rank=0,
-                layer_idx=layer_ids[0],
-                layer_parallel=False,
             )
     except (ValueError, FileNotFoundError, RuntimeError) as e:
         parser.error(str(e))
         return 2  # pragma: no cover (parser.error sys.exits 2)
 
     if rank is not None and world_size is not None:
-        logger.info(f"rank={rank}/{world_size}: verifying decoder layer {config.decoder_layer_indices[0]}")
+        logger.info(f"rank={rank}/{world_size}: verifying decoder layer {config.decoder_layer_index}")
     _log_resolved_config(config)
 
     if args.dry_run:
@@ -542,7 +548,7 @@ def main(argv: list[str] | None = None) -> int:
     # Result summary so the CLI ends with an audit-friendly digest of what ran.
     logger.info("=" * 80)
     if rank is not None and world_size is not None:
-        logger.info(f"SUMMARY rank={rank}/{world_size} layer={config.decoder_layer_indices[0]}")
+        logger.info(f"SUMMARY rank={rank}/{world_size} layer={config.decoder_layer_index}")
     else:
         logger.info("SUMMARY")
     logger.info("=" * 80)
