@@ -668,7 +668,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             for kernel_size, dilation in zip(self.cfg.resblock_kernel_sizes, self.cfg.resblock_dilation_sizes):
                 for dil in dilation:
                     x = _conv_out_length(x, kernel_size, 1, (kernel_size - 1) * dil // 2, dilation=dil)
-                for _dil in dilation:
+                for _ in range(len(dilation)):
                     x = _conv_out_length(x, kernel_size, 1, (kernel_size - 1) // 2, dilation=1)
 
         x = _conv_out_length(x, 7, 1, 3)
