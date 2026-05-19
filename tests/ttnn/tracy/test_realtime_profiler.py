@@ -49,6 +49,11 @@ from pathlib import Path
 import pytest
 
 
+# Skipped due to issue #44657: real-time profiler is disabled by default
+# (TT_METAL_ENABLE_REALTIME_PROFILER kill switch).
+pytestmark = pytest.mark.skip(reason="Real-time profiler disabled by default — see issue #44657")
+
+
 # ---------------------------------------------------------------------------
 # Common paths / constants
 # ---------------------------------------------------------------------------

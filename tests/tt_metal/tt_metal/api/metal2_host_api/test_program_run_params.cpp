@@ -229,20 +229,41 @@ TEST_F(ProgramRunParamsTestQuasar, WrongCommonRuntimeArgsCountFails) {
 
 // TODO: Currently, we require that all kernels in a ProgramSpec have params specified.
 // Should relax this to omit kernels with no RTAs or CRTAs.
-TEST_F(ProgramRunParamsTestQuasar, MissingKernelParamsFails) {
+TEST_F(ProgramRunParamsTestQuasar, EmptySchemaKernelOmittedFromRunParamsSucceeds) {
     NodeCoord node{0, 0};
+    // Both kernels have empty RTA/CRTA schemas — neither has anything to supply per enqueue.
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
-    // Only provide params for dm_kernel, missing compute_kernel
+    // Only provide params for dm_kernel; omit compute_kernel.
+    // Since compute_kernel's schema is empty, this should succeed.
     ProgramRunParams params;
     params.kernel_run_params.push_back(MakeKernelRunParams("dm_kernel", node, {}, {}));
-    // Missing: compute_kernel params
+
+    EXPECT_NO_THROW({ SetProgramRunParameters(program, params); });
+}
+
+TEST_F(ProgramRunParamsTestQuasar, NonEmptySchemaKernelMissingFromRunParamsFails) {
+    NodeCoord node{0, 0};
+    // compute_kernel has a non-empty schema (2 vararg RTAs).
+    ProgramSpec spec = MakeSpecWithBothKernelRTAs(
+        node,
+        /*dm_per_node_rtas=*/0,
+        /*dm_common_rtas=*/0,
+        /*compute_per_node_rtas=*/2,
+        /*compute_common_rtas=*/0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Only provide params for dm_kernel; omit compute_kernel.
+    // Since compute_kernel has declared RTAs, this should fail.
+    ProgramRunParams params;
+    params.kernel_run_params.push_back(MakeKernelRunParams("dm_kernel", node, {}, {}));
 
     EXPECT_THAT(
         [&] { SetProgramRunParameters(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
-            "Kernel 'compute_kernel' is registered in the Program but has no runtime parameters")));
+            "Kernel 'compute_kernel' is registered in the Program with a non-empty RTA/CRTA schema "
+            "but has no runtime parameters specified in ProgramRunParams")));
 }
 
 TEST_F(ProgramRunParamsTestQuasar, DuplicateKernelParamsFails) {
