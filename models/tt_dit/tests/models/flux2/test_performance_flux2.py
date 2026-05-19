@@ -13,7 +13,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
-from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
+from ....pipelines.flux2.pipeline_flux2_opt_hybrid import Flux2Pipeline
 from .test_pipeline_flux2 import line_params_8k_flux2, line_params_flux2, ring_params_8k_flux2
 
 NUM_INFERENCE_STEPS = 50

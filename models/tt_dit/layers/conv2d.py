@@ -443,15 +443,14 @@ class Conv2d(Module):
                 msg = f"expected input channel dimension to be {expected_c}, but got {c}"
                 raise ValueError(msg)
 
-        # num_slices is a hand-tuned DRAM width-slicing count per (h, w, in, out) conv shape
-        # and mesh shape. Fall back to the documented max for the tile DRAM width
-        # (ceil(w / TILE)) for shapes not in the table — keeps new resolutions / VAEs
-        # working (more slices fit L1; the OOM path below reports if even that is too big).
-        slice_table = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
-        num_slices = slice_table.get((h, w, self.in_channels, self.out_channels), max(1, math.ceil(w / 32)))
-        slice_config = ttnn.Conv2dSliceConfig(
-            num_slices=num_slices,
-            slice_type=ttnn.Conv2dDRAMSliceWidth,
+        slice_params = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
+        slice_config = (
+            ttnn.Conv2dSliceConfig(
+                num_slices=slice_params[(h, w, self.in_channels, self.out_channels)],
+                slice_type=ttnn.Conv2dDRAMSliceWidth,
+            )
+            if (h, w, self.in_channels, self.out_channels) in slice_params
+            else None
         )
 
         try:
