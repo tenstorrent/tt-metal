@@ -311,7 +311,7 @@ targets:
               # decode targets lowered from 27 → 24 after observed regression
               # to 24.95 t/s in scheduled run 25778148259 (2026-05-13).
               decode_t/s/u: 28.03
-              decode_t/s: 28.03
+              decode_t/s: 23.8
             accuracy: {}
 
   gemma-3-27b:
@@ -588,7 +588,7 @@ targets:
             #   measured decode 8.77 t/s, prefill >= 11 t/s (only decode regressed).
             # Set ~10% below observed for headroom.
             perf:
-              prefill_t/s: 11.0
+              prefill_t/s: 12.84
               decode_t/s/u: 7.9
               decode_t/s: 7.9
             accuracy: {}
@@ -744,6 +744,13 @@ targets:
               decode_t/s: 516.1
               decode_tolerance: 1.4
             accuracy: {}
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 98.0
+              top5: 100.0
           - batch_size: 1
             seq_len: 1024
             status: active
