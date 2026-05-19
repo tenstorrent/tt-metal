@@ -76,18 +76,32 @@ _DTYPE_BYTES = {"bfloat16": 2, "bfloat8_b": 1088 / 1024.0}[_DTYPE_NAME]  # avg b
 _L1_BANK_HEADROOM_BYTES = 256 * 1024  # leave 256 KB for matmul + activation + output L1
 
 
+def _matmul_in1_block_size_bytes() -> int:
+    """Matmul's receiver fifo_page_size = in0_block_w * per_core_N * tile_bytes.
+    in0_block_w (matmul-computed) = K_per_shard_tiles, per_core_N = N_per_recv_tiles."""
+    k_per_shard_tiles = (_K // _RING_SIZE) // ttnn.TILE_SIZE
+    n_per_recv_tiles = (_N // _RING_SIZE) // ttnn.TILE_SIZE
+    return k_per_shard_tiles * n_per_recv_tiles * int(_DTYPE_BYTES * ttnn.TILE_SIZE * ttnn.TILE_SIZE)
+
+
 def _gcb_size_capped(block_size_bytes: int, max_buffered_blocks: int = 4) -> int:
     # Matmul receiver needs ~block_size_bytes of L1 for in1_CB (the per-receiver weight slice
     # fully buffered for gather_in0). To fit GCB + in1_CB + other matmul CBs in ~1.4 MB L1,
     # the GCB itself can't exceed ~(1.4 MB - block_size_bytes - matmul overhead).
+    # CRITICAL: gcb_size MUST be an exact multiple of the matmul's receiver fifo_page_size
+    # (= in1_block_size_bytes). If not, remote_cb_wait_front's wrap-adjustment math fires at
+    # the layer boundary and inflates the wait count by (fifo_size % page_size), causing the
+    # receiver to wait forever for pages the sender will never push.
+    in1_block_size = _matmul_in1_block_size_bytes()
     upper_l1 = max(block_size_bytes, 1_400_000 - block_size_bytes - _L1_BANK_HEADROOM_BYTES)
     upper_cb_pages_bytes = 65000 * 16  # 16 B page * <65535 pages = ~1 MB
     upper = min(upper_l1, upper_cb_pages_bytes)
     desired = block_size_bytes * max_buffered_blocks
     sized = max(block_size_bytes, min(desired, upper))
-    sized = _round_up(sized, 4096)
+    # Snap to a multiple of in1_block_size (rounding down so we stay under the L1 cap).
+    sized = max(in1_block_size, (sized // in1_block_size) * in1_block_size)
     if sized // 16 >= 65535:
-        sized = (65000 * 16 // 4096) * 4096
+        sized = (65000 * 16 // in1_block_size) * in1_block_size
     return sized
 
 
