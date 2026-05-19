@@ -302,7 +302,11 @@ if [[ "$DEV_MODE" == true ]]; then
     export TT_METAL_WATCHER_DISABLE_DISPATCH=1
 
     if [[ "$SIM_MODE" == true ]]; then
-        echo "SAFE_PYTEST: [sim+dev] asserts=ebreak llk_asserts=ON watcher=polling watchdog=${TTSIM_HANG_WATCHDOG_CLOCKS} clocks workers=${SIM_WORKERS}"
+        # NoC sanitizer is intentionally disabled on sim — the sanitizer is
+        # tuned for HW behavior and hits false positives under libttsim.
+        # (Mirrors tt-probe.sh.)
+        export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
+        echo "SAFE_PYTEST: [sim+dev] asserts=ebreak llk_asserts=ON watcher=polling(noc_sanitize=OFF) watchdog=${TTSIM_HANG_WATCHDOG_CLOCKS} clocks workers=${SIM_WORKERS}"
     else
         echo "SAFE_PYTEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s"
     fi
