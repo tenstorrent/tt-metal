@@ -133,6 +133,15 @@ class TTSourceModuleHnNSF:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
+        # Pre-generate out_noise_raw [1, time_len, 1] once; reused every forward call.
+        _out_noise_dummy = torch.zeros(1, params.time_len, 1, dtype=torch.float32)
+        self._out_noise_raw = ttnn.from_torch(
+            torch.randn_like(_out_noise_dummy),
+            dtype=params.sinegen.activation_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def forward(
         self,
@@ -149,7 +158,8 @@ class TTSourceModuleHnNSF:
             sinegen_rand_ini: optional ``[B, 1, dim]`` for SineGen's internal initial-phase noise.
             sinegen_noise_raw: optional ``[B, T, dim]`` raw noise mixed *inside* SineGen.
             out_noise_raw: optional ``[B, T, 1]`` raw Gaussian noise for the *output* noise branch
-                (``randn_like(uv)`` in the reference). Zeros if ``None``.
+                (``randn_like(uv)`` in the reference). Uses the pre-generated
+                ``self._out_noise_raw`` (tiled to batch size) if ``None``.
 
         Returns:
             ``(sine_merge, noise, uv)`` matching the reference contract — each ``[B, T, 1]``.
@@ -225,14 +235,12 @@ class TTSourceModuleHnNSF:
 
         # ``noise = randn_like(uv) * sine_amp / 3`` → [B, T, 1]
         if out_noise_raw is None:
-            out_noise_raw_local = ttnn.zeros(
-                [B, p.time_len, 1],
-                dtype=p.sinegen.activation_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=memory_config,
-            )
-            owns_noise = True
+            if B == 1:
+                out_noise_raw_local = self._out_noise_raw
+                owns_noise = False
+            else:
+                out_noise_raw_local = ttnn.concat([self._out_noise_raw] * B, dim=0, memory_config=memory_config)
+                owns_noise = True
         else:
             out_noise_raw_local = out_noise_raw
             owns_noise = False
