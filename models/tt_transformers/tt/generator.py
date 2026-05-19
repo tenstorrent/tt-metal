@@ -99,7 +99,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self.prefill_traces_warmup = False
         self.already_warmed_up_prefill = False
         # By default, enable split sampling (break the decode trace into two parts: upto logits, then sampling step)
-        self.enable_split_sampling = True
+        self.enable_split_sampling = True  # todo remove the joint trace option as invalid
         self.mode = None
 
     # Class-level capabilities (VLLM specific, to be overridden by subclasses)
@@ -137,7 +137,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         return ret
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device):
+    def warmup_model_prefill(
+        self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device, warmup_only=False
+    ):
         if self.already_warmed_up_prefill:
             return
         self.already_warmed_up_prefill = True
@@ -199,6 +201,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                             **warmup_args,
                             kv_cache=kv_cache,
                             enable_trace=enable_trace,
+                            warmup_only=warmup_only,
                             model_id_warmup=model_id,
                             sampling_params=param,
                         )
@@ -246,6 +249,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         batch_size=1,
         user_id=0,
         start_pos=0,
+        warmup_only=False,
     ):
         if batch_size > 1:
             prefill_kwargs = {
@@ -278,7 +282,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
             ttnn.synchronize_device(self.model_args[model_id].mesh_device)
             logger.info("Done Compiling Model")
-
+            if warmup_only:
+                logger.info("Done Warmup-Only Prefill Run")
+                return None, tt_out_trace, *device_inputs
             device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
             trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
             transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
@@ -324,6 +330,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
             ttnn.synchronize_device(self.model_args[model_id].mesh_device)
             logger.info("Done Compiling Model")
+            if warmup_only:
+                logger.info("Done Warmup-Only Prefill Run")
+                return None, tt_out_trace, *device_inputs
 
             device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
             trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
@@ -424,6 +433,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         prefill_seq_len=None,
         batch_size=1,
         num_cached_tokens=0,
+        warmup_only=False,
         **kwargs,
     ):
         global_user_id = kwargs.get("global_user_id", None)
@@ -465,7 +475,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 batch_size=batch_size,
                 user_id=user_id,
                 start_pos=chunk_start_idx,
+                warmup_only=warmup_only,
             )
+            if warmup_only:
+                return tt_out_trace
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
             self.trace_output_prefill[trace_key] = tt_out_trace
@@ -535,6 +548,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         start_pos: list[int] = None,  # Cached prefixes lengths
         return_hidden_states=False,
         warmup_prefill=True,
+        warmup_only=False,
         **kwargs,
     ):
         self.mode = Mode.PREFILL
@@ -558,6 +572,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 enable_trace=enable_trace,
                 can_sample_on_device=sampling_on_device_enabled,
                 non_greedy_decoding_on_device=sampling_on_device_enabled,
+                warmup_only=warmup_only,
             )
 
         batch_size, batch_seq_len = tokens.shape
@@ -813,6 +828,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     prefill_seq_len=prefill_seq_len,
                     batch_size=padded_batch if use_batched_prefill else 1,
                     num_cached_tokens=0 if use_batched_prefill else num_cached_tokens,
+                    warmup_only=warmup_only,
                     **local_kwargs,
                 )
             else:
@@ -860,7 +876,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     )
 
                     sampling_trace_key = f"sampling_{prefill_seq_len}_{model_id}_{sampling_batch}_{sampling_dp}"
-                    if enable_trace_current_prompt:
+                    if enable_trace_current_prompt and not warmup_only:
                         if self.trace_id_prefill_sampling[sampling_trace_key] is None:
                             (
                                 s_trace_id,
@@ -882,6 +898,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         )
                         tt_tokens, tt_log_probs = self.trace_output_prefill_sampling[sampling_trace_key]
                     else:
+                        # Sampling warmup is covered by this non-traced sampling call.
                         batched_logits = self.model[model_id]._apply_norm_and_lm_head(user_hidden)
                         tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
                             batched_logits,
@@ -959,6 +976,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     raise NotImplementedError("return_hidden_states=True requires enable_trace=True")
 
             if sampling_enabled:
+                # This non-traced sampling call is the warmup path for sampling ops.
                 tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
                     logits,
                     enable_trace=False,
@@ -1178,6 +1196,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         slot_remap=None,
         **kwargs,
     ):
+        warmup_only = kwargs.pop("warmup_only", False)
+        # warmup_only enters via kwargs from warmup paths; when True we execute
+        # traced decode logic for compile warmup but skip trace capture state changes.
         mode_switched = False
         if self.mode != Mode.DECODE:
             self.mode = Mode.DECODE
@@ -1196,6 +1217,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
+
         sampling_params_list = None
         if sampling_params is not None:
             # sampling_dp may differ from data_parallel for models that internally
@@ -1263,7 +1285,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         }
 
         if enable_trace:
-            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
+            tt_decode_output = self._decode_forward_trace_text(
+                **decode_kwargs,
+                reset_batch=mode_switched,
+                warmup_only=warmup_only,
+            )
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
@@ -1324,6 +1350,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         page_table=None,
         kv_cache=None,
         sampling_on_device=False,
+        warmup_only=False,
     ):
         """
         Captures a trace for the decode_forward method.
@@ -1349,7 +1376,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             host_inputs = self.model[i].prepare_decode_inputs_host(
                 tokens[i], current_pos[i], page_table=user_page_table
             )
-
             device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
             device_inputs.append(device_inputs_i)
 
@@ -1360,9 +1386,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 and sampling_module is not None
                 and getattr(sampling_module, "enable_internal_trace", False)
             )
-            trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
-            trace_ids[i] = trace_id
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
+            if not warmup_only:
+                trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
+                trace_ids[i] = trace_id
             tt_out_trace.append(
                 self.model[i].ttnn_decode_forward(
                     *device_inputs[i],
@@ -1371,21 +1398,45 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     capture_sampling_trace=split_enabled,
                 )
             )
-            ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
+            if not warmup_only:
+                ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
 
-            if split_enabled:
+            if split_enabled and not warmup_only:
                 sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=device_inputs[i][0])
+        if warmup_only:
+            logger.info("Done Warmup-Only Decode Run")
+            return None, tt_out_trace, *device_inputs
         logger.info("Done Capturing Decode Trace")
 
         return trace_ids, tt_out_trace, *device_inputs
 
     def _decode_forward_trace_text(
-        self, tokens, current_pos, page_table=None, kv_cache=None, sampling_on_device=False, reset_batch=False
+        self,
+        tokens,
+        current_pos,
+        page_table=None,
+        kv_cache=None,
+        sampling_on_device=False,
+        reset_batch=False,
+        warmup_only=False,
     ):
         """
         Run decode forward text with tracing
+        warmup_only=True executes traced decode ops in compile-only mode
+        (no begin_trace_capture/end_trace_capture).
         """
         # The trace is different depending on whether we are doing device sampling or not
+        if warmup_only:
+            _, tt_out_trace, *_ = self._capture_decode_trace_text(
+                tokens,
+                current_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                sampling_on_device=sampling_on_device,
+                warmup_only=True,
+            )
+            return tt_out_trace
+
         if not self.trace_ids_decode[sampling_on_device]:
             trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
                 tokens, current_pos, page_table=page_table, kv_cache=kv_cache, sampling_on_device=sampling_on_device
