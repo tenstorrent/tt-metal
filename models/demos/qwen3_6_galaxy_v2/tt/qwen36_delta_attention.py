@@ -351,7 +351,12 @@ class TtQwen36DeltaAttention(LightweightModule):
         v_per_row = self.v_per_row
 
         replicate = ttnn.ReplicateTensorToMesh(self.mesh_device)
-        row_shard_out = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(1, None), mesh_shape=self.cluster_shape)
+        # V2-DN-TP: 2D-TP DeltaNet — rows split output dim (heads), cols split
+        # input dim (hidden).  Input contract becomes col-sharded H/4 = 1280
+        # per chip; col-axis all_reduce after the matmul completes the inner-
+        # product sum.  Math verified bit-equivalent to 1D-TP in
+        # test_2d_tp_matmul_math.py (V2-DN-TP-0).
+        row_shard_out = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(1, 0), mesh_shape=self.cluster_shape)
 
         # -- QKV / Z / A / B projections --
         # HF Qwen3.6 uses a fused in_proj_qkvz weight in some snapshots; v1
@@ -496,11 +501,15 @@ class TtQwen36DeltaAttention(LightweightModule):
         norm_w_4d = norm_w.reshape(1, 1, self.head_dim // 32, 32)
         self.norm_weight = self._to_device(norm_w_4d, replicate, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        # -- Output projection: [H, n_v*hd] → shard input dim across rows --
+        # -- Output projection: [H, n_v*hd] -- V2-DN-TP 2D-TP layout --
+        # rows split dim 0 (input n_v*hd=6144 → 768 per row, head subset)
+        # cols split dim 1 (output H=5120 → 1280 per col, col-sharded output)
+        # Per chip shape: [768, 1280].  After row-axis all_reduce the output
+        # is naturally col-sharded H/4 — matches the V2-TP residual contract.
         out_proj_w = self._resolve_weight(sd, "linear_attn.out_proj.weight", "out_proj.weight")
         out_proj_w_T = out_proj_w.T.contiguous()
-        row_shard_out0 = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.cluster_shape)
-        self.w_out = self._to_device(out_proj_w_T, row_shard_out0)  # per-row [768, 5120]
+        row_shard_out0 = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=self.cluster_shape)
+        self.w_out = self._to_device(out_proj_w_T, row_shard_out0)  # per-chip [768, 1280]
 
     # ------------------------------------------------------------------
     # Persistent buffer constructors
@@ -635,8 +644,12 @@ class TtQwen36DeltaAttention(LightweightModule):
         """
         mem = ttnn.DRAM_MEMORY_CONFIG
         ck = self.compute_kernel
-        # Q+K+V+Z fused
-        qkvz = ttnn.linear(x, self.w_qkvz, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
+        # V2-DN-TP: x is now COL-SHARDED H/4 = 1280 per chip (was full-H 5120).
+        # The matmul produces a partial output on the input dim; complete the
+        # sum with an all_reduce on cluster_axis=1 (4-way col ring).
+        qkvz_partial = ttnn.linear(x, self.w_qkvz, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
+        qkvz = ttnn.all_reduce(qkvz_partial, cluster_axis=1, num_links=1, memory_config=mem)
+        qkvz_partial.deallocate(True)
         out_rank = len(qkvz.shape)
         q_per_row = self.q_per_row  # 256
         v_per_row = self.v_per_row  # 768
@@ -671,7 +684,10 @@ class TtQwen36DeltaAttention(LightweightModule):
         qkvz.deallocate(True)
 
         # B+A fused (note: matches in_proj_ba layout which is b|a, not a|b)
-        ba = ttnn.linear(x, self.w_ba, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
+        # V2-DN-TP: col-axis all_reduce to complete the inner-product sum.
+        ba_partial = ttnn.linear(x, self.w_ba, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
+        ba = ttnn.all_reduce(ba_partial, cluster_axis=1, num_links=1, memory_config=mem)
+        ba_partial.deallocate(True)
         n_v_per_row = self.n_v_per_row
         if out_rank == 3:
             B_, T_, _ = list(ba.shape)

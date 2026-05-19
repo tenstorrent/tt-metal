@@ -372,19 +372,10 @@ class TtTransformerBlock(LightweightModule):
             attn_in_sharded, _ = self.attention_norm(x, None, norm_mlp_mode)
 
             if self.is_linear_attention_layer:
-                # DeltaNet: gather norm output to full-H, run attention,
-                # scatter back to col-sharded.
-                attn_in_full = ttnn.all_gather(
+                # V2-DN-TP: DeltaNet now consumes + produces COL-SHARDED H/4.
+                # No surrounding gather/scatter needed.
+                attn_out = self.attention.forward(
                     attn_in_sharded,
-                    dim=3,
-                    num_links=1,
-                    cluster_axis=1,
-                    topology=ttnn.Topology.Linear,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                attn_in_sharded.deallocate(True)
-                attn_out_full = self.attention.forward(
-                    attn_in_full,
                     current_pos,
                     rot_mats,
                     user_id,
@@ -396,23 +387,18 @@ class TtTransformerBlock(LightweightModule):
                     kv_cache=kv_cache,
                     batch_size=batch_size,
                 )
-                attn_in_full.deallocate(True)
-                if len(list(attn_out_full.shape)) == 3:
-                    _B_a, _T_a, _H_a = list(attn_out_full.shape)
-                    attn_out_full = ttnn.reshape(attn_out_full, ttnn.Shape([_B_a, 1, _T_a, _H_a]))
+                attn_in_sharded.deallocate(True)
+                if len(list(attn_out.shape)) == 3:
+                    _B_a, _T_a, _H_a = list(attn_out.shape)
+                    attn_out = ttnn.reshape(attn_out, ttnn.Shape([_B_a, 1, _T_a, _H_a]))
                 if mode == "decode":
-                    _B_a, _, _T_a, _H_a = list(attn_out_full.shape)
+                    _B_a, _, _T_a, _H_a = list(attn_out.shape)
                     if _T_a != 1:
-                        attn_out_full_t1 = ttnn.slice(
-                            attn_out_full, [0, 0, 0, 0], [_B_a, 1, 1, _H_a], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                        attn_out_t1 = ttnn.slice(
+                            attn_out, [0, 0, 0, 0], [_B_a, 1, 1, _H_a], memory_config=ttnn.DRAM_MEMORY_CONFIG
                         )
-                        attn_out_full.deallocate(True)
-                        attn_out_full = attn_out_full_t1
-                # Scatter full-H output back to col-sharded for the residual.
-                attn_out = ttnn.mesh_partition(
-                    attn_out_full, dim=-1, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
-                )
-                attn_out_full.deallocate(True)
+                        attn_out.deallocate(True)
+                        attn_out = attn_out_t1
             else:
                 # Full-attention 2D-TP: col-sharded I/O all the way through.
                 attn_out = self.attention.forward(

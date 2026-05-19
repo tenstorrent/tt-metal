@@ -321,14 +321,13 @@ def test_perf_deltanet_decode_unit(bh_glx_mesh):
         "Did the linear_attention_pattern fail to apply?"
     )
 
-    # Decode input: [B=1, 1, T=1, H].  Layout depends on include_ccl:
-    #   include_ccl=False → full-H replicated (DeltaNet direct input)
-    #   include_ccl=True  → col-sharded H/4 (production residual-stream layout)
+    # Decode input: [B=1, 1, T=1, H], COL-SHARDED H/4 — production residual
+    # stream layout AND the new V2-DN-TP DeltaNet input contract.
+    # ``include_ccl`` adds an extra gather + scatter around the block;
+    # post-V2-DN-TP the gather+scatter shouldn't be needed in production,
+    # so this flag mostly stays off.
     x_cpu = torch.randn(1, 1, 1, _H, dtype=torch.bfloat16) * 0.5
-    if _INCLUDE_CCL:
-        x_input_tt = _send_col_sharded(x_cpu, bh_glx_mesh, args)
-    else:
-        x_input_tt = _send_full_h(x_cpu, bh_glx_mesh, args)
+    x_input_tt = _send_col_sharded(x_cpu, bh_glx_mesh, args)
 
     # ---- Warmup ----
     for _ in range(_WARMUP):
