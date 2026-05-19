@@ -49,24 +49,21 @@ class TTMistral3PatchMerger(LightweightModule):
             for inner_h in range(self.spatial_merge_size)
             for inner_w in range(self.spatial_merge_size)
         ]
+        # ``mcast_in0=True`` requires the *entire* M dimension to fit in a single block
+        # (num_blocks_y == 1, i.e. M_tiles <= per_core_M). For very small patch grids
+        # (e.g. tiny thumbnail images) this fast 1D path is correct and efficient.
+        # For all larger images the explicit program config below would silently produce
+        # wrong results because only the start core receives valid in0 sender runtime
+        # args; in that regime we omit ``program_config`` and let ttnn auto-select a
+        # generic matmul algorithm that correctly handles arbitrary M.
+        self._small_m_per_core_tiles = 8
         self.merge_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(11, 10),
             in0_block_w=32,
             out_subblock_h=8,
             out_subblock_w=1,
-            per_core_M=8,
+            per_core_M=self._small_m_per_core_tiles,
             per_core_N=1,
-            fuse_batch=False,
-            fused_activation=None,
-            mcast_in0=True,
-        )
-        self.merge_large_m_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(11, 10),
-            in0_block_w=32,
-            out_subblock_h=1,
-            out_subblock_w=4,
-            per_core_M=8,
-            per_core_N=4,
             fuse_batch=False,
             fused_activation=None,
             mcast_in0=True,
@@ -94,12 +91,11 @@ class TTMistral3PatchMerger(LightweightModule):
                 (merged_h, self.spatial_merge_size, merged_w, self.spatial_merge_size, d),
             )
             merged_patches = merged_h * merged_w
+            # ``per_core_M`` is in TILE units; the 1D mcast_in0 path is only correct
+            # when the whole M dimension fits in one tile-block on the start core.
             merged_patch_tiles = (merged_patches + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-            merge_program_config = (
-                self.merge_large_m_program_config
-                if ((merged_patch_tiles + 7) // 8) * 32 > 110
-                else self.merge_program_config
-            )
+            use_small_config = merged_patch_tiles <= self._small_m_per_core_tiles
+            merge_program_config = self.merge_program_config if use_small_config else None
 
             merged = None
             weight_index = 0
@@ -112,12 +108,16 @@ class TTMistral3PatchMerger(LightweightModule):
                     )
                     patch = ttnn.reshape(patch, (merged_h * merged_w, d))
                     patch = ttnn.to_layout(patch, ttnn.TILE_LAYOUT)
+                    linear_kwargs = dict(
+                        dtype=ttnn.bfloat16,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    if merge_program_config is not None:
+                        linear_kwargs["program_config"] = merge_program_config
                     projected = ttnn.linear(
                         patch,
                         self.merging_weights[weight_index],
-                        dtype=ttnn.bfloat16,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        program_config=merge_program_config,
+                        **linear_kwargs,
                     )
                     merged = projected if merged is None else ttnn.add(merged, projected)
                     weight_index += 1

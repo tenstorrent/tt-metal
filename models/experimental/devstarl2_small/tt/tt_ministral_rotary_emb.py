@@ -12,7 +12,18 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.prefetcher import Prefetcher
-from models.tt_transformers.tt.rope import HfRotarySetup
+
+# The TT-Transformers rebase replaced ``HfRotarySetup`` with a new variant that
+# is wired to the new ``ttnn.experimental.rotary_embedding_hf`` kernel: decode
+# caches in ``ROW_MAJOR``, decode ``get_rot_mats`` returns ``[1, batch, 1,
+# head_dim]`` height-sharded for the new sharded HF rope op. That path silently
+# misrotates Q/K when consumed by the legacy code path the demos historically
+# used (caption decoded to repeating tokens like "pigeon"). To keep the demo
+# bit-for-bit consistent with the pre-rebase working state we deliberately
+# inherit from ``HfRotarySetupOld`` (still shipped) and pair it with the
+# matching ``ttnn.experimental.rotary_embedding`` per-batch loop in
+# :class:`TtMinistralAttention`.
+from models.tt_transformers.tt.rope import HfRotarySetupOld as HfRotarySetup
 from ttnn import replicate_tensor_to_mesh_mapper
 
 
@@ -145,6 +156,8 @@ def _upload_hf_cos_sin_4d(
     sin_hf: np.ndarray,
     device: Any,
     datatype: ttnn.DataType,
+    *,
+    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
     cos_4d = cos_hf[np.newaxis, np.newaxis, ...]
     sin_4d = sin_hf[np.newaxis, np.newaxis, ...]
@@ -152,14 +165,14 @@ def _upload_hf_cos_sin_4d(
     cos_tt = ttnn.from_torch(
         cos_4d,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=layout,
         dtype=datatype,
         mesh_mapper=mapper,
     )
     sin_tt = ttnn.from_torch(
         sin_4d,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=layout,
         dtype=datatype,
         mesh_mapper=mapper,
     )
@@ -184,17 +197,34 @@ class TtMinistral3RotaryEmbedding(HfRotarySetup):
         LightweightModule.__init__(self)
         if use_qk_fused:
             raise NotImplementedError("use_qk_fused")
+        # ``HfRotarySetupOld`` exposes these fields on the parent; we duplicate
+        # the assignments here because we deliberately skip the parent
+        # ``__init__`` (which would rebuild cos/sin via ``rope_theta`` and lose
+        # HF Ministral3 / YaRN alignment).
         self.batch_size = batch_size
         self.head_dim = head_dim
         self.max_seq_len = max_seq_len
         self.device = device
+        # Stash a few extra attributes some callers / debug logging expects.
+        self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
+        self.prefetcher = prefetcher
+        self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
 
         table_np = np.float32 if datatype == ttnn.bfloat16 else np.float64
         cos_hf, sin_hf = ministral3_hf_cos_sin_tables(head_dim, max_seq_len, config, table_dtype=table_np)
 
-        self.cos_matrix, self.sin_matrix = _upload_hf_cos_sin_4d(cos_hf, sin_hf, device, datatype)
-        self.cos_matrix_prefill, self.sin_matrix_prefill = _upload_hf_cos_sin_4d(cos_hf, sin_hf, device, datatype)
+        # Legacy HF rope (``ttnn.experimental.rotary_embedding``) expects TILE
+        # cos/sin caches for both decode (per-batch slice) and prefill (full
+        # sequence). Matches :class:`HfRotarySetupOld` layout exactly.
+        self.cos_matrix, self.sin_matrix = _upload_hf_cos_sin_4d(
+            cos_hf, sin_hf, device, datatype, layout=ttnn.TILE_LAYOUT
+        )
+        self.cos_matrix_prefill, self.sin_matrix_prefill = _upload_hf_cos_sin_4d(
+            cos_hf, sin_hf, device, datatype, layout=ttnn.TILE_LAYOUT
+        )
 
+        # 2D trace-friendly views used by ``HfRotarySetupOld.get_rot_mats``
+        # for per-position embedding gather (decode trace path).
         self.cos_matrix_2d = ttnn.reshape(self.cos_matrix, (max_seq_len, head_dim))
         self.sin_matrix_2d = ttnn.reshape(self.sin_matrix, (max_seq_len, head_dim))
 

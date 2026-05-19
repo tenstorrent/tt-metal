@@ -16,6 +16,18 @@ class TtMinistralAttention(Attention):
     """TT Ministral attention like base :class:`Attention` with Llama-4 post-RoPE Q scaling.
 
     HF ``rope_parameters`` supply ``llama_4_scaling_beta`` and ``original_max_position_embeddings``; missing → no scaling.
+
+    Rope override: the upstream attention was switched in the TT-Transformers
+    rebase to the new ``ttnn.experimental.rotary_embedding_hf`` kernel (sharded
+    HF rope). That kernel pairs with the new ``HfRotarySetup`` cos/sin layout
+    (per-batch height-sharded slices). The devstral text path was validated
+    against the **legacy** ``ttnn.experimental.rotary_embedding`` op with full
+    ``[1, 1, max_seq_len, head_dim]`` cos/sin caches, and post-rebase the new
+    kernel silently misrotates Q/K for the devstral decoder (caption decoded
+    to repeating tokens like "pigeon"). To stay bit-for-bit consistent with
+    the pre-rebase known-good path, we override the rope hooks here to call
+    the legacy op, and pair this with
+    ``HfRotarySetupOld`` inside :class:`TtMinistral3RotaryEmbedding`.
     """
 
     def __init__(
@@ -28,6 +40,13 @@ class TtMinistralAttention(Attention):
         self.llama_4_scaling_beta = llama_4_scaling_beta
         self.original_max_position_embeddings = original_max_position_embeddings
         super().__init__(*args, **kwargs)
+
+        # Replace the upstream HF rope hooks (which target the new sharded
+        # ``rotary_embedding_hf`` kernel) with the legacy implementations
+        # below. Non-HF paths (mllama / qk-fused) are untouched.
+        if self.use_hf_rope:
+            self.rotary_embedding_decode = self._hf_rope_decode_legacy
+            self.rotary_embedding_prefill = self._hf_rope_prefill_legacy
 
         _decode_rope = self.rotary_embedding_decode
         _prefill_rope = self.rotary_embedding_prefill
@@ -42,6 +61,87 @@ class TtMinistralAttention(Attention):
 
         self.rotary_embedding_decode = rotary_embedding_decode_wrapped
         self.rotary_embedding_prefill = rotary_embedding_prefill_wrapped
+
+    def _hf_rope_prefill_legacy(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
+        """HF-style prefill rope via legacy ``ttnn.experimental.rotary_embedding``.
+
+        Pre-rebase behaviour: cos/sin are full ``[1, 1, seq_len, head_dim]``
+        TILE tensors built by :class:`TtMinistral3RotaryEmbedding`.
+        """
+        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:
+            q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
+        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:
+            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
+
+        q_heads_1QSD = ttnn.experimental.rotary_embedding(q_heads_1QSD_pre_rot, rot_mats[0], rot_mats[1])
+        k_heads_1KSD = ttnn.experimental.rotary_embedding(k_heads_1KSD_pre_rot, rot_mats[0], rot_mats[1])
+        return q_heads_1QSD, k_heads_1KSD
+
+    def _hf_rope_decode_legacy(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
+        """HF-style decode rope via legacy ``ttnn.experimental.rotary_embedding``.
+
+        Pre-rebase behaviour: per-batch loop with ``token_idx=0`` because
+        cos/sin are already per-position slices from
+        ``HfRotarySetupOld.get_rot_mats`` (shape ``[1, 1, batch_padded,
+        head_dim]`` TILE). Merge in L1, then reshard back to the original Q/K
+        memory configs and reshape away the tile padding the legacy op adds.
+        """
+        cos, sin = rot_mats[0], rot_mats[1]
+        B_iter = self.batch_size_per_device_group
+
+        if q_heads_pre_rot_1BQD.dtype != ttnn.bfloat16:
+            q_heads_pre_rot_1BQD = ttnn.typecast(q_heads_pre_rot_1BQD, dtype=ttnn.bfloat16)
+        if k_heads_pre_rot_1BKD.dtype != ttnn.bfloat16:
+            k_heads_pre_rot_1BKD = ttnn.typecast(k_heads_pre_rot_1BKD, dtype=ttnn.bfloat16)
+
+        q_out_mem = q_heads_pre_rot_1BQD.memory_config()
+        k_out_mem = k_heads_pre_rot_1BKD.memory_config()
+
+        q_il_parts = []
+        k_il_parts = []
+        for b in range(B_iter):
+            q_b = q_heads_pre_rot_1BQD[:, b : b + 1, :, :]
+            k_b = k_heads_pre_rot_1BKD[:, b : b + 1, :, :]
+            cos_b = cos[:, :, b : b + 1, :]
+            sin_b = sin[:, :, b : b + 1, :]
+            q_rot = ttnn.experimental.rotary_embedding(q_b, cos_b, sin_b, 0)
+            k_rot = ttnn.experimental.rotary_embedding(k_b, cos_b, sin_b, 0)
+            q_il_parts.append(ttnn.to_memory_config(q_rot, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16))
+            k_il_parts.append(ttnn.to_memory_config(k_rot, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16))
+            ttnn.deallocate(q_rot)
+            ttnn.deallocate(k_rot)
+
+        if B_iter == 1:
+            q_merged_il = q_il_parts[0]
+            k_merged_il = k_il_parts[0]
+        else:
+            q_merged_il = ttnn.concat(q_il_parts, dim=1)
+            k_merged_il = ttnn.concat(k_il_parts, dim=1)
+            for t in q_il_parts:
+                ttnn.deallocate(t)
+            for t in k_il_parts:
+                ttnn.deallocate(t)
+
+        q_heads_1BQD = ttnn.interleaved_to_sharded(q_merged_il, q_out_mem)
+        k_heads_1BKD = ttnn.interleaved_to_sharded(k_merged_il, k_out_mem)
+        ttnn.deallocate(q_merged_il)
+        ttnn.deallocate(k_merged_il)
+
+        # Legacy op pads head count axis up to 32 (tile alignment) — restate
+        # the logical head count, then slice to the real n_local_*_heads.
+        q_heads_1BQD = ttnn.reshape(
+            q_heads_1BQD,
+            (1, self.batch_size_per_device_group, self.n_local_heads, self.head_dim),
+            (1, self.batch_size_per_device_group, 32, self.head_dim),
+        )
+        k_heads_1BKD = ttnn.reshape(
+            k_heads_1BKD,
+            (1, self.batch_size_per_device_group, self.n_local_kv_heads, self.head_dim),
+            (1, self.batch_size_per_device_group, 32, self.head_dim),
+        )
+        q_heads_1BQD = q_heads_1BQD[:, :, : self.n_local_heads]
+        k_heads_1BKD = k_heads_1BKD[:, :, : self.n_local_kv_heads]
+        return q_heads_1BQD, k_heads_1BKD
 
     def _llama4_scaling_enabled(self) -> bool:
         return self.llama_4_scaling_beta is not None and self.original_max_position_embeddings is not None
