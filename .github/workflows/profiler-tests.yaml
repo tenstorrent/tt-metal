@@ -8,6 +8,9 @@ name: "Profiler tests"
 # own boolean.
 
 on:
+  push:
+    branches:
+      - tdowdall/profiler-reorg
   workflow_dispatch:
     inputs:
       run_t3k_profiler:
@@ -106,6 +109,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      use-artifacts-from-run: 26115460245
 
   # Build the enabled-skus string here (not via inline ternaries) so the impl
   # receives a clean, comma-separated list with no trailing/empty commas.
@@ -119,10 +123,12 @@ jobs:
         run: |
           set -e
           # push/schedule events don't carry workflow_dispatch inputs, so the
-          # run_*_profiler booleans evaluate as empty. Hardcode a full SKU
-          # set for those triggers instead.
+          # run_*_profiler booleans evaluate as empty. Mirror the
+          # workflow_dispatch defaults (t3k+bh+n300+n150 on, galaxy off) so a
+          # push runs the same SKU set a developer gets clicking "Run workflow"
+          # without changing inputs.
           if [[ "${{ github.event_name }}" == "push" || "${{ github.event_name }}" == "schedule" ]]; then
-            skus="wh_llmbox,wh_galaxy,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu,wh_n300_civ2,wh_n150_civ2"
+            skus="wh_llmbox,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu,wh_n300_civ2,wh_n150_civ2"
           else
             parts=()
             [[ "${{ inputs.run_t3k_profiler }}" == "true" ]] && parts+=("wh_llmbox")
