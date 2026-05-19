@@ -567,6 +567,21 @@ std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() co
     }
     return names;
 }
+
+void ProgramImpl::register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    metal2_registry_->dfb_borrowed_bindings.emplace_back(dfb_id, tensor_parameter_name);
+}
+
+const std::vector<std::pair<uint32_t, std::string>>& ProgramImpl::get_dfb_borrowed_bindings() const {
+    static const std::vector<std::pair<uint32_t, std::string>> empty;
+    if (!metal2_registry_) {
+        return empty;
+    }
+    return metal2_registry_->dfb_borrowed_bindings;
+}
 // ============================================================================
 
 std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& program, IDevice* device) {

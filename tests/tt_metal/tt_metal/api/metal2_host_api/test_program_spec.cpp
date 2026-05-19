@@ -52,11 +52,13 @@ namespace {
 
 // Import shared test helpers
 using test_helpers::BindDFBToKernel;
+using test_helpers::BindTensorParameterToKernel;
 using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
+using test_helpers::MakeMinimalTensorParameter;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::ScopedSlowDispatchOverride;
@@ -783,9 +785,15 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("not yet supported")));
 }
 
-// Remove once implemented
-TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBFails) {
-    // Borrowed memory DFBs are not yet implemented
+// Helper: build a ProgramSpec with a single borrowed-memory DFB backed by a TensorParameter.
+//   - DFB sized to 32 bytes (1*32*sizeof(bfloat16)), matching MakeMinimalTensorParameter's
+//     1x32 BFLOAT16 default exactly.
+//   - tensor_buffer_type defaults to L1 (the only legal choice for borrowing).
+inline ProgramSpec MakeBorrowedDFBProgramSpec(
+    const std::string& tensor_param_name = "borrowed_tensor",
+    tt::tt_metal::BufferType tensor_buffer_type = tt::tt_metal::BufferType::L1,
+    uint32_t dfb_entry_size = 16,
+    uint32_t dfb_num_entries = 2) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -793,20 +801,59 @@ TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBFails) {
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalDMKernel("consumer");
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.uses_borrowed_memory = true;  // Not supported!
+    auto dfb = MakeMinimalDFB("dfb", dfb_entry_size, dfb_num_entries);
+    dfb.borrowed_from = tensor_param_name;
 
     BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
 
+    auto tensor_param = MakeMinimalTensorParameter(tensor_param_name, tensor_buffer_type);
+    // The TensorParameter must be bound to at least one kernel (referential-integrity check).
+    BindTensorParameterToKernel(producer, tensor_param_name, "borrowed_t");
+
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
+    spec.tensor_parameters = {tensor_param};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+    return spec;
+}
+
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBSucceeds) {
+    // Positive baseline: borrowed-memory DFB whose TensorParameter is L1-resident and large enough.
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec();
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBUnknownTensorParameterFails) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec("borrowed_tensor");
+    // Re-target the DFB at a TensorParameter that wasn't declared.
+    spec.dataflow_buffers[0].borrowed_from = "nonexistent_tensor";
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("DFB 'dfb' uses borrowed memory, but this feature is not yet implemented")));
+            ::testing::HasSubstr("borrows memory from TensorParameter 'nonexistent_tensor'")));
+}
+
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBNonL1TensorParameterFails) {
+    // DRAM-resident TensorParameter is not a legal borrow source.
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec("borrowed_tensor", tt::tt_metal::BufferType::DRAM);
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is not L1-resident")));
+}
+
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOversizedFails) {
+    // DFB total bytes exceed the TensorParameter's packed size: 1*32*sizeof(bfloat16) = 64 bytes,
+    // so 128 bytes of DFB (entry_size 64, num_entries 2) overruns.
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/64, /*dfb_num_entries=*/2);
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("is larger than its borrowed TensorParameter")));
 }
 
 // Remove once implemented
@@ -2312,11 +2359,11 @@ TEST(AggregateSpecTypes, DataflowBufferSpecDesignatedInitializers) {
         .unique_id = "borrowed_dfb",
         .entry_size = 1024,
         .num_entries = 8,
-        .uses_borrowed_memory = true,
+        .borrowed_from = "input_tensor",
         .disable_implicit_sync = true,
     };
 
-    EXPECT_TRUE(borrowed_dfb.uses_borrowed_memory);
+    EXPECT_EQ(borrowed_dfb.borrowed_from, std::optional<TensorParameterName>{"input_tensor"});
     EXPECT_TRUE(borrowed_dfb.disable_implicit_sync);
 }
 
@@ -2751,8 +2798,7 @@ TEST_F(ProgramSpecTestGen1, DuplicateKernelNameFails) {
 // are covered in test_program_run_params.cpp). Hardware-agnostic; using the Gen1 fixture for
 // lower-likelihood-of-unrelated-mock-issues per Audrey's guidance.
 
-using test_helpers::BindTensorParameterToKernel;
-using test_helpers::MakeMinimalTensorParameter;
+// (BindTensorParameterToKernel and MakeMinimalTensorParameter using-declarations hoisted to top-of-file.)
 
 TEST_F(ProgramSpecTestGen1, DuplicateTensorParameterNameFails) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();

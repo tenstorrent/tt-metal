@@ -1064,12 +1064,47 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         spec.program_id,
         spec.remote_dataflow_buffers.size());
 
-    // Borrowed memory is not yet implemented
+    // Validate borrowed-memory DFBs.
+    //
+    // A borrowed-memory DFB names a TensorParameter via DataflowBufferSpec::borrowed_from. The
+    // backing MeshTensor flows through ProgramRunParams::tensor_args at execution time.
+    // We enforce only the safety-relevant checks:
+    //  - the named parameter exists
+    //  - the TensorSpec places storage in L1,
+    //  - the spec is large enough
+    // We don't validate any layout considerations (interleaved vs sharded, page / tile sizes, etc.)
+    // That's on the user; this is an advanced feature.
     for (const auto& dfb : spec.dataflow_buffers) {
+        if (!dfb.borrowed_from.has_value()) {
+            continue;
+        }
+        const TensorParameterName& tp_name = *dfb.borrowed_from;
+        auto it = collected.tensor_parameter_by_name.find(tp_name);
         TT_FATAL(
-            !dfb.uses_borrowed_memory,
-            "DFB '{}' uses borrowed memory, but this feature is not yet implemented",
-            dfb.unique_id);
+            it != collected.tensor_parameter_by_name.end(),
+            "DFB '{}' borrows memory from TensorParameter '{}', but no such TensorParameter is declared in the "
+            "ProgramSpec.",
+            dfb.unique_id,
+            tp_name);
+        const TensorSpec& tensor_spec = it->second->spec;
+        TT_FATAL(
+            tensor_spec.memory_config().buffer_type() == tt::tt_metal::BufferType::L1,
+            "DFB '{}' borrows memory from TensorParameter '{}', but its TensorSpec is not L1-resident (L1 is "
+            "required).",
+            dfb.unique_id,
+            tp_name);
+        const size_t dfb_bytes = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
+        const size_t tensor_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+        TT_FATAL(
+            dfb_bytes <= tensor_bytes,
+            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) is larger than its borrowed TensorParameter '{}' "
+            "({} bytes).",
+            dfb.unique_id,
+            dfb.entry_size,
+            dfb.num_entries,
+            dfb_bytes,
+            tp_name,
+            tensor_bytes);
     }
 
     // DFB aliasing is not supported yet
@@ -1828,7 +1863,10 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .enable_implicit_sync = !dfb_spec->disable_implicit_sync,
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
-        .tensix_scope = tensix_scope};
+        .tensix_scope = tensix_scope,
+        // DFB borrowed memory mode is declared at program creation time.
+        // The actual backing memory L1 address is attached at runtime.
+        .borrows_memory = dfb_spec->borrowed_from.has_value()};
 }
 
 // ----------------------------------------------------------------------------
@@ -2168,9 +2206,18 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
 
         // Add the DFB to the ProgramImpl, and register the name -> handle mapping.
         // Allocation nodes are derived from binding kernels' WorkUnitSpec membership.
+        // (For borrowed-memory DFBs, config.borrows_memory was set in MakeDataflowBufferConfig;
+        // the device-side runtime uses that to skip regular L1 allocation.)
         uint32_t dfb_id = program_impl->add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
         program_impl->register_dfb_spec_name(dfb_name, dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
+
+        // Borrowed-memory DFB: record the dfb_id ↔ TensorParameterName binding so that
+        // SetProgramRunParameters / UpdateTensorArgs can resolve and attach the actual L1 Buffer
+        // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
+        if (dfb_spec.borrowed_from.has_value()) {
+            program_impl->register_dfb_borrowed_binding(dfb_id, *dfb_spec.borrowed_from);
+        }
     }
 
     // Create Semaphores and build name -> ID map.
