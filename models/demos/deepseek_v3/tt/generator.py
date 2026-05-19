@@ -885,10 +885,12 @@ class DeepseekGenerator(WarmupForwardMixin):
 
     def _reset_sampling_state(self, sampling_params: SamplingParams, batch_size: int, batch_size_per_row: int) -> None:
         # TODO(vllm): Thread prompt/output token state into sampling resets for penalty correctness.
-        sampling_params = format_sampling_params(sampling_params, max_batch_size=batch_size)
         sampling_dp = self.sampling_generator.tt_sampling._sampling_dp
         sampling_param_chunks = chunk_sampling_params(sampling_params, sampling_dp)
-        seed = getattr(sampling_params, "seed", None)
+        # apply_decode_state() formats user-facing params for TT sampling. Keep
+        # the chunks raw here, and only format a copy to preserve seed padding.
+        seed_params = format_sampling_params(sampling_params, max_batch_size=batch_size)
+        seed = getattr(seed_params, "seed", None)
         if seed is not None:
             user_ids = list(range(batch_size))
             self.sampling_generator.seed_manager.reset_seed(seed, user_ids)
