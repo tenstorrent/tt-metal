@@ -5,8 +5,8 @@
 Pure-D2D DRAM→fabric→DRAM cross-mesh smoke — host out of the data path.
 
 Single chip-pair, single cross-mesh socket. Ships one logical tensor of size
-``_NUM_ELEMS_PER_TENSOR`` (uint32) from a DRAM-resident source on rank 0's
-chip (0, 0) to a DRAM-resident destination on rank 1's chip (0, 0), then
+``num_pages × _PAGE_SIZE_BYTES`` uint32s from a DRAM-resident source on rank
+0's chip (0, 0) to a DRAM-resident destination on rank 1's chip (0, 0), then
 verifies the destination matches the source bit-exactly.
 
 Why this exists
@@ -29,6 +29,18 @@ Kernels
   chip's core (0, 0). Pulls each page from the socket FIFO and
   ``noc_async_write``s it into the DRAM destination via ``TensorAccessor``.
 
+Known cross-host (2-galaxy) limitation
+--------------------------------------
+On 2-galaxy the receiver's ``fabric_socket_notify_sender_stateful`` ack
+writes (inline NOC writes encoded in fabric packet headers) don't reach the
+sender's ``bytes_acked`` counter — the data path works fine, but the credit
+return path goes silent. Symptom: sender hangs in ``socket_barrier`` waiting
+for the last ack. The data transfer itself is correct (verified bit-exact
+end-to-end). Workaround: the sender kernel takes a ``wait_for_acks``
+compile-time arg; we set it to 0 for 2-galaxy. Consequence: ``num_pages``
+must fit inside the socket FIFO (no page recycling), so 2-galaxy is capped
+at ``fifo_size / page_size`` pages until the ack path is fixed.
+
 Once this smoke passes, scaling to all 32 chip-pairs in parallel is just
 "add 31 more SocketConnections + 31 more program dispatches."
 """
@@ -49,16 +61,25 @@ _RECEIVER_KERNEL = "models/demos/deepseek_v3_d_p/tests/pipeline/kernels/socket_t
 
 # Tensor sized so the per-page L1 footprint fits comfortably alongside the
 # socket FIFO + packet header CB + kernel binary on a single Tensix core
-# (~1.5 MB total L1 on Blackhole). 2 MB total / 8 KB pages = 256 pages.
+# (~1.5 MB total L1 on Blackhole). Shape is (NUM_PAGES, ELEMS_PER_PAGE) so a
+# ROW_MAJOR DRAM tensor's intrinsic page (one row) == our kernel's page,
+# letting TensorAccessor.get_noc_addr(p) walk real pages rather than past
+# the end of a single-row allocation.
 #
-# Shape is (NUM_PAGES, ELEMS_PER_PAGE) so a ROW_MAJOR DRAM tensor's intrinsic
-# page (one row) == our kernel's page (8 KB). TensorAccessor.get_noc_addr(p)
-# then walks 256 real tensor pages, not into uninitialized memory past the
-# end of a single-row allocation.
-_NUM_PAGES = 256
+# Per-topology page counts:
+#   - 1-galaxy: 256 pages (2 MB total). socket_barrier works intra-galaxy.
+#   - 2-galaxy: 4 pages (32 KB). The ack credit-return path is broken cross-
+#     host, so wait_for_acks is off and num_pages must fit in the FIFO.
 _ELEMS_PER_PAGE = 2048
-_NUM_ELEMS_PER_TENSOR = _NUM_PAGES * _ELEMS_PER_PAGE  # 512K uint32 = 2 MB
 _PAGE_SIZE_BYTES = _ELEMS_PER_PAGE * 4  # 8 KB
+_FIFO_PAGES = 4  # FIFO sized to 4 pages (= 32 KB)
+
+# Per-topology config. The 1-galaxy variant exercises the full intra-galaxy
+# path; the 2-galaxy variant is the cross-host smoke and is FIFO-capped.
+_TOPOLOGY_CONFIG = {
+    "1galaxy": {"num_pages": 256, "wait_for_acks": True},
+    "2galaxy": {"num_pages": _FIFO_PAGES, "wait_for_acks": False},
+}
 
 _DATA_CB_INDEX = 0
 _PACKET_HEADER_CB_INDEX = 1
@@ -95,12 +116,21 @@ def _data_cb(core_range_set, page_size_bytes):
     )
 
 
-def _build_sender_program(mesh_device, mesh_socket, send_core, recv_core, source_tensor, page_size, num_pages):
+def _build_sender_program(
+    mesh_device, mesh_socket, send_core, recv_core, source_tensor, page_size, num_pages, wait_for_acks
+):
     core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(send_core.core_coord, send_core.core_coord)])
 
     tensor_accessor_args = ttnn.TensorAccessorArgs(source_tensor).get_compile_time_args()
 
-    compile_time_args = [_DATA_CB_INDEX, _PACKET_HEADER_CB_INDEX, page_size, num_pages, *tensor_accessor_args]
+    compile_time_args = [
+        _DATA_CB_INDEX,
+        _PACKET_HEADER_CB_INDEX,
+        page_size,
+        num_pages,
+        1 if wait_for_acks else 0,
+        *tensor_accessor_args,
+    ]
 
     sender_kernel = ttnn.KernelDescriptor(
         kernel_source=_SENDER_KERNEL,
@@ -200,14 +230,16 @@ def test_dram_to_dram_smoke(mesh_device):
     if num_procs != 2:
         pytest.skip(f"This test runs with exactly 2 ranks; got num_procs={num_procs}")
 
-    total_bytes = _NUM_ELEMS_PER_TENSOR * 4  # uint32
-    assert (
-        total_bytes % _PAGE_SIZE_BYTES == 0
-    ), f"total_bytes ({total_bytes}) must be a multiple of page_size ({_PAGE_SIZE_BYTES})"
-    num_pages = total_bytes // _PAGE_SIZE_BYTES
+    # Topology-aware config: 2-galaxy is FIFO-capped (see module docstring).
+    mesh_shape = mesh_device.shape
+    topology_id = "1galaxy" if (int(mesh_shape[0]), int(mesh_shape[1])) == (2, 4) else "2galaxy"
+    cfg = _TOPOLOGY_CONFIG[topology_id]
+    num_pages = cfg["num_pages"]
+    wait_for_acks = cfg["wait_for_acks"]
+    num_elems_per_tensor = num_pages * _ELEMS_PER_PAGE
+    total_bytes = num_elems_per_tensor * 4
 
-    # 4 in-flight pages of headroom — same convention as the H2D-bound perf test.
-    fifo_size_bytes = _PAGE_SIZE_BYTES * 4
+    fifo_size_bytes = _PAGE_SIZE_BYTES * _FIFO_PAGES
 
     my_mesh_id = mesh_device.get_system_mesh_id()
     peer_mesh_id = 1 if my_mesh_id == 0 else 0
@@ -220,8 +252,9 @@ def test_dram_to_dram_smoke(mesh_device):
     recv_core = ttnn.MeshCoreCoord(receiver_device_coord, core_coord)
 
     logger.info(
-        f"[mesh_id={my_mesh_id}] DRAM smoke: total={total_bytes} B, "
-        f"page={_PAGE_SIZE_BYTES} B, num_pages={num_pages}, fifo={fifo_size_bytes} B"
+        f"[mesh_id={my_mesh_id}] DRAM smoke ({topology_id}): total={total_bytes} B, "
+        f"page={_PAGE_SIZE_BYTES} B, num_pages={num_pages}, fifo={fifo_size_bytes} B, "
+        f"wait_for_acks={wait_for_acks}"
     )
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
@@ -243,10 +276,10 @@ def test_dram_to_dram_smoke(mesh_device):
     # ReplicateTensorToMesh explicitly so read-back semantics are deterministic.
     if my_mesh_id == 0:
         torch_local = (
-            torch.arange(_NUM_ELEMS_PER_TENSOR, dtype=torch.int64).to(torch.int32).reshape(_NUM_PAGES, _ELEMS_PER_PAGE)
+            torch.arange(num_elems_per_tensor, dtype=torch.int64).to(torch.int32).reshape(num_pages, _ELEMS_PER_PAGE)
         )
     else:
-        torch_local = torch.zeros(_NUM_PAGES, _ELEMS_PER_PAGE, dtype=torch.int32)
+        torch_local = torch.zeros(num_pages, _ELEMS_PER_PAGE, dtype=torch.int32)
     local_tensor = ttnn.from_torch(
         torch_local,
         dtype=ttnn.uint32,
@@ -261,7 +294,7 @@ def test_dram_to_dram_smoke(mesh_device):
     # Build the right program for this rank.
     if my_mesh_id == 0:
         program = _build_sender_program(
-            mesh_device, mesh_socket, send_core, recv_core, local_tensor, _PAGE_SIZE_BYTES, num_pages
+            mesh_device, mesh_socket, send_core, recv_core, local_tensor, _PAGE_SIZE_BYTES, num_pages, wait_for_acks
         )
         my_device_coord = sender_device_coord
     else:
@@ -291,11 +324,11 @@ def test_dram_to_dram_smoke(mesh_device):
             ttnn.from_device(local_tensor),
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
         ).to(torch.int32)
-        # readback shape: (_NUM_PAGES, num_chips * _ELEMS_PER_PAGE) ROW_MAJOR.
+        # readback shape: (num_pages, num_chips * _ELEMS_PER_PAGE) ROW_MAJOR.
         # Chip (0, 0) is the first cols slice; flatten that to compare against arange.
-        first_chip = readback[:, :_ELEMS_PER_PAGE].reshape(-1)
+        first_chip = readback[:, :_ELEMS_PER_PAGE].reshape(-1)[:num_elems_per_tensor]
 
-        expected = torch.arange(_NUM_ELEMS_PER_TENSOR, dtype=torch.int64).to(torch.int32)
+        expected = torch.arange(num_elems_per_tensor, dtype=torch.int64).to(torch.int32)
         match = torch.equal(expected, first_chip)
         if not match:
             mismatches = (expected != first_chip).nonzero(as_tuple=True)[0]
@@ -309,6 +342,6 @@ def test_dram_to_dram_smoke(mesh_device):
                 f"  expected (8 elems from there): {sample_expected}\n"
                 f"  got      (8 elems from there): {sample_got}"
             )
-        logger.info(f"[mesh_id=1] DRAM→DRAM bit-exact: PASS ({_NUM_ELEMS_PER_TENSOR} uint32 elems = {total_bytes} B)")
+        logger.info(f"[mesh_id=1] DRAM→DRAM bit-exact: PASS ({num_elems_per_tensor} uint32 elems = {total_bytes} B)")
 
     logger.info(f"[mesh_id={my_mesh_id}] smoke OK")

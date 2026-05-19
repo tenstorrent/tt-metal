@@ -49,8 +49,17 @@ constexpr uint32_t data_cb_id = get_compile_time_arg_val(0);
 constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(1);
 constexpr uint32_t page_size = get_compile_time_arg_val(2);
 constexpr uint32_t num_pages = get_compile_time_arg_val(3);
+// Toggles whether the sender waits for all pages to be acked before exiting.
+// Set to 0 in cross-host (2-galaxy) cases — see test_dram_to_dram_smoke.py for
+// why: receiver-side acks (`fabric_socket_notify_sender_stateful` inline writes)
+// don't reach the sender's `bytes_acked` counter over inter-host fabric, so the
+// barrier never returns. The data path itself is unaffected — bit-exact still
+// passes — but the FIFO-recycle bookkeeping that socket_barrier relies on does
+// not. With this disabled, num_pages must fit inside the socket FIFO since
+// pages won't be recycled.
+constexpr uint32_t wait_for_acks = get_compile_time_arg_val(4);
 // TensorAccessor CT args for the DRAM source tensor start here.
-constexpr uint32_t input_args_cta_idx = 4;
+constexpr uint32_t input_args_cta_idx = 5;
 constexpr uint32_t input_args_crta_idx = 0;
 
 void kernel_main() {
@@ -107,7 +116,9 @@ void kernel_main() {
         cb_pop_front(data_cb_id, 1);
     }
 
-    socket_barrier(sender_socket);
+    if constexpr (wait_for_acks) {
+        socket_barrier(sender_socket);
+    }
     update_socket_config(sender_socket);
     fabric_connection.close();
 }

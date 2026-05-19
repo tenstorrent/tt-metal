@@ -47,13 +47,24 @@ void kernel_main() {
 
     fabric_connection.open_finish();
 
+    // Pre-compute the fabric unicast route + ack target NOC addr once, then use
+    // the _stateful notify variant inside the loop. This mirrors the production
+    // d2d_exchange.cpp pattern exactly; the non-stateful variant re-runs
+    // fabric_set_unicast_route on every call, which appears to leave the bwd
+    // path mis-routed on the cross-host fabric (sender's socket_barrier hangs
+    // because acks don't arrive).
+    fabric_set_unicast_route(socket_packet_header_addr, recv_socket);
+    uint64_t upstream_bytes_acked_noc_addr = get_noc_addr(
+        recv_socket.d2d.upstream_noc_x, recv_socket.d2d.upstream_noc_y, recv_socket.d2d.upstream_bytes_acked_addr);
+
     for (uint32_t p = 0; p < num_pages; ++p) {
         socket_wait_for_pages(recv_socket, 1);
         uint64_t dst_noc_addr = output_addr_gen.get_noc_addr(p);
         noc_async_write<page_size>(recv_socket.read_ptr, dst_noc_addr, page_size);
         noc_async_write_barrier();
         socket_pop_pages(recv_socket, 1);
-        fabric_socket_notify_sender(recv_socket, fabric_connection, socket_packet_header_addr);
+        fabric_socket_notify_sender_stateful(
+            recv_socket, fabric_connection, socket_packet_header_addr, upstream_bytes_acked_noc_addr);
     }
 
     update_socket_config(recv_socket);
