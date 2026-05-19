@@ -16,6 +16,13 @@ namespace ckernel
 namespace sfpu
 {
 
+// Helper that is always false but remains value-dependent on the template
+// parameter, enabling well-formed static_assert in if-constexpr else branches
+// (C++17 requirement: the condition must be value-dependent to prevent
+// immediate rejection without instantiation).
+template <DataFormat>
+inline constexpr bool unsupported_binary_comp_format_v = false;
+
 // Int32 binary comparison for relational ops (signed), ported from BH.
 // All ops reduce to computing LT(X, Y) with optional operand swap and result
 // inversion:
@@ -90,9 +97,7 @@ inline void calculate_binary_comp(
     }
     else
     {
-        // Dependent static_assert: the condition is always false here, but must
-        // depend on FMT to satisfy C++17 rules for if-constexpr else branches.
-        static_assert(FMT == DataFormat::Int32 && false, "Only DataFormat::Int32 is currently supported for binary comparison on Quasar");
+        static_assert(unsupported_binary_comp_format_v<FMT>, "Only DataFormat::Int32 is currently supported for binary comparison on Quasar");
     }
 }
 
