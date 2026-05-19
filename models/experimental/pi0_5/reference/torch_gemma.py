@@ -130,6 +130,15 @@ def apply_rotary_emb(
     cos = torch.cat([cos, cos], dim=-1)
     sin = torch.cat([sin, sin], dim=-1)
 
+    # Match cos/sin dtype to q/k so the rotation stays in q/k's precision
+    # (bf16 inputs would otherwise be upcast to fp32 by cos/sin's fp32 dtype
+    # and break downstream dtype-strict matmuls like attn_weights @ v).
+    q_dtype, k_dtype = q.dtype, k.dtype
+    cos_q = cos.to(q_dtype)
+    sin_q = sin.to(q_dtype)
+    cos_k = cos.to(k_dtype)
+    sin_k = sin.to(k_dtype)
+
     # Apply rotation
     # Split and interleave for rotation
     q1, q2 = q[..., : head_dim // 2], q[..., head_dim // 2 :]
@@ -137,15 +146,15 @@ def apply_rotary_emb(
 
     q_rotated = torch.cat(
         [
-            q1 * cos[..., : head_dim // 2] - q2 * sin[..., : head_dim // 2],
-            q1 * sin[..., head_dim // 2 :] + q2 * cos[..., head_dim // 2 :],
+            q1 * cos_q[..., : head_dim // 2] - q2 * sin_q[..., : head_dim // 2],
+            q1 * sin_q[..., head_dim // 2 :] + q2 * cos_q[..., head_dim // 2 :],
         ],
         dim=-1,
     )
     k_rotated = torch.cat(
         [
-            k1 * cos[..., : head_dim // 2] - k2 * sin[..., : head_dim // 2],
-            k1 * sin[..., head_dim // 2 :] + k2 * cos[..., head_dim // 2 :],
+            k1 * cos_k[..., : head_dim // 2] - k2 * sin_k[..., : head_dim // 2],
+            k1 * sin_k[..., head_dim // 2 :] + k2 * cos_k[..., head_dim // 2 :],
         ],
         dim=-1,
     )

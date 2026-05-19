@@ -119,6 +119,11 @@ class Pi0_5LiberoAdapter:
         lerobot_safetensors = os.path.join(
             checkpoint_dir, "policy_preprocessor_step_2_normalizer_processor.safetensors"
         )
+        # openpi config.py:187 — `use_quantile_norm = model_type != PI0`. For
+        # pi05 (PI05 model_type), this is True, so the upstream pi05_libero was
+        # trained with QUANTILE normalization (q01/q99-based), not MEAN_STD.
+        # The lerobot finetune (state_in_prompt=True) was trained with MEAN_STD.
+        self.use_quantile_norm = not state_in_prompt
         if os.path.exists(upstream_json):
             import json as _json
 
@@ -128,12 +133,17 @@ class Pi0_5LiberoAdapter:
             self.action_std = np.asarray(ns["actions"]["std"], dtype=np.float32)
             self.state_mean = np.asarray(ns["state"]["mean"], dtype=np.float32)
             self.state_std = np.asarray(ns["state"]["std"], dtype=np.float32)
+            self.action_q01 = np.asarray(ns["actions"].get("q01", []), dtype=np.float32)
+            self.action_q99 = np.asarray(ns["actions"].get("q99", []), dtype=np.float32)
+            self.state_q01 = np.asarray(ns["state"].get("q01", []), dtype=np.float32)
+            self.state_q99 = np.asarray(ns["state"].get("q99", []), dtype=np.float32)
         else:
             flat = load_file(lerobot_safetensors)
             self.action_mean = flat["action.mean"].float().numpy()  # (7,)
             self.action_std = flat["action.std"].float().numpy()
             self.state_mean = flat["observation.state.mean"].float().numpy()  # (8,)
             self.state_std = flat["observation.state.std"].float().numpy()
+            self.action_q01 = self.action_q99 = self.state_q01 = self.state_q99 = np.zeros(0, dtype=np.float32)
         self.real_action_dim = len(self.action_mean)
         self.real_state_dim = len(self.state_mean)
 
@@ -188,27 +198,29 @@ class Pi0_5LiberoAdapter:
     def _image_for_pi05(self, img_hwc_uint8: np.ndarray) -> torch.Tensor:
         """(H, W, 3) uint8 → (1, 3, 224, 224) float32 in [-1, 1] (PaliGemma convention).
 
-        Upstream openpi pi05_libero rotates raw LIBERO observations 180°
-        before resize (`img[::-1, ::-1]`) to match the camera frame
-        convention the model was trained on — see
-        `/storage/sdawle/openpi/examples/libero/main.py:115-117`.
-        The lerobot finetune does NOT rotate (data was already
-        pre-rotated at dataset-build time). We apply the rotation only
-        in upstream mode (state_in_prompt=False).
+        Caller is responsible for any rotation: in our LIBERO run_episode the
+        180° rotation (`img[::-1, ::-1]`) happens up-front for *both* lerobot
+        and upstream modes — matching openpi/examples/libero/main.py:115-117 —
+        so we don't rotate again here. (We used to rotate again in upstream
+        mode and that was a double-rotation that silently undid itself.)
         """
-        if not self.state_in_prompt:
-            img_hwc_uint8 = np.ascontiguousarray(img_hwc_uint8[::-1, ::-1])
         img_pad = self._resize_with_pad_centered(img_hwc_uint8, self.image_size)
         chw = np.transpose(img_pad, (2, 0, 1))  # (3, H, W)
         return torch.from_numpy(chw).unsqueeze(0).contiguous()
 
     # --- state ---
     def _state_normalize(self, state: np.ndarray) -> np.ndarray:
-        """MEAN_STD normalization → padded to max_state_dim. Matches the
-        finetune's preprocessor (norm_map STATE: MEAN_STD).
+        """State normalization → padded to max_state_dim.
+
+        - state_in_prompt=True (lerobot finetune): MEAN_STD (`(x - mean) / std`).
+        - state_in_prompt=False (upstream openpi pi05): QUANTILE
+          (`(x - q01) / (q99 - q01) * 2 - 1`), per openpi.transforms.Normalize.
         """
-        eps = 1e-8
-        s = (state - self.state_mean) / (self.state_std + eps)
+        eps = 1e-6
+        if self.use_quantile_norm and len(self.state_q01) == len(state):
+            s = (state - self.state_q01) / (self.state_q99 - self.state_q01 + eps) * 2.0 - 1.0
+        else:
+            s = (state - self.state_mean) / (self.state_std + 1e-8)
         padded = np.zeros(self.max_state_dim, dtype=np.float32)
         padded[: len(s)] = s
         return padded
@@ -259,11 +271,21 @@ class Pi0_5LiberoAdapter:
     # --- action denorm ---
     def _denormalize_actions(self, actions_norm: np.ndarray) -> np.ndarray:
         """(chunk, max_action_dim) normalized → (chunk, real_action_dim) raw.
-        MEAN_STD inverse: a_raw = a_norm * std + mean. Matches the finetune's
-        postprocessor (norm_map ACTION: MEAN_STD).
+
+        - state_in_prompt=True (lerobot finetune): MEAN_STD inverse
+          (`a_raw = a_norm * std + mean`).
+        - state_in_prompt=False (upstream openpi pi05): QUANTILE inverse
+          (`a_raw = (a_norm + 1) / 2 * (q99 - q01) + q01`).
+
+        Per openpi.transforms.Unnormalize (and config.py:187 which sets
+        `use_quantile_norm = model_type != PI0`).
         """
+        eps = 1e-6
         a = actions_norm[:, : self.real_action_dim]
-        a = a * self.action_std + self.action_mean
+        if self.use_quantile_norm and len(self.action_q01) == self.real_action_dim:
+            a = (a + 1.0) / 2.0 * (self.action_q99 - self.action_q01 + eps) + self.action_q01
+        else:
+            a = a * self.action_std + self.action_mean
         return a
 
     # --- main entry: predict a chunk given LIBERO obs ---

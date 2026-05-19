@@ -18,6 +18,7 @@ import torch.nn.functional as F
 from models.experimental.pi0_5.common.configs import PaliGemmaConfig
 from models.experimental.pi0_5.reference.torch_gemma import GemmaBlock, rms_norm, precompute_freqs_cis
 from models.experimental.pi0_5.reference.torch_siglip import SigLIPVisionTower, MultiModalProjector
+from models.experimental.pi0_5.reference.torch_siglip_hf import HFSigLIPVisionTower, use_hf_siglip
 
 
 class PaliGemmaBackbone:
@@ -66,8 +67,11 @@ class PaliGemmaBackbone:
             block_weights = self._get_block_weights(weights["action_expert"], i)
             self.expert_blocks.append(GemmaBlock(config.expert_config, block_weights, i))
 
-        # Vision tower
-        self.vision_tower = SigLIPVisionTower(config.siglip_config, weights["vlm_vision"])
+        # Vision tower — opt-in HF wrapper for openpi/upstream pi05_libero compat.
+        if use_hf_siglip():
+            self.vision_tower = HFSigLIPVisionTower(config.siglip_config, weights["vlm_vision"])
+        else:
+            self.vision_tower = SigLIPVisionTower(config.siglip_config, weights["vlm_vision"])
 
         # Multi-modal projector
         self.mm_projector = MultiModalProjector(weights["vlm_projector"])
@@ -94,9 +98,16 @@ class PaliGemmaBackbone:
         return block_weights
 
     def embed_image(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        """Embed images through vision tower and projector."""
+        """Embed images through vision tower and projector.
+
+        When `PI0_SIGLIP_HF=1`, the vision tower runs the openpi mixed-bf16
+        scheme and returns bf16 — mm_projector then runs in bf16 too (also
+        matching openpi). We cast back to `pixel_values.dtype` before
+        returning so the rest of our fp32-by-default pipeline stays unaware.
+        """
         vision_features = self.vision_tower.forward(pixel_values)
-        return self.mm_projector.forward(vision_features)
+        projected = self.mm_projector.forward(vision_features)
+        return projected.to(pixel_values.dtype)
 
     def embed_language_tokens(self, token_ids: torch.Tensor) -> torch.Tensor:
         """Embed language tokens."""
