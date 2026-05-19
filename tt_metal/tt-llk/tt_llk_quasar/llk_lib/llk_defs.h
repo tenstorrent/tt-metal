@@ -124,6 +124,13 @@ enum class StochRndType : std::uint8_t
     All  = 3,
 };
 
+enum class PackMode : std::uint8_t
+{
+    Default  = 0,
+    Untilize = 1,
+    Tilize   = 2,
+};
+
 // Packer ReLU modes; encoding matches RELU_MODE (2 bits) in HW.
 enum class ReluType : std::uint8_t
 {

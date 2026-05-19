@@ -76,6 +76,11 @@ using KernelSpecName = std::string;
 //  - Kernel argument bindings (for compile-time constant arguments)
 //  - The configuration of any hardware resources controlled by the kernel
 //
+// Specialization: A single kernel source may be represented by multiple KernelSpecs in
+// the same ProgramSpec — for example with different CTA bindings, different DFB endpoint
+// bindings, different semaphore bindings, etc. Each KernelSpec compiles independently
+// and is placed independently via WorkUnitSpec membership.
+//
 // Instancing: A KernelSpec is a *per-node template*. At runtime, one independent
 // instance runs on each node where the kernel is placed, with its own runtime arguments.
 //
