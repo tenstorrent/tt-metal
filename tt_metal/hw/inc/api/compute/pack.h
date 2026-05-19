@@ -217,7 +217,7 @@ ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) {
 ALWI void pack_rows_init(uint32_t num_rows) {
 #ifndef ARCH_QUASAR
     PACK((llk_pack_rows_init(num_rows)));
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 // clang-format off
@@ -246,7 +246,7 @@ ALWI void pack_rows_init(uint32_t num_rows) {
 ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
 #ifndef ARCH_QUASAR
     PACK((llk_pack_rows(idst, ocb, output_index)));
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 // clang-format off
@@ -265,7 +265,7 @@ ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
 ALWI void pack_rows_uninit() {
 #ifndef ARCH_QUASAR
     PACK((llk_pack_rows_uninit()));
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 /**
