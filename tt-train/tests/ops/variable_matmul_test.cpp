@@ -1643,3 +1643,194 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA) {
 
     EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(InputAndWeightK,tA) vs minimal not bit-exact";
 }
+
+// ---------------------------------------------------------------------------
+// M-axis OffsetsRole bit-exact parity. variable_matmul with an M-axis offset reads only
+// the M[a..b] row range of the input parent (InputRow), writes to that row range of the
+// output parent (OutputRow), or both (InputAndOutputRow). With matched HiFi4 settings,
+// the relevant sub-region of the output MUST be bit-identical to minimal_matmul on the
+// corresponding sliced input.
+// ---------------------------------------------------------------------------
+
+namespace {
+// Helper: compare a subregion `[m_lo, m_hi) × [0, N)` of `result_parent_vec` (M_parent×N
+// flattened) against the entire `ref_vec` (M_e×N) computed from minimal_matmul on the
+// same slice. Returns max abs diff.
+float subregion_max_abs_error(
+    const std::vector<float>& result_parent_vec,
+    const std::vector<float>& ref_vec,
+    uint32_t m_lo,
+    uint32_t M_e,
+    uint32_t N) {
+    float err = 0.0F;
+    for (uint32_t m = 0; m < M_e; ++m) {
+        for (uint32_t n = 0; n < N; ++n) {
+            err = std::max(err, std::abs(result_parent_vec[(m_lo + m) * N + n] - ref_vec[m * N + n]));
+        }
+    }
+    return err;
+}
+}  // namespace
+
+TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputRow) {
+    // parent_M > N → transpose_core_grid = true (dm_in1 is writer).
+    const uint32_t M_parent = 320, K = 128, N = 64;
+    constexpr uint32_t effective_M_tiles_upper = 4U;  // 128 rows upper bound for output sizing
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M_parent, K, device);
+    auto weight = create_random_device_tensor(K, N, device);
+
+    // start_index=2 → rows [96, 160) → actual_eff_M = 64 rows = 2 tiles.
+    const std::vector<uint32_t> offsets_host = {0U, 32U, 96U, 160U, 224U, 288U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    constexpr uint32_t kStart = 2U;
+    constexpr uint32_t m_lo = 96U;
+    constexpr uint32_t m_hi = 160U;
+    constexpr uint32_t actual_M = m_hi - m_lo;  // = 64
+
+    auto result = ttml::metal::variable_matmul(
+        input,
+        weight,
+        kConfig,
+        /*bias=*/std::nullopt,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/effective_M_tiles_upper,
+        /*in0_k_offset_tiles=*/0,
+        /*in1_k_offset_tiles=*/0,
+        /*output_tensor=*/std::nullopt,
+        /*out_row_offset_tiles=*/0,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::InputRow,
+        /*offsets_start_index=*/kStart);
+
+    auto input_slice = ttnn::slice(
+        input,
+        ttnn::SmallVector<uint32_t>{0U, 0U, m_lo, 0U},
+        ttnn::SmallVector<uint32_t>{1U, 1U, m_hi, K},
+        ttnn::SmallVector<uint32_t>{1U, 1U, 1U, 1U});
+    auto ref = minimal_matmul_hifi4(input_slice, weight, kConfig);
+
+    // result has shape [effective_M_tiles_upper*32, N] = [128, 64]. Only the first actual_M
+    // rows are valid; the rest is whatever was left in the upper-bound buffer.
+    auto result_vec = ttml::core::to_vector<float>(result);
+    auto ref_vec = ttml::core::to_vector<float>(ref);
+    EXPECT_EQ(subregion_max_abs_error(result_vec, ref_vec, /*m_lo=*/0U, actual_M, N), 0.0F)
+        << "variable(InputRow) vs minimal not bit-exact on actual M sub-range";
+}
+
+TEST_F(VariableMatmulTest, MinimalParity_OnDeviceOutputRow) {
+    // parent_M > N → transpose_core_grid = true; dm_in1 is the writer.
+    const uint32_t M_e = 128, K = 128, N = 64, M_parent_out = 512;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M_e, K, device);
+    auto weight = create_random_device_tensor(K, N, device);
+    // Pre-fill output with random values so we can verify untouched rows are preserved.
+    auto parent_out = create_random_device_tensor(M_parent_out, N, device);
+    const auto parent_orig_vec = ttml::core::to_vector<float>(parent_out);
+
+    // start_index=1 → row 128 → out_row_offset_tiles = 4.
+    const std::vector<uint32_t> offsets_host = {0U, 128U, 256U, 384U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    constexpr uint32_t kStart = 1U;
+    constexpr uint32_t m_lo = 128U;
+
+    ttml::metal::variable_matmul(
+        input,
+        weight,
+        kConfig,
+        /*bias=*/std::nullopt,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/0,
+        /*in0_k_offset_tiles=*/0,
+        /*in1_k_offset_tiles=*/0,
+        /*output_tensor=*/parent_out,
+        /*out_row_offset_tiles=*/0,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::OutputRow,
+        /*offsets_start_index=*/kStart);
+
+    auto ref = minimal_matmul_hifi4(input, weight, kConfig);
+    const auto ref_vec = ttml::core::to_vector<float>(ref);
+    const auto written_vec = ttml::core::to_vector<float>(parent_out);
+
+    EXPECT_EQ(subregion_max_abs_error(written_vec, ref_vec, m_lo, M_e, N), 0.0F)
+        << "variable(OutputRow) vs minimal not bit-exact at [" << m_lo << "," << m_lo + M_e << ")";
+
+    // Verify untouched rows preserved exactly.
+    float untouched_err = 0.0F;
+    for (uint32_t m = 0; m < M_parent_out; ++m) {
+        if (m >= m_lo && m < m_lo + M_e) {
+            continue;
+        }
+        for (uint32_t n = 0; n < N; ++n) {
+            untouched_err = std::max(untouched_err, std::abs(written_vec[m * N + n] - parent_orig_vec[m * N + n]));
+        }
+    }
+    EXPECT_EQ(untouched_err, 0.0F) << "variable(OutputRow) corrupted untouched rows";
+}
+
+// InputAndOutputRow: read input rows [a, b), compute matmul, write into output rows [a, b)
+// of the parent. This is the moe_ffn forward call pattern (gate_proj / up_proj /
+// down_proj).
+TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
+    const uint32_t M_parent = 320, K = 128, N = 64;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M_parent, K, device);
+    auto weight = create_random_device_tensor(K, N, device);
+    // Output parent is same shape as input M-axis (shared-tensor design).
+    auto parent_out = create_random_device_tensor(M_parent, N, device);
+    const auto parent_orig_vec = ttml::core::to_vector<float>(parent_out);
+
+    // start_index=2 → rows [96, 160) → actual_M = 64.
+    const std::vector<uint32_t> offsets_host = {0U, 32U, 96U, 160U, 224U, 288U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    constexpr uint32_t kStart = 2U;
+    constexpr uint32_t m_lo = 96U;
+    constexpr uint32_t m_hi = 160U;
+    constexpr uint32_t actual_M = m_hi - m_lo;
+
+    ttml::metal::variable_matmul(
+        input,
+        weight,
+        kConfig,
+        /*bias=*/std::nullopt,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/M_parent / 32U,  // upper bound = parent_M
+        /*in0_k_offset_tiles=*/0,
+        /*in1_k_offset_tiles=*/0,
+        /*output_tensor=*/parent_out,
+        /*out_row_offset_tiles=*/0,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
+        /*offsets_start_index=*/kStart);
+
+    auto input_slice = ttnn::slice(
+        input,
+        ttnn::SmallVector<uint32_t>{0U, 0U, m_lo, 0U},
+        ttnn::SmallVector<uint32_t>{1U, 1U, m_hi, K},
+        ttnn::SmallVector<uint32_t>{1U, 1U, 1U, 1U});
+    auto ref = minimal_matmul_hifi4(input_slice, weight, kConfig);
+    const auto ref_vec = ttml::core::to_vector<float>(ref);
+    const auto written_vec = ttml::core::to_vector<float>(parent_out);
+
+    EXPECT_EQ(subregion_max_abs_error(written_vec, ref_vec, m_lo, actual_M, N), 0.0F)
+        << "variable(InputAndOutputRow) vs minimal not bit-exact at [" << m_lo << "," << m_hi << ")";
+
+    // Untouched rows of parent_out preserved exactly.
+    float untouched_err = 0.0F;
+    for (uint32_t m = 0; m < M_parent; ++m) {
+        if (m >= m_lo && m < m_hi) {
+            continue;
+        }
+        for (uint32_t n = 0; n < N; ++n) {
+            untouched_err = std::max(untouched_err, std::abs(written_vec[m * N + n] - parent_orig_vec[m * N + n]));
+        }
+    }
+    EXPECT_EQ(untouched_err, 0.0F) << "variable(InputAndOutputRow) corrupted untouched rows";
+}
