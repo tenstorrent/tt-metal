@@ -264,7 +264,7 @@ def test_bw_workercore_prefetcher(device):
     )
 
     def sender_fn():
-        ttnn.dram_prefetcher([tt_weight, tt_addrs], num_layers=num_layers, global_cb=gcb)
+        ttnn.dram_prefetcher([tt_weight, tt_addrs], num_layers=num_layers, global_cb=gcb, enable_performance_mode=True)
 
     def consumer_fn():
         ttnn.dram_prefetcher_consumer(device, num_iters=num_iters_total, page_size_bytes=page_size, global_cb=gcb)
