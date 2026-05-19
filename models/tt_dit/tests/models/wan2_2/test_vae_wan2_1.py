@@ -1859,18 +1859,13 @@ def test_wan_decoder_chunked_consistency(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
         width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
     )
-    # Use production height/width so the decoder constructs ConvDims with real
-    # values and get_conv3d_config hits the precomputed _BLOCKINGS table (the
-    # bespoke per-(h_factor,w_factor,T,H,W) entries in conv3d.py:144). Without
-    # this, the test falls back to _DEFAULT_BLOCKINGS for every conv and
-    # bypasses exactly the production code path we're trying to validate.
-    # 480p: H_lat=60 -> H_pix=480; W_lat=104 -> W_pix=832. 720p analogous.
+    # Latent (B, C, T, H, W) -> pixel (H*8, W*8). The decoder needs real
+    # pixel dims at construction so get_conv3d_config hits the per-shape
+    # _BLOCKINGS table rather than the channel-only _DEFAULT_BLOCKINGS
+    # fallback -- this test validates the production path.
     pixel_height = H * 8
     pixel_width = W * 8
 
-    # Build a separate model per chunk_size so the constructor's blocking table
-    # lookup uses that chunk_size's stage dims. (compute_decoder_dims derives
-    # cur_T from t_chunk_size, so each chunk size gets its own _BLOCKINGS keys.)
     def _build_model(t_chunk_size_for_init):
         m = WanDecoder(
             base_dim=base_dim,
@@ -1904,9 +1899,8 @@ def test_wan_decoder_chunked_consistency(
     concat_dims[w_axis] = 4
 
     def run_decoder(t_chunk_size):
-        # Build a fresh model so the constructor's _BLOCKINGS lookup uses this
-        # chunk_size's stage_t.T_res values. Otherwise we'd be running every
-        # chunk size against the model built for the previous one's blockings.
+        # Fresh model per chunk_size: the constructor's _BLOCKINGS lookup keys
+        # off stage_t.T_res, which depends on t_chunk_size.
         model = _build_model(t_chunk_size_for_init=t_chunk_size)
         tt_input_tensor = typed_tensor_2dshard(
             tt_input_host,
@@ -1926,12 +1920,7 @@ def test_wan_decoder_chunked_consistency(
     baseline = run_decoder(t_chunk_size=1)
     logger.info(f"Baseline output shape: {baseline.shape}")
 
-    # Compare each chunk size against the baseline
-    # NOTE: chunk_size=7 is a production-shipped value on BH 2x4 (vae_t_chunk_size=7
-    # in pipeline_wan.create_pipeline) but was missing from this list, which is why
-    # SVI Pro saw a visible chunk-boundary distortion at pixel frame 24/25 (latent
-    # frame 6/7 boundary). Adding it here so the partial/inferred conv blockings at
-    # conv3d.py:284-307 are bit-checked against the chunk_size=1 ground truth.
+    # chunk_size=7 matches the production vae_t_chunk_size on BH 2x4 / 480p.
     for t_chunk_size in [2, 4, 7, 8, 16, T]:
         if t_chunk_size > T:
             continue

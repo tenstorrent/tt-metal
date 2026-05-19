@@ -42,11 +42,10 @@ Two sampling regimes:
 Upstream: https://github.com/vita-epfl/Stable-Video-Infinity (svi_wan22).
 LoRA weights: HF ``vita-video-gen/svi-model``.
 """
-from __future__ import annotations
-
 from pathlib import Path
 from typing import List, Literal, Optional, Union
 
+import numpy as np
 import PIL
 import torch
 from loguru import logger
@@ -394,6 +393,4 @@ def _concat_with_overlap(clips: List[torch.Tensor], *, overlap: int):
     pieces = [clips[0]] + [c[overlap:] if overlap > 0 else c for c in clips[1:]]
     if isinstance(pieces[0], torch.Tensor):
         return torch.cat(pieces, dim=0)
-    import numpy as np
-
     return np.concatenate(pieces, axis=0)

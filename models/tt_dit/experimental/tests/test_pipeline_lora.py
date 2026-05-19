@@ -10,10 +10,9 @@ test): ``LORA_HIGH_PATH``, ``LORA_LOW_PATH``, ``LORA_SCALE``. Set
 ``path[:scale]`` entries to exercise multi-LoRA stacking. If both single-LoRA
 and stack env vars are set, the stack form wins.
 """
-from __future__ import annotations
-
 import itertools
 import os
+from typing import List, Tuple
 
 import numpy as np
 import PIL
@@ -27,9 +26,9 @@ from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt
 from models.tt_dit.utils.test import line_params, ring_params
 
 
-def _parse_stack(env_val: str) -> list[LoRASpec]:
+def _parse_stack(env_val: str) -> List[LoRASpec]:
     """Parse ``path[:scale],path[:scale]`` into a LoRASpec list."""
-    out: list[LoRASpec] = []
+    out: List[LoRASpec] = []
     for entry in env_val.split(","):
         entry = entry.strip()
         if not entry:
@@ -42,7 +41,7 @@ def _parse_stack(env_val: str) -> list[LoRASpec]:
     return out
 
 
-def _resolve_lora_args() -> tuple[list[LoRASpec], list[LoRASpec], float]:
+def _resolve_lora_args() -> Tuple[List[LoRASpec], List[LoRASpec], float]:
     stack_high = os.environ.get("LORA_STACK_HIGH")
     stack_low = os.environ.get("LORA_STACK_LOW")
     single_high = os.environ.get("LORA_HIGH_PATH")

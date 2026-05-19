@@ -297,10 +297,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         scheduler = scheduler or UniPCMultistepScheduler.from_pretrained(
             checkpoint_name, subfolder="scheduler", flow_shift=12.0
         )
-        # Dispatch solver based on scheduler type. Upstream SVI Python reference
-        # uses FlowMatchEulerDiscreteScheduler with a plain Euler step; UniPC's
-        # order-2 correction shifts denoised latents and produces visible
-        # boundary artifacts in SVI Pro output.
         if isinstance(scheduler, FlowMatchEulerDiscreteScheduler):
             self._solver = EulerSolver(scheduler=scheduler)
         else:
@@ -1040,8 +1036,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             profiler.end("denoising", profiler_iteration)
             profiler.start("vae", profiler_iteration)
 
-        # SVI / clip-chaining needs the post-denoise pre-rescale latent to splice
-        # into the next clip's I2V conditioning. Capture before VAE std-scaling.
+        # Capture the post-denoise pre-rescale latent before VAE std-scaling
+        # mutates it (used for clip-to-clip continuity by long-video drivers).
         last_latent_out = latents.detach().cpu().clone() if return_last_latent else None
 
         if not output_type == "latent":

@@ -45,13 +45,11 @@ diffusers prefixes (``diffusion_model.``, ``transformer.``, ``unet.``,
 ``model.``) stripped automatically, kohya/A1111 (``lora_unet_blocks_N_...``)
 remapped to lightx2v style.
 """
-from __future__ import annotations
-
 import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Union
+from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 import torch
 from loguru import logger
@@ -78,7 +76,7 @@ class LoRASpec:
 LoRAArg = Union[LoRASpec, str, Iterable[Union[LoRASpec, str]], None]
 
 
-def normalize_lora_arg(arg: LoRAArg) -> list[LoRASpec]:
+def normalize_lora_arg(arg: LoRAArg) -> List[LoRASpec]:
     """Coerce a LoRA constructor argument into a list of :class:`LoRASpec`.
 
     Accepts None, a bare path string (scale defaults to 1.0), a single
@@ -90,7 +88,7 @@ def normalize_lora_arg(arg: LoRAArg) -> list[LoRASpec]:
         return [arg]
     if isinstance(arg, str):
         return [LoRASpec(arg)]
-    out: list[LoRASpec] = []
+    out: List[LoRASpec] = []
     for item in arg:
         if isinstance(item, LoRASpec):
             out.append(item)
@@ -174,11 +172,11 @@ def _has_lora_keys(state_dict: dict) -> bool:
 
 
 def fuse_lora_state_dict(
-    base_state_dict: dict[str, torch.Tensor],
-    lora_state_dict: dict[str, torch.Tensor],
+    base_state_dict: Dict[str, torch.Tensor],
+    lora_state_dict: Dict[str, torch.Tensor],
     *,
     scale: float = 1.0,
-) -> dict[str, torch.Tensor]:
+) -> Dict[str, torch.Tensor]:
     """Return a new state dict with LoRA deltas fused into ``base_state_dict``.
 
     Computes ``W_fused = W + scale * B @ A`` for each rank-r low-rank pair and
@@ -189,10 +187,10 @@ def fuse_lora_state_dict(
     Raises:
         KeyError: a LoRA low-rank pair is missing one half.
     """
-    pairs: dict[str, dict[str, torch.Tensor]] = {}
-    direct_deltas: list[tuple[str, str, torch.Tensor]] = []  # (base_path, suffix, tensor)
-    alphas: dict[str, float] = {}
-    skipped_unknown: list[str] = []
+    pairs: Dict[str, Dict[str, torch.Tensor]] = {}
+    direct_deltas: List[Tuple[str, str, torch.Tensor]] = []  # (base_path, suffix, tensor)
+    alphas: Dict[str, float] = {}
+    skipped_unknown: List[str] = []
 
     for raw_key, tensor in lora_state_dict.items():
         key = _kohya_to_lightx2v(_strip_known_prefixes(raw_key))
@@ -216,7 +214,7 @@ def fuse_lora_state_dict(
 
     fused = dict(base_state_dict)
     applied_pairs = 0
-    skipped_unmapped: list[str] = []
+    skipped_unmapped: List[str] = []
 
     for base_path, ab in pairs.items():
         if "A" not in ab or "B" not in ab:
@@ -264,8 +262,8 @@ def fuse_lora_state_dict(
 
 
 def verify_fusion_changed_weights(
-    base_sd: dict[str, torch.Tensor],
-    fused_sd: dict[str, torch.Tensor],
+    base_sd: Dict[str, torch.Tensor],
+    fused_sd: Dict[str, torch.Tensor],
     *,
     min_changed: int = 3,
     label: str,
@@ -279,7 +277,7 @@ def verify_fusion_changed_weights(
     Raises ``RuntimeError`` if no weights changed at all, or if fewer than
     ``min_changed`` weights changed (likely a partial load).
     """
-    changed: list[tuple[str, float]] = []
+    changed: List[Tuple[str, float]] = []
     max_diff = 0.0
     for k, base in base_sd.items():
         fused = fused_sd.get(k)
@@ -298,7 +296,7 @@ def verify_fusion_changed_weights(
             f"Verified {len(base_sd)} keys against fused dict; max L2 diff is 0.0."
         )
 
-    sample = changed[: max(min_changed, 5)]
+    sample = changed[:5]
     logger.info(
         f"LoRA fusion verified for '{label}': {len(changed)} tensors changed, "
         f"max L2 diff={max_diff:.4f}. Sample diffs:"
@@ -318,7 +316,7 @@ def verify_fusion_changed_weights(
 # ---------------------------------------------------------------------------
 
 
-def _lora_stack_cache_namespace(specs_by_expert: dict[int, list[LoRASpec]]) -> str:
+def _lora_stack_cache_namespace(specs_by_expert: Dict[int, List[LoRASpec]]) -> str:
     """Stable short hash so distinct LoRA stacks cache separately on disk.
 
     Hashes ordered ``(resolved_path, scale)`` tuples per expert index. Two
@@ -364,11 +362,11 @@ class WanPipelineI2VLora(WanPipelineI2V):
                 if not Path(spec.path).is_file():
                     raise FileNotFoundError(f"{label}: file does not exist: {spec.path}")
 
-        self._lora_specs: dict[int, list[LoRASpec]] = {0: high_specs, 1: low_specs}
+        self._lora_specs: Dict[int, List[LoRASpec]] = {0: high_specs, 1: low_specs}
         self._cache_namespace = _lora_stack_cache_namespace(self._lora_specs)
         # Lazily-built fused state dicts keyed by transformer index. Cleared
         # after handoff to TT cache to free CPU memory.
-        self._fused_state_dicts: dict[int, dict[str, torch.Tensor] | None] = {0: None, 1: None}
+        self._fused_state_dicts: Dict[int, Optional[Dict[str, torch.Tensor]]] = {0: None, 1: None}
 
         super().__init__(*args, **kwargs)
 
@@ -382,7 +380,7 @@ class WanPipelineI2VLora(WanPipelineI2V):
             return buffer
         return super().prepare_text_conditioning(tt_model, prompt_embeds, buffer, traced)
 
-    def _build_fused_state_dict(self, idx: int) -> dict[str, torch.Tensor] | None:
+    def _build_fused_state_dict(self, idx: int) -> Optional[Dict[str, torch.Tensor]]:
         specs = self._lora_specs[idx]
         state = self.transformer_states[idx]
         if not specs:

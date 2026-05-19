@@ -9,8 +9,6 @@ LoRA safetensors (``vita-video-gen/svi-model`` on HuggingFace). All other
 inference knobs (number of clips, num_motion_latent, num_overlap_frame) are
 env-configurable to support experimentation.
 """
-from __future__ import annotations
-
 import os
 
 import numpy as np
@@ -86,12 +84,11 @@ def test_long_video(
 
     pil_image = PIL.Image.open(os.environ.get("PROMPT_IMAGE", "./prompt_image.png"))
     prompt_env = os.environ.get("PROMPT", "A golden retriever running on a sandy beach, waves in the background")
-    # Per-clip prompts: split on '||' for storytelling across clips. Must have
-    # exactly num_clips entries (or 1 entry for "same prompt per clip").
+    # Per-clip prompts: split on '||' for storytelling across clips.
     if "||" in prompt_env:
         prompt = [p.strip() for p in prompt_env.split("||")]
         if len(prompt) != num_clips:
-            pytest.skip(
+            pytest.fail(
                 f"PROMPT contains '||' splitting into {len(prompt)} prompts but "
                 f"SVI_NUM_CLIPS={num_clips}. Provide exactly {num_clips} prompts."
             )
