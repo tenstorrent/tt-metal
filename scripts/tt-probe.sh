@@ -130,7 +130,12 @@ if [[ -n "${TT_METAL_SIMULATOR:-}" ]]; then
     SIM_MODE=true
     export TT_METAL_SLOW_DISPATCH_MODE=1
     export TT_METAL_DISABLE_SFPLOADMACRO=1
+    # libttsim's own hang watchdog (clocks of no RISC-V / Tensix progress with
+    # pending work before the sim _Exit(1)'s). User-set env wins.
+    : "${TTSIM_HANG_WATCHDOG_CLOCKS:=50000}"
+    export TTSIM_HANG_WATCHDOG_CLOCKS
 fi
+PROBE_STDOUT_LOG="/tmp/tt-probe-stdout-$$.log"
 
 # --- Timeout config ---
 DISPATCH_TIMEOUT=5
@@ -149,9 +154,10 @@ rm -f "$TRIAGE_LOG"
 # next ordinary probe failure.
 rm -f "$TRIAGE_JSON"
 MISSING_TTEXALENS=false
-if [[ "$SIM_MODE" == true ]]; then
-    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="echo HANG > ${TRIAGE_LOG}"
-else
+# On sim, TT_METAL_OPERATION_TIMEOUT_SECONDS is unset, so the dispatch-timeout
+# command never fires — sim hangs are caught by the libttsim watchdog below,
+# not this hook.
+if [[ "$SIM_MODE" == false ]]; then
     if python3 -c "import ttexalens" 2>/dev/null; then
         mkdir -p "${TRIAGE_JSON_DIR}"
         export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --json-path=${TRIAGE_JSON} > ${TRIAGE_LOG} 2>&1"
@@ -182,8 +188,11 @@ if [[ "$DEV_MODE" == true ]]; then
     export TT_METAL_WATCHER_DISABLE_DISPATCH=1
 
     if [[ "$SIM_MODE" == true ]]; then
+        # NoC sanitizer is intentionally disabled on sim — see comment in
+        # safe_pytest.sh for symmetry. (Kept off here because sim hits false
+        # positives the sanitizer is tuned for HW behavior on.)
         export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
-        echo "TT_PROBE: [sim+dev] watcher=polling(+assert,noc_sanitize=OFF) triage=OFF"
+        echo "TT_PROBE: [sim+dev] watcher=polling(+assert,noc_sanitize=OFF) watchdog=${TTSIM_HANG_WATCHDOG_CLOCKS} clocks"
     else
         # Lightweight asserts: compile ASSERT() as ebreak so the core halts at
         # the exact instruction. The dispatch timeout then fires triage, which
@@ -254,10 +263,14 @@ trap '_signal_cleanup INT'  SIGINT
 
 # Run in background + wait so the trap can fire on signal (bash blocks
 # signal delivery during synchronous foreground commands).
-python3 "$PROBE_FILE" &
+# Mirror stdout/stderr to PROBE_STDOUT_LOG via process substitution so we can
+# grep for the libttsim watchdog message after a sim hang. Process substitution
+# leaves $! pointing at python3 itself (not tee).
+python3 "$PROBE_FILE" > >(tee "$PROBE_STDOUT_LOG") 2>&1 &
 CHILD_PID=$!
 wait "$CHILD_PID"
 EXIT_CODE=$?
+wait 2>/dev/null  # let tee flush before we grep
 CHILD_PID=
 
 echo "========================================"
@@ -283,19 +296,25 @@ if [[ "$SIM_MODE" == false ]]; then
 fi
 
 # --- Detect hang ---
+# HW:  dispatch-timeout handler populated TRIAGE_LOG with tt-triage output.
+# Sim: libttsim watchdog _Exit(1)'d the child; stage its message into
+#      TRIAGE_LOG so the dump below treats it uniformly.
+if [[ "$SIM_MODE" == true ]] && grep -q "hang watchdog fired" "$PROBE_STDOUT_LOG" 2>/dev/null; then
+    grep -A4 "hang watchdog fired" "$PROBE_STDOUT_LOG" > "$TRIAGE_LOG"
+fi
 if [[ -s "$TRIAGE_LOG" ]]; then
     echo "TT_PROBE: HANG DETECTED"
-    if [[ "$SIM_MODE" == false ]]; then
-        cat "$TRIAGE_LOG"
-        if [[ -s "$TRIAGE_JSON" ]]; then
-            echo "TT_PROBE: JSON triage: ${TRIAGE_JSON}"
-        fi
+    cat "$TRIAGE_LOG"
+    if [[ "$SIM_MODE" == false && -s "$TRIAGE_JSON" ]]; then
+        echo "TT_PROBE: JSON triage: ${TRIAGE_JSON}"
     fi
     rm -f "$TRIAGE_LOG"
+    rm -f "$PROBE_STDOUT_LOG"
     echo "TT_PROBE_RESULT: HANG (probe: ${PROBE_REL})"
     exit 2
 fi
 rm -f "$TRIAGE_LOG"
+rm -f "$PROBE_STDOUT_LOG"
 
 # --- Result ---
 # Reserve wrapper exit 2 for the HANG case above. For any other non-zero
