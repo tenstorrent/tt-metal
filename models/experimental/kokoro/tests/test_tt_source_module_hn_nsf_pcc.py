@@ -64,9 +64,6 @@ def _run_deterministic_pcc(device, *, sampling_rate, upsample_scale, harmonic_nu
     ref = _make_ref(sampling_rate=sampling_rate, upsample_scale=upsample_scale, harmonic_num=harmonic_num)
     f0 = torch.relu(torch.randn(B, time_len, 1) * 200.0)
 
-    with torch.no_grad(), _torch_random_zeros():
-        sine_merge_ref, noise_ref, uv_ref = ref(f0)
-
     params = preprocess_tt_source_module_hn_nsf(
         ref,
         device,
@@ -76,7 +73,10 @@ def _run_deterministic_pcc(device, *, sampling_rate, upsample_scale, harmonic_nu
         voiced_threshold=0.0,
         time_len=time_len,
     )
-    tt_mod = TTSourceModuleHnNSF(device, params)
+    with _torch_random_zeros():
+        with torch.no_grad():
+            sine_merge_ref, noise_ref, uv_ref = ref(f0)
+        tt_mod = TTSourceModuleHnNSF(device, params)
 
     f0_tt = ttnn.from_torch(f0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     sine_merge_tt, noise_tt, uv_tt = tt_mod(f0_tt)
@@ -123,13 +123,12 @@ def test_tt_source_module_hn_nsf_larger_upsample(device):
 
 
 def test_tt_source_module_hn_nsf_noise_path(device):
-    """Inject a deterministic ``out_noise_raw`` and verify the noise branch matches the reference."""
+    """Verify the noise branch using noise generated at init time."""
     torch.manual_seed(3)
     sampling_rate = 24000.0
     upsample_scale = 4
-    # ``harmonic_num >= 1`` so SineGen's internal ``randn_like(sine_waves)`` ([B, T, dim]) has a
-    # different shape from the output ``randn_like(uv)`` ([B, T, 1]); the shape-based filter below
-    # then injects ``fixed_noise`` only into the latter.
+    # ``harmonic_num >= 1`` so SineGen's dummy ([B, T, dim]) has a different shape from the
+    # output dummy ([B, T, 1]); the shape filter injects ``fixed_noise`` only into the latter.
     harmonic_num = 1
     time_len = 64
     B = 1
@@ -139,28 +138,11 @@ def test_tt_source_module_hn_nsf_noise_path(device):
 
     fixed_noise = torch.randn(B, time_len, 1)
 
-    # On the reference side: ``randn_like(uv) * sine_amp / 3`` is what produces the output ``noise``.
-    # The SineGen side uses its own ``rand`` and ``randn_like`` — we zero those.
-    real_rand = torch.rand
-    real_randn_like = torch.randn_like
-    torch.rand = lambda *size, **kwargs: torch.zeros(*size, **kwargs)
-    # Track which call we're on: SineGen's internal ``randn_like`` (zero) vs ours (``fixed_noise``).
-    state = {"calls": 0}
-
     def fake_randn_like(t, **kwargs):
-        # SineGen calls ``randn_like(sine_waves)`` first ([B, T, dim]) — return zeros.
-        # SourceModuleHnNSF then calls ``randn_like(uv)`` ([B, T, 1]) — return ``fixed_noise``.
+        # SineGen dummy/call ([B, T, dim=2]) → zeros; SourceModule dummy/call ([B, T, 1]) → fixed_noise.
         if t.shape == fixed_noise.shape:
             return fixed_noise.to(t.dtype)
         return torch.zeros_like(t, **kwargs)
-
-    torch.randn_like = fake_randn_like
-    try:
-        with torch.no_grad():
-            sine_merge_ref, noise_ref, uv_ref = ref(f0)
-    finally:
-        torch.rand = real_rand
-        torch.randn_like = real_randn_like
 
     params = preprocess_tt_source_module_hn_nsf(
         ref,
@@ -171,11 +153,20 @@ def test_tt_source_module_hn_nsf_noise_path(device):
         voiced_threshold=0.0,
         time_len=time_len,
     )
-    tt_mod = TTSourceModuleHnNSF(device, params)
+    # Apply the same randn_like patch for both TT init and reference forward:
+    #   sinegen._noise_raw = zeros, _out_noise_raw = fixed_noise (from init)
+    #   reference SineGen noise = zeros, SourceModule output noise = fixed_noise
+    real_randn_like = torch.randn_like
+    torch.randn_like = fake_randn_like
+    try:
+        tt_mod = TTSourceModuleHnNSF(device, params)
+        with torch.no_grad():
+            sine_merge_ref, noise_ref, uv_ref = ref(f0)
+    finally:
+        torch.randn_like = real_randn_like
 
     f0_tt = ttnn.from_torch(f0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    noise_tt_in = ttnn.from_torch(fixed_noise, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    sine_merge_tt, noise_tt, uv_tt = tt_mod(f0_tt, out_noise_raw=noise_tt_in)
+    sine_merge_tt, noise_tt, uv_tt = tt_mod(f0_tt)
 
     sm_h = ttnn.to_torch(sine_merge_tt).float()
     n_h = ttnn.to_torch(noise_tt).float()
@@ -186,7 +177,6 @@ def test_tt_source_module_hn_nsf_noise_path(device):
     ttnn.deallocate(sine_merge_tt)
     ttnn.deallocate(noise_tt)
     ttnn.deallocate(uv_tt)
-    ttnn.deallocate(noise_tt_in)
     ttnn.deallocate(f0_tt)
 
     _, pcc_sm = comp_pcc(sine_merge_ref, sm_h, pcc=0.0)
@@ -212,9 +202,6 @@ def test_tt_source_module_hn_nsf_tanh_only_vs_linear_fallback(device):
     ref = _make_ref(sampling_rate=sampling_rate, upsample_scale=upsample_scale, harmonic_num=harmonic_num)
     f0 = torch.relu(torch.randn(B, time_len, 1) * 200.0)
 
-    with torch.no_grad(), _torch_random_zeros():
-        sine_merge_ref, _noise_ref, _uv_ref = ref(f0)
-
     params = preprocess_tt_source_module_hn_nsf(
         ref,
         device,
@@ -224,11 +211,16 @@ def test_tt_source_module_hn_nsf_tanh_only_vs_linear_fallback(device):
         voiced_threshold=0.0,
         time_len=time_len,
     )
+    with _torch_random_zeros():
+        with torch.no_grad():
+            sine_merge_ref, _noise_ref, _uv_ref = ref(f0)
+        tt_linear = TTSourceModuleHnNSF(device, params, use_torch_linear_fallback=True, use_torch_tanh_fallback=False)
+        tt_tanh_only = TTSourceModuleHnNSF(
+            device, params, use_torch_linear_fallback=False, use_torch_tanh_fallback=True
+        )
+        tt_both = TTSourceModuleHnNSF(device, params, use_torch_linear_fallback=True, use_torch_tanh_fallback=True)
 
     f0_tt = ttnn.from_torch(f0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_linear = TTSourceModuleHnNSF(device, params, use_torch_linear_fallback=True, use_torch_tanh_fallback=False)
-    tt_tanh_only = TTSourceModuleHnNSF(device, params, use_torch_linear_fallback=False, use_torch_tanh_fallback=True)
-    tt_both = TTSourceModuleHnNSF(device, params, use_torch_linear_fallback=True, use_torch_tanh_fallback=True)
 
     sm_linear_tt, noise_linear_tt, uv_linear_tt = tt_linear(f0_tt)
     sm_tanh_tt, noise_tanh_tt, uv_tanh_tt = tt_tanh_only(f0_tt)

@@ -30,9 +30,11 @@ interpolation instead of a matmul to avoid BF16 precision loss from the small K=
 Randomness
 ----------
 The reference samples ``rand_ini ~ U[0,1)`` (with the fundamental forced to 0) and
-``noise ~ N(0, 1)`` inside ``forward``. For deterministic PCC against torch, callers should
-pass ``rand_ini`` and ``noise_raw`` explicitly (``None`` ⇒ zeros). Tests patch ``torch.rand`` and
-``torch.randn_like`` on the reference side to match.
+``noise ~ N(0, 1)`` inside ``forward``. In this port, noise is generated once in ``__init__``
+via ``torch.randn_like`` on a dummy tensor of the correct shape and uploaded to device; the
+same tensor is reused every ``forward`` call (tiled along the batch dimension when ``B > 1``).
+Callers may still override by passing ``noise_raw`` explicitly. Tests patch ``torch.rand`` and
+``torch.randn_like`` during module construction to keep noise deterministic.
 """
 
 from __future__ import annotations
@@ -246,6 +248,15 @@ class TTSineGen:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
+        # Pre-generate noise_raw [1, time_len, dim] once; reused every forward call.
+        _noise_dummy = torch.zeros(1, params.time_len, params.dim, dtype=torch.float32)
+        self._noise_raw = ttnn.from_torch(
+            torch.randn_like(_noise_dummy),
+            dtype=params.activation_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def _torch_phase_fallback(
         self,
@@ -330,7 +341,8 @@ class TTSineGen:
             rand_ini: optional ``[B, 1, dim]`` initial phase noise (zeros if ``None``); the
                 fundamental's column is forced to 0 internally to match the reference.
             noise_raw: optional ``[B, T, dim]`` noise tensor before amplitude scaling
-                (``randn_like(sine_waves)`` in the reference). Zeros if ``None``.
+                (``randn_like(sine_waves)`` in the reference). Uses the pre-generated
+                ``self._noise_raw`` (tiled to batch size) if ``None``.
 
         Returns:
             ``(sine_waves, uv, noise)`` matching the reference contract.
@@ -472,8 +484,12 @@ class TTSineGen:
 
         # ``noise = noise_amp * randn_like(sine_waves)`` → [B, T, dim] (broadcast on last dim)
         if noise_raw is None:
-            noise_raw_local = self._zero_btd(B)
-            owns_noise = True
+            if B == 1:
+                noise_raw_local = self._noise_raw
+                owns_noise = False
+            else:
+                noise_raw_local = ttnn.concat([self._noise_raw] * B, dim=0, memory_config=memory_config)
+                owns_noise = True
         else:
             noise_raw_local = noise_raw
             owns_noise = False

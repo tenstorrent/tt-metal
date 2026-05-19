@@ -182,53 +182,41 @@ def test_tt_generator_m_source_no_fallback_pcc(device):
     sinegen_noise_raw = torch.randn(B, T_har, dim)
     source_noise_raw = torch.randn(B, T_har, 1)
 
-    real_rand = torch.rand
-    real_randn_like = torch.randn_like
-    state = {"randn_like_calls": 0}
-
     def _fake_rand(*size, **kwargs):
         out = rand_ini.to(kwargs.get("device", rand_ini.device))
         dtype = kwargs.get("dtype", out.dtype)
         return out.to(dtype)
 
     def _fake_randn_like(t, **kwargs):
-        state["randn_like_calls"] += 1
-        if state["randn_like_calls"] == 1:
-            out = sinegen_noise_raw.to(device=t.device, dtype=t.dtype)
-        elif state["randn_like_calls"] == 2:
-            out = source_noise_raw.to(device=t.device, dtype=t.dtype)
-        else:
-            raise RuntimeError(f"Unexpected torch.randn_like call count: {state['randn_like_calls']}")
-        return out
+        if t.shape[-1] == 1:
+            return source_noise_raw.to(device=t.device, dtype=t.dtype).expand_as(t).clone()
+        return sinegen_noise_raw.to(device=t.device, dtype=t.dtype).expand_as(t).clone()
 
+    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
+    real_rand = torch.rand
+    real_randn_like = torch.randn_like
     torch.rand = _fake_rand
     torch.randn_like = _fake_randn_like
     try:
+        tt_mod = TTGenerator(
+            device,
+            params,
+            use_torch_phase_fallback=False,
+            use_torch_linear_fallback=False,
+            use_torch_tanh_fallback=False,
+        )
         with torch.no_grad():
             sine_merge_ref, noise_ref, uv_ref = ref.m_source(f0u)
     finally:
         torch.rand = real_rand
         torch.randn_like = real_randn_like
-
-    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
-    tt_mod = TTGenerator(
-        device,
-        params,
-        use_torch_phase_fallback=False,
-        use_torch_linear_fallback=False,
-        use_torch_tanh_fallback=False,
-    )
     _assert_generator_no_fallbacks(tt_mod)
 
     f0_tt = ttnn.from_torch(f0u, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     rand_ini_tt = ttnn.from_torch(rand_ini.unsqueeze(1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    sinegen_noise_tt = ttnn.from_torch(sinegen_noise_raw, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    source_noise_tt = ttnn.from_torch(source_noise_raw, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     sine_merge_tt, noise_tt, uv_tt = tt_mod._m_source(
         f0_tt,
         sinegen_rand_ini=rand_ini_tt,
-        sinegen_noise_raw=sinegen_noise_tt,
-        out_noise_raw=source_noise_tt,
     )
 
     sine_merge_h = ttnn.to_torch(sine_merge_tt).float()
@@ -246,8 +234,6 @@ def test_tt_generator_m_source_no_fallback_pcc(device):
     ttnn.deallocate(uv_tt)
     ttnn.deallocate(f0_tt)
     ttnn.deallocate(rand_ini_tt)
-    ttnn.deallocate(sinegen_noise_tt)
-    ttnn.deallocate(source_noise_tt)
 
     assert sine_merge_h.shape == sine_merge_ref.shape, (sine_merge_h.shape, sine_merge_ref.shape)
     assert noise_h.shape == noise_ref.shape, (noise_h.shape, noise_ref.shape)
@@ -799,28 +785,23 @@ def test_tt_generator_harmonic_path_before_after_stft_pcc(device):
     sinegen_noise_raw = torch.randn(B, T_har, dim)
     source_noise_raw = torch.randn(B, T_har, 1)
 
-    real_rand = torch.rand
-    real_randn_like = torch.randn_like
-    state = {"randn_like_calls": 0}
-
     def _fake_rand(*size, **kwargs):
         out = rand_ini.to(kwargs.get("device", rand_ini.device))
         dtype = kwargs.get("dtype", out.dtype)
         return out.to(dtype)
 
     def _fake_randn_like(t, **kwargs):
-        state["randn_like_calls"] += 1
-        if state["randn_like_calls"] == 1:
-            out = sinegen_noise_raw.to(device=t.device, dtype=t.dtype)
-        elif state["randn_like_calls"] == 2:
-            out = source_noise_raw.to(device=t.device, dtype=t.dtype)
-        else:
-            raise RuntimeError(f"Unexpected torch.randn_like call count: {state['randn_like_calls']}")
-        return out
+        if t.shape[-1] == 1:
+            return source_noise_raw.to(device=t.device, dtype=t.dtype).expand_as(t).clone()
+        return sinegen_noise_raw.to(device=t.device, dtype=t.dtype).expand_as(t).clone()
 
+    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
+    real_rand = torch.rand
+    real_randn_like = torch.randn_like
     torch.rand = _fake_rand
     torch.randn_like = _fake_randn_like
     try:
+        tt_mod = TTGenerator(device, params)
         with torch.no_grad():
             har_source_ref_btl, _noi_ref, _uv_ref = ref.m_source(f0u_ref)  # [B, T_har, 1]
             har_source_ref = har_source_ref_btl.transpose(1, 2).squeeze(1).contiguous()  # [B, T_har]
@@ -828,21 +809,14 @@ def test_tt_generator_harmonic_path_before_after_stft_pcc(device):
     finally:
         torch.rand = real_rand
         torch.randn_like = real_randn_like
-
-    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
-    tt_mod = TTGenerator(device, params)
     _assert_generator_no_fallbacks(tt_mod)
 
     f0_tt = ttnn.from_torch(f0u_ref, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     rand_ini_tt = ttnn.from_torch(rand_ini.unsqueeze(1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    sinegen_noise_tt = ttnn.from_torch(sinegen_noise_raw, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    source_noise_tt = ttnn.from_torch(source_noise_raw, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
     har_source_tt_btl, noise_tt, uv_tt = tt_mod._m_source(
         f0_tt,
         sinegen_rand_ini=rand_ini_tt,
-        sinegen_noise_raw=sinegen_noise_tt,
-        out_noise_raw=source_noise_tt,
     )
     har_source_tt = ttnn.squeeze(har_source_tt_btl, 2)  # [B, T_har]
     har_spec_tt, har_phase_tt = tt_mod._stft.transform(har_source_tt)
@@ -878,8 +852,6 @@ def test_tt_generator_harmonic_path_before_after_stft_pcc(device):
     ttnn.deallocate(uv_tt)
     ttnn.deallocate(f0_tt)
     ttnn.deallocate(rand_ini_tt)
-    ttnn.deallocate(sinegen_noise_tt)
-    ttnn.deallocate(source_noise_tt)
 
 
 def test_tt_generator_harmonic_path_before_after_stft_pcc_including_f0_upsample_block(device):
@@ -903,28 +875,23 @@ def test_tt_generator_harmonic_path_before_after_stft_pcc_including_f0_upsample_
     sinegen_noise_raw = torch.randn(B, T_har, dim)
     source_noise_raw = torch.randn(B, T_har, 1)
 
-    real_rand = torch.rand
-    real_randn_like = torch.randn_like
-    state = {"randn_like_calls": 0}
-
     def _fake_rand(*size, **kwargs):
         out = rand_ini.to(kwargs.get("device", rand_ini.device))
         dtype = kwargs.get("dtype", out.dtype)
         return out.to(dtype)
 
     def _fake_randn_like(t, **kwargs):
-        state["randn_like_calls"] += 1
-        if state["randn_like_calls"] == 1:
-            out = sinegen_noise_raw.to(device=t.device, dtype=t.dtype)
-        elif state["randn_like_calls"] == 2:
-            out = source_noise_raw.to(device=t.device, dtype=t.dtype)
-        else:
-            raise RuntimeError(f"Unexpected torch.randn_like call count: {state['randn_like_calls']}")
-        return out
+        if t.shape[-1] == 1:
+            return source_noise_raw.to(device=t.device, dtype=t.dtype).expand_as(t).clone()
+        return sinegen_noise_raw.to(device=t.device, dtype=t.dtype).expand_as(t).clone()
 
+    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
+    real_rand = torch.rand
+    real_randn_like = torch.randn_like
     torch.rand = _fake_rand
     torch.randn_like = _fake_randn_like
     try:
+        tt_mod = TTGenerator(device, params)
         with torch.no_grad():
             har_source_ref_btl, _noi_ref, _uv_ref = ref.m_source(f0u_ref)  # [B, T_har, 1]
             har_source_ref = har_source_ref_btl.transpose(1, 2).squeeze(1).contiguous()  # [B, T_har]
@@ -932,9 +899,6 @@ def test_tt_generator_harmonic_path_before_after_stft_pcc_including_f0_upsample_
     finally:
         torch.rand = real_rand
         torch.randn_like = real_randn_like
-
-    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
-    tt_mod = TTGenerator(device, params)
     _assert_generator_no_fallbacks(tt_mod)
     mc = ttnn.DRAM_MEMORY_CONFIG
 
@@ -957,13 +921,9 @@ def test_tt_generator_harmonic_path_before_after_stft_pcc_including_f0_upsample_
     ttnn.deallocate(f0_b_t_1)
 
     rand_ini_tt = ttnn.from_torch(rand_ini.unsqueeze(1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    sinegen_noise_tt = ttnn.from_torch(sinegen_noise_raw, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    source_noise_tt = ttnn.from_torch(source_noise_raw, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     har_source_tt_btl, noise_tt, uv_tt = tt_mod._m_source(
         f0_har_tt,
         sinegen_rand_ini=rand_ini_tt,
-        sinegen_noise_raw=sinegen_noise_tt,
-        out_noise_raw=source_noise_tt,
     )
     har_source_tt = ttnn.squeeze(har_source_tt_btl, 2)  # [B, T_har]
     har_spec_tt, har_phase_tt = tt_mod._stft.transform(har_source_tt)
@@ -1003,8 +963,6 @@ def test_tt_generator_harmonic_path_before_after_stft_pcc_including_f0_upsample_
     ttnn.deallocate(noise_tt)
     ttnn.deallocate(uv_tt)
     ttnn.deallocate(rand_ini_tt)
-    ttnn.deallocate(sinegen_noise_tt)
-    ttnn.deallocate(source_noise_tt)
 
 
 def test_tt_generator_phase_and_inverse_integration_diagnostic(device):
@@ -1035,13 +993,9 @@ def test_tt_generator_phase_and_inverse_integration_diagnostic(device):
         return out.to(kwargs.get("dtype", out.dtype))
 
     def _fake_randn_like(t, **kwargs):
-        if t.shape == sinegen_noise_raw.shape:
-            out = sinegen_noise_raw
-        elif t.shape == source_noise_raw.shape:
-            out = source_noise_raw
-        else:
-            raise RuntimeError(f"Unexpected torch.randn_like shape: {tuple(t.shape)}")
-        return out.to(device=t.device, dtype=t.dtype)
+        if t.shape[-1] == 1:
+            return source_noise_raw.to(device=t.device, dtype=t.dtype).expand_as(t).clone()
+        return sinegen_noise_raw.to(device=t.device, dtype=t.dtype).expand_as(t).clone()
 
     pcc_log: list[tuple[str, float]] = []
 
@@ -1052,8 +1006,6 @@ def test_tt_generator_phase_and_inverse_integration_diagnostic(device):
             pcc_log.append((name, _pcc_ref_tt(ref_t, tt_t)))
 
     # --- Reference: step-by-step (istftnet.py 385-409) ---
-    torch.rand = _fake_rand
-    torch.randn_like = _fake_randn_like
     ref_stage = {
         "leaky_relu_0.1": [],
         "noise_conv": [],
@@ -1062,7 +1014,13 @@ def test_tt_generator_phase_and_inverse_integration_diagnostic(device):
         "add": [],
         "resblocks": [],
     }
+    p = preprocess_tt_generator(ref, device, time_len_x=T_x)
+    real_rand = torch.rand
+    real_randn_like = torch.randn_like
+    torch.rand = _fake_rand
+    torch.randn_like = _fake_randn_like
     try:
+        tt_mod = TTGenerator(device, p)
         with torch.no_grad():
             f0_ref = ref.f0_upsamp(f0[:, None]).transpose(1, 2)
             har_source_btl, _, _ = ref.m_source(f0_ref)
@@ -1099,9 +1057,6 @@ def test_tt_generator_phase_and_inverse_integration_diagnostic(device):
     finally:
         torch.rand = real_rand
         torch.randn_like = real_randn_like
-
-    p = preprocess_tt_generator(ref, device, time_len_x=T_x)
-    tt_mod = TTGenerator(device, p)
     _assert_generator_no_fallbacks(tt_mod)
     memory_config = ttnn.DRAM_MEMORY_CONFIG
     ck = tt_mod.compute_kernel_config
@@ -1112,8 +1067,6 @@ def test_tt_generator_phase_and_inverse_integration_diagnostic(device):
     sinegen_rand_ini = ttnn.from_torch(
         rand_ini.unsqueeze(1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
     )
-    sinegen_noise_raw = ttnn.from_torch(sinegen_noise_raw, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    source_noise_raw = ttnn.from_torch(source_noise_raw, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
     # --- TT: mirrors ``TTGenerator._harmonic_source_path`` + ``forward`` op-for-op ---
     f_shape = list(f0.shape)
@@ -1136,8 +1089,6 @@ def test_tt_generator_phase_and_inverse_integration_diagnostic(device):
     har_source, _noise_out, _uv = tt_mod._m_source.forward(
         f0_har,
         sinegen_rand_ini=sinegen_rand_ini,
-        sinegen_noise_raw=sinegen_noise_raw,
-        out_noise_raw=source_noise_raw,
         memory_config=memory_config,
     )
     ttnn.deallocate(f0_har)
@@ -1293,8 +1244,6 @@ def test_tt_generator_phase_and_inverse_integration_diagnostic(device):
     ttnn.deallocate(s_bs)
     ttnn.deallocate(f0)
     ttnn.deallocate(sinegen_rand_ini)
-    ttnn.deallocate(sinegen_noise_raw)
-    ttnn.deallocate(source_noise_raw)
     ttnn.deallocate(spec_bct)
     ttnn.deallocate(phase_bct)
     ttnn.deallocate(audio)
@@ -1416,19 +1365,20 @@ def test_tt_generator_full_forward_torch_stft_fallback_pcc(device):
     T_x = 5
     x, s, f0 = _setup_test_inputs(T_x)
 
-    with torch.no_grad(), _torch_random_zeros():
-        y_ref = ref(x, s, f0)
-
     params = preprocess_tt_generator(ref, device, time_len_x=T_x)
     # Enable full STFT transform fallback + SineGen phase fallback + source linear/tanh fallbacks.
-    tt_mod = TTGenerator(
-        device,
-        params,
-        use_torch_stft_fallback=True,
-        use_torch_phase_fallback=True,
-        use_torch_linear_fallback=True,
-        use_torch_tanh_fallback=True,
-    )
+    # TTGenerator is constructed inside the same zeros context so self._noise_raw /
+    # self._out_noise_raw match the zeros noise used by the reference forward.
+    with torch.no_grad(), _torch_random_zeros():
+        y_ref = ref(x, s, f0)
+        tt_mod = TTGenerator(
+            device,
+            params,
+            use_torch_stft_fallback=True,
+            use_torch_phase_fallback=True,
+            use_torch_linear_fallback=True,
+            use_torch_tanh_fallback=True,
+        )
 
     x_nlc = x.transpose(1, 2).contiguous()
     x_tt = ttnn.from_torch(x_nlc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -1478,17 +1428,16 @@ def test_tt_generator_stft_linear_fallback_no_sinegen_pcc(device):
     T_x = 5
     x, s, f0 = _setup_test_inputs(T_x)
 
+    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
     with torch.no_grad(), _torch_random_zeros():
         y_ref = ref(x, s, f0)
-
-    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
-    tt_mod = TTGenerator(
-        device,
-        params,
-        use_torch_stft_fallback=True,
-        use_torch_linear_fallback=True,
-        use_torch_phase_fallback=False,  # SineGen stays on TTNN — this is what we're testing
-    )
+        tt_mod = TTGenerator(
+            device,
+            params,
+            use_torch_stft_fallback=True,
+            use_torch_linear_fallback=True,
+            use_torch_phase_fallback=False,  # SineGen stays on TTNN — this is what we're testing
+        )
 
     x_nlc = x.transpose(1, 2).contiguous()
     x_tt = ttnn.from_torch(x_nlc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -1532,18 +1481,17 @@ def test_tt_generator_stft_tanh_fallback_no_sinegen_pcc(device):
     T_x = 5
     x, s, f0 = _setup_test_inputs(T_x)
 
+    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
     with torch.no_grad(), _torch_random_zeros():
         y_ref = ref(x, s, f0)
-
-    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
-    tt_mod = TTGenerator(
-        device,
-        params,
-        use_torch_stft_fallback=True,
-        use_torch_tanh_fallback=True,
-        use_torch_linear_fallback=False,
-        use_torch_phase_fallback=False,
-    )
+        tt_mod = TTGenerator(
+            device,
+            params,
+            use_torch_stft_fallback=True,
+            use_torch_tanh_fallback=True,
+            use_torch_linear_fallback=False,
+            use_torch_phase_fallback=False,
+        )
 
     x_nlc = x.transpose(1, 2).contiguous()
     x_tt = ttnn.from_torch(x_nlc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -1583,18 +1531,17 @@ def test_tt_generator_full_forward_all_fallbacks_except_linear_pcc(device):
     T_x = 5
     x, s, f0 = _setup_test_inputs(T_x)
 
+    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
     with torch.no_grad(), _torch_random_zeros():
         y_ref = ref(x, s, f0)
-
-    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
-    tt_mod = TTGenerator(
-        device,
-        params,
-        use_torch_stft_fallback=True,
-        use_torch_phase_fallback=True,
-        use_torch_tanh_fallback=True,
-        use_torch_linear_fallback=False,
-    )
+        tt_mod = TTGenerator(
+            device,
+            params,
+            use_torch_stft_fallback=True,
+            use_torch_phase_fallback=True,
+            use_torch_tanh_fallback=True,
+            use_torch_linear_fallback=False,
+        )
 
     x_nlc = x.transpose(1, 2).contiguous()
     x_tt = ttnn.from_torch(x_nlc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -1637,51 +1584,39 @@ def test_tt_generator_full_forward_smoke(device):
     sinegen_noise_raw = torch.randn(B, T_har, dim)
     source_noise_raw = torch.randn(B, T_har, 1)
 
-    real_rand = torch.rand
-    real_randn_like = torch.randn_like
-    state = {"randn_like_calls": 0}
-
     def _fake_rand(*size, **kwargs):
         out = rand_ini.to(kwargs.get("device", rand_ini.device))
         dtype = kwargs.get("dtype", out.dtype)
         return out.to(dtype)
 
     def _fake_randn_like(t, **kwargs):
-        state["randn_like_calls"] += 1
-        if t.shape == sinegen_noise_raw.shape:
-            out = sinegen_noise_raw.to(device=t.device, dtype=t.dtype)
-        elif t.shape == source_noise_raw.shape:
-            out = source_noise_raw.to(device=t.device, dtype=t.dtype)
-        else:
-            raise RuntimeError(f"Unexpected torch.randn_like shape: {tuple(t.shape)}")
-        return out
+        if t.shape[-1] == 1:
+            return source_noise_raw.to(device=t.device, dtype=t.dtype).expand_as(t).clone()
+        return sinegen_noise_raw.to(device=t.device, dtype=t.dtype).expand_as(t).clone()
 
+    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
+    real_rand = torch.rand
+    real_randn_like = torch.randn_like
     torch.rand = _fake_rand
     torch.randn_like = _fake_randn_like
     try:
+        tt_mod = TTGenerator(device, params)
         with torch.no_grad():
             y_ref = ref(x, s, f0)
     finally:
         torch.rand = real_rand
         torch.randn_like = real_randn_like
 
-    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
-    tt_mod = TTGenerator(device, params)
-
     x_nlc = x.transpose(1, 2).contiguous()
     x_tt = ttnn.from_torch(x_nlc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     s_tt = ttnn.from_torch(s, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     f0_tt = ttnn.from_torch(f0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     rand_ini_tt = ttnn.from_torch(rand_ini.unsqueeze(1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    sinegen_noise_tt = ttnn.from_torch(sinegen_noise_raw, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    source_noise_tt = ttnn.from_torch(source_noise_raw, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = tt_mod(
         x_tt,
         s_tt,
         f0_tt,
         sinegen_rand_ini=rand_ini_tt,
-        sinegen_noise_raw=sinegen_noise_tt,
-        source_noise_raw=source_noise_tt,
     )
 
     y_h = ttnn.to_torch(y_tt).float()
@@ -1694,8 +1629,6 @@ def test_tt_generator_full_forward_smoke(device):
     _, pcc = comp_pcc(y_ref, y_h, pcc=0.0)
     print(f"TTGenerator full-forward smoke PCC: {pcc:.6f} (informational; WH bf16 limit applies)")
     ttnn.deallocate(rand_ini_tt)
-    ttnn.deallocate(sinegen_noise_tt)
-    ttnn.deallocate(source_noise_tt)
 
 
 @pytest.mark.xfail(
