@@ -447,13 +447,24 @@ def main() -> None:
             from models.demos.ace_step_v1_5.torch_ref.five_hz_lm import LocalFiveHzLMHandler
         except ModuleNotFoundError as e:
             raise RuntimeError(
-                "--use-official-lm requires AceStepHandler and its deps "
-                f"(missing {e.name!r}). pip install torchaudio (match your PyTorch build)."
+                "--use-official-lm requires the upstream ACE-Step ``acestep`` package "
+                "(``acestep.handler.AceStepHandler`` + ``acestep.inference.generate_music``).\n"
+                f"  Missing module: {e.name!r}.\n"
+                "Fix one of:\n"
+                "  1. Keep the vendored copy at "
+                "models/demos/ace_step_v1_5/torch_ref/_vendored_acestep/ in place "
+                "(it ships with this demo by default).\n"
+                "  2. Point --ace-step-repo-root / $ACE_STEP_REPO_ROOT at an external clone "
+                "of https://github.com/ace-step/ACE-Step-1.5.\n"
+                "  3. Run without --use-official-lm (the default TTNN path doesn't need "
+                "acestep.inference)."
             ) from e
 
-        import acestep.model_downloader as _mdl
-
-        _mdl.MAIN_MODEL_COMPONENTS = [args.variant, "vae", "Qwen3-Embedding-0.6B", args.lm_variant]
+        # Weights are pre-downloaded by ``_ensure_variant`` earlier in main(); the
+        # historical ``_mdl.MAIN_MODEL_COMPONENTS = [...]`` mutation here was informational
+        # only (telling the vendored downloader which sub-components live in the main repo).
+        # Removed because the handler's defaults already cover the same set and every file
+        # exists on disk by the time the handler runs.
 
         dit_handler = AceStepHandler()
         llm_handler = LocalFiveHzLMHandler()
@@ -679,16 +690,28 @@ def main() -> None:
         from models.demos.ace_step_v1_5.torch_ref.five_hz_lm import LocalFiveHzLMHandler
     except ModuleNotFoundError as e:
         raise RuntimeError(
-            "Default preprocessing imports AceStepHandler, which pulls ACE-Step training code "
-            f"(e.g. torchaudio). Missing module: {e.name!r}. "
-            "Fix: pip install torchaudio (match your torch/CUDA build from pytorch.org)."
+            "The default preprocessing path needs the upstream ACE-Step ``acestep`` package "
+            "(``acestep.handler.AceStepHandler`` owns ``preprocess_batch`` and "
+            "``prepare_condition``).\n"
+            f"  Missing module: {e.name!r}.\n"
+            "Fix one of:\n"
+            "  1. Keep the vendored copy at "
+            "models/demos/ace_step_v1_5/torch_ref/_vendored_acestep/ in place "
+            "(it ships with this demo by default).\n"
+            "  2. Point --ace-step-repo-root / $ACE_STEP_REPO_ROOT at an external clone "
+            "of https://github.com/ace-step/ACE-Step-1.5.\n"
+            "  3. Pass --fast-preprocess to run the lightweight tokenizer + TTNN Qwen3 "
+            "encoder path that does not depend on acestep.handler (note: this skips the "
+            "5 Hz LM and lyric/timbre encoders, so audio quality differs).\n"
+            "  4. If e.name == 'torchaudio': pip install torchaudio (match your torch/CUDA "
+            "build from pytorch.org)."
         ) from e
-
-    import acestep.model_downloader as _mdl
 
     from models.demos.ace_step_v1_5.acestep_preprocess_shim import GenerationConfig, GenerationParams
 
-    _mdl.MAIN_MODEL_COMPONENTS = [args.variant, "vae", "Qwen3-Embedding-0.6B", args.lm_variant]
+    # Weights are pre-downloaded by ``_ensure_variant`` earlier in main(); the historical
+    # ``import acestep.model_downloader as _mdl; _mdl.MAIN_MODEL_COMPONENTS = [...]``
+    # mutation here was informational only and has been removed.
 
     tt_dev_early = None
     if getattr(args, "experimental_5hz_ttnn_causal_lm", False):
