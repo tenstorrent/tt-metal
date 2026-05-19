@@ -59,6 +59,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_binary_sfpu.h"
 #include "params.h"
 #include "sfpu/ckernel_sfpu_add.h"
+#if defined(SFPU_INT_OP_MUL)
+#include "sfpu/ckernel_sfpu_mul_int32.h"
+#endif
+#if defined(SFPU_INT_OP_GT) || defined(SFPU_INT_OP_LT) || defined(SFPU_INT_OP_LE) || defined(SFPU_INT_OP_GE)
+#include "sfpu/ckernel_sfpu_binary_comp.h"
+#endif
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -78,20 +84,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_sfpu_init_();
 
-    constexpr int tile_stride = NUM_FACES * FACE_R_DIM; // 4 faces * 16 rows per tile
+    constexpr int tile_stride = NUM_FACES * FACE_R_DIM;
     const int in0_offset      = params.SRC0_TILE_IDX * tile_stride;
     const int in1_offset      = params.SRC1_TILE_IDX * tile_stride;
     const int out_offset      = params.DST_TILE_IDX * tile_stride;
 
-    _llk_math_eltwise_sfpu_start_(0);
-
-    for (std::uint32_t face = 0; face < NUM_FACES; face++)
-    {
-        _calculate_add_(src_format, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
-        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
-    }
-
-    _llk_math_eltwise_sfpu_done_();
+#if defined(SFPU_INT_OP_MUL)
+    _llk_math_eltwise_binary_sfpu_params_<false>(
+        _mul_int32_<false, 8>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+#elif defined(SFPU_INT_OP_GT)
+    _llk_math_eltwise_binary_sfpu_params_<false>(
+        calculate_binary_comp_int32<false, 8, SfpuType::gt>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+#elif defined(SFPU_INT_OP_LT)
+    _llk_math_eltwise_binary_sfpu_params_<false>(
+        calculate_binary_comp_int32<false, 8, SfpuType::lt>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+#elif defined(SFPU_INT_OP_LE)
+    _llk_math_eltwise_binary_sfpu_params_<false>(
+        calculate_binary_comp_int32<false, 8, SfpuType::le>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+#elif defined(SFPU_INT_OP_GE)
+    _llk_math_eltwise_binary_sfpu_params_<false>(
+        calculate_binary_comp_int32<false, 8, SfpuType::ge>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+#else
+    _llk_math_eltwise_binary_sfpu_params_<false>(
+        _add_int_<false, 8, 0, false>, 0, src_format, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+#endif
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 }
