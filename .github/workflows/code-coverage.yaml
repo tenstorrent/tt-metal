@@ -111,6 +111,7 @@ jobs:
             base=$(basename "$obj" .so)
             llvm-cov-20 report \
               -instr-profile=/work/coverage/coverage.profdata \
+              --ignore-filename-regex='(^|/)\.cpmcache/|(^|/)build/|(^|/)third_party/' \
               "$obj" > "/work/coverage_per_object/${base}.txt" 2>&1 || true
           done
 
@@ -119,7 +120,7 @@ jobs:
             --format=html \
             --instr-profile=/work/coverage/coverage.profdata \
             "${obj_flags[@]}" \
-            --ignore-filename-regex='(/work/build/|/work/.cpmcache/|/work/tt_metal/llrt/hal/generated/)' \
+            --ignore-filename-regex='(^|/)\.cpmcache/|(^|/)build/|(^|/)third_party/' \
             --output-dir=/work/coverage_html
           echo "HTML report: $(du -sh /work/coverage_html | cut -f1)"
 
@@ -128,7 +129,7 @@ jobs:
             --format=text \
             --instr-profile=/work/coverage/coverage.profdata \
             "${obj_flags[@]}" \
-            --ignore-filename-regex='(/work/build/|/work/.cpmcache/|/work/tt_metal/llrt/hal/generated/)' \
+            --ignore-filename-regex='(^|/)\.cpmcache/|(^|/)build/|(^|/)third_party/' \
             --summary-only > /work/coverage/summary.json
 
           # Step summary
