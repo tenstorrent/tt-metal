@@ -20,7 +20,7 @@ This module:
   2) Builds the transformation matrix used by ``ttnn.experimental.rotary_embedding_llama`` so we
      can apply RoPE on-device with the same numerics.
   3) Exposes slicing helpers for prefill (``[start_pos:start_pos+seq_len]``) and decode
-     (``[current_pos]``).
+     (``[current_pos]`` via on-device ``ttnn.embedding`` — no host gather / ``from_torch``).
 
 Llama-4 query scaling is **baked into cos/sin** for the query path so the on-device RoPE op
 multiplies through with no extra ops. See the ``cos_q`` / ``sin_q`` upload below.
@@ -39,6 +39,7 @@ from models.experimental.devstral2_large.tt.weight_loading import (
     ROPE_TABLE_MEM_CONFIG,
     resolve_weight_cache_path,
     upload_replicated_tile,
+    weight_cache_file,
 )
 
 __all__ = ["TtRotaryEmbedding", "precompute_cos_sin", "compute_llama4_scale", "get_rot_transformation_mat"]
@@ -241,6 +242,58 @@ class TtRotaryEmbedding:
             cache_key="rotary_trans_mat",
         )
 
+        # Decode: ROW_MAJOR DRAM tables for ``ttnn.embedding`` row gather (cf. tt_transformers HfRotarySetup).
+        def _upload_decode_lookup(host_2d: torch.Tensor, name: str) -> ttnn.Tensor:
+            return ttnn.as_tensor(
+                host_2d.to(torch.bfloat16).contiguous(),
+                dtype=dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                cache_file_name=weight_cache_file(cache_path, f"rotary_decode_{name}"),
+            )
+
+        self.cos_q_decode = _upload_decode_lookup(cos_q, "cos_q")
+        self.sin_q_decode = _upload_decode_lookup(sin_q, "sin_q")
+        self.cos_k_decode = _upload_decode_lookup(cos, "cos_k")
+        self.sin_k_decode = _upload_decode_lookup(sin, "sin_k")
+
+        self._sharded_trans_mat: dict[int, ttnn.Tensor] = {}
+
+    def get_sharded_trans_mat(self, batch_size: int) -> ttnn.Tensor:
+        """Height-sharded trans_mat for decode RoPE (cached per batch size)."""
+        if batch_size not in self._sharded_trans_mat:
+            grid_size = ttnn.CoreCoord(8, 8)
+            batch_grid = ttnn.num_cores_to_corerangeset(batch_size, grid_size, row_wise=True)
+            mem_config = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+                core_grid=batch_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self._sharded_trans_mat[batch_size] = ttnn.interleaved_to_sharded(self.trans_mat, mem_config)
+        return self._sharded_trans_mat[batch_size]
+
+    def _decode_rot_idxs(self, current_pos: ttnn.Tensor, batch_size: int) -> ttnn.Tensor:
+        rot_idxs = ttnn.reshape(current_pos, (1, batch_size))
+        return ttnn.typecast(rot_idxs, ttnn.uint32)
+
+    def _lookup_decode_table(self, rot_idxs: ttnn.Tensor, table: ttnn.Tensor, *, batch_size: int) -> ttnn.Tensor:
+        """``ttnn.embedding`` gather → ``[1, batch, TILE, head_dim]`` interleaved L1 for decode RoPE."""
+        emb = ttnn.embedding(
+            rot_idxs,
+            table,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        emb = ttnn.unsqueeze_to_4D(emb)
+        emb = ttnn.transpose(emb, 1, 2)
+        if batch_size % ttnn.TILE_SIZE != 0:
+            emb = emb[:, :batch_size, :, :]
+        return ttnn.to_memory_config(emb, ttnn.L1_MEMORY_CONFIG)
+
     # --- Prefill: returns (cos_q, sin_q, cos_k, sin_k) sliced to ``[start:start+seq_len]`` ---
 
     def get_prefill_tables(
@@ -255,44 +308,26 @@ class TtRotaryEmbedding:
 
         return _slice(self.cos_q), _slice(self.sin_q), _slice(self.cos_k), _slice(self.sin_k)
 
-    # --- Decode: returns per-position rows uploaded fresh each step ---
+    # --- Decode: on-device embedding lookup (no host round-trip) ---
 
     def get_decode_tables(
         self,
-        current_pos,
+        current_pos: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        """``current_pos`` is a device or host int tensor of shape ``[batch]``.
+        """Gather cos/sin rows for ``current_pos`` via ``ttnn.embedding``.
 
-        Indexed on the host and uploaded fresh; mirrors HF semantics (``forward(x, position_ids)``
-        rebuilds the table for given positions) and avoids on-device gather.
+        ``current_pos`` must be a device tensor of shape ``[batch]`` (int32). Returns four
+        interleaved L1 tensors shaped ``[1, batch, TILE, head_dim]`` for sharding in attention.
         """
-        if isinstance(current_pos, ttnn.Tensor):
-            positions = ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0]).reshape(-1).long()
-        else:
-            positions = current_pos.long()
-        batch = int(positions.shape[0])
-        head_dim = self.args.head_dim
-
-        def _gather(t: torch.Tensor) -> ttnn.Tensor:
-            rows = t[positions].to(torch.bfloat16).reshape(1, batch, 1, head_dim)
-            # Pad seq dim to a tile so ``ttnn.experimental.rotary_embedding_llama`` is happy.
-            pad_to = ttnn.TILE_SIZE
-            padded = torch.zeros((1, batch, pad_to, head_dim), dtype=torch.bfloat16)
-            padded[:, :, 0:1, :] = rows
-            return ttnn.from_torch(
-                padded,
-                device=self.mesh_device,
-                dtype=self.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-
+        if not isinstance(current_pos, ttnn.Tensor):
+            raise TypeError(f"current_pos must be ttnn.Tensor on device, got {type(current_pos)!r}")
+        batch_size = int(current_pos.shape[0])
+        rot_idxs = self._decode_rot_idxs(current_pos, batch_size)
         return (
-            _gather(self._cos_q_host),
-            _gather(self._sin_q_host),
-            _gather(self._cos_host),
-            _gather(self._sin_host),
+            self._lookup_decode_table(rot_idxs, self.cos_q_decode, batch_size=batch_size),
+            self._lookup_decode_table(rot_idxs, self.sin_q_decode, batch_size=batch_size),
+            self._lookup_decode_table(rot_idxs, self.cos_k_decode, batch_size=batch_size),
+            self._lookup_decode_table(rot_idxs, self.sin_k_decode, batch_size=batch_size),
         )
 
     # --- Convenience: apply RoPE on device. ---
