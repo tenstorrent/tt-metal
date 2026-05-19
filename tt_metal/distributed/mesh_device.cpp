@@ -1381,8 +1381,8 @@ bool MeshDeviceImpl::initialize_impl(
 }
 
 void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device) {
-    static const bool disable_rt_profiler = tt::parse_env<bool>("DISABLE_REALTIME_PROFILER", false);
-    if (disable_rt_profiler || realtime_profiler_) {
+    static const bool enable_rt_profiler = tt::parse_env<bool>("ENABLE_REALTIME_PROFILER", false);
+    if (!enable_rt_profiler || realtime_profiler_) {
         return;
     }
     realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);
