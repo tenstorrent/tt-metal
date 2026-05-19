@@ -23,7 +23,6 @@ from models.tt_dit.models.transformers.ltx.rope_ltx import LTXRopeType, precompu
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
-from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from models.tt_dit.utils.test import line_params, ring_params
 
@@ -62,6 +61,7 @@ def test_ltx_transformer_block(
     num_links: int,
     topology: ttnn.Topology,
     is_fsdp: bool,
+    reset_seeds,
 ) -> None:
     """
     Test LTXTransformerBlock: compare TT vs LTX-2 PyTorch BasicAVTransformerBlock.
@@ -213,12 +213,14 @@ def test_ltx_transformer_model(
     num_links: int,
     topology: ttnn.Topology,
     is_fsdp: bool,
+    reset_seeds,
 ) -> None:
     """
     Test LTXTransformerModel: compare 1-layer TT model vs LTX-2 PyTorch LTXModel.
     """
     from ltx_core.guidance.perturbations import BatchedPerturbationConfig, PerturbationConfig
     from ltx_core.model.transformer.model import LTXModel, LTXModelType, Modality
+    from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
 
     dim = 4096
     num_heads = 32
@@ -232,7 +234,13 @@ def test_ltx_transformer_model(
     seq_len = F * H * W  # 256
     prompt_len = 32
 
-    # Create PyTorch reference (1 layer, video only)
+    # Create PyTorch reference (1 layer, video only).
+    # SPLIT rope_type matches the production pipeline and the block test.
+    # LTX-2's default rope_type changed from INTERLEAVED to SPLIT in a vendor
+    # update; pinning explicitly here prevents the same drift from biting again.
+    # Deterministic, scaled-down random weights keep both reference and TT
+    # forwards numerically well-behaved (full default init can explode through
+    # adaln_single + (1+scale)*x chains in fp32 with no real training signal).
     torch_model = LTXModel(
         model_type=LTXModelType.VideoOnly,
         num_layers=num_layers,
@@ -243,10 +251,61 @@ def test_ltx_transformer_model(
         cross_attention_dim=cross_attention_dim,
         use_middle_indices_grid=True,
         cross_attention_adaln=True,
+        rope_type=RefRopeType.SPLIT,
     )
     torch_model.eval()
-    torch_state = torch_model.state_dict()
-    logger.info(f"PyTorch model: {len(torch_state)} keys, {sum(p.numel() for p in torch_model.parameters()):,} params")
+    WEIGHT_SEED = 1234
+    torch.manual_seed(WEIGHT_SEED)
+    with torch.no_grad():
+        for p in torch_model.parameters():
+            p.copy_(torch.randn(p.shape, dtype=p.dtype) * 0.1)
+    logger.info(f"PyTorch model: {sum(p.numel() for p in torch_model.parameters()):,} params (overwritten N(0, 0.1²))")
+
+    # Create inputs
+    torch.manual_seed(42)
+    latent = torch.randn(B, seq_len, in_channels, dtype=torch.float32)
+    context = torch.randn(B, prompt_len, cross_attention_dim, dtype=torch.float32)
+
+    # Positions: (B, 3, T, 2) for use_middle_indices_grid=True
+    t_ids = torch.arange(F)
+    h_ids = torch.arange(H)
+    w_ids = torch.arange(W)
+    grid_t, grid_h, grid_w = torch.meshgrid(t_ids, h_ids, w_ids, indexing="ij")
+    indices = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=0).float()
+    positions = torch.stack([indices, indices], dim=-1).unsqueeze(0)  # (1, 3, T, 2)
+
+    # Timestep — small enough that adaln_single (input timestep * 1000) stays
+    # comfortably in float32 range even with the scaled-down random init.
+    timestep_val = 0.01
+
+    # === PyTorch reference forward (compute BEFORE any TT operations so that
+    # ttnn weight conversions cannot perturb torch_model parameters and push
+    # the random-init model over its narrow stability cliff). ===
+    # Match sigma to timestep_val: TT's inner_step uses a single `timestep_torch`
+    # for BOTH adaln_single (driven by timesteps in torch) AND prompt_adaln_single
+    # (driven by sigma in torch). Production calls inner_step with timestep=sigma,
+    # so we mirror that here. Without this, torch's prompt_adaln sees a different
+    # input than TT's, yielding a systematically diverged cross-attention path
+    # and ~10% PCC loss masquerading as a precision issue.
+    video = Modality(
+        latent=latent,
+        sigma=torch.tensor([timestep_val]),
+        timesteps=torch.ones(B, seq_len) * timestep_val,
+        positions=positions,
+        context=context,
+        enabled=True,
+        context_mask=None,
+        attention_mask=None,
+    )
+    perturbations = BatchedPerturbationConfig(perturbations=[PerturbationConfig(perturbations=None) for _ in range(B)])
+    with torch.no_grad():
+        torch_out, _ = torch_model(video=video, audio=None, perturbations=perturbations)
+    logger.info(f"PyTorch model output shape: {torch_out.shape}, range=[{torch_out.min():.4f}, {torch_out.max():.4f}]")
+
+    # Snapshot state dict with cloned tensors so TT-side _prepare_torch_state
+    # views/permutations cannot share storage with torch_model parameters.
+    torch_state = {k: v.detach().clone() for k, v in torch_model.state_dict().items()}
+    logger.info(f"State dict: {len(torch_state)} keys")
 
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
@@ -265,38 +324,6 @@ def test_ltx_transformer_model(
     )
     tt_model.load_torch_state_dict(torch_state)
 
-    # Create inputs
-    torch.manual_seed(42)
-    latent = torch.randn(B, seq_len, in_channels, dtype=torch.float32)
-    context = torch.randn(B, prompt_len, cross_attention_dim, dtype=torch.float32)
-
-    # Positions: (B, 3, T, 2) for use_middle_indices_grid=True
-    t_ids = torch.arange(F)
-    h_ids = torch.arange(H)
-    w_ids = torch.arange(W)
-    grid_t, grid_h, grid_w = torch.meshgrid(t_ids, h_ids, w_ids, indexing="ij")
-    indices = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=0).float()
-    positions = torch.stack([indices, indices], dim=-1).unsqueeze(0)  # (1, 3, T, 2)
-
-    # Timestep
-    timestep_val = 500.0
-
-    # === PyTorch reference forward ===
-    video = Modality(
-        latent=latent,
-        sigma=torch.tensor([0.5]),
-        timesteps=torch.ones(B, seq_len) * timestep_val,
-        positions=positions,
-        context=context,
-        enabled=True,
-        context_mask=None,
-        attention_mask=None,
-    )
-    perturbations = BatchedPerturbationConfig(perturbations=[PerturbationConfig(perturbations=None) for _ in range(B)])
-    with torch.no_grad():
-        torch_out, _ = torch_model(video=video, audio=None, perturbations=perturbations)
-    logger.info(f"PyTorch model output shape: {torch_out.shape}")
-
     # === TT forward ===
     # Prompt
     prompt = context.unsqueeze(0)  # (1, B, L, D)
@@ -309,6 +336,9 @@ def test_ltx_transformer_model(
     # For use_middle_indices_grid=True, average start/end (same here)
     indices_grid_for_rope = indices_grid_for_rope.unsqueeze(0)  # (1, T, 3)
 
+    # SPLIT-format RoPE returns (B, H, N, head_dim/2) directly — no reshape needed.
+    # Must match the rope_type used by torch_model (now SPLIT) and TT attention
+    # (selected by passing trans_mat=None below).
     cos_freq, sin_freq = precompute_freqs_cis(
         indices_grid_for_rope,
         dim=dim,
@@ -316,27 +346,22 @@ def test_ltx_transformer_model(
         theta=10000.0,
         max_pos=[20, 2048, 2048],
         num_attention_heads=num_heads,
+        rope_type=LTXRopeType.SPLIT,
     )
-    # Shape: (1, T, dim) -> reshape to (B, H, N, head_dim) for per-head RoPE
-    cos_heads = cos_freq.reshape(B, seq_len, num_heads, head_dim).permute(0, 2, 1, 3)
-    sin_heads = sin_freq.reshape(B, seq_len, num_heads, head_dim).permute(0, 2, 1, 3)
-    tt_cos = bf16_tensor_2dshard(cos_heads, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_sin = bf16_tensor_2dshard(sin_heads, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+    tt_cos = bf16_tensor_2dshard(cos_freq, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_sin = bf16_tensor_2dshard(sin_freq, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
 
-    # Use inner_step: takes timestep value, multiplies by 1000 internally for adaln
-    # Reference does: timesteps * timestep_scale_multiplier(1000) → adaln
-    # inner_step does: timestep_torch * 1000 → adaln
-    # So pass timestep_val directly to match reference behavior
+    # Use inner_step: takes timestep value, multiplies by 1000 internally for adaln.
+    # trans_mat=None selects the SPLIT RoPE path in TT attention to match torch.
     spatial_torch = latent.unsqueeze(0)  # (1, B, N, in_channels)
-    timestep_torch = torch.tensor([timestep_val])  # 500.0 → inner_step makes 500000.0
+    timestep_torch = torch.tensor([timestep_val])
 
     tt_out = tt_model.inner_step(
         video_1BNI_torch=spatial_torch,
         video_prompt_1BLP=tt_prompt,
         video_rope_cos=tt_cos,
         video_rope_sin=tt_sin,
-        trans_mat=tt_trans_mat,
+        trans_mat=None,
         video_N=seq_len,
         timestep_torch=timestep_torch,
     )
@@ -363,6 +388,7 @@ def test_ltx_transformer_inner_step(
     num_links: int,
     topology: ttnn.Topology,
     is_fsdp: bool,
+    reset_seeds,
 ) -> None:
     """
     Test LTXTransformerModel.inner_step: validates the pipeline denoising loop path.
@@ -370,6 +396,7 @@ def test_ltx_transformer_inner_step(
     """
     from ltx_core.guidance.perturbations import BatchedPerturbationConfig, PerturbationConfig
     from ltx_core.model.transformer.model import LTXModel, LTXModelType, Modality
+    from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
 
     dim = 4096
     num_heads = 32
@@ -383,7 +410,8 @@ def test_ltx_transformer_inner_step(
     seq_len = F * H * W
     prompt_len = 32
 
-    # PyTorch reference
+    # PyTorch reference. SPLIT rope_type matches production / block test
+    # (see comment in test_ltx_transformer_model for rationale).
     torch_model = LTXModel(
         model_type=LTXModelType.VideoOnly,
         num_layers=num_layers,
@@ -394,9 +422,50 @@ def test_ltx_transformer_inner_step(
         cross_attention_dim=cross_attention_dim,
         use_middle_indices_grid=True,
         cross_attention_adaln=True,
+        rope_type=RefRopeType.SPLIT,
     )
     torch_model.eval()
-    torch_state = torch_model.state_dict()
+    WEIGHT_SEED = 1234
+    torch.manual_seed(WEIGHT_SEED)
+    with torch.no_grad():
+        for p in torch_model.parameters():
+            p.copy_(torch.randn(p.shape, dtype=p.dtype) * 0.1)
+
+    # Inputs
+    torch.manual_seed(42)
+    latent = torch.randn(B, seq_len, in_channels, dtype=torch.float32)
+    context = torch.randn(B, prompt_len, cross_attention_dim, dtype=torch.float32)
+    timestep_val = 0.01
+
+    # Positions
+    t_ids = torch.arange(F)
+    h_ids = torch.arange(H)
+    w_ids = torch.arange(W)
+    grid_t, grid_h, grid_w = torch.meshgrid(t_ids, h_ids, w_ids, indexing="ij")
+    indices = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=0).float()
+    positions = torch.stack([indices, indices], dim=-1).unsqueeze(0)
+
+    # === PyTorch reference forward (compute BEFORE any TT operations) ===
+    # sigma=timestep_val: TT's inner_step uses a single value for both
+    # adaln_single and prompt_adaln_single (matches production where timestep=sigma).
+    video = Modality(
+        latent=latent,
+        sigma=torch.tensor([timestep_val]),
+        timesteps=torch.ones(B, seq_len) * timestep_val,
+        positions=positions,
+        context=context,
+        enabled=True,
+        context_mask=None,
+        attention_mask=None,
+    )
+    perturbations = BatchedPerturbationConfig(perturbations=[PerturbationConfig(perturbations=None) for _ in range(B)])
+    with torch.no_grad():
+        torch_out, _ = torch_model(video=video, audio=None, perturbations=perturbations)
+    logger.info(f"PyTorch reference output range=[{torch_out.min():.4f}, {torch_out.max():.4f}]")
+
+    # Snapshot state dict with cloned tensors so TT-side _prepare_torch_state
+    # views/permutations cannot share storage with torch_model parameters.
+    torch_state = {k: v.detach().clone() for k, v in torch_model.state_dict().items()}
 
     # TT model
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
@@ -416,41 +485,14 @@ def test_ltx_transformer_inner_step(
     )
     tt_model.load_torch_state_dict(torch_state)
 
-    # Inputs
-    torch.manual_seed(42)
-    latent = torch.randn(B, seq_len, in_channels, dtype=torch.float32)
-    context = torch.randn(B, prompt_len, cross_attention_dim, dtype=torch.float32)
-    timestep_val = 500.0
-
-    # Positions
-    t_ids = torch.arange(F)
-    h_ids = torch.arange(H)
-    w_ids = torch.arange(W)
-    grid_t, grid_h, grid_w = torch.meshgrid(t_ids, h_ids, w_ids, indexing="ij")
-    indices = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=0).float()
-    positions = torch.stack([indices, indices], dim=-1).unsqueeze(0)
-
-    # PyTorch reference forward
-    video = Modality(
-        latent=latent,
-        sigma=torch.tensor([0.5]),
-        timesteps=torch.ones(B, seq_len) * timestep_val,
-        positions=positions,
-        context=context,
-        enabled=True,
-        context_mask=None,
-        attention_mask=None,
-    )
-    perturbations = BatchedPerturbationConfig(perturbations=[PerturbationConfig(perturbations=None) for _ in range(B)])
-    with torch.no_grad():
-        torch_out, _ = torch_model(video=video, audio=None, perturbations=perturbations)
-
     # Cache prompt and RoPE on device (step-independent)
     prompt = context.unsqueeze(0)
     tt_prompt = bf16_tensor(prompt, device=mesh_device)
 
     from models.tt_dit.models.transformers.ltx.rope_ltx import precompute_freqs_cis
 
+    # SPLIT-format RoPE — matches torch_model's rope_type and TT's SPLIT path
+    # (selected by trans_mat=None below).
     indices_grid = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=-1).float().unsqueeze(0)
     cos_freq, sin_freq = precompute_freqs_cis(
         indices_grid,
@@ -459,12 +501,10 @@ def test_ltx_transformer_inner_step(
         theta=10000.0,
         max_pos=[20, 2048, 2048],
         num_attention_heads=num_heads,
+        rope_type=LTXRopeType.SPLIT,
     )
-    cos_heads = cos_freq.reshape(B, seq_len, num_heads, head_dim).permute(0, 2, 1, 3)
-    sin_heads = sin_freq.reshape(B, seq_len, num_heads, head_dim).permute(0, 2, 1, 3)
-    tt_cos = bf16_tensor_2dshard(cos_heads, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_sin = bf16_tensor_2dshard(sin_heads, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+    tt_cos = bf16_tensor_2dshard(cos_freq, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_sin = bf16_tensor_2dshard(sin_freq, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
 
     # Call inner_step (torch spatial input, cached device tensors)
     spatial_torch = latent.unsqueeze(0)  # (1, B, N, in_channels)
@@ -475,7 +515,7 @@ def test_ltx_transformer_inner_step(
         video_prompt_1BLP=tt_prompt,
         video_rope_cos=tt_cos,
         video_rope_sin=tt_sin,
-        trans_mat=tt_trans_mat,
+        trans_mat=None,
         video_N=seq_len,
         timestep_torch=timestep_torch,
     )
