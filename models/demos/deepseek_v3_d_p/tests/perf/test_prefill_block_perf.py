@@ -3,16 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Prefill block-level device-perf tests on 8x4 galaxy with real pretrained weights.
+Prefill block-level device-perf tests with real pretrained weights.
 
-- `block_8x4_layer0_dense`: full MLA + dense FFN block. Measures MLA, dense FFN, norms,
-  residual adds. Gives a baseline without the MoE path.
-- `block_8x4_layer3_moe`: full MLA + MoE block (gate + dispatch + routed experts + combine
-  + shared expert + reduce). Subtract the dense-layer number to isolate MoE overhead.
+- `block_8x4_layer0_dense`: full MLA + dense FFN block on an 8x4 galaxy mesh. Measures
+  MLA, dense FFN, norms, and residual adds. Gives a baseline without the MoE path.
+- `block_8x4_layer3_moe`: full MLA + MoE block on an 8x4 galaxy mesh (gate + dispatch +
+  routed experts + combine + shared expert + reduce). Subtract the dense-layer number to
+  isolate MoE overhead.
+- `block_2x4_layer3_moe`: full MLA + MoE block on a 2x4 2-link mesh, using the smaller
+  `isl_6k4` configuration for real-weights perf coverage on that topology.
 
-Both run 1 iteration with `skip_reference=True` (no torch reference, bfp8/bfp4 production
-dtypes) at isl_total=25*1024 (`isl_25k`). Requires a galaxy runner (32 BH chips in 8x4
-topology) and DEEPSEEK_V3_HF_MODEL pointing to the pretrained checkpoint.
+All three run 1 iteration with `skip_reference=True` (no torch reference, bfp8/bfp4
+production dtypes). The 8x4 cases run at `isl_total=25*1024` (`isl_25k`), while the 2x4
+case runs at `isl_total=6*1024+512` (`isl_6k4`). Requires the appropriate hardware for the
+selected mesh topology and `DEEPSEEK_V3_HF_MODEL` pointing to the pretrained checkpoint.
 """
 
 import pytest
