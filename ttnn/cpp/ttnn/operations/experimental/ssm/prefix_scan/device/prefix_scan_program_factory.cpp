@@ -27,7 +27,10 @@ tt::tt_metal::ProgramDescriptor PrefixScanProgramFactory::create_descriptor(
     Buffer* bx_buffer = bx.buffer();
     Buffer* h_buffer = h_prev.buffer();
     Buffer* output_buffer = output.buffer();
-    TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device");
+    TT_FATAL(a_buffer != nullptr, "Input a buffer should be allocated on device");
+    TT_FATAL(bx_buffer != nullptr, "Input bx buffer should be allocated on device");
+    TT_FATAL(h_buffer != nullptr, "Input h_prev buffer should be allocated on device");
+    TT_FATAL(output_buffer != nullptr, "Output buffer should be allocated on device");
 
     const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     const uint32_t input_tile_size = tt::tile_size(input_format);

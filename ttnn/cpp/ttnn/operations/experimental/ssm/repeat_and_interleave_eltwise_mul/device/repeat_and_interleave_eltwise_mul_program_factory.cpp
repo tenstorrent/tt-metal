@@ -34,7 +34,7 @@ tt::tt_metal::ProgramDescriptor RepeatAndInterleaveEltwiseMulProgramFactory::cre
     Buffer* src1_buffer = b.buffer();
 
     Buffer* out_buffer = output.buffer();
-    TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
