@@ -76,8 +76,9 @@ void kernel_main() {
     constexpr uint32_t receiver_semaphore_id = get_compile_time_arg_val(28);
     constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(29);
     constexpr bool mcast_enabled = get_compile_time_arg_val(30) == 1;
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(31) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<31>();
+    constexpr auto q_args = TensorAccessorArgs<32>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -326,24 +327,13 @@ void kernel_main() {
                 }
                 for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
                     /*
-                    Read a chunk of Q. BALANCED_Q_PARALLEL evenly distributes Q chunks
-                    across cores when causal and other conditions are met.
+                    Read a chunk of Q. Zigzag balancing remaps the flat per-head Q
+                    index in causal mode so light and heavy causal chunks interleave.
                     When chunked, we must treat Q as offset by some factor.
                     When causal, we set up the bounds such that we only read the lower triangle of K and V.
                     When non-causal, read all of K and V.
                     */
-                    uint32_t q_chunk;
-#if defined BALANCED_Q_PARALLEL
-                    uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
-                    if (q_iter < q_chunk_div_2) {  // bottom half
-                        q_chunk = local_q_start + q_iter;
-                    } else {
-                        uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
-                        q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
-                    }
-#else
-                    q_chunk = local_q_start + q_iter;
-#endif
+                    uint32_t q_chunk = remap_q_index(local_q_start + q_iter, q_num_chunks, use_zigzag_balancing);
                     /*
                     Determine how many rows of Q will be read. Both start and end rows are
                     capped by valid_Sqt, since Sq padding is independent of Sk padding.
