@@ -76,7 +76,7 @@ def _embedding_weight(emb: torch.nn.Embedding, *, device: ttnn.Device) -> ttnn.T
 
 
 def _vocoder_embedding_weight_row_major(emb: torch.nn.Embedding, *, device: ttnn.Device) -> ttnn.Tensor:
-    """ROW_MAJOR embedding table for [`TTSeamlessM4Tv2CodeHifiGan`] (matches text decoder / T2U Stage 10).
+    """ROW_MAJOR embedding table for [`TTSeamlessM4Tv2CodeHifiGan`] (matches text decoder / T2U decoder).
 
     ``ttnn.embedding`` still returns TILE_LAYOUT activations when ``layout=ttnn.TILE_LAYOUT`` is passed;
     TILE-stored tables can add a trailing untilize on lookup. Call sites unchanged in ``tt_code_hifigan``.
@@ -127,8 +127,8 @@ def _fused_qkv_pair(
 ) -> dict:
     """Concatenate Q/K/V projection weights into a single fused QKV linear.
 
-    Produced tensor pairs feed ``ttnn.linear`` followed by a slice-based
-    QKV split in ``_qkv_heads`` (Stage 3a head-fusion path).
+    Produced tensor pairs feed ``ttnn.linear`` followed by
+    ``ttnn.experimental.nlp_create_qkv_heads`` (fused QKV head path).
     Concatenation is along the output dimension so the fused matmul
     output is laid out as ``[..., 3 * hidden]`` (Q | K | V).
 
@@ -162,7 +162,7 @@ def _fused_kv_pair(
     """Concatenate K/V projection weights for one matmul over shared activations (cross-attn).
 
     Output layout is ``[..., 2 * hidden]`` (K | V) on the last dim; the decoder splits before
-    ``_heads`` (Stage 15).
+    ``_heads``.
     """
     kv_weight = torch.cat([k_proj.weight.detach(), v_proj.weight.detach()], dim=0).contiguous()
     kv_bias = torch.cat([k_proj.bias.detach(), v_proj.bias.detach()], dim=0).contiguous()
@@ -183,7 +183,7 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device) -> dict:
     cfg = decoder.config
     scale = embed_scale_for_config(cfg)
 
-    # Stage 10: ROW_MAJOR embedding tables (matches text encoder / T2U decoder).
+    # ROW_MAJOR embedding tables (matches text encoder / T2U decoder).
     # ``ttnn.embedding`` emits TILE_LAYOUT activations regardless; TILE-stored weights
     # can force a trailing ``UntilizeWithUnpaddingDeviceOperation`` per table lookup.
     scaled_emb = (decoder.embed_tokens.weight.detach() * scale).contiguous()
@@ -213,8 +213,8 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device) -> dict:
                 "weight": _ln_to_device(layer.self_attn_layer_norm.weight, device=device),
                 "bias": _ln_to_device(layer.self_attn_layer_norm.bias, device=device),
             },
-            # Stage 12: fused self-attn Q|K|V. Stage 15: cross-attn K|V fused (see ``cross_attention``).
-            # Stage 17: attention linear weights in bfloat8_b (bandwidth; biases stay bf16) — encoder pattern.
+            # Fused self-attn Q|K|V; cross-attn K|V fused (see ``cross_attention``).
+            # Attention linear weights in bfloat8_b (bandwidth; biases stay bf16) — encoder pattern.
             "self_attn": {
                 "qkv": _fused_qkv_pair(
                     layer.self_attn.q_proj,
@@ -229,7 +229,7 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device) -> dict:
                 "weight": _ln_to_device(layer.cross_attention_layer_norm.weight, device=device),
                 "bias": _ln_to_device(layer.cross_attention_layer_norm.bias, device=device),
             },
-            # Stage 15: fused K|V over encoder hidden states (one matmul vs two; Q stays separate).
+            # Fused K|V over encoder hidden states (one matmul vs two; Q stays separate).
             "cross_attention": {
                 "q_proj": _linear_pair(layer.cross_attention.q_proj, device=device, weight_dtype=ttnn.bfloat8_b),
                 "kv": _fused_kv_pair(
@@ -245,7 +245,7 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device) -> dict:
                 "bias": _ln_to_device(layer.ffn_layer_norm.bias, device=device),
             },
             "ffn": {
-                # Stage 16: FFN matmul weights in block-float8 (encoder Stage 1.3 recipe). Biases stay bf16;
+                # FFN matmul weights in block-float8. Biases stay bf16;
                 # activations remain bf16; compute configs unchanged (HiFi2 fc1, LoFi fc2).
                 "fc1": _linear_pair(layer.ffn.fc1, device=device, weight_dtype=ttnn.bfloat8_b),
                 "fc2": _linear_pair(layer.ffn.fc2, device=device, weight_dtype=ttnn.bfloat8_b),
@@ -280,7 +280,7 @@ def _m4t_encoder_self_attn_ffn_layers(
     ``ffn_weight_dtype`` controls the storage dtype of ``fc1.weight`` /
     ``fc2.weight``. ``attn_weight_dtype`` controls the storage dtype of
     ``q_proj``/``k_proj``/``v_proj``/``out_proj`` weights. Pass
-    ``ttnn.bfloat8_b`` for memory-bound matmuls (Stage 1 bandwidth optimization);
+    ``ttnn.bfloat8_b`` for memory-bound matmuls (bandwidth optimization);
     biases and LayerNorm parameters always stay at ``bfloat16``.
 
     When ``fuse_qkv=True`` the per-layer ``self_attn`` dict exposes a single
@@ -754,7 +754,7 @@ def _t2u_decoder_parameters(decoder: torch.nn.Module, *, device: ttnn.Device) ->
     """[`SeamlessM4Tv2TextToUnitDecoder`] weights (character + duration + conv decoder stack)."""
     cfg = decoder.config
     scale = embed_scale_for_config(cfg)
-    # Stage 1.2: upload embedding tables ROW-MAJOR (matches text encoder recipe).
+    # Upload embedding tables ROW-MAJOR (matches text encoder recipe).
     # ``ttnn.embedding`` produces a TILE_LAYOUT output regardless of how its weight is
     # stored; uploading the weight in ROW_MAJOR_LAYOUT avoids the trailing
     # ``UntilizeWithUnpaddingDeviceOperation`` that the embedding kernel emits when the

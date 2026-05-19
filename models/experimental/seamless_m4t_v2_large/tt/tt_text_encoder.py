@@ -10,12 +10,7 @@ from typing import Optional
 
 import ttnn
 
-from models.common.utility_functions import nearest_32
-
-
-def _core_grid(device: ttnn.Device) -> ttnn.CoreGrid:
-    grid = device.compute_with_storage_grid_size()
-    return ttnn.CoreGrid(y=grid.y, x=grid.x)
+from models.experimental.seamless_m4t_v2_large.tt.common import build_ln_sharded_config, core_grid, sdpa_program_config
 
 
 class TTSeamlessM4Tv2Encoder:
@@ -71,25 +66,11 @@ class TTSeamlessM4Tv2Encoder:
         # the reduction across grid_x cores -- typically 8 cores at seq=32 --
         # for a ~4-5x per-op speedup.
         self._ln_sharded_cache: dict = {}
-        # Reuse ``SDPAProgramConfig`` per (seq_q, seq_k) across encoder layers (same as decoder Stage 19).
+        # Reuse ``SDPAProgramConfig`` per (seq_q, seq_k) across encoder layers.
         self._sdpa_pc_cache: dict = {}
 
     def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
-        key = (seq_q, seq_k)
-        cached = self._sdpa_pc_cache.get(key)
-        if cached is not None:
-            return cached
-
-        q_chunk = max(64, min(256, nearest_32(seq_q)))
-        k_chunk = max(64, min(256, nearest_32(seq_k)))
-        out = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
-            q_chunk_size=q_chunk,
-            k_chunk_size=k_chunk,
-            exp_approx_mode=False,
-        )
-        self._sdpa_pc_cache[key] = out
-        return out
+        return sdpa_program_config(self.device, seq_q, seq_k, self._sdpa_pc_cache)
 
     def _linear(
         self,
@@ -104,7 +85,7 @@ class TTSeamlessM4Tv2Encoder:
             weight,
             bias=bias,
             activation=activation,
-            core_grid=_core_grid(self.device),
+            core_grid=core_grid(self.device),
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self._linear_ln_compute_cfg,
         )
@@ -120,61 +101,7 @@ class TTSeamlessM4Tv2Encoder:
         )
 
     def _build_ln_sharded_config(self, m_tiles: int, n_tiles: int):
-        """Build width-sharded LN program config + memory config for [M_tiles, N_tiles].
-
-        At our typical shape (B=1, S=32, hidden=1024) -> M_tiles=1, N_tiles=32:
-        we pick an ``(8, 1)`` grid (8 cores in x, 1 in y) with ``block_h=1``,
-        ``block_w=4`` so the 32 N-tiles split evenly across 8 cores.  For
-        larger M we add core rows up to ``grid.y``.
-        """
-        key = (m_tiles, n_tiles)
-        cached = self._ln_sharded_cache.get(key)
-        if cached is not None:
-            return cached
-
-        device_grid = self.device.compute_with_storage_grid_size()
-
-        # Pick grid_x that divides N_tiles evenly, prefer the largest available.
-        grid_x = device_grid.x
-        while grid_x > 1 and n_tiles % grid_x != 0:
-            grid_x -= 1
-        block_w = n_tiles // grid_x
-
-        # Pick grid_y that divides M_tiles evenly (for M=1 we end up at grid_y=1).
-        grid_y = min(device_grid.y, m_tiles)
-        while grid_y > 1 and m_tiles % grid_y != 0:
-            grid_y -= 1
-        block_h = m_tiles // grid_y
-
-        # ``out_subblock_w * out_subblock_h`` must be <= 4 with
-        # ``fp32_dest_acc_en=True`` -- block_h is typically 1, so we cap
-        # subblock_w at min(block_w, 4) and let the kernel handle the rest.
-        subblock_w = min(block_w, 4)
-        while block_w % subblock_w != 0:
-            subblock_w -= 1
-
-        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(grid_x, grid_y),
-            subblock_w=subblock_w,
-            block_h=block_h,
-            block_w=block_w,
-            inplace=False,
-        )
-
-        shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}),
-            [block_h * 32, block_w * 32],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED if grid_y == 1 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            ttnn.BufferType.L1,
-            shard_spec,
-        )
-
-        cached = (memory_config, program_config)
-        self._ln_sharded_cache[key] = cached
-        return cached
+        return build_ln_sharded_config(self.device, m_tiles, n_tiles, self._ln_sharded_cache)
 
     def _layer_norm_sharded(
         self,
@@ -217,7 +144,7 @@ class TTSeamlessM4Tv2Encoder:
         hidden_size: int,
         sdpa_cfg: ttnn.SDPAProgramConfig,
     ) -> ttnn.Tensor:
-        # Fused QKV projection (Stage 3a): one matmul producing
+        # Fused QKV projection: one matmul producing
         # ``[B, S, 3 * hidden]`` instead of three separate Q/K/V matmuls.
         qkv = self._linear(hidden_states, attn_module.qkv.weight, attn_module.qkv.bias)
 
