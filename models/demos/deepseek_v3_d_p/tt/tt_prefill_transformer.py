@@ -293,6 +293,7 @@ class TtPrefillTransformer(LightweightModule):
 
         if return_intermediates:
             intermediates["lm_head"] = logits_host
+            intermediates["logits"] = first_token_logits
 
         # Reorder intermediates if balanced
         if return_intermediates and self.is_balanced:

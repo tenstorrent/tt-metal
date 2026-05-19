@@ -54,6 +54,49 @@ P64TOK_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_64tok.json")
 P960TOK_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_960tok.json")
 PIE960_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_pie_960tok.json")
 
+TRACE_DIR_BASE = Path(os.getenv("DEEPSEEK_V3_TRACE_DIR", "/mnt/MLPerf/deepseek-prefill-cache"))
+ILLIAD_1024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2"
+ILLIAD_25024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2_25024"
+ABC_1K_PAD_RIGHT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_right_1024"
+ABC_1K_PAD_LEFT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_left_1024"
+LONGBOOK_QA_ENG_25600 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_25600_nopad"
+
+# Identity-based trace lookup: (input_source, isl_total, padding_side) -> Path.
+# Traces are only used when use_pretrained=True and n_routed_experts=256, since they
+# were generated from the full pretrained model.
+TRACE_LOOKUP: dict[tuple[str, int, str], Path] = {
+    ("json_prompts", 1024, "right"): ILLIAD_1024_TRACE,
+    ("json_prompts", 25600, "right"): ILLIAD_25024_TRACE,
+    ("abc_1k", 1024, "right"): ABC_1K_PAD_RIGHT_1024,
+    ("abc_1k", 1024, "left"): ABC_1K_PAD_LEFT_1024,
+    ("longbook_qa_eng", 25600, "right"): LONGBOOK_QA_ENG_25600,
+}
+
+
+def find_trace_dir(
+    input_source: str,
+    isl_total: int,
+    padding_side: str,
+    use_pretrained: bool,
+    n_routed_experts: int,
+) -> Path | None:
+    """Return the trace directory for an exact test configuration, or None.
+
+    A trace is eligible only when:
+    - the model uses pretrained weights with 256 experts (traces were generated from
+      the full pretrained DeepSeek-R1 model)
+    - (input_source, isl_total, padding_side) match a known trace exactly
+    - the directory exists and contains a metadata.json
+    """
+    if not use_pretrained or n_routed_experts != 256:
+        return None
+
+    path = TRACE_LOOKUP.get((input_source, isl_total, padding_side))
+    if path is not None and path.exists() and (path / "metadata.json").exists():
+        return path
+    return None
+
+
 # Subset name -> JSONL filename on HuggingFace
 INFINITEBENCH_SUBSETS = {
     "passkey": "passkey.jsonl",
