@@ -75,6 +75,20 @@ Skip Opus pre-classification if layer pre-filter already rules it out.
 
 ### Step 1: Detection (Snowflake)
 
+
+**⚠️ Known data quality issue — device-perf tests (N300 WH B0 Set 2 and similar):**
+Test results from device-perf jobs only land in Snowflake when the *overall job fails*.
+When the N300 Set 2 job succeeds, the inner test may PASS but the JUnit XML is never uploaded,
+so Snowflake sees silence instead of a pass. This causes artificially wide commit ranges
+(e.g. apparent 86-commit gaps that are really just missing records, not actual re-failures).
+
+**Mitigation when investigating device-perf escapes:**
+- Before trusting `first_passing_sha` from Snowflake, check device-perf scheduled run logs
+  directly: `GET /repos/tenstorrent/tt-metal/actions/workflows/76728129/runs?branch=main`
+- For each run in the range, grep the N300 Set 2 job logs for the specific test result.
+  The test may have been passing much earlier than Snowflake recorded.
+- Do NOT treat Snowflake `first_passing_sha` as authoritative for device-perf tests.
+
 Run the following SQL. Adjust `DATEADD` for backfill (60 days) vs incremental (1 day).
 
 Thresholds:
