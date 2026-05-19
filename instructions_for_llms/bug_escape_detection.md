@@ -78,18 +78,16 @@ Skip Opus pre-classification if layer pre-filter already rules it out.
 Run the following SQL. Adjust `DATEADD` for backfill (60 days) vs incremental (1 day).
 
 Thresholds:
-- **Backfill**: `consecutive_fail_count >= 5`, `consecutive_pass_count >= 3`, lookback 60 days
-- **Incremental**: `consecutive_fail_count >= 3`, `consecutive_pass_count >= 3`, lookback 1 day
+- **Backfill**: `consecutive_fail_count >= 10`, `consecutive_pass_count >= 10`, lookback 60 days
+- **Incremental**: `consecutive_fail_count >= 10`, `consecutive_pass_count >= 10`, lookback 1 day
 
 **Signature requirement**: All failures in the streak must share the **exact same normalized error signature**
 (addresses and timestamps stripped). A test that fails 5 times with 5 different errors is flaky noise,
 not a regression. The SQL enforces this via `distinct_sig_count = 1`.
 
-**Pre-streak stability gate**: A candidate must have ≥ 10 runs AND ≥ 95% pass rate in the 30 days
-BEFORE the fail streak started. Flaky tests with 20-30% baseline failure rate naturally produce 5+
-consecutive failures; this gate filters them out by requiring the test was reliably green before it
-went consistently red. Tests with fewer than 10 pre-streak runs are **excluded** (sparse history =
-insufficient signal to distinguish regression from debut flakiness).
+**Streak length requirement**: ≥ 10 consecutive failures followed by ≥ 10 consecutive passes, with
+no gap between them. This rules out flaky tests — a 20% flaky test may produce a 5-run streak by
+chance, but a 10-run streak is statistically unlikely without a genuine regression.
 
 ```sql
 WITH runs AS (
@@ -138,59 +136,25 @@ island_summary AS (
     MAX(PIPELINE_START_TS)                AS streak_end_ts,
     MIN_BY(commit_sha, PIPELINE_START_TS) AS streak_first_sha,
     MAX_BY(commit_sha, PIPELINE_START_TS) AS streak_last_sha,
-    MAX_BY(norm_signature, PIPELINE_START_TS) AS norm_signature
+    MAX_BY(norm_signature, PIPELINE_START_TS) AS norm_signature,
+    MIN(rn_asc)                           AS streak_first_rn,  -- for true adjacency check
+    MAX(rn_asc)                           AS streak_last_rn
   FROM islands
   GROUP BY 1, 2, 3
 ),
--- Pre-streak stability: for each candidate fail streak, look at the 30-day window
--- BEFORE it started and require the test was passing ≥ 95% of the time with ≥ 10 runs.
--- A true regression shows a reliably-green test suddenly going consistently red.
--- Flaky tests with 20-30% baseline failure rate naturally produce 5+ consecutive failures,
--- so without this gate they produce false positives constantly.
-pre_streak_stability AS (
-  SELECT
-    fs_tmp.CICD_TEST_CASE_ID,
-    fs_tmp.island_key,
-    COUNT(*)                                                   AS pre_streak_runs,
-    SUM(CASE WHEN t2.SUCCESS = TRUE THEN 1 ELSE 0 END)        AS pre_streak_passes,
-    SUM(CASE WHEN t2.SUCCESS = TRUE THEN 1 ELSE 0 END)
-      * 1.0 / NULLIF(COUNT(*), 0)                             AS pre_streak_pass_rate
-  FROM (
-    -- Candidate fail streaks (same criteria as fail_streaks below)
-    SELECT CICD_TEST_CASE_ID, island_key, streak_start_ts
-    FROM island_summary
-    WHERE SUCCESS = FALSE
-      AND streak_length >= 5
-      AND distinct_sig_count = 1
-  ) fs_tmp
-  JOIN TTDATASF.SW_TEST.CICD_TEST t2
-    ON t2.TEST_CASE_ID = fs_tmp.CICD_TEST_CASE_ID
-  JOIN TTDATASF.SW_TEST.CICD_JOB j2 ON t2.CICD_JOB_ID = j2.CICD_JOB_ID
-  JOIN TTDATASF.SW_TEST.CICD_PIPELINE p2 ON j2.CICD_PIPELINE_ID = p2.CICD_PIPELINE_ID
-  WHERE p2.PIPELINE_START_TS < fs_tmp.streak_start_ts
-    AND p2.PIPELINE_START_TS >= DATEADD('day', -30, fs_tmp.streak_start_ts)
-    AND p2.PROJECT = 'tt-metal'
-    AND p2.GIT_BRANCH_NAME = 'main'
-    AND j2.FAILURE_SIGNATURE NOT LIKE 'InfraErrorV1%'
-  GROUP BY 1, 2
-),
 fail_streaks AS (
   SELECT
-    is2.CICD_TEST_CASE_ID,
-    is2.island_key,
-    is2.streak_length AS consecutive_fail_count,
-    is2.streak_end_ts AS last_fail_ts,
-    is2.streak_last_sha AS last_failing_sha,
-    is2.norm_signature
-  FROM island_summary is2
-  JOIN pre_streak_stability pss
-    ON is2.CICD_TEST_CASE_ID = pss.CICD_TEST_CASE_ID
-    AND is2.island_key = pss.island_key
-  WHERE is2.SUCCESS = FALSE
-    AND is2.streak_length >= 5         -- require 5+ consecutive failures (3 for incremental mode)
-    AND is2.distinct_sig_count = 1     -- all failures must share the same normalized error signature
-    AND pss.pre_streak_runs >= 10      -- must have sufficient pre-streak history
-    AND pss.pre_streak_pass_rate >= 0.95  -- must have been reliably green before the regression
+    CICD_TEST_CASE_ID,
+    island_key,
+    streak_length AS consecutive_fail_count,
+    streak_end_ts AS last_fail_ts,
+    streak_last_sha AS last_failing_sha,
+    streak_last_rn AS last_fail_rn,
+    norm_signature
+  FROM island_summary
+  WHERE SUCCESS = FALSE
+    AND streak_length >= 10        -- require 10+ consecutive failures
+    AND distinct_sig_count = 1     -- all failures must share the same normalized error signature
 ),
 pass_streaks AS (
   SELECT
@@ -198,10 +162,11 @@ pass_streaks AS (
     island_key,
     streak_length AS consecutive_pass_count,
     streak_start_ts AS first_pass_ts,
-    streak_first_sha AS first_passing_sha
+    streak_first_sha AS first_passing_sha,
+    streak_first_rn AS first_pass_rn
   FROM island_summary
   WHERE SUCCESS = TRUE
-    AND streak_length >= 3  -- P1: require 3+ consecutive passes after fix
+    AND streak_length >= 10  -- require 10+ consecutive passes after fix
 ),
 transitions AS (
   SELECT
@@ -216,14 +181,8 @@ transitions AS (
   FROM fail_streaks fs
   JOIN pass_streaks ps
     ON fs.CICD_TEST_CASE_ID = ps.CICD_TEST_CASE_ID
-    AND ps.first_pass_ts > fs.last_fail_ts
-    -- Adjacent islands only: no runs exist between the two streaks
-    AND NOT EXISTS (
-      SELECT 1 FROM island_summary x
-      WHERE x.CICD_TEST_CASE_ID = fs.CICD_TEST_CASE_ID
-        AND x.streak_start_ts > fs.last_fail_ts
-        AND x.streak_start_ts < ps.first_pass_ts
-    )
+    -- True adjacency: pass streak begins on the very next run after the fail streak ends
+    AND ps.first_pass_rn = fs.last_fail_rn + 1
 ),
 -- Most recent transition per test, joined back to get test metadata
 result AS (
