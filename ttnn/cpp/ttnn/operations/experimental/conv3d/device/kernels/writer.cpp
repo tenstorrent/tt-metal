@@ -364,6 +364,8 @@ void kernel_main() {
                                     }
                                 }
                                 noc.async_write_barrier();
+                                // Streaming may have waited on fewer than output_tiles; drain before pop.
+                                cb_out.wait_front(output_tiles);
                                 cb_out.pop_front(output_tiles);
                             }
                         }
