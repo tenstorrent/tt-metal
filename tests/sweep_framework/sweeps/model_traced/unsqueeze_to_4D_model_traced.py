@@ -13,7 +13,6 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
-    get_mesh_composer,
     reconcile_golden_to_actual,
 )
 
@@ -82,7 +81,7 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    # Check kwargs for storage_type — V2 loader provides input_a_storage_type for HOST tensors
+    # Check kwargs for storage_type -- V2 loader provides input_a_storage_type for HOST tensors
     if storage_type == "StorageType::DEVICE":
         if "input_a_storage_type" in kwargs:
             storage_type = kwargs["input_a_storage_type"]
@@ -149,7 +148,7 @@ def run(
                 memory_config=input_a_memory_config,
             )
     else:
-        # HOST tensor — create without placing on device.  On mesh devices the
+        # HOST tensor -- create without placing on device.  On mesh devices the
         # master trace still records mesh metadata (distribution_shape, mesh_device_shape).
         # Pass mesh_mapper so the tensor carries the correct topology.
         if is_mesh_device and input_a_tensor_placement:
@@ -170,9 +169,8 @@ def run(
     start_time = start_measuring_time()
     try:
         output_tensor = ttnn.unsqueeze_to_4D(input_tensor_a)
-        mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
         output_tensor = mesh_tensor_to_torch(
-            output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer
+            output_tensor, device if is_mesh_device else None
         )
         e2e_perf = stop_measuring_time(start_time)
         if is_mesh_device:

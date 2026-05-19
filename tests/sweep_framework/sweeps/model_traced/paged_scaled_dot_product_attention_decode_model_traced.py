@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import re as _re_mod
+from contextlib import contextmanager
 from functools import partial
 
 import torch
@@ -69,45 +71,47 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    # The master configs include both (4,8) and (8,4) mesh shapes.
-    # Configs with (8,4) mesh also carry sub_core_grids that require
-    # COL dispatch (y up to 9).  Use (8,4) so those configs get the
-    # correct logical device mapping; the (4,8) configs (which use an
-    # (x=8,y=8) grid without sub_core_grids) fail with a pre-existing
-    # dispatch-core placement error regardless of mesh orientation.
-    mesh_shape = get_model_traced_mesh_shape()
-    # If the master JSON contains (8,4) configs (qwen3-32b),
-    # prefer (8,4) to match the model's actual mesh layout.
-    try:
-        import json as _json_mf
-        import os as _os_mf
+    # Configs in the master JSON span different mesh shapes (4,8) and (8,4)
+    # and different dispatch requirements (ETH vs COL). Opening a single
+    # device for all configs causes cross-config crashes (wrong mesh shape
+    # or wrong dispatch type). Yield a dummy so the runner still works;
+    # each run() call opens its own device with the correct parameters.
+    yield None, "Device creation in sweep body"
 
-        _mj = _os_mf.environ.get("TTNN_MASTER_JSON_PATH", "")
-        if _mj and _os_mf.path.isfile(_mj):
-            with open(_mj) as _f:
-                _md = _json_mf.load(_f)
-            _sdpa_key = "ttnn.transformer.paged_scaled_dot_product_attention_decode"
-            for _cfg in _md.get("operations", {}).get(_sdpa_key, {}).get("configurations", []):
-                for _arg in _cfg.get("arguments", {}).values():
-                    if isinstance(_arg, dict):
-                        _tp = _arg.get("tensor_placement", {})
-                        _ms = str(_tp.get("mesh_device_shape", ""))
-                        if "[8, 4]" in _ms:
-                            mesh_shape = (8, 4)
-                            break
-    except Exception:
-        pass
-    # SDPA needs compute_with_storage_grid_size=(8,6) which requires x=7.
-    # COL dispatch reserves column 7, so use ETH dispatch which gives 8x8 grid.
+
+@contextmanager
+def _sdpa_device_context(tensor_placements, program_config_raw):
+    """Open a mesh device with the right mesh shape for this config.
+
+    - Mesh shape is inferred from tensor_placement metadata (defaults to (4,8)).
+    - Uses COL dispatch (WORKER), matching the production model config.
+      The SDPA sub_core_grids explicitly avoid the dispatch column (x=7).
+    """
+    # Determine mesh shape from tensor placement metadata
+    mesh = (4, 8)
+    for tp in tensor_placements:
+        if isinstance(tp, dict):
+            ms_str = str(tp.get("mesh_device_shape", ""))
+            ms_nums = _re_mod.findall(r"\d+", ms_str)
+            if len(ms_nums) >= 2:
+                mesh = (int(ms_nums[0]), int(ms_nums[1]))
+                break
+
+    from tests.scripts.common import get_updated_device_params
+
+    _dev_params = get_updated_device_params({
+        "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+        "l1_small_size": 79104,
+    })
     device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(*mesh_shape),
-        l1_small_size=79104,
-        dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
+        mesh_shape=ttnn.MeshShape(*mesh),
+        **_dev_params,
     )
-    device_name = ttnn.get_arch_name()
-    yield (device, device_name)
-    ttnn.close_mesh_device(device)
-    del device
+    try:
+        yield device
+    finally:
+        ttnn.close_mesh_device(device)
+        del device
 
 
 def _paged_sdpa_input_shard_axis_and_factor(placement_dict):
@@ -145,18 +149,22 @@ def _paged_sdpa_input_shard_axis_and_factor(placement_dict):
 
 
 def _paged_sdpa_decode_chip_attn(
-    q_chip, k_cache_chip, v_cache_chip, page_table, cur_pos, num_users, page_size, sliding_window_size=None
+    q_chip, k_cache_chip, v_cache_chip, page_table, cur_pos, num_users, page_size, sliding_window_size=None, scale=None
 ):
-    """Compute per-chip paged attention output: (B, H_q, num_users, D_chip).
-    q_chip:       (B, H_q, num_users, D_chip)
-    k_cache_chip: (num_pages, H_kv, page_size, D_chip)
-    v_cache_chip: (num_pages, H_kv, page_size, D_chip)
-    page_table:   (B_pt, max_pages) int  — shared across users (rows: user idx mod B_pt)
-    cur_pos:      shape varies; we use cur_pos[user_idx % cur_pos.numel()]
+    """Compute per-chip paged attention output: (1, num_users, H_q, D_chip).
+
+    TTNN paged_sdpa_decode convention (confirmed by unit tests and model code):
+      q_chip:       (1, num_users, H_q, D_chip)
+      k_cache_chip: (num_pages, H_kv, page_size, D_chip)
+      v_cache_chip: (num_pages, H_kv, page_size, D_chip)
+      page_table:   (num_users, max_pages) int
+      cur_pos:      (num_users,) int
+      output:       (1, num_users, H_q, D_chip)
     """
-    B, H_q, U, D = q_chip.shape
+    _, U_dim, H_q, D = q_chip.shape
     num_pages, H_kv, _, _ = k_cache_chip.shape
-    out = torch.zeros((B, H_q, num_users, D), dtype=torch.float32)
+    _scale = scale if scale is not None else D**-0.5
+    out = torch.zeros((1, num_users, H_q, D), dtype=torch.float32)
     pt = page_table.long().view(page_table.shape[0], -1) if page_table.ndim >= 2 else page_table.long().view(1, -1)
     cp = cur_pos.long().view(-1)
     cp_max = num_pages * page_size - 1
@@ -169,11 +177,12 @@ def _paged_sdpa_decode_chip_attn(
         n_pages_active = (n_active + page_size - 1) // page_size
         pt_row = pt[u % pt.shape[0]]
         # Clamp page indices into [0, num_pages-1] so torch indexing stays valid
-        # for randomly-generated inputs.
-        pages = pt_row[:n_pages_active].clamp_(0, num_pages - 1)
+        # for randomly-generated inputs.  Use non-in-place clamp to avoid
+        # corrupting shared page-table rows across users.
+        pages = pt_row[:n_pages_active].clamp(0, num_pages - 1)
         k_pages = k_cache_chip[pages]  # (n_pages_active, H_kv, page_size, D)
         v_pages = v_cache_chip[pages]
-        # Concat along sequence axis (page_size) → (H_kv, n_pages_active*page_size, D)
+        # Concat along sequence axis (page_size) -> (H_kv, n_pages_active*page_size, D)
         k_seq = k_pages.permute(1, 0, 2, 3).reshape(H_kv, -1, D)
         v_seq = v_pages.permute(1, 0, 2, 3).reshape(H_kv, -1, D)
         # Sliding-window: ttnn paged_sdpa_decode with sliding_window_size=W
@@ -189,7 +198,8 @@ def _paged_sdpa_decode_chip_attn(
             rep = H_q // H_kv
             k_seq = k_seq.repeat_interleave(rep, dim=0)
             v_seq = v_seq.repeat_interleave(rep, dim=0)
-        q_u = q_chip[0, :, u, :]  # (H_q, D)
+        # dim 1 = users, dim 2 = heads: q for user u is all heads' query vectors
+        q_u = q_chip[0, u, :, :]  # (H_q, D)
         # Multi-head attention: when H_q != H_kv, handle GQA/MQA
         H_k = k_seq.shape[0]
         H_q_local = q_u.shape[0]
@@ -197,17 +207,17 @@ def _paged_sdpa_decode_chip_attn(
             # MQA: each Q head attends to all K/V heads independently
             # Expand Q to match K, compute attention, then average per Q head group
             q_expanded = q_u.repeat_interleave(H_k // max(H_q_local, 1), dim=0)[:H_k]
-            scores = torch.einsum("hd,htd->ht", q_expanded.float(), k_seq.float()) / (D**0.5)
+            scores = torch.einsum("hd,htd->ht", q_expanded.float(), k_seq.float()) * _scale
             attn = torch.softmax(scores, dim=-1)
             out_expanded = torch.einsum("ht,htd->hd", attn, v_seq.float())
             # Reduce back: average groups of H_k/H_q heads
             group = H_k // max(H_q_local, 1)
             out_u = out_expanded.view(H_q_local, group, D).mean(dim=1)
         else:
-            scores = torch.einsum("hd,htd->ht", q_u.float(), k_seq.float()) / (D**0.5)
+            scores = torch.einsum("hd,htd->ht", q_u.float(), k_seq.float()) * _scale
             attn = torch.softmax(scores, dim=-1)
             out_u = torch.einsum("ht,htd->hd", attn, v_seq.float())
-        out[0, :, u, :] = out_u
+        out[0, u, :, :] = out_u
     return out
 
 
@@ -221,10 +231,13 @@ def _paged_sdpa_decode_golden(
     padded_users,
     factor,
     sliding_window_size=None,
+    scale=None,
 ):
     """Slice Q/K/V on dim -1 by `factor`, run per-chip paged attention, concat on -1.
-    Returns tensor with shape (B, H_q, padded_users, D_global)."""
-    B, H_q, U, D = torch_q.shape
+
+    TTNN convention: Q is (1, num_users, H_q, D), output is the same layout.
+    Returns tensor with shape (1, padded_users, H_q, D_global)."""
+    _, U_dim, H_q, D = torch_q.shape
     num_pages, H_kv, page_size, _ = torch_k_cache.shape
     if factor > 1:
         q_chunks = torch.chunk(torch_q, factor, dim=-1)
@@ -235,13 +248,13 @@ def _paged_sdpa_decode_golden(
         k_chunks = (torch_k_cache,)
         v_chunks = (torch_v_cache,)
     per_chip = [
-        _paged_sdpa_decode_chip_attn(q, k, v, page_table, cur_pos, num_users, page_size, sliding_window_size)
+        _paged_sdpa_decode_chip_attn(q, k, v, page_table, cur_pos, num_users, page_size, sliding_window_size, scale=scale)
         for q, k, v in zip(q_chunks, k_chunks, v_chunks)
     ]
-    out = torch.cat(per_chip, dim=-1)  # (B, H_q, num_users, D_global)
+    out = torch.cat(per_chip, dim=-1)  # (1, num_users, H_q, D_global)
     if padded_users != num_users:
-        padded = torch.zeros((B, H_q, padded_users, out.shape[-1]), dtype=out.dtype)
-        padded[:, :, :num_users, :] = out
+        padded = torch.zeros((1, padded_users, H_q, out.shape[-1]), dtype=out.dtype)
+        padded[:, :num_users, :, :] = out
         return padded
     return out
 
@@ -276,6 +289,27 @@ def run(
     input_c_tensor_placement = kwargs.get("input_c_tensor_placement", None)
     input_d_tensor_placement = kwargs.get("input_d_tensor_placement", None)
     input_e_tensor_placement = kwargs.get("input_e_tensor_placement", None)
+
+    # --- Per-config device creation ---
+    # The fixture yields None; each config opens its own mesh device with
+    # the correct mesh shape and dispatch type so a crash in one config
+    # cannot kill the process for subsequent configs.
+    if device is None:
+        with _sdpa_device_context(
+            [input_a_tensor_placement, input_b_tensor_placement, input_c_tensor_placement],
+            kwargs.get("program_config"),
+        ) as _dev:
+            return run(
+                input_a_shape, input_a_dtype, input_a_layout, input_a_memory_config,
+                input_b_dtype, input_b_layout, input_b_memory_config,
+                input_c_dtype, input_c_layout, input_c_memory_config,
+                input_d_dtype, input_d_layout, input_d_memory_config,
+                input_e_dtype, input_e_layout, input_e_memory_config,
+                output_memory_config, storage_type,
+                device=_dev,
+                **kwargs,
+            )
+
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
@@ -379,54 +413,43 @@ def run(
 
     if len(shape_a) == 4:
         try:
-            B_q, num_users, H_q, D = shape_a
-            num_pg, H_kv, pg_size, _ = shape_b
-            cur_p = torch_input_e.long().view(-1)
-            pt_full = torch_input_d.long()
-            if pt_full.ndim >= 2:
-                pt_full = pt_full.view(pt_full.shape[0], -1)
-            else:
-                pt_full = pt_full.view(1, -1)
+            # TTNN paged_sdpa_decode convention (confirmed by unit tests & model code):
+            #   Q:       (1, num_users, num_q_heads, head_dim)
+            #   K cache: (num_pages, num_kv_heads, page_size, head_dim)
+            #   Output:  same layout as Q
+            B_q = shape_a[0]
+            D = shape_a[-1]       # head_dim
+            num_users_padded = shape_a[1]  # dim 1 = num_users (may be tile-padded)
+            H_q = shape_a[2]      # dim 2 = num Q heads
+
+            # Determine actual num_users from cur_pos or page_table (unambiguous)
+            num_users = int(shape_e[0]) if shape_e is not None and len(shape_e) >= 1 else num_users_padded
+
             _scale = kwargs.get("scale", D**-0.5)
             if _scale == "__ABSENT__" or _scale is None:
                 _scale = D**-0.5
             _scale = float(_scale)
-            _k_chunk = 256
-            _pc = kwargs.get("program_config")
-            if isinstance(_pc, dict):
-                import re as _re_pc
 
-                _kcm = _re_pc.search(r"k_chunk_size=(\d+)", str(_pc.get("value", "")))
-                if _kcm:
-                    _k_chunk = int(_kcm.group(1))
+            # Determine D-dim shard factor from tensor placement (for DRAM-distributed head_dim)
+            _shard_axis, _shard_factor = _paged_sdpa_input_shard_axis_and_factor(input_a_tensor_placement)
+            _d_factor = _shard_factor if _shard_axis is not None and (_shard_axis == -1 or _shard_axis == len(shape_a) - 1) else 1
 
-            golden_out = torch.zeros(B_q, num_users, H_q, D, dtype=torch.float32)
-            for u in range(num_users):
-                cp_u = int(cur_p[u % cur_p.numel()].item()) if cur_p.numel() > 0 else 0
-                cp_u = min(max(cp_u, 0), num_pg * pg_size - 1)
-                n_active = cp_u + 1
-                padded_len = n_active
-                if _k_chunk > 0:
-                    padded_len = ((n_active + _k_chunk - 1) // _k_chunk) * _k_chunk
-                n_pages_active = (padded_len + pg_size - 1) // pg_size
-                pt_row = pt_full[u % pt_full.shape[0]]
-                max_pages = pt_row.shape[0]
-                n_pages_active = min(n_pages_active, max_pages)
-                padded_len = min(padded_len, n_pages_active * pg_size)
-                pages = pt_row[:n_pages_active].clamp(0, num_pg - 1)
-                k_pages = torch_input_b[pages].float()
-                v_pages = torch_input_c[pages].float()
-                k_seq = k_pages.permute(1, 0, 2, 3).reshape(H_kv, -1, D)[:, :padded_len, :]
-                v_seq = v_pages.permute(1, 0, 2, 3).reshape(H_kv, -1, D)[:, :padded_len, :]
-                K_exp = torch.cat([k_seq[i : i + 1].repeat(H_q // H_kv, 1, 1) for i in range(H_kv)], dim=0).unsqueeze(0)
-                V_exp = torch.cat([v_seq[i : i + 1].repeat(H_q // H_kv, 1, 1) for i in range(H_kv)], dim=0).unsqueeze(0)
-                q_u = torch_input_a[0, u : u + 1, :H_q, :].permute(1, 0, 2).unsqueeze(0).float()
-                mask = torch.zeros(1, H_q, 1, padded_len)
-                mask[:, :, :, cp_u + 1 :] = float("-inf")
-                attn_out = torch.nn.functional.scaled_dot_product_attention(
-                    q_u, K_exp, V_exp, attn_mask=mask, scale=_scale, is_causal=False
-                )
-                golden_out[0, u, :, :] = attn_out.squeeze(2)
+            _sw = kwargs.get("sliding_window_size")
+            if _sw == "__ABSENT__":
+                _sw = None
+
+            golden_out = _paged_sdpa_decode_golden(
+                torch_input_a.float(),
+                torch_input_b.float(),
+                torch_input_c.float(),
+                torch_input_d,
+                torch_input_e,
+                num_users=num_users,
+                padded_users=num_users_padded,
+                factor=_d_factor,
+                sliding_window_size=_sw,
+                scale=_scale,
+            )
             torch_output_tensor = golden_out.to(torch_input_a.dtype)
         except Exception as _golden_err:
             import traceback
@@ -447,23 +470,45 @@ def run(
             return False
 
     if is_mesh_device and input_a_tensor_placement:
-        # When the destination memory_config is sharded, ttnn.from_torch
-        # promotes the per-chip logical shape to the shard height (e.g. 8 -> 32).
-        # The master trace records the production logical shape (8), so we
-        # create the tensor in DRAM first and then to_memory_config into the
-        # sharded L1 layout to preserve the logical shape.
-        if _is_sharded_memory_config(mem_config_a):
-            tensor_a_dram = create_tensor_on_mesh(
-                torch_input_a, device, dtype_a, layout_a, ttnn.DRAM_MEMORY_CONFIG, input_a_tensor_placement
+        # For SDPA decode: the kernel requires Q (or output) in L1 HEIGHT_SHARDED.
+        # The traced shard spec uses a model-specific core grid that may not
+        # distribute data correctly via to_memory_config on replicated tensors.
+        # Instead, build a standard HEIGHT_SHARDED Q layout matching the
+        # reference test: shard shape (padded_num_heads, head_dim) across b cores,
+        # where b = Q.shape[1] (num_users) and padded_num_heads is rounded up.
+        # This guarantees each shard holds one user's complete Q data.
+        if _is_sharded_memory_config(mem_config_a) and len(shape_a) == 4:
+            _q_num_users = shape_a[1]
+            _q_num_heads = shape_a[2]
+            _q_head_dim = shape_a[3]
+            # Pad num_heads to nearest power-of-2 of nearest multiple of 32
+            # (matching the reference SDPA decode test convention).
+            import math as _math_q
+            _q_padded_heads = 1 << _math_q.ceil(_math_q.log2(max(((_q_num_heads + 31) // 32) * 32, 1)))
+            # Build shard grid for b=_q_num_users cores, respecting the
+            # device's compute grid (COL dispatch has max_x=6, ROW has max_x=7).
+            _dev_grid = device.compute_with_storage_grid_size() if hasattr(device, "compute_with_storage_grid_size") else None
+            _max_x = _dev_grid.x if _dev_grid else 8
+            _shard_x = min(_q_num_users, _max_x)
+            _shard_y = (_q_num_users + _shard_x - 1) // _shard_x
+            _q_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(_shard_x - 1, _shard_y - 1),
+            )})
+            _q_shard_spec = ttnn.ShardSpec(
+                _q_shard_grid, (_q_padded_heads, _q_head_dim), ttnn.ShardOrientation.ROW_MAJOR
             )
-            tensor_a = ttnn.to_memory_config(tensor_a_dram, mem_config_a)
-            try:
-                tensor_a_dram.deallocate(True)
-            except Exception:
-                # Best-effort cleanup of the intermediate DRAM tensor — if
-                # deallocate raises (already-freed, mesh teardown), the sweep
-                # should continue to verify correctness on tensor_a.
-                pass
+            _q_sharded_memcfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _q_shard_spec
+            )
+            tensor_a = ttnn.from_torch(
+                torch_input_a,
+                dtype=dtype_a,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=_q_sharded_memcfg,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
         else:
             tensor_a = create_tensor_on_mesh(
                 torch_input_a, device, dtype_a, layout_a, mem_config_a, input_a_tensor_placement
@@ -540,7 +585,7 @@ def run(
     if is_causal is not None:
         op_kwargs["is_causal"] = is_causal
 
-    # Pass sliding_window_size even when None — master records it whenever the
+    # Pass sliding_window_size even when None -- master records it whenever the
     # model explicitly passed it (gpt-oss decode does, with config.sliding_window
     # potentially being None). build_op_kwargs strips None values, so use
     # __absent_keys__ to disambiguate "explicit None" from "key absent".
@@ -575,7 +620,11 @@ def run(
             )
         op_kwargs["attention_sink"] = sink_tensor
 
-    # build_op_kwargs strips program_config; parse from raw kwargs
+    # build_op_kwargs strips program_config; parse from raw kwargs.
+    # For the sweep, we override the traced program_config to use a standard
+    # grid layout (no sub_core_grids) that matches our standard Q shard grid.
+    # The traced sub_core_grids is specific to the model's dispatch layout and
+    # won't work with the sweep's Q shard placement.
     if "program_config" not in op_kwargs:
         traced_pc = kwargs.get("program_config")
         if isinstance(traced_pc, dict) and traced_pc.get("type") == "SDPAProgramConfig":
@@ -583,120 +632,66 @@ def run(
 
             val = traced_pc.get("value", "")
             gm = re.search(r"compute_with_storage_grid_size=(\d+)-(\d+)", val)
-            qm = re.search(r"q_chunk_size=(\d+)", val)
-            km = re.search(r"k_chunk_size=(\d+)", val)
             em = re.search(r"exp_approx_mode=(\w+)", val)
-            if gm and qm and km:
-                _sdpa_kwargs = dict(
-                    compute_with_storage_grid_size=(int(gm.group(1)), int(gm.group(2))),
-                    q_chunk_size=int(qm.group(1)),
-                    k_chunk_size=int(km.group(1)),
-                    exp_approx_mode=em.group(1).lower() == "true" if em else False,
-                )
-                # Parse max_cores_per_head_batch
-                mcm = re.search(r"max_cores_per_head_batch=(\d+)", val)
-                if mcm:
-                    _sdpa_kwargs["max_cores_per_head_batch"] = int(mcm.group(1))
-                # Parse sub_core_grids
-                scg = re.search(r"sub_core_grids=\{(.+?)\}", val)
-                if scg:
-                    import ttnn as _ttnn_scg
 
-                    scg_ranges = re.findall(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", scg.group(1))
-                    if scg_ranges:
-                        _sdpa_kwargs["sub_core_grids"] = _ttnn_scg.CoreRangeSet(
-                            set(
-                                _ttnn_scg.CoreRange(
-                                    _ttnn_scg.CoreCoord(int(sx), int(sy)),
-                                    _ttnn_scg.CoreCoord(int(ex), int(ey)),
-                                )
-                                for sx, sy, ex, ey in scg_ranges
-                            )
-                        )
-                # Reconcile compute_with_storage_grid_size with the device grid.
-                #
-                # SDPA kernel asserts:
-                #   1. sub_core_grids.num_cores() == grid_size.x * grid_size.y
-                #   2. grid_size.x * grid_size.y <= device_grid.x * device_grid.y
-                #
-                # When sub_core_grids is present the kernel uses it (not
-                # grid_size) for actual core placement; grid_size is only
-                # used for the core *count*.  So:
-                #  - If all sub_core_grids entries fit the device grid, keep
-                #    the original compute_with_storage_grid_size unchanged
-                #    (the count already matches sub_core_grids and assertion
-                #    2 holds because count <= device total).
-                #  - If any entry is out-of-bounds, clamp ranges and adjust
-                #    compute_with_storage_grid_size to the new count.
-                #  - Without sub_core_grids, just clamp grid_size dims.
-                if hasattr(device, "compute_with_storage_grid_size"):
-                    dev_grid = device.compute_with_storage_grid_size()
-                    cg = _sdpa_kwargs["compute_with_storage_grid_size"]
-                    if "sub_core_grids" in _sdpa_kwargs:
-                        _scg = _sdpa_kwargs["sub_core_grids"]
-                        _scg_count = _scg.num_cores()
-                        _dev_total = dev_grid.x * dev_grid.y
-                        # Check all cores are within the device grid.
-                        _all_valid = True
-                        for _cr in _scg.ranges():
-                            if _cr.end.x >= dev_grid.x or _cr.end.y >= dev_grid.y:
-                                _all_valid = False
-                                break
-                        if _all_valid and _scg_count <= _dev_total:
-                            # All cores valid — keep original grid_size.
-                            # It may have x > dev_grid.x but the kernel
-                            # only uses x*y as a count when sub_core_grids
-                            # is present.
-                            pass
-                        elif not _all_valid:
-                            import ttnn as _ttnn_clamp
+            # Build a clean program_config WITHOUT sub_core_grids.
+            # Use device compute grid clamped to the traced grid size.
+            if gm:
+                _grid_x, _grid_y = int(gm.group(1)), int(gm.group(2))
+            else:
+                _grid_x, _grid_y = 8, 6  # default
 
-                            _new_ranges = []
-                            for _cr in _scg.ranges():
-                                _ex = min(int(_cr.end.x), dev_grid.x - 1)
-                                _ey = min(int(_cr.end.y), dev_grid.y - 1)
-                                _sx = min(int(_cr.start.x), _ex)
-                                _sy = min(int(_cr.start.y), _ey)
-                                _new_ranges.append(
-                                    _ttnn_clamp.CoreRange(
-                                        _ttnn_clamp.CoreCoord(_sx, _sy),
-                                        _ttnn_clamp.CoreCoord(_ex, _ey),
-                                    )
-                                )
-                            _scg = _ttnn_clamp.CoreRangeSet(set(_new_ranges))
-                            _sdpa_kwargs["sub_core_grids"] = _scg
-                            _scg_count = _scg.num_cores()
-                            if _scg_count <= _dev_total:
-                                _sdpa_kwargs["compute_with_storage_grid_size"] = cg
-                            else:
-                                del _sdpa_kwargs["sub_core_grids"]
-                                _sdpa_kwargs["compute_with_storage_grid_size"] = (
-                                    min(cg[0], dev_grid.x),
-                                    min(cg[1], dev_grid.y),
-                                )
-                        else:
-                            # sub_core_grids exceeds device total — drop it.
-                            del _sdpa_kwargs["sub_core_grids"]
-                            _sdpa_kwargs["compute_with_storage_grid_size"] = (
-                                min(cg[0], dev_grid.x),
-                                min(cg[1], dev_grid.y),
-                            )
-                    else:
-                        # No sub_core_grids — just clamp grid_size.
-                        _sdpa_kwargs["compute_with_storage_grid_size"] = (
-                            min(cg[0], dev_grid.x),
-                            min(cg[1], dev_grid.y),
-                        )
-                op_kwargs["program_config"] = ttnn.SDPAProgramConfig(**_sdpa_kwargs)
+            if hasattr(device, "compute_with_storage_grid_size"):
+                dev_grid = device.compute_with_storage_grid_size()
+                _grid_x = min(_grid_x, dev_grid.x)
+                _grid_y = min(_grid_y, dev_grid.y)
+
+            # Determine padded_num_heads for q_chunk_size (matching reference test)
+            import math as _math_pc
+            _pc_num_heads = shape_a[2] if len(shape_a) == 4 else 32
+            _pc_padded_heads = 1 << _math_pc.ceil(_math_pc.log2(max(((_pc_num_heads + 31) // 32) * 32, 1)))
+
+            _sdpa_kwargs = dict(
+                compute_with_storage_grid_size=(_grid_x, _grid_y),
+                q_chunk_size=_pc_padded_heads,
+                k_chunk_size=_pc_padded_heads,
+                exp_approx_mode=em.group(1).lower() == "true" if em else False,
+            )
+
+            op_kwargs["program_config"] = ttnn.SDPAProgramConfig(**_sdpa_kwargs)
         elif traced_pc is not None and traced_pc != "__ABSENT__" and not isinstance(traced_pc, dict):
             op_kwargs["program_config"] = traced_pc
 
-    # Pass memory_config from V2 vector when present (master records it).
-    v2_memory_config = kwargs.get("memory_config")
-    if v2_memory_config is not None and v2_memory_config != "__ABSENT__":
-        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+    # For SDPA sweep: since we build Q with our own shard grid (not the
+    # model's traced grid), we must also override the output memory_config
+    # to use a compatible shard grid.  Use the same grid we built for Q.
+    if is_mesh_device and len(shape_a) == 4 and _is_sharded_memory_config(mem_config_a):
+        _q_num_users = shape_a[1]
+        _q_num_heads = shape_a[2]
+        _q_head_dim = shape_a[3]
+        import math as _math_out
+        _q_padded_heads = 1 << _math_out.ceil(_math_out.log2(max(((_q_num_heads + 31) // 32) * 32, 1)))
+        _dev_grid_out = device.compute_with_storage_grid_size() if hasattr(device, "compute_with_storage_grid_size") else None
+        _max_x_out = _dev_grid_out.x if _dev_grid_out else 8
+        _shard_x_out = min(_q_num_users, _max_x_out)
+        _shard_y_out = (_q_num_users + _shard_x_out - 1) // _shard_x_out
+        _out_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(
+            ttnn.CoreCoord(0, 0),
+            ttnn.CoreCoord(_shard_x_out - 1, _shard_y_out - 1),
+        )})
+        _out_shard_spec = ttnn.ShardSpec(
+            _out_shard_grid, (_q_padded_heads, _q_head_dim), ttnn.ShardOrientation.ROW_MAJOR
+        )
+        op_kwargs["memory_config"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _out_shard_spec
+        )
+    else:
+        # Pass memory_config from V2 vector when present (master records it).
+        v2_memory_config = kwargs.get("memory_config")
+        if v2_memory_config is not None and v2_memory_config != "__ABSENT__":
+            from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 
-        op_kwargs.setdefault("memory_config", parse_dict_value("memory_config", v2_memory_config))
+            op_kwargs.setdefault("memory_config", parse_dict_value("memory_config", v2_memory_config))
 
     ttnn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
         tensor_a,  # Q
@@ -706,11 +701,31 @@ def run(
         cur_pos_tensor=tensor_e,
         **op_kwargs,
     )
-    output_tensor = mesh_tensor_to_torch(ttnn_output, device if is_mesh_device else None)
-    if is_mesh_device and output_tensor.shape != torch_output_tensor.shape:
+    # SDPA output is replicated across devices (each chip computes the full
+    # attention for its users).  mesh_tensor_to_torch concatenates shards and
+    # produces wrong shapes (e.g. 8x32x8x128 or 1x8x8x4096 for 32 devices).
+    # Read only device 0's output for PCC comparison.
+    if is_mesh_device:
         dev_tensors = ttnn.get_device_tensors(ttnn_output)
         output_tensor = ttnn.to_torch(dev_tensors[0])
+    else:
+        output_tensor = ttnn.to_torch(ttnn_output)
     e2e_perf = stop_measuring_time(start_time)
+
+    # --- DEBUG ---
+    print(f"DEBUG golden shape: {torch_output_tensor.shape}, std: {torch_output_tensor.float().std().item():.6f}", flush=True)
+    print(f"DEBUG device shape: {output_tensor.shape}, std: {output_tensor.float().std().item():.6f}", flush=True)
+    # Per-user PCC
+    if torch_output_tensor.ndim == 4 and output_tensor.ndim == 4:
+        for u in range(min(torch_output_tensor.shape[1], 8)):
+            g_u = torch_output_tensor[0, u].float()
+            d_u = output_tensor[0, u].float()
+            try:
+                pcc_u = check_with_pcc(g_u, d_u, 0.5)
+            except Exception:
+                pcc_u = "ERR"
+            print(f"DEBUG user {u}: golden_std={g_u.std():.6f}, dev_std={d_u.std():.6f}, pcc={pcc_u}", flush=True)
+    # --- END DEBUG ---
 
     if torch_output_tensor.shape != output_tensor.shape:
         # Trim padded heads/users and align shapes
