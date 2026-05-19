@@ -11,6 +11,13 @@ targets:
     skus:
       wh_n150:
         entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 79.0
+              top5: 97.0
           - batch_size: 32
             seq_len: 1024
             status: active
@@ -34,6 +41,13 @@ targets:
     skus:
       wh_n150:
         entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 89.0
+              top5: 98.0
           - batch_size: 32
             seq_len: 1024
             status: active
@@ -93,6 +107,13 @@ targets:
       wh_llmbox_perf:
         entries:
           - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 89.1
+              top5: 97.1
+          - batch_size: 1
             seq_len: 1024
             status: active
             perf: {}
@@ -121,6 +142,13 @@ targets:
     skus:
       wh_n150:
         entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 95.0
+              top5: 99.0
           - batch_size: 32
             seq_len: 1024
             status: active
@@ -144,6 +172,13 @@ targets:
     skus:
       wh_n300:
         entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 84.0
+              top5: 96.0
           - batch_size: 32
             seq_len: 1024
             status: active
@@ -185,6 +220,13 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 95.5
+              top5: 99.0
           - batch_size: 32
             seq_len: 1024
             status: active
@@ -208,6 +250,13 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 89.0
+              top5: 97.0
           - batch_size: 32
             seq_len: 1024
             status: active
@@ -279,7 +328,7 @@ targets:
               # band. The metric needs to be anchored to a fixed seq_len
               # (see PR #43982 description) before it can gate CI usefully.
               decode_t/s/u: 11.04
-              decode_t/s: 11.04
+              decode_t/s: 12.6
               decode_tolerance: 1.15
             accuracy: {}
 
@@ -508,6 +557,13 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 96.0
+              top5: 100.0
           - batch_size: 32
             seq_len: 131072
             status: TODO
@@ -689,6 +745,13 @@ targets:
     skus:
       wh_n150:
         entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 89.0
+              top5: 99.0
           - batch_size: 1
             seq_len: 1024
             status: active
