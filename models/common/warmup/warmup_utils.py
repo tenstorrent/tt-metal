@@ -86,6 +86,7 @@ class WarmupForwardMixin:
         num_blocks,
         can_sample_on_device,
         non_greedy_decoding_on_device,
+        warmup_only=False,
         read_from_device=True,
     ):
         """
@@ -104,14 +105,16 @@ class WarmupForwardMixin:
 
         for param in sampling_params:
             logger.info(f"Warming up decode for sampling params: {param}")
-            self.decode_forward(
+            decode_kwargs = dict(
                 tokens=tokens,
                 start_pos=start_pos,
                 page_table=page_table,
                 kv_cache=kv_cache,
                 enable_trace=enable_trace,
+                warmup_only=warmup_only,
                 read_from_device=read_from_device,
                 sampling_params=param,
             )
+            self.decode_forward(**decode_kwargs)
 
         logger.info("Decode warmup completed")
