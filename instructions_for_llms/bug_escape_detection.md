@@ -75,7 +75,6 @@ Skip Opus pre-classification if layer pre-filter already rules it out.
 
 ### Step 1: Detection (Snowflake)
 
-
 **⚠️ Known data quality issue — device-perf tests (N300 WH B0 Set 2 and similar):**
 Test results from device-perf jobs only land in Snowflake when the *overall job fails*.
 When the N300 Set 2 job succeeds, the inner test may PASS but the JUnit XML is never uploaded,
@@ -83,11 +82,43 @@ so Snowflake sees silence instead of a pass. This causes artificially wide commi
 (e.g. apparent 86-commit gaps that are really just missing records, not actual re-failures).
 
 **Mitigation when investigating device-perf escapes:**
-- Before trusting `first_passing_sha` from Snowflake, check device-perf scheduled run logs
-  directly: `GET /repos/tenstorrent/tt-metal/actions/workflows/76728129/runs?branch=main`
-- For each run in the range, grep the N300 Set 2 job logs for the specific test result.
-  The test may have been passing much earlier than Snowflake recorded.
 - Do NOT treat Snowflake `first_passing_sha` as authoritative for device-perf tests.
+- Use the procedure below to find the true range before doing any bisect work.
+
+**Procedure: correct the commit range for device-perf tests**
+
+Do this BEFORE Step 2 (layer filter) and BEFORE any bisect dispatch.
+
+1. List device-perf scheduled runs on main (workflow 76728129, newest first):
+   ```
+   GET /repos/tenstorrent/tt-metal/actions/workflows/76728129/runs?branch=main&per_page=100
+   ```
+   Each run object has: `id`, `head_sha`, `created_at`, `conclusion`.
+
+2. For each run whose `head_sha` falls between Snowflake's `last_failing_sha` and
+   `first_passing_sha`, read the N300 Set 2 job log:
+   ```
+   GET /repos/tenstorrent/tt-metal/actions/runs/{run_id}/jobs
+   ```
+   Filter for job name containing "N300 WH B0 Set 2". Then:
+   ```
+   GET /repos/tenstorrent/tt-metal/actions/jobs/{job_id}/logs
+   ```
+   Search the log for `{test_name}`. Look for lines matching:
+   - `PASSED tests/.../{test_file}::{test_name}` → test passed at this commit
+   - `FAILED tests/.../{test_file}::{test_name}` → test failed at this commit
+
+3. Walk runs chronologically (oldest first within the range) to establish:
+   - **True `last_failing_sha`**: latest `head_sha` where the test explicitly FAILs.
+   - **True `first_passing_sha`**: earliest `head_sha` after that where the test explicitly PASSes.
+   If a run's log has no mention of the test at all, skip it (job may have aborted early).
+
+4. Recompute the commit range with the corrected SHAs:
+   ```
+   GET /repos/tenstorrent/tt-metal/compare/{true_last_failing_sha}...{true_first_passing_sha}
+   ```
+   Use this range for all subsequent steps. The corrected range is typically much smaller
+   than what Snowflake suggested (e.g., 86 apparent commits → 2 actual).
 
 Run the following SQL. Adjust `DATEADD` for backfill (60 days) vs incremental (1 day).
 
@@ -385,27 +416,25 @@ Method B procedure:
    and `ttnn-dist-cp310-Release-profiler-{SHA}-{RUN_ID}`
 
 3. If profiler artifacts exist for a **nearby commit** (within ~5 commits of target):
-   Dispatch `perf-device-models.yaml` on the `brain/efficientnet-bisect-probe` branch
-   with `use-artifacts-from-run = {that run ID}`. The test will run using that commit's
-   compiled code, not the branch's code.
+   Dispatch `perf-device-models.yaml` on your probe branch with `use-artifacts-from-run = {that run ID}`.
+   The test will run using that artifact commit's compiled code, not the probe branch's code.
    ⚠️ This tests the artifact commit's code, not your probe branch — only use when the
    artifact commit is close enough to the target that the difference is irrelevant.
 
 4. If NO profiler artifacts exist near the target commit:
-   - Update the `brain/efficientnet-bisect-probe` branch to base on the target commit
-     (keeping the workflow changes), push it, then dispatch with `use-artifacts-from-run = ""`.
+   - Update your probe branch (e.g. `brain/{test-name}-bisect-probe`) to base on the target
+     commit (keeping the workflow changes), push it, then dispatch with `use-artifacts-from-run = ""`.
    - This triggers a full rebuild (~60 min) but correctly tests that exact commit.
    - Command sequence:
      ```bash
-     cd /workspace/group/worktrees/efficientnet-bisect-probe
-     # Save the workflow change commit hash first
+     cd /workspace/group/worktrees/{probe-branch-name}
      WORKFLOW_COMMIT=$(git rev-parse HEAD)
      git reset --hard {target_sha}
      git cherry-pick $WORKFLOW_COMMIT
-     git push origin brain/efficientnet-bisect-probe --force
+     git push origin brain/{test-name}-bisect-probe --force
      ```
 
-5. The overall job will likely **report failure** even when the specific pcc test passes
+5. The overall job will likely **report failure** even when the specific test passes
    (perf regression on another model, infra issue, etc.). You MUST check actual test logs:
    ```
    GET /repos/tenstorrent/tt-metal/actions/runs/{run_id}/jobs
@@ -414,15 +443,15 @@ Method B procedure:
    ```
    GET /repos/tenstorrent/tt-metal/actions/jobs/{job_id}/logs
    ```
-   Search for `test_efficientnetb0_model` and look for `PASSED` or `FAILED`.
+   Search for `{test_name}` and look for `PASSED` or `FAILED` on that line.
 
 6. Dispatch inputs for `perf-device-models.yaml` (workflow ID 76728129):
    ```json
    {
-     "ref": "brain/efficientnet-bisect-probe",
+     "ref": "brain/{test-name}-bisect-probe",
      "inputs": {
        "architecture": "[\"wormhole_b0\"]",
-       "requested-models": "[\"efficientnetb0\"]",
+       "requested-models": "[\"<model-short-name>\"]",
        "platform": "Ubuntu 22.04",
        "build-type": "Release",
        "use-artifacts-from-run": "{run_id or empty string}"
@@ -431,6 +460,23 @@ Method B procedure:
    ```
 
 Use `test-dispatch.yaml` (workflow ID 103409066) to run the test at individual commits.
+
+**For device-perf tests — read existing run logs before dispatching anything (MANDATORY):**
+
+Device-perf scheduled runs fire ~daily on main. For any commit in your bisect range,
+there is likely already a run with logs. Reading logs costs nothing; each new dispatch
+costs ~60 min of rebuild time.
+
+Before dispatching any midpoint probe:
+1. List all device-perf runs in the corrected range (from the Step 1 correction procedure above).
+2. For each midpoint commit in the binary search, check if a device-perf run exists at that SHA
+   (match `run.head_sha == commits[mid].sha`).
+3. If a run exists: read its N300 Set 2 job log and extract PASS/FAIL for the test.
+   This IS your probe result — do not dispatch a new run.
+4. Only dispatch a new run (Method B) when no existing run covers that commit.
+
+In a typical 86-commit Snowflake-inflated range, all commits already have device-perf runs.
+You can complete the entire bisect with zero new dispatches by reading logs only.
 
 **Algorithm:**
 1. Get the commit list between `last_failing_sha` (exclusive) and `first_passing_sha` (inclusive):
