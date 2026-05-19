@@ -12,6 +12,34 @@
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
+// Rotary kernel structure (Llama-style):
+//   out = (x @ trans_mat) * sin + x * cos
+//
+// The original implementation ran this as 4 sequential ACQ/REL phases with
+// 3 intermediate L1 materializations (rotated_in_interm_cb -> sin_interim_cb
+// + cos_interim_cb -> out_cb). At MATH=4% on the full grid (Qwen3 prefill,
+// bs=32 ISL=512), the kernel is bandwidth-bound on the intermediate
+// CB round-trips, not on FPU work.
+//
+// This rewrite collapses the 4 phases into 2 by reusing DST registers across
+// FPU ops via EltwiseBinaryReuseDestType::DEST_TO_SRCA:
+//
+//   Phase 1 (single ACQ/REL):
+//     dst[j] = matmul(x[j], trans_mat)           // FPU matmul, dst <- rotated
+//     dst[j] *= sin[j]                            // FPU mul DEST_TO_SRCA
+//     pack(dst[j] -> sin_interm_cb)               // -> rotated*sin in CB
+//
+//   Phase 2 (single ACQ/REL):
+//     dst[j] = x[j] * cos[j]                      // FPU mul, dst <- x*cos
+//     dst[j] += sin_interm_cb[j]                  // FPU add DEST_TO_SRCA
+//     pack(dst[j] -> out_cb)                      // -> final output
+//
+// rotated_in_interm_cb and cos_interm_cb are no longer used; they remain
+// allocated by the program factory but are inert. The arithmetic is
+// bit-identical to the original (all ops are FPU add/mul/matmul on the same
+// bf16 tiles). Each phase still uses Wt DST tiles, matching the original's
+// budget so fp32_dest_acc_en behavior is unchanged.
+
 void kernel_main() {
     uint32_t argrt = 0;
     uint32_t batch_start = get_arg_val<uint32_t>(argrt++);
@@ -60,60 +88,50 @@ void kernel_main() {
                 cb_wait_front(cos_cb, Wt);
 #endif
 
-                cb_reserve_back(rotated_in_interm_cb, Wt);
                 cb_reserve_back(sin_interm_cb, Wt);
-                cb_reserve_back(cos_interm_cb, Wt);
                 cb_reserve_back(out_cb, Wt);
 
-                // // rotated = x @ trans_mat
+                // ---------- Phase 1: matmul + sin-mul fused via DEST_TO_SRCA ----------
+                // dst[j] = (x[j] @ trans_mat) * sin[j];  pack -> sin_interm_cb
                 mm_init_short(in_cb, trans_mat_cb);
                 ACQ();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     matmul_tiles(in_cb, trans_mat_cb, j, in1_index, j);
-                    pack_tile(j, rotated_in_interm_cb, j);
                 }
-                REL();
-                cb_push_back(rotated_in_interm_cb, Wt);
-                cb_wait_front(rotated_in_interm_cb, Wt);
-
-                mul_tiles_init(rotated_in_interm_cb, sin_cb);
-                ACQ();
+                // Re-init to read first operand from DST (the matmul result) instead of a CB.
+                binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                    sin_cb);
                 for (uint32_t j = 0; j < Wt; ++j) {
-                    // sin_interim = rotated * sin
-                    mul_tiles(rotated_in_interm_cb, sin_cb, j, j + (sin_cos_row_cnt * Wt), j);
+                    binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                        sin_cb, j + (sin_cos_row_cnt * Wt), j);
                     pack_tile(j, sin_interm_cb, j);
                 }
                 REL();
                 cb_push_back(sin_interm_cb, Wt);
-                cb_pop_front(rotated_in_interm_cb, Wt);
-
-                ACQ();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    // cos_interim = x * cos
-                    mul_tiles(in_cb, cos_cb, j, j + (sin_cos_row_cnt * Wt), j);
-                    pack_tile(j, cos_interm_cb, j);
-                }
-                REL();
-                cb_push_back(cos_interm_cb, Wt);
-                cb_pop_front(in_cb, Wt);  // Done with input
-#if RELOAD_IMPL == 1
-                cb_pop_front(sin_cb, Wt);
-                cb_pop_front(cos_cb, Wt);
-#endif
-
                 cb_wait_front(sin_interm_cb, Wt);
-                cb_wait_front(cos_interm_cb, Wt);
-                add_tiles_init(cos_interm_cb, sin_interm_cb);
+
+                // ---------- Phase 2: cos-mul + add fused via DEST_TO_SRCA ----------
+                // dst[j] = x[j] * cos[j] + sin_interm_cb[j];  pack -> out_cb
+                mul_tiles_init(in_cb, cos_cb);
                 ACQ();
                 for (uint32_t j = 0; j < Wt; ++j) {
-                    // out = cos_interim + sin_interim
-                    add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
+                    mul_tiles(in_cb, cos_cb, j, j + (sin_cos_row_cnt * Wt), j);
+                }
+                binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                    sin_interm_cb);
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                        sin_interm_cb, j, j);
                     pack_tile(j, out_cb, j);
                 }
                 REL();
                 cb_push_back(out_cb, Wt);
                 cb_pop_front(sin_interm_cb, Wt);
-                cb_pop_front(cos_interm_cb, Wt);
+                cb_pop_front(in_cb, Wt);  // Done with input
+#if RELOAD_IMPL == 1
+                cb_pop_front(sin_cb, Wt);
+                cb_pop_front(cos_cb, Wt);
+#endif
 
 #if RELOAD_IMPL == 0
                 // no-reload needs to increment this counter

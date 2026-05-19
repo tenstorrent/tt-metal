@@ -8,6 +8,9 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include <cstdlib>
+#include <string>
+
 namespace ttnn::operations::experimental::transformer {
 
 using namespace tt::constants;
@@ -66,9 +69,20 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     uint32_t q_num_tiles = num_q_heads * q_out_w_tiles;
     uint32_t kv_num_tiles = num_kv_heads * q_out_w_tiles;
 
+    const char* head_split_env = std::getenv("QWEN_NLP_CREATE_HEADS_HEAD_SPLIT");
+    const bool head_split_enabled = head_split_env != nullptr && std::string(head_split_env) == "1" &&
+                                    !transpose_k_heads && !read_from_input_tensor_kv && num_kv_heads > 0 &&
+                                    num_q_heads % num_kv_heads == 0 && q_out_w_tiles > 0;
+
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // Block is a unit of work; ie. num of in0_w_tiles per core
     uint32_t num_blocks = input_shape[0] * input_shape[1] * input_shape[2] / TILE_HEIGHT;
+    if (head_split_enabled) {
+        // Specialized Qwen-style fused-QKV split: split each sequence tile into KV-head groups.
+        // For Qwen3-Embedding-0.6B bs=1/ISL=512 this creates 16 seq blocks * 8 KV groups
+        // = 128 work units instead of the generic path's 16 sequence-only units.
+        num_blocks *= num_kv_heads;
+    }
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
 
@@ -91,23 +105,45 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)q_num_tiles,
-        (std::uint32_t)kv_num_tiles,
-    };
+    std::vector<uint32_t> reader_compile_time_args;
+    if (head_split_enabled) {
+        reader_compile_time_args = {
+            (std::uint32_t)(num_q_heads / num_kv_heads),
+            (std::uint32_t)num_kv_heads,
+            (std::uint32_t)q_out_w_tiles,
+            (std::uint32_t)in0_w_tiles,
+        };
+    } else {
+        reader_compile_time_args = {
+            (std::uint32_t)q_num_tiles,
+            (std::uint32_t)kv_num_tiles,
+        };
+    }
     tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
     // Always append placeholder/accessor for in1 to keep offsets stable
     tt::tt_metal::TensorAccessorArgs(read_from_input_tensor_kv ? in1_buffer : nullptr)
         .append_to(reader_compile_time_args);
 
     // TODO: Q, K, V doesn't necessarily need to be the same output mem config
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)q_out_h_tiles,
-        (std::uint32_t)q_out_w_tiles,
-        (std::uint32_t)q_out_HtWt,
-        (std::uint32_t)num_q_heads,   // q_out_c
-        (std::uint32_t)num_kv_heads,  // kv_out_c
-    };
+    std::vector<uint32_t> writer_compile_time_args;
+    if (head_split_enabled) {
+        writer_compile_time_args = {
+            (std::uint32_t)q_out_h_tiles,
+            (std::uint32_t)q_out_w_tiles,
+            (std::uint32_t)q_out_HtWt,
+            (std::uint32_t)num_q_heads,
+            (std::uint32_t)num_kv_heads,
+            (std::uint32_t)(num_q_heads / num_kv_heads),
+        };
+    } else {
+        writer_compile_time_args = {
+            (std::uint32_t)q_out_h_tiles,
+            (std::uint32_t)q_out_w_tiles,
+            (std::uint32_t)q_out_HtWt,
+            (std::uint32_t)num_q_heads,   // q_out_c
+            (std::uint32_t)num_kv_heads,  // kv_out_c
+        };
+    }
     tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(v_buffer).append_to(writer_compile_time_args);
@@ -115,17 +151,12 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
     if (transpose_k_heads) {
-        // For FLOAT32 input, enable fp32 dest accumulation so the JIT data-format selection
-        // resolves the unpack-dst CB to Tf32 (10-bit mantissa) instead of Float16_b (7-bit
-        // mantissa). Mirrors the per-dtype promotion in eltwise unary/binary primitives.
-        const bool fp32_dest_acc_en = input_tensor.dtype() == tt_metal::DataType::FLOAT32;
-
         std::vector<uint32_t> compute_args_core_group_1 = {num_blocks_per_core_group_1 * kv_num_tiles};
         tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp",
             core_group_1,
-            tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args_core_group_1});
+            tt_metal::ComputeConfig{.compile_args = compute_args_core_group_1});
 
         if (core_group_2.num_cores() > 0) {
             std::vector<uint32_t> compute_args_core_group_2 = {num_blocks_per_core_group_2 * kv_num_tiles};
@@ -133,8 +164,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
                 program,
                 "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp",
                 core_group_2,
-                tt_metal::ComputeConfig{
-                    .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args_core_group_2});
+                tt_metal::ComputeConfig{.compile_args = compute_args_core_group_2});
         }
 
         reader_defines["TRANSPOSE_K_HEADS"] = "1";
@@ -144,16 +174,27 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
         reader_defines["READ_FROM_INPUT_TENSOR_KV"] = "1";
     }
 
+    const char* reader_kernel_path =
+        head_split_enabled
+            ? "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
+              "reader_tm_tile_layout_nlp_create_qkv_heads_head_split.cpp"
+            : "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
+              "reader_tm_tile_layout_nlp_create_qkv_heads.cpp";
+    const char* writer_kernel_path =
+        head_split_enabled
+            ? "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
+              "writer_tm_tile_layout_nlp_create_qkv_heads_head_split.cpp"
+            : "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
+              "writer_tm_tile_layout_nlp_create_qkv_heads.cpp";
+
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
-        "reader_tm_tile_layout_nlp_create_qkv_heads.cpp",
+        reader_kernel_path,
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
-        "writer_tm_tile_layout_nlp_create_qkv_heads.cpp",
+        writer_kernel_path,
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
@@ -206,28 +247,39 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
             (std::uint32_t)in1_buffer_addr,
             num_blocks_per_core,
             num_blocks_written * in0_w_tiles,
-            num_blocks_written * in1_w_tiles,
+            head_split_enabled ? num_blocks_written : num_blocks_written * in1_w_tiles,
         };
 
-        uint32_t q_out_h_dim = num_blocks_written % q_out_h_tiles;
-        uint32_t q_out_tensor_tile_id =
-            (num_blocks_written / q_out_h_tiles * q_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);
-        uint32_t v_out_tensor_tile_id =
-            (num_blocks_written / q_out_h_tiles * kv_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);
-        uint32_t k_out_tensor_tile_id = transpose_k_heads
-                                            ? (num_blocks_written / q_out_h_tiles * kv_out_CHtWt) + q_out_h_dim
-                                            : v_out_tensor_tile_id;
+        std::vector<uint32_t> writer_runtime_args;
+        if (head_split_enabled) {
+            writer_runtime_args = {
+                (std::uint32_t)q_buffer->address(),  // q_tensor_addr
+                (std::uint32_t)k_buffer->address(),  // k_tensor_addr
+                (std::uint32_t)v_buffer->address(),  // v_tensor_addr
+                num_blocks_per_core,                 // num_work_units
+                num_blocks_written,                  // work_unit_start
+            };
+        } else {
+            uint32_t q_out_h_dim = num_blocks_written % q_out_h_tiles;
+            uint32_t q_out_tensor_tile_id =
+                (num_blocks_written / q_out_h_tiles * q_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);
+            uint32_t v_out_tensor_tile_id =
+                (num_blocks_written / q_out_h_tiles * kv_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);
+            uint32_t k_out_tensor_tile_id = transpose_k_heads
+                                                ? (num_blocks_written / q_out_h_tiles * kv_out_CHtWt) + q_out_h_dim
+                                                : v_out_tensor_tile_id;
 
-        std::vector<uint32_t> writer_runtime_args = {
-            (std::uint32_t)q_buffer->address(),  // q_tensor_addr
-            (std::uint32_t)k_buffer->address(),  // k_tensor_addr
-            (std::uint32_t)v_buffer->address(),  // v_tensor_addr
-            num_blocks_per_core,                 // num_blocks
-            q_out_h_dim,                         // q_out_h_dim
-            q_out_tensor_tile_id,                // q_out_tensor_tile_id
-            k_out_tensor_tile_id,                // k_out_tensor_tile_id
-            v_out_tensor_tile_id,                // v_out_tensor_tile_id
-        };
+            writer_runtime_args = {
+                (std::uint32_t)q_buffer->address(),  // q_tensor_addr
+                (std::uint32_t)k_buffer->address(),  // k_tensor_addr
+                (std::uint32_t)v_buffer->address(),  // v_tensor_addr
+                num_blocks_per_core,                 // num_blocks
+                q_out_h_dim,                         // q_out_h_dim
+                q_out_tensor_tile_id,                // q_out_tensor_tile_id
+                k_out_tensor_tile_id,                // k_out_tensor_tile_id
+                v_out_tensor_tile_id,                // v_out_tensor_tile_id
+            };
+        }
 
         tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
