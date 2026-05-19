@@ -16,6 +16,10 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
@@ -50,9 +54,40 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     [
-        (3200, 7168, 64, 2, 2),
+        # Real model shapes (perf-only, num_routed_experts // 4 to fit the test mesh).
+        pytest.param(
+            3200,
+            DeepSeekV3Config.EMB_SIZE,
+            DeepSeekV3Config.NUM_ROUTED_EXPERTS // 4,
+            2,
+            2,
+            id="deepseek_v3",
+        ),
+        pytest.param(
+            3200,
+            DeepSeekV4ProConfig.EMB_SIZE,
+            DeepSeekV4ProConfig.NUM_ROUTED_EXPERTS // 4,
+            2,
+            2,
+            id="deepseek_v4_pro",
+        ),
+        pytest.param(
+            3200,
+            DeepSeekV4FlashConfig.EMB_SIZE,
+            DeepSeekV4FlashConfig.NUM_ROUTED_EXPERTS // 4,
+            2,
+            2,
+            id="deepseek_v4_flash",
+        ),
+        pytest.param(
+            3200,
+            GptOss120BConfig.EMB_SIZE,
+            GptOss120BConfig.NUM_ROUTED_EXPERTS // 4,
+            2,
+            2,
+            id="gpt_oss_120b",
+        ),
     ],
-    ids=["3200-avg"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",

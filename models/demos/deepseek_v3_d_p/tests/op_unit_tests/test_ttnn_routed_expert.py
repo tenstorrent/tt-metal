@@ -18,6 +18,9 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
@@ -102,11 +105,13 @@ def run_torch_routed_experts(
     "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
         # fmt: off
-        (320, 1024, 512, 64, 2, 9, True),
-        (3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 3, False),
+        pytest.param(320, 1024, 512, 64, 2, 9, True, id="small-dims-validate-pcc"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 3, False, id="deepseek_v3-dims-skip-pcc"),
+        pytest.param(3200, DeepSeekV4ProConfig.EMB_SIZE, DeepSeekV4ProConfig.MOE_INTERMEDIATE_SIZE, DeepSeekV4ProConfig.NUM_ROUTED_EXPERTS // 4, 2, 3, False, id="deepseek_v4_pro-dims-skip-pcc"),
+        pytest.param(3200, DeepSeekV4FlashConfig.EMB_SIZE, DeepSeekV4FlashConfig.MOE_INTERMEDIATE_SIZE, DeepSeekV4FlashConfig.NUM_ROUTED_EXPERTS // 4, 2, 3, False, id="deepseek_v4_flash-dims-skip-pcc"),
+        pytest.param(3200, GptOss120BConfig.EMB_SIZE, GptOss120BConfig.MOE_INTERMEDIATE_SIZE, GptOss120BConfig.NUM_ROUTED_EXPERTS // 4, 2, 3, False, id="gpt_oss_120b-dims-skip-pcc"),
         # fmt: on
     ],
-    ids=["small-dims-validate-pcc", "deepseek-v3-dims-skip-pcc"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",

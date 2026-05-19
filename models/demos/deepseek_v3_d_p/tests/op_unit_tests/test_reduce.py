@@ -17,6 +17,10 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.tt.moe.reduce import TorchReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_sparse_combine_output,
@@ -30,10 +34,37 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 @pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
 @pytest.mark.parametrize(
-    "seq_len, emb_dim, topk",
+    "seq_len, emb_dim, topk, num_routed_experts",
     [
-        (32, 2048, 8),
-        (3200, 7 * 1024, 8),  # DeepSeek values
+        # Real model shapes (perf-only); num_routed_experts is NUM_ROUTED_EXPERTS // 4 to fit the test mesh.
+        pytest.param(
+            3200,
+            DeepSeekV3Config.EMB_SIZE,
+            DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,
+            DeepSeekV3Config.NUM_ROUTED_EXPERTS // 4,
+            id="deepseek_v3",
+        ),
+        pytest.param(
+            3200,
+            DeepSeekV4ProConfig.EMB_SIZE,
+            DeepSeekV4ProConfig.NUM_EXPERTS_PER_TOKEN,
+            DeepSeekV4ProConfig.NUM_ROUTED_EXPERTS // 4,
+            id="deepseek_v4_pro",
+        ),
+        pytest.param(
+            3200,
+            DeepSeekV4FlashConfig.EMB_SIZE,
+            DeepSeekV4FlashConfig.NUM_EXPERTS_PER_TOKEN,
+            DeepSeekV4FlashConfig.NUM_ROUTED_EXPERTS // 4,
+            id="deepseek_v4_flash",
+        ),
+        pytest.param(
+            3200,
+            GptOss120BConfig.EMB_SIZE,
+            GptOss120BConfig.NUM_EXPERTS_PER_TOKEN,
+            GptOss120BConfig.NUM_ROUTED_EXPERTS // 4,
+            id="gpt_oss_120b",
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -59,6 +90,7 @@ def test_ttnn_reduce(
     seq_len,
     emb_dim,
     topk,
+    num_routed_experts,
     use_weights,
 ):
     """Test TTNN reduce module in isolation using synthetic sparse inputs."""
@@ -88,8 +120,6 @@ def test_ttnn_reduce(
         sparsity=0.75,
     )
     logger.debug(f"Created sparse combine output: {torch_combine_output.shape}")
-
-    num_routed_experts = 64
 
     # Create random gate weights for weighted reduce (if enabled)
     torch_gate_weights = None

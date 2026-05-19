@@ -15,31 +15,28 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
 
+# Model FFN shapes (emb_dim, hidden_dim) the single-expert sweep runs against.
+MODEL_SHAPES = [
+    pytest.param(DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, id="deepseek_v3"),
+    pytest.param(DeepSeekV4ProConfig.EMB_SIZE, DeepSeekV4ProConfig.MOE_INTERMEDIATE_SIZE, id="deepseek_v4_pro"),
+    pytest.param(DeepSeekV4FlashConfig.EMB_SIZE, DeepSeekV4FlashConfig.MOE_INTERMEDIATE_SIZE, id="deepseek_v4_flash"),
+    # pytest.param(GptOss120BConfig.EMB_SIZE, GptOss120BConfig.MOE_INTERMEDIATE_SIZE, id="gpt_oss_120b"),
+]
 
+
+@pytest.mark.parametrize("emb_dim, hidden_dim", MODEL_SHAPES)
 @pytest.mark.parametrize(
-    "num_tokens, emb_dim, hidden_dim",
-    [
-        (1024, 7168, 2048),  # DeepSeek V3 dims, 1K tokens
-        (2048, 7168, 2048),  # DeepSeek V3 dims, 2K tokens
-        (4096, 7168, 2048),  # DeepSeek V3 dims, 4K tokens
-        (5120, 7168, 2048),  # DeepSeek V3 dims, 5K tokens
-        (6144, 7168, 2048),  # DeepSeek V3 dims, 6K tokens
-        (8192, 7168, 2048),  # DeepSeek V3 dims, 8K tokens
-        (25600, 7168, 2048),  # DeepSeek V3 dims, 25K tokens
-    ],
-    ids=[
-        "ds-v3-1k",
-        "ds-v3-2k",
-        "ds-v3-4k",
-        "ds-v3-5k",
-        "ds-v3-6k",
-        "ds-v3-8k",
-        "ds-v3-25k",
-    ],
+    "num_tokens",
+    [1024, 2048, 4096, 5120, 6144, 8192, 25600],
+    ids=["1k", "2k", "4k", "5k", "6k", "8k", "25k"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -158,21 +155,22 @@ def test_single_routed_expert(
     logger.debug("Test PASSED!")
 
 
+@pytest.mark.parametrize("emb_dim, hidden_dim", MODEL_SHAPES)
 @pytest.mark.parametrize(
-    "allocated_tokens, active_tokens, emb_dim, hidden_dim",
+    "allocated_tokens, active_tokens",
     [
-        (4096, 2048, 7168, 2048),
-        (25 * 1024, 2048, 7168, 2048),
-        (25 * 1024, 4096, 7168, 2048),
-        (16384, 2048, 7168, 2048),
-        (16384, 4096, 7168, 2048),
+        (4096, 2048),
+        (25 * 1024, 2048),
+        (25 * 1024, 4096),
+        (16384, 2048),
+        (16384, 4096),
     ],
     ids=[
-        "ds-v3-4k-alloc-2k-active",
-        "ds-v3-25k-alloc-2k-active",
-        "ds-v3-25k-alloc-4k-active",
-        "ds-v3-16k-alloc-2k-active",
-        "ds-v3-16k-alloc-4k-active",
+        "4k-alloc-2k-active",
+        "25k-alloc-2k-active",
+        "25k-alloc-4k-active",
+        "16k-alloc-2k-active",
+        "16k-alloc-4k-active",
     ],
 )
 @pytest.mark.parametrize(

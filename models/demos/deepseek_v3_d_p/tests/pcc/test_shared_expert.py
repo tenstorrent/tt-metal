@@ -15,6 +15,9 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
 from models.tt_transformers.tt.ccl import get_num_links
@@ -24,10 +27,33 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, hidden_dim",
     [
-        (4096, 7 * 1024, 2 * 1024),
-        (3200, 7 * 1024, 2 * 1024),
+        pytest.param(4096, 7 * 1024, 2 * 1024, id="deepseek_v3-4K"),
+        pytest.param(3200, 7 * 1024, 2 * 1024, id="deepseek_v3-3.2K"),
+        # Real model shapes.
+        pytest.param(
+            4096, DeepSeekV4ProConfig.EMB_SIZE, DeepSeekV4ProConfig.MOE_INTERMEDIATE_SIZE, id="deepseek_v4_pro-4K"
+        ),
+        pytest.param(
+            3200,
+            DeepSeekV4ProConfig.EMB_SIZE,
+            DeepSeekV4ProConfig.MOE_INTERMEDIATE_SIZE,
+            id="deepseek_v4_pro-3.2K",
+        ),
+        pytest.param(
+            4096,
+            DeepSeekV4FlashConfig.EMB_SIZE,
+            DeepSeekV4FlashConfig.MOE_INTERMEDIATE_SIZE,
+            id="deepseek_v4_flash-4K",
+        ),
+        pytest.param(
+            3200,
+            DeepSeekV4FlashConfig.EMB_SIZE,
+            DeepSeekV4FlashConfig.MOE_INTERMEDIATE_SIZE,
+            id="deepseek_v4_flash-3.2K",
+        ),
+        pytest.param(4096, GptOss120BConfig.EMB_SIZE, GptOss120BConfig.MOE_INTERMEDIATE_SIZE, id="gpt_oss_120b-4K"),
+        pytest.param(3200, GptOss120BConfig.EMB_SIZE, GptOss120BConfig.MOE_INTERMEDIATE_SIZE, id="gpt_oss_120b-3.2K"),
     ],
-    ids=["4K", "3.2K"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
