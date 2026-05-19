@@ -1,10 +1,10 @@
 # qwen3_omni_thinker
-mesh_shape: [1, 16]
-cluster_axis: 1
+mesh_shape: [16, 4]
+cluster_axis: 0
 batch_per_device: 32
 hidden_size: 2048
 select_experts_k: 8
-num_routed_experts: 32
+num_routed_experts: 128
 num_shared_experts: 0
 has_bias: false
 
@@ -16,4 +16,4 @@ reduce:
   shared_expert_scale: 1.0
 
 experts:
-  expert_mapping: [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15]
+  expert_mapping: sequential

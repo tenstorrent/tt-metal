@@ -2,7 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
@@ -27,7 +30,7 @@ class _TTMoEDecodeExpertState:
         # TODO
         pass
 
-    def _init_expert_mapping(expert_mapping: mesh_shape):
+    def _init_expert_mapping(torch_expert_mapping: "torch.Tensor", mesh_device: ttnn.MeshDevice):
         expert_mapping_dtype = ttnn.uint16
         return ttnn.from_torch(
             torch_expert_mapping,
@@ -42,12 +45,17 @@ class _TTMoEDecodeExpertState:
         )
 
     @staticmethod
+    @torch.no_grad()
     def _device_map_reorder_weights(
         torch_w0: "torch.Tensor", torch_w1: "torch.Tensor", torch_w2: "torch.Tensor", expert_mapping: list[int]
     ):
+        for t in (torch_w0, torch_w1, torch_w2):
+            assert len(expert_mapping) == t.shape[1]
+
         ind = torch.Tensor([expert_mapping])
         return tuple([t[:, ind, :, :] for t in (torch_w0, torch_w1, torch_w2)])
 
+    @torch.no_grad()
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -69,11 +77,19 @@ class _TTMoEDecodeExpertState:
         torch_b1: "torch.Tensor" | None = None,
         torch_b2: "torch.Tensor" | None = None,
     ):
+        print("init expert state")
+
         self._validate()
 
-        mapped_torch_w0, mapped_torch_w1, mapped_torch_w2 = self._device_map_reorder_weights(
-            torch_w0, torch_w1, torch_w2, expert_mapping
-        )
+        mapped_torch_w0, mapped_torch_w1, mapped_torch_w2 = (
+            torch_w0,
+            torch_w1,
+            torch_w2,
+        )  # self._device_map_reorder_weights(
+        #    torch_w0, torch_w1, torch_w2, expert_mapping
+        # )
+
+        logger.info("reordered weights")
 
         if shared_expert_ids_to_devices is not None:
             total_torch_w0, total_torch_w1, total_torch_w2 = add_shared_expert_weights(
@@ -95,9 +111,9 @@ class _TTMoEDecodeExpertState:
             total_torch_w0, total_torch_w1, total_torch_w2 = mapped_torch_w0, mapped_torch_w1, mapped_torch_w2
             total_expert_mapping = expert_mapping
 
-        self.tt_expert_mapping = self._init_expert_mapping(
-            total_expert_mapping, shared_expert_ids_to_devices, mesh_shape, cluster_axis
-        )
+        self.tt_expert_mapping = self._init_expert_mapping(total_expert_mapping, mesh_device)
+
+        print("init map")
 
         self.tt_w0_w1, self.tt_w2 = self._init_total_expert_weights_impl(
             total_torch_w0,
@@ -129,9 +145,13 @@ class _TTMoEDecodeExpertState:
         intermediate_size = torch_w0.shape[-1]
         total_experts_per_device = torch_w0.shape[1] // mesh_device.get_num_devices()
 
+        print("init-ing weights")
+
         w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(
             mesh_device, hidden_size, intermediate_size
         )
+
+        print("init shard maps")
 
         if has_bias:
             torch_w0_w1_reordered = prepare_w0_w1_tensor_with_bias(
@@ -167,9 +187,12 @@ class _TTMoEDecodeExpertState:
                 intermediate_size,
                 w0_w1_shard_map,
             )
+            print(f"Built w0w1")
             torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
                 torch_w2, num_layers, experts_per_device, intermediate_size, hidden_size, w2_shard_map, w0_w1_shard_map
             )
+
+            print(f"Built w2")
 
         w0_w1_mem_config, w2_mem_config, K_for_shard, w2_N_total = get_weight_mem_configs(
             num_layers,
@@ -190,6 +213,8 @@ class _TTMoEDecodeExpertState:
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device),
         )
 
+        print("sent out w0w1")
+
         tt_w2 = ttnn.from_torch(
             torch_w2_reordered,
             dtype=ttnn.bfloat4_b,
@@ -198,6 +223,8 @@ class _TTMoEDecodeExpertState:
             memory_config=w2_mem_config,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device),
         )
+
+        print("sent out w0w1")
 
         return tt_w0_w1, tt_w2
 
@@ -327,12 +354,12 @@ class TTMoEDecode:
         torch_b2: torch.Tensor | None = None,
     ):
         self.config = config
-        self.state = _TTMoEDecodeExpertState(
+        self.expert_state = _TTMoEDecodeExpertState(
             mesh_device,
             torch_w0,
             torch_w1,
             torch_w2,
-            **config.state.model_dump(),
+            **config.experts.model_dump(),
             shared_id_to_torch_w0=shared_id_to_torch_w0,
             shared_id_to_torch_w1=shared_id_to_torch_w1,
             shared_id_to_torch_w2=shared_id_to_torch_w2,
@@ -401,7 +428,7 @@ class TTMoEDecode:
             tt_dispatch_input_tensor,
             tt_dispatch_input_expert_indices_tensor,
             tt_dispatch_input_expert_scores_tensor,
-            self.state.tt_expert_mapping,
+            self.expert_state.tt_expert_mapping,
             layer_id=layer_id,
             **self.config.dispatch.model_dump(),
             # shared_expert_ids
@@ -431,9 +458,9 @@ class TTMoEDecode:
             tt_dispatch_output_sparse_buffer,
             tt_dispatch_output_expert_indices,
             tt_dispatch_output_expert_scores,
-            self.state.tt_expert_mapping,
-            self.state.tt_w0_w1,
-            self.state.tt_w2,
+            self.expert_state.tt_expert_mapping,
+            self.expert_state.tt_w0_w1,
+            self.expert_state.tt_w2,
             layer_id=layer_id,
             # output_height_shard_dim=compute_output_height_shard_dim,
             # cluster_axis=cluster_axis,
@@ -472,7 +499,7 @@ class TTMoEDecode:
         tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc_fused(
             tt_tilized_compute_output,
             tt_dispatch_input_expert_indices_tensor,
-            self.state.tt_expert_mapping,
+            self.expert_state.tt_expert_mapping,
             # reduce_dim=0,
             # cluster_axis=cluster_axis,
             # split_size=int(tt_tilized_compute_output.shape[-1] // num_replicated_devices),

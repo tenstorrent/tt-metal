@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from math import prod
 from typing import Any, ClassVar, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -245,10 +246,81 @@ class ExpertStateConfig(_TTOpKwargs):
     mesh_shape: tuple[int, int]
     cluster_axis: int
     has_bias: bool
-    expert_mapping: list[int]
+    expert_mapping: list[int] | str
     num_routed_experts: int
     num_shared_experts: int
-    shared_expert_ids_to_devices: Optional[dict[int, list[int]]] = None
+    shared_expert_ids_to_devices: Optional[dict[int, list[int]] | str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _expand_convenience_keywords(cls, data: Any) -> Any:
+        """Expand the string-form convenience keywords for `expert_mapping` and
+        `shared_expert_ids_to_devices` into their concrete dict/list forms.
+
+        Runs before pydantic validates the field types, so we can replace strings
+        in the input dict without bumping into the frozen-model assignment ban.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        mesh_shape = data.get("mesh_shape")
+        cluster_axis = data.get("cluster_axis")
+        num_routed = data.get("num_routed_experts")
+        num_shared = data.get("num_shared_experts", 0)
+        if mesh_shape is None or cluster_axis is None or num_routed is None:
+            return data  # let pydantic raise about missing fields
+
+        num_devices = prod(mesh_shape)
+        if num_routed % num_devices != 0:
+            raise ValueError(
+                f"num_routed_experts ({num_routed}) must be evenly divisible " f"by num_devices ({num_devices})"
+            )
+
+        # expert_mapping: "sequential" → linearized mesh-coord per expert, following
+        # the convention in `test_optimized_moe_decode_block.get_linearized_mesh_coord`.
+        # cluster_axis=1 (row-major dispatch): linear_id = expert_id // experts_per_device.
+        # cluster_axis=0 (column-major dispatch): adjacent experts straddle clusters —
+        #   linear_id = device_within_cluster * num_replicated + cluster_id.
+        mapping = data.get("expert_mapping")
+        if isinstance(mapping, str):
+            if mapping == "sequential":
+                experts_per_device = num_routed // num_devices
+                if cluster_axis == 1:
+                    data["expert_mapping"] = [e // experts_per_device for e in range(num_routed)]
+                elif cluster_axis == 0:
+                    num_dispatch = mesh_shape[0]
+                    num_replicated = num_devices // num_dispatch
+                    experts_per_cluster = num_routed // num_replicated
+                    new_mapping = []
+                    for e in range(num_routed):
+                        cluster_id = e // experts_per_cluster
+                        expert_within_cluster = e % experts_per_cluster
+                        device_within_cluster = expert_within_cluster // experts_per_device
+                        new_mapping.append(device_within_cluster * num_replicated + cluster_id)
+                    data["expert_mapping"] = new_mapping
+                else:
+                    raise ValueError(f"Unsupported cluster_axis={cluster_axis} for sequential expert_mapping")
+            else:
+                raise ValueError(f"Unknown expert_mapping keyword: {mapping!r}")
+
+        # shared_expert_ids_to_devices: "fully_replicated" → {num_routed+i: list(range(num_devices)) for i ...}
+        shared = data.get("shared_expert_ids_to_devices")
+        if isinstance(shared, str):
+            if num_shared <= 0:
+                raise ValueError(f"shared_expert_ids_to_devices={shared!r} given but num_shared_experts={num_shared}")
+            if shared == "fully_replicated":
+                data["shared_expert_ids_to_devices"] = {
+                    num_routed + i: list(range(num_devices)) for i in range(num_shared)
+                }
+            else:
+                raise ValueError(f"Unknown shared_expert_ids_to_devices keyword: {shared!r}")
+        elif isinstance(shared, dict):
+            if num_shared != len(shared):
+                raise ValueError(
+                    f"shared_expert_ids_to_devices has {len(shared)} entries but " f"num_shared_experts={num_shared}"
+                )
+
+        return data
 
     @classmethod
     def adopt_fields(cls) -> set[str]:

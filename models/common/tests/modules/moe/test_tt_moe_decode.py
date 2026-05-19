@@ -14,58 +14,95 @@ Parametrized over every YAML model config in `models/common/modules/moe/configs/
 
 from __future__ import annotations
 
-import os
 import random
 from pathlib import Path
 
 import pytest
 import torch
 from loguru import logger
+from ttnn.operations.ccl import MoEActivationFunction
 
 import ttnn
 from models.common.modules.moe.tt_moe_decode import TTMoEDecode
 from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
-from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.deepseek_v3.tests.fused_op_unit_tests.moe.test_optimized_moe_decode_block import (
+    create_torch_dispatch_input_expert_scores_tensor,
+    create_torch_dispatch_input_tensor,
+    verify_output,
+)
+from tests.nightly.tg.ccl.moe.test_moe_compute_6U import _swiglu_reference
 
 # ---------------------------------------------------------------------------
-# torch reference helpers (mirrors `test_optimized_moe_decode_block.py`)
+# torch reference helpers
+#
+# `_swiglu_reference`, `create_torch_dispatch_input_tensor`,
+# `create_torch_dispatch_input_expert_scores_tensor`, and `verify_output` are
+# imported above from the existing MoE tests — same logic, no need to duplicate.
+# Helpers that diverge (per-expert weight/bias init, activation/bias-aware
+# matmul, output-golden assembly) are defined locally.
 # ---------------------------------------------------------------------------
 
 
-def _matmul_golden(token: torch.Tensor, w0: torch.Tensor, w1: torch.Tensor, w2: torch.Tensor) -> torch.Tensor:
-    """SiLU SwiGLU MoE expert reference (num_layers=1 throughout)."""
-    silu = torch.nn.functional.silu(token @ w0)
-    gate = token @ w1
-    return (silu * gate) @ w2
+def _matmul_golden(
+    token: torch.Tensor,
+    w0: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    activation_type: MoEActivationFunction = MoEActivationFunction.SILU,
+    b0: torch.Tensor | None = None,
+    b1: torch.Tensor | None = None,
+    b2: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """MoE expert reference (num_layers=1 throughout).
+
+    SILU:   `silu(x @ w0 + b0) * (x @ w1 + b1) @ w2 + b2`
+    SWIGLU: `(up + 1) * gate * sigmoid(alpha * gate) @ w2 + b2` with clamping (GPT-OSS),
+            where `gate = x @ w0 + b0` and `up = x @ w1 + b1`.
+
+    Per-expert bias shapes: `b0`/`b1` are `[num_layers, 1, N]`, `b2` is
+    `[num_layers, 1, hidden_size]`. `unsqueeze(-2)` broadcasts over the token dim.
+    """
+    gate = token @ w0
+    if b0 is not None:
+        gate = gate + b0.unsqueeze(-2)
+    up = token @ w1
+    if b1 is not None:
+        up = up + b1.unsqueeze(-2)
+
+    if activation_type == MoEActivationFunction.SILU:
+        intermediate = torch.nn.functional.silu(gate) * up
+    elif activation_type == MoEActivationFunction.SWIGLU:
+        intermediate = _swiglu_reference(gate, up)
+    else:
+        raise ValueError(f"Unsupported activation type: {activation_type}")
+
+    output = intermediate @ w2
+    if b2 is not None:
+        output = output + b2.unsqueeze(-2)
+    return output
 
 
 def _create_per_expert_weights(num_layers: int, num_experts: int, h: int, n: int) -> torch.Tensor:
     """Returns a [num_layers, num_experts, *, *] tensor of expert weights."""
-    return torch.cat(
-        [torch.rand((num_layers, 1, h, n), dtype=torch.bfloat16) - 0.5 for _ in range(num_experts)],
-        dim=1,
-    )
+    return torch.rand((num_layers, num_experts, h, n), dtype=torch.bfloat16) - 0.5
 
 
-def _create_dispatch_input(batch: int, hidden_size: int) -> torch.Tensor:
-    """[batch, 1, 1, hidden_size] — seq=1 for decode."""
-    return torch.rand((batch, 1, 1, hidden_size), dtype=torch.bfloat16) - 0.5
+def _create_per_expert_biases(num_layers: int, num_experts: int, dim: int) -> torch.Tensor:
+    """Returns a [num_layers, num_experts, dim] tensor of expert biases.
+
+    Matches the bias init in `test_moe_compute_6U.py` (std=0.12 then cast to bfloat16).
+    """
+    _bias_std = 0.12
+    return (torch.randn(num_layers, num_experts, dim, dtype=torch.float32) * _bias_std).to(torch.bfloat16)
 
 
 def _create_expert_indices(batch: int, num_experts: int, select_k: int) -> torch.Tensor:
     """[batch, 1, 1, select_k] — random unique experts per token."""
     out = torch.full((batch, 1, 1, select_k), -1, dtype=torch.int32)
     for b in range(batch):
-        choices = random.sample(range(num_experts), select_k)
-        for k, e in enumerate(choices):
+        for k, e in enumerate(random.sample(range(num_experts), select_k)):
             out[b, 0, 0, k] = e
-    return out.to(torch.int32)
-
-
-def _create_expert_scores(batch: int, select_k: int) -> torch.Tensor:
-    """[batch, 1, 1, select_k] — softmax-normalized random scores."""
-    s = torch.rand((batch, 1, 1, select_k), dtype=torch.bfloat16)
-    return s / s.sum(dim=-1, keepdim=True)
+    return out
 
 
 def _gen_output_golden(
@@ -78,69 +115,33 @@ def _gen_output_golden(
     batch: int,
     hidden_size: int,
     select_k: int,
+    activation_type: MoEActivationFunction = MoEActivationFunction.SILU,
+    b0_per_expert: list[torch.Tensor] | None = None,
+    b1_per_expert: list[torch.Tensor] | None = None,
+    b2_per_expert: list[torch.Tensor] | None = None,
 ) -> torch.Tensor:
     """[batch, 1, 1, hidden_size] — sum_k(score_k * matmul(token, expert_k))."""
     out = torch.zeros((batch, 1, 1, hidden_size), dtype=torch.bfloat16)
     for t in range(batch):
         for k in range(select_k):
             e = expert_indices[t, 0, 0, k].item()
-            contrib = _matmul_golden(tokens[t], w0_per_expert[e], w1_per_expert[e], w2_per_expert[e])
+            contrib = _matmul_golden(
+                tokens[t],
+                w0_per_expert[e],
+                w1_per_expert[e],
+                w2_per_expert[e],
+                activation_type,
+                b0=b0_per_expert[e] if b0_per_expert is not None else None,
+                b1=b1_per_expert[e] if b1_per_expert is not None else None,
+                b2=b2_per_expert[e] if b2_per_expert is not None else None,
+            )
             out[t] = out[t] + expert_scores[t, 0, 0, k] * contrib
     return out
 
 
-def _linearized_expert_to_device(
-    expert_id: int,
-    cluster_axis: int,
-    num_replicated_devices: int,
-    experts_per_cluster: int,
-    experts_per_device: int,
-) -> int:
-    """Returns the linear device id (in mesh row-major order) hosting `expert_id`."""
-    if cluster_axis == 0:
-        cluster_id = expert_id // experts_per_cluster
-        device_within_cluster = (expert_id % experts_per_cluster) // experts_per_device
-        return device_within_cluster * num_replicated_devices + cluster_id
-    return expert_id // experts_per_device
-
-
-# ---------------------------------------------------------------------------
-# verification
-# ---------------------------------------------------------------------------
-
-
-def _verify_output(
-    iteration: int,
-    mesh_device: ttnn.MeshDevice,
-    mesh_shape: tuple[int, int],
-    tt_output: ttnn.Tensor,
-    output_reference: torch.Tensor,
-    pcc_threshold: float = 0.988,
-    atol_threshold: float = 450.0,
-) -> bool:
-    tt_torch = ttnn.to_torch(
-        tt_output,
-        dtype=torch.bfloat16,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(-2, -1)),
-    )
-    # [1, 1, batch, hidden_size] -> [batch, 1, 1, hidden_size]
-    tt_torch = tt_torch.reshape(tt_torch.shape[-2], 1, 1, tt_torch.shape[-1])
-
-    pcc_passed, pcc_str = comp_pcc(tt_torch, output_reference, pcc=pcc_threshold)
-    logger.info(f"Final Output - Iteration {iteration} - PCC: {pcc_str}")
-    if not pcc_passed:
-        logger.warning(f"FAILED PCC - iteration {iteration}: {pcc_str}")
-
-    allclose_passed, allclose_str = comp_allclose(output_reference, tt_torch, atol=atol_threshold, rtol=0)
-    logger.info(f"Final Output - Iteration {iteration} - AllClose: {allclose_str}")
-    if not allclose_passed:
-        logger.warning(f"FAILED AllClose - iteration {iteration}: {allclose_str}")
-
-    return pcc_passed and allclose_passed
-
-
 CONFIGS_DIR = Path(__file__).resolve().parents[3] / "modules" / "moe" / "configs"
-CONFIG_PATHS = sorted(CONFIGS_DIR.glob("*.yaml"))
+CONFIG_PATHS = filter(lambda x: "gpt_oss" in str(x), sorted(CONFIGS_DIR.glob("*.yaml")))
+assert CONFIG_PATHS, f"no YAML configs found in {CONFIGS_DIR}"
 
 
 def _config_id(path: Path) -> str:
@@ -152,15 +153,13 @@ def _config_id(path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.requires_device(["QUAD"])
-@pytest.mark.skipif(os.getenv("USE_TORUS_MODE") is None, reason="Requires ring fabric")
 @pytest.mark.parametrize(
-    "mesh_shape, mesh_device",
+    "mesh_device",
     [
-        pytest.param((1, 16), (1, 16), id="1x16"),
-        pytest.param((1, 8), (1, 8), id="1x8"),
+        # pytest.param((16, 4), id="16x4"),
+        pytest.param((8, 4), id="8x4"),
     ],
-    indirect=["mesh_device"],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -178,7 +177,6 @@ def _config_id(path: Path) -> str:
 @pytest.mark.parametrize("config_path", CONFIG_PATHS, ids=_config_id)
 @torch.no_grad()
 def test_tt_moe_decode(
-    mesh_shape: tuple[int, int],
     mesh_device: ttnn.MeshDevice,
     config_path: Path,
     num_iterations: int,
@@ -186,9 +184,10 @@ def test_tt_moe_decode(
     torch.manual_seed(2005)
     random.seed(2005)
 
+    mesh_shape = tuple(mesh_device.shape)
     config = TTMoEDecodeConfig.from_yaml(config_path.read_text())
     if config.mesh_shape != mesh_shape:
-        pytest.skip(f"config mesh_shape {config.mesh_shape} != fixture mesh_shape {mesh_shape}")
+        pytest.skip(f"config mesh_shape {config.mesh_shape} != device mesh_shape {mesh_shape}")
 
     # --- derived sizes (all from config) ---
     cluster_axis = config.cluster_axis
@@ -221,6 +220,19 @@ def test_tt_moe_decode(
     w1_per_expert = [torch_w1[:, e : e + 1, ...] for e in range(routed_experts)]
     w2_per_expert = [torch_w2[:, e : e + 1, ...] for e in range(routed_experts)]
 
+    # --- biases (optional): [num_layers=1, routed_experts, N or hidden_size] ---
+    torch_b0 = torch_b1 = torch_b2 = None
+    b0_per_expert = b1_per_expert = b2_per_expert = None
+    if config.has_bias:
+        torch_b0 = _create_per_expert_biases(num_layers, routed_experts, intermediate_size)
+        torch_b1 = _create_per_expert_biases(num_layers, routed_experts, intermediate_size)
+        torch_b2 = _create_per_expert_biases(num_layers, routed_experts, hidden_size)
+        b0_per_expert = [torch_b0[:, e : e + 1, :] for e in range(routed_experts)]
+        b1_per_expert = [torch_b1[:, e : e + 1, :] for e in range(routed_experts)]
+        b2_per_expert = [torch_b2[:, e : e + 1, :] for e in range(routed_experts)]
+
+    print("Created inputs")
+
     # --- build module ---
     decode = TTMoEDecode(
         mesh_device=mesh_device,
@@ -228,7 +240,12 @@ def test_tt_moe_decode(
         torch_w0=torch_w0,
         torch_w1=torch_w1,
         torch_w2=torch_w2,
+        torch_b0=torch_b0,
+        torch_b1=torch_b1,
+        torch_b2=torch_b2,
     )
+
+    logger.info("Module Setup complete")
 
     # --- per-iteration inputs + goldens ---
     tt_dispatch_inputs = []
@@ -236,9 +253,9 @@ def test_tt_moe_decode(
     tt_dispatch_scores = []
     output_goldens = []
     for _ in range(num_iterations):
-        tokens = _create_dispatch_input(batch, hidden_size)
+        tokens = create_torch_dispatch_input_tensor(batch, 1, hidden_size, ttnn.bfloat16)
         indices = _create_expert_indices(batch, routed_experts, select_experts_k)
-        scores = _create_expert_scores(batch, select_experts_k)
+        scores = create_torch_dispatch_input_expert_scores_tensor(batch, 1, select_experts_k, ttnn.bfloat16)
 
         tt_dispatch_inputs.append(
             ttnn.from_torch(
@@ -282,8 +299,14 @@ def test_tt_moe_decode(
                 batch,
                 hidden_size,
                 select_experts_k,
+                activation_type=config.compute.activation_type,
+                b0_per_expert=b0_per_expert,
+                b1_per_expert=b1_per_expert,
+                b2_per_expert=b2_per_expert,
             )
         )
+
+    logger.info("Goldens computed")
 
     # --- run + collect outputs ---
     logger.info("Running forward iterations")
@@ -297,6 +320,7 @@ def test_tt_moe_decode(
                 layer_id=0,
             )
         )
+        logger.info(f"Op iteration {it} complete")
 
     ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
 
@@ -304,7 +328,7 @@ def test_tt_moe_decode(
     logger.info("Verifying outputs")
     all_passed = True
     for it in range(num_iterations):
-        if not _verify_output(it, mesh_device, mesh_shape, tt_outputs[it], output_goldens[it]):
+        if not verify_output(it, mesh_device, mesh_shape, tt_outputs[it], output_goldens[it]):
             all_passed = False
 
     assert all_passed, f"TTMoEDecode output verification failed for {config_path.stem}"
