@@ -788,20 +788,19 @@ def run(
                                 apply_tensor_placement_topology(tt_input, input_a_tensor_placement, mesh_shape)
                             except Exception:
                                 pass  # Intentionally ignored: topology application is best-effort, fallback to default
-                        # Pass positional args to match master trace form
+                        # Pass cluster_axis, topology, and semaphore as NAMED kwargs
+                        # to match the master trace form exactly.
                         _dim = op_kwargs.pop("dim", dim)
-                        _semaphore = op_kwargs.pop("multi_device_global_semaphore", ccl_semaphore_handles[i])
-                        _cluster_axis = op_kwargs.pop("cluster_axis", None)
-                        _topology = op_kwargs.pop("topology", topology)
-                        _mesh_dev = op_kwargs.pop("mesh_device", device)
-                        if not op_kwargs.get("use_optimal_ccl_for_llama", None):
+                        # Keep mesh_device in op_kwargs (already there if traced)
+                        if "mesh_device" not in op_kwargs:
+                            op_kwargs["mesh_device"] = device
+                        # use_optimal_ccl_for_llama: honour the vector value; only
+                        # default to False when the key is truly absent.
+                        if "use_optimal_ccl_for_llama" not in op_kwargs:
                             op_kwargs["use_optimal_ccl_for_llama"] = False
-                        if _cluster_axis is not None:
-                            tt_out_tensor = ttnn.experimental.all_gather_async(
-                                tt_input, _dim, _cluster_axis, _mesh_dev, _topology, _semaphore, **op_kwargs
-                            )
-                        else:
-                            tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, _dim, _semaphore, **op_kwargs)
+                        tt_out_tensor = ttnn.experimental.all_gather_async(
+                            tt_input, _dim, **op_kwargs
+                        )
                     else:
                         _ag_kwargs = dict(
                             num_links=num_links,

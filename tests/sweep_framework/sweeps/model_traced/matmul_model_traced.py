@@ -159,11 +159,14 @@ def run(
 
     # build_op_kwargs filters memory_config (infrastructure key), but matmul
     # accepts it as an op kwarg.  Re-inject from the traced kwargs when present.
+    # Use dict_to_memory_config directly — it handles the V2 vector format
+    # {"type": "ttnn._ttnn.tensor.MemoryConfig", "data": {...}} that
+    # parse_dict_value's _is_memory_config_dict check doesn't recognise.
     raw_mc = kwargs.get("memory_config")
     if raw_mc is not None and raw_mc != "__ABSENT__":
-        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config as _dtmc
 
-        op_kwargs["memory_config"] = parse_dict_value("memory_config", raw_mc) if isinstance(raw_mc, dict) else raw_mc
+        op_kwargs["memory_config"] = _dtmc(raw_mc) if isinstance(raw_mc, dict) else raw_mc
 
     # When the GCB/prefetcher path is active, the shard grid ordering matters.
     # Vector serialization may reorder CoreRangeSet cores (e.g., sorting by x,y),
@@ -400,7 +403,12 @@ def run(
             device.reset_sub_device_stall_group()
         output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
         e2e_perf = stop_measuring_time(start_time)
-    except Exception:
+    except Exception as _first_err:
+        # Retry with interleaved inputs but KEEP program_config and memory_config
+        # so the traced op signature matches master.  Only strip global_cb and
+        # sub_device_id (infrastructure objects that can't survive a device reset).
+        import traceback as _tb_fallback
+        _tb_fallback.print_exc()
         input_tensor_a = ttnn.from_torch(
             torch_input_tensor_a,
             dtype=input_a_dtype,
@@ -416,9 +424,14 @@ def run(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         fallback_kwargs = {
-            k: v for k, v in op_kwargs.items() if k not in ("program_config", "global_cb", "sub_device_id")
+            k: v for k, v in op_kwargs.items() if k not in ("global_cb", "sub_device_id")
         }
-        fallback_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+        # Keep the traced memory_config when available; fall back to DRAM only
+        # when no traced output memory_config was parsed.
+        if "memory_config" not in fallback_kwargs or not isinstance(
+            fallback_kwargs.get("memory_config"), ttnn.MemoryConfig
+        ):
+            fallback_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
         start_time = start_measuring_time()
         output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, **fallback_kwargs)
         output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
