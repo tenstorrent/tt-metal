@@ -27,7 +27,7 @@ struct ComputeConfiguration {
     //
     // The Tensix Engine is a 3-stage pipeline (Unpack → Math → Pack).
     // There are two math engines:
-    //  - FPU reads operands from the SrcA / SrcB register files (~19 bit),
+    //  - FPU reads operands from the SrcA / SrcB register files (~19-bit),
     //    writes to the Dest register file (16- or 32-bit, configurable).
     //  - SFPU runs SIMD transcendentals. It can only access Dest.
     // The fields below configure this pipeline.
