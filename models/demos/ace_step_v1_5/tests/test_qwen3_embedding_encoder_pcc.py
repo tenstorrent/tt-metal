@@ -14,7 +14,7 @@ from transformers import AutoModel, AutoTokenizer
 
 import ttnn
 from models.demos.ace_step_v1_5.tests._dit_decoder_pcc_common import assert_pcc_print
-from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
+from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_ace_step import AceStepQwen3Encoder as TtQwen3EmbeddingEncoder
 
 # Same default checkpoint root as ``run_prompt_to_wav`` (HF hub cache layout).
 _DEFAULT_QWEN_DIR = Path.home() / ".cache" / "huggingface" / "hub" / "ACE-Step-1.5-checkpoints" / "Qwen3-Embedding-0.6B"

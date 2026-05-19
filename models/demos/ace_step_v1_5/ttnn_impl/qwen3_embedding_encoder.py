@@ -1,12 +1,25 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""TTNN ``Qwen3Model`` (embedding encoder) for ACE-Step — matches HF ``transformers`` layout.
+"""Reusable Qwen3-style TTNN transformer-block building blocks for ACE-Step.
 
-Fixed ``max_seq_len`` (default 256): RoPE ``cos``/``sin`` are precomputed once from the local HF
-``config.json`` + ``Qwen3RotaryEmbedding`` (Transformers, CPU-only at init).
+This module previously hosted ``TtQwen3EmbeddingEncoder`` (a hand-rolled TTNN port of
+the Qwen3-Embedding-0.6B caption encoder). That encoder has moved to
+:mod:`models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_ace_step` which subclasses
+the stock :class:`models.demos.wormhole.qwen3_embedding_8b.demo.generator_vllm.Qwen3ForEmbedding`
+(``tt_transformers``-based).
 
-Forward path is TTNN-only (no PyTorch tensors after ``input_ids`` numpy staging).
+What's left here are the **transformer-block primitives** that the ACE-Step DiT
+condition encoder (:mod:`models.demos.ace_step_v1_5.ttnn_impl.condition_encoder`) reuses
+for its Lyric and Timbre encoders — these are *not* Qwen3-Embedding instances; they're
+ACE-Step-specific small transformers that happen to share the Qwen3 layer architecture:
+
+- :class:`Qwen3EmbeddingEncoderConfig` — config dataclass
+- :class:`TtQwen3EncoderMLP` — Qwen3-style SwiGLU MLP
+- :class:`_TtQwen3EncoderLayer` — Qwen3-style attention + MLP layer (with GQA, RoPE,
+  q_norm/k_norm, optional sliding-window mask)
+- :func:`apply_rope_hf_style`, :func:`rotate_half_ttnn`, :func:`repeat_kv_gqa_ttnn` —
+  RoPE + GQA helpers used by ``_TtQwen3EncoderLayer``
 """
 
 from __future__ import annotations
@@ -18,12 +31,7 @@ import math
 # ≤ ~4 MB device DRAM. Increase via ACE_STEP_QWEN_BIAS_CACHE_MAX if you batch over many
 # distinct prompts.
 import os as _os
-from collections import OrderedDict
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Dict, Optional
-
-import numpy as np
 
 import ttnn
 
@@ -33,84 +41,6 @@ _QWEN_BIAS_CACHE_MAX = max(1, int(_os.environ.get("ACE_STEP_QWEN_BIAS_CACHE_MAX"
 def _sdpa_head_dim_tile_padding(d_head: int) -> int:
     align = 32
     return (int(d_head) + align - 1) // align * align
-
-
-def load_qwen3_weights_np(safetensors_path: str) -> Dict[str, np.ndarray]:
-    import torch
-    from safetensors import safe_open
-
-    out: Dict[str, np.ndarray] = {}
-    with safe_open(safetensors_path, framework="pt", device="cpu") as sf:
-        for k in sf.keys():
-            t = sf.get_tensor(k)
-            out[k] = t.detach().to(torch.float32).cpu().numpy()
-    return out
-
-
-def build_hf_rope_cos_sin_np(
-    *,
-    hf_model_dir: str,
-    hidden_size: int,
-    head_dim: int,
-    max_seq_len: int,
-    rope_theta: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    """HF-compatible ``cos``/``sin`` shaped ``[1, 1, S, head_dim]`` (float32 host)."""
-    import torch
-    from transformers import AutoConfig
-    from transformers.models.qwen3.modeling_qwen3 import Qwen3RotaryEmbedding
-
-    cfg = AutoConfig.from_pretrained(str(hf_model_dir), local_files_only=True)
-    cfg.hidden_size = hidden_size
-    cfg.head_dim = head_dim
-    cfg.max_position_embeddings = max(int(cfg.max_position_embeddings), max_seq_len)
-    cfg.rope_theta = rope_theta
-
-    rope = Qwen3RotaryEmbedding(cfg)
-    position_ids = torch.arange(max_seq_len, dtype=torch.long).unsqueeze(0)
-    x = torch.zeros(1, max_seq_len, hidden_size, dtype=torch.bfloat16)
-    cos, sin = rope(x, position_ids)
-    cos_np = cos.float().numpy().reshape(1, 1, max_seq_len, head_dim)
-    sin_np = sin.float().numpy().reshape(1, 1, max_seq_len, head_dim)
-    return cos_np.astype(np.float32), sin_np.astype(np.float32)
-
-
-def causal_padding_attn_bias_np(attention_mask_01: np.ndarray, seq_len: int) -> np.ndarray:
-    """Match HF ``Qwen3Model`` + SDPA mask: causal (no peeking) and **key** padding only.
-
-    HF ``create_causal_mask`` does not mask entire rows when the query index is padding;
-    padded queries may still attend to earlier valid keys. Only **key** positions *j*
-    with ``mask[..., j]==0`` are blocked, plus ``j > i`` (causal).
-
-    Returns additive bias ``[B, 1, S, S]`` (float32): 0 keep, large negative masked.
-    """
-    m = np.asarray(attention_mask_01, dtype=np.float32)
-    if m.ndim == 1:
-        m = m.reshape(1, -1)
-    b, s = m.shape
-    if s != seq_len:
-        raise ValueError(f"attention mask length {s} != seq_len {seq_len}")
-    neg = np.float32(-1.0e9)
-    j = np.arange(s, dtype=np.int32)[None, :]
-    i = np.arange(s, dtype=np.int32)[:, None]
-    causal_ok = (j <= i).astype(np.float32)  # [S, S], query=i, key=j
-    k_ok = m[:, None, :]  # [B, 1, S] — validity of key index j only (HF SDPA convention)
-    keep = causal_ok[np.newaxis, :, :] * k_ok
-    return np.where(keep > 0.5, np.float32(0.0), neg).astype(np.float32)[:, np.newaxis, :, :]
-
-
-def padding_attn_bias_np(attention_mask_01: np.ndarray) -> np.ndarray:
-    """1=keep, 0=pad → additive bias ``[B,1,S,S]``."""
-    m = np.asarray(attention_mask_01, dtype=np.float32)
-    if m.ndim == 1:
-        m = m.reshape(1, -1)
-    b, s = m.shape
-    neg = np.float32(-1.0e9)
-    bias = np.zeros((b, 1, s, s), dtype=np.float32)
-    for bi in range(b):
-        row = m[bi][:, None] * m[bi][None, :]
-        bias[bi, 0, :, :] = np.where(row > 0.5, 0.0, neg)
-    return bias
 
 
 def rotate_half_ttnn(x: ttnn.Tensor) -> ttnn.Tensor:
@@ -346,250 +276,10 @@ class _TtQwen3EncoderLayer:
         return ttnn.add(res2, ff)
 
 
-class TtQwen3EmbeddingEncoder:
-    """HF ``Qwen3Model`` forward (no LM head): returns last hidden states ``[B,1,S,H]`` TILE."""
-
-    def __init__(
-        self,
-        *,
-        device,
-        hf_model_dir: str | Path,
-        qwen_safetensors_path: str | Path,
-        cfg: Optional[Qwen3EmbeddingEncoderConfig] = None,
-        dtype=None,
-    ) -> None:
-        self.device = device
-        self.cfg = cfg or Qwen3EmbeddingEncoderConfig()
-        self.dtype = dtype or getattr(ttnn, "bfloat16", None)
-        if self.dtype is None:
-            raise RuntimeError("bfloat16 required")
-        self.mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper = ttnn.ReplicateTensorToMesh(device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
-
-        weights_np = load_qwen3_weights_np(str(qwen_safetensors_path))
-
-        cos_np, sin_np = build_hf_rope_cos_sin_np(
-            hf_model_dir=str(hf_model_dir),
-            hidden_size=self.cfg.hidden_size,
-            head_dim=self.cfg.head_dim,
-            max_seq_len=self.cfg.max_seq_len,
-            rope_theta=self.cfg.rope_theta,
-        )
-        self.cos_tt = ttnn.as_tensor(
-            cos_np,
-            device=device,
-            dtype=self.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.mem,
-            mesh_mapper=mapper,
-        )
-        self.sin_tt = ttnn.as_tensor(
-            sin_np,
-            device=device,
-            dtype=self.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.mem,
-            mesh_mapper=mapper,
-        )
-
-        sdpa_compute_kernel_config = None
-        linear_compute_kernel_config = None
-        init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
-        if callable(init_ck):
-            sdpa_compute_kernel_config = init_ck(
-                device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
-            linear_compute_kernel_config = init_ck(
-                device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
-
-        sdpa_program_config = None
-        if hasattr(device, "compute_with_storage_grid_size") and hasattr(ttnn, "SDPAProgramConfig"):
-            sdpa_program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                q_chunk_size=32,
-                k_chunk_size=256,
-                exp_approx_mode=False,
-            )
-
-        self.embed_weight = ttnn.as_tensor(
-            weights_np["embed_tokens.weight"],
-            device=device,
-            dtype=self.dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=self.mem,
-            mesh_mapper=mapper,
-        )
-
-        self.layers = [
-            _TtQwen3EncoderLayer(
-                device=device,
-                weights_np=weights_np,
-                prefix=f"layers.{i}",
-                cfg=self.cfg,
-                dtype=self.dtype,
-                mem=self.mem,
-                mapper=mapper,
-                sdpa_compute_kernel_config=sdpa_compute_kernel_config,
-                sdpa_program_config=sdpa_program_config,
-                linear_compute_kernel_config=linear_compute_kernel_config,
-            )
-            for i in range(self.cfg.num_hidden_layers)
-        ]
-
-        self.final_norm_w = ttnn.as_tensor(
-            weights_np["norm.weight"],
-            device=device,
-            dtype=self.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.mem,
-            mesh_mapper=mapper,
-        )
-
-        # Per-prompt LRU cache of the causal+padding attention-bias tensors. Key is the bytes
-        # of the host-side ``bias_np`` (content-addressable, so identical masks reuse the
-        # device tensor). Cached tensors are owned by this encoder instance and must NOT be
-        # deallocated by callers — that's what makes the cache work across `forward()` calls.
-        self._bias_cache: "OrderedDict[bytes, ttnn.Tensor]" = OrderedDict()
-        self._bias_cache_max = _QWEN_BIAS_CACHE_MAX
-
-    def embed_tokens(self, input_ids: np.ndarray) -> ttnn.Tensor:
-        """Token IDs ``[B,S]`` -> embedding hidden states ``[B,S,H]`` on device.
-
-        Legacy host-input wrapper: uploads ``input_ids`` to device, calls the device-only path,
-        then deallocates the uploaded tensor. For trace+2CQ use ``embed_tokens_device`` directly
-        with a persistent device input.
-        """
-        cfg = self.cfg
-        ids = np.asarray(input_ids, dtype=np.uint32)
-        b, s = int(ids.shape[0]), int(ids.shape[1])
-        mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
-        ids_tt = ttnn.as_tensor(
-            ids,
-            device=self.device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=self.mem,
-            mesh_mapper=mapper,
-        )
-        h = self.embed_tokens_device(ids_tt)
-        ttnn.deallocate(ids_tt)
-        return h
-
-    def embed_tokens_device(self, ids_tt: ttnn.Tensor) -> ttnn.Tensor:
-        """Trace-safe embedding lookup.
-
-        ``ids_tt`` must already be a device tensor (``uint32``, ``ROW_MAJOR``, shape ``[B,S]``).
-        Caller owns the input lifetime — the output is a freshly allocated device tensor.
-        """
-        return ttnn.embedding(ids_tt, weight=self.embed_weight, dtype=self.dtype)
-
-    def forward_device(self, ids_tt: ttnn.Tensor, attn_bias_tt: ttnn.Tensor) -> ttnn.Tensor:
-        """Trace-safe forward.
-
-        ``ids_tt``: ``[B,S]`` uint32 ROW_MAJOR device tensor (the encoder's persistent input buffer).
-        ``attn_bias_tt``: ``[B,1,S,S]`` device tensor matching ``self.dtype`` in ``TILE`` layout — the
-        precomputed additive causal+padding mask from :func:`causal_padding_attn_bias_np` uploaded
-        to device by the caller.
-
-        All ops are device-only; no host transfers. Safe to call inside ``begin_trace_capture``.
-        """
-        cfg = self.cfg
-        b, s = int(ids_tt.shape[0]), int(ids_tt.shape[1])
-        if s != cfg.max_seq_len:
-            raise ValueError(f"seq_len must be {cfg.max_seq_len}, got {s}")
-
-        h = self.embed_tokens_device(ids_tt)
-        h = ttnn.reshape(h, (b, 1, s, cfg.hidden_size))
-        for layer in self.layers:
-            h = layer(h, self.cos_tt, self.sin_tt, attn_bias_tt)
-        h = ttnn.to_layout(h, ttnn.TILE_LAYOUT)
-        h = ttnn.rms_norm(h, weight=self.final_norm_w, epsilon=float(cfg.rms_norm_eps), memory_config=self.mem)
-        return h
-
-    def _get_or_upload_attn_bias(self, bias_np: np.ndarray) -> "ttnn.Tensor":
-        """Return a device tensor for the causal+padding bias, reusing a cached upload when possible.
-
-        Cache key is the byte-pattern of ``bias_np`` (content-addressable). On miss, the bias
-        is uploaded once and stored; subsequent calls with an identical mask skip the
-        ``ttnn.as_tensor`` DMA. Cache is bounded LRU at ``_bias_cache_max`` entries.
-
-        The returned tensor is **owned by this cache** — callers must NOT call
-        ``ttnn.deallocate`` on it.
-        """
-        key = bias_np.tobytes()
-        cached = self._bias_cache.get(key)
-        if cached is not None:
-            self._bias_cache.move_to_end(key)
-            return cached
-        mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
-        attn_bias_tt = ttnn.as_tensor(
-            bias_np,
-            device=self.device,
-            dtype=self.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.mem,
-            mesh_mapper=mapper,
-        )
-        if len(self._bias_cache) >= self._bias_cache_max:
-            _, evicted = self._bias_cache.popitem(last=False)
-            try:
-                ttnn.deallocate(evicted)
-            except Exception:
-                pass
-        self._bias_cache[key] = attn_bias_tt
-        return attn_bias_tt
-
-    def forward(self, input_ids: np.ndarray, attention_mask: Optional[np.ndarray] = None) -> ttnn.Tensor:
-        """Legacy host-input wrapper around :meth:`forward_device`.
-
-        Builds the additive causal+padding bias on host, uploads ``ids`` to device, fetches the
-        bias tensor from the per-prompt LRU cache (or uploads on miss), runs
-        :meth:`forward_device`, and deallocates only the (always-fresh) ``ids_tt``. The bias
-        tensor is owned by ``self._bias_cache`` and stays device-resident across calls.
-        """
-        cfg = self.cfg
-        ids = np.asarray(input_ids, dtype=np.uint32)
-        b, s = int(ids.shape[0]), int(ids.shape[1])
-        if s != cfg.max_seq_len:
-            raise ValueError(f"seq_len must be {cfg.max_seq_len}, got {s}")
-
-        mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
-
-        m = attention_mask if attention_mask is not None else np.ones((b, s), dtype=np.float32)
-        bias_np = causal_padding_attn_bias_np(np.asarray(m), cfg.max_seq_len)
-        attn_bias_tt = self._get_or_upload_attn_bias(bias_np)
-
-        ids_tt = ttnn.as_tensor(
-            ids,
-            device=self.device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=self.mem,
-            mesh_mapper=mapper,
-        )
-
-        out = self.forward_device(ids_tt, attn_bias_tt)
-
-        # Deallocate only ids_tt; attn_bias_tt is owned by self._bias_cache.
-        try:
-            ttnn.deallocate(ids_tt)
-        except Exception:
-            pass
-        return out
-
-
 __all__ = [
     "Qwen3EmbeddingEncoderConfig",
-    "TtQwen3EmbeddingEncoder",
-    "load_qwen3_weights_np",
-    "build_hf_rope_cos_sin_np",
+    "TtQwen3EncoderMLP",
+    "apply_rope_hf_style",
+    "repeat_kv_gqa_ttnn",
+    "rotate_half_ttnn",
 ]

@@ -1,49 +1,42 @@
 """
 ACE-Step v1.5 demo: official-style host preprocessing + TTNN DiT sampler + VAE decode.
 
-Latent diffusion runs on TTNN; VAE decode uses the TTNN Oobleck port from ``ign/ACE_perf`` by
-default (HF-style ``ckpt_dir/vae/`` with ``config.json``). Long latent sequences are decoded
-in overlapping time tiles so ``ttnn.conv1d`` stays within L1 limits. Pass ``--torch-vae`` for
-PyTorch ``AutoencoderOobleck``.
+Latent diffusion runs on TTNN; VAE decode uses the TTNN Oobleck port from ``ign/ACE_perf`` by default
+(HF-style ``ckpt_dir/vae/`` with ``config.json``). Long latent sequences are decoded in overlapping
+time tiles so ``ttnn.conv1d`` stays within L1 limits. Pass ``--torch-vae`` for PyTorch ``AutoencoderOobleck``.
 
-Default backends (no flags required):
+<<<<<<< HEAD
+By default this matches ``torch_ref/run_prompt_to_wav.py --use-official-acestep`` for **Phase 1**
+(5 Hz LM / CoT, audio codes, handler ``preprocess_batch``, TTNN Qwen3 caption encoder via
+``infer_text_embeddings``, and TTNN ``prepare_condition`` replacement with **precomputed LM hints**),
+emitting the same style of **loguru** / model logs as the official CLI. DiT sampling runs on TTNN.
+=======
+- **5 Hz LM (`acestep-5Hz-lm-1.7B` by default)**: experimental TTNN causal LM
+  (``ttnn_impl/five_hz_causal_lm_experimental.py`` →
+  ``ttnn_impl/qwen_tt_transformers_lm.QwenModelTtTransformers``).
+  The whole decoder (Embedding, ``Attention`` with fused QKV / paged SDPA, ``MLP``,
+  ``DistributedNorm(RMSNorm)``, ``HfRotarySetup``, ``LMHead``) is built from the stock
+  ``models/tt_transformers`` graph via
+  :func:`models.tt_transformers.tt.common.create_tt_model`. Disable with
+  ``--no-experimental-5hz-ttnn-causal-lm`` (falls back to host PyTorch HF Qwen 1.7B forward).
+>>>>>>> a1bf7c7f42e (chnaged Transformer Attention Block to use tt_transformers)
 
-- **5 Hz LM**: host PyTorch HF ``Qwen`` forward (acestep-5Hz-lm-1.7B). DiT condition logits are
-  combined with TTNN CFG (``uncond + cfg_scale * (cond - uncond)``) when the same TTNN device
-  is attached to the handler (see ``ttnn_impl/lm_logits_ttnn.py``). This is the audio-quality-
-  correct configuration for the ``acestep-v15-base`` / ``-sft`` variants and is the **default**.
+Use ``--fast-preprocess`` to skip the LM and use the lightweight path (tokenizer + TTNN ``Qwen3Model``
+embedding encoder + ``precomputed_lm_hints_25Hz=None``), avoiding a PyTorch Qwen forward while still
+using HF ``prepare_condition`` on the host by default. Pass ``--ttnn-condition-embedding`` to force
+the lightweight TTNN condition path, or ``--no-ttnn-condition-embedding`` to compare against Torch
+``prepare_condition``.
 
-- **DiT condition embedding**: TTNN
-  (``ttnn_impl/condition_encoder.TtAceStepInstrumentalConditionEncoder``). Disable with
-  ``--no-ttnn-condition-embedding`` for the Torch ``acestep.handler.prepare_condition``
-  reference path.
+``--use-official-lm`` runs full ``acestep.inference.generate_music`` (PyTorch DiT on host) with no TTNN.
 
-- **Guidance scale**: variant-aware (7.0 for base/sft, 1.0 for turbo). CFG is essential for the
-  base/sft variants; disabling it (``--guidance_scale 1``) collapses the latents into the
-  unconditional prior and produces noisy audio.
-
-- **DiT sampler + VAE**: TTNN end-to-end.
-
-Opt-in modes:
-
-- ``--experimental-5hz-ttnn-causal-lm``: replaces the host PyTorch HF Qwen forward with the
-  stock ``tt_transformers`` TTNN causal stack
-  (``ttnn_impl/qwen_tt_transformers_lm.QwenModelTtTransformers``). All matmuls / RoPE / RMSNorm
-  / paged KV / LMHead run on Tensix; post-processing (rep_penalty + top-k + top-p + sample)
-  runs as a single fused on-device call. Requires ``--guidance_scale 1`` because DiT KV / mesh
-  batch is fixed at 1 in this path - so use this flag together with ``--guidance_scale 1`` and
-  understand that DiT CFG is disabled. Combine with the ``turbo`` variant for the best audio.
-
-- ``--fast-preprocess``: lightweight path (tokenizer + TTNN Qwen3 embedding encoder + no
-  5 Hz LM / no precomputed hints). Skips ``AceStepHandler`` and the LM; useful for measuring
-  pipeline DiT/VAE latency in isolation. Auto-disables TTNN condition embedding.
-
-- ``--use-official-lm``: runs the full upstream ``acestep.inference.generate_music`` (PyTorch
-  DiT on host, no TTNN). Used for parity reference only.
-
-The ACE-Step ``acestep`` package is loaded from a vendored copy under
-``models/demos/ace_step_v1_5/torch_ref/_vendored_acestep/`` by default; pass
-``--ace-step-repo-root`` to override with an external clone.
+On the default (non ``--fast-preprocess``) path, after the TTNN device is opened for the Qwen3 caption
+encoder, the same device is attached to the 5 Hz LM handler so the **CFG logit combine**
+(``uncond + cfg_scale * (cond - uncond)``) runs on TTNN with strict fallbacks disabled inside that op:
+valid-audio **slice** in codes phase when a mask is applied, otherwise **full vocabulary**; see
+``ttnn_impl/lm_logits_ttnn.py``. The 5 Hz causal LM forward remains PyTorch unless you pass
+``--experimental-5hz-ttnn-causal-lm`` (then ``ttnn_impl/five_hz_causal_lm_experimental.py`` wraps
+``ttnn_impl/qwen_model_full_device.QwenModelFullDevice``; use ``--guidance-scale 1`` if that backend
+cannot batch cond+uncond).
 """
 
 from __future__ import annotations
@@ -165,6 +158,9 @@ def _build_t_schedule(*, shift: float, infer_steps: int, timesteps: str | None, 
     return t
 
 
+# Vendored ACE-Step copy bundled with the demo so it runs without an external clone of
+# https://github.com/ace-step/ACE-Step-1.5. ``_resolve_ace_step_repo_root`` prefers this
+# path (after explicit CLI / env overrides) so the demo is repo-independent by default.
 _VENDORED_ACESTEP_ROOT = Path(__file__).resolve().parent / "torch_ref" / "_vendored_acestep"
 
 _WELL_KNOWN_REPO_ROOTS = [
@@ -184,7 +180,8 @@ def _resolve_ace_step_repo_root(*, ckpt_dir: str | None, ace_step_repo_root: str
     3. **Vendored copy** at ``models/demos/ace_step_v1_5/torch_ref/_vendored_acestep/`` —
        default; lets the demo run with no external clone of ACE-Step-1.5.
     4. Walk up from ``ckpt_dir`` (looks for an ``acestep/`` sibling).
-    5. Well-known external paths (``~/proj_sdk/ACE-Step-1.5``, ``~/ACE-Step-1.5``, ``/opt/...``).
+    5. Well-known external paths (``~/proj_sdk/ACE-Step-1.5``, ``~/ACE-Step-1.5``,
+       ``/opt/ACE-Step-1.5``).
     """
     candidates: list[Path] = []
     if ace_step_repo_root:
@@ -322,15 +319,7 @@ def main() -> None:
         "--guidance_scale",
         type=float,
         default=None,
-        help=(
-            "DiT classifier-free guidance strength. Default: variant-aware - 7.0 for "
-            "``acestep-v15-base`` / ``acestep-v15-sft`` (CFG is essential for those - disabling it "
-            "collapses latents into the unconditional prior and produces noisy / wrong audio), "
-            "1.0 for ``acestep-v15-turbo`` (turbo is trained without CFG). "
-            "Set 1 explicitly to disable CFG. The experimental TTNN causal LM "
-            "(``--experimental-5hz-ttnn-causal-lm``, opt-in) requires ``guidance_scale==1`` because "
-            "the DiT KV / mesh batch is fixed at 1 in that path - opt into both flags together."
-        ),
+        help="CFG strength (default: 7 base, 1 turbo). Set 1 to disable CFG.",
     )
     ap.add_argument("--cfg_interval_start", type=float, default=0.0)
     ap.add_argument("--cfg_interval_end", type=float, default=1.0)
@@ -345,12 +334,7 @@ def main() -> None:
         "--ace-step-repo-root",
         type=str,
         default=None,
-        help=(
-            "Optional override for the ACE-Step-1.5 repo (folder containing acestep/). "
-            "By default the demo uses the vendored copy at "
-            "models/demos/ace_step_v1_5/torch_ref/_vendored_acestep/, so this flag (and "
-            "ACE_STEP_REPO_ROOT) is only needed to point at an external checkout."
-        ),
+        help="ACE-Step-1.5 repo (contains acestep/). Defaults to env ACE_STEP_REPO_ROOT or walk from ckpt_dir.",
     )
     ap.add_argument(
         "--use-official-lm",
@@ -371,10 +355,9 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
-            "Run ACE condition embedding / prepare_condition assembly in TTNN instead of HF "
-            "prepare_condition. Default: auto - on for the official LM/handler TTNN demo path, "
-            "off when --fast-preprocess is set (that path skips the full prepare_condition "
-            "pipeline). Pass --no-ttnn-condition-embedding to force the Torch reference path."
+            "Run ACE condition embedding / prepare_condition assembly in TTNN instead of HF prepare_condition. "
+            "Default: on for the official LM/handler TTNN demo path, off for --fast-preprocess. "
+            "Use --no-ttnn-condition-embedding to force the Torch prepare_condition reference path."
         ),
     )
     ap.add_argument(
@@ -386,13 +369,9 @@ def main() -> None:
         "--experimental-5hz-ttnn-causal-lm",
         action="store_true",
         help=(
-            "Opt in to the stock tt_transformers TTNN causal stack for the 5 Hz LM "
-            "(models/demos/ace_step_v1_5/ttnn_impl/qwen_tt_transformers_lm.py). "
-            "Opens TTNN before LM init; requires --guidance_scale 1 (DiT KV / mesh batch=1 "
-            "in this path). LM classifier-free guidance uses lm_cfg_scale (default 2); this "
-            "path forces lm_cfg_scale=1. Default OFF - the host PyTorch HF Qwen 1.7B forward "
-            "is used with the variant-default --guidance_scale (7.0 for base/sft, 1.0 for "
-            "turbo), which is the audio-quality-correct configuration for the v15-base demo."
+            "Load the 5 Hz LM via demo TTNN causal stack (models/demos/ace_step_v1_5/ttnn_impl/ace_step_ds_r1_qwen.py). "
+            "Opens TTNN before LM init; requires guidance_scale==1 for DiT KV batch=1. "
+            "LM classifier-free guidance uses lm_cfg_scale (default 2); this path forces lm_cfg_scale=1."
         ),
     )
     ap.add_argument(
@@ -436,9 +415,6 @@ def main() -> None:
                 flush=True,
             )
             fast_preprocess = True
-    # ``--ttnn-condition-embedding`` defaults to ``None`` (auto): on for the official LM /
-    # handler TTNN demo path, off when --fast-preprocess is set (that path skips the full
-    # prepare_condition pipeline). Explicit True / False from the CLI is preserved.
     if args.ttnn_condition_embedding is None:
         args.ttnn_condition_embedding = not fast_preprocess
 
@@ -470,11 +446,6 @@ def main() -> None:
 
     dev_opened_for_ttnn_text_encoder = False
 
-    # Variant-aware ``--guidance_scale`` default: 7.0 for base/sft (CFG is essential for
-    # those variants - disabling it collapses latents to the unconditional prior and the
-    # output sounds like noise), 1.0 for turbo (trained without CFG). If the experimental
-    # TTNN causal LM is opted into, gs is forced to 1.0 because that path keeps DiT KV /
-    # mesh batch at 1.
     gs = args.guidance_scale
     if gs is None:
         gs = 1.0 if "turbo" in str(args.variant).lower() else 7.0
@@ -619,7 +590,9 @@ def main() -> None:
 
         _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
         import ttnn
-        from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
+        from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_ace_step import (
+            AceStepQwen3Encoder as TtQwen3EmbeddingEncoder,
+        )
 
         if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
             ttnn.CONFIG.throw_exception_on_fallback = True
@@ -761,12 +734,7 @@ def main() -> None:
     if getattr(args, "experimental_5hz_ttnn_causal_lm", False):
         if float(gs) > 1.0 + 1e-6:
             raise ValueError(
-                "The experimental TTNN causal LM (default backend) requires --guidance_scale 1 "
-                "because DiT KV / mesh batch is fixed at 1. "
-                f"Got --guidance_scale={float(gs)}. "
-                "Either drop --guidance_scale (defaults to 1.0) or pass "
-                "--no-experimental-5hz-ttnn-causal-lm to fall back to the host PyTorch HF Qwen "
-                "forward, which supports DiT classifier-free guidance with cfg_scale > 1."
+                "--experimental-5hz-ttnn-causal-lm requires --guidance_scale 1 (DiT KV / mesh batch=1 for this demo)."
             )
         _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
         import ttnn as _ttnn_pre_lm
@@ -846,7 +814,9 @@ def main() -> None:
     _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
     import ttnn
     from models.demos.ace_step_v1_5.ttnn_impl.audio_code_detokenizer import TtAceStepAudioCodeDetokenizer
-    from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
+    from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_ace_step import (
+        AceStepQwen3Encoder as TtQwen3EmbeddingEncoder,
+    )
 
     if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
         ttnn.CONFIG.throw_exception_on_fallback = True

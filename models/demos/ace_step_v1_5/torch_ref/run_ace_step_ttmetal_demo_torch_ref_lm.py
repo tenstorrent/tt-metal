@@ -550,7 +550,9 @@ def main() -> None:
 
         _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
         import ttnn
-        from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
+        from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_ace_step import (
+            AceStepQwen3Encoder as TtQwen3EmbeddingEncoder,
+        )
 
         if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
             ttnn.CONFIG.throw_exception_on_fallback = True
@@ -771,7 +773,9 @@ def main() -> None:
 
     _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
     import ttnn
-    from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
+    from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_ace_step import (
+        AceStepQwen3Encoder as TtQwen3EmbeddingEncoder,
+    )
 
     if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
         ttnn.CONFIG.throw_exception_on_fallback = True
