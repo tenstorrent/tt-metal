@@ -245,7 +245,7 @@ void run_single_core_tilize_program(
         test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A;
     const std::string reader_kernel_path =
         is_unpack_a_tilize ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n_2_0.cpp"
-                           : "tt_metal/kernels/dataflow/reader_unary_2_0.cpp";
+                           : "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_2_0.cpp";
 
     experimental::metal2_host_api::KernelSpec::RuntimeArgSchema reader_schema;
     if (is_unpack_a_tilize) {
@@ -278,7 +278,8 @@ void run_single_core_tilize_program(
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{"tt_metal/kernels/dataflow/writer_unary_2_0.cpp"},
+            experimental::metal2_host_api::KernelSpec::SourceFilePath{
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp"},
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUTPUT_DFB,
