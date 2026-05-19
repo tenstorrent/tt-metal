@@ -60,7 +60,6 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     uint32_t Wt = input_shape[3] / tile_width;
     uint32_t Kt = (k + tile_width - 1) / tile_width;
 
-
     // for streaming in input
     uint32_t num_cb_unit = 2;
     uint32_t cb_in_units = 2 * num_cb_unit;

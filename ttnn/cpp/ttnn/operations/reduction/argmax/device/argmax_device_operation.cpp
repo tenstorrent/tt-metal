@@ -95,11 +95,6 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
         const uint32_t tile_width = input_tensor_a.tensor_spec().tile().get_width();
         const uint32_t tile_height = input_tensor_a.tensor_spec().tile().get_height();
         TT_FATAL(
-            input_shape[rank - 1] > 0 && input_shape[rank - 2] > 0,
-            "Argmax TILE input: padded spatial face must be positive (padded_height={}, padded_width={})",
-            input_shape[rank - 2],
-            input_shape[rank - 1]);
-        TT_FATAL(
             input_shape[rank - 1] % tile_width == 0,
             "Last dimension {} must be divisible by tile width {}",
             input_shape[rank - 1],
@@ -160,12 +155,6 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
             input_tensor_a.layout() == Layout::ROW_MAJOR,
             "Multicore argmax only supports ROW_MAJOR layout for inputs, got {}",
             input_tensor_a.layout());
-        const auto& input_padded_shape = input_tensor_a.padded_shape();
-        const auto padded_shape_rank = input_padded_shape.size();
-        TT_FATAL(
-            input_padded_shape[padded_shape_rank - 1] > 0,
-            "Multicore argmax requires positive reduction dimension size (last padded dim), got {}",
-            input_padded_shape[padded_shape_rank - 1]);
     }
 
     {

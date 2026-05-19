@@ -67,12 +67,6 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
     {
         const int32_t logical_rank = input_tensor.logical_shape().rank();
         const int32_t acc_dim = attributes.dim;
-        TT_FATAL(acc_dim >= 0, "Accumulation (cumsum/cumprod) expects non-negative normalized dim, got {}", acc_dim);
-        TT_FATAL(
-            logical_rank > 0,
-            "Accumulation (cumsum/cumprod) requires positive logical rank for axis {}, got rank {}",
-            acc_dim,
-            logical_rank);
         TT_FATAL(
             acc_dim < logical_rank, "Accumulation dim {} must be less than logical rank {}", acc_dim, logical_rank);
     }

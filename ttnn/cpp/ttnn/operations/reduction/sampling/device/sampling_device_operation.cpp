@@ -59,23 +59,7 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
         sampling_grid_opts.sub_grid_label = "sub_core_grids";
     }
 
-    {
-        const uint32_t sampling_in_tile_height = input_values_tensor.tensor_spec().tile().get_height();
-        const uint32_t sampling_in_tile_width = input_values_tensor.tensor_spec().tile().get_width();
-        TT_FATAL(
-            (input_shape[0] * input_shape[1] * input_shape[2]) % sampling_in_tile_height == 0,
-            "Sampling D0*D1*D2 product must be tile-height-aligned ({}); got dims [{},{},{}]",
-            sampling_in_tile_height,
-            input_shape[0],
-            input_shape[1],
-            input_shape[2]);
-        validate_reduce_op_tensor(input_values_tensor, "Sampling", "input_values", &sampling_grid_opts);
-        TT_FATAL(
-            input_values_tensor.physical_volume() % (sampling_in_tile_height * sampling_in_tile_width) == 0,
-            "Sampling input_values physical volume must be a multiple of tile element count {} (got {})",
-            sampling_in_tile_height * sampling_in_tile_width,
-            input_values_tensor.physical_volume());
-    }
+    validate_reduce_op_tensor(input_values_tensor, "Sampling", "input_values", &sampling_grid_opts);
     if (args.sub_core_grids.has_value()) {
         TT_FATAL(
             args.sub_core_grids.value().num_cores() == input_shape[0] * input_shape[1] * input_shape[2],

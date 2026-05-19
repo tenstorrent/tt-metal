@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -126,16 +127,8 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
         tt::tt_metal::split_work_to_cores(grid_size, num_units);
 
     TT_FATAL(num_cores > 0, "Argmax single-core split requires at least one core ");
-    {
-        const auto device_core_grid = device->compute_with_storage_grid_size();
-        const tt::tt_metal::CoreRangeSet device_worker_grid =
-            tt::tt_metal::num_cores_to_corerangeset(device_core_grid.x * device_core_grid.y, device_core_grid, false);
-        TT_FATAL(
-            device_worker_grid.contains(all_cores),
-            "Argmax single-core program core grid {} must be contained in device grid {}",
-            all_cores,
-            device_worker_grid);
-    }
+    validate_reduce_op_program_grid(
+        "Argmax single-core", all_cores, device->compute_with_storage_grid_size(), nullptr, true, {});
 
     const tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -187,11 +180,6 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
 
     // Runtime args
     const auto cores = grid_to_cores(num_cores, grid_size.x, grid_size.y, false);
-    TT_FATAL(
-        cores.size() == num_cores,
-        "Argmax single-core resolved core list size {} must match split num_cores {}",
-        cores.size(),
-        num_cores);
     for (const auto& core : cores) {
         reader_desc.emplace_runtime_args(core, {src_buffer, dst_buffer});
     }

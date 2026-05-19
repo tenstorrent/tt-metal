@@ -13,6 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 namespace ttnn::prim {
 
@@ -67,27 +68,13 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     }
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 
-    {
-        const uint32_t sampling_device_total_cores =
-            compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
-        TT_FATAL(
-            num_cores <= sampling_device_total_cores,
-            "Sampling num_cores={} exceeds device compute grid capacity {}",
-            num_cores,
-            sampling_device_total_cores);
-        const CoreRangeSet sampling_program_device_grid =
-            num_cores_to_corerangeset(sampling_device_total_cores, compute_with_storage_grid_size, true);
-        TT_FATAL(
-            sampling_program_device_grid.contains(core_grid),
-            "Sampling program core_grid {} must be contained in device compute grid {}",
-            core_grid,
-            sampling_program_device_grid);
-        TT_FATAL(
-            cores.size() == num_cores,
-            "Sampling core workload mismatch: corerange_to_cores returned {} cores but num_cores is {}",
-            cores.size(),
-            num_cores);
-    }
+    validate_reduce_op_program_grid(
+        "Sampling",
+        core_grid,
+        compute_with_storage_grid_size,
+        sub_core_grids.has_value() ? &sub_core_grids.value() : nullptr,
+        true,
+        {});
 
     if (seed.has_value()) {
         random_seed = seed.value();

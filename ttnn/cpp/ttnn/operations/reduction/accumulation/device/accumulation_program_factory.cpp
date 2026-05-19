@@ -4,6 +4,7 @@
 
 #include "accumulation/device/accumulation_device_operation_types.hpp"
 #include "accumulation_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 #include "tt-metalium/base_types.hpp"
 #include "tt-metalium/host_api.hpp"
@@ -63,7 +64,6 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
     TT_FATAL(num_cores_y != 0, "Compute grid y-dimension must be non-zero");
-    TT_FATAL(grid.x != 0, "Compute grid x-dimension must be non-zero for accumulation (cumsum/cumprod)");
 
     const int32_t dim{
         (operation_attributes.dim >= 0) ? operation_attributes.dim : (input_rank + operation_attributes.dim)};
@@ -86,39 +86,8 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
         num_cores > 0,
         "Accumulation (cumsum/cumprod) requires at least one worker core; num_rows_total={}",
         num_rows_total);
-    const auto cores = tt::tt_metal::corerange_to_cores(all_cores, num_cores, false);
-    TT_FATAL(
-        cores.size() == num_cores,
-        "Accumulation resolved core list size {} must match split num_cores {}",
-        cores.size(),
-        num_cores);
 
-    {
-        using namespace tt::tt_metal;
-        const CoreRangeSet device_grid = num_cores_to_corerangeset(grid.x * grid.y, grid, false);
-        TT_FATAL(
-            device_grid.contains(all_cores),
-            "Accumulation program core grid {} must be contained in device compute grid {}",
-            all_cores,
-            device_grid);
-        const auto& output_memory_config = output_tensor.memory_config();
-        if (output_memory_config.shard_spec().has_value()) {
-            const auto& output_shard_grid = output_memory_config.shard_spec().value().grid;
-            TT_FATAL(
-                all_cores.contains(output_shard_grid),
-                "Accumulation output shard grid {} must be contained in program core grid {}",
-                output_shard_grid,
-                all_cores);
-        }
-        if (output_memory_config.nd_shard_spec().has_value()) {
-            const auto& output_nd_shard_grid = output_memory_config.nd_shard_spec().value().grid;
-            TT_FATAL(
-                all_cores.contains(output_nd_shard_grid),
-                "Accumulation output ND shard grid {} must be contained in program core grid {}",
-                output_nd_shard_grid,
-                all_cores);
-        }
-    }
+    validate_reduce_op_program_grid("Accumulation", all_cores, grid, nullptr, true, {{&output_tensor, "output"}});
 
     constexpr uint32_t in_tiles = 4;
     constexpr uint32_t acc_tiles = 1;

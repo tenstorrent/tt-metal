@@ -106,6 +106,69 @@ void validate_core_grids_within_device_grid(
 
 }  // namespace
 
+void validate_reduce_op_program_grid(
+    std::string_view op_name,
+    const CoreRangeSet& all_cores,
+    const CoreCoord& device_compute_grid_size,
+    const CoreRangeSet* sub_core_grids,
+    bool num_cores_use_last_core_divider,
+    std::initializer_list<ReduceOpProgramGridShardedTensor> sharded_tensors) {
+    TT_FATAL(
+        device_compute_grid_size.x > 0 && device_compute_grid_size.y > 0,
+        "{} requires non-empty device compute grid, got ({}, {})",
+        op_name,
+        device_compute_grid_size.x,
+        device_compute_grid_size.y);
+
+    const CoreRangeSet device_grid = num_cores_to_corerangeset(
+        device_compute_grid_size.x * device_compute_grid_size.y,
+        device_compute_grid_size,
+        num_cores_use_last_core_divider);
+
+    TT_FATAL(
+        device_grid.contains(all_cores),
+        "{} program core grid {} must be contained in device compute grid {}",
+        op_name,
+        all_cores,
+        device_grid);
+
+    if (sub_core_grids != nullptr) {
+        TT_FATAL(
+            sub_core_grids->contains(all_cores),
+            "{} program core grid {} must be contained in sub_core_grids {}",
+            op_name,
+            all_cores,
+            *sub_core_grids);
+    }
+
+    for (const auto& sharded_tensor : sharded_tensors) {
+        if (sharded_tensor.tensor == nullptr) {
+            continue;
+        }
+        const auto& memory_config = sharded_tensor.tensor->memory_config();
+        if (memory_config.shard_spec().has_value()) {
+            const auto& shard_grid = memory_config.shard_spec().value().grid;
+            TT_FATAL(
+                all_cores.contains(shard_grid),
+                "{} {} shard grid {} must be contained in program core grid {}",
+                op_name,
+                sharded_tensor.label,
+                shard_grid,
+                all_cores);
+        }
+        if (memory_config.nd_shard_spec().has_value()) {
+            const auto& nd_shard_grid = memory_config.nd_shard_spec().value().grid;
+            TT_FATAL(
+                all_cores.contains(nd_shard_grid),
+                "{} {} ND shard grid {} must be contained in program core grid {}",
+                op_name,
+                sharded_tensor.label,
+                nd_shard_grid,
+                all_cores);
+        }
+    }
+}
+
 void validate_reduce_op_tensor(
     const Tensor& tensor_ref,
     std::string_view op_name,

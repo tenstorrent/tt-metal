@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ema_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 #include "ttnn/operations/math.hpp"
 
@@ -30,16 +31,6 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
     if ((grid_size.x == 0) && (grid_size.y == 0)) {
         grid_size = device->compute_with_storage_grid_size();
     }
-    {
-        const auto ema_device_grid = device->compute_with_storage_grid_size();
-        TT_FATAL(
-            grid_size.x <= ema_device_grid.x && grid_size.y <= ema_device_grid.y,
-            "EMA grid_size ({}, {}) must fit within device compute grid ({}, {})",
-            grid_size.x,
-            grid_size.y,
-            ema_device_grid.x,
-            ema_device_grid.y);
-    }
     auto num_cores_available = grid_size.x * grid_size.y;
 
     // Compute total_tiles to determine core split
@@ -60,37 +51,8 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
     // We now have the number of cores to use, compute per core parameters
     auto all_cores = CoreRangeSet(grid_to_cores(num_cores, grid_size.x, grid_size.y, false));
 
-    {
-        const auto ema_device_grid_sz = device->compute_with_storage_grid_size();
-        const CoreRangeSet ema_full_device_grid =
-            num_cores_to_corerangeset(ema_device_grid_sz.x * ema_device_grid_sz.y, ema_device_grid_sz, false);
-        TT_FATAL(
-            ema_full_device_grid.contains(all_cores),
-            "EMA program cores {} must be contained in device compute grid {}",
-            all_cores,
-            ema_full_device_grid);
-        auto validate_shard_grids_subset_of_program_cores = [&](const Tensor& t, const char* tensor_name) {
-            const auto& memory_config = t.memory_config();
-            if (memory_config.shard_spec().has_value()) {
-                TT_FATAL(
-                    all_cores.contains(memory_config.shard_spec().value().grid),
-                    "EMA {} shard grid {} must be contained in program cores {}",
-                    tensor_name,
-                    memory_config.shard_spec().value().grid,
-                    all_cores);
-            }
-            if (memory_config.nd_shard_spec().has_value()) {
-                TT_FATAL(
-                    all_cores.contains(memory_config.nd_shard_spec().value().grid),
-                    "EMA {} ND shard grid {} must be contained in program cores {}",
-                    tensor_name,
-                    memory_config.nd_shard_spec().value().grid,
-                    all_cores);
-            }
-        };
-        validate_shard_grids_subset_of_program_cores(input, "input");
-        validate_shard_grids_subset_of_program_cores(output, "output");
-    }
+    validate_reduce_op_program_grid(
+        "EMA", all_cores, device->compute_with_storage_grid_size(), nullptr, false, {{&output, "output"}});
     log_debug(
         tt::LogOp,
         "EmaProgramFactory: grid_size=({}, {}), num_cores={}, total_batch_channel_tiles={}",

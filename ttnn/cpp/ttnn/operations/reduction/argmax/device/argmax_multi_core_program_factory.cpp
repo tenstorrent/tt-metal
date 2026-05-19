@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
@@ -203,16 +204,13 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     const uint32_t num_total_cores = num_cores0 + num_cores1;
 
     TT_FATAL(num_total_cores > 0, "Argmax multicore requires at least one worker core");
-    {
-        const auto device_core_grid = device->compute_with_storage_grid_size();
-        const CoreRangeSet device_worker_grid =
-            num_cores_to_corerangeset(device_core_grid.x * device_core_grid.y, device_core_grid, false);
-        TT_FATAL(
-            device_worker_grid.contains(all_cores),
-            "Argmax multicore program core grid {} must be contained in device grid {}",
-            all_cores,
-            device_worker_grid);
-    }
+    validate_reduce_op_program_grid(
+        "Argmax multicore",
+        all_cores,
+        device->compute_with_storage_grid_size(),
+        sub_core_grids.has_value() ? &sub_core_grids.value() : nullptr,
+        true,
+        {});
 
     // Page sizes for input and output tensors based on the ROW_MAJOR layout
     const auto src_page_size = round_up_to_mul32(red_dim_units * input_unit_size);
@@ -289,11 +287,6 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     // Get physical coordinates of the reduce core that collates the intermediate outputs
     const uint32_t reduce_core_id = 0;  // We can do perf optimization by tuning this in the future
     const auto cores = corerange_to_cores(all_cores, num_total_cores, true);
-    TT_FATAL(
-        cores.size() == num_total_cores,
-        "Argmax multicore resolved core list size {} must match num_total_cores {}",
-        cores.size(),
-        num_total_cores);
     const auto reduce_core = device->worker_core_from_logical_core(cores.at(reduce_core_id));
 
     // Get first and last core's coordinates for the at max two groups of cores in all_cores

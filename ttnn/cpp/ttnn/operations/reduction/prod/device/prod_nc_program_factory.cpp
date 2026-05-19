@@ -3,6 +3,7 @@
 
 #include "prod_nc_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -81,36 +82,7 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
          num_cols_per_core_group_1,
          num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_output_tiles);
 
-    {
-        const tt::tt_metal::CoreRangeSet prod_nc_device_grid =
-            tt::tt_metal::num_cores_to_corerangeset(grid.x * grid.y, grid, false);
-        TT_FATAL(
-            prod_nc_device_grid.contains(all_cores),
-            "Prod_nc program cores {} must be contained in device compute grid {}",
-            all_cores,
-            prod_nc_device_grid);
-        auto validate_shard_grids_subset_of_program_cores = [&](const Tensor& t, const char* tensor_name) {
-            const auto& memory_config = t.memory_config();
-            if (memory_config.shard_spec().has_value()) {
-                TT_FATAL(
-                    all_cores.contains(memory_config.shard_spec().value().grid),
-                    "Prod_nc {} shard grid {} must be contained in program cores {}",
-                    tensor_name,
-                    memory_config.shard_spec().value().grid,
-                    all_cores);
-            }
-            if (memory_config.nd_shard_spec().has_value()) {
-                TT_FATAL(
-                    all_cores.contains(memory_config.nd_shard_spec().value().grid),
-                    "Prod_nc {} ND shard grid {} must be contained in program cores {}",
-                    tensor_name,
-                    memory_config.nd_shard_spec().value().grid,
-                    all_cores);
-            }
-        };
-        validate_shard_grids_subset_of_program_cores(input, "input");
-        validate_shard_grids_subset_of_program_cores(output, "output");
-    }
+    validate_reduce_op_program_grid("Prod_nc", all_cores, grid, nullptr, true, {{&output, "output"}});
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup

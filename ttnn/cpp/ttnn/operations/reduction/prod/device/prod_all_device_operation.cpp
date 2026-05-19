@@ -25,14 +25,6 @@ void ProdAllDeviceOperation::validate_on_program_cache_miss(
         input.dtype() == tt::tt_metal::DataType::BFLOAT16,
         "Error - unsupported data type for prod, expected BFLOAT16 but got {}.",
         input.dtype());
-
-    {
-        const auto prod_all_logical_rank = tensor_args.input.logical_shape().rank();
-        TT_FATAL(
-            prod_all_logical_rank >= 1,
-            "Prod_all expects logical rank >= 1 at device entry, got {}",
-            prod_all_logical_rank);
-    }
 }
 
 ProdAllDeviceOperation::spec_return_value_t ProdAllDeviceOperation::compute_output_specs(

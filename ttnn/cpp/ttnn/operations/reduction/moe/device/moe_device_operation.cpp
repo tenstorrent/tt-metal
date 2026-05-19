@@ -73,33 +73,6 @@ void MoeDeviceOperation::validate_on_program_cache_miss(
         input_logical_shape[-1]);
     TT_FATAL(topk_shape[-2] == 32, "Topk shape inner dim must be padded to 32, got {}", topk_shape[-2]);
     TT_FATAL(expert_shape[-2] == 32, "Expert shape inner dim must be padded to 32, got {}", expert_shape[-2]);
-        TT_FATAL(expert_shape[-1] == input_shape[-1],
-        "Expert shape inner dim must be equal to input_shape[-1], got {}",
-        expert_shape[-1]);
-    TT_FATAL(topk_shape[-2] == 32, "Topk shape inner dim must be equal to 32, got {}", topk_shape[-2]);
-    TT_FATAL(expert_shape[-2] == 32, "Expert shape inner dim must be equal to 32, got {}", expert_shape[-2]);
-
-    {
-        const int32_t logical_rank = input_tensor.logical_shape().rank();
-        TT_FATAL(logical_rank > 0, "MoE requires positive logical rank, got {}", logical_rank);
-        constexpr int32_t fixed_dim_negative = -1;
-        const int32_t fixed_dim_normalized = fixed_dim_negative + logical_rank;
-        TT_FATAL(
-            fixed_dim_normalized >= 0 && fixed_dim_normalized < logical_rank,
-            "MoE fixed reduction dim {} normalized to {} is out of range for logical rank {}",
-            fixed_dim_negative,
-            fixed_dim_normalized,
-            logical_rank);
-    }
-    TT_FATAL(
-        is_row_broadcastable_mask(expert_logical_shape, input_logical_shape[-1]),
-        "Expert mask must be row-broadcastable with last dim == input_shape[-1]. Got rank={} and shape={} for "
-        "input_shape[-1]={}",
-        expert_logical_shape.rank(),
-        expert_logical_shape,
-        input_logical_shape[-1]);
-    TT_FATAL(topk_shape[-2] == 32, "Topk shape inner dim must be padded to 32, got {}", topk_shape[-2]);
-    TT_FATAL(expert_shape[-2] == 32, "Expert shape inner dim must be padded to 32, got {}", expert_shape[-2]);
 }
 
 TensorSpec MoeDeviceOperation::compute_output_specs(
