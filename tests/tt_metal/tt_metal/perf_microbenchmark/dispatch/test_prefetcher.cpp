@@ -2662,6 +2662,16 @@ public:
                                               ? tt::align(scratch_db_base + scratch_db_size, page_size)
                                               : memmap.dispatch_buffer_base();
 
+        const auto& soc_desc = tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->device_->id());
+        TT_FATAL(
+            dispatch_cb_base + dispatch_buffer_pages * Common::SD_DISPATCH_BUFFER_PAGE_SIZE <= soc_desc.worker_l1_size,
+            "SD prefetch dispatch_cb overflows worker L1 (base={:#x}, pages={}, page_size={:#x}, "
+            "worker_l1_size={:#x})",
+            dispatch_cb_base,
+            dispatch_buffer_pages,
+            Common::SD_DISPATCH_BUFFER_PAGE_SIZE,
+            soc_desc.worker_l1_size);
+
         // Hugepage addressing
         // Use the same hugepage region that the FD runtime uses for the issue queue
         // (safe since SD mode never runs the FD runtime concurrently).
