@@ -73,6 +73,7 @@ set(UNIT_TESTS_API_SOURCES
     test_pointer_size.cpp
     test_semaphore_write.cpp
     test_tensor_bad_acess.cpp
+    test_valid_mem_wrong_alloc.cpp
     test_write_beyond_res_pages.cpp
     test_write_outside_tensor.cpp
     disaggregation/test_kv_chunk_address_table.cpp
