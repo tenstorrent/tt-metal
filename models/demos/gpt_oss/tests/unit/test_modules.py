@@ -438,8 +438,8 @@ def run_fused_throughput_experts_component(
             if tensor is not None:
                 try:
                     ttnn.deallocate(tensor)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to deallocate {attr}: {e}")
         ttnn.synchronize_device(mesh_device)
 
 
