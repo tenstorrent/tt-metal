@@ -28,7 +28,7 @@ def rotate_half(x):
     x2 = ttnn.slice(x, (0, 0, 0, half), (x.shape[0], x.shape[1], x.shape[2], last_dim))
 
     neg_x2 = ttnn.mul(x2, -1)
-    return ttnn.concat([neg_x2, x1], dim=-1)
+    return ttnn.concat([neg_x2, x1], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 
 def apply_rotary_pos_emb_vision_tt(q, k, cos, sin):
@@ -301,6 +301,8 @@ class TtMistralImageAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         if self.num_devices > 1:
+            # Keep all-gather input on-chip to avoid DRAM-interleaved in0 stalls.
+            output_11SH = ttnn.to_memory_config(output_11SH, memory_config=ttnn.L1_MEMORY_CONFIG)
             num_links = 2
             dense_out_gathered = ttnn.experimental.all_gather_async(
                 output_11SH,
@@ -310,7 +312,7 @@ class TtMistralImageAttention(LightweightModule):
                 num_links=num_links,
                 topology=ttnn.Topology.Linear,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
+                chunks_per_sync=20,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )

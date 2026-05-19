@@ -90,6 +90,12 @@ class MistralTTVisionMLP(LightweightModule):
         if seq_len <= chunk:
             return run_chunk(x)
 
+        # Fast path: when sequence chunks exactly, avoid per-chunk concat by batching chunk axis.
+        if seq_len % chunk == 0:
+            x_batched = ttnn.reshape(x, [1, seq_len // chunk, chunk, -1])
+            out_batched = run_chunk(x_batched)
+            return ttnn.reshape(out_batched, [1, 1, seq_len, -1])
+
         parts: list[ttnn.Tensor] = []
         start = 0
         while start < seq_len:
