@@ -1896,6 +1896,70 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(termination_master_virtual_core.y);                   // termination_master_noc_y 16
 }
 
+void fabric_mux_connection_rt_args(
+    const bool mux_connection_valid,
+    const bool is_termination_master,
+    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    const uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::ProgramDescriptor& desc,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> termination_master_semaphore_id) {
+    // Allocate per-worker semaphores by pushing SemaphoreDescriptors with
+    // sequential ids onto desc.semaphores.  The legacy Program& overload calls
+    // CreateSemaphore(program, {worker_logical_core}, 0) 5x (or 4x when the
+    // termination_master id is shared across workers); we reserve the same
+    // number of slot ids here.
+    const tt::tt_metal::CoreRangeSet worker_crs(tt::tt_metal::CoreRange(worker_logical_core, worker_logical_core));
+
+    auto reserve_semaphore = [&]() {
+        const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = sem_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = worker_crs,
+            .initial_value = 0,
+        });
+        return sem_id;
+    };
+
+    // termination_sync_address (slot 10): either the caller-supplied shared id
+    // or a freshly reserved per-worker id.
+    const uint32_t termination_sync_id =
+        termination_master_semaphore_id.has_value() ? *termination_master_semaphore_id : reserve_semaphore();
+    const uint32_t local_fabric_mux_status_id = reserve_semaphore();  // 11
+    const uint32_t local_flow_control_id = reserve_semaphore();       // 12
+    const uint32_t local_teardown_id = reserve_semaphore();           // 13
+    const uint32_t local_buffer_index_id = reserve_semaphore();       // 14
+
+    worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid 0
+    worker_rt_args.push_back(is_termination_master);  // is_termination_master 1
+    worker_rt_args.push_back(mux_virtual_core.x);     // fabric_mux_x 2
+    worker_rt_args.push_back(mux_virtual_core.y);     // fabric_mux_y 3
+    worker_rt_args.push_back(
+        mux_kernel_config.get_channel_base_address(channel_type, worker_id));  // fabric_mux_channel_base_address 4
+    worker_rt_args.push_back(mux_kernel_config.get_connection_info_address(
+        channel_type, worker_id));  // fabric_mux_connection_info_address 5
+    worker_rt_args.push_back(mux_kernel_config.get_connection_handshake_address(
+        channel_type, worker_id));  // fabric_mux_connection_handshake_address 6
+    worker_rt_args.push_back(
+        mux_kernel_config.get_flow_control_address(channel_type, worker_id));  // fabric_mux_flow_control_address 7
+    worker_rt_args.push_back(
+        mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
+    worker_rt_args.push_back(
+        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id 9
+    worker_rt_args.push_back(termination_sync_id);                                  // termination_sync_address 10
+    worker_rt_args.push_back(local_fabric_mux_status_id);         // local_fabric_mux_status_address 11
+    worker_rt_args.push_back(local_flow_control_id);              // local_flow_control_address 12
+    worker_rt_args.push_back(local_teardown_id);                  // local_teardown_address 13
+    worker_rt_args.push_back(local_buffer_index_id);              // local_buffer_index_address 14
+    worker_rt_args.push_back(termination_master_virtual_core.x);  // termination_master_noc_x 15
+    worker_rt_args.push_back(termination_master_virtual_core.y);  // termination_master_noc_y 16
+}
+
 namespace {  // anonymous namespace for internal helpers
 
 // Fabric bandwidth is based on raw hardware capability

@@ -14,6 +14,7 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -781,6 +782,24 @@ void fabric_mux_connection_rt_args(
     CoreCoord termination_master_virtual_core,
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> = std::nullopt);
+
+// ProgramDescriptor overload: pushes up to 5 SemaphoreDescriptors onto
+// desc.semaphores (one per worker, on `worker_logical_core`) using sequential
+// ids, and embeds those ids - plus the optional shared termination-master id -
+// into worker_rt_args at the same slots as the Program& overload.  Used by
+// CCL ops migrating to the descriptor framework.
+void fabric_mux_connection_rt_args(
+    bool mux_connection_valid,
+    bool is_termination_master,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::ProgramDescriptor& desc,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> termination_master_semaphore_id = std::nullopt);
 
 // Estimate fabric transfer time (nanoseconds).
 //   arch:          Wormhole or Blackhole

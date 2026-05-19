@@ -11,6 +11,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "ttnn/distributed/types.hpp"
@@ -75,6 +76,21 @@ void append_fabric_mux_connection_rt_args(
     bool is_termination_master,
     tt::tt_metal::CoreCoord termination_master_virtual_core,
     tt::tt_metal::Program& program,
+    std::vector<uint32_t>& worker_rt_args);
+
+// ProgramDescriptor overload: pushes 5 SemaphoreDescriptors onto desc.semaphores
+// (one per worker) using sequential ids, and embeds those ids into worker_rt_args
+// at the same slots as the Program& overload.
+void append_fabric_mux_connection_rt_args(
+    bool mux_connection_valid,
+    const tt::tt_metal::CoreCoord& mux_virtual_core,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    const tt::tt_metal::CoreCoord& worker_logical_core,
+    uint32_t worker_per_direction_id,
+    bool is_termination_master,
+    tt::tt_metal::CoreCoord termination_master_virtual_core,
+    tt::tt_metal::ProgramDescriptor& desc,
     std::vector<uint32_t>& worker_rt_args);
 
 }  // namespace ttnn::experimental::ccl
