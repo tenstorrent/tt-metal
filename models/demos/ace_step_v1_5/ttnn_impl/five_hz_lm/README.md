@@ -35,8 +35,9 @@ The handler dispatches into:
 - `ttnn_impl/lm_constrained_logits_ttnn.py` — top-k, top-p, sampling, repetition penalty,
   EOS / pad checks, sequence concat (TTNN per-token logits assist).
 - `ttnn_impl/lm_logits_ttnn.py` — CFG `uncond + s·(cond - uncond)` linear combine.
-- `ttnn_impl/five_hz_causal_lm_experimental.py` → `ttnn_impl/ace_step_ds_r1_qwen.py::QwenModel`
-  for `--experimental-5hz-ttnn-causal-lm` (full TTNN matmuls + host RoPE / KV / softmax).
+- `ttnn_impl/five_hz_causal_lm_experimental.py` → `ttnn_impl/qwen_tt_transformers_lm.py::QwenModelTtTransformers`
+  for `--experimental-5hz-ttnn-causal-lm` (stock `tt_transformers` Transformer: fused QKV/SDPA,
+  paged KV cache, HF RoPE, `DistributedNorm(RMSNorm)`, `MLP`, `LMHead`).
 
 `TTNN_LM_CONVERSION_SUMMARY.txt` is a longer-form note tracking what stays on host vs what was
 moved to TTNN during bring-up.

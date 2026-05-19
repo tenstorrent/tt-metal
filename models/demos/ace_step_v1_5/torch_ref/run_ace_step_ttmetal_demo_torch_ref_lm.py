@@ -330,7 +330,8 @@ def main() -> None:
         "--experimental-5hz-ttnn-causal-lm",
         action="store_true",
         help=(
-            "Load the 5 Hz LM via demo TTNN causal stack (models/demos/ace_step_v1_5/ttnn_impl/ace_step_ds_r1_qwen.py). "
+            "Load the 5 Hz LM via the stock tt_transformers TTNN causal stack "
+            "(models/demos/ace_step_v1_5/ttnn_impl/qwen_tt_transformers_lm.py). "
             "Opens TTNN before LM init; requires guidance_scale==1 for DiT KV batch=1. "
             "LM classifier-free guidance uses lm_cfg_scale (default 2); this path forces lm_cfg_scale=1."
         ),
