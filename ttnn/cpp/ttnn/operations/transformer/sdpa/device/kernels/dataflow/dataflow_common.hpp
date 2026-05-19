@@ -1222,8 +1222,12 @@ struct PaddedAddrGenerator {
 // Dispatches to the generator's issue_reads. PaddedAddrGenerator's overload hoists id_of
 // (4 muls + 3 adds) and the row-only validity check out of the inner col loop;
 // CatAddrGenerator keeps per-tile dispatch (off the ring SDPA hot path).
+//
+// noinline: reader (NCRISC) has 3+ call sites and the issue_reads body is large enough that
+// inlining at every site overflows the TENSIX kernel-config ringbuffer. Function-call
+// overhead is negligible next to the per-block NoC reads.
 template <typename CatAddrGeneratorType>
-void fetch_block(
+__attribute__((noinline)) void fetch_block(
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& src_slice,
     const uint32_t end_seq_tile,
