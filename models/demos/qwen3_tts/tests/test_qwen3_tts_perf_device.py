@@ -38,10 +38,11 @@ ARCH_GOLDENS = {
         "prefill_ms_upper": 30.0,
     },
     "WORMHOLE_B0": {
-        # N150 measured 117.02 ms/frame and 27.44 ms prefill (single chip,
-        # 8x8 worker grid). Initial baseline from a single run — using a wider
-        # 10% margin until run-to-run variance is characterized; tighten later.
-        "steady_ms_per_frame": 117.0,
+        # N150 (TP=1): ~117 ms/frame, ~27 ms prefill (single chip, 8x8 grid).
+        # N300 (TP=2): ~111 ms/frame, ~24 ms prefill (DRAM-sharded MLP, 2-chip).
+        # Single golden covers both configs: TP=2 with DRAM-sharded MLP lands in
+        # [105, 129] alongside N150. Tighten when more measurements are available.
+        "steady_ms_per_frame": 113.0,
         "steady_margin": 0.10,
         "prefill_ms_upper": 35.0,
     },

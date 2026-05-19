@@ -124,3 +124,65 @@ def build_dram_sharded_weight(
         memory_config=memcfg,
     )
     return tt, k, n_padded
+
+
+def build_dram_sharded_weight_tp(
+    weight_kn_full: "torch.Tensor",
+    device,
+    tp_size: int,
+    split_dim: int,
+    dtype=ttnn.bfloat16,
+) -> Tuple["ttnn.Tensor", int, int]:
+    """Build DRAM-sharded per-chip weight for TP>1, distributed across a mesh.
+
+    split_dim=1 (column-parallel): weight [K, N_full], each chip gets [K, N_full/tp].
+    split_dim=0 (row-parallel):    weight [K_full, N], each chip gets [K_full/tp, N].
+
+    Returns (ttnn_tensor, k_per_chip, n_padded_per_chip).
+    """
+    import torch as _torch
+
+    dram_cores = device.dram_grid_size().x
+
+    if split_dim == 1:
+        K = int(weight_kn_full.shape[0])
+        N_per_chip = int(weight_kn_full.shape[1]) // tp_size
+        n_padded = pad_n_for_dram_align(N_per_chip, dram_cores)
+        if n_padded == N_per_chip:
+            host = weight_kn_full.contiguous()  # [K, tp*N_per_chip] — already aligned
+        else:
+            chunks = list(_torch.chunk(weight_kn_full, tp_size, dim=1))
+            pads = [_torch.zeros(K, n_padded, dtype=chunks[0].dtype) for _ in chunks]
+            for i, c in enumerate(chunks):
+                pads[i][:, : c.shape[1]] = c
+            host = _torch.cat(pads, dim=1)  # [K, tp*n_padded]
+        memcfg = dram_sharded_weight_memcfg(K, n_padded, device)
+        tt = ttnn.from_torch(
+            host,
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=memcfg,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1),
+        )
+        return tt, K, n_padded
+
+    else:  # split_dim == 0 (row-parallel)
+        K_per_chip = int(weight_kn_full.shape[0]) // tp_size
+        N = int(weight_kn_full.shape[1])
+        n_padded = pad_n_for_dram_align(N, dram_cores)
+        if n_padded == N:
+            host = weight_kn_full.contiguous()  # [K_full, N]
+        else:
+            host = _torch.zeros(int(weight_kn_full.shape[0]), n_padded, dtype=weight_kn_full.dtype)
+            host[:, :N] = weight_kn_full
+        memcfg = dram_sharded_weight_memcfg(K_per_chip, n_padded, device)
+        tt = ttnn.from_torch(
+            host,
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=memcfg,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+        )
+        return tt, K_per_chip, n_padded

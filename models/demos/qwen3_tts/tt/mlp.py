@@ -15,6 +15,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     build_dram_sharded_weight,
+    build_dram_sharded_weight_tp,
     dram_sharded_program_config,
     find_grid_k_n,
     width_sharded_l1_memcfg,
@@ -160,19 +161,49 @@ class MLP(LightweightModule):
             fp32_dest_acc_en=_fp32,
         )
 
-        # DRAM-sharded decode path (TP=1 only — skipped for TP>1).
+        # DRAM-sharded decode path — now supported for TP>1 too.
+        # TP=2 benefit: each chip has smaller dimensions (local_intermediate = intermediate // tp)
+        # so tensors fit L1 more easily and DRAM bandwidth splits across chips.
+        _cg = device.compute_with_storage_grid_size()
         if self.tp_size > 1:
-            self.gate_proj_dram_sharded = None
-            self.up_proj_dram_sharded = None
-            self.down_proj_dram_sharded = None
-            self._decode_gate_up_n_padded = self.local_intermediate
-            self._decode_down_n_padded = hidden_size
-            self._decode_gate_up_dramshard_progcfg = None
-            self._decode_down_dramshard_progcfg = None
-            self._decode_gate_up_in0_memcfg = None
-            self._decode_gate_up_out_memcfg = None
-            self._decode_down_in0_memcfg = None
-            self._decode_down_out_memcfg = None
+            # Column-parallel gate/up: full weight [hidden, intermediate] sharded along N (dim=1).
+            gate_w_kn_full = state_dict[f"{layer_prefix}.mlp.gate_proj.weight"].transpose(-2, -1).contiguous()
+            up_w_kn_full = state_dict[f"{layer_prefix}.mlp.up_proj.weight"].transpose(-2, -1).contiguous()
+            self.gate_proj_dram_sharded, k_gu, n_padded_gu = build_dram_sharded_weight_tp(
+                gate_w_kn_full, device, self.tp_size, split_dim=1, dtype=weight_dtype
+            )
+            self.up_proj_dram_sharded, _, _ = build_dram_sharded_weight_tp(
+                up_w_kn_full, device, self.tp_size, split_dim=1, dtype=weight_dtype
+            )
+            self._decode_gate_up_n_padded = n_padded_gu
+            k_tiles_gu, n_tiles_gu = k_gu // 32, n_padded_gu // 32
+            rows_gu, cols_gu = find_grid_k_n(k_tiles_gu, n_tiles_gu, max_rows=_cg.y, max_cols=_cg.x)
+            self._decode_gate_up_dramshard_progcfg = dram_sharded_program_config(
+                m=32, k=k_gu, n=n_padded_gu, num_cores=rows_gu * cols_gu
+            )
+            self._decode_gate_up_in0_memcfg = width_sharded_l1_memcfg(
+                m_tiles=1, k_tiles=k_tiles_gu, num_cores_x=cols_gu, num_cores_y=rows_gu
+            )
+            self._decode_gate_up_out_memcfg = width_sharded_l1_memcfg(
+                m_tiles=1, k_tiles=n_tiles_gu, num_cores_x=cols_gu, num_cores_y=rows_gu
+            )
+            # Row-parallel down: full weight [intermediate, hidden] sharded along K (dim=0).
+            down_w_kn_full = state_dict[f"{layer_prefix}.mlp.down_proj.weight"].transpose(-2, -1).contiguous()
+            self.down_proj_dram_sharded, k_d, n_padded_d = build_dram_sharded_weight_tp(
+                down_w_kn_full, device, self.tp_size, split_dim=0, dtype=weight_dtype
+            )
+            self._decode_down_n_padded = n_padded_d
+            k_tiles_d, n_tiles_d = k_d // 32, n_padded_d // 32
+            rows_d, cols_d = find_grid_k_n(k_tiles_d, n_tiles_d, max_rows=_cg.y, max_cols=_cg.x)
+            self._decode_down_dramshard_progcfg = dram_sharded_program_config(
+                m=32, k=k_d, n=n_padded_d, num_cores=rows_d * cols_d
+            )
+            self._decode_down_in0_memcfg = width_sharded_l1_memcfg(
+                m_tiles=1, k_tiles=k_tiles_d, num_cores_x=cols_d, num_cores_y=rows_d
+            )
+            self._decode_down_out_memcfg = width_sharded_l1_memcfg(
+                m_tiles=1, k_tiles=n_tiles_d, num_cores_x=cols_d, num_cores_y=rows_d
+            )
             return
 
         gate_w_kn = state_dict[f"{layer_prefix}.mlp.gate_proj.weight"].transpose(-2, -1).contiguous()
@@ -237,8 +268,10 @@ class MLP(LightweightModule):
         if seq_len >= 1024:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
 
-        # Decode path: DRAM-sharded chain (TP=1 only; TP>1 falls through to prefill path below).
-        if self.tp_size == 1 and is_decode and seq_len < 1024:
+        # Decode path: DRAM-sharded chain. Now enabled for all tp_size values.
+        # TP>1: each chip runs its per-chip (smaller) DRAM-sharded matmuls, then all_reduce
+        # on the down output combines partial sums.
+        if is_decode and seq_len < 1024:
             # Width-shard x once, reuse for both gate and up. Skip the I→S if the
             # caller already gave us a tensor in the matching shard config (e.g. piped
             # from a sharded layernorm in decoder_layer).
@@ -291,8 +324,15 @@ class MLP(LightweightModule):
                 memory_config=self._decode_down_out_memcfg,
             )
             ttnn.deallocate(hidden_for_down)
-            # Decoder layer's residual add wants sharded input — return sharded.
+            # Decoder layer's residual add wants sharded input — return sharded (TP=1).
+            # TP>1: all_reduce after unpadding — go via L1_INTERLEAVED for CCL compat.
             if self._decode_down_n_padded == self.hidden_size:
+                if self.tp_size > 1:
+                    from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce
+
+                    output_il = ttnn.to_memory_config(out_sharded, ttnn.L1_MEMORY_CONFIG)
+                    ttnn.deallocate(out_sharded)
+                    return tp_all_reduce(output_il, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
                 return out_sharded
             # Weight N was padded; slice back via L1_INTERLEAVED.
             output_padded = ttnn.to_memory_config(out_sharded, ttnn.L1_MEMORY_CONFIG)
@@ -304,6 +344,10 @@ class MLP(LightweightModule):
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             ttnn.deallocate(output_padded)
+            if self.tp_size > 1:
+                from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce
+
+                output = tp_all_reduce(output, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
             return output
 
         # Prefill path: standard 1D-mcast matmul.
