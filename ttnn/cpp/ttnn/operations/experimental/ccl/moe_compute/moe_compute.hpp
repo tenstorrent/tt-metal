@@ -24,6 +24,7 @@ std::vector<ttnn::Tensor> moe_compute(
     const ttnn::Tensor& matmul_w2_tensor,
     uint32_t layer_id,
     uint32_t output_height_shard_dim,
+    uint32_t intermediate_size,
     bool has_bias,
     uint32_t cluster_axis,
     const std::optional<tt::tt_fabric::Topology>& topology,
