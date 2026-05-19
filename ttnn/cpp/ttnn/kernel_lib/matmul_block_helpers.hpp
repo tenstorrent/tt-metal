@@ -89,23 +89,76 @@ namespace matmul_config {
  * matching mm_block_init. Mirrors the InitUninitMode convention used by untilize_helpers
  * for back-to-back invocations.
  *
- * Full          (default) Helper calls mm_block_init at the start — the full re-init that
- *               re-runs unpack/math/pack hw_configure plus pack_init/pack_dest_init in
- *               addition to the matmul-specific init. Required when an intervening op
- *               (tilize, untilize, reduce, eltwise) reconfigured PACK/UNPACK/MATH for its
- *               own needs and the matmul-mode hw config must be re-established. After
- *               compute_kernel_hw_startup alone (no intervening ops), Short is sufficient
- *               and faster, but Full is the safe conservative default.
- * Short         Helper calls mm_block_init_short — only the matmul-specific
- *               llk_unpack_AB_matmul_init + llk_math_matmul_init, no hw_configure. Use
- *               (a) right after compute_kernel_hw_startup with the same in0/in1/out CBs,
- *               or (b) for chains of matmul_block calls where the previous helper already
- *               configured matmul state and only the per-call shape/cb might have changed.
- * None          Helper skips init entirely. Use only when the caller has just executed a
- *               compatible matmul_block in the same configuration and no other op has
- *               touched matmul state.
+ * Modes are listed from "safest, plug-and-forget" down to "fully manual." Pick the lightest
+ * one your context can guarantee — but do NOT use Full as a casual mid-kernel safety net:
+ * it issues the same _hw_configure MMIO writes as compute_kernel_hw_startup, and those
+ * writes have caused race conditions in practice when execution units were not provably
+ * idle.
+ *
+ * ReconfigAndShort (DEFAULT — safe plug-and-forget)
+ *                  Helper issues `reconfig_data_format(in1_cb_id, in0_cb_id)` +
+ *                  `pack_reconfig_data_format(interm_cb_id)` + `mm_block_init_short` at
+ *                  entry, plus ActivationInitHelper::init() when an activation is bound.
+ *                  No _hw_configure MMIO writes — only the format registers and matmul-
+ *                  mode MOP programming. Restores correct SRCA/SRCB/PACK data formats
+ *                  even when a prior op (tilize, untilize, reduce, eltwise, transpose)
+ *                  left them set to its own CBs. This is the proven SDPA pattern that
+ *                  sidesteps the race condition seen on Full.
+ *
+ *                  PRECONDITION: caller must have run `compute_kernel_hw_startup` once at
+ *                  kernel boot. The helper does NOT redo hw_configure / pack_init /
+ *                  pack_dest_init / math_pack_sync_init; those are boot-only.
+ *
+ * Short            Helper calls `mm_block_init_short` only — no data-format reconfig.
+ *                  Use when the caller can prove the SRCA/SRCB/PACK formats are already
+ *                  set to in0/in1/out (typically: a chain of `matmul_block` calls with
+ *                  the same CBs back-to-back, where the previous call's exit state still
+ *                  matches the current call's expected entry state). Avoids the
+ *                  format-register MMIO when it is provably redundant.
+ *
+ * Full             Helper calls `mm_block_init` — runs the SAME _hw_configure MMIO writes
+ *                  that `compute_kernel_hw_startup` runs, plus `pack_init` /
+ *                  `pack_dest_init` / `math_pack_sync_init`, plus the matmul-mode init.
+ *                  Use ONLY when the kernel did not call `compute_kernel_hw_startup` at
+ *                  boot and the helper must establish all hw state from scratch (e.g. a
+ *                  minimal single-op kernel that doesn't bother with a separate startup
+ *                  call). Mid-kernel use after other ops is NOT a free safety upgrade —
+ *                  the _hw_configure writes have raced with in-flight TRISC state in
+ *                  practice; prefer ReconfigAndShort for that case.
+ *
+ * None             Helper skips init entirely. Use when the caller manages matmul state
+ *                  externally and is invoking the helper repeatedly with a known-good
+ *                  state (FUSE_BIAS kernels, gathered all-gather kernels, SDPA wrappers).
+ *                  Caller is responsible for ActivationInitHelper::init() at boot if an
+ *                  activation is bound.
  */
-enum class InitMode : uint8_t { Full, Short, None };
+enum class InitMode : uint8_t { ReconfigAndShort, Short, Full, None };
+
+/**
+ * Callback-state-restore policy for PreKBlockFn / PostKBlockFn.
+ *
+ * After every non-default callback invocation, the helper can either auto-restore matmul
+ * state (so callers can freely tilize / transpose / reduce / reconfigure inside their
+ * functor and not worry about leaving the helper in a broken state for the next K-block),
+ * or skip the restore (for functors that either don't disturb matmul state at all, or
+ * self-restore — e.g. issue `mm_block_init_short_with_dt` themselves).
+ *
+ * Auto  (DEFAULT — safe plug-and-forget) After each pre_k_block / post_k_block call, if
+ *       the functor type is NOT the no-op default (NoPreKBlock / NoPostKBlock), helper
+ *       re-issues the same reconfig + short pair that ReconfigAndShort init uses
+ *       (reconfig_data_format(in1, in0) + pack_reconfig_data_format(interm) +
+ *       mm_block_init_short). When the functor type IS the default no-op, the restore is
+ *       statically elided — no cost. So Auto is free for callers without callbacks, and
+ *       safety-by-default for callers with callbacks that disturb state.
+ *
+ * None  Skip restoration. Use for two cases: (1) functors that DON'T disturb matmul
+ *       state — e.g. ring-aware callbacks that only compute / advance a CB rd_ptr and
+ *       don't touch UNPACK/MATH/PACK MOPs or formats; (2) functors that self-restore via
+ *       `mm_block_init_short_with_dt` / `mm_block_init_short_with_both_dt` (conv2d's
+ *       ConvTilizePreKBlock, the FUSE_BIAS in0_transpose lambda). Saves one reconfig +
+ *       short per K-block versus Auto.
+ */
+enum class CallbackRestore : uint8_t { Auto, None };
 
 }  // namespace matmul_config
 
@@ -272,10 +325,31 @@ struct NoIn1BaseOffset {
  *                                           corruption on the K-accumulator.
  *                                           Use HiFi2 or HiFi3 instead.
  *
- * Init handling: by default the helper calls mm_block_init() itself (init_mode=Full).
- * The caller's only init responsibility is one compute_kernel_hw_startup() at boot.
- * For back-to-back chains, init_mode=Short uses mm_block_init_short (cheap restore);
- * init_mode=None skips init entirely. See matmul_config::InitMode.
+ * Init handling: by default the helper is plug-and-forget — it issues
+ * reconfig_data_format + pack_reconfig_data_format + mm_block_init_short at entry
+ * (init_mode=ReconfigAndShort). This is the proven SDPA pattern: it restores correct
+ * SRCA/SRCB/PACK formats even when a prior op left them set to its own CBs, and skips
+ * the heavyweight _hw_configure MMIO writes that mm_block_init issues. The caller's
+ * only init responsibility is one compute_kernel_hw_startup() at boot.
+ *
+ * Perf knobs (see matmul_config::InitMode for full details):
+ *   init_mode=Short — skip the data-format reconfig (use when SRCA/SRCB/PACK formats
+ *                     are provably already set to in0/in1/out, e.g. back-to-back matmul
+ *                     calls on the same CBs).
+ *   init_mode=Full  — run the heavy mm_block_init (_hw_configure MMIO writes). Use ONLY
+ *                     when the kernel did NOT call compute_kernel_hw_startup at boot.
+ *                     Mid-kernel use after other ops has caused race conditions in
+ *                     practice — use ReconfigAndShort for that case.
+ *   init_mode=None  — skip init entirely; caller manages state externally.
+ *
+ * Callback restore: by default (callback_restore=Auto) the helper re-issues the same
+ * reconfig + short pair after every non-default PreKBlockFn / PostKBlockFn invocation,
+ * so callers can freely tilize / transpose / reduce / reconfigure inside their functor.
+ * Statically elided when the functor type is the no-op default (NoPreKBlock /
+ * NoPostKBlock). Set the corresponding `*_restore` template arg to CallbackRestore::None
+ * when the functor self-restores (e.g. ConvTilizePreKBlock issuing
+ * mm_block_init_short_with_both_dt) or doesn't disturb matmul state (e.g. ring-aware
+ * callbacks that only update a CB rd_ptr). See matmul_config::CallbackRestore.
  *
  * SKIP_COMPUTE: When this macro is defined by the calling TU (microbenchmark path),
  * the inner ckernel::matmul_block() call is omitted. All other pipeline work (waits,
@@ -293,8 +367,16 @@ struct NoIn1BaseOffset {
  *                     See LastBlockTarget docstring for the three valid pack/RELU
  *                     combinations.
  *   layout            OutputLayout: SubblockMajor (default) or RowMajor (see above).
- *   init_mode         matmul_config::InitMode: Full (default), Short, or None.
- *                     Controls whether the helper itself calls mm_block_init / _short.
+ *   init_mode         matmul_config::InitMode: ReconfigAndShort (default — safe plug-and-
+ *                     forget), Short (back-to-back same-CB matmul chains), Full (only
+ *                     when no compute_kernel_hw_startup ran), or None (caller manages
+ *                     init externally). See the InitMode docstring for details.
+ *   pre_k_block_restore  matmul_config::CallbackRestore: Auto (default) re-issues
+ *                     reconfig + short after each PreKBlockFn call. None when the
+ *                     functor self-restores or doesn't disturb state. Statically elided
+ *                     when PreKBlockFn == NoPreKBlock.
+ *   post_k_block_restore Same as pre_k_block_restore, applied after PostKBlockFn.
+ *                     Statically elided when PostKBlockFn == NoPostKBlock.
  *   in0_policy        InputPolicy: WaitAndPopPerKBlock (default) or
  *                     WaitAndRetainOnLastBlock (caller reuses in0 across the next
  *                     iteration — SDPA reuses Q across K chunks). NoWaitNoPop is
@@ -408,9 +490,9 @@ struct NoIn1BaseOffset {
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
  *   in0_buf, in1_buf   Input buffers for matrices A and B (CircularBuffer or
- *                      DataflowBuffer — pass an experimental::CircularBuffer
+ *                      DataflowBuffer — pass an CircularBuffer
  *                      object on legacy CB-backed kernels, or an
- *                      experimental::DataflowBuffer object on Metal-2.0 / DFB
+ *                      DataflowBuffer object on Metal-2.0 / DFB
  *                      kernels).
  *   out_buf            Output buffer for the final result.
  *   interm_buf         Intermediate buffer for K-blocking spill/reload or
@@ -440,18 +522,21 @@ struct NoIn1BaseOffset {
  *
  * @example
  *   // Single-core matmul with defaults — no transpose, no L1 accumulation,
- *   // no activation fusion, SubblockMajor pack, init_mode=Full. Valid for any
- *   // (M, K, N) whose K dimension fits in a single K-block (= all Kt tiles
- *   // fit alongside one M and N sub-block in L1). Caller constructs
- *   // experimental::CircularBuffer (or DataflowBuffer) once per CB and
- *   // passes the object; the helper wraps wait_front / pop_front /
- *   // reserve_back / push_back on it and issues mm_block_init internally.
+ *   // no activation fusion, SubblockMajor pack, init_mode=ReconfigAndShort.
+ *   // Valid for any (M, K, N) whose K dimension fits in a single K-block (=
+ *   // all Kt tiles fit alongside one M and N sub-block in L1). Caller
+ *   // constructs CircularBuffer (or DataflowBuffer) once per CB
+ *   // and passes the object; the helper wraps wait_front / pop_front /
+ *   // reserve_back / push_back on it and issues reconfig + mm_block_init_short
+ *   // internally. Caller's only init responsibility is one
+ *   // compute_kernel_hw_startup at boot.
  *   // Passes out_buf itself as the interm placeholder — see the interm_buf
  *   // runtime-param doc above for why that is the canonical pattern when
  *   // num_k_blocks == 1.
- *   experimental::CircularBuffer in0_buf(cb_in0);
- *   experimental::CircularBuffer in1_buf(cb_in1);
- *   experimental::CircularBuffer out_buf(cb_out);
+ *   compute_kernel_hw_startup(cb_in0, cb_in1, cb_out);
+ *   CircularBuffer in0_buf(cb_in0);
+ *   CircularBuffer in1_buf(cb_in1);
+ *   CircularBuffer out_buf(cb_out);
  *   matmul_block<>(
  *       in0_buf, in1_buf, out_buf,
  *       out_buf,  // interm placeholder — unread when num_k_blocks == 1
@@ -495,7 +580,7 @@ struct NoIn1BaseOffset {
  *   // DRAM-sharded passes explicit in1_per_core_w (shard width) and
  *   // out_row_width (padded pack width).
  *   matmul_block<in1_transpose_tile, l1_acc, LastBlockTarget::Interm,
- *                output_layout, matmul_config::InitMode::Full,
+ *                output_layout, matmul_config::InitMode::ReconfigAndShort,
  *                InputPolicy::WaitAndPopPerKBlock, InputPolicy::WaitAndPopPerKBlock,
  *                PostFn, PreFn>(
  *       in0_buf, in1_buf, out_buf, mm_partials_buf,
@@ -577,7 +662,7 @@ template <
     bool packer_l1_acc = false,
     LastBlockTarget last_block_target = LastBlockTarget::Out,
     OutputLayout layout = OutputLayout::SubblockMajor,
-    matmul_config::InitMode init_mode = matmul_config::InitMode::Full,
+    matmul_config::InitMode init_mode = matmul_config::InitMode::ReconfigAndShort,
     InputPolicy in0_policy = InputPolicy::WaitAndPopPerKBlock,
     InputPolicy in1_policy = InputPolicy::WaitAndPopPerKBlock,
     typename PostComputeFn = NoPostCompute,
@@ -590,7 +675,9 @@ template <
     typename In1BaseOffsetFn = NoIn1BaseOffset,
     bool caller_owns_pack_target = false,
     typename Activation = NoneActivation,
-    typename Buf = ::experimental::CircularBuffer>
+    matmul_config::CallbackRestore pre_k_block_restore = matmul_config::CallbackRestore::Auto,
+    matmul_config::CallbackRestore post_k_block_restore = matmul_config::CallbackRestore::Auto,
+    typename Buf = ::CircularBuffer>
 ALWI void matmul_block(
     Buf& in0_buf,
     Buf& in1_buf,
@@ -635,7 +722,7 @@ ALWI void matmul_block(
  *   // After:  out_accum_buf has Wt tiles (one reduced row).
  *   matmul_reduce_inplace(out_accum_buf, col_identity_buf, Wt, STATS_GRANULARITY);
  */
-template <typename Buf = ::experimental::CircularBuffer>
+template <typename Buf = ::CircularBuffer>
 ALWI void matmul_reduce_inplace(
     Buf& in_out_buf,
     Buf& in1_buf,

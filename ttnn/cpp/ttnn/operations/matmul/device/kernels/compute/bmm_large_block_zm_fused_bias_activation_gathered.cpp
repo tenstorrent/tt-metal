@@ -201,7 +201,7 @@ struct GatheredPreKBlock {
         // self-prime its local in0 CB for the first ring step. The pre-migration
         // kernel did this inline at the top of the K-loop body when `block == 0`.
         if (block == 0) {
-            experimental::CircularBuffer in0_cb(In0CbId);
+            CircularBuffer in0_cb(In0CbId);
             in0_cb.reserve_back(In0BlockNumTiles);
             in0_cb.push_back(In0BlockNumTiles);
         }
@@ -386,9 +386,9 @@ void kernel_main() {
     constexpr bool needs_in1_base_offset = !enable_global_cb && !in1_is_dram;
 
     // Buf wrappers used by the kernel's outer fabric-sync primitives.
-    experimental::CircularBuffer in1_cb(in1_cb_id);
-    experimental::CircularBuffer sync_buf(sync_cb);
-    experimental::CircularBuffer sync2_buf(sync_cb2);
+    CircularBuffer in1_cb(in1_cb_id);
+    CircularBuffer sync_buf(sync_cb);
+    CircularBuffer sync2_buf(sync_cb2);
 
     // Runtime args
     uint32_t rt_args_idx = 0;
@@ -405,8 +405,8 @@ void kernel_main() {
     // Buf wrappers for the helper's wait_front / pop_front / LLK call hygiene.
     // The In0SourceFn alternates between in0_cb_id (block 0) and in2_cb_id
     // (blocks 1..N); the helper uses these via active_in0_buf inside the K-loop.
-    experimental::CircularBuffer in0_buf(in0_cb_id);
-    experimental::CircularBuffer in1_buf(in1_cb_id);
+    CircularBuffer in0_buf(in0_cb_id);
+    CircularBuffer in1_buf(in1_cb_id);
 
     // Boot-time matmul + activation init. The helper invocation below uses
     // InitMode::None so it doesn't re-init each call; the per-batch
@@ -453,8 +453,8 @@ void kernel_main() {
 
         const uint32_t mm_out_cb_id = mm_out_cb_ids[b];
         const uint32_t mm_partials_cb_id = mm_partials_cb_ids[b];
-        experimental::CircularBuffer mm_out_buf(mm_out_cb_id);
-        experimental::CircularBuffer mm_partials_buf(mm_partials_cb_id);
+        CircularBuffer mm_out_buf(mm_out_cb_id);
+        CircularBuffer mm_partials_buf(mm_partials_cb_id);
 
 #ifdef PACK_RELU
         // for each batch we start with relu disabled so that intermediate results are not relu'd
@@ -507,7 +507,12 @@ void kernel_main() {
             In0SrcFn,     // In0SourceFn
             In1OffsetFn,  // In1BaseOffsetFn
             /*caller_owns_pack_target=*/false,
-            ActivationOp<activation_type, activation_param0, activation_param1, activation_param2>>(
+            ActivationOp<activation_type, activation_param0, activation_param1, activation_param2>,
+            // GatheredPreKBlock / GatheredPostKBlock only touch packer relu config and
+            // UNPACK rd_ptr — they do NOT disturb matmul MOPs or data formats, so the
+            // helper's Auto reconfig + short would be pure overhead.
+            matmul_config::CallbackRestore::None,   // pre_k_block_restore
+            matmul_config::CallbackRestore::None>(  // post_k_block_restore
             in0_buf,
             in1_buf,
             mm_out_buf,

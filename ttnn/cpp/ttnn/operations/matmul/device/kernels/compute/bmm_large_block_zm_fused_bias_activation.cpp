@@ -158,19 +158,19 @@ void kernel_main() {
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
     constexpr uint32_t in0_transpose_cb_id = get_named_compile_time_arg_val("cb_in0");
 
-    experimental::CircularBuffer in0_buf(in0_cb_id);
-    experimental::CircularBuffer in1_buf(in1_cb_id);
-    experimental::CircularBuffer out_buf(out_cb_id);
-    experimental::CircularBuffer mm_partials_buf(mm_partials_cb_id);
-    experimental::CircularBuffer untilize_mode_out_buf(untilize_mode_out_cb_id);
-    experimental::CircularBuffer in0_transpose_buf(in0_transpose_cb_id);
+    CircularBuffer in0_buf(in0_cb_id);
+    CircularBuffer in1_buf(in1_cb_id);
+    CircularBuffer out_buf(out_cb_id);
+    CircularBuffer mm_partials_buf(mm_partials_cb_id);
+    CircularBuffer untilize_mode_out_buf(untilize_mode_out_cb_id);
+    CircularBuffer in0_transpose_buf(in0_transpose_cb_id);
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = get_named_compile_time_arg_val("cb_bias");
     constexpr uint32_t bias_ntiles = get_named_compile_time_arg_val("bias_ntiles");
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
     constexpr bool row_broadcast_bias = (bool)get_compile_time_arg_val(18);
-    experimental::CircularBuffer bias_buf(bias_cb_id);
+    CircularBuffer bias_buf(bias_cb_id);
 #endif
 
     // ── SFPU activation params (compile-time, named CT args) ────────────
@@ -337,7 +337,11 @@ void kernel_main() {
                         NoIn0Source,                       // In0SourceFn
                         NoIn1BaseOffset,                   // In1BaseOffsetFn
                         false,                             // caller_owns_pack_target
-                        ActivationOp<matmul_activation, activation_param0, activation_param1, activation_param2>>(
+                        ActivationOp<matmul_activation, activation_param0, activation_param1, activation_param2>,
+                        // xpose self-restores matmul mode via mm_block_init_short_with_dt;
+                        // skip the helper's Auto reconfig + short to avoid redundant work.
+                        matmul_config::CallbackRestore::None,   // pre_k_block_restore
+                        matmul_config::CallbackRestore::None>(  // post_k_block_restore (NoPostKBlock anyway)
                         in0_buf,
                         in1_buf,
                         phase1_out_buf,
