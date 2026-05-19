@@ -314,7 +314,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         )
 
     @classmethod
-    def _forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+    def _forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         return cls._forward_impl(x, cfg, "decode")
 
     @classmethod
@@ -348,7 +348,9 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         return output
 
     @classmethod
-    def _forward_impl(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, mode: str) -> ttnn.Tensor:
+    def _forward_impl(
+        cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, mode: str
+    ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         # Validate input dimensions
         hidden_size = cfg["hidden_size"]
         mesh_device = cfg.get("mesh_device")
@@ -376,7 +378,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
 
         # MOE
         if mode == "decode":
-            post_combine_output_tensor = cls._fwd_decode_moe(
+            return cls._fwd_decode_moe(
                 x,
                 topk_experts_indices,
                 topk_experts_weights,
@@ -384,9 +386,9 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
                 batch_size_per_device,
                 batch_size,
                 seq_len,
-            )
+            )  # also returns topk_experts_indices_rm, topk_experts_weights_rm
         else:
-            post_combine_output_tensor = cls._fwd_prefill_moe(
+            return cls._fwd_prefill_moe(
                 x,
                 topk_experts_indices,
                 topk_experts_weights,
@@ -395,9 +397,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
                 batch_size,
                 seq_len,
             )
-
-        # Note: sum_experts and reduce_scatter is handled by the caller (decoder block or test)
-        return post_combine_output_tensor
 
     @classmethod
     def _fwd_moe_gate(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -442,7 +441,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             topk_experts_weights_rm,
         )
 
-        return post_combine_output_tensor
+        return post_combine_output_tensor, topk_experts_indices_rm, topk_experts_weights_rm
 
     @classmethod
     def _fwd_prefill_moe(
@@ -533,7 +532,17 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
                 [cfg["num_experts_per_tok"], 1, batch_chunk, cfg["hidden_size"]],
             )
 
-            output_chunks.append(post_combine_output_tensor)
+            summed_experts = ttnn.experimental.deepseek_moe_fast_reduce_nc_fused(
+                post_combine_output_tensor,
+                topk_experts_indices_rm_chunk,
+                cfg["expert_mapping_tensor"],
+                reduce_dim=0,
+                cluster_axis=0,
+                split_size=1,
+                scores_tensor=topk_experts_weights_rm_chunk,
+            )
+
+            output_chunks.append(summed_experts[0])
 
         ttnn.deallocate(topk_experts_indices_rm)
         ttnn.deallocate(topk_experts_weights_rm)
@@ -564,21 +573,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             topk_experts_weights_rm,
             memory_config=cfg["quad_ring_all_to_all_dispatch_metadata_sharded_memory_config"],
         )
-
-        # NOTE: L1 sharded topk_experts_weights need to be deallocated before moe_compute,
-        # configure weights for post combine scaling prior to that deallocation, and store in DRAM
-        topk_experts_weights_for_scaling = ttnn.permute(
-            topk_experts_weights_rm, (3, 1, 0, 2), memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-        topk_experts_weights_for_scaling = ttnn.to_layout(
-            topk_experts_weights_for_scaling, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-
-        ttnn.deallocate(topk_experts_indices_rm)
-        ttnn.deallocate(topk_experts_weights_rm)
-
-        # NOTE: needs to run prior to all_to_all_dispatch_metadata
-        preallocated_combine_output = ttnn.moreh_full(**cfg["quad_ring_moreh_full"])
 
         # TODO: #41009
         (
@@ -614,7 +608,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             cfg["expert_mapping_tensor"],
             cfg["moe_experts"]["quad_ring_w0_w1_experts"]["input_tensor_b"],
             cfg["moe_experts"]["quad_ring_w2_experts"]["input_tensor_b"],
-            optional_output_tensor=preallocated_combine_output,
             layer_id=0,  # each layer is composed of distinct tensors, as apposed to all layers fused together
             **cfg["quad_ring_moe_compute"],
         )
@@ -640,10 +633,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
                 pad_value=0.0,
                 memory_config=cfg["quad_ring_deepseek_moe_post_combine_tilize_config"]["output_memory_config"],
             )
-
-        post_combine_output_tensor = ttnn.mul(
-            combine_output, topk_experts_weights_for_scaling, **cfg["mul_experts_output_with_weights"]
-        )
 
         ttnn.deallocate(combine_output)
         return post_combine_output_tensor
@@ -682,7 +671,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             x = cls._fwd_all_gather(x, cfg)
 
         # Run the forward pass
-        output = cls._forward_decode(x, cfg)
+        output, indices_rm, weights_rm = cls._forward_decode(x, cfg)
 
         # Handle sum_experts and reduce_scatter if tensor parallel is enabled
         if handle_tensor_parallel:
@@ -703,7 +692,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
                 output = ttnn.sum(output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
                 output = cls._fwd_reduce_scatter(output, cfg, ccl)
 
-        return output
+        return output, indices_rm, weights_rm
 
     @classmethod
     def forward_prefill(
