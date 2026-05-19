@@ -404,6 +404,17 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Sharded::create_descriptor
 
     uint32_t remote_q_read = 0;
     uint32_t remote_kv_read = 0;
+    // TODO: convert to emplace_runtime_args(Buffer*) for fast cache-hit patching once the
+    // reader/writer kernel ABI is updated to accept (base_buffer, offset) pairs and compute
+    // q_start_addr = get_arg_val(base_pos) + get_arg_val(offset_pos) in-kernel.  Today both
+    // q_base_addr and q_start_addr are baked as raw uint32_t (q_start_addr = q_base_addr +
+    // remote_q_head_start_idx * head_size), and similarly for K/V whose base addresses are
+    // themselves computed offsets into the input (or kv) buffer rather than standalone
+    // buffers, which makes a clean BufferBinding registration non-trivial.  No BufferBinding
+    // is registered for this op, so the contract-1 adapter falls back to the slow-path
+    // rebuild via apply_descriptor_runtime_args on cache hits (see
+    // mesh_device_operation_adapter.hpp apply_descriptor — Contract-1 branch with empty
+    // resolved_bindings.rt_args), which correctly refreshes the addresses, just not as fast.
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
         bool read_kv_heads = i < k_cores.num_cores();

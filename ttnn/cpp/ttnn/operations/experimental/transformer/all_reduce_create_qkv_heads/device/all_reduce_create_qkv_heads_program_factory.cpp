@@ -103,7 +103,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     TT_FATAL(
         mesh_dispatch_coordinate.has_value(),
         "AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor requires a mesh dispatch coordinate");
-    const ttnn::MeshCoordinate mesh_coord = mesh_dispatch_coordinate.value();
+    const ttnn::MeshCoordinate& mesh_coord = mesh_dispatch_coordinate.value();
 
     log_debug(tt::LogOp, "AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor called");
 
@@ -852,12 +852,12 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     // writer_args[4] = i.  We do this by walking input cores and updating the runtime args
     // already attached to that core in the reader/writer reduction kernel descriptors.
     auto patch_arg_at_index_4 = [](KernelDescriptor& kd, const CoreCoord& core, uint32_t value) {
-        for (auto& [c, args] : kd.runtime_args) {
-            if (c == core) {
-                args[4] = value;
-                return;
-            }
-        }
+        auto it = std::find_if(
+            kd.runtime_args.begin(), kd.runtime_args.end(), [&core](const auto& entry) { return entry.first == core; });
+        TT_FATAL(it != kd.runtime_args.end(), "patch_arg_at_index_4: core {} not found", core);
+        auto& args = it->second;
+        TT_FATAL(args.size() > 4, "patch_arg_at_index_4: args.size() = {} < 5", args.size());
+        args[4] = value;
     };
     for (uint32_t i = 0; i < in_num_cores; i++) {
         const auto& core = in_cores_vec[i];
