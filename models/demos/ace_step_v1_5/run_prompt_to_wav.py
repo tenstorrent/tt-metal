@@ -5,12 +5,11 @@ Latent diffusion runs on TTNN; VAE decode uses the TTNN Oobleck port from ``ign/
 (HF-style ``ckpt_dir/vae/`` with ``config.json``). Long latent sequences are decoded in overlapping
 time tiles so ``ttnn.conv1d`` stays within L1 limits. Pass ``--torch-vae`` for PyTorch ``AutoencoderOobleck``.
 
-<<<<<<< HEAD
 By default this matches ``torch_ref/run_prompt_to_wav.py --use-official-acestep`` for **Phase 1**
 (5 Hz LM / CoT, audio codes, handler ``preprocess_batch``, TTNN Qwen3 caption encoder via
 ``infer_text_embeddings``, and TTNN ``prepare_condition`` replacement with **precomputed LM hints**),
 emitting the same style of **loguru** / model logs as the official CLI. DiT sampling runs on TTNN.
-=======
+
 - **5 Hz LM (`acestep-5Hz-lm-1.7B` by default)**: experimental TTNN causal LM
   (``ttnn_impl/five_hz_causal_lm_experimental.py`` →
   ``ttnn_impl/qwen_tt_transformers_lm.QwenModelTtTransformers``).
@@ -19,7 +18,6 @@ emitting the same style of **loguru** / model logs as the official CLI. DiT samp
   ``models/tt_transformers`` graph via
   :func:`models.tt_transformers.tt.common.create_tt_model`. Disable with
   ``--no-experimental-5hz-ttnn-causal-lm`` (falls back to host PyTorch HF Qwen 1.7B forward).
->>>>>>> a1bf7c7f42e (chnaged Transformer Attention Block to use tt_transformers)
 
 Use ``--fast-preprocess`` to skip the LM and use the lightweight path (tokenizer + TTNN ``Qwen3Model``
 embedding encoder + ``precomputed_lm_hints_25Hz=None``), avoiding a PyTorch Qwen forward while still
@@ -553,6 +551,8 @@ def main() -> None:
 
     if fast_preprocess:
         # --- Lightweight: TTNN Qwen3 embedding encoder + HF prepare_condition (no 5 Hz LM / no precomputed hints) ---
+        from transformers import AutoTokenizer
+
         tok = AutoTokenizer.from_pretrained(str(text_model_dir))
         dit_instruction = "Fill the audio semantic mask based on the given conditions:"
         metas = {"caption": args.prompt, "duration": float(args.duration_sec), "language": "en"}
@@ -669,6 +669,8 @@ def main() -> None:
                 text_hidden_states = text_hidden_states.squeeze(1).contiguous()
             text_hidden_states = text_hidden_states.to(torch_dev)
 
+            from transformers import AutoModel
+
             ace = AutoModel.from_pretrained(str(model_dir), trust_remote_code=True).eval().to(torch_dev)
             B = 1
             lyric_dim = int(text_hidden_states.shape[-1])
@@ -699,7 +701,13 @@ def main() -> None:
             enc_mask = enc_mask.float().cpu()
             ctx_lat = ctx_lat.float().cpu()
 
-            null_emb = _null_condition_emb(ace).float().cpu()
+            nc = getattr(ace, "null_condition_emb", None)
+            if nc is None:
+                inner = getattr(ace, "model", None)
+                nc = getattr(inner, "null_condition_emb", None) if inner is not None else None
+            if nc is None:
+                raise RuntimeError("Could not find null_condition_emb on ACE-Step model.")
+            null_emb = nc.float().cpu()
     else:
         # --- Official: 5 Hz LM + AceStepHandler batching + prepare_condition (precomputed LM hints) ---
         ref_root = _ensure_acestep_on_path()

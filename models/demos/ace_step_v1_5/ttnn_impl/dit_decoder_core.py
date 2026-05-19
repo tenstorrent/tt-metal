@@ -726,6 +726,9 @@ class TtAceStepAttentionSDPA:
 
         # Split fused KV: kv is [B,1,S,2*(n_kv*Dh)]
         kv_dim = int(self.n_kv * Dh)
+        assert (
+            int(kv.shape[3]) == 2 * kv_dim
+        ), f"KV shape mismatch: last dim {int(kv.shape[3])} != 2*kv_dim={2 * kv_dim}"
         k = ttnn.slice(kv, (0, 0, 0, 0), (B, 1, int(kv.shape[2]), kv_dim))
         v = ttnn.slice(kv, (0, 0, 0, kv_dim), (B, 1, int(kv.shape[2]), 2 * kv_dim))
         if hasattr(ttnn, "deallocate"):
@@ -917,6 +920,7 @@ class TtAceStepAttentionSDPA:
         # conditioned encoder tensor; applying prepare_condition masks here caused large PCC gaps vs ref.
         # We only mask keys **past** the encoder logical length (tile pad / storage tail, e.g. 258→288).
         sdpa_attn_mask = attn_mask if is_self_attn else None
+        sdpa_mask_owned = False  # True when sdpa_attn_mask is a fresh ttnn.add allocation we must free
         if not is_self_attn:
             s_enc_log = _ace_step_logical_seq_len_dim2(encoder_hidden_states)
             S_q0 = int(q.shape[2])
@@ -928,7 +932,11 @@ class TtAceStepAttentionSDPA:
                 W = tgt_k
             if W > s_enc_log:
                 pad_m = self._get_cross_tail_mask(batch=B, s_q0=S_q0, w=W, s_enc_log=s_enc_log)
-                sdpa_attn_mask = pad_m if sdpa_attn_mask is None else ttnn.add(sdpa_attn_mask, pad_m)
+                if sdpa_attn_mask is None:
+                    sdpa_attn_mask = pad_m  # cached tensor, not owned
+                else:
+                    sdpa_attn_mask = ttnn.add(sdpa_attn_mask, pad_m)
+                    sdpa_mask_owned = True
 
         # Self-attn: pad Q/K/V together to a tile multiple for SDPA, and mask padded key columns so
         # softmax matches the unpadded reference (PyTorch/HF uses exact S).
@@ -947,9 +955,10 @@ class TtAceStepAttentionSDPA:
                 # Match Q/K/V dtype so SDPA uniform-dataformat paths accept the mask tensor.
                 pad_m = self._get_self_pad_mask(batch=B, target_sdpa=target_sdpa, s_rope=S_rope)
                 if sdpa_attn_mask is None:
-                    sdpa_attn_mask = pad_m
+                    sdpa_attn_mask = pad_m  # cached tensor, not owned
                 else:
                     sdpa_attn_mask = ttnn.add(sdpa_attn_mask, pad_m)
+                    sdpa_mask_owned = True
 
         # Cross-attn: decomposed matmul + softmax + matmul (no fused SDPA), with FP32 scores/softmax/@V
         # when `ttnn.float32` exists — mirrors torch_ref `_sdpa`. Tail-pad mask keeps tile-multiple K/V
@@ -972,6 +981,8 @@ class TtAceStepAttentionSDPA:
             if sliding_window_size is not None:
                 sdpa_kwargs["sliding_window_size"] = int(sliding_window_size)
             ctx = self._sdpa(q, k, v, **sdpa_kwargs)
+        if sdpa_mask_owned and sdpa_attn_mask is not None:
+            ttnn.deallocate(sdpa_attn_mask)
         if _trace:
             _ace_step_log_ttnn_tensor(f"{debug_prefix}ctx_after_sdpa_BHSD", ctx, ttnn=ttnn)
         # [B,H,S_ctx,Dh] -> [B,1,S_ctx,H*Dh]. SDPA can return tile-aligned logical

@@ -50,6 +50,9 @@ class TtOobleckDecoder:
         self.audio_channels = int(audio_channels)
         self.upsampling_ratios = list(upsampling_ratios)
         cm = [1] + list(channel_multiples)
+        assert (
+            len(cm) == len(upsampling_ratios) + 1
+        ), f"channel_multiples length {len(channel_multiples)} must equal len(upsampling_ratios)={len(upsampling_ratios)}"
         self.activation_dtype = activation_dtype or getattr(ttnn, "bfloat16", None)
         self.weights_dtype = weights_dtype or getattr(ttnn, "bfloat16", None)
         if self.activation_dtype is None or self.weights_dtype is None:

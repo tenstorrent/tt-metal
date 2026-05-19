@@ -211,8 +211,11 @@ class TtAceStepAudioCodeDetokenizer:
             memory_config=self.mem,
             mesh_mapper=mapper,
         )
-        for layer in self.layers:
-            h = layer(h, self.cos_tt, self.sin_tt, bias_tt)
+        try:
+            for layer in self.layers:
+                h = layer(h, self.cos_tt, self.sin_tt, bias_tt)
+        finally:
+            ttnn.deallocate(bias_tt)
         h = ttnn.rms_norm(ttnn.to_layout(h, ttnn.TILE_LAYOUT), weight=self.norm_w, epsilon=1e-6, memory_config=self.mem)
         h = ttnn.linear(h, self.proj_out_w, bias=self.proj_out_b, transpose_b=True)
         h = ttnn.reshape(h, (1, len(code_ids) * 5, 64))
