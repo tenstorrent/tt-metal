@@ -5,12 +5,18 @@
 // DRISC prefetcher kernel for the DRAM-core mode of ttnn.dram_prefetcher.
 //
 // Collapses the BRISC reader + NCRISC writer of the worker-core path into a
-// single DRISC kernel:
-//   1. DMA-read a block from the local GDDR bank into DRISC L1 (ping-pong
-//      between two scratch buffers, stage = block_idx & 1).
-//   2. Reserve and push that block to all receivers via the experimental
-//      remote_cb_* API (NoC writes from DRISC L1 to each receiver's slice).
-//   3. End-of-stream: drain DMA, remote_cb_sender_barrier, restore NoC mode.
+// single DRISC kernel.
+//
+// Pipeline (ping-pong DMA + NoC push, 2 buffers, 2 DMA streams):
+//   - Prologue: issue DMA(stream=0) into buffer A for block 0.
+//   - Steady state (for each block b):
+//       1. Wait for stream (b&1)'s DMA to drain (i.e. buffer for this block).
+//       2. If there's another block, issue DMA on stream ((b+1)&1) into the
+//          OTHER buffer for block b+1 -- overlaps with the NoC push below.
+//       3. NoC-push the current buffer to all receivers, flush.
+//   - The flush at end of iter b ensures the buffer used here is free of
+//     outstanding writes before iter b+2 starts a new DMA into it.
+//   - End-of-stream: remote_cb_sender_barrier, restore NoC mode.
 
 #include <stdint.h>
 
@@ -106,21 +112,32 @@ void kernel_main() {
             // remote_cb_* page accounting lines up.
             experimental::resize_remote_sender_cb_interface<false>(remote_cb_id, push_page_size, noc_index);
 
+            // Prologue: issue first DMA (stage 0 -> buffer A) before entering the loop so the
+            // steady-state body can overlap DMA(b+1) with NoC-push(b).
             uint32_t src_off = bank_local_base;
+            experimental::dma_async_read(/*stream=*/0, src_off, stage_buf_addr_a, dma_block_size);
+            src_off += dma_block_size;
             for (uint32_t b = 0; b < num_blocks; ++b) {
                 const uint32_t stage = b & 1u;
                 const uint32_t stage_buf = (stage == 0) ? stage_buf_addr_a : stage_buf_addr_b;
 
-                // Issue DMA for this stage: read one in0_block_w-tall, full-N-wide chunk of the
-                // local bank's weight stripe.
-                experimental::dma_async_read(stage, src_off, stage_buf, dma_block_size);
-                src_off += dma_block_size;
-
-                // Wait for THIS stage's DMA to drain before NOC-writing from it.
+                // Wait for THIS block's DMA to drain. Stream `stage` only ever has one
+                // outstanding read at a time (we issue on alternating streams), so n=0 is right.
                 experimental::dma_async_read_wait_n(stage, 0);
 
+                // Issue NEXT block's DMA early, into the other buffer / other stream. The DMA
+                // engine processes this in the background while the NoC push below runs.
+                if (b + 1 < num_blocks) {
+                    const uint32_t next_stage = 1u - stage;
+                    const uint32_t next_buf = (next_stage == 0) ? stage_buf_addr_a : stage_buf_addr_b;
+                    experimental::dma_async_read(next_stage, src_off, next_buf, dma_block_size);
+                    src_off += dma_block_size;
+                }
+
                 // Reserve, write to all receivers, flush. Each receiver gets `push_page_size`
-                // bytes (its N-tile slice of this K-block) from the stage buffer.
+                // bytes (its N-tile slice of this K-block) from the stage buffer. The flush
+                // here also guarantees the writes from this buffer complete before the matching
+                // buffer can be re-DMA'd two iterations later.
                 experimental::remote_cb_reserve_back(remote_cb_id, 1);
                 experimental::remote_cb_push_back_and_write_pages<false>(
                     remote_cb_id,
