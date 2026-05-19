@@ -138,7 +138,11 @@ class TtQwen3EncoderMLP:
         up = ttnn.linear(x, self.w_up, bias=None, transpose_b=True, **lin_kw)
         gate = ttnn.silu(gate) if hasattr(ttnn, "silu") else ttnn.gelu(gate)
         h = ttnn.multiply(gate, up)
-        return ttnn.linear(h, self.w_down, bias=None, transpose_b=True, **lin_kw)
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
+        out = ttnn.linear(h, self.w_down, bias=None, transpose_b=True, **lin_kw)
+        ttnn.deallocate(h)
+        return out
 
 
 class _TtQwen3EncoderLayer:
@@ -249,9 +253,11 @@ class _TtQwen3EncoderLayer:
             k = ttnn.pad(k, padding=pad4, value=0.0)
             v = ttnn.pad(v, padding=pad4, value=0.0)
 
+        mask_repeated = None
         mask_tt = attn_bias_b11ss
         if mask_tt is not None:
             mask_tt = ttnn.repeat(mask_tt, (1, H, 1, 1))
+            mask_repeated = mask_tt
 
         sdpa_kw = dict(attn_mask=mask_tt, is_causal=False, scale=self.scale)
         if self._sdpa_compute_kernel_config is not None:
@@ -259,6 +265,11 @@ class _TtQwen3EncoderLayer:
         if self._sdpa_program_config is not None:
             sdpa_kw["program_config"] = self._sdpa_program_config
         ctx = self._sdpa(q, k, v, **sdpa_kw)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+        if mask_repeated is not None:
+            ttnn.deallocate(mask_repeated)
 
         if sdpa_d > self.dh:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (b, H, s, self.dh))
