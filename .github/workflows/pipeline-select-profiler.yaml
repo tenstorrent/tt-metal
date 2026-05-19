@@ -84,7 +84,7 @@ jobs:
           # (t3k + bh + n300 + n150 on, galaxy off) so a push runs the same
           # set a developer gets clicking "Run workflow" without changes.
           if [[ "${{ github.event_name }}" == "push" ]]; then
-            galaxy=false
+            galaxy=true
             t3k=true
             bh=true
             n300=true
