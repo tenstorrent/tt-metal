@@ -29,7 +29,7 @@ COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
 )
 
 
-def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int, grid_y: int = 9):
+def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
     """Program configs for the gate / up / down matmuls on Blackhole."""
     grid = ttnn.CoreCoord(11, 9)
     gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -411,17 +411,9 @@ class TtSharedExpert(LightweightModule):
         ), f"Matmul shape mismatch: gate_proj[-1]={self.gate_proj.shape[-1]} != down_proj[-2]={self.down_proj.shape[-2]}"
 
         # ===== Inlined shared expert FFN — height-sharded sub-device matmuls =====
-        # When running on a sub-device the available rows are fewer than the full
-        # grid (dispatch takes 1 row).  BH full grid = 12x10, shared sub-device
-        # = 11x9; WH full grid = 8x8, shared sub-device = 8x7.
+        # Available compute grid: BH = 11x9, WH = 8x7.
         TILE = 32
-        BH_GRID_X, BH_GRID_Y = 11, 9
-        WH_GRID_X, WH_GRID_Y = 8, 7
-        if is_blackhole():
-            grid_x, grid_y = BH_GRID_X, BH_GRID_Y
-        else:
-            grid_x, grid_y = WH_GRID_X, WH_GRID_Y
-        max_cores = grid_x * grid_y
+        max_cores = 11 * 9 if is_blackhole() else 8 * 7
 
         # Pick the largest divisor of M_tiles that fits in the sub-device — gives
         # max parallelism with no padding waste.
@@ -435,7 +427,7 @@ class TtSharedExpert(LightweightModule):
         down_n_tiles = self.down_proj.padded_shape[-1] // TILE
         if is_blackhole():
             gate_program_config, up_program_config, down_program_config = get_bh_program_configs(
-                per_core_M, gate_n_tiles, down_n_tiles, grid_y=grid_y
+                per_core_M, gate_n_tiles, down_n_tiles
             )
         else:
             gate_program_config, up_program_config, down_program_config = get_wh_program_configs(
