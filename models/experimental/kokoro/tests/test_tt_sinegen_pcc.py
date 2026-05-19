@@ -75,9 +75,6 @@ def _run_pcc(
     # F0 in Hz; allow some unvoiced positions (clamped to 0) to exercise the ``uv`` branch.
     f0 = torch.relu(torch.randn(B, time_len, 1) * f0_scale)
 
-    with torch.no_grad(), _deterministic_torch_random():
-        sine_ref, uv_ref, noise_ref = ref(f0)
-
     params = preprocess_tt_sinegen(
         device=device,
         sampling_rate=sampling_rate,
@@ -88,7 +85,10 @@ def _run_pcc(
         voiced_threshold=0.0,
         time_len=time_len,
     )
-    tt_mod = TTSineGen(device, params)
+    with _deterministic_torch_random():
+        with torch.no_grad():
+            sine_ref, uv_ref, noise_ref = ref(f0)
+        tt_mod = TTSineGen(device, params)
 
     f0_tt = ttnn.from_torch(f0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     sine_tt, uv_tt, noise_tt = tt_mod(f0_tt)
@@ -137,7 +137,7 @@ def test_tt_sinegen_larger_upsample(device):
 
 
 def test_tt_sinegen_noise_path(device):
-    """Supply a deterministic ``noise_raw`` tensor and verify the noise-mix formula matches."""
+    """Verify the noise-mix formula using noise generated at init time."""
     torch.manual_seed(3)
     sampling_rate = 24000.0
     upsample_scale = 4
@@ -157,19 +157,7 @@ def test_tt_sinegen_noise_path(device):
     ).eval()
     f0 = torch.relu(torch.randn(B, time_len, 1) * 200.0)
 
-    # Use the same noise tensor in both reference and TT.
     fixed_noise = torch.randn(B, time_len, harmonic_num + 1)
-
-    real_randn_like = torch.randn_like
-    torch.randn_like = lambda t, **kwargs: fixed_noise.to(t.dtype).expand_as(t).clone()
-    real_rand = torch.rand
-    torch.rand = lambda *size, **kwargs: torch.zeros(*size, **kwargs)
-    try:
-        with torch.no_grad():
-            sine_ref, _, noise_ref = ref(f0)
-    finally:
-        torch.randn_like = real_randn_like
-        torch.rand = real_rand
 
     params = preprocess_tt_sinegen(
         device=device,
@@ -181,10 +169,18 @@ def test_tt_sinegen_noise_path(device):
         voiced_threshold=0.0,
         time_len=time_len,
     )
-    tt_mod = TTSineGen(device, params)
+    # Patch randn_like for both TT init (self._noise_raw = fixed_noise) and reference forward.
+    real_randn_like = torch.randn_like
+    torch.randn_like = lambda t, **kwargs: fixed_noise.to(t.dtype).expand_as(t).clone()
+    try:
+        tt_mod = TTSineGen(device, params)
+        with torch.no_grad():
+            sine_ref, _, noise_ref = ref(f0)
+    finally:
+        torch.randn_like = real_randn_like
+
     f0_tt = ttnn.from_torch(f0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    noise_tt_in = ttnn.from_torch(fixed_noise, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    sine_tt, uv_tt, noise_tt_out = tt_mod(f0_tt, noise_raw=noise_tt_in)
+    sine_tt, uv_tt, noise_tt_out = tt_mod(f0_tt)
 
     sine_h = ttnn.to_torch(sine_tt).float()
     noise_h = ttnn.to_torch(noise_tt_out).float()
@@ -195,7 +191,6 @@ def test_tt_sinegen_noise_path(device):
     ttnn.deallocate(sine_tt)
     ttnn.deallocate(uv_tt)
     ttnn.deallocate(noise_tt_out)
-    ttnn.deallocate(noise_tt_in)
     ttnn.deallocate(f0_tt)
 
     _, pcc_noise = comp_pcc(noise_ref, noise_h, pcc=0.0)
@@ -227,9 +222,6 @@ def _build_sinegen_kokoro_scale(device, *, use_torch_phase_fallback: bool = Fals
     ).eval()
     f0 = torch.relu(torch.randn(B, time_len, 1) * 200.0)
 
-    with torch.no_grad(), _deterministic_torch_random():
-        sine_ref, uv_ref, _ = ref(f0)
-
     params = preprocess_tt_sinegen(
         device=device,
         sampling_rate=sampling_rate,
@@ -240,7 +232,10 @@ def _build_sinegen_kokoro_scale(device, *, use_torch_phase_fallback: bool = Fals
         voiced_threshold=0.0,
         time_len=time_len,
     )
-    tt_mod = TTSineGen(device, params, use_torch_phase_fallback=use_torch_phase_fallback)
+    with _deterministic_torch_random():
+        with torch.no_grad():
+            sine_ref, uv_ref, _ = ref(f0)
+        tt_mod = TTSineGen(device, params, use_torch_phase_fallback=use_torch_phase_fallback)
     f0_tt = ttnn.from_torch(f0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     sine_tt, uv_tt, noise_tt = tt_mod(f0_tt)
 
