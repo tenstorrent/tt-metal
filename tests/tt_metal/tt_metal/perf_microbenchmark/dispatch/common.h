@@ -1227,6 +1227,7 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
     uint32_t dispatch_cb_base,
     uint32_t completion_queue_base = 0,
     uint32_t completion_queue_size = 0) {
+    const bool is_cq_dram_backed = (device_->arch() == tt::ARCH::QUASAR);
     const uint32_t num_compute_cores =
         device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
     const auto my_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_disp);
@@ -1236,7 +1237,8 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
     const auto downstream_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, CoreCoord{0, 0});
 
     return {
-        {"IS_CQ_DRAM_BACKED", "0"},
+        {"IS_CQ_DRAM_BACKED", is_cq_dram_backed ? "1" : "0"},
+        {"DRAM_BACKED_CQ_BANK_ID", "0"},
         {"DISPATCH_CB_BASE", std::to_string(dispatch_cb_base)},
         {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
         {"DISPATCH_CB_PAGES", std::to_string(dispatch_buffer_pages)},
@@ -1346,6 +1348,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
     uint32_t entry_size,
     const CoreCoord& phys_prefetch,
     const CoreCoord& phys_dispatch) {
+    const bool is_cq_dram_backed = (device->arch() == tt::ARCH::QUASAR);
     const auto my_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_prefetch);
     const auto downstream_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_dispatch);
     return {
@@ -1363,7 +1366,8 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"DOWNSTREAM_CB_PAGES", std::to_string(dispatch_cb_pages)},
         {"MY_DOWNSTREAM_CB_SEM_ID", std::to_string(dispatch_cb_sem_id)},
         {"DOWNSTREAM_CB_SEM_ID", std::to_string(dispatch_cb_sem_id)},
-        {"IS_CQ_DRAM_BACKED", "0"},
+        {"IS_CQ_DRAM_BACKED", is_cq_dram_backed ? "1" : "0"},
+        {"DRAM_BACKED_CQ_BANK_ID", "0"},
         {"PCIE_BASE", std::to_string(pcie_base)},
         {"PCIE_SIZE", std::to_string(pcie_size)},
         {"PREFETCH_Q_BASE", std::to_string(prefetch_q_base)},
