@@ -83,11 +83,11 @@ class TtConv1d:
             math_fidelity = ttnn.MathFidelity.HiFi2
 
         self._vae_conv_perf = True
-        # Dilated convs (dilation > 1) overflow the static CB region on Blackhole when input is in
-        # L1 with act_block_h_override=32 (L1 buffer @ 139072 vs CB end @ 139328, 256-byte clash).
-        # Non-dilated convs have a smaller effective kernel → smaller CB → fit in L1 interleaved,
-        # avoiding the I2S + extra-block-conv + tilize overhead of the DRAM auto-sharding path.
-        self._l1_mem = ace_step_linear_l1_memory_config(ttnn) if (self.dilation <= 1) else None
+        # Only kernel_size==1 convs (residual 1×1 projections) safely fit in L1 on Blackhole.
+        # Any kernel_size > 1 conv overflows the static CB region regardless of dilation:
+        # L1 buffer @ 139072 vs CB end @ 139328 (256-byte clash at act_block_h_override=32).
+        # Larger kernels need bigger CBs that push the activation buffer into the CB region.
+        self._l1_mem = ace_step_linear_l1_memory_config(ttnn) if (self.kernel_size == 1) else None
 
         w = _to_float32_numpy(weight_host)
         if w.ndim != 3 or w.shape[0] != self.out_channels or w.shape[1] != self.in_channels:
@@ -145,9 +145,12 @@ class TtConv1d:
         return ttnn.DRAM_MEMORY_CONFIG
 
     def _maybe_l1(self, x):
-        if self._l1_mem is None:
-            return x
-        return self.ttnn.to_memory_config(x, self._l1_mem)
+        # Always move to the target memory so L1 Snake outputs are explicitly placed in DRAM
+        # for k>1 convs. Leaving the tensor as-is is fragile: L1 allocator fragmentation can
+        # place a Snake output inside the static CB region of the conv program, causing a
+        # "L1 buffer clashes with CB" crash (e.g. L1 buffer @ 133120 vs CB end @ 139328).
+        target = self._l1_mem if self._l1_mem is not None else self.ttnn.DRAM_MEMORY_CONFIG
+        return self.ttnn.to_memory_config(x, target)
 
     def _ensure_packed(self, batch_size: int, input_length: int) -> None:
         ttnn = self.ttnn
@@ -333,9 +336,9 @@ class TtConvTranspose1d:
         return ttnn.DRAM_MEMORY_CONFIG
 
     def _maybe_l1(self, x):
-        if self._l1_mem is None:
-            return x
-        return self.ttnn.to_memory_config(x, self._l1_mem)
+        # Always move to the target memory — same rationale as TtConv1d._maybe_l1.
+        target = self._l1_mem if self._l1_mem is not None else self.ttnn.DRAM_MEMORY_CONFIG
+        return self.ttnn.to_memory_config(x, target)
 
     def __call__(self, x):
         """Run conv_transpose2d on a ``[B, T, C]`` row-major tensor.

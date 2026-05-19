@@ -93,6 +93,10 @@ class TtOobleckResidualUnit:
         # Skip-connection trim uses ``x[:, pad:pad+y_T, :]`` → ``ttnn.slice``. TILE slices require
         # 32-aligned starts/sizes on the last two dims; activations here are often TILE after convs.
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        # Keep the residual skip tensor in DRAM so it does not occupy L1 during conv1 (k=7).
+        # The k=7 conv program's static CB region extends to 139328; any live L1 buffer below
+        # that address causes a "CB clashes with L1 buffer" fatal error at program compile time.
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
         y = self.snake1(x)
         y = self.conv1(y)

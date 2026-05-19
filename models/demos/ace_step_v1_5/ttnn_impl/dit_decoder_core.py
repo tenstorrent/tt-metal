@@ -83,6 +83,7 @@ from .math_perf_env import (
     ace_step_eltwise_l1_memory_config,
     ace_step_ensure_l1_activation,
     ace_step_init_dit_linear_compute_kernel_config,
+    ace_step_nlp_concat_heads,
     ace_step_permute_kwargs,
     ace_step_reshape_kwargs,
     ace_step_sdpa_mask_memory_config,
@@ -993,8 +994,8 @@ class TtAceStepAttentionSDPA:
                 f"S_ctx={S_ctx} S_q_expected={S} slice_back={S_ctx != S}",
                 flush=True,
             )
-        ctx = ttnn.permute(ctx, (0, 2, 1, 3), **_pk)
-        ctx = ttnn.reshape(ctx, (B, 1, S_ctx, H * Dh), **_sr)
+        # [B,H,S_ctx,Dh] -> [B,1,S_ctx,H*Dh] via fused nlp_concat_heads (single kernel vs permute+reshape)
+        ctx = ace_step_nlp_concat_heads(ttnn, ctx)
         if S_ctx != S:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (B, 1, S, H * Dh))
         ctx = self._l1_activation(ctx)

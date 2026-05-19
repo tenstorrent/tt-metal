@@ -125,6 +125,28 @@ def ace_step_dit_linear_l1_memory_config(ttnn: Any):
     return ace_step_linear_l1_memory_config(ttnn)
 
 
+def ace_step_nlp_concat_heads(ttnn: Any, ctx: Any, *, l1_mc: Any | None = None) -> Any:
+    """Replace output permute+reshape with ``ttnn.experimental.nlp_concat_heads``.
+
+    Converts ``[B, H, S, Dh]`` → ``[B, 1, S, H*Dh]`` in a single device kernel,
+    eliminating one permute (~360 μs) and one non-view reshape (~405 μs) per attention block.
+
+    Falls back to the original permute+reshape path if the op is unavailable.
+    """
+    experimental = getattr(ttnn, "experimental", None)
+    nlp_concat = getattr(experimental, "nlp_concat_heads", None) if experimental is not None else None
+    mc = l1_mc if l1_mc is not None else ace_step_linear_l1_memory_config(ttnn)
+    if nlp_concat is not None:
+        kw = {"memory_config": mc} if mc is not None else {}
+        return nlp_concat(ctx, **kw)
+    # Fallback: original two-op path.
+    B, H, S, Dh = int(ctx.shape[0]), int(ctx.shape[1]), int(ctx.shape[2]), int(ctx.shape[3])
+    _kw = {"memory_config": mc} if mc is not None else {}
+    ctx = ttnn.permute(ctx, (0, 2, 1, 3), **_kw)
+    ctx = ttnn.reshape(ctx, (B, 1, S, H * Dh), **_kw)
+    return ctx
+
+
 def ace_step_eltwise_l1_memory_config(ttnn: Any):
     """L1 config for BinaryNg / ``add`` / ``multiply`` / ``softmax`` activations (Tracy ``in0`` bucket)."""
     return ace_step_linear_l1_memory_config(ttnn)

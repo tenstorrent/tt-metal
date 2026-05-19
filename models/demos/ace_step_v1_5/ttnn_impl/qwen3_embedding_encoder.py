@@ -25,6 +25,7 @@ from .math_perf_env import (
     ace_step_cond_mlp_gate_up_linear_program_config,
     ace_step_init_hifi2_linear_compute_kernel_config,
     ace_step_linear_l1_memory_config,
+    ace_step_nlp_concat_heads,
     ace_step_permute_kwargs,
     ace_step_reshape_kwargs,
 )
@@ -482,8 +483,8 @@ class _TtQwen3EncoderLayer:
         if sdpa_d > self.dh:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (b, H, s, self.dh))
 
-        ctx = ttnn.permute(ctx, (0, 2, 1, 3), **_pk)
-        ctx = ttnn.reshape(ctx, (b, 1, s, H * Dh), **_sr)
+        # [b,H,s,Dh] -> [b,1,s,H*Dh] via fused nlp_concat_heads (single kernel vs permute+reshape)
+        ctx = ace_step_nlp_concat_heads(ttnn, ctx)
         ctx = self._l1_activation(ctx)
         lin_o = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=q_dim_o, out_dim=hsz)
         attn_out = ttnn.linear(ctx, self.wo, bias=None, transpose_b=True, **lin_o)

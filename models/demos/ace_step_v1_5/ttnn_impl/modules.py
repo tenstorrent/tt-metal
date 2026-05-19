@@ -4,7 +4,7 @@ import math
 
 from ._ttnn import get_ttnn
 from .config import AceConfigTTNN
-from .math_perf_env import ace_step_permute_kwargs, ace_step_reshape_kwargs
+from .math_perf_env import ace_step_nlp_concat_heads, ace_step_permute_kwargs, ace_step_reshape_kwargs
 
 # TTNN SDPA requires TILE tensors whose logical head_dim equals the padded head_dim
 # (see sdpa_device_operation.cpp: logical_shape[3] == legacy_shape[3]). Sub-tile
@@ -251,9 +251,8 @@ class MultiHeadSelfAttentionTTNN:
         ttnn.deallocate(probs)
         ttnn.deallocate(v)
 
-        # [B,H,S,Dh] -> [B,S,H,Dh] -> [B,1,S,H*Dh]
-        ctx = ttnn.permute(ctx, (0, 2, 1, 3), **_pk)  # [B,H,S,Dh] -> [B,S,H,Dh]
-        ctx = ttnn.reshape(ctx, (B, 1, S, H * Dh), **_sr)
+        # [B,H,S,Dh] -> [B,1,S,H*Dh] via fused nlp_concat_heads (single kernel vs permute+reshape)
+        ctx = ace_step_nlp_concat_heads(ttnn, ctx)
         out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True)
         ttnn.deallocate(ctx)
         return out
@@ -349,8 +348,8 @@ class MultiHeadSelfAttentionSDPATTNN:
 
         if sdpa_d > Dh:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (B, H, S, Dh))
-        ctx = ttnn.permute(ctx, (0, 2, 1, 3), **_pk)
-        ctx = ttnn.reshape(ctx, (B, 1, S, H * Dh), **_sr)
+        # [B,H,S,Dh] -> [B,1,S,H*Dh] via fused nlp_concat_heads (single kernel vs permute+reshape)
+        ctx = ace_step_nlp_concat_heads(ttnn, ctx)
         out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True)
         ttnn.deallocate(ctx)
         return out
