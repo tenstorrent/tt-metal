@@ -111,9 +111,14 @@ def test_exp2_atol(input_shapes, low, high, device):
 
 
 # Targeted edge-case coverage for the optimised exp2 (see #44507).
-# The optimised implementation handles overflow / underflow / NaN explicitly,
+# The optimised implementation handles overflow / underflow / ±inf explicitly,
 # so we verify each special case produces the IEEE-correct value rather than
 # relying on randomly sampled inputs to hit these boundaries.
+#
+# NaN is intentionally excluded: ttnn.bfloat16 host-side packing collapses NaN
+# to +inf before the tensor reaches the SFPU (same root cause as the xfail in
+# tests/.../test_fmod.py: "NaN is packed as inf for ttnn.bfloat16"), so a
+# device-side NaN-propagation test is not expressible at this dtype.
 def test_exp2_special_values(device):
     # Tile must be 32x32; pack edge-case scalars then pad the rest of the tile
     # with a value (0.0) whose result is known and stable.
@@ -127,7 +132,6 @@ def test_exp2_special_values(device):
         -126.0,  # near-min normal output
         float("inf"),  # exp2(+inf) = +inf
         float("-inf"),  # exp2(-inf) = 0.0
-        float("nan"),  # exp2(NaN)  = NaN
         128.0,  # exact overflow boundary
         -127.0,  # exact underflow boundary
     ]
@@ -152,7 +156,7 @@ def test_exp2_special_values(device):
     golden_flat = golden.reshape(-1)
 
     # Walk each special input twice:
-    #   1. Bit-exact checks for NaN / ±inf (ULP is undefined here).
+    #   1. Bit-exact checks for ±inf (ULP is undefined here).
     #   2. Collect finite (input, golden, result) triples and check them with
     #      assert_with_ulp at the end — a principled bound regardless of
     #      magnitude (handles exp2(127) ≈ 1.7e38 the same as exp2(-10)).
@@ -161,9 +165,7 @@ def test_exp2_special_values(device):
         g = golden_flat[i].item()
         r = result[i].item()
 
-        if np.isnan(g):
-            assert np.isnan(r), f"exp2({x}): expected NaN, got {r}"
-        elif np.isinf(g):
+        if np.isinf(g):
             assert np.isinf(r) and (np.sign(r) == np.sign(g)), f"exp2({x}): expected {g}, got {r}"
         else:
             finite_indices.append(i)
