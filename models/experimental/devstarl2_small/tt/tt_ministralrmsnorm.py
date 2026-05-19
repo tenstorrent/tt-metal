@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-# Tenstorrent RMSNorm for Hugging Face Ministral3 text (``Ministral3RMSNorm``). Delegates to :class:`models.common.rmsnorm.RMSNorm` (``ttnn.rms_norm`` / distributed variants). Meta checkpoints use ``attention_norm`` / ``ffn_norm`` per layer after ``map_hf_to_meta_keys`` (HF ``input_layernorm`` / ``post_attention_layernorm``). Forward uses only ``ttnn`` ops; host tensors appear only when staging weights in ``__init__``.
+# Ministral3 RMSNorm wrapper (attention_norm / ffn_norm meta keys).
 
 from __future__ import annotations
 

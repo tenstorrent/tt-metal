@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# PCC test: Hugging Face PixtralRMSNorm vs TtPixtralRMSNorm using real gamma weights from mistralai/Devstral-Small-2-24B-Instruct-2512 (vision tower layer 0 ``attention_norm``). Weights are loaded via safetensors partial read so the full checkpoint is not loaded into RAM.
+# PCC: HF PixtralRMSNorm vs TtPixtralRMSNorm (layer 0, safetensors partial load).
 
 import os
 
@@ -10,9 +10,7 @@ import torch
 from loguru import logger
 from transformers.models.llama.modeling_llama import LlamaRMSNorm
 
-# HF ``PixtralRMSNorm`` is the same implementation as ``LlamaRMSNorm`` (see modeling_pixtral).
-# Some transformers builds ship a corrupted pixtral module (norm class accidentally named ``m``),
-# so we use ``LlamaRMSNorm`` here as the reference for PCC.
+# Use LlamaRMSNorm as HF ref (PixtralRMSNorm alias; some transformers builds break pixtral norm).
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc

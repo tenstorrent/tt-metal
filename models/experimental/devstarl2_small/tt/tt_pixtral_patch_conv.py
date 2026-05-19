@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# HF-equivalent patch embedding: ``nn.Conv2d`` (square stride=kernel) using ``ttnn.conv2d``.
+# Pixtral patch embedding via ttnn.conv2d.
 
 from __future__ import annotations
 

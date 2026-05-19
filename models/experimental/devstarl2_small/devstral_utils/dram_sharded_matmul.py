@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-# DRAM-sharded matmul helpers (decode-style projections). Mirrors the pattern used in ``models/tt_transformers/tt/model_config.py``: * weights: width-sharded across the device's DRAM banks (see ``device.dram_grid_size()``). * activation: width-sharded in L1 across the compute grid along K. * program: ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``. **Mesh devices:** ``ttnn.from_torch(..., memory_config=WIDTH_SHARDED DRAM, mesh_mapper=...)`` requires the ``ShardSpec`` to describe **per...
+# DRAM-sharded decode matmul helpers (WIDTH_SHARDED weights + L1 activations).
 
 from __future__ import annotations
 
@@ -25,9 +25,7 @@ def _gather_in0_dram_mm_program_config(
     fused_activation: Optional[Any],
     compute_kernel_config: Any,
 ) -> Any:
-    """``gather_in0`` matmul program config for WIDTH_SHARDED L1 activations + DRAM weights on BH.
-
-    Subblocks follow ``ModelArgs.matmul_1d_config`` divisors (not a naive countdown)."""
+    """gather_in0 matmul config for WIDTH_SHARDED L1 activations + DRAM weights."""
     num_cores = grid.x * grid.y
     if m_seq % TILE != 0:
         raise ValueError(f"gather_in0 linear expects M divisible by {TILE}, got m_seq={m_seq}")
@@ -82,9 +80,7 @@ def width_sharded_l1_linear_reuse_multicast(
     compute_kernel_config: Any,
     fused_activation: Optional[Any] = None,
 ) -> ttnn.Tensor:
-    """Width-shard K in L1, dram WIDTH_SHARDED weights, ``gather_in0`` reuse-multicast linear.
-
-    Requires tile-aligned ``k_dim``, ``n_dim``, ``m_seq`` matching ``dram_shard_core_grid_for_k_and_n``."""
+    """Width-sharded L1 linear with gather_in0 (tile-aligned k, n, m)."""
     if k_dim % TILE != 0 or n_dim % TILE != 0:
         raise ValueError(
             f"width_sharded_l1_linear_reuse_multicast requires tile-aligned k_dim, n_dim; got k={k_dim} n={n_dim}"
@@ -231,9 +227,7 @@ def build_dram_sharded_weight(
     dtype=ttnn.bfloat16,
     mesh_mapper=None,
 ) -> Tuple[ttnn.Tensor, int, int]:
-    """DRAM width-sharded weight from ``weight_torch_2d`` ``[K,N]`` (single-device / replicated mesh).
-
-    Returns ``(tensor, k, n_padded)``; use :func:`dram_sharded_weight_memcfg` with matching dims for sharded mesh."""
+    """Build DRAM width-sharded weight [K,N]; returns (tensor, k, n_padded)."""
     assert weight_torch_2d.dim() == 2
     k, n_unpadded = weight_torch_2d.shape
     dram_cores = device.dram_grid_size().x

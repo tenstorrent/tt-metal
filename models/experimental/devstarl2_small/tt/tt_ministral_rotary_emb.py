@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-# Tenstorrent rotary tables aligned with Hugging Face ``Ministral3RotaryEmbedding``. Host-side frequencies use **NumPy only** (no PyTorch in this module): ``inv_freq`` and ``attention_scaling`` match ``transformers`` defaults / YaRN logic, then tables are uploaded with ``ttnn.from_torch`` (which accepts NumPy arrays). Device behavior inherits :class:`HfRotarySetup`.
+# HF-aligned Ministral3 RoPE tables (NumPy build + HfRotarySetupOld device caches).
 
 from __future__ import annotations
 
@@ -13,16 +13,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.prefetcher import Prefetcher
 
-# The TT-Transformers rebase replaced ``HfRotarySetup`` with a new variant that
-# is wired to the new ``ttnn.experimental.rotary_embedding_hf`` kernel: decode
-# caches in ``ROW_MAJOR``, decode ``get_rot_mats`` returns ``[1, batch, 1,
-# head_dim]`` height-sharded for the new sharded HF rope op. That path silently
-# misrotates Q/K when consumed by the legacy code path the demos historically
-# used (caption decoded to repeating tokens like "pigeon"). To keep the demo
-# bit-for-bit consistent with the pre-rebase working state we deliberately
-# inherit from ``HfRotarySetupOld`` (still shipped) and pair it with the
-# matching ``ttnn.experimental.rotary_embedding`` per-batch loop in
-# :class:`TtMinistralAttention`.
+# Use HfRotarySetupOld + legacy rotary_embedding (new HF rope misrotates Q/K here).
 from models.tt_transformers.tt.rope import HfRotarySetupOld as HfRotarySetup
 from ttnn import replicate_tensor_to_mesh_mapper
 
@@ -132,7 +123,7 @@ def ministral3_hf_cos_sin_tables(
     *,
     table_dtype: np.dtype = np.float32,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Host cos/sin tables ``[max_seq_len, head_dim]`` matching HF ``Ministral3RotaryEmbedding.forward`` for positions ``0 .. max_seq_len - 1``. Computed with NumPy only."""
+    """Host cos/sin ``[max_seq_len, head_dim]`` matching HF Ministral3RotaryEmbedding (NumPy)."""
     from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
 
     if not isinstance(config, Ministral3Config):
@@ -197,15 +188,11 @@ class TtMinistral3RotaryEmbedding(HfRotarySetup):
         LightweightModule.__init__(self)
         if use_qk_fused:
             raise NotImplementedError("use_qk_fused")
-        # ``HfRotarySetupOld`` exposes these fields on the parent; we duplicate
-        # the assignments here because we deliberately skip the parent
-        # ``__init__`` (which would rebuild cos/sin via ``rope_theta`` and lose
-        # HF Ministral3 / YaRN alignment).
+        # Skip parent __init__ so cos/sin stay HF/YaRN-aligned.
         self.batch_size = batch_size
         self.head_dim = head_dim
         self.max_seq_len = max_seq_len
         self.device = device
-        # Stash a few extra attributes some callers / debug logging expects.
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.prefetcher = prefetcher
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
@@ -213,19 +200,14 @@ class TtMinistral3RotaryEmbedding(HfRotarySetup):
         table_np = np.float32 if datatype == ttnn.bfloat16 else np.float64
         cos_hf, sin_hf = ministral3_hf_cos_sin_tables(head_dim, max_seq_len, config, table_dtype=table_np)
 
-        # Legacy HF rope (``ttnn.experimental.rotary_embedding``) expects TILE
-        # cos/sin caches for both decode (per-batch slice) and prefill (full
-        # sequence). Matches :class:`HfRotarySetupOld` layout exactly.
-        self.cos_matrix, self.sin_matrix = _upload_hf_cos_sin_4d(
+        self.cos_matrix, self.sin_matrix = _upload_hf_cos_sin_4d(  # TILE layout for legacy rope op
             cos_hf, sin_hf, device, datatype, layout=ttnn.TILE_LAYOUT
         )
         self.cos_matrix_prefill, self.sin_matrix_prefill = _upload_hf_cos_sin_4d(
             cos_hf, sin_hf, device, datatype, layout=ttnn.TILE_LAYOUT
         )
 
-        # 2D trace-friendly views used by ``HfRotarySetupOld.get_rot_mats``
-        # for per-position embedding gather (decode trace path).
-        self.cos_matrix_2d = ttnn.reshape(self.cos_matrix, (max_seq_len, head_dim))
+        self.cos_matrix_2d = ttnn.reshape(self.cos_matrix, (max_seq_len, head_dim))  # decode trace gather
         self.sin_matrix_2d = ttnn.reshape(self.sin_matrix, (max_seq_len, head_dim))
 
         self.transformation_mat = None
@@ -234,7 +216,7 @@ class TtMinistral3RotaryEmbedding(HfRotarySetup):
         self._ministral3_config = config
 
     def slice_rot_mats_prefill(self, start_pos: int, seq_len: int) -> list:
-        """Cos/sin slices ``[1, 1, seq_len, head_dim]`` on device for full prefill starting at ``start_pos``. Matches the slicing policy used in ``Transformer.prepare_inputs_prefill`` (pad dim 2 if needed)."""
+        """Cos/sin ``[1,1,seq_len,head_dim]`` on device from ``start_pos`` (pad if needed)."""
         mat_len = self.cos_matrix_prefill.shape[2]
         required_end = start_pos + seq_len
         if mat_len < required_end:

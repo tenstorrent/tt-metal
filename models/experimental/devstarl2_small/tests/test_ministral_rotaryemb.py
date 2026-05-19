@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# PCC test: Hugging Face ``Ministral3RotaryEmbedding`` vs ``TtMinistral3RotaryEmbedding``. Loads Devstral the same way as ``test_ministralattn.py`` (full multimodal checkpoint via ``ModelArgs.load_state_dict()``, ``cache_hf=True``), uses the **cached** language-model ``rotary_emb`` as the reference, and compares cos/sin for positions ``0 .. seq_len - 1`` against TT tables built from the real ``text_config`` (rope tables follow config / buffers from the loaded checkpoint). Applies the shared Dev...
+# PCC: HF Ministral3RotaryEmbedding vs TtMinistral3RotaryEmbedding (cached HF rotary_emb ref).
 
 from __future__ import annotations
 

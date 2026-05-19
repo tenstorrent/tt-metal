@@ -8,6 +8,8 @@ Blackhole only.
 
 This folder contains an experimental Tenstorrent (`ttnn`) port of **Mistral [Devstral Small 2](https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512)** (Mistral3 multimodal): Pixtral-class vision tower, multimodal projector, and Ministral3 text stack. PCC tests compare subgraphs and full vision+projector paths against Hugging Face references.
 
+**Maximum context length:** 4K tokens (prompt + generation combined) for the TT demos and on-device stack.
+
 ## Prerequisites
 
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
@@ -26,15 +28,15 @@ Tests are marked `models_performance_bare_metal` and expect a configured Blackho
 Examples (from repo root):
 
 ```sh
-pytest models/experimental/devstarl2_small/tests/test_devstral2_small.py::test_devstral2_small_projected_image_features_pcc
+pytest models/experimental/devstarl2_small/tests/pipeline_tests/test_devstral2_small.py::test_devstral2_small_projected_image_features_pcc
 ```
 
 ```sh
-pytest models/experimental/devstarl2_small/tests/test_ministral3_model.py::test_ministral3_model_pcc_devstral_weights
+pytest models/experimental/devstarl2_small/tests/pipeline_tests/test_ministral3_model.py::test_ministral3_model_pcc_devstral_weights
 ```
 
 ```sh
-pytest models/experimental/devstarl2_small/tests/test_pixtral_vision_model.py::test_pixtral_vision_model_pcc_devstral_weights
+pytest models/experimental/devstarl2_small/tests/pipeline_tests/test_pixtral_vision_model.py::test_pixtral_vision_model_pcc_devstral_weights
 ```
 
 Run a whole file (longer):
@@ -83,17 +85,44 @@ Can you implement in Python a method to compute the fibonnaci sequence at the `n
 Then run the Python code for the function for n=5 and give the answer.
 ```
 
-For a PyTorch-only agent loop, see `demo_agent.py --help`.
-
 ## Resources
 
-- **`resource/`** — static demo assets only (for example `sample.jpeg` for `tt_image_demo.py`). Put images here; do not add Python modules under this folder.
-- **`devstral_utils/chat_reference.py`** — chat template constants (`SP`, `REFERENCE_MESSAGES`, `REFERENCE_TOOLS`, `REFERENCE_GENERATE_KWARGS`, …) imported by `tt_text_demo.py` and `tt_image_demo.py`.
+| Path | Purpose |
+|------|---------|
+| **`demo/`** | Runnable demos: `tt_image_demo.py` (HF or TT multimodal), `tt_text_demo.py` (TT text LM), `tt_demo_agent.py` (interactive TT agent with `/image`). |
+| **`resource/`** | Static assets only (e.g. `sample.jpeg` for image demos). No Python modules. |
+| **`devstral_utils/`** | Shared helpers imported by demos, tests, and TT modules (re-exported from `devstral_utils/__init__.py`). |
+| **`tt/`** | TT layer implementations (Ministral3 + Pixtral building blocks). |
+| **`tt/pipeline/`** | Composed models: vision → projector → text LM. |
+| **`tests/`** | Per-op PCC tests (attention, MLP, norms, Pixtral blocks, decoder layer, …). |
+| **`tests/pipeline_tests/`** | End-to-end PCC for `TtDevstral2SmallModel`, `TtMinistral3Model`, vision tower, and projector. |
+
+**`devstral_utils/` modules**
+
+- `chat_reference.py` — chat template constants (`SP`, `REFERENCE_MESSAGES`, `REFERENCE_TOOLS`, `REFERENCE_GENERATE_KWARGS`, …).
+- `multimodal_demo_helpers.py` — mesh open/close, TT prefill padding, LM head helpers, traced decode buffers, multimodal scatter prefill.
+- `fp8_dequantize_compat.py` — HF FP8 scalar-scale shim for Devstral checkpoints across `transformers` versions.
+- `pixtral_seq_chunk.py` — vision matmul sequence chunk sizing (`pixtral_vision_seq_chunk_len`; env `PIXTRAL_VISION_MM_SEQ_CHUNK*`).
+- `dram_sharded_matmul.py` — DRAM-sharded decode matmul helpers (width-sharded L1 linear, weight build, core grids).
 
 ## Details
 
-- Entry point for the full TT multimodal backbone: `models/experimental/devstarl2_small/tt/tt_devstral2_small_model.py` (`TtDevstral2SmallModel`).
-- Text stack: `tt/tt_ministral3_model.py`, decoder layers, attention, MLP, RMSNorm, rotary embedding under `tt/`.
-- Vision: Pixtral tower and helpers under `tt/` (`tt_pixtral_*.py`, `tt_patchmerger.py`, etc.).
-- Shared demo utilities: `devstral_utils/` (mesh open/close, prefill padding, FP8 scalar-scale shim, decode trace helpers, chat reference constants).
-- Default HF model id used in demos/helpers: `mistralai/Devstral-Small-2-24B-Instruct-2512` (override with `HF_MODEL` / `--model-id` where supported).
+**Layout**
+
+- **`tt/pipeline/`** — top-level TT models wired like HF `Mistral3Model`:
+  - `tt_devstral2_small_model.py` — `TtDevstral2SmallModel` (vision + projector + `TtMinistral3Model`).
+  - `tt_ministral3_model.py` — text stack (embed → decoder layers → RMSNorm; optional on-device RoPE).
+  - `tt_pixtral_vision_model.py` — Pixtral vision tower.
+  - `tt_multimodal_projector.py` — patch merger + projector into text hidden size.
+- **`tt/`** — subgraph building blocks, e.g. `tt_ministral3_decoder_layer`, `tt_ministralattn`, `tt_ministralmlp`, `tt_ministralrmsnorm`, `tt_ministral_rotary_emb`, `tt_pixtralattn`, `tt_pixtralmlp`, `tt_pixtral_transformer`, `tt_patchmerger`, `tt_rmsnorm`, …
+- **`devstral_utils/`** — cross-cutting demo/test utilities (see table above); demos import from here rather than duplicating mesh/prefill/trace logic.
+
+**Model and limits**
+
+- Default HF weights: `mistralai/Devstral-Small-2-24B-Instruct-2512` (`DEFAULT_MODEL_ID` in `devstral_utils`; override with `HF_MODEL` or `--model-id`).
+- **Maximum context length: 4K tokens** (prompt + generation). TT demos size `ModelArgs.max_seq_len` to at least **4096** (rounded to a 512 multiple for SDPA decode). Longer sessions need a smaller `--max-new-tokens` budget or a higher `max_seq_len` in code.
+
+**PCC tests**
+
+- Submodule tests under `tests/` validate individual TT ops against HF on Devstral weights (often layer 0, partial safetensors, or full `ModelArgs.load_state_dict()` where noted).
+- Pipeline tests under `tests/pipeline_tests/` validate composed vision, text, and full multimodal paths.

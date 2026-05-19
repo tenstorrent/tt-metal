@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# PCC test: Hugging Face ``Ministral3Attention`` vs ``TtMinistralAttention`` on Devstral weights. Loads the **full** multimodal checkpoint via ``ModelArgs.load_state_dict()`` (same conversion path as production: ``standardize_hf_keys_multimodal`` + ``convert_vision_hf_to_meta_no_qkv_permute``), so TT attention sees keys such as ``layers.0.attention.wq.weight``. The reference submodule is taken from ``cached_hf_model.model.language_model`` (layer 0 ``self_attn`` and ``rotary_emb``). Rotary cos/s...
+# PCC: HF Ministral3Attention vs TtMinistralAttention (full Devstral checkpoint, layer 0).
 
 from __future__ import annotations
 

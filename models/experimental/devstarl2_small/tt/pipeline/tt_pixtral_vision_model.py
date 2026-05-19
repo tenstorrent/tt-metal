@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# TT ``PixtralVisionModel``: patch Conv (Unfold+linear), ``ln_pre``, RoPE, ``TtPixtralTransformer``.
+# TT PixtralVisionModel: patch conv, ln_pre, RoPE, transformer.
 
 from __future__ import annotations
 
@@ -14,9 +14,7 @@ from models.experimental.devstarl2_small.tt.tt_pixtralnorm import TtPixtralRMSNo
 
 
 class TtPixtralVisionModel(LightweightModule):
-    """HF ``PixtralVisionModel`` path with ``TtPixtralPatchConv`` + RoPE + ``TtPixtralTransformer``.
-
-    Inputs are torch ``[N,C,H,W]`` bf16 through unfold→linear before device ops."""
+    """HF PixtralVisionModel path (torch [N,C,H,W] bf16 → patch conv → TT transformer)."""
 
     def __init__(
         self,

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# PCC: Hugging Face ``Mistral3MultiModalProjector`` vs TT projector on Devstral weights.
+# PCC: HF Mistral3MultiModalProjector vs TT projector (Devstral).
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from transformers.models.mistral3.modeling_mistral3 import Mistral3MultiModalPro
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.devstarl2_small.tt.tt_multimodal_projector import TTMistral3MultiModalProjector
+from models.experimental.devstarl2_small.tt.pipeline.tt_multimodal_projector import TTMistral3MultiModalProjector
 from models.tt_transformers.tt.model_config import ModelArgs
 
 DEVSTRAL_REPO_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"

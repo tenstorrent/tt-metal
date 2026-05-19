@@ -49,13 +49,7 @@ class TTMistral3PatchMerger(LightweightModule):
             for inner_h in range(self.spatial_merge_size)
             for inner_w in range(self.spatial_merge_size)
         ]
-        # ``mcast_in0=True`` requires the *entire* M dimension to fit in a single block
-        # (num_blocks_y == 1, i.e. M_tiles <= per_core_M). For very small patch grids
-        # (e.g. tiny thumbnail images) this fast 1D path is correct and efficient.
-        # For all larger images the explicit program config below would silently produce
-        # wrong results because only the start core receives valid in0 sender runtime
-        # args; in that regime we omit ``program_config`` and let ttnn auto-select a
-        # generic matmul algorithm that correctly handles arbitrary M.
+        # mcast_in0 only valid when M fits one core block; else use auto matmul config.
         self._small_m_per_core_tiles = 8
         self.merge_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(11, 10),
@@ -91,8 +85,6 @@ class TTMistral3PatchMerger(LightweightModule):
                 (merged_h, self.spatial_merge_size, merged_w, self.spatial_merge_size, d),
             )
             merged_patches = merged_h * merged_w
-            # ``per_core_M`` is in TILE units; the 1D mcast_in0 path is only correct
-            # when the whole M dimension fits in one tile-block on the start core.
             merged_patch_tiles = (merged_patches + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
             use_small_config = merged_patch_tiles <= self._small_m_per_core_tiles
             merge_program_config = self.merge_program_config if use_small_config else None

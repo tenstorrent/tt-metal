@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-# Single ``Ministral3DecoderLayer`` block on TT: pre-norm attention, residual, pre-norm SwiGLU MLP, residual. Submodules are composed from existing Devstral TT modules only (no Torch in ``forward``).
+# TT Ministral3DecoderLayer: pre-norm attn + MLP with residuals.
 
 from __future__ import annotations
 
@@ -14,9 +14,7 @@ from models.tt_transformers.tt.common import Mode
 
 
 class TtMinistral3DecoderLayer(LightweightModule):
-    """HF ``Ministral3DecoderLayer`` order: pre-norm attention + residual, pre-norm MLP + residual.
-
-    Submodule ctor args match :class:`TtMinistralAttention`, :class:`TtMinistralMLP`, and the two norms."""
+    """Pre-norm attention + MLP with residuals (HF Ministral3DecoderLayer order)."""
 
     def __init__(
         self,
@@ -34,12 +32,7 @@ class TtMinistral3DecoderLayer(LightweightModule):
     ):
         super().__init__()
         self.layer_num = layer_num
-        # Cached for ``forward_prefill`` / ``forward_decode`` so the two
-        # per-layer ``ttnn.all_gather`` calls can size ``num_links`` from the
-        # actual fabric (e.g. 2 on BH-QB P150x4, 1 on single chip / T3K 1x4
-        # submesh) instead of being hard-pinned to ``num_links=1`` which under-
-        # uses ethernet bandwidth.
-        self.tt_ccl = tt_ccl
+        self.tt_ccl = tt_ccl  # fabric num_links for all_gather
 
         self.input_layernorm = TtMinistralRMSNorm(
             mesh_device,
@@ -93,8 +86,7 @@ class TtMinistral3DecoderLayer(LightweightModule):
         residual = x_11SH
         h = self.input_layernorm(x_11SH, Mode.PREFILL)
         attn_out = self.self_attn.forward_prefill(h, rot_mats, position_ids=position_ids)
-        # Multi-chip PCC path: gather fractured attn output before adding residual so RMSNorm sees full width.
-        if self.self_attn.num_devices > 1:
+        if self.self_attn.num_devices > 1:  # gather attn output before residual add
             attn_out = ttnn.all_gather(
                 attn_out,
                 dim=3,
@@ -102,7 +94,6 @@ class TtMinistral3DecoderLayer(LightweightModule):
                 topology=self.self_attn.args.ccl_topology(),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        # Align memory layout with residual before elementwise add to avoid binary subtile broadcast issues.
         skip_mem_cfg = residual.memory_config()
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
         h = ttnn.add(residual, attn_out, memory_config=skip_mem_cfg)
@@ -128,19 +119,14 @@ class TtMinistral3DecoderLayer(LightweightModule):
         user_id: int = 0,
         page_table=None,
     ) -> ttnn.Tensor:
-        """Decode one token using KV from ``forward_prefill``.
-
-        ``x``: residual-mem width-sharded tensor; ``current_pos`` ``[1,batch]``; ``rot_mats`` from ``get_rot_mats``."""
+        """Decode one token (width-sharded ``x``, ``current_pos`` [1,batch], ``rot_mats`` from cache)."""
         args = self.self_attn.args
         num_devices = self.self_attn.num_devices
         residual_mem_cfg = args.get_residual_mem_config(Mode.DECODE, None)
         attn_input_mem_cfg = args.get_attn_input_mem_config(Mode.DECODE, None)
         mlp_input_mem_cfg = args.get_mlp_input_mem_config(Mode.DECODE, None)
 
-        # Decode residual is width-fractured on multi-chip; all_gather post-norm before QKV/FF1 need full dim per chip.
         x = ttnn.to_memory_config(x, residual_mem_cfg)
-
-        # Attention: DRAM norm → gather → shard into DRAM-sharded QKV matmuls.
         x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         h_normed = self.input_layernorm(x_dram, Mode.DECODE)
         ttnn.deallocate(x_dram)
@@ -167,7 +153,6 @@ class TtMinistral3DecoderLayer(LightweightModule):
         skip1 = ttnn.add(x, attn_out, memory_config=residual_mem_cfg)
         ttnn.deallocate(attn_out)
 
-        # MLP: same DRAM norm → gather → shard pattern as attention path.
         skip1_dram = ttnn.to_memory_config(skip1, ttnn.DRAM_MEMORY_CONFIG)
         h2_normed = self.post_attention_layernorm(skip1_dram, Mode.DECODE)
         ttnn.deallocate(skip1_dram)

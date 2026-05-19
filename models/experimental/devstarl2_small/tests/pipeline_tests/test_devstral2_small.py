@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# PCC: HF ``Mistral3Model.get_image_features`` vs TT ``TtDevstral2SmallModel`` (vision + projector).
+# PCC: HF get_image_features vs TtDevstral2SmallModel (vision + projector).
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from transformers.models.pixtral.modeling_pixtral import position_ids_in_meshgri
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.devstarl2_small.tt.tt_devstral2_small_model import TtDevstral2SmallModel
+from models.experimental.devstarl2_small.tt.pipeline.tt_devstral2_small_model import TtDevstral2SmallModel
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 
@@ -91,9 +91,7 @@ def test_devstral2_small_projected_image_features_pcc(mesh_device, monkeypatch, 
     except Exception as exc:
         pytest.skip(f"Full checkpoint load failed (memory / hub / env): {exc}")
 
-    # After load only: ``ModelArgs.load_state_dict`` drops keys containing ``layers.{i}.`` for i≥n_layers.
-    # That substring matches ``vision_tower.transformer.layers.{i}`` too, so we must load with full
-    # ``n_layers`` first, then trim the **text** decoder depth for ``TtMinistral3Model``.
+    # Load full n_layers first (vision keys match layers.{i}); then trim text depth only.
     model_args.n_layers = 1
 
     hf_full = model_args.cached_hf_model
@@ -108,8 +106,7 @@ def test_devstral2_small_projected_image_features_pcc(mesh_device, monkeypatch, 
     image_sizes_tensor = torch.tensor([[H, W]], dtype=torch.long)
     image_sizes_list = [(H, W)]
 
-    # Build HF reference like ``Mistral3Model.get_image_features`` (projector output before per-image split).
-    # Some checkpoints / wrappers make ``get_image_features`` return a non-tuple; avoid ``torch.cat`` on it.
+    # HF get_image_features reference (handle non-tuple return from some checkpoints).
     cfg = hf_inner.config
     vfl = cfg.vision_feature_layer
     img_out = hf_inner.vision_tower(pixel_values, image_sizes=image_sizes_tensor, output_hidden_states=True)

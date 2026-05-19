@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# PCC: Hugging Face ``Ministral3Model`` (text path) vs ``TtMinistral3Model`` on Devstral weights. Importing :class:`~models.experimental.devstarl2_small.tt.tt_ministral3_model.TtMinistral3Model` runs ``apply_fp8_dequantize_compat()`` so HF scalar FP8 scales work across ``transformers`` versions.
+# PCC: HF Ministral3Model vs TtMinistral3Model (Devstral weights; FP8 compat on import).
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from transformers.models.ministral3.modeling_ministral3 import Ministral3Model
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.devstarl2_small.tt.tt_ministral3_model import TtMinistral3Model
+from models.experimental.devstarl2_small.tt.pipeline.tt_ministral3_model import TtMinistral3Model
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 
@@ -82,7 +82,7 @@ def test_ministral3_model_pcc_devstral_weights(
     trust_remote_ministral,
 ):
     monkeypatch.setenv("HF_MODEL", DEVSTRAL_REPO_ID)
-    # Short prefill: QKV + WO + MLP down-proj use L1 width-sharded gather-in0 matmul (lower DRAM-interleaved MM time).
+    # Short prefill uses L1 width-sharded gather-in0 matmuls.
     monkeypatch.setenv(MINISTRAL_SHORT_PREFILL_L1_WIDTH_MM_ENV, "1")
 
     dtype = ttnn.bfloat16

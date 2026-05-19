@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# PCC: Hugging Face ``PixtralAttentionLayer`` vs TT composed attention layer.
+# PCC: HF PixtralAttentionLayer vs TtPixtralAttentionLayer.
 
 from __future__ import annotations
 

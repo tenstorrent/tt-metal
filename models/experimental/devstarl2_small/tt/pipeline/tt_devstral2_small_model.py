@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# TT ``Mistral3Model``-style backbone for Devstral Small: vision → multimodal projector → text stack.
+# TT Mistral3 backbone: vision → projector → text LM.
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ import ttnn
 from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.devstarl2_small.tt.tt_ministral3_model import TtMinistral3Model
-from models.experimental.devstarl2_small.tt.tt_multimodal_projector import TTMistral3MultiModalProjector
-from models.experimental.devstarl2_small.tt.tt_pixtral_vision_model import TtPixtralVisionModel
+from models.experimental.devstarl2_small.tt.pipeline.tt_ministral3_model import TtMinistral3Model
+from models.experimental.devstarl2_small.tt.pipeline.tt_multimodal_projector import TTMistral3MultiModalProjector
+from models.experimental.devstarl2_small.tt.pipeline.tt_pixtral_vision_model import TtPixtralVisionModel
 
 
 class TtDevstral2SmallModel(LightweightModule):

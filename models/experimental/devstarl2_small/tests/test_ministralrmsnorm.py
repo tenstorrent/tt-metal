@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# PCC: Hugging Face ``Ministral3RMSNorm`` vs ``TtMinistralRMSNorm`` on Devstral text weights. Applies the shared Devstral FP8 scalar-scale compat patch at import.
+# PCC: HF Ministral3RMSNorm vs TtMinistralRMSNorm (Devstral text weights).
 
 from __future__ import annotations
 
@@ -97,8 +97,7 @@ def test_ministral3_rmsnorm_pcc_devstral_weights(
         cache_hf=True,
     )
 
-    # Hidden dim > 4096 + multichip prefill selects distributed RMSNorm; its sharded gamma (e.g. 1280/chip)
-    # does not match a fully replicated activations PCC layout vs single-device HF — force replicated path.
+    # Force replicated norm for PCC (distributed gamma mismatches single-device HF).
     model_args.is_distributed_norm = types.MethodType(lambda self, mode: False, model_args)
 
     try:
@@ -138,7 +137,7 @@ def test_ministral3_rmsnorm_pcc_devstral_weights(
     )
 
     tt_out = tt_norm(tt_in, Mode.PREFILL)
-    # Replicated norm output per device: concat mesh on dim 0 then take one replica (same pattern as Grok RMS PCC).
+    # Replicated output: concat mesh dim 0, take one replica.
     tt_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0]
     if tt_torch.shape != ref_out.shape:
         tt_torch = tt_torch.reshape(ref_out.shape)

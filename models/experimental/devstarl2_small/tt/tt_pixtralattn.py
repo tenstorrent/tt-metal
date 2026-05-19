@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-# Modified vision attention for Mistral-Small / Pixtral-class checkpoints. Uses ``apply_rotary_pos_emb_vision_tt`` for Devstral-compatible RoPE.
+# Pixtral vision attention with Devstral-compatible vision RoPE.
 
 import os
 
@@ -8,13 +8,11 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole, nearest_32
-from models.experimental.devstarl2_small.tt.tt_pixtral_seq_chunk import pixtral_vision_seq_chunk_len
+from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import pixtral_vision_seq_chunk_len
 
 
 def _pixtral_sdpa_qk_chunk_sizes() -> tuple[int, int]:
-    """Small fixed Q/K tile chunks for vision SDPA (env ``PIXTRAL_SDPA_Q/K_CHUNK``).
-
-    Avoid scaling chunks by ``num_matmul_chunks``—that blows ``q_chunk_size`` on long sequences."""
+    """Fixed Q/K SDPA chunk sizes (env PIXTRAL_SDPA_Q/K_CHUNK; do not scale with matmul chunks)."""
     q = int(os.environ.get("PIXTRAL_SDPA_Q_CHUNK", "32"))
     k = int(os.environ.get("PIXTRAL_SDPA_K_CHUNK", "32"))
     q = max(32, min(q, 128))

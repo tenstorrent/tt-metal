@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-# Minimal TT ``Ministral3Model`` (text stack): embeddings -> decoder layers -> final RMSNorm. Optionally owns :class:`TtMinistral3RotaryEmbedding` (device cos/sin from ``Ministral3Config`` via ``ministral_text_config``). If configured, ``forward_prefill`` / ``forward_prefill_from_embeddings`` may omit ``rot_mats`` (``None``) and slice tables in-model; otherwise pass ``rot_mats`` as before. Composes existing TT submodules from this experimental folder; no Torch fallback in forward.
+# TT Ministral3 text stack: embed → decoder layers → RMSNorm (optional on-device RoPE).
 
 from __future__ import annotations
 
@@ -10,13 +10,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 
-# Load fp8_dequantize_compat by file path to avoid importing devstral_utils __init__ (circular import).
+# Load fp8_dequantize_compat by path (avoid devstral_utils __init__ circular import).
 def _ensure_fp8_scalar_compat() -> None:
     _mod_name = "_devstarl2_fp8_dequantize_compat_exec"
     if _mod_name in sys.modules:
         sys.modules[_mod_name].apply_fp8_dequantize_compat()
         return
-    _path = Path(__file__).resolve().parent.parent / "devstral_utils" / "fp8_dequantize_compat.py"
+    _path = Path(__file__).resolve().parent.parent.parent / "devstral_utils" / "fp8_dequantize_compat.py"
     _spec = importlib.util.spec_from_file_location(_mod_name, _path)
     if _spec is None or _spec.loader is None:
         return
@@ -61,18 +61,9 @@ class TtMinistral3Model(LightweightModule):
         super().__init__()
         self.args = model_args
         self.mesh_device = mesh_device
-        # Cached for ``forward_decode_from_device_tensors`` so the final
-        # post-norm ``ttnn.all_gather`` (LM head needs full hidden width on
-        # every chip) auto-sizes ``num_links`` from the fabric instead of
-        # hardcoding ``num_links=1``.
-        self.tt_ccl = tt_ccl
+        self.tt_ccl = tt_ccl  # fabric num_links for post-norm all_gather
         self.n_layers = int(model_args.n_layers)
-        # Embedding storage dtype. Defaults to ``ttnn.bfloat16`` so existing
-        # callers / tests are unaffected. Latency-sensitive demos (e.g. the
-        # BH-QB Devstral2 demo) may pass a different dtype here; note that
-        # ttnn.embedding currently requires ROW_MAJOR_LAYOUT, which excludes
-        # bfloat8_b / bfloat4_b — keep this float-typed.
-        embed_dtype = embed_dtype if embed_dtype is not None else ttnn.bfloat16
+        embed_dtype = embed_dtype if embed_dtype is not None else ttnn.bfloat16  # ROW_MAJOR only
 
         if tt_rotary_embedding is not None and ministral_text_config is not None:
             raise ValueError("Pass at most one of tt_rotary_embedding and ministral_text_config.")
@@ -176,7 +167,6 @@ class TtMinistral3Model(LightweightModule):
         pos_uint32: ttnn.Tensor,
         pos_int32: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        # Trace-safe decode: device-only ids/positions; suitable inside trace capture.
         if self.tt_rotary_embedding is None:
             raise ValueError(
                 "forward_decode_from_device_tensors requires tt_rotary_embedding "
@@ -193,8 +183,7 @@ class TtMinistral3Model(LightweightModule):
             h = layer.forward_decode(h, pos_int32, rot_mats)
         h_dram = ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG)
         out = self.norm(h_dram, Mode.DECODE)
-        # Multi-chip: distributed norm shards width; LM head needs full dim — all_gather on dim 3.
-        if self.args.is_multichip:
+        if self.args.is_multichip:  # LM head needs full hidden width
             out = ttnn.all_gather(
                 out,
                 dim=3,
@@ -209,8 +198,7 @@ class TtMinistral3Model(LightweightModule):
         token_ids_tt: ttnn.Tensor,
         decode_pos: int,
     ) -> ttnn.Tensor:
-        # Decode one step from int position (allocates device tensors; not trace-safe — use forward_decode_from_device_tensors).
-        if self.tt_rotary_embedding is None:
+        if self.tt_rotary_embedding is None:  # not trace-safe; prefer forward_decode_from_device_tensors
             raise ValueError("forward_decode requires tt_rotary_embedding (pass ministral_text_config to __init__).")
 
         _torch = __import__("torch")

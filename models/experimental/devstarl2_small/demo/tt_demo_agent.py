@@ -55,8 +55,8 @@ from models.experimental.devstarl2_small.devstral_utils import (
     tt_sampling_output_token_id,
     tt_update_decode_input_buffers,
 )
-from models.experimental.devstarl2_small.tt.tt_devstral2_small_model import TtDevstral2SmallModel
-from models.experimental.devstarl2_small.tt.tt_ministral3_model import TtMinistral3Model
+from models.experimental.devstarl2_small.tt.pipeline.tt_devstral2_small_model import TtDevstral2SmallModel
+from models.experimental.devstarl2_small.tt.pipeline.tt_ministral3_model import TtMinistral3Model
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.lm_head import LMHead
