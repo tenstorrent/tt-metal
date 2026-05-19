@@ -136,13 +136,6 @@ int main()
 
                 reset_state(counter);
                 commit_store(brisc_bread0, counter);
-
-#ifdef PERF_COUNTERS_COMPILED
-                // Drive the full per-zone counter snapshot lifecycle by scanning
-                // each TRISC's profiler ring buffer. TRISCs do zero extra work
-                // (their ELF is bit-identical to NC).
-                llk_perf::monitor_zones_from_brisc();
-#endif
                 break;
 
             case BriscCommandState::RESET_TRISCS:

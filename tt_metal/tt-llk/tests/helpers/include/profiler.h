@@ -174,14 +174,6 @@ public:
 
     inline __attribute__((always_inline)) zone_scoped()
     {
-        // Only compiler fences here; PERF_CNT_ALL writes moved to
-        // perf_counter_scoped (counters.h) so all counter-specific code stays
-        // in counter header. Order via LIFO destruction:
-        //   1) perf_counter_scoped::ctor → arm counter
-        //   2) zone_scoped::ctor       → t_start (this fn)
-        //   3) /* body */
-        //   4) zone_scoped::dtor       → t_end
-        //   5) perf_counter_scoped::dtor → freeze + read counters
         asm volatile("" ::: "memory");
         if (!is_buffer_full())
         {

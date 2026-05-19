@@ -12,9 +12,8 @@
 // ── Per-zone performance counter measurement ──────────────────────────
 // MEASURE_PERF_COUNTERS("INIT") / MEASURE_PERF_COUNTERS("TILE_LOOP")
 // placed BEFORE ZONE_SCOPED in the same scope — counter stops AFTER profiler zone ends.
-// Full counter implementation is in counters.h (included by trisc.cpp).
-// We only need forward declarations + RAII class here to avoid pulling
-// ATINCGET assembly into the test source compilation context.
+// Full counter implementation is in counters.h, transitively included below
+// when PERF_COUNTERS_COMPILED is defined.
 
 // Counter hooks are now integrated into profiler.h's zone_scoped class.
 // When PERF_COUNTERS_COMPILED is defined, zone_scoped calls

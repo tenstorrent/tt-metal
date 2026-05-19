@@ -13,8 +13,6 @@
 #include "ckernel_helper.h" // Only for WH/BH
 #endif
 #include "boot.h"
-#include "counters.h"
-#line 16
 #include "profiler.h"
 
 #ifdef LLK_PROFILER
