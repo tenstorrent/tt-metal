@@ -11,7 +11,10 @@
 namespace ttnn::operations::experimental::deepseek_prefill::dummy_op {
 
 ttnn::Tensor dummy_op(
-    const ttnn::Tensor& input_tensor, uint32_t num_iter, const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
+    const ttnn::Tensor& input_tensor,
+    uint32_t num_iter,
+    const tt::tt_metal::GlobalSemaphore& global_semaphore,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
     auto* mesh_device = input_tensor.device();
 
     // If a subdevice_id is given, use its worker cores. Otherwise fall back to
@@ -25,7 +28,8 @@ ttnn::Tensor dummy_op(
         worker_core_range_set = CoreRangeSet{CoreRange{{0, 0}, {grid.x - 1, 0}}};
     }
 
-    return ttnn::prim::prefill_dummy_op(input_tensor, num_iter, worker_core_range_set);
+    return ttnn::prim::prefill_dummy_op(
+        input_tensor, num_iter, worker_core_range_set, static_cast<uint32_t>(global_semaphore.address()));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dummy_op

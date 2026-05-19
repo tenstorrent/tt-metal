@@ -84,10 +84,16 @@ DummyOpDeviceOperation::tensor_return_value_t DummyOpDeviceOperation::create_out
 namespace ttnn::prim {
 
 ttnn::Tensor prefill_dummy_op(
-    const ttnn::Tensor& input_tensor, uint32_t num_iter, const CoreRangeSet& worker_core_range_set) {
+    const ttnn::Tensor& input_tensor,
+    uint32_t num_iter,
+    const CoreRangeSet& worker_core_range_set,
+    uint32_t global_semaphore_address) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::dummy_op::DummyOpDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{.num_iter = num_iter, .worker_core_range_set = worker_core_range_set},
+        OperationType::operation_attributes_t{
+            .num_iter = num_iter,
+            .worker_core_range_set = worker_core_range_set,
+            .global_semaphore_address = global_semaphore_address},
         OperationType::tensor_args_t{.input_tensor = input_tensor});
 }
 

@@ -28,6 +28,9 @@ void bind_dummy_op(nb::module_& mod) {
                 num_iter (int): Number of read+write iterations. Baked into the
                     kernel as a compile-time constant, so changing it triggers a
                     program-cache miss / recompile.
+                global_semaphore (ttnn.GlobalSemaphore): Semaphore the reader
+                    kernel waits on (== 0) once before its iter loop. Must be
+                    created on the cores the op will run on.
                 subdevice_id (ttnn.SubDeviceId, optional): Sub-device whose
                     worker cores should host the reader/writer kernels. The
                     sub-device must span exactly one Tensix row. If omitted,
@@ -40,6 +43,7 @@ void bind_dummy_op(nb::module_& mod) {
         nb::arg("input_tensor").noconvert(),
         nb::kw_only(),
         nb::arg("num_iter"),
+        nb::arg("global_semaphore"),
         nb::arg("subdevice_id") = nb::none());
 }
 

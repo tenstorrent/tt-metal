@@ -22,6 +22,12 @@ struct DummyOpParams {
     // spanning exactly one Tensix row (start.y == end.y).
     CoreRangeSet worker_core_range_set;
 
+    // L1 address of a GlobalSemaphore that the reader kernel waits on (== 0)
+    // once before the iter loop. Kept out of attribute_values so reusing the
+    // op with a different semaphore (different address) doesn't churn the
+    // program cache -- override_runtime_arguments re-pushes the address.
+    uint32_t global_semaphore_address;
+
     static constexpr auto attribute_names = std::forward_as_tuple("num_iter", "worker_core_range_set");
 
     auto attribute_values() const { return std::forward_as_tuple(num_iter, worker_core_range_set); }

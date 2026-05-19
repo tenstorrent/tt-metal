@@ -33,6 +33,9 @@ struct DummyOpDeviceOperation {
 namespace ttnn::prim {
 
 ttnn::Tensor prefill_dummy_op(
-    const ttnn::Tensor& input_tensor, uint32_t num_iter, const CoreRangeSet& worker_core_range_set);
+    const ttnn::Tensor& input_tensor,
+    uint32_t num_iter,
+    const CoreRangeSet& worker_core_range_set,
+    uint32_t global_semaphore_address);
 
 }  // namespace ttnn::prim

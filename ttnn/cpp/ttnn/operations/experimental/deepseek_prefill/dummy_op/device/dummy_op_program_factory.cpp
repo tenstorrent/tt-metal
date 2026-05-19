@@ -78,7 +78,11 @@ DummyOpProgramFactory::cached_program_t DummyOpProgramFactory::create(
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         const auto& core = cores[core_id];
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {input_buffer->address(), total_tiles, core_id});
+        tt::tt_metal::SetRuntimeArgs(
+            program,
+            reader_kernel_id,
+            core,
+            {input_buffer->address(), total_tiles, core_id, operation_attributes.global_semaphore_address});
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, {input_buffer->address(), total_tiles, core_id});
     }
 
@@ -89,7 +93,7 @@ DummyOpProgramFactory::cached_program_t DummyOpProgramFactory::create(
 
 void DummyOpProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const DummyOpParams& /*operation_attributes*/,
+    const DummyOpParams& operation_attributes,
     const DummyOpInputs& tensor_args,
     Tensor& /*tensor_return_value*/) {
     auto& program = cached_program.program;
@@ -98,10 +102,12 @@ void DummyOpProgramFactory::override_runtime_arguments(
     const auto& cores = cached_program.shared_variables.cores;
 
     const uint32_t input_addr = tensor_args.input_tensor.buffer()->address();
+    const uint32_t sem_addr = operation_attributes.global_semaphore_address;
 
     for (const auto& core : cores) {
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
         reader_args[0] = input_addr;
+        reader_args[3] = sem_addr;
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
         writer_args[0] = input_addr;
