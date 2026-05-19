@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import NamedTuple
 
 import ttnn
@@ -102,6 +103,44 @@ class MochiVAEParallelConfig(NamedTuple):
             h_parallel=ParallelFactor(*h),
             w_parallel=ParallelFactor(*w),
         )
+
+
+@dataclass(frozen=True)
+class Flux2VaeParallelConfig:
+    """Parallel config for the Flux2 VAE decoder.
+
+    Any two of the three axes may be set; the third must be None (2-D mesh constraint).
+    All non-None entries must use distinct ``mesh_axis`` values.
+    """
+
+    tp_parallel: ParallelFactor | None = None
+    h_parallel: ParallelFactor | None = None
+    w_parallel: ParallelFactor | None = None
+
+    def __post_init__(self) -> None:
+        active = [p for p in (self.tp_parallel, self.h_parallel, self.w_parallel) if p is not None]
+        if len(active) > 2:
+            raise ValueError("At most 2 of tp_parallel/h_parallel/w_parallel may be set on a 2-D mesh")
+        axes = [p.mesh_axis for p in active]
+        if len(axes) != len(set(axes)):
+            raise ValueError(f"Parallel axes must be distinct; got mesh_axes={axes}")
+
+    def _asdict(self) -> dict[str, ParallelFactor | None]:
+        return {"tp_parallel": self.tp_parallel, "h_parallel": self.h_parallel, "w_parallel": self.w_parallel}
+
+    @classmethod
+    def from_axes(
+        cls,
+        mesh_device: ttnn.MeshDevice,
+        *,
+        tp_axis: int | None = None,
+        h_axis: int | None = None,
+        w_axis: int | None = None,
+    ) -> Flux2VaeParallelConfig:
+        def _pf(axis: int | None) -> ParallelFactor | None:
+            return ParallelFactor(factor=int(mesh_device.shape[axis]), mesh_axis=axis) if axis is not None else None
+
+        return cls(tp_parallel=_pf(tp_axis), h_parallel=_pf(h_axis), w_parallel=_pf(w_axis))
 
 
 class OldParallelConfig(NamedTuple):
