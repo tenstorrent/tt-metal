@@ -310,6 +310,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         !init_done.contains(InitializerKey::Dispatch),
         "FabricFirmwareInitializer must be torn down after DispatchKernelInitializer");
     if (descriptor_->is_mock_device()) {
+        log_info(tt::LogMetal, "Skipping fabric teardown for mock devices");
         init_done.erase(key);
         return;
     }
