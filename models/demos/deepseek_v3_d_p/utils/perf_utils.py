@@ -70,7 +70,9 @@ def load_merged_durations(csv_path: str, use_avg: bool = False) -> pd.Series:
     return df_merged.groupby("OP CODE")["DEVICE KERNEL DURATION [ns]"].sum()
 
 
-def approximate_8x4_perf(csv_8x1: str, csv_2x4: str, csv_8x4: str = None, use_avg: bool = False) -> pd.DataFrame:
+def approximate_8x4_perf(
+    csv_8x1: str, csv_2x4: str, csv_8x4: str | None = None, use_avg: bool = False
+) -> pd.DataFrame:
     """
     Approximate 8x4 MOE performance from cheaper 8x1 + 2x4 runs.
 
@@ -123,7 +125,7 @@ def approximate_8x4_perf(csv_8x1: str, csv_2x4: str, csv_8x4: str = None, use_av
     return df_result
 
 
-def approximate_mla_galaxy_perf(csv_2x4: str, csv_8x4: str = None, use_avg: bool = False) -> pd.DataFrame:
+def approximate_mla_galaxy_perf(csv_2x4: str, csv_8x4: str | None = None, use_avg: bool = False) -> pd.DataFrame:
     """
     Approximate 8x4 MLA performance from a cheaper 2x4 run.
 
