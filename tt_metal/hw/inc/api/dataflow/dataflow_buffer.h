@@ -39,20 +39,45 @@
 // Here my_dfb_name is a constexpr DFBAccessor, auto-included in kernel_bindings_generated.h.
 //
 // Currently, DFBAccessor is backed by a compile-time ID, baked into the kernel binary.
-// If we want to switch to using an implicit CRTA mechanism, the implementation of
-// DFBAccessor can be transparently modified (kernel-side syntax stays unchanged).
+// On Gen2 (Quasar) we reserve the right to switch to a runtime-backed ID
+// (e.g., dispatch-populated slot) without changing kernel-side syntax. The two
+// extraction paths below have intentionally different futureproofing contracts —
+// see their per-member comments.
 struct DFBAccessor {
-    explicit constexpr DFBAccessor(uint16_t id) noexcept : id(id) {}
+    explicit constexpr DFBAccessor(uint16_t id) noexcept : id_(id) {}
 
-    // DFBAccessor is implicitly convertible to uint32_t.
-    // On WH/BH, this allows a Metal 2.0 user to pass a DFBAccessor directly to
-    // LLK compute APIs that expect a raw CB id.
+    // Implicit conversion to uint32_t — lets a Metal 2.0 kernel pass a
+    // DFBAccessor directly to Gen1 (WH/BH) LLK compute APIs that expect a raw CB id.
     //
-    // NOTE: If we ever want to switch DFBAccessor from implicit CTA to implicit
-    // CRTA or RTA, we can update the conversion adaptor without affecting any
-    // kernel code that's passing DFBAccessors into LLK APIs.
-    constexpr operator uint32_t() const noexcept { return id; }
-    uint16_t id;
+    // This conversion is constexpr, which means callers may use it in constexpr
+    // contexts (template parameters, static_asserts, address computations). That
+    // permanently commits Gen1 to CTA-based DFB ids, and we have accepted that
+    // commitment: a survey of the TTNN kernel library found that every CB id
+    // already reaches the kernel via a compile-time path (CTA or hardcoded
+    // CBIndex enum), with zero RTA-backed cases. The Gen1 LLK macro architecture
+    // depends on constexpr CB ids and is not going to change.
+    constexpr operator uint32_t() const noexcept { return id_; }
+
+    // Non-constexpr accessor — the blessed extraction path for Gen2 (Quasar) LLK
+    // APIs that accept DFBAccessor directly.
+    //
+    // Intentionally NOT constexpr. If we ever switch Gen2 DFB ids from implicit
+    // CTA to a runtime mechanism (RTA/CRTA), this method's body flips to a
+    // runtime load; marking it constexpr today would lock in a promise we'd
+    // later have to break. Keeping it non-constexpr preserves the seam.
+    //
+    // Gen2 LLK contract — OPEN QUESTION for the LLK team:
+    // Can we get away with this being non-constexpr, or does that break LLK
+    // APIs? If we want to leave open the possibility of future RTA-ification,
+    // the rule is: don't use the extracted value in any context that requires
+    // it to be a compile-time constant — no template non-type parameters, no
+    // constexpr variables, no array sizes, no static_asserts.
+    // If that constraint doesn't work for LLK, we can discard the futureproof
+    // attempt.
+    uint16_t resolve_id() const noexcept { return id_; }
+
+private:
+    uint16_t id_;
 };
 
 class DataflowBuffer {
@@ -66,7 +91,7 @@ public:
     // Preferred constructor for Metal 2.0 / ProgramSpec kernels.
     // Pass the named binding constant from kernel_bindings_generated.h:
     //   DataflowBuffer dfb(my_dfb_name);
-    DataflowBuffer(DFBAccessor accessor) : DataflowBuffer(accessor.id) {}
+    DataflowBuffer(DFBAccessor accessor) : DataflowBuffer(accessor.resolve_id()) {}
 
     // Low-level constructor: prefer DFBAccessor overload above for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
