@@ -285,11 +285,8 @@ ALWI void sdpa_forward_data(
     uint32_t block_size) {
     copy_tile_init(cb_prev_max_sum);
     // Reconfigure from pack_block_contiguous mop configuration back to regular tile packing
-    PACK((llk_pack_init<
-          false /* untilize */,
-          false /* zero_output */,
-          false /* tilize */,
-          true /* skip_addrmod_config */>(cb_cur_max_sum)));
+    PACK((llk_pack_init<ckernel::PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(
+        cb_cur_max_sum)));
     cb_wait_front(cb_prev_max_sum, 1);
     cb_reserve_back(cb_cur_max_sum, 1);
 

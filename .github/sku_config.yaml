@@ -218,6 +218,16 @@ skus:
       - pipeline-perf
       - in-service
 
+  bh_sp_single_galaxy:
+    runs_on:
+      - exabox-multihost-with-nfs
+    allocation:
+      type: Count
+      count: 1
+      match_labels:
+        exabox.tenstorrent.com/purpose: ci-metal
+        exabox.tenstorrent.com/superpod: A29
+
   bh_sp1:
     runs_on:
       - exabox-multihost-with-nfs

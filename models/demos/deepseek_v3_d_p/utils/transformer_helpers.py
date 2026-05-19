@@ -345,10 +345,10 @@ def load_and_compute_layer_by_layer(
     from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
     from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
     from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-    from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
     from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
     from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
     from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 
     if gate_fallback_mode is None:
         gate_fallback_mode = GateComputeMode.HOST_ALL

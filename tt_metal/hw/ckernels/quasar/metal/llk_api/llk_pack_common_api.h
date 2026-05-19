@@ -13,9 +13,9 @@
  *************************************************************************/
 
 /**
- * @brief Programs packer0 l1 info & math destination register format
+ * @brief Programs packer0 L1 information & math destination register format
  *
- * @param pack_output The output circular buffer
+ * @param pack_output The output DataFlow Buffer identifier
  */
 inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
@@ -87,9 +87,9 @@ inline void llk_pack_dest_section_done() {
  * @param config Packed uint32: bits [1:0] = ReluType, bits [31:16] = threshold.
  */
 TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) {
-    _llk_pack_relu_config_<p_pacr::PACK0, false>(ckernel::ReluConfig::from_packed(config));
+    _llk_pack_relu_config_<p_pacr::PACK0, false /* EN_32B_DEST */>(ckernel::ReluConfig::from_packed(config));
 }
 
 TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
-    _llk_pack_relu_config_<p_pacr::PACK0, false>(relu_config);
+    _llk_pack_relu_config_<p_pacr::PACK0, false /* EN_32B_DEST */>(relu_config);
 }

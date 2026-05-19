@@ -47,7 +47,7 @@ jobs:
       caller-id: ${{ format('{0}/run-{1}/attempt-{2}', github.workflow, github.run_id, github.run_attempt) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install registry parser dependency
         run: pip3 install PyYAML

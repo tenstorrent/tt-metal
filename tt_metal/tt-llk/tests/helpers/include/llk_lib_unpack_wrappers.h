@@ -12,7 +12,7 @@
 
 #include "llk_unpack_tilize.h"
 
-#ifdef ARCH_WORMHOLE // ARCH_WORMHOLE version of the wrappers
+#ifdef ARCH_WORMHOLE
 
 inline void _llk_unpack_tilize_init_wrapper_(
     const std::uint32_t unpack_src_format = 0,
