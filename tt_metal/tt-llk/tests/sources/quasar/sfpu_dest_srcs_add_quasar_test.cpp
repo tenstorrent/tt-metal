@@ -153,11 +153,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_unpack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
     _llk_pack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
-    _llk_math_eltwise_unary_sfpu_init_();
+    _llk_math_eltwise_sfpu_init_();
 
     // SFPU add: operand A from SrcS slice 0, operand B from Dest, result to SrcS slice 2.
     // Dest addressing is purely SW — no counter increments needed.
-    // D counter stays at 0 (set by _llk_math_eltwise_unary_sfpu_init_) and
+    // D counter stays at 0 (set by _llk_math_eltwise_sfpu_init_) and
     // ADDR_MOD_7 has dest.incr=0, so the full offset is in dest_reg_addr.
     // Tile positioning uses dest_section_base (via _set_dst_write_addr_),
     const SfpuSlice<SfpuReg::SrcS> srcs {static_cast<int>(PARAM_SRCS_YDIM)};
@@ -187,7 +187,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 TT_SFPSTORE(p_sfpu::LREG2, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, srcs[2] + (d << 1));
             }
 
-            _llk_math_eltwise_unary_sfpu_srcs_clear_vlds_<0x1, 0x1>(); // Clears dvalid for SFPU read and write
+            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>(); // Clears dvalid for SFPU read and write
         }
     }
 
