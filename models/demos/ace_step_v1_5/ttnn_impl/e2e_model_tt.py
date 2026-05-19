@@ -1338,9 +1338,12 @@ class AceStepE2EModel:
             # deallocating ``null_4d`` previously freed the cached buffer and broke subsequent
             # ``generate`` calls with "Tensor is not allocated". Clone first so we own a temp buffer
             # and can free it safely.
-            null_owned = (
-                ttnn.clone(null_emb_tt) if hasattr(ttnn, "clone") else ttnn.to_memory_config(null_emb_tt, self.mem)
-            )
+            if not hasattr(ttnn, "clone"):
+                raise RuntimeError(
+                    "ttnn.clone is required to safely copy null_condition_emb before reshape/deallocate. "
+                    "This TTNN build does not expose ttnn.clone."
+                )
+            null_owned = ttnn.clone(null_emb_tt)
             null_4d = ttnn.reshape(null_owned, (1, 1, 1, d_enc))
             null_rep_4d = ttnn.repeat(null_4d, (1, 1, s_enc, 1))
             null_rep = ttnn.reshape(null_rep_4d, (1, s_enc, d_enc))
