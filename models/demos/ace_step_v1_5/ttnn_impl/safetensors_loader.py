@@ -36,14 +36,12 @@ def load_safetensors_state_dict(path: str, *, prefix: Optional[str] = None) -> S
             the prefix is stripped from returned keys.
     """
     try:
-        pass
-
         from safetensors.torch import load_file as torch_load_file  # type: ignore
 
         # Prefer torch loader when available to preserve dtype (e.g. BF16).
         raw: Dict[str, Any] = {k: v.detach().cpu() for k, v in torch_load_file(path, device="cpu").items()}
-    except Exception:
-        # Torch-free fallback: load as numpy arrays. Note that BF16 support may vary by environment.
+    except ImportError:
+        # torch safetensors not available; fall back to numpy loader.
         from safetensors.numpy import load_file  # type: ignore
 
         raw = load_file(path)

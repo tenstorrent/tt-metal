@@ -16,6 +16,11 @@ import ttnn
 # cache at a few MB even with many prompts. Override via ACE_STEP_DIT_ENC_MASK_CACHE_MAX.
 _DIT_ENC_MASK_CACHE_MAX = max(1, int(os.environ.get("ACE_STEP_DIT_ENC_MASK_CACHE_MAX", "32")))
 
+# Resolved once at import time — avoids per-call hasattr checks scattered through the module.
+_ttnn_concat_fn = getattr(ttnn, "concat", None) or getattr(ttnn, "concatenate", None)
+if _ttnn_concat_fn is None:
+    raise RuntimeError("Neither ttnn.concat nor ttnn.concatenate is available")
+
 from .dit_decoder_core import AceStepDecoderConfigTTNN, TtAceStepDiTCore, TtTimestepEmbedding
 from .output_head import TtAceStepDiTOutputHead
 from .patchify import TtAceStepPatchEmbed1D
@@ -230,10 +235,11 @@ class AceStepV15TTNNPipeline:
         Accepts:
         - torch.Tensor on CPU/GPU
         - numpy arrays / array-likes
-        - None
+
+        Raises ValueError if mask_1d is None; callers must guard with a None check before calling.
         """
         if mask_1d is None:
-            raise ValueError("mask_1d must be non-None")
+            raise ValueError("mask_1d must not be None; check keep_k is not None before calling")
 
         # Torch support (optional dependency in some environments).
         try:
@@ -344,10 +350,7 @@ class AceStepV15TTNNPipeline:
         Returns:
             ``None`` when every encoder key is valid (no mask tensor needed).
         """
-        if hasattr(ttnn, "concat"):
-            hidden_states_btC = ttnn.concat([context_latents_bt128, xt_bt64], dim=-1)
-        else:
-            hidden_states_btC = ttnn.concatenate([context_latents_bt128, xt_bt64], dim=-1)
+        hidden_states_btC = _ttnn_concat_fn([context_latents_bt128, xt_bt64], dim=-1)
 
         patches, _meta = self.patch_embed.forward(hidden_states_btC)
         b = int(hidden_states_btC.shape[0])
@@ -367,7 +370,7 @@ class AceStepV15TTNNPipeline:
 
         # Per-prompt cache lookup: identical (shape + mask-pattern) reuses the device tensor.
         # `keep_k` is already shaped (b, s_k_pad); its bytes uniquely identify the mask.
-        cache_key = (int(b), int(s_q), int(s_k_pad), bytes(np.ascontiguousarray(keep_k)))
+        cache_key = (int(b), int(s_q), int(s_k_pad), keep_k.tobytes())
         cached = self._enc_mask_cache.get(cache_key)
         if cached is not None:
             self._enc_mask_cache.move_to_end(cache_key)
@@ -385,7 +388,7 @@ class AceStepV15TTNNPipeline:
             _, evicted = self._enc_mask_cache.popitem(last=False)
             try:
                 ttnn.deallocate(evicted)
-            except Exception:
+            except RuntimeError:
                 pass
         self._enc_mask_cache[cache_key] = mask_tt
         return mask_tt
@@ -474,10 +477,7 @@ class AceStepV15TTNNPipeline:
             )
 
         if hidden_states_btC is None:
-            if hasattr(ttnn, "concat"):
-                hidden_states_btC = ttnn.concat([context_latents_bt128, xt_bt64], dim=-1)
-            else:
-                hidden_states_btC = ttnn.concatenate([context_latents_bt128, xt_bt64], dim=-1)
+            hidden_states_btC = _ttnn_concat_fn([context_latents_bt128, xt_bt64], dim=-1)
 
         if debug:
             try:

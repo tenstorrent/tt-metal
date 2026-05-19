@@ -55,6 +55,14 @@ def _load_state_dict_torch(path: Path) -> dict[str, Any]:
             return torch.load(str(path), map_location="cpu")
 
 
+def _ttnn_concat(ttnn, tensors, dim):
+    """Call ttnn.concat or ttnn.concatenate, whichever is available."""
+    fn = getattr(ttnn, "concat", None) or getattr(ttnn, "concatenate", None)
+    if fn is None:
+        raise RuntimeError("Neither ttnn.concat nor ttnn.concatenate is available")
+    return fn(tensors, dim=dim)
+
+
 class TtOobleckVaeDecoder:
     """Wraps ``TtOobleckDecoder`` built from HF ``vae/`` checkpoints."""
 
@@ -149,6 +157,10 @@ class TtOobleckVaeDecoder:
         # (weights were packed with input_dtype=activation_dtype=bfloat16).
         if latents_btc.layout != ttnn.ROW_MAJOR_LAYOUT:
             latents_btc = ttnn.to_layout(latents_btc, ttnn.ROW_MAJOR_LAYOUT)
+        assert latents_btc.layout == ttnn.ROW_MAJOR_LAYOUT, (
+            "decode_tiled requires ROW_MAJOR layout: ttnn.slice on TILE layout requires 32-aligned "
+            "boundaries which overlap-add chunk windows never satisfy (would silently corrupt in Release builds)."
+        )
         if latents_btc.dtype != dec.activation_dtype:
             latents_btc = ttnn.typecast(latents_btc, dec.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -160,7 +172,7 @@ class TtOobleckVaeDecoder:
             for b in range(batch):
                 slab = ttnn.slice(latents_btc, (b, 0, 0), (b + 1, latent_frames, c_lat))
                 parts.append(self.decode_tiled(slab, chunk_size=chunk_size, overlap=overlap))
-            return ttnn.concat(parts, dim=0) if hasattr(ttnn, "concat") else ttnn.concatenate(parts, dim=0)
+            return _ttnn_concat(ttnn, parts, dim=0)
 
         min_win = int(
             os.environ.get(
@@ -229,6 +241,7 @@ class TtOobleckVaeDecoder:
                 win_len = win_end - win_start
                 if win_len < min_win:
                     win_end = min(latent_frames, win_start + min_win)
+                    win_len = win_end - win_start
 
             latent_chunk = ttnn.slice(latents_btc, (0, win_start, 0), (1, win_end, c_lat))
             wav = dec(latent_chunk)
@@ -258,5 +271,5 @@ class TtOobleckVaeDecoder:
         if len(cores) == 1:
             merged = cores[0]
         else:
-            merged = ttnn.concat(cores, dim=1) if hasattr(ttnn, "concat") else ttnn.concatenate(cores, dim=1)
+            merged = _ttnn_concat(ttnn, cores, dim=1)
         return _crop_audio_tail(merged, initial_pad_lat)

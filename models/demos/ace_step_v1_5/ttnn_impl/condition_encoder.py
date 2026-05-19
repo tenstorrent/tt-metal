@@ -374,7 +374,7 @@ class TtAceStepInstrumentalConditionEncoder:
             if t is not None:
                 try:
                     ttnn.deallocate(t)
-                except Exception:
+                except RuntimeError:
                     pass
         return enc, self.null_condition_emb
 

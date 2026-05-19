@@ -29,7 +29,7 @@ class TtnnMomentumBufferApg:
             return
         try:
             ttnn.deallocate(self.running_tt)
-        except Exception:
+        except RuntimeError:
             pass
         self.running_tt = None
 
@@ -68,15 +68,19 @@ def bf16_row_from_numpy_bc(arr_f32_np: np.ndarray, *, device: Any, dram: Any) ->
 
 def typecast_bf16_any_to_fp32_tile(tt_bf16: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
     tt = ttnn.to_layout(tt_bf16, layout=ttnn.TILE_LAYOUT)
-    out = ttnn.typecast(tt, ttnn.float32, memory_config=dram)
-    ttnn.deallocate(tt)
+    try:
+        out = ttnn.typecast(tt, ttnn.float32, memory_config=dram)
+    finally:
+        ttnn.deallocate(tt)
     return out
 
 
 def fp32_tile_to_row_bf16(x_f32_tile: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
     x_bf_tile = ttnn.typecast(x_f32_tile, ttnn.bfloat16, memory_config=dram)
-    out = ttnn.to_layout(x_bf_tile, layout=ttnn.ROW_MAJOR_LAYOUT)
-    ttnn.deallocate(x_bf_tile)
+    try:
+        out = ttnn.to_layout(x_bf_tile, layout=ttnn.ROW_MAJOR_LAYOUT)
+    finally:
+        ttnn.deallocate(x_bf_tile)
     return out
 
 

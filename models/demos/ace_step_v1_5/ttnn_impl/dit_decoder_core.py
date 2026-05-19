@@ -845,8 +845,6 @@ class TtAceStepAttentionSDPA:
         # length (e.g. 258); padding to 288 first corrupts K statistics and attention. Self-attn:
         # padding K/V before RoPE would extend the sequence seen by RoPE — keep norm+RoPE at true S,
         # then pad for SDPA only.
-        tile_target_pre_norm = 0
-
         if _trace:
             _cross_kv_note = "n/a(self)" if is_self_attn else "n/a(cross, SDPA pad only after norm)"
             print(
@@ -865,8 +863,7 @@ class TtAceStepAttentionSDPA:
                 print(
                     "[ace_step_v1_5][sdpa] "
                     f"k_shape={tuple(k.shape)} v_shape={tuple(v.shape)} "
-                    f"k_padded={_seq_len_padded(k)} v_padded={_seq_len_padded(v)} "
-                    f"tile_target_pre_norm={tile_target_pre_norm}",
+                    f"k_padded={_seq_len_padded(k)} v_padded={_seq_len_padded(v)}",
                     flush=True,
                 )
             except Exception:
