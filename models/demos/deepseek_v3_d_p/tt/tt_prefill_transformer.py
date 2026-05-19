@@ -50,7 +50,6 @@ class TtPrefillTransformer(LightweightModule):
         num_layers: int,
         experts_per_chip: int = 8,
         first_k_dense: int = 3,
-        lm_head_is_column_parallel: bool = False,
     ) -> bool:
         """
         Top-level cache completeness check for the full transformer.
@@ -63,10 +62,6 @@ class TtPrefillTransformer(LightweightModule):
             num_layers: Number of transformer layers
             experts_per_chip: Number of routed experts per chip (default: 8)
             first_k_dense: Number of initial dense (non-MoE) layers (default: 3)
-            lm_head_is_column_parallel: Selects the LM head cache filename to look for.
-                Must match the value passed to the TtPrefillTransformer constructor so
-                the cache check and the actual load reference the same files.
-                Defaults to False (row-parellel mode) to match TtLMHead's default.
 
         Returns:
             True if all expected cache files exist, False otherwise
@@ -92,8 +87,8 @@ class TtPrefillTransformer(LightweightModule):
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, "norm"):
             return False
 
-        # LM head — must match the mode the constructor will use to read the cache.
-        if not TtLMHead.check_cache_complete(cache_path, is_column_parallel=lm_head_is_column_parallel):
+        # LM head
+        if not TtLMHead.check_cache_complete(cache_path):
             return False
 
         logger.info(f"TTNN cache complete at {cache_path} ({num_layers} layers)")

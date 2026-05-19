@@ -60,17 +60,12 @@ class TtLMHead(LightweightModule):
         return (None, -1) if is_column_parallel else (None, -2)
 
     @staticmethod
-    def _cache_file_basename(is_column_parallel: bool) -> str:
-        return "lm_head_weight" if is_column_parallel else "lm_head_weight_row"
-
-    @staticmethod
-    def check_cache_complete(cache_path: Path, is_column_parallel: bool = True) -> bool:
+    def check_cache_complete(cache_path: Path) -> bool:
         """Check if LM head weights cache files exist for the requested mode."""
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
-        pattern = f"{TtLMHead._cache_file_basename(is_column_parallel)}*.tensorbin"
-        if not pattern_exists(pattern, "LMHead"):
-            logger.debug(f"TTNN cache missing: {pattern}")
+        if not pattern_exists("lm_head_weight*.tensorbin", "LMHead"):
+            logger.debug("TTNN cache missing: lm_head_weight")
             return False
         return True
 
@@ -83,7 +78,7 @@ class TtLMHead(LightweightModule):
         dtype: ttnn.DataType,
         cache_path: Path | None,
         device: ttnn.MeshDevice | None = None,
-        is_column_parallel: bool = True,
+        is_column_parallel: bool = False,
     ) -> ttnn.Tensor | None:
         """
         Shared logic for converting LM head weight to ttnn with caching.
@@ -119,7 +114,7 @@ class TtLMHead(LightweightModule):
             dims=TtLMHead._weight_shard_dims(is_column_parallel),
         )
 
-        cache_file_name = str(cache_path / TtLMHead._cache_file_basename(is_column_parallel)) if cache_path else None
+        cache_file_name = str(cache_path / "lm_head_weight") if cache_path else None
 
         tt_weight = ttnn.as_tensor(
             torch_weight,
@@ -148,7 +143,7 @@ class TtLMHead(LightweightModule):
         mesh_device: ttnn.MeshDevice,
         cache_path: Path,
         dtype: ttnn.DataType = ttnn.bfloat16,
-        is_column_parallel: bool = True,
+        is_column_parallel: bool = False,
     ):
         """Build TTNN cache for LM head weight without device copy."""
         TtLMHead._convert_and_cache_weight(
@@ -165,6 +160,8 @@ class TtLMHead(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
         emb_dim: int = DeepSeekV3Config.EMB_SIZE,
         vocab_size: int = DeepSeekV3Config.VOCAB_SIZE,
         torch_weight: torch.Tensor = None,
@@ -203,8 +200,10 @@ class TtLMHead(LightweightModule):
         self.emb_dim = emb_dim
         self.vocab_size = vocab_size
         self.num_devices = mesh_device.get_num_devices()
-        self.sp_factor = mesh_device.shape[0]
-        self.dp_factor = mesh_device.shape[1]
+        self.sp_factor = mesh_device.shape[sp_axis]
+        self.tp_factor = mesh_device.shape[tp_axis]
+        self.sp_axis = sp_axis
+        self.tp_axis = tp_axis
         self.num_links = num_links
         self.topology = topology
         self.activations_dtype = activations_dtype
@@ -359,8 +358,6 @@ class TtLMHead(LightweightModule):
         x = ttnn.narrow(x, dim=-2, start=tile_start, length=ttnn.TILE_SIZE)
         logger.debug(f"[TtLMHead.forward] After narrow ({local_token_id=} {tile_start=}): {x.shape=} {token_offset=}")
 
-        tp_size = self.mesh_device.shape[1]
-
         if self.is_column_parallel:
             # ========================================
             # Column-parallel: All-gather x to get full emb_dim (replicated across TP axis)
@@ -368,11 +365,11 @@ class TtLMHead(LightweightModule):
             # Input x is sharded: (dispatch_group_size/axis0, seq_len_per_chip, emb_dim/axis1)
             # Both shared_expert and dispatch need full emb_dim, so all-gather first
             # Only needed if there are multiple devices in TP axis (axis 1)
-            if tp_size > 1:
+            if self.tp_factor > 1:
                 x_full = ttnn.all_gather(
                     x,
                     dim=-1,  # Gather along emb_dim
-                    cluster_axis=1,  # Gather across axis 1 (TP axis)
+                    cluster_axis=self.tp_axis,  # Gather across TP axis
                     num_links=self.num_links,
                     topology=self.topology,
                 )
@@ -391,10 +388,10 @@ class TtLMHead(LightweightModule):
             partial = ttnn.matmul(x, self.weight, compute_kernel_config=self.compute_kernel_config)
             logger.debug(f"[TtLMHead.forward] partial (after matmul) shape: {partial.shape}")
 
-            if tp_size > 1:
+            if self.tp_factor > 1:
                 output = ttnn.experimental.all_reduce_async(
                     partial,
-                    cluster_axis=1,
+                    cluster_axis=self.tp_axis,
                     mesh_device=self.mesh_device,
                     num_links=self.num_links,
                     math_op=ttnn.ReduceType.Sum,
@@ -419,10 +416,9 @@ class TtLMHead(LightweightModule):
                        concatenate on host to assemble the full vocab.
         """
         ttnn.synchronize_device(self.mesh_device)
-        tp = self.mesh_device.shape[1]
         shards = ttnn.get_device_tensors(tt_logit)
         # Mesh row-major flat index: sp_i * tp + tp_j
-        base_idx = device_id * tp
+        base_idx = device_id * self.tp_factor
 
         if not self.is_column_parallel:
             # Row-parallel: all TP slices on this SP row are identical (TP-replicated by all-reduce).
@@ -430,8 +426,8 @@ class TtLMHead(LightweightModule):
             return ttnn.to_torch(shards[base_idx + 0]).to(torch.bfloat16)
 
         # column: 4 TP slices, each holds vocab/tp; concat on vocab dim to assemble the full vocab on host.
-        host_pieces = [ttnn.to_torch(shards[base_idx + j]).to(torch.bfloat16) for j in range(tp)]
+        host_pieces = [ttnn.to_torch(shards[base_idx + j]).to(torch.bfloat16) for j in range(self.tp_factor)]
         return torch.cat(host_pieces, dim=-1)
 
     def select_first_token(self, logit_host: torch.Tensor, token_offset: int) -> torch.Tensor:
-        return logit_host[..., token_offset, :].unsqueeze(0).unsqueeze(0)
+        return logit_host[..., token_offset, :]
