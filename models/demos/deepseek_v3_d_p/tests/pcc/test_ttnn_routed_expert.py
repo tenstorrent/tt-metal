@@ -137,7 +137,7 @@ def run_torch_routed_experts(
         pytest.param(
             (2, 4),
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="mesh-2x4",
         ),
     ],
