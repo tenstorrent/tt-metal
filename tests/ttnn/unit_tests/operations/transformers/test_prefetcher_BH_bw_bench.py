@@ -58,14 +58,17 @@ def _round_up(n, m):
     return ((n + m - 1) // m) * m
 
 
-# Workload constants
+# Workload constants. Override via env vars for cross-shape experiments.
 _M = 32  # matmul batch dim; unused on the receiver side (no matmul) but needed by tensor shape
-_K = 2048
-_N = 4096
+_K = int(os.environ.get("BENCH_K", "2048"))
+_N = int(os.environ.get("BENCH_N", "4096"))
 _NUM_BANKS = 8
 _NUM_RECV_PER_BANK = int(os.environ.get("BENCH_RECV_PER_BANK", "1"))
-_NUM_RECEIVERS = _NUM_BANKS * _NUM_RECV_PER_BANK  # 16
-_BF8_TILE_BYTES = 1088  # 32x32 bf8_b
+_NUM_RECEIVERS = _NUM_BANKS * _NUM_RECV_PER_BANK
+_DTYPE_NAME = os.environ.get("BENCH_DTYPE", "bfloat8_b")  # "bfloat8_b" or "bfloat16"
+_DTYPE = {"bfloat8_b": ttnn.bfloat8_b, "bfloat16": ttnn.bfloat16}[_DTYPE_NAME]
+_TILE_BYTES = {"bfloat8_b": 1088, "bfloat16": 2048}[_DTYPE_NAME]
+_BF8_TILE_BYTES = _TILE_BYTES  # kept for backward-compat in derivations below
 
 
 def _expected_push_geometry(path: str):
@@ -99,7 +102,7 @@ def _make_weight(device, num_dram_banks: int) -> ttnn.Tensor:
         ttnn.ShardSpec(dram_core_range_set, [_K, _N // num_dram_banks], ttnn.ShardOrientation.ROW_MAJOR),
     )
     return ttnn.as_tensor(
-        pt_weight, device=device, dtype=ttnn.bfloat8_b, memory_config=weight_mem_config, layout=ttnn.TILE_LAYOUT
+        pt_weight, device=device, dtype=_DTYPE, memory_config=weight_mem_config, layout=ttnn.TILE_LAYOUT
     )
 
 
