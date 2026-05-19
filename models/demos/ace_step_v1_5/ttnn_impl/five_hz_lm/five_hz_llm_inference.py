@@ -352,41 +352,88 @@ class LocalFiveHzLMHandler:
         return negative_prompt and negative_prompt.strip() and negative_prompt.strip() != "NO USER INPUT"
 
     def _build_logits_processor(self, repetition_penalty: float) -> LogitsProcessorList:
-        """Build logits processor list with repetition penalty if needed"""
+        """Build logits processor list with repetition penalty if needed.
+
+        When the TTNN logits device is attached, repetition penalty + top-k + top-p +
+        temperature sampling run as a single fused on-device pipeline inside
+        :meth:`_postprocess_and_sample_ttnn_or_torch`, so the host-side HF processor
+        list stays empty (avoids double application).
+        """
         logits_processor = LogitsProcessorList()
-        # When TTNN logits device is set, repetition runs on-device in
-        # ``_apply_repetition_penalty_ttnn_or_torch`` (avoid double application).
         if repetition_penalty != 1.0 and self._ttnn_logits_device is None:
             logits_processor.append(RepetitionPenaltyLogitsProcessor(penalty=repetition_penalty))
         return logits_processor
 
-    def _apply_repetition_penalty_ttnn_or_torch(
+    def _postprocess_and_sample_ttnn_or_torch(
         self,
         input_ids: torch.Tensor,
         scores: torch.Tensor,
+        *,
         repetition_penalty: float,
+        top_k: Optional[int],
+        top_p: Optional[float],
+        temperature: float,
         logits_processor: LogitsProcessorList,
     ) -> torch.Tensor:
-        """HF-style repetition penalty: TTNN when ``_ttnn_logits_device`` is set, else HF processors."""
-        if repetition_penalty == 1.0:
-            return scores
-        if self._ttnn_logits_device is not None:
-            from models.demos.ace_step_v1_5.ttnn_impl.lm_constrained_logits_ttnn import repetition_penalty_apply_bf16
+        """Apply repetition penalty → top-k → top-p → temperature sample, returning ``[B]`` token ids.
 
-            out = repetition_penalty_apply_bf16(
+        TTNN path: single fused on-device call via
+        :func:`~models.demos.ace_step_v1_5.ttnn_impl.lm_postprocess_tt_transformers.apply_penalty_filter_sample`
+        (logits never leave the chip between penalty and sample). Subclasses
+        :class:`~models.demos.ace_step_v1_5.ttnn_impl.lm_postprocess_tt_transformers.AceStepPenalties1D`
+        and :class:`~models.demos.ace_step_v1_5.ttnn_impl.lm_postprocess_tt_transformers.AceStepSampling1D`
+        wrap the stock :mod:`models.common.modules.sampling` modules so all penalty / top-k /
+        top-p / temperature math comes from ``tt_transformers`` primitives.
+
+        Host fallback (no TTNN device attached): standard HF + PyTorch path
+        (``RepetitionPenaltyLogitsProcessor`` → ``torch.topk`` → top-p sort+softmax+scatter
+        → ``torch.multinomial``).
+        """
+        if self._ttnn_logits_device is not None:
+            from models.demos.ace_step_v1_5.ttnn_impl.lm_postprocess_tt_transformers import apply_penalty_filter_sample
+
+            self._ttnn_sample_counter = int(self._ttnn_sample_counter) + 1
+            tokens = apply_penalty_filter_sample(
                 scores,
                 input_ids,
-                repetition_penalty,
+                repetition_penalty=float(repetition_penalty),
+                top_k=top_k,
+                top_p=top_p,
+                temperature=float(temperature),
+                seed=self._ttnn_sample_counter,
                 device=self._ttnn_logits_device,
             )
-            return out.to(device=scores.device, dtype=scores.dtype)
-        if len(logits_processor) > 0:
-            out = scores
-            for processor in logits_processor:
-                out = processor(input_ids, out)
-            return out
-        rep_proc = RepetitionPenaltyLogitsProcessor(penalty=repetition_penalty)
-        return rep_proc(input_ids, scores)
+            return tokens.to(device=scores.device)
+
+        # Host fallback: identical semantics to the legacy 4-step path.
+        out = scores
+        if repetition_penalty != 1.0:
+            if len(logits_processor) > 0:
+                for processor in logits_processor:
+                    out = processor(input_ids, out)
+            else:
+                rep_proc = RepetitionPenaltyLogitsProcessor(penalty=repetition_penalty)
+                out = rep_proc(input_ids, out)
+
+        if top_k is not None and top_k > 0:
+            indices_to_remove = out < torch.topk(out, top_k)[0][..., -1, None]
+            out = out.clone()
+            out[indices_to_remove] = float("-inf")
+
+        if top_p is not None and 0.0 < top_p < 1.0:
+            sorted_logits, sorted_indices = torch.sort(out, descending=True)
+            cumulative_probs = torch.cumsum(torch.softmax(sorted_logits.float(), dim=-1), dim=-1)
+            sorted_indices_to_remove = cumulative_probs > top_p
+            sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+            sorted_indices_to_remove[..., 0] = 0
+            indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+            out = out.clone()
+            out[indices_to_remove] = float("-inf")
+
+        if temperature > 0:
+            probs = torch.softmax(out.float() / float(temperature), dim=-1)
+            return torch.multinomial(probs, num_samples=1).squeeze(1)
+        return torch.argmax(out, dim=-1)
 
     def _mask_any_ttnn_or_torch(self, mask: torch.Tensor) -> bool:
         """Reduce ``mask.any()``; TTNN sum when ``_ttnn_logits_device`` is set."""
@@ -576,62 +623,13 @@ class LocalFiveHzLMHandler:
         except Exception as e:
             return False, f"❌ Error initializing 5Hz LM: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
 
-    def _apply_top_k_filter(self, logits: torch.Tensor, top_k: Optional[int]) -> torch.Tensor:
-        """Apply top-k filtering to logits"""
-        if self._ttnn_logits_device is not None and top_k is not None and top_k > 0:
-            from models.demos.ace_step_v1_5.ttnn_impl.lm_constrained_logits_ttnn import logits_top_k_filter_bf16
-
-            return logits_top_k_filter_bf16(logits, int(top_k), device=self._ttnn_logits_device).to(
-                device=logits.device, dtype=logits.dtype
-            )
-        if top_k is not None and top_k > 0:
-            indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
-            logits[indices_to_remove] = float("-inf")
-        return logits
-
-    def _apply_top_p_filter(self, logits: torch.Tensor, top_p: Optional[float]) -> torch.Tensor:
-        """Apply top-p (nucleus) filtering to logits"""
-        if self._ttnn_logits_device is not None and top_p is not None and 0.0 < top_p < 1.0:
-            from models.demos.ace_step_v1_5.ttnn_impl.lm_constrained_logits_ttnn import logits_top_p_nucleus_bf16
-
-            return logits_top_p_nucleus_bf16(logits, float(top_p), device=self._ttnn_logits_device).to(
-                device=logits.device, dtype=logits.dtype
-            )
-        if top_p is not None and 0.0 < top_p < 1.0:
-            sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-            # Upcast to float32 for stable softmax/cumsum (critical for float16/MPS)
-            cumulative_probs = torch.cumsum(torch.softmax(sorted_logits.float(), dim=-1), dim=-1)
-            sorted_indices_to_remove = cumulative_probs > top_p
-            sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-            sorted_indices_to_remove[..., 0] = 0
-            indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
-            logits[indices_to_remove] = float("-inf")
-        return logits
-
-    def _sample_tokens(self, logits: torch.Tensor, temperature: float) -> torch.Tensor:
-        """Sample tokens from logits with temperature.
-
-        Upcasts to float32 for numerical stability (float16 logits can overflow
-        during softmax, especially after CFG scaling).
-        """
-        if self._ttnn_logits_device is not None:
-            from models.demos.ace_step_v1_5.ttnn_impl.lm_constrained_logits_ttnn import logits_sample_indices_bf16
-
-            self._ttnn_sample_counter = int(self._ttnn_sample_counter) + 1
-            idx = logits_sample_indices_bf16(
-                logits,
-                float(temperature),
-                device=self._ttnn_logits_device,
-                seed=self._ttnn_sample_counter,
-            )
-            return idx.to(device=logits.device)
-        if temperature > 0:
-            # Upcast to float32 for stable softmax (critical for float16/MPS)
-            logits = logits.float() / temperature
-            probs = torch.softmax(logits, dim=-1)
-            return torch.multinomial(probs, num_samples=1).squeeze(1)
-        else:
-            return torch.argmax(logits, dim=-1)
+    # Note: top-k filter, top-p filter, and sampling were previously three separate
+    # methods (``_apply_top_k_filter``, ``_apply_top_p_filter``, ``_sample_tokens``) that
+    # each round-tripped host↔device when TTNN assist was on. They are now fused into
+    # :meth:`_postprocess_and_sample_ttnn_or_torch`, which performs the whole
+    # ``repetition_penalty → top-k → top-p → temperature → sample`` pipeline as a single
+    # on-device call (via ``models.common.modules.sampling.{penalties_1d,sampling_1d}``)
+    # when ``_ttnn_logits_device`` is attached, or pure host PyTorch otherwise.
 
     def _check_eos_token(self, tokens: torch.Tensor, eos_token_id: int, pad_token_id: Optional[int]) -> bool:
         """Check if any token in the batch is EOS or pad token"""
@@ -2814,16 +2812,17 @@ class LocalFiveHzLMHandler:
                 if constrained_processor is not None:
                     next_token_logits = constrained_processor(generated_ids, next_token_logits)
 
-                next_token_logits = self._apply_repetition_penalty_ttnn_or_torch(
-                    generated_ids, next_token_logits, repetition_penalty, logits_processor
+                # Fused: repetition_penalty → top-k → top-p → temperature → sample.
+                # TTNN-assist path runs the whole pipeline on-device in one shot.
+                next_tokens = self._postprocess_and_sample_ttnn_or_torch(
+                    generated_ids,
+                    next_token_logits,
+                    repetition_penalty=repetition_penalty,
+                    top_k=top_k,
+                    top_p=top_p,
+                    temperature=temperature,
+                    logits_processor=logits_processor,
                 )
-
-                # Apply top-k and top-p filtering
-                next_token_logits = self._apply_top_k_filter(next_token_logits, top_k)
-                next_token_logits = self._apply_top_p_filter(next_token_logits, top_p)
-
-                # Apply temperature and sample
-                next_tokens = self._sample_tokens(next_token_logits, temperature)
 
                 # Update constrained processor state
                 self._update_constrained_processor_state(constrained_processor, next_tokens)
@@ -3001,24 +3000,28 @@ class LocalFiveHzLMHandler:
                 if constrained_processor is not None:
                     cfg_logits = constrained_processor(current_input_ids, cfg_logits)
 
-                # Repetition penalty (TTNN when device set; else HF processors on cond branch only)
-                cfg_logits = self._apply_repetition_penalty_ttnn_or_torch(
-                    current_input_ids, cfg_logits, repetition_penalty, logits_processor
-                )
-
-                # Apply top-k and top-p filtering
-                cfg_logits = self._apply_top_k_filter(cfg_logits, top_k)
-                cfg_logits = self._apply_top_p_filter(cfg_logits, top_p)
-
-                # Force EOS for already-finished sequences so they don't alter constrained state
+                # Force EOS for already-finished sequences BEFORE the fused pipeline.
+                # Same effect as the prior "overwrite then sample" pattern: rows with all-finite
+                # logits replaced by (eos=0, rest=-inf) cause top-k → top-p → sample to pick EOS
+                # regardless of penalty/temperature (the only non-(-inf) token survives every
+                # filter step). Moving this BEFORE the fused TTNN call lets us collapse
+                # repetition + top-k + top-p + temperature + sample into one on-device pipeline.
                 if self._mask_any_ttnn_or_torch(seq_finished):
                     for b in range(batch_size):
                         if seq_finished[b]:
                             cfg_logits[b, :] = float("-inf")
                             cfg_logits[b, eos_token_id] = 0.0
 
-                # Apply temperature and sample
-                next_tokens = self._sample_tokens(cfg_logits, temperature)
+                # Fused: repetition_penalty → top-k → top-p → temperature → sample.
+                next_tokens = self._postprocess_and_sample_ttnn_or_torch(
+                    current_input_ids,
+                    cfg_logits,
+                    repetition_penalty=repetition_penalty,
+                    top_k=top_k,
+                    top_p=top_p,
+                    temperature=temperature,
+                    logits_processor=logits_processor,
+                )
 
                 # Update constrained processor state AFTER sampling
                 self._update_constrained_processor_state(constrained_processor, next_tokens)
@@ -4186,16 +4189,16 @@ class LocalFiveHzLMHandler:
             if constrained_processor is not None:
                 t_logits = constrained_processor(t_ids, t_logits)
 
-            t_logits = self._apply_repetition_penalty_ttnn_or_torch(
-                t_ids, t_logits, repetition_penalty, logits_processor_rep
+            # Fused: repetition_penalty → top-k → top-p → temperature → sample.
+            t_token = self._postprocess_and_sample_ttnn_or_torch(
+                t_ids,
+                t_logits,
+                repetition_penalty=repetition_penalty,
+                top_k=top_k,
+                top_p=top_p,
+                temperature=temperature,
+                logits_processor=logits_processor_rep,
             )
-
-            # Apply top-k and top-p filtering (reuse existing methods)
-            t_logits = self._apply_top_k_filter(t_logits, top_k)
-            t_logits = self._apply_top_p_filter(t_logits, top_p)
-
-            # Sample token (reuse existing method)
-            t_token = self._sample_tokens(t_logits, temperature)
             token_id = t_token.item()
 
             new_tokens.append(token_id)
