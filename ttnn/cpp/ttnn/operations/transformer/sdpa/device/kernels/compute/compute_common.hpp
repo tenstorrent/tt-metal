@@ -56,7 +56,7 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
         acquire_dst();
         copy_tile(in0, i, dst_reg_0);
         copy_tile(in1, i, dst_reg_1);
-        binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_0, static_cast<int>(VectorMode::C));
+        binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_0, VectorMode::C);
         pack_tile(dst_reg_0, in0);
         release_dst();
     }
@@ -68,7 +68,7 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
 /**
  * out_cb = eltwise_max(in0, in1)
  */
-template <int vector_mode = (int)VectorMode::RC>
+template <VectorMode vector_mode = VectorMode::RC>
 void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) {
     // inputs come in full, outputs go out full
     copy_tile_to_dst_init_short(in0);
@@ -83,7 +83,7 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
         acquire_dst();
         copy_tile(in0, i, dst_reg_0);
         copy_tile(in1, i, dst_reg_1);
-        binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_0, static_cast<int>(VectorMode::C));
+        binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_0, vector_mode);
         pack_tile(dst_reg_0, out_cb, i);
         release_dst();
     }
@@ -100,7 +100,7 @@ template <
     uint32_t scale_cb,
     uint32_t rows,
     uint32_t cols,
-    int vector_mode = static_cast<int>(VectorMode::C)>
+    VectorMode vector_mode = VectorMode::C>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
@@ -179,7 +179,7 @@ template <
     uint32_t in0_cb,
     uint32_t scale_cb,
     uint32_t rows,
-    int vector_mode = static_cast<int>(VectorMode::C)>
+    VectorMode vector_mode = VectorMode::C>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
@@ -207,7 +207,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         if (do_eltwise_max) {
             copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
-            binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, static_cast<int>(vector_mode));
+            binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, vector_mode);
         }
 
         pack_tile(reduce_dst_idx, out_cb);
@@ -261,7 +261,7 @@ void calculate_recip_first_column() {
 
 template <bool legacy_compat = true>
 void recip_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column<legacy_compat>, idst, (int)VectorMode::C);
+    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column<legacy_compat>, idst, VectorMode::C);
 }
 #endif
 
@@ -298,7 +298,7 @@ template <
     uint32_t scale_fp32,
     bool write_result_inplace = true,
     bool do_reduce = true,
-    int vector_mode = (int)VectorMode::RC>
+    VectorMode vector_mode = VectorMode::RC>
 void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
@@ -332,7 +332,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 : 8;
-                constexpr int vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
+                constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
                 exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
             }
             tile_regs_commit();
@@ -848,7 +848,7 @@ void calculate_exponential_first_column() {
 template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
 void exp_tile_first_column(uint32_t idst) {
     _llk_math_eltwise_unary_sfpu_params_(
-        calculate_exponential_first_column<SDPA_EXP_APPROX_MODE, scale_bf16>, idst, (int)VectorMode::C);
+        calculate_exponential_first_column<SDPA_EXP_APPROX_MODE, scale_bf16>, idst, VectorMode::C);
 }
 #endif  // defined(TRISC_MATH) || defined(TRISC_PACK)
 
@@ -940,14 +940,14 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     }
 }
 
-template <bool SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C>
+template <bool SDPA_EXP_APPROX_MODE, VectorMode vector_mode = VectorMode::C>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
     _llk_math_eltwise_unary_sfpu_params_(
         calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE>, idst, vector_mode, scale_bf16);
 }
 #endif
 
-template <uint32_t scale_fp32, int vector_mode = (int)VectorMode::C>
+template <uint32_t scale_fp32, VectorMode vector_mode = VectorMode::C>
 void correction_block(
     uint32_t cb_worker_max,
     uint32_t cb_worker_sum,
@@ -1092,7 +1092,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
         // add_unary_tile(0, 0x3F800000); // Call the LLK directly to get access to VectorMode argument
-        MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY>(0, 0x3F800000, (int)VectorMode::C)));
+        MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY>(0, 0x3F800000, VectorMode::C)));
         // recip_tile<false>(0, (int)VectorMode::C);
         MATH((recip_tile_first_column<false>(0)));
         pack_tile(0, out_cb);
@@ -1119,7 +1119,7 @@ void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
 
 void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, uint threshold) {
     _llk_math_eltwise_unary_sfpu_params_(
-        calculate_softplus_first_column<APPROX>, idst, (int)VectorMode::C, beta, beta_reciprocal, threshold);
+        calculate_softplus_first_column<APPROX>, idst, VectorMode::C, beta, beta_reciprocal, threshold);
 }
 #endif
 

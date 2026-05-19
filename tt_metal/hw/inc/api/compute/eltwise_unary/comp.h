@@ -508,7 +508,7 @@ ALWI void eqz_tile_uint16(uint32_t idst) {
  */
 // clang-format on
 ALWI void eqz_tile_uint32(uint32_t idst) {
-    MATH((SFPU_TWO_PARAM_KERNEL(calculate_eqz_uint32, APPROX, 8, idst, (int)VectorMode::RC)));
+    MATH((SFPU_TWO_PARAM_KERNEL(calculate_eqz_uint32, APPROX, 8, idst, VectorMode::RC)));
 }
 
 /**
@@ -583,7 +583,7 @@ ALWI void nez_tile_uint16(uint32_t idst) {
  */
 // clang-format on
 ALWI void nez_tile_uint32(uint32_t idst) {
-    MATH((SFPU_TWO_PARAM_KERNEL(calculate_nez_uint32, APPROX, 8, idst, (int)VectorMode::RC)));
+    MATH((SFPU_TWO_PARAM_KERNEL(calculate_nez_uint32, APPROX, 8, idst, VectorMode::RC)));
 }
 
 /**

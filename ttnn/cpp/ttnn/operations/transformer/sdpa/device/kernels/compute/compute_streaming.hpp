@@ -319,7 +319,7 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
         MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
         uint32_t dst_index = 0;
         constexpr int iterations = 32;
-        constexpr int vector_mode_exp = (int)VectorMode::None;
+        constexpr VectorMode vector_mode_exp = VectorMode::None;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; j++) {
                 exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
@@ -530,7 +530,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
 #ifdef ARCH_BLACKHOLE
             recip_tile_init<false>();
-            MATH((recip_tile<false>(0, (int)VectorMode::C)));
+            MATH((recip_tile<false>(0, VectorMode::C)));
 #else
             recip_tile_init();
             MATH((recip_tile_first_column_wh_idst0_direct()));
