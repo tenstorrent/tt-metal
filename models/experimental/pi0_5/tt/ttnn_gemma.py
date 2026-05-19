@@ -484,6 +484,37 @@ class GemmaAttentionTTNN:
         # OPTIMIZATION 2: Native TTNN head splitting (no PyTorch transfers!)
         # This splits the fused QKV into separate Q, K, V with proper head layout
         # Output shapes: q=[batch, num_heads, seq, head_dim], k/v=[batch, num_kv_heads, seq, head_dim]
+        #
+        # MQA-bypass experiment (DON'T re-try without first reading this note):
+        # When num_kv_heads=1 and M-tile=2 (the expert: action_horizon=50
+        # padded to 64 → 2 tiles), this op's work-distribution heuristic
+        # caps dispatch at 2 cores even with QWEN_NLP_CREATE_HEADS_HEAD_SPLIT=1
+        # (the multiplier is num_kv_heads, which is 1, so head-split is a
+        # no-op for MQA). At 180 calls/chunk (18 expert layers × 10 denoise
+        # steps) that "looks" wasteful in the visualizer.
+        #
+        # I tried bypassing with slice(Q)+slice(K)+slice(V)+reshape(Q)+
+        # transpose(Q) (K, V are already in the right layout once sliced).
+        # Result: +6 ms/chunk regression (61 → 67 ms perf-trace baseline).
+        # Tracy breakdown (run_mqa_bypass_l1c vs baseline run2):
+        #   - Saved: -198× NlpCreateHeads, -4788 µs device
+        #   - Added: +198× ReshapeView (~36 µs/call, 7287 µs total),
+        #            +198× Transpose (1521 µs),
+        #            +594× Slice (1071 µs),
+        #            +792× Typecast fp32→bf16 (3529 µs, auto-inserted
+        #                  because ReshapeView promotes bf8_b→fp32 internally)
+        #   - Net: +8.6 ms device-side
+        # Pinning memory_config=L1_MEMORY_CONFIG on every intermediate shrank
+        # op-to-op latency 5-47× but DIDN'T touch device compute — the
+        # ReshapeView cost is from physically restitching tiles whose inner
+        # boundaries change ((B,1,M,H*D)→(B,M,H,D)), not from buffer location.
+        #
+        # Net: the fused nlp_create_qkv_heads at 2 cores beats the
+        # decomposed slice+reshape+transpose chain at 120 cores. Don't undo
+        # this without an upstream TTNN fix to either:
+        #   (a) make ReshapeView on tile-layout bf8_b not promote to fp32, or
+        #   (b) extend nlp_create_qkv_heads to parallelize across num_q_heads
+        #       (not just num_kv_heads × M-tile).
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
             num_heads=self.num_heads,
