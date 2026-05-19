@@ -14,7 +14,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ttnn.device import is_blackhole as ttnn_is_blackhole
-from ttnn.device import is_wormhole_b0 as ttnn_is_wormhole_b0
 
 import ttnn
 
@@ -34,6 +33,7 @@ class MLPOptimizations:
     activation_memcfg: ttnn.MemoryConfig
     core_grid: ttnn.CoreGrid
     wi_prg_config: object | None = None
+    wo_prg_config: object | None = None
     wi_minimal_config: object | None = None
 
 
@@ -98,7 +98,7 @@ class Optimizations:
         intermediate_size: int = 4096,
     ) -> "Optimizations":
         """Build fully-resolved optimizations for the given shape and device."""
-        max_batch = max(1, int(max_batch_size))
+        max_batch = max(1, max_batch_size)
         core_grid = _matmul_core_grid(mesh_device, max_seq_len, max_batch)
         act_mem = _linear_activation_memory_config(max_seq_len, max_batch)
 
@@ -123,14 +123,27 @@ class Optimizations:
             )
         )
 
+        # B1/S512 tuned matmul configs for AttnOut and MLPwo (Sweep 4.2).
+        tuned_b1 = max_seq_len == 512 and max_batch == 1
+        wo_prg_tuned = (
+            _tuned_mlp_wo_program_config(
+                mesh_device,
+                hidden_size=hidden_size,
+                intermediate_size=intermediate_size,
+            )
+            if tuned_b1
+            else None
+        )
+
         mlp_opts = MLPOptimizations(
-            wi_compute_kernel_cfg=mlp_wi_compute_kernel_config(mesh_device, max_seq_len, max_batch),
-            wo_compute_kernel_cfg=mlp_wo_compute_kernel_config(mesh_device, max_seq_len, max_batch),
+            wi_compute_kernel_cfg=mlp_wi_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
+            wo_compute_kernel_cfg=mlp_wo_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
             wi_memcfg=_mlp_wi_output_memory_config(max_seq_len, max_batch, mesh_device),
             wo_memcfg=_mlp_wo_output_memory_config(max_seq_len, max_batch, mesh_device),
             activation_memcfg=act_mem,
             core_grid=core_grid,
             wi_prg_config=wi_prg,
+            wo_prg_config=wo_prg_tuned,
             wi_minimal_config=wi_minimal,
         )
 
@@ -138,16 +151,24 @@ class Optimizations:
 
         qkv_out_dim = 3 * hidden_size
         attn_opts = AttentionOptimizations(
-            qkv_compute_kernel_cfg=attention_qkv_compute_kernel_config(mesh_device, max_seq_len, max_batch),
-            output_compute_kernel_cfg=attention_output_compute_kernel_config(mesh_device, max_seq_len, max_batch),
-            score_compute_kernel_cfg=sdpa_compute_kernel_config(mesh_device, max_seq_len, max_batch),
+            qkv_compute_kernel_cfg=attention_qkv_compute_kernel_config(
+                mesh_device, max_seq_len, max_batch, dtype=dtype
+            ),
+            output_compute_kernel_cfg=attention_output_compute_kernel_config(
+                mesh_device, max_seq_len, max_batch, dtype=dtype
+            ),
+            score_compute_kernel_cfg=sdpa_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
             qkv_memcfg=act_mem,
             create_heads_memcfg=_create_heads_output_memory_config(max_seq_len, max_batch, mesh_device),
             score_memcfg=act_mem,
             output_memcfg=_attention_output_memory_config(max_seq_len, max_batch, mesh_device),
             core_grid=core_grid,
             qkv_prg_config=_qkv_program_config(max_seq_len, max_batch, hidden_size, qkv_out_dim, mesh_device),
-            output_prg_config=_attention_output_program_config(max_seq_len, max_batch, hidden_size, mesh_device),
+            output_prg_config=(
+                _tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
+                if tuned_b1
+                else _attention_output_program_config(max_seq_len, max_batch, hidden_size, mesh_device)
+            ),
         )
 
         # ── Norm ─────────────────────────────────────────────────────────
@@ -176,37 +197,11 @@ class Optimizations:
 # ══════════════════════════════════════════════════════════════════════════════
 
 BGE_M3_L1_LINEAR_MAX_SEQ_LEN = 512
-BGE_M3_WORMHOLE_MLP_WI_DRAM_MAX_SEQ_LEN = 127
-BGE_M3_MATMUL_SHORT_SEQ_MAX_LEN = 32
-BGE_M3_MATMUL_SHORT_SEQ_CORE_ROWS_CAP = 4
-BGE_M3_FAST_PACKER_OFFLOAD_MAX_SEQ_LEN = 32
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Device helpers
 # ══════════════════════════════════════════════════════════════════════════════
-
-
-def is_wormhole_family_device(mesh_device: ttnn.MeshDevice) -> bool:
-    if ttnn_is_blackhole(mesh_device):
-        return False
-    if ttnn_is_wormhole_b0(mesh_device):
-        return True
-    return "wormhole" in ttnn.get_arch_name().lower()
-
-
-def _wormhole_use_fast_packer_offload(max_seq_len, max_batch_size):
-    if max_seq_len is None or int(max_seq_len) > BGE_M3_FAST_PACKER_OFFLOAD_MAX_SEQ_LEN:
-        return False
-    b = 1 if max_batch_size is None else max(1, int(max_batch_size))
-    return b <= 1
-
-
-def _resolve_packer_l1_acc(mesh_device, max_seq_len, max_batch_size):
-    if not ttnn_is_blackhole(mesh_device) and is_wormhole_family_device(mesh_device):
-        if _wormhole_use_fast_packer_offload(max_seq_len, max_batch_size):
-            return False
-    return True
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -219,49 +214,38 @@ def weight_dram_memory_config():
 
 
 def _linear_activation_memory_config(max_seq_len, max_batch_size=None):
-    s = 0 if max_seq_len is None else int(max_seq_len)
+    s = 0 if max_seq_len is None else max_seq_len
     if s > BGE_M3_L1_LINEAR_MAX_SEQ_LEN:
         return ttnn.DRAM_MEMORY_CONFIG
-    b = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    b = 1 if max_batch_size is None else max(1, max_batch_size)
     if b * s > BGE_M3_L1_LINEAR_MAX_SEQ_LEN:
         return ttnn.DRAM_MEMORY_CONFIG
     return ttnn.L1_MEMORY_CONFIG
 
 
 def _mlp_wi_output_memory_config(max_seq_len, max_batch_size, mesh_device):
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
-    base = _linear_activation_memory_config(max_seq_len, max_batch_size)
-    if base == ttnn.DRAM_MEMORY_CONFIG:
-        return base
-    if (
-        mesh_device is not None
-        and is_wormhole_family_device(mesh_device)
-        and max_seq_len is not None
-        and max_seq_len > BGE_M3_MATMUL_SHORT_SEQ_MAX_LEN
-        and max_seq_len <= BGE_M3_WORMHOLE_MLP_WI_DRAM_MAX_SEQ_LEN
-    ):
-        return ttnn.DRAM_MEMORY_CONFIG
-    return base
+    return _linear_activation_memory_config(max_seq_len, max_batch_size)
 
 
 def _mlp_wo_output_memory_config(max_seq_len, max_batch_size, mesh_device):
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return _linear_activation_memory_config(max_seq_len, max_batch_size)
 
 
 def _attention_output_memory_config(max_seq_len, max_batch_size, mesh_device):
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return _linear_activation_memory_config(max_seq_len, max_batch)
 
 
 def _create_heads_output_memory_config(max_seq_len, max_batch_size, mesh_device):
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return _linear_activation_memory_config(max_seq_len, max_batch)
@@ -281,10 +265,6 @@ def _matmul_core_grid(mesh_device, sequence_length=None, batch_size=None):
             gx, gy = int(g.x), int(g.y)
         except Exception:
             gx, gy = 8, 8
-    use_short = sequence_length is not None and sequence_length <= BGE_M3_MATMUL_SHORT_SEQ_MAX_LEN
-    single_batch = batch_size is None or int(batch_size) <= 1
-    if use_short and single_batch:
-        return ttnn.CoreGrid(y=min(BGE_M3_MATMUL_SHORT_SEQ_CORE_ROWS_CAP, gy), x=gx)
     return ttnn.CoreGrid(y=gy, x=gx)
 
 
@@ -294,70 +274,76 @@ def _matmul_core_grid(mesh_device, sequence_length=None, batch_size=None):
 
 
 def _make_compute_kernel(mesh_device, fidelity, max_seq_len=None, max_batch_size=None):
-    packer_l1_acc = _resolve_packer_l1_acc(mesh_device, max_seq_len, max_batch_size)
+    packer_l1_acc = True
+    # B1/S512: fp32_dest_acc_en=False lifts the matmul subblock cap (h*w <= 8
+    # instead of 4) and speeds up LN reduction passes (~1.68 µs/call).
+    # All other shapes: conservative fp32_dest_acc_en=True.
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
+    fp32_dest_acc_en = not (max_seq_len == 512 and max_batch == 1)
     return ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
         math_fidelity=fidelity,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=packer_l1_acc,
     )
 
 
 def _default_fidelity(mesh_device):
-    if ttnn_is_blackhole(mesh_device) or is_wormhole_family_device(mesh_device):
-        return ttnn.MathFidelity.HiFi4
-    return ttnn.MathFidelity.HiFi2
+    return ttnn.MathFidelity.HiFi4
 
 
 def matmul_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None):
     return _make_compute_kernel(mesh_device, _default_fidelity(mesh_device), max_seq_len, max_batch_size)
 
 
-def mlp_wi_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None):
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
-    if max_seq_len == 512 and max_batch == 1:
-        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch)
-    if max_seq_len == 512 and max_batch == 32:
-        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch)
+def mlp_wi_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None):
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
+    if max_seq_len == 512 and max_batch in (1, 32):
+        fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
+        return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
-def mlp_wo_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None):
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+def mlp_wo_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None):
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch in (1, 32):
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
-def attention_qkv_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None):
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
-    if max_seq_len == 512 and max_batch == 1:
-        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch)
-    if max_seq_len == 512 and max_batch == 32:
-        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch)
-    return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
-
-
-def attention_output_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None):
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+def attention_qkv_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None):
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch in (1, 32):
-        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch)
+        fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
+        return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
-def sdpa_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None):
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+def attention_output_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None):
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
+    if max_seq_len == 512 and max_batch in (1, 32):
+        fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
+        return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch)
+    return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
+
+
+def sdpa_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None):
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch == 1:
-        fidelity = ttnn.MathFidelity.HiFi2
-    elif ttnn_is_blackhole(mesh_device) or is_wormhole_family_device(mesh_device):
-        fidelity = ttnn.MathFidelity.HiFi4
-    else:
-        fidelity = ttnn.MathFidelity.HiFi2
-    return _make_compute_kernel(mesh_device, fidelity, max_seq_len, max_batch_size)
+        fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
+        return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch)
+    return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi4, max_seq_len, max_batch_size)
 
 
 def layernorm_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None):
+    # B1/S512: HiFi2 (LoFi regressed test_model PCC 1.0 -> 0.906).
+    # bf8b precision at B1/S512 is protected by the bf8b->bf16 fused reshard
+    # in norm.py (interleaved_to_sharded with output_dtype=bf16).
+    # All other shapes: HiFi4 (conservative default).
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
+    if max_seq_len == 512 and max_batch == 1:
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch_size)
     return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi4, max_seq_len, max_batch_size)
 
 
@@ -367,7 +353,7 @@ def layernorm_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_siz
 
 
 def _mlp_wi_program_config(mesh_device, max_seq_len, max_batch_size, *, hidden_size, intermediate_size):
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len != 512:
         return None
     if max_batch == 32:
@@ -427,7 +413,7 @@ def _b32s512_sequence_program_config(
 
 
 def _mlp_wi_minimal_matmul_config(mesh_device, max_seq_len, max_batch_size, *, hidden_size, intermediate_size):
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len != 512 or max_batch != 32:
         return None
     if hidden_size != 1024 or intermediate_size != 4096:
@@ -454,7 +440,7 @@ def _mlp_wi_minimal_matmul_config(mesh_device, max_seq_len, max_batch_size, *, h
 
 
 def _qkv_program_config(max_seq_len, max_batch_size, hidden_size, qkv_out_dim, mesh_device):
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if (
         max_seq_len != 512
         or max_batch != 32
@@ -486,7 +472,7 @@ def _qkv_program_config(max_seq_len, max_batch_size, hidden_size, qkv_out_dim, m
 
 
 def _attention_output_program_config(max_seq_len, max_batch_size, hidden_size, mesh_device):
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if (
         max_seq_len != 512
         or max_batch != 32
@@ -519,9 +505,83 @@ def _attention_output_program_config(max_seq_len, max_batch_size, hidden_size, m
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Tuned matmul program configs (B1/S512 only)
+# Sweep 4.2: AttnOut and MLPwo benefit from explicit 11x10 ibw=8 sub=2x1.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _tuned_mm2d_program_config(
+    mesh_device,
+    *,
+    grid_x,
+    grid_y,
+    M,
+    K,
+    N,
+    in0_block_w,
+    out_subblock_h,
+    out_subblock_w,
+    fused_activation,
+):
+    if mesh_device is None:
+        return None
+    try:
+        g = mesh_device.compute_with_storage_grid_size()
+        dev_gx, dev_gy = int(g.x), int(g.y)
+    except Exception:
+        return None
+    if dev_gx < grid_x or dev_gy < grid_y:
+        return None
+    M_tiles = M // 32
+    N_tiles = N // 32
+    per_core_M = (M_tiles + grid_y - 1) // grid_y
+    per_core_N = (N_tiles + grid_x - 1) // grid_x
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+    )
+
+
+def _tuned_attention_output_program_config(mesh_device, *, hidden_size):
+    return _tuned_mm2d_program_config(
+        mesh_device,
+        grid_x=11,
+        grid_y=10,
+        M=512,
+        K=hidden_size,
+        N=hidden_size,
+        in0_block_w=8,
+        out_subblock_h=2,
+        out_subblock_w=1,
+        fused_activation=None,
+    )
+
+
+def _tuned_mlp_wo_program_config(mesh_device, *, hidden_size, intermediate_size):
+    return _tuned_mm2d_program_config(
+        mesh_device,
+        grid_x=11,
+        grid_y=10,
+        M=512,
+        K=intermediate_size,
+        N=hidden_size,
+        in0_block_w=8,
+        out_subblock_h=2,
+        out_subblock_w=1,
+        fused_activation=None,
+    )
+
+
 def _layernorm_sharded_config(max_seq_len, max_batch_size):
     """Return (program_config, sharded_memcfg) for B1/S512, else (None, None)."""
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len != 512 or max_batch != 1:
         return None, None
 
@@ -544,7 +604,7 @@ def _layernorm_sharded_config(max_seq_len, max_batch_size):
         block_w=shard_width // TILE_SIZE,
         inplace=False,
         use_welford=False,
-        legacy_reduction=True,
-        legacy_rsqrt=True,
+        legacy_reduction=False,
+        legacy_rsqrt=False,
     )
     return program_config, sharded_mem
