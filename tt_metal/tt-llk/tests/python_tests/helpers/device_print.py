@@ -44,7 +44,6 @@ def aux_size_for(processor_count: int) -> int:
 
 
 # Sentinels (dprint_common.h/device_print.h).
-DEVICE_PRINT_RESET_BUFFER_MAGIC = 0xF0E1D2C3
 DEVICE_PRINT_WRITE_STALL_FLAG = 1 << 31
 WRAP_INFO_ID = 0xFFFF
 NEW_KERNEL_PAYLOAD_SENTINEL = 1023  # max_message_payload_size, used as "no payload" tag
@@ -345,31 +344,31 @@ class DevicePrintParser:
 
         return out
 
-    # When the buffer is full, the kernel sets WRITE_STALL_FLAG
-    # and waits for host to drain and set RESET_BUFFER_MAGIC.
-    # We'd spin forever if the kernel hangs while holding up
-    # the flag, so we bound the poll loop; 64 is reasonable.
+    # We'd spin forever if the kernel hangs while holding up the flag,
+    # so we bound the poll loop; 64 is reasonable.
     _MAX_STALL_RESETS_PER_POLL: int = 64
 
     def poll(self, location: str = "0,0") -> list[str]:
         """Incremental drain: read new data since last poll, advance device rpos.
         Return immediately if there is no new data.
         See dprint_server.cpp:read_core_data.
+
+        Kernel is the sole writer of wpos, host is the sole writer of rpos.
+        Unlike Metal, we don't write RESET_BUFFER_MAGIC to rpos due to a race
+        that happens if both host and device write to the same address.
         """
         out: list[str] = []
 
         aux_raw = read_from_device(location, self.buffer_base, num_bytes=self.aux_size)
         wpos, rpos = _decode_wpos_rpos(aux_raw)
 
-        # Nothing to do: producer has no new data.
+        # Nothing to do: device has no new data.
         if wpos == rpos:
             return out
 
         for _ in range(self._MAX_STALL_RESETS_PER_POLL):
             stall = bool(wpos & DEVICE_PRINT_WRITE_STALL_FLAG)
             wpos = _strip_stall(wpos)
-            if rpos == DEVICE_PRINT_RESET_BUFFER_MAGIC:
-                rpos = 0  # Start reading from the beginning
 
             if rpos > wpos:
                 # Kernel wrapped wpos back to 0; drain the tail then fall through to head.
@@ -396,24 +395,22 @@ class DevicePrintParser:
                 out.extend(self._walk_records(chunk))
                 rpos = wpos
 
-            if stall:
-                # Buffer full; signal kernel to reset and continue from offset 0,
-                # then re-read both wpos and rpos.
-                write_words_to_device(
-                    location, self.buffer_base + 4, [DEVICE_PRINT_RESET_BUFFER_MAGIC]
-                )
-                aux_raw = read_from_device(
-                    location, self.buffer_base, num_bytes=self.aux_size
-                )
-                wpos, rpos = _decode_wpos_rpos(aux_raw)
-                continue
-
             write_words_to_device(location, self.buffer_base + 4, [rpos])
-            return out
+
+            if not stall:
+                return out
+
+            # Kernel was stalled when we entered this iteration. Re-read
+            # and loop: either it has unstalled and produced more data, or it
+            # hasn't yet observed our rpos write and we retry.
+            aux_raw = read_from_device(
+                location, self.buffer_base, num_bytes=self.aux_size
+            )
+            wpos, rpos = _decode_wpos_rpos(aux_raw)
 
         raise RuntimeError(
             f"DevicePrintParser.poll(): stall flag still set after "
-            f"{self._MAX_STALL_RESETS_PER_POLL} resets, kernel likely hung."
+            f"{self._MAX_STALL_RESETS_PER_POLL} iterations, kernel likely hung."
         )
 
     def final_drain(self, location: str = "0,0") -> list[str]:
