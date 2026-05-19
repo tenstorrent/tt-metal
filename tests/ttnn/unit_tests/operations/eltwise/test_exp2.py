@@ -155,11 +155,15 @@ def test_exp2_special_values(device):
 
     golden_flat = golden.reshape(-1)
 
-    # Walk each special input twice:
+    # Walk each special input three ways:
     #   1. Bit-exact checks for ±inf (ULP is undefined here).
-    #   2. Collect finite (input, golden, result) triples and check them with
-    #      assert_with_ulp at the end — a principled bound regardless of
-    #      magnitude (handles exp2(127) ≈ 1.7e38 the same as exp2(-10)).
+    #   2. Subnormal goldens (|g| < smallest normal bf16 = 2^-126) must flush
+    #      to zero — the SFPU stack uses IEEE FTZ semantics on output, so any
+    #      subnormal result is rounded to ±0 (matches the kernel's documented
+    #      behaviour at x = -127).
+    #   3. Remaining finite (input, golden, result) triples are checked with
+    #      assert_with_ulp — a principled bound regardless of magnitude.
+    SMALLEST_NORMAL_BF16 = 2.0**-126
     finite_indices = []
     for i, x in enumerate(special_inputs):
         g = golden_flat[i].item()
@@ -167,6 +171,8 @@ def test_exp2_special_values(device):
 
         if np.isinf(g):
             assert np.isinf(r) and (np.sign(r) == np.sign(g)), f"exp2({x}): expected {g}, got {r}"
+        elif 0.0 < abs(g) < SMALLEST_NORMAL_BF16:
+            assert r == 0.0, f"exp2({x}): subnormal golden {g} expected to flush to 0, got {r}"
         else:
             finite_indices.append(i)
 
