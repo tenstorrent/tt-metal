@@ -79,10 +79,6 @@ def _trace_corruption_and_rerun(mesh_device, run_ccl_op, run_l1_overwrite):
     return out
 
 
-def _make_sem(mesh_device, cores, buffer_type, initial_value=0):
-    return ttnn.create_global_semaphore(mesh_device, cores, initial_value, buffer_type)
-
-
 def _cluster_axis_with_more_than_one_device(mesh_device):
     shape = mesh_device.shape
     if hasattr(shape, "dims") and shape.dims() >= 2:
@@ -93,12 +89,6 @@ def _cluster_axis_with_more_than_one_device(mesh_device):
         return 1 if len(shape) >= 2 and shape[0] == 1 and shape[1] > 1 else 0
     except TypeError:
         return 0
-
-
-# External semaphores are intentionally allocated in L1.
-# This test reproduces the real L1 trace-overwrite scenario while verifying that
-# explicitly passed semaphores are correctly forwarded in composite paths.
-SEM_BUFFER_TYPE = ttnn.BufferType.L1
 
 
 def _check_mesh_output(result, golden, opname):
@@ -139,13 +129,16 @@ def _check_mesh_output(result, golden, opname):
     indirect=["device_params", "mesh_device"],
 )
 def test_composite_all_gather_hang(mesh_device, case):
-    logger.info(f"all_gather[{case}]: a hang during execution means this test failed")
     torch.manual_seed(42)
     ccl_sub_device_crs, worker_sub_device_id = _setup_device(mesh_device)
     run_l1_overwrite = _setup_l1_overwrite(mesh_device)
 
-    semaphores = [_make_sem(mesh_device, ccl_sub_device_crs, SEM_BUFFER_TYPE) for _ in range(2)]
-    barrier_sem = _make_sem(mesh_device, ccl_sub_device_crs, SEM_BUFFER_TYPE)
+    logger.info(f"all_gather[{case}]: expected pass; hang means failure")
+
+    semaphores = [
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0, ttnn.BufferType.L1) for _ in range(2)
+    ]
+    barrier_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0, ttnn.BufferType.L1)
 
     use_persistent = case.startswith("persistent_")
     use_mesh_overload = case.startswith("mesh_")
@@ -179,7 +172,7 @@ def test_composite_all_gather_hang(mesh_device, case):
         dim = 0
     elif case in ("persistent_2d", "mesh_2d"):
         num_gather_devices = mesh_device.shape[0]
-        per_device_width = 128
+        per_device_width = 33
         golden = torch.randn(32, per_device_width * num_gather_devices).bfloat16()
         ag_input = ttnn.from_torch(
             golden,
@@ -258,7 +251,7 @@ def test_composite_all_gather_hang(mesh_device, case):
     _check_mesh_output(result, golden, f"all_gather_{case}")
 
 
-# Covers both all_reduce_async composite overloads:
+# Covers both all_reduce_async overloads used by this hang regression test:
 #   - 2D: mesh_device + cluster_axis path on FABRIC_2D (2,4)
 #   - 1D: num_devices path on FABRIC_1D (1,8)
 @pytest.mark.timeout(60)
@@ -272,17 +265,20 @@ def test_composite_all_gather_hang(mesh_device, case):
     indirect=["device_params", "mesh_device"],
 )
 def test_composite_all_reduce_hang(mesh_device, case):
-    logger.info(f"all_reduce[{case}]: a hang during execution means this test failed")
     torch.manual_seed(42)
     ccl_sub_device_crs, worker_sub_device_id = _setup_device(mesh_device)
     run_l1_overwrite = _setup_l1_overwrite(mesh_device)
 
-    rs_sems = [_make_sem(mesh_device, ccl_sub_device_crs, SEM_BUFFER_TYPE) for _ in range(3)]
-    ag_sems = [_make_sem(mesh_device, ccl_sub_device_crs, SEM_BUFFER_TYPE) for _ in range(2)]
-    barrier_sems = [_make_sem(mesh_device, ccl_sub_device_crs, SEM_BUFFER_TYPE) for _ in range(2)]
+    logger.info(f"all_reduce[{case}]: expected pass; hang means failure")
+
+    rs_sems = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0, ttnn.BufferType.L1) for _ in range(3)]
+    ag_sems = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0, ttnn.BufferType.L1) for _ in range(2)]
+    barrier_sems = [
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0, ttnn.BufferType.L1) for _ in range(2)
+    ]
 
     if case == "2D":
-        per_chip_shape = [32, 256]
+        per_chip_shape = [1, 1, 32, 96]
         num_reduce_devices = mesh_device.shape[0]
         inputs = [torch.randn(per_chip_shape).bfloat16() for _ in range(num_reduce_devices)]
         golden = sum(inputs)
@@ -346,13 +342,14 @@ def test_composite_all_reduce_hang(mesh_device, case):
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=["mesh_device"])
 def test_composite_all_to_all_hang(mesh_device):
-    logger.info("all_to_all: a hang during execution means this test failed")
     torch.manual_seed(42)
     ccl_sub_device_crs, worker_sub_device_id = _setup_device(mesh_device)
     run_l1_overwrite = _setup_l1_overwrite(mesh_device)
 
-    ccl_sem = _make_sem(mesh_device, ccl_sub_device_crs, SEM_BUFFER_TYPE)
-    barrier_sem = _make_sem(mesh_device, ccl_sub_device_crs, SEM_BUFFER_TYPE)
+    logger.info("all_to_all: expected pass; hang means failure")
+
+    ccl_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0, ttnn.BufferType.L1)
+    barrier_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0, ttnn.BufferType.L1)
 
     num_devices = mesh_device.get_num_devices()
     in_dim = 0
