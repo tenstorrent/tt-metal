@@ -18,8 +18,10 @@ this models a single user (slot) continuing a multi-turn conversation, fanned
 out across ``num_replication_slots`` identical-state replicas for cross-slot
 determinism validation.
 
-The persistent decoder + H2D/D2H sockets are launched once before the first
-prompt and torn down once after the last prompt.
+For each testing iteration, the persistent decoder + H2D/D2H sockets are launched
+once before the first prompt and torn down once after the last prompt. Enabled
+verification gates run after each testing iteration, then in-memory outputs are
+released before the next iteration starts.
 
 Validation gates (every gate is independently toggleable in the config)
 -----------------------------------------------------------------------
@@ -70,6 +72,8 @@ Dumps (independently toggleable, both off by default suppresses all disk I/O):
   prompt's position range. Note: the saved tensor preserves the view's full
   backing storage, so the on-disk file is currently larger than the slice
   itself; downstream tooling reads the loaded tensor's ``shape`` as-is.
+  When ``num_testing_iterations > 1``, later iterations overwrite the same dump
+  filenames; the final files represent the last completed iteration.
 
 Public API surface
 ------------------
@@ -238,7 +242,7 @@ class HostIoDecoderSweepConfig:
     # Positions are disjoint and incrementing in ``prompt_names`` order. Single
     # prompt is allowed; multi-prompt fans out into a multi-turn conversation
     # across the shared slot range.
-    decoder_layer_indices: tuple[int, ...]
+    decoder_layer_index: int
     hidden_states_dir: Path
     prompt_names: tuple[str, ...]
 
@@ -278,16 +282,12 @@ class HostIoDecoderSweepConfig:
     # --- misc ---
     seed: int = 0
     log_per_iteration: bool = False
+    num_testing_iterations: int = 1
 
     def __post_init__(self) -> None:
         """Validate static invariants. Trace-dependent checks live in preflight."""
-        if not self.decoder_layer_indices:
-            raise ValueError("decoder_layer_indices must contain at least one entry")
-        if len(self.decoder_layer_indices) != 1:
-            raise ValueError("HostIoDecoderSweepConfig expects exactly one decoder layer per run")
-        for layer_idx in self.decoder_layer_indices:
-            if layer_idx < 0:
-                raise ValueError(f"decoder_layer_indices must be >= 0, got {self.decoder_layer_indices}")
+        if self.decoder_layer_index < 0:
+            raise ValueError(f"decoder_layer_index must be >= 0, got {self.decoder_layer_index}")
         if not self.prompt_names:
             raise ValueError("prompt_names must contain at least one entry")
         for name in self.prompt_names:
@@ -322,6 +322,8 @@ class HostIoDecoderSweepConfig:
             raise ValueError(f"kv_cache_pcc_threshold must be in (0, 1]; got {self.kv_cache_pcc_threshold}")
         if (self.dump_hidden_states or self.dump_kv_cache) and self.dump_dir is None:
             raise ValueError("dump_dir is required when dump_hidden_states or dump_kv_cache is True")
+        if self.num_testing_iterations < 1:
+            raise ValueError(f"num_testing_iterations must be >= 1, got {self.num_testing_iterations}")
 
 
 @dataclass
@@ -463,8 +465,7 @@ def _load_kv_cache_reference(trace_dir: Path, prompt_name: str, L_p: int) -> tor
         raise FileNotFoundError(
             f"KV-cache reference not found: {path}. Required when "
             f"validate_kv_cache_cross_trace is True. The conversion tool "
-            f"emits this file alongside {{prompt}}.pt; see "
-            f"convert_bit_sculpt_trace.py."
+            f"emits this file alongside {{prompt}}.pt."
         )
     kv = torch.load(path, map_location="cpu")
     if not isinstance(kv, torch.Tensor):
@@ -648,6 +649,7 @@ def _run_prompt_sweep(
     input_for_prompt: dict[int, torch.Tensor],
     collected_for_prompt: dict[int, torch.Tensor],
     output_tensor: ttnn.Tensor,
+    testing_iteration_label: str,
 ) -> None:
     """Run one prompt's H2D / decoder / D2H sweep, writing into the supplied collector.
 
@@ -689,7 +691,7 @@ def _run_prompt_sweep(
         )
     log_every = 1 if config.log_per_iteration else 1000
     logger.info(
-        f"sweep prompt={prompt_name!r} (idx={prompt_idx}): L_p={L_p} "
+        f"{testing_iteration_label}: sweep prompt={prompt_name!r} (idx={prompt_idx}): L_p={L_p} "
         f"global_pos_range=[{offset}, {offset + L_p}) "
         f"replication_slots={config.num_replication_slots}"
     )
@@ -707,26 +709,28 @@ def _run_prompt_sweep(
                 actual_position_id = int(metadata_flat[InputField.POSITION_ID].item())
                 actual_token_id = int(metadata_flat[InputField.TOKEN_ID].item())
                 assert parsed.slot_id == slot_id, (
-                    f"prompt={prompt_name!r} slot={slot_id} global_pos={global_pos}: "
+                    f"{testing_iteration_label}: prompt={prompt_name!r} slot={slot_id} global_pos={global_pos}: "
                     f"slot_id round-trip mismatch (got {parsed.slot_id})"
                 )
                 assert actual_position_id == global_pos, (
-                    f"prompt={prompt_name!r} slot={slot_id} global_pos={global_pos}: "
+                    f"{testing_iteration_label}: prompt={prompt_name!r} slot={slot_id} global_pos={global_pos}: "
                     f"position_id round-trip mismatch (got {actual_position_id})"
                 )
                 assert actual_token_id == global_pos, (
-                    f"prompt={prompt_name!r} slot={slot_id} global_pos={global_pos}: "
+                    f"{testing_iteration_label}: prompt={prompt_name!r} slot={slot_id} global_pos={global_pos}: "
                     f"token_id round-trip mismatch (got {actual_token_id})"
                 )
                 assert parsed.token_0_type == TokenType.BASE, (
-                    f"prompt={prompt_name!r} slot={slot_id} global_pos={global_pos}: "
+                    f"{testing_iteration_label}: prompt={prompt_name!r} slot={slot_id} global_pos={global_pos}: "
                     f"token_0_type round-trip mismatch (got {parsed.token_0_type})"
                 )
 
             collected_for_prompt[slot_id][p_local, :] = _extract_activation_from_d2h(output_tensor)
 
         if (p_local + 1) % log_every == 0 or p_local + 1 == L_p:
-            logger.info(f"sweep prompt={prompt_name!r}: {p_local + 1}/{L_p} positions complete")
+            logger.info(
+                f"{testing_iteration_label}: sweep prompt={prompt_name!r}: {p_local + 1}/{L_p} positions complete"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -789,6 +793,10 @@ def _inputs_from_traces(
     }
 
 
+def _testing_iteration_label(testing_iteration: int, num_testing_iterations: int) -> str:
+    return f"testing_iteration={testing_iteration + 1}/{num_testing_iterations}"
+
+
 def _run_decoder_layer_pass(
     *,
     config: HostIoDecoderSweepConfig,
@@ -800,171 +808,405 @@ def _run_decoder_layer_pass(
     schedule: MultiTurnSchedule,
     input_hidden_states: dict[str, dict[int, torch.Tensor]],
     pull_kv_cache: bool,
+    testing_iteration: int,
+    num_testing_iterations: int,
 ) -> tuple[dict[str, dict[int, torch.Tensor]], torch.Tensor | None]:
     """Run one decoder layer over the scheduled prompt inputs."""
     num_devices = config.mesh_rows * config.mesh_cols
     layer_prefix = f"layer {layer_position + 1}/{total_layers} (idx={layer_idx})"
-    logger.info(f"{layer_prefix}: creating {config.mesh_rows}x{config.mesh_cols} submesh ({num_devices} devices)")
+    testing_iteration_label = _testing_iteration_label(testing_iteration, num_testing_iterations)
+    logger.info(
+        f"{testing_iteration_label}: {layer_prefix}: creating "
+        f"{config.mesh_rows}x{config.mesh_cols} submesh ({num_devices} devices)"
+    )
     submesh = parent_mesh.create_submesh(ttnn.MeshShape((config.mesh_rows, config.mesh_cols)))
-    ttnn.enable_asynchronous_slow_dispatch(submesh)
+    try:
+        ttnn.enable_asynchronous_slow_dispatch(submesh)
 
-    # Auto-detect dense vs MoE from layer_idx (see NUM_DENSE_LAYERS comment at the
-    # top of this module). Dense layers use a different weight loader and pass
-    # different MoE-related kwargs into HostIoDecoderStage; everything else about
-    # the harness (broadcast / reduce / sockets / KV cache) is layer-type agnostic.
-    is_moe_layer = _is_moe_layer(layer_idx)
-    layer_type = "MoE" if is_moe_layer else "dense"
-    logger.info(f"{layer_prefix}: layer type auto-detected -> {layer_type} " f"(NUM_DENSE_LAYERS={NUM_DENSE_LAYERS})")
-    if is_moe_layer:
-        layer_weights = provider.load_moe_layer(layer_id=layer_idx, device=submesh)
-    else:
-        layer_weights = provider.load_dense_layer(layer_id=layer_idx, device=submesh)
-    logger.info(f"{layer_prefix}: {layer_type} layer weights ready")
-
-    # Single-stage pipeline (num_procs == 1, no loopback). Coords match
-    # the original test_decoder_block.test_decoder layout:
-    # broadcast source = (1, 0), reduce-to-one root = (1, 1).
-    pipeline_config = [
-        _SinglePipelineStage(
-            entry_node_coord=ttnn.MeshCoordinate(1, 0),
-            exit_node_coord=ttnn.MeshCoordinate(1, 1),
+        # Auto-detect dense vs MoE from layer_idx (see NUM_DENSE_LAYERS comment at the
+        # top of this module). Dense layers use a different weight loader and pass
+        # different MoE-related kwargs into HostIoDecoderStage; everything else about
+        # the harness (broadcast / reduce / sockets / KV cache) is layer-type agnostic.
+        is_moe_layer = _is_moe_layer(layer_idx)
+        layer_type = "MoE" if is_moe_layer else "dense"
+        logger.info(
+            f"{testing_iteration_label}: {layer_prefix}: layer type auto-detected -> {layer_type} "
+            f"(NUM_DENSE_LAYERS={NUM_DENSE_LAYERS})"
         )
-    ]
-    stages_metadata = {0: StageMetadata(rank=0, mesh_id=0)}
-    ctx = StageContext(
-        mesh_device=submesh,
-        pipeline_config=pipeline_config,
-        my_stage_idx=0,
-        stages_metadata=stages_metadata,
-    )
+        if is_moe_layer:
+            layer_weights = provider.load_moe_layer(layer_id=layer_idx, device=submesh)
+        else:
+            layer_weights = provider.load_dense_layer(layer_id=layer_idx, device=submesh)
+        logger.info(f"{testing_iteration_label}: {layer_prefix}: {layer_type} layer weights ready")
 
-    # Production-shape decoder: is_torus=True, persistent_mode=True,
-    # use_hardcoded_expert_index=False. MoE layers also set is_moe=True with
-    # num_routed_experts=NUM_ROUTED_EXPERTS (256) and enable_routing=True; dense
-    # layers set those to False/0/False. position_id=0 seeds the initial KV cache
-    # state; runtime per-token positions come from each H2D page (global_pos in
-    # multi-turn).
-    if is_moe_layer:
-        layer_type_kwargs = dict(
-            is_moe=True,
-            num_routed_experts=NUM_ROUTED_EXPERTS,
-            enable_routing=True,
+        # Single-stage pipeline (num_procs == 1, no loopback). Coords match
+        # the original test_decoder_block.test_decoder layout:
+        # broadcast source = (1, 0), reduce-to-one root = (1, 1).
+        pipeline_config = [
+            _SinglePipelineStage(
+                entry_node_coord=ttnn.MeshCoordinate(1, 0),
+                exit_node_coord=ttnn.MeshCoordinate(1, 1),
+            )
+        ]
+        stages_metadata = {0: StageMetadata(rank=0, mesh_id=0)}
+        ctx = StageContext(
+            mesh_device=submesh,
+            pipeline_config=pipeline_config,
+            my_stage_idx=0,
+            stages_metadata=stages_metadata,
         )
-    else:
-        layer_type_kwargs = dict(
-            is_moe=False,
-            num_routed_experts=0,
-            enable_routing=False,
+
+        # Production-shape decoder: is_torus=True, persistent_mode=True,
+        # use_hardcoded_expert_index=False. MoE layers also set is_moe=True with
+        # num_routed_experts=NUM_ROUTED_EXPERTS (256) and enable_routing=True; dense
+        # layers set those to False/0/False. position_id=0 seeds the initial KV cache
+        # state; runtime per-token positions come from each H2D page (global_pos in
+        # multi-turn).
+        if is_moe_layer:
+            layer_type_kwargs = dict(
+                is_moe=True,
+                num_routed_experts=NUM_ROUTED_EXPERTS,
+                enable_routing=True,
+            )
+        else:
+            layer_type_kwargs = dict(
+                is_moe=False,
+                num_routed_experts=0,
+                enable_routing=False,
+            )
+        logger.info(
+            f"{testing_iteration_label}: {layer_prefix}: instantiating HostIoDecoderStage "
+            f"(layer_type={layer_type}, layer_type_kwargs={layer_type_kwargs})"
         )
-    logger.info(
-        f"{layer_prefix}: instantiating HostIoDecoderStage "
-        f"(layer_type={layer_type}, layer_type_kwargs={layer_type_kwargs})"
-    )
-    stage = HostIoDecoderStage(
-        weights=layer_weights,
-        layer_idx=layer_idx,
-        metadata=DeepseekMetadata(position_id=0),
-        max_seq_len=config.max_seq_len,
-        num_slots=config.num_slots,
-        persistent_mode=True,
-        is_torus=True,
-        use_hardcoded_expert_index=False,
-        inject_hidden_states=True,
-        **layer_type_kwargs,
-    )
+        stage = HostIoDecoderStage(
+            weights=layer_weights,
+            layer_idx=layer_idx,
+            metadata=DeepseekMetadata(position_id=0),
+            max_seq_len=config.max_seq_len,
+            num_slots=config.num_slots,
+            persistent_mode=True,
+            is_torus=True,
+            use_hardcoded_expert_index=False,
+            inject_hidden_states=True,
+            **layer_type_kwargs,
+        )
 
-    logger.info(f"{layer_prefix}: building PipelineBlock + persistent kernels")
-    pipeline_block = stage.create_pipeline_block(ctx)
-    stage.setup(ctx, pipeline_block)
-    pipeline_block.run()
-    stage.launch_compute(ctx, pipeline_block)
-    logger.info(f"{layer_prefix}: all persistent kernels dispatched")
+        logger.info(f"{testing_iteration_label}: {layer_prefix}: building PipelineBlock + persistent kernels")
+        pipeline_block = stage.create_pipeline_block(ctx)
+        stage.setup(ctx, pipeline_block)
+        pipeline_block.run()
+        stage.launch_compute(ctx, pipeline_block)
+        logger.info(f"{testing_iteration_label}: {layer_prefix}: all persistent kernels dispatched")
 
-    out_words = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES // dtype_size(ttnn.bfloat16)
+        out_words = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES // dtype_size(ttnn.bfloat16)
 
-    # Pre-allocate ALL per-prompt collectors AND the shared D2H receive buffer
-    # before any H2D write. Keeps the multi-turn sweep loop tight: only
-    # writes/reads/stores live in the hot path, no allocation work between
-    # iterations.
-    #
-    # output_tensor is reused across every (prompt, position, slot) iteration:
-    # read_output overwrites it in place, and the activation/metadata extractors
-    # copy the bytes out to fresh CPU tensors before the next read_output runs.
-    collected: dict[str, dict[int, torch.Tensor]] = {
-        prompt_name: {
-            slot: torch.zeros(schedule.prompt_lengths[prompt_idx], D.HIDDEN_SIZE, dtype=torch.bfloat16)
-            for slot in range(config.num_replication_slots)
+        # Pre-allocate ALL per-prompt collectors AND the shared D2H receive buffer
+        # before any H2D write. Keeps the multi-turn sweep loop tight: only
+        # writes/reads/stores live in the hot path, no allocation work between
+        # iterations.
+        #
+        # output_tensor is reused across every (prompt, position, slot) iteration:
+        # read_output overwrites it in place, and the activation/metadata extractors
+        # copy the bytes out to fresh CPU tensors before the next read_output runs.
+        collected: dict[str, dict[int, torch.Tensor]] = {
+            prompt_name: {
+                slot: torch.zeros(schedule.prompt_lengths[prompt_idx], D.HIDDEN_SIZE, dtype=torch.bfloat16)
+                for slot in range(config.num_replication_slots)
+            }
+            for prompt_idx, prompt_name in enumerate(config.prompt_names)
         }
-        for prompt_idx, prompt_name in enumerate(config.prompt_names)
-    }
-    output_tensor = ttnn.from_torch(
-        torch.zeros(1, out_words, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
-    logger.info(
-        f"{layer_prefix}: pre-allocated collected hidden states for {len(config.prompt_names)} prompt(s) x "
-        f"{config.num_replication_slots} slot(s); reusing one D2H receive buffer "
-        f"(out_words={out_words}) across all iterations"
-    )
-
-    # =========================================================================
-    # Phase 1: Multi-turn prompt loop (sweep only — no validation here)
-    # =========================================================================
-    for prompt_idx, prompt_name in enumerate(config.prompt_names):
-        _run_prompt_sweep(
-            config=config,
-            pipeline_block=pipeline_block,
-            prompt_name=prompt_name,
-            prompt_idx=prompt_idx,
-            schedule=schedule,
-            input_for_prompt=input_hidden_states[prompt_name],
-            collected_for_prompt=collected[prompt_name],
-            output_tensor=output_tensor,
+        output_tensor = ttnn.from_torch(
+            torch.zeros(1, out_words, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        logger.info(
+            f"{testing_iteration_label}: {layer_prefix}: pre-allocated collected hidden states for "
+            f"{len(config.prompt_names)} prompt(s) x {config.num_replication_slots} slot(s); "
+            f"reusing one D2H receive buffer (out_words={out_words}) across all iterations"
         )
 
-    # =========================================================================
-    # Phase 2: Termination (single teardown for the entire multi-turn run)
-    # =========================================================================
-    logger.info(f"{layer_prefix}: Phase 2: signalling persistent decoder termination")
-    stage.terminate(ctx, pipeline_block)
+        # =========================================================================
+        # Phase 1: Multi-turn prompt loop (sweep only — no validation here)
+        # =========================================================================
+        for prompt_idx, prompt_name in enumerate(config.prompt_names):
+            _run_prompt_sweep(
+                config=config,
+                pipeline_block=pipeline_block,
+                prompt_name=prompt_name,
+                prompt_idx=prompt_idx,
+                schedule=schedule,
+                input_for_prompt=input_hidden_states[prompt_name],
+                collected_for_prompt=collected[prompt_name],
+                output_tensor=output_tensor,
+                testing_iteration_label=testing_iteration_label,
+            )
 
-    # Termination dummy targets (slot=num_slots-1, position=max_seq_len-1).
-    # Preflight asserts schedule.total_length() + 1 < max_seq_len, so the dummy
-    # never lands on a used position. __post_init__ asserts num_slots >
-    # num_replication_slots, so it never lands on a used slot.
-    zero_hidden_state = torch.zeros(D.HIDDEN_SIZE, dtype=torch.bfloat16)
-    termination_dummy = _to_hidden_state_input(
-        zero_hidden_state,
-        token_id=0,
-        prefill_token_id=-1,
-        user_id=config.num_slots - 1,
-        position_id=config.max_seq_len - 1,
-        token_type=TokenType.BASE,
-        temperature=0.6,
-        top_k=1,
-        probability_mass_threshold=1.0,
-    )
-    logger.info(
-        f"{layer_prefix}: pushing termination dummy at slot={config.num_slots - 1} pos={config.max_seq_len - 1}"
-    )
-    pipeline_block.write_token(termination_dummy)
-    pipeline_block.drain_dummy_output()
-    pipeline_block.terminate()
-    ttnn.synchronize_device(submesh)
-    logger.info(f"{layer_prefix}: Phase 2 complete: HostIoDecoderStage teardown done")
+        # =========================================================================
+        # Phase 2: Termination (single teardown for the entire multi-turn run)
+        # =========================================================================
+        logger.info(f"{testing_iteration_label}: {layer_prefix}: Phase 2: signalling persistent decoder termination")
+        stage.terminate(ctx, pipeline_block)
 
-    kv_cache_torch: torch.Tensor | None = None
-    if pull_kv_cache:
-        logger.info(f"{layer_prefix}: pulling on-device KV cache to host (fast-dispatch context)")
-        with ttnn.device.setup_fast_dispatch(submesh):
-            kv_cache_torch = stage.get_kv_cache_host()
-        assert kv_cache_torch is not None, "get_kv_cache_host returned None (setup not completed?)"
-        logger.info(f"{layer_prefix}: KV cache shape={tuple(kv_cache_torch.shape)} dtype={kv_cache_torch.dtype}")
+        # Termination dummy targets (slot=num_slots-1, position=max_seq_len-1).
+        # Preflight asserts schedule.total_length() + 1 < max_seq_len, so the dummy
+        # never lands on a used position. __post_init__ asserts num_slots >
+        # num_replication_slots, so it never lands on a used slot.
+        zero_hidden_state = torch.zeros(D.HIDDEN_SIZE, dtype=torch.bfloat16)
+        termination_dummy = _to_hidden_state_input(
+            zero_hidden_state,
+            token_id=0,
+            prefill_token_id=-1,
+            user_id=config.num_slots - 1,
+            position_id=config.max_seq_len - 1,
+            token_type=TokenType.BASE,
+            temperature=0.6,
+            top_k=1,
+            probability_mass_threshold=1.0,
+        )
+        logger.info(
+            f"{testing_iteration_label}: {layer_prefix}: pushing termination dummy "
+            f"at slot={config.num_slots - 1} pos={config.max_seq_len - 1}"
+        )
+        pipeline_block.write_token(termination_dummy)
+        pipeline_block.drain_dummy_output()
+        pipeline_block.terminate()
+        ttnn.synchronize_device(submesh)
+        logger.info(f"{testing_iteration_label}: {layer_prefix}: Phase 2 complete: HostIoDecoderStage teardown done")
+
+        kv_cache_torch: torch.Tensor | None = None
+        if pull_kv_cache:
+            logger.info(f"{testing_iteration_label}: {layer_prefix}: pulling on-device KV cache to host")
+            with ttnn.device.setup_fast_dispatch(submesh):
+                kv_cache_torch = stage.get_kv_cache_host()
+            assert kv_cache_torch is not None, "get_kv_cache_host returned None (setup not completed?)"
+            logger.info(
+                f"{testing_iteration_label}: {layer_prefix}: "
+                f"KV cache shape={tuple(kv_cache_torch.shape)} dtype={kv_cache_torch.dtype}"
+            )
+        else:
+            logger.info(f"{testing_iteration_label}: {layer_prefix}: KV cache pull skipped")
+
+        return collected, kv_cache_torch
+    finally:
+        logger.info(f"{testing_iteration_label}: {layer_prefix}: closing submesh")
+        ttnn.close_mesh_device(submesh)
+
+
+def _validate_and_dump_sweep(
+    *,
+    config: HostIoDecoderSweepConfig,
+    schedule: MultiTurnSchedule,
+    traces: dict[str, dict[str, torch.Tensor]],
+    collected: dict[str, dict[int, torch.Tensor]],
+    kv_cache_torch: torch.Tensor | None,
+    need_kv_cache: bool,
+    testing_iteration: int,
+    num_testing_iterations: int,
+) -> dict[str, torch.Tensor] | None:
+    """Run all post-pass validation and optional dumps for one testing iteration."""
+    testing_iteration_label = _testing_iteration_label(testing_iteration, num_testing_iterations)
+
+    # =========================================================================
+    # Phase 3: Hidden state validation (cross-slot equality + cross-trace PCC)
+    # =========================================================================
+    # Per-prompt cross-slot equality. The same hidden state is pushed through
+    # every replicated slot at each position, so each slot's collected output
+    # must be byte-identical for every prompt. (No-op for Mode A.)
+    if config.validate_hidden_states_cross_slot and config.num_replication_slots > 1:
+        logger.info(
+            f"{testing_iteration_label}: Phase 3a: hidden-state cross-slot equality across "
+            f"{config.num_replication_slots} slots for {len(config.prompt_names)} prompt(s)"
+        )
+        for prompt_name in config.prompt_names:
+            ref = collected[prompt_name][0]
+            for s in range(1, config.num_replication_slots):
+                assert torch.equal(collected[prompt_name][s], ref), (
+                    f"{testing_iteration_label}: Hidden-state cross-slot equality failed: "
+                    f"prompt={prompt_name!r} slot {s} diverged from slot 0"
+                )
+            logger.info(f"{testing_iteration_label}: prompt={prompt_name!r}: hidden-state cross-slot equality OK")
     else:
-        logger.info(f"{layer_prefix}: KV cache pull skipped")
+        logger.info(
+            f"{testing_iteration_label}: Phase 3a skipped: "
+            f"validate_hidden_states_cross_slot=False or num_replication_slots == 1"
+        )
 
-    return collected, kv_cache_torch
+    # Cross-trace per-(prompt, slot) PCC against the reference output trace.
+    # If 3a already proved cross-slot equality (i.e. all slots byte-identical to
+    # slot 0), PCC of slot 0 is a sound proxy for every slot — skip the redundant
+    # PCC computations for slots 1..N-1. Otherwise (Mode A, or 3a disabled) we
+    # have no proof of cross-slot equality and must PCC each slot independently.
+    if config.validate_hidden_states_cross_trace:
+        cross_slot_proven = config.validate_hidden_states_cross_slot and config.num_replication_slots > 1
+        slots_to_pcc: list[int] = [0] if cross_slot_proven else list(range(config.num_replication_slots))
+        logger.info(
+            f"{testing_iteration_label}: Phase 3b: cross-trace PCC validation (threshold={config.pcc_threshold}) "
+            f"for {len(config.prompt_names)} prompt(s); slots_to_pcc={slots_to_pcc} "
+            f"(cross_slot_proven_in_3a={cross_slot_proven})"
+        )
+        for prompt_name in config.prompt_names:
+            expected = traces[prompt_name]["output"]
+            for slot in slots_to_pcc:
+                passing, pcc = comp_pcc(
+                    expected.flatten(),
+                    collected[prompt_name][slot].flatten(),
+                    config.pcc_threshold,
+                )
+                slot_label = (
+                    f"slot={slot} (proxy for all {config.num_replication_slots} slots)"
+                    if cross_slot_proven
+                    else f"slot={slot}"
+                )
+                logger.info(
+                    f"{testing_iteration_label}: PCC: prompt={prompt_name!r} {slot_label} "
+                    f"pcc={float(pcc):.6f} threshold={config.pcc_threshold} pass={passing}"
+                )
+                assert passing, (
+                    f"{testing_iteration_label}: Cross-trace validation FAILED: "
+                    f"prompt={prompt_name!r} slot={slot} "
+                    f"pcc={float(pcc):.6f} < threshold {config.pcc_threshold}"
+                )
+        logger.info(f"{testing_iteration_label}: Phase 3b complete: cross-trace PCC OK for all prompts")
+    else:
+        logger.info(f"{testing_iteration_label}: Phase 3b skipped: validate_hidden_states_cross_trace=False")
+
+    # =========================================================================
+    # Phase 4: KV cache pull (fast-dispatch) + per-prompt cross-slot validation
+    # =========================================================================
+    if not need_kv_cache:
+        logger.info(
+            f"{testing_iteration_label}: Phase 4: KV cache pull skipped " f"(no KV-cache validation, no KV-cache dump)"
+        )
+
+    if config.validate_kv_cache_cross_slot and config.num_replication_slots > 1:
+        assert kv_cache_torch is not None  # guaranteed by need_kv_cache above
+        logger.info(
+            f"{testing_iteration_label}: Phase 4: per-prompt KV-cache cross-slot equality "
+            f"({config.num_replication_slots} slots)"
+        )
+        for prompt_idx, prompt_name in enumerate(config.prompt_names):
+            start, end = schedule.range_for(prompt_idx)
+            ref_kv = kv_cache_torch[0, :, start:end, :]
+            for s in range(1, config.num_replication_slots):
+                assert torch.equal(kv_cache_torch[s, :, start:end, :], ref_kv), (
+                    f"{testing_iteration_label}: KV-cache cross-slot equality failed: prompt={prompt_name!r} "
+                    f"position_range=[{start}, {end}) slot {s} diverged from slot 0"
+                )
+            logger.info(
+                f"{testing_iteration_label}: prompt={prompt_name!r} KV cross-slot OK for positions [{start}, {end})"
+            )
+
+    # Phase 4b: per-(prompt, slot) cross-trace PCC against the reference KV
+    # cache. The reference file is a slot-agnostic
+    # ``kv_cache_reference_{prompt}.pt`` (shape (1, L_p, KV_PE_DIM) bf16) living
+    # alongside the hidden-state trace; produced by the conversion tool from
+    # the GPU/HF golden. Mirrors Phase 3b's hidden-state cross-trace PCC: if
+    # 4a already proved cross-slot equality, slot 0 acts as a proxy for every
+    # other slot — otherwise (Mode A, or 4a disabled) we PCC each slot.
+    # Per-prompt references are stashed in ``kv_cache_references`` for the
+    # returned SweepResult, so downstream tooling can re-PCC, dump, or
+    # visualize without reloading.
+    kv_cache_references: dict[str, torch.Tensor] | None = None
+    if config.validate_kv_cache_cross_trace:
+        assert kv_cache_torch is not None  # guaranteed by need_kv_cache above
+        cross_slot_proven = config.validate_kv_cache_cross_slot and config.num_replication_slots > 1
+        slots_to_pcc: list[int] = [0] if cross_slot_proven else list(range(config.num_replication_slots))
+        logger.info(
+            f"{testing_iteration_label}: Phase 4b: KV-cache cross-trace PCC validation "
+            f"(threshold={config.kv_cache_pcc_threshold}) for {len(config.prompt_names)} prompt(s); "
+            f"slots_to_pcc={slots_to_pcc} (cross_slot_proven_in_4a={cross_slot_proven})"
+        )
+        kv_cache_references = {}
+        for prompt_idx, prompt_name in enumerate(config.prompt_names):
+            start, end = schedule.range_for(prompt_idx)
+            L_p = end - start
+            expected_kv = _load_kv_cache_reference(config.hidden_states_dir, prompt_name, L_p=L_p)
+            # The on-disk reference (produced from a bit_sculpt / HF trace) is
+            # in HF/split-halves RoPE storage; permute the k_pe channels into
+            # TT/interleaved storage so the PCC compares like-for-like against
+            # the on-device KV slice. The kv_latent_normed channels are
+            # layout-agnostic and pass through unchanged.
+            expected_kv = _split_halves_to_interleaved_kpe(expected_kv)
+            kv_cache_references[prompt_name] = expected_kv
+            for slot in slots_to_pcc:
+                # Device slice is (1, L_p, KV_PE_DIM) — leading 1 is the head
+                # dim, matching the reference layout exactly.
+                actual_kv = kv_cache_torch[slot, :, start:end, :]
+                passing, pcc = comp_pcc(
+                    expected_kv.flatten(),
+                    actual_kv.flatten(),
+                    config.kv_cache_pcc_threshold,
+                )
+                slot_label = (
+                    f"slot={slot} (proxy for all {config.num_replication_slots} slots)"
+                    if cross_slot_proven
+                    else f"slot={slot}"
+                )
+                logger.info(
+                    f"{testing_iteration_label}: KV PCC: prompt={prompt_name!r} {slot_label} "
+                    f"pcc={float(pcc):.6f} threshold={config.kv_cache_pcc_threshold} pass={passing}"
+                )
+                if not passing:
+                    # Per-channel diagnostic on failure: split into MLA's two
+                    # sub-paths so the user can localize between the
+                    # RMSNorm-compressed-latent and the RoPE-K branches without
+                    # rerunning. Bit_sculpt REPORT.md explicitly recommends
+                    # this localization step.
+                    latent_pcc = float(
+                        comp_pcc(
+                            expected_kv[:, :, :KV_LATENT_DIM].flatten(),
+                            actual_kv[:, :, :KV_LATENT_DIM].flatten(),
+                            config.kv_cache_pcc_threshold,
+                        )[1]
+                    )
+                    kpe_pcc = float(
+                        comp_pcc(
+                            expected_kv[:, :, KV_LATENT_DIM:].flatten(),
+                            actual_kv[:, :, KV_LATENT_DIM:].flatten(),
+                            config.kv_cache_pcc_threshold,
+                        )[1]
+                    )
+                    logger.error(
+                        f"{testing_iteration_label}: KV PCC sub-channel diagnostic: "
+                        f"prompt={prompt_name!r} {slot_label} "
+                        f"kv_latent_normed[:,:,:{KV_LATENT_DIM}] pcc={latent_pcc:.6f}, "
+                        f"k_pe_roped[:,:,{KV_LATENT_DIM}:] pcc={kpe_pcc:.6f}"
+                    )
+                assert passing, (
+                    f"{testing_iteration_label}: KV-cache cross-trace validation FAILED: "
+                    f"prompt={prompt_name!r} slot={slot} "
+                    f"pcc={float(pcc):.6f} < threshold {config.kv_cache_pcc_threshold}"
+                )
+        logger.info(f"{testing_iteration_label}: Phase 4b complete: KV-cache cross-trace PCC OK for all prompts")
+    else:
+        logger.info(f"{testing_iteration_label}: Phase 4b skipped: validate_kv_cache_cross_trace=False")
+
+    # =========================================================================
+    # Phase 5: Per-(prompt, slot) dumps
+    # =========================================================================
+    if config.dump_hidden_states or config.dump_kv_cache:
+        assert config.dump_dir is not None  # __post_init__ guarantees this
+        logger.info(f"{testing_iteration_label}: Phase 5: per-(prompt, slot) dumps to {config.dump_dir}")
+
+    if config.dump_hidden_states:
+        for prompt_name in config.prompt_names:
+            for slot in range(config.num_replication_slots):
+                out_path = config.dump_dir / f"output_hidden_states_slot_{slot:02d}_{prompt_name}.pt"
+                torch.save(collected[prompt_name][slot], out_path)
+                logger.info(f"{testing_iteration_label}: Wrote {out_path}")
+
+    if config.dump_kv_cache:
+        assert kv_cache_torch is not None  # guaranteed by need_kv_cache above
+        for prompt_idx, prompt_name in enumerate(config.prompt_names):
+            start, end = schedule.range_for(prompt_idx)
+            for slot in range(config.num_replication_slots):
+                kv_slice = kv_cache_torch[slot, :, start:end, :]
+                out_path = config.dump_dir / f"kv_cache_slot_{slot:02d}_{prompt_name}.pt"
+                torch.save(kv_slice, out_path)
+                logger.info(f"{testing_iteration_label}: Wrote {out_path} shape={tuple(kv_slice.shape)}")
+
+    return kv_cache_references
 
 
 def run_sweep(
@@ -974,12 +1216,14 @@ def run_sweep(
     """Run one multi-turn HostIoDecoderStage sweep end-to-end.
 
     Single-layer and rank-parallel invocations carry one layer id in
-    ``decoder_layer_indices``.
+    ``decoder_layer_index``. ``num_testing_iterations`` repeats the full decoder
+    pass; each iteration verifies immediately and releases its in-memory
+    outputs before the next iteration starts.
 
     Phases (see module docstring for full semantics):
         0.  Preflight: load traces, build :class:`MultiTurnSchedule`, validate
             trace-dependent invariants.
-        0.5 Layer pass: create submesh, load weights, instantiate
+        0.5 Per-outer-iteration layer pass: create submesh, load weights, instantiate
             :class:`HostIoDecoderStage`, launch persistent kernels, sweep all
             prompts, and terminate the decoder. In rank-parallel mode each
             launcher rank runs this function with its rank-selected layer id.
@@ -989,10 +1233,10 @@ def run_sweep(
             than the per-iteration metadata round-trip asserts.
         2.  Termination for the persistent decoder, followed by the optional
             final KV-cache pull when any KV validation or dump needs it.
-        3.  Hidden state validation (post-teardown):
+        3.  Per-outer-iteration hidden state validation (post-teardown):
             3a. Per-prompt cross-slot ``torch.equal`` across replicated slots.
             3b. Optional per-(prompt, slot) cross-trace PCC vs ``trace["output"]``.
-        4.  KV cache validation:
+        4.  Per-outer-iteration KV cache validation:
             4a. Per-prompt cross-slot ``torch.equal`` across replicated slots.
             4b. Optional per-(prompt, slot) cross-trace PCC vs
                 ``kv_cache_reference_{prompt}.pt``, with split-halves →
@@ -1031,10 +1275,10 @@ def run_sweep(
         raise FileNotFoundError(f"HF model path does not exist: {config.hf_model_path}")
 
     torch.manual_seed(config.seed)
-    layer_indices = config.decoder_layer_indices
+    layer_idx = config.decoder_layer_index
     schedule, traces = _preflight(config)
     logger.info(
-        f"preflight: layers={list(layer_indices)} prompts={list(config.prompt_names)} "
+        f"preflight: layer={layer_idx} prompts={list(config.prompt_names)} "
         f"prompt_lengths={schedule.prompt_lengths} total_length={schedule.total_length()} "
         f"max_seq_len={config.max_seq_len}"
     )
@@ -1060,218 +1304,49 @@ def run_sweep(
     )
 
     input_hidden_states = _inputs_from_traces(config, traces)
-    collected: dict[str, dict[int, torch.Tensor]] | None = None
-    kv_cache_torch: torch.Tensor | None = None
-    for layer_position, layer_idx in enumerate(layer_indices):
-        final_layer = layer_position == len(layer_indices) - 1
-        collected, maybe_kv_cache = _run_decoder_layer_pass(
+    last_result: SweepResult | None = None
+    for testing_iteration in range(config.num_testing_iterations):
+        testing_iteration_label = _testing_iteration_label(testing_iteration, config.num_testing_iterations)
+        logger.info(f"{testing_iteration_label}: starting full HostIoDecoderStage sweep")
+        collected, kv_cache_torch = _run_decoder_layer_pass(
             config=config,
             parent_mesh=parent_mesh,
             provider=provider,
             layer_idx=layer_idx,
-            layer_position=layer_position,
-            total_layers=len(layer_indices),
+            layer_position=0,
+            total_layers=1,
             schedule=schedule,
             input_hidden_states=input_hidden_states,
-            pull_kv_cache=final_layer and need_kv_cache,
+            pull_kv_cache=need_kv_cache,
+            testing_iteration=testing_iteration,
+            num_testing_iterations=config.num_testing_iterations,
         )
-        if final_layer:
-            kv_cache_torch = maybe_kv_cache
-        else:
-            input_hidden_states = collected
-
-    assert collected is not None
-
-    # =========================================================================
-    # Phase 3: Hidden state validation (cross-slot equality + cross-trace PCC)
-    # =========================================================================
-    # Per-prompt cross-slot equality. The same hidden state is pushed through
-    # every replicated slot at each position, so each slot's collected output
-    # must be byte-identical for every prompt. (No-op for Mode A.)
-    if config.validate_hidden_states_cross_slot and config.num_replication_slots > 1:
-        logger.info(
-            f"Phase 3a: hidden-state cross-slot equality across "
-            f"{config.num_replication_slots} slots for {len(config.prompt_names)} prompt(s)"
+        kv_cache_references = _validate_and_dump_sweep(
+            config=config,
+            schedule=schedule,
+            traces=traces,
+            collected=collected,
+            kv_cache_torch=kv_cache_torch,
+            need_kv_cache=need_kv_cache,
+            testing_iteration=testing_iteration,
+            num_testing_iterations=config.num_testing_iterations,
         )
-        for prompt_name in config.prompt_names:
-            ref = collected[prompt_name][0]
-            for s in range(1, config.num_replication_slots):
-                assert torch.equal(collected[prompt_name][s], ref), (
-                    f"Hidden-state cross-slot equality failed: prompt={prompt_name!r} " f"slot {s} diverged from slot 0"
-                )
-            logger.info(f"prompt={prompt_name!r}: hidden-state cross-slot equality OK")
-    else:
-        logger.info("Phase 3a skipped: validate_hidden_states_cross_slot=False or num_replication_slots == 1")
-
-    # Cross-trace per-(prompt, slot) PCC against the reference output trace.
-    # If 3a already proved cross-slot equality (i.e. all slots byte-identical to
-    # slot 0), PCC of slot 0 is a sound proxy for every slot — skip the redundant
-    # PCC computations for slots 1..N-1. Otherwise (Mode A, or 3a disabled) we
-    # have no proof of cross-slot equality and must PCC each slot independently.
-    if config.validate_hidden_states_cross_trace:
-        cross_slot_proven = config.validate_hidden_states_cross_slot and config.num_replication_slots > 1
-        slots_to_pcc: list[int] = [0] if cross_slot_proven else list(range(config.num_replication_slots))
-        logger.info(
-            f"Phase 3b: cross-trace PCC validation (threshold={config.pcc_threshold}) "
-            f"for {len(config.prompt_names)} prompt(s); slots_to_pcc={slots_to_pcc} "
-            f"(cross_slot_proven_in_3a={cross_slot_proven})"
+        last_result = SweepResult(
+            collected=collected,
+            kv_cache=kv_cache_torch,
+            schedule=schedule,
+            traces=traces,
+            kv_cache_references=kv_cache_references,
         )
-        for prompt_name in config.prompt_names:
-            expected = traces[prompt_name]["output"]
-            for slot in slots_to_pcc:
-                passing, pcc = comp_pcc(
-                    expected.flatten(),
-                    collected[prompt_name][slot].flatten(),
-                    config.pcc_threshold,
-                )
-                slot_label = (
-                    f"slot={slot} (proxy for all {config.num_replication_slots} slots)"
-                    if cross_slot_proven
-                    else f"slot={slot}"
-                )
-                logger.info(
-                    f"PCC: prompt={prompt_name!r} {slot_label} pcc={float(pcc):.6f} "
-                    f"threshold={config.pcc_threshold} pass={passing}"
-                )
-                assert passing, (
-                    f"Cross-trace validation FAILED: prompt={prompt_name!r} slot={slot} "
-                    f"pcc={float(pcc):.6f} < threshold {config.pcc_threshold}"
-                )
-        logger.info("Phase 3b complete: cross-trace PCC OK for all prompts")
-    else:
-        logger.info("Phase 3b skipped: validate_hidden_states_cross_trace=False")
+        logger.info(f"{testing_iteration_label}: verification complete")
+        if testing_iteration + 1 < config.num_testing_iterations:
+            logger.info(f"{testing_iteration_label}: clearing in-memory outputs before next testing iteration")
+            del collected
+            del kv_cache_torch
+            del kv_cache_references
+            del last_result
+            last_result = None
 
-    # =========================================================================
-    # Phase 4: KV cache pull (fast-dispatch) + per-prompt cross-slot validation
-    # =========================================================================
-    if not need_kv_cache:
-        logger.info("Phase 4: KV cache pull skipped (no KV-cache validation, no KV-cache dump)")
-
-    if config.validate_kv_cache_cross_slot and config.num_replication_slots > 1:
-        assert kv_cache_torch is not None  # guaranteed by need_kv_cache above
-        logger.info(f"Phase 4: per-prompt KV-cache cross-slot equality " f"({config.num_replication_slots} slots)")
-        for prompt_idx, prompt_name in enumerate(config.prompt_names):
-            start, end = schedule.range_for(prompt_idx)
-            ref_kv = kv_cache_torch[0, :, start:end, :]
-            for s in range(1, config.num_replication_slots):
-                assert torch.equal(kv_cache_torch[s, :, start:end, :], ref_kv), (
-                    f"KV-cache cross-slot equality failed: prompt={prompt_name!r} "
-                    f"position_range=[{start}, {end}) slot {s} diverged from slot 0"
-                )
-            logger.info(f"prompt={prompt_name!r} KV cross-slot OK for positions [{start}, {end})")
-
-    # Phase 4b: per-(prompt, slot) cross-trace PCC against the reference KV
-    # cache. The reference file is a slot-agnostic
-    # ``kv_cache_reference_{prompt}.pt`` (shape (1, L_p, KV_PE_DIM) bf16) living
-    # alongside the hidden-state trace; produced by the conversion tool from
-    # the GPU/HF golden. Mirrors Phase 3b's hidden-state cross-trace PCC: if
-    # 4a already proved cross-slot equality, slot 0 acts as a proxy for every
-    # other slot — otherwise (Mode A, or 4a disabled) we PCC each slot.
-    # Per-prompt references are stashed in ``kv_cache_references`` for the
-    # returned SweepResult, so downstream tooling can re-PCC, dump, or
-    # visualize without reloading.
-    kv_cache_references: dict[str, torch.Tensor] | None = None
-    if config.validate_kv_cache_cross_trace:
-        assert kv_cache_torch is not None  # guaranteed by need_kv_cache above
-        cross_slot_proven = config.validate_kv_cache_cross_slot and config.num_replication_slots > 1
-        slots_to_pcc: list[int] = [0] if cross_slot_proven else list(range(config.num_replication_slots))
-        logger.info(
-            f"Phase 4b: KV-cache cross-trace PCC validation "
-            f"(threshold={config.kv_cache_pcc_threshold}) for {len(config.prompt_names)} prompt(s); "
-            f"slots_to_pcc={slots_to_pcc} (cross_slot_proven_in_4a={cross_slot_proven})"
-        )
-        kv_cache_references = {}
-        for prompt_idx, prompt_name in enumerate(config.prompt_names):
-            start, end = schedule.range_for(prompt_idx)
-            L_p = end - start
-            expected_kv = _load_kv_cache_reference(config.hidden_states_dir, prompt_name, L_p=L_p)
-            # The on-disk reference (produced from a bit_sculpt / HF trace) is
-            # in HF/split-halves RoPE storage; permute the k_pe channels into
-            # TT/interleaved storage so the PCC compares like-for-like against
-            # the on-device KV slice. The kv_latent_normed channels are
-            # layout-agnostic and pass through unchanged.
-            expected_kv = _split_halves_to_interleaved_kpe(expected_kv)
-            kv_cache_references[prompt_name] = expected_kv
-            for slot in slots_to_pcc:
-                # Device slice is (1, L_p, KV_PE_DIM) — leading 1 is the head
-                # dim, matching the reference layout exactly.
-                actual_kv = kv_cache_torch[slot, :, start:end, :]
-                passing, pcc = comp_pcc(
-                    expected_kv.flatten(),
-                    actual_kv.flatten(),
-                    config.kv_cache_pcc_threshold,
-                )
-                slot_label = (
-                    f"slot={slot} (proxy for all {config.num_replication_slots} slots)"
-                    if cross_slot_proven
-                    else f"slot={slot}"
-                )
-                logger.info(
-                    f"KV PCC: prompt={prompt_name!r} {slot_label} pcc={float(pcc):.6f} "
-                    f"threshold={config.kv_cache_pcc_threshold} pass={passing}"
-                )
-                if not passing:
-                    # Per-channel diagnostic on failure: split into MLA's two
-                    # sub-paths so the user can localize between the
-                    # RMSNorm-compressed-latent and the RoPE-K branches without
-                    # rerunning. Bit_sculpt REPORT.md explicitly recommends
-                    # this localization step.
-                    latent_pcc = float(
-                        comp_pcc(
-                            expected_kv[:, :, :KV_LATENT_DIM].flatten(),
-                            actual_kv[:, :, :KV_LATENT_DIM].flatten(),
-                            config.kv_cache_pcc_threshold,
-                        )[1]
-                    )
-                    kpe_pcc = float(
-                        comp_pcc(
-                            expected_kv[:, :, KV_LATENT_DIM:].flatten(),
-                            actual_kv[:, :, KV_LATENT_DIM:].flatten(),
-                            config.kv_cache_pcc_threshold,
-                        )[1]
-                    )
-                    logger.error(
-                        f"KV PCC sub-channel diagnostic: prompt={prompt_name!r} {slot_label} "
-                        f"kv_latent_normed[:,:,:{KV_LATENT_DIM}] pcc={latent_pcc:.6f}, "
-                        f"k_pe_roped[:,:,{KV_LATENT_DIM}:] pcc={kpe_pcc:.6f}"
-                    )
-                assert passing, (
-                    f"KV-cache cross-trace validation FAILED: prompt={prompt_name!r} slot={slot} "
-                    f"pcc={float(pcc):.6f} < threshold {config.kv_cache_pcc_threshold}"
-                )
-        logger.info("Phase 4b complete: KV-cache cross-trace PCC OK for all prompts")
-    else:
-        logger.info("Phase 4b skipped: validate_kv_cache_cross_trace=False")
-
-    # =========================================================================
-    # Phase 5: Per-(prompt, slot) dumps
-    # =========================================================================
-    if config.dump_hidden_states or config.dump_kv_cache:
-        assert config.dump_dir is not None  # __post_init__ guarantees this
-        logger.info(f"Phase 5: per-(prompt, slot) dumps to {config.dump_dir}")
-
-    if config.dump_hidden_states:
-        for prompt_name in config.prompt_names:
-            for slot in range(config.num_replication_slots):
-                out_path = config.dump_dir / f"output_hidden_states_slot_{slot:02d}_{prompt_name}.pt"
-                torch.save(collected[prompt_name][slot], out_path)
-                logger.info(f"Wrote {out_path}")
-
-    if config.dump_kv_cache:
-        assert kv_cache_torch is not None  # guaranteed by need_kv_cache above
-        for prompt_idx, prompt_name in enumerate(config.prompt_names):
-            start, end = schedule.range_for(prompt_idx)
-            for slot in range(config.num_replication_slots):
-                kv_slice = kv_cache_torch[slot, :, start:end, :]
-                out_path = config.dump_dir / f"kv_cache_slot_{slot:02d}_{prompt_name}.pt"
-                torch.save(kv_slice, out_path)
-                logger.info(f"Wrote {out_path} shape={tuple(kv_slice.shape)}")
-
+    assert last_result is not None, "num_testing_iterations validation should guarantee at least one result"
     logger.info("run_sweep complete")
-    return SweepResult(
-        collected=collected,
-        kv_cache=kv_cache_torch,
-        schedule=schedule,
-        traces=traces,
-        kv_cache_references=kv_cache_references,
-    )
+    return last_result
