@@ -28,9 +28,16 @@ Pre-computed dense matrices (device-resident, small inputs only):
 B_real / B_imag already encode synthesis windowing, OLA and COLA normalisation, so the
 runtime is two matmuls + one add.
 
-When the iSTFT matrix would exceed ``_ISTFT_MATRIX_BYTES_LIMIT`` bytes (default 1 GiB) we avoid
-materializing the full matrix and instead run iSTFT as a sequence of on-device chunked matmuls.
-This keeps large-sequence synthesis fully on TT without torch runtime fallbacks.
+When the iSTFT matrix would exceed ``_ISTFT_MATRIX_BYTES_LIMIT`` bytes (default 1 GiB) the
+full matrix is not materialised.  Instead iSTFT uses ``conv_transpose2d``:
+
+    y_ola = conv_transpose2d(X_real, synth_real, stride=hop)
+          + conv_transpose2d(X_imag, synth_imag, stride=hop)   # [B, L_padded, 1]
+    y = trim(y_ola) * inv_denom                                 # COLA normalisation
+
+``conv_transpose2d`` is the adjoint of the forward STFT strided conv2d, so it computes the
+windowed overlap-add (OLA) exactly in a single on-device pass.  There is no CPU involvement
+in the forward path.
 """
 
 from __future__ import annotations
@@ -45,7 +52,7 @@ import torch
 import ttnn
 
 # iSTFT matrix bytes limit: if [K*F, output_length] float32 would exceed this, skip
-# precomputing the matrices and use torch.istft on CPU instead.
+# precomputing the matrices and use conv_transpose2d OLA instead.
 _ISTFT_MATRIX_BYTES_LIMIT = 1_073_741_824  # 1 GiB
 
 
@@ -58,11 +65,16 @@ class TTTorchSTFTParams:
     conv_stft_imag: ttnn.Tensor  # [K, 1, n_fft, 1], ROW_MAJOR
     conv_pad_len: int  # n_fft // 2
 
-    # iSTFT: y = X_real_flat @ istft_real + X_imag_flat @ istft_imag
-    # None when the full matrix exceeds _ISTFT_MATRIX_BYTES_LIMIT; inverse uses chunked TT matmuls.
+    # iSTFT full matrix (None when it would exceed _ISTFT_MATRIX_BYTES_LIMIT).
+    # y = X_real_flat @ istft_real + X_imag_flat @ istft_imag
     istft_real: Optional[ttnn.Tensor]  # [K*F, output_length]
     istft_imag: Optional[ttnn.Tensor]  # [K*F, output_length]
-    istft_chunk_size: int
+
+    # iSTFT conv-transpose OLA (used when full matrix is not precomputed).
+    # Synthesis kernels w[n]*iFFT_real/imag[k,n] — adjoint of the STFT forward conv.
+    synth_real: ttnn.Tensor  # [K, 1, n_fft, 1], ROW_MAJOR, host
+    synth_imag: ttnn.Tensor  # [K, 1, n_fft, 1], ROW_MAJOR, host
+    inv_denom_tt: ttnn.Tensor  # [1, output_length], TILE, device — COLA normalisation
 
     filter_length: int  # n_fft
     hop_length: int
@@ -123,7 +135,7 @@ def _build_istft_matrices(L: int, n_fft: int, hop: int, window: np.ndarray) -> t
 
 
 def _build_istft_inverse_denom_trim(L: int, n_fft: int, hop: int, window: np.ndarray) -> np.ndarray:
-    """Return COLA normalization inverse for trimmed output positions ``[output_length]``."""
+    """Return COLA normalisation inverse for trimmed output positions ``[output_length]``."""
     output_length = (L // hop) * hop
     p = n_fft // 2
     L_padded = output_length + n_fft
@@ -139,55 +151,29 @@ def _build_istft_inverse_denom_trim(L: int, n_fft: int, hop: int, window: np.nda
     return (1.0 / np.maximum(denom_trim, 1e-11)).astype(np.float32)
 
 
-def _build_istft_matrix_chunk(
-    L: int,
-    n_fft: int,
-    hop: int,
-    window: np.ndarray,
-    inv_denom_trim: np.ndarray,
-    col_start: int,
-    col_end: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Build one iSTFT chunk ``[K*F, col_end-col_start]`` for trimmed output columns."""
+def _build_synth_kernels(n_fft: int, win_length: int) -> tuple[np.ndarray, np.ndarray]:
+    """Build per-frame synthesis kernels ``[K, 1, n_fft, 1]`` (IOHW) for conv_transpose2d OLA.
+
+    synth_real/imag[k, 0, n, 0] = window[n] * iFFT_real/imag[k, n].
+    conv_transpose2d with these kernels and stride=hop computes the windowed OLA sum exactly:
+    the operation is the adjoint of the forward STFT strided conv2d.
+    """
+    window = _hann_window(win_length)
     K = n_fft // 2 + 1
-    F = L // hop + 1
-    output_length = (F - 1) * hop
-    p = n_fft // 2
-    N = n_fft
-    chunk_w = col_end - col_start
-    padded_start = p + col_start
-    padded_end = p + col_end
+    k = np.arange(K)
+    n = np.arange(n_fft)
+    angle = 2.0 * np.pi * np.outer(k, n) / n_fft
 
-    iFFT_real = np.zeros((K, N), dtype=np.float64)
-    iFFT_imag = np.zeros((K, N), dtype=np.float64)
-    for n in range(N):
-        iFFT_real[0, n] = 1.0 / N
-        iFFT_real[K - 1, n] = (1.0 / N) * ((-1.0) ** n)
-        for k in range(1, K - 1):
-            angle = 2.0 * np.pi * k * n / N
-            iFFT_real[k, n] = (2.0 / N) * np.cos(angle)
-            iFFT_imag[k, n] = -(2.0 / N) * np.sin(angle)
+    iFFT_real = np.zeros((K, n_fft), dtype=np.float64)
+    iFFT_imag = np.zeros((K, n_fft), dtype=np.float64)
+    iFFT_real[0, :] = 1.0 / n_fft
+    iFFT_real[K - 1, :] = ((-1.0) ** n) / n_fft
+    iFFT_real[1 : K - 1, :] = (2.0 / n_fft) * np.cos(angle[1 : K - 1, :])
+    iFFT_imag[1 : K - 1, :] = -(2.0 / n_fft) * np.sin(angle[1 : K - 1, :])
 
-    B_real = np.zeros((K * F, chunk_w), dtype=np.float32)
-    B_imag = np.zeros((K * F, chunk_w), dtype=np.float32)
-    for f in range(F):
-        frame_base = f * hop
-        for n in range(N):
-            m = frame_base + n
-            if m < padded_start or m >= padded_end:
-                continue
-            out_col = m - padded_start
-            w_n = float(window[n])
-            row_base = f
-            for k in range(K):
-                row = k * F + row_base
-                B_real[row, out_col] = np.float32(w_n * iFFT_real[k, n])
-                B_imag[row, out_col] = np.float32(w_n * iFFT_imag[k, n])
-
-    norm = inv_denom_trim[col_start:col_end][None, :]
-    B_real *= norm
-    B_imag *= norm
-    return B_real, B_imag
+    synth_real = (window * iFFT_real).astype(np.float32)[:, None, :, None]  # [K, 1, n_fft, 1]
+    synth_imag = (window * iFFT_imag).astype(np.float32)[:, None, :, None]
+    return synth_real, synth_imag
 
 
 def _build_conv_stft_kernels(n_fft: int, win_length: int) -> tuple[np.ndarray, np.ndarray]:
@@ -263,7 +249,7 @@ def preprocess_tt_torch_stft(
     """Build STFT/iSTFT parameters on the host and upload them to device.
 
     The iSTFT full matrix is skipped when it would exceed ``_ISTFT_MATRIX_BYTES_LIMIT``.
-    In that case ``TTTorchSTFT.inverse`` uses chunked on-device matmuls.
+    In that case ``TTTorchSTFT`` uses conv_transpose2d OLA iSTFT.
     """
     if win_length != filter_length:
         raise ValueError(f"Only win_length == filter_length is supported (got {win_length} vs {filter_length})")
@@ -277,18 +263,25 @@ def preprocess_tt_torch_stft(
     F = input_length // hop_length + 1
     output_length = (F - 1) * hop_length  # == input_length when input_length % hop_length == 0
 
-    matrix_bytes = K * F * output_length * 4  # float32 bytes for one matrix
-    skip_istft_precompute = matrix_bytes > _ISTFT_MATRIX_BYTES_LIMIT
+    window = _hann_window(win_length)
 
-    istft_chunk_size = 1024
-    if skip_istft_precompute:
+    matrix_bytes = K * F * output_length * 4  # float32 bytes for one matrix
+    if matrix_bytes > _ISTFT_MATRIX_BYTES_LIMIT:
         istft_real_t: Optional[ttnn.Tensor] = None
         istft_imag_t: Optional[ttnn.Tensor] = None
     else:
-        window = _hann_window(win_length)
         B_real, B_imag, output_length = _build_istft_matrices(input_length, filter_length, hop_length, window)
         istft_real_t = _upload(B_real, device, dtype=weights_dtype)
         istft_imag_t = _upload(B_imag, device, dtype=weights_dtype)
+
+    # Synthesis kernels for conv_transpose2d OLA iSTFT (always precomputed; tiny).
+    synth_real_np, synth_imag_np = _build_synth_kernels(filter_length, win_length)
+    synth_real_t = ttnn.from_torch(torch.from_numpy(synth_real_np), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    synth_imag_t = ttnn.from_torch(torch.from_numpy(synth_imag_np), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    # COLA normalisation on device for conv_transpose OLA path.
+    inv_denom_np = _build_istft_inverse_denom_trim(input_length, filter_length, hop_length, window)
+    inv_denom_t = _upload(inv_denom_np.reshape(1, -1), device, dtype=ttnn.float32)  # [1, output_length]
 
     conv_real, conv_imag = _build_conv_stft_kernels(filter_length, win_length)
 
@@ -298,7 +291,9 @@ def preprocess_tt_torch_stft(
         conv_pad_len=filter_length // 2,
         istft_real=istft_real_t,
         istft_imag=istft_imag_t,
-        istft_chunk_size=istft_chunk_size,
+        synth_real=synth_real_t,
+        synth_imag=synth_imag_t,
+        inv_denom_tt=inv_denom_t,
         filter_length=filter_length,
         hop_length=hop_length,
         win_length=win_length,
@@ -422,8 +417,12 @@ class _StridedStftConv:
 class TTTorchSTFT:
     """TT port of :class:`TorchSTFT` (STFT/iSTFT via precomputed dense matrices).
 
-    ``use_torch_stft_fallback=True`` applies to :meth:`transform` only.
-    iSTFT always runs on TT (full matrix or chunked matmuls).
+    ``use_torch_stft_fallback=True`` runs the entire :meth:`transform` on CPU (``torch.stft``).
+    ``use_torch_stft_conv_fallback=True`` runs only the strided conv on CPU float32; magnitude and
+    phase stay on TT.  On trained harmonic waveforms cos(phase) PCC remains well below full fallback;
+    use ``use_torch_stft_fallback=True`` for cos(phase) PCC > 0.99 vs reference.
+
+    iSTFT always runs on TT (full matrix or conv_transpose2d OLA).
     """
 
     def __init__(
@@ -432,6 +431,7 @@ class TTTorchSTFT:
         params: TTTorchSTFTParams,
         *,
         use_torch_stft_fallback: bool = False,
+        use_torch_stft_conv_fallback: bool = False,
     ) -> None:
         self.device = device
         self.params = params
@@ -440,9 +440,10 @@ class TTTorchSTFT:
         # sensitive to BF16 rounding; clamp their phase to 0 to reduce random phase jitter.
         self.phase_zero_floor = float(os.getenv("KOKORO_STFT_PHASE_ZERO_FLOOR", "1e-8"))
         self._use_torch_stft_fallback = use_torch_stft_fallback
-        # _StridedStftConv is used only when use_torch_stft_fallback=False.
-        self._conv_real = _StridedStftConv(device, params.conv_stft_real, params.hop_length)
-        self._conv_imag = _StridedStftConv(device, params.conv_stft_imag, params.hop_length)
+        self._use_torch_stft_conv_fallback = use_torch_stft_conv_fallback and not use_torch_stft_fallback
+        conv_fb = self._use_torch_stft_conv_fallback
+        self._conv_real = _StridedStftConv(device, params.conv_stft_real, params.hop_length, use_torch_fallback=conv_fb)
+        self._conv_imag = _StridedStftConv(device, params.conv_stft_imag, params.hop_length, use_torch_fallback=conv_fb)
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -450,10 +451,10 @@ class TTTorchSTFT:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        self._istft_window = _hann_window(params.win_length)
-        self._istft_inv_denom_trim = _build_istft_inverse_denom_trim(
-            params.input_length, params.filter_length, params.hop_length, self._istft_window
-        )
+        # Conv-transpose weight cache: prepared once per (B, F) to avoid re-upload.
+        self._synth_real_prep: Optional[ttnn.Tensor] = None
+        self._synth_imag_prep: Optional[ttnn.Tensor] = None
+        self._synth_prep_key: Optional[tuple] = None
 
     def _transform_torch_fallback(self, x_bL: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """CPU float32 STFT transform using ``torch.stft`` (exact match to reference TorchSTFT).
@@ -491,23 +492,8 @@ class TTTorchSTFT:
         )
         return mag_tt, phase_tt
 
-    def transform(self, x_bL: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """
-        Args:
-            x_bL: ``[B, L]`` (TILE layout) where ``L == params.input_length``.
-
-        Returns:
-            ``(magnitude, phase)`` each ``[B, K, F]`` (TILE layout).
-
-        When ``use_torch_stft_fallback=True`` the entire transform runs on CPU via ``torch.stft``
-        (see :meth:`_transform_torch_fallback`).  This is necessary because BH rounds float32
-        inputs to BF16 before ALL ops — including the SFPU that evaluates ``atan2`` — so moving
-        only the conv2d to CPU still leaves ``atan2`` degraded.  The TTNN path (fallback=False)
-        applies BH BF16 throughout and achieves ~0.58 PCC on full-forward.
-        """
-        if self._use_torch_stft_fallback:
-            return self._transform_torch_fallback(x_bL)
-
+    def _forward_stft_conv(self, x_bL: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Strided conv STFT branches → ``(X_real, X_imag)`` each ``[B, K, F]``."""
         L_in = int(x_bL.shape[-1])
         if L_in != self.params.input_length:
             raise ValueError(f"input length mismatch: got {L_in}, expected {self.params.input_length}")
@@ -525,10 +511,13 @@ class TTTorchSTFT:
         ttnn.deallocate(x_n1lc)
         L_padded = L_in + 2 * p.conv_pad_len
 
-        X_real = self._conv_real(x_padded, B, L_padded)  # [B, K, F]
-        X_imag = self._conv_imag(x_padded, B, L_padded)  # [B, K, F]
+        X_real = self._conv_real(x_padded, B, L_padded)
+        X_imag = self._conv_imag(x_padded, B, L_padded)
         ttnn.deallocate(x_padded)
+        return X_real, X_imag
 
+    def _magnitude_phase_from_xy(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """``sqrt(real^2+imag^2)`` and ``atan2`` on TT."""
         mc = ttnn.DRAM_MEMORY_CONFIG
         mag_sq = ttnn.add(
             ttnn.multiply(X_real, X_real, memory_config=mc),
@@ -559,45 +548,113 @@ class TTTorchSTFT:
         ttnn.deallocate(X_imag)
         return magnitude, phase
 
-    def _inverse_chunked(self, X_real_flat: ttnn.Tensor, X_imag_flat: ttnn.Tensor) -> ttnn.Tensor:
-        """Chunked iSTFT matmul path for long sequences (TT-only, no torch runtime fallback)."""
+    def transform(self, x_bL: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """
+        Args:
+            x_bL: ``[B, L]`` (TILE layout) where ``L == params.input_length``.
+
+        Returns:
+            ``(magnitude, phase)`` each ``[B, K, F]`` (TILE layout).
+
+        When ``use_torch_stft_fallback=True`` the entire transform runs on CPU via ``torch.stft``
+        (see :meth:`_transform_torch_fallback`).  This is necessary because BH rounds float32
+        inputs to BF16 before ALL ops — including the SFPU that evaluates ``atan2`` — so moving
+        only the conv2d to CPU still leaves ``atan2`` degraded.  The TTNN path (fallback=False)
+        applies BH BF16 throughout and achieves ~0.58 PCC on full-forward.
+        """
+        if self._use_torch_stft_fallback:
+            return self._transform_torch_fallback(x_bL)
+
+        X_real, X_imag = self._forward_stft_conv(x_bL)
+        return self._magnitude_phase_from_xy(X_real, X_imag)
+
+    def _inverse_conv_transpose(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> ttnn.Tensor:
+        """Conv-transpose OLA iSTFT — fully on device, no CPU in forward path.
+
+        conv_transpose2d with synthesis kernels w[n]*iFFT[k,n] and stride=hop is the
+        adjoint of the forward STFT strided conv2d: it computes the windowed OLA sum
+        in a single on-device pass.  After trimming the reflect-pad margins the COLA
+        normalisation (precomputed on device) is applied pointwise.
+        """
         p = self.params
         mc = ttnn.DRAM_MEMORY_CONFIG
-        parts: list[ttnn.Tensor] = []
-        for col_start in range(0, p.output_length, p.istft_chunk_size):
-            col_end = min(col_start + p.istft_chunk_size, p.output_length)
-            B_real_np, B_imag_np = _build_istft_matrix_chunk(
-                p.input_length,
-                p.filter_length,
-                p.hop_length,
-                self._istft_window,
-                self._istft_inv_denom_trim,
-                col_start,
-                col_end,
+        B = int(X_real.shape[0])
+
+        def _to_nhwc(x_bkf: ttnn.Tensor) -> ttnn.Tensor:
+            # [B, K, F] → [B, F, K] ROW_MAJOR → [B, 1, F, K] for conv_transpose2d NHWC
+            x_bfk = ttnn.permute(x_bkf, (0, 2, 1), memory_config=mc)
+            x_rm = ttnn.to_layout(x_bfk, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
+            ttnn.deallocate(x_bfk)
+            return ttnn.reshape(x_rm, [B, 1, p.F, p.K], memory_config=mc)
+
+        x_real_nhwc = _to_nhwc(X_real)
+        x_imag_nhwc = _to_nhwc(X_imag)
+
+        # Use the same minimal conv_config as tt_conv_transpose1d_nlc (no output_layout override).
+        conv_cfg = ttnn.Conv2dConfig(weights_dtype=ttnn.float32)
+        conv_cfg.config_tensors_in_dram = True
+        compute_cfg = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+        )
+
+        def _run_ct(x_nhwc: ttnn.Tensor, synth_w: ttnn.Tensor) -> ttnn.Tensor:
+            y, out_hw = ttnn.conv_transpose2d(
+                input_tensor=x_nhwc,
+                weight_tensor=synth_w,
+                device=self.device,
+                in_channels=p.K,
+                out_channels=1,
+                batch_size=B,
+                input_height=p.F,
+                input_width=1,
+                kernel_size=(p.filter_length, 1),
+                stride=(p.hop_length, 1),
+                padding=(0, 0),
+                output_padding=(0, 0),
+                dilation=(1, 1),
+                groups=1,
+                bias_tensor=None,
+                conv_config=conv_cfg,
+                compute_config=compute_cfg,
+                mirror_kernel=True,
+                return_output_dim=True,
             )
-            B_real_tt = _upload(B_real_np, self.device, dtype=ttnn.float32)
-            B_imag_tt = _upload(B_imag_np, self.device, dtype=ttnn.float32)
-            y_real = ttnn.matmul(
-                X_real_flat, B_real_tt, memory_config=mc, compute_kernel_config=self.compute_kernel_config
-            )
-            y_imag = ttnn.matmul(
-                X_imag_flat, B_imag_tt, memory_config=mc, compute_kernel_config=self.compute_kernel_config
-            )
-            y_chunk = ttnn.add(y_real, y_imag, memory_config=mc)
-            ttnn.deallocate(y_real)
-            ttnn.deallocate(y_imag)
-            ttnn.deallocate(B_real_tt)
-            ttnn.deallocate(B_imag_tt)
-            parts.append(y_chunk)
-        if len(parts) == 1:
-            return parts[0]
-        out = parts[0]
-        for i in range(1, len(parts)):
-            cat = ttnn.concat([out, parts[i]], dim=1, memory_config=mc)
-            ttnn.deallocate(out)
-            ttnn.deallocate(parts[i])
-            out = cat
-        return out
+            oh, ow = int(out_hw[0]), int(out_hw[1])
+            # y is in the conv_transpose2d internal layout; reshape to [B, L_padded, C_out]
+            return ttnn.reshape(y, (y.shape[0], oh * ow, y.shape[-1]), memory_config=mc)
+
+        y_real = _run_ct(x_real_nhwc, p.synth_real)
+        ttnn.deallocate(x_real_nhwc)
+        y_imag = _run_ct(x_imag_nhwc, p.synth_imag)
+        ttnn.deallocate(x_imag_nhwc)
+
+        # Ensure TILE_LAYOUT for add (TTNN binary ops require TILE).
+        if y_real.layout != ttnn.TILE_LAYOUT:
+            y_real = ttnn.to_layout(y_real, ttnn.TILE_LAYOUT, memory_config=mc)
+        if y_imag.layout != ttnn.TILE_LAYOUT:
+            y_imag = ttnn.to_layout(y_imag, ttnn.TILE_LAYOUT, memory_config=mc)
+        y_sum = ttnn.add(y_real, y_imag, memory_config=mc)
+        ttnn.deallocate(y_real)
+        ttnn.deallocate(y_imag)
+
+        # Convert to ROW_MAJOR for slice, trim reflect-pad margins.
+        y_rm = ttnn.to_layout(y_sum, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
+        ttnn.deallocate(y_sum)
+        pad = p.filter_length // 2
+        y_trim = ttnn.slice(y_rm, [0, pad, 0], [B, pad + p.output_length, 1], [1, 1, 1], memory_config=mc)
+        ttnn.deallocate(y_rm)
+
+        # [B, output_length, 1] → [B, output_length] → TILE for COLA multiply.
+        y_flat = ttnn.reshape(y_trim, [B, p.output_length], memory_config=mc)
+        ttnn.deallocate(y_trim)
+        y_tile = ttnn.to_layout(y_flat, ttnn.TILE_LAYOUT, memory_config=mc)
+        ttnn.deallocate(y_flat)
+        y_norm = ttnn.multiply(y_tile, p.inv_denom_tt, memory_config=mc)
+        ttnn.deallocate(y_tile)
+        return ttnn.reshape(y_norm, [B, 1, p.output_length], memory_config=mc)
 
     def inverse(self, magnitude: ttnn.Tensor, phase: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -609,7 +666,7 @@ class TTTorchSTFT:
             ``[B, 1, output_length]`` (matches ``TorchSTFT.inverse``'s trailing ``unsqueeze(-2)``).
 
         When iSTFT full matrices are not precomputed (input too large for
-        ``_ISTFT_MATRIX_BYTES_LIMIT``), this method uses chunked TT matmuls.
+        ``_ISTFT_MATRIX_BYTES_LIMIT``), this method uses conv_transpose2d OLA.
         """
         p = self.params
         if magnitude.dtype != ttnn.float32:
@@ -625,12 +682,12 @@ class TTTorchSTFT:
         ttnn.deallocate(sin_phase)
 
         B = int(magnitude.shape[0])
-        X_real_flat = ttnn.reshape(X_real, [B, p.K * p.F], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        X_imag_flat = ttnn.reshape(X_imag, [B, p.K * p.F], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(X_real)
-        ttnn.deallocate(X_imag)
 
         if p.istft_real is not None and p.istft_imag is not None:
+            X_real_flat = ttnn.reshape(X_real, [B, p.K * p.F], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            X_imag_flat = ttnn.reshape(X_imag, [B, p.K * p.F], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(X_real)
+            ttnn.deallocate(X_imag)
             y_real = ttnn.matmul(
                 X_real_flat,
                 p.istft_real,
@@ -646,22 +703,68 @@ class TTTorchSTFT:
             y = ttnn.add(y_real, y_imag, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(y_real)
             ttnn.deallocate(y_imag)
+            ttnn.deallocate(X_real_flat)
+            ttnn.deallocate(X_imag_flat)
+            while len(y.shape) > 2:
+                y = ttnn.squeeze(y, 0)
+            return ttnn.reshape(y, [B, 1, p.output_length], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
-            y = self._inverse_chunked(X_real_flat, X_imag_flat)
-        ttnn.deallocate(X_real_flat)
-        ttnn.deallocate(X_imag_flat)
+            y = self._inverse_conv_transpose(X_real, X_imag)
+            ttnn.deallocate(X_real)
+            ttnn.deallocate(X_imag)
+            return y
 
-        while len(y.shape) > 2:
-            y = ttnn.squeeze(y, 0)
-        out = ttnn.reshape(y, [B, 1, p.output_length], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return out
+    def _forward_stft_to_istft(self, x_bL: ttnn.Tensor) -> ttnn.Tensor:
+        """STFT conv → iSTFT without mag/phase roundtrip.
+
+        Skipping atan2 + cos/sin avoids BH BF16 phase errors that amplify near-zero bin
+        noise: mag * cos(atan2_BF16(y, x)) can diverge from x by ~100× when phase is off by π.
+        Direct X_real/X_imag passthrough keeps the error at the conv2d noise floor.
+        """
+        X_real, X_imag = self._forward_stft_conv(x_bL)
+        p = self.params
+        mc = ttnn.DRAM_MEMORY_CONFIG
+
+        if X_real.dtype != ttnn.float32:
+            X_real = ttnn.typecast(X_real, ttnn.float32, memory_config=mc)
+        if X_imag.dtype != ttnn.float32:
+            X_imag = ttnn.typecast(X_imag, ttnn.float32, memory_config=mc)
+
+        B = int(X_real.shape[0])
+
+        if p.istft_real is not None and p.istft_imag is not None:
+            X_real_flat = ttnn.reshape(X_real, [B, p.K * p.F], memory_config=mc)
+            X_imag_flat = ttnn.reshape(X_imag, [B, p.K * p.F], memory_config=mc)
+            ttnn.deallocate(X_real)
+            ttnn.deallocate(X_imag)
+            y_real = ttnn.matmul(
+                X_real_flat, p.istft_real, memory_config=mc, compute_kernel_config=self.compute_kernel_config
+            )
+            y_imag = ttnn.matmul(
+                X_imag_flat, p.istft_imag, memory_config=mc, compute_kernel_config=self.compute_kernel_config
+            )
+            y = ttnn.add(y_real, y_imag, memory_config=mc)
+            ttnn.deallocate(y_real)
+            ttnn.deallocate(y_imag)
+            ttnn.deallocate(X_real_flat)
+            ttnn.deallocate(X_imag_flat)
+            while len(y.shape) > 2:
+                y = ttnn.squeeze(y, 0)
+            return ttnn.reshape(y, [B, 1, p.output_length], memory_config=mc)
+        else:
+            y = self._inverse_conv_transpose(X_real, X_imag)
+            ttnn.deallocate(X_real)
+            ttnn.deallocate(X_imag)
+            return y
 
     def forward(self, x_bL: ttnn.Tensor) -> ttnn.Tensor:
         """STFT → iSTFT round trip (matches ``TorchSTFT.forward``)."""
-        mag, phase = self.transform(x_bL)
-        y = self.inverse(mag, phase)
-        ttnn.deallocate(mag)
-        ttnn.deallocate(phase)
-        return y
+        if self._use_torch_stft_fallback:
+            mag, phase = self._transform_torch_fallback(x_bL)
+            y = self.inverse(mag, phase)
+            ttnn.deallocate(mag)
+            ttnn.deallocate(phase)
+            return y
+        return self._forward_stft_to_istft(x_bL)
 
     __call__ = forward

@@ -2,27 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTNN port of Kokoro-82M :class:`~models.experimental.kokoro.reference.model.KModel`.
-
-Full on-device forward pass composing:
-
-    TTCustomAlbert   (PL-BERT)
-    bert_encoder     (ttnn.linear 768 → 512)
-    TTDurationEncoder + BiLSTM + TTLinearNorm   (duration prediction)
-    alignment matrix   (built on host from integer pred_dur; pushed to device)
-    TTAdainResBlk1d branches × 3   (F0 / N from TTProsodyPredictor.F0Ntrain)
-    TTTextEncoder   (CNN + BiLSTM text features)
-    matmul alignment   (asr = t_en @ pred_aln_trg)
-    TTDecoder → TTGenerator   (iSTFTNet vocoder)
-
-The only host-side step is reading predicted durations (a single small integer
-tensor) to construct the alignment matrix, which is then immediately pushed back to
-device.  This mirrors the existing precedent in :class:`TTProsodyPredictor` and
-:class:`TTTextEncoder` which already read ``sequence_lengths`` from the host.
-
-Generator fallbacks are propagated to :class:`TTDecoder` and are intended for
-testing / hardware-limitation workarounds only.
-"""
+"""TTNN port of Kokoro-82M KModel: full on-device phonemes → audio forward pass."""
 
 from __future__ import annotations
 
@@ -47,8 +27,6 @@ from .tt_text_encoder import TTTextEncoder, TTTextEncoderParams, preprocess_tt_t
 
 
 class KokoroConfig:
-    """Shared constants for Kokoro-82M (hexgrad/Kokoro-82M on HuggingFace)."""
-
     repo_id: str = "hexgrad/Kokoro-82M"
     sample_rate_hz: int = 24_000
 
@@ -60,11 +38,9 @@ class KokoroConfig:
 
 @dataclass(frozen=True)
 class TTKModelParams:
-    """Device-resident weights for :class:`TTKModel` (excluding the decoder)."""
-
     bert: TTCustomAlbertParams
-    bert_encoder_w: ttnn.Tensor  # [hidden_dim, hidden_size_bert] — used with transpose_b=True
-    bert_encoder_b: ttnn.Tensor  # [1, 1, 1, hidden_dim]
+    bert_encoder_w: ttnn.Tensor  # stored transposed for transpose_b=True in ttnn.linear
+    bert_encoder_b: ttnn.Tensor
     predictor: TTProsodyPredictorParams
     text_encoder: TTTextEncoderParams
     hidden_dim: int
@@ -83,13 +59,7 @@ def preprocess_tt_kmodel(
     weights_dtype=ttnn.bfloat16,
     conv_weights_dtype=ttnn.float32,
 ) -> TTKModelParams:
-    """Upload a reference :class:`~models.experimental.kokoro.reference.model.KModel`
-    to device for :class:`TTKModel`.
-
-    The vocoder (:class:`TTDecoder`) is **not** preprocessed here because its STFT
-    matrices depend on ``time_len_asr``, which is determined at inference time.
-    :meth:`TTKModel._get_decoder` handles that lazily and caches by ``T_mel``.
-    """
+    """Upload KModel weights to device. TTDecoder is handled lazily by TTKModel._get_decoder."""
     bert_params = preprocess_tt_custom_albert(ref.bert, device, weights_dtype=weights_dtype)
 
     enc_w = ttnn.from_torch(
@@ -136,7 +106,6 @@ def preprocess_tt_kmodel(
 
 @contextmanager
 def _zero_noise():
-    """Context that returns zeros from all stochastic torch ops (deterministic mode)."""
     real_rand = torch.rand
     real_randn_like = torch.randn_like
     torch.rand = lambda *size, **kwargs: torch.zeros(*size, **kwargs)
@@ -171,29 +140,7 @@ def _build_alignment(pred_dur: torch.LongTensor) -> torch.Tensor:
 
 
 class TTKModel:
-    """Full TTNN port of ``KModel``.
-
-    Composes :class:`TTCustomAlbert`, :class:`TTProsodyPredictor`,
-    :class:`TTTextEncoder`, and :class:`TTDecoder` entirely on-device.
-
-    The alignment matrix (built from predicted durations) is the only step that
-    touches the host — ``pred_dur`` values are read back as integers, the
-    one-hot matrix is constructed on CPU in float32, and immediately pushed
-    to device.
-
-    Args:
-        device: Open TT device.
-        ref: Reference :class:`~models.experimental.kokoro.reference.model.KModel`.
-            Used for ``vocab``, ``context_length``, and the ``decoder`` module
-            (for dynamic :meth:`_get_decoder` preprocessing).
-        params: Preprocessed device weights from :func:`preprocess_tt_kmodel`.
-        use_torch_stft_fallback: Route ``torch.stft`` transform through CPU float32.
-            Required together with ``use_torch_phase_fallback`` to reach PCC > 0.99
-            on BH hardware (see :class:`TTGenerator` docstring).
-        use_torch_phase_fallback: Route SineGen phase chain through CPU float32.
-        use_torch_linear_fallback: Route source-module linear through CPU float32.
-        use_torch_tanh_fallback: Route source-module tanh through CPU float32.
-    """
+    """Full TTNN port of KModel. Alignment matrix read-back is the only host-side step."""
 
     @dataclass
     class Output:
@@ -207,6 +154,7 @@ class TTKModel:
         params: TTKModelParams,
         *,
         use_torch_stft_fallback: bool = False,
+        use_torch_stft_conv_fallback: bool = False,
         use_torch_phase_fallback: bool = False,
         use_torch_linear_fallback: bool = False,
         use_torch_tanh_fallback: bool = False,
@@ -217,6 +165,7 @@ class TTKModel:
         self.params = params
         self._ref_decoder = ref.decoder  # kept for lazy preprocess_tt_decoder calls
         self._use_stft_fallback = use_torch_stft_fallback
+        self._use_stft_conv_fallback = use_torch_stft_conv_fallback
         self._use_phase_fallback = use_torch_phase_fallback
         self._use_linear_fallback = use_torch_linear_fallback
         self._use_tanh_fallback = use_torch_tanh_fallback
@@ -233,7 +182,6 @@ class TTKModel:
     # ------------------------------------------------------------------
 
     def _get_decoder(self, t_mel: int) -> TTDecoder:
-        """Return cached :class:`TTDecoder` for the given mel-frame count, uploading on first access."""
         if t_mel not in self._decoder_cache:
             dec_params = preprocess_tt_decoder(
                 self._ref_decoder,
@@ -244,6 +192,7 @@ class TTKModel:
                 self.device,
                 dec_params,
                 use_torch_stft_fallback=self._use_stft_fallback,
+                use_torch_stft_conv_fallback=self._use_stft_conv_fallback,
                 use_torch_phase_fallback=self._use_phase_fallback,
                 use_torch_linear_fallback=self._use_linear_fallback,
                 use_torch_tanh_fallback=self._use_tanh_fallback,
@@ -262,26 +211,12 @@ class TTKModel:
         speed: float = 1.0,
         deterministic: bool = False,
     ) -> "TTKModel.Output":
-        """End-to-end TT inference: phonemes → audio waveform.
-
-        Args:
-            phonemes: IPA phoneme string (e.g. from ``KPipeline``).
-            ref_s: ``[1, style_dim*2]`` voice style embedding (CPU).
-            speed: Speaking-rate multiplier.
-            deterministic: Zero all stochastic noise (torch.rand / torch.randn_like)
-                for reproducible output when generator fallbacks are enabled.
-
-        Returns:
-            :class:`Output` with ``.audio`` (1-D float32 waveform on CPU) and
-            ``.pred_dur`` (per-phoneme frame count on CPU).
-        """
-        # --- Tokenise --------------------------------------------------
         input_ids_list = list(filter(lambda i: i is not None, map(lambda p: self.vocab.get(p), phonemes)))
         assert len(input_ids_list) + 2 <= self.context_length, (
             len(input_ids_list) + 2,
             self.context_length,
         )
-        input_ids = torch.LongTensor([[0, *input_ids_list, 0]])  # [1, T]
+        input_ids = torch.LongTensor([[0, *input_ids_list, 0]])
 
         ref_s = ref_s.cpu()
         if ref_s.dim() == 1:
@@ -289,14 +224,12 @@ class TTKModel:
 
         B, T = input_ids.shape
         input_lengths = torch.full((B,), T, dtype=torch.long)
-        # text_mask[b, t] = True where position is padding (beyond valid length)
         text_mask = torch.arange(T).unsqueeze(0).expand(B, -1).type_as(input_lengths)
-        text_mask = torch.gt(text_mask + 1, input_lengths.unsqueeze(1))  # [B, T] bool
-        attention_mask = (~text_mask).int()  # [B, T]  1=keep, 0=pad
+        text_mask = torch.gt(text_mask + 1, input_lengths.unsqueeze(1))
+        attention_mask = (~text_mask).int()
 
-        # Style slices (CPU, will be pushed to device when needed)
-        s_pred_cpu = ref_s[:, self.params.style_dim :]  # [B, style_dim] for predictor
-        s_style_cpu = ref_s[:, : self.params.style_dim]  # [B, style_dim] for decoder
+        s_pred_cpu = ref_s[:, self.params.style_dim :]
+        s_style_cpu = ref_s[:, : self.params.style_dim]
 
         mc = ttnn.DRAM_MEMORY_CONFIG
         ck = self._predictor.compute_kernel_config
@@ -315,6 +248,7 @@ class TTKModel:
                 speed,
                 mc,
                 ck,
+                deterministic=deterministic,
             )
 
         audio = ttnn.to_torch(audio_tt).float().squeeze()
@@ -340,13 +274,14 @@ class TTKModel:
         speed: float,
         mc: ttnn.MemoryConfig,
         ck,
+        *,
+        deterministic: bool = False,
     ) -> ttnn.Tensor:
-        B, T = input_ids.shape
         p = self.params
         dev = self.device
 
         # ------ 1. PL-BERT -----------------------------------------------
-        bert_out = self._bert(input_ids, attention_mask)  # [B, T, hidden_size] NLC
+        bert_out = self._bert(input_ids, attention_mask)
 
         # ------ 2. bert_encoder: Linear(hidden_size → hidden_dim) --------
         d_en = ttnn.linear(
@@ -356,14 +291,14 @@ class TTKModel:
             transpose_b=True,
             memory_config=mc,
             compute_kernel_config=ck,
-        )  # [B, T, hidden_dim] NLC
+        )
         ttnn.deallocate(bert_out)
 
-        # Squeeze any leading singleton dims that ttnn.linear may add
+        # ttnn.linear may prepend a singleton batch dim
         while len(d_en.shape) > 3:
             d_en = ttnn.squeeze(d_en, 0)
 
-        d_en_bct = ttnn.permute(d_en, (0, 2, 1), memory_config=mc)  # [B, hidden_dim, T]
+        d_en_bct = ttnn.permute(d_en, (0, 2, 1), memory_config=mc)
         ttnn.deallocate(d_en)
 
         # ------ 3. Style on device ----------------------------------------
@@ -386,7 +321,7 @@ class TTKModel:
             keep_mask_btl=keep_mask,
             compute_kernel_config=ck,
             memory_config=mc,
-        )  # [B, T, d_hid + style_dim]
+        )
         ttnn.deallocate(d_en_bct)
         ttnn.deallocate(keep_mask)
 
@@ -398,45 +333,40 @@ class TTKModel:
             compute_kernel_config=ck,
             memory_config=mc,
             sequence_lengths=lengths_list,
-        )  # [B, T, d_hid]
+        )
         duration = self._predictor._duration_proj.forward(x_lstm, compute_kernel_config=ck, memory_config=mc)
         ttnn.deallocate(x_lstm)
-        # duration: [B, T, max_dur]
 
         # ------ 6. Alignment (host step: read pred_dur, build matrix) -----
-        dur_cpu = ttnn.to_torch(duration).float()  # [B, T, max_dur]
+        dur_cpu = ttnn.to_torch(duration).float()
         ttnn.deallocate(duration)
-        dur_sum = torch.sigmoid(dur_cpu).sum(dim=-1) / speed  # [B, T]
-        pred_dur = torch.round(dur_sum).clamp(min=1).long().squeeze()  # [T]
+        dur_sum = torch.sigmoid(dur_cpu).sum(dim=-1) / speed
+        pred_dur = torch.round(dur_sum).clamp(min=1).long().squeeze()
 
-        aln_cpu = _build_alignment(pred_dur)  # [1, T, T_aligned]
+        aln_cpu = _build_alignment(pred_dur)
         T_aligned = int(aln_cpu.shape[2])
 
         aln_tt = ttnn.from_torch(aln_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc)
 
         # ------ 7. en_nlc = aln^T @ d_nlc --------------------------------
-        aln_Ta_T = ttnn.permute(aln_tt, (0, 2, 1), memory_config=mc)  # [1, T_aligned, T]
+        aln_Ta_T = ttnn.permute(aln_tt, (0, 2, 1), memory_config=mc)
         en_nlc = ttnn.matmul(aln_Ta_T, d_nlc, memory_config=mc, compute_kernel_config=ck)
-        # [1, T_aligned, d_hid + style_dim]
         ttnn.deallocate(aln_Ta_T)
         ttnn.deallocate(d_nlc)
 
         # ------ 8. F0 / N from predictor ---------------------------------
         F0, N = self._predictor.F0Ntrain(en_nlc, s_pred_tt, memory_config=mc)
-        # F0, N: [B, T_f0] where T_f0 = 2 * T_aligned
         ttnn.deallocate(en_nlc)
         ttnn.deallocate(s_pred_tt)
 
         # ------ 9. TextEncoder + asr = t_en @ aln -------------------------
         t_en_bct = self._text_encoder(input_ids, input_lengths=input_lengths, text_mask=text_mask)
-        # [B, hidden_dim, T] BCT
 
         asr_bct = ttnn.matmul(t_en_bct, aln_tt, memory_config=mc, compute_kernel_config=ck)
-        # [B, hidden_dim, T_aligned] BCT
         ttnn.deallocate(t_en_bct)
         ttnn.deallocate(aln_tt)
 
-        asr_nlc = ttnn.permute(asr_bct, (0, 2, 1), memory_config=mc)  # [B, T_aligned, hidden_dim]
+        asr_nlc = ttnn.permute(asr_bct, (0, 2, 1), memory_config=mc)
         ttnn.deallocate(asr_bct)
 
         # ------ 10. Decoder (vocoder) ------------------------------------
@@ -444,18 +374,37 @@ class TTKModel:
             s_style_cpu, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc
         )
         decoder = self._get_decoder(T_aligned)
-        audio = decoder(asr_nlc, F0, N, s_style_tt, memory_config=mc)
+        gen = decoder._generator
+        m_source_kwargs: dict = {}
+        if deterministic:
+            from models.experimental.kokoro.m_source_rng import (
+                deallocate_m_source_rng_tt,
+                make_zero_m_source_rng,
+                upload_m_source_rng,
+            )
+
+            B_dec = int(F0.shape[0])
+            T_har = int(F0.shape[1]) * int(gen.params.upsample_scale_full)
+            dim = int(gen.params.m_source.sinegen.dim)
+            rng_cpu = make_zero_m_source_rng(B_dec, T_har, dim)
+            rng_tt = upload_m_source_rng(rng_cpu, dev, memory_config=mc)
+            m_source_kwargs = {
+                "sinegen_rand_ini": rng_tt.rand_ini,
+                "sinegen_noise_raw": rng_tt.sinegen_noise,
+                "source_noise_raw": rng_tt.source_noise,
+            }
+        else:
+            rng_tt = None
+
+        audio = decoder(asr_nlc, F0, N, s_style_tt, memory_config=mc, **m_source_kwargs)
+        if deterministic:
+            deallocate_m_source_rng_tt(rng_tt)
         ttnn.deallocate(asr_nlc)
         ttnn.deallocate(F0)
         ttnn.deallocate(N)
         ttnn.deallocate(s_style_tt)
 
-        return audio  # [B, 1, audio_len]
-
-
-# ---------------------------------------------------------------------------
-# Null context (Python 3.6 compatible via explicit class, avoids nullcontext)
-# ---------------------------------------------------------------------------
+        return audio
 
 
 @contextmanager
