@@ -432,7 +432,7 @@ def run(
 
             # Determine D-dim shard factor from tensor placement (for DRAM-distributed head_dim)
             _shard_axis, _shard_factor = _paged_sdpa_input_shard_axis_and_factor(input_a_tensor_placement)
-            _d_factor = _shard_factor if _shard_axis is not None and (_shard_axis == -1 or _shard_axis == len(shape_a) - 1) else 1
+            _d_factor = 1  # attention is not separable along D; always compute full-D golden
 
             _sw = kwargs.get("sliding_window_size")
             if _sw == "__ABSENT__":
@@ -728,13 +728,13 @@ def run(
     # --- END DEBUG ---
 
     if torch_output_tensor.shape != output_tensor.shape:
-        # Trim padded heads/users and align shapes
-        ot = output_tensor
+        # Device tile-pads heads (e.g. 8->32). Trim device output to golden shape.
         gt = torch_output_tensor
+        ot = output_tensor
         if gt.ndim == ot.ndim == 4:
-            gt = gt[: ot.shape[0], : ot.shape[1], : ot.shape[2], : ot.shape[3]]
+            ot = ot[: gt.shape[0], : gt.shape[1], : gt.shape[2], : gt.shape[3]]
         elif gt.numel() == ot.numel():
-            gt = gt.reshape(ot.shape)
+            ot = ot.reshape(gt.shape)
         torch_output_tensor = gt
         output_tensor = ot
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
