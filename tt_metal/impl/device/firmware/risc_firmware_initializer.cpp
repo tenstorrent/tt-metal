@@ -193,18 +193,35 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
         terminate_active_ethernet_cores_on_all_chips();
 
         const auto mmio_ids_set = cluster_.mmio_chip_ids();
+
+        // FIX XX (#42429): Two-pass launch to eliminate cooperative-ETH relay race.
+        //
+        // Root cause of flaky "Timeout waiting for Ethernet core service remote IO request"
+        // (CI run 26108653976, device_4 core 21-16, 5 s silence at 16:40:37→16:40:42):
+        //   The old single loop processed each device as: reset_cores(N) → init_firmware(N).
+        //   When N == MMIO device_0, initialize_and_launch_firmware wrote fw_launch_addr_value
+        //   to device_0's cooperative ETH relay channel (the one bridging to device_4).
+        //   The cooperative UMD base firmware on that channel asynchronously detected the
+        //   non-zero fw_launch_addr and jumped to Metal firmware — killing the UMD relay.
+        //   The next loop iteration then called reset_cores(device_4), which called
+        //   erisc_app_still_running() → read_non_mmio() through the now-dead relay → 5 s timeout.
+        //
+        // Fix: split into two passes so reset_cores(all) completes while the relay is
+        // guaranteed alive (no fw_launch_addr written yet), then initialize firmware with
+        // non-MMIO devices processed before MMIO (relay alive for non-MMIO init writes;
+        // MMIO init kills the relay last, when no remaining reset_cores calls need it).
+
+        // ── Pass 1: reset all cores (relay guaranteed alive, no fw_launch_addr written yet) ──
         for (tt::ChipId device_id : device_ids) {
             ClearNocData(descriptor_->env_impl(), device_id);
             reset_cores(device_id);
-            // FIX NZ (#42429): skip initialize_and_launch_firmware for non-MMIO devices with a
-            // known-broken relay.  initialize_and_launch_firmware calls write_core (guarded by
-            // FIX NY) and wait_until_cores_done, which polls worker cores via read_core.  For a
-            // remote chip with a dead relay, each read_core blocks for 5 s; a full 64-core tensix
-            // grid = 64 × 5 s = 320 s before the GHA 5-minute action timeout fires.  FIX NZ
-            // (read_core throw) is a belt-and-suspenders guard, but skipping here is cleaner:
-            // the fabric firmware initializer will handle the dead relay cleanly on the next
-            // run (terminate_stale_erisc_routers rebuilds state from scratch).
-            if (!mmio_ids_set.count(device_id) && cluster_.is_relay_broken(device_id)) {
+        }
+
+        // ── Pass 2a: initialize non-MMIO devices (relay still alive) ──
+        for (tt::ChipId device_id : device_ids) {
+            if (mmio_ids_set.count(device_id)) continue;
+            // FIX NZ (#42429): skip if relay is already broken (detected during Pass 1 reset_cores).
+            if (cluster_.is_relay_broken(device_id)) {
                 log_warning(
                     tt::LogAlways,
                     "run_launch_phase: FIX NZ — skipping initialize_and_launch_firmware for "
@@ -212,29 +229,26 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                     device_id);
                 continue;
             }
-            // FIX BX (#42429): belt-and-suspenders over FIX NZ. If the relay was NOT yet broken
-            // at the FIX NZ check above but becomes broken DURING initialize_and_launch_firmware
-            // (e.g. write_to_non_mmio times out → FIX BW marks relay_broken_chips_ and re-throws),
-            // catch that exception here for non-MMIO devices and continue without crashing.
-            // Root cause: write_core_immediate's FIX AE previously only marked relay broken at
-            // the UMD driver level, not in relay_broken_chips_, so FIX NZ never saw the broken
-            // state. FIX BW fixes the gap; FIX BX is the outer safety net for any remaining
-            // window between the FIX NZ pre-check and the first write in initialize_and_launch_firmware.
-            if (!mmio_ids_set.count(device_id)) {
-                try {
-                    initialize_and_launch_firmware(device_id);
-                } catch (const std::exception& e) {
-                    log_warning(
-                        tt::LogAlways,
-                        "run_launch_phase: FIX BX — initialize_and_launch_firmware threw for "
-                        "non-MMIO device {} (relay likely broken mid-init): {}. "
-                        "Skipping — fabric init will handle on next session. (#42429)",
-                        device_id,
-                        e.what());
-                }
-            } else {
+            // FIX BX (#42429): belt-and-suspenders — catch relay failures that arise during
+            // initialize_and_launch_firmware itself (FIX BW marks relay_broken and re-throws).
+            try {
                 initialize_and_launch_firmware(device_id);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogAlways,
+                    "run_launch_phase: FIX BX — initialize_and_launch_firmware threw for "
+                    "non-MMIO device {} (relay likely broken mid-init): {}. "
+                    "Skipping — fabric init will handle on next session. (#42429)",
+                    device_id,
+                    e.what());
             }
+        }
+
+        // ── Pass 2b: initialize MMIO devices (may write fw_launch_addr → kills relay) ──
+        // All non-MMIO reset_cores and init_firmware calls are done; relay death is now safe.
+        for (tt::ChipId device_id : device_ids) {
+            if (!mmio_ids_set.count(device_id)) continue;
+            initialize_and_launch_firmware(device_id);
         }
 
         // FIX TV (#42429): Wait for MMIO ETH channels to complete rebooting to base-UMD
