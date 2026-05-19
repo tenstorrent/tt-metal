@@ -28,6 +28,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
