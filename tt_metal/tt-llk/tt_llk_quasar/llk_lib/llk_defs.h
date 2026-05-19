@@ -10,7 +10,7 @@ namespace ckernel
 {
 
 // Currently unused but kept for backwards compatibility
-enum VectorMode
+enum class VectorMode
 {
     None      = 0,
     R         = 1,
@@ -92,7 +92,17 @@ enum class SfpuType : std::uint32_t
     abs,
     fill,
     swiglu,
-    where
+    where,
+    unused,
+    lt,
+    gt,
+    le,
+    ge,
+    lt_int,
+    gt_int,
+    le_int,
+    ge_int,
+    mul_int,
 };
 
 enum class BinaryOp : std::uint8_t
@@ -100,6 +110,7 @@ enum class BinaryOp : std::uint8_t
     ADD,
     SUB,
     MUL,
+    DIV,
 };
 
 enum class DstSync : std::uint8_t
