@@ -378,6 +378,20 @@ class Pi0_5LiberoAdapter:
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
             )
+            # Pre-stage upstream-compat artifacts (mask + position-aware RoPE)
+            # when PI0_UPSTREAM_MASKS=1 or PI0_SIGLIP_HF=1. Idempotent: keyed
+            # by (img_present_tuple, lang_real_count, prefix_len) so within a
+            # task the call costs ~0 — only the FIRST chunk pays the host
+            # build + 6-tensor upload. Without this, sample_actions does the
+            # build inside the hot path (~315 ms / chunk overhead measured
+            # in the 40-task upstream sweep). Use the host (torch) masks to
+            # avoid the device-sync that ttnn-mask coercion would trigger.
+            from models.experimental.pi0_5.tt.ttnn_pi0_5_model import use_upstream_masks
+
+            if use_upstream_masks():
+                num_image_tokens = self.cfg.siglip_config.num_patches
+                prefix_len = len(images) * num_image_tokens + lang_mask.shape[-1]
+                self.model.prepare_upstream_artifacts(img_masks, lang_mask, prefix_len=prefix_len)
             out = self.model.sample_actions(
                 images=images_ttnn,
                 img_masks=img_masks_ttnn,
