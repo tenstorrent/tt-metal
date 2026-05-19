@@ -101,16 +101,11 @@
     DISABLED_LLK='LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3:MeshDeviceFixture.Top32RmDevPipelineCompletes'
     ./build/test/tt_metal/unit_tests_llk --gtest_filter="-${DISABLED_LLK}"
     ./build/test/tt_metal/unit_tests_sfpi
-  # Timeout bumped 8 -> 16 min by issue #44767: the suite legitimately needs
-  # ~10-12 min of test-step wall clock (tests are passing, just slow — e.g.
-  # LLKMeshDeviceFixture.TensixComputeReduceW takes 36s alone). Was timing out
-  # at 8 min in every main run 2026-05-15..2026-05-19. Uses the remaining 8 min
-  # of runtime/unit budget headroom on wh_n150_civ2 and bh_p150b_civ2.
   skus:
     wh_n150_civ2:
-      timeout: 16
+      timeout: 8
     bh_p150b_civ2:
-      timeout: 16
+      timeout: 8
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
