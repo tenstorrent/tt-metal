@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_program_factory.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -141,36 +142,6 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
                 : (use_sub_core_grids
                        ? tt::tt_metal::split_work_to_cores(*operation_attributes.sub_core_grids, num_output_tiles)
                        : tt::tt_metal::split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true));
-    {
-        const uint32_t fr_nc_device_total_cores = num_cores_x * num_cores_y;
-        const CoreRangeSet fr_nc_device_grid = num_cores_to_corerangeset(fr_nc_device_total_cores, grid, true);
-        TT_FATAL(
-            fr_nc_device_grid.contains(all_cores),
-            "FastReduceNC program all_cores {} must be contained in device compute grid {}",
-            all_cores,
-            fr_nc_device_grid);
-        auto validate_shard_grids_subset_of_program_grid = [&](const Tensor& t, const char* tensor_name) {
-            const auto& memory_config = t.memory_config();
-            if (memory_config.shard_spec().has_value()) {
-                TT_FATAL(
-                    all_cores.contains(memory_config.shard_spec().value().grid),
-                    "FastReduceNC {} shard grid {} must be contained in program grid {}",
-                    tensor_name,
-                    memory_config.shard_spec().value().grid,
-                    all_cores);
-            }
-            if (memory_config.nd_shard_spec().has_value()) {
-                TT_FATAL(
-                    all_cores.contains(memory_config.nd_shard_spec().value().grid),
-                    "FastReduceNC {} ND shard grid {} must be contained in program grid {}",
-                    tensor_name,
-                    memory_config.nd_shard_spec().value().grid,
-                    all_cores);
-            }
-        };
-        validate_shard_grids_subset_of_program_grid(tensor_args.input, "input");
-        validate_shard_grids_subset_of_program_grid(tensor_return_value, "output");
-    }
     num_cols_per_core_group_1 *= shard_factor;
     num_cols_per_core_group_2 *= shard_factor;
 

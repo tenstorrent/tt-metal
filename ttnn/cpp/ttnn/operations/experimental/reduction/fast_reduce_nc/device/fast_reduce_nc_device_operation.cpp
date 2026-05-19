@@ -19,7 +19,6 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     // FLOAT32 is allowed so multi-stage Sum chains can carry FP32 between stages.
     operations::check_tensor(
         input, "FastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::FLOAT32});
-
     if (preallocated_output.has_value()) {
         operations::check_tensor(
             preallocated_output.value(),
