@@ -12,6 +12,8 @@ on:
           - all
           - llama3.1-8b
           - llama3.3-70b
+          - qwen3-32b
+          - gpt-oss
       sku:
         description: "Select SKU to test"
         required: false

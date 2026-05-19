@@ -11,6 +11,13 @@ on:
         options:
           - all
           - llama3.1-8b
+          - llama3.3-70b
+          - qwen3-32b
+          - qwen2.5-32b
+          - qwen2.5-coder-32b
+          - mixtral-8x7b
+          - gemma-3-4b
+          - gemma-3-27b
       sku:
         description: "Select SKU to test"
         required: false
