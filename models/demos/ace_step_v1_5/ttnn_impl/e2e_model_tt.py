@@ -73,7 +73,7 @@ from .dit_sampling_ttnn import (
 )
 from .full_pipeline import AceStepV15TTNNPipeline
 from .oobleck_vae_decoder import TtOobleckVaeDecoder
-from .qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
+from .qwen3_embedding_ace_step import AceStepQwen3Encoder as TtQwen3EmbeddingEncoder
 
 
 def _ace_step_prof_signpost(header: str, message: Optional[str] = None) -> None:

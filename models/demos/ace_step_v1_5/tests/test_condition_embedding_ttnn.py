@@ -28,7 +28,7 @@ from transformers import AutoModel, AutoTokenizer
 
 import ttnn
 from models.demos.ace_step_v1_5.tests._dit_decoder_pcc_common import assert_pcc_print
-from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
+from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_ace_step import AceStepQwen3Encoder as TtQwen3EmbeddingEncoder
 from models.demos.ace_step_v1_5.ttnn_impl.text_projector import TtAceStepTextProjector, load_text_projector_weight_numpy
 
 
