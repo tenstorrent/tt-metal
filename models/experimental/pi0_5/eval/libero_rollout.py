@@ -186,7 +186,18 @@ class Pi0_5LiberoAdapter:
         return out
 
     def _image_for_pi05(self, img_hwc_uint8: np.ndarray) -> torch.Tensor:
-        """(H, W, 3) uint8 → (1, 3, 224, 224) float32 in [-1, 1] (PaliGemma convention)."""
+        """(H, W, 3) uint8 → (1, 3, 224, 224) float32 in [-1, 1] (PaliGemma convention).
+
+        Upstream openpi pi05_libero rotates raw LIBERO observations 180°
+        before resize (`img[::-1, ::-1]`) to match the camera frame
+        convention the model was trained on — see
+        `/storage/sdawle/openpi/examples/libero/main.py:115-117`.
+        The lerobot finetune does NOT rotate (data was already
+        pre-rotated at dataset-build time). We apply the rotation only
+        in upstream mode (state_in_prompt=False).
+        """
+        if not self.state_in_prompt:
+            img_hwc_uint8 = np.ascontiguousarray(img_hwc_uint8[::-1, ::-1])
         img_pad = self._resize_with_pad_centered(img_hwc_uint8, self.image_size)
         chw = np.transpose(img_pad, (2, 0, 1))  # (3, H, W)
         return torch.from_numpy(chw).unsqueeze(0).contiguous()
@@ -216,8 +227,10 @@ class Pi0_5LiberoAdapter:
            "Task: <desc>, State: 128 200 145 ...; Action: " — state quantized
            to 256 bins and embedded as text. The model learns to read it.
          - `state_in_prompt=False` (upstream openpi pi05_libero, discrete_state_input=False):
-           "Task: <desc>; Action: " — state is NOT included; the model was
-           trained to infer state implicitly from vision.
+           just the cleaned task description + "\n", matching openpi's
+           tokenizer (see `openpi/src/openpi/models/tokenizer.py:28-33`).
+           No "Task:" prefix, no "Action:" suffix — the model was trained
+           only on the raw description tokens.
         """
         cleaned = task_desc.strip().replace("_", " ").replace("\n", " ")
         if self.state_in_prompt:
@@ -225,9 +238,12 @@ class Pi0_5LiberoAdapter:
             bins = self._discretize_state(s_norm)
             state_str = " ".join(str(int(b)) for b in bins)
             full = f"Task: {cleaned}, State: {state_str};\nAction: "
+            tokens = self.sp.encode(full, add_bos=True)
         else:
-            full = f"Task: {cleaned};\nAction: "
-        tokens = self.sp.encode(full, add_bos=True)
+            # Upstream openpi format: bos + <desc> + "\n" (tokenizer.py:28-33).
+            # encode(text, add_bos=True) + encode("\n") preserves the explicit
+            # newline tokenization openpi uses.
+            tokens = self.sp.encode(cleaned, add_bos=True) + self.sp.encode("\n")
         L = len(tokens)
         if L < self.max_token_len:
             mask = [True] * L + [False] * (self.max_token_len - L)
@@ -260,13 +276,20 @@ class Pi0_5LiberoAdapter:
         num_denoising_steps: int = 10,
     ) -> np.ndarray:
         """Returns (chunk_size, real_action_dim) numpy array of LIBERO-space actions."""
-        # 3 cameras: agentview, wrist, empty.
-        # IMPORTANT: empty camera is filled with -1 (black in PaliGemma's [-1,1]
-        # input convention), NOT 0 (which would be mid-gray). Matches
-        # lerobot.policies.pi05.modeling_pi05._preprocess_images.
+        # 3 cameras: agentview, wrist, empty placeholder.
+        # The third camera is masked False so the model ignores it. Fill value
+        # follows the training convention:
+        #  - lerobot:  -1 (black in PaliGemma's [-1,1] convention) — matches
+        #              lerobot.policies.pi05.modeling_pi05._preprocess_images
+        #  - openpi:   0 (zero-padding, matches
+        #              openpi/src/openpi/policies/libero_policy.py:60-67's
+        #              np.zeros_like(base_image) for the right_wrist slot)
         img1 = self._image_for_pi05(agentview_image)
         img2 = self._image_for_pi05(wrist_image)
-        img3 = torch.ones_like(img1) * -1.0
+        if self.state_in_prompt:
+            img3 = torch.ones_like(img1) * -1.0
+        else:
+            img3 = torch.zeros_like(img1)
         images = [img1, img2, img3]
         img_masks = [
             torch.ones(1, dtype=torch.bool),
