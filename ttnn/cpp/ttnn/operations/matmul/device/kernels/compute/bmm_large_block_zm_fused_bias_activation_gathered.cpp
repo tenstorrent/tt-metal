@@ -486,5 +486,16 @@ void kernel_main() {
             in1_cb_id, in1_block_size_bytes, ring_size, in1_tensor_split)));  // update to next tensor addr
 #endif
         }
+        // Benchmark-only: drain mm_out_cb between repeats. The output CB is sized for one matmul's
+        // worth of tiles; without a consumer, the next repeat's PACK push would block. Each repeat
+        // overwrites the same physical output location (set_globally_allocated_address points at
+        // the output buffer), so only the final iteration's value is read.
+        if (r + 1 < num_kernel_repeats) {
+            for (uint32_t b = 0; b < batch; b++) {
+                CircularBuffer mm_out_cb_drain(mm_out_cb_ids[b]);
+                mm_out_cb_drain.wait_front(out_block_num_tiles);
+                mm_out_cb_drain.pop_front(out_block_num_tiles);
+            }
+        }
     }  // num_kernel_repeats
 }
