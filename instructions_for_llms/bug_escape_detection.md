@@ -299,7 +299,19 @@ Determine test layer from `test_filepath`:
 - other (CI, docs, cmake) → skip (not a meaningful test layer)
 
 If NO commit in the range touches a layer lower than the test layer → **discard**. Not an escape.
-If any commit does → proceed to Step 3.
+If any commit does → collect the cross-layer commits for Step 3.
+
+**For each cross-layer commit, fetch its full diff now — do not skip this:**
+```
+GET /repos/tenstorrent/tt-metal/commits/{sha}
+```
+The `files[].patch` field contains the actual line-level diff. You MUST pass this to Opus in
+Step 3c — not just the filename. Opus cannot reason about causality from filenames alone.
+
+**Commit intent signal**: Note whether any cross-layer commit has explicit fix intent — commit
+message containing "fix", "bug", "revert", "restore", "correct". If the range has ZERO fix-intent
+cross-layer commits (only features, refactors, docs), set a `low_confidence_prior = true` flag.
+Proceed to Step 3 but Opus should treat this as a strong indicator against PROCEED_TO_BISECT.
 
 ---
 
@@ -328,18 +340,40 @@ Use first 200 lines of the relevant test step.
 
 Provide Opus with:
 1. The raw failure log excerpt
-2. The cross-layer commits from Step 2 (SHA, message, files changed, diff if available)
+2. The cross-layer commits from Step 2 (SHA, message, files changed, **full line-level diffs** — NOT just filenames)
 3. The test filepath, name, and streak stats from Step 1
+4. The `low_confidence_prior` flag from Step 2 (if set)
+
+> **⚠️ DO NOT skip the diffs.** Opus cannot reason about causality from filenames alone.
+> Pass the `files[].patch` content from `GET /repos/tenstorrent/tt-metal/commits/{sha}` for every
+> cross-layer commit. If a diff is too large (>500 lines), pass the first 500 lines and note it was truncated.
 
 ```
 You are analyzing a potential vertical bug escape in tenstorrent/tt-metal CI.
+
+════════════════════════════════════════════════════════════════
+YOUR PRIMARY TASK: DETERMINE WHETHER THIS IS A VERTICAL ESCAPE
+════════════════════════════════════════════════════════════════
+
+A vertical escape means a bug at layer N caused a test at layer M (N < M) to fail.
+This is NOT just "a lower-layer file was changed in this range."
+You must trace a SPECIFIC CAUSAL MECHANISM:
+  → Which exact function/macro/register/ABI changed in the lower-layer commit?
+  → What is the call path from that change to the test's execution path?
+  → Why does that change produce EXACTLY the observed error (wrong output, TT_FATAL, assertion)?
+
+If you cannot name all three with specificity, the verdict must be SKIP_UNRELATED.
+Vague causal links ("it's possible the change affected performance") do NOT qualify.
+
+════════════════════════════════════════════════════════════════
 
 Test: {test_name}
 File: {test_filepath} (layer {test_layer})
 Streak: {consecutive_fail_count} consecutive failures → {consecutive_pass_count} consecutive passes after fix
 Failure window: {last_fail_ts} to {first_pass_ts}
+Low-confidence prior: {low_confidence_prior}  ← if true, weight heavily against PROCEED_TO_BISECT
 
-Cross-layer commits between last failure and first pass:
+Cross-layer commits between last failure and first pass (with full diffs):
 {commit_list_with_diffs}
 
 Raw failure log:
@@ -358,17 +392,26 @@ CHECK 2 — Determinism:
   Note: {consecutive_fail_count} consecutive failures is a strong determinism signal.
   → If no consistent test name or error signature across runs: verdict SKIP_LIKELY_NOISE. Stop.
 
-CHECK 3 — Causal analysis:
-  Is there a plausible causal link between one of the cross-layer commits and this specific failure?
-  Look for: the commit touches code in the call path of the failing test, or changes an API/ABI
-  that the test exercises. "Plausible" means you can name the mechanism.
-  Red flags: hardware-specific errors (temp sensor, PCI link), timing-dependent races,
-  external service failures (network, registry).
-  → If no plausible causal link: verdict SKIP_UNRELATED. Stop.
+CHECK 3 — Causal analysis (HIGH BAR — read carefully):
+  You must establish ALL THREE of the following before this check passes:
+  (a) **Specific change**: Name the exact function, macro, register, or ABI modified in the
+      cross-layer commit. "Changed files in tt-llk" does NOT pass. Example of passing:
+      "ckernel_sfpu_binary_bcast.h stopped restoring lreg11 to -1 after use."
+  (b) **Call path**: Trace how the test reaches the changed code.
+      Example: "test calls ttnn.adamw → SFPU binary bcast kernel → lreg11 read in step 2."
+  (c) **Error match**: Explain why the specific change produces EXACTLY the observed failure,
+      not a different error. Example: "lreg11 corrupted → cached kernel computes wrong
+      gradient → AdamW weight update diverges → assertion fails on step 2 of 4."
+  Red flags that should push you toward SKIP_UNRELATED:
+    - Hardware-specific sensor errors (temp, PCI link), timing races, network/registry failures
+    - The commit message says "feature", "refactor", "cleanup" with no "fix"/"bug"/"revert"
+    - `low_confidence_prior = true` (no fix-intent commits in range)
+    - You can only say "it's possible" or "might affect" — not "it does because..."
+  → If you cannot satisfy all three: verdict SKIP_UNRELATED. Stop.
 
 CHECK 4 — Range size sanity:
   How many commits are in the bisect range? If > 50, the range is likely too wide to bisect
-  efficiently unless Opus's causal candidate is very specific (single commit).
+  efficiently unless your causal candidate from Check 3 is a single specific commit.
   → If range > 50 AND no single obvious fix commit: lower confidence to "low".
 
 CHECK 5 — Cross-test scope:
@@ -384,9 +427,21 @@ Respond with JSON only:
   "check1_error_type": "test_code" | "infrastructure",
   "check2_determinism": "deterministic" | "likely_flaky" | "unknown",
   "check3_causal_mechanism": "<one sentence explaining the link, or null>",
+  "vertical_escape_justification": {
+    "specific_change": "<exact function/macro/register/ABI changed, or null>",
+    "call_path": "<how the test reaches the changed code, or null>",
+    "error_match": "<why this specific change produces exactly the observed error, or null>"
+  },
   "reasoning": "<2-3 sentences: what the error is, which commit is likely the fix and why>"
 }
 ```
+
+**Post-Opus validation (BrAIn must check before dispatching):**
+Inspect `vertical_escape_justification` in Opus's response.
+- If `specific_change`, `call_path`, or `error_match` is null, generic, or uses hedging language
+  ("might", "possibly", "could affect") → override verdict to `SKIP_UNRELATED`, regardless of
+  what Opus returned. Mark `status: "skipped_vague_justification"` in `seen-escapes.json`.
+- Only proceed if all three fields are concrete and specific.
 
 If verdict is not PROCEED_TO_BISECT → write escape ID to `seen-escapes.json` with
 `status: "skipped_prefilter"` and stop.
