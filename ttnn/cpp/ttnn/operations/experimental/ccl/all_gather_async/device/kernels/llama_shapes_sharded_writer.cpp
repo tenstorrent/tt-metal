@@ -186,5 +186,7 @@ void kernel_main() {
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
     }
 
+    // noc_async_atomic_barrier();
+    //  TODO: Remove if watcher run is clean, restore if not
     noc_async_full_barrier();
 }
