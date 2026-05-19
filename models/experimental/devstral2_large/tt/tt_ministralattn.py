@@ -37,6 +37,7 @@ import ttnn
 from models.experimental.devstral2_large.tt.ccl_helpers import all_reduce_replicate
 from models.experimental.devstral2_large.tt.mem_config import (
     get_compute_kernel_config,
+    get_compute_kernel_config_hifi4,
     get_linear_program_config,
     get_sdpa_decode_compute_kernel_config,
     get_sdpa_decode_output_mem_config,
@@ -184,8 +185,17 @@ class TtAttention:
         self.kv_proj = _to_tt_weight(
             kv_w, mesh_device, args, self.dtype, shard_dim=-1, weight_cache_path=wp, cache_key=f"{pfx}kv_proj"
         )
+        # Experiment: o_proj quantized to bfloat8_b with HiFi4 fidelity.
+        self.o_proj_weight_dtype = ttnn.bfloat8_b
+        self.o_proj_output_dtype = ttnn.bfloat8_b
         self.o_proj = _to_tt_weight(
-            o_w, mesh_device, args, self.dtype, shard_dim=-2, weight_cache_path=wp, cache_key=f"{pfx}o_proj"
+            o_w,
+            mesh_device,
+            args,
+            self.o_proj_weight_dtype,
+            shard_dim=-2,
+            weight_cache_path=wp,
+            cache_key=f"{pfx}o_proj_bfp8",
         )
 
         cache_shape = (
@@ -210,6 +220,7 @@ class TtAttention:
         )
 
         self._compute_kernel_config = get_compute_kernel_config(mesh_device)
+        self._compute_kernel_config_hifi4 = get_compute_kernel_config_hifi4(mesh_device)
         self._sdpa_decode_program_config = get_sdpa_decode_program_config(mesh_device)
         self._sdpa_decode_compute_kernel_config = get_sdpa_decode_compute_kernel_config(mesh_device)
 
@@ -227,11 +238,13 @@ class TtAttention:
         kind: str,
         seq_len: int = 1,
         activation: Optional[str] = None,
+        output_dtype: Optional[ttnn.DataType] = None,
+        compute_kernel_config=None,
     ) -> ttnn.Tensor:
         return ttnn.linear(
             x,
             weight,
-            dtype=self.args.activation_dtype,
+            dtype=output_dtype if output_dtype is not None else self.args.activation_dtype,
             memory_config=self._act_mem(mode),
             activation=activation,
             program_config=get_linear_program_config(
@@ -243,7 +256,9 @@ class TtAttention:
                 k=int(weight.shape[-2]),
                 n=int(weight.shape[-1]),
             ),
-            compute_kernel_config=self._compute_kernel_config,
+            compute_kernel_config=compute_kernel_config
+            if compute_kernel_config is not None
+            else self._compute_kernel_config,
         )
 
     def _project_qkv_prefill(self, x: ttnn.Tensor, *, seq_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -259,7 +274,15 @@ class TtAttention:
         return ttnn.concat([q, kv], dim=-1, memory_config=self._act_mem("decode"))
 
     def _project_o(self, attn_out_flat: ttnn.Tensor, *, mode: str, seq_len: int = 1) -> ttnn.Tensor:
-        dense = self._linear(attn_out_flat, self.o_proj, mode=mode, kind="o_proj", seq_len=seq_len)
+        dense = self._linear(
+            attn_out_flat,
+            self.o_proj,
+            mode=mode,
+            kind="o_proj",
+            seq_len=seq_len,
+            output_dtype=self.o_proj_output_dtype,
+            compute_kernel_config=self._compute_kernel_config_hifi4,
+        )
         return all_reduce_replicate(
             dense,
             mesh_device=self.mesh_device,

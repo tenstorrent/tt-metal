@@ -20,10 +20,10 @@ if TYPE_CHECKING:
 LinearKind = Literal["qkv", "o_proj", "gate", "up", "down"]
 
 
-def get_compute_kernel_config(mesh_device):
-    """Pick HiFi2 kernel config for the device architecture."""
+def get_compute_kernel_config(mesh_device, *, math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2):
+    """Pick a kernel config for the device architecture. Defaults to HiFi2."""
     cfg = dict(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=math_fidelity,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
@@ -31,6 +31,11 @@ def get_compute_kernel_config(mesh_device):
     if is_blackhole_mesh(mesh_device):
         return ttnn.types.BlackholeComputeKernelConfig(**cfg)
     return ttnn.WormholeComputeKernelConfig(**cfg)
+
+
+def get_compute_kernel_config_hifi4(mesh_device):
+    """HiFi4 kernel config for matmuls quantized to bfloat8_b that need full accuracy."""
+    return get_compute_kernel_config(mesh_device, math_fidelity=ttnn.MathFidelity.HiFi4)
 
 
 @lru_cache(maxsize=4)
