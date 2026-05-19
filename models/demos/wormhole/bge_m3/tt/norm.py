@@ -80,6 +80,7 @@ class LayerNorm1D(LightweightModule):
         x = _load_input_device_tensor(x, self.config)
         assert self.weight is not None and self.bias is not None, "weights must be loaded before forward"
 
+        original_dtype = x.dtype
         out_mem = self.config.output_memcfg or ttnn.DRAM_MEMORY_CONFIG
         program_config = self.config.program_config
         memory_config = out_mem
@@ -118,7 +119,17 @@ class LayerNorm1D(LightweightModule):
         )
 
         if self.config.sharded_memcfg is not None and out_mem != memory_config:
-            interleaved_output = ttnn.to_memory_config(sharded_output, memory_config=out_mem)
+            # Fused sharded→interleaved with bf16→bf8b typecast.
+            # The next LN re-typecasts bf8b→bf16 via fused I->S anyway, so
+            # writing the interleaved tensor as bf8b here halves NoC bytes
+            # without changing what the LN kernel actually consumes.
+            # Math-equivalent vs the bf16 interleaved path.
+            if original_dtype == ttnn.bfloat8_b:
+                interleaved_output = ttnn.sharded_to_interleaved(
+                    sharded_output, memory_config=out_mem, output_dtype=ttnn.bfloat8_b
+                )
+            else:
+                interleaved_output = ttnn.to_memory_config(sharded_output, memory_config=out_mem)
             if return_sharded:
                 return interleaved_output, sharded_output
             ttnn.deallocate(sharded_output)
