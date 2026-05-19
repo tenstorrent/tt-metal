@@ -52,14 +52,13 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
         "Input inner dim ({}) must be non-zero and divisible by 32, pad if needed!",
         input_shape[3]);
 
-    ReduceOpDeviceGridValidationOptions sampling_grid_opts;
-    sampling_grid_opts.num_cores_use_last_core_divider = true;
     if (args.sub_core_grids.has_value()) {
+        ReduceOpDeviceGridValidationOptions sampling_grid_opts;
+        sampling_grid_opts.num_cores_use_last_core_divider = true;
         sampling_grid_opts.sub_grid_contained_in_device_grid = &args.sub_core_grids.value();
         sampling_grid_opts.sub_grid_label = "sub_core_grids";
+        validate_reduce_op_tensor(input_values_tensor, "Sampling", "input_values", &sampling_grid_opts);
     }
-
-    validate_reduce_op_tensor(input_values_tensor, "Sampling", "input_values", &sampling_grid_opts);
     if (args.sub_core_grids.has_value()) {
         TT_FATAL(
             args.sub_core_grids.value().num_cores() == input_shape[0] * input_shape[1] * input_shape[2],

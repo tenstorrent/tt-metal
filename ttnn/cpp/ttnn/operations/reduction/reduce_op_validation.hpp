@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,8 +36,6 @@ struct ReduceOpProgramGridShardedTensor {
     std::string_view label = {};
 };
 
-// Validates all_cores ⊆ device grid, optional all_cores ⊆ sub_core_grids, and (for each listed tensor)
-// shard/ND-shard grid ⊆ all_cores when sharded_tensors is non-empty.
 void validate_reduce_op_program_grid(
     std::string_view op_name,
     const tt::tt_metal::CoreRangeSet& all_cores,

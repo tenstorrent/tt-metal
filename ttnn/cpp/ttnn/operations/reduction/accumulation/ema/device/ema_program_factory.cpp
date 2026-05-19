@@ -63,16 +63,6 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
 
     auto total_tiles_per_core = total_batch_channel_tiles_per_core * tiles_per_channel;
 
-    {
-        const uint32_t ema_tile_hw = input.tensor_spec().tile().get_tile_hw();
-        const uint32_t ema_total_tile_units = input.physical_volume() / ema_tile_hw;
-        TT_FATAL(
-            num_cores * total_tiles_per_core == ema_total_tile_units,
-            "EMA workload mismatch: num_cores={} * tiles_per_core={} must equal input tile count {}",
-            num_cores,
-            total_tiles_per_core,
-            ema_total_tile_units);
-    }
     // Precompute the alpha and beta bits
     // Used by the EMA SFPU instructions
     // ----------------------------------

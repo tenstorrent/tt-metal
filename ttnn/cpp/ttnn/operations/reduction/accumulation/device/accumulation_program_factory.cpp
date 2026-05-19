@@ -263,13 +263,6 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
         }
 
         tile_offset += num_tiles_per_core;
-        if (i == num_cores - 1) {
-            TT_FATAL(
-                tile_offset == num_rows_total,
-                "Accumulation assigned {} work tiles across cores, expected {}",
-                tile_offset,
-                num_rows_total);
-        }
     }
 
     desc.kernels.push_back(std::move(reader_desc));

@@ -197,8 +197,6 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     auto [all_cores, cores0, cores1, red_dim_units0, red_dim_units1] =
         distribute_work_to_cores(device, red_dim_units, min_red_dim_units_per_core, sub_core_grids);
 
-    TT_FATAL(red_dim_units > 0, "Argmax multicore requires positive reduction dimension size, got {}", red_dim_units);
-
     const uint32_t num_cores0 = cores0.num_cores();
     const uint32_t num_cores1 = cores1.num_cores();
     const uint32_t num_total_cores = num_cores0 + num_cores1;

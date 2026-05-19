@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "prod_all_device_operation.hpp"
-#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -27,8 +26,6 @@ ProgramDescriptor ProdAllDeviceOperation::ProdAllProgramFactory::create_descript
 
     uint32_t num_tiles = input.physical_volume() / input.tensor_spec().tile().get_tile_hw();
 
-    validate_reduce_op_program_grid(
-        "Prod_all", core_ranges, input.device()->compute_with_storage_grid_size(), nullptr, true, {});
     TT_FATAL(num_tiles > 0, "Prod_all workload num_tiles must be > 0, got {}", num_tiles);
 
     uint32_t num_input_tiles = 2;

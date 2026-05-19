@@ -6,7 +6,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
 #include "tt_stl/assert.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
@@ -14,7 +13,6 @@
 #include <cmath>
 #include <map>
 #include <string>
-#include <cstdlib>
 
 using namespace tt::tt_metal;
 

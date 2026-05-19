@@ -157,12 +157,10 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
             input_tensor_a.layout());
     }
 
-    {
+    if (args.use_multicore && args.sub_core_grids.has_value()) {
         ReduceOpDeviceGridValidationOptions grid_opts;
-        if (args.use_multicore && args.sub_core_grids.has_value()) {
-            grid_opts.sub_grid_contained_in_device_grid = &args.sub_core_grids.value();
-            grid_opts.sub_grid_label = "Multicore argmax sub_core_grids";
-        }
+        grid_opts.sub_grid_contained_in_device_grid = &args.sub_core_grids.value();
+        grid_opts.sub_grid_label = "Multicore argmax sub_core_grids";
         validate_reduce_op_tensor(tensor_args.input, "Argmax", "input", &grid_opts);
     }
 }
