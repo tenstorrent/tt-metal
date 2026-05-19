@@ -61,6 +61,18 @@ _FanMode = Literal["fan_in", "fan_out"]
 
 _FULL_PRECISION = ttml.autograd.PreferredPrecision.FULL
 
+# Module-private RNG so weight initialization never touches np.random's global
+# state. Callers that want reproducible init must use manual_seed() below;
+# seeding np.random alone has no effect, mirroring how torch.manual_seed is
+# isolated from numpy.
+_rng: np.random.Generator = np.random.default_rng()
+
+
+def manual_seed(seed: int) -> None:
+    """Seed ttml.init's RNG. Independent from np.random and torch RNGs."""
+    global _rng
+    _rng = np.random.default_rng(seed)
+
 
 def _get_device():
     return ttml.autograd.AutoContext.get_instance().get_device()
@@ -151,7 +163,7 @@ def uniform(a: float = 0.0, b: float = 1.0):
     """Uniform distribution over [a, b)."""
 
     def uniform_init(shape, mapper=None):
-        data = np.random.uniform(low=a, high=b, size=tuple(shape)).astype(np.float32)
+        data = _rng.uniform(low=a, high=b, size=tuple(shape)).astype(np.float32)
         return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
     return uniform_init
@@ -161,7 +173,7 @@ def normal(mean: float = 0.0, std: float = 1.0):
     """Normal (Gaussian) distribution."""
 
     def normal_init(shape, mapper=None):
-        data = np.random.normal(loc=mean, scale=std, size=tuple(shape)).astype(np.float32)
+        data = _rng.normal(loc=mean, scale=std, size=tuple(shape)).astype(np.float32)
         return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
     return normal_init
@@ -429,6 +441,7 @@ __all__ = [
     "kaiming_normal_",
     "kaiming_uniform",
     "kaiming_uniform_",
+    "manual_seed",
     "normal",
     "normal_",
     "ones",
