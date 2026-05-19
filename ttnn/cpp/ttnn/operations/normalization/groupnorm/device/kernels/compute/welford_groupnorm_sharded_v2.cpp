@@ -40,6 +40,17 @@ void kernel_main() {
     constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(24);
     constexpr uint32_t tile_width = get_compile_time_arg_val(25);
 
+    // Welford-fp32 alias args, appended to the compile-time vector by the host. When the alias
+    // is active, cb_in0_welford_id points to c_29 (shares L1 with c_0) and cb_in_welford_id
+    // points to c_31 (shares L1 with c_1). Both alias indices are configured with
+    // unpack_to_dest_mode=UnpackToDestFp32 so the welford intake's transpose_wh_tile takes the
+    // UnpackToDest fp32 path, preserving the full 23-bit mantissa into DEST for the SFPU
+    // welford. The final-stage sub_tiles_bcast_scalar still reads c_0 / c_1 (Default SrcA path).
+    // When inactive, the alias ids collapse onto c_0 / c_1 and the alias-side ops are no-ops.
+    constexpr bool welford_fp32_alias = get_compile_time_arg_val(26) != 0;
+    constexpr uint32_t cb_in0_welford_id = get_compile_time_arg_val(27);
+    constexpr uint32_t cb_in_welford_id = get_compile_time_arg_val(28);
+
     // dst regs
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t input_dst = 0;
@@ -94,6 +105,8 @@ void kernel_main() {
     CircularBuffer cb_ex_partial(cb_ex_partial_id);
     CircularBuffer cb_gamma(cb_gamma_id);
     CircularBuffer cb_in(cb_in_id);
+    CircularBuffer cb_in_welford(cb_in_welford_id);
+    CircularBuffer cb_in0_welford(cb_in0_welford_id);
     CircularBuffer cb_input_mask(cb_input_mask_id);
     CircularBuffer cb_x(cb_x_id);
     CircularBuffer cb_xmm(cb_xmm_id);
@@ -122,6 +135,13 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
     cb_in.wait_front(per_core_MN);
+    if constexpr (welford_fp32_alias) {
+        // The tilize call above pushed per_core_MN tiles into cb_in (c_1). Mirror that push
+        // on the alias (c_31) so it tracks cb_in's state -- they share L1 memory.
+        cb_in_welford.reserve_back(per_core_MN);
+        cb_in_welford.push_back(per_core_MN);
+        cb_in_welford.wait_front(per_core_MN);
+    }
 #else
     binary_op_init_common(cb_in0_id, cb_in0_id, cb_in0_id);
 #endif
@@ -142,7 +162,15 @@ void kernel_main() {
     for (uint32_t b = 0; b < num_batches; ++b) {
         uint32_t tile_id = b * block_hw;
         cb_ex_partial.reserve_back(2);
-        transpose_wh_init(cb_in0_id, cb_ex_partial_id);
+        if constexpr (welford_fp32_alias) {
+            // Full transpose_wh hw init for the alias buffer index so the unpack-to-DEST fp32
+            // path is configured before the per-tile transpose_wh_init_short below switches to
+            // it. The non-alias path retains the prior cb_in0_id init.
+            transpose_wh_init(cb_in0_welford_id, cb_ex_partial_id);
+            transpose_wh_init(cb_in_welford_id, cb_ex_partial_id);
+        } else {
+            transpose_wh_init(cb_in0_id, cb_ex_partial_id);
+        }
         tile_regs_acquire();
         welford_init();
 
@@ -172,24 +200,25 @@ void kernel_main() {
 
             for (uint32_t nt = 0; nt < per_core_N; ++nt) {
 #ifdef TILIZE_IN
-                transpose_wh_init_short(cb_in_id);
-                transpose_wh_tile(cb_in_id, tile_id, input_dst);
+                transpose_wh_init_short(cb_in_welford_id);
+                transpose_wh_tile(cb_in_welford_id, tile_id, input_dst);
 #else
-                transpose_wh_init_short(cb_in0_id);
-                transpose_wh_tile(cb_in0_id, tile_id, input_dst);
+                transpose_wh_init_short(cb_in0_welford_id);
+                transpose_wh_tile(cb_in0_welford_id, tile_id, input_dst);
 #endif
 
-                // Re-establish the welford SFPU replay buffer state. Neither c_0 (non-TILIZE_IN)
-                // nor c_1 (TILIZE_IN) can carry UnpackToDestFp32 in this kernel because both
-                // CBs are also consumed by sub_tiles_bcast_scalar in the final-normalization
-                // stage (an FPU op on SrcA, incompatible with unpack-to-DEST). transpose_wh_tile
-                // therefore always routes through SrcA and this re-init is currently a no-op.
-                // Kept as defensive cover: if the kernel is later restructured to use a
-                // unary-only intake CB with the flag set, llk_math_transpose_dest would write
-                // to SFPU replay buffer slot 0 -- the same slot welford_init programmed with
-                // the welford recurrence -- and welford_update_rows would replay stale
-                // transpose-dest ops without this re-init. LREG4/5 are about to be overwritten
-                // by welford_restore_state, so no need to preserve them.
+                // Re-establish the welford SFPU replay buffer state. When welford_fp32_alias is
+                // active, the transpose_wh_tile above reads from cb_in0_welford (c_29) or
+                // cb_in_welford (c_31), both configured with UnpackToDestFp32, so the call
+                // routes through llk_math_transpose_dest and writes to SFPU replay buffer
+                // slot 0 -- the same slot welford_init programmed with the welford recurrence.
+                // Without this re-init, welford_update_rows would replay stale transpose-dest
+                // ops. When welford_fp32_alias is inactive, the alias ids collapse onto cb_in0
+                // (c_0) / cb_in (c_1), neither of which can carry the flag because both also
+                // feed sub_tiles_bcast_scalar in the final-normalization stage (FPU on SrcA);
+                // transpose_wh_tile routes through SrcA in that case and this re-init is a
+                // harmless no-op. LREG4/5 are about to be overwritten by welford_restore_state,
+                // so no need to preserve them.
                 MATH((llk_math_welfords_sfpu_init()));
 
                 uint32_t group_offset = 0;

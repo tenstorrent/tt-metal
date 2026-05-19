@@ -924,6 +924,12 @@ void add_kernel_descriptors(
     // fp32 into DEST via cb_x_welford (c_29). cb_x itself (c_0 non-fused, c_24 fused) stays at
     // Default mode so the post-welford FPU eltwise (sub_tiles_bcast_cols) keeps reading via
     // SrcA Tf32. Same multi-buffer-index aliasing pattern as the matmul shared output+interm CB.
+    //
+    // cb_ex_global (c_15) was considered and rejected. Its only consumer is transpose_wh_tile,
+    // which would benefit from UnpackToDestFp32 in isolation, but the transpose result is then
+    // packed into cb_transpose and the downstream consumers (sub_tiles_bcast_cols /
+    // mul_tiles_bcast_cols) read cb_transpose via SrcA, truncating to TF32. The flag would
+    // preserve fp32 inside the transpose without delivering a user-visible precision win.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (kernel_config.welford_fp32_alias) {

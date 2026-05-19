@@ -403,6 +403,8 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     //   - Input CB: needed on all three reduction paths (H, W, HW).
     //   - W-reduce only: cb_var (c_19) -- the variance tile is read back after the initial
     //     transpose to undo it.
+    //   - W-reduce + do_scale only: cb_scaled (c_20) -- the FPU-scaled input tile is read
+    //     back by transpose_wh_tile, whose result feeds the SFPU welford on DEST.
     //   - HW-reduce only: cb_combined (c_22) -- the variance tile is read back after the
     //     writer-side cross-core re-reduction.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
@@ -412,6 +414,9 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     }
     if (reduce_w && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
         unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_19)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    if (reduce_w && do_scale && input_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_20)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     if (reduce_hw && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
         unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_22)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;

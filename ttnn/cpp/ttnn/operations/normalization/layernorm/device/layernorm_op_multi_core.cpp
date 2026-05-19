@@ -555,6 +555,14 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_29)] =
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
+    // The post-welford row->column transpose calls (transpose_wh_tile on cb_ex / cb_ex2 in
+    // layernorm_welford.cpp and layernorm_large_tensor_welford.cpp) could in principle be
+    // redirected through the c_30 / c_31 aliases to take the UnpackToDest fp32 path. That was
+    // considered and rejected: the transpose result is packed back to a scratch CB whose
+    // downstream consumers (sub_tiles_bcast_cols / mul_tiles_bcast_cols on mean and var via
+    // SrcB) truncate to TF32 anyway, so preserving fp32 inside the transpose itself delivers
+    // no user-visible precision win. The aliases stay reserved for the spill/restore copy_tile
+    // path where the SFPU welford recurrence does benefit from full mantissa.
 
     // Select compute kernel path.
     // For input_is_row_major: TILIZE_IN define handles in-flight tilization; large_tensor kernel allowed.

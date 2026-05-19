@@ -648,18 +648,51 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     //
     // c_0 (input) has two consumers in the welford kernel: transpose_wh_tile during the
     //   welford intake (non-TILIZE_IN branch) and sub_tiles_bcast_scalar during the final
-    //   (x - mean) normalization. The latter is FPU on SrcA, so the flag is NOT safe on c_0:
-    //   any partial benefit at the intake transpose is wiped out by garbage from the
-    //   final-stage subtraction.
+    //   (x - mean) normalization. The latter is FPU on SrcA, so the flag cannot be set on
+    //   c_0 directly. Instead we register c_19 as a second buffer index pointing to the same
+    //   L1 allocation, with UnpackToDestFp32 set on that alias only. The compute kernel
+    //   reads via c_19 for the welford intake transpose (UnpackToDest path preserves the full
+    //   23-bit mantissa into DEST, which the SFPU welford then consumes) and via c_0 for the
+    //   final-stage FPU sub. Same multi-buffer-index aliasing pattern as in layernorm.
     // c_29 is the tilized-input CB used by the welford TILIZE_IN path; its only consumer is
     //   transpose_wh_tile (final normalization reads c_0, not c_29). Pure unary-only path,
     //   so the flag is safe and preserves full mantissa width into the welford recurrence.
+    //
+    // Other FP32 CBs were considered and rejected because, even though they pass through an
+    // unpack-to-DEST-capable op (copy_tile / transpose_wh_tile), the next consumer is a pack
+    // into a CB whose downstream reader is an FPU op (add_tiles / mul_tiles / sub_tiles /
+    // *_bcast_*) reading via SrcA, which truncates to TF32 regardless of what was preserved
+    // in DEST. Setting the flag on those CBs would incur the cost without delivering a
+    // user-visible precision win:
+    //   - cb_xmm (c_25): the (x - mean) intermediate. copy_tile into DEST then pack to cb_x;
+    //     cb_x is read by add_tiles (FPU on SrcA) for accumulation. TF32 truncation at the
+    //     add_tiles step erases any preserved mantissa.
+    //   - cb_x (c_24): accumulates (x - mean) results across groups via repeated add_tiles,
+    //     each of which reads cb_x via SrcA (truncating to TF32) before producing the next
+    //     FP32 sum. The final stored value does carry one add_tiles step's worth of FP32
+    //     precision, so an UnpackToDestFp32 alias on the final copy_tile out to cb_out would
+    //     preserve roughly one mantissa-bit step beyond TF32 -- but the accumulated TF32
+    //     errors from every earlier SrcA read of cb_x dominate the residual, so the gain
+    //     doesn't justify the alias machinery.
+    const bool welford_fp32_alias =
+        use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32 && !tilize_in;
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32) {
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_29)] =
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
+    if (welford_fp32_alias) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_19)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
+    const uint32_t cb_in0_welford_index =
+        welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_19) : static_cast<uint32_t>(tt::CBIndex::c_0);
+    mcast_sender_compute_named_compile_time_args["welford_fp32_alias"] = static_cast<uint32_t>(welford_fp32_alias);
+    mcast_sender_compute_named_compile_time_args["cb_in0_welford"] = cb_in0_welford_index;
+    mcast_receiver_compute_named_compile_time_args["welford_fp32_alias"] = static_cast<uint32_t>(welford_fp32_alias);
+    mcast_receiver_compute_named_compile_time_args["cb_in0_welford"] = cb_in0_welford_index;
 
     KernelDescriptor compute_sender_desc;
     compute_sender_desc.kernel_source = compute_kernel_path;
@@ -695,16 +728,27 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
 
     // Create circular buffers
     constexpr uint32_t in0_cb_index = tt::CBIndex::c_0;
+    constexpr uint32_t in0_welford_alias_index = tt::CBIndex::c_19;
     constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in0_CB_size_group_1,
-        .core_ranges = all_cores_group_1,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(in0_cb_index),
-            .data_format = in_data_format,
-            .page_size = in_single_tile_size,
-        }}},
-    });
+    {
+        CBDescriptor in0_desc{
+            .total_size = in0_CB_size_group_1,
+            .core_ranges = all_cores_group_1,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(in0_cb_index),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size,
+            }}},
+        };
+        if (welford_fp32_alias) {
+            in0_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(in0_welford_alias_index),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size,
+            });
+        }
+        desc.cbs.push_back(std::move(in0_desc));
+    }
     desc.cbs.push_back(CBDescriptor{
         .total_size = out_CB_size_group_1,
         .core_ranges = all_cores_group_1,

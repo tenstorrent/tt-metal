@@ -727,11 +727,51 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // The welford_groupnorm_sharded_v2 kernel feeds both c_0 (non-TILIZE_IN) and c_1
     // (TILIZE_IN) through both transpose_wh_tile (welford intake) and sub_tiles_bcast_scalar
     // (final (x - mean) normalization). The FPU consumer means neither CB can carry the flag
-    // without producing garbage in the final-stage subtraction. Sharded welford therefore
-    // accepts the TF32 floor at the intake transpose; recovering fp32 precision here would
-    // require restructuring the kernel to use a separate intake CB with no FPU consumer.
+    // directly. The fix is the multi-buffer-index aliasing pattern used in layernorm: register
+    // c_29 as a second buffer index on c_0's L1 allocation and c_31 on c_1's, set
+    // UnpackToDestFp32 on the alias indices, and have the kernel read the welford intake
+    // transpose via the alias (UnpackToDest fp32 path preserves the full 23-bit mantissa into
+    // DEST for the SFPU welford) while keeping the final-stage sub_tiles_bcast_scalar on the
+    // primary index (Default mode, SrcA path).
+    //
+    // Other FP32 CBs were considered and rejected because, even though they pass through an
+    // unpack-to-DEST-capable op (copy_tile / transpose_wh_tile), the next consumer is a pack
+    // into a CB whose downstream reader is an FPU op (add_tiles / mul_tiles / sub_tiles /
+    // *_bcast_*) reading via SrcA, which truncates to TF32 regardless of what was preserved
+    // in DEST. Setting the flag on those CBs would incur the cost without delivering a
+    // user-visible precision win:
+    //   - cb_xmm (c_2): the (x - mean) intermediate. copy_tile into DEST then pack to cb_x;
+    //     cb_x is read by add_tiles (FPU on SrcA) for accumulation. TF32 truncation at the
+    //     add_tiles step erases any preserved mantissa.
+    //   - cb_x (c_13): accumulates (x - mean) results across groups via repeated add_tiles,
+    //     each of which reads cb_x via SrcA (truncating to TF32) before producing the next
+    //     FP32 sum. The final stored value does carry one add_tiles step's worth of FP32
+    //     precision, so an UnpackToDestFp32 alias on the final copy_tile out to cb_out would
+    //     preserve roughly one mantissa-bit step beyond TF32 -- but the accumulated TF32
+    //     errors from every earlier SrcA read of cb_x dominate the residual, so the gain
+    //     doesn't justify the alias machinery.
+    const bool welford_fp32_alias = use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32;
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (welford_fp32_alias) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_29)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_31)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
+    // Append welford-fp32 alias args to the compute compile-time args vector. The kernel reads
+    // these positionally; see welford_groupnorm_sharded_v2.cpp.
+    const uint32_t cb_in0_welford_arg =
+        welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_29) : static_cast<uint32_t>(tt::CBIndex::c_0);
+    const uint32_t cb_in_welford_arg =
+        welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_31) : static_cast<uint32_t>(tt::CBIndex::c_1);
+    mcast_sender_compute_compile_time_args.push_back(static_cast<uint32_t>(welford_fp32_alias));
+    mcast_sender_compute_compile_time_args.push_back(cb_in0_welford_arg);
+    mcast_sender_compute_compile_time_args.push_back(cb_in_welford_arg);
+    mcast_receiver_compute_compile_time_args.push_back(static_cast<uint32_t>(welford_fp32_alias));
+    mcast_receiver_compute_compile_time_args.push_back(cb_in0_welford_arg);
+    mcast_receiver_compute_compile_time_args.push_back(cb_in_welford_arg);
 
     KernelDescriptor compute_sender_desc;
     compute_sender_desc.kernel_source =
@@ -773,11 +813,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
 
     // Create circular buffers
     constexpr uint32_t in0_cb_index = tt::CBIndex::c_0;
+    constexpr uint32_t in0_welford_alias_index = tt::CBIndex::c_29;
     constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t in0_cb_page_size = reader_repack_output ? a.buffer()->page_size() : in_single_tile_size;
     if (inplace) {
         // input and output share the same CB and globally allocated buffer
-        desc.cbs.push_back(CBDescriptor{
+        CBDescriptor in0_desc{
             .total_size = in0_CB_size,
             .core_ranges = all_cores,
             .format_descriptors =
@@ -792,9 +833,17 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                       .page_size = in0_cb_page_size,
                   }}},
             .buffer = a.buffer(),
-        });
+        };
+        if (welford_fp32_alias) {
+            in0_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(in0_welford_alias_index),
+                .data_format = in_data_format,
+                .page_size = in0_cb_page_size,
+            });
+        }
+        desc.cbs.push_back(std::move(in0_desc));
     } else {
-        desc.cbs.push_back(CBDescriptor{
+        CBDescriptor in0_desc{
             .total_size = in0_CB_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
@@ -803,7 +852,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                 .page_size = in0_cb_page_size,
             }}},
             .buffer = a.buffer(),
-        });
+        };
+        if (welford_fp32_alias) {
+            in0_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(in0_welford_alias_index),
+                .data_format = in_data_format,
+                .page_size = in0_cb_page_size,
+            });
+        }
+        desc.cbs.push_back(std::move(in0_desc));
 
         uint32_t out_cb_total_size = reader_repack_output ? output.buffer()->aligned_size_per_bank() : out_CB_size;
         uint32_t out_cb_page_size = reader_repack_output ? output.buffer()->page_size() : out_single_tile_size;
@@ -819,18 +876,29 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         });
     }
 
-    if (!negative_mask.has_value()) {
-        // in - stores tilized input
-        constexpr uint32_t in_cb_index = tt::CBIndex::c_1;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = in_CB_size,
+    constexpr uint32_t in_welford_alias_index = tt::CBIndex::c_31;
+    auto make_in_cb_desc = [&](uint32_t total_size) {
+        CBDescriptor in_desc{
+            .total_size = total_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(in_cb_index),
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
                 .data_format = in_data_format,
                 .page_size = in_single_tile_size,
             }}},
-        });
+        };
+        if (welford_fp32_alias) {
+            in_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(in_welford_alias_index),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size,
+            });
+        }
+        return in_desc;
+    };
+    if (!negative_mask.has_value()) {
+        // in - stores tilized input
+        desc.cbs.push_back(make_in_cb_desc(in_CB_size));
         if (untilize_out) {
             constexpr uint32_t out_cb_index = tt::CBIndex::c_30;
             desc.cbs.push_back(CBDescriptor{
@@ -846,16 +914,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     } else {
         // in - stores tilized input
         // tilized in is overlapped with it
-        constexpr uint32_t in_cb_index = tt::CBIndex::c_1;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = in_CB_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(in_cb_index),
-                .data_format = in_data_format,
-                .page_size = in_single_tile_size,
-            }}},
-        });
+        desc.cbs.push_back(make_in_cb_desc(in_CB_size));
     }
     // in2 scaler - for partial Ex
     constexpr uint32_t in2_cb_index = tt::CBIndex::c_2;
