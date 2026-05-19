@@ -24,10 +24,7 @@ from models.tt_dit.utils.test import line_params, ring_params
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        # BH Loud Box (2x4 = 8 chips). Matches the bh_2x4sp1tp0 id from
-        # test_pipeline_wan_i2v.py.
         [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
-        # BH Galaxy (4x8 = 32 chips).
         [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0_ring"],
@@ -74,7 +71,6 @@ def test_long_video(
     num_motion_latent = int(os.environ.get("SVI_NUM_MOTION_LATENT", "1"))
     num_overlap_frame = int(os.environ.get("SVI_NUM_OVERLAP_FRAME", "4"))
     base_seed = int(os.environ.get("SVI_SEED", "0"))
-    # Defaults match the regime; explicit env vars override.
     regime_default_steps = "50" if regime == "python" else "6"
     regime_default_cfg = "5.0" if regime == "python" else "1.5"
     num_inference_steps = int(os.environ.get("NUM_STEPS", regime_default_steps))
@@ -83,7 +79,6 @@ def test_long_video(
 
     pil_image = PIL.Image.open(os.environ.get("PROMPT_IMAGE", "./prompt_image.png"))
     prompt_env = os.environ.get("PROMPT", "A golden retriever running on a sandy beach, waves in the background")
-    # Per-clip prompts: split on '||' for storytelling across clips.
     if "||" in prompt_env:
         prompt = [p.strip() for p in prompt_env.split("||")]
         if len(prompt) != num_clips:

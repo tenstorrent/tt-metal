@@ -67,9 +67,7 @@ def _resolve_lora_args() -> Tuple[List[LoRASpec], List[LoRASpec], float]:
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        # BH Loud Box (2x4 = 8 chips).
         [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
-        # BH Galaxy (4x8 = 32 chips).
         [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0_ring"],

@@ -60,10 +60,6 @@ from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from models.tt_dit.utils import cache
 
-# ---------------------------------------------------------------------------
-# Public API: types
-# ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class LoRASpec:
@@ -97,11 +93,6 @@ def normalize_lora_arg(arg: LoRAArg) -> List[LoRASpec]:
         else:
             raise TypeError(f"Expected LoRASpec or str in LoRA list, got {type(item).__name__}")
     return out
-
-
-# ---------------------------------------------------------------------------
-# Internal: key normalization / detection helpers
-# ---------------------------------------------------------------------------
 
 
 _STRIP_PREFIXES = ("diffusion_model.", "transformer.", "unet.", "model.")
@@ -164,11 +155,6 @@ def _has_lora_keys(state_dict: dict) -> bool:
         or k.startswith("lora_unet_")
         for k in state_dict
     )
-
-
-# ---------------------------------------------------------------------------
-# Public API: fusion + verification
-# ---------------------------------------------------------------------------
 
 
 def fuse_lora_state_dict(
@@ -311,11 +297,6 @@ def verify_fusion_changed_weights(
         )
 
 
-# ---------------------------------------------------------------------------
-# Internal: cache key
-# ---------------------------------------------------------------------------
-
-
 def _lora_stack_cache_namespace(specs_by_expert: Dict[int, List[LoRASpec]]) -> str:
     """Stable short hash so distinct LoRA stacks cache separately on disk.
 
@@ -331,11 +312,6 @@ def _lora_stack_cache_namespace(specs_by_expert: Dict[int, List[LoRASpec]]) -> s
             h.update(f"{spec.scale:.6f}".encode())
             h.update(b"\x00")
     return f"Wan2.2-I2V-LoRA-{h.hexdigest()[:12]}"
-
-
-# ---------------------------------------------------------------------------
-# Pipeline
-# ---------------------------------------------------------------------------
 
 
 class WanPipelineI2VLora(WanPipelineI2V):
@@ -364,8 +340,7 @@ class WanPipelineI2VLora(WanPipelineI2V):
 
         self._lora_specs: Dict[int, List[LoRASpec]] = {0: high_specs, 1: low_specs}
         self._cache_namespace = _lora_stack_cache_namespace(self._lora_specs)
-        # Lazily-built fused state dicts keyed by transformer index. Cleared
-        # after handoff to TT cache to free CPU memory.
+        # Cleared after TT cache handoff (see _prepare_transformer) to free CPU memory.
         self._fused_state_dicts: Dict[int, Optional[Dict[str, torch.Tensor]]] = {0: None, 1: None}
 
         super().__init__(*args, **kwargs)

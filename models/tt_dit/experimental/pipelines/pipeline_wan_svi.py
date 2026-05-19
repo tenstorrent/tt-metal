@@ -79,9 +79,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
             ``comfyui`` (both match upstream).
     """
 
-    # Defaults applied to generate_long_video's call_kwargs per regime.
-    # boundary_ratio is an __init__ parameter (passed through WanPipeline
-    # create_pipeline) and is not in these dicts.
     PYTHON_CALL_DEFAULTS = dict(
         num_inference_steps=50,
         guidance_scale=5.0,
@@ -132,7 +129,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
         self._num_motion_latent = int(num_motion_latent)
         self._num_overlap_frame = int(num_overlap_frame)
 
-        # Build the LoRA stacks and pick the scheduler per regime.
         if regime == "python":
             kwargs["lora_high"] = [LoRASpec(svi_high, 1.0)]
             kwargs["lora_low"] = [LoRASpec(svi_low, 1.0)]
@@ -174,13 +170,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
         kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
         return WanPipeline.create_pipeline(*args, pipeline_class=WanPipelineSVI, **kwargs)
 
-    # ------------------------------------------------------------------ #
-    # __call__ wrapper. The base WanPipeline.__call__ does not accept
-    # anchor_image / prev_last_latent and does not forward arbitrary kwargs
-    # to prepare_latents. We stash them on `self` so the prepare_latents
-    # override below can pick them up, then clear on exit.
-    # ------------------------------------------------------------------ #
-
     def __call__(
         self,
         *args,
@@ -195,10 +184,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
         finally:
             self._svi_anchor_image = None
             self._svi_prev_last_latent = None
-
-    # ------------------------------------------------------------------ #
-    # Conditioning: matches upstream WanVideoUnit_ImageEmbedderVAE.
-    # ------------------------------------------------------------------ #
 
     def prepare_latents(
         self,
@@ -237,9 +222,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 "generate_long_video(...) or pass anchor_image= to __call__."
             )
 
-        # Encoder runs once with the anchor at frame 0, producing the correct
-        # mask packing and the encoded anchor at latent frame 0. Subsequent
-        # frames of tt_y get overwritten below.
         anchor_pil = anchor_image if anchor_image is not None else _unwrap_image(image_prompt)
         latents, tt_y = super().prepare_latents(
             batch_size=batch_size,
@@ -274,10 +256,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
 
         return latents, tt_y
 
-    # ------------------------------------------------------------------ #
-    # Autoregressive long-video driver.
-    # ------------------------------------------------------------------ #
-
     def generate_long_video(
         self,
         *,
@@ -309,7 +287,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
             raise ValueError("num_clips must be >= 1")
         call_kwargs.setdefault("output_type", "pt")
 
-        # Regime-specific defaults for the inner __call__ (steps, CFG, etc.).
         defaults = self.PYTHON_CALL_DEFAULTS if self._regime == "python" else self.COMFYUI_CALL_DEFAULTS
         for k, v in defaults.items():
             call_kwargs.setdefault(k, v)
@@ -352,7 +329,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
             if prev_last_latent is None:
                 raise RuntimeError("SVI requires return_last_latent=True from the inner pipeline.")
 
-            # frames is (B, T, ...) for pt/np outputs — drop the batch dim.
             clips.append(frames[0] if frames.ndim == 5 else frames)
 
         return _concat_with_overlap(clips, overlap=self._num_overlap_frame)
