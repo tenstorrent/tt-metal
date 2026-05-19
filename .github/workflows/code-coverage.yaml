@@ -43,7 +43,7 @@ jobs:
     container:
       image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work
+        - ${{ github.workspace }}:/work
       options: --tmpfs /tmp
     defaults:
       run:
@@ -56,7 +56,9 @@ jobs:
         with:
           fetch-depth: 1
           submodules: recursive
-          path: docker-job
+
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
 
       - name: Setup job
         uses: ./.github/actions/setup-job
@@ -109,6 +111,7 @@ jobs:
             base=$(basename "$obj" .so)
             llvm-cov-20 report \
               -instr-profile=/work/coverage/coverage.profdata \
+              --ignore-filename-regex='(^|/)\.cpmcache/|(^|/)build[^/]*/|(^|/)third_party/' \
               "$obj" > "/work/coverage_per_object/${base}.txt" 2>&1 || true
           done
 
@@ -117,7 +120,7 @@ jobs:
             --format=html \
             --instr-profile=/work/coverage/coverage.profdata \
             "${obj_flags[@]}" \
-            --ignore-filename-regex='(/work/build/|/work/.cpmcache/|/work/tt_metal/llrt/hal/generated/)' \
+            --ignore-filename-regex='(^|/)\.cpmcache/|(^|/)build[^/]*/|(^|/)third_party/' \
             --output-dir=/work/coverage_html
           echo "HTML report: $(du -sh /work/coverage_html | cut -f1)"
 
@@ -126,7 +129,7 @@ jobs:
             --format=text \
             --instr-profile=/work/coverage/coverage.profdata \
             "${obj_flags[@]}" \
-            --ignore-filename-regex='(/work/build/|/work/.cpmcache/|/work/tt_metal/llrt/hal/generated/)' \
+            --ignore-filename-regex='(^|/)\.cpmcache/|(^|/)build[^/]*/|(^|/)third_party/' \
             --summary-only > /work/coverage/summary.json
 
           # Step summary
