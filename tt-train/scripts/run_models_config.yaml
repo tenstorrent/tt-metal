@@ -74,7 +74,7 @@ models:
     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tiny_deepseek_char.yaml"
-      - "--max_steps 1000"
+      - "--max_steps 2048"
       - "--track_memory"
     skip-card:
       - "n150"
@@ -99,7 +99,7 @@ models:
       - "--track_memory"
       - "--batch_size=4"
       - "--max_steps=2048"
-    mgd: "${TT_METAL_RUNTIME_ROOT}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_4x8_graph_descriptor.textproto"
+    mgd: "${TT_METAL_RUNTIME_ROOT}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_4x8_graph_descriptor.textproto"
     tokenize:
       text_file: "data/shakespeare.txt"
       hf_tokenizer: "/mnt/MLPerf/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659"
@@ -113,7 +113,7 @@ models:
       - "--track_memory"
       - "--batch_size=8"
       - "--max_steps=2048"
-    mgd: "${TT_METAL_RUNTIME_ROOT}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
+    mgd: "${TT_METAL_RUNTIME_ROOT}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
     tokenize:
       text_file: "data/shakespeare.txt"
       hf_tokenizer: "/mnt/MLPerf/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659"
