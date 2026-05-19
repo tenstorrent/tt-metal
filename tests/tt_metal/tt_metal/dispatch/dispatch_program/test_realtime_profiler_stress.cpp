@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -147,9 +148,13 @@ distributed::MeshWorkload build_blank_kernel_workload(const std::shared_ptr<dist
 }
 
 TEST(RealtimeProfilerStress, RingBufferOverflowFromTrace) {
-    // Skipped due to issue #44657: real-time profiler is disabled by default
-    // (TT_METAL_ENABLE_REALTIME_PROFILER kill switch).
-    GTEST_SKIP() << "Real-time profiler disabled by default — see issue #44657";
+    // Flip the RT-profiler kill switch on for this test (see issue #44657:
+    // RT profiler is gated off by default). The env var is consumed by a
+    // function-local static in MeshDeviceImpl::init_realtime_profiler_socket
+    // on first call, so this setenv only takes effect if no earlier test in
+    // the process has already opened a mesh device. In that fallback case
+    // the IsProgramRealtimeProfilerActive() check below will skip cleanly.
+    setenv("TT_METAL_ENABLE_REALTIME_PROFILER", "1", /*overwrite=*/1);
     constexpr int kDeviceId = 0;
 
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(

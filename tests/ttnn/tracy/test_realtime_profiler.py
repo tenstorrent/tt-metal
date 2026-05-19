@@ -49,9 +49,14 @@ from pathlib import Path
 import pytest
 
 
-# Skipped due to issue #44657: real-time profiler is disabled by default
-# (TT_METAL_ENABLE_REALTIME_PROFILER kill switch).
-pytestmark = pytest.mark.skip(reason="Real-time profiler disabled by default — see issue #44657")
+# Flip the RT-profiler kill switch on for every subprocess workload spawned by
+# this module (see issue #44657: RT profiler is gated off by default). All
+# device-touching work runs in subprocesses that inherit env via
+# ``dict(os.environ)``, so setting it at module load time propagates into
+# every workload. Each subprocess is fresh, so the function-local static
+# in MeshDeviceImpl::init_realtime_profiler_socket sees a clean slate and
+# picks up this env var on its first mesh-device open.
+os.environ["TT_METAL_ENABLE_REALTIME_PROFILER"] = "1"
 
 
 # ---------------------------------------------------------------------------
