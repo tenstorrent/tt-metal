@@ -43,17 +43,17 @@ def strict_perf_target_checks_enabled() -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
-def perf_target_check(condition: bool, message: str) -> bool:
+def perf_target_check(condition: bool, message: str, exception_type: type[Exception] = AssertionError) -> bool:
     """
     Checks a perf condition in strict or warning-only mode.
 
     Returns True when condition passes, False when condition fails in warning-only mode.
-    Raises AssertionError when condition fails in strict mode.
+    Raises `exception_type` when condition fails in strict mode.
     """
     if condition:
         return True
     if strict_perf_target_checks_enabled():
-        raise AssertionError(message)
+        raise exception_type(message)
     logger.warning(f"{STRICT_PERF_TARGET_CHECKS_ENV}=0, warning-only: {message}")
     return False
 

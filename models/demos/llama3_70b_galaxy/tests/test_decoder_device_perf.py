@@ -16,7 +16,6 @@ from models.perf.benchmarking_utils import (
     BenchmarkData,
     BenchmarkProfiler,
     perf_target_check,
-    strict_perf_target_checks_enabled,
 )
 from models.perf.device_perf_utils import run_device_perf
 from tracy.process_model_log import (
@@ -480,22 +479,16 @@ def load_perf_targets(galaxy_type):
             perf_targets = json.load(f)
     except FileNotFoundError:
         message = f"Performance target file '{perf_target_json_filename}' does not exist."
-        if strict_perf_target_checks_enabled():
-            raise FileNotFoundError(message)
-        logger.warning(message)
+        perf_target_check(False, message, exception_type=FileNotFoundError)
         return _empty_perf_targets()
     except json.JSONDecodeError as e:
         message = f"Invalid JSON format in '{perf_target_json_filename}': {e}"
-        if strict_perf_target_checks_enabled():
-            raise ValueError(message)
-        logger.warning(message)
+        perf_target_check(False, message, exception_type=ValueError)
         return _empty_perf_targets()
 
     if not isinstance(perf_targets, dict):
         message = f"Expected top-level JSON object to be a dictionary in '{perf_target_json_filename}'."
-        if strict_perf_target_checks_enabled():
-            raise ValueError(message)
-        logger.warning(message)
+        perf_target_check(False, message, exception_type=ValueError)
         return _empty_perf_targets()
 
     return perf_targets
@@ -510,22 +503,16 @@ def load_qwen_perf_targets():
             perf_targets = json.load(f)
     except FileNotFoundError:
         message = f"Performance target file '{perf_target_json_filename}' does not exist."
-        if strict_perf_target_checks_enabled():
-            raise FileNotFoundError(message)
-        logger.warning(message)
+        perf_target_check(False, message, exception_type=FileNotFoundError)
         return _empty_perf_targets()
     except json.JSONDecodeError as e:
         message = f"Invalid JSON format in '{perf_target_json_filename}': {e}"
-        if strict_perf_target_checks_enabled():
-            raise ValueError(message)
-        logger.warning(message)
+        perf_target_check(False, message, exception_type=ValueError)
         return _empty_perf_targets()
 
     if not isinstance(perf_targets, dict):
         message = f"Expected top-level JSON object to be a dictionary in '{perf_target_json_filename}'."
-        if strict_perf_target_checks_enabled():
-            raise ValueError(message)
-        logger.warning(message)
+        perf_target_check(False, message, exception_type=ValueError)
         return _empty_perf_targets()
 
     return perf_targets
