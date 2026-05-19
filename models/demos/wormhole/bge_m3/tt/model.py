@@ -222,8 +222,20 @@ class BgeM3Model(LightweightModule):
         if self.embedding_norm is not None:
             hidden_states = self.embedding_norm(hidden_states)
 
+        residual_sharded = None
         for layer in self.layers:
-            hidden_states = layer(hidden_states=hidden_states, attention_mask=prepared_attention_mask)
+            result = layer(
+                hidden_states=hidden_states,
+                attention_mask=prepared_attention_mask,
+                residual_sharded=residual_sharded,
+            )
+            if isinstance(result, tuple):
+                hidden_states, residual_sharded = result
+            else:
+                hidden_states = result
+                residual_sharded = None
+        if residual_sharded is not None:
+            ttnn.deallocate(residual_sharded)
 
         return hidden_states
 
