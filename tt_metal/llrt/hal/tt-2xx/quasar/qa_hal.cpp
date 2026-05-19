@@ -113,7 +113,7 @@ public:
                     case 8:
                     case 12:
                         flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_TRISC0_FIRMWARE_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC0_FIRMWARE_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_FIRMWARE_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC0_GLOBAL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
@@ -123,7 +123,7 @@ public:
                     case 9:
                     case 13:
                         flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_TRISC1_FIRMWARE_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC1_FIRMWARE_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_FIRMWARE_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC1_GLOBAL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE / 2);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
@@ -133,7 +133,7 @@ public:
                     case 10:
                     case 14:
                         flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_TRISC2_FIRMWARE_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC2_FIRMWARE_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_FIRMWARE_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC2_GLOBAL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE / 2);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
@@ -143,7 +143,7 @@ public:
                     case 11:
                     case 15:
                         flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_TRISC3_FIRMWARE_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC3_FIRMWARE_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_FIRMWARE_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC3_GLOBAL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
