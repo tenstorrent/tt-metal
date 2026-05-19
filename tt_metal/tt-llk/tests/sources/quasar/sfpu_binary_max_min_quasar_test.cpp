@@ -103,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Release the Dest section to the next consumer (SFPU on the unpack-to-dest path).
     // On the FPU path, T1's _llk_math_set_dvalid_<FPU> handles the release instead.
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
     }
@@ -135,7 +135,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // producer for the datacopy step and the SFPU producer for the max/min step), so
     // both clients must be registered. On the unpack-to-dest path T1 is only the SFPU
     // client; the producer is T0/UNPACK.
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
@@ -166,7 +166,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // FPU-datacopy path: move both input tiles from SrcA into Dest at DST_INDEX + i.
     // Required for non-32-bit and MX formats; skipped when the unpacker has already
     // placed data directly in Dest. After the moves, release Dest to the SFPU step.
-    if (!unpack_to_dest)
+    if constexpr (!unpack_to_dest)
     {
         const std::uint32_t num_rows = params.num_faces * params.TEST_FACE_R_DIM;
         _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_rows, 1);
@@ -179,16 +179,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // SFPU step: read Dest tile 0 (in0) and Dest tile 1 (in1), write Dest tile 2 (out).
     // dst_index_in0/in1/out are tile offsets relative to params.DST_INDEX.
-    _llk_math_eltwise_unary_sfpu_init_();
+    _llk_math_eltwise_sfpu_init_();
 
-    // All integer formats route through the int32 kernel: with EN_INT32_MATH_FORMAT
-    // enabled, Dest holds INT32 sign-mag values regardless of the src width, so the
-    // SFPU loads them via sfpmem::INT32. The kernel's LT0-guarded correction is a
-    // no-op for unsigned-origin lanes (bit 31 always 0).
+    // All integer formats route through the Int32 path (sfpmem::INT32); float and MX
+    // formats use the DEFAULT path (sfpmem::DEFAULT, HW derives the mode from ACC_CTRL).
     if (math_format == DataFormat::Int32)
     {
         _llk_math_eltwise_unary_sfpu_params_(
-            ckernel::sfpu::calculate_binary_max_min_int32<IS_MAX_OP, 8 /*ITERATIONS*/>,
+            ckernel::sfpu::calculate_binary_max_min<DataFormat::Int32, IS_MAX_OP, 8 /*ITERATIONS*/>,
             params.DST_INDEX,
             /* dst_index_in0 */ 0U,
             /* dst_index_in1 */ 1U,
@@ -197,7 +195,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     else
     {
         _llk_math_eltwise_unary_sfpu_params_(
-            ckernel::sfpu::calculate_binary_max_min<IS_MAX_OP, 8 /*ITERATIONS*/>,
+            ckernel::sfpu::calculate_binary_max_min<DataFormat::Float32, IS_MAX_OP, 8 /*ITERATIONS*/>,
             params.DST_INDEX,
             /* dst_index_in0 */ 0U,
             /* dst_index_in1 */ 1U,
@@ -235,7 +233,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // PACK is the final consumer of the Dest DVALID chain. The producer field
     // tracks which path wrote Dest (UNPACK on the unpack-to-dest path, FPU otherwise).
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
