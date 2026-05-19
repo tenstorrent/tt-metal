@@ -637,8 +637,30 @@ PhysicalSystemDescriptor run_local_discovery(
     }
 
     psd.get_system_graph().host_connectivity_graph[hostname_key] = {};
-    // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
-    psd.get_ethernet_firmware_version() = cluster.get_ethernet_firmware_version().value_or(tt::umd::semver_t(0, 0, 0));
+    // Default the ethernet firmware version to 0.0.0.
+    //
+    // The intent (introduced in commit 5be32922095, "ct/fabric cluster update") was to
+    // read the ETH firmware version off the cluster descriptor. The originally written
+    // call ``cluster_desc.get_cluster_eth_fw_version()`` does not match any
+    // ``tt::umd::ClusterDescriptor`` API in our pinned UMD revision
+    // (``v0.9.5-dev.260424-8-g7b37f8aa``):
+    //
+    //   * ``tt::umd::ClusterDescriptor`` stores it in a **private** field
+    //     ``std::optional<SemVer> eth_fw_version`` (cluster_descriptor.hpp:325). Only
+    //     ``tt::umd::Cluster`` and ``tt::umd::TopologyDiscovery`` are friended; there is
+    //     no public getter exposed.
+    //   * ``tt::umd::Cluster`` does have ``get_ethernet_firmware_version()`` (cluster.hpp:656),
+    //     but ``run_local_discovery`` only has a ``ClusterDescriptor&``, not a ``Cluster*``.
+    //
+    // The original ``.value_or(semver_t(0, 0, 0))`` already documents that the unknown /
+    // not-populated case is tolerated, so we just default to zero here until UMD adds a
+    // public ``ClusterDescriptor::get_ethernet_firmware_version()`` accessor. Downstream
+    // consumers (``check_firmware_capabilities``, peer-version comparison, protobuf
+    // serialization) handle a zero version as "unknown / not present".
+    //
+    // TODO: once the pinned UMD revision exposes a public getter on ``ClusterDescriptor``,
+    //       replace this with the proper read.
+    psd.get_ethernet_firmware_version() = tt::umd::semver_t(0, 0, 0);
 
     return psd;
 }
