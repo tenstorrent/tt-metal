@@ -17,7 +17,9 @@ from ..layers.module import Module, ModuleList, Parameter
 from ..layers.normalization import DistributedRMSNorm, GroupNorm, RMSNorm
 from ..parallel.manager import CCLManager
 from ..utils import tensor
+from ..utils.conv3d import get_conv3d_config
 from ..utils.substate import rename_substate
+from ..utils.tensor import local_device_to_torch
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,7 @@ class VaeContext:
     h_factor: int = 1
     w_mesh_axis: int | None = None
     w_factor: int = 1
+    use_conv3d: bool = False
 
 
 @dataclass(frozen=True)
@@ -171,6 +174,102 @@ class VaeRmsNorm(Module):
         return x * (norm * self.gamma.data)
 
 
+class _VaeConv2dConv3d(Module):
+    """Conv2d implemented via conv3d with T=1. SP-aware (receives pre-padded input from
+    VaeConv2d), but no TP sharding — used only when ctx.tp_axis is None or tensor_parallel
+    is False.  Weights are stored in the prepared conv3d format (shape [k*k*C_in, C_out]).
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        *,
+        kernel_size: int,
+        h_pad: int,
+        w_pad: int,
+        ctx: VaeContext,
+    ) -> None:
+        super().__init__()
+
+        self.out_channels = out_channels
+        kernel_3d = (1, kernel_size, kernel_size)
+        self._kernel_3d = kernel_3d
+        self._padding_3d = (0, h_pad, w_pad)
+
+        self.conv_config = get_conv3d_config(
+            in_channels,
+            out_channels,
+            kernel_3d,
+            ttnn.bfloat16,
+            grid_size=ctx.device.compute_with_storage_grid_size(),
+            h_factor=ctx.h_factor,
+            w_factor=ctx.w_factor,
+            T=1,
+            H=0,
+            W=0,
+        )
+
+        d = kernel_size * kernel_size * in_channels
+        self.weight = Parameter(total_shape=[d, out_channels], device=ctx.device, pad_value=0)
+        self.bias = Parameter(total_shape=[1, out_channels], device=ctx.device, pad_value=0)
+
+        self._tile_aligned = (in_channels % 32 == 0) and (out_channels % 32 == 0)
+        self._ctx = ctx
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            ctx.device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4 if is_blackhole() else ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "weight" in state:
+            w = state["weight"]
+            if w.dim() == 2:
+                w = w.reshape(w.shape[0], w.shape[1], 1, 1)
+            w = w.unsqueeze(2)  # [C_out, C_in, kH, kW] → [C_out, C_in, 1, kH, kW]
+            weight_tt = ttnn.from_torch(w, dtype=ttnn.bfloat16, pad_value=0)
+            prepared = ttnn.experimental.prepare_conv3d_weights(
+                weight_tensor=weight_tt,
+                C_in_block=self.conv_config.C_in_block,
+                device=self._ctx.device,
+            )
+            state["weight"] = local_device_to_torch(prepared)
+        if "bias" in state:
+            state["bias"] = state["bias"].reshape(1, -1)
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        n, h, w, c = x.shape
+        if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.reshape(x, (n, 1, h, w, c))
+
+        x = ttnn.experimental.conv3d(
+            input_tensor=x,
+            weight_tensor=self.weight.data,
+            bias_tensor=self.bias.data,
+            device=self._ctx.device,
+            config=self.conv_config,
+            output_channels=self.out_channels,
+            kernel_size=self._kernel_3d,
+            stride=(1, 1, 1),
+            padding=self._padding_3d,
+            padding_mode="zeros",
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+
+        # [N, 1, H_out, W_out, C_out] → [N, H_out, W_out, C_out]
+        # Tile-aligned channels: reshape is metadata-only (free). Non-aligned (e.g. C=3):
+        # fall back to indexing which gathers into a fresh contiguous buffer.
+        if self._tile_aligned:
+            _, _, h2, w2, c2 = x.shape
+            return ttnn.reshape(x, (n, h2, w2, c2))
+        return x[:, 0, :, :, :]
+
+
 class VaeConv2d(Module):
     def __init__(
         self,
@@ -200,16 +299,30 @@ class VaeConv2d(Module):
         w_pad = 0 if self._w_sharded else padding
         actual_padding = (h_pad, w_pad) if (h_pad != w_pad) else h_pad
 
-        self.inner = Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=kernel_size,
-            padding=actual_padding,
-            mesh_device=ctx.device,
-            in_mesh_axis=ctx.tp_axis if tensor_parallel and not out_is_greater else None,
-            out_mesh_axis=ctx.tp_axis if tensor_parallel and out_is_greater else None,
-            ccl_manager=ctx.ccl_manager,
-        )
+        # Use conv3d when requested and no TP is in play for this conv.
+        no_tp = ctx.tp_axis is None or not tensor_parallel
+        self._use_conv3d = ctx.use_conv3d and no_tp
+
+        if self._use_conv3d:
+            self.inner = _VaeConv2dConv3d(
+                in_channels,
+                out_channels,
+                kernel_size=kernel_size,
+                h_pad=h_pad,
+                w_pad=w_pad,
+                ctx=ctx,
+            )
+        else:
+            self.inner = Conv2d(
+                in_channels,
+                out_channels,
+                kernel_size=kernel_size,
+                padding=actual_padding,
+                mesh_device=ctx.device,
+                in_mesh_axis=ctx.tp_axis if tensor_parallel and not out_is_greater else None,
+                out_mesh_axis=ctx.tp_axis if tensor_parallel and out_is_greater else None,
+                ccl_manager=ctx.ccl_manager,
+            )
         self._ctx = ctx
         self._padding = padding
 
@@ -253,6 +366,11 @@ class VaeConv2d(Module):
             )
             x = ttnn.unsqueeze(x, 0)  # back to [N=1, H_local+pad, W_local+pad, C]
 
+        if self._use_conv3d:
+            result = self.inner.forward(x)
+            if result.layout != ttnn.TILE_LAYOUT:
+                result = ttnn.to_layout(result, ttnn.TILE_LAYOUT)
+            return result
         return self.inner.forward(x, use_persistent_buffer=False)
 
 
