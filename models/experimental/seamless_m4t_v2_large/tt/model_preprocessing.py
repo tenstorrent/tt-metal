@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import ttnn
@@ -122,16 +123,27 @@ def _fused_qkv_pair(
     *,
     device: ttnn.Device,
     weight_dtype: ttnn.DataType = ttnn.bfloat16,
+    q_scale: float = 1.0,
 ) -> dict:
     """Concatenate Q/K/V projection weights into a single fused QKV linear.
 
-    Produced tensor pairs feed ``ttnn.linear`` followed by
-    ``ttnn.experimental.nlp_create_qkv_heads`` (Stage 3a head-fusion path).
+    Produced tensor pairs feed ``ttnn.linear`` followed by a slice-based
+    QKV split in ``_qkv_heads`` (Stage 3a head-fusion path).
     Concatenation is along the output dimension so the fused matmul
     output is laid out as ``[..., 3 * hidden]`` (Q | K | V).
+
+    Stage 8: when ``q_scale != 1.0``, the Q rows of the concatenated weight
+    and bias are pre-multiplied by ``q_scale`` (typically ``1 / sqrt(head_dim)``).
+    This folds the attention scale factor into the weights at preprocessing time,
+    eliminating a runtime ``multiply`` per conformer self-attention layer.
     """
-    qkv_weight = torch.cat([q_proj.weight.detach(), k_proj.weight.detach(), v_proj.weight.detach()], dim=0).contiguous()
-    qkv_bias = torch.cat([q_proj.bias.detach(), k_proj.bias.detach(), v_proj.bias.detach()], dim=0).contiguous()
+    q_w = q_proj.weight.detach()
+    q_b = q_proj.bias.detach()
+    if q_scale != 1.0:
+        q_w = (q_w * q_scale).to(q_w.dtype)
+        q_b = (q_b * q_scale).to(q_b.dtype)
+    qkv_weight = torch.cat([q_w, k_proj.weight.detach(), v_proj.weight.detach()], dim=0).contiguous()
+    qkv_bias = torch.cat([q_b, k_proj.bias.detach(), v_proj.bias.detach()], dim=0).contiguous()
     w = preprocess_linear_weight(qkv_weight, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
     b = preprocess_linear_bias(qkv_bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     return {
@@ -397,11 +409,34 @@ def _conv1d_like_padding_int(conv: torch.nn.Module) -> int:
     return int(p)
 
 
-def _conformer_feed_forward_params(ffn: torch.nn.Module, *, device: ttnn.Device) -> dict:
+def _conformer_feed_forward_params(
+    ffn: torch.nn.Module,
+    *,
+    device: ttnn.Device,
+    weight_dtype: ttnn.DataType = ttnn.bfloat16,
+    out_scale: float = 1.0,
+) -> dict:
+    """Preprocess conformer FFN weights.
+
+    Stage 13a: when ``out_scale != 1.0`` (e.g. 0.5 for Macaron-style half-step residual),
+    the ``output_dense`` weight and bias are pre-multiplied at load time.  This folds the
+    constant runtime ``multiply(ff, 0.5)`` that follows every conformer FFN call into the
+    weights, eliminating 49 scalar-multiply ops per forward pass.
+    """
+    od_w = ffn.output_dense.weight.detach()
+    od_b = ffn.output_dense.bias.detach()
+    if out_scale != 1.0:
+        od_w = (od_w * out_scale).to(od_w.dtype)
+        od_b = (od_b * out_scale).to(od_b.dtype)
+    od_w_tt = preprocess_linear_weight(od_w, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
+    od_b_tt = preprocess_linear_bias(od_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     return make_parameter_dict(
         {
-            "intermediate_dense": _linear_pair(ffn.intermediate_dense, device=device),
-            "output_dense": _linear_pair(ffn.output_dense, device=device),
+            "intermediate_dense": _linear_pair(ffn.intermediate_dense, device=device, weight_dtype=weight_dtype),
+            "output_dense": {
+                "weight": ttnn.to_device(od_w_tt, device),
+                "bias": ttnn.to_device(od_b_tt, device),
+            },
         }
     )
 
@@ -454,12 +489,31 @@ def _conformer_conv_module_params(conv_module: torch.nn.Module, *, device: ttnn.
     )
 
 
-def _conformer_self_attn_params(attn: torch.nn.Module, *, device: ttnn.Device, with_relative: bool) -> dict:
+def _conformer_self_attn_params(
+    attn: torch.nn.Module,
+    *,
+    device: ttnn.Device,
+    with_relative: bool,
+    weight_dtype: ttnn.DataType = ttnn.bfloat16,
+) -> dict:
+    # Stage 3a: fused Q|K|V matmul stays bf16 (bf8 QKV drops PCC); out_proj may use bf8.
+    # Stage 8: for relative-position self-attention, pre-fold 1/√head_dim into Q weights
+    # and bias, eliminating a runtime multiply per conformer layer.  Adapter self-attn
+    # (with_relative=False) uses SDPA which applies the scale internally at runtime.
+    if with_relative:
+        q_scale = 1.0 / math.sqrt(int(attn.head_size))
+    else:
+        q_scale = 1.0
     out = {
-        "linear_q": _linear_pair(attn.linear_q, device=device),
-        "linear_k": _linear_pair(attn.linear_k, device=device),
-        "linear_v": _linear_pair(attn.linear_v, device=device),
-        "linear_out": _linear_pair(attn.linear_out, device=device),
+        "qkv": _fused_qkv_pair(
+            attn.linear_q,
+            attn.linear_k,
+            attn.linear_v,
+            device=device,
+            weight_dtype=ttnn.bfloat16,
+            q_scale=q_scale,
+        ),
+        "linear_out": _linear_pair(attn.linear_out, device=device, weight_dtype=weight_dtype),
     }
     if with_relative and getattr(attn, "distance_embedding", None) is not None:
         out["distance_embedding"] = make_parameter_dict(
@@ -470,25 +524,36 @@ def _conformer_self_attn_params(attn: torch.nn.Module, *, device: ttnn.Device, w
     return make_parameter_dict(out)
 
 
-def _conformer_encoder_layer_params(layer: torch.nn.Module, *, device: ttnn.Device) -> dict:
+def _conformer_encoder_layer_params(
+    layer: torch.nn.Module,
+    *,
+    device: ttnn.Device,
+    matmul_weight_dtype: ttnn.DataType = ttnn.bfloat16,
+) -> dict:
     return make_parameter_dict(
         {
             "ffn1_layer_norm": {
                 "weight": _ln_to_device(layer.ffn1_layer_norm.weight, device=device),
                 "bias": _ln_to_device(layer.ffn1_layer_norm.bias, device=device),
             },
-            "ffn1": _conformer_feed_forward_params(layer.ffn1, device=device),
+            "ffn1": _conformer_feed_forward_params(
+                layer.ffn1, device=device, weight_dtype=matmul_weight_dtype, out_scale=0.5
+            ),
             "self_attn_layer_norm": {
                 "weight": _ln_to_device(layer.self_attn_layer_norm.weight, device=device),
                 "bias": _ln_to_device(layer.self_attn_layer_norm.bias, device=device),
             },
-            "self_attn": _conformer_self_attn_params(layer.self_attn, device=device, with_relative=True),
+            "self_attn": _conformer_self_attn_params(
+                layer.self_attn, device=device, with_relative=True, weight_dtype=matmul_weight_dtype
+            ),
             "conv_module": _conformer_conv_module_params(layer.conv_module, device=device),
             "ffn2_layer_norm": {
                 "weight": _ln_to_device(layer.ffn2_layer_norm.weight, device=device),
                 "bias": _ln_to_device(layer.ffn2_layer_norm.bias, device=device),
             },
-            "ffn2": _conformer_feed_forward_params(layer.ffn2, device=device),
+            "ffn2": _conformer_feed_forward_params(
+                layer.ffn2, device=device, weight_dtype=matmul_weight_dtype, out_scale=0.5
+            ),
             "final_layer_norm": {
                 "weight": _ln_to_device(layer.final_layer_norm.weight, device=device),
                 "bias": _ln_to_device(layer.final_layer_norm.bias, device=device),
@@ -497,7 +562,9 @@ def _conformer_encoder_layer_params(layer: torch.nn.Module, *, device: ttnn.Devi
     )
 
 
-def _speech_adapter_layer_params(layer: torch.nn.Module, *, device: ttnn.Device) -> dict:
+def _speech_adapter_layer_params(
+    layer: torch.nn.Module, *, device: ttnn.Device, matmul_weight_dtype: ttnn.DataType = ttnn.bfloat16
+) -> dict:
     return make_parameter_dict(
         {
             "kernel_size": int(layer.kernel_size),
@@ -530,12 +597,14 @@ def _speech_adapter_layer_params(layer: torch.nn.Module, *, device: ttnn.Device)
                 "stride": int(layer.self_attn_conv.stride[0]),
                 "groups": layer.self_attn_conv.groups,
             },
-            "self_attn": _conformer_self_attn_params(layer.self_attn, device=device, with_relative=False),
+            "self_attn": _conformer_self_attn_params(
+                layer.self_attn, device=device, with_relative=False, weight_dtype=matmul_weight_dtype
+            ),
             "ffn_layer_norm": {
                 "weight": _ln_to_device(layer.ffn_layer_norm.weight, device=device),
                 "bias": _ln_to_device(layer.ffn_layer_norm.bias, device=device),
             },
-            "ffn": _conformer_feed_forward_params(layer.ffn, device=device),
+            "ffn": _conformer_feed_forward_params(layer.ffn, device=device, weight_dtype=matmul_weight_dtype),
         }
     )
 
@@ -543,7 +612,11 @@ def _speech_adapter_layer_params(layer: torch.nn.Module, *, device: ttnn.Device)
 def create_speech_encoder_parameters(speech_encoder, *, device: ttnn.Device) -> dict:
     """
     Convert [`SeamlessM4Tv2SpeechEncoder`] weights to TTNN tensors for [`TTSeamlessM4Tv2SpeechEncoder`].
+
+    FFN and attention out projections use ``bfloat8_b`` weights (Stage 1 bandwidth optimization);
+    fused QKV weights stay ``bfloat16`` (Stage 3a — bf8 QKV hurts PCC). Biases stay bf16.
     """
+    matmul_bf8 = ttnn.bfloat8_b
     fp = speech_encoder.feature_projection
     feature_projection = {
         "layer_norm": {
@@ -551,10 +624,12 @@ def create_speech_encoder_parameters(speech_encoder, *, device: ttnn.Device) -> 
             "bias": _ln_to_device(fp.layer_norm.bias, device=device),
             "eps": float(fp.layer_norm.eps),
         },
-        "projection": _linear_pair(fp.projection, device=device),
+        "projection": _linear_pair(fp.projection, device=device, weight_dtype=matmul_bf8),
     }
     enc = speech_encoder.encoder
-    enc_layers = [_conformer_encoder_layer_params(layer, device=device) for layer in enc.layers]
+    enc_layers = [
+        _conformer_encoder_layer_params(layer, device=device, matmul_weight_dtype=matmul_bf8) for layer in enc.layers
+    ]
     encoder = {
         "layers": enc_layers,
         "layer_norm": {
@@ -563,7 +638,7 @@ def create_speech_encoder_parameters(speech_encoder, *, device: ttnn.Device) -> 
         },
     }
     im = speech_encoder.intermediate_ffn
-    intermediate_ffn = _conformer_feed_forward_params(im, device=device)
+    intermediate_ffn = _conformer_feed_forward_params(im, device=device, weight_dtype=matmul_bf8, out_scale=0.5)
     inner_layer_norm = {
         "weight": _ln_to_device(speech_encoder.inner_layer_norm.weight, device=device),
         "bias": _ln_to_device(speech_encoder.inner_layer_norm.bias, device=device),
@@ -575,7 +650,10 @@ def create_speech_encoder_parameters(speech_encoder, *, device: ttnn.Device) -> 
         "inner_layer_norm": make_parameter_dict(inner_layer_norm),
     }
     if speech_encoder.adapter is not None:
-        adapter_layers = [_speech_adapter_layer_params(layer, device=device) for layer in speech_encoder.adapter.layers]
+        adapter_layers = [
+            _speech_adapter_layer_params(layer, device=device, matmul_weight_dtype=matmul_bf8)
+            for layer in speech_encoder.adapter.layers
+        ]
         out["adapter"] = make_parameter_dict({"layers": adapter_layers})
     return make_parameter_dict(out)
 
