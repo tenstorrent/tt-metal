@@ -228,7 +228,7 @@ class TtMistral4TextModel:
 
     def _to_logits(self, x: ttnn.Tensor) -> torch.Tensor:
         """Final norm → lm_head → gather to host."""
-        x = _rms_norm(x, self.final_norm_w, self.compute_kernel_config)
+        x = _rms_norm(x, self.final_norm_w, self.compute_kernel_config, ttnn.L1_MEMORY_CONFIG)
         logits_tt = ttnn.linear(
             x,
             self.lm_head_weight,
@@ -257,7 +257,7 @@ class TtMistral4TextModel:
         Pipeline: rms_norm → lm_head (partial) → all_gather over vocab → argmax → readback.
         Only a single uint32 per device crosses the PCIe boundary.
         """
-        x_normed = _rms_norm(x_last, self.final_norm_w, self.compute_kernel_config)
+        x_normed = _rms_norm(x_last, self.final_norm_w, self.compute_kernel_config, ttnn.L1_MEMORY_CONFIG)
         partial = ttnn.linear(
             x_normed,
             self.lm_head_weight,
@@ -409,7 +409,7 @@ class TtMistral4TextModel:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         x = ttnn.reshape(x, [1, 1, 1, HIDDEN_SIZE])
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
 
         for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
             x = layer.forward_decode(x, cos_tt, sin_tt, kv_cache, current_pos, self._decode_cur_pos_device)
@@ -461,7 +461,7 @@ class TtMistral4TextModel:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         x = ttnn.reshape(x, [1, 1, 1, HIDDEN_SIZE])
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
 
         for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
             x = layer.forward_decode(x, cos_tt, sin_tt, kv_cache, current_pos, self._decode_cur_pos_device)
