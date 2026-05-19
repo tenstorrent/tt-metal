@@ -318,7 +318,8 @@ ttnn::Tensor reshape_tiled(
     const bool recreate_mapping_tensor,
     const std::optional<CoreRangeSet>& sub_core_grid,
     bool explicit_memory_config,
-    const bool skip_padding_fill) {
+    const bool skip_padding_fill,
+    const bool pad_value_explicit) {
     // fill_implicit_tile_padding takes float; integer pad is not bit-exact for all dtypes/values.
     const float fill_value = detail::pad_value_as_float(pad_value, tensor.dtype());
     // squeeze input tensor and requested shape to 3D
@@ -415,10 +416,13 @@ ttnn::Tensor reshape_tiled(
             recreate_mapping_tensor,
             sub_core_grid);
 
-        // Fill implicit tile padding. Output may be sharded (typical) or INTERLEAVED if
+        // Fill implicit tile padding only when the caller explicitly asked for it (pad_value_explicit).
+        // Default-on fill would write into "padding" lanes of prim::reshape_view, which can be a zero-cost
+        // alias of the input buffer; in extreme low-rank cases (e.g. inner-2D (1, 1)) this clobbers
+        // logical lanes of aliased tensors. Output may be sharded (typical) or INTERLEAVED if
         // recompute fell back; handle both. Tensors here are rank-3, so the fill stays
         // on its non-recursive path and cannot loop back into ttnn::reshape.
-        if (!skip_padding_fill && detail::has_inner_2d_tile_padding(requested_shape_3d)) {
+        if (pad_value_explicit && !skip_padding_fill && detail::has_inner_2d_tile_padding(requested_shape_3d)) {
             if (output_tensor_3d.memory_config().is_sharded()) {
                 // TODO(#43090): drop this s2i/i2s detour once prim::fill_pad supports sharded buffers
                 // without overflowing fill_pad_writer's per-core runtime-arg cap (341).
@@ -474,11 +478,16 @@ ttnn::Tensor reshape_tiled(
         recreate_mapping_tensor,
         sub_core_grid);
 
-    // Fill in BF16 for BFLOAT8_B inputs, otherwise in native dtype (rank-3, non-recursive).
-    // skip_padding_fill is forced off for BF8: the downstream typecast's 16-elem shared
-    // exponent would otherwise let unfilled padding corrupt logical lanes in the same block.
+    // Fill rules:
+    //   - BFLOAT8_B: ALWAYS fill (skip_padding_fill is ignored). The downstream typecast's 16-elem
+    //     shared exponent would otherwise let unfilled padding corrupt logical lanes in the same block.
+    //   - Otherwise (BF16/FP32/int): fill only when the caller EXPLICITLY passed pad_value. A default-on
+    //     fill writes into "padding" lanes of prim::reshape_view, which can be a zero-cost alias of the
+    //     input buffer; in extreme low-rank cases (e.g. inner-2D (1, 1)) this clobbers logical lanes of
+    //     aliased tensors and silently corrupts unrelated callers (e.g. tt-train AdamW / ColumnParallel).
+    //   - skip_padding_fill (when caller did pass pad_value) still suppresses non-BF8 fills.
     const bool is_bfloat8_b_output = (tensor.dtype() == DataType::BFLOAT8_B);
-    const bool should_fill = (!skip_padding_fill || is_bfloat8_b_output);
+    const bool should_fill = is_bfloat8_b_output || (pad_value_explicit && !skip_padding_fill);
     if (should_fill && detail::has_inner_2d_tile_padding(requested_shape_3d)) {
         output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
     }
@@ -583,6 +592,9 @@ ttnn::Tensor ttnn::reshape(
             pad_value.value_or(default_pad_value),
             sub_core_grid);
     }
+    // Preserve whether the caller explicitly passed pad_value. value_or(default_pad_value) below
+    // collapses that signal, but reshape_tiled needs it to gate the default-off fill for non-BF8.
+    const bool pad_value_explicit = pad_value.has_value();
     return operations::data_movement::reshape_tiled(
         tensor,
         logical_shape,
@@ -591,7 +603,8 @@ ttnn::Tensor ttnn::reshape(
         reshape_map_mode == TileReshapeMapMode::RECREATE,
         sub_core_grid,
         explicit_memory_config,
-        skip_padding_fill);
+        skip_padding_fill,
+        pad_value_explicit);
 }
 
 ttnn::Tensor ttnn::reshape(
