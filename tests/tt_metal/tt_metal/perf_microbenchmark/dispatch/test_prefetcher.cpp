@@ -2721,7 +2721,7 @@ public:
         const uint32_t host_align = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
 
         // write_prefetcher_cmd: streaming-store cmd to hugepage (WH/BH) or DRAM bank 0 (Quasar),
-        // then write one FetchQ entry via TLB (WH/BH) or write_core (Quasar).
+        // then write one FetchQ entry via TLB.
         // cmd_size_bytes must be a multiple of 64 (host alignment) and cmd_size_entry is the
         // pre-computed FetchQ value (may have MSB stall flag set for exec_buf).
         auto write_prefetcher_cmd = [&](const uint32_t* src, uint32_t cmd_size_bytes, uint32_t cmd_size_entry) {
@@ -2852,14 +2852,6 @@ public:
             dispatch_cb_base,
             dev_completion_base,
             Common::SD_COMPLETION_QUEUE_SIZE);
-
-        if (this->device_->arch() == tt::ARCH::QUASAR) {
-            // Quasar has no PCIe endpoint — both kernels' NOC addressing must resolve to DRAM bank 0.
-            prefetch_defines["IS_CQ_DRAM_BACKED"] = "1";
-            prefetch_defines["DRAM_BACKED_CQ_BANK_ID"] = "0";
-            dispatch_defines["IS_CQ_DRAM_BACKED"] = "1";
-            dispatch_defines["DRAM_BACKED_CQ_BANK_ID"] = "0";
-        }
 
         // LOAD-BEARING ORDER: on Quasar, the experimental kernel API auto-assigns DM0 to the first
         // kernel created on a given core and DM1 to the second. Prefetch must be first to get DM0.
