@@ -11,12 +11,12 @@ monitored metrics: TTFT and prefill latency (and hence end-to-end latency).
 Usage:
     $ python3 run.py \
         -m Qwen/Qwen3-4B-Instruct-2507 \
-        -p 20 -w 3 -v 1 \
+        -p 20 -w 0 -v 1 \
         -t none decode_only all \
         -r 0.0 33.0 67.0 100.0
         -c 0.5 1.0 2.0
     $ # You'll see something like this as an output:
-    Aggregate Cross-Mode Summary (lower is better):
+    🧮 Aggregate Cross-Mode Summary (lower is better):
     +-------------+--------------------+-...-+---------------------------+
     | trace_mode  | median_ttft (sec.) | ... | median_e2e_latency (sec.) |
     +-------------+--------------------+-...-+---------------------------+
@@ -113,9 +113,9 @@ def parse_options() -> argparse.Namespace:
         "-r",
         "--prefix_caching_ratio",
         help=(
-            "Percent of context tokens fixed in the shared prompt prefix.\n"
-            "0.0 means no prefix caching, 50.0 means half of context tokens are\n"
-            "in the shared prefix, and 100.0 means full prefix caching.\n"
+            "Percent of the entire shared prompt prefix (system + context) fixed\n"
+            "for prefix caching. 0.0 means no prefix caching, 50.0 means half of\n"
+            "all prefix tokens are fixed, and 100.0 means full prefix caching.\n"
         ),
         nargs="+",
         default=[0.0, 50.0, 100.0],
@@ -181,6 +181,16 @@ def parse_options() -> argparse.Namespace:
         "--output",
         help="Optional path to save detailed benchmark rows and summary.\n",
         default=None,
+    )
+    parser.add_argument(
+        "--winner_delta_threshold",
+        help=(
+            "Minimum prefill-latency gap (seconds) required to declare a strict winner\n"
+            "in per-setting comparison. If mode differences are within this threshold,\n"
+            "they are treated as a tie.\n"
+        ),
+        type=float,
+        default=0.001,
     )
     parser.add_argument(
         "-v",
@@ -277,23 +287,27 @@ def build_prompts(
         repeat_count, remainder = divmod(n_target_context_tokens, n_base_context_tokens)
         context_token_ids = base_context_token_ids * repeat_count + base_context_token_ids[:remainder]
 
-    n_context_tokens = len(context_token_ids)
-    n_fixed_context_tokens = int(n_context_tokens * prefix_caching_ratio / 100.0)
-    fixed_context = tokenizer.decode(context_token_ids[:n_fixed_context_tokens], skip_special_tokens=False).strip()
-    nonfixed_context = tokenizer.decode(context_token_ids[n_fixed_context_tokens:], skip_special_tokens=False).strip()
+    # Combine system and context to apply ratio to entire shared prefix
+    system_token_ids = tokenizer.encode(system, add_special_tokens=False)
 
-    shared_prefix = system if not fixed_context else f"{system}\n---\n{fixed_context}"
+    full_prefix_token_ids = system_token_ids + context_token_ids
+    n_full_prefix_tokens = len(full_prefix_token_ids)
+
+    # Apply ratio to entire prefix
+    n_fixed_total_tokens = int(n_full_prefix_tokens * prefix_caching_ratio / 100.0)
+
+    shared_prefix = tokenizer.decode(full_prefix_token_ids[:n_fixed_total_tokens], skip_special_tokens=False).strip()
+    nonfixed_prefix = tokenizer.decode(full_prefix_token_ids[n_fixed_total_tokens:], skip_special_tokens=False).strip()
+    nonfixed_context = nonfixed_prefix
     # endregion
 
     # region Maybe print token stats
     if options.verbose > 0:
-        shared_tokens_map = tokenizer(shared_prefix, return_length=True)
-        n_shared_tokens = shared_tokens_map["length"][0]
+        n_nonfixed_total_tokens = n_full_prefix_tokens - n_fixed_total_tokens
         print(
-            "\n📚 Shared prefix has "
-            f"{n_shared_tokens:,} tokens, with {n_fixed_context_tokens:,}/{n_context_tokens:,} "
-            "context tokens fixed for prefix caching "
-            f"({prefix_caching_ratio:.1f}%) and context_multiply={context_multiply:.3f}."
+            f"\n📚 Prefix token stats: full={n_full_prefix_tokens:,}, "
+            f"cached={n_fixed_total_tokens:,}, non-cached={n_nonfixed_total_tokens:,} "
+            f"(prefix_caching_ratio={prefix_caching_ratio:.1f}%)."
         )
     # endregion
 
@@ -308,8 +322,8 @@ def build_prompts(
         prompts.append(prompt)
 
     return prompts, {
-        "context_tokens_cached": n_fixed_context_tokens,
-        "context_tokens_total": n_context_tokens,
+        "context_tokens_cached": n_fixed_total_tokens,
+        "context_tokens_total": n_full_prefix_tokens,
     }
 
 
@@ -348,6 +362,7 @@ def load_llm(options: argparse.Namespace, trace_mode: TraceModesT, prefix_cachin
         block_size=options.block_size,
         max_num_seqs=options.max_num_seqs,
         enable_prefix_caching=prefix_caching_ratio > 0.0,
+        # plugin_config={"tt": {"trace_mode": trace_mode}},
         override_tt_config={"trace_mode": trace_mode},
         use_tqdm_on_load=False,
         disable_log_stats=False,
@@ -555,7 +570,7 @@ def maybe_print_metrics_tables(
         key = _setting_key(row)
         by_setting.setdefault(key, {})[str(row["trace_mode"])] = row
 
-    # region Table 1: Aggregate summary over all settings.
+    # Table 1: Aggregate summary over all settings.
     aggregate_headers = [
         "trace_mode",
         "median_ttft (sec.)",
@@ -604,14 +619,13 @@ def maybe_print_metrics_tables(
         right_align_from=1,
     )
     print("* marks the lowest value per metric (ties allowed).")
-    # endregion
 
-    # region Table 2: Per-setting prefill comparison with winner and delta against "all".
+    # Table 2: Per-setting prefill comparison with winner and delta against "all".
     per_setting_headers = [
         "prefix_ratio (%)",
-        "cached_ctx_toks",
-        "full_ctx_toks",
-        *[f"prefill_{mode}" for mode in trace_modes],
+        "cached_ctx_toks (#)",
+        "full_ctx_toks (#)",
+        *[f"prefill_{mode} (sec.)" for mode in trace_modes],
         "winner",
         "all_vs_best_other (sec.)",
         "all_vs_best_other (%)",
@@ -627,7 +641,10 @@ def maybe_print_metrics_tables(
         setting_sample = next(iter(mode_rows.values()))
         min_prefill = min(prefill_values.values())
         winners = "/".join(
-            mode for mode in trace_modes if mode in prefill_values and prefill_values[mode] == min_prefill
+            mode
+            for mode in trace_modes
+            if mode in prefill_values
+            and abs(prefill_values[mode] - min_prefill) <= options.winner_delta_threshold
         )
 
         delta_sec = "n/a"
@@ -657,9 +674,7 @@ def maybe_print_metrics_tables(
         rows=per_setting_rows,
         right_align_from=0,
     )
-    # endregion
 
-    # region Reminder about input options
     print("\n🎸 Reminder: benchmarking used these fixed options (unless overridden on CLI):")
     pprint.pprint(
         {
@@ -669,10 +684,10 @@ def maybe_print_metrics_tables(
             "trace_mode": options.trace_mode,
             "prefix_caching_ratio (%)": options.prefix_caching_ratio,
             "context_multiply": options.context_multiply,
+            "winner_delta_threshold": options.winner_delta_threshold,
         },
         sort_dicts=False,
     )
-    # endregion
 
 
 def _print_ascii_table(
