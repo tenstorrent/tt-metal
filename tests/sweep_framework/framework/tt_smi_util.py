@@ -36,6 +36,18 @@ def _perform_eth_retrain():
         logger.warning(f"SWEEPS: ETH retrain failed (non-fatal): {e}")
 
 
+def eth_retrain_if_6u():
+    """Public no-op-elsewhere wrapper that runs UMD ETH link retrain on 6U Galaxy.
+
+    Intended for callers that want to clear stale ETH dispatch state between
+    workload boundaries (e.g., between sweep modules) without performing a
+    full device reset. Safe to call on non-6U hosts and when tt_umd is missing.
+    """
+    if not _is_galaxy_6u():
+        return
+    _perform_eth_retrain()
+
+
 def _umd_warm_reset_with_recovery():
     """Use UMD WarmResetWithRecovery for WH 6U (Galaxy) machines.
 

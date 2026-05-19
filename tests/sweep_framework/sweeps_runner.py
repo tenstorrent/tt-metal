@@ -800,6 +800,17 @@ def run_sweeps(
     module_pbar = pbar_manager.counter(total=len(module_names), desc="Modules", leave=False)
     try:
         for module_name in module_names:
+            # On WH 6U (Galaxy), the previous module can leave ETH dispatch cores
+            # in a stale run_mailbox state that causes the next open_mesh_device
+            # to TT_FATAL during init. Re-run topology discovery with
+            # perform_6u_eth_retrain=True so links are clean before the next
+            # module's first device open. No-op on non-6U.
+            if not config.dry_run:
+                try:
+                    tt_smi_util.eth_retrain_if_6u()
+                except Exception as e:
+                    logger.warning(f"SWEEPS: pre-module ETH retrain failed (non-fatal): {e}")
+
             if config.suite_name:
                 # Filter to only the specified suite
                 all_suites = vector_source.get_available_suites(module_name)
