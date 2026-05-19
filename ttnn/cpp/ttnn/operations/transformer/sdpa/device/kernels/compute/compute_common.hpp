@@ -331,7 +331,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
-                constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 : 8;
+                constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
                 constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
                 exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
             }
@@ -1091,10 +1091,11 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
         sub_tiles(in0_cb, in1_cb, i, i, 0);
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
-        // add_unary_tile(0, 0x3F800000); // Call the LLK directly to get access to VectorMode argument
-        MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY>(0, 0x3F800000, VectorMode::C)));
+        // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the LLK directly to get access to VectorMode argument
+        MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY>(
+            0 /*dst_index*/, 0x3F800000 /*scalar*/, VectorMode::C)));
         // recip_tile<false>(0, (int)VectorMode::C);
-        MATH((recip_tile_first_column<false>(0)));
+        MATH((recip_tile_first_column<false>(0 /*dst_index*/)));
         pack_tile(0, out_cb);
         release_dst();
     }

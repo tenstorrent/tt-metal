@@ -958,8 +958,8 @@ struct MatmulExpertCompressedDRAM {
                         cb_reserve_back(CTArgs::cb_out_silu, 1);
                         tile_regs_acquire();
                         copy_tile(CTArgs::cb_out_silu, 0, 0);
-                        MATH((
-                            llk_math_eltwise_unary_sfpu_silu<true, DST_ACCUM_MODE, silu_iterations>(0, VectorMode::R)));
+                        MATH((llk_math_eltwise_unary_sfpu_silu<true, DST_ACCUM_MODE, silu_iterations>(
+                            0 /*dst_index*/, VectorMode::R)));
                         tile_regs_commit();
                         tile_regs_wait();
                         pack_tile(0, CTArgs::cb_out_silu, 0);
@@ -1054,7 +1054,8 @@ struct MatmulExpertCompressedDRAM {
                             PACK(TT_SETC16(
                                 DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
                             for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
-                                PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 2>(sn, VectorMode::R)));
+                                PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 2 /*ITER*/>(
+                                    sn /*dst_index*/, VectorMode::R)));
                             }
                             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
                         } else {
