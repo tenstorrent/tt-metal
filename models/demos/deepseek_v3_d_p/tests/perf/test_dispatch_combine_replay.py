@@ -98,6 +98,17 @@ _CAPTURE_FILES = _list_captures()
             ttnn.Topology.Linear,
             id="linear-8-2link",
         ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4-2link",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -145,38 +156,80 @@ def test_dispatch_combine_replay(mesh_device, num_links, topology, capture_file,
 
     assert galaxy_col < ndg_galaxy, f"galaxy_col={galaxy_col} but Galaxy had only {ndg_galaxy} dispatch groups"
 
-    logger.info(f"[replay] file={capture_file}  layer={layer_idx}  galaxy_col={galaxy_col}")
+    # Detect mesh variant: 8x1 (LB or single-col Galaxy) vs 8x4 (full Galaxy with all-col contention).
+    mesh_rows = int(mesh_device.shape[0])
+    mesh_cols = int(mesh_device.shape[1])
+    is_full_8x4 = mesh_cols == ndg_galaxy
+    if is_full_8x4 and galaxy_col != 0:
+        # 8x4 single run captures all 4 cols simultaneously; we only need one combo per layer.
+        pytest.skip(
+            f"mesh-8x4-2link: skipping galaxy_col={galaxy_col}; full mesh runs all 4 cols in one go (col0 only)."
+        )
+
+    # --- Diagnostic: print device_id → MeshCoordinate(row, col) mapping.
+    # Aggregator uses chip_id % mesh_cols to attribute each chip to its dispatch col;
+    # this print lets us verify the assumption that device_id enumeration follows row-major
+    # LinMeshCoord (so device_id % num_cols == col_idx).
+    try:
+        logger.info(f"[mesh-map] mesh.shape=({mesh_rows}, {mesh_cols}) — checking device_id ↔ (row, col) mapping:")
+        any_mismatch = False
+        for r in range(mesh_rows):
+            row_devs = []
+            for c in range(mesh_cols):
+                dev = mesh_device.get_device(ttnn.MeshCoordinate(r, c))
+                did = dev.id()
+                row_devs.append(
+                    f"(r={r},c={c})→id={did:>2} [id%{mesh_cols}={did % mesh_cols}{'✓' if (did % mesh_cols) == c else f' EXPECTED {c}'}]"
+                )
+                if (did % mesh_cols) != c:
+                    any_mismatch = True
+            logger.info("[mesh-map]  " + "  ".join(row_devs))
+        if any_mismatch:
+            logger.warning(
+                "[mesh-map] device_id % num_cols does NOT cleanly map to col_idx — "
+                "summarize_8x4's per-col attribution via chip_id % 4 will be wrong. "
+                "Need to use the actual mapping above when aggregating."
+            )
+        else:
+            logger.info(
+                "[mesh-map] ✓ device_id % num_cols == col_idx for all positions — chip_id % 4 attribution is correct"
+            )
+    except Exception as e:
+        logger.warning(
+            f"[mesh-map] could not enumerate mesh devices via mesh_device.get_device(MeshCoordinate(r,c)): {e}"
+        )
+
+    logger.info(
+        f"[replay] file={capture_file}  layer={layer_idx}  galaxy_col={galaxy_col}  mesh={tuple(mesh_device.shape)}  is_full_8x4={is_full_8x4}"
+    )
     logger.info(
         f"[replay] config: dgs={dgs} num_routed_experts={nre} topk={nept} experts_per_chip={epc} "
         f"seq_len_per_chip={sl} emb_dim={emb_dim}  num_links={num_links}  topology={topology}"
     )
 
-    # --- 1. Build full Galaxy (4, 256) dispatch_table; take col k's row as LB's (1, 256) table.
-    #        Row k has chip IDs [0, 8) only for experts in [k*64, (k+1)*64); all other 192 entries
-    #        are -1 (kernel skips). Identical semantics to Galaxy col k.
+    # --- 1. Build dispatch_table.
+    #   8x1: use col k's row of the (4, 256) full table → (1, 256) with 192 -1 entries (col-k 1:1 replay).
+    #   8x4: use the full (4, 256) table → all 4 cols dispatch simultaneously with contention.
     full_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=nre,
         dispatch_group_size=dgs,
         num_dispatch_groups=ndg_galaxy,
     )  # (4, 256)
-    col_table = full_table[galaxy_col : galaxy_col + 1].contiguous()  # (1, 256)
-    n_valid = int((col_table >= 0).sum().item())
-    logger.info(
-        f"[replay] col{galaxy_col} dispatch_table: {n_valid} valid entries / {nre} total "
-        f"({nre - n_valid} entries are -1 → kernel skips those routings)"
-    )
+    if is_full_8x4:
+        col_table = full_table.contiguous()  # (4, 256) — full Galaxy table
+        logger.info(f"[replay] 8x4: full dispatch_table {tuple(col_table.shape)} pushed to all 4 cols simultaneously")
+    else:
+        col_table = full_table[galaxy_col : galaxy_col + 1].contiguous()  # (1, 256) — col k only
+        n_valid = int((col_table >= 0).sum().item())
+        logger.info(
+            f"[replay] 8x1 col{galaxy_col} dispatch_table: {n_valid} valid entries / {nre} total "
+            f"({nre - n_valid} entries are -1 → kernel skips those routings)"
+        )
 
-    # --- 2. Compute offsets/counts/region_offsets from indices + col-k table.
-    #        Routings to experts with table entry == -1 contribute 0 to counts/offsets,
-    #        so buffer layout exactly matches what Galaxy col k saw.
-    #
-    # Shape note: get_gate_outputs ALWAYS returns shape (num_dg, dgs, nre) where num_dg is
-    # internally derived as num_routed_experts // experts_per_chip // dispatch_group_size = 4.
-    # All 4 dim-0 slots contain IDENTICAL col-k data because our (1, 256) col_table broadcasts
-    # the same mask across all 4 slots. We slice [0:1] → (1, dgs, nre), which on LB 8x1 shards
-    # cleanly to per-device (1, 1, nre) — matching what production Galaxy 8x4 gets per device
-    # (Galaxy host has (4, 8, 256), sharded dim 0 across mesh axis 1 = 4, per device (1, 1, 256)).
-    logger.info(f"[replay] computing gate outputs (col{galaxy_col})...")
+    # --- 2. Compute offsets/counts/region_offsets from indices + table.
+    #   8x1: slice the (4, dgs, nre) gate output to col-k's slice → (1, dgs, nre) → per-device (1, 1, nre).
+    #   8x4: keep full (4, dgs, nre) → mesh shards dim 0 (=4) across mesh axis 1 (=4) → per-device (1, 1, nre).
+    logger.info(f"[replay] computing gate outputs ({'full 4 cols' if is_full_8x4 else f'col{galaxy_col}'})...")
     col_offsets_full, col_counts_full, col_region_offsets_full, _ = get_gate_outputs(
         indices=indices,
         dispatch_group_size=dgs,
@@ -184,20 +237,31 @@ def test_dispatch_combine_replay(mesh_device, num_links, topology, capture_file,
         experts_per_chip=epc,
         seq_len_per_chip=sl,
         num_experts_per_tok=nept,
-        expert_dispatch_table=col_table,
-    )  # each (4, dgs, nre) — all 4 dim-0 slots identical (col-k mask broadcast)
-    col_offsets = col_offsets_full[0:1].contiguous()  # (1, dgs, nre)
-    col_counts = col_counts_full[0:1].contiguous()  # (1, dgs, nre)
-    col_region_offsets = col_region_offsets_full[0:1].contiguous()  # (1, dgs, nre)
-    col_routings = int(col_counts.sum().item()) // dgs
-    total_topk_slots = indices.numel()
+        expert_dispatch_table=col_table if is_full_8x4 else col_table,
+    )  # each (4, dgs, nre)
+    if is_full_8x4:
+        col_offsets = col_offsets_full.contiguous()
+        col_counts = col_counts_full.contiguous()
+        col_region_offsets = col_region_offsets_full.contiguous()
+        total_routings = int(col_counts.sum().item()) // dgs
+        total_topk_slots = indices.numel()
+        logger.info(
+            f"[replay] 8x4: total routings across 4 cols = {total_routings} / {total_topk_slots} topk slots "
+            f"({100.0 * total_routings / total_topk_slots:.1f}% — Galaxy production workload)"
+        )
+    else:
+        col_offsets = col_offsets_full[0:1].contiguous()  # (1, dgs, nre)
+        col_counts = col_counts_full[0:1].contiguous()  # (1, dgs, nre)
+        col_region_offsets = col_region_offsets_full[0:1].contiguous()  # (1, dgs, nre)
+        col_routings = int(col_counts.sum().item()) // dgs
+        total_topk_slots = indices.numel()
+        logger.info(
+            f"[replay] col{galaxy_col} actual routings = {col_routings} / {total_topk_slots} topk slots "
+            f"({100.0 * col_routings / total_topk_slots:.1f}% — matches Galaxy col {galaxy_col} 1:1)"
+        )
     logger.info(
-        f"[replay] col{galaxy_col} actual routings = {col_routings} / {total_topk_slots} topk slots "
-        f"({100.0 * col_routings / total_topk_slots:.1f}% — matches Galaxy col {galaxy_col} 1:1)"
-    )
-    logger.info(
-        f"[replay] sliced host shapes: offsets={tuple(col_offsets.shape)} counts={tuple(col_counts.shape)} "
-        f"region_offsets={tuple(col_region_offsets.shape)} (each will shard to per-device (1, 1, {nre}))"
+        f"[replay] host shapes: offsets={tuple(col_offsets.shape)} counts={tuple(col_counts.shape)} "
+        f"region_offsets={tuple(col_region_offsets.shape)}"
     )
 
     # --- 3. Synthesize x and weights (values don't drive kernel cycle count) ---
@@ -259,11 +323,11 @@ def test_dispatch_combine_replay(mesh_device, num_links, topology, capture_file,
         topology=topology,
         layer_idx=layer_idx,
     )
-    logger.info(f"[replay] constructing TtCombineModule...")
+    logger.info(f"[replay] constructing TtCombineModule (num_dispatch_groups={ndg_galaxy if is_full_8x4 else 1})...")
     combine_module = TtCombineModule(
         mesh_device=mesh_device,
         dispatch_group_size=dgs,
-        num_dispatch_groups=1,
+        num_dispatch_groups=ndg_galaxy if is_full_8x4 else 1,
         experts_per_chip=epc,
         num_experts_per_tok=nept,
         seq_len_per_chip=sl,
