@@ -3,11 +3,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
 import ttnn
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
+from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, make_deepseek_sampling_args
 
 
@@ -56,6 +59,53 @@ def _sample_device_tokens(mesh_device, ccl, args, torch_input, user_params):
     ttnn.deallocate(tt_tokens)
     ttnn.deallocate(tt_input)
     return device_tokens
+
+
+class _FakeSeedManager:
+    def __init__(self):
+        self.reset_calls = []
+
+    def reset_seed(self, seeds, user_ids):
+        self.reset_calls.append((seeds, user_ids))
+
+
+class _FakeSamplingGenerator:
+    def __init__(self):
+        self.tt_sampling = SimpleNamespace(_sampling_dp=2)
+        self.seed_manager = _FakeSeedManager()
+        self.decode_state_calls = []
+
+    def apply_decode_state(self, sampling_param_chunks, **kwargs):
+        self.decode_state_calls.append((sampling_param_chunks, kwargs))
+
+
+def test_deepseek_reset_sampling_state_does_not_preformat_sampling_params():
+    batch_size = 64
+    batch_size_per_row = 32
+    sampling_generator = _FakeSamplingGenerator()
+    generator = SimpleNamespace(sampling_generator=sampling_generator)
+    sampling_params = SamplingParams(
+        temperature=[0.6] * batch_size,
+        top_k=[32] * batch_size,
+        top_p=[0.95] * batch_size,
+        seed=[1234] * batch_size,
+    )
+
+    DeepseekGenerator._reset_sampling_state(generator, sampling_params, batch_size, batch_size_per_row)
+
+    [(sampling_param_chunks, kwargs)] = sampling_generator.decode_state_calls
+    assert len(sampling_param_chunks) == 2
+    assert sampling_param_chunks[0].temperature[0] == 0.6
+    assert sampling_param_chunks[1].temperature[0] == 0.6
+    first_chunk_temperature = format_sampling_params(
+        sampling_param_chunks[0], max_batch_size=batch_size_per_row
+    ).temperature[0]
+    assert first_chunk_temperature == pytest.approx(1 / 0.6)
+    assert kwargs["reset_batch"] is True
+    assert kwargs["prompt_tokens"].shape == (batch_size_per_row, 1)
+    assert kwargs["output_tokens"].shape == (batch_size_per_row, 1)
+    [seed_reset] = sampling_generator.seed_manager.reset_calls
+    assert seed_reset == ([1234] * batch_size, list(range(batch_size)))
 
 
 @torch.no_grad()
