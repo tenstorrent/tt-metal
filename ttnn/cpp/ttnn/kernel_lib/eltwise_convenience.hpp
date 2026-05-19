@@ -22,7 +22,6 @@ ALWI void binary_op(uint32_t n_tiles) {
     using BinElt = BinaryFpu<
         CbA,
         CbB,
-        CbOut,
         Op,
         BroadcastDim::None,
         BinaryDataFormatReconfig::None,
