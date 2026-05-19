@@ -10,6 +10,7 @@ import torch
 from loguru import logger
 from ttnn.experimental.moe_compute_utils import (
     add_shared_expert_weights,
+    auto_output_width_shard_dim,
     get_shared_experts_per_device,
     get_weight_core_shard_maps,
     get_weight_mem_configs,
@@ -690,7 +691,13 @@ def test_optimized_moe_decode_block(
     )
     combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in combine_mux_core_range])])
 
-    compute_tilize_drain_core = ttnn.CoreCoord(6, 9)
+    compute_tilize_drain_core = ttnn.experimental.get_moe_tilize_drain_core(
+        mesh_device,
+        compute_output_height_shard_dim,
+        auto_output_width_shard_dim(hidden_size),
+        hidden_size,
+        mux_core_range_set=combine_mux_cores,
+    )
 
     ############################################
     # create global semaphores
