@@ -333,9 +333,9 @@ void kernel_main() {
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
-    experimental::CircularBuffer in0_buf(in0_cb);
-    experimental::CircularBuffer in1_buf(in1_cb);
-    experimental::CircularBuffer intermediate_buf(intermediate_cb);
+    CircularBuffer in0_buf(in0_cb);
+    CircularBuffer in1_buf(in1_cb);
+    CircularBuffer intermediate_buf(intermediate_cb);
 
     uint32_t current_M_block_tiles = M_block_tiles;
     uint32_t current_N_block_tiles = N_block_tiles;

@@ -650,8 +650,7 @@ void kernel_main() {
                                 for (uint32_t w = 0; w < out_subblock_w_; ++w) {
                                     if (bw < num_blocks_w_dim_) {
                                         noc.async_write(
-                                            experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(
-                                                cb_out),
+                                            use<CircularBuffer::AddrSelector::READ_PTR>(cb_out),
                                             s,
                                             output_single_tile_size_bytes,
                                             {.offset_bytes = out_read_offset},

@@ -168,11 +168,11 @@ void kernel_main() {
     // wrapper covers both branches. w2c_rdy_buf wraps the ring sync CB used by
     // KStepWithRing during the W2 cycle to advance ring slots when the active
     // slot's tile budget is exhausted.
-    experimental::CircularBuffer in_buf(cb_s2c_in);
-    experimental::CircularBuffer in2_buf(cb_s2c_in2);
-    experimental::CircularBuffer ones_buf(cb_c2c_ones_tile);
-    experimental::CircularBuffer w_buf(cb_r2c_w0_w1);  // == cb_r2c_w2
-    experimental::CircularBuffer w2c_rdy_buf(cb_w2c_rdy);
+    CircularBuffer in_buf(cb_s2c_in);
+    CircularBuffer in2_buf(cb_s2c_in2);
+    CircularBuffer ones_buf(cb_c2c_ones_tile);
+    CircularBuffer w_buf(cb_r2c_w0_w1);  // == cb_r2c_w2
+    CircularBuffer w2c_rdy_buf(cb_w2c_rdy);
 
     // Constants for MoE
     constexpr uint32_t num_w0_w1_tiles_h = config_t::NUM_W0_W1_TILES_H;
@@ -314,8 +314,8 @@ void kernel_main() {
             // at the K-tile position past the regular weights and skips
             // remaining padding K-slots; without bias, KStepDefault fires
             // every K-slot as a regular FMA.
-            using KStepBias = KStepWithBias<experimental::CircularBuffer>;
-            using KStepNoBias = KStepDefault<experimental::CircularBuffer>;
+            using KStepBias = KStepWithBias<CircularBuffer>;
+            using KStepNoBias = KStepDefault<CircularBuffer>;
             using W0W1Pack = detail::MoEComputeW0W1Pack<activation_type, cb_s2c_in2>;
             const SegmentedKLoopShape w0_w1_kloop_shape = SegmentedKLoopShape::of(
                 /*num_blocks=*/w0_w1_blocks_per_two_elt_tile,
@@ -363,8 +363,8 @@ void kernel_main() {
             // linearly, no wraparound.
             cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
             using W2RingStep = detail::MoEComputeW2RingStep<tiles_per_step>;
-            using W2KStepBias = KStepWithRing<true, experimental::CircularBuffer, W2RingStep>;
-            using W2KStepNoBias = KStepWithRing<false, experimental::CircularBuffer, W2RingStep>;
+            using W2KStepBias = KStepWithRing<true, CircularBuffer, W2RingStep>;
+            using W2KStepNoBias = KStepWithRing<false, CircularBuffer, W2RingStep>;
             using W2Pack = detail::MoEComputeW2UntilizePack<cb_c2s_out, /*BlockCtDim=*/4, /*FullCtDim=*/20>;
             const SegmentedKLoopShape w2_kloop_shape = SegmentedKLoopShape::of(
                 /*num_blocks=*/w2_blocks_per_four_mm2_tile,

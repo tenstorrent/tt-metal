@@ -126,8 +126,8 @@ void kernel_main() {
     // Buffer wrappers consumed by matmul_kloop_pack (which owns the K-loop
     // cb_wait/pop on in1 and the FMA stride). Pack-target CBs (cb_c2w_rdy,
     // cb_s2c_out, cb_w2c_in3) are managed by each call's pack_body lambda.
-    experimental::CircularBuffer in0_buf(cb_s2c_in);
-    experimental::CircularBuffer in1_buf(cb_r2c_w);
+    CircularBuffer in0_buf(cb_s2c_in);
+    CircularBuffer in1_buf(cb_r2c_w);
 
     // NOC Packet size
     constexpr uint32_t noc_packet_size = 8192;
@@ -174,7 +174,7 @@ void kernel_main() {
         //-------------------------------------------------------------------------
         // matmul_kloop_pack Form 2: K-loop + custom pack body, partial last
         // block (w_tiles_per_block_last < w_tiles_per_block).
-        using KStep = KStepDefault<experimental::CircularBuffer>;
+        using KStep = KStepDefault<CircularBuffer>;
         using PackBody = MoEGateMMSendPack<cb_s2c_out, cb_c2w_rdy>;
         KStep k_step{in0_buf, in1_buf, /*in0_index=*/2 * 76, /*transpose=*/false};
         matmul_kloop_pack(
@@ -208,7 +208,7 @@ void kernel_main() {
     // cb_r2c_w at bias_tile_index in the (still-fronted) last block; the
     // trailing cb_pop_front fires after the matmul_kloop_pack scope, once
     // the bias is consumed.
-    using NonSendKStep = KStepDefault<experimental::CircularBuffer>;
+    using NonSendKStep = KStepDefault<CircularBuffer>;
     using NonSendPostK = MoEGateMMNonSendPostK<cb_w2c_in2, cb_r2c_w>;
     using NonSendPack = MoEGateMMNonSendPack<cb_s2c_out, cb_w2c_in3>;
     NonSendKStep k_step{in0_buf, in1_buf, /*in0_index=*/0, /*transpose=*/false};

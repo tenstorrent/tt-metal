@@ -4,8 +4,8 @@
 
 #pragma once
 
-// Compatibility helpers for working with experimental::CircularBuffer and
-// experimental::DataflowBuffer behind a uniform interface in compute helpers.
+// Compatibility helpers for working with CircularBuffer and
+// DataflowBuffer behind a uniform interface in compute helpers.
 //
 // CircularBuffer exposes get_cb_id() (uint32_t); DataflowBuffer exposes
 // get_id() (uint16_t). The buf_id() overload set lets generic helper code
@@ -14,13 +14,13 @@
 // / pop_front) already share names across both classes, so no wrapper needed
 // for those.
 
-#include "experimental/circular_buffer.h"
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 namespace compute_kernel_lib {
 
-ALWI uint32_t buf_id(const ::experimental::CircularBuffer& cb) { return cb.get_cb_id(); }
+ALWI uint32_t buf_id(const ::CircularBuffer& cb) { return cb.get_cb_id(); }
 
-ALWI uint32_t buf_id(const ::experimental::DataflowBuffer& dfb) { return dfb.get_id(); }
+ALWI uint32_t buf_id(const ::DataflowBuffer& dfb) { return dfb.get_id(); }
 
 }  // namespace compute_kernel_lib

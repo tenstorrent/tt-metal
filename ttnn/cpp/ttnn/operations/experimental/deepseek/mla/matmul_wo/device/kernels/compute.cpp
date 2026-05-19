@@ -29,9 +29,9 @@ void kernel_main() {
 
     // Buffer wrappers consumed by matmul_kloop_pack: in0/in1 feed the K-loop's
     // FMA stream; out_buf receives the final pack_tile_block.
-    experimental::CircularBuffer in0_buf(cb_s2c_in);
-    experimental::CircularBuffer in1_buf(cb_r2c_w);
-    experimental::CircularBuffer out_buf(cb_c2w_out);
+    CircularBuffer in0_buf(cb_s2c_in);
+    CircularBuffer in1_buf(cb_r2c_w);
+    CircularBuffer out_buf(cb_c2w_out);
 
     // Constants for the kernel
     constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
@@ -80,10 +80,8 @@ void kernel_main() {
     const SegmentedKLoopShape iter_shape =
         SegmentedKLoopShape::of(num_blocks_per_iter, w_tiles_per_block, /*ct_dim=*/num_n_tiles_per_iter);
     for (uint32_t iter_id = 0; iter_id < num_iters; ++iter_id) {
-        KStepDefault<experimental::CircularBuffer> k_step{
-            in0_buf, in1_buf, /*in0_index=*/in0_index_base, /*transpose=*/false};
-        matmul_kloop_pack(
-            in1_buf, iter_shape, k_step, SimplePack<experimental::CircularBuffer>{out_buf, num_n_tiles_per_iter});
+        KStepDefault<CircularBuffer> k_step{in0_buf, in1_buf, /*in0_index=*/in0_index_base, /*transpose=*/false};
+        matmul_kloop_pack(in1_buf, iter_shape, k_step, SimplePack<CircularBuffer>{out_buf, num_n_tiles_per_iter});
     }
 
     // Drain the pipeline - the last dummy push

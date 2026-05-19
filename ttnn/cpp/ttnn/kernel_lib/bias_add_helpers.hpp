@@ -154,12 +154,12 @@ struct NoPostBias {
  *   // Canonical caller-side bias lifecycle. The reader pushes Nt bias tiles
  *   // once per row-broadcast set; the helper reads at indices 0..Nt-1 without
  *   // touching wait/pop on bias_buf. Drive wait/pop on the
- *   // experimental::CircularBuffer object — prefer the buffer object's
+ *   // CircularBuffer object — prefer the buffer object's
  *   // wait_front/pop_front methods over raw cb_wait_front / cb_pop_front so
  *   // the kernel stays uniformly typed against the buffer abstraction.
- *   experimental::CircularBuffer partials_buf(cb_partials);
- *   experimental::CircularBuffer bias_buf(cb_bias);
- *   experimental::CircularBuffer out_buf(cb_out);
+ *   CircularBuffer partials_buf(cb_partials);
+ *   CircularBuffer bias_buf(cb_bias);
+ *   CircularBuffer out_buf(cb_out);
  *
  *   bias_buf.wait_front(Nt);
  *   add_bias_bcast_rows<BiasBroadcast::RowBroadcast,
@@ -223,7 +223,7 @@ template <
     OutputLayout output_layout = OutputLayout::SubblockMajor,
     typename PostBiasFn = bias_add_config::NoPostBias,
     typename Activation = NoneActivation,
-    typename Buf = ::experimental::CircularBuffer>
+    typename Buf = ::CircularBuffer>
 ALWI void add_bias_bcast_rows(
     Buf& partials_buf,
     Buf& bias_buf,
