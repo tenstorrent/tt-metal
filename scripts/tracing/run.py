@@ -643,8 +643,7 @@ def maybe_print_metrics_tables(
         winners = "/".join(
             mode
             for mode in trace_modes
-            if mode in prefill_values
-            and abs(prefill_values[mode] - min_prefill) <= options.winner_delta_threshold
+            if mode in prefill_values and abs(prefill_values[mode] - min_prefill) <= options.winner_delta_threshold
         )
 
         delta_sec = "n/a"
