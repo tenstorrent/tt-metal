@@ -371,7 +371,7 @@ Graph capture overhead has several independently controllable layers:
 |---|---|---|
 | **C++ graph processor** | Always on when capture is active | Inherent to `begin_graph_capture` |
 | **Python I/O recording** | Auto-enabled by Python `begin_graph_capture()`, off for C++-initiated capture | `enable_python_io_recording()` / `disable_python_io_recording()` |
-| **Python stack traces** | Off; on during Python `begin_graph_capture` if `ttnn.CONFIG.enable_graph_python_stack_traces` is true | `TTNN_CONFIG_OVERRIDES`, or `enable_python_stack_traces()` / `disable_python_stack_traces()` |
+| **Python stack traces** | Off; auto-enabled for the outermost Python-started `begin_graph_capture()` when `ttnn.CONFIG.enable_graph_python_stack_traces` is true | `TTNN_CONFIG_OVERRIDES`, or `enable_python_stack_traces()` / `disable_python_stack_traces()` |
 | Per-op buffer snapshots | Off | `enable_detailed_buffer_tracing()` / `disable_detailed_buffer_tracing()` |
 | Per-op captured sub-graphs | Off (fast dispatch) | `enable_fast_runtime_mode=False` |
 
