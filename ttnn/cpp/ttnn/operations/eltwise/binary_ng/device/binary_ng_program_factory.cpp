@@ -316,15 +316,26 @@ bool is_llk_bcast(
     const SubtileBroadcastType subtile_broadcast_type,
     const DataType a_dtype,
     const DataType b_dtype,
-    const DataType c_dtype) {
-    // HACK (diagnostic): force software-broadcast path whenever the output
-    // dtype doesn't match the input dtypes. Hypothesis: the LLK unary_bcast
-    // path is unsafe when fp32_dest_acc_en is enabled because c_dtype=FLOAT32
-    // but the input CBs are BFLOAT16 (the known "unary_bcast + fp32_acc_to_dest
-    // + bfloat16 CB" LLK bug). Original code ignored c_dtype entirely.
-    if (a_dtype != c_dtype || b_dtype != c_dtype) {
+    const bool fp32_dest_acc_en) {
+    // LLK unary_bcast (called by the SCALAR/COL/ROW LLK-bcast compute kernels)
+    // routes sub-32-bit source CBs through a 19-bit SrcB path (see
+    // tt_metal/hw/inc/api/compute/bcast.h:33 and tt-llk issue #1338). That
+    // path is incompatible with DST_ACCUM_MODE, which the program factory
+    // enables here whenever fp32_dest_acc_en is true. The mismatch produces
+    // silently bad values on Wormhole and can additionally wedge dispatch
+    // state — manifesting as a host-side hang on the post-op Synchronize —
+    // on Blackhole. Existing call-site workarounds live in
+    //   {minimal_matmul, all_gather_minimal_matmul_async}/device/kernels/compute.cpp;
+    // this guard handles the general binary-ng path centrally.
+    // (Note: the existing Blackhole MOVB2D guard a few lines below covers a
+    // different LLK bug — BH issue #449 in the MOVB2D path — and is unrelated.)
+    auto is_subword_float = [](DataType dt) {
+        return dt == DataType::BFLOAT16 || dt == DataType::BFLOAT8_B || dt == DataType::BFLOAT4_B;
+    };
+    if (fp32_dest_acc_en && (is_subword_float(a_dtype) || is_subword_float(b_dtype))) {
         return false;
     }
+
     auto all_match = [&](DataType dt) { return a_dtype == dt && b_dtype == dt; };
 
     if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
@@ -731,8 +742,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
     bool use_llk_bcast =
-        !inputs_row_major &&
-        CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype);
+        !inputs_row_major && CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(
+                                 operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en);
 
     // The B2D broadcast path for BFP formats introduces rounding that EXP/EXP2
     // amplifies beyond acceptable tolerance.
