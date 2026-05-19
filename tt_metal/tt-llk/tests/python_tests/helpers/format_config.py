@@ -158,6 +158,14 @@ class DataFormat(Enum):
             DataFormat.MxInt2,
         }
 
+    def is_mx_int_format(self) -> bool:
+        """Checks if the data format is an MX integer format."""
+        return self in {
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
+        }
+
     def is_mx_fp_format(self) -> bool:
         """Checks if the data format is an MX floating-point format."""
         return self in {

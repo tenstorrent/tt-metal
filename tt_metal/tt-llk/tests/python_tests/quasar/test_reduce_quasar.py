@@ -214,7 +214,6 @@ def test_reduce_quasar(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        print_errors=False,
     )
 
     assert test_passed, "Assert against golden failed"

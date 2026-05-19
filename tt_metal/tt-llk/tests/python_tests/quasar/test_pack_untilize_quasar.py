@@ -175,5 +175,7 @@ def test_pack_untilize_quasar(formats_dest_acc_sync_dimensions):
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format, print_errors=False
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
     ), "Assert against golden failed"

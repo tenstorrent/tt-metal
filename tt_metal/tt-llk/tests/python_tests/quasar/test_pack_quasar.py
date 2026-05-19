@@ -177,7 +177,7 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
         unpacking_to_dest=unpack_to_dest,
     )
 
-    # HW flow with relu: unpack input -> bf16 in dest -> apply relu in pack_src
+    # HW flow with relu: unpack input -> dest -> apply relu in pack_src
     # space -> pack to output (one MX quantization, block scale derived at pack
     # time from post-relu values). DataCopyGolden, given an MX output format,
     # does a pre-relu MxInt4 quantization that HW doesn't do. That extra
@@ -266,7 +266,9 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     test_passed = passed_test(
-        golden_tensor, res_tensor, formats.output_format, print_errors=False
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
     )
 
     # Same method as test_pack.py for original ReLu testing and threshold tolerance issue

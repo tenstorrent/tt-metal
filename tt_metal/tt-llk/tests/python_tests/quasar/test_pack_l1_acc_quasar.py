@@ -80,8 +80,7 @@ def generate_qsr_pack_l1_acc_combinations(
         if in_fmt.is_integer() ^ out_fmt.is_integer():
             return False
         # MX formats are not L1-accumulation-capable as the output; allow them
-        # only on the input side. (Confirmed experimentally — MX-output combos
-        # fail.)
+        # only on the input side.
         if out_fmt.is_mx_format():
             return False
         return True

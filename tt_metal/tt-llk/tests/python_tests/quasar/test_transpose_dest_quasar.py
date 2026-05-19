@@ -281,5 +281,4 @@ def test_transpose_dest_quasar(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        print_errors=False,
     ), "Assert against golden failed"

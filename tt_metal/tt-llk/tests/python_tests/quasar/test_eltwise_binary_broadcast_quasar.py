@@ -44,51 +44,6 @@ TILE_ELEMS = 32 * 32
 FACE_ELEMS = 16 * 16
 
 
-def _print_diff(golden, res, max_print=64):
-    g = golden.float().flatten()
-    r = res.float().flatten()
-    diff = (g - r).abs()
-    mism = (diff > 0).nonzero(as_tuple=True)[0]
-    n = g.numel()
-    print(
-        f"\n=== DIFF: {len(mism)}/{n} mismatches, max |diff|={diff.max().item():.4f} ==="
-    )
-    if len(mism) == 0:
-        return
-
-    # Per-tile / per-face mismatch counts
-    n_tiles = n // TILE_ELEMS
-    if n_tiles > 0 and n % TILE_ELEMS == 0:
-        print(f"{'tile':>4} {'f0':>5} {'f1':>5} {'f2':>5} {'f3':>5} {'total':>6}")
-        for t in range(n_tiles):
-            base = t * TILE_ELEMS
-            tile_mism = diff[base : base + TILE_ELEMS] > 0
-            face_cnts = [
-                int(tile_mism[f * FACE_ELEMS : (f + 1) * FACE_ELEMS].sum())
-                for f in range(4)
-            ]
-            print(
-                f"{t:>4} {face_cnts[0]:>5} {face_cnts[1]:>5} {face_cnts[2]:>5} {face_cnts[3]:>5} {sum(face_cnts):>6}"
-            )
-
-    # First N mismatches
-    print(
-        f"\n{'idx':>7} {'tile':>4} {'face':>4} {'row':>3} {'col':>3} {'golden':>10} {'result':>10} {'diff':>10}"
-    )
-    for i in mism[:max_print].tolist():
-        t = i // TILE_ELEMS
-        within_tile = i % TILE_ELEMS
-        f = within_tile // FACE_ELEMS
-        within_face = within_tile % FACE_ELEMS
-        row, col = within_face // 16, within_face % 16
-        print(
-            f"{i:>7} {t:>4} {f:>4} {row:>3} {col:>3} "
-            f"{g[i].item():>10.4f} {r[i].item():>10.4f} {diff[i].item():>10.4f}"
-        )
-    if len(mism) > max_print:
-        print(f"... ({len(mism) - max_print} more)")
-
-
 @pytest.mark.quasar
 @parametrize(
     formats=input_output_formats(
@@ -212,8 +167,6 @@ def test_eltwise_binary_broadcast_quasar(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    if not passed_test(
+    assert passed_test(
         golden_tensor, res_tensor, formats.output_format, print_errors=True
-    ):
-        _print_diff(golden_tensor, res_tensor)
-        assert False, "Assert against golden failed"
+    ), "Assert against golden failed"

@@ -191,8 +191,8 @@ def test_eltwise_binary_reuse_dest_quasar(
         )
 
     # On Quasar with IMPLIED_MATH_FORMAT=Yes the HW dest accumulator's physical
-    # storage is implied from the SrcA tag: Float16 input → FP16A (1.5.10);
-    # Float16_b and plain MX inputs → BF16 (1.8.7). Match that here so the
+    # storage is implied from the SrcA tag: Float16 input → FP16A (S1E5M10);
+    # Float16_b and plain MX inputs → BF16 (S1E8M7). Match that here so the
     # golden's multi-tile accumulation rounds the same way as HW. The pack
     # stage widens dest to (sign, 8-bit exp, 23-bit mantissa) without a bf16
     # detour, so the post-loop tensor is kept in fp32 — feeding bf16 into the
@@ -325,7 +325,7 @@ def test_eltwise_binary_reuse_dest_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     # Quantize golden tensor if output format is MX format. Feed the native
-    # (fp16 or bf16) values directly — HW does not bf16-cast before MX quantize.
+    # (fp16 or bf16) values directly.
     if formats.output_format.is_mx_format():
         golden_tensor = quantize_mx_tensor_chunked(
             golden_tensor, formats.output_format

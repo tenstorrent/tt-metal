@@ -439,27 +439,28 @@ def quantize_mx_stimuli(
         )
 
     # Quantize based on format
-    if data_format == DataFormat.MxFp8R:
-        packed = pack_mxfp8r(tensor, num_faces=num_faces)
-        return unpack_mxfp8r(packed, num_faces=num_faces)
-    elif data_format == DataFormat.MxFp8P:
-        packed = pack_mxfp8p(tensor, num_faces=num_faces)
-        return unpack_mxfp8p(packed, num_faces=num_faces)
-    elif data_format == DataFormat.MxFp4:
-        packed = pack_mxfp4(tensor, num_faces=num_faces)
-        return unpack_mxfp4(packed, num_faces=num_faces)
-    elif data_format == DataFormat.MxInt8:
-        packed = pack_mxint8(tensor, num_faces=num_faces)
-        return unpack_mxint8(packed, num_faces=num_faces)
-    elif data_format == DataFormat.MxInt4:
-        packed = pack_mxint4(tensor, num_faces=num_faces)
-        return unpack_mxint4(packed, num_faces=num_faces)
-    elif data_format == DataFormat.MxInt2:
-        packed = pack_mxint2(tensor, num_faces=num_faces)
-        return unpack_mxint2(packed, num_faces=num_faces)
-    else:
-        # This should never happen due to validation above, but kept for safety
-        raise ValueError(f"Unsupported MX format: {data_format}")
+    match data_format:
+        case DataFormat.MxFp8R:
+            packed = pack_mxfp8r(tensor, num_faces=num_faces)
+            return unpack_mxfp8r(packed, num_faces=num_faces)
+        case DataFormat.MxFp8P:
+            packed = pack_mxfp8p(tensor, num_faces=num_faces)
+            return unpack_mxfp8p(packed, num_faces=num_faces)
+        case DataFormat.MxFp4:
+            packed = pack_mxfp4(tensor, num_faces=num_faces)
+            return unpack_mxfp4(packed, num_faces=num_faces)
+        case DataFormat.MxInt8:
+            packed = pack_mxint8(tensor, num_faces=num_faces)
+            return unpack_mxint8(packed, num_faces=num_faces)
+        case DataFormat.MxInt4:
+            packed = pack_mxint4(tensor, num_faces=num_faces)
+            return unpack_mxint4(packed, num_faces=num_faces)
+        case DataFormat.MxInt2:
+            packed = pack_mxint2(tensor, num_faces=num_faces)
+            return unpack_mxint2(packed, num_faces=num_faces)
+        case _:
+            # This should never happen due to validation above, but kept for safety
+            raise ValueError(f"Unsupported MX format: {data_format}")
 
 
 def quantize_mx_tensor_chunked(
@@ -1235,7 +1236,7 @@ class MatmulGolden(FidelityMasking):
         # which can disagree with HW's per-KT-tile rounding once results land
         # near MxInt2/MxInt4 quantization bin boundaries.
         if data_format.is_mx_format():
-            return self._matmul_mxfp4(
+            return self._matmul_mx(
                 operand1,
                 operand2,
                 data_format,
@@ -1318,7 +1319,7 @@ class MatmulGolden(FidelityMasking):
             ).flatten()
         return res
 
-    def _matmul_mxfp4(
+    def _matmul_mx(
         self,
         operand1,
         operand2,
@@ -2379,7 +2380,7 @@ class EltwiseBinaryGolden(FidelityMasking):
 
         # On Quasar with IMPLIED_MATH_FORMAT=Yes, the HW dest register's
         # physical storage is implied from the SrcA tag: Float16 input →
-        # FP16A (1.5.10); Float16_b and plain MX inputs → BF16 (1.8.7).
+        # FP16A (S1E5M10); Float16_b and plain MX inputs → BF16 (S1E8M7).
         # For MX-output paths we preserve that precision through the golden
         # so multi-tile accumulation rounds the same way as HW.
         out_is_mx = data_format.is_mx_format()
@@ -2481,8 +2482,10 @@ class EltwiseBinaryGolden(FidelityMasking):
         elif data_format == DataFormat.Bfp8_b:
             result = _bfp8b_to_float16b(result.to(torch.bfloat16))
         elif data_format.is_mx_format():
-            # HW pack widens dest directly to an fp32-bus then MX-quantizes —
-            # no bf16 detour. Pass the native dtype to preserve precision.
+            # MX output conversion is performed by the packer gasket. Avoid forcing
+            # an extra bfloat16 cast before MX quantization; quantize from the current
+            # result dtype so the golden follows the active pack-source path more
+            # closely.
             result = quantize_mx_tensor_chunked(result, data_format)
         else:
             result = to_tensor(result, data_format)
@@ -2845,6 +2848,13 @@ class ReduceGolden:
                     for tile in range(tile_cnt)
                 ]
             )
+        # MX-quantize the golden to match what HW physically packs into L1.
+        # Low-bit outputs (e.g. MxInt2: 2 bits per element → only {-1, 0, -0 (not recommended), +1}
+        # scaled by the block's shared E8M0 exponent) snap aggressively to
+        # the block lattice at pack time; without this the golden carries
+        # raw input values that miss the target bins.
+        if data_format.is_mx_format():
+            result = quantize_mx_tensor_chunked(result, data_format)
 
         # Final FTZ pass: hardware always flushes subnormals to zero. Same
         # rationale as EltwiseBinaryGolden — covers both BFP and FP outputs
@@ -3063,9 +3073,10 @@ class ReduceGapoolGolden(FidelityMasking):
             ]
         )
 
-        # HW pack widens dest directly to an fp32-bus then MX-quantizes — no
-        # bf16 detour. Quantize the golden so it matches what HW physically
-        # stored in L1 for MX outputs.
+        # MX output conversion is performed by the packer gasket. Avoid forcing
+        # an extra bfloat16 cast before MX quantization; quantize from the current
+        # result dtype so the golden follows the active pack-source path more
+        # closely.
         if out_is_mx:
             result = quantize_mx_tensor_chunked(result, data_format)
 
