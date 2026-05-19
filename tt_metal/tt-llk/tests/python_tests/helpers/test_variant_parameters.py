@@ -146,7 +146,7 @@ class SFPU_INT_OP(TemplateParameter):
             return ""
         op_upper = self.op.upper()
         if op_upper in _COMP_OP_NAMES:
-            return f"constexpr auto SFPU_COMP_OP = SfpuType::{op_upper.lower()};\n#define SFPU_COMP_ENABLED"
+            return f"constexpr auto SFPU_COMP_OP = SfpuType::{op_upper.lower()};"
         return f"#define SFPU_INT_OP_{op_upper}"
 
 
@@ -157,12 +157,16 @@ class COMP_DATA_FORMAT(TemplateParameter):
     Generates ``constexpr auto COMP_DATA_FORMAT = DataFormat::<name>;`` so the
     unified ``calculate_binary_comp`` template can dispatch to the correct
     implementation (int vs. float) purely at compile time.
+
+    Also emits ``#define SFPU_COMP_ENABLED`` so that preprocessor-controlled
+    ``#include`` and dispatch guards in the C++ test source know to activate the
+    comparison code path.
     """
 
     data_format: DataFormat = DataFormat.Int32
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr auto COMP_DATA_FORMAT = DataFormat::{self.data_format.name};"
+        return f"constexpr auto COMP_DATA_FORMAT = DataFormat::{self.data_format.name};\n#define SFPU_COMP_ENABLED"
 
 
 def _generate_operation_constants(mathop: MathOperation) -> list[str]:
