@@ -24,7 +24,7 @@ void kernel_main() {
     // program cache hits.
     const auto s0 = TensorAccessor(src_args, src_addr, stick_size);
 
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB cb_in0(cb_id_in0);
 
     uint32_t i_stick = start_id;

@@ -57,6 +57,7 @@ struct HDSocketDescriptor {
     uint32_t virtual_core_y = 0;             // Virtual (translated) core coordinate Y
     uint32_t pcie_alignment = 0;             // PCIe page alignment in bytes (e.g. 64 for Blackhole)
     uint32_t bytes_acked_device_offset = 0;  // D2H: L1 offset of bytes_acked within config buffer
+    uint32_t connector_state_offset = 0;     // Offset of HDSocketConnectorState within the SHM region
 
     /**
      * @brief Populate common fields from the owner socket's state.

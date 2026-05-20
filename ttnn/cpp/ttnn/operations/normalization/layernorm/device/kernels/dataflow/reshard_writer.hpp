@@ -6,14 +6,14 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 
 inline void write_resharded_data(
-    experimental::Noc& noc,
-    experimental::CircularBuffer& cb_out,
-    experimental::CircularBuffer& cb_out_resharded,
+    Noc& noc,
+    CircularBuffer& cb_out,
+    CircularBuffer& cb_out_resharded,
     uint32_t num_segments_to_write_back,
     uint32_t storage_core_start_offset,
     tt_l1_ptr uint32_t* segment_args,
@@ -24,7 +24,7 @@ inline void write_resharded_data(
     uint32_t args_idx = 0;
     uint32_t worker_core_read_offset = 0;
 
-    experimental::UnicastEndpoint remote;
+    UnicastEndpoint remote;
 
     uint32_t num_tiles_in_write_queue = 0;
 

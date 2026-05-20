@@ -35,8 +35,7 @@ ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transp
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false,  // is_int_fpu_en
-          false   // tilize
-          >(cbid)));
+          PackMode::Default>(cbid)));
 }
 
 /**
@@ -234,28 +233,26 @@ void calculate_recip_first_column() {
             //     out = -out;
             // }
             // v_endif;
-            if constexpr (DST_ACCUM_MODE || APPROX) {
-                sfpi::dst_reg[0] = out;
-            } else {
-                sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, RoundMode::NearestEven));
+            if constexpr (!(DST_ACCUM_MODE || APPROX)) {
+                out = sfpi::convert<sfpi::vFloat16b>(out, RoundMode::NearestEven);
             }
+            sfpi::dst_reg[0] = out;
             sfpi::dst_reg += 2;
         }
     } else {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
+            sfpi::vFloat out;
 
             if constexpr (APPROX) {
-                sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
+                out = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
+            } else if constexpr (DST_ACCUM_MODE) {
+                out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
             } else {
-                if constexpr (DST_ACCUM_MODE) {
-                    sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
-                } else {
-                    sfpi::vFloat out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-                    sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, RoundMode::NearestEven));
-                }
+                out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
+                out = sfpi::convert<sfpi::vFloat16b>(out, RoundMode::NearestEven);
             }
-
+            sfpi::dst_reg[0] = out;
             sfpi::dst_reg += 2;
         }
     }
@@ -1740,18 +1737,8 @@ void sdpa_inner_loop(
         uint32_t q_high_tile = 0;     // STANDARD: upper tile bound for K iteration
         uint32_t causal_k_limit = 0;  // RING: K-chunk index beyond which all K is above the diagonal
         if constexpr (sdpa_type == STANDARD) {
-            uint32_t q_chunk;
-#if defined BALANCED_Q_PARALLEL
-            uint32_t q_chunk_div_2 = iter_q_end / 2;  // q_chunks_per_core / 2.
-            if (q_iter < q_chunk_div_2) {             // bottom half
-                q_chunk = local_q_start + q_iter;
-            } else {
-                uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
-                q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
-            }
-#else
-            q_chunk = local_q_start + q_iter;
-#endif
+            const uint32_t linear_q_chunk = local_q_start + (q_iter - iter_q_start);
+            uint32_t q_chunk = remap_q_index(linear_q_chunk, q_num_chunks, use_zigzag_balancing);
             // Get Q chunk
             if constexpr (is_chunked) {
                 q_chunk = chunked_q_chunk_offset + q_chunk;
@@ -2197,7 +2184,8 @@ void sdpa_standard(
     const uint32_t cb_sum_B,
     const uint32_t cb_exp_max_diff,
     const uint32_t cb_out,
-    const LightweightMaskContext& lw_mask = {}) {
+    const LightweightMaskContext& lw_mask = {},
+    const bool use_zigzag_balancing = false) {
     sdpa_inner_loop<
         STANDARD,
         cb_qk_im,
@@ -2272,7 +2260,9 @@ void sdpa_standard(
         0,  // cb_prev_out (not used)
         cb_out,
         lw_mask,
-        is_causal);
+        is_causal,
+        false,  // is_balanced (not used)
+        use_zigzag_balancing);
 }
 
 /**

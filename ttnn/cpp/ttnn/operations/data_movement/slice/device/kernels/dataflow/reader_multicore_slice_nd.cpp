@@ -48,7 +48,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // Runtime arguments - first get basic parameters
@@ -90,8 +90,8 @@ void kernel_main() {
     // Set up TensorAccessor for input data - use row size as page size
     const auto s0 = TensorAccessor(src_args, src_addr);
 
-    // Create experimental CircularBuffer for Device 2.0 API
-    experimental::CircularBuffer cb_out(cb_id_out);
+    // Create CircularBuffer for Device 2.0 API
+    CircularBuffer cb_out(cb_id_out);
 
     // Multi-core work distribution using iterative approach with explicit coordinate tracking
     // Track current position in N-dimensional space

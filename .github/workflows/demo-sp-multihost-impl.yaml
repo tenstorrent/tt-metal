@@ -29,7 +29,7 @@ jobs:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/demo_sp_multihost_tests.yaml
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install dependencies
         run: pip3 install PyYAML
@@ -98,7 +98,6 @@ jobs:
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
       PIP_CACHE_DIR: /home/user/.cache/pip
-      PYTHONPATH: /home/user/tt-metal
       LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
       TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
       TT_METAL_CACHE: /home/user/.cache
@@ -112,7 +111,7 @@ jobs:
       test-result: ${{ steps.run-test.outcome }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Parse docker image
         id: parse-image
@@ -178,7 +177,7 @@ jobs:
           # Move the cloned directory to workers. TODO: Clone directly to NFS
           cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
           if ! command -v zstd >/dev/null 2>&1; then
-            echo "zstd not found on runner, installing..."
+            echo "zstd not found in runner context, installing fallback..."
             sudo apt-get update
             sudo apt-get install -y zstd
           fi
@@ -212,7 +211,8 @@ jobs:
             ls -R /ci/artifacts
             exit 1
           fi
-          mpirun --pernode pip install "${ttnn_wheels[@]}"
+
+          mpirun --pernode uv pip install "${ttnn_wheels[@]}"
 
       - name: Reset cards and validate cluster for ${{ matrix.test-group.name }}
         working-directory: /tmp
@@ -228,7 +228,7 @@ jobs:
             echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
 
             echo "--- Resetting cards with tt-smi ---"
-            if ! mpirun --pernode --tag-output tt-smi -glx_reset; then
+            if ! mpirun --pernode --mca btl_tcp_if_include ens5f0np0 tt-smi -glx_reset; then
               echo "WARNING: Reset failed on attempt $attempt"
               if [ "$attempt" -eq "$MAX_RECOVERY_ATTEMPTS" ]; then
                 echo "ERROR: Reset failed after $MAX_RECOVERY_ATTEMPTS attempts"
@@ -243,7 +243,7 @@ jobs:
             sleep 5
 
             echo "--- Running cluster validation ---"
-            if mpirun --pernode --tag-output \
+            if mpirun --pernode --mca btl_tcp_if_include ens5f0np0 --tag-output \
               /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
               --send-traffic \
               --hard-fail \
@@ -264,15 +264,19 @@ jobs:
           echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts"
           exit 1
 
-      - name: Verify Python env on workers
+      - name: Verify ttnn imports on workers
         working-directory: /tmp
         run: |
           mpirun --pernode --tag-output bash -lc '
-            echo "host=$(hostname)"
-            echo "python3=$(command -v python3)"
-            python3 -V
+            python3 -c "import ttnn; print(\"ttnn import: OK\")"
             python3 -c "import ttnn.device; print(\"ttnn.device import: OK\")"
-            python3 -c "import transformers; print(\"transformers=\" + transformers.__version__)"
+          '
+
+      - name: Check /mnt/models access on workers
+        working-directory: /tmp
+        run: |
+          mpirun --pernode --tag-output bash -lc '
+            test -r /mnt/models
           '
 
       - name: ${{ matrix.test-group.name }}
