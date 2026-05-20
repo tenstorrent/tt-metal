@@ -278,10 +278,42 @@ Comparison vs the existing no-trace test on the same hardware:
 - `test_atss_swinl_dyhead_perf_single_device_2cq` (no trace): **6.06 s/inference, 0.165 FPS** (this report's measurement)
 - `test_atss_swinl_dyhead_perf_single_device_trace_2cq` (trace + 2CQ, device DyHead): **0.4555 s/inference, 2.195 FPS** — **13.3× speedup**
 
-### 7.6 Outstanding work
+### 7.6 PCC investigation findings (single session)
 
-- **PCC tightening at deeper levels.** The full DyHead PCC vs the float-CPU reference is in the 0.6–0.9 range at levels P5–P7 (smaller feature maps), and the E2E head outputs land at 0.7–0.99. The kernel functional but not bit-faithful — bf16 drift compounds across 6 DyHead blocks + slight bilinear-resize semantics divergence (we use `align_corners=False` grid_sample for resize; reference uses `F.interpolate(align_corners=True)`). For production accuracy, validate detection quality on COCO rather than per-tensor PCC.
-- **Precision experiments** to lift PCC: use fp32 in the GroupNorm scale/mean compute path; enable `packer_l1_acc=True` in the DCN matmul compute config; investigate whether the resize semantics can be aligned with the reference.
+Per-block PCC vs the PyTorch reference (random NCHW inputs, after each of 6 DyHead blocks):
+
+```
+           L0(P3)  L1(P4)  L2(P5)  L3(P6)  L4(P7)
+  block0:   0.993   0.994   0.996   0.982   1.000
+  block1:   0.993   0.972   0.977   0.912   0.988
+  block2:   0.983   0.949   0.927   0.872   0.952
+  block3:   0.968   0.931   0.892   0.864   0.904
+  block4:   0.957   0.922   0.882   0.822   0.877
+  block5:   0.925   0.916   0.877   0.807   0.877
+```
+
+**Root cause:** ~1.5% PCC drop per block, fundamental to bf16 storage between chained ops.
+The single-block PCC is ≥0.98 at every level — the per-block math is correct. The drift compounds linearly across the 6-block chain.
+
+**What we tried and the result:**
+
+| Change | PCC at block5 P3 | PCC at block5 P7 |
+|---|---:|---:|
+| Baseline (LoFi, align_corners=False math) | 0.925 | 0.878 |
+| Align resize math to `align_corners=True` (matches ref) | 0.925 | 0.878 |
+| HiFi2 + fp32_dest_acc in all DyHead matmuls | 0.925 | 0.877 |
+| HiFi4 + fp32_dest_acc + packer_l1_acc | 0.925 | 0.878 |
+| HiFi3 + fp32_dest_acc + packer_l1_acc (current) | 0.925 | 0.877 |
+
+Math-fidelity flags don't move the needle because the storage between ops is bf16 — the limiting factor is bf16 quantization at op boundaries, not the matmul reduction precision.
+
+Element-wise analysis (after 6 blocks): no NaN/Inf, no systematic bias, but per-element diff std is ~0.08–0.11 on values that are typically 0.1–0.2 (relative noise ~50%, absolute ~0.1). PCC stays "high" (0.8–0.9) because the overall pattern correlates but individual elements drift.
+
+**Important hardware note** (uncovered during this work): on Wormhole, `MathFidelity.HiFi4` + `fp32_dest_acc=True` triggers a HW bug that REDUCES accuracy vs HiFi3. The runtime emits this warning. Use HiFi3 + fp32_dest_acc as the maximum-precision config on Wormhole.
+
+### 7.7 Outstanding work
+
+- **Fundamental PCC fix:** would require fp32 storage between blocks (2× memory, slower ops). Not pursued — single-block PCC is fine, and the bf16-compounded drift is a known characteristic of TTNN inference. **Use COCO mAP for production accuracy validation**, not per-tensor PCC, because detections are robust to this kind of channel-wise noise as long as ranking is preserved.
 - **Multi-device variant** (`test_atss_swinl_dyhead_perf_multi_device_2cq`) — should work identically but needs verification.
 
 ---

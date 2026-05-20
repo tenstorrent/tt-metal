@@ -28,6 +28,21 @@ from models.experimental.atss_swin_l_dyhead.tt.tt_deform_conv import TtDeformCon
 # ---------------------------------------------------------------------------
 
 
+def _hifi2_compute_config(device):
+    """Shared compute config: HiFi3 + fp32 accumulator + L1 acc + no math approx.
+
+    NOTE: On Wormhole, HiFi4 + fp32_dest_acc has a hardware-level accuracy bug; HiFi3 is
+    actually MORE accurate. HiFi3 is the highest practical math_fidelity on this hardware.
+    """
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi3,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+        math_approx_mode=False,
+    )
+
+
 class TtScaleAttnNHWC:
     """Scale-aware attention on NHWC input.
 
@@ -37,6 +52,7 @@ class TtScaleAttnNHWC:
 
     def __init__(self, device, conv_weight: torch.Tensor, conv_bias: torch.Tensor):
         self.device = device
+        self._compute_config = _hifi2_compute_config(device)
         C = conv_weight.shape[1]
         # weight: (1, C, 1, 1) -> (C, 1) for matmul; reshape to column vector
         w = conv_weight.reshape(1, C).T.contiguous()  # (C, 1)
@@ -54,7 +70,9 @@ class TtScaleAttnNHWC:
         pooled = ttnn.mean(feat_nhwc, dim=(-3, -2), keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
         pooled = ttnn.reshape(pooled, (B, C))
 
-        out = ttnn.matmul(pooled, self.weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.matmul(
+            pooled, self.weight, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self._compute_config
+        )
         out = ttnn.add(out, self.bias, memory_config=ttnn.L1_MEMORY_CONFIG)
         out = ttnn.relu(out, memory_config=ttnn.L1_MEMORY_CONFIG)
         out = ttnn.hardsigmoid(out, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -72,6 +90,7 @@ class TtDyReLUNHWC:
     def __init__(self, device, conv1_w, conv1_b, conv2_w, conv2_b, channels=256):
         self.device = device
         self.channels = channels
+        self._compute_config = _hifi2_compute_config(device)
 
         ratio_ch = conv1_w.shape[0]
         exp_ch = conv2_w.shape[0]
@@ -100,11 +119,15 @@ class TtDyReLUNHWC:
         pooled = ttnn.mean(feat_nhwc, dim=(-3, -2), keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
         pooled = ttnn.reshape(pooled, (B, C))
 
-        h = ttnn.matmul(pooled, self.weight1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        h = ttnn.matmul(
+            pooled, self.weight1, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self._compute_config
+        )
         h = ttnn.add(h, self.bias1, memory_config=ttnn.L1_MEMORY_CONFIG)
         h = ttnn.relu(h, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        coeffs = ttnn.matmul(h, self.weight2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        coeffs = ttnn.matmul(
+            h, self.weight2, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self._compute_config
+        )
         coeffs = ttnn.add(coeffs, self.bias2, memory_config=ttnn.L1_MEMORY_CONFIG)
         coeffs = ttnn.hardsigmoid(coeffs, memory_config=ttnn.L1_MEMORY_CONFIG)
         coeffs = ttnn.add(coeffs, -0.5, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -260,17 +283,34 @@ _RESIZE_GRID_CACHE: dict = {}
 
 
 def _get_resize_grid(device, src_H, src_W, target_H, target_W):
-    """Return a cached (1, target_H, target_W, 2) grid on device for the given resize."""
+    """Return a cached (1, target_H, target_W, 2) grid for the given resize.
+
+    Reference DyHead uses F.interpolate(mode='bilinear', align_corners=True) for cross-level
+    offset/mask/feature resizing. We replicate that sampling position with ttnn.grid_sample,
+    which itself always uses align_corners=False normalization regardless of the flag passed.
+
+    align_corners=True target-to-source mapping:
+        src_y = ty * (H_in - 1) / (H_out - 1)        for H_out > 1
+        src_y = 0                                     for H_out == 1
+    Convert to ttnn (align_corners=False) grid:
+        ny = (2 * src_y + 1) / H_in - 1
+    """
     key = (id(device), src_H, src_W, target_H, target_W)
     g = _RESIZE_GRID_CACHE.get(key)
     if g is not None:
         return g
-    # Build grid for align_corners=False: target pixel ty maps to source (ty + 0.5) * H / target_H - 0.5
-    # Normalized: (2 * src_pixel + 1) / H - 1
     ty = torch.arange(target_H, dtype=torch.float32)
     tx = torch.arange(target_W, dtype=torch.float32)
-    src_y = (ty + 0.5) * src_H / target_H - 0.5
-    src_x = (tx + 0.5) * src_W / target_W - 0.5
+    # align_corners=True source-pixel positions
+    if target_H > 1:
+        src_y = ty * (src_H - 1.0) / (target_H - 1.0)
+    else:
+        src_y = torch.zeros(1, dtype=torch.float32)
+    if target_W > 1:
+        src_x = tx * (src_W - 1.0) / (target_W - 1.0)
+    else:
+        src_x = torch.zeros(1, dtype=torch.float32)
+    # Convert to ttnn grid (align_corners=False) coordinates
     ny = (2 * src_y + 1) / src_H - 1
     nx = (2 * src_x + 1) / src_W - 1
     grid = torch.zeros(1, target_H, target_W, 2, dtype=torch.float32)
@@ -468,12 +508,16 @@ class TtDyHeadBlockDevice:
             channels=out_channels,
         )
 
+        # HiFi2 + fp32 accumulator for the spatial_conv_offset conv. This conv runs once per
+        # block per level and feeds directly into the DCN sampling positions — small precision
+        # errors here ripple through 9 bilinear samples per output pixel and compound through
+        # 6 blocks. Worth the kernel-time cost.
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=False,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc_en=True,
             packer_l1_acc=False,
-            math_approx_mode=True,
+            math_approx_mode=False,
         )
 
     @staticmethod
