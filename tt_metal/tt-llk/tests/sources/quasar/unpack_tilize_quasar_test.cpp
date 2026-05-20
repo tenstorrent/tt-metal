@@ -70,7 +70,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
 
     constexpr std::uint32_t num_faces_c_dim = 2;                        // Tile width in faces (narrow tile is 0 (false) )
-    constexpr std::uint32_t num_faces_r_dim = (num_faces == 2) ? 1 : 2; // Tile width in faces (narrow tile is 0 (false))
+    constexpr std::uint32_t num_faces_r_dim = (num_faces == 2) ? 1 : 2; // Tile height in faces (narrow tile is 0 (false))
     constexpr TensorShape tensor_shape      = {TEST_FACE_R_DIM, TEST_FACE_C_DIM, num_faces_r_dim, num_faces_c_dim};
 
     _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
@@ -84,7 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
     }
 
-    std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * TEST_FACE_R_DIM;
+    std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
     if constexpr (unpack_to_dest)
     {
         // Batched tilize directly into DEST using block API.
