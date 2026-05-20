@@ -17,7 +17,6 @@ void kernel_main() {
     const uint32_t num_full_blocks_in_row = get_arg_val<uint32_t>(5);
     const uint32_t start_page_id = get_arg_val<uint32_t>(8);
 
-    constexpr uint32_t page_size = get_compile_time_arg_val(0);  // For ND sharded tensors, page size can be < row size.
     constexpr uint32_t num_pages_in_row =
         get_compile_time_arg_val(1);  // For ND-sharded tensors, each row can have multiple pages.
     constexpr uint32_t size_of_valid_data_in_last_page_in_row =
@@ -26,7 +25,7 @@ void kernel_main() {
 
     constexpr auto src_tensor_args = TensorAccessorArgs<3>();
 
-    const auto s = TensorAccessor(src_tensor_args, src_addr, page_size);
+    const auto s = TensorAccessor(src_tensor_args, src_addr);
 
     auto read_tiles = [&](const uint32_t& num_tiles, uint32_t page_id) {
         cb_reserve_back(cb_id_in0, num_tiles);

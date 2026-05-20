@@ -37,5 +37,6 @@ std::vector<ttnn::Tensor> all_broadcast(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const ttnn::MemoryConfig& output_mem_config,
     uint32_t num_links,
-    tt::tt_fabric::Topology topology);
+    tt::tt_fabric::Topology topology,
+    bool use_l1_small_for_semaphores = false);
 }  // namespace ttnn::prim

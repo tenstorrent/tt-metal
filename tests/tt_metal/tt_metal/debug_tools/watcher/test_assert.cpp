@@ -26,8 +26,9 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/kernels/kernel.hpp"
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "impl/debug/debug_helpers.hpp"
+#include <umd/device/types/core_coordinates.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher asserts.
@@ -58,8 +59,6 @@ static void RunTest(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
     auto* device = mesh_device->get_devices()[0];
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
@@ -69,6 +68,7 @@ static void RunTest(
     CoreCoord logical_core, virtual_core;
     // Set up the kernel on the correct risc
     KernelHandle assert_kernel = 0;
+    constexpr const char* ASSERT_KERNEL_NAME = "assert_kernel";
     auto processor_idx =
         hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
     std::string risc = hal.get_processor_class_name(processor.core_type, processor_idx, false);
@@ -79,15 +79,33 @@ static void RunTest(
             switch (processor.processor_class) {
                 case HalProcessorClassType::DM:
                     if (is_quasar) {
-                        // On Quasar, kernel runs on all 8 DMs but only dm_id executes the test;
-                        // others exit early. This lets us verify assert works on each DM individually
+                        // On Quasar, kernel runs on the 6 user DMs (DM2..DM7); only dm_id executes the test;
+                        // others exit early. DM0/DM1 are reserved for internal use and are skipped by the
+                        // outer test fixture.
                         uint32_t dm_id = static_cast<uint32_t>(processor.processor_type);
-                        assert_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
-                            program_,
-                            kernel,
-                            logical_core,
-                            tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                                .num_threads_per_cluster = 8, .compile_args = {dm_id}});
+                        experimental::metal2_host_api::KernelSpec assert_kernel_spec{
+                            .unique_id = ASSERT_KERNEL_NAME,
+                            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel},
+                            .num_threads = 6,
+                            .compile_time_arg_bindings = {{"dm_id", dm_id}},
+                            .runtime_arguments_schema =
+                                {.named_runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
+                            .config_spec =
+                                experimental::metal2_host_api::DataMovementConfiguration{
+                                    .gen2_data_movement_config = experimental::metal2_host_api::
+                                        DataMovementConfiguration::Gen2DataMovementConfig{}},
+                        };
+                        experimental::metal2_host_api::WorkUnitSpec wu{
+                            .unique_id = "main",
+                            .kernels = {ASSERT_KERNEL_NAME},
+                            .target_nodes = experimental::metal2_host_api::NodeCoord{logical_core},
+                        };
+                        experimental::metal2_host_api::ProgramSpec spec{
+                            .program_id = "watcher_assert_dm",
+                            .kernels = {assert_kernel_spec},
+                            .work_units = {wu},
+                        };
+                        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
                     } else {
                         DataMovementConfig dm_config{};
                         dm_config.processor = static_cast<tt_metal::DataMovementProcessor>(processor.processor_type);
@@ -95,20 +113,38 @@ static void RunTest(
                                          enchantum::to_underlying(tt::tt_metal::DataMovementProcessor::RISCV_1))
                                             ? tt_metal::NOC::RISCV_1_default
                                             : tt_metal::NOC::RISCV_0_default;
-                        assert_kernel = CreateKernel(program_, kernel, logical_core, dm_config);
+                        assert_kernel = CreateKernel(program, kernel, logical_core, dm_config);
                     }
                     break;
                 case HalProcessorClassType::COMPUTE:
-                    // TODO: Watcher features are temporarily skipped on Quasar until basic runtime bring-up is complete
                     if (is_quasar) {
-                        GTEST_SKIP() << "Compute kernel watcher tests skipped on Quasar until TRISC runtime bring-up "
-                                        "is complete";
+                        experimental::metal2_host_api::KernelSpec assert_kernel_spec{
+                            .unique_id = ASSERT_KERNEL_NAME,
+                            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel},
+                            .num_threads = 1,
+                            .compiler_options = {.defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}},
+                            .runtime_arguments_schema =
+                                {.named_runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
+                            .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+                        };
+                        experimental::metal2_host_api::WorkUnitSpec wu{
+                            .unique_id = "main",
+                            .kernels = {ASSERT_KERNEL_NAME},
+                            .target_nodes = experimental::metal2_host_api::NodeCoord{logical_core},
+                        };
+                        experimental::metal2_host_api::ProgramSpec spec{
+                            .program_id = "watcher_assert_compute",
+                            .kernels = {assert_kernel_spec},
+                            .work_units = {wu},
+                        };
+                        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+                    } else {
+                        assert_kernel = CreateKernel(
+                            program,
+                            kernel,
+                            logical_core,
+                            ComputeConfig{.defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}});
                     }
-                    assert_kernel = CreateKernel(
-                        program_,
-                        kernel,
-                        logical_core,
-                        ComputeConfig{.defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}});
                     break;
                 default: TT_THROW("Unsupported processor class type for TENSIX");
             }
@@ -128,22 +164,48 @@ static void RunTest(
             if (!is_active) {
                 eth_config.eth_mode = Eth::IDLE;
             }
-            assert_kernel = CreateKernel(program_, kernel, logical_core, eth_config);
+            assert_kernel = CreateKernel(program, kernel, logical_core, eth_config);
             // TODO: replace string literals with hal.get_processor_class_name() after
             // unifying all tests + watcher_device_reader::get_riscv_name() with same method
             risc = is_active ? "erisc" : "ierisc";
             break;
         }
-        case HalProgrammableCoreType::DRAM:
-            log_info(LogTest, "Skipping: DRAM cores do not support watcher assert tests.");
-            GTEST_SKIP();
+        case HalProgrammableCoreType::DRAM: {
+            if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+                log_info(LogTest, "Skipping: DRAM programmable cores not available on this architecture.");
+                GTEST_SKIP();
+            }
+            logical_core = {0, 0};
+            virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+            assert_kernel = CreateKernel(program, kernel, logical_core, DramConfig{.noc = tt_metal::NOC::NOC_0});
+            risc = "drisc";
+            break;
+        }
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported programmable core type");
     }
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
 
+    // Build runtime arg setter that targets either the Metal 2.0 named-name path or the legacy handle.
+    auto set_args = [&](Program& prog, const std::vector<uint32_t>& args) {
+        if (is_quasar) {
+            experimental::metal2_host_api::ProgramRunParams params;
+            params.kernel_run_params = {{
+                .kernel_spec_name = ASSERT_KERNEL_NAME,
+                .named_runtime_args =
+                    {{.node = experimental::metal2_host_api::NodeCoord{logical_core},
+                      .args =
+                          {{"a", args[0]}, {"b", args[1]}, {"assert_type", args[2]}, {"hw_assert_cause", args[3]}}}},
+            }};
+            experimental::metal2_host_api::SetProgramRunParameters(prog, params);
+        } else {
+            SetRuntimeArgs(prog, assert_kernel, logical_core, args);
+        }
+    };
+
     // Write runtime args that should not trip an assert.
     const std::vector<uint32_t> safe_args = {3, 4, static_cast<uint32_t>(assert_type), hw_assert_cause};
-    SetRuntimeArgs(program_, assert_kernel, logical_core, safe_args);
+    set_args(program, safe_args);
+    workload.add_program(device_range, std::move(program));
 
     // Run the kernel, don't expect an issue here.
     log_info(LogTest, "Running args that shouldn't assert...");
@@ -151,8 +213,9 @@ static void RunTest(
     log_info(LogTest, "Args did not assert!");
 
     // Write runtime args that should trip an assert.
+    auto& program_ref = workload.get_programs().at(device_range);
     const std::vector<uint32_t> unsafe_args = {3, 3, static_cast<uint32_t>(assert_type), hw_assert_cause};
-    SetRuntimeArgs(program_, assert_kernel, logical_core, unsafe_args);
+    set_args(program_ref, unsafe_args);
 
     // Run the kernel, expect an exit due to the assert.
     log_info(LogTest, "Running args that should assert...");
@@ -179,6 +242,7 @@ static void RunTest(
     switch (processor.core_type) {
         case HalProgrammableCoreType::ACTIVE_ETH: core_str = "acteth"; break;
         case HalProgrammableCoreType::IDLE_ETH: core_str = "idleth"; break;
+        case HalProgrammableCoreType::DRAM: core_str = "dram"; break;
         default: core_str = "worker";
     }
 
@@ -257,6 +321,9 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
 
     // Skip if processor type is not available on this architecture
     const auto& hal = MetalContext::instance().hal();
+    if (!hal.has_programmable_core_type(params.processor.core_type)) {
+        GTEST_SKIP() << "Test " << params.test_name << " skipped: core type not available on this architecture";
+    }
     uint32_t core_type_index = hal.get_programmable_core_type_index(params.processor.core_type);
     uint32_t available_processors =
         hal.get_processor_types_count(core_type_index, static_cast<uint32_t>(params.processor.processor_class));
@@ -266,18 +333,26 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
     }
 
     // Dispatch mode validation:
-    // - IDLE_ETH cores only support SD (FD not yet implemented)
+    // - IDLE_ETH and DRAM cores only support SD (FD not yet implemented)
     // - TENSIX/ACTIVE_ETH cores: SD only used for Quasar watcher tests (TODO: Remove once FD enabled on Quasar)
     bool is_idle_eth = (params.processor.core_type == HalProgrammableCoreType::IDLE_ETH);
+    bool is_dram = (params.processor.core_type == HalProgrammableCoreType::DRAM);
     bool is_quasar = (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR);
     bool using_slow_dispatch = this->IsSlowDispatch();
 
-    if (is_idle_eth && !using_slow_dispatch) {
-        log_info(tt::LogTest, "IDLE_ETH requires Slow Dispatch (Fast Dispatch not yet supported).");
+    // On Quasar, DM0 and DM1 are reserved for internal use; user kernels can only land on DM2..DM7.
+    if (is_quasar && params.processor.core_type == HalProgrammableCoreType::TENSIX &&
+        params.processor.processor_class == HalProcessorClassType::DM && params.processor.processor_type < 2) {
+        GTEST_SKIP() << "DM0/DM1 are reserved for internal use on Quasar";
+    }
+
+    if ((is_idle_eth || is_dram) && !using_slow_dispatch) {
+        log_info(
+            tt::LogTest, "{} requires Slow Dispatch (Fast Dispatch not yet supported).", is_dram ? "DRAM" : "IDLE_ETH");
         GTEST_SKIP();
     }
-    if (using_slow_dispatch && !is_quasar && !is_idle_eth) {
-        GTEST_SKIP() << "Slow Dispatch tests only run on Quasar or IDLE_ETH cores";
+    if (using_slow_dispatch && !is_quasar && !is_idle_eth && !is_dram) {
+        GTEST_SKIP() << "Slow Dispatch tests only run on Quasar, IDLE_ETH, or DRAM cores";
     }
     this->RunTestOnDevice(
         [&params](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -309,7 +384,8 @@ INSTANTIATE_TEST_SUITE_P(
         WatcherTestParams{"Trisc2", {TENSIX, COMPUTE, 2}},
         WatcherTestParams{"Trisc3", {TENSIX, COMPUTE, 3}},  // Trisc3 only Runs on Quasar
         WatcherTestParams{"Erisc", {ACTIVE_ETH, DM, 0}},
-        WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}}),
+        WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}},
+        WatcherTestParams{"Drisc", {DRAM, DM, 0}}),
     [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
 
 INSTANTIATE_TEST_SUITE_P(
@@ -318,6 +394,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         WatcherTestParams{"Brisc", {TENSIX, DM, 0}, dev_msgs::DebugAssertTripped},
         WatcherTestParams{"NCrisc", {TENSIX, DM, 1}, dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
+        WatcherTestParams{"NCriscPacketTag", {TENSIX, DM, 1}, dev_msgs::DebugAssertNCriscNOCPacketTagClearedTripped},
         // DM2 to DM7 only run on Quasar
         WatcherTestParams{"DM2", {TENSIX, DM, 2}, dev_msgs::DebugAssertTripped},
         WatcherTestParams{"DM3", {TENSIX, DM, 3}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},
@@ -341,7 +418,8 @@ INSTANTIATE_TEST_SUITE_P(
         WatcherTestParams{
             "Trisc3", {TENSIX, COMPUTE, 3}, dev_msgs::DebugAssertRtaOutOfBounds},  // Trisc3 only Runs on Quasar
         WatcherTestParams{"Erisc", {ACTIVE_ETH, DM, 0}, dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
-        WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped}),
+        WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},
+        WatcherTestParams{"Drisc", {DRAM, DM, 0}, dev_msgs::DebugAssertTripped}),
     [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
 
 }  // namespace

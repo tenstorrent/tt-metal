@@ -162,7 +162,7 @@ WindowedScaledDotProductAttentionDeviceOperation::create_op_performance_model(
         log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
 
-    MathFidelity math_fidelity = ttnn::get_math_fidelity(attrs.compute_kernel_config);
+    tt::tt_metal::MathFidelity math_fidelity = ttnn::get_math_fidelity(attrs.compute_kernel_config);
     auto arch = output_tensor.storage_type() == StorageType::DEVICE ? output_tensor.device()->arch()
                                                                     : ttnn::GetDefaultDevice()->arch();
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {

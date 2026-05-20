@@ -351,7 +351,7 @@ static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& 
         ReplicatedBufferConfig{transfer_size},
         DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
         mesh_device.get());
-    std::vector<ElementType> host_buffer;
+    std::vector<ElementType> host_buffer(transfer_size / ElementSize);
 
     for ([[maybe_unused]] auto _ : state) {
         // EnqueueReadMeshBuffer cannot read from a replicated buffer yet, have to use ReadShard
@@ -468,8 +468,11 @@ int main(int argc, char** argv) {
                 ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
                 ->ComputeStatistics("min", compute_min)
                 ->ComputeStatistics("max", compute_max);
+            auto pinned_write_page_sizes = PAGE_SIZE_ARGS;
+            pinned_write_page_sizes.push_back(4096);
+            auto pinned_write_args = {pinned_write_page_sizes, TRANSFER_SIZE_ARGS, BUFFER_TYPE_ARGS, {device_id}};
             benchmark::RegisterBenchmark("WritePinnedMemory", BM_write_pinned_memory, device)
-                ->ArgsProduct(benchmark_args)
+                ->ArgsProduct(pinned_write_args)
                 ->ArgNames(benchmark_arg_names)
                 ->UseRealTime()
                 ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)

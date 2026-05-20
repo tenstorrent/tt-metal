@@ -28,6 +28,9 @@ bool can_use_sharded_optimized_factory(const PadParams& operation_attributes, co
     if (!input_tensor.shard_spec().has_value()) {
         return false;
     }
+    if (!input_tensor.memory_config().is_l1()) {
+        return false;
+    }
     if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
         return false;
     }

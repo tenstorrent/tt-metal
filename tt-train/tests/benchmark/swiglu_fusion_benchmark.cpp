@@ -9,19 +9,18 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <numeric>
-#include <random>
-#include <sstream>
 #include <string>
 #include <tt-metalium/distributed.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "benchmark_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "models/llama.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
+#include "test_utils/random_data.hpp"
 #include "utils/memory_utils.hpp"
 
 namespace {
@@ -33,7 +32,6 @@ struct SweepConfig {
     uint32_t sequence_length = 256;
     // 0 means: use model.num_blocks from the selected preset.
     uint32_t stacked_blocks = 0;
-    std::vector<std::string> model_filter;
 };
 
 struct ModelShape {
@@ -61,10 +59,6 @@ const std::vector<ModelShape>& all_models() {
     return models;
 }
 
-double avg(const std::vector<double>& values) {
-    return std::accumulate(values.begin(), values.end(), 0.0) / static_cast<double>(values.size());
-}
-
 size_t cumulative_peak_from_captured_traces() {
     long long cumulative_current = 0;
     long long cumulative_peak = 0;
@@ -78,48 +72,7 @@ size_t cumulative_peak_from_captured_traces() {
     return static_cast<size_t>(std::max(0LL, cumulative_peak));
 }
 
-std::vector<uint32_t> parse_u32_csv(const std::string& csv) {
-    std::vector<uint32_t> out;
-    std::stringstream ss(csv);
-    std::string token;
-    while (std::getline(ss, token, ',')) {
-        if (token.empty()) {
-            continue;
-        }
-        out.push_back(static_cast<uint32_t>(std::stoul(token)));
-    }
-    return out;
-}
-
-std::vector<std::string> parse_string_csv(const std::string& csv) {
-    std::vector<std::string> out;
-    std::stringstream ss(csv);
-    std::string token;
-    while (std::getline(ss, token, ',')) {
-        if (token.empty()) {
-            continue;
-        }
-        out.push_back(token);
-    }
-    return out;
-}
-
-bool model_is_enabled(const SweepConfig& cfg, const std::string& name) {
-    if (cfg.model_filter.empty()) {
-        return true;
-    }
-    return std::find(cfg.model_filter.begin(), cfg.model_filter.end(), name) != cfg.model_filter.end();
-}
-
-std::vector<uint32_t> make_random_tokens(size_t count, uint32_t vocab_size, uint32_t seed) {
-    std::mt19937 gen(seed);
-    std::uniform_int_distribution<uint32_t> dist(0U, vocab_size - 1U);
-    std::vector<uint32_t> values(count);
-    std::generate(values.begin(), values.end(), [&]() { return dist(gen); });
-    return values;
-}
-
-RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t batch_size, bool use_fused) {
+RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, const uint32_t batch_size, const bool use_fused) {
     auto* const device = &ttml::autograd::ctx().get_device();
     device->clear_program_cache();
 
@@ -152,10 +105,10 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t b
     constexpr uint32_t kFeaturesSeedBase = 2026U;
     constexpr uint32_t kTargetsSeedBase = 3039U;
     const size_t token_count = static_cast<size_t>(batch_size) * cfg.sequence_length;
-    const auto features_host =
-        make_random_tokens(token_count, model_cfg.vocab_size, kFeaturesSeedBase + batch_size + num_blocks);
-    const auto targets_host =
-        make_random_tokens(token_count, model_cfg.vocab_size, kTargetsSeedBase + batch_size + num_blocks);
+    const auto features_host = ttml::test_utils::make_uniform_vector<uint32_t>(
+        token_count, 0U, model_cfg.vocab_size - 1U, kFeaturesSeedBase + batch_size + num_blocks);
+    const auto targets_host = ttml::test_utils::make_uniform_vector<uint32_t>(
+        token_count, 0U, model_cfg.vocab_size - 1U, kTargetsSeedBase + batch_size + num_blocks);
     const ttnn::Shape features_shape({batch_size, 1, 1, cfg.sequence_length});
     const ttnn::Shape targets_shape({batch_size, cfg.sequence_length});
 
@@ -247,13 +200,6 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t b
     return result;
 }
 
-double pct(double fused, double baseline) {
-    if (baseline == 0.0) {
-        return 0.0;
-    }
-    return (fused - baseline) / baseline * 100.0;
-}
-
 struct RowSummary {
     uint32_t batch = 0;
     double baseline_total_ms = 0.0;
@@ -296,21 +242,6 @@ int main() {
                 sweep_cfg.stacked_blocks = static_cast<uint32_t>(parsed);
             }
         }
-        if (const char* env_warmup = std::getenv("TTML_SWIGLU_BENCH_WARMUP")) {
-            sweep_cfg.num_warmup = static_cast<uint32_t>(std::stoul(env_warmup));
-        }
-        if (const char* env_measure = std::getenv("TTML_SWIGLU_BENCH_MEASURE")) {
-            sweep_cfg.num_measure = static_cast<uint32_t>(std::stoul(env_measure));
-        }
-        if (const char* env_batches = std::getenv("TTML_SWIGLU_BENCH_BATCHES")) {
-            auto parsed = parse_u32_csv(env_batches);
-            if (!parsed.empty()) {
-                sweep_cfg.batch_sizes = std::move(parsed);
-            }
-        }
-        if (const char* env_models = std::getenv("TTML_SWIGLU_BENCH_MODELS")) {
-            sweep_cfg.model_filter = parse_string_csv(env_models);
-        }
         const auto& models = all_models();
 
         const tt::tt_metal::distributed::MeshShape mesh(1, 1);
@@ -328,26 +259,24 @@ int main() {
         fmt::print("Runs full training-like step: model forward + CE loss + backward + AdamW step.\n");
 
         for (const auto& model : models) {
-            if (!model_is_enabled(sweep_cfg, model.name)) {
-                continue;
-            }
             std::vector<RowSummary> rows;
             rows.reserve(sweep_cfg.batch_sizes.size());
             for (const auto batch_size : sweep_cfg.batch_sizes) {
                 const auto baseline = run_single(model, sweep_cfg, batch_size, /*use_fused=*/false);
                 const auto fused = run_single(model, sweep_cfg, batch_size, /*use_fused=*/true);
 
-                const double b_total = avg(baseline.step_times);
-                const double f_total = avg(fused.step_times);
+                const double b_total = ttml::benchmark_utils::average(baseline.step_times);
+                const double f_total = ttml::benchmark_utils::average(fused.step_times);
 
                 rows.push_back(RowSummary{
                     .batch = batch_size,
                     .baseline_total_ms = b_total,
                     .fused_total_ms = f_total,
-                    .total_pct = pct(f_total, b_total),
+                    .total_pct = ttml::benchmark_utils::relative_change_pct(f_total, b_total),
                     .baseline_dram_kb = static_cast<double>(baseline.dram_peak) / 1024.0,
                     .fused_dram_kb = static_cast<double>(fused.dram_peak) / 1024.0,
-                    .dram_pct = pct(static_cast<double>(fused.dram_peak), static_cast<double>(baseline.dram_peak)),
+                    .dram_pct = ttml::benchmark_utils::relative_change_pct(
+                        static_cast<double>(fused.dram_peak), static_cast<double>(baseline.dram_peak)),
                 });
             }
             print_model_table(model, rows);

@@ -13,9 +13,15 @@ The demo runs prefill + decode over `DeepSeekV3` sockets and streams decoded tex
 
 | Mode | Flag | Extra args | Behavior |
 |------|------|------------|----------|
-| **Cached tensorbin** | `--weights real` (default) | `--cache-path` (required) | Loads pre-generated `.tensorbin` + `manifest.json` from the weight cache (same layout as `scripts/generate_cache.py`). |
+| **Cached tensorbin** | `--weights real` (default) | `--cache-path` (required) | Uses `--cache-path` as the tensorbin cache directory. The cache is **warmed automatically on the first run**; later runs load from the existing `.tensorbin` + `manifest.json` layout. |
 | **HF safetensors + prepare** | `--weights state_dict` | `--model-path` (required) | Uses `LazyStateDict` ([`models/demos/deepseek_v3/utils/lazy_state_dict.py`](../../deepseek_v3/utils/lazy_state_dict.py)) over a local HuggingFace checkpoint (`model.safetensors.index.json` + shards) and runs the same `prepare_*` path as synthetic weights (`StateDictWeightProvider` in [`weight_provider.py`](weight_provider.py)) — no tensorbin cache. |
 | **Synthetic** | `--weights synthetic` | — | Random HF-shaped tensors through `prepare_*` for bring-up (no disk weights). |
+
+### Weight cache location
+
+The canonical `--cache-path` for this demo is **`/home/esmal/cache`**. You do not need to pre-populate it: the **first run warms the cache** automatically; after that, runs reuse the on-disk artifacts.
+
+An older cache tree (for example **`/mnt/models/deepseek-ai/cache-2026-03-22`**) may still exist on shared storage, but **it is no longer compatible** with this demo—do not use it as `--cache-path`.
 
 Optional overrides (all modes): `--dense-layer-id-override`, `--moe-layer-id-override` (see `python -m models.demos.deepseek_v3_b1.demo.cli --help`).
 
@@ -48,7 +54,7 @@ TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --rank-binding bh_4x2_multi_mesh_rank_bindi
     python -m models.demos.deepseek_v3_b1.demo.cli \
     --max-new-tokens 2048 \
     --weights real \
-    --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+    --cache-path /home/esmal/cache \
     --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
     --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
 ```
@@ -71,7 +77,7 @@ TT_METAL_DPRINT_CORES=all TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \
     python -m models.demos.deepseek_v3_b1.demo.cli \
     --max-new-tokens 2048 \
     --weights real \
-    --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+    --cache-path /home/esmal/cache \
     --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
     --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
 ```
@@ -94,7 +100,7 @@ TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \
     python -m models.demos.deepseek_v3_b1.demo.cli \
     --max-new-tokens 2048 \
     --weights real \
-    --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+    --cache-path /home/esmal/cache \
     --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
     --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
 ```

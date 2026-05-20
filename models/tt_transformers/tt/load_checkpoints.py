@@ -661,6 +661,7 @@ def map_hf_to_meta_keys_mllama(loaded_weights, config):
         (r"^vision_model.post_tile_positional_embedding.gate", r"vision_model.post_tile_pos_embed.gate"),
         (r"^vision_model.", r"vision_model.vision_encoder."),
         (r"^model.multi_modal_projector.", r"vision_model.vision_projection."),
+        (r"^multi_modal_projector.", r"vision_model.vision_projection."),
     ]
 
     self_attn_replacements = {

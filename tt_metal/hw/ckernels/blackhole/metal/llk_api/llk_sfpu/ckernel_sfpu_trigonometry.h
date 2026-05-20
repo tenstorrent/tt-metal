@@ -11,6 +11,7 @@
 #include "ckernel_sfpu_sqrt_custom.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "sfpu/ckernel_sfpu_trigonometry.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -127,11 +128,10 @@ inline void calculate_tangent() {
 
         a = sfpu_tan<is_fp32_dest_acc_en>(a, i);
 
-        if constexpr (is_fp32_dest_acc_en) {
-            sfpi::dst_reg[0] = a;
-        } else {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(a, 0));
+        if constexpr (!is_fp32_dest_acc_en) {
+            a = sfpi::convert<sfpi::vFloat16b>(a, sfpi::RoundMode::NearestEven);
         }
+        sfpi::dst_reg[0] = a;
         sfpi::dst_reg++;
     }
 }
@@ -196,15 +196,14 @@ inline void calculate_sine() {
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
-            sfpi::dst_reg[0] = r;
         } else {
             r = C2 * s + C1;
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(r, 0));
+            r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::NearestEven);
         }
-
+        sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
     }
 }
@@ -276,21 +275,21 @@ inline void calculate_cosine() {
         sfpi::vFloat s = a * a;
         a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) ^ q);
 
+        sfpi::vFloat r;
         if constexpr (is_fp32_dest_acc_en) {
-            sfpi::vFloat r = C3 * s + C2;
+            r = C3 * s + C2;
             r = r * s + C1;
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
-            sfpi::dst_reg[0] = r;
         } else {
-            sfpi::vFloat r = C2 * s + C1;
+            r = C2 * s + C1;
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(r, 0));
+            r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::NearestEven);
         }
-
+        sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
     }
 }
@@ -301,8 +300,8 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
     sfpi::vFloat result = sfpi::vConst0;
 
     // If input is NaN then output must be NaN as well
-    sfpi::vInt exponent = sfpi::exexp_nodebias(val);
-    sfpi::vInt mantissa = sfpi::exman9(val);
+    sfpi::vInt exponent = sfpi::exexp(val, sfpi::ExponentMode::NoDebias);
+    sfpi::vInt mantissa = sfpi::exman(val);
     v_if(exponent == 255 && mantissa != 0) { result = std::numeric_limits<float>::quiet_NaN(); }
     v_else {
         sfpi::vFloat absval_minus_1 = t0 - sfpi::vConst1;
@@ -342,7 +341,7 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
         v_if(absval_minus_1 > 0.0f) { t1 = PI_2 - t1; }
         v_endif;
 
-        result = sfpi::setsgn(t1, val);
+        result = sfpi::copysgn(t1, val);
     }
     v_endif;
 
@@ -356,7 +355,7 @@ inline void calculate_atan() {
         sfpi::vFloat result = sfpu_atan<APPROXIMATION_MODE, is_fp32_dest_acc_en>(in);
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
 
         sfpi::dst_reg[0] = result;
@@ -415,7 +414,7 @@ sfpi_inline sfpi::vFloat sfpu_asin_range_reduced(sfpi::vFloat val) {
     }
     v_endif;
 
-    return sfpi::setsgn(asin_abs, val);
+    return sfpi::copysgn(asin_abs, val);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool IS_ACOS, int ITERATIONS = 8>
@@ -435,7 +434,7 @@ inline void calculate_asin_acos_impl() {
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
 
         sfpi::dst_reg[0] = result;
@@ -508,7 +507,7 @@ void tangent_init() {
 
 template <bool APPROXIMATION_MODE>
 void init_hyperbolic_trig() {
-    _init_exponential_<APPROXIMATION_MODE, false, p_sfpu::kCONST_1_FP16B>();
+    _init_exponential_<APPROXIMATION_MODE, p_sfpu::kCONST_1_FP16B>();
 }
 
 template <bool APPROXIMATION_MODE>

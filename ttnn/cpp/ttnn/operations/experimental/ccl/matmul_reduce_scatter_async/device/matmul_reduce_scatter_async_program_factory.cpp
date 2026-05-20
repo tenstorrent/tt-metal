@@ -160,6 +160,7 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
             shared_vars.reduce_scatter_artifacts.num_workers_per_direction,
             shared_vars.reduce_scatter_artifacts.num_mux_cores_per_direction_per_link,
             shared_vars.reduce_scatter_artifacts.num_cores_per_link,
+            shared_vars.reduce_scatter_artifacts.normalized_dim,
             args.reduce_scatter_params.barrier_semaphore,
             args.reduce_scatter_params.semaphore,
             output_tensors.mm,

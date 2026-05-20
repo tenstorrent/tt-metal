@@ -33,6 +33,7 @@ struct AllGatherDeviceOperation {
         const std::optional<uint32_t> num_workers_per_link;
         const std::optional<uint32_t> num_buffers_per_channel;
         const std::optional<CoreRangeSet> sub_core_grid;
+        const bool use_l1_small_for_semaphores = false;
     };
 
     struct tensor_args_t {
@@ -82,6 +83,8 @@ struct AllGatherDeviceOperation {
     static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
+        const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
 
 }  // namespace ttnn::operations::ccl
@@ -99,5 +102,6 @@ ttnn::Tensor all_gather(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const std::optional<CoreRangeSet>& sub_core_grid);
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    bool use_l1_small_for_semaphores = false);
 }  // namespace ttnn::prim

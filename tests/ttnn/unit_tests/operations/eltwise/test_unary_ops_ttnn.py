@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
 import pytest
 import ttnn
@@ -32,8 +34,7 @@ def test_unary_square_ttnn(input_shapes, device):
     ttnn.square(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.square(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -73,8 +74,7 @@ def test_unary_abs_ttnn(input_shapes, device):
     ttnn.abs(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.abs(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_equal(output_tensor, golden_tensor)
 
 
 @pytest.mark.parametrize(
@@ -135,8 +135,7 @@ def test_unary_atan_ttnn(input_shapes, device):
     ttnn.atan(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.atan(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -155,8 +154,7 @@ def test_unary_cos_ttnn(input_shapes, device):
     ttnn.cos(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.cos(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -173,10 +171,9 @@ def test_unary_eqz_ttnn(input_shapes, device):
 
     cq_id = 0
     ttnn.eqz(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = in_data == 0
+    golden_tensor = (in_data == 0).float()
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_equal(output_tensor, golden_tensor)
 
 
 @pytest.mark.parametrize(
@@ -193,10 +190,9 @@ def test_unary_eqz_ttnn(input_shapes, device):
 
     cq_id = 0
     ttnn.eqz(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = in_data == 0
+    golden_tensor = (in_data == 0).float()
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_equal(output_tensor, golden_tensor)
 
 
 @pytest.mark.parametrize(
@@ -213,10 +209,9 @@ def test_unary_nez_ttnn(input_shapes, device):
 
     cq_id = 0
     ttnn.nez(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = in_data != 0
+    golden_tensor = (in_data != 0).float()
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_equal(output_tensor, golden_tensor)
 
 
 @pytest.mark.parametrize(
@@ -233,10 +228,9 @@ def test_unary_gez_ttnn(input_shapes, device):
 
     cq_id = 0
     ttnn.gez(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = in_data >= 0
+    golden_tensor = (in_data >= 0).float()
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_equal(output_tensor, golden_tensor)
 
 
 @pytest.mark.parametrize(
@@ -253,10 +247,9 @@ def test_unary_lez_ttnn(input_shapes, device):
 
     cq_id = 0
     ttnn.lez(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = in_data <= 0
+    golden_tensor = (in_data <= 0).float()
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_equal(output_tensor, golden_tensor)
 
 
 @pytest.mark.parametrize(
@@ -273,10 +266,9 @@ def test_unary_ltz_ttnn(input_shapes, device):
 
     cq_id = 0
     ttnn.ltz(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = in_data < 0
+    golden_tensor = (in_data < 0).float()
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_equal(output_tensor, golden_tensor)
 
 
 @pytest.mark.parametrize(
@@ -293,10 +285,9 @@ def test_unary_gtz_ttnn(input_shapes, device):
 
     cq_id = 0
     ttnn.gtz(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = in_data > 0
+    golden_tensor = (in_data > 0).float()
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_equal(output_tensor, golden_tensor)
 
 
 @pytest.mark.parametrize(
@@ -316,8 +307,7 @@ def test_unary_erf_ttnn(input_shapes, fast_and_approx, device):
     ttnn.erf(input_tensor, fast_and_approximate_mode=fast_and_approx, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.erf(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -328,13 +318,12 @@ def test_unary_erf_ttnn(input_shapes, fast_and_approx, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("fast_and_approx", [False, True])
-def test_unary_erfc_ttnn(input_shapes, fast_and_approx, device):
+def test_unary_erfc_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
     cq_id = 0
-    ttnn.erfc(input_tensor, fast_and_approximate_mode=fast_and_approx, output_tensor=output_tensor, queue_id=cq_id)
+    ttnn.erfc(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.erfc(in_data)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
@@ -377,8 +366,7 @@ def test_unary_expm1_ttnn(input_shapes, device):
     ttnn.expm1(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.expm1(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -419,8 +407,7 @@ def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, device):
     ttnn.leaky_relu(input_tensor, negative_slope=negative_slope, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.nn.functional.leaky_relu(in_data, negative_slope)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -439,8 +426,7 @@ def test_unary_i0_ttnn(input_shapes, device):
     ttnn.i0(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.i0(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -481,8 +467,7 @@ def test_unary_relu_ttnn(input_shapes, device):
     ttnn.relu(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.relu(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_equal(output_tensor, golden_tensor)
 
 
 @pytest.mark.parametrize(
@@ -501,8 +486,7 @@ def test_unary_relu6_ttnn(input_shapes, device):
     ttnn.relu6(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.nn.functional.relu6(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_equal(output_tensor, golden_tensor)
 
 
 @pytest.mark.parametrize(
@@ -521,8 +505,7 @@ def test_unary_tan_ttnn(input_shapes, device):
     ttnn.tan(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.tan(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -541,8 +524,7 @@ def test_unary_tanh_ttnn(input_shapes, device):
     ttnn.tanh(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.tanh(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -561,8 +543,7 @@ def test_unary_sign_ttnn(input_shapes, device):
     ttnn.sign(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.sign(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_equal(output_tensor, golden_tensor)
 
 
 @pytest.mark.parametrize(
@@ -579,10 +560,9 @@ def test_unary_signbit_ttnn(input_shapes, device):
 
     cq_id = 0
     ttnn.signbit(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.signbit(in_data)
+    golden_tensor = torch.signbit(in_data).float()
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_equal(output_tensor, golden_tensor)
 
 
 @pytest.mark.parametrize(
@@ -603,8 +583,7 @@ def test_unary_silu_ttnn(input_shapes, device):
     ttnn.silu(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.nn.functional.silu(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
     atol_delta = torch.max(torch.abs(ttnn.to_torch(output_tensor) - golden_tensor)).item()
     torch.allclose(golden_tensor, ttnn.to_torch(output_tensor), atol=max_atol)
     assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
@@ -629,7 +608,6 @@ def test_unary_silu_ttnn_pos_ulp_check(input_shapes, device):
     golden_tensor = torch.nn.functional.silu(in_data)
 
     assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2)
-    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
@@ -648,8 +626,7 @@ def test_unary_log_sigmoid_ttnn(input_shapes, device):
     ttnn.log_sigmoid(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.nn.functional.logsigmoid(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -678,8 +655,11 @@ def test_unary_sigmoid_ttnn(input_shapes, device, approx_mode):
     )
     golden_tensor = torch.sigmoid(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    if approx_mode:
+        comp_pass = compare_pcc([output_tensor], [golden_tensor])
+        assert comp_pass
+    else:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -698,8 +678,7 @@ def test_unary_recip_ttnn(input_shapes, device):
     ttnn.reciprocal(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.reciprocal(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -719,8 +698,7 @@ def test_unary_heaviside_ttnn(input_shapes, value, device):
     ttnn.heaviside(input_tensor, value=value, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.heaviside(in_data, torch.tensor(value, dtype=in_data.dtype))
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_equal(output_tensor, golden_tensor)
 
 
 @pytest.mark.parametrize(
@@ -739,8 +717,7 @@ def test_unary_log2_ttnn(input_shapes, device):
     ttnn.log2(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.log2(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
@@ -759,8 +736,7 @@ def test_unary_log10_ttnn(input_shapes, device):
     ttnn.log10(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.log10(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
@@ -831,7 +807,7 @@ def test_unary_log1p_ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.log1p)
     torch_output_tensor = golden_function(torch_input_tensor)
 
-    assert_with_pcc(output_tensor, torch_output_tensor, pcc=0.999)
+    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
@@ -943,5 +919,59 @@ def test_unary_celu(input_shapes, param, device):
     golden_function = ttnn.get_golden_function(ttnn.celu)
     golden_tensor = golden_function(in_data, alpha=param)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    if math.isinf(param) or math.isnan(param):
+        # PCC masks non-finite entries. For these degenerate alphas the device returns ±inf where the
+        # torch golden returns NaN — a pre-existing semantic gap not in this PR's scope — so we can't
+        # demand exact NaN-mask equivalence. Instead require a high Jaccard overlap of the non-finite
+        # *positions* so regressions are caught in both directions: returning all-non-finite (low
+        # overlap with golden's mask) and returning all-finite (overlap = 0).
+        output_torch = ttnn.to_torch(output_tensor)
+        g_nonfinite = ~torch.isfinite(golden_tensor)
+        d_nonfinite = ~torch.isfinite(output_torch)
+        intersection = (g_nonfinite & d_nonfinite).sum().item()
+        union = (g_nonfinite | d_nonfinite).sum().item()
+        jaccard = intersection / max(union, 1)
+        assert jaccard >= 0.95, (
+            f"Non-finite mask Jaccard overlap {jaccard:.3f} < 0.95 between golden and device; "
+            f"non-finite handling appears regressed (golden non-finite frac="
+            f"{g_nonfinite.float().mean().item():.3f}, device={d_nonfinite.float().mean().item():.3f})."
+        )
+        finite_mask = torch.isfinite(golden_tensor) & torch.isfinite(output_torch)
+        assert_with_pcc(output_torch[finite_mask], golden_tensor[finite_mask], pcc=0.999)
+    else:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
+
+
+@pytest.mark.parametrize(
+    "ttnn_op",
+    (ttnn.eqz, ttnn.nez, ttnn.gtz, ttnn.ltz, ttnn.gez, ttnn.lez),
+)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.float32])
+def test_unary_comp_ops(ttnn_op, ttnn_dtype, device):
+    dtype = torch.float32 if ttnn_dtype == ttnn.float32 else torch.bfloat16
+    tor_a = torch.tensor(
+        [
+            [
+                float("nan"),
+                -float("nan"),
+                -1.0,
+                -0.0,
+                0.0,
+                1.0,
+                -float("inf"),
+                float("inf"),
+            ]
+        ],
+        dtype=dtype,
+    )
+
+    torch_input = tor_a.repeat(32, 4)
+    torch_fn = ttnn.get_golden_function(ttnn_op)
+    tor_res = torch_fn(torch_input)
+
+    tt_a = ttnn.from_torch(
+        torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    result = ttnn_op(tt_a)
+    tt_res = ttnn.to_torch(result)
+    assert torch.equal(tt_res, tor_res)

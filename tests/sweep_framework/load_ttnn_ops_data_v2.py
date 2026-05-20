@@ -18,6 +18,7 @@ from datetime import date
 from pathlib import Path
 
 import psycopg2
+from psycopg2 import sql
 
 try:
     import yaml
@@ -81,8 +82,10 @@ def _append_registry_entries(entries, path):
     """
     _require_yaml()
     with open(path, "a") as f:
-        f.write("\n")
         for entry in entries:
+            # Blank line separator before each appended entry (keeps a single
+            # trailing newline at end-of-file so end-of-file-fixer stays happy).
+            f.write("\n")
             f.write(f"  - trace_id: {entry['trace_id']}\n")
             f.write(f"    status: {entry['status']}\n")
             models = entry.get("models", [])
@@ -110,7 +113,18 @@ def _append_registry_entries(entries, path):
             notes_escaped = notes.replace("'", "''")
             f.write(f"    loaded_at: '{loaded_at_escaped}'\n")
             f.write(f"    notes: '{notes_escaped}'\n")
-            f.write("\n")
+            pytest_args = entry.get("pytest_args")
+            if pytest_args:
+                pytest_args_escaped = str(pytest_args).replace("'", "''")
+                f.write(f"    pytest_args: '{pytest_args_escaped}'\n")
+            else:
+                f.write("    pytest_args: null\n")
+            tt_kmd = entry.get("tt_kmd")
+            tt_smi = entry.get("tt_smi")
+            tt_firmware = entry.get("tt_firmware")
+            f.write(f"    tt_kmd: {json.dumps(tt_kmd) if tt_kmd is not None else 'null'}\n")
+            f.write(f"    tt_smi: {json.dumps(tt_smi) if tt_smi is not None else 'null'}\n")
+            f.write(f"    tt_firmware: {json.dumps(tt_firmware) if tt_firmware is not None else 'null'}\n")
 
 
 DEFAULT_SCHEMA = "ttnn_ops_v6"
@@ -458,17 +472,63 @@ def parse_mesh_from_machine_info(machine_info, arguments=None):
     return mesh_shape, device_count, placement_type, shard_dim, distribution_shape
 
 
-def get_or_create_trace_run(cur, trace_run_cache, trace_uid, hardware_id, tt_metal_sha=None, schema=DEFAULT_SCHEMA):
-    """Create and cache a trace_run for a unique trace_uid."""
+def _normalize_trace_sw_value(value):
+    """Normalize trace software metadata to a storable scalar string."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple, dict)):
+        return json.dumps(value, sort_keys=True, default=str)
+    return str(value)
+
+
+def _parse_trace_sw_value(value):
+    """Best-effort parse for software metadata read back from DB."""
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped:
+        return value
+    if stripped[0] in "[{":
+        try:
+            return json.loads(stripped)
+        except (TypeError, ValueError):
+            return value
+    return value
+
+
+def get_or_create_trace_run(
+    cur,
+    trace_run_cache,
+    trace_uid,
+    hardware_id,
+    tt_metal_sha=None,
+    pytest_args=None,
+    tt_kmd=None,
+    tt_smi=None,
+    tt_firmware=None,
+    schema=DEFAULT_SCHEMA,
+):
+    """Create and cache a trace_run for a unique trace_uid.
+
+    pytest_args is the verbatim CLI args (everything after `--`) used to
+    invoke generic_ops_tracer.py for this trace. Stored on trace_run so we
+    can answer "have I traced model X with these args on hardware Y?"
+    purely via SQL.
+    """
     _validate_schema(schema)
     if trace_uid not in trace_run_cache:
+        trace_run_table = sql.Identifier(schema, "trace_run")
         cur.execute(
-            f"""
-            INSERT INTO {schema}.trace_run (trace_uid, hardware_id, tt_metal_sha)
-            VALUES (%s, %s, %s)
+            sql.SQL(
+                """
+            INSERT INTO {} (trace_uid, hardware_id, tt_metal_sha, pytest_args, tt_kmd, tt_smi, tt_firmware)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING trace_run_id
-            """,
-            (trace_uid, hardware_id, tt_metal_sha),
+            """
+            ).format(trace_run_table),
+            (trace_uid, hardware_id, tt_metal_sha, pytest_args, tt_kmd, tt_smi, tt_firmware),
         )
         trace_run_cache[trace_uid] = cur.fetchone()[0]
 
@@ -559,7 +619,7 @@ def refresh_trace_aggregates(cur, trace_run_ids, configuration_ids, schema=DEFAU
         )
 
 
-def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_SCHEMA):
+def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_SCHEMA, emit_id_file=None):
     """Main loading function.
 
     Args:
@@ -569,6 +629,10 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
         dry_run: If True, run all logic but roll back every DB write at the end.
                  Prints the same stats so you can verify behaviour without persisting anything.
         schema: Database schema to load into (default: DEFAULT_SCHEMA).
+        emit_id_file: Optional path to write the newly-created trace_run_id(s) to,
+                      one integer per line. Only written on a successful (non-dry-run)
+                      load that actually created trace_runs. CI pipelines consume this
+                      to pin downstream validation to the traces just uploaded.
     """
     _validate_schema(schema)
     json_path = json_path or JSON_PATH
@@ -702,6 +766,13 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
                 machine_info = normalize_machine_info(execution.get("machine_info", {}), arguments=arguments)
                 execution_count = execution.get("count", 1)
                 trace_uid = execution.get("trace_uid", default_trace_uid)
+                # pytest_args is per-invocation (1:1 with trace_uid). Older
+                # JSONs won't have this field; treat absence as None so
+                # trace_run.pytest_args stays NULL for legacy data.
+                pytest_args = execution.get("pytest_args")
+                tt_kmd = _normalize_trace_sw_value(machine_info.get("tt_kmd"))
+                tt_smi = _normalize_trace_sw_value(machine_info.get("tt_smi"))
+                tt_firmware = _normalize_trace_sw_value(machine_info.get("tt_firmware"))
 
                 # Validate required fields
                 missing = []
@@ -789,13 +860,22 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
                 # Link this execution canonically via trace + config + model
                 if model_id is not None:
                     if hardware_id:
+                        trace_run_kwargs = {"pytest_args": pytest_args, "schema": schema}
+                        if tt_kmd is not None or tt_smi is not None or tt_firmware is not None:
+                            trace_run_kwargs.update(
+                                {
+                                    "tt_kmd": tt_kmd,
+                                    "tt_smi": tt_smi,
+                                    "tt_firmware": tt_firmware,
+                                }
+                            )
                         trace_run_id = get_or_create_trace_run(
                             cur,
                             trace_run_cache,
                             trace_uid,
                             hardware_id,
                             tt_metal_sha,
-                            schema=schema,
+                            **trace_run_kwargs,
                         )
                         trace_run_ids_touched.add(trace_run_id)
                         trace_config_pairs.add((trace_run_id, config_id))
@@ -859,6 +939,13 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
     if dry_run:
         return
 
+    if emit_id_file and trace_run_cache:
+        new_ids = sorted(set(trace_run_cache.values()))
+        emit_path = Path(emit_id_file).resolve()
+        emit_path.parent.mkdir(parents=True, exist_ok=True)
+        emit_path.write_text("\n".join(str(i) for i in new_ids) + "\n")
+        print(f"  Wrote {len(new_ids)} trace_run_id(s) to {emit_path}")
+
     # Auto-append draft entries to manifest registry
     if trace_run_cache and yaml is not None:
         _append_manifest_drafts(trace_run_cache, schema=schema)
@@ -882,14 +969,15 @@ def _append_manifest_drafts(trace_run_cache, schema=DEFAULT_SCHEMA):
         trace_details_map = {}  # trace_run_id -> (hardware_id, sha, trace_uid)
         for trace_run_id in trace_run_cache.values():
             cur.execute(
-                f"SELECT hardware_id, tt_metal_sha, trace_uid FROM {schema}.trace_run WHERE trace_run_id = %s",
+                f"SELECT hardware_id, tt_metal_sha, trace_uid, pytest_args, tt_kmd, tt_smi, tt_firmware"
+                f" FROM {schema}.trace_run WHERE trace_run_id = %s",
                 (trace_run_id,),
             )
             tr_row = cur.fetchone()
             if not tr_row:
                 continue
-            hardware_id, sha, trace_uid = tr_row
-            trace_details_map[trace_run_id] = (hardware_id, sha, trace_uid)
+            hardware_id, sha, trace_uid, pytest_args, tt_kmd, tt_smi, tt_firmware = tr_row
+            trace_details_map[trace_run_id] = (hardware_id, sha, trace_uid, pytest_args, tt_kmd, tt_smi, tt_firmware)
             if hardware_id and hardware_id not in hw_map:
                 cur.execute(
                     f"SELECT board_type, device_series, card_count FROM {schema}.ttnn_hardware WHERE ttnn_hardware_id = %s",
@@ -923,7 +1011,7 @@ def _append_manifest_drafts(trace_run_cache, schema=DEFAULT_SCHEMA):
         tr_row = trace_details_map.get(trace_run_id)
         if not tr_row:
             continue
-        hardware_id, sha, trace_uid = tr_row
+        hardware_id, sha, trace_uid, pytest_args, tt_kmd, tt_smi, tt_firmware = tr_row
         if trace_uid and trace_uid in existing_trace_uids:
             continue
         if not trace_uid and trace_run_id in existing_ids:
@@ -951,6 +1039,10 @@ def _append_manifest_drafts(trace_run_cache, schema=DEFAULT_SCHEMA):
             "config_count": None,  # updated after commit
             "loaded_at": str(date.today()),
             "notes": "",
+            "pytest_args": pytest_args,
+            "tt_kmd": tt_kmd,
+            "tt_smi": tt_smi,
+            "tt_firmware": _parse_trace_sw_value(tt_firmware),
         }
         data["registry"].append(entry)
         existing_ids.add(trace_run_id)
@@ -1020,7 +1112,13 @@ def _machine_info_key(machine_info):
 
 
 def _merge_execution_lists(existing_executions, incoming_executions):
-    """Merge execution buckets by (source, machine_info), summing counts and provenance."""
+    """Merge execution buckets by (source, machine_info), summing counts and provenance.
+
+    pytest_args is per-trace, so when multiple traces collapse into one bucket
+    here we accumulate them into pytest_args_seen (a sorted, deduplicated list).
+    Single-string pytest_args from individual reconstructions also fold into
+    that list so callers always see a uniform shape across merged outputs.
+    """
     merged = {}
     for execution in list(existing_executions or []) + list(incoming_executions or []):
         source = execution.get("source")
@@ -1032,11 +1130,20 @@ def _merge_execution_lists(existing_executions, incoming_executions):
                 "machine_info": machine_info,
                 "count": 0,
                 "trace_run_ids": [],
+                "pytest_args_seen": [],
             }
         merged[key]["count"] += execution.get("count", 0)
         merged[key]["trace_run_ids"] = _merge_trace_run_ids(
             merged[key]["trace_run_ids"], execution.get("trace_run_ids")
         )
+
+        incoming_pytest_args = []
+        if execution.get("pytest_args"):
+            incoming_pytest_args.append(execution["pytest_args"])
+        if execution.get("pytest_args_seen"):
+            incoming_pytest_args.extend(execution["pytest_args_seen"])
+        if incoming_pytest_args:
+            merged[key]["pytest_args_seen"] = sorted(set(merged[key]["pytest_args_seen"]) | set(incoming_pytest_args))
     return list(merged.values())
 
 
@@ -1181,9 +1288,11 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
                     m.source_file,
                     m.hf_model_identifier,
                     SUM(trcm.execution_count) AS execution_count,
-                    ARRAY_AGG(DISTINCT trcm.trace_run_id ORDER BY trcm.trace_run_id) AS trace_run_ids
+                    ARRAY_AGG(DISTINCT trcm.trace_run_id ORDER BY trcm.trace_run_id) AS trace_run_ids,
+                    ARRAY_REMOVE(ARRAY_AGG(DISTINCT tr.pytest_args), NULL) AS pytest_args_seen
                 FROM {schema}.trace_run_configuration_model trcm
                 JOIN {schema}.ttnn_model m ON m.ttnn_model_id = trcm.model_id
+                JOIN {schema}.trace_run tr ON tr.trace_run_id = trcm.trace_run_id
                 WHERE trcm.configuration_id = %s
                 {source_filter_clause}
                 GROUP BY m.source_file, m.hf_model_identifier
@@ -1211,7 +1320,7 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
             config_dict["config_hash"] = config_hash
 
             executions = []
-            for source_file, hf_model, exec_count, trace_run_ids in source_rows:
+            for source_file, hf_model, exec_count, trace_run_ids, pytest_args_seen in source_rows:
                 source_str = format_source(source_file, hf_model)
                 if not source_str:
                     continue
@@ -1221,6 +1330,11 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
                     "machine_info": {},
                     "count": exec_count,
                     "trace_run_ids": list(trace_run_ids or []),
+                    # Aggregated view: a (config, model) pair may have been
+                    # produced under several pytest_args variants. Surface
+                    # them all for inspection. For a lossless single-trace
+                    # round-trip use reconstruct_from_trace_run instead.
+                    "pytest_args_seen": list(pytest_args_seen or []),
                 }
 
                 if board_type:
@@ -1287,7 +1401,8 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
         SELECT
             tr.trace_run_id,
             h.board_type, h.device_series, h.card_count,
-            tr.tt_metal_sha, tr.traced_at, tr.config_count, tr.notes
+            tr.tt_metal_sha, tr.traced_at, tr.config_count, tr.notes,
+            tr.pytest_args, tr.tt_kmd, tr.tt_smi, tr.tt_firmware
         FROM {schema}.trace_run tr
         JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = tr.hardware_id
         WHERE tr.trace_run_id = %s
@@ -1300,7 +1415,20 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
         conn.close()
         return None
 
-    (_, board_type, device_series, card_count, tt_metal_sha, traced_at, _, _) = tr_row
+    (
+        _,
+        board_type,
+        device_series,
+        card_count,
+        tt_metal_sha,
+        traced_at,
+        _,
+        _,
+        trace_pytest_args,
+        trace_tt_kmd,
+        trace_tt_smi,
+        trace_tt_firmware,
+    ) = tr_row
 
     # Fetch all models for this trace; then apply model_names filter if specified.
     cur.execute(
@@ -1400,6 +1528,12 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
             exec_machine_info["mesh_device_shape"] = mesh_shape
             if device_count:
                 exec_machine_info["device_count"] = device_count
+        if trace_tt_kmd:
+            exec_machine_info["tt_kmd"] = trace_tt_kmd
+        if trace_tt_smi:
+            exec_machine_info["tt_smi"] = trace_tt_smi
+        if trace_tt_firmware:
+            exec_machine_info["tt_firmware"] = _parse_trace_sw_value(trace_tt_firmware)
 
         source = format_source(source_file, hf_model_identifier)
 
@@ -1421,6 +1555,7 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
                 "machine_info": exec_machine_info,
                 "count": execution_count,
                 "trace_run_ids": [trace_run_id],
+                "pytest_args": trace_pytest_args,
             }
         )
 
@@ -1440,6 +1575,10 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
         "card_count": card_count,
         "tt_metal_sha": tt_metal_sha,
         "traced_at": str(traced_at) if traced_at else None,
+        "pytest_args": trace_pytest_args,
+        "tt_kmd": trace_tt_kmd,
+        "tt_smi": trace_tt_smi,
+        "tt_firmware": _parse_trace_sw_value(trace_tt_firmware),
     }
 
     print(f"Reconstructed {len(result['operations'])} operations, {total_configs} configurations")
@@ -1450,6 +1589,79 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
         print(f"Saved to {output_path}")
 
     return result
+
+
+def list_variants(model_pattern, schema=DEFAULT_SCHEMA):
+    """List every (model, pytest_args, hardware) combination traced for a model.
+
+    Answers "did I trace model X with these pytest args on this hardware?".
+    Each row is one trace_run, so repeated runs of the same variant appear
+    as separate rows (with different traced_at timestamps).
+
+    Args:
+        model_pattern: ILIKE pattern matched against ttnn_model.source_file,
+            e.g. "%flux1%". The leading/trailing wildcards are added if absent.
+        schema: Database schema to query (default: DEFAULT_SCHEMA).
+    """
+    _validate_schema(schema)
+    if not model_pattern:
+        print("Error: provide a source_file pattern (e.g. 'flux1' or '%flux1%')")
+        return []
+
+    if "%" not in model_pattern:
+        model_pattern = f"%{model_pattern}%"
+
+    conn = psycopg2.connect(NEON_URL)
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        SELECT
+            m.source_file,
+            COALESCE(m.hf_model_identifier, '') AS hf_model,
+            COALESCE(tr.pytest_args, '') AS pytest_args,
+            h.board_type,
+            h.device_series,
+            h.card_count,
+            tr.tt_kmd,
+            tr.tt_smi,
+            tr.tt_firmware,
+            tr.trace_uid,
+            tr.trace_run_id,
+            tr.traced_at,
+            tr.config_count
+        FROM {schema}.trace_run tr
+        JOIN {schema}.trace_run_model trm ON trm.trace_run_id = tr.trace_run_id
+        JOIN {schema}.ttnn_model m ON m.ttnn_model_id = trm.model_id
+        JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = tr.hardware_id
+        WHERE m.source_file ILIKE %s
+        ORDER BY m.source_file, tr.pytest_args NULLS FIRST, h.device_series, tr.traced_at DESC
+        """,
+        (model_pattern,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
+        print(f"No traces match source_file ILIKE {model_pattern!r}")
+        return []
+
+    print(f"\nVariants matching {model_pattern!r}:")
+    print(f"{'trace_id':>8}  {'hardware':22}  {'configs':>7}  {'traced_at':20}  source_file / pytest_args")
+    print("-" * 140)
+    for sf, hf, pa, board, ds, cc, tt_kmd, tt_smi, tt_firmware, _uid, tr_id, traced_at, cfg_count in rows:
+        hw = f"{ds} ({cc}x)"
+        traced = str(traced_at)[:19] if traced_at else "-"
+        label = sf if not hf else f"{sf} [HF_MODEL:{hf}]"
+        pa_disp = pa if pa else "(no pytest_args recorded)"
+        print(f"{tr_id:>8}  {hw:22}  {cfg_count or 0:>7}  {traced:20}  {label}")
+        print(f"{'':>8}  {'':22}  {'':>7}  {'':20}    args: {pa_disp}")
+        if tt_kmd or tt_smi or tt_firmware:
+            print(
+                f"{'':>8}  {'':22}  {'':>7}  {'':20}    "
+                f"sw: kmd={tt_kmd or '-'} smi={tt_smi or '-'} fw={tt_firmware or '-'}"
+            )
+
+    return rows
 
 
 def list_trace_runs(model_filter=None, schema=DEFAULT_SCHEMA):
@@ -1472,6 +1684,9 @@ def list_trace_runs(model_filter=None, schema=DEFAULT_SCHEMA):
             tr.traced_at,
             tr.config_count,
             tr.notes,
+            tr.tt_kmd,
+            tr.tt_smi,
+            tr.tt_firmware,
             STRING_AGG(COALESCE(m.model_name, m.source_file), ', '
                        ORDER BY COALESCE(m.model_name, m.source_file)) AS models
         FROM {schema}.trace_run tr
@@ -1495,14 +1710,15 @@ def list_trace_runs(model_filter=None, schema=DEFAULT_SCHEMA):
         print("No trace runs found")
         return []
 
-    print(f"\n{'ID':>4}  {'Hardware':20}  {'SHA':12}  {'Configs':>7}  {'Traced At':20}  Models")
-    print("-" * 120)
+    print(f"\n{'ID':>4}  {'Hardware':20}  {'SHA':12}  {'Configs':>7}  {'Traced At':20}  {'SW':46}  Models")
+    print("-" * 200)
 
-    for tr_id, device_series, card_count, sha, traced_at, cfg_count, _, models in rows:
+    for tr_id, device_series, card_count, sha, traced_at, cfg_count, _, tt_kmd, tt_smi, tt_firmware, models in rows:
         hw = f"{device_series} ({card_count}x)"
         sha_short = sha[:12] if sha else "-"
         traced = str(traced_at)[:19] if traced_at else "-"
-        print(f"{tr_id:>4}  {hw:20}  {sha_short:12}  {cfg_count or 0:>7}  {traced:20}  {models or ''}")
+        sw_summary = f"kmd={tt_kmd or '-'} smi={tt_smi or '-'} fw={tt_firmware or '-'}"
+        print(f"{tr_id:>4}  {hw:20}  {sha_short:12}  {cfg_count or 0:>7}  {traced:20}  {sw_summary:46}  {models or ''}")
 
     return rows
 
@@ -1618,11 +1834,16 @@ def resolve_manifest(manifest_path=None, scope=None):
     return unique
 
 
-def _resolve_manifest_with_models(manifest_path=None, scope=None):
+def _resolve_manifest_with_models(manifest_path=None, scope=None, model_filter=None):
     """Like resolve_manifest but returns {trace_id: set_of_model_names | None}.
 
     None means no filter (all models in the trace).
     A set means only reconstruct configs belonging to those model_names.
+
+    Args:
+        model_filter: Optional list of model names to restrict to.  When set,
+            only targets whose model list intersects with *model_filter* are
+            resolved, and only the intersecting model names are passed through.
     """
     data, _ = _load_manifest(manifest_path)
     targets_map = data.get("targets", {})
@@ -1638,6 +1859,12 @@ def _resolve_manifest_with_models(manifest_path=None, scope=None):
     # trace_id -> set of model_names to include (None = all models)
     trace_model_map = {}
 
+    # Build a lookup of which models each trace contains (from registry metadata).
+    # Used to skip pinned traces that don't contain filtered models.
+    registry_models_by_tid = {}
+    for r in registry:
+        registry_models_by_tid[r.get("trace_id")] = set(r.get("models", []))
+
     for entries in groups.values():
         for entry in entries or []:
             model_val = entry.get("model")
@@ -1645,6 +1872,12 @@ def _resolve_manifest_with_models(manifest_path=None, scope=None):
             hw_filter = entry.get("hardware")
 
             models = [model_val] if isinstance(model_val, str) else (list(model_val) if model_val else [])
+
+            # Apply CLI model filter: only keep models that match the filter
+            if model_filter:
+                models = [m for m in models if m in model_filter]
+                if not models:
+                    continue
 
             def _add(tid, model_list):
                 if tid not in trace_model_map:
@@ -1657,7 +1890,16 @@ def _resolve_manifest_with_models(manifest_path=None, scope=None):
             if pinned_trace is not None:
                 tids = [int(pinned_trace)] if not isinstance(pinned_trace, list) else [int(t) for t in pinned_trace]
                 for tid in tids:
-                    _add(tid, models)
+                    if model_filter:
+                        # Only add this trace if the registry confirms it contains at least
+                        # one of the filtered models.  This avoids hitting the DB for traces
+                        # that clearly don't have the requested model.
+                        registry_models_for_tid = registry_models_by_tid.get(tid, set())
+                        trace_models = [m for m in models if m in registry_models_for_tid]
+                        if trace_models:
+                            _add(tid, trace_models)
+                    else:
+                        _add(tid, models)
                 continue
 
             # Registry-resolved: each model resolves to latest active trace per device_series
@@ -1680,7 +1922,9 @@ def _resolve_manifest_with_models(manifest_path=None, scope=None):
     return trace_model_map
 
 
-def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None, schema=DEFAULT_SCHEMA):
+def reconstruct_from_manifest(
+    manifest_path=None, output_path=None, scope=None, schema=DEFAULT_SCHEMA, model_filter=None
+):
     """Reconstruct merged JSON from manifest targets.
 
     Resolves targets to (trace_run_id, model_names) pairs, reconstructs each
@@ -1691,11 +1935,12 @@ def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None, 
         output_path: Path to write the merged JSON (optional).
         scope: 'lead_models' or 'model_traced' (None = all targets).
         schema: Database schema to read from (default: "ttnn_ops_v6").
+        model_filter: Optional list of model names to restrict reconstruction to.
 
     Returns:
         Merged dict in the tracer's master JSON format.
     """
-    trace_model_map = _resolve_manifest_with_models(manifest_path, scope=scope)
+    trace_model_map = _resolve_manifest_with_models(manifest_path, scope=scope, model_filter=model_filter)
     if not trace_model_map:
         print("Nothing to reconstruct")
         return {"operations": {}, "metadata": {}}
@@ -1831,9 +2076,11 @@ def reconstruct_single_operation(operation_name, output_path=None, schema=DEFAUL
                 m.source_file,
                 m.hf_model_identifier,
                 SUM(trcm.execution_count) AS execution_count,
-                ARRAY_AGG(DISTINCT trcm.trace_run_id ORDER BY trcm.trace_run_id) AS trace_run_ids
+                ARRAY_AGG(DISTINCT trcm.trace_run_id ORDER BY trcm.trace_run_id) AS trace_run_ids,
+                ARRAY_REMOVE(ARRAY_AGG(DISTINCT tr.pytest_args), NULL) AS pytest_args_seen
             FROM {schema}.trace_run_configuration_model trcm
             JOIN {schema}.ttnn_model m ON m.ttnn_model_id = trcm.model_id
+            JOIN {schema}.trace_run tr ON tr.trace_run_id = trcm.trace_run_id
             WHERE trcm.configuration_id = %s
             GROUP BY m.source_file, m.hf_model_identifier
             ORDER BY m.source_file, m.hf_model_identifier
@@ -1858,7 +2105,7 @@ def reconstruct_single_operation(operation_name, output_path=None, schema=DEFAUL
         config_dict["config_hash"] = config_hash
 
         executions = []
-        for source_file, hf_model, exec_count, trace_run_ids in source_rows:
+        for source_file, hf_model, exec_count, trace_run_ids, pytest_args_seen in source_rows:
             source_str = format_source(source_file, hf_model)
             if not source_str:
                 continue
@@ -1867,6 +2114,7 @@ def reconstruct_single_operation(operation_name, output_path=None, schema=DEFAUL
                 "machine_info": {},
                 "count": exec_count,
                 "trace_run_ids": list(trace_run_ids or []),
+                "pytest_args_seen": list(pytest_args_seen or []),
             }
             if board_type:
                 execution["machine_info"]["board_type"] = board_type
@@ -2275,9 +2523,29 @@ if __name__ == "__main__":
             args = sys.argv[2:]
             dry_run = "--dry-run" in args
             args = [a for a in args if a != "--dry-run"]
+            emit_id_file = None
+            filtered = []
+            i = 0
+            while i < len(args):
+                if args[i] == "--emit-id-file" and i + 1 < len(args):
+                    emit_id_file = args[i + 1]
+                    i += 2
+                elif args[i].startswith("--emit-id-file="):
+                    emit_id_file = args[i].split("=", 1)[1]
+                    i += 1
+                else:
+                    filtered.append(args[i])
+                    i += 1
+            args = filtered
             json_path = args[0] if len(args) > 0 else None
             sha = args[1] if len(args) > 1 else None
-            load_data(json_path=json_path, tt_metal_sha=sha, dry_run=dry_run, schema=_schema)
+            load_data(
+                json_path=json_path,
+                tt_metal_sha=sha,
+                dry_run=dry_run,
+                schema=_schema,
+                emit_id_file=emit_id_file,
+            )
         elif cmd == "reconstruct":
             output = sys.argv[2] if len(sys.argv) > 2 else "ttnn_operations_reconstructed.json"
             model_filter = sys.argv[3].split(",") if len(sys.argv) > 3 else None
@@ -2294,8 +2562,49 @@ if __name__ == "__main__":
         elif cmd == "list-traces":
             model_filter = sys.argv[2].split(",") if len(sys.argv) > 2 else None
             list_trace_runs(model_filter, schema=_schema)
+        elif cmd == "list-variants":
+            if len(sys.argv) < 3:
+                print(
+                    "Usage: python load_ttnn_ops_data_v2.py list-variants <source_file_pattern> [--schema S]\n"
+                    "  Lists every (model, pytest_args, hardware) combination ever traced\n"
+                    "  for source_files matching the ILIKE pattern (e.g. 'flux1' or '%%flux1%%')."
+                )
+                sys.exit(1)
+            list_variants(sys.argv[2], schema=_schema)
         elif cmd == "reconstruct-manifest":
             _args = sys.argv[2:]
+            # Extract --models-filter if present.
+            #
+            # Tolerate shell word-splitting of the value: an unquoted shell variable
+            # holding "gpt_oss, tt_dit" (with a space) expands to two argv tokens
+            # ("gpt_oss," and "tt_dit"). Greedily absorb consecutive non-flag tokens
+            # ONLY across comma boundaries (prev ends with "," or next starts with
+            # ","), so a legitimate scope positional that happens to follow without a
+            # comma is left untouched.
+            _model_filter = None
+            if "--models-filter" in _args:
+                idx = _args.index("--models-filter")
+                consumed = []
+                i = idx + 1
+                while i < len(_args) and not _args[i].startswith("--"):
+                    consumed.append(_args[i])
+                    if i + 1 >= len(_args):
+                        i += 1
+                        break
+                    # Continue absorbing only across an explicit comma boundary.
+                    if _args[i].endswith(",") or _args[i + 1].startswith(","):
+                        i += 1
+                        continue
+                    i += 1
+                    break
+                if consumed:
+                    # "".join glues "gpt_oss," + "tt_dit" -> "gpt_oss,tt_dit",
+                    # and also handles a lone "," token between the names.
+                    joined = "".join(consumed)
+                    _model_filter = [m.strip() for m in joined.split(",") if m.strip()]
+                    _args = _args[:idx] + _args[i:]
+                else:
+                    _args = _args[:idx]
             if _args and _args[0].endswith(".json"):
                 manifest, output = None, _args[0]
                 _args = _args[1:]
@@ -2304,7 +2613,7 @@ if __name__ == "__main__":
                 output = _args[1] if len(_args) > 1 else None
                 _args = _args[2:]
             scope = _args[0] if _args else None
-            reconstruct_from_manifest(manifest, output, scope, _schema)
+            reconstruct_from_manifest(manifest, output, scope, _schema, model_filter=_model_filter)
         elif cmd == "resolve-manifest":
             manifest = sys.argv[2] if len(sys.argv) > 2 else None
             scope = sys.argv[3] if len(sys.argv) > 3 else None
@@ -2357,7 +2666,9 @@ if __name__ == "__main__":
         else:
             print(f"Unknown command: {cmd}")
             print("Usage (all commands accept --schema <name>, default: ttnn_ops_v6):")
-            print("  python load_ttnn_ops_data_v2.py load [json_path] [sha] [--dry-run]           # Load JSON to DB")
+            print(
+                "  python load_ttnn_ops_data_v2.py load [json_path] [sha] [--dry-run] [--emit-id-file PATH]  # Load JSON to DB"
+            )
             print(
                 "  python load_ttnn_ops_data_v2.py reconstruct [output] [models]                # Reconstruct JSON from DB"
             )
@@ -2371,6 +2682,9 @@ if __name__ == "__main__":
                 "  python load_ttnn_ops_data_v2.py resolve-manifest [manifest] [scope]               # Show resolved trace IDs"
             )
             print("  python load_ttnn_ops_data_v2.py list-traces [model_filter]                   # List trace runs")
+            print(
+                "  python load_ttnn_ops_data_v2.py list-variants <pattern>                     # List traced (args, hw) variants per model"
+            )
             print(
                 "  python load_ttnn_ops_data_v2.py reconstruct-op <name> [output.json]          # Reconstruct single op"
             )

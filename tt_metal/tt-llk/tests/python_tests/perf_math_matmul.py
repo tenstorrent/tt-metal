@@ -88,7 +88,10 @@ ALL_TEST_PARAMS = list(
 @pytest.mark.perf
 @pytest.mark.parametrize("math_fidelity,matmul_config,throttle", ALL_TEST_PARAMS)
 def test_perf_math_matmul(
-    math_fidelity, matmul_config, throttle, perf_report, workers_tensix_coordinates
+    math_fidelity,
+    matmul_config,
+    throttle,
+    perf_report,
 ):
     """
     Performance test for matmul operations.
@@ -170,4 +173,4 @@ def test_perf_math_matmul(
         dest_acc=matmul_config.dest_acc,
     )
 
-    configuration.run(perf_report, location=workers_tensix_coordinates)
+    configuration.run(perf_report)

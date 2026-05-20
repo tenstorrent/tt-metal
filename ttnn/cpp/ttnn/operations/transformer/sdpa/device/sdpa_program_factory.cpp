@@ -67,41 +67,20 @@ tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bo
     return use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
 }
 
-// Streaming compute v2: no row buffers (cb_push_back_hold_wr_ptr).
-// Mask uses Float16_b for the streaming path to avoid Bfp4_b→Float16_b L1 accumulate artifacts.
-// fp32_dest_acc_en is not functional with the streaming path — skip it in that case.
-// Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
-// Sq_chunk_t==1 with K padding has L1 acc write-back issues after cb_push_back_hold_wr_ptr.
+// Streaming compute v2 eligibility. Returns false for features the streaming kernel doesn't
+// support: user-provided mask, attention sink, sliding window, fp32_dest_acc.
 bool can_use_streaming_compute(
-    bool is_causal,
     bool use_provided_mask,
     bool use_attention_sink,
     const std::optional<uint32_t>& sliding_window_size,
-    bool is_chunked,
-    bool fp32_dest_acc_en,
-    uint32_t qk_out_subblock_h,
-    uint32_t Sk_chunk_t,
-    uint32_t dst_size,
-    uint32_t padded_Sk,
-    uint32_t Sk,
-    uint32_t Sq_chunk_t) {
-    if (is_causal || use_provided_mask || use_attention_sink) {
+    bool fp32_dest_acc_en) {
+    if (use_provided_mask || use_attention_sink) {
         return false;
     }
-    if (sliding_window_size.value_or(0) != 0 || is_chunked || fp32_dest_acc_en) {
+    if (sliding_window_size.value_or(0) != 0 || fp32_dest_acc_en) {
         return false;
     }
-    if (qk_out_subblock_h > 2 || Sk_chunk_t % (dst_size / qk_out_subblock_h) != 0) {
-        return false;
-    }
-    // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
-    // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap.
-    if (Sq_chunk_t / qk_out_subblock_h <= 1) {
-        return false;
-    }
-    // Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
-    const bool streaming_mask_unsupported = (padded_Sk != Sk) && (Sk % TILE_HEIGHT != 0 || Sq_chunk_t == 1);
-    return !streaming_mask_unsupported;
+    return true;
 }
 
 // Check whether all data formats used by the compute kernel are uniform (allows skipping reconfigs).
@@ -386,29 +365,24 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
-    const bool use_streaming_compute = can_use_streaming_compute(
-        is_causal,
-        use_provided_mask,
-        use_attention_sink,
-        sliding_window_size,
-        is_chunked,
-        fp32_dest_acc_en,
-        qk_out_subblock_h,
-        Sk_chunk_t,
-        dst_size,
-        padded_Sk,
-        Sk,
-        Sq_chunk_t);
+    const bool use_streaming_compute =
+        can_use_streaming_compute(use_provided_mask, use_attention_sink, sliding_window_size, fp32_dest_acc_en);
 
-    const bool lightweight_mask = use_streaming_compute && use_padded_mask;
+    const bool lightweight_causal = is_causal && !use_provided_mask && sliding_window_size.value_or(0) == 0;
+    const bool lightweight_mask = (use_streaming_compute && use_padded_mask) || lightweight_causal;
+    // Non-causal partial-tile K (Sk % TILE != 0) needs a partial-tile mask in cb_mask_in.
+    const uint32_t k_partial_col =
+        (use_streaming_compute && use_padded_mask && (Sk % TILE_HEIGHT != 0)) ? (Sk % TILE_HEIGHT) : 0;
+    const bool lw_partial_active = (k_partial_col > 0);
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;            // double buffer
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;           // double buffer
-    uint32_t mask_tiles = lightweight_mask ? 1 : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
+    uint32_t mask_tiles = lightweight_mask ? (1 + (lightweight_causal ? 1 : 0) + (lw_partial_active ? 1 : 0))
+                                           : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
-    uint32_t out0_t = Sq_chunk_t * vDHt;
+    uint32_t out0_t = Sq_chunk_t * vDHt;  // finalized below once out_out_subblock_h is known
     uint32_t scale_tiles = 1;
     uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
     uint32_t attention_sink_tiles = use_attention_sink ? Sq_chunk_t : 0;  // One column vector per Q chunk
@@ -419,7 +393,6 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     log_debug(tt::LogOp, "v_tiles: {}", v_tiles);
     log_debug(tt::LogOp, "mask_tiles: {}", mask_tiles);
     log_debug(tt::LogOp, "qk_tiles: {}", qk_tiles);
-    log_debug(tt::LogOp, "out0_t: {}", out0_t);
     log_debug(tt::LogOp, "scale_tiles: {}", scale_tiles);
     log_debug(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
     log_debug(tt::LogOp, "attention_sink_tiles: {}", attention_sink_tiles);
@@ -438,6 +411,16 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
+    // Streaming: shrink cb_out to a 2-slot ping-pong (see sdpa_subblock_utils.hpp).
+    if (use_streaming_compute) {
+        out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, vDHt);
+        TT_FATAL(
+            Sq_chunk_t % out_out_subblock_h == 0,
+            "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
+            Sq_chunk_t,
+            out_out_subblock_h);
+    }
+    log_debug(tt::LogOp, "out0_t: {}", out0_t);
     log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
@@ -482,6 +465,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     } scale_union{};
     scale_union.f = scale.value_or(1.0f);
 
+    const bool use_zigzag_balancing = is_causal;
+
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       B,
                                                       NQH,
@@ -518,6 +503,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     reader_compile_time_args.push_back(0);  // receiver_semaphore_id placeholder
     reader_compile_time_args.push_back(0);  // valid_semaphore_id placeholder
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
+    reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 31
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -575,7 +561,11 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
         sliding_window_size.value_or(0),
-        (std::uint32_t)(use_streaming_compute && use_padded_mask),  // arg 20: lightweight mask for v2
+        (std::uint32_t)(lightweight_mask),            // arg 20: lightweight mask (causal or streaming padded)
+        (std::uint32_t)(use_streaming_compute),       // arg 21: row-grouped cb_out drain
+        out_out_subblock_h,                           // arg 22: drain group height
+        k_partial_col,                                // arg 23: K partial-tile col (0 = no partial)
+        static_cast<uint32_t>(use_zigzag_balancing),  // arg 24
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -615,9 +605,11 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         scale_union.u,
         sliding_window_size.value_or(0),
         (std::uint32_t)use_attention_sink,
-        (std::uint32_t)use_streaming_compute,  // arg 30
-        valid_Skt,                             // arg 31: unpadded K tile count for streaming padded_k_tiles
-        (std::uint32_t)uniform_dataformat,     // arg 32: skip reconfig when all formats match
+        (std::uint32_t)use_streaming_compute,         // arg 30
+        valid_Skt,                                    // arg 31: unpadded K tile count for streaming padded_k_tiles
+        (std::uint32_t)uniform_dataformat,            // arg 32: skip reconfig when all formats match
+        k_partial_col,                                // arg 33: K partial-tile col (0 = no partial)
+        static_cast<uint32_t>(use_zigzag_balancing),  // arg 34
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
@@ -629,13 +621,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    uint32_t balanced_q_parallel =
-        (is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
-    if (balanced_q_parallel) {
-        defines["BALANCED_Q_PARALLEL"] = "1";
-    }
 
-    log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
+    log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
@@ -647,7 +634,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
     tt::DataFormat mask_df = select_mask_dataformat(attn_mask, use_streaming_compute);
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    tt::DataFormat scalar_df =
+        (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
@@ -658,7 +646,6 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
     uint32_t v_tile_size = tt::tile_size(v_df);
-    uint32_t mask_tile_size = tt::tile_size(mask_df);
     uint32_t out_tile_size = tt::tile_size(out_df);
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
@@ -689,13 +676,12 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     // Only create mask buffer if it's going to be used
     if (use_provided_mask or is_causal or use_padded_mask) {
-        // Lightweight mask: single bfloat16 -inf tile (no Bfp4_b round-trip artifacts).
+        // Lightweight mask: Float16_b, mask_tiles already computed (1 for padding, 2 for causal).
         // Legacy: full Sq×Sk double-buffered matrix in Bfp4_b.
-        uint32_t actual_mask_tiles = lightweight_mask ? 1 : mask_tiles;
         tt::DataFormat actual_mask_df = lightweight_mask ? tt::DataFormat::Float16_b : mask_df;
-        uint32_t actual_mask_tile_size = lightweight_mask ? tt::tile_size(actual_mask_df) : mask_tile_size;
+        uint32_t actual_mask_tile_size = tt::tile_size(actual_mask_df);
         auto c_in3_config =
-            CircularBufferConfig(actual_mask_tiles * actual_mask_tile_size, {{tt::CBIndex::c_3, actual_mask_df}})
+            CircularBufferConfig(mask_tiles * actual_mask_tile_size, {{tt::CBIndex::c_3, actual_mask_df}})
                 .set_page_size(tt::CBIndex::c_3, actual_mask_tile_size);
         CreateCircularBuffer(program, core_grid, c_in3_config);
     }
@@ -1222,11 +1208,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 const CoreCoord rect_start = CoreCoord{min_x, injector_y};
                 const CoreCoord rect_end = CoreCoord{max_x, injector_y};
 
-                // When the injector is geometrically inside the mcast rect (not at min or max X),
-                // the hardware counts it as a destination slot, so num_dests must include it.
-                const uint32_t injector_x = core_work[injector_idx].physical_core.x;
-                const bool injector_inside_rect = (injector_x > min_x && injector_x < max_x);
-                const uint32_t mcast_num_dests = injector_inside_rect ? chain_size : num_receivers;
+                const uint32_t mcast_num_dests = num_receivers;
 
                 // Configure injector
                 auto& injector_chain = core_chain_info[injector_idx];
@@ -1265,7 +1247,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             }
         }
 
-        log_info(
+        log_debug(
             tt::LogOp,
             "Multicast eligibility: {}/{} chains using mcast (all-or-nothing)",
             mcast_chains,

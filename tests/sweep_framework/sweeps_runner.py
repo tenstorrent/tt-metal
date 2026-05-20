@@ -19,7 +19,11 @@ from queue import Empty
 # third party
 import enlighten
 import framework.tt_smi_util as tt_smi_util
-from faster_fifo import Queue
+
+try:
+    from faster_fifo import Queue  # faster IPC; not available on aarch64 Linux
+except ImportError:
+    from multiprocessing import Queue
 
 # tt
 from framework.device_fixtures import default_device
@@ -978,7 +982,8 @@ def enable_profiler():
     os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
     os.environ["ENABLE_TRACY"] = "1"
     os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
-    os.environ["TT_METAL_PROFILER_SYNC"] = "1"
+    # TT_METAL_PROFILER_SYNC skipped: triggers syncAllDevices() on ETH cores,
+    # which deadlocks on Galaxy due to residual fabric state between test iterations.
 
 
 def disable_profiler():

@@ -14,7 +14,7 @@
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "llk_pack_untilize.h"
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK PACK UNTILIZE
@@ -26,7 +26,7 @@
  *
  * @tparam block_ct_dim  Width of a single block in tiles.
  * @tparam full_ct_dim   Total width of the tensor row in tiles (default = block_ct_dim).
- * @param pack_output    Output DFB identifier.
+ * @param pack_output    Output DataFlow Buffer identifier.
  */
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim>
 inline void llk_pack_untilize_init(std::uint32_t pack_output) {
@@ -59,7 +59,7 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
  * @tparam full_ct_dim        Total width of the tensor row in tiles, used to compute the
  *                            L1 row stride (default = block_ct_dim).
  * @param block_rt_dim        Number of tile-rows to pack.
- * @param pack_output         Output circular buffer identifier.
+ * @param pack_output         Output DataFlow Buffer identifier.
  * @param block_c_index       Column-block index within the full row, used to offset the L1
  *                            write address when full_ct_dim > block_ct_dim (default 0).
  */
@@ -80,7 +80,8 @@ inline void llk_pack_untilize(
     // merging adjacent face-columns into a single output row. Hence we use R_DIM_FACES instead of num_faces for L1
     // strides
     const std::uint32_t y_stride = full_ct_dim * R_DIM_FACES * face_r_dim;
-    const std::uint32_t base_l1 = g_dfb_interface[output_id].wr_entry_idx * R_DIM_FACES * face_r_dim;
+    const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
+    const std::uint32_t base_l1 = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx * R_DIM_FACES * face_r_dim;
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         const std::uint32_t dest_idx = block_rt * block_ct_dim + tile_dst_rt_offset;

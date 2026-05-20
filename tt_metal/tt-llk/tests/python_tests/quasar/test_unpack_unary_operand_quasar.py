@@ -10,10 +10,12 @@ from helpers.golden_generators import (
     DataCopyGolden,
     TransposeGolden,
     get_golden_generator,
+    quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
+    DestSync,
     ImpliedMathFormat,
     Transpose,
     UnpackerEngine,
@@ -25,7 +27,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
@@ -56,12 +58,11 @@ def generate_unpack_unary_operand_combinations(
     Returns: List of (format, dest_acc, transpose_en, unpacker_sel, input_dimensions) tuples
     """
     dimensions_cache = {
-        DestAccumulation.No: tuple(
-            generate_unary_input_dimensions(DestAccumulation.No)
-        ),
-        DestAccumulation.Yes: tuple(
-            generate_unary_input_dimensions(DestAccumulation.Yes)
-        ),
+        (dest_acc, dest_sync): tuple(
+            generate_unary_input_dimensions(dest_acc, dest_sync)
+        )
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        for dest_sync in (DestSync.Half, DestSync.Full)
     }
 
     combinations = []
@@ -92,12 +93,20 @@ def generate_unpack_unary_operand_combinations(
                 # Skip if input format is not Float32 and output format is Float32 and dest_acc is No
                 # This combination is not supported in the Quasar Packer format conversions
                 continue
-            for transpose_en in transpose_modes:
-                for unpacker_sel in unpacker_engines:
-                    for dimensions in dimensions_cache[dest_acc]:
-                        combinations.append(
-                            (fmt, dest_acc, transpose_en, unpacker_sel, dimensions)
-                        )
+            for dest_sync in (DestSync.Half, DestSync.Full):
+                for transpose_en in transpose_modes:
+                    for unpacker_sel in unpacker_engines:
+                        for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
+                            combinations.append(
+                                (
+                                    fmt,
+                                    dest_acc,
+                                    dest_sync,
+                                    transpose_en,
+                                    unpacker_sel,
+                                    dimensions,
+                                )
+                            )
 
     return combinations
 
@@ -107,6 +116,7 @@ UNPACK_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
+        DataFormat.MxFp4,
     ]
 )
 ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
@@ -116,21 +126,22 @@ ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinatio
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_transpose_unpack_sel_dims=ALL_UNPACK_UNARY_OPERAND_COMBINATIONS,
+    formats_dest_acc_sync_transpose_unpack_sel_dims=ALL_UNPACK_UNARY_OPERAND_COMBINATIONS,
 )
 def test_unpack_unary_operand_quasar(
-    formats_dest_acc_transpose_unpack_sel_dims, boot_mode=BootMode.DEFAULT
+    formats_dest_acc_sync_transpose_unpack_sel_dims,
+    boot_mode=BootMode.DEFAULT,
 ):
-    formats_dest_acc_transpose_unpack_sel_dims = (
-        formats_dest_acc_transpose_unpack_sel_dims[0]
-    )
-    formats = formats_dest_acc_transpose_unpack_sel_dims[0]
-    dest_acc = formats_dest_acc_transpose_unpack_sel_dims[1]
-    transpose_en = formats_dest_acc_transpose_unpack_sel_dims[2]
-    unpacker_sel = formats_dest_acc_transpose_unpack_sel_dims[3]
-    input_dimensions = formats_dest_acc_transpose_unpack_sel_dims[4]
+    (
+        formats,
+        dest_acc,
+        dest_sync_mode,
+        transpose_en,
+        unpacker_sel,
+        input_dimensions,
+    ) = formats_dest_acc_sync_transpose_unpack_sel_dims[0]
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -143,6 +154,9 @@ def test_unpack_unary_operand_quasar(
         src_B if unpacker_sel == UnpackerEngine.UnpB else src_A
     )  # use A for UnpA and UnpDest
     if transpose_en == Transpose.Yes:
+        if formats.input_format.is_mx_format():
+            golden_src = quantize_mx_tensor_chunked(golden_src, formats.input_format)
+
         generate_golden = get_golden_generator(TransposeGolden)
         golden_tensor = generate_golden.transpose_faces_multi_tile(
             golden_src,
@@ -165,6 +179,7 @@ def test_unpack_unary_operand_quasar(
             formats.output_format,
             num_faces=num_faces,
             input_dimensions=input_dimensions,
+            input_format=formats.input_format,
         )
 
     configuration = TestConfig(
@@ -179,7 +194,7 @@ def test_unpack_unary_operand_quasar(
                 if unpacker_sel == UnpackerEngine.UnpB
                 else DataCopyType.A2D
             ),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync_mode),
             UNPACK_TRANS_FACES(transpose_en),
             UNPACK_TRANS_WITHIN_FACE(transpose_en),
         ],
@@ -204,6 +219,8 @@ def test_unpack_unary_operand_quasar(
         ),
         dest_acc=dest_acc,
         boot_mode=boot_mode,
+        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
+        disable_format_inference=(formats.input_format.is_mx_format()),
     )
 
     res_from_L1 = configuration.run().result

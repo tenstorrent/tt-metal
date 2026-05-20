@@ -25,7 +25,6 @@ using namespace tt::tt_fabric::linear::experimental;
 
 constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
 constexpr uint32_t page_size = get_compile_time_arg_val(1);
-constexpr uint32_t row_size = get_compile_time_arg_val(2);
 constexpr uint32_t max_packet_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_rows_per_packet = get_compile_time_arg_val(4);
 constexpr uint32_t num_packets_per_row = get_compile_time_arg_val(5);
@@ -88,7 +87,7 @@ void kernel_main() {
     open_connections(fabric_connection, num_connections, fab_idx);
 #else
     constexpr auto tensor0_args = TensorAccessorArgs<sharded_args_start_idx>();
-    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, row_size);
+    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
     open_connections(fabric_connection, num_connections, arg_for_fab);
 #endif
     uint8_t starts[] = {

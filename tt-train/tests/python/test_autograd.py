@@ -77,15 +77,19 @@ def do_test_numpy_autograd_conversion(
                 runtime_error = handle_error(e, expect_runtime_exception, runtime_error)
 
     if autograd_tensor:
-        assert (autograd_tensor.to_numpy() == numpy_tensor).all()
-        assert (autograd_tensor.to_numpy(new_type=autograd_type) == numpy_tensor).all()
-        for new_type in supported_autograd_types_except(autograd_type):
-            try:
-                assert (autograd_tensor.to_numpy(new_type=new_type) == numpy_tensor).all()
-            except TypeError as e:
-                type_error = handle_error(e, expect_type_exception, type_error)
-            except RuntimeError as e:
-                runtime_error = handle_error(e, expect_runtime_exception, runtime_error)
+        try:
+            assert (autograd_tensor.to_numpy() == numpy_tensor).all()
+            assert (autograd_tensor.to_numpy(new_type=autograd_type) == numpy_tensor).all()
+        except RuntimeError as e:
+            runtime_error = handle_error(e, expect_runtime_exception, runtime_error)
+        else:
+            for new_type in supported_autograd_types_except(autograd_type):
+                try:
+                    assert (autograd_tensor.to_numpy(new_type=new_type) == numpy_tensor).all()
+                except TypeError as e:
+                    type_error = handle_error(e, expect_type_exception, type_error)
+                except RuntimeError as e:
+                    runtime_error = handle_error(e, expect_runtime_exception, runtime_error)
     # sanity check: the occurrence of an exception implies we were expecting it
     assert (not type_error) or (type_error and expect_type_exception)
     assert (not runtime_error) or (runtime_error and expect_runtime_exception)
@@ -280,6 +284,38 @@ typecast_issue_cases = [
         default_tensor_data,
         ml_dtypes.bfloat16,
         ttnn.DataType.FLOAT32,
+        ttnn.Layout.ROW_MAJOR,
+    ),
+    # Row-major typecast requires padded_shape()[-1] to be a multiple of 32.
+    # default_tensor_data is 3x3, so these are expected runtime failures.
+    (
+        default_tensor_data,
+        np.float32,
+        ttnn.DataType.BFLOAT16,
+        ttnn.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        np.int32,
+        ttnn.DataType.BFLOAT16,
+        ttnn.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttnn.DataType.BFLOAT16,
+        ttnn.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttnn.DataType.BFLOAT16,
+        ttnn.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        None,
         ttnn.Layout.ROW_MAJOR,
     ),
 ]

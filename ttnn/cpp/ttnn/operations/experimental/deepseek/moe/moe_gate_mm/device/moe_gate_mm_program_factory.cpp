@@ -183,7 +183,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
         "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/device/kernels/compute.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::LoFi,
+            .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
             .fp32_dest_acc_en = false,
             .dst_full_sync_en = false,
             .bfp8_pack_precise = false,

@@ -9,6 +9,8 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -39,9 +41,11 @@ PlusOneProgramFactory::cached_program_t PlusOneProgramFactory::create(
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_units = W;
-    uint32_t aligned_input_page_size = round_up_to_mul32(num_input_units * input_unit_size);
     auto* src_buffer = input.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const uint32_t page_alignment =
+        src_is_dram ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
+    uint32_t aligned_input_page_size = tt::align(num_input_units * input_unit_size, page_alignment);
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(aligned_input_page_size, {{src0_cb_index, input_cb_data_format}})

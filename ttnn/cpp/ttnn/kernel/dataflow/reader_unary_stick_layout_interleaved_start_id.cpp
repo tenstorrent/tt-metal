@@ -12,10 +12,9 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr auto src0_args = TensorAccessorArgs<2>();
 
-    const auto s0 = TensorAccessor(src0_args, src_addr, page_size);
+    const auto s0 = TensorAccessor(src0_args, src_addr);
 
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_sticks;

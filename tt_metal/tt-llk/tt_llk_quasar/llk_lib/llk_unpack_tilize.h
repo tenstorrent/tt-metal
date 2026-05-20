@@ -13,22 +13,24 @@ using namespace ckernel;
 
 /**
  * @brief MOP configuration for upk tilize for full 32x32 tiles using the fused HW instruction
- * @details Sets up MOP for unpacking and tilizing a single tile, works for SRCA/B/S and DEST
+ * @details Sets up MOP for unpacking and tilizing block_ct_dim tiles per invocation,
+ * works for SRCA/B/S and DEST
  * @tparam UNP_SEL: Selects which unpacker resource to use,
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_S
  * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
+ * @param block_ct_dim: Number of tiles unpacked per MOP invocation (MOP inner loop length)
  */
-template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t BLOCK_CT_DIM>
-inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id)
+template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
+inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t block_ct_dim)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
 
     constexpr std::uint32_t MOP_OUTER_LOOP = 1;
-    constexpr std::uint32_t MOP_INNER_LOOP = BLOCK_CT_DIM;
+    const std::uint32_t MOP_INNER_LOOP     = block_ct_dim;
 
     // For UNP_DEST, don't set dvalid on individual tiles, the section_done signal handles it.
     // Setting dvalid per tile would cause the packer to start (and ZEROACC) before all tiles are in DEST.
@@ -64,33 +66,36 @@ inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id)
  * @tparam UNP_SEL: Selects which unpacker resource to use,
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
  * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
- * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet
  * @tparam C_DIM_FACES: number of faces in c_dim = number of tiles in c_dim * faces in c_dim per tile
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
+ * @param full_ct_dim: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet
+ * @param block_ct_dim: Number of tiles unpacked per MOP invocation (MOP inner loop length)
  */
-template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM, std::uint32_t C_DIM_FACES>
-inline void _llk_unpack_tilize_init_(const std::uint32_t buf_desc_id)
+template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t C_DIM_FACES>
+inline void _llk_unpack_tilize_init_(const std::uint32_t buf_desc_id, const std::uint32_t full_ct_dim, const std::uint32_t block_ct_dim)
 {
+    // Pack all UNPACK_TILIZE stride fields into a single struct to perform a direct 32-bit cfg write
+    ckernel::unpack::unpack_tilize_cfg_u unpk_cfg = {};
+    unpk_cfg.f.src_z_stride      = C_DIM_FACES; // col dim of a tile in L1 in units of 16 datums (1 face). This is used for
+                                                // Src (L1) counter increments in the UNPACR_TILIZE instruction
+    unpk_cfg.f.dst_z_stride      = 1;           // col dim of a tile in dest reg (1 face)
+    unpk_cfg.f.stride_val_source = 0;
+    unpk_cfg.f.stride_offset_0   = full_ct_dim * C_DIM_FACES; // how much to stride to go to next row within the same tile
+
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
-        cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);                            // Disable transpose
-        cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_RMW, C_DIM_FACES); // col dim of a tile in L1 in units of 16 datums (1 face). This is used for
-                                                                                   // Src (L1) counter increments in the UNPACR_TILIZE instruction
-        cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_TILIZE_DST_Z_STRIDE_RMW, 1);           // col dim of a tile in dest reg (1 face)
-        cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
-        cfg_rmw(THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * C_DIM_FACES); // how much to stride to go to next row within the same tile
+        cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0); // Disable transpose
+        cfg[THCON_UNPACKER0_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
+        cfg[THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
     }
     else
     {
-        cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);                            // Disable transpose
-        cfg_rmw(THCON_UNPACKER1_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_RMW, C_DIM_FACES); // col dim of a tile in L1 in units of 16 datums (1 face). This is used for
-                                                                                   // Src (L1) counter increments in the UNPACR_TILIZE instruction
-        cfg_rmw(THCON_UNPACKER1_REG1_UNPACK_TILIZE_DST_Z_STRIDE_RMW, 1); // col dim of a tile in SRC reg - SRC reg will always be 16 datums across (1 face)
-        cfg_rmw(THCON_UNPACKER1_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
-        cfg_rmw(THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * C_DIM_FACES); // how much to stride to go to next row within the same tile
+        cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0); // Disable transpose
+        cfg[THCON_UNPACKER1_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
+        cfg[THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
     }
-    _llk_unpack_tilize_mop_config_<UNP_SEL, IS_32b_DEST_EN, BLOCK_CT_DIM>(buf_desc_id);
+    _llk_unpack_tilize_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, block_ct_dim);
 }
 
 /**
@@ -162,12 +167,17 @@ inline void _llk_unpack_tilize_block_mop_config_(const std::uint32_t buf_desc_id
 template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM, std::uint32_t C_DIM_FACES, std::uint32_t NUM_FACES>
 inline void _llk_unpack_tilize_block_init_(const std::uint32_t buf_desc_id)
 {
-    cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);                            // Disable transpose
-    cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_RMW, C_DIM_FACES); // col dim of a tile in L1 in units of 16 datums (1 face)
+    ckernel::unpack::unpack_tilize_cfg_u unpk_cfg = {};
+    unpk_cfg.f.src_z_stride      = C_DIM_FACES; // col dim of a tile in L1 in units of 16 datums (1 face)
     // Z stride unit = FACE_R_DIM datums (1 face row = 16 datums). Each tile = NUM_FACES faces × FACE_R_DIM rows per face.
-    cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_TILIZE_DST_Z_STRIDE_RMW, NUM_FACES * FACE_R_DIM); // stride between tiles in DEST
-    cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
-    cfg_rmw(THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * C_DIM_FACES); // stride to next row within same tile
+    unpk_cfg.f.dst_z_stride      = NUM_FACES * FACE_R_DIM; // stride between tiles in DEST
+    unpk_cfg.f.stride_val_source = 0;
+    unpk_cfg.f.stride_offset_0   = FULL_CT_DIM * C_DIM_FACES; // stride to next row within same tile
+
+    cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0); // Disable transpose
+    cfg[THCON_UNPACKER0_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
+    cfg[THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
+
     _llk_unpack_tilize_block_mop_config_<BLOCK_CT_DIM>(buf_desc_id);
 }
 

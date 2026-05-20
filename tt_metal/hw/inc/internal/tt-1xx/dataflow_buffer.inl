@@ -18,8 +18,6 @@
 #endif
 #endif  // COMPILE_FOR_TRISC
 
-namespace experimental {
-
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
     : local_dfb_interface_(get_local_cb_interface(logical_dfb_id)), logical_dfb_id_(logical_dfb_id) {}
 
@@ -108,6 +106,10 @@ inline bool DataflowBuffer::pages_reservable_at_back(int32_t num_pages) const { 
 
 inline bool DataflowBuffer::pages_available_at_front(int32_t num_pages) const { return cb_pages_available_at_front(logical_dfb_id_, num_pages); }
 
+inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
+    noc.async_write_barrier();
+}
+
 #endif
 
 inline void DataflowBuffer::finish_impl() {}
@@ -115,7 +117,5 @@ inline void DataflowBuffer::finish_impl() {}
 inline uint32_t DataflowBuffer::get_write_ptr_impl() const { return local_dfb_interface_.fifo_wr_ptr; }
 
 inline uint32_t DataflowBuffer::get_read_ptr_impl() const { return local_dfb_interface_.fifo_rd_ptr; }
-
-}  // namespace experimental
 
 #endif  // !ARCH_QUASAR

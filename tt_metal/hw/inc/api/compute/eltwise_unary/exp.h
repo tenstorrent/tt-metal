@@ -6,12 +6,14 @@
 
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
+#ifndef ARCH_QUASAR
 #include "ckernel_sfpu_exp.h"
+#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
-
+#ifndef ARCH_QUASAR
 /**
  * Controls whether the fast approximate exponential clamps very negative inputs.
  *
@@ -27,23 +29,17 @@ enum class InputClamping : uint8_t {
 /**
  * Please refer to documentation for any_init.
  *
- * Template scale parameter is used when approx and fast_and_approx are true and exp_tile is called with scale_en set to
+ * Template scale parameter is used when approx is true and exp_tile is called with scale_en set to
  * true.
  *
  */
 template <
     bool approx = false,
-    bool fast_and_approx = true,
     uint32_t scale = 0x3F800000,
     InputClamping input_clamping = InputClamping::ClampToNegative>
 ALWI void exp_tile_init() {
     MATH(SFPU_TEMPLATE_INIT_KERNEL(
-        exponential,
-        sfpu::exp_init,
-        approx,
-        fast_and_approx,
-        scale,
-        (input_clamping == InputClamping::ClampToNegative)));
+        exponential, sfpu::exp_init, approx, scale, (input_clamping == InputClamping::ClampToNegative)));
 }
 
 // clang-format off
@@ -58,10 +54,8 @@ ALWI void exp_tile_init() {
  * | Template Parameter      | Description                                                    | Type     | Valid Range      | Default |
  * |-------------------------|----------------------------------------------------------------|----------|------------------|---------|
  * | approx                  | Enable approximate mode.                                       | bool     | true, false      | false   |
- * | fast_and_approx         | If approx is true, enable fast approximation.                  | bool     | true, false      | true   |
  * | scale_en                | Enable input scaling by a constant factor in approximate or non-approximate mode | bool     | true, false      | false   |
- * | skip_positive_check     | Skip large-positive input check                                | bool     | true, false      | false   |
- * | input_clamping          | If approx && fast_and_approx, controls whether very negative inputs are clamped to prevent incorrect outputs | InputClamping | ClampToNegative, None | ClampToNegative |
+ * | input_clamping          | If approx, controls whether very negative inputs are clamped to prevent incorrect outputs | InputClamping | ClampToNegative, None | ClampToNegative |
  * | iterations              | Number of iterations over 32-SFPU lanes to run                 | int      | Positive integer | 8       |
  *
  * | Argument    | Description                                                                | Type     | Valid Range                                           | Required |
@@ -73,19 +67,15 @@ ALWI void exp_tile_init() {
 // clang-format on
 template <
     bool approx = false,
-    bool fast_and_approx = true,
     bool scale_en = false,
-    bool skip_positive_check = false,
     InputClamping input_clamping = InputClamping::ClampToNegative,
     int iterations = 8>
 ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
     MATH(SFPU_TEMPLATE_PARAMS_KERNEL_FN(
         calculate_exponential,
         approx,
-        fast_and_approx,
         DST_ACCUM_MODE,
         scale_en,
-        skip_positive_check,
         (input_clamping == InputClamping::ClampToNegative),
         iterations,
         idst,
@@ -99,17 +89,11 @@ ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_
  */
 template <
     bool approx = false,
-    bool fast_and_approx = true,
     uint32_t scale = 0x3F800000,
     InputClamping input_clamping = InputClamping::ClampToNegative>
 ALWI void exp_packthread_tile_init() {
     PACK(SFPU_TEMPLATE_INIT_KERNEL(
-        exponential,
-        sfpu::exp_init,
-        approx,
-        fast_and_approx,
-        scale,
-        (input_clamping == InputClamping::ClampToNegative)));
+        exponential, sfpu::exp_init, approx, scale, (input_clamping == InputClamping::ClampToNegative)));
 }
 
 /**
@@ -118,9 +102,7 @@ ALWI void exp_packthread_tile_init() {
  */
 template <
     bool approx = false,
-    bool fast_and_approx = true,
     bool scale_en = false,
-    bool skip_positive_check = false,
     InputClamping input_clamping = InputClamping::ClampToNegative,
     int iterations = 8>
 ALWI void exp_packthread_tile(
@@ -128,15 +110,13 @@ ALWI void exp_packthread_tile(
     PACK(SFPU_TEMPLATE_PARAMS_KERNEL_FN(
         calculate_exponential,
         approx,
-        fast_and_approx,
         DST_ACCUM_MODE,
         scale_en,
-        skip_positive_check,
         (input_clamping == InputClamping::ClampToNegative),
         iterations,
         idst,
         vector_mode,
         scale));
 }
-
+#endif
 }  // namespace ckernel

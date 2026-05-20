@@ -145,14 +145,14 @@ Tensor repeat_and_interleave_eltwise_mul(
     const Tensor& b,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> dtype,
-    std::optional<MathFidelity> math_fidelity,
+    std::optional<tt::tt_metal::MathFidelity> math_fidelity,
     const std::optional<Tensor>& preallocated_output) {
     using OperationType = ttnn::experimental::prim::RepeatAndInterleaveEltwiseMulDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .memory_config = memory_config.value_or(a.memory_config()),
         .dtype = dtype.value_or(a.dtype()),
-        .math_fidelity = math_fidelity.value_or(MathFidelity::HiFi4),
+        .math_fidelity = math_fidelity.value_or(tt::tt_metal::MathFidelity::HiFi4),
     };
     auto tensor_args = OperationType::tensor_args_t{.a = a, .b = b, .preallocated_output = preallocated_output};
 

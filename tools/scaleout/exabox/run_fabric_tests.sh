@@ -9,7 +9,7 @@ Run fabric tests on 4x8, 4x32, or 8x16 cluster configuration.
 
 Required Options:
     --hosts <host-list>                 Comma-separated list of hosts (single host for 4x8)
-    --image <docker-image>              Docker image to use
+    --image <docker-image>              Docker image to use ("none" to use local build)
 
 Optional:
     --config <4x8|4x32|8x16>           Mesh configuration (default: 4x32)
@@ -22,6 +22,7 @@ Optional:
                                         (default: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric)
     --test-config <path>                Path to test configuration file
                                         (default: tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml)
+    --filter <pattern>                  Filter pattern passed to test_tt_fabric --filter
     --help                              Display this help message and exit
 
 Example:
@@ -42,6 +43,7 @@ MESH_GRAPH_DESC_PATH=""
 MESH_GRAPH_DESC_PATH_EXPLICIT=false
 TEST_BINARY="./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric"
 TEST_CONFIG="tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml"
+FILTER=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -108,6 +110,14 @@ while [[ $# -gt 0 ]]; do
             TEST_CONFIG="$2"
             shift 2
             ;;
+        --filter)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --filter requires a non-empty value"
+                exit 1
+            fi
+            FILTER="$2"
+            shift 2
+            ;;
         --help)
             show_help
             exit 0
@@ -161,16 +171,73 @@ echo "Output directory: $OUTPUT_DIR"
 echo "Mesh graph descriptor: $MESH_GRAPH_DESC_PATH"
 echo "Test binary: $TEST_BINARY"
 echo "Test config: $TEST_CONFIG"
+if [[ -n "$FILTER" ]]; then
+    echo "Filter: $FILTER"
+fi
 echo "Log file: $LOG_FILE"
 echo "=========================================="
 echo ""
 
 EXTRA_BINARY_ARGS=""
 if [[ "$TEST_BINARY" == *test_tt_fabric ]]; then
-    EXTRA_BINARY_ARGS="--show-progress --show-workers"
+    EXTRA_BINARY_ARGS="--show-progress-detail --show-workers --progress-interval 1"
+fi
+if [[ -n "$FILTER" ]]; then
+    EXTRA_BINARY_ARGS="$EXTRA_BINARY_ARGS --filter $FILTER"
 fi
 
-if [[ "$CONFIG" == "4x8" ]]; then
+# Marker used to detect reports written during this run (vs. stale ones from a
+# previous run). We compare report mtimes against this file with bash's `-nt`.
+RUN_START_MARKER="$(mktemp)"
+trap 'rm -f "$RUN_START_MARKER"' EXIT
+
+if [[ "$DOCKER_IMAGE" == "none" ]]; then
+    # No-docker path: invoke mpirun-ulfm directly against the local build.
+    if [[ "$CONFIG" == "4x8" ]]; then
+        SINGLE_HOST="${HOSTS%%,*}"
+        echo "Running single-host 4x8 on: $SINGLE_HOST (no docker)"
+        echo ""
+
+        mpirun-ulfm \
+            --tag-output \
+            --mca plm_ssh_args "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
+            --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+            --bind-to none \
+            --host "$SINGLE_HOST" \
+            -np 1 \
+            -x TT_MESH_ID=0 \
+            -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+            "$TEST_BINARY" \
+            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
+    else
+        mpirun-ulfm \
+            --tag-output \
+            --mca plm_ssh_args "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
+            --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+            --bind-to none \
+            --host "$HOSTS" \
+            -np 1 \
+            -x TT_MESH_ID=0 \
+            -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+            "$TEST_BINARY" \
+            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+            -np 1 \
+            -x TT_MESH_ID=0 \
+            -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+            "$TEST_BINARY" \
+            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+            -np 1 \
+            -x TT_MESH_ID=0 \
+            -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+            "$TEST_BINARY" \
+            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+            -np 1 \
+            -x TT_MESH_ID=0 \
+            -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+            "$TEST_BINARY" \
+            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
+    fi
+elif [[ "$CONFIG" == "4x8" ]]; then
     SINGLE_HOST="${HOSTS%%,*}"
     echo "Running single-host 4x8 on: $SINGLE_HOST"
     echo ""
@@ -182,7 +249,7 @@ if [[ "$CONFIG" == "4x8" ]]; then
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=0 "$TEST_BINARY" \
+        "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
 else
     ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
@@ -192,22 +259,22 @@ else
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=0 "$TEST_BINARY" \
+        "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=1 "$TEST_BINARY" \
+        "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=2 "$TEST_BINARY" \
+        "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=3 "$TEST_BINARY" \
+        "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
 fi
 
@@ -215,4 +282,17 @@ echo ""
 echo "=========================================="
 echo "Tests completed at $(date)"
 echo "Results logged to: $LOG_FILE"
+
+# Copy any pairwise-validation reports written by test_tt_fabric (only rank 0
+# writes them, and only when a hang is detected) into the user's --output dir
+# so all artifacts for this run live in one place. Only copy reports that were
+# written during this run (newer than $RUN_START_MARKER) so we don't pick up
+# stale files from a previous invocation.
+REPORT_SRC_DIR="${TT_METAL_HOME:-.}/generated/fabric"
+for report in pairwise_validation_summary.log pairwise_validation_detailed.log; do
+    if [[ -f "$REPORT_SRC_DIR/$report" && "$REPORT_SRC_DIR/$report" -nt "$RUN_START_MARKER" ]]; then
+        cp "$REPORT_SRC_DIR/$report" "$OUTPUT_DIR/"
+        echo "Copied report: $OUTPUT_DIR/$report"
+    fi
+done
 echo "=========================================="

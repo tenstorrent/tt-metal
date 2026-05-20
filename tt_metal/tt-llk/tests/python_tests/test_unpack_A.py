@@ -33,8 +33,8 @@ from helpers.param_config import (
     input_output_formats,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig, TestMode
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
@@ -382,13 +382,12 @@ def test_unpack_comprehensive(
     num_faces,
     face_r_dim,
     input_dimensions,
-    workers_tensix_coordinates,
 ):
 
     # torch.manual_seed(0.0)
     partial_face = face_r_dim < 16
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -414,7 +413,10 @@ def test_unpack_comprehensive(
             face_r_dim=face_r_dim,
             tile_cnt=tile_cnt_A,
         )
-    elif transpose_of_faces == Transpose.Yes and TestConfig.MODE != TestMode.PRODUCE:
+    elif (
+        transpose_of_faces == Transpose.Yes
+        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
+    ):
         # Both transpose flags are ALWAYS on together (mutually inclusive constraint)
         transpose_golden = get_golden_generator(TransposeGolden)
         # First apply within-face transpose, then face transpose
@@ -566,7 +568,7 @@ def test_unpack_comprehensive(
         unpack_to_dest=(formats.input_format.is_32_bit() and acc_to_dest),
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor

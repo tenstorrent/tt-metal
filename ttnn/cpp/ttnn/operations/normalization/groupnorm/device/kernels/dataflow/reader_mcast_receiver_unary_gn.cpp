@@ -5,12 +5,12 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/tensor.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     // clang-format off
@@ -123,18 +123,18 @@ void kernel_main() {
     constexpr uint32_t cb_x_id = tt::CBIndex::c_24;
     constexpr uint32_t cb_reread_out_id = tt::CBIndex::c_23;
 
-    experimental::Noc noc;
-    experimental::Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    experimental::Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
-    experimental::CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    experimental::CircularBuffer cb_ex2_partial(cb_ex2_partial_id);
-    experimental::CircularBuffer cb_ex_global(cb_ex_global_id);
-    experimental::CircularBuffer cb_ex2_global(cb_ex2_global_id);
-    experimental::CircularBuffer cb_in0(cb_in0_id);
-    experimental::CircularBuffer cb_repack(cb_repack_id);
-    experimental::CircularBuffer cb_repack_out(cb_repack_out_id);
-    experimental::CircularBuffer cb_out0(cb_out0_id);
-    experimental::CircularBuffer cb_reread_out(cb_reread_out_id);
+    Noc noc;
+    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
+    Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
+    CircularBuffer cb_ex_partial(cb_ex_partial_id);
+    CircularBuffer cb_ex2_partial(cb_ex2_partial_id);
+    CircularBuffer cb_ex_global(cb_ex_global_id);
+    CircularBuffer cb_ex2_global(cb_ex2_global_id);
+    CircularBuffer cb_in0(cb_in0_id);
+    CircularBuffer cb_repack(cb_repack_id);
+    CircularBuffer cb_repack_out(cb_repack_out_id);
+    CircularBuffer cb_out0(cb_out0_id);
+    CircularBuffer cb_reread_out(cb_reread_out_id);
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
     const DataFormat out_data_format = get_dataformat(cb_out0_id);
@@ -142,12 +142,12 @@ void kernel_main() {
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();
     uint32_t src_addr_in0 = in0_l1_read_addr;
-    experimental::UnicastEndpoint self_ep;
+    UnicastEndpoint self_ep;
     for (uint32_t m = 0; m < per_core_M; ++m) {
         cb_repack.reserve_back(per_core_N);
         uint32_t l1_write_addr_repack = cb_repack.get_write_ptr();
         for (uint32_t i = 0; i < tile_height; ++i) {
-            noc.async_read(self_ep, experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack), per_core_N_bytes, {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0}, {});
+            noc.async_read(self_ep, CoreLocalMem<uint32_t>(l1_write_addr_repack), per_core_N_bytes, {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0}, {});
             src_addr_in0 += per_core_N_bytes;
             l1_write_addr_repack += per_core_N_bytes_with_stride;
         }
@@ -198,7 +198,7 @@ void kernel_main() {
                     }
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
                     const uint32_t src0_tile_bytes = get_tile_size(cb_in0_id);
-                    const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
+                    const auto src_a = TensorAccessor(src0_args, src_addr);
                     uint32_t l1_write_addr;
                     l1_write_addr = cb_in0.get_write_ptr();
                     cb_in0.reserve_back(out_block_hw_normal);
@@ -206,7 +206,7 @@ void kernel_main() {
                         for (uint32_t nt = 0; nt < block_w; nt++) {
                             noc.async_read(
                                 src_a,
-                                experimental::CoreLocalMem<uint32_t>(l1_write_addr),
+                                CoreLocalMem<uint32_t>(l1_write_addr),
                                 src0_tile_bytes,
                                 {.page_id = start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_b_offset +
                                     index_g_offset},
@@ -238,7 +238,7 @@ void kernel_main() {
                         }
                     } else if (cur_read_iteration == 2) {
                         // add or copy with previous output results
-                        const auto dst_a = TensorAccessor(out_args, out_addr, single_tile_size_bytes);
+                        const auto dst_a = TensorAccessor(out_args, out_addr);
 
                         uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
@@ -251,7 +251,7 @@ void kernel_main() {
                             for (uint32_t nt = 0; nt < block_w_curr; nt++) {
                                 noc.async_read(
                                     dst_a,
-                                    experimental::CoreLocalMem<uint32_t>(l1_write_addr),
+                                    CoreLocalMem<uint32_t>(l1_write_addr),
                                     single_tile_size_bytes,
                                     {.page_id = out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
                                         index_b_offset + index_g_offset},
@@ -319,9 +319,9 @@ void kernel_main() {
         cb_repack_out.wait_front(per_core_N);
         uint32_t in0_l1_read_addr = cb_repack_out.get_read_ptr();
         uint32_t src_addr_in0 = in0_l1_read_addr;
-        experimental::UnicastEndpoint self_ep;
+        UnicastEndpoint self_ep;
         for (uint32_t i = 0; i < tile_height; ++i) {
-            noc.async_read(self_ep, experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack), per_core_N_bytes, {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0}, {});
+            noc.async_read(self_ep, CoreLocalMem<uint32_t>(l1_write_addr_repack), per_core_N_bytes, {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0}, {});
             src_addr_in0 += per_core_N_bytes_with_stride;
             l1_write_addr_repack += per_core_N_bytes;
         }

@@ -8,7 +8,7 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, format_dict, format_tile_sizes
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli_w_tile_dimensions
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     INPUT_DIMENSIONS,
@@ -40,7 +40,9 @@ WIDTHS = [
     dimensions=[(1, w) for w in WIDTHS],
 )
 def test_fast_tilize_tiny_tiles(
-    formats, dest_acc, dimensions, workers_tensix_coordinates
+    formats,
+    dest_acc,
+    dimensions,
 ):
 
     if (
@@ -55,7 +57,7 @@ def test_fast_tilize_tiny_tiles(
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(TILE_DIMENSIONS)
     num_faces = num_faces_r_dim * num_faces_c_dim
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_w_tile_dimensions(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -109,7 +111,7 @@ def test_fast_tilize_tiny_tiles(
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     # Verify the kernel wrote a contiguous block of tiles to L1 (no gaps
     # from incorrect bank-switch addressing). This confirms the packer's
@@ -119,7 +121,7 @@ def test_fast_tilize_tiny_tiles(
     )
     expected_bytes = tile_size_actual * tile_cnt_A
     raw_res = read_from_device(
-        workers_tensix_coordinates,
+        TestConfig.TENSIX_LOCATION,
         configuration.variant_stimuli.buf_res_addr,
         num_bytes=expected_bytes,
     )

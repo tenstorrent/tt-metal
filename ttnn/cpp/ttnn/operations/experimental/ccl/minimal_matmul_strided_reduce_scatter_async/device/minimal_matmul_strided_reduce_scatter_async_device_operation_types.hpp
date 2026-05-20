@@ -39,7 +39,6 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
     const std::optional<uint32_t> chunk_width_in_mm_blocks;
 
     const CoreCoord reduce_scatter_core_grid_offset;
-    const std::vector<tt::tt_metal::IDevice*> devices;
 };
 
 struct MinimalMatmulStridedReduceScatterAsyncInputs {

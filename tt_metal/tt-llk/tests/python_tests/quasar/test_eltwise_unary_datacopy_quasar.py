@@ -13,6 +13,7 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
+    DestSync,
     ImpliedMathFormat,
     UnpackerEngine,
     format_dict,
@@ -24,7 +25,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
@@ -47,15 +48,14 @@ def generate_eltwise_unary_datacopy_combinations(
 
     Args: List of input-output format pairs
 
-    Returns: List of (format, dest_acc, data_copy_type, input_dimensions, edgecase_dest_index) tuples
+    Returns: List of (format, dest_acc, data_copy_type, input_dimensions, dest_sync, edgecase_dest_index) tuples
     """
     dimensions_cache = {
-        DestAccumulation.No: tuple(
-            generate_unary_input_dimensions(DestAccumulation.No)
-        ),
-        DestAccumulation.Yes: tuple(
-            generate_unary_input_dimensions(DestAccumulation.Yes)
-        ),
+        (dest_acc, dest_sync): tuple(
+            generate_unary_input_dimensions(dest_acc, dest_sync)
+        )
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        for dest_sync in (DestSync.Half, DestSync.Full)
     }
 
     combinations = []
@@ -64,6 +64,7 @@ def generate_eltwise_unary_datacopy_combinations(
         in_fmt = fmt.input_format
 
         dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
+        dest_sync_modes = (DestSync.Half, DestSync.Full)
         data_copy_types = (DataCopyType.A2D, DataCopyType.B2D)
 
         for dest_acc in dest_acc_modes:
@@ -76,21 +77,24 @@ def generate_eltwise_unary_datacopy_combinations(
                 # This combination is not supported in the Quasar Packer format conversions
                 continue
 
-            for data_copy_type in data_copy_types:
-                for dimensions in dimensions_cache[dest_acc]:
-                    for _, edgecase_dest_index in calculate_edgecase_dest_indices(
-                        True if dest_acc == DestAccumulation.Yes else False,
-                        dimensions[0] // 32 * dimensions[1] // 32,
-                    ):
-                        combinations.append(
-                            (
-                                fmt,
-                                dest_acc,
-                                data_copy_type,
-                                dimensions,
-                                edgecase_dest_index,
+            for dest_sync in dest_sync_modes:
+                for data_copy_type in data_copy_types:
+                    for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
+                        for _, edgecase_dest_index in calculate_edgecase_dest_indices(
+                            True if dest_acc == DestAccumulation.Yes else False,
+                            dimensions[0] // 32 * dimensions[1] // 32,
+                            [dest_sync],
+                        ):
+                            combinations.append(
+                                (
+                                    fmt,
+                                    dest_acc,
+                                    data_copy_type,
+                                    dimensions,
+                                    dest_sync,
+                                    edgecase_dest_index,
+                                )
                             )
-                        )
 
     return combinations
 
@@ -99,6 +103,7 @@ DATACOPY_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
+        DataFormat.MxFp4,
     ]
 )
 ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
@@ -108,20 +113,30 @@ ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_data_copy_type_dims_dest_indices=ALL_DATACOPY_COMBINATIONS,
+    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=ALL_DATACOPY_COMBINATIONS,
     implied_math_format=[ImpliedMathFormat.Yes, ImpliedMathFormat.No],
 )
 def test_eltwise_unary_datacopy_quasar(
-    formats_dest_acc_data_copy_type_dims_dest_indices,
+    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
     implied_math_format,
 ):
-    formats = formats_dest_acc_data_copy_type_dims_dest_indices[0]
-    dest_acc = formats_dest_acc_data_copy_type_dims_dest_indices[1]
-    data_copy_type = formats_dest_acc_data_copy_type_dims_dest_indices[2]
-    input_dimensions = formats_dest_acc_data_copy_type_dims_dest_indices[3]
-    dest_index = formats_dest_acc_data_copy_type_dims_dest_indices[4]
+    (
+        formats,
+        dest_acc,
+        data_copy_type,
+        input_dimensions,
+        dest_sync_mode,
+        dest_index,
+    ) = formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
+    if (
+        formats.input_format.is_mx_format()
+        and implied_math_format == ImpliedMathFormat.No
+    ):
+        pytest.skip("MX formats require implied_math_format=Yes on Quasar")
+
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -137,6 +152,7 @@ def test_eltwise_unary_datacopy_quasar(
         formats.output_format,
         num_faces=num_faces,
         input_dimensions=input_dimensions,
+        input_format=formats.input_format,
     )
 
     configuration = TestConfig(
@@ -150,7 +166,7 @@ def test_eltwise_unary_datacopy_quasar(
                 if data_copy_type == DataCopyType.B2D
                 else UnpackerEngine.UnpA
             ),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
@@ -171,6 +187,11 @@ def test_eltwise_unary_datacopy_quasar(
         ),
         unpack_to_dest=False,
         dest_acc=dest_acc,
+        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting
+        disable_format_inference=(
+            implied_math_format == ImpliedMathFormat.Yes
+            and formats.input_format.is_mx_format()
+        ),
     )
 
     res_from_L1 = configuration.run().result

@@ -16,7 +16,7 @@ int compute_sdpa_ideal_cycles(
     uint32_t DH,
     uint32_t DV,
     bool is_causal,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     int num_cores) {
     constexpr int64_t FLOPS_PER_FMA = 2;  // Each FMA is 2 FLOPS
     int64_t num_mul_adds = 0;

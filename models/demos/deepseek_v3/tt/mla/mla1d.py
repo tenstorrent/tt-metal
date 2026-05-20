@@ -27,9 +27,9 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MeshDeviceStub,
     PermuteConfig,
     ReshardConfig,
-    SavedWeight,
     SliceConfig,
 )
+from models.demos.deepseek_v3.utils.config_helpers import K_CHUNK_SIZE, Q_CHUNK_SIZE
 from models.demos.deepseek_v3.utils.config_helpers import SEQ_LEN_CHUNK_SIZE as DEFAULT_SEQ_LEN_CHUNK_SIZE
 from models.demos.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
@@ -68,7 +68,17 @@ def pad_batch_to_dram_banks(batch, num_banks=12):
     return ((batch + num_banks - 1) // num_banks) * num_banks
 
 
-def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_w=32, *, mesh_device: ttnn.Device):
+def build_prefill_matmul_program_config(
+    seq_len,
+    k,
+    n,
+    batch=1,
+    tile_h=32,
+    tile_w=32,
+    *,
+    mesh_device: ttnn.Device,
+    override_compute_grid: ttnn.CoreGrid = None,
+):
     """Build MatmulMultiCoreReuseMultiCastProgramConfig for prefill matmuls.
 
     Handles both unbatched (batch=1, fuse_batch=True) and batched (batch>1, fuse_batch=False)
@@ -91,7 +101,8 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
     N_tiles = even_int_div(n, tile_w)
 
     compute_grid = mesh_device.compute_with_storage_grid_size()
-
+    if override_compute_grid is not None:
+        compute_grid = override_compute_grid
     # grid_x splits N dimension; grid_y splits M dimension
     grid_x = 1
     for x in range(min(compute_grid.x, N_tiles), 0, -1):
@@ -323,9 +334,8 @@ class MLA1D(AbstractModule):
             shape=(num_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank),
         ).reshape(num_shards, num_heads, qk_nope_head_dim + v_head_dim, kv_lora_rank)
 
-        torch_weights_k = torch_weights[..., :qk_nope_head_dim, :].transpose(
-            -2, -1
-        )  # [num_shards, num_heads, kv_lora_rank, qk_nope_head_dim]
+        torch_weights_k = torch_weights[..., :qk_nope_head_dim, :].transpose(-2, -1).contiguous()
+        # [num_shards, num_heads, kv_lora_rank, qk_nope_head_dim]
         torch_weights_v = torch_weights[..., qk_nope_head_dim:, :]  # [num_shards, num_heads, v_head_dim, kv_lora_rank]
 
         # Create DRAM HEIGHT sharded memory config for wkv_b1 (batch sharding)
@@ -402,10 +412,10 @@ class MLA1D(AbstractModule):
         mesh_device: ttnn.MeshDevice,
         memory_config: ttnn.MemoryConfig,
         padding_needed: tuple[int, int, int] = (0, 0, 0),
-    ) -> SavedWeight:
+    ) -> ttnn.Tensor:
         return shard_and_save(
             path,
-            torch_metaweight.transpose(-2, -1),
+            torch_metaweight.transpose(-2, -1).contiguous(),
             shard_dims=dims,
             mesh_device=mesh_device,
             dtype=ttnn.bfloat8_b,
@@ -488,8 +498,8 @@ class MLA1D(AbstractModule):
         )
 
         # FlashMLA
-        q_chunk_size = 128  # TODO: Make dynamic?
-        k_chunk_size = 128  # TODO: Make dynamic?
+        q_chunk_size = Q_CHUNK_SIZE
+        k_chunk_size = K_CHUNK_SIZE
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -963,7 +973,7 @@ class MLA1D(AbstractModule):
 
         # FlashMLA
         q_chunk_size = 0  # Unused in decode mode
-        k_chunk_size = 128  # TODO: Make dynamic?
+        k_chunk_size = K_CHUNK_SIZE
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -2031,14 +2041,21 @@ class MLA1D(AbstractModule):
         cfg: RunDecodeConfig,
         rope_tensors: dict,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        # Parallel Q and KV Norms
-        # Q: 1,1,32,1536, width sharded 8x2 [32,96]
-        # KV: 1,1,32,512 8x2 [32,32]
-        q_norm_desc = descriptors.rms_norm(tt_q, program_config=RMSNorm._get_pc(tt_q.memory_config()), **cfg["q_norm"])
-        kv_norm_desc = descriptors.rms_norm(
-            tt_kv_nope, program_config=RMSNorm._get_pc(tt_kv_nope.memory_config()), **cfg["kv_norm"]
-        )
-        tt_q, tt_kv_nope = Parallel(q_norm_desc, kv_norm_desc).run()
+        # Parallel Q and KV Norms — persistent Parallel (reuse OpDescriptors + update).
+        # Q: 1,1,32,1536, width sharded 4x4 [32,96]
+        # KV: 1,1,32,512, width sharded 2x8 [32,32]
+        fused = cfg.get("fused_qkv_norm")
+        if fused is None:
+            q_pc = RMSNorm._get_pc(tt_q.memory_config())
+            kv_pc = RMSNorm._get_pc(tt_kv_nope.memory_config())
+            fused = Parallel(
+                q=descriptors.rms_norm(program_config=q_pc, **cfg["q_norm"]),
+                kv=descriptors.rms_norm(program_config=kv_pc, **cfg["kv_norm"]),
+            )
+            cfg["fused_qkv_norm"] = fused
+        fused.q.update(tt_q)
+        fused.kv.update(tt_kv_nope)
+        tt_q, tt_kv_nope = fused.run()
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
 
         # KV RoPE
@@ -2374,6 +2391,9 @@ class MLA1D(AbstractModule):
             n=qkv_a_n,
             batch=batch_size,
             mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+            override_compute_grid=ttnn.CoreGrid(
+                x=6, y=6
+            ),  # FIXME: optimize this config for prefill, potential DI_DT hang WORKAROUND. See issue #41501.
         )
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"], program_config=wq_kv_a_program_config)
 

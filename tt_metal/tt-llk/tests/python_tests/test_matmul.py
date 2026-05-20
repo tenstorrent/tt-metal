@@ -14,7 +14,7 @@ from helpers.matmul_sweep import (
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import StimuliSpec, generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -58,6 +58,7 @@ def generate_format_aware_matmul_combinations(
 MATMUL_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32, DataFormat.Bfp8_b]
 )
+
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
     MATMUL_FORMATS, DEST_ACC_MODES
@@ -77,7 +78,6 @@ ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
 def test_matmul(
     math_fidelity,
     format_dest_acc_and_dims,
-    workers_tensix_coordinates,
     boot_mode=BootMode.DEFAULT,
 ):
     torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
@@ -87,12 +87,14 @@ def test_matmul(
     input_A_dimensions = format_dest_acc_and_dims[2][0]
     input_B_dimensions = format_dest_acc_and_dims[2][1]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_A_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_B_dimensions,
-        sfpu=False,
+        spec_A=sfpu_false_spec,
+        spec_B=sfpu_false_spec,
     )
 
     # Calculate all matmul dimensions using helper function
@@ -147,7 +149,7 @@ def test_matmul(
         boot_mode=boot_mode,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor

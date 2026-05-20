@@ -6,10 +6,22 @@
 import ml_dtypes
 import numpy as np
 import torch
-from helpers.format_config import MXFP8_BLOCK_SIZE, DataFormat
+from helpers.format_config import (
+    MX_FORMAT_BLOCK_SIZE,
+    MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN,
+    MXFP8_SRCS_SLICE_PACKED_BYTE_LEN,
+    DataFormat,
+)
 
 from .llk_params import format_dict, format_tile_sizes
-from .tile_constants import FACE_C_DIM, MAX_FACE_R_DIM, MAX_NUM_FACES, MIN_BFP_EXPONENTS
+from .tile_constants import (
+    FACE_C_DIM,
+    MAX_FACE_R_DIM,
+    MAX_NUM_FACES,
+    MIN_BFP_EXPONENTS,
+    SRCS_SLICE_32B_ROW_DIM,
+    SRCS_SLICE_ROW_DIM,
+)
 
 
 def unpack_fp16(packed_list):
@@ -28,15 +40,24 @@ def unpack_fp32(packed_list):
     return np.frombuffer(bytes(packed_list), dtype=np.float32).tolist()
 
 
-def unpack_int32(packed_list):
-    return np.frombuffer(bytes(packed_list), dtype=np.int32).tolist()
+def unpack_int32(packed_list, twos_complement=False):
+    if twos_complement:
+        return np.frombuffer(bytes(packed_list), dtype=np.int32).tolist()
+    # INT32 uses sign-magnitude format in hardware (not two's complement)
+    # Format: bit 31 = sign, bits 30:0 = magnitude
+    uint32_array = np.frombuffer(bytes(packed_list), dtype=np.uint32)
+    sign = (uint32_array & 0x80000000).astype(bool)
+    magnitude = (uint32_array & 0x7FFFFFFF).astype(np.int64)
+    return np.where(sign, -magnitude, magnitude).astype(np.int32).tolist()
 
 
 def unpack_uint32(packed_list):
     return np.frombuffer(bytes(packed_list), dtype=np.uint32).tolist()
 
 
-def unpack_int16(packed_list):
+def unpack_int16(packed_list, twos_complement=False):
+    if twos_complement:
+        return np.frombuffer(bytes(packed_list), dtype=np.int16).tolist()
     # INT16 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 15 = sign, bits 14:0 = magnitude
     uint16_array = np.frombuffer(bytes(packed_list), dtype=np.uint16)
@@ -57,7 +78,9 @@ def unpack_fp8_e4m3(packed_list):
     )
 
 
-def unpack_int8(packed_list):
+def unpack_int8(packed_list, twos_complement=False):
+    if twos_complement:
+        return np.frombuffer(bytes(packed_list), dtype=np.int8).tolist()
     # INT8 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 7 = sign, bits 6:0 = magnitude
     uint8_array = np.frombuffer(bytes(packed_list), dtype=np.uint8)
@@ -203,41 +226,44 @@ def unpack_bfp4_b(bfp4_block, sfpu=False, num_faces=4, face_r_dim=16):
 # ============================================================================
 
 
-def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4):
+def _align16(n: int) -> int:
+    """Round *n* up to the next 16-byte boundary."""
+    return (n + 15) & ~15
+
+
+def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DIM):
     """
-    Unpack MXFP8 format with layout: [all_scales][all_elements]
+    Unpack MXFP8 format with layout: [scales padded to 16B][elements padded to 16B].
+
+    One E8M0 scale byte per 32-element block.
 
     Args:
         packed_bytes: List of bytes in [all scales][all elements] format
         fp8_dtype: ml_dtypes dtype (float8_e5m2 or float8_e4m3fn)
         num_faces: Number of faces (1, 2, or 4). Defaults to 4.
+        face_r_dim: Rows per face (1, 2, 4, 8, or 16). Defaults to 16.
 
     Returns:
         torch.Tensor of bfloat16 values
     """
-    num_scales = num_faces * 8
-    num_blocks = num_faces * 8
+    num_elements = face_r_dim * FACE_C_DIM * num_faces
+    num_scales = num_elements // MX_FORMAT_BLOCK_SIZE
+
+    scale_section_len = _align16(num_scales)
 
     scales_e8m0 = packed_bytes[:num_scales]
-    elements_bytes = packed_bytes[num_scales:]
+    elements_bytes = packed_bytes[scale_section_len : scale_section_len + num_elements]
 
-    # Convert all elements to FP8 array using ml_dtypes
-    fp8_array = np.frombuffer(bytes(elements_bytes), dtype=fp8_dtype)
-
-    # Reshape into blocks: (num_blocks, 32)
-    fp8_blocks = fp8_array[: num_blocks * MXFP8_BLOCK_SIZE].reshape(
-        num_blocks, MXFP8_BLOCK_SIZE
+    # Convert elements bytes to FP8 blocks and reshape to (num_scales, 32)
+    fp8_blocks = np.frombuffer(bytes(elements_bytes), dtype=fp8_dtype).reshape(
+        num_scales, MX_FORMAT_BLOCK_SIZE
     )
 
     # Vectorized scale decoding - decode all E8M0 scales at once
     scales_array = np.frombuffer(bytes(scales_e8m0), dtype=np.uint8)
     # Handle NaN case (255) and compute 2^(exponent) where exponent = value - 127
     scale_factors = np.where(
-        scales_array == 255, np.nan, np.exp2(scales_array.astype(np.float32) - 127.0)
-    )
-    # Replace NaN and zero scales with 0
-    scale_factors = np.where(
-        np.isnan(scale_factors) | (scale_factors == 0), 0, scale_factors
+        scales_array == 255, 0.0, np.exp2(scales_array.astype(np.float32) - 127.0)
     )
 
     # Scale blocks back to float32
@@ -247,32 +273,196 @@ def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4):
     return torch.tensor(scaled_blocks.flatten(), dtype=torch.bfloat16)
 
 
-def unpack_mxfp8r(packed_bytes, num_faces=4):
+def _unpack_mxfp8_srcs(packed_bytes, fp8_dtype, dest_acc: bool = False):
+    """Unpack sequential SrcS slices for MX formats.
+
+    Slice geometry depends on *dest_acc*:
+      - 16-bit (dest_acc=False): 8×16 = 128 elements/slice, 144 bytes
+      - 32-bit (dest_acc=True):  4×16 =  64 elements/slice,  80 bytes
+    """
+    if dest_acc:
+        slice_len = MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN
+        slice_row_dim = SRCS_SLICE_32B_ROW_DIM
+    else:
+        slice_len = MXFP8_SRCS_SLICE_PACKED_BYTE_LEN
+        slice_row_dim = SRCS_SLICE_ROW_DIM
+
+    num_bytes = len(packed_bytes)
+    if num_bytes % slice_len != 0:
+        raise ValueError(
+            f"Invalid packed_bytes length for use_srcs=True: got {num_bytes} bytes, "
+            f"expected a multiple of {slice_len} bytes per SrcS slice."
+        )
+
+    out = []
+    for i in range(0, num_bytes, slice_len):
+        out.append(
+            _unpack_mxfp8(
+                packed_bytes[i : i + slice_len],
+                fp8_dtype,
+                num_faces=1,
+                face_r_dim=slice_row_dim,
+            )
+        )
+    return torch.cat(out)
+
+
+def unpack_mxfp8r(
+    packed_bytes,
+    num_faces=4,
+    face_r_dim=MAX_FACE_R_DIM,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
     """
     Unpack MXFP8R format (E5M2 variant) to bfloat16 tensor.
 
     Args:
         packed_bytes: Packed MX data in FULLY SEPARATED layout [all_scales][all_elements]
         num_faces: Number of faces to unpack (1, 2, or 4). Defaults to 4.
+        face_r_dim: Rows per face (1, 2, 4, 8, or 16). Defaults to 16.
+        use_srcs: If True, unpack sequential SrcS slices instead of a
+            single flat tile.  Supports sub-tile sizes (any multiple of one slice).
+        dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
+            (4×16, 80 bytes/slice) instead of 16-bit (8×16, 144 bytes/slice).
 
     Returns:
         torch.Tensor of bfloat16 values
     """
-    return _unpack_mxfp8(packed_bytes, ml_dtypes.float8_e5m2, num_faces)
+    if use_srcs:
+        return _unpack_mxfp8_srcs(packed_bytes, ml_dtypes.float8_e5m2, dest_acc)
+    return _unpack_mxfp8(packed_bytes, ml_dtypes.float8_e5m2, num_faces, face_r_dim)
 
 
-def unpack_mxfp8p(packed_bytes, num_faces=4):
+def unpack_mxfp8p(
+    packed_bytes,
+    num_faces=4,
+    face_r_dim=MAX_FACE_R_DIM,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
     """
     Unpack MXFP8P format (E4M3 variant) to bfloat16 tensor.
 
     Args:
         packed_bytes: Packed MX data in FULLY SEPARATED layout [all_scales][all_elements]
         num_faces: Number of faces to unpack (1, 2, or 4). Defaults to 4.
+        face_r_dim: Rows per face (1, 2, 4, 8, or 16). Defaults to 16.
+        use_srcs: If True, unpack sequential SrcS slices instead of a
+            single flat tile.  Supports sub-tile sizes (any multiple of one slice).
+        dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
+            (4×16, 80 bytes/slice) instead of 16-bit (8×16, 144 bytes/slice).
 
     Returns:
         torch.Tensor of bfloat16 values
     """
-    return _unpack_mxfp8(packed_bytes, ml_dtypes.float8_e4m3fn, num_faces)
+    if use_srcs:
+        return _unpack_mxfp8_srcs(packed_bytes, ml_dtypes.float8_e4m3fn, dest_acc)
+    return _unpack_mxfp8(packed_bytes, ml_dtypes.float8_e4m3fn, num_faces, face_r_dim)
+
+
+def unpack_mxfp4(
+    packed_bytes,
+    num_faces=4,
+    face_r_dim=MAX_FACE_R_DIM,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
+    """
+    Unpack MXFP4 format (E2M1 variant) to bfloat16 tensor.
+    Function is implemented based on the OCP MX specification and Tensix hardware documentation.
+
+    MXFP4 uses 32-element blocks per OCP MX spec, each with:
+      - 1 shared E8M0 scale (8 bits)
+      - 32 × float4_e2m1fn elements (4 bits each, packed 2 per byte)
+
+    Layout: [all_scales][all_packed_elements]
+      - [32 scales (1 per block)][512 bytes (2 FP4 elements per byte)]
+
+    Per Tensix hardware documentation:
+      - Block exp = 0xFF (255): NaN block, all elements become NaN
+      - Block exp = 0x00 (0): neutral-ish scale for zeros
+
+    Args:
+        packed_bytes: Packed MX data in FULLY SEPARATED layout [all_scales][all_elements]
+        num_faces: Number of faces to unpack (1, 2, or 4). Defaults to 4.
+        face_r_dim: Rows per face (1, 2, 4, 8, or 16). Defaults to 16.
+        use_srcs: If True, unpack sequential SrcS slices (not yet implemented for MxFp4).
+        dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry (not yet implemented for MxFp4).
+
+    Returns:
+        torch.Tensor of bfloat16 values
+    """
+    if use_srcs:
+        # SrcS mode not yet implemented for MxFp4
+        raise NotImplementedError("use_srcs mode is not yet supported for MxFp4")
+
+    block_size = MX_FORMAT_BLOCK_SIZE
+    num_elements = face_r_dim * FACE_C_DIM * num_faces
+    num_blocks = num_elements // block_size
+
+    if num_elements % block_size != 0:
+        raise ValueError(
+            "Invalid MXFP4 tile geometry: num_elements must be a multiple of "
+            f"{block_size}, got {num_elements}."
+        )
+
+    # Expected bytes = 1 scale byte per block (16B-aligned) + packed FP4 elements.
+    scale_section_len = _align16(num_blocks)
+    element_bytes_len = num_blocks * (block_size // 2)
+    expected_len = scale_section_len + element_bytes_len
+    if len(packed_bytes) != expected_len:
+        raise ValueError(
+            "Invalid packed_bytes length for MXFP4: got "
+            f"{len(packed_bytes)} bytes, expected {expected_len} bytes."
+        )
+
+    scales_u8 = np.frombuffer(bytes(packed_bytes[:num_blocks]), dtype=np.uint8)
+    packed_u8 = np.frombuffer(
+        bytes(packed_bytes[scale_section_len : scale_section_len + element_bytes_len]),
+        dtype=np.uint8,
+    )
+
+    # Each byte packs 2 FP4 values: low nibble then high nibble.
+    nibbles_u8 = np.empty(packed_u8.size * 2, dtype=np.uint8)
+    nibbles_u8[0::2] = packed_u8 & 0x0F
+    nibbles_u8[1::2] = packed_u8 >> 4
+
+    fp4_f32 = (
+        nibbles_u8.view(ml_dtypes.float4_e2m1fn)[: num_blocks * block_size]
+        .reshape(num_blocks, block_size)
+        .astype(np.float32)
+    )
+
+    block_exp_unbiased = scales_u8.astype(np.int32) - 127  # E8M0 bias=127
+    scaled_blocks = fp4_f32 * np.exp2(block_exp_unbiased.astype(np.float32))[:, None]
+
+    # Extract 2-bit exponent field from E2M1 format
+    unit_exp_field = (
+        ((nibbles_u8 >> 1) & 0x3)
+        .astype(np.int32)[: num_blocks * block_size]
+        .reshape(num_blocks, block_size)
+    )
+
+    # E2M1 unbiased exponent calculation (bias=1):
+    # - Normal values (exp_field != 0): unbiased = exp_field - 1
+    # - Subnormal values (exp_field == 0): unbiased = 0 (fixed at 1-bias)
+    unit_exp_unbiased = np.where(unit_exp_field == 0, 0, unit_exp_field - 1)
+    combined_unbiased = block_exp_unbiased[:, None] + unit_exp_unbiased
+
+    nan_blocks = scales_u8 == 0xFF
+    overflow_mask = (combined_unbiased >= 128) & ~nan_blocks[:, None]
+    underflow_mask = (combined_unbiased < -127) & ~nan_blocks[:, None]
+
+    if np.any(nan_blocks):
+        scaled_blocks[nan_blocks] = np.nan
+
+    scaled_blocks[overflow_mask] = np.where(
+        scaled_blocks[overflow_mask] >= 0.0, np.inf, -np.inf
+    )
+    scaled_blocks[underflow_mask] = 0.0
+
+    return torch.tensor(scaled_blocks.ravel(), dtype=torch.bfloat16)
 
 
 _UNPACKERS = {
@@ -297,6 +487,9 @@ def unpack_res_tiles(
     num_faces: int = MAX_NUM_FACES,
     face_r_dim: int = MAX_FACE_R_DIM,
     tile_stride_bytes: int = None,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+    twos_complement: bool = False,
 ):
     output_dtype = format_dict[output_format]
 
@@ -328,6 +521,8 @@ def unpack_res_tiles(
         unpack_func = unpack_mxfp8r
     elif output_format == DataFormat.MxFp8P:
         unpack_func = unpack_mxfp8p
+    elif output_format == DataFormat.MxFp4:
+        unpack_func = unpack_mxfp4
     else:
         unpack_func = _UNPACKERS[output_format]
 
@@ -343,8 +538,20 @@ def unpack_res_tiles(
             unpacked_tile = unpack_func(
                 tile_data, sfpu=sfpu, num_faces=num_faces, face_r_dim=face_r_dim
             )
-        elif unpack_func in [unpack_mxfp8r, unpack_mxfp8p]:
-            unpacked_tile = unpack_func(tile_data, num_faces=num_faces)
+        elif unpack_func in [unpack_mxfp8r, unpack_mxfp8p, unpack_mxfp4]:
+            unpacked_tile = unpack_func(
+                tile_data,
+                num_faces=num_faces,
+                face_r_dim=face_r_dim,
+                use_srcs=use_srcs,
+                dest_acc=dest_acc,
+            )
+        elif twos_complement and unpack_func in (
+            unpack_int32,
+            unpack_int16,
+            unpack_int8,
+        ):
+            unpacked_tile = unpack_func(tile_data, twos_complement=True)
         else:
             unpacked_tile = unpack_func(tile_data)
 

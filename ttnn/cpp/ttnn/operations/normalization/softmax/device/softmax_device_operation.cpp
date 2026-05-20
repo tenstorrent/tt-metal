@@ -13,6 +13,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/normalization/shard_spec_validation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -325,6 +326,12 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                     shard_shape[0],
                     shard_shape[1],
                     tensors_args.input_tensor.tensor_spec().tile().get_width());
+
+                const auto& a = tensors_args.input_tensor;
+                if (a.is_sharded()) {
+                    ttnn::operations::normalization::detail::validate_sharded_input(
+                        a, program_config.compute_with_storage_grid_size);
+                }
             }
         },
         attributes.program_config);
@@ -412,7 +419,7 @@ SoftmaxDeviceOperation::create_op_performance_model(
 static DeviceComputeKernelConfig softmax_init_compute_kernel_config(
     tt::ARCH arch, const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config, bool is_fp32) {
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    const auto default_fidelity = (is_wormhole && is_fp32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
+    const auto default_fidelity = (is_wormhole && is_fp32) ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
     verify_numerical_configuration(arch, compute_kernel_config);
     return init_device_compute_kernel_config(arch, compute_kernel_config, default_fidelity, true, is_fp32, false);
 }

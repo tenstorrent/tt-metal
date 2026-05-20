@@ -15,6 +15,9 @@
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_reduce_api.h"
 #endif
+#ifdef TRISC_PACK
+#include "llk_pack_reduce_api.h"
+#endif
 
 namespace ckernel {
 
@@ -36,6 +39,16 @@ namespace ckernel {
  * above-mentioned scaling factors to ensure that operations function as intended. Refer to ISA documentation for more details.
  * NOTE: For other valid ways of populating the `icb_scaler`, refer to the ISA documentation.
  *
+ * Output tile layout (packer-zeroing contract): for all three values of `reduce_dim`, `reduce_init` programs the
+ * packer's edge masks (`_llk_pack_reduce_mask_config_<reduce_dim, …>`) so that any output datum that is not part
+ * of the reduction result is written to CB by the packer as zero. Specifically, for any tile packed into `ocb`
+ * while this reduce_init's packer state is in effect:
+ *   - `REDUCE_SCALAR`: the scalar result is at face-0 `[0, 0]`; every other datum in the tile is zero.
+ *   - `REDUCE_ROW`:    each row's reduced value is at column 0 of that row; every other datum in the tile is zero.
+ *   - `REDUCE_COL`:    each column's reduced value is at row 0 of that column; every other datum in the tile is zero.
+ * A reset to the default packer mask happens via `reduce_uninit` (or by the next non-reduce init); until then this
+ * contract holds for every pack into `ocb`.
+ *
  * Return value: None
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
@@ -48,7 +61,7 @@ namespace ckernel {
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
+template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
 ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb, icb_scaler, ocb, call_line);
 #ifndef ARCH_QUASAR
@@ -58,12 +71,11 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, uint32_t 
         MATH((tensix_sync()));
         MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11)));
     }
-    PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>()));
 #else
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>(icb)));
-    PACK((llk_pack_reduce_mask_config<reduce_dim>()));
 #endif
+    PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>()));
 }
 
 // clang-format off
@@ -132,7 +144,7 @@ ALWI void reduce_uninit(uint32_t icb = 0) {
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
+template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
 ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t itile_scaler, uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
@@ -172,7 +184,7 @@ ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_
  * | Function   | num_faces                 | Number of faces to reduce (optional, default 4)                                         | uint32_t  | 1 to 4                                         | False    |
  */
 // clang-format on
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
+template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
 ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
 #ifndef ARCH_QUASAR
     ASSERT(num_faces > 0 && num_faces <= MAX_NUM_FACES);
@@ -201,7 +213,7 @@ ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
  * | Function   | tensor_shape              | The shape of the tensor to reduce                                                       | ckernel::TensorShape | N/A                                            | True     |
  */
 // clang-format on
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
+template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
 ALWI void reduce_tile_math(uint32_t idst, const ckernel::TensorShape& tensor_shape) {
 #ifndef ARCH_QUASAR
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(

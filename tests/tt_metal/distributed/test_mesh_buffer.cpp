@@ -34,6 +34,7 @@
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
@@ -42,6 +43,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::distributed::test {
@@ -54,6 +56,22 @@ static_assert(std::is_move_assignable_v<MeshBuffer>, "MeshBuffer should be move 
 
 using MeshBufferTest2x4 = MeshDevice2x4Fixture;
 using MeshBufferTestSuite = GenericMeshDeviceFixture;
+
+class ScopedPinnedMemoryCacheLimit {
+public:
+    explicit ScopedPinnedMemoryCacheLimit(size_t limit_bytes) :
+        previous_limit_bytes_(
+            tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes()) {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_pinned_memory_cache_limit_bytes(limit_bytes);
+    }
+
+    ~ScopedPinnedMemoryCacheLimit() {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_pinned_memory_cache_limit_bytes(previous_limit_bytes_);
+    }
+
+private:
+    size_t previous_limit_bytes_;
+};
 
 struct DeviceLocalShardedBufferTestConfig {
     Shape2D num_pages_per_core;
@@ -89,6 +107,26 @@ struct DeviceLocalShardedBufferTestConfig {
             this->tensor2d_shape_in_pages());
     }
 };
+
+std::vector<uint32_t> expected_shard_host_layout_after_filtered_write(
+    Buffer& shard_buffer,
+    uint32_t page_size_bytes,
+    uint32_t sentinel_value,
+    uint32_t new_value,
+    const CoreRangeSet& filter) {
+    const auto mapping = shard_buffer.get_buffer_page_mapping();
+    const uint32_t words_per_page = page_size_bytes / sizeof(uint32_t);
+    const uint32_t num_u32 = static_cast<uint32_t>(shard_buffer.size() / sizeof(uint32_t));
+    std::vector<uint32_t> expected(num_u32, sentinel_value);
+    for (auto it = mapping->begin(); it != mapping->end(); ++it) {
+        const auto mp = *it;
+        const CoreCoord& core = mapping->all_cores.at(mp.core_id);
+        const uint32_t v = (filter.empty() || !filter.contains(core)) ? sentinel_value : new_value;
+        const size_t base = static_cast<size_t>(mp.host_page) * words_per_page;
+        std::fill(expected.begin() + base, expected.begin() + base + words_per_page, v);
+    }
+    return expected;
+}
 
 // Helper function to print detailed mismatch information between two uint32_t vectors
 template <typename T>
@@ -191,6 +229,22 @@ TEST_F(MeshBufferTest2x4, ReplicatedBufferInitialization) {
     EXPECT_EQ(replicated_buffer->size(), 16 << 10);
     EXPECT_EQ(replicated_buffer->global_layout(), MeshBufferLayout::REPLICATED);
     EXPECT_EQ(replicated_buffer->device_local_size(), 16 << 10);
+}
+
+TEST_F(MeshBufferTestSuite, EnqueueWriteMeshBufferValidSrcSize) {
+    constexpr size_t buffer_size = 16;
+
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = buffer_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const ReplicatedBufferConfig buffer_config{.size = buffer_size};
+    auto mesh_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+    std::vector<uint8_t> small_src_vec(buffer_size / 2, 0);
+    std::vector<uint8_t> exact_src_vec(buffer_size, 0);
+    std::vector<uint8_t> large_src_vec(buffer_size * 2, 0);
+
+    EXPECT_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, small_src_vec), std::exception);
+    EXPECT_NO_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, exact_src_vec, true));
+    EXPECT_NO_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, large_src_vec, true));
 }
 
 TEST_F(MeshBufferTest2x4, Deallocation) {
@@ -847,6 +901,112 @@ TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory)
     EXPECT_EQ(dst_aligned, src);
 }
 
+TEST_F(MeshBufferTestSuite, PinnedMemoryCacheUpgradesCoverageForSameHostBuffer) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0) {
+        GTEST_SKIP() << "Pinned memory cache is disabled";
+        return;
+    }
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+
+    if (mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Requires at least two devices in the mesh";
+        return;
+    }
+
+    constexpr int device_read_align = 64;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    ASSERT_TRUE(device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0)
+        << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
+        << std::endl;
+
+    const uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+    const auto num_words = single_tile_size / sizeof(uint32_t);
+    auto src =
+        std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(num_words, 0);
+    std::iota(src->begin(), src->end(), 0);
+
+    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src->data(), num_words), MemoryPin(src));
+
+    const auto first_coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
+    const auto single_coord_range = MeshCoordinateRangeSet(MeshCoordinateRange(first_coord, first_coord));
+    auto single_coord_pin =
+        experimental::PinnedMemoryCache::instance().try_pin(*mesh_device_, single_coord_range, host_buffer, true);
+    ASSERT_TRUE(single_coord_pin);
+    EXPECT_EQ(single_coord_pin->get_device_ids().size(), 1);
+    single_coord_pin.reset();
+
+    const auto full_range = MeshCoordinateRangeSet(MeshCoordinateRange(mesh_device_->shape()));
+    auto full_mesh_pin =
+        experimental::PinnedMemoryCache::instance().try_pin(*mesh_device_, full_range, host_buffer, true);
+    ASSERT_TRUE(full_mesh_pin);
+    EXPECT_EQ(full_mesh_pin->get_device_ids().size(), mesh_device_->num_devices());
+
+    auto repeated_full_mesh_pin =
+        experimental::PinnedMemoryCache::instance().try_pin(*mesh_device_, full_range, host_buffer, true);
+    ASSERT_TRUE(repeated_full_mesh_pin);
+    EXPECT_EQ(repeated_full_mesh_pin.get(), full_mesh_pin.get());
+}
+
+TEST_F(MeshBufferTestSuite, PinnedMemoryCacheEvictsOldestEntryToStayWithinLimit) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0) {
+        GTEST_SKIP() << "Pinned memory cache is disabled";
+        return;
+    }
+    const auto pinning_params = experimental::GetMemoryPinningParameters(*mesh_device_);
+    if (!pinning_params.can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+    if (pinning_params.max_pins < 2) {
+        GTEST_SKIP() << "Requires enough pin slots to keep two cache entries resident";
+        return;
+    }
+
+    constexpr int device_read_align = 64;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    ASSERT_TRUE(device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0)
+        << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
+        << std::endl;
+
+    const uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+    const auto num_words = single_tile_size / sizeof(uint32_t);
+    using AlignedVector = std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>;
+    auto src0 = std::make_shared<AlignedVector>(num_words, 0);
+    auto src1 = std::make_shared<AlignedVector>(num_words, 1);
+    auto src2 = std::make_shared<AlignedVector>(num_words, 2);
+
+    HostBuffer host_buffer0(tt::stl::Span<uint32_t>(src0->data(), num_words), MemoryPin(src0));
+    HostBuffer host_buffer1(tt::stl::Span<uint32_t>(src1->data(), num_words), MemoryPin(src1));
+    HostBuffer host_buffer2(tt::stl::Span<uint32_t>(src2->data(), num_words), MemoryPin(src2));
+
+    const auto first_coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
+    const auto single_coord_range = MeshCoordinateRangeSet(MeshCoordinateRange(first_coord, first_coord));
+    ScopedPinnedMemoryCacheLimit cache_limit(2 * single_tile_size);
+
+    auto first_pin =
+        experimental::PinnedMemoryCache::instance().try_pin(*mesh_device_, single_coord_range, host_buffer0, true);
+    ASSERT_TRUE(first_pin);
+    std::weak_ptr<experimental::PinnedMemory> first_weak = first_pin;
+    first_pin.reset();
+
+    auto second_pin =
+        experimental::PinnedMemoryCache::instance().try_pin(*mesh_device_, single_coord_range, host_buffer1, true);
+    ASSERT_TRUE(second_pin);
+    std::weak_ptr<experimental::PinnedMemory> second_weak = second_pin;
+    second_pin.reset();
+
+    auto third_pin =
+        experimental::PinnedMemoryCache::instance().try_pin(*mesh_device_, single_coord_range, host_buffer2, true);
+    ASSERT_TRUE(third_pin);
+    third_pin.reset();
+
+    EXPECT_TRUE(first_weak.expired());
+    EXPECT_FALSE(second_weak.expired());
+}
+
 TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned) {
     if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
@@ -1216,6 +1376,89 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
         ASSERT_EQ(dst_vec.size(), src_vector.size());
         EXPECT_EQ(dst_vec, src_vector);
     }
+}
+
+TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithCoreFilter) {
+    CoreCoord core_grid_size = mesh_device_->compute_with_storage_grid_size();
+    DeviceLocalShardedBufferTestConfig test_config{
+        .num_pages_per_core = {2, 2},
+        .num_cores = {core_grid_size.x, core_grid_size.y},
+        .page_shape = {1, 1024},
+        .mem_config = TensorMemoryLayout::HEIGHT_SHARDED};
+
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = test_config.page_size(),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(test_config.shard_parameters(), test_config.mem_config),
+        .bottom_up = false};
+
+    uint32_t buf_size = test_config.num_pages() * test_config.page_size();
+    ReplicatedBufferConfig global_buffer_config{.size = buf_size};
+
+    auto buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+    distributed::MeshCoordinate coord(0, 0);
+
+    constexpr uint32_t k_sentinel = 0x33333333u;
+    constexpr uint32_t k_new = 0x44444444u;
+    const uint32_t num_u32 = buf_size / sizeof(uint32_t);
+    std::vector<uint32_t> sentinel_vec(num_u32, k_sentinel);
+    WriteShard(mesh_device_->mesh_command_queue(), buf, sentinel_vec, coord, /*blocking=*/true);
+
+    std::vector<uint32_t> newest(num_u32, k_new);
+    CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    DistributedHostBuffer distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
+    distributed_host_buffer.emplace_shard(coord, [newest]() { return HostBuffer(newest); });
+    tt::tt_metal::experimental::core_subset_write::enqueue_write(
+        mesh_device_->mesh_command_queue(), *buf, distributed_host_buffer, /*blocking=*/true, filter);
+
+    std::vector<uint32_t> dst_vec;
+    ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, coord);
+    Buffer& shard = *buf->get_device_buffer(coord);
+    auto expected =
+        expected_shard_host_layout_after_filtered_write(shard, test_config.page_size(), k_sentinel, k_new, filter);
+    ASSERT_EQ(dst_vec.size(), expected.size());
+    EXPECT_EQ(dst_vec, expected);
+}
+
+TEST_F(MeshBufferTestSuite, EnqueueWriteWithNullFilterIsEquivalent) {
+    CoreCoord core_grid_size = mesh_device_->compute_with_storage_grid_size();
+    DeviceLocalShardedBufferTestConfig test_config{
+        .num_pages_per_core = {2, 2},
+        .num_cores = {core_grid_size.x, core_grid_size.y},
+        .page_shape = {1, 1024},
+        .mem_config = TensorMemoryLayout::HEIGHT_SHARDED};
+
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = test_config.page_size(),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(test_config.shard_parameters(), test_config.mem_config),
+        .bottom_up = false};
+
+    uint32_t buf_size = test_config.num_pages() * test_config.page_size();
+    ReplicatedBufferConfig global_buffer_config{.size = buf_size};
+
+    auto buf_explicit = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+    auto buf_default = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+    distributed::MeshCoordinate coord(0, 0);
+
+    const uint32_t num_u32 = buf_size / sizeof(uint32_t);
+    std::vector<uint32_t> src_vec(num_u32);
+    std::iota(src_vec.begin(), src_vec.end(), 0u);
+
+    DistributedHostBuffer dhb_a = DistributedHostBuffer::create(mesh_device_->shape());
+    dhb_a.emplace_shard(coord, [src_vec]() { return HostBuffer(src_vec); });
+    mesh_device_->mesh_command_queue().enqueue_write(buf_explicit, dhb_a, /*blocking=*/true);
+
+    DistributedHostBuffer dhb_b = DistributedHostBuffer::create(mesh_device_->shape());
+    dhb_b.emplace_shard(coord, [src_vec]() { return HostBuffer(src_vec); });
+    mesh_device_->mesh_command_queue().enqueue_write(buf_default, dhb_b, /*blocking=*/true);
+
+    std::vector<uint32_t> out_a;
+    std::vector<uint32_t> out_b;
+    ReadShard(mesh_device_->mesh_command_queue(), out_a, buf_explicit, coord);
+    ReadShard(mesh_device_->mesh_command_queue(), out_b, buf_default, coord);
+    EXPECT_EQ(out_a, out_b);
+    EXPECT_EQ(out_a, src_vec);
 }
 
 // On a single host all coords are local, so this test exercises the SD sharded buffer

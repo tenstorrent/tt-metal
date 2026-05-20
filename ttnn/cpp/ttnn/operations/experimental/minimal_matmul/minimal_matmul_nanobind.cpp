@@ -88,7 +88,7 @@ void bind_minimal_matmul(nb::module_& mod) {
 
         compute_kernel_config : Optional[ttnn.operations.core.compute_kernel.DeviceComputeKernelConfig], default: None
             Compute kernel configuration. If omitted, defaults are selected via `init_device_compute_kernel_config`
-            (e.g., MathFidelity::HiFi2, fp32 accumulation enabled, packer accumulation enabled).
+            (e.g., tt::tt_metal::MathFidelity::HiFi2, fp32 accumulation enabled, packer accumulation enabled).
 
         Returns
         -------

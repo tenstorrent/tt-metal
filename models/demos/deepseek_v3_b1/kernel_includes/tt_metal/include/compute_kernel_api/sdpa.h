@@ -8,6 +8,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack_untilize.h"
+#include "api/compute/experimental/pack_block.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_pack_untilize.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm_reuse_dest_srcb.h"
@@ -134,7 +135,6 @@ ALWI void sdpa_reduce_sum_row(uint src_index, uint dst_index, bool prev_sum = fa
 
 #ifdef TRISC_PACK
 // Packer:
-// All 32 slots of replay buffer are used for red sum and red max
 // Fast Approx Exp uses 3 constants and LoadMacro
 // Non-Approx Exp uses 1 constant for recip. TODO: Look into integrating new polynomial exp in
 // ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp
@@ -167,7 +167,8 @@ inline void init_fast_approx_exp_constants() {
 
 inline void fast_approx_exp(uint32_t dst_index) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
-    ckernel::sfpu::calculate_exponential<true, true, DST_ACCUM_MODE, true, 4, true>();
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    ckernel::sfpu::calculate_exponential<true, DST_ACCUM_MODE, true, 8, true>();
 }
 
 // TODO: Currently hardcodes the lregs used by red max
@@ -184,10 +185,11 @@ inline void non_approx_exp_mul_prev(uint32_t curr_sum_index, uint32_t corr_exp_i
     sfpi::vFloat sub_top_4 = prev_max_top_4 - curr_max_top_4;
     sfpi::vFloat sub_bottom_4 = prev_max_bottom_4 - curr_max_bottom_4;
     ckernel::sfpu::_init_sfpu_reciprocal_<false>();
-    sfpi::vFloat exp_top_4 = sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
-        sub_top_4, scale_bf16);
+    sfpi::vFloat exp_top_4 =
+        sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+            sub_top_4, scale_bf16);
     sfpi::vFloat exp_bottom_4 =
-        sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+        sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
             sub_bottom_4, scale_bf16);
     // Subtract 1. This is because the bcast mul accumulates to dest
     // Without -1: bcast = prev * exp + prev
@@ -229,6 +231,10 @@ inline void recip_sum(uint32_t curr_sum_index, uint32_t recip_dst_index) {
 
 // First chunk controls whether we run the correction path with prev sum, max, out
 // Last chunk controls whether we signal out packer to start packing as output is produced
+//
+// output_granularity controls how often the QK^T*V matmul (sdpa_custom_mm_reuse_dest_srcb_block)
+// signals the packer via the FPU->SFPU semaphore. The packer must consume tiles in matching
+// groups of output_granularity. num_tiles_v must be divisible by output_granularity.
 template <
     uint32_t chunk_size,
     uint32_t num_tiles_k,
@@ -238,7 +244,9 @@ template <
     bool transpose_k,
     bool transpose_v,
     uint32_t packed_tile_size,
-    bool exp_approx_mode = false>
+    bool exp_approx_mode = false,
+    uint32_t output_granularity = 1,
+    bool mm_pack_init = true>
 void compute_sdpa_chunk(
     uint32_t cb_q,
     uint32_t cb_k,
@@ -253,8 +261,9 @@ void compute_sdpa_chunk(
     bool last_chunk,
     bool mask_chunk) {
     static_assert(DST_ACCUM_MODE == false, "FP32 destination accumulation mode is not supported");
+    static_assert(num_tiles_v % output_granularity == 0, "num_tiles_v must be divisible by output_granularity");
     PACK((ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_()));
-    sdpa_custom_mm_block_init_short<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
+    sdpa_custom_mm_block_init_short<transpose_k, mm_pack_init>(cb_q, cb_k, cb_out, chunk_size);
     cb_wait_front(cb_k, num_tiles_k * chunk_size);
     // Q @ K (FPU)
     // Make sure SFPU of previous chunk is done (sem is zero)
@@ -293,6 +302,7 @@ void compute_sdpa_chunk(
     for (uint32_t i = 0; i < chunk_size; i++) {
         // Wait for FPU that tile is ready (sem is non-zero)
         PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
+        // Each tile is 8x32, which is the same as a full 16x16 face
         PACK((fast_approx_exp(mm1_dst_offset + i * packed_tile_size)));
         PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
         // No stall since we waited on sfpu already
@@ -301,7 +311,7 @@ void compute_sdpa_chunk(
 
     // MM (FPU)
     sdpa_custom_mm_reuse_dest_srcb_block_init_short(cb_q, cb_k, cb_out, transpose_v, chunk_size, num_tiles_v);
-    sdpa_custom_mm_reuse_dest_srcb_block(
+    sdpa_custom_mm_reuse_dest_srcb_block<output_granularity>(
         cb_q,
         cb_k,
         0,
@@ -394,10 +404,10 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
 
         // Exponentials of differences
         sfpi::vFloat exp_prev =
-            sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+            sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_prev, scale_bf16);
         sfpi::vFloat exp_worker =
-            sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+            sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_worker, scale_bf16);
 
         if constexpr (!final_norm) {
@@ -420,7 +430,7 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
  */
 template <bool SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C, bool final_norm = false>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
-    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_(
         calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, final_norm>, idst, vector_mode, scale_bf16);
 }
 #endif
@@ -478,6 +488,7 @@ ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32
 
     // Not final reduction: pack out stats and release regs
     if constexpr (!normalize) {
+        PACK((llk_pack_init<PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(cb_cur_ms)));
         tile_regs_commit();
         cb_reserve_back(cb_cur_ms, 1);
         tile_regs_wait();
@@ -523,7 +534,7 @@ ALWI void sdpa_tail_l_block(
         pack_untilize_dest<block_size, block_size * num_blocks, false, false, TILE_C_DIM, 0, dense>(
             cb_l_out, 1, block_index, 8, dense ? 2 : 4);
     } else {
-        pack_tile_block(0, cb_l_out, block_size);
+        pack_block_contiguous(0, cb_l_out, block_size);
     }
     if constexpr (manage_cbs) {
         if constexpr (!untilize) {
@@ -599,6 +610,9 @@ ALWI void sdpa_tail(
         // Reduce packing stride from tile to tile to 32 rows instead of 64
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
             (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));
+    }
+    if constexpr (!untilize) {
+        pack_block_contiguous_init(cb_l_out);
     }
 
     // Phase 2: Process all L blocks

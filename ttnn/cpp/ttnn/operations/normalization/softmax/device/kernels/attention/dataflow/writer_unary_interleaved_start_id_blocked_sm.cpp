@@ -4,9 +4,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "../../../../../../kernel_helper_functions/pad_tile.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     using namespace tt::constants;
@@ -28,9 +28,9 @@ void kernel_main() {
     const uint32_t mask_padded_data = get_arg_val<uint32_t>(4);
     // const uint32_t num_datum_padded = get_arg_val<uint32_t>(5);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_id_out0_obj(cb_id_out0);
-    experimental::CircularBuffer cb_id_mask_obj(cb_id_mask);
+    Noc noc;
+    CircularBuffer cb_id_out0_obj(cb_id_out0);
+    CircularBuffer cb_id_mask_obj(cb_id_mask);
 
     // Adds -inf padding. Note: the value is the uint16 representation of bfloat16's -inf
     constexpr uint16_t mask_val = 0xFF80;
@@ -49,7 +49,7 @@ void kernel_main() {
         cb_id_mask_obj.push_back(1);
     }
 
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     uint32_t tile_id = tile_offset;
     for (uint32_t i = 0; i < num_tiles; i += blk) {

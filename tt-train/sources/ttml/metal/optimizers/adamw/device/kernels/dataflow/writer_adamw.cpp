@@ -30,11 +30,10 @@ void kernel_main() {
     constexpr auto exp_avg_sq_out_args = TensorAccessorArgs<exp_avg_out_args.next_compile_time_args_offset()>();
     constexpr auto max_exp_avg_sq_out_args = TensorAccessorArgs<exp_avg_sq_out_args.next_compile_time_args_offset()>();
 
-    const auto param_out_addr_gen = TensorAccessor(param_out_args, param_addr, tile_size_bytes);
-    const auto exp_avg_out_addr_gen = TensorAccessor(exp_avg_out_args, exp_avg_addr, tile_size_bytes);
-    const auto exp_avg_sq_out_addr_gen = TensorAccessor(exp_avg_sq_out_args, exp_avg_sq_addr, tile_size_bytes);
-    const auto max_exp_avg_sq_out_addr_gen =
-        TensorAccessor(max_exp_avg_sq_out_args, max_exp_avg_sq_addr, tile_size_bytes);
+    const auto param_out_addr_gen = TensorAccessor(param_out_args, param_addr);
+    const auto exp_avg_out_addr_gen = TensorAccessor(exp_avg_out_args, exp_avg_addr);
+    const auto exp_avg_sq_out_addr_gen = TensorAccessor(exp_avg_sq_out_args, exp_avg_sq_addr);
+    const auto max_exp_avg_sq_out_addr_gen = TensorAccessor(max_exp_avg_sq_out_args, max_exp_avg_sq_addr);
 
     uint32_t end_tile = start_tile + num_tiles_to_process;
     for (uint32_t tile_idx = start_tile; tile_idx < end_tile; tile_idx += block_size) {

@@ -99,7 +99,7 @@ jobs:
       llk-ci-tag: ${{ steps.llk-images.outputs.llk-ci-tag }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
@@ -201,9 +201,9 @@ jobs:
         id: llk-images
         run: |
           set -euo pipefail
-          LLK="tt_metal/third_party/tt_llk"
+          LLK="tt_metal/tt-llk"
           if [ ! -d "$LLK" ] || [ ! -f "$LLK/.github/Dockerfile.base" ]; then
-            echo "::error::tt_llk submodule is missing or not checked out (expected $LLK with .github/Dockerfile.base). Initialize submodules in CI checkout or fix .gitmodules."
+            echo "::error::LLK source missing (expected $LLK with .github/Dockerfile.base). Ensure the repository is fully checked out."
             exit 1
           fi
           DOCKER_TAG=$(./.github/scripts/llk-get-docker-tag.sh)
@@ -226,7 +226,7 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
@@ -321,7 +321,7 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
@@ -350,7 +350,7 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
@@ -377,7 +377,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions/push-latest-image-to-ghcr
           sparse-checkout-cone-mode: false

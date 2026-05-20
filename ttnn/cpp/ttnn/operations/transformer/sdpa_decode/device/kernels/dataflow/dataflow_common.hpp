@@ -534,6 +534,8 @@ void read_q(
         }
     } else {
         // Q is not sharded - read tiles from DRAM
+        // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale
+        // on program cache hits.
         const auto q_reader = TensorAccessor(q_args, q_addr, q_page_size_bytes);
         uint32_t q_tile_id = q_batch_offset;
 

@@ -14,6 +14,7 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     ImpliedMathFormat,
     PackerReluType,
     format_dict,
@@ -24,7 +25,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -63,9 +64,10 @@ def generate_qsr_pack_combinations(
 
     def get_dest_acc_modes(in_fmt):
         """Determine valid dest register modes depending on the input format."""
-        # Having Int16 in src registers and Int32 in the dest register is not supported
+        # Int16 requires 16bit mode dest register
         if in_fmt == DataFormat.Int16:
             return (DestAccumulation.No,)
+        # Int32, Float32 (unpack_to_dest) requires 32bit mode dest register
         if in_fmt.is_32_bit():
             return (DestAccumulation.Yes,)
         return (DestAccumulation.No, DestAccumulation.Yes)
@@ -89,12 +91,11 @@ def generate_qsr_pack_combinations(
         return True
 
     dimensions_cache = {
-        DestAccumulation.No: tuple(
-            generate_unary_input_dimensions(DestAccumulation.No)
-        ),
-        DestAccumulation.Yes: tuple(
-            generate_unary_input_dimensions(DestAccumulation.Yes)
-        ),
+        (dest_acc, dest_sync): tuple(
+            generate_unary_input_dimensions(dest_acc, dest_sync)
+        )
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        for dest_sync in (DestSync.Half, DestSync.Full)
     }
 
     all_relu_types = [
@@ -103,6 +104,8 @@ def generate_qsr_pack_combinations(
         PackerReluType.MinThresholdRelu,
         PackerReluType.MaxThresholdRelu,
     ]
+
+    dest_sync_modes = (DestSync.Half, DestSync.Full)
 
     combinations = []
     for fmt in formats_list:
@@ -120,9 +123,12 @@ def generate_qsr_pack_combinations(
         )
         for dest_acc in get_dest_acc_modes(in_fmt):
             if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-                for dimensions in dimensions_cache[dest_acc]:
-                    for relu_type in relu_types:
-                        combinations.append((fmt, dest_acc, dimensions, relu_type))
+                for dest_sync in dest_sync_modes:
+                    for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
+                        for relu_type in relu_types:
+                            combinations.append(
+                                (fmt, dest_acc, dest_sync, dimensions, relu_type)
+                            )
 
     return combinations
 
@@ -136,18 +142,21 @@ PACK_FORMATS = input_output_formats(
         DataFormat.Int8,
         DataFormat.UInt8,
         DataFormat.Int16,
+        DataFormat.MxFp4,
     ]
 )
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_input_dims=generate_qsr_pack_combinations(PACK_FORMATS),
+    formats_dest_acc_sync_dims_relu=generate_qsr_pack_combinations(PACK_FORMATS),
 )
-def test_pack_quasar(formats_dest_acc_input_dims, boot_mode=BootMode.DEFAULT):
-    (formats, dest_acc, input_dimensions, relu_type) = formats_dest_acc_input_dims[0]
+def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT):
+    (formats, dest_acc, dest_sync_mode, input_dimensions, relu_type) = (
+        formats_dest_acc_sync_dims_relu[0]
+    )
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -161,6 +170,7 @@ def test_pack_quasar(formats_dest_acc_input_dims, boot_mode=BootMode.DEFAULT):
         formats.output_format,
         num_faces=num_faces,
         input_dimensions=input_dimensions,
+        input_format=formats.input_format,
     )
 
     # Same method as test_pack.py for original ReLu testing and threshold tolerance issue
@@ -197,7 +207,7 @@ def test_pack_quasar(formats_dest_acc_input_dims, boot_mode=BootMode.DEFAULT):
         formats,
         templates=[
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
             TEST_FACE_DIMS(),
@@ -219,6 +229,7 @@ def test_pack_quasar(formats_dest_acc_input_dims, boot_mode=BootMode.DEFAULT):
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
         boot_mode=boot_mode,
+        disable_format_inference=(formats.input_format == DataFormat.MxFp4),
     )
 
     res_from_L1 = configuration.run().result

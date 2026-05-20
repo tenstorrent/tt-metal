@@ -5,15 +5,16 @@
 #include <gtest/gtest.h>
 #include <sys/types.h>
 
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 // used for moreh softmax
@@ -47,13 +48,10 @@ TEST_F(SoftmaxTest, SoftmaxTest_Batch) {
     const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
     int32_t dim = 3U;
 
-    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::core::parallel_generate(
-        std::span{input_tensor.data(), input_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        seed);
+    xt::xarray<float> input_tensor =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, -10.0F, 10.0F, seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -77,13 +75,10 @@ TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
     const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
     int32_t dim = 3U;
 
-    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::core::parallel_generate(
-        std::span{input_tensor.data(), input_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        seed);
+    xt::xarray<float> input_tensor =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, -10.0F, 10.0F, seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -104,13 +99,10 @@ TEST_F(SoftmaxTest, NIGHTLY_SoftmaxTest_Huge_Batch) {
     const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
     int32_t dim = 3U;
 
-    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::core::parallel_generate(
-        std::span{input_tensor.data(), input_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        seed);
+    xt::xarray<float> input_tensor =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, -10.0F, 10.0F, seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 

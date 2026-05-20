@@ -56,10 +56,16 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
         "Input tensor height ({}) must equal cache tensor height ({})",
         input_tensor.padded_shape()[1],
         cache_tensor.padded_shape()[1]);
+
     TT_FATAL(
         cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
-            cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED,
-        "Cache tensor memory layout must be INTERLEAVED or ND_SHARDED but got {}",
+            cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED ||
+            (cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+             cache_tensor.memory_config().created_with_nd_shard_spec() &&
+             cache_tensor.memory_config()
+                 .is_dram()),  // ND_SHARDED layout can collapse to HEIGHT_SHARDED when each bank holds single shard
+        "Cache tensor memory layout must be INTERLEAVED, ND_SHARDED, or HEIGHT_SHARDED (created from ND shard spec) "
+        "but got {}",
         cache_tensor.memory_config().memory_layout());
     if (args.op_type == UpdateCacheOpType::FILL) {
         // TODO: If we want to support mixed precision like decode, we need to add simple compute kernel for conversion

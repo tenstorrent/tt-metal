@@ -15,7 +15,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     NARROW_TILE,
@@ -58,22 +58,11 @@ def test_unpack_tilize_comprehensive(
     dest_acc,
     num_faces,
     input_dimensions,
-    workers_tensix_coordinates,
 ):
     """Comprehensive parameter sweep test for unpack_tilize operation."""
 
     # Get architecture for architecture-specific skips
     arch = get_chip_architecture()
-
-    # Wormhole unpack_tilize has 0-loop for num_faces=1
-    # File: tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h:220
-    # num_loops = num_faces / 2 → when num_faces=1, this is 1/2=0 (integer division)
-    # Result: for (n=0; n<0; n++) never executes, no data unpacked, packer timeout
-    if arch == ChipArchitecture.WORMHOLE and num_faces == 1:
-        pytest.skip(
-            "Wormhole LLK: num_loops = num_faces/2 = 0 when num_faces=1 "
-            "(tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h:220)"
-        )
 
     # BFP8_b input format not supported by tilize unpacker
     # Tilize unpacker cannot correctly read row-major BFP8_b data with shared exponents
@@ -106,7 +95,7 @@ def test_unpack_tilize_comprehensive(
             "Bfp8_b output with StochasticRounding.Pack/All causes the resulting value to be 0 when input is -508"
         )
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -155,7 +144,7 @@ def test_unpack_tilize_comprehensive(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor

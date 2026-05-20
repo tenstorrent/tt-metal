@@ -70,12 +70,19 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
 
     // ========== Core Dimensions ==========
     // B = batch size, PNH = padded num Q heads, S = sequence length, DH = head dim
+    //
+    // With block_size_override set, this call reads a K/V cache allocated for a
+    // different layer's shape; Q's last dim drives DH. Without it, k_shape[3] is used
+    // and the strict q.head_dim == k.head_dim check in validate keeps legacy callers
+    // byte-identical.
+    const bool has_block_size_override = operation_attributes.block_size_override.has_value();
     uint32_t B = q_shape[1];
     uint32_t PNH = q_shape[2];
     uint32_t S = k_shape[2];
-    uint32_t DH = k_shape[3];
-    uint32_t vDH = use_mla ? head_dim_v : v_shape[3];
+    uint32_t DH = has_block_size_override ? q_shape[3] : k_shape[3];
+    uint32_t vDH = use_mla ? head_dim_v : (has_block_size_override ? q_shape[3] : v_shape[3]);
     uint32_t Bkv = k_shape[0];
+    uint32_t Bmask = attn_mask.has_value() ? attn_mask->padded_shape()[0] : Bkv;
     uint32_t num_kv_heads = k_shape[1];
     uint32_t num_q_heads = q_shape_unpadded[2];
     uint32_t page_block_size_t = 0;
@@ -88,10 +95,13 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         B = page_table_tensor->is_sharded() ? page_table_tensor->padded_shape()[0] /
                                                   page_table_tensor->memory_config().shard_spec()->grid.num_cores()
                                             : page_table_tensor->padded_shape()[0];
-        uint32_t block_size = k_shape[2];
-        original_block_size = input_tensor_k.logical_shape()[2];
+        uint32_t block_size = operation_attributes.block_size_override.value_or(k_shape[2]);
+        // original_block_size gates the sub-tile padding mask. With an override active,
+        // validate already enforces it's a multiple of TILE_HEIGHT (no padding path).
+        original_block_size = has_block_size_override ? block_size : input_tensor_k.logical_shape()[2];
         page_block_size_t = block_size / TILE_HEIGHT;
-        S = page_table_tensor.value().padded_shape()[-1] * S;
+        // kv_seq_len = max_num_blocks_per_seq * effective block_size.
+        S = page_table_tensor.value().padded_shape()[-1] * block_size;
         has_block_padding = original_block_size < TILE_HEIGHT;
     }
 
@@ -162,11 +172,14 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     // ========== Core Allocation ==========
     const uint32_t max_cores_per_head =
         program_config.has_value() ? program_config->max_cores_per_head_batch : num_cores_available;
+    TT_FATAL(max_cores_per_head > 0, "max_cores_per_head_batch must be > 0");
     const uint32_t max_num_cores_for_compute = max_cores_per_head * B * num_kv_heads;
     const uint32_t num_cores_per_batch_uncapped = std::min(num_cores_available, max_num_cores_for_compute) / B;
     const uint32_t num_cores_per_head = std::max(1u, num_cores_per_batch_uncapped / num_kv_heads);
-    const uint32_t num_heads_per_core =
-        std::max(1u, (uint32_t)std::ceil((float)num_kv_heads / num_cores_per_batch_uncapped));
+    uint32_t num_heads_per_core = std::max(1u, (uint32_t)std::ceil((float)num_kv_heads / num_cores_per_batch_uncapped));
+    while (num_kv_heads % num_heads_per_core != 0) {
+        num_heads_per_core++;
+    }
     const uint32_t num_cores_per_batch = num_cores_per_head * num_kv_heads / num_heads_per_core;
     const uint32_t num_reducer_cores = num_kv_heads * B / num_heads_per_core;
     const uint32_t num_output_cores = B;
@@ -331,12 +344,14 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     }
 
     // All active cores (for tree reduction lookups)
-    std::vector<uint32_t> reduction_group_core_xs(num_active_cores);
-    std::vector<uint32_t> reduction_group_core_ys(num_active_cores);
+    std::vector<uint32_t> reduction_group_core_xs;
+    std::vector<uint32_t> reduction_group_core_ys;
+    reduction_group_core_xs.reserve(num_active_cores);
+    reduction_group_core_ys.reserve(num_active_cores);
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         auto physical = device->worker_core_from_logical_core(core_group[i]);
-        reduction_group_core_xs[i] = physical.x;
-        reduction_group_core_ys[i] = physical.y;
+        reduction_group_core_xs.push_back(physical.x);
+        reduction_group_core_ys.push_back(physical.y);
     }
 
     log_debug(
@@ -397,7 +412,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     const tt::DataFormat mask_df = use_attention_mask
                                        ? tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
                                        : tt::DataFormat::Float16_b;
-    const tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    const tt::DataFormat scalar_df =
+        (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const tt::DataFormat im_df = tt::DataFormat::Float16_b;
     const tt::DataFormat stats_df = tt::DataFormat::Float16_b;
 
@@ -624,6 +640,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         k_mcast_semaphore_id,
         (uint32_t)q_locally_available,
         (uint32_t)use_col_major_group_indexing,  // use_k_mcast
+        Bmask,
     };
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
@@ -636,7 +653,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     if (use_attention_sink) {
         tt_metal::TensorAccessorArgs(*attention_sink->buffer()).append_to(reader_compile_time_args_common);
     } else {
-        reader_compile_time_args_common.push_back(0);
+        tt_metal::TensorAccessorArgs(static_cast<const Buffer*>(nullptr)).append_to(reader_compile_time_args_common);
     }
 
     std::vector<uint32_t> writer_compile_time_args_common = {

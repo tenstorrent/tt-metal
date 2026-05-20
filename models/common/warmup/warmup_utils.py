@@ -86,6 +86,7 @@ class WarmupForwardMixin:
         num_blocks,
         can_sample_on_device,
         non_greedy_decoding_on_device,
+        read_from_device=True,
     ):
         """
         This function is called by vLLM
@@ -109,7 +110,7 @@ class WarmupForwardMixin:
                 page_table=page_table,
                 kv_cache=kv_cache,
                 enable_trace=enable_trace,
-                read_from_device=True,
+                read_from_device=read_from_device,
                 sampling_params=param,
             )
 

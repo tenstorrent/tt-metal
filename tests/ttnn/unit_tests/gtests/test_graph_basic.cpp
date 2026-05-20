@@ -58,7 +58,7 @@ TEST_P(BufferTestFixture, BufferTest) {
     auto params = std::get<0>(param_combination);
     auto run_mode = std::get<1>(param_combination);
 
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
     {
         ttnn::graph::GraphProcessor::begin_graph_capture(run_mode);
         {
@@ -155,7 +155,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 class TestScopedGraphCapture : public ttnn::TTNNFixtureWithDevice {};
 TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     auto operation = [&device](tt::tt_metal::DataType datatype) {
         const auto input_a = ttnn::TensorSpec(
@@ -235,7 +235,7 @@ TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
 }
 
 TEST_F(TestScopedGraphCapture, OrderOfArgsTest) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
@@ -310,7 +310,7 @@ TEST_F(TestScopedGraphCapture, OrderOfArgsTest) {
 }
 
 TEST_F(TestScopedGraphCapture, SameTensorMultipleTimesTest) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
@@ -359,7 +359,7 @@ TEST_F(TestScopedGraphCapture, TernaryOpDifferentOrderTest) {
     GTEST_SKIP()
         << "High-level function tracing was removed - argument order testing at function level is no longer available";
 
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
@@ -434,7 +434,7 @@ TEST_F(TestScopedGraphCapture, TernaryOpRepeatedTensorsTest) {
     GTEST_SKIP()
         << "High-level function tracing was removed - argument order testing at function level is no longer available";
 
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
@@ -503,7 +503,7 @@ TEST_F(TestScopedGraphCapture, MatmulDifferentOrdersTest) {
     GTEST_SKIP()
         << "High-level function tracing was removed - argument order testing at function level is no longer available";
 
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{64, 64}),
@@ -582,7 +582,7 @@ TEST_F(TestScopedGraphCapture, SubtractArgumentOrderWithCapturedTensorsTest) {
     // the graph correctly tracks the argument order for non-commutative operations like subtract.
     // We test subtract(a, b) vs subtract(b, a) to ensure the order is preserved.
 
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     auto operation = [&device]() {
         // Create tensors INSIDE the capture
@@ -667,7 +667,6 @@ class DurationTrackingTest : public ttnn::TTNNFixtureWithDevice,
 
 TEST_P(DurationTrackingTest, DurationTracking) {
     auto run_mode = GetParam();
-    tt::tt_metal::IDevice* device = device_;
 
     nlohmann::json trace;
     {
@@ -679,7 +678,7 @@ TEST_P(DurationTrackingTest, DurationTracking) {
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device);
+        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device_);
         const auto output_tensor = ttnn::softmax(input_tensor, -1);
 
         trace = capture.end_graph_capture();
@@ -737,7 +736,6 @@ class TensorInfoTest : public ttnn::TTNNFixtureWithDevice,
 
 TEST_P(TensorInfoTest, FullTensorInfoCaptured) {
     auto run_mode = GetParam();
-    tt::tt_metal::IDevice* device = device_;
 
     nlohmann::json trace;
     {
@@ -749,7 +747,7 @@ TEST_P(TensorInfoTest, FullTensorInfoCaptured) {
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device);
+        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device_);
 
         trace = capture.end_graph_capture();
     }
@@ -785,7 +783,7 @@ TEST_P(TensorInfoTest, FullTensorInfoCaptured) {
                     EXPECT_TRUE(params.at(ttnn::graph::kAddress).is_number());
 
                     ASSERT_TRUE(params.contains(ttnn::graph::kBufferType));
-                    EXPECT_TRUE(params.at(ttnn::graph::kBufferType).is_string());
+                    EXPECT_TRUE(params.at(ttnn::graph::kBufferType).is_number());
 
                     ASSERT_TRUE(params.contains(ttnn::graph::kMemoryConfig));
                     EXPECT_TRUE(params.at(ttnn::graph::kMemoryConfig).is_string());
@@ -813,7 +811,6 @@ INSTANTIATE_TEST_SUITE_P(
 
 // Test report contains cluster_descriptor when devices are present
 TEST_F(TestScopedGraphCapture, ReportContainsClusterDescriptor) {
-    tt::tt_metal::IDevice* device = device_;
 
     auto report_path = std::filesystem::temp_directory_path() / "test_cluster_desc_report.json";
     {
@@ -825,7 +822,7 @@ TEST_F(TestScopedGraphCapture, ReportContainsClusterDescriptor) {
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device);
+        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device_);
 
         capture.end_graph_capture_to_file(report_path);
     }
@@ -846,7 +843,6 @@ TEST_F(TestScopedGraphCapture, ReportContainsClusterDescriptor) {
 }
 
 TEST_F(TestScopedGraphCapture, ExactBufferTypeAndMaxSizePerBankTest) {
-    tt::tt_metal::IDevice* device = device_;
 
     nlohmann::json trace;
     {
@@ -858,7 +854,7 @@ TEST_F(TestScopedGraphCapture, ExactBufferTypeAndMaxSizePerBankTest) {
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device);
+        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device_);
 
         trace = capture.end_graph_capture();
     }
@@ -869,11 +865,8 @@ TEST_F(TestScopedGraphCapture, ExactBufferTypeAndMaxSizePerBankTest) {
             found_buffer_allocate = true;
             const auto& params = node.at(ttnn::graph::kParams);
 
-            ASSERT_TRUE(params.contains(ttnn::graph::kExactBufferType))
-                << "buffer_allocate should contain exact_buffer_type";
-            EXPECT_TRUE(params.at(ttnn::graph::kExactBufferType).is_string());
-            auto exact_type = params.at(ttnn::graph::kExactBufferType).get<std::string>();
-            EXPECT_FALSE(exact_type.empty());
+            ASSERT_TRUE(params.contains(ttnn::graph::kBufferType)) << "buffer_allocate should contain buffer_type";
+            EXPECT_TRUE(params.at(ttnn::graph::kBufferType).is_number_integer());
 
             ASSERT_TRUE(params.contains(ttnn::graph::kMaxSizePerBank))
                 << "buffer_allocate should contain max_size_per_bank";
@@ -885,7 +878,6 @@ TEST_F(TestScopedGraphCapture, ExactBufferTypeAndMaxSizePerBankTest) {
 }
 
 TEST_F(TestScopedGraphCapture, PerOperationBuffersInReportTest) {
-    tt::tt_metal::IDevice* device = device_;
 
     auto report_path = std::filesystem::temp_directory_path() / "test_per_op_buffers_report.json";
     {
@@ -898,7 +890,7 @@ TEST_F(TestScopedGraphCapture, PerOperationBuffersInReportTest) {
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device);
+        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device_);
         const auto output_tensor = ttnn::softmax(input_tensor, -1);
 
         capture.end_graph_capture_to_file(report_path);
@@ -928,8 +920,7 @@ TEST_F(TestScopedGraphCapture, PerOperationBuffersInReportTest) {
     }
 }
 
-TEST_F(TestScopedGraphCapture, DeallocateContainsExactBufferTypeTest) {
-    tt::tt_metal::IDevice* device = device_;
+TEST_F(TestScopedGraphCapture, DeallocateContainsBufferTypeTest) {
 
     nlohmann::json trace;
     {
@@ -941,7 +932,7 @@ TEST_F(TestScopedGraphCapture, DeallocateContainsExactBufferTypeTest) {
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device);
+        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device_);
         const auto output_tensor = ttnn::softmax(input_tensor, -1);
 
         trace = capture.end_graph_capture();
@@ -950,22 +941,21 @@ TEST_F(TestScopedGraphCapture, DeallocateContainsExactBufferTypeTest) {
     for (const auto& node : trace) {
         if (node.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeBufferDeallocate) {
             const auto& params = node.at(ttnn::graph::kParams);
-            EXPECT_TRUE(params.contains(ttnn::graph::kExactBufferType))
-                << "buffer_deallocate should contain exact_buffer_type";
-            if (params.contains(ttnn::graph::kExactBufferType)) {
-                EXPECT_TRUE(params.at(ttnn::graph::kExactBufferType).is_string());
+            EXPECT_TRUE(params.contains(ttnn::graph::kBufferType)) << "buffer_deallocate should contain buffer_type";
+            if (params.contains(ttnn::graph::kBufferType)) {
+                EXPECT_TRUE(params.at(ttnn::graph::kBufferType).is_number_integer());
             }
             EXPECT_TRUE(params.contains(ttnn::graph::kAddress)) << "buffer_deallocate should contain address";
         }
     }
 
-    // Verify buffer_allocate events also carry exact_buffer_type (stronger check)
+    // Verify buffer_allocate events also carry buffer_type (stronger check)
     bool found_alloc = false;
     for (const auto& node : trace) {
         if (node.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeBufferAllocate) {
             found_alloc = true;
             const auto& params = node.at(ttnn::graph::kParams);
-            ASSERT_TRUE(params.contains(ttnn::graph::kExactBufferType));
+            ASSERT_TRUE(params.contains(ttnn::graph::kBufferType));
             ASSERT_TRUE(params.contains(ttnn::graph::kAddress));
         }
     }

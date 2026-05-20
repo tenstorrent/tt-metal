@@ -7,14 +7,19 @@ import pytest
 import torch
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, ImpliedMathFormat, format_dict
+from helpers.llk_params import (
+    DestAccumulation,
+    DestSync,
+    ImpliedMathFormat,
+    format_dict,
+)
 from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -34,37 +39,50 @@ def generate_pack_untilize_combinations(
     """
     Generate pack_untilize combinations.
 
-    Args: List of input-output format pairs
+    Args:
+        formats_list: List of input-output format pairs
 
-    Returns: List of (format, dest_acc, input_dimensions) tuples
+    Returns: List of (format, dest_acc, dest_sync, input_dimensions) tuples
     """
+
+    def is_supported_format_conversion(in_fmt, out_fmt):
+        # Skip if mixing integer and non-integer formats
+        if in_fmt.is_integer() ^ out_fmt.is_integer():
+            return False
+        # If input format is Int16, output format must also be Int16, and vice versa
+        if (in_fmt == DataFormat.Int16) ^ (out_fmt == DataFormat.Int16):
+            return False
+        return True
+
+    def get_dest_acc_modes(in_fmt):
+        # Int16 requires 16bit mode dest register
+        if in_fmt == DataFormat.Int16:
+            return (DestAccumulation.No,)
+        # Int32, Float32 (unpack_to_dest) requires 32bit mode dest register
+        if in_fmt.is_32_bit():
+            return (DestAccumulation.Yes,)
+        return (DestAccumulation.No, DestAccumulation.Yes)
+
     dimensions_cache = {
-        DestAccumulation.No: tuple(
-            generate_unary_input_dimensions(DestAccumulation.No)
-        ),
-        DestAccumulation.Yes: tuple(
-            generate_unary_input_dimensions(DestAccumulation.Yes)
-        ),
+        (dest_acc, dest_sync): tuple(
+            generate_unary_input_dimensions(dest_acc, dest_sync)
+        )
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        for dest_sync in (DestSync.Half, DestSync.Full)
     }
 
+    dest_sync_modes = (DestSync.Half, DestSync.Full)
     combinations = []
-
     for fmt in formats_list:
-        in_fmt = fmt.input_format
+        in_fmt, out_fmt = fmt.input_format, fmt.output_format
 
-        dest_acc_modes = (
-            (DestAccumulation.Yes,)
-            if in_fmt.is_32_bit()
-            else (
-                (DestAccumulation.No,)
-                if in_fmt in [DataFormat.Int16, DataFormat.Float16]
-                else (DestAccumulation.No, DestAccumulation.Yes)
-            )
-        )
+        if not is_supported_format_conversion(in_fmt, out_fmt):
+            continue
 
-        for dest_acc in dest_acc_modes:
-            for dimensions in dimensions_cache[dest_acc]:
-                combinations.append((fmt, dest_acc, dimensions))
+        for dest_acc in get_dest_acc_modes(in_fmt):
+            for dest_sync in dest_sync_modes:
+                for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
+                    combinations.append((fmt, dest_acc, dest_sync, dimensions))
 
     return combinations
 
@@ -75,8 +93,8 @@ PACK_UNTILIZE_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Int16,
         DataFormat.Int32,
+        DataFormat.MxFp4,
     ],
-    same=True,
 )
 ALL_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
     PACK_UNTILIZE_FORMATS
@@ -85,15 +103,17 @@ ALL_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_dimensions=ALL_PACK_UNTILIZE_COMBINATIONS,
+    formats_dest_acc_sync_dimensions=ALL_PACK_UNTILIZE_COMBINATIONS,
 )
-def test_pack_untilize_quasar(formats_dest_acc_dimensions):
-    formats_dest_acc_dimensions = formats_dest_acc_dimensions[0]
-    formats = formats_dest_acc_dimensions[0]
-    dest_acc = formats_dest_acc_dimensions[1]
-    input_dimensions = formats_dest_acc_dimensions[2]
+def test_pack_untilize_quasar(formats_dest_acc_sync_dimensions):
+    (formats, dest_acc, dest_sync_mode, input_dimensions) = (
+        formats_dest_acc_sync_dimensions[0]
+    )
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+    if formats.output_format.is_mx_format():
+        pytest.skip("MX as output format produces flaky results.")
+
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -101,7 +121,12 @@ def test_pack_untilize_quasar(formats_dest_acc_dimensions):
     )
 
     generate_golden = get_golden_generator(UntilizeGolden)
-    golden_tensor = generate_golden(src_A, formats.output_format, input_dimensions)
+    golden_tensor = generate_golden(
+        src_A,
+        formats.output_format,
+        input_dimensions,
+        input_format=formats.input_format,
+    )
 
     num_faces = 4
     configuration = TestConfig(
@@ -110,7 +135,7 @@ def test_pack_untilize_quasar(formats_dest_acc_dimensions):
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync_mode),
             UNPACKER_ENGINE_SEL(),
             TEST_FACE_DIMS(),
             NUM_FACES(num_faces),
@@ -132,6 +157,10 @@ def test_pack_untilize_quasar(formats_dest_acc_dimensions):
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         dest_acc=dest_acc,
+        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
+        disable_format_inference=(
+            formats.input_format.is_mx_format() or formats.output_format.is_mx_format()
+        ),
     )
 
     res_from_L1 = configuration.run().result
@@ -143,5 +172,5 @@ def test_pack_untilize_quasar(formats_dest_acc_dimensions):
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor, res_tensor, formats.output_format, print_errors=False
     ), "Assert against golden failed"

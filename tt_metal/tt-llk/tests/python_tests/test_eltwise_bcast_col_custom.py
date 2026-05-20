@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -22,7 +21,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
@@ -76,14 +75,7 @@ def test_eltwise_bcast_col_custom(
     broadcast_type,
     input_dimensions_A,
     input_dimensions_B,
-    workers_tensix_coordinates,
 ):
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
-        and cpp_source == "sources/multiple_tiles_eltwise_custom_test.cpp"
-    ):
-        pytest.skip("Custom test not supported on Wormhole")
-
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
@@ -95,7 +87,7 @@ def test_eltwise_bcast_col_custom(
         input_dimensions_B,
     )
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions_A,
         stimuli_format_B=formats.input_format,
@@ -155,7 +147,7 @@ def test_eltwise_bcast_col_custom(
         ),
         dest_acc=dest_acc,
     )
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     res_from_L1 = untilize_block(
         res_from_L1, formats.output_format, input_dimensions_A

@@ -12,7 +12,7 @@ import yaml
 from loguru import logger
 
 from infra.data_collection.github.workflows import is_job_hanging_from_job_log
-from infra.data_collection.models import InfraErrorV1, TestErrorV1
+from infra.data_collection.models import InfraErrorV1, TestErrorV1, CodeQualityErrorV1
 from infra.data_collection.pydantic_models import CompleteBenchmarkRun
 
 
@@ -134,6 +134,16 @@ def get_job_failure_signature_(github_job, failure_description, workflow_outputs
         )
         if is_generic_setup_failure:
             return str(InfraErrorV1.GENERIC_SET_UP_FAILURE)
+
+    # If failure occurred in clang-tidy step, classify as code quality failure
+    for step in github_job.get("steps", []):
+        step_name = step.get("name", "")
+        step_conclusion = step.get("conclusion", "")
+
+        is_clang_tidy_failure = "analyze code with clang-tidy" in step_name.lower() and step_conclusion == "failure"
+
+        if is_clang_tidy_failure:
+            return str(CodeQualityErrorV1.CLANG_TIDY_VIOLATION)
 
     # generic catch-all
     return str(InfraErrorV1.GENERIC_FAILURE)
@@ -474,10 +484,11 @@ def create_json_with_github_benchmark_environment(
     logger.warning("Hardcoded null for device_memory_size")
     device_memory_size = ""
 
-    device_info = {"card_type": device_type, "dram_size": device_memory_size}
-
     with open(github_partial_benchmark_data_filename, "rb") as f:
         partial_benchmark_data = pickle.load(f)
+
+    existing_device_info = partial_benchmark_data.device_info or {}
+    device_info = existing_device_info | {"card_type": device_type, "dram_size": device_memory_size}
 
     partial_benchmark_data = partial_benchmark_data.model_copy(
         update={

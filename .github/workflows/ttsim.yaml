@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.5.1"
+        default: "v1.6.3"
       job-timeout:
         required: false
         type: number
@@ -72,7 +72,7 @@ jobs:
     steps:
 
       - name: Checkout actions
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions/download-artifact-with-retry
           sparse-checkout-cone-mode: false
@@ -156,7 +156,7 @@ jobs:
       ttnn-tests: ${{ steps.compute-tests.outputs.ttnn-tests }}
     steps:
       - name: Checkout repository for test definitions
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github
@@ -170,19 +170,19 @@ jobs:
           set -euo pipefail
           pip3 install -q PyYAML
           python3 - "${{ env.TTNN_TESTS_YAML }}" "$GITHUB_OUTPUT" << 'PY'
-          import json, sys, yaml
+          import json, re, sys, yaml
           path, out_path = sys.argv[1], sys.argv[2]
           with open(path) as f:
               tests = yaml.safe_load(f)
           # TTSim runs all tests on ubuntu-latest; ignore skus and timeouts from YAML, use fixed timeout.
-          TTSIM_TIMEOUT_MINUTES = 30
+          TTSIM_TIMEOUT_MINUTES = 40
           entries = []
           for t in tests:
-              if not t.get("ttsim") or not t.get("cmd"):
-                  continue
-              entries.append({"name": t.get("name", "Unnamed Test"), "cmd": t.get("cmd", ""), "timeout": TTSIM_TIMEOUT_MINUTES})
+              cmd = re.sub(r'\s+--timeout\s+\d+', '', t['cmd'])
+              serial_cmd = re.sub(r'\s+--splits\s+\d+', '', re.sub(r'\s+--group\s+\d+', '', cmd))
+              entries.append({"name": t.get("name", "Unnamed Test"), "cmd": cmd, "serial_cmd": serial_cmd, "timeout": TTSIM_TIMEOUT_MINUTES})
           if not entries:
-              raise SystemExit("No TTSim-compatible TTNN tests found (ttsim: true)")
+              raise SystemExit("No TTSim-compatible TTNN tests found")
           with open(out_path, "a") as f:
               f.write("ttnn-tests<<EOF\n" + json.dumps(entries) + "\nEOF\n")
           PY
@@ -209,12 +209,6 @@ jobs:
             build_suffix: release_bh
             soc_desc: blackhole_140_arch.yaml
         test-group: ${{ fromJSON(needs.define-ttsim-ttnn-tests.outputs.ttnn-tests) }}
-        exclude:
-          # Conv tests are all skipped on Blackhole - skip the job entirely
-          - arch:
-              name: blackhole
-            test-group:
-              name: "ttnn conv group"
     container:
       image: ${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
@@ -235,7 +229,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: ⬇️  Setup Job
@@ -244,6 +238,18 @@ jobs:
         with:
           path: .
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      - name: Apply ttsim WH workaround patches
+        run: |
+          # WORKAROUND: The TEN-3868 LLK hardware bug workaround in unpack_to_dest_tile_done() issues
+          # TT_UNPACR(SrcA, INT32) which is UndefinedBehavior per tt-isa-documentation. ttsim faithfully
+          # implements the spec and correctly rejects it. The simulator does not have the hardware bug, so
+          # the workaround is not needed in simulation. This line can be removed when the LLK team ships
+          # a proper fix. Tracking: https://github.com/tenstorrent/tt-metal/issues/38246
+          HEADER=$(find /opt/venv -name "cunpack_common.h" -path "*wormhole_b0*" 2>/dev/null | head -1)
+          echo "Patching: $HEADER"
+          sed -i -e '/TT_UNPACR(SrcA, 0, 0, context_id, 0, 1 \/\* Set OvrdThreadId\*\/, 0 \/\*Set Dvalid\*\/, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);/d' \
+            "$HEADER"
 
       - name: Compute ttsim asset name
         id: ttsim-asset
@@ -279,17 +285,31 @@ jobs:
           echo "skip_args=${SKIP_ARGS}" >> "$GITHUB_OUTPUT"
 
       - name: Run TTNN Pytests - ${{ matrix.test-group.name }}
+        env:
+          # Set via PYTEST_ADDOPTS so flags reach every pytest invocation in the
+          # cmd, including cmds that chain multiple pytest calls with &&.
+          # Appending to the cmd string only reaches the last invocation.
+          PYTEST_ADDOPTS: "-p no:timeout -n 4 ${{ steps.skip-list.outputs.skip_args }}"
         run: |
-          # Run pytest with parallel execution and skip list.
+          # Run pytest with parallel execution, pytest-level timeouts disabled (more harm than good on sim), and skip list.
           # If a worker crashes, pytest-xdist only reports "worker crashed"
           # which is useless for debugging. Re-run the failures serially to
           # get actionable output.
-          if ${{ matrix.test-group.cmd }} -n 4 ${{ steps.skip-list.outputs.skip_args }}; then
+          if ${{ matrix.test-group.cmd }}; then
             exit 0
           fi
           echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."
-          ${{ matrix.test-group.cmd }} --lf --lfnf=all --tb=long -v ${{ steps.skip-list.outputs.skip_args }} || true
+          # Override PYTEST_ADDOPTS to drop -n 4 for the serial retry. Use export
+          # so the override applies to every pytest in &&-chained serial_cmds.
+          export PYTEST_ADDOPTS="-p no:timeout ${{ steps.skip-list.outputs.skip_args }}"
+          ${{ matrix.test-group.serial_cmd }} --lf --lfnf=all --tb=long -v || true
           exit 1
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
 
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
@@ -321,7 +341,7 @@ jobs:
       TT_METAL_DISABLE_SFPLOADMACRO: 1
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: Setup Job
@@ -407,7 +427,7 @@ jobs:
       TT_METAL_MOCK_CLUSTER_DESC_PATH: ${{ matrix.cluster_desc }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: Setup Job

@@ -61,7 +61,7 @@ FORCE_INLINE void output_block(
 void kernel_main() {
     const uint32_t output_base_addr = get_arg_val<uint32_t>(0);
     constexpr auto ctas = get_ctas();
-    const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_base_addr, get_tile_size(ctas.output_cb));
+    const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_base_addr);
     constexpr uint32_t num_slices_along_channels = ceil(ctas.num_channels, ctas.tile_width);
     constexpr uint32_t num_blocks_in_row = ceil(ctas.input_depth, ctas.block_depth);
     constexpr uint32_t num_blocks_in_column = ceil(ctas.input_height, ctas.tile_height);

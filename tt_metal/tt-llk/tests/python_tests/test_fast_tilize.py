@@ -9,7 +9,7 @@ from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
@@ -61,7 +61,11 @@ def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
     dimensions=generate_input_dimensions(25),
 )
-def test_fast_tilize(formats, dest_acc, dimensions, workers_tensix_coordinates):
+def test_fast_tilize(
+    formats,
+    dest_acc,
+    dimensions,
+):
 
     input_height, input_width = dimensions
 
@@ -70,7 +74,7 @@ def test_fast_tilize(formats, dest_acc, dimensions, workers_tensix_coordinates):
 
     input_dimensions = [input_height * 32, input_width * 32]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -104,7 +108,7 @@ def test_fast_tilize(formats, dest_acc, dimensions, workers_tensix_coordinates):
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(golden_tensor)
 

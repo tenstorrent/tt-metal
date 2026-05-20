@@ -3,18 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
-import torch
-import ttnn
-from ttnn import ShardTensor2dMesh
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
 from functools import partial
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
-    create_mesh_device,
-    mesh_tensor_to_torch,
-)
+
+import torch
+
+import ttnn
+from models.common.utility_functions import torch_random
 
 # Import V2 master config loader and standalone helpers for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import (
@@ -23,13 +17,23 @@ from tests.sweep_framework.master_config_loader_v2 import (
     parse_dtype,
     parse_layout,
 )
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    create_mesh_device,
+    get_mesh_composer,
+    get_model_traced_mesh_shape,
+    mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
+)
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from ttnn import ShardTensor2dMesh
 
 
 def _parse_shard_dims_from_placement(placements):
-    """Extract (dim0, dim1) for ShardTensor2dMesh from a placements list.
+    """Extract (dim0, dim1) for ShardTensor2dMesh from a placements value.
 
-    ``placements`` is a list like ['PlacementShard(2)', 'PlacementShard(1)']
-    or ['PlacementReplicate', 'PlacementShard(3)'].
+    ``placements`` may be a Python list like ['PlacementShard(2)', 'PlacementShard(1)']
+    or its JSON-serialized string form "['PlacementShard(2)', 'PlacementShard(1)']".
 
     Returns a tuple of (dim_or_None, dim_or_None) for a 2-entry list, else None.
     """
@@ -40,27 +44,40 @@ def _parse_shard_dims_from_placement(placements):
     else:
         placement_str = str(placements)
     dims = []
-    for m in re.finditer(r"PlacementShard\((-?\d+)\)|PlacementReplicate", placement_str):
+    for m in re.finditer(r"PlacementShard\((?:dim=)?(-?\d+)\)|PlacementReplicate", placement_str):
         dims.append(int(m.group(1)) if m.group(1) is not None else None)
     return tuple(dims) if len(dims) == 2 else None
 
 
-def _get_placement_from_tensor_spec(tensor_spec):
-    """Extract placement info from a raw tensor spec's mesh_device field.
+def _parse_mesh_shape(mesh_device_shape):
+    """Parse a mesh_device_shape value (list, tuple, or string like '[4, 8]') -> tuple."""
+    if isinstance(mesh_device_shape, (list, tuple)):
+        return tuple(int(x) for x in mesh_device_shape)
+    if isinstance(mesh_device_shape, str):
+        nums = re.findall(r"-?\d+", mesh_device_shape)
+        if len(nums) >= 2:
+            return tuple(int(x) for x in nums[:2])
+    return None
 
-    Returns (shard_dims, mesh_shape) or (None, None) if not available.
-    shard_dims is a tuple like (2, 1) or (None, 3).
-    mesh_shape is a tuple like (4, 8).
+
+def _get_placement_from_tensor_spec(tensor_spec):
+    """Extract (shard_dims, mesh_shape) from a tensor_spec's tensor_placement field.
+
+    The vector format stores tensor_placement = {
+        'distribution_shape': '[4, 8]',
+        'mesh_device_shape':  '[4, 8]',
+        'placement':          "['PlacementShard(2)', 'PlacementShard(3)']",
+    }
     """
-    mesh_device = tensor_spec.get("mesh_device")
-    if not mesh_device:
+    tensor_placement = tensor_spec.get("tensor_placement") if isinstance(tensor_spec, dict) else None
+    if not tensor_placement:
         return None, None
-    placements = mesh_device.get("placements", [])
-    mesh_shape = mesh_device.get("shape", mesh_device.get("distribution_shape"))
-    if not mesh_shape or not placements:
+    mesh_shape = _parse_mesh_shape(
+        tensor_placement.get("mesh_device_shape") or tensor_placement.get("distribution_shape")
+    )
+    shard_dims = _parse_shard_dims_from_placement(tensor_placement.get("placement"))
+    if mesh_shape is None or shard_dims is None:
         return None, None
-    mesh_shape = tuple(mesh_shape)
-    shard_dims = _parse_shard_dims_from_placement(placements)
     return shard_dims, mesh_shape
 
 
@@ -94,32 +111,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
-    mesh_shape = get_mesh_shape()
-
-    if mesh_shape:
-        # Create mesh device based on env var
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"⚠️ Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        # Single device (default)
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -244,10 +240,42 @@ def run(
     if mem_config is not None:
         op_kwargs["memory_config"] = mem_config
 
+    # Forward sub_core_grids when master had it (use __absent_keys__ guard).
+    absent_keys = kwargs.get("__absent_keys__")
+    has_absent_info = absent_keys is not None
+    absent_keys = set(absent_keys or [])
+    if has_absent_info and "sub_core_grids" not in absent_keys:
+        traced_scg = kwargs.get("sub_core_grids")
+        if traced_scg is not None and traced_scg != "__ABSENT__":
+            from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+            parsed_scg = parse_dict_value("sub_core_grids", traced_scg) if isinstance(traced_scg, dict) else traced_scg
+            op_kwargs["sub_core_grids"] = parsed_scg
+        else:
+            op_kwargs["sub_core_grids"] = None
+
+    # Restore tensor topology to match master trace
+    for i, tensor_spec in enumerate(arg0):
+        if isinstance(tensor_spec, dict) and i < len(ttnn_tensors):
+            tp = tensor_spec.get("tensor_placement")
+            if tp and is_mesh_device:
+                from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology
+
+                try:
+                    apply_tensor_placement_topology(ttnn_tensors[i], tp, actual_mesh)
+                except Exception:
+                    pass  # Intentionally ignored: topology application is best-effort, fallback to default
+
     output_tensor = ttnn.concat(ttnn_tensors, dim=dim_value, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    # Use arg0[0]'s tensor_placement to drive the mesh composer (all inputs share
+    # the same placement for concat in the traced configs we've seen).
+    primary_placement = arg0[0].get("tensor_placement") if isinstance(arg0[0], dict) else None
+    mesh_composer = get_mesh_composer(device, primary_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, primary_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

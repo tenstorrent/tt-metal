@@ -7,6 +7,7 @@
 #include <tracy/Tracy.hpp>
 #include <cmath>
 #include <cstddef>
+#include <filesystem>
 #include <map>
 #include <string>
 
@@ -84,7 +85,7 @@ std::map<std::string, std::string> initialize_device_kernel_defines(const JitDev
 
 uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOptions& rtoptions) {
     // Collect all the parameters that affect the build configuration
-    FNV1a hasher;
+    StableHasher hasher;
 
     hasher.update(static_cast<uint32_t>(config.dispatch_core_type));
     hasher.update(static_cast<uint32_t>(config.dispatch_core_axis));
@@ -195,8 +196,17 @@ const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
 
 const JitBuildState& BuildEnvManager::get_firmware_build_state(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
-    const uint32_t state_idx =
-        get_firmware_build_index_and_state_count(programmable_core, processor_class).first + processor_id;
+    // `processor_id` is indexed in the per-processor-type space (0..get_processor_types_count-1),
+    // which on Quasar can span replicated NEOs (e.g. COMPUTE has 16 entries: 4 NEOs x 4 TRISCs).
+    // Firmware binaries are built per TRISC type only (num_fw_binaries == 4 for COMPUTE), and the
+    // processor layout is {NEO0 TR0..3, NEO1 TR0..3, ...}, so the type index is processor_id % num_fw_binaries.
+    const auto [base, num_fw_binaries] = get_firmware_build_index_and_state_count(programmable_core, processor_class);
+    TT_ASSERT(
+        num_fw_binaries > 0,
+        "No firmware binaries for programmable_core={} processor_class={}",
+        programmable_core,
+        processor_class);
+    const uint32_t state_idx = base + (static_cast<uint32_t>(processor_id) % num_fw_binaries);
     return get_device_build_env(device_id).firmware_build_states[state_idx];
 }
 
@@ -267,6 +277,19 @@ std::string BuildEnvManager::get_firmware_binary_path(
     const auto& env = get_device_build_env(device_id).build_env;
     const auto& state = get_firmware_build_state(device_id, programmable_core, processor_class, processor_id);
     return env.get_firmware_binary_root() + state.get_target_full_path();
+}
+
+std::string BuildEnvManager::get_kernel_binary_path(
+    ChipId device_id,
+    uint32_t programmable_core,
+    uint32_t processor_class,
+    int processor_id,
+    const std::string& binary_root,
+    const std::string& kernel_full_name) {
+    const auto& state = get_kernel_build_state(device_id, programmable_core, processor_class, processor_id);
+    auto path = std::filesystem::path(binary_root) / kernel_full_name;
+    path += state.get_target_full_path();
+    return path.string();
 }
 
 // Get build environment info for all devices

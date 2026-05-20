@@ -4,7 +4,7 @@ LLM-powered bug pattern detection for tt-metal PRs. Scans PR diffs against a lib
 
 ## How It Works
 
-1. A PR is targeted (via `/bug-check` comment or local CLI invocation).
+1. A PR is targeted (via `/bug-check run` comment or local CLI invocation).
 2. The tool loads all rules from `.github/bug_checker/manifest.yaml`.
 3. Rules are filtered to only those matching the PR's changed files (path globs) or labels.
 4. Each matching rule is sent to Claude along with the PR diff. Claude analyzes the diff against the bug pattern described in the rule's markdown file.
@@ -113,7 +113,7 @@ Each rule runs in its own isolated LLM session — no state is shared between ru
 
 ### GitHub Actions (primary)
 
-Comment `/bug-check` on any PR. The workflow at `.github/workflows/bug-check.yaml` runs the checker and posts findings as inline comments.
+Comment `/bug-check run` on any PR. The workflow at `.github/workflows/bug-check.yaml` runs the checker and posts findings as inline comments. Comment `/bug-check` (bare) to see all available subcommands.
 
 ### Local CLI
 
@@ -138,7 +138,8 @@ python .github/bug_checker/run_bug_checker.py --pr 39432 --verbose
 
 | Command | Description |
 |---------|-------------|
-| `/bug-check` | Run all matching rules (default) |
+| `/bug-check` | Show this help message |
+| `/bug-check run` | Run all matching rules against the PR |
 | `/bug-check list-rules` | List all rules with their severity, paths, and labels |
 | `/bug-check check-rule <id>` | Run only the named rule against the PR |
 | `/bug-check dry-run` | Show which rules match and what diff sections each would analyze (no LLM calls) |

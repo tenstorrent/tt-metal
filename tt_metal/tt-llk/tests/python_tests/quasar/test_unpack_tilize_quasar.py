@@ -9,10 +9,12 @@ from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     TilizeGolden,
     get_golden_generator,
+    quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
+    DestSync,
     ImpliedMathFormat,
     UnpackerEngine,
     format_dict,
@@ -23,7 +25,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
@@ -52,12 +54,11 @@ def generate_unpack_tilize_combinations(
     Returns: List of (format, dest_acc, unpacker_sel, input_dimensions) tuples
     """
     dimensions_cache = {
-        DestAccumulation.No: tuple(
-            generate_unary_input_dimensions(DestAccumulation.No)
-        ),
-        DestAccumulation.Yes: tuple(
-            generate_unary_input_dimensions(DestAccumulation.Yes)
-        ),
+        (dest_acc, dest_sync): tuple(
+            generate_unary_input_dimensions(dest_acc, dest_sync)
+        )
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        for dest_sync in (DestSync.Half, DestSync.Full)
     }
 
     combinations = []
@@ -82,9 +83,12 @@ def generate_unpack_tilize_combinations(
         )
 
         for dest_acc in dest_acc_modes:
-            for unpacker_sel in unpacker_engines:
-                for dimensions in dimensions_cache[dest_acc]:
-                    combinations.append((fmt, dest_acc, unpacker_sel, dimensions))
+            for dest_sync in (DestSync.Half, DestSync.Full):
+                for unpacker_sel in unpacker_engines:
+                    for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
+                        combinations.append(
+                            (fmt, dest_acc, dest_sync, unpacker_sel, dimensions)
+                        )
 
     return combinations
 
@@ -95,6 +99,7 @@ UNPACK_TILIZE_FORMATS = input_output_formats(
         DataFormat.Float16,
         DataFormat.Int32,
         DataFormat.Int16,
+        DataFormat.MxFp4,
     ],
     same=True,  # Input format and output format are the same
 )
@@ -105,18 +110,16 @@ ALL_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_unpack_sel_dimensions=ALL_UNPACK_TILIZE_COMBINATIONS,
+    formats_dest_acc_sync_unpack_sel_dimensions=ALL_UNPACK_TILIZE_COMBINATIONS,
 )
 def test_unpack_tilize_quasar(
-    formats_dest_acc_unpack_sel_dimensions, boot_mode=BootMode.DEFAULT
+    formats_dest_acc_sync_unpack_sel_dimensions, boot_mode=BootMode.DEFAULT
 ):
-    formats_dest_acc_unpack_sel_dimensions = formats_dest_acc_unpack_sel_dimensions[0]
-    formats = formats_dest_acc_unpack_sel_dimensions[0]
-    dest_acc = formats_dest_acc_unpack_sel_dimensions[1]
-    unpacker_sel = formats_dest_acc_unpack_sel_dimensions[2]
-    input_dimensions = formats_dest_acc_unpack_sel_dimensions[3]
+    (formats, dest_acc, dest_sync_mode, unpacker_sel, input_dimensions) = (
+        formats_dest_acc_sync_unpack_sel_dimensions[0]
+    )
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -125,6 +128,8 @@ def test_unpack_tilize_quasar(
 
     generate_golden = get_golden_generator(TilizeGolden)
     golden_src = src_B if unpacker_sel == UnpackerEngine.UnpB else src_A
+    if formats.input_format.is_mx_format():
+        golden_src = quantize_mx_tensor_chunked(golden_src, formats.input_format)
     golden_tensor = generate_golden(
         golden_src, input_dimensions, formats.output_format, num_faces=4
     )
@@ -141,7 +146,7 @@ def test_unpack_tilize_quasar(
                 if unpacker_sel == UnpackerEngine.UnpB
                 else DataCopyType.A2D
             ),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync_mode),
             TILE_COUNT(tile_cnt_A),
             TEST_FACE_DIMS(),
             NUM_FACES(),
@@ -163,6 +168,8 @@ def test_unpack_tilize_quasar(
         ),
         dest_acc=dest_acc,
         boot_mode=boot_mode,
+        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
+        disable_format_inference=(formats.input_format.is_mx_format()),
     )
 
     res_from_L1 = configuration.run().result

@@ -17,7 +17,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     NUM_BLOCKS,
@@ -54,7 +54,10 @@ dimension_combinations = [
     dimensions=dimension_combinations,
 )
 def test_pack_rows(
-    formats, dest_acc, num_rows_to_pack, dimensions, workers_tensix_coordinates
+    formats,
+    dest_acc,
+    num_rows_to_pack,
+    dimensions,
 ):
     row_num_datums = 16
 
@@ -71,7 +74,7 @@ def test_pack_rows(
         # Skip test cases where tile count is not evenly divisible by block size
         pytest.skip(f"Skipping incompatible dimension: {str(e)}")
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=dimensions,
         stimuli_format_B=formats.input_format,
@@ -115,7 +118,7 @@ def test_pack_rows(
         unpack_to_dest=formats.input_format.is_32_bit(),
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 

@@ -97,7 +97,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
             r = r * m + 0x1.274p-3f;
             r = r * m + -0x1.55p-3f;
             r = r * m + 0x1.998p-3f;
-            e_float = sfpi::int32_to_float(abs_e, 0);
+            e_float = sfpi::int32_to_float(abs_e, sfpi::RoundMode::NearestEven);
             r = r * m + sfpi::vConstFloatPrgm1;
             s = m * m;
             r = r * m + sfpi::vConstFloatPrgm2;
@@ -106,14 +106,14 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
             // log1p(x) = x + x*x * (-0x1.008p-1 + x * (0x1.744p-2 + x * (-0x1p-2)))
 
             m = m + t;
-            e_float = sfpi::int32_to_float(abs_e, 0);
+            e_float = sfpi::int32_to_float(abs_e, sfpi::RoundMode::NearestEven);
             r = neg_quarter * m + sfpi::vConstFloatPrgm1;
             s = m * m;
             r = r * m + sfpi::vConstFloatPrgm2;
         }
         // int32_to_float returns |e| as a real number in exponent-bit units;
         // restore sign and multiply by log(2) * 2^(-23) to recover k * log(2).
-        e_float = sfpi::setsgn(e_float, sfpi::reinterpret<sfpi::vFloat>(e));
+        e_float = sfpi::copysgn(e_float, sfpi::reinterpret<sfpi::vFloat>(e));
         r = r * s + m;
         sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
         r = e_float * sfpi::vConstFloatPrgm0 + r;
@@ -139,7 +139,7 @@ inline void calculate_log1p() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat result = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;

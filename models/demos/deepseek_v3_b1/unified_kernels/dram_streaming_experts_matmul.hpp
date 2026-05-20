@@ -13,7 +13,6 @@
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
@@ -157,6 +156,32 @@ struct DRAMStreamingExpertsMatmul {
             constexpr uint32_t dram_bank_id = CTArgs::bank_id;
             constexpr uint32_t vc = CTArgs::vc;
 
+            // Setup DRAM read for in1 — issued before the indexing block so the NOC
+            // cmd-buf register writes overlap with the cb_wait_front on the index CB.
+            uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, CTArgs::in1_tensor_addr);
+
+            // Previous multicasts could have put trids into a non-zero state, so reset the barrier counter
+            reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
+
+            // Set up NOC state for page reads
+            noc_async_read_one_packet_set_state<true>(in1_base_addr, CTArgs::in1_page_size, vc);
+
+            // Triple-buffering with transaction IDs for pipelining
+            constexpr uint32_t num_buffers = 3;
+            constexpr uint32_t extra_blocks_in_flight = 1;
+
+            cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
+            uint32_t l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
+
+            // CB base for boundary wrapping: compile-time addr when looping, runtime addr otherwise
+            uint32_t cb_in1_base;
+            if constexpr (ResetCBIn1) {
+                cb_in1_base = CBIn1ResetAddr;
+            } else {
+                cb_in1_base = l1_write_addr_in1;  // fresh kernel: get_write_ptr == CB base
+            }
+            uint32_t cb_in1_end = cb_in1_base + num_buffers * CTArgs::in1_block_size_bytes;
+
             // Expert indexing: compute DRAM offsets for all selected experts
             constexpr uint32_t k_tiles = CTArgs::num_subblocks_k * CTArgs::subblock_k;
             constexpr uint32_t bytes_per_tile = CTArgs::in1_block_size_bytes / CTArgs::subblock_k;
@@ -184,34 +209,9 @@ struct DRAMStreamingExpertsMatmul {
                 }
             }
 
-            // Previous multicasts could have put trids into a non-zero state, so reset the barrier counter
-            reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
-
-            // Setup DRAM read for in1
-            uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, CTArgs::in1_tensor_addr);
-            uint32_t l1_write_addr_in1;
-
-            // Set up NOC state for page reads
-            noc_async_read_one_packet_set_state<true>(in1_base_addr, CTArgs::in1_page_size, vc);
-
-            // Triple-buffering with transaction IDs for pipelining
-            constexpr uint32_t num_buffers = 3;
-            constexpr uint32_t extra_blocks_in_flight = 1;
             uint32_t num_free_blocks_in_buffer = num_buffers;
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;
-
-            cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
-            l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
-
-            // CB base for boundary wrapping: compile-time addr when looping, runtime addr otherwise
-            uint32_t cb_in1_base;
-            if constexpr (ResetCBIn1) {
-                cb_in1_base = CBIn1ResetAddr;
-            } else {
-                cb_in1_base = l1_write_addr_in1;  // fresh kernel: get_write_ptr == CB base
-            }
-            uint32_t cb_in1_end = cb_in1_base + num_buffers * CTArgs::in1_block_size_bytes;
 
             // Outer loop over experts, inner loop streams one expert's weight tiles.
             // Pipeline state (trid, free blocks, L1 write addr) flows continuously;
@@ -317,10 +317,10 @@ struct DRAMStreamingExpertsMatmul {
                         tile_regs_commit();
 
                         // Run SiLU on PACK thread
-                        TTI_SEMWAIT(
+                        PACK(TTI_SEMWAIT(
                             p_stall::STALL_TDMA | p_stall::STALL_CFG,
                             semaphore::t6_sem(semaphore::MATH_PACK),
-                            p_stall::STALL_ON_ZERO);
+                            p_stall::STALL_ON_ZERO));
                         PACK(TT_SETC16(
                             DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -44,37 +45,50 @@ void kernel_main() {
     constexpr uint32_t experts_tok_counter_page_size = get_compile_time_arg_val(12);
     constexpr uint32_t output_page_size = get_compile_time_arg_val(13);
 
-    // Operation parameters (indices 14-18)
+    // Operation parameters (indices 14-17)
     constexpr uint32_t num_chips = get_compile_time_arg_val(14);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(15);
     constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(16);
     constexpr uint32_t seq_len_per_chip = get_compile_time_arg_val(17);
-    constexpr uint32_t max_dispatched_tokens_per_expert = get_compile_time_arg_val(18);
 
-    // Hidden dimension (index 19)
-    constexpr uint32_t hidden_size = get_compile_time_arg_val(19);
+    // Hidden dimension (index 18)
+    constexpr uint32_t hidden_size = get_compile_time_arg_val(18);
 
-    // Aligned page sizes (indices 20-23)
-    constexpr uint32_t aligned_dispatched_buffer_page_size = get_compile_time_arg_val(20);
-    constexpr uint32_t aligned_dispatched_metadata_page_size = get_compile_time_arg_val(21);
-    constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(22);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(23);
+    // Aligned page sizes (indices 19-22)
+    constexpr uint32_t aligned_dispatched_buffer_page_size = get_compile_time_arg_val(19);
+    constexpr uint32_t aligned_dispatched_metadata_page_size = get_compile_time_arg_val(20);
+    constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(21);
+    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(22);
 
-    // Mesh information (indices 24-28)
-    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(24);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(25);
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(26);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(27);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(28);
+    // Mesh information (indices 23-27)
+    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(23);
+    constexpr uint32_t src_chip_id = get_compile_time_arg_val(24);
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(25);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(26);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(27);
 
-    // Fabric configuration (indices 29-32)
-    constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(29);
-    constexpr uint32_t l1_alignment = get_compile_time_arg_val(30);
-    constexpr uint32_t num_links = get_compile_time_arg_val(31);
-    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(32);
+    // Fabric configuration (indices 28-31)
+    constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(28);
+    constexpr uint32_t l1_alignment = get_compile_time_arg_val(29);
+    constexpr uint32_t num_links = get_compile_time_arg_val(30);
+    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(31);
 
-    // TensorAccessorArgs for all 4 tensors (starting at index 33)
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<33>();
+    // Batch configuration (index 32)
+    constexpr uint32_t read_batch_size = get_compile_time_arg_val(32);
+    // Number of dispatch groups (index 33)
+    constexpr uint32_t num_dispatch_groups = get_compile_time_arg_val(33);
+
+    // Expert region offsets tensor metadata (indices 34-37)
+    constexpr uint32_t cb_expert_region_offsets_id = get_compile_time_arg_val(34);
+    constexpr uint32_t expert_region_offsets_pages = get_compile_time_arg_val(35);
+    constexpr uint32_t expert_region_offsets_page_size = get_compile_time_arg_val(36);
+    constexpr uint32_t aligned_expert_region_offsets_page_size = get_compile_time_arg_val(37);
+
+    // Index 38 (max_dispatch_buffer_token_size) is consumed by reader_combine only;
+    // writer_combine skips over it and continues with TensorAccessorArgs at index 39.
+
+    // TensorAccessorArgs for all 5 tensors (starting at index 39)
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<39>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
     constexpr auto experts_tok_counter_args =
@@ -86,9 +100,13 @@ void kernel_main() {
     uint32_t dispatched_buffer_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t dispatched_metadata_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t experts_tok_counter_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    rt_args_idx++;  // expert_region_offsets_addr — consumed by reader only
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t zero_init_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
+    // Separate semaphore for the exit handshake. Reusing init_semaphore_address
+    // for both phases is racy
+    uint32_t exit_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t zero_init_barrier_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
@@ -97,8 +115,11 @@ void kernel_main() {
     uint32_t zero_init_semaphore_address = get_semaphore(zero_init_semaphore_id);
     uint32_t zero_init_barrier_l1_offset = get_semaphore(zero_init_barrier_semaphore_id);
 
-    // Read NOC coordinates for all cores (for inter-core barrier signaling)
-    uint64_t all_core_barrier_noc_addrs[2];
+    // Read NOC coordinates for all cores (for inter-core barrier signaling).
+    // num_cores = effective_num_links = min(num_links, 4).
+    constexpr uint32_t MAX_WORKER_CORES = 4;
+    ASSERT(num_cores <= MAX_WORKER_CORES);
+    uint64_t all_core_barrier_noc_addrs[MAX_WORKER_CORES];
     for (uint32_t c = 0; c < num_cores; c++) {
         uint32_t noc_x = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
@@ -116,11 +137,13 @@ void kernel_main() {
     DPRINT_COMBINE << "Combine Writer: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
                    << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
 
+#if ZERO_INIT
     // Wait for reader to complete zero-init
     volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
     noc_semaphore_wait(zero_init_sem_ptr, 1);
     noc_semaphore_set(zero_init_sem_ptr, 0);
+#endif
 
 #ifdef DEST_CHIP_ID
     constexpr uint32_t total_mesh_devices = mesh_rows * mesh_cols;
@@ -157,20 +180,23 @@ void kernel_main() {
     DPRINT_COMBINE << "Fabric setup complete" << ENDL();
 #endif
 
+#if INIT_ZEROS
     // Signal ALL readers that global init exchange is done.
     // Each writer increments every reader's barrier sem so each reader
     // collects num_cores signals before proceeding.
     for (uint32_t c = 0; c < num_cores; c++) {
         noc_semaphore_inc(all_core_barrier_noc_addrs[c], 1);
     }
-    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+#endif
 
-    const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
+    const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
     // Sentinel-terminated fabric send loop
     while (true) {
         cb_wait_front(cb_route_info_id, 1);
-        volatile uint32_t* route_info = (volatile uint32_t*)(get_read_ptr(cb_route_info_id));
+        volatile tt_l1_ptr uint32_t* route_info =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_route_info_id));
 
         uint32_t route = route_info[0];
         if (route == ROUTE_INFO_SENTINEL) {
@@ -197,17 +223,26 @@ void kernel_main() {
             output_page_idx,
             (int)aligned_output_page_size,
             l1_alignment);
-
-        noc_async_write_barrier();
+        noc_async_writes_flushed();  // Ensure output data departed L1 before freeing CB slot
 #endif
 
         cb_pop_front(cb_output_for_writer_id, 1);
     }
 
 #ifdef DEST_CHIP_ID
-    // Exit semaphore exchange
+    // Defensive: drain pending local NOC writes before fabric atomic-inc traffic,
+    // so the exit-sem signal cannot reach peers ahead of the last data writes.
+    noc_async_write_barrier();
+
+    // Exit semaphore exchange - uses a dedicated semaphore (exit_semaphore_address) and
+    // the dedicated sem_packet_header. flush=true (vs the init handshake which uses the
+    // default flush=false): the EDM on the receiver holds this atomic-inc until our prior
+    // fabric writes to that chip have committed there. Without it the small atomic-inc
+    // packet can overtake the larger data writes on B's local NOC and the peer would
+    // observe sem-reached-threshold before the data has landed in DRAM. At init there are
+    // no prior writes to order against, so flush=false saves one EDM round-trip check.
     {
-        const uint64_t exit_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+        const uint64_t exit_noc_semaphore_addr = get_noc_addr(exit_semaphore_address);
         send_init_semaphore_to_configured_targets<
             linearized_mesh_coord,
             topology,
@@ -216,13 +251,28 @@ void kernel_main() {
             mesh_cols,
             axis,
             total_mesh_devices>(
-            fabric_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, exit_noc_semaphore_addr);
+            fabric_connections,
+            sem_packet_header,
+            dest_chip_ids,
+            dest_mesh_ids,
+            exit_noc_semaphore_addr,
+            /*flush=*/true);
 
         volatile tt_l1_ptr uint32_t* exit_sem_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exit_semaphore_address);
         noc_semaphore_wait(exit_sem_ptr, combine_devices - 1);
         noc_semaphore_set(exit_sem_ptr, 0);
     }
+
+    // send_init_semaphore_to_configured_targets calls fabric_send_chip_unicast_noc_unicast_semaphore_only[_1d]
+    // which calls send_payload_flush_blocking_from_address -> send_payload_from_address_impl<FLUSH_BLOCKING>,
+    // which only calls noc_async_writes_flushed on the packet-header write. It confirms the the write departed
+    // worker's NIU but does not mean the write landed in EDM's L1 inbox.
+    // If we exit the kernel and close_direction_connections runs while the write is still mid-flight toward EDM's L1,
+    // EDM might process its slot bookkeeping before the actual packet bytes have landed.
+    // A full barrier ensures all writes have completed, as well as atomics which is purely defensive here and
+    // future-proof.
+    noc_async_full_barrier();
 
     close_direction_connections(directions, fabric_connections);
 #endif

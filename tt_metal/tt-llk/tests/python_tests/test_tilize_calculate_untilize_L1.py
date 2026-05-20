@@ -12,7 +12,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     MATH_FIDELITY,
@@ -43,11 +43,14 @@ from helpers.utils import passed_test
     ],
 )
 def test_tilize_calculate_untilize_L1(
-    formats, dest_acc, mathop, math_fidelity, workers_tensix_coordinates
+    formats,
+    dest_acc,
+    mathop,
+    math_fidelity,
 ):
     input_dimensions = [32, 32]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -82,7 +85,7 @@ def test_tilize_calculate_untilize_L1(
         L1_to_L1_iterations=2,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(golden_tensor)
 

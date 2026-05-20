@@ -10,7 +10,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import StimuliSpec, generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -78,15 +78,21 @@ def print_stimuli_and_golden(src_A, golden, input_dimensions, r_dim):
     dest_sync=[DestSync.Half],
 )
 def test_pack_untilize(
-    formats, dest_acc, input_dimensions, r_dim, dest_sync, workers_tensix_coordinates
+    formats,
+    dest_acc,
+    input_dimensions,
+    r_dim,
+    dest_sync,
 ):
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=False,
+        spec_A=sfpu_false_spec,
+        spec_B=sfpu_false_spec,
     )
 
     # src_A = generate_specific_stimuli(input_dimensions, r_dim, formats.input_format)
@@ -121,7 +127,7 @@ def test_pack_untilize(
         unpack_to_dest=False,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
     # Since input and output shapes are identical we always specify r_dim of 16 for stimulus
     # because stimulus must have 4 faces and 16 is only valid r_dim for 4 faces
     # In output for smaller actual r_dims lower portion is unused and therefore truncated

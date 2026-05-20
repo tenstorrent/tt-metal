@@ -273,7 +273,7 @@ std::vector<Tensor> minimal_matmul(
     auto kernel_config_val = init_device_compute_kernel_config(
         arch,
         compute_kernel_config,
-        MathFidelity::HiFi2,
+        tt::tt_metal::MathFidelity::HiFi2,
         false /*approx_mode*/,
         true /*fp32_acc*/,
         true /*packer_acc*/);

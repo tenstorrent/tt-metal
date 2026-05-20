@@ -51,7 +51,7 @@ inline void piecewise_exp_reduce(sfpi::vFloat x, sfpi::vFloat& s, sfpi::vInt& k_
 }
 
 inline sfpi::vFloat piecewise_exp_expand(sfpi::vFloat poly_result, sfpi::vInt k_int) {
-    return sfpi::setexp(poly_result, sfpi::exexp_nodebias(poly_result) + k_int);
+    return sfpi::setexp(poly_result, sfpi::exexp(poly_result, sfpi::ExponentMode::NoDebias) + k_int);
 }
 #endif
 
@@ -90,7 +90,7 @@ inline sfpi::vFloat piecewise_log_expand(sfpi::vFloat poly_result, sfpi::vInt e_
 #endif
     v_if(e_int < 0) { e_int = sfpi::setsgn(~e_int + 1, 1); }
     v_endif;
-    return sfpi::int32_to_float(e_int, 0) * EXPAND_C + poly_result;
+    return sfpi::int32_to_float(e_int, sfpi::RoundMode::NearestEven) * EXPAND_C + poly_result;
 }
 #endif
 
@@ -112,18 +112,18 @@ ALWI void piecewise_rational_eval_numer_denom(
     sfpi::vFloat denom = den_coeffs[DEN_DEGREE];
 
     if constexpr (NUM_DEGREE > DEN_DEGREE) {
-#pragma unroll
+#pragma GCC unroll 64
         for (int i = NUM_DEGREE - 1; i >= static_cast<int>(DEN_DEGREE); i--) {
             numer = numer * x + num_coeffs[i];
         }
     } else if constexpr (DEN_DEGREE > NUM_DEGREE) {
-#pragma unroll
+#pragma GCC unroll 64
         for (int i = DEN_DEGREE - 1; i >= static_cast<int>(NUM_DEGREE); i--) {
             denom = denom * x + den_coeffs[i];
         }
     }
 
-#pragma unroll
+#pragma GCC unroll 64
     for (int i = MIN_DEG - 1; i >= 0; i--) {
         numer = numer * x + num_coeffs[i];
         denom = denom * x + den_coeffs[i];
@@ -158,12 +158,12 @@ ALWI void piecewise_rational_eval_parity_numer_denom(
     sfpi::vFloat denom = den_coeffs[DEN_TOP];
 
     if constexpr (NUM_STEPS > DEN_STEPS) {
-#pragma unroll
+#pragma GCC unroll 64
         for (int k = 0; k < NUM_STEPS - DEN_STEPS; k++) {
             numer = numer * x2 + num_coeffs[NUM_TOP - 2 * (k + 1)];
         }
     } else if constexpr (DEN_STEPS > NUM_STEPS) {
-#pragma unroll
+#pragma GCC unroll 64
         for (int k = 0; k < DEN_STEPS - NUM_STEPS; k++) {
             denom = denom * x2 + den_coeffs[DEN_TOP - 2 * (k + 1)];
         }
@@ -173,7 +173,7 @@ ALWI void piecewise_rational_eval_parity_numer_denom(
     constexpr int NUM_POS = NUM_TOP - 2 * ((NUM_STEPS > DEN_STEPS) ? (NUM_STEPS - DEN_STEPS) : 0);
     constexpr int DEN_POS = DEN_TOP - 2 * ((DEN_STEPS > NUM_STEPS) ? (DEN_STEPS - NUM_STEPS) : 0);
 
-#pragma unroll
+#pragma GCC unroll 64
     for (int k = 1; k <= MIN_STEPS; k++) {
         numer = numer * x2 + num_coeffs[NUM_POS - 2 * k];
         denom = denom * x2 + den_coeffs[DEN_POS - 2 * k];
@@ -194,8 +194,7 @@ ALWI void piecewise_rational_dispatch_numer_denom(
     sfpi::vFloat x,
     sfpi::vFloat& out_numer,
     sfpi::vFloat& out_denom,
-    sfpi::vFloat x2 = 0.0f
-) {
+    sfpi::vFloat x2 = 0.0f) {
     if constexpr (USE_PARITY) {
         piecewise_rational_eval_parity_numer_denom<NUM_DEGREE, DEN_DEGREE>(
             num_coeffs, den_coeffs, x, x2, out_numer, out_denom);
@@ -208,36 +207,30 @@ ALWI void piecewise_rational_dispatch_numer_denom(
 // Recursive segment unroller with deferred reciprocal
 // ============================================================================
 
-template <uint32_t SEG, uint32_t NUM_DEGREE, uint32_t DEN_DEGREE, uint32_t NUM_SEGMENTS, uint32_t LUT_SIZE, bool USE_PARITY = false>
+template <
+    uint32_t SEG,
+    uint32_t NUM_DEGREE,
+    uint32_t DEN_DEGREE,
+    uint32_t NUM_SEGMENTS,
+    uint32_t LUT_SIZE,
+    bool USE_PARITY = false>
 ALWI void piecewise_rational_unroll_segment(
     const std::array<float, LUT_SIZE>& lut,
     sfpi::vFloat x,
     sfpi::vFloat& numer,
     sfpi::vFloat& denom,
-    sfpi::vFloat x2 = 0.0f
-) {
+    sfpi::vFloat x2 = 0.0f) {
     if constexpr (SEG < NUM_SEGMENTS) {
         constexpr uint32_t NUM_COEFFS = NUM_DEGREE + 1;
         constexpr uint32_t CPS = NUM_COEFFS + DEN_DEGREE + 1;
         constexpr uint32_t CO = NUM_SEGMENTS + 1;
         v_if(x >= lut[SEG]) {
             piecewise_rational_dispatch_numer_denom<NUM_DEGREE, DEN_DEGREE, USE_PARITY>(
-                &lut[CO + SEG * CPS],
-                &lut[CO + SEG * CPS + NUM_COEFFS],
-                x,
-                numer,
-                denom,
-                x2
-            );
+                &lut[CO + SEG * CPS], &lut[CO + SEG * CPS + NUM_COEFFS], x, numer, denom, x2);
         }
         v_endif;
         piecewise_rational_unroll_segment<SEG + 1, NUM_DEGREE, DEN_DEGREE, NUM_SEGMENTS, LUT_SIZE, USE_PARITY>(
-            lut,
-            x,
-            numer,
-            denom,
-            x2
-        );
+            lut, x, numer, denom, x2);
     }
 }
 

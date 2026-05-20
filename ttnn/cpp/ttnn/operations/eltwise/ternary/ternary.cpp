@@ -29,7 +29,7 @@ Tensor where_impl(
     const auto& value_false,
     const MemoryConfig& memory_config,
     const std::optional<Tensor>& output) {
-    log_debug(tt::LogOp, "Where Legacy");
+    log_debug(tt::LogOp, "Where Composite");
     using FusedActivations = ttsl::Span<const unary::EltwiseUnaryWithParam>;
     constexpr auto dtype = std::nullopt;
     const auto get_multiplied = [&](const Tensor& condition, const auto& value) -> Tensor {
@@ -41,8 +41,7 @@ Tensor where_impl(
             /* output */ std::nullopt,
             /* post_activations */ FusedActivations{},
             /* lhs_activations */ FusedActivations{},
-            /* rhs_activations */ FusedActivations{},
-            /* use_legacy */ false);
+            /* rhs_activations */ FusedActivations{});
     };
 
     return ttnn::add(
@@ -53,8 +52,7 @@ Tensor where_impl(
         output,
         /* post_activations */ FusedActivations{},
         /* lhs_activations */ FusedActivations{},
-        /* rhs_activations */ FusedActivations{},
-        /* use_legacy */ false);
+        /* rhs_activations */ FusedActivations{});
 }
 
 inline bool have_same_shape(const Tensor& a, const Tensor& b) { return (a.logical_shape() == b.logical_shape()); }
@@ -254,11 +252,18 @@ Tensor addcmul(
 
     bool is_supported_dtype =
         (input_a.dtype() == DataType::BFLOAT16 || input_a.dtype() == DataType::FLOAT32 ||
-         input_a.dtype() == DataType::INT32 || input_a.dtype() == DataType::BFLOAT8_B);  // TODO(#38972): UINT32 support
+         input_a.dtype() == DataType::INT32 || input_a.dtype() == DataType::BFLOAT8_B ||
+         input_a.dtype() == DataType::UINT32);
     TT_FATAL(
         is_supported_dtype,
-        "Addcmul supports only BFLOAT16, BFLOAT8_B, FLOAT32, and INT32 dtypes. Got {}",
+        "Addcmul supports only BFLOAT16, BFLOAT8_B, FLOAT32, INT32, and UINT32 dtypes. Got {}",
         input_a.dtype());
+    TT_FATAL(
+        input_b.dtype() == input_a.dtype() && input_c.dtype() == input_a.dtype(),
+        "Addcmul TTT requires all input tensors to have the same dtype. Got input_a={}, input_b={}, input_c={}",
+        input_a.dtype(),
+        input_b.dtype(),
+        input_c.dtype());
 
     // Only TTT variant is supported for addcmul
     auto broadcast_type = get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
@@ -272,7 +277,6 @@ Tensor addcmul(
     if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast)) {
         log_debug(tt::LogOp, "Addcmul Fallback - TTT");
         // Fall back to composite implementation for unsupported cases
-        // For block-format ROW bcast of ttnn.mul, legacy binary bcast implementation is used.
         float value_f = std::visit([](auto&& v) { return static_cast<float>(v); }, value);
         return _addcmul(input_a, input_b, input_c, value_f, memory_config);
     }

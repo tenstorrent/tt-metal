@@ -20,6 +20,7 @@ public:
     void read_results(
         ttnn::distributed::MeshDevice* device,
         const std::string& noop_identifier = "noop_identifier",
+        bool dump_results = false,
         const size_t number_of_noops = 5U,
         tt::tt_metal::ProfilerReadState read_state = tt::tt_metal::ProfilerReadState::NORMAL) const;
 

@@ -7,6 +7,7 @@ import math
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
 from .module import Module, Parameter
@@ -181,7 +182,7 @@ class ColParallelLinear(Module):
             state["bias"] = bias
 
     def forward(
-        self, x: ttnn.Tensor, compute_kernel_config=None, default_block_size=None, parallel_config=None
+        self, x: ttnn.Tensor, compute_kernel_config=None, default_block_size=None, parallel_config=None, dtype=None
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
@@ -225,8 +226,9 @@ class ColParallelLinear(Module):
                 barrier_semaphore=None,
                 force_transpose=True,
                 num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
-                num_buffers_per_channel=48,
+                num_buffers_per_channel=48 if not is_blackhole() else 24,
                 chunks=self.chunks if self.chunks is not None else 1,
+                dtype=dtype,
             )
 
             if self.chunks is not None and (self.chunks > 1):
@@ -235,7 +237,7 @@ class ColParallelLinear(Module):
                 output = outputs[0]
         else:
             M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
-            core_grid = self.mesh_device.compute_with_storage_grid_size()
+            core_grid = get_matmul_core_grid(self.mesh_device)
             matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
 
             if self.chunks is not None:
@@ -248,6 +250,7 @@ class ColParallelLinear(Module):
                     fused_activation=self.fused_activation_fn,
                     compute_kernel_config=compute_kernel_config or self.compute_config,
                     config=matmul_config,
+                    dtype=dtype,
                 )
                 return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
 
@@ -258,6 +261,7 @@ class ColParallelLinear(Module):
                 config=matmul_config,
                 fused_activation=self.fused_activation_fn,
                 compute_kernel_config=compute_kernel_config or self.compute_config,
+                dtype=dtype,
             )
 
         return _apply_activation_fn(output, self.activation_fn)
@@ -336,6 +340,7 @@ class RowParallelLinear(Module):
         compute_kernel_config=None,
         use_persistent_buffer: bool = True,
         default_block_size: tuple = None,
+        dtype=None,
     ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
@@ -360,6 +365,7 @@ class RowParallelLinear(Module):
             bias_tensor=self.bias.data if self.bias is not None else None,
             config=matmul_config,
             compute_kernel_config=compute_kernel_config or self.compute_config,
+            dtype=dtype,
         )
 
         if self._mesh_axis_size > 1:
@@ -384,6 +390,7 @@ class RowParallelLinear(Module):
         scalar: float = 1.0,
         *,
         compute_kernel_config=None,
+        dtype=None,
     ) -> ttnn.Tensor:
         """Fused RowParallel matmul + reduce-scatter + addcmul at the RS final write step.
 
@@ -424,6 +431,7 @@ class RowParallelLinear(Module):
             fused_ternary_scalar=scalar,
             addcmul_input_tensor1=addcmul_a,
             addcmul_input_tensor2=addcmul_b,
+            dtype=dtype,
         )
         if needs_reshape:
             output = ttnn.squeeze(output, 0)

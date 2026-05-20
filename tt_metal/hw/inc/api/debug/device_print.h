@@ -23,6 +23,13 @@
 #include "dprint_tile.h"
 #endif
 
+#ifndef PROCESSOR_INDEX
+#define PROCESSOR_INDEX_DEFINED 0
+#define PROCESSOR_INDEX internal_::get_hw_thread_idx()
+#else
+#define PROCESSOR_INDEX_DEFINED 1
+#endif
+
 #define DEVICE_PRINT_STRINGS_SECTION_NAME ".device_print_strings"
 #define DEVICE_PRINT_STRINGS_INFO_SECTION_NAME ".device_print_strings_info"
 
@@ -119,23 +126,19 @@ struct dp_typed_array_t {
 #endif
 
 #if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && defined(USE_DEVICE_PRINT)
-#define DEVICE_PRINT_GET_STRING_INFO_ADDRESS(variable_name, updated_format)                                    \
-    std::uintptr_t variable_name = 0;                                                                          \
-    {                                                                                                          \
-        static const auto allocated_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = \
-            updated_format.to_array();                                                                         \
-        static const auto allocated_file_string                                                                \
-            __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = []() {                         \
-                device_print_detail::helpers::static_string<sizeof(__FILE__)> file_str;                        \
-                for (std::size_t i = 0; i < sizeof(__FILE__); ++i) {                                           \
-                    file_str.push_back(__FILE__[i]);                                                           \
-                }                                                                                              \
-                return file_str.to_array();                                                                    \
-            }();                                                                                               \
-        static device_print_detail::structures::DevicePrintStringInfo allocated_string_info                    \
-            __attribute__((section(DEVICE_PRINT_STRINGS_INFO_SECTION_NAME), used)) = {                         \
-                allocated_string.data(), allocated_file_string.data(), __LINE__};                              \
-        variable_name = reinterpret_cast<std::uintptr_t>(&allocated_string_info);                              \
+#define DEVICE_PRINT_GET_STRING_INFO_ADDRESS(variable_name, updated_format)                         \
+    std::uintptr_t variable_name = 0;                                                               \
+    {                                                                                               \
+        constexpr auto _device_print_format_array = updated_format.to_array();                      \
+        constexpr auto _device_print_file_array = []() {                                            \
+            device_print_detail::helpers::static_string<sizeof(__FILE__)> file_str;                 \
+            for (std::size_t i = 0; i < sizeof(__FILE__); ++i) {                                    \
+                file_str.push_back(__FILE__[i]);                                                    \
+            }                                                                                       \
+            return file_str.to_array();                                                             \
+        }();                                                                                        \
+        variable_name = device_print_detail::                                                       \
+            register_string_info<_device_print_format_array, _device_print_file_array, __LINE__>(); \
     }
 
 #define DEVICE_PRINT(format, ...)                                                                                  \
@@ -181,7 +184,9 @@ struct dp_typed_array_t {
                 constexpr auto message_size = device_print_detail::serialization::get_total_message_size(args...); \
                 device_print_detail::structures::DevicePrintHeader header = {};                                    \
                 header.is_kernel = DEVICE_PRINT_IS_KERNEL;                                                         \
-                header.risc_id = PROCESSOR_INDEX;                                                                  \
+                if constexpr (PROCESSOR_INDEX_DEFINED) {                                                           \
+                    header.risc_id = PROCESSOR_INDEX;                                                              \
+                }                                                                                                  \
                 header.message_payload =                                                                           \
                     message_size - sizeof(header); /* Payload size does not include header itself */               \
                 return header;                                                                                     \
@@ -217,6 +222,22 @@ namespace device_print_detail {
 template <typename F, typename... Args>
 __attribute__((always_inline)) inline auto invoke_by_value(F&& f, Args... args) -> decltype(auto) {
     return f(static_cast<Args&&>(args)...);
+}
+
+// Helper function to solve linkage problem. Marked `static` so the template — and therefore
+// every instantiation and every static local inside it — has internal linkage. Without
+// internal linkage, statics inside a DEVICE_PRINT expanded in a vague-linkage caller (inline
+// header function, function template, in-class member, lambda-in-template) inherit COMDAT linkage;
+// that conflicts with the named-section attribute and silently sends them to `.data` instead
+// of `.device_print_strings_info`.
+template <auto FormatArr, auto FileArr, std::size_t Line>
+static std::uintptr_t register_string_info() {
+    static const auto allocated_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = FormatArr;
+    static const auto allocated_file_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = FileArr;
+    static structures::DevicePrintStringInfo allocated_string_info
+        __attribute__((section(DEVICE_PRINT_STRINGS_INFO_SECTION_NAME), used)) = {
+            allocated_string.data(), allocated_file_string.data(), Line};
+    return reinterpret_cast<std::uintptr_t>(&allocated_string_info);
 }
 
 template <typename BufferType>
@@ -797,30 +818,16 @@ template <>
 struct device_print_type<char*> {
     static constexpr device_print_type_info value = {'s', sizeof(char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, char* argument) {
-        if constexpr (sizeof(char*) == 4) {
-            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint32_t>(argument);
-        } else if constexpr (sizeof(char*) == 8) {
-            *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint64_t>(argument);
-        } else {
-            static_assert(sizeof(char*) == 4 || sizeof(char*) == 8, "Unsupported pointer size");
-        }
+        *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
+                reinterpret_cast<std::uintptr_t>(argument);
     }
 };
 template <>
 struct device_print_type<const char*> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, const char* argument) {
-        if constexpr (sizeof(const char*) == 4) {
-            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint32_t>(argument);
-        } else if constexpr (sizeof(const char*) == 8) {
-            *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint64_t>(argument);
-        } else {
-            static_assert(sizeof(const char*) == 4 || sizeof(const char*) == 8, "Unsupported pointer size");
-        }
+        *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
+                reinterpret_cast<std::uintptr_t>(argument);
     }
 };
 
@@ -830,13 +837,8 @@ template <>
 struct device_print_type<ct_string> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, ct_string argument) {
-        if constexpr (sizeof(const char*) == 4) {
-            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint32_t>(argument.ptr);
-        } else if constexpr (sizeof(const char*) == 8) {
-            *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint64_t>(argument.ptr);
-        }
+        *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
+                reinterpret_cast<std::uintptr_t>(argument.ptr);
     }
 };
 
@@ -1104,7 +1106,6 @@ constexpr auto update_format_string(const char (&format)[N]) {
 
     helpers::static_string<result_len> result;
 
-    constexpr auto type_infos = get_types_info<Args...>();
     constexpr auto arg_reorder = get_arg_reorder<Args...>();
 
     std::size_t type_index = 0;
@@ -1128,7 +1129,14 @@ constexpr auto update_format_string(const char (&format)[N]) {
             result.push_back('{');
 
             // Output the index (updated with reordered index)
-            result.push_back_uint32(arg_reorder[arg_index]);
+            auto reordered_index = arg_reorder[arg_index];
+            for (size_t j = 0; j < arg_reorder.size(); j++) {
+                if (arg_reorder[j] == arg_index) {
+                    reordered_index = j;
+                    break;
+                }
+            }
+            result.push_back_uint32(reordered_index);
 
             // Add comma and type character (enum types emit extended type info)
             result.push_back(',');
@@ -1300,6 +1308,19 @@ namespace locking {
 uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer, uint32_t message_size);
 void release_lock();
 
+#if !defined(ARCH_WORMHOLE)
+volatile tt_l1_ptr std::atomic<uint32_t>& get_lock_atomic() {
+#if !defined(ARCH_QUASAR)
+    return get_device_print_buffer()->aux.lock;
+#else
+    std::uintptr_t buffer_address = reinterpret_cast<std::uintptr_t>(get_device_print_buffer());
+    auto cached_address = buffer_address - MEM_L1_UNCACHED_BASE;
+    auto* print_buffer = reinterpret_cast<volatile tt_l1_ptr DevicePrintMemoryLayout*>(cached_address);
+    return print_buffer->aux.lock;
+#endif
+}
+#endif
+
 // Takes lock unconditionally. Prints kernel id message if needed.
 void acquire_lock() {
     // We need to acquire lock only if we have more than 1 processor, otherwise there is no contention.
@@ -1335,7 +1356,7 @@ void acquire_lock() {
             }
         }
 #else
-        auto& lock_atomic = get_device_print_buffer()->aux.lock;
+        auto& lock_atomic = get_lock_atomic();
 
         while (lock_atomic.exchange(1) != 0) {
             // Failed to acquire lock, wait and try again
@@ -1350,18 +1371,24 @@ void acquire_lock() {
     // After acquiring the lock, invalidate our L1 cache to ensure we see the most up-to-date data in the buffer
     invalidate_l1_cache();
 
+#if defined(KERNEL_BUILD)
     // Check if we should print kernel id
     volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
     if (device_print_buffer->aux.wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
-        auto risc_state = device_print_buffer->aux.risc_state[PROCESSOR_INDEX];
+#if PROCESSOR_INDEX_DEFINED
+        constexpr auto processor_index = PROCESSOR_INDEX;
+#else
+        auto processor_index = internal_::get_hw_thread_idx();
+#endif
+        auto risc_state = device_print_buffer->aux.risc_state[processor_index];
         if (risc_state != DevicePrintRiscCoreState::PrintingDisabled) {
             if (risc_state == DevicePrintRiscCoreState::KernelNotPrinted) {
                 uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
                 tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_idx]);
-                auto kernel_id = launch_msg->kernel_config.watcher_kernel_ids[PROCESSOR_INDEX];
+                auto kernel_id = launch_msg->kernel_config.watcher_kernel_ids[processor_index];
                 structures::DevicePrintHeader new_kernel_message = {};
                 new_kernel_message.is_kernel = 1;
-                new_kernel_message.risc_id = PROCESSOR_INDEX;
+                new_kernel_message.risc_id = processor_index;
                 new_kernel_message.message_payload = structures::DevicePrintHeader::max_message_payload_size;
                 new_kernel_message.info_id = kernel_id;
                 auto header_value = new_kernel_message.value;
@@ -1371,16 +1398,22 @@ void acquire_lock() {
                 formatting::device_print_type<decltype(header_value)>::serialize(
                     device_print_buffer_ptr, 0, header_value);
                 device_print_buffer->aux.wpos += sizeof(new_kernel_message);
-                device_print_buffer->aux.risc_state[PROCESSOR_INDEX] = DevicePrintRiscCoreState::KernelPrinted;
+                device_print_buffer->aux.risc_state[processor_index] = DevicePrintRiscCoreState::KernelPrinted;
             }
         }
     }
+#endif
 }
 
 void update_kernel_finished() {
     volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
-    if (device_print_buffer->aux.risc_state[PROCESSOR_INDEX] != DevicePrintRiscCoreState::PrintingDisabled) {
-        device_print_buffer->aux.risc_state[PROCESSOR_INDEX] = DevicePrintRiscCoreState::KernelNotPrinted;
+#if PROCESSOR_INDEX_DEFINED
+    constexpr auto processor_index = PROCESSOR_INDEX;
+#else
+    auto processor_index = internal_::get_hw_thread_idx();
+#endif
+    if (device_print_buffer->aux.risc_state[processor_index] != DevicePrintRiscCoreState::PrintingDisabled) {
+        device_print_buffer->aux.risc_state[processor_index] = DevicePrintRiscCoreState::KernelNotPrinted;
     }
 }
 
@@ -1392,7 +1425,7 @@ void release_lock() {
     *lock_ptr = 0;  // Release lock by setting to 0
     asm volatile("" ::: "memory");
 #else
-    auto& lock_atomic = get_device_print_buffer()->aux.lock;
+    auto& lock_atomic = get_lock_atomic();
     lock_atomic = 0;
 #endif
 }
@@ -1404,7 +1437,7 @@ void initialize_lock() {
     *lock_ptr = 0;  // Ensure lock starts in free state
     asm volatile("" ::: "memory");
 #else
-    auto& lock_atomic = get_device_print_buffer()->aux.lock;
+    auto& lock_atomic = get_lock_atomic();
     lock_atomic = 0;
 #endif
 }
@@ -1433,6 +1466,9 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
         // as it will be the same state as at the beginning when buffer is empty. So in order to distinguish real
         // empty state and wrap around state, we will wait for reader to progress from start.
         if (read_position == 0) {
+            // Mark that we are in stall waiting for reader
+            device_print_buffer->aux.wpos = write_position | DEVICE_PRINT_WRITE_STALL_FLAG;
+
             // Reader is at the beginning, we need to wait for it to move before we can safely wrap around.
             WAYPOINT("DPW");
             while (read_position == 0) {
@@ -1447,12 +1483,27 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
 
                 // Read new read position for next check
                 read_position = device_print_buffer->aux.rpos;
+
+                // Check if read position is suggesting buffer clear
+                if (read_position == DEVICE_PRINT_RESET_BUFFER_MAGIC) {
+                    // Reader is suggesting buffer clear, we can reset buffer state to empty to avoid waiting for reader
+                    // to move.
+                    device_print_buffer->aux.wpos = 0;
+                    device_print_buffer->aux.rpos = 0;
+                    return 0;
+                }
             }
             WAYPOINT("DPD");
+
+            // Clear stall state, we can continue with normal flow now.
+            device_print_buffer->aux.wpos = write_position;
         }
 
-        // Check if we should wair for reader to consume until end of the buffer before we can wrap around.
+        // Check if we should wait for reader to consume until end of the buffer before we can wrap around.
         if (write_position < read_position) {
+            // Mark that we are in stall waiting for reader
+            device_print_buffer->aux.wpos = write_position | DEVICE_PRINT_WRITE_STALL_FLAG;
+
             WAYPOINT("DPW");
             while (write_position < read_position) {
                 invalidate_l1_cache();
@@ -1466,8 +1517,20 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
 
                 // Read new read position for next check
                 read_position = device_print_buffer->aux.rpos;
+
+                // Check if read position is suggesting buffer clear
+                if (read_position == DEVICE_PRINT_RESET_BUFFER_MAGIC) {
+                    // Reader is suggesting buffer clear, we can reset buffer state to empty to avoid waiting for reader
+                    // to move.
+                    device_print_buffer->aux.wpos = 0;
+                    device_print_buffer->aux.rpos = 0;
+                    return 0;
+                }
             }
             WAYPOINT("DPD");
+
+            // Clear stall state, we can continue with normal flow now.
+            device_print_buffer->aux.wpos = write_position;
         }
 
         // There is not enough space for our message until end of buffer.
@@ -1494,6 +1557,8 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
     if (write_position < read_position) {
         // Wrapped around, check if there is enough space between wpos and rpos
         WAYPOINT("DPW");
+        // Mark that we are in stall waiting for reader
+        device_print_buffer->aux.wpos = write_position | DEVICE_PRINT_WRITE_STALL_FLAG;
         while (write_position < read_position && write_position + message_size >= read_position) {
             invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
@@ -1506,8 +1571,20 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
 
             // Read new read position for next check
             read_position = device_print_buffer->aux.rpos;
+
+            // Check if read position is suggesting buffer clear
+            if (read_position == DEVICE_PRINT_RESET_BUFFER_MAGIC) {
+                // Reader is suggesting buffer clear, we can reset buffer state to empty to avoid waiting for reader to
+                // move.
+                device_print_buffer->aux.wpos = 0;
+                device_print_buffer->aux.rpos = 0;
+                return 0;
+            }
         }
         WAYPOINT("DPD");
+
+        // Clear stall state, we can continue with normal flow now.
+        device_print_buffer->aux.wpos = write_position;
     }
     return write_position;
 }
@@ -1580,6 +1657,10 @@ begin_message_write(structures::DevicePrintHeader header, std::uintptr_t string_
     } else {
         header.info_id = static_cast<uint32_t>(string_info_index);
     }
+
+#if !PROCESSOR_INDEX_DEFINED
+    header.risc_id = internal_::get_hw_thread_idx();
+#endif
 
     // Serialize header
     auto device_print_buffer_ptr = &(device_print_buffer->data[0]) + write_position;
