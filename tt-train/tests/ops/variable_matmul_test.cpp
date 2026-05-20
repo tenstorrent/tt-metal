@@ -665,6 +665,60 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA) {
     EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(InputAndWeightK,tA) vs minimal not bit-exact";
 }
 
+// Non-tile-aligned matmul-M on the InputAndWeightK + transpose_a path. This is the
+// DeepSeek 16B / TP=8 moe_ffn bwd dW_gate (and dW_up) pattern: in0 = d_gate_proj
+// stored [count, I/TP=176], read as [I/TP, count] under transpose_a. matmul-M = I/TP = 176
+// (off-tile), matmul-N = H (tile-aligned), matmul-K = expert's count-tiles (tile-aligned,
+// from offsets[start..start+2]). Output [176, H] gets logical M=176 / padded 192; the
+// tail 16 padded rows are zero, downstream readers see only 176.
+TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA_NonTileAlignedM_176) {
+    const uint32_t K_parent_in0 = 512, M = 176, K_parent_in1 = 512, N = 64;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    // in0 stored [K_parent, M=176]; physical [K_parent, 192] in TILE layout.
+    auto in0_km = create_random_device_tensor(K_parent_in0, M, device);
+    auto in1 = create_random_device_tensor(K_parent_in1, N, device);
+
+    const std::vector<uint32_t> offsets_host = {0U, 64U, 128U, 256U, 384U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    constexpr uint32_t kStart = 2U;
+    constexpr uint32_t k_lo = 128;
+    constexpr uint32_t K_active = 128;
+
+    auto cfg = kConfig;
+    cfg.transpose_a = true;
+    auto result = ttml::metal::variable_matmul(
+        in0_km,
+        in1,
+        cfg,
+        /*bias=*/std::nullopt,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/0,
+        /*in0_k_offset_tiles=*/0,
+        /*in1_k_offset_tiles=*/0,
+        /*output_tensor=*/std::nullopt,
+        /*out_row_offset_tiles=*/0,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
+        /*offsets_start_index=*/kStart);
+
+    auto in0_sliced_km = ttnn::slice(
+        in0_km,
+        ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
+        ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_active, M},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto in0_sliced_mk = ttnn::transpose(in0_sliced_km, -2, -1);
+    auto in1_sliced = ttnn::slice(
+        in1,
+        ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
+        ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_active, N},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto ref = minimal_matmul_hifi4(in0_sliced_mk, in1_sliced, cfg);
+
+    EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(InputAndWeightK,tA,M=176) vs minimal not bit-exact";
+}
+
 // ---------------------------------------------------------------------------
 // M-axis OffsetsRole bit-exact parity. variable_matmul with an M-axis offset reads only
 // the M[a..b] row range of the input parent (InputRow), writes to that row range of the
