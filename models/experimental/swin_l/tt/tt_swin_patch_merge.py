@@ -17,6 +17,12 @@ class TtSwinPatchMerge:
         self.device = device
         self.parameters = parameters
         self.dim = dim
+        self._ln_compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
 
     def __call__(self, input_tensor):
         B, H, W, C = input_tensor.shape
@@ -39,6 +45,7 @@ class TtSwinPatchMerge:
             weight=self.parameters["norm"]["weight"],
             bias=self.parameters["norm"]["bias"],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self._ln_compute_config,
         )
         return ttnn.to_memory_config(
             ttnn.linear(
