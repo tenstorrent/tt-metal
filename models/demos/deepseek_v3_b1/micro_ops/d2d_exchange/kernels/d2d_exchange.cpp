@@ -113,6 +113,7 @@ FORCE_INLINE void send_pages_over_socket(
 
 void kernel_main() {
     // Build Fabric Connections
+    DPRINT << "d2d exchange op\n";
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2;
@@ -179,6 +180,7 @@ void kernel_main() {
         if (!deepseek_b1_ops::socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
+        DPRINT << "Pages available in receiver socket, sending data to remote core\n";
 
         auto l1_read_addr = receiver_socket.read_ptr;
         uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
@@ -202,7 +204,9 @@ void kernel_main() {
         } else {
             socket_notify_sender(receiver_socket);
         }
+        DPRINT << "Data sent to remote core, updating receiver socket state\n";
     }
+    DPRINT << "Termination signal received, cleaning up and exiting d2d exchange kernel\n";
 
     update_socket_config(sender_socket);
     update_socket_config(receiver_socket);
@@ -215,4 +219,5 @@ void kernel_main() {
         downstream_fabric_connection.close();
         downstream_fabric_connection_2.close();
     }
+    DPRINT << "D2D exchange kernel terminating\n";
 }

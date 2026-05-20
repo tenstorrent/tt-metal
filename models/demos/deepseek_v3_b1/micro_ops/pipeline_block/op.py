@@ -852,8 +852,12 @@ class PipelineBlock:
                 )
             self.exit_socket_interface.append(exit_si)
 
-    def _dispatch_parallel_device_programs(self):
-        """Collect programs from all per-device socket interfaces and dispatch in a single generic_op."""
+    def get_parallel_device_programs(self):
+        """Build d2d exchange programs for all parallel devices without dispatching.
+
+        Returns a list of ``(MeshCoordinate, ProgramDescriptor)`` entries that
+        can be merged with compute programs before a single ``generic_op`` call.
+        """
         entry_entries = []
         for si in self.entry_socket_interface:
             entry_entries.extend(si.build_programs())
@@ -864,6 +868,11 @@ class PipelineBlock:
         exit_device_set = {str(dc) for dc, _ in exit_entries}
         all_entries = [(dc, prog) for dc, prog in entry_entries if str(dc) not in exit_device_set]
         all_entries.extend(exit_entries)
+        return all_entries
+
+    def _dispatch_parallel_device_programs(self):
+        """Collect programs from all per-device socket interfaces and dispatch in a single generic_op."""
+        all_entries = self.get_parallel_device_programs()
 
         dummy_tensor = ttnn.allocate_tensor_on_device(
             ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device

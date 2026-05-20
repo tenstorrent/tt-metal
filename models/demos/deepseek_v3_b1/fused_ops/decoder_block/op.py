@@ -206,6 +206,7 @@ class DecoderBlock:
         forward_staging_tensor=None,
         exit_column=None,
         reduce_exit_column=None,
+        forward_metadata_size_bytes=None,
     ):
         """Build io_tensors and mesh_program_descriptor without executing.
 
@@ -300,7 +301,11 @@ class DecoderBlock:
             termination_semaphore=termination_semaphore,
             bcast_sender_coord=sender_coord,
             is_torus=is_torus,
-            forward_metadata_size_bytes=DeepseekMetadata.aligned_size_bytes(),
+            forward_metadata_size_bytes=(
+                DeepseekMetadata.aligned_size_bytes()
+                if forward_metadata_size_bytes is None
+                else forward_metadata_size_bytes
+            ),
             metadata_l1_addr=metadata_addr,
             forward_sockets=forward_sockets,
             forward_staging_tensor=forward_staging_tensor,
@@ -376,6 +381,7 @@ class DecoderBlock:
             return result
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        per_device_programs = []
         for ctx in decoder_per_device_contexts:
             mesh_coord = ctx["mesh_coord"]
             row = mesh_coord[0]
@@ -460,7 +466,11 @@ class DecoderBlock:
                 + ctx["brisc_named_compile_time_args"]
                 + moe_brisc_ct
                 + additional_named_compile_time_args,
-                brisc_common_runtime_args=ctx["brisc_common_runtime_args"],
+                brisc_common_runtime_args=(
+                    ctx["brisc_common_runtime_args"][:2] + moe.brisc_common_rt_args
+                    if moe_ctx.enable_forward
+                    else ctx["brisc_common_runtime_args"]
+                ),
                 trisc_named_compile_time_args=mesh_coord_args
                 + ctx["trisc_named_compile_time_args"]
                 + moe_trisc_ct
@@ -645,26 +655,68 @@ class DecoderBlock:
             # MoE fabric connections (reduce-to-all, broadcast, forward)
             moe._setup_fabric_connections(mesh_coord, row, col, reduce_root_coord, kernel_result, program)
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
+            per_device_programs.append((mesh_coord, program))
             print(
                 f"DecoderBlock.get_program_context: Finished setting up program descriptor for mesh coordinate {mesh_coord}"
             )
-        return io_tensors, mesh_program_descriptor, attention_block_output_tensor
+        return io_tensors, mesh_program_descriptor, attention_block_output_tensor, per_device_programs
 
     @staticmethod
-    def execute(io_tensors, mesh_program_descriptor, attention_block_output_tensor):
+    def execute(io_tensors, mesh_program_descriptor, attention_block_output_tensor, per_device_programs=None):
         """Run a previously built decoder block program.
 
         Args:
             io_tensors: List of IO tensors from ``get_program_context``.
             mesh_program_descriptor: MeshProgramDescriptor from ``get_program_context``.
             attention_block_output_tensor: The attention output tensor from ``get_program_context``.
+            per_device_programs: Optional list of (coord, program) entries (unused here, used for merging).
 
         Returns:
             Tuple of (moe_result, attention_block_output_tensor).
         """
-        print("DecoderBlock.execute: Starting execution of decoder block program")
+        import sys
+        import time
+
+        t0 = time.perf_counter()
+        print(f"[{t0:.3f}] DecoderBlock.execute: Starting, {len(io_tensors)} IO tensors", flush=True)
+
+        # Log IO tensor details
+        for i, t in enumerate(io_tensors):
+            try:
+                dev = t.device() if hasattr(t, "device") else "N/A"
+                shape = t.shape if hasattr(t, "shape") else "N/A"
+                print(
+                    f"[{time.perf_counter():.3f}] DecoderBlock.execute: io_tensor[{i}] shape={shape} device={dev}",
+                    flush=True,
+                )
+            except Exception as e:
+                print(f"[{time.perf_counter():.3f}] DecoderBlock.execute: io_tensor[{i}] error={e}", flush=True)
+
+        # Log mesh_program_descriptor info
+        print(
+            f"[{time.perf_counter():.3f}] DecoderBlock.execute: mesh_program_descriptor type={type(mesh_program_descriptor)}",
+            flush=True,
+        )
+        try:
+            # Try to get number of entries
+            print(
+                f"[{time.perf_counter():.3f}] DecoderBlock.execute: mesh_program_descriptor entries={len(mesh_program_descriptor.mesh_programs) if hasattr(mesh_program_descriptor, 'mesh_programs') else 'unknown'}",
+                flush=True,
+            )
+        except Exception as e:
+            print(
+                f"[{time.perf_counter():.3f}] DecoderBlock.execute: mesh_program_descriptor inspection error={e}",
+                flush=True,
+            )
+
+        print(f"[{time.perf_counter():.3f}] DecoderBlock.execute: calling ttnn.generic_op NOW...", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
-        print("DecoderBlock.execute: Finished execution of decoder block program")
+        print(
+            f"[{time.perf_counter():.3f}] DecoderBlock.execute: ttnn.generic_op returned after {time.perf_counter()-t0:.3f}s",
+            flush=True,
+        )
         return result, attention_block_output_tensor
 
     @staticmethod
@@ -673,7 +725,10 @@ class DecoderBlock:
 
         Accepts the same arguments as ``get_program_context``.
         """
-        io_tensors, mesh_program_descriptor, attention_block_output_tensor = DecoderBlock.get_program_context(
-            *args, **kwargs
-        )
+        (
+            io_tensors,
+            mesh_program_descriptor,
+            attention_block_output_tensor,
+            _per_device,
+        ) = DecoderBlock.get_program_context(*args, **kwargs)
         return DecoderBlock.execute(io_tensors, mesh_program_descriptor, attention_block_output_tensor)

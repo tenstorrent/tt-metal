@@ -231,6 +231,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="If set, log every inner sweep iteration; otherwise log every 1000 outer positions per prompt.",
     )
     misc.add_argument(
+        "--multi-exit",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable multi-entry/exit mode: 4 parallel H2D/D2H channels with forward + reduce-to-all.",
+    )
+    misc.add_argument(
         "--dry-run",
         action="store_true",
         help="Print resolved config and exit before opening any device.",
@@ -289,6 +295,7 @@ def _config_from_args(args: argparse.Namespace) -> HostIoDecoderSweepConfig:
         cache_path=args.cache_path,
         seed=args.seed,
         log_per_iteration=args.log_per_iteration,
+        multi_exit=args.multi_exit,
     )
 
 

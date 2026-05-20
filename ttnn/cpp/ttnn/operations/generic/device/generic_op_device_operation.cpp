@@ -130,8 +130,28 @@ ttnn::operations::generic::tensor_return_value_t generic_op(
         "io_tensors must contain at least one input tensor and one output tensor, got {} tensors.",
         io_tensors.size());
 
+    log_info(
+        tt::LogOp,
+        "generic_op: io_tensors.size()={}, mesh_programs.size()={}",
+        io_tensors.size(),
+        operation_attributes.mesh_programs.size());
+    for (size_t i = 0; i < operation_attributes.mesh_programs.size(); ++i) {
+        const auto& [range, prog] = operation_attributes.mesh_programs[i];
+        log_info(
+            tt::LogOp,
+            "generic_op: mesh_program[{}] range={} kernels={} cbs={} sems={}",
+            i,
+            range,
+            prog.kernels.size(),
+            prog.cbs.size(),
+            prog.semaphores.size());
+    }
+    log_info(tt::LogOp, "generic_op: calling device_operation::launch...");
+
     auto tensor_args = OperationType::tensor_args_t{.io_tensors = io_tensors, .output_tensor = io_tensors.back()};
 
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    auto result = ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    log_info(tt::LogOp, "generic_op: device_operation::launch returned");
+    return result;
 }
 }  // namespace ttnn::prim

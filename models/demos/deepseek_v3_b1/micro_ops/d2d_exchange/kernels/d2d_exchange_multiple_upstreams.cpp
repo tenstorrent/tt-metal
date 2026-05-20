@@ -175,6 +175,7 @@ FORCE_INLINE bool process_upstream_sockets(
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
 void kernel_main() {
+    DPRINT << "d2d exchange multiple upstreams\n";
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender upstream_fabric_connection;
@@ -255,11 +256,12 @@ void kernel_main() {
         noc_semaphore_wait_min(page_ready_sem, 1);
         noc_semaphore_set(page_ready_sem, 0);
 #endif
-
+        DPRINT << "Reserved page in sender socket, waiting for pages in receiver sockets\n";
         invalidate_l1_cache();
         if (termination_semaphore[0] == 1) {
             break;
         }
+        DPRINT << "Pages available in receiver sockets, processing upstream sockets\n";
 
         uint64_t dst_addr_base;
 #if defined(COMPILE_FOR_BRISC)
@@ -277,6 +279,7 @@ void kernel_main() {
             upstream_packet_header,
             upstream_bytes_acked_noc_addrs,
             termination_semaphore);
+        DPRINT << "Finished processing upstream sockets for this iteration\n";
 
 #if defined(COMPILE_FOR_BRISC)
         if (!terminated) {
@@ -286,6 +289,7 @@ void kernel_main() {
             if constexpr (!use_fabric_on_sender) {
                 socket_notify_receiver(sender_socket);
             }
+            DPRINT << "Pushed page to sender socket and notified receiver\n";
         }
 #elif defined(COMPILE_FOR_NCRISC)
         noc_semaphore_set(ncrisc_done_sem, 1);
@@ -310,5 +314,6 @@ void kernel_main() {
     if constexpr (use_fabric_on_sender) {
         downstream_fabric_connection.close();
     }
+    DPRINT << "D2D exchange kernel terminating\n";
 }
 #endif

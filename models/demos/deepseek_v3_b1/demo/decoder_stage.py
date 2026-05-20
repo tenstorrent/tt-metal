@@ -15,6 +15,7 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import yarn_get_mscale
 from models.demos.deepseek_v3.tt.rope import get_cos_sin_matrix, get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.demo.stage import (
+    ACTIVATION_DIM,
     ACTIVATION_PAGE_SIZE_BYTES,
     ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
     DEFAULT_ACTIVATION_FIFO_PAGES,
@@ -716,6 +717,7 @@ class DecoderStage(StageKind):
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         host_loopback: bool = False,
+        multi_exit: bool = False,
     ) -> None:
         if not isinstance(weights, (DeepSeekV3MoELayerWeights, DeepSeekV3DenseLayerWeights)):
             raise ValueError(
@@ -740,6 +742,7 @@ class DecoderStage(StageKind):
         self._upstream_fifo_pages = upstream_fifo_pages
         self._downstream_fifo_pages = downstream_fifo_pages
         self._host_loopback = host_loopback
+        self._multi_exit = multi_exit
         self._num_links_bcast = 1
         self._num_links_allreduce = 2
         self._state: dict[str, Any] = {}
@@ -788,7 +791,7 @@ class DecoderStage(StageKind):
             else LoopbackConfig.fabric_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD)),
         )
 
-    def _build_decoder_program_context(self) -> tuple[Any, Any, Any]:
+    def _build_decoder_program_context(self) -> tuple[Any, Any, Any, Any]:
         """Build DecoderBlock program before pipeline launch; requires ``self._state`` fully populated."""
         d = self._state["d"]
         if self._is_moe:
@@ -871,9 +874,13 @@ class DecoderStage(StageKind):
             persistent_mode=self._persistent_mode,
             termination_semaphore=self._state.get("termination_semaphore"),
             is_torus=self._is_torus,
+            forward_sockets=self._state.get("forward_sockets"),
+            forward_staging_tensor=self._state.get("forward_staging_tensor"),
+            exit_column=self._state.get("exit_column"),
+            reduce_exit_column=self._state.get("reduce_exit_column"),
         )
 
-    def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+    def setup(self, ctx: StageContext, pipeline_block) -> None:
         mesh_device = ctx.mesh_device
         pipeline_config = ctx.pipeline_config
         my_stage_idx = ctx.my_stage_idx
@@ -906,6 +913,7 @@ class DecoderStage(StageKind):
                 weights=self._weights,
                 metadata=self._metadata,
                 num_slots=self._num_slots,
+                entry_column=int(sender_coord[1]) if self._multi_exit else None,
             )
         else:
             d = create_decoder_block_tensors(
@@ -921,11 +929,41 @@ class DecoderStage(StageKind):
                 metadata=self._metadata,
                 num_slots=self._num_slots,
                 is_moe=False,
+                entry_column=int(sender_coord[1]) if self._multi_exit else None,
             )
         ttnn.synchronize_device(mesh_device)
 
-        recv_socket = pipeline_block.get_downstream_socket()
-        downstream_sockets = pipeline_block.get_upstream_sockets()
+        if self._multi_exit:
+            mesh_rows = mesh_device.shape[0]
+            mesh_cols = mesh_device.shape[1]
+            entry_column = int(sender_coord[1])
+            exit_column = entry_column
+            reduce_exit_col = int(reduce_root_coord[1])
+
+            raw_fwd = pipeline_block.get_downstream_sockets()
+            raw_ds = pipeline_block.get_upstream_sockets()
+            num_devices = mesh_rows * mesh_cols
+            forward_sockets = [None] * num_devices
+            downstream_sockets = [None] * num_devices
+            for idx in range(mesh_rows):
+                fwd_chip_id = idx * mesh_cols + entry_column
+                ds_chip_id = idx * mesh_cols + reduce_exit_col
+                forward_sockets[fwd_chip_id] = raw_fwd[idx]
+                downstream_sockets[ds_chip_id] = raw_ds[idx]
+
+            forward_staging_tensor = MoeOp.create_forward_staging_tensor(
+                mesh_device, self.MOE_SENDER_CORE, ACTIVATION_DIM
+            )
+            ttnn.synchronize_device(mesh_device)
+
+            recv_socket = None
+        else:
+            recv_socket = pipeline_block.get_downstream_socket()
+            downstream_sockets = pipeline_block.get_upstream_sockets()
+            forward_sockets = None
+            forward_staging_tensor = None
+            exit_column = None
+            reduce_exit_col = None
 
         self._state = {
             "d": d,
@@ -935,6 +973,10 @@ class DecoderStage(StageKind):
             "reduce_root_coord": reduce_root_coord,
             "recv_socket": recv_socket,
             "downstream_sockets": downstream_sockets,
+            "forward_sockets": forward_sockets,
+            "forward_staging_tensor": forward_staging_tensor,
+            "exit_column": exit_column,
+            "reduce_exit_column": reduce_exit_col,
             # Captured for get_kv_cache_host: ConcatMesh2dToTensor needs the mesh handle,
             # interleave_kv_cache needs (device_chunk_size, num_sp).
             "mesh_device": mesh_device,
@@ -1005,6 +1047,89 @@ class DecoderStage(StageKind):
         return kv_cache_torch
 
 
+class _ParallelHostIoPipelineBlock:
+    """Lightweight PipelineBlock-like wrapper managing per-row HostInterfaces for multi-exit mode.
+
+    Provides the same lifecycle (run/write_token/read_output/terminate) and socket
+    accessor API (get_downstream_sockets / get_upstream_sockets) that DecoderStage.setup()
+    and the harness sweep loop require, but backed by N independent HostInterfaces — one
+    per mesh row — instead of a single combined H2D+D2H stage.
+    """
+
+    def __init__(self, host_ios: list, mesh_device):
+        import torch
+
+        self.host_ios = host_ios
+        self.mesh_device = mesh_device
+        self.parallel_devices = True
+        if len(host_ios) > 1:
+            page_size = host_ios[0].d2h_page_size
+            page_words = page_size // 4
+            self._drain_sink = ttnn.from_torch(
+                torch.zeros(1, page_words, dtype=torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+        else:
+            self._drain_sink = None
+
+    def run(self):
+        for hio in self.host_ios:
+            hio.run()
+
+    def write_token(self, tensor):
+        for hio in self.host_ios:
+            hio.h2d_socket.write_tensor(tensor)
+
+    def read_output(self, tensor):
+        self.host_ios[0].d2h_socket.read_tensor(tensor)
+        if self._drain_sink is not None:
+            for hio in self.host_ios[1:]:
+                hio.d2h_socket.read_tensor(self._drain_sink)
+
+    def get_downstream_sockets(self):
+        return [hio.get_downstream_socket() for hio in self.host_ios]
+
+    def get_upstream_sockets(self):
+        return [hio.get_upstream_sockets() for hio in self.host_ios]
+
+    def terminate(self):
+        for hio in self.host_ios:
+            hio.terminate(True)
+
+    def get_downstream_socket(self):
+        raise RuntimeError("Use get_downstream_sockets() in multi-exit mode")
+
+    def push_dummy_token(self):
+        import torch
+
+        page_size = self.host_ios[0].h2d_page_size
+        page_words = page_size // 4
+        dummy = ttnn.from_torch(
+            torch.zeros(1, page_words, dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        for hio in self.host_ios:
+            hio.h2d_socket.write_tensor(dummy)
+
+    def drain_dummy_output(self):
+        if self._drain_sink is not None:
+            sink = self._drain_sink
+        else:
+            import torch
+
+            page_size = self.host_ios[0].d2h_page_size
+            page_words = page_size // 4
+            sink = ttnn.from_torch(
+                torch.zeros(1, page_words, dtype=torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+        for hio in self.host_ios:
+            hio.d2h_socket.read_tensor(sink)
+
+
 class HostIoDecoderStage(DecoderStage):
     """Decoder stage that runs as a single-stage pipeline talking directly to host I/O.
 
@@ -1043,6 +1168,7 @@ class HostIoDecoderStage(DecoderStage):
         use_hardcoded_expert_index: bool,
         enable_routing: bool,
         inject_hidden_states: bool = False,
+        multi_exit: bool = False,
     ) -> None:
         # Two mutually-exclusive H2D modes:
         #   - default (embedding lookup): host pushes a 256-byte token page; the fused
@@ -1071,11 +1197,12 @@ class HostIoDecoderStage(DecoderStage):
             use_hardcoded_expert_index=use_hardcoded_expert_index,
             enable_routing=enable_routing,
             host_loopback=False,
+            multi_exit=multi_exit,
         )
         self._embedding_weights = embedding_weights
         self._inject_hidden_states = inject_hidden_states
 
-    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
+    def create_pipeline_block(self, ctx: StageContext):
         mesh_device = ctx.mesh_device
         pipeline_config = ctx.pipeline_config
         my_stage_idx = ctx.my_stage_idx
@@ -1121,6 +1248,19 @@ class HostIoDecoderStage(DecoderStage):
         # Local socket pair between the H2D core and MOE_SENDER_CORE on the entry node.
         h2d_to_compute_fifo_size = activation_fifo_size_bytes(page_size, DEFAULT_ACTIVATION_FIFO_PAGES)
 
+        if self._multi_exit:
+            return self._create_parallel_host_io_block(
+                ctx,
+                shard_cores_list,
+                h2d_socket_page_size,
+                h2d_socket_fifo_size,
+                d2h_socket_page_size,
+                d2h_socket_fifo_size,
+                exit_upstream_page_size,
+                h2d_to_compute_fifo_size,
+                embedding_tensor,
+            )
+
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -1145,6 +1285,71 @@ class HostIoDecoderStage(DecoderStage):
             pipeline_config=pipeline_config,
             loopback=LoopbackConfig.no_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD)),
         )
+
+    def _create_parallel_host_io_block(
+        self,
+        ctx: StageContext,
+        shard_cores_list,
+        h2d_socket_page_size,
+        h2d_socket_fifo_size,
+        d2h_socket_page_size,
+        d2h_socket_fifo_size,
+        exit_upstream_page_size,
+        h2d_to_compute_fifo_size,
+        embedding_tensor,
+    ):
+        """Create per-row HostInterfaces for multi-exit mode (4 parallel H2D/D2H channels)."""
+        from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
+
+        mesh_device = ctx.mesh_device
+        pipeline_config = ctx.pipeline_config
+        my_stage_idx = ctx.my_stage_idx
+        mesh_rows = mesh_device.shape[0]
+        mesh_cols = mesh_device.shape[1]
+
+        entry_column = int(pipeline_config[my_stage_idx].entry_node_coord[1])
+        exit_column = int(pipeline_config[my_stage_idx].exit_node_coord[1])
+
+        metadata_size_bytes = DeepseekMetadata.aligned_size_bytes()
+        host_io_placement = HostIoPlacement.default(PIPELINE_CORE_COORD)
+
+        host_ios = []
+        for row in range(mesh_rows):
+            h2d_device_coord = ttnn.MeshCoordinate(row, entry_column)
+            d2h_device_coord = ttnn.MeshCoordinate(row, exit_column)
+
+            h2d_socket = ttnn.H2DSocket(
+                mesh_device,
+                ttnn.MeshCoreCoord(h2d_device_coord, host_io_placement.h2d_core),
+                ttnn.BufferType.L1,
+                h2d_socket_fifo_size,
+                ttnn.H2DMode.HOST_PUSH,
+            )
+            d2h_socket = ttnn.D2HSocket(
+                mesh_device,
+                ttnn.MeshCoreCoord(d2h_device_coord, host_io_placement.d2h_core),
+                d2h_socket_fifo_size,
+            )
+
+            exit_upstream_cores = [ttnn.MeshCoreCoord(d2h_device_coord, c) for c in shard_cores_list]
+
+            hio = HostInterface(
+                h2d_socket,
+                d2h_socket,
+                h2d_socket_page_size,
+                d2h_socket_page_size,
+                core_to_core_socket_buffer_size=h2d_to_compute_fifo_size,
+                h2d_downstream_core=ttnn.MeshCoreCoord(h2d_device_coord, self.MOE_SENDER_CORE),
+                embedding_tensor=embedding_tensor,
+                metadata_size_bytes=metadata_size_bytes,
+                d2h_upstream_cores=exit_upstream_cores,
+                d2h_upstream_page_size=exit_upstream_page_size,
+                d2h_socket_fifo_size=d2h_socket_fifo_size,
+                d2h_forward_metadata_size_bytes=metadata_size_bytes,
+            )
+            host_ios.append(hio)
+
+        return _ParallelHostIoPipelineBlock(host_ios, mesh_device)
 
 
 class MoEDecoderStage(DecoderStage):

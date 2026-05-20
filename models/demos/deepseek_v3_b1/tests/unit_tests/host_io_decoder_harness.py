@@ -204,6 +204,7 @@ class HostIoDecoderSweepConfig:
     # --- misc ---
     seed: int = 0
     log_per_iteration: bool = False
+    multi_exit: bool = False
 
     def __post_init__(self) -> None:
         """Validate static invariants. Trace-dependent checks live in preflight."""
@@ -731,12 +732,22 @@ def run_sweep(
     # Single-stage pipeline (num_procs == 1, no loopback). Coords match
     # the original test_decoder_block.test_decoder layout:
     # broadcast source = (1, 0), reduce-to-one root = (1, 1).
-    pipeline_config = [
-        _SinglePipelineStage(
-            entry_node_coord=ttnn.MeshCoordinate(1, 0),
-            exit_node_coord=ttnn.MeshCoordinate(1, 1),
-        )
-    ]
+    # In multi_exit mode, entry col=0 (all rows receive via forward) and
+    # exit col=1 (all rows produce via reduce-to-all).
+    if config.multi_exit:
+        pipeline_config = [
+            _SinglePipelineStage(
+                entry_node_coord=ttnn.MeshCoordinate(0, 0),
+                exit_node_coord=ttnn.MeshCoordinate(0, 1),
+            )
+        ]
+    else:
+        pipeline_config = [
+            _SinglePipelineStage(
+                entry_node_coord=ttnn.MeshCoordinate(1, 0),
+                exit_node_coord=ttnn.MeshCoordinate(1, 1),
+            )
+        ]
     stages_metadata = {0: StageMetadata(rank=0, mesh_id=0)}
     ctx = StageContext(
         mesh_device=submesh,
@@ -777,6 +788,7 @@ def run_sweep(
         is_torus=True,
         use_hardcoded_expert_index=False,
         inject_hidden_states=True,
+        multi_exit=config.multi_exit,
         **layer_type_kwargs,
     )
 
