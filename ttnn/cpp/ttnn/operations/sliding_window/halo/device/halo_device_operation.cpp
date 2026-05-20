@@ -3,7 +3,6 @@
 
 #include "untilize_with_halo_program_factory.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp"
 #include "ttnn/device_operation.hpp"

@@ -35,7 +35,6 @@
 #include "ttnn/graph/graph_nanobind.hpp"
 #include "ttnn/operations/bernoulli/bernoulli_nanobind.hpp"
 #include "ttnn/operations/ccl/ccl_nanobind.hpp"
-#include "ttnn/operations/conv/conv_nanobind.hpp"
 #include "ttnn/operations/creation/creation_nanobind.hpp"
 #include "ttnn/operations/debug/debug_nanobind.hpp"
 #include "ttnn/operations/data_movement/data_movement_nanobind.hpp"
@@ -154,9 +153,6 @@ void py_module(nb::module_& mod) {
 
     auto m_sliding_window = mod.def_submodule("sliding_window", "sliding_window operations");
     sliding_window::bind_sliding_window(m_sliding_window);
-
-    auto m_conv2d = mod.def_submodule("conv", "Convolution operations");
-    conv::py_module(m_conv2d);
 
     auto m_pool = mod.def_submodule("pool", "pooling  operations");
     pool::py_module(m_pool);

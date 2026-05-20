@@ -90,10 +90,6 @@ set(TTNN_SRC_PYBIND
     core/distributed/distributed_nanobind.cpp
     core/graph/graph_nanobind.cpp
     cpp/ttnn/operations/bernoulli/bernoulli_nanobind.cpp
-    cpp/ttnn/operations/conv/conv1d/conv1d_nanobind.cpp
-    cpp/ttnn/operations/conv/conv2d/conv2d_nanobind.cpp
-    cpp/ttnn/operations/conv/conv_nanobind.cpp
-    cpp/ttnn/operations/conv/conv_transpose2d/conv_transpose2d_nanobind.cpp
     cpp/ttnn/operations/creation/creation_nanobind.cpp
     cpp/ttnn/operations/data_movement/data_movement_nanobind.cpp
     cpp/ttnn/operations/data_movement/concat/concat_nanobind.cpp
@@ -294,9 +290,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/sliding_window/sliding_window_nanobind.cpp
     cpp/ttnn/operations/transformer/attention_softmax/attention_softmax_nanobind.cpp
     cpp/ttnn/operations/transformer/concatenate_heads/concatenate_heads_nanobind.cpp
-    cpp/ttnn/operations/transformer/sdpa/sdpa_nanobind.cpp
-    cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode_nanobind.cpp
-    cpp/ttnn/operations/transformer/sdpa_windowed/sdpa_windowed_nanobind.cpp
     cpp/ttnn/operations/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
     cpp/ttnn/operations/transformer/transformer_nanobind.cpp
     cpp/ttnn/operations/uniform/uniform_nanobind.cpp

@@ -4,12 +4,12 @@
 
 #include "generic_pools.hpp"
 
+#include "../conv_compat_stub.hpp"
 #include "tt-metalium/constants.hpp"
 #include "ttnn/operations/pool/generic/device/pool_op.hpp"
 #include <cmath>
 #include <optional>
 #include <tt-metalium/buffer_types.hpp>
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
