@@ -163,17 +163,28 @@ def format_pr_comment(finding: Finding) -> str:
 def format_summary_comment(
     findings: list[Finding],
     comment_failures: int = 0,
-    skipped_rules: list[str] | None = None,
+    failed_rules: list[str] | None = None,
     truncated_rules: list[str] | None = None,
+    skipped_rules: list[str] | None = None,
 ) -> str:
     """Format a summary comment for the PR."""
+    if failed_rules is None:
+        failed_rules = skipped_rules
     blocking = [f for f in findings if f.severity == "blocking"]
     warnings = [f for f in findings if f.severity == "warning"]
 
-    lines = ["## Bug Checker Results\n"]
-    if not findings:
+    lines = ["## Bug Checker Failed\n" if failed_rules else "## Bug Checker Results\n"]
+    if failed_rules and not findings:
+        lines.append(
+            "The analysis did not complete, so this run cannot be treated as a pass."
+        )
+    elif not findings:
         lines.append("No issues found.")
     else:
+        if failed_rules:
+            lines.append(
+                "Partial findings were produced before the checker failed. Treat this run as failed.\n"
+            )
         if blocking:
             lines.append(f"**{len(blocking)} blocking issue(s) found.**\n")
         if warnings:
@@ -189,11 +200,11 @@ def format_summary_comment(
             f"truncated before their matched files: {rule_list}. Consider breaking this PR into smaller pieces."
         )
 
-    if skipped_rules:
-        rule_list = ", ".join(f"`{r}`" for r in skipped_rules)
+    if failed_rules:
+        rule_list = ", ".join(f"`{r}`" for r in failed_rules)
         lines.append(
-            f"\n> **Warning:** {len(skipped_rules)} rule(s) were skipped due to errors "
-            f"and may not have been checked: {rule_list}. Results may be incomplete."
+            f"\n> **Failure:** {len(failed_rules)} rule(s) failed during LLM analysis: "
+            f"{rule_list}. The GitHub check exits non-zero so this is not silently accepted."
         )
 
     if comment_failures:

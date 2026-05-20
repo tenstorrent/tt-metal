@@ -11,8 +11,6 @@ try:
 except ImportError:
     anthropic = None  # type: ignore[assignment]
 
-from bug_checker.logger import logger
-
 DEFAULT_MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 4096
 
@@ -126,10 +124,7 @@ class LLMSession:
             (b for b in response.content if b.type == "tool_use"), None
         )
         if tool_use_block is None:
-            logger.warning(
-                f"Rule {rule_id}: expected tool_use response, got none — skipping"
-            )
-            return []
+            raise RuntimeError(f"Rule {rule_id}: expected tool_use response, got none")
 
         return self._build_findings(tool_use_block.input, rule_id, severity)
 

@@ -96,25 +96,26 @@ def test_format_summary_comment_with_failures():
     assert "2 comment(s) could not be posted" in summary
 
 
-def test_format_summary_comment_with_skipped_rules():
+def test_format_summary_comment_with_failed_rules():
     summary = format_summary_comment(
-        [], skipped_rules=["ccl-ring-buffer-mismatch", "reshape-dim-check"]
+        [], failed_rules=["ccl-ring-buffer-mismatch", "reshape-dim-check"]
     )
-    assert "2 rule(s) were skipped" in summary
+    assert "Bug Checker Failed" in summary
+    assert "2 rule(s) failed" in summary
     assert "`ccl-ring-buffer-mismatch`" in summary
     assert "`reshape-dim-check`" in summary
-    assert "Results may be incomplete" in summary
+    assert "exits non-zero" in summary
 
 
-def test_format_summary_comment_skipped_rules_shown_even_with_no_findings():
-    summary = format_summary_comment([], skipped_rules=["my-rule"])
-    assert "No issues found" in summary
+def test_format_summary_comment_failed_rules_shown_even_with_no_findings():
+    summary = format_summary_comment([], failed_rules=["my-rule"])
+    assert "cannot be treated as a pass" in summary
     assert "my-rule" in summary
 
 
-def test_format_summary_comment_no_skipped_rules_no_note():
+def test_format_summary_comment_no_failed_rules_no_note():
     summary = format_summary_comment([_make_finding()])
-    assert "skipped" not in summary
+    assert "failed during LLM analysis" not in summary
 
 
 def test_format_summary_comment_with_truncated_rules():
