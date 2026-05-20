@@ -358,14 +358,3 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
 } ATTR_PACK;
 
 using TSLICE = TileSlice<64>;
-
-template <>
-uint8_t DebugPrintTypeToId<TileSlice<64>>() {
-    return DPrintTILESLICE;
-}  // TODO(AP): can we use SFINAE here?
-template <>
-uint8_t DebugPrintTypeToId<TileSlice<128>>() {
-    return DPrintTILESLICE;
-}  // TODO(AP): can we use SFINAE here?
-
-template DebugPrinter operator<< <TSLICE>(DebugPrinter, TSLICE val);

@@ -660,7 +660,8 @@ void DevicePrintImpl::init_print_buffers_for_core(
     auto& cluster = env_.get_cluster();
     uint32_t num_processors = hal.get_num_risc_processors(core_type);
     uint32_t buffer_size = DPRINT_BUFFER_SIZE * num_processors;
-    WriteInitMagic(cluster, device_id, virtual_core, GetDevicePrintBufAddr(device_id, virtual_core), true, buffer_size);
+    WriteInitMagic(
+        cluster, device_id, virtual_core, GetDevicePrintBufAddr(device_id, virtual_core), false, buffer_size);
 }
 
 void DevicePrintImpl::enable_print_buffers_for_core(
@@ -669,6 +670,8 @@ void DevicePrintImpl::enable_print_buffers_for_core(
     const auto& hal = env_.get_hal();
     uint32_t num_processors = hal.get_num_risc_processors(core_type);
     uint64_t device_print_buffer_address = GetDevicePrintBufAddr(device_id, virtual_core);
+    uint32_t buffer_size = DPRINT_BUFFER_SIZE * num_processors;
+    WriteInitMagic(cluster, device_id, virtual_core, device_print_buffer_address, true, buffer_size);
     uint64_t risc_flags_address = device_print_buffer_address + 8;  // sizeof(wpos) + sizeof(rpos)
     std::vector<uint8_t> risc_flags(
         (num_processors + 3) / 4 * 4, static_cast<uint8_t>(DevicePrintRiscCoreState::KernelNotPrinted));
