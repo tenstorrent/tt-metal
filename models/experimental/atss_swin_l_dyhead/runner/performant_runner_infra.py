@@ -88,6 +88,7 @@ class ATSSPerformanceRunnerInfra:
             device=self.device,
             input_h=resolution[0],
             input_w=resolution[1],
+            hybrid_dyhead="device",  # Full on-device DyHead → trace compatible
             inputs_mesh_mapper=self.inputs_mesh_mapper,
             output_mesh_composer=self.outputs_mesh_composer,
         )

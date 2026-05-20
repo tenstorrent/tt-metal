@@ -185,6 +185,38 @@ def test_atss_swinl_dyhead_perf_single_device_2cq(
 @run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.timeout(1800)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 400000000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("batch_size_per_device", (1,))
+@pytest.mark.parametrize(
+    "resolution, expected_inference_throughput",
+    [((640, 640), 3)],
+)
+def test_atss_swinl_dyhead_perf_single_device_trace_2cq(
+    device,
+    batch_size_per_device,
+    model_location_generator,
+    resolution,
+    expected_inference_throughput,
+):
+    """End-to-end perf with TRACE + 2CQ enabled. Requires hybrid_dyhead='device' in the runner."""
+    run_perf_e2e_atss_swinl_dyhead(
+        device,
+        batch_size_per_device,
+        model_location_generator,
+        resolution,
+        expected_inference_throughput,
+        use_trace=True,
+        num_command_queues=2,
+    )
+
+
+@run_for_wormhole_b0()
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.timeout(1800)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize("batch_size_per_device", (1,))
 @pytest.mark.parametrize(

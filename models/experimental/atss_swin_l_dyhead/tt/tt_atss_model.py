@@ -47,6 +47,7 @@ from models.experimental.atss_swin_l_dyhead.tt.weight_loading import (
 from models.experimental.atss_swin_l_dyhead.reference.dyhead import build_dyhead_for_atss
 from models.experimental.atss_swin_l_dyhead.reference.postprocess import atss_postprocess
 from models.experimental.atss_swin_l_dyhead.tt.tt_dyhead import TtHybridDyHead
+from models.experimental.atss_swin_l_dyhead.tt.tt_dyhead_device import TtDyHeadDevice
 
 
 class TtATSSModel:
@@ -89,7 +90,7 @@ class TtATSSModel:
         device: ttnn.Device,
         input_h=None,
         input_w=None,
-        hybrid_dyhead: bool = True,
+        hybrid_dyhead=True,
         inputs_mesh_mapper=None,
         output_mesh_composer=None,
     ):
@@ -100,8 +101,12 @@ class TtATSSModel:
             device: TTNN device.
             input_h: padded input height (default: ATSS_INPUT_H).
             input_w: padded input width  (default: ATSS_INPUT_W).
-            hybrid_dyhead: if True, run scale/task attention on TTNN device
-                (spatial DCNv2 stays on CPU). If False, run entire DyHead on CPU.
+            hybrid_dyhead:
+                - True (default): scale/task attention on TTNN, DCNv2 spatial on CPU (host roundtrip)
+                - False: entire DyHead on CPU (pure PyTorch)
+                - "device": full DyHead on TTNN device (uses TtDyHeadDevice). Unblocks trace+2CQ
+                  but DCN runs through composed grid_sample+matmul which is bf16, so PCC is
+                  somewhat lower than the CPU hybrid path.
             inputs_mesh_mapper: mesh mapper for sharding inputs across devices.
             output_mesh_composer: mesh composer for gathering outputs from devices.
         """
@@ -130,7 +135,16 @@ class TtATSSModel:
         pt_dyhead.load_state_dict(dyhead_sd, strict=True)
         pt_dyhead.eval()
 
-        if hybrid_dyhead:
+        if hybrid_dyhead == "device":
+            # Need FPN level shapes to construct the on-device DyHead. Derive them from the
+            # padded input size and the standard ATSS strides (8, 16, 32, 64, 128).
+            from models.experimental.atss_swin_l_dyhead.common import ATSS_STRIDES, ATSS_INPUT_H, ATSS_INPUT_W
+
+            h_in = input_h if input_h is not None else ATSS_INPUT_H
+            w_in = input_w if input_w is not None else ATSS_INPUT_W
+            level_shapes = [(h_in // s, w_in // s) for s in ATSS_STRIDES]
+            dyhead = TtDyHeadDevice(device, pt_dyhead, level_shapes)
+        elif hybrid_dyhead is True:
             dyhead = TtHybridDyHead(
                 device,
                 pt_dyhead,
@@ -223,11 +237,21 @@ class TtATSSModel:
 
     def forward_device(self, x_ttnn):
         """
-        Full forward returning TTNN device tensors (no host conversion).
+        Full forward returning TTNN device tensors. Pure on-device when self.dyhead is
+        TtDyHeadDevice (host-roundtrip-free → trace-compatible). Otherwise falls back to
+        the host-DyHead path which performs to_torch/from_torch around DCNv2.
         Input: preprocessed image as ttnn tensor [1, 3, H, W] NCHW.
         Returns: (cls_scores, bbox_preds, centernesses) as lists of TTNN device tensors.
         """
         fpn_feats = self.forward_backbone_fpn(x_ttnn)
+
+        if isinstance(self.dyhead, TtDyHeadDevice):
+            # Fully on-device path — no host roundtrips. fpn_feats is already a list of
+            # NHWC TTNN tensors, which is what TtDyHeadDevice expects.
+            dy_feats_ttnn = self.dyhead(fpn_feats)
+            return self.head(dy_feats_ttnn)
+
+        # Hybrid (CPU DCN) or pure-CPU DyHead — must transfer to host and back.
         dy_feats = self.forward_dyhead(fpn_feats)
         ttnn_feats = []
         for feat in dy_feats:
