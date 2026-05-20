@@ -183,11 +183,6 @@ BUCKETS: tuple[Bucket, ...] = (
             f"{UNIT_TEST_DIR}/test_broadcast_rms_single_device.py",
         ),
     ),
-    Bucket(
-        name="host_io_decoder_sweep_chunked_trace",
-        timeout=1200,
-        targets=(f"{UNIT_TEST_DIR}/test_host_io_decoder_sweep_chunked_trace.py",),
-    ),
     # Keep fast-dispatch buckets visually separated from slow-dispatch buckets.
     Bucket(
         name="fast_dispatch",

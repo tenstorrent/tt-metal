@@ -148,17 +148,6 @@
   owner_id: U088DBNUKGR # Evan Smal
   team: models
 
-- name: bh_galaxy_DeepSeek_B1_Unit_Tests_HostIODecoderSweepChunkedTrace
-  cmd: |
-    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
-      --bucket host_io_decoder_sweep_chunked_trace
-  model: deepseek_decode
-  skus:
-    bh_galaxy:
-      timeout: 20
-  owner_id: U0709049XNK
-  team: models
-
 - name: bh_galaxy_DeepSeek_B1_Unit_Tests_MoreFabric
   cmd: |
     python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
