@@ -581,8 +581,8 @@ class GemmaAttentionTTNN:
         #   (c) neither — fresh forward without cache reuse.
         if static_cache is not None:
             k_buf, v_buf, update_idx = static_cache
-            ttnn.update_cache(k_buf, k_rope, update_idx)
-            ttnn.update_cache(v_buf, v, update_idx)
+            ttnn.kv_cache.update_cache(k_buf, k_rope, update_idx)
+            ttnn.kv_cache.update_cache(v_buf, v, update_idx)
             # SDPA sees the full pre-allocated buffer (with prefix already
             # filled via fill_cache + the suffix slot we just wrote). The
             # caller's attention_mask masks the unused tail beyond

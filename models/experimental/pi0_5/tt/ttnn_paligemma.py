@@ -634,23 +634,16 @@ class Pi0_5PaliGemmaBackboneTTNN(PaliGemmaBackboneTTNN):
             cache_shape = (1, num_kv_heads, max_seq, head_dim)
             self.expert_kv_static_cache = []
             for _ in range(config.expert_config.depth):
-                # L1 attempt: ~9 MB total spread across 120 cores = ~75 KB/core.
-                # Possible now because Pi0_5ModelTTNN.sample_actions deallocates
-                # the original prefix_kv_cache (~4.7 MB) right after fill_cache
-                # — that freed enough headroom to avoid the previous "static
-                # circular buffer region clash" error. If we hit the clash
-                # again, fall back to DRAM_MEMORY_CONFIG. Dtype bf8_b to match
-                # K/V produced by the QKV linear.
                 k_buf = ttnn.from_torch(
                     torch.zeros(*cache_shape, dtype=torch.bfloat16),
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
                 v_buf = ttnn.from_torch(
                     torch.zeros(*cache_shape, dtype=torch.bfloat16),
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
