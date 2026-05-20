@@ -97,11 +97,9 @@ def _run_cpu_reference(args: argparse.Namespace, cpu_output: Path) -> dict:
 
 
 def _run_tt_reference(args: argparse.Namespace, tt_output: Path) -> dict:
-    import ttnn
+    from models.experimental.audiox.demo.tt_demo import open_tt_device, run_tt_demo
 
-    from models.experimental.audiox.demo.tt_demo import run_tt_demo
-
-    device = ttnn.open_device(device_id=args.tt_device_id)
+    device = open_tt_device(device_id=args.tt_device_id)
     try:
         started_at = time.perf_counter()
         output_path = run_tt_demo(
@@ -117,6 +115,8 @@ def _run_tt_reference(args: argparse.Namespace, tt_output: Path) -> dict:
         )
         elapsed_seconds = time.perf_counter() - started_at
     finally:
+        import ttnn
+
         ttnn.close_device(device)
 
     summary = _summarize_audio_file(output_path)

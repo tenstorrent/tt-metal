@@ -7,6 +7,12 @@ from models.experimental.audiox.tt.common import linear_weight, to_tt
 from models.experimental.audiox.tt.rotary import apply_rotary_pos_emb
 
 
+def _deallocate_tensor(tensor) -> None:
+    if tensor is None:
+        return
+    ttnn.deallocate(tensor, force=True)
+
+
 def _self_attention(x, qkv_w, ow, num_heads, cos=None, sin=None):
     """Self-attention with fused QKV projection. Optionally applies rotary to Q/K."""
     qkv = ttnn.linear(x, qkv_w)
@@ -104,6 +110,26 @@ class TtTransformerBlock:
         self.ff_glu_b = to_tt(sd["ff.ff.0.proj.bias"], mesh_device)
         self.ff_out_w = to_tt(linear_weight(sd["ff.ff.2.weight"]), mesh_device)
         self.ff_out_b = to_tt(sd["ff.ff.2.bias"], mesh_device)
+
+    def deallocate(self) -> None:
+        _deallocate_tensor(self.pre_norm_w)
+        _deallocate_tensor(self.pre_norm_b)
+        _deallocate_tensor(self.self_qkv_w)
+        _deallocate_tensor(self.self_o_w)
+
+        if self.cross_attend:
+            _deallocate_tensor(self.cross_norm_w)
+            _deallocate_tensor(self.cross_norm_b)
+            _deallocate_tensor(self.cross_q_w)
+            _deallocate_tensor(self.cross_kv_w)
+            _deallocate_tensor(self.cross_o_w)
+
+        _deallocate_tensor(self.ff_norm_w)
+        _deallocate_tensor(self.ff_norm_b)
+        _deallocate_tensor(self.ff_glu_w)
+        _deallocate_tensor(self.ff_glu_b)
+        _deallocate_tensor(self.ff_out_w)
+        _deallocate_tensor(self.ff_out_b)
 
     def __call__(
         self,

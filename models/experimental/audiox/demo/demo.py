@@ -258,7 +258,7 @@ def run_demo(
     latent = sample_rf(model_fn, noise, steps=steps)
 
     # Decode latent -> stereo audio. Decoder upsamples by `downsample`.
-    audio = decoder(latent).clamp(-1.0, 1.0).cpu()
+    audio = decoder(latent).clamp(-1.0, 1.0).detach().cpu()
     audio = resample_output_audio(
         audio,
         input_sample_rate=_HF_CONFIG["sample_rate"],
