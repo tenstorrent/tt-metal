@@ -2,9 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 import pytest
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 pytestmark = pytest.mark.use_module_device
 
@@ -30,6 +33,8 @@ pytestmark = pytest.mark.use_module_device
     [ttnn.ne],
 )
 def test_binary_relational_uint8(a_shape, b_shape, low_a, high_a, low_b, high_b, ttnn_op, device):
+    if is_blackhole() and os.environ.get("TT_METAL_SIMULATOR"):
+        pytest.skip("Skipping on tt-sim in Blackhole/Wormhole B0")
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     corner_cases = torch.tensor([0, 1, 255], dtype=torch.int32)

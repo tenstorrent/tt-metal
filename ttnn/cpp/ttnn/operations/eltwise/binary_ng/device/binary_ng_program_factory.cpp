@@ -763,6 +763,22 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         use_llk_bcast = false;
     }
 
+    // Integer relational ops (NE/EQ/GT/LT/GE/LE) on UInt16 take the FPU SUB + NEZ
+    // postprocess path with DEST configured for Fp16_b accumulation (fp32_dest_acc_en
+    // is false for UInt16).  Under SCALAR broadcast the B2D datacopy unpacker writes
+    // a single u16 lane into all DEST positions; the resulting Fp16_b-tagged DEST is
+    // then read back by the NEZ postprocess, which interprets the integer bit pattern
+    // through the format-conversion path and corrupts the comparison result (#36217).
+    // Fall back to software broadcast for this combination - non-broadcast u16
+    // relational ops and broadcasted arithmetic u16 ops (no postprocess) are
+    // unaffected.
+    if (use_llk_bcast && a_data_format == tt::DataFormat::UInt16 && b_data_format == tt::DataFormat::UInt16 &&
+        op_config.postprocess.has_value() &&
+        (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B)) {
+        use_llk_bcast = false;
+    }
+
     // On Blackhole, the B2D datacopy path (MOVB2D) has a known issue in FP32 dest
     // accumulation mode with non-32-bit source formats (BH Issue #449).  SCALAR and
     // ROW broadcasts use MOVB2D, which produces corrupted results when

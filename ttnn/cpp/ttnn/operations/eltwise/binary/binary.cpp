@@ -933,8 +933,8 @@ Tensor ne(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    const auto a = lhs.dtype() == DataType::UINT8 ? ttnn::typecast(lhs, DataType::BFLOAT16) : lhs;
-    const auto b = rhs.dtype() == DataType::UINT8 ? ttnn::typecast(rhs, DataType::BFLOAT16) : rhs;
+    const auto a = lhs.dtype() == DataType::UINT8 ? ttnn::typecast(lhs, DataType::UINT16) : lhs;
+    const auto b = rhs.dtype() == DataType::UINT8 ? ttnn::typecast(rhs, DataType::UINT16) : rhs;
     return ttnn::detail::invoke_binary_ng(
         a,
         b,
