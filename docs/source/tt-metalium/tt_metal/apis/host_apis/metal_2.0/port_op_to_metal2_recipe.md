@@ -1,10 +1,10 @@
-# Porting an Op to Metal 2.0 — Phases A–D: Port Recipe
+# Porting an Op to Metal 2.0 — Port Recipe
 
-> This is the second of two documents covering the Metal 2.0 op port workflow. **This document covers Phases A–D (legacy inventory, spec planning, mechanical construction, verification).** Phase 0 — the feasibility audit — lives in [`port_op_to_metal2_audit.md`](port_op_to_metal2_audit.md) and is a hard prerequisite to anything in this document.
+> This is the second of two documents covering the Metal 2.0 op port workflow. **This document covers the port itself — legacy inventory, spec planning, construction, and verification.** The feasibility audit (the gate that precedes the port) lives in [`port_op_to_metal2_audit.md`](port_op_to_metal2_audit.md) and is a hard prerequisite to anything in this document.
 
 ## Read this first
 
-**Audience**: AI agents asked to perform the actual Metal 2.0 port of a TTNN op, *after* the Phase 0 feasibility audit has cleared with GREEN status and the user has explicitly approved proceeding.
+**Audience**: AI agents asked to perform the actual Metal 2.0 port of a TTNN op, *after* the feasibility audit has cleared with GREEN status and the user has explicitly approved proceeding.
 
 **Precondition — non-negotiable**: You may only invoke this document if:
 
@@ -15,18 +15,25 @@ If either condition is unmet, stop. Return to the audit document. Do not improvi
 
 **Operating principle**: Refusing to write code is still a successful outcome.
 
-The audit cleared the *features* and *prereqs* known at audit time. During the port you may discover something the audit missed — a feature gate that didn't fire, a kernel pattern that doesn't translate cleanly, an interaction the audit didn't anticipate. When that happens, the correct response is the same as in Phase 0: **stop and report**. Do not improvise around it.
+The audit cleared the *features* and *prereqs* known at audit time. During the port you may discover something the audit missed — a feature gate that didn't fire, a kernel pattern that doesn't translate cleanly, an interaction the audit didn't anticipate. When that happens, the correct response is the same as in the audit: **stop and report**. Do not improvise around it.
 
 In particular: if you find yourself constructing a clever workaround during the port — packing data into varargs to simulate a missing field, threading a buffer address through an RTA because the binding mechanism doesn't fit, hand-rolling a synchronization primitive — **stop**. Whatever you are about to write is almost certainly wrong. Surface the problem; do not paper over it.
 
-**The port plan as central artifact.** This recipe centers on a port plan (`PORT_PLAN.md`) that you write to the op's directory and commit alongside the port. The plan externalizes structural decisions before mechanical translation begins. It is read by you (during Phases C and D) and by human reviewers (during PR review and later debugging). See [Appendix A](#appendix-a--port_planmd-template) for the template.
+**Generated docs in the op directory.** This recipe directs you to write three files into the op's directory, alongside the program factory `.cpp` files:
+
+- `METAL2_PREPORT_AUDIT.md` — the audit report. (Written by the [audit doc](port_op_to_metal2_audit.md), not this one; included here so you know it's expected to be present as input.)
+- `METAL2_PORT_PLAN.md` — the port plan (this recipe's load-bearing artifact). Externalizes structural decisions before mechanical translation begins. Read by you during construction and verification, by human reviewers during PR review, and by future debuggers. See [Appendix A](#appendix-a--metal2_port_planmd-template) for the template.
+- `METAL2_PORT_PROBLEMS.md` — the post-port problems file. Records friction observed during the port: what bit you, where the docs helped or didn't. Written at the end of the port; feeds doc evolution. See [Capture problems and friction](#capture-problems-and-friction) for the structure.
+
+All three are committed alongside the port.
 
 **Workflow at a glance**:
 
-1. [**Phase A**](#phase-a--legacy-inventory) — Legacy inventory. Consume the audit; record the legacy structure to `PORT_PLAN.md`.
-2. [**Phase B**](#phase-b--plan-the-spec) — Plan the spec. Apply host-side specialization principles; identify legacy plumbing that should evaporate. Externalize all structural decisions to the plan.
-3. [**Phase C**](#phase-c--construct-paired-spec--run-params) — Construct the spec and run-params, paired by resource. Mechanical translation per the plan.
-4. [**Phase D**](#phase-d--verification) — Verify. Build, run tests, run anti-pattern self-audit against the [patterns catalog](metal2_port_patterns.md).
+1. [**Legacy inventory**](#legacy-inventory) — Consume the audit; record the legacy structure to `METAL2_PORT_PLAN.md`.
+2. [**Plan the spec**](#plan-the-spec) — Apply host-side specialization principles; identify legacy plumbing that should evaporate. Externalize all structural decisions to the plan.
+3. [**Construct paired spec + run-params**](#construct-paired-spec--run-params) — Construct the spec and run-params, paired by resource. Mechanical translation per the plan.
+4. [**Verification**](#verification) — Build, run tests, run anti-pattern self-audit against the [patterns catalog](metal2_port_patterns.md).
+5. [**Capture problems and friction**](#capture-problems-and-friction) — Write `METAL2_PORT_PROBLEMS.md` recording what the docs helped with and what they missed.
 
 **Reference material** the recipe relies on, loaded on demand:
 
@@ -36,16 +43,16 @@ In particular: if you find yourself constructing a clever workaround during the 
 
 ---
 
-## Phase A — Legacy inventory
+## Legacy inventory
 
-*This is an observation phase. No decisions yet.*
+*This is an observation step. No decisions yet.*
 
 **Inputs**:
-- The audit report for this op (produced in Phase 0). The audit's "kernels referenced" and "factory shape" sections are the starting point for the inventory.
+- The audit report (`METAL2_PREPORT_AUDIT.md` in the op directory). The audit's "kernels referenced" and "factory shape" sections are the starting point for the inventory.
 - The op's program-factory `.cpp` / `.hpp` files.
 - The kernel sources referenced by the factories.
 
-**Output**: write the **Legacy Inventory** section of `PORT_PLAN.md` to the op's directory. Record:
+**Output**: write the **Legacy Inventory** section of `METAL2_PORT_PLAN.md` to the op's directory. Record:
 
 - **Factory shape**: which `ttnn::device_operation` concept the factory currently satisfies (`ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept`). For each variant (if the device-operation is multi-variant), record separately.
 - **Kernels**: every `KernelDescriptor` (one row per descriptor):
@@ -73,18 +80,18 @@ In particular: if you find yourself constructing a clever workaround during the 
 
 ---
 
-## Phase B — Plan the spec
+## Plan the spec
 
-*This is the load-bearing planning phase. Externalize all structural decisions before writing code.*
+*This is the load-bearing planning step. Externalize all structural decisions before writing code.*
 
 **Inputs**:
-- The Legacy Inventory from Phase A.
+- The Legacy Inventory written in the previous step.
 - The [migration guide — Design Principles](metal2_migration_guide.md#design-principles), especially Principle 2 (named bindings) which drives the "Dropped Plumbing" section below.
 - The [migration guide — TTNN Framework Integration](metal2_migration_guide.md#ttnn-framework-integration) for the factory concept the ported op will satisfy.
 - The [patterns catalog](metal2_port_patterns.md).
 - Any yellow-tier items from the audit (apply per the catalog's override guidance for each).
 
-**Output**: extend `PORT_PLAN.md` with the following sections (see [Appendix A](#appendix-a--port_planmd-template) for the template). Each section may say "none" with a one-line justification when no items apply.
+**Output**: extend `METAL2_PORT_PLAN.md` with the following sections (see [Appendix A](#appendix-a--metal2_port_planmd-template) for the template). Each section may say "none" with a one-line justification when no items apply.
 
 ### Planned Spec Shape
 
@@ -119,7 +126,7 @@ For each legacy RTA or CTA that should *not* survive the port, list it with the 
 - **Semaphore-ID RTAs**: replaced by `SemaphoreBinding`. List each kernel's affected RTA slot.
 - **Positional CTAs**: replaced by named CTAs. List each kernel's positional CTA list with the names you'll assign.
 
-This section's enumeration is the gate against builder-pattern carry-over. If a legacy RTA / CTA is not listed here, it will be translated by reflex in Phase C — which is exactly the failure mode this gate exists to prevent. See [migration guide — Principle 2](metal2_migration_guide.md#principle-2-first-class-named-resource-bindings) for the rationale.
+This section's enumeration is the gate against builder-pattern carry-over. If a legacy RTA / CTA is not listed here, it will be translated by reflex during construction — which is exactly the failure mode this gate exists to prevent. See [migration guide — Principle 2](metal2_migration_guide.md#principle-2-first-class-named-resource-bindings) for the rationale.
 
 ### Applied Patterns
 
@@ -131,22 +138,22 @@ For each non-trivial pattern from the [catalog](metal2_port_patterns.md) invoked
 
 ### Deferred / Flagged
 
-Any items the audit flagged as YELLOW that affect this port, plus any new findings Phase B uncovered:
+Any items the audit flagged as YELLOW that affect this port, plus any new findings the planning step uncovered:
 
 - Yellow audit items, with the relevant [catalog](metal2_port_patterns.md) override guidance entry referenced.
-- New findings: anything the audit missed that surfaced during Phase B's structural planning.
+- New findings: anything the audit missed that surfaced during structural planning.
 
-**Stop signal**: if Phase B uncovers a structural issue the audit didn't catch — e.g., a kernel that genuinely cannot be expressed without one of the legacy workarounds, or a feature gate that the audit's Appendix A doesn't cover — **stop and report**. Don't paper it over by demoting CTAs, packing varargs, or hand-rolling primitives. The audit's gate set improves with what later phases discover.
+**Stop signal**: if planning uncovers a structural issue the audit didn't catch — e.g., a kernel that genuinely cannot be expressed without one of the legacy workarounds, or a feature gate that the audit's Appendix A doesn't cover — **stop and report**. Don't paper it over by demoting CTAs, packing varargs, or hand-rolling primitives. The audit's gate set improves with what later steps discover.
 
 ---
 
-## Phase C — Construct paired spec + run-params
+## Construct paired spec + run-params
 
 *Mechanical translation from the plan. Build each resource's spec entry and its run-params entry together.*
 
 **Operating principle**: prefer designated initializers. Metal 2.0 was designed to support them and the spec reads as data, not as procedure.
 
-For each resource type, construct the spec entry and its run-params entry as a pair. The order within Phase C emerges naturally from the op's existing structure (reader / writer / compute order, tensor → DFB → semaphore precedence); the recipe does not prescribe a fixed sequence.
+For each resource type, construct the spec entry and its run-params entry as a pair. The order emerges naturally from the op's existing structure (reader / writer / compute order, tensor → DFB → semaphore precedence); the recipe does not prescribe a fixed sequence.
 
 - **`KernelSpec` ↔ `KernelRunParams`.** For each planned `KernelSpec`, build the schema (`compile_time_arg_bindings`, `runtime_arguments_schema`, `dfb_bindings`, `tensor_bindings`, `semaphore_bindings`, `config_spec`); alongside, build the corresponding `KernelRunParams` entry (per-node `named_runtime_args` and `named_common_runtime_args`). If the kernel has no RTAs, the run-params entry may be omitted entirely.
 - **`DataflowBufferSpec`.** Build with `entry_size`, `num_entries`, `data_format_metadata`. No placement field — placement is derived from the kernel bindings. Borrowed-memory DFBs (not yet supported as of this guide's date) would have failed the audit; their presence here indicates the audit missed something.
@@ -166,11 +173,11 @@ After all resources are built, assemble the `ProgramSpec` (collecting `kernels`,
 - Thread a buffer address through an RTA because the binding mechanism doesn't fit.
 - Hand-roll a synchronization primitive.
 
-If any of these appear in your draft, **stop and report**. The likely cause is a structural decision in Phase B that should be revisited.
+If any of these appear in your draft, **stop and report**. The likely cause is a structural decision during planning that should be revisited.
 
 ---
 
-## Phase D — Verification
+## Verification
 
 *Build, test, anti-pattern self-audit.*
 
@@ -210,19 +217,39 @@ Scan the ported code against this checklist. Each item is a Metal 2.0 design-int
 - [ ] **No `TensorAccessorArgs<N>()` survived in any ported kernel.** Search for this; if present, the kernel needs `TensorAccessor(ta::name)` instead.
 - [ ] **No `#ifdef` newly added to gate optional bindings in kernel.** Search the ported kernels for `#ifdef` blocks gating DFB wrapper declarations; if present, convert to `if constexpr` on a named CTA. (Pre-existing `#ifdef`s that pre-date the port are out of scope; this audit catches *newly introduced* ones.)
 - [ ] **No `.id` extraction at LLK call sites.** Search for `.id` on `dfb::` handles; if present, pass `dfb::name` directly.
-- [ ] **No CTA→RTA demotion in compute kernels.** If a per-group dimension was moved from CTA to RTA in the port, the structural decision is wrong; revisit Phase B.
+- [ ] **No CTA→RTA demotion in compute kernels.** If a per-group dimension was moved from CTA to RTA in the port, the structural decision is wrong; revisit planning.
 - [ ] **All CTAs are named.** Search the factory for positional `compile_time_args = {...}`; should be `compile_time_arg_bindings = {{name, value}, ...}` only.
 - [ ] **No new varargs unless the kernel reads them in a loop.** Check `num_runtime_varargs` use; if the kernel reads `get_vararg(0)`, `get_vararg(1)`, ..., the named form is the right answer.
 
-If any checklist item fails, return to Phase B / C to fix. Do not paper over with kernel-side modifications.
-
-### Commit
-
-The `PORT_PLAN.md` file is committed alongside the port. It serves as the documented evidence of the port's structural decisions for human review and later debugging.
+If any checklist item fails, return to planning / construction to fix. Do not paper over with kernel-side modifications.
 
 ---
 
-## Appendix A — `PORT_PLAN.md` template
+## Capture problems and friction
+
+After the port reaches its stopping point — whether that's "all factories ported and tests pass" or "stuck on issue X and cannot proceed" — write `METAL2_PORT_PROBLEMS.md` to the op directory, alongside `METAL2_PREPORT_AUDIT.md` and `METAL2_PORT_PLAN.md`. This file captures the friction observed during the port and is read by the doc maintainers to evolve the audit / recipe / catalog / migration guide.
+
+**Structure each entry** as: *what bit you, and how the docs helped or didn't.* Cite file paths, line numbers, doc sections. Distinguish:
+
+- **Vindications**: where the docs steered you right. Especially valuable when you almost did something the catalog warned against and the warning fired correctly. These are the entries that justify keeping a doc section in its current form.
+- **Gaps**: where the docs didn't have an answer, or had a stale answer. Most actionable kind of entry — directly translates to a doc improvement.
+- **Confusion**: where the docs were ambiguous, hard to follow, or led you to a near-miss before the right path became clear.
+
+Aim for substance over comprehensiveness — 5–15 well-targeted entries beats 30 shallow ones. Be specific.
+
+Topics worth covering (not all will apply):
+
+- **Doc structure**: was the workflow ordering helpful? Did the port-plan template fit your port? Were the cross-references navigable?
+- **Specific patterns**: catalog entries that matched real patterns you hit; entries that seemed to apply but were misleading.
+- **Migration guide gaps**: design principles or concept-map rows that left you without a clear translation.
+- **Anti-patterns you were tempted by**: if the docs warned you off something, note where the warning fired. Vindications worth recording.
+- **Audit appendix staleness** (if encountered): cite the entry, the framework evidence that contradicts it.
+
+Commit `METAL2_PORT_PROBLEMS.md` alongside the port code, audit report, and port plan. All four artifacts (port code + the three `METAL2_*.md` files) form the port's PR.
+
+---
+
+## Appendix A — `METAL2_PORT_PLAN.md` template
 
 Copy this template to the op's directory at the start of the port:
 
@@ -230,11 +257,11 @@ Copy this template to the op's directory at the start of the port:
 # Port Plan — <op name>
 
 Port plan for `<op>`, ported from `<legacy api>` to Metal 2.0.
-Written during Phases A–B; committed alongside the port for review.
+Written during the inventory and planning steps; committed alongside the port for review.
 
 ## Legacy Inventory
 
-*Filled in during Phase A.*
+*Filled in during the inventory step.*
 
 ### Factory shape
 - Concept: <ProgramFactoryConcept | ProgramDescriptorFactoryConcept>
@@ -278,13 +305,13 @@ List any kernel `source` path outside the op's directory. Each one is a Caution 
 (or "none")
 
 ### Flags
-Anything Phase A noticed but didn't classify — unreferenced kernel files, unusual descriptors, etc.
+Anything the inventory step noticed but didn't classify — unreferenced kernel files, unusual descriptors, etc.
 
 (or "none")
 
 ## Planned Spec Shape
 
-*Filled in during Phase B.*
+*Filled in during the planning step.*
 
 - KernelSpecs: ...
 - DataflowBufferSpecs: ...
@@ -322,7 +349,7 @@ List any patterns from the catalog invoked by this port:
 ## Deferred / Flagged
 
 - Yellow items from audit: ... ([catalog override guidance link])
-- New findings during Phase B: ...
+- New findings during planning: ...
 
 (or "none")
 ````
@@ -331,6 +358,6 @@ List any patterns from the catalog invoked by this port:
 
 ## Appendix B — Cross-references
 
-- [Phase 0 feasibility audit](port_op_to_metal2_audit.md)
+- [Feasibility audit](port_op_to_metal2_audit.md)
 - [Migration guide (concept map, design principles, TTNN integration)](metal2_migration_guide.md)
 - [Patterns catalog](metal2_port_patterns.md)

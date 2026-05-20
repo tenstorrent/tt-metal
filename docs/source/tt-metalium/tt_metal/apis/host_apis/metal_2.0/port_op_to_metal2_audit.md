@@ -1,6 +1,8 @@
-# Porting an Op to Metal 2.0 — Phase 0: Feasibility Audit
+# Porting an Op to Metal 2.0 — Feasibility Audit
 
-> This is the first of two documents covering the Metal 2.0 op port workflow. **This document covers Phase 0 only — the feasibility audit.** Phases 1 (mechanical translation) and 2 (verification) live in [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md) and are loaded only after the audit clears with explicit user go-ahead.
+> This is the first of two documents covering the Metal 2.0 op port workflow. **This document covers the feasibility audit only — the gate that decides whether a given op can be ported today.** The port recipe (inventory, planning, construction, verification) lives in [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md) and is loaded only after the audit clears with explicit user go-ahead.
+>
+> **Last validated against main**: commit `ddbdd3c7ba5` (2026-05-20). Appendix A entries reflect Metal 2.0 feature support as of that commit. If you observe a feature in the codebase whose Appendix A status seems stale — particularly an `UNSUPPORTED` entry whose API has clearly landed in the framework headers — see [§Maintenance: keeping Appendix A current](#maintenance-keeping-appendix-a-current) for the override rule.
 
 ## Read this first
 
@@ -30,19 +32,18 @@ When in doubt about feature support, **ask the user.** Do not infer support from
 
 ## Workflow at a glance
 
-Porting an op is a three-phase workflow split across two documents:
+Porting an op is a workflow split across two documents:
 
-1. **Phase 0 — Feasibility audit.** *(This document.)* Decide whether this op can be ported at all. Output: a written report to the user. STOP here.
-2. **Phase 1 — Mechanical translation.** Lives in [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md). Loaded only after the audit clears with explicit user go-ahead.
-3. **Phase 2 — Verification.** Lives in [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md). Same precondition.
+1. **Feasibility audit.** *(This document.)* Decide whether this op can be ported at all. Output: write `METAL2_PREPORT_AUDIT.md` to the op directory, then STOP.
+2. **Port recipe** — legacy inventory, spec planning, construction, and verification. Lives in [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md). Loaded only after the audit clears with explicit user go-ahead.
 
-This audit document covers Phase 0 only. **Your job in this document is to decide whether the port is feasible — not to perform it.** Producing the audit report and stopping is the complete deliverable. The recipe document is loaded as a separate step, after the user has reviewed your audit and explicitly asked you to proceed.
+This audit document covers the feasibility audit only. **Your job in this document is to decide whether the port is feasible — not to perform it.** Producing the audit report and stopping is the complete deliverable. The recipe document is loaded as a separate step, after the user has reviewed your audit and explicitly asked you to proceed.
 
-You do not skip Phase 0. You do not pre-load the recipe document. The audit is its own unit of work.
+You do not skip the audit. You do not pre-load the recipe document. The audit is its own unit of work.
 
 ---
 
-## Phase 0 — Feasibility audit
+## Feasibility audit
 
 For the op in scope, run through two checks. Each check has three possible outcomes:
 
@@ -55,7 +56,7 @@ For the op in scope, run through two checks. Each check has three possible outco
 - **Follow kernel references, not directory boundaries.** Audit every kernel referenced by any `KernelDescriptor::kernel_source` in the op's program factories — cross-op kernels living in adjacent directories (e.g. `eltwise/`, `data_movement/`, `kernels/dataflow/`) are in scope when the op uses them.
 - **Unreferenced kernel files in the op's directory are out of scope.** If the op's directory contains kernel files that no factory references (dead code, tests, work-in-progress), do not audit their contents. If their presence could confuse a reader of the report, mention them in the identifying section as unreferenced; otherwise ignore them.
 - **Multiple device-operations in one op directory.** If the directory contains more than one `DeviceOperation` type sharing factories or kernels (e.g. `ReduceDeviceOperation` plus `WelfordReduceDeviceOperation`), audit them together and produce a single combined report. If the device-operations are independent, audit each separately. Ask the user if unsure whether to bundle.
-- **`RuntimeArgsDescriptor` and runtime-arg setup are not audit signals.** RTAs translate directly to `KernelSpec::runtime_arguments_schema` and `ProgramRunParams`; treat them as routine port work, not gates. In particular, **buffer-address RTAs in an otherwise-clean `ProgramDescriptor` op are normal here** — the `tensor.buffer()->address()` pattern in an RTA, paired with the corresponding `get_arg_val<uint32_t>(0)` on the kernel side, is the standard `ProgramDescriptor`-era idiom that the Metal 2.0 tensor-binding mechanism subsumes during Phase 1. Do not flag this as a Phase-0 issue. (The Phase-1 anti-pattern against buffer-address RTAs lives in the recipe doc and applies *after* the binding mechanism is in scope; it is not a Phase-0 gate.)
+- **`RuntimeArgsDescriptor` and runtime-arg setup are not audit signals.** RTAs translate directly to `KernelSpec::runtime_arguments_schema` and `ProgramRunParams`; treat them as routine port work, not gates. In particular, **buffer-address RTAs in an otherwise-clean `ProgramDescriptor` op are normal here** — the `tensor.buffer()->address()` pattern in an RTA, paired with the corresponding `get_arg_val<uint32_t>(0)` on the kernel side, is the standard `ProgramDescriptor`-era idiom that the Metal 2.0 tensor-binding mechanism subsumes during the port. Do not flag this as an audit issue. (The recipe doc's anti-pattern against buffer-address RTAs applies *after* the binding mechanism is in scope; it is not an audit gate.)
 
 A red on any check fails the audit. Do not attempt to port a red op (modulo the scoped-subset case described in the report-output section).
 
@@ -93,19 +94,19 @@ Step-ordering tip: if a kernel involves sharded code paths or reads from a CB ra
 
 **For kernels that pass the causal-link gate** (i.e. the lack of `TensorAccessor` is not downstream of a dynamic CB), classify by one of these three cases:
 
-- **Green — uses `TensorAccessor`** (with `TensorAccessorArgs<N>()` plumbing on the host side and `TensorAccessor(args, addr)` on the device side). Ready for Phase 1.
+- **Green — uses `TensorAccessor`** (with `TensorAccessorArgs<N>()` plumbing on the host side and `TensorAccessor(args, addr)` on the device side). Ready for the port.
 - **Red — doesn't use `TensorAccessor`, but the access pattern is page-by-page or otherwise iteratable.** Convert the kernel to use `TensorAccessor` in a separate, prior PR (may bundle with Check 2). Then return to this guide.
 - **Yellow — doesn't use `TensorAccessor`, and the access pattern genuinely cannot be expressed via `TensorAccessor`** (exotic NoC walks; sub-page access; address arithmetic the iterators don't support). Porting is possible without `TensorAccessor` for this kernel, but the user must make an explicit call. Report yellow and surface the following rationale to the user, **verbatim**:
 
   > The use of `TensorAccessor` is an ergonomic choice on Gen1 architectures. It has meaningful performance implications on Gen2 architectures. Ideally, `TensorAccessor` should be updated to support the required iteration pattern; consider filing an issue requesting that support.
 
-  **Do not self-classify into this bucket.** AI agents tend to misclassify the previous case (kernel laziness or pre-`TensorAccessor` cruft) as this one. Always confirm with the user before treating a kernel as genuinely exotic — assume the previous case until the user confirms otherwise. On user override (proceed without `TensorAccessor`), the kernel will need a buffer-address RTA threaded through during Phase 1; treat this as the documented escape hatch rather than a workaround.
+  **Do not self-classify into this bucket.** AI agents tend to misclassify the previous case (kernel laziness or pre-`TensorAccessor` cruft) as this one. Always confirm with the user before treating a kernel as genuinely exotic — assume the previous case until the user confirms otherwise. On user override (proceed without `TensorAccessor`), the kernel will need a buffer-address RTA threaded through during the port; treat this as the documented escape hatch rather than a workaround.
 
 ### Step 0.2 — Feature compatibility check
 
 Some legacy-API features are not yet supported in Metal 2.0. If the op uses any such feature, it cannot be ported until support lands.
 
-For each entry in [Appendix A: Metal 2.0 feature compatibility](#appendix-a-metal-20-feature-compatibility), scan the op (host code, kernel code, factory functions, descriptors) using the recognition signals listed for that feature. Each entry declares its tier in the header — `UNSUPPORTED` (red action: refuse and wait for support) or `DISCOURAGED` (yellow action: ask the user; respect the override).
+For each entry in [Appendix A: Metal 2.0 feature compatibility](#appendix-a-metal-20-feature-compatibility), scan the op (host code, kernel code, factory functions, descriptors) using the recognition signals listed for that feature. Each entry declares its tier in the header — `UNSUPPORTED` (red action: refuse and wait for support), `DISCOURAGED` (yellow action: ask the user; respect the override), or `LANDED` (green: feature is supported in Metal 2.0 as of the doc's "Last validated against main" commit; no port gate).
 
 - **Green**: no entry's recognition signals fire.
 - **Yellow**: either a `DISCOURAGED` entry's signals match, **or** an `UNSUPPORTED` entry's signals match ambiguously (you cannot be sure whether the feature is in use). Ask the user. On override, proceed per the entry's guidance.
@@ -115,13 +116,13 @@ If the op uses something *not listed* in Appendix A and you are uncertain of its
 
 ### Output: the audit report
 
-Phase 0 produces a written report to the user.
+The audit produces a written report. Write the report as `METAL2_PREPORT_AUDIT.md` in the op's directory (alongside the program factory `.cpp` files). This file is the audit's deliverable and is committed alongside the port — it sits next to `METAL2_PORT_PLAN.md` and `METAL2_PORT_PROBLEMS.md` (both written by the port recipe), so all generated docs for the port land in one spot.
 
 **Important framing for the human reader.** RED entries gate *this specific port attempt*, but they are **not permanent blockers**. Most RED entries mean "Metal 2.0 hasn't implemented this yet" — the port will become possible once the missing feature lands. A few (today: just `address_offset`) require a runtime-team consultation about a redesigned API. Each Appendix A entry's **Status** field describes the future path. **You must surface that future path explicitly in the report** for every RED row, so the human reader does not misread RED as "this op can never be ported." Reassuring framing matters here — a colleague seeing the report should understand the path forward, not just the gate.
 
 **Code-path scope.** Blockers are often confined to specific code paths within an op (e.g., a single factory's `if (use_width_sharding)` branch). When this is the case, **explicitly identify which code paths are clean vs. blocked** in the report, and offer the user the option of a scoped-subset port — e.g., "interleaved-only paths, omitting the sharded path." A partial port that delivers value now may be preferable to waiting for the full upstream gate to clear. The Overall line should reflect this when applicable: `RED at op level; subset <X> is clear` rather than just `RED`.
 
-**Output format.** Produce the report as a **Markdown file** (`.md` suffix). Default to `metal2_audit_<op-shortname>.md` in the current working directory; honor any path the user specified up front. Do not interrupt to ask — defaulting is lower friction than confirming. The file is the deliverable — in chat, surface only the **Result** line plus the file path so the user can open the file when ready. Do not paste the full report inline; an audit of any non-trivial op runs to dozens or hundreds of lines and chat-scrollback isn't the right home for it.
+**Output format.** The file is the deliverable — in chat, surface only the **Result** line plus the file path so the user can open the file when ready. Do not paste the full report inline; an audit of any non-trivial op runs to dozens or hundreds of lines and chat-scrollback isn't the right home for it.
 
 Markdown formatting is required, not optional — the headers, tables, and inline-code spans are what make a sizeable report skim-friendly for a human reviewer. Use:
 
@@ -134,7 +135,7 @@ Markdown formatting is required, not optional — the headers, tables, and inlin
 The conclusion appears at the top so a colleague glancing at the report sees the bottom line first; the detailed sections follow. **Required structure** (extend any cell, row, or paragraph with multi-line context where it improves clarity):
 
 ````markdown
-# Phase 0 audit: `<op path or qualified name>`
+# Pre-port audit: `<op path or qualified name>`
 
 <Identifying section: device operations sharing the directory, factory file list, anything else needed to disambiguate. For multi-device-op directories, use a nested bullet list — outer bullets for device-operations, inner bullets for their program factories. Example shape:
 
@@ -191,8 +192,8 @@ Every entry from Appendix A appears in this summary table, in the same order as 
 | Feature | Status | Notes |
 |---|---|---|
 | GlobalCircularBuffer | GREEN | |
-| Dynamic CircularBuffer (CB on borrowed memory) | RED | see detail below |
-| CBDescriptor `address_offset` (non-zero) | GREEN | |
+| Dynamic CircularBuffer (CB on borrowed memory) | GREEN | (LANDED in Appendix A; if the op uses this, the port uses `borrowed_from`) |
+| CBDescriptor `address_offset` (non-zero) | RED | see detail below |
 | Aliased Circular Buffers | GREEN | |
 | GlobalSemaphore | GREEN | |
 | Non-zero semaphore initial value | GREEN | |
@@ -201,7 +202,7 @@ Every entry from Appendix A appears in this summary table, in the same order as 
 
 For each non-GREEN row, follow up with an H3 detail section. Omit detail sections for GREEN rows.
 
-### Dynamic CircularBuffer (CB on borrowed memory): **RED**
+### CBDescriptor `address_offset` (non-zero): **RED**
 
 **Signal:** <what fired the recognition rule>
 
@@ -237,20 +238,33 @@ Save the report file and surface its path to the user along with the Result line
 
 - **On RED**: this op cannot be ported in its current state. Surface the file path and Result; stop. Do not load the recipe document.
 - **On YELLOW**: surface the file path, the Result, and the open questions. Wait for the user's decisions. On override, re-run the affected checks, update the report file in place, and confirm GREEN before any handoff.
-- **On GREEN + explicit user go-ahead**: load [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md) to perform the port. Pass the audit report file as context to the next session — Phase 1 needs to know which features and decisions cleared. Do not load the recipe document on your own initiative; the user must explicitly approve.
+- **On GREEN + explicit user go-ahead**: load [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md) to perform the port. Pass the audit report file as context to the next session — the port recipe needs to know which features and decisions cleared. Do not load the recipe document on your own initiative; the user must explicitly approve.
 
 ---
 
 ## Appendix A: Metal 2.0 feature compatibility
 
-This appendix lists legacy-API features that gate the port. Each entry falls into one of two tiers, declared in the entry's header:
+This appendix lists legacy-API features that gate the port. Each entry falls into one of three tiers, declared in the entry's header:
 
 - **UNSUPPORTED** — Metal 2.0 does not currently support this feature. Action: refuse the port and report (red). Each entry's **Status** field describes the future path: most entries will be supported as-is when implemented; a few will only be addressable via a redesigned, semantically different construct (and may require a runtime-team consultation before re-attempting). Always check the Status field before telling the user "wait and revisit."
 - **DISCOURAGED** — Metal 2.0 supports the feature today, but its use is discouraged in favor of a planned alternative. Action: report yellow and ask the user; if the user overrides, proceed per the entry's guidance.
+- **LANDED** — Metal 2.0 supports the feature as of the doc's "Last validated against main" commit. Action: no port gate; the feature is supported. The entry's **Status** field names the Metal 2.0 construct that replaces the legacy form, with the PR or commit reference.
 
-When scanning during Phase 0 Step 0.2, match each feature's recognition signals against the op's source. If any signal matches, take the action declared in the entry.
+### Maintenance: keeping Appendix A current
 
-> **For maintainers adding new entries — skim if you're applying the recipe, not editing it.** Features whose underlying *functionality* Metal 2.0 will *never* support are handled differently: they are either reclassified as a Pass 1 prereq fix (the legacy use is replaced before porting) or get a dedicated fix-up recipe in Phase 1. They do *not* live here, because the action for them is not "wait" or "ask" — it is "transform." (Features whose *current API form* will not be supported but whose *underlying functionality* will be — via a different construct — do belong here as UNSUPPORTED entries; the entry's Status field calls out the redesign requirement.) If you are about to add an entry and the underlying functionality has no planned support, route it to one of those other locations instead.
+Appendix A entries reflect Metal 2.0 feature support as of the **Last validated against main** commit declared at the top of this document. When a new Metal 2.0 feature lands (or an existing limitation is lifted), the doc maintainer updates the relevant entry — typically by flipping the tier from `UNSUPPORTED` to `LANDED`, rewriting the Status / Action paragraphs to reference the new construct, and bumping the doc's `Last validated against main` commit hash.
+
+**Staleness override for porting AIs.** If during the audit you observe a feature in the codebase whose Appendix A entry is marked `UNSUPPORTED` but the framework headers clearly show the API has landed (e.g., the spec/field/method the legacy construct would need to translate to is *visibly present* in `tt_metal/api/tt-metalium/experimental/metal2_host_api/`), this likely means the audit doc is stale. Do not refuse the port reflexively. Instead:
+
+1. Report the row as **YELLOW (staleness override)** rather than RED.
+2. In the report's Questions for the user section, flag the apparent discrepancy: cite the Appendix A row, name the framework header / commit that contradicts it, and ask the user to confirm whether the feature is now supported.
+3. Respect the user's answer; if they confirm support, proceed with the port using the new construct. The doc maintainer will update Appendix A separately.
+
+This override mechanism exists because Metal 2.0 is moving fast and the audit doc lags reality. Do not invent it for entries that are clearly still unsupported (no API surface present); only for cases where the codebase contradicts the doc.
+
+When scanning during Step 0.2 of the feature compatibility check, match each feature's recognition signals against the op's source. If any signal matches, take the action declared in the entry.
+
+> **For maintainers adding new entries — skim if you're applying the recipe, not editing it.** Features whose underlying *functionality* Metal 2.0 will *never* support are handled differently: they are either reclassified as a prereq fix (the legacy use is replaced before porting) or get a dedicated fix-up recipe in the port recipe. They do *not* live here, because the action for them is not "wait" or "ask" — it is "transform." (Features whose *current API form* will not be supported but whose *underlying functionality* will be — via a different construct — do belong here as UNSUPPORTED entries; the entry's Status field calls out the redesign requirement.) If you are about to add an entry and the underlying functionality has no planned support, route it to one of those other locations instead.
 
 Each entry follows this uniform format:
 - **Status** — support state and tier framing.
@@ -285,11 +299,11 @@ Plain `CircularBuffer`, `CBHandle`, `CBDescriptor`, or `CBFormatDescriptor` *wit
 - `ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/dram_prefetcher_device_operation.cpp`
 - `ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/`
 
-### Dynamic CircularBuffer (CB built on borrowed Buffer memory) — UNSUPPORTED
+### Dynamic CircularBuffer (CB built on borrowed Buffer memory) — LANDED
 
-**Status**: Not yet supported in Metal 2.0. The legacy "dynamic circular buffer" pattern places a CB on top of an existing `Buffer`'s memory — i.e. the CB uses the Buffer's allocated address as its backing storage rather than getting its own L1 allocation. The Metal 2.0 equivalent is **DFB built on borrowed memory** (referred to as "borrowed-memory DFB" in `tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp`), but it is not yet implemented.
+**Status**: Supported in Metal 2.0 as of commit `f06cb279620` (PR #44662). The legacy "dynamic circular buffer" pattern — `CBDescriptor::buffer = <some_buffer>` placing a CB on top of an existing `Buffer`'s memory — translates to Metal 2.0 as a **borrowed-memory DFB** via `DataflowBufferSpec::borrowed_from`. See `tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp:95` for the spec field.
 
-**Recognition — definitely this feature** (refuse and report):
+**Recognition — definitely this feature** (no port gate; use borrowed-memory DFB):
 
 - **Descriptor-API** (the in-scope path): a `CBDescriptor` literal or struct assignment with its `.buffer` field set to a non-null `Buffer*` (any expression that is not statically `nullptr`). The type token does not appear at the assignment site — look for the **field name** `buffer` on a `CBDescriptor`. The companion field `.address_offset` is meaningful only when `.buffer` is set; it is not an independent signal.
 - **Imperative-API** (the op's own program-factory code using these will already be flagged red by Step 0.1 Check 1, but they can also leak in via shared utility code — e.g. `cb_utils.hpp` — that the op calls):
@@ -299,13 +313,13 @@ Plain `CircularBuffer`, `CBHandle`, `CBDescriptor`, or `CBFormatDescriptor` *wit
 
 **Recognition — false-positive guard**:
 
-- A `CBDescriptor` with `.buffer = nullptr` (or with `.buffer` simply not set) is a regular CB → supported in Metal 2.0 as `DataflowBufferSpec`. Do not refuse these.
+- A `CBDescriptor` with `.buffer = nullptr` (or with `.buffer` simply not set) is a regular CB → standard `DataflowBufferSpec` (no `borrowed_from`). Do not require the borrowed-memory path for these.
 - The `.global_circular_buffer` field on `CBDescriptor` is a *different* feature, covered by the GlobalCircularBuffer rule above. Do not conflate the two — `.buffer` and `.global_circular_buffer` are independent fields on `CBDescriptor` with different meanings.
-- A `CircularBufferConfig` constructed via the one-argument form `CircularBufferConfig(total_size)` followed by `set_page_size(...)` calls (no `set_globally_allocated_address`, no three-arg constructor) is a regular static CB → supported.
+- A `CircularBufferConfig` constructed via the one-argument form `CircularBufferConfig(total_size)` followed by `set_page_size(...)` calls (no `set_globally_allocated_address`, no three-arg constructor) is a regular static CB → standard `DataflowBufferSpec`.
 
-**Action**: STOP. Report to the user that this op uses a dynamic / borrowed-memory CB, which Metal 2.0 does not yet support. Do not invent a workaround. In particular: do **not** translate the dynamic CB into a regular DFB plus an extra data copy (changes memory layout), and do **not** thread the `Buffer`'s address through an RTA so the kernel can read it directly (changes the kernel's semantics; both forms are common AI failure modes for this rule).
+**Action**: Proceed with the port. On the Metal 2.0 side, declare the affected `DataflowBufferSpec` with `borrowed_from = <tensor_parameter_name>` naming the `TensorParameter` whose buffer backs the DFB. The DFB's handle (`dfb::name`) resolves to the borrowed L1 address at runtime; the kernel-side code that previously read from the borrowed-memory CB continues to work via the DFB wrapper.
 
-**Examples in the wild** (for ground-truthing your match):
+**Examples in the wild** (op locations whose port exercises this construct):
 - Descriptor-API form (`CBDescriptor::buffer` set):
   - `ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core.cpp`
   - `ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_*_program_factory.cpp` (sharded, mcast, no_mcast)
@@ -439,7 +453,7 @@ Plain `Semaphore` / `CreateSemaphore(program, core_spec, initial_value)` is the 
 - The initial-value expression as written.
 - A note that the construct is supported today but discouraged, and that the user may override and proceed.
 
-**Do not refuse the port outright on this signal alone.** The user may decide to proceed; this is their call. On override: the translation is direct — set `SemaphoreSpec::initial_value` to the same value used in the legacy code. Phase 1 mechanical work is unaffected.
+**Do not refuse the port outright on this signal alone.** The user may decide to proceed; this is their call. On override: the translation is direct — set `SemaphoreSpec::initial_value` to the same value used in the legacy code. The port's mechanical work is unaffected.
 
 **Examples in the wild** (for ground-truthing your match):
 - `ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp` (`INVALID` sentinel)
