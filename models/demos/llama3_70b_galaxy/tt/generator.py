@@ -406,15 +406,26 @@ class Generator(WarmupForwardMixin):
         if empty_slots is None:
             empty_slots = list(range(batch))
 
-        # If batch >= 16 and padded prompt_lens are all 128, and no cached tokens, use batched prefill
-        use_batched_prefill = False
-        if (
-            batch >= 16
-            and len(set(prefill_seq_lens)) == 1
-            and prefill_seq_lens[0] == 128
-            and (start_pos is None or all(x == 0 for x in start_pos))
-        ):
-            use_batched_prefill = True
+        sampling_prompt_tokens = None
+        if sampling_params is not None:
+            source_prompt_tokens = prompt_tokens if prompt_tokens is not None else tokens
+            max_prompt_tokens_len = (
+                max(int(prompt_lens[idx]) for idx in range(batch)) if batch > 0 else batch_seq_len
+            )
+            sampling_prompt_tokens = torch.full(
+                (self.model_args.max_batch_size, max_prompt_tokens_len),
+                -1,
+                dtype=torch.long,
+                device=source_prompt_tokens.device,
+            )
+            for request_idx, slot in enumerate(empty_slots):
+                if request_idx >= batch:
+                    break
+                slot = int(slot)
+                if slot < 0 or slot >= self.model_args.max_batch_size:
+                    continue
+                seq_len = min(int(prompt_lens[request_idx]), source_prompt_tokens.shape[-1])
+                sampling_prompt_tokens[slot, :seq_len] = source_prompt_tokens[request_idx, :seq_len]
 
         if return_logits:
             tt_out_logits_all_users = torch.zeros(batch, 1, self.model.args.padded_vocab_size)
@@ -424,6 +435,32 @@ class Generator(WarmupForwardMixin):
         # - return_logits=False: produce next-token ids; we only run on-device sampling when logits are not requested
         save_logits_to_host = tt_out_logits_all_users is not None
         do_device_sampling = (not return_logits) and (not save_logits_to_host)
+
+        def _sampling_values(value):
+            if value is None:
+                return []
+            return value if isinstance(value, list) else [value]
+
+        requires_slot_stable_prefill = False
+        if do_device_sampling and sampling_params is not None:
+            seed_values = _sampling_values(getattr(sampling_params, "seed", None))
+            temperature_values = _sampling_values(getattr(sampling_params, "temperature", None))
+            requires_slot_stable_prefill = any(seed is not None for seed in seed_values) or any(
+                float(temp) == 0.0 for temp in temperature_values if temp is not None
+            )
+
+        # If batch >= 16 and padded prompt_lens are all 128, and no cached tokens, use batched prefill.
+        # Seeded or greedy on-device sampling currently requires slot-stable logits, so use the
+        # single-user prefill path for those batches.
+        use_batched_prefill = False
+        if (
+            batch >= 16
+            and len(set(prefill_seq_lens)) == 1
+            and prefill_seq_lens[0] == 128
+            and (start_pos is None or all(x == 0 for x in start_pos))
+            and not requires_slot_stable_prefill
+        ):
+            use_batched_prefill = True
 
         # Accumulate sharded logits (same format as decode, before all-gather) for on-device sampling.
 
@@ -437,6 +474,7 @@ class Generator(WarmupForwardMixin):
             and batch >= 16
             and not use_batched_prefill
             and not any(num_cached_tokens_list)
+            and not requires_slot_stable_prefill
             and 128 in prefill_seq_lens
             and len(set(prefill_seq_lens)) > 1
         )
@@ -465,6 +503,9 @@ class Generator(WarmupForwardMixin):
             prefill_work_items.extend(
                 (False, [request_idx], [empty_slots[request_idx]]) for request_idx in range(batch)
             )
+
+        if do_device_sampling and use_batched_prefill:
+            self.tt_logits_accumulated_batched = []
 
         for work_use_batched_prefill, request_indices, request_slots in prefill_work_items:
             request_idx = request_indices[0]
@@ -565,9 +606,6 @@ class Generator(WarmupForwardMixin):
             last_token_idx_output = last_token_idx - num_cached if num_cached > 0 else last_token_idx
 
             if user_enable_trace:
-                # For batched prefill, reset to empty list since we use extend()
-                if use_batched_prefill and work_use_batched_prefill and do_device_sampling:
-                    self.tt_logits_accumulated_batched = []
                 tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
@@ -606,6 +644,16 @@ class Generator(WarmupForwardMixin):
                 else:
                     # Single user: logits list has 1 entry, copy into persistent buffer
                     ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[user_id])
+        if do_device_sampling and not use_batched_prefill and empty_slots:
+            active_prefill_slots = {int(slot) for slot in empty_slots}
+            fill_slot = int(empty_slots[0])
+            for slot in range(self.model_args.max_batch_size):
+                if slot not in active_prefill_slots:
+                    ttnn.copy(
+                        input_a=self.tt_logits_accumulated[fill_slot],
+                        input_b=self.tt_logits_accumulated[slot],
+                    )
+        
         prefill_log_probs = None
         # On-device sampling for prefill
         if do_device_sampling:
@@ -656,8 +704,9 @@ class Generator(WarmupForwardMixin):
             sampling_module = self.model.sampling
 
             sampling_module.reset_sampling_params(sampling_params)
-            # if prompt_tokens is not None:  # Guard for warmup
-            sampling_module.reset_prompt_tokens(prefill_ids)
+            sampling_module.reset_prompt_tokens(
+                sampling_prompt_tokens if sampling_prompt_tokens is not None else prefill_ids
+            )
             sampling_module.reset_output_state()
             sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
             sampling_module.seed_manager.get_new_values(empty_slots)
@@ -1105,6 +1154,29 @@ class Generator(WarmupForwardMixin):
         self._prev_sampling_on_device = sampling_on_device
         if prev_sampling_on_device is not None and prev_sampling_on_device != sampling_on_device:
             reset_inputs = True
+        if reset_batch:
+            reset_inputs = True
+        if sampling_params is not None:
+            temperature_values = getattr(sampling_params, "temperature", None)
+            if isinstance(temperature_values, torch.Tensor):
+                temperature_values = temperature_values.reshape(-1).tolist()
+            elif not isinstance(temperature_values, list):
+                temperature_values = [temperature_values]
+            if start_pos is not None:
+                active_slots = [
+                    idx
+                    for idx, pos in enumerate(torch.as_tensor(start_pos).reshape(-1).tolist())
+                    if int(pos) >= 0
+                ]
+                temperature_values = [
+                    temperature_values[idx]
+                    for idx in active_slots
+                    if idx < len(temperature_values) and temperature_values[idx] is not None
+                ]
+            has_greedy = any(float(temp) == 0.0 for temp in temperature_values if temp is not None)
+            has_random = any(float(temp) != 0.0 for temp in temperature_values if temp is not None)
+            if has_greedy and has_random:
+                reset_inputs = True
         if self.prev_page_table is None:
             self.prev_page_table = (
                 page_table.clone()
@@ -1120,6 +1192,13 @@ class Generator(WarmupForwardMixin):
             reset_inputs = True  # Last step wasn't decode, so we definitely need to load inputs.
 
         kv_cache = kv_cache[0]
+        active_seed_slots = None
+        if start_pos is not None:
+            active_seed_slots = [
+                idx
+                for idx, pos in enumerate(torch.as_tensor(start_pos).reshape(-1).tolist())
+                if int(pos) >= 0
+            ]
         decode_kwargs = {
             "current_pos": start_pos,
             "tokens": tokens,
@@ -1133,7 +1212,7 @@ class Generator(WarmupForwardMixin):
             sm_bs = self.model.sampling.seed_manager.max_batch_size
             rank_remap = slot_remap[0:sm_bs]
             self.model.sampling.seed_manager.apply_slot_remap(rank_remap)
-        self.model.sampling.seed_manager.get_new_values()
+        self.model.sampling.seed_manager.get_new_values(active_seed_slots)
         if reset_inputs and sampling_params is not None:
             # If we have new inputs, we need to set up the sampling module again
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
