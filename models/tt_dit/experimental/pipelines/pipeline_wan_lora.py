@@ -11,9 +11,9 @@ detected by ``fuse_lora_state_dict`` and the supported namespaces.
 """
 import hashlib
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 import torch
 from loguru import logger
@@ -33,18 +33,33 @@ class LoRASpec:
     scale: float = 1.0
 
 
-LoRAArg = Union[LoRASpec, str, Iterable[Union[LoRASpec, str]], None]
+LoRAArg = LoRASpec | str | Sequence[LoRASpec | str] | None
 
 
-def normalize_lora_arg(arg: LoRAArg) -> List[LoRASpec]:
-    """Coerce None / str / LoRASpec / iterable-of-either into a List[LoRASpec]."""
+@dataclass(frozen=True)
+class _FusionStats:
+    applied_pairs: int = 0
+    applied_direct: int = 0
+    skipped_unknown: int = 0
+    skipped_unmapped: int = 0
+    skipped_shape_mismatch: int = 0
+
+    @property
+    def applied(self) -> int:
+        return self.applied_pairs + self.applied_direct
+
+
+def _normalize_lora_arg(arg: LoRAArg) -> list[LoRASpec]:
+    """Coerce None / path / LoRASpec / sequence-of-either into LoRASpecs."""
     if arg is None:
         return []
     if isinstance(arg, LoRASpec):
         return [arg]
     if isinstance(arg, str):
         return [LoRASpec(arg)]
-    out: List[LoRASpec] = []
+    if not isinstance(arg, Sequence):
+        raise TypeError(f"Expected LoRASpec, str, sequence, or None; got {type(arg).__name__}")
+    out: list[LoRASpec] = []
     for item in arg:
         if isinstance(item, LoRASpec):
             out.append(item)
@@ -57,9 +72,7 @@ def normalize_lora_arg(arg: LoRAArg) -> List[LoRASpec]:
 
 _STRIP_PREFIXES = ("diffusion_model.", "transformer.", "unet.", "model.")
 
-# PEFT-style adapters insert an extra ``.<adapter_name>`` segment between
-# ``lora_X`` and the trailing ``.weight`` (e.g. SVI uses
-# ``...lora_A.default.weight``). The optional non-capturing group matches it.
+# PEFT may insert an adapter name before ``.weight``, e.g. ``lora_A.default.weight``.
 _LOW_RANK_RE = re.compile(r"^(?P<base>.*)\.lora_(?P<slot>A|B|down|up)(?:\.[^.]+)?\.weight$")
 _SLOT_MAP = {"A": "A", "down": "A", "B": "B", "up": "B"}
 
@@ -103,37 +116,34 @@ def _diffusers_target(lightx2v_base_path: str, suffix: str) -> str:
     return weight_key[: -len(".weight")] + suffix
 
 
-def _has_lora_keys(state_dict: dict) -> bool:
+def _is_lora_key(raw_key: str) -> bool:
+    key = _kohya_to_lightx2v(_strip_known_prefixes(raw_key))
+    return bool(_LOW_RANK_RE.match(key)) or key.endswith((".diff", ".diff_b"))
+
+
+def _has_lora_keys(state_dict: dict[str, torch.Tensor]) -> bool:
     """Return True iff the safetensors file contains at least one LoRA-style key."""
-    return any(
-        ("lora_A" in k)
-        or ("lora_B" in k)
-        or ("lora_down" in k)
-        or ("lora_up" in k)
-        or k.endswith(".diff")
-        or k.endswith(".diff_b")
-        or k.startswith("lora_unet_")
-        for k in state_dict
-    )
+    return any(_is_lora_key(k) for k in state_dict)
 
 
 def fuse_lora_state_dict(
-    base_state_dict: Dict[str, torch.Tensor],
-    lora_state_dict: Dict[str, torch.Tensor],
+    base_state_dict: dict[str, torch.Tensor],
+    lora_state_dict: dict[str, torch.Tensor],
     *,
     scale: float = 1.0,
-) -> Dict[str, torch.Tensor]:
-    """Return a new state dict with LoRA deltas fused into ``base_state_dict``.
+    return_stats: bool = False,
+) -> dict[str, torch.Tensor] | tuple[dict[str, torch.Tensor], _FusionStats]:
+    """Return a fused state dict, optionally with stats describing what applied.
 
     The base dict is not mutated; entries that were touched are fresh tensors
     so the caller can chain fusions across a stack safely. See
     ``experimental/models/Wan2_2_LoRA.md`` for the supported adapter key
     formats. Raises ``KeyError`` when a low-rank pair is missing one half.
     """
-    pairs: Dict[str, Dict[str, torch.Tensor]] = {}
-    direct_deltas: List[Tuple[str, str, torch.Tensor]] = []  # (base_path, suffix, tensor)
-    alphas: Dict[str, float] = {}
-    skipped_unknown: List[str] = []
+    pairs: dict[str, dict[str, torch.Tensor]] = {}
+    direct_deltas: list[tuple[str, str, torch.Tensor]] = []  # (base_path, suffix, tensor)
+    alphas: dict[str, float] = {}
+    skipped_unknown: list[str] = []
 
     for raw_key, tensor in lora_state_dict.items():
         key = _kohya_to_lightx2v(_strip_known_prefixes(raw_key))
@@ -152,12 +162,12 @@ def fuse_lora_state_dict(
 
     if skipped_unknown:
         logger.warning(
-            f"LoRA fusion: {len(skipped_unknown)} unrecognized keys ignored. " f"Examples: {skipped_unknown[:5]}"
+            f"LoRA fusion: {len(skipped_unknown)} unrecognized keys ignored. Examples: {skipped_unknown[:5]}"
         )
 
     fused = dict(base_state_dict)
     applied_pairs = 0
-    skipped_unmapped: List[str] = []
+    skipped_unmapped: list[str] = []
 
     for base_path, ab in pairs.items():
         if "A" not in ab or "B" not in ab:
@@ -178,6 +188,7 @@ def fuse_lora_state_dict(
         applied_pairs += 1
 
     applied_direct = 0
+    skipped_shape_mismatch = 0
     for base_path, suffix, tensor in direct_deltas:
         diffusers_key = _diffusers_target(base_path, suffix)
         if diffusers_key not in fused:
@@ -189,6 +200,7 @@ def fuse_lora_state_dict(
                 f"LoRA direct delta shape mismatch for '{diffusers_key}': "
                 f"base {tuple(base.shape)} vs delta {tuple(tensor.shape)}; skipping."
             )
+            skipped_shape_mismatch += 1
             continue
         fused[diffusers_key] = (base.float() + scale * tensor.to(torch.float32)).to(base.dtype)
         applied_direct += 1
@@ -200,12 +212,19 @@ def fuse_lora_state_dict(
         )
 
     logger.info(f"Fused {applied_pairs} low-rank pairs and {applied_direct} direct deltas (scale={scale})")
-    return fused
+    stats = _FusionStats(
+        applied_pairs=applied_pairs,
+        applied_direct=applied_direct,
+        skipped_unknown=len(skipped_unknown),
+        skipped_unmapped=len(skipped_unmapped),
+        skipped_shape_mismatch=skipped_shape_mismatch,
+    )
+    return (fused, stats) if return_stats else fused
 
 
 def verify_fusion_changed_weights(
-    base_sd: Dict[str, torch.Tensor],
-    fused_sd: Dict[str, torch.Tensor],
+    base_sd: dict[str, torch.Tensor],
+    fused_sd: dict[str, torch.Tensor],
     *,
     min_changed: int = 3,
     label: str,
@@ -219,7 +238,7 @@ def verify_fusion_changed_weights(
     Raises ``RuntimeError`` if no weights changed at all, or if fewer than
     ``min_changed`` weights changed (likely a partial load).
     """
-    changed: List[Tuple[str, float]] = []
+    changed: list[tuple[str, float]] = []
     max_diff = 0.0
     for k, base in base_sd.items():
         fused = fused_sd.get(k)
@@ -253,7 +272,7 @@ def verify_fusion_changed_weights(
         )
 
 
-def _lora_stack_cache_namespace(specs_by_expert: Dict[int, List[LoRASpec]]) -> str:
+def _lora_stack_cache_namespace(specs_by_expert: dict[int, list[LoRASpec]]) -> str:
     """Hash ordered ``(resolved_path, scale)`` per expert so distinct stacks cache separately."""
     h = hashlib.sha1()
     for idx in sorted(specs_by_expert.keys()):
@@ -276,8 +295,8 @@ class WanPipelineI2VLora(WanPipelineI2V):
         lora_low: LoRAArg = None,
         **kwargs,
     ):
-        high_specs = normalize_lora_arg(lora_high)
-        low_specs = normalize_lora_arg(lora_low)
+        high_specs = _normalize_lora_arg(lora_high)
+        low_specs = _normalize_lora_arg(lora_low)
 
         if not high_specs and not low_specs:
             raise ValueError(
@@ -290,10 +309,10 @@ class WanPipelineI2VLora(WanPipelineI2V):
                 if not Path(spec.path).is_file():
                     raise FileNotFoundError(f"{label}: file does not exist: {spec.path}")
 
-        self._lora_specs: Dict[int, List[LoRASpec]] = {0: high_specs, 1: low_specs}
+        self._lora_specs: dict[int, list[LoRASpec]] = {0: high_specs, 1: low_specs}
         self._cache_namespace = _lora_stack_cache_namespace(self._lora_specs)
         # Cleared after TT cache handoff (see _prepare_transformer) to free CPU memory.
-        self._fused_state_dicts: Dict[int, Optional[Dict[str, torch.Tensor]]] = {0: None, 1: None}
+        self._fused_state_dicts: dict[int, dict[str, torch.Tensor] | None] = {0: None, 1: None}
 
         super().__init__(*args, **kwargs)
 
@@ -304,7 +323,7 @@ class WanPipelineI2VLora(WanPipelineI2V):
             return buffer
         return super().prepare_text_conditioning(tt_model, prompt_embeds, buffer, traced)
 
-    def _build_fused_state_dict(self, idx: int) -> Optional[Dict[str, torch.Tensor]]:
+    def _build_fused_state_dict(self, idx: int) -> dict[str, torch.Tensor] | None:
         specs = self._lora_specs[idx]
         state = self.transformer_states[idx]
         if not specs:
@@ -320,13 +339,16 @@ class WanPipelineI2VLora(WanPipelineI2V):
                 raise RuntimeError(
                     f"No LoRA-style keys (lora_A/lora_B, lora_down/lora_up, diff/diff_b) found in {spec.path}"
                 )
-            fused_sd = fuse_lora_state_dict(fused_sd, lora_sd, scale=spec.scale)
-
-        verify_fusion_changed_weights(
-            base_sd,
-            fused_sd,
-            label=f"{state.subfolder} (stack of {len(specs)})",
-        )
+            previous_sd = fused_sd
+            fused_sd, stats = fuse_lora_state_dict(previous_sd, lora_sd, scale=spec.scale, return_stats=True)
+            label = f"{state.subfolder}: {Path(spec.path).name}"
+            if stats.applied == 0:
+                raise RuntimeError(
+                    f"LoRA fusion applied no tensors for '{label}'. "
+                    f"Skipped unmapped={stats.skipped_unmapped}, unknown={stats.skipped_unknown}, "
+                    f"shape_mismatch={stats.skipped_shape_mismatch}."
+                )
+            verify_fusion_changed_weights(previous_sd, fused_sd, label=label)
         return fused_sd
 
     def _prepare_transformer(self, idx: int):
