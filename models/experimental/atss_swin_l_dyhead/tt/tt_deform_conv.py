@@ -294,6 +294,7 @@ class TtDeformConv2dV2:
             self.weight_tt,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self._compute_config,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
         )
         if self.bias_tt is not None:
             out_flat = ttnn.add(out_flat, self.bias_tt, memory_config=ttnn.L1_MEMORY_CONFIG)
