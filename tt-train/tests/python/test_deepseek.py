@@ -318,7 +318,7 @@ def _ttml_topk_indices_to_numpy(topk_ttnn) -> np.ndarray:
     which ttml's ``to_numpy`` doesn't bind directly) to an int64 numpy
     array of shape ``[B, S, k]``."""
     topk_u32 = ttnn.typecast(topk_ttnn, ttnn.DataType.UINT32)
-    arr = ttml.autograd.create_tensor(topk_u32).to_numpy(ttnn.DataType.UINT32)
+    arr = ttml.autograd.create_tensor(topk_u32, requires_grad=False).to_numpy(ttnn.DataType.UINT32)
     # Drop the singleton dim that ttml uses for its [B, 1, S, k] layout.
     return arr.reshape(arr.shape[0], arr.shape[2], arr.shape[3]).astype(np.int64)
 
