@@ -18,7 +18,6 @@ from models.experimental.voxtraltts.reference.functional import (
 from models.experimental.voxtraltts.tests.common import create_real_voxtral_text_model_or_skip
 
 
-# tt_transformers prefill uses 32-token tiles: get_last_token must be the tile start index.
 def _prefill_tile_start(token_index: int) -> int:
     return (int(token_index) // 32) * 32
 
@@ -93,7 +92,6 @@ def test_text_model_prefill_inference(device, reset_seeds):
         tt_x,
         rot_mats_global=rot_mats_global,
         rot_mats_local=rot_mats_local,
-        # get_last_token is tile start (multiple of 32), not absolute token index.
         get_last_token=((seq_len - 1) // 32) * 32,
     )
     logits = model.inner.process_output_prefill(
@@ -108,8 +106,6 @@ def test_text_model_prefill_inference(device, reset_seeds):
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 def test_text_model_prefill_pcc(device, reset_seeds):
-    # Main parity test:
-    # compares final last-token logits from TT text_model prefill vs PyTorch reference backbone.
     model = create_real_voxtral_text_model_or_skip(device, max_seq_len=256, dtype=ttnn.bfloat16)
     args = model.inner.args
     state_dict = args.load_state_dict()
@@ -117,7 +113,6 @@ def test_text_model_prefill_pcc(device, reset_seeds):
     seq_len = 128
     tokens = torch.randint(0, model.inner.vocab_size, (1, seq_len), dtype=torch.int64)
 
-    # TT prefill path (final logits at last token)
     tt_x, rot_mats_global, rot_mats_local, _, _ = model.prepare_inputs_prefill(tokens, start_pos=0)
     tt_logits = model.inner.ttnn_prefill_forward(
         tt_x,
@@ -130,7 +125,6 @@ def test_text_model_prefill_pcc(device, reset_seeds):
         last_token_idx=((seq_len - 1) % 32),
     ).float()
 
-    # Reference full-text backbone forward using the same loaded checkpoint.
     ref_last_logits = _reference_last_logits(state_dict, args, tokens)
 
     passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.98)
@@ -141,8 +135,6 @@ def test_text_model_prefill_pcc(device, reset_seeds):
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 def test_text_model_decode_reference_pcc(device, reset_seeds):
-    # Output parity test:
-    # compares TT decode logits with PyTorch reference logits at the same decode position.
     model = create_real_voxtral_text_model_or_skip(device, max_seq_len=256, dtype=ttnn.bfloat16)
     args = model.inner.args
     state_dict = args.load_state_dict()
@@ -152,7 +144,6 @@ def test_text_model_decode_reference_pcc(device, reset_seeds):
     prompt_tokens = torch.randint(0, vocab_size, (1, prompt_len), dtype=torch.int64)
     decode_input_token = torch.randint(0, vocab_size, (1,), dtype=torch.int64)
 
-    # TT decode path.
     tt_prompt_x, prompt_rot_global, prompt_rot_local, _, _ = model.prepare_inputs_prefill(prompt_tokens, start_pos=0)
     _ = model.inner.ttnn_prefill_forward(
         tt_prompt_x,
@@ -173,7 +164,6 @@ def test_text_model_decode_reference_pcc(device, reset_seeds):
     )
     tt_last_logits = model.inner.process_output_decode(tt_decode_logits, B=1, S=1, is_tokens=False)[0, 0].float()
 
-    # Reference decode-equivalent logits from full prefix.
     ref_tokens = torch.cat([prompt_tokens, decode_input_token.view(1, 1)], dim=1)
     ref_last_logits = _reference_last_logits(state_dict, args, ref_tokens)
 
@@ -186,8 +176,6 @@ def test_text_model_decode_reference_pcc(device, reset_seeds):
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("decode_steps", [4, 26], ids=["4_steps", "26_steps"])
 def test_text_model_decode_multistep_reference_pcc(device, reset_seeds, decode_steps):
-    # TT decodes step-by-step with KV cache, while the reference recomputes the same
-    # prefix and compares the last-token logits at each decode position.
     model = create_real_voxtral_text_model_or_skip(device, max_seq_len=256, dtype=ttnn.bfloat16)
     args = model.inner.args
     state_dict = args.load_state_dict()

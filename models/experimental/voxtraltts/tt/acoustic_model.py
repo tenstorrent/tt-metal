@@ -1,22 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""TTNN acoustic ``FlowMatchingAudioTransformer``-equivalent module.
-
-**Core trunk:** ``predict_velocity`` matches
-``reference.cpu_flow_matching_acoustic.FlowMatchingAudioTransformerRef._predict_velocity``:
-projections → 3× (RMSNorm + bidirectional GQA + residual + RMSNorm + SwiGLU) → final RMSNorm →
-``acoustic_codebook_output``.
-
-**Full ``forward``:** matches ``FlowMatchingAudioTransformerRef.forward``: TT linear for
-``semantic_codebook_output``, masking + argmax on host, then Euler FM decoding with CFG (same math
-as reference). Time embedding uses the reference sinusoidal formula on host (checkpoint has no
-``inv_freq`` tensor); each step calls ``predict_velocity`` on device.
-
-**Reuse:** ``VoxtralTTAttention`` with identity RoPE (``cos=1``, ``sin=0``). ``VoxtralTTMLP`` for
-SwiGLU. ``VoxtralAcousticRMSNorm`` wraps common ``RMSNorm`` with ``COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC``.
-
-FM trunk matmuls (``ttnn.linear``), attention SDPA, MLP linears, and acoustic norms share that config
-"""
+"""TT flow-matching acoustic head (semantic argmax + Euler FM + CFG). Matches CPU reference."""
 
 from __future__ import annotations
 
@@ -42,7 +26,6 @@ def extract_acoustic_state_dict(full_state_dict: dict[str, torch.Tensor]) -> dic
 
 
 def _linear_weight_ttnn(w_out_in: torch.Tensor, device, dtype) -> ttnn.Tensor:
-    # Checkpoint / nn.Linear: [out, in]. ttnn.linear expects [in, out].
     return ttnn.from_torch(
         w_out_in.transpose(-2, -1).contiguous(),
         device=device,
@@ -82,7 +65,6 @@ class VoxtralTTAcousticModel:
         self.n_kv_heads = n_kv_heads
         self.n_layers = n_layers
         self.n_acoustic_out = n_acoustic_out
-        self._semantic_codebook_size = semantic_codebook_size
         self._acoustic_embeddings_levels = acoustic_embeddings_levels
         self._n_decoding_steps = n_decoding_steps
 
@@ -92,12 +74,11 @@ class VoxtralTTAcousticModel:
         self._tail_mask_start = n_special + semantic_codebook_size
 
         half = dim // 2
-        self._inv_freq_cpu = torch.exp(-math.log(time_embedding_theta) * torch.arange(half).float() / half)
+        inv_freq_cpu = torch.exp(-math.log(time_embedding_theta) * torch.arange(half).float() / half)
         self._timesteps_cpu = torch.linspace(0, 1, n_decoding_steps + 1)
 
-        # Pre-upload inv_freq for on-device sinusoidal time embedding.
         self._inv_freq_tt = ttnn.from_torch(
-            self._inv_freq_cpu.reshape(1, 1, -1),
+            inv_freq_cpu.reshape(1, 1, -1),
             device=mesh_device,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
@@ -111,7 +92,6 @@ class VoxtralTTAcousticModel:
         self.w_velocity = _linear_weight_ttnn(sd["acoustic_codebook_output.weight"], mesh_device, dtype)
         self.w_semantic = _linear_weight_ttnn(sd["semantic_codebook_output.weight"], mesh_device, dtype)
 
-        # Pre-compute additive semantic logit mask (-inf at empty and tail positions).
         _sem_size = sd["semantic_codebook_output.weight"].shape[0]
         _sem_mask = torch.zeros(1, 1, _sem_size)
         _sem_mask[0, 0, self._empty_audio_token_id] = float("-inf")
@@ -185,7 +165,6 @@ class VoxtralTTAcousticModel:
             for i in range(n_layers)
         ]
 
-        # Identity RoPE → no rotation (matches bidirectional acoustic attention).
         self._cos_identity = torch.ones(1, 3, head_dim, dtype=torch.bfloat16)
         self._sin_identity = torch.zeros(1, 3, head_dim, dtype=torch.bfloat16)
 
@@ -309,8 +288,6 @@ class VoxtralTTAcousticModel:
             debug_out["proj_time"] = ttnn.to_torch(s1).float()
             debug_out["proj_llm"] = ttnn.to_torch(s2).float()
 
-        # Keep concat fully on TT.
-        # Build sequence in rank-3 [B, 3, D] first, then reshape to [B, 1, 3, D].
         def _as_token_3d(x: ttnn.Tensor) -> ttnn.Tensor:
             shape = tuple(x.shape)
             if len(shape) == 3:
@@ -352,10 +329,7 @@ class VoxtralTTAcousticModel:
             return x_sliced
 
         def _residual_add_rank3(h4: ttnn.Tensor, r4: ttnn.Tensor) -> ttnn.Tensor:
-            # Match reference residual math on rank-3 [B, S, D] and then restore rank-4.
-            # ``h4`` must be a tensor we own for reshape/deallocate (e.g. a clone of activations),
-            # not the live activation tensor: reshaped views may alias device buffers that must not
-            # be freed while the original tensor is still live elsewhere.
+            """Residual on rank-3 view; ``h4`` must be an owned clone, not live activations."""
             h4_shape = tuple(h4.shape)
             r4_shape = tuple(r4.shape)
             if len(h4_shape) != 4 or len(r4_shape) != 4:
@@ -377,8 +351,6 @@ class VoxtralTTAcousticModel:
         _residual_mc = ttnn.DRAM_MEMORY_CONFIG
 
         for i in range(self.n_layers):
-            # Snapshot activations before the sublayer; residual add uses this copy so reshape/dealloc
-            # inside _residual_add_rank3 cannot corrupt the stream tensor (matches CPU ref PCC).
             residual_attn = ttnn.clone(h, dtype=self.dtype, memory_config=_residual_mc)
             normed = self.attn_norms[i](h, mode=Mode.DECODE)
             if debug_out is not None:
@@ -417,7 +389,6 @@ class VoxtralTTAcousticModel:
         if debug_out is not None:
             debug_out["final_norm"] = ttnn.to_torch(h).float()
 
-        # First token only: [B, 1, 3, D] → [B, 1, 1, D]
         h_shape = tuple(h.shape)
         h0 = ttnn.slice(h, [0, 0, 0, 0], [h_shape[0], 1, 1, h_shape[-1]])
         ttnn.deallocate(h)
@@ -434,12 +405,6 @@ class VoxtralTTAcousticModel:
             debug_out["velocity"] = ttnn.to_torch(vel).float()
             return vel, debug_out
         return vel
-
-    def _time_embedding(self, t: torch.Tensor) -> torch.Tensor:
-        """Sinusoidal time embedding ``[B, dim]`` (reference ``TimeEmbedding``, theta=10000). ``t``: ``[B, 1]``."""
-        inv = self._inv_freq_cpu.to(device=t.device, dtype=t.dtype)
-        emb = torch.einsum("bi, j -> bj", t, inv)
-        return torch.cat((emb.cos(), emb.sin()), dim=-1)
 
     def _time_embedding_tt(self, t_val: float, bsz: int) -> ttnn.Tensor:
         """On-device sinusoidal time embedding; returns ``[bsz, 1, dim]`` ttnn tensor."""
@@ -468,11 +433,9 @@ class VoxtralTTAcousticModel:
         dtype = llm_hidden.dtype
         should_decode = semantic_code != self._end_audio_token_id
 
-        # RNG must stay torch for seed synchronisation with reference (tests use torch.manual_seed).
         x_0 = torch.randn(bsz, self.n_acoustic_out, device=device, dtype=dtype)
         timesteps = self._timesteps_cpu
 
-        # Upload initial noise and LLM context to device once before the loop.
         sampled_tt = ttnn.from_torch(
             x_0.to(torch.bfloat16).unsqueeze(1),
             device=self.mesh_device,
@@ -509,8 +472,6 @@ class VoxtralTTAcousticModel:
             x_batched = ttnn.concat([sampled_tt, sampled_tt], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             te_batched = ttnn.concat([te, te], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(te)
-            # ``x_batched``/``te_batched`` ownership transferred — freed inside _predict_velocity_impl.
-            # ``tt_llm_batched`` borrowed — freed after the loop.
             v_tt = self._predict_velocity_impl(
                 None,
                 None,
@@ -535,8 +496,6 @@ class VoxtralTTAcousticModel:
             ttnn.deallocate(v_cond_scaled)
             ttnn.deallocate(v_uncond_scaled)
 
-            # Euler step on device: sampled = sampled + v_t * dt.
-            # v_t_tt shape: [bsz, 1, 1, n_acoustic] → reshape to [bsz, 1, n_acoustic] to match sampled_tt.
             v_t_3d = ttnn.reshape(v_t_tt, (bsz, 1, self.n_acoustic_out))
             ttnn.deallocate(v_t_tt)
             v_scaled = ttnn.multiply(v_t_3d, dt_val, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -548,10 +507,8 @@ class VoxtralTTAcousticModel:
 
         ttnn.deallocate(tt_llm_batched)
 
-        # Post-processing: clamp to [-1, 1], scale to [0, levels-1].
         clamped_tt = ttnn.clip(sampled_tt, min=-1.0, max=1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(sampled_tt)
-        # Replicate reference formula exactly: ((clamped + 1) / 2) * (levels - 1)
         plus_one_tt = ttnn.add(clamped_tt, 1.0, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(clamped_tt)
         halved_tt = ttnn.multiply(plus_one_tt, 0.5, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -580,7 +537,6 @@ class VoxtralTTAcousticModel:
     ) -> ttnn.Tensor:
         """Euler FM on device for trace replay; returns rounded acoustic codes ``[bsz, n_acoustic]`` on device."""
         bsz = int(llm_hidden_tt.shape[0])
-        # Clone so euler deallocations never free the persistent ``noise_tt`` (trace compile runs twice).
         sampled_tt = ttnn.clone(noise_tt)
         tt_llm = llm_hidden_tt
         tt_llm_zero = ttnn.zeros_like(tt_llm)
@@ -684,20 +640,6 @@ class VoxtralTTAcousticModel:
         ttnn.deallocate(rounded_off)
         return codes_tt
 
-    def forward_acoustic_trace(
-        self,
-        llm_hidden_tt: ttnn.Tensor,
-        noise_tt: ttnn.Tensor,
-        cfg_scalar: float,
-    ) -> None:
-        """Trace-safe full acoustic frame: semantic argmax + Euler FM (no host I/O).
-
-        ``noise_tt`` must stay allocated across trace compile/capture and replay; FM uses
-        ``ttnn.clone(noise_tt)`` internally so euler temporaries never free it.
-        """
-        codes_tt = self.forward_acoustic_trace_codes(llm_hidden_tt, noise_tt, cfg_scalar)
-        ttnn.deallocate(codes_tt)
-
     def predict_velocity(
         self,
         x_t: torch.Tensor,
@@ -739,11 +681,9 @@ class VoxtralTTAcousticModel:
         )
         ttnn.deallocate(tt_llm)
 
-        # Apply mask on device: adds -inf at empty_audio and tail positions.
         sem_masked = ttnn.add(sem_tt, self._sem_mask_tt, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(sem_tt)
 
-        # On-device argmax over semantic logit dimension; sem_masked: [bsz, 1, sem_size].
         semantic_code_tt = ttnn.argmax(sem_masked, dim=2, keepdim=True)
         ttnn.deallocate(sem_masked)
         semantic_code = ttnn.to_torch(semantic_code_tt).long().reshape(bsz, 1)
