@@ -656,7 +656,6 @@ jobs:
     secrets: inherit
     with:
       python-version: ${{ needs.determine-python-version.outputs.python-version }}
-      build-type: ${{ inputs.build-type }}
       docker-image: >-
         ${{ inputs.manylinux-docker-image ||
             needs.build-docker-image.outputs.manylinux-tag ||
