@@ -27,6 +27,25 @@ import torch.nn.functional as F
 
 import ttnn
 
+# Profiling switches (kept off by default; flipped on by the tracy launcher).
+# If set to an int N > 0, only the first N CP decode traces will be REPLAYED
+# per frame (regardless of how many were captured). Used to make the profiler
+# CSV show CP decode once instead of 14×.
+PROFILING_CP_DECODE_REPLAYS_OVERRIDE: Optional[int] = None
+
+# If True, emit tracy signposts at each sub-block boundary in the AR loop
+# (TALKER_DECODE / CP_PREFILL / CP_DECODE) plus an INFERENCE_START on the
+# first iteration. Signposts appear in the raw profiler CSV.
+PROFILING_EMIT_SIGNPOSTS: bool = False
+
+
+def _signpost(name: str) -> None:
+    if PROFILING_EMIT_SIGNPOSTS:
+        try:
+            ttnn.tracy_message(f"`TT_SIGNPOST: {name}`")
+        except Exception:
+            pass
+
 
 @dataclass
 class DecodeLoopState:
@@ -165,6 +184,9 @@ def ar_decode_loop(
             ttnn.wait_for_event(1, trace_cq0_idle)
         else:
             ttnn.synchronize_device(device)
+        if step == 0:
+            _signpost("INFERENCE_START")
+        _signpost(f"FRAME_{step}_START")
         t_step_start = time.time()
         _step_pc = time.perf_counter()
 
@@ -192,7 +214,9 @@ def ar_decode_loop(
         if use_2cq:
             write_ev = ttnn.record_event(device, 1)
             ttnn.wait_for_event(0, write_ev)
+        _signpost("CP_PREFILL_START")
         ttnn.execute_trace(device, state.cp_prefill_trace_id, cq_id=0, blocking=False)
+        _signpost("CP_PREFILL_END")
         if use_2cq:
             trace_cq0_idle = ttnn.record_event(device, 0)
         else:
@@ -219,7 +243,11 @@ def ar_decode_loop(
 
         # CP decode traces (num_code_groups - 2 of them, double-buffered with 2cq).
         _decode_sp_agg = {"device_logits": 0.0, "cpu_sample": 0.0}
-        for _trace_i, code_idx in enumerate(range(2, config.num_code_groups)):
+        _cp_decode_count = config.num_code_groups - 2
+        if PROFILING_CP_DECODE_REPLAYS_OVERRIDE is not None:
+            _cp_decode_count = min(_cp_decode_count, PROFILING_CP_DECODE_REPLAYS_OVERRIDE)
+        _signpost("CP_DECODE_LOOP_START")
+        for _trace_i, code_idx in enumerate(range(2, 2 + _cp_decode_count)):
             _buf_i = (_trace_i % 2) if use_2cq else 0
 
             # H2D embed for this iteration's input.
@@ -261,6 +289,7 @@ def ar_decode_loop(
             _decode_sp_agg["cpu_sample"] += _dsp.get("cpu_sample", 0.0)
             code_row.append(token)
 
+        _signpost("CP_DECODE_LOOP_END")
         all_codes.append(code_row)
         if streaming_decoder is not None:
             streaming_decoder.add_tokens(torch.tensor(code_row, dtype=torch.long))
@@ -309,7 +338,9 @@ def ar_decode_loop(
         if use_2cq:
             write_ev = ttnn.record_event(device, 1)
             ttnn.wait_for_event(0, write_ev)
+        _signpost("TALKER_DECODE_START")
         ttnn.execute_trace(device, state.talker_decode_trace_id, cq_id=0, blocking=False)
+        _signpost("TALKER_DECODE_END")
         talker_hidden_tt = state.trace_hidden_out
         talker_pos += 1
         if use_2cq:

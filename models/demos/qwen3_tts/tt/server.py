@@ -1119,7 +1119,7 @@ def generate_codes_ttnn(
     # k=freshly projected (sliced, width=bucket) + fused SDPA (is_causal=True).
     # Numerics identical to non-traced run. Cache write goes through fill_cache
     # (constant batch_idx=0 → trace-safe).
-    TRACE_PREFILL_BUCKETS = [32, 64, 128]
+    TRACE_PREFILL_BUCKETS = globals().get("TRACE_PREFILL_BUCKETS_OVERRIDE", [32, 64, 128])
     talker_prefill_traces = {}
     print(f"  Capturing Talker prefill traces for buckets {TRACE_PREFILL_BUCKETS}...")
     for _bucket in TRACE_PREFILL_BUCKETS:
