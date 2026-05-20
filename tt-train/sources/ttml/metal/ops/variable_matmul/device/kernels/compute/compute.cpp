@@ -199,9 +199,7 @@ void kernel_main() {
     uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
-    // Variable-M: actual M_blocks_per_core from runtime args
     uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
-    // Variable-K: K extent comes from runtime; K_num_blocks derived using K_block_tiles (CTA).
     // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from cb_ctrl[3].
     uint32_t K_tiles = get_arg_val<uint32_t>(argidx++);
 

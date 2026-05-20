@@ -73,8 +73,6 @@ void kernel_main() {
     if constexpr (use_out_offset) {
         out_row_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 8);
     }
-    // Variable-K: K extent comes from runtime. padded_K_tiles / K_num_blocks derived from
-    // K_tiles + K_block_tiles (CTA). One cached program services any K value.
     // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from on-device offsets[start..start+2].
     uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 9);
 
