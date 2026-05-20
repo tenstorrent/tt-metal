@@ -358,7 +358,6 @@ class Pi0_5ModelTTNN:
         img_masks: List[torch.Tensor],
         lang_masks: torch.Tensor,
         prefix_len: int,
-        expert_kv_total_override: Optional[int] = None,
     ):
         """Build all the upstream-openpi-compat tensors that the default TTNN
         path skips: VLM prefix attention mask, prefix RoPE table at
@@ -441,12 +440,9 @@ class Pi0_5ModelTTNN:
         suffix_sin = sin_exp[suffix_positions].unsqueeze(0).unsqueeze(0)
 
         # ---- 5) Expert cross-attention mask ----
-        # Shape: (1, 1, suffix_padded, kv_total)
-        # kv_total: by default prefix_padded + suffix_padded. When using the
-        # static KV-cache buffer (PI0_EXPERT_KV_INPLACE=1) the K/V tensors are
-        # the full max_seq_len buffer, so the override raises kv_total to that
-        # size and masks everything beyond prefix_padded + suffix_padded.
-        kv_total = expert_kv_total_override if expert_kv_total_override is not None else (prefix_padded + suffix_padded)
+        # Shape: (1, 1, suffix_padded, prefix_padded + suffix_padded)
+        # Block: prefix pad positions, tile-overhang on prefix side, tile-overhang on suffix side.
+        kv_total = prefix_padded + suffix_padded
         expert_mask = torch.zeros(suffix_padded, kv_total, dtype=torch.bfloat16)
         # Prefix-side: positions with pad_mask=False get masked
         pad_blocked = (~pad_mask).nonzero(as_tuple=True)[0]
@@ -455,10 +451,7 @@ class Pi0_5ModelTTNN:
         if prefix_padded > prefix_len:
             expert_mask[:, prefix_len:prefix_padded] = _MASK_VAL
         if suffix_padded > action_horizon:
-            expert_mask[:, prefix_padded + action_horizon : prefix_padded + suffix_padded] = _MASK_VAL
-        # Static-cache tail: mask everything past the suffix slot.
-        if kv_total > prefix_padded + suffix_padded:
-            expert_mask[:, prefix_padded + suffix_padded : kv_total] = _MASK_VAL
+            expert_mask[:, prefix_padded + action_horizon : kv_total] = _MASK_VAL
         # Phantom suffix rows: mask them out entirely so they don't contribute
         # to softmax (they're junk Q rows). Their attention output is discarded.
         if suffix_padded > action_horizon:
@@ -588,33 +581,17 @@ class Pi0_5ModelTTNN:
         #     ttnn img_mask but avoids re-uploading the 6 mask/RoPE tensors.
         # (c) cold build: first call without pre-stage — build + cache.
         upstream_artifacts = None
-        # If the expert is using its pre-allocated static KV-cache buffers
-        # (PI0_EXPERT_KV_INPLACE=1), the expert SDPA reads K/V tensors of
-        # size max_seq_len_padded — so the expert attention mask must cover
-        # that full extent (mask out the unfilled tail past prefix+suffix).
-        # See ttnn_paligemma.Pi0_5PaliGemmaBackboneTTNN.__init__ for cache
-        # allocation.
-        expert_kv_total_override = None
-        if self.backbone.expert_kv_static_cache is not None:
-            # Cache shape per layer is (1, num_kv_heads, max_seq_len, head_dim).
-            expert_kv_total_override = self.backbone.expert_kv_static_cache[0][0].shape[2]
         if use_upstream_masks():
             if self._upstream_artifacts_explicit and self._cached_upstream_artifacts is not None:
                 upstream_artifacts = self._cached_upstream_artifacts
             else:
                 ims_t, lm_t = self._coerce_upstream_masks(img_masks, lang_masks)
                 key = self._upstream_cache_key(ims_t, lm_t, prefix_embs.shape[1])
-                # Include kv_total in cache key so the artifacts get rebuilt
-                # if the static-cache state changes between calls.
-                key = (*key, expert_kv_total_override)
                 if self._cached_upstream_artifacts is not None and self._cached_upstream_key == key:
                     upstream_artifacts = self._cached_upstream_artifacts
                 else:
                     upstream_artifacts = self._build_upstream_attn_artifacts(
-                        ims_t,
-                        lm_t,
-                        prefix_len=prefix_embs.shape[1],
-                        expert_kv_total_override=expert_kv_total_override,
+                        ims_t, lm_t, prefix_len=prefix_embs.shape[1]
                     )
                     self._cached_upstream_artifacts = upstream_artifacts
                     self._cached_upstream_key = key
@@ -649,23 +626,6 @@ class Pi0_5ModelTTNN:
                 # prefix_embs.shape[1] is the original (pre-lift) logical length.
                 self._sdpa_attn_mask = self._build_sdpa_phantom_mask(prefix_embs.shape[1])
                 self._sdpa_mask_kv_len = prefix_logical_lifted
-
-        # Static KV-cache path (PI0_EXPERT_KV_INPLACE=1): copy the VLM-side
-        # prefix K/V into the pre-allocated per-layer static buffers via
-        # ttnn.kv_cache.fill_cache. Each expert layer's static buffer is
-        # (1, num_kv_heads, max_seq_len, head_dim); fill_cache writes the
-        # prefix into [0..prefix_logical_lifted). The denoise loop then
-        # passes update_idx=prefix_logical_lifted so each step writes the
-        # suffix K/V at the slot immediately after the prefix — replacing
-        # the per-step concat([past_k, k_rope]) with an in-place write.
-        self._static_kv_update_idx: Optional[int] = None
-        if self.backbone.expert_kv_static_cache is not None and prefix_kv_cache is not None:
-            update_idx = prefix_kv_cache[0][0].shape[2]  # prefix_logical_lifted (tile-aligned)
-            for i, (past_k, past_v) in enumerate(prefix_kv_cache):
-                k_buf, v_buf = self.backbone.expert_kv_static_cache[i]
-                ttnn.kv_cache.fill_cache(k_buf, past_k, 0)
-                ttnn.kv_cache.fill_cache(v_buf, past_v, 0)
-            self._static_kv_update_idx = update_idx
 
         num_steps = self.denoise_config.num_steps
         timesteps = [1.0 - i / num_steps for i in range(num_steps + 1)]
@@ -768,7 +728,6 @@ class Pi0_5ModelTTNN:
                 keep_padded=keep_padded_expert,
                 cos_override=_cos_o,
                 sin_override=_sin_o,
-                static_kv_cache_update_idx=self._static_kv_update_idx,
             )
             ttnn.deallocate(suffix_embs)
 
