@@ -742,9 +742,6 @@ run_all_needed_local_tests() {
     local saved_upr_mode="${DEEPSEEK_DEMO_UPR_MODE:-}"
     export DEEPSEEK_DEMO_UPR_MODE="all"
 
-    run_dual_teacher_forced_test
-    run_dual_demo_test
-    run_dual_demo_stress_test
     run_quad_teacher_forced_test
     run_quad_test_model_long_prefill_single_galaxy_test
     run_quad_demo_test
