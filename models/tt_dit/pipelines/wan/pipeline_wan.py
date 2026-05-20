@@ -926,9 +926,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         prepared_prompts = [False, False]
 
         sp_axis = self.transformer_states[0].model.parallel_config.sequence_parallel.mesh_axis
-        # Use len(timesteps) (not num_inference_steps) so the progress bar
-        # also tracks doubled schedules (e.g. DPM++ SDE 2nd-order).
-        with self.progress_bar(total=len(timesteps)) as progress_bar:
+        with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 warmup_t2 = i == 1 and len(timesteps) == 2  # Ensure transformer_2 is also warmed up
 
@@ -1033,8 +1031,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             profiler.end("denoising", profiler_iteration)
             profiler.start("vae", profiler_iteration)
 
-        # Capture the post-denoise pre-rescale latent before VAE std-scaling
-        # mutates it (used for clip-to-clip continuity by long-video drivers).
+        # Captured before VAE std-rescale mutates `latents`.
         last_latent_out = latents.detach().cpu().clone() if return_last_latent else None
 
         if not output_type == "latent":
