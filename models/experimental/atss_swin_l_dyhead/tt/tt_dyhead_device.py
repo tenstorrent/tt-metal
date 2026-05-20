@@ -146,10 +146,10 @@ class TtDyReLUNHWC:
         )
         a2 = ttnn.multiply(a2, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        branch1 = ttnn.multiply(feat_nhwc, a1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        branch1 = ttnn.add(branch1, b1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        branch2 = ttnn.multiply(feat_nhwc, a2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        branch2 = ttnn.add(branch2, b2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Fused branch_k = b_k + feat * a_k. Broadcast shape (B, 1, 1, C) over (B, H, W, C)
+        # is supported by addcmul (unlike the (B,1,1,1) scalar-broadcast case).
+        branch1 = ttnn.addcmul(b1, feat_nhwc, a1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        branch2 = ttnn.addcmul(b2, feat_nhwc, a2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         return ttnn.maximum(branch1, branch2)
 
