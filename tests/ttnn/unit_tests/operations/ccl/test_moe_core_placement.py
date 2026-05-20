@@ -47,22 +47,20 @@ def test_get_moe_combine_cores_width_shard_auto_helper(device):
     assert len(cores) == token_parallel * expected_width
 
 
-def test_get_moe_combine_cores_not_fixed_legacy_pool(device):
-    """Combine cores should not all lie in the legacy hardcoded pool (5,0)-(6,7)."""
+def test_get_moe_combine_cores_disjoint_from_tilize(device):
+    """Combine cores must be spatially disjoint from the tilize drain core."""
     hidden_size = 4096
     token_parallel = 4
     data_parallel = auto_output_width_shard_dim(hidden_size)
 
     cores = ttnn.experimental.get_moe_combine_cores(device, token_parallel, data_parallel, hidden_size)
+    drain = ttnn.experimental.get_moe_tilize_drain_core(device, token_parallel, data_parallel, hidden_size)
 
-    legacy_pool = {(x, y) for x in range(5, 7) for y in range(0, 8)}
-    legacy_hits = sum(1 for c in cores if (c.x, c.y) in legacy_pool)
-
-    # Dynamic placement may coincidentally use some legacy coords, but not the entire grid.
-    assert legacy_hits < len(cores)
+    combine_set = {(c.x, c.y) for c in cores}
+    assert (drain.x, drain.y) not in combine_set, "tilize drain core must not overlap combine cores"
 
 
-def test_get_moe_tilize_drain_core_on_wh_grid(device):
+def test_get_moe_tilize_drain_core_structural(device):
     hidden_size = 4096
     token_parallel = 4
     data_parallel = auto_output_width_shard_dim(hidden_size)
@@ -72,7 +70,9 @@ def test_get_moe_tilize_drain_core_on_wh_grid(device):
 
     assert 0 <= drain_core.x < grid.x
     assert 0 <= drain_core.y < grid.y
-    # Legacy WH drain was (6, 9) on the 8×10 worker grid.
-    if grid.x == 8 and grid.y == 10:
-        assert drain_core.x == 6
-        assert drain_core.y == 9
+
+    cores = ttnn.experimental.get_moe_combine_cores(device, token_parallel, data_parallel, hidden_size)
+    combine_set = {(c.x, c.y) for c in cores}
+    assert (drain_core.x, drain_core.y) not in combine_set, "drain core must not overlap combine cores"
+
+    assert drain_core.y >= grid.y - 2, "drain core should be in the bottom two worker rows (tilize region)"
