@@ -26,40 +26,7 @@ Comment `/bug-check run` on any PR. The workflow at `.github/workflows/bug-check
 | `/bug-check check-rule <id>` | Run only the named rule against the PR |
 | `/bug-check dry-run` | Show which rules match and what diff sections each would analyze (no LLM calls) |
 
-### Local CLI
-
-Install the local dependencies and provide a Claude API key:
-
-```bash
-pip install -r .github/bug_checker/requirements-bug-checker.txt
-export BUG_CHECKER_API_KEY=<your-api-key>  # or ANTHROPIC_API_KEY
-```
-
-`BUG_CHECKER_MODEL` can be set to override the default model (`claude-sonnet-4-6`).
-
-Run the checker against a branch diff or PR, optionally selecting a subcommand:
-
-```bash
-# Analyze the current branch diff against main
-python .github/bug_checker/run_bug_checker.py --branch --verbose
-
-# Analyze against a different base branch
-python .github/bug_checker/run_bug_checker.py --branch origin/release-1.0
-
-# Analyze a PR by number (requires gh CLI auth)
-python .github/bug_checker/run_bug_checker.py --pr 39432 --verbose
-
-# List rules without analyzing a target
-python .github/bug_checker/run_bug_checker.py --subcommand list-rules
-
-# Run one rule against a PR
-python .github/bug_checker/run_bug_checker.py --pr 12345 --subcommand check-rule --rule-id ccl-ring-buffer-mismatch
-
-# Preview matching rules and diff sections without LLM calls
-python .github/bug_checker/run_bug_checker.py --branch --subcommand dry-run
-```
-
-## Adding a New Rule
+## Creating a New Rule
 
 1. **Write the rule markdown** in `.github/bug_checker/rules/your-rule-name.md`. Copy `rules/template-rule.md` and fill in each section:
 
@@ -119,6 +86,39 @@ good_code();
 | `labels` | list of strings | Rule runs if any PR label matches |
 
 A rule is selected if **either** a path or a label matches.
+
+### Local CLI
+
+Install the local dependencies and provide a Claude API key:
+
+```bash
+pip install -r .github/bug_checker/requirements-bug-checker.txt
+export BUG_CHECKER_API_KEY=<your-api-key>  # or ANTHROPIC_API_KEY
+```
+
+`BUG_CHECKER_MODEL` can be set to override the default model (`claude-sonnet-4-6`).
+
+Run the checker against a branch diff or PR, optionally selecting a subcommand:
+
+```bash
+# Analyze the current branch diff against main
+python .github/bug_checker/run_bug_checker.py --branch --verbose
+
+# Analyze against a different base branch
+python .github/bug_checker/run_bug_checker.py --branch origin/release-1.0
+
+# Analyze a PR by number (requires gh CLI auth)
+python .github/bug_checker/run_bug_checker.py --pr 39432 --verbose
+
+# List rules without analyzing a target
+python .github/bug_checker/run_bug_checker.py --subcommand list-rules
+
+# Run one rule against a PR
+python .github/bug_checker/run_bug_checker.py --pr 12345 --subcommand check-rule --rule-id ccl-ring-buffer-mismatch
+
+# Preview matching rules and diff sections without LLM calls
+python .github/bug_checker/run_bug_checker.py --branch --subcommand dry-run
+```
 
 ## Component Reference
 
