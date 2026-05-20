@@ -174,7 +174,6 @@ void kernel_main() {
                 for (uint32_t i = 0; i < INPUT_SIZE; ++i) {
                     uint32_t idx = get_index(index_l1_addr, i);
                     uint32_t msk = get_mask(mask_l1_addr, i);
-                    DPRINT << chunk << ": " << idx << " -> " << msk << ENDL();
                     DEVICE_PRINT("{}: {} -> {}\n", chunk, idx, msk);
                 }
 #endif

@@ -9,7 +9,6 @@
 #include "../../../unified_kernels/termination.hpp"
 
 void kernel_main() {
-    DPRINT << "Starting d2h sender kernel" << ENDL();
     DEVICE_PRINT("Starting d2h sender kernel\n");
     // Get this value from MeshSocket struct on host
     constexpr uint32_t send_socket_config_addr = get_compile_time_arg_val(0);

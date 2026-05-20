@@ -24,8 +24,6 @@ void kernel_main() {
 
     semaphore.wait(signal_value);
 
-    DPRINT << "Reading " << dram_buffer_size << " bytes from DRAM address " << dram_src_address << " in bank "
-           << dram_src_bank_id << " and writing it to L1 address " << l1_dst_address << ENDL();
     DEVICE_PRINT(
         "Reading {} bytes from DRAM address {} in bank {} and writing it to L1 address {}\n",
         dram_buffer_size,

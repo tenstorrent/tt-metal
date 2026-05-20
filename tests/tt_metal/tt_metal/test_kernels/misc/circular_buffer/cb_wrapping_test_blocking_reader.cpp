@@ -68,10 +68,8 @@ void core_agnostic_main() {
         cb.pop_front(CB_STEP_SIZE);
     }
 
-    DPRINT << "Reader Wait" << ENDL();
     DEVICE_PRINT("Reader Wait\n");
     riscv_wait(NUM_WAIT_CYCLES);
-    DPRINT << "Reader Wait Done" << ENDL();
     DEVICE_PRINT("Reader Wait Done\n");
 
     for (auto i = 0ul; i < 3; i++) {

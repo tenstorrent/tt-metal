@@ -274,8 +274,6 @@ struct command_context_t final {
 
         this->current_cmd_header = ttnn::ccl::cmd::CclCommandHeader::from_uint32(get_arg_val<uint32_t>(arg_idx++));
 #ifdef DEBUG_PRINT_ENABLED
-        DPRINT << "CMD (code=" << (uint32_t)current_cmd_header.code
-               << ", args=" << (uint32_t)current_cmd_header.arg_count << ", idx=" << (uint32_t)(arg_idx - 1) << "\n";
         DEVICE_PRINT("CMD (code={}, args={}, idx={})\n", (uint32_t)current_cmd_header.code, current_cmd_header.arg_count, arg_idx - 1);
 #endif
         update_ccl_command(arg_idx, *this, current_cmd_header);
@@ -533,7 +531,6 @@ void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_ctx) {
         return;
     }
 
-    DPRINT << "tensor -> CB: " << (uint32_t)cmd_ctx.cb_id << "\n";
     DEVICE_PRINT("tensor -> CB: {}\n", cmd_ctx.cb_id);
 
     wrapped_worker_slice_read_context& cmd_specific_ctx = cmd_ctx.cmd_specific_ctx.wrapped_worker_slice_read_ctx;
@@ -632,7 +629,6 @@ void write_and_advance_local_read_address_for_fabric_write(
             }
         } break;
         default: {
-            DPRINT << "default\n";
             DEVICE_PRINT("default\n");
             ASSERT(false);
         } break;
@@ -687,7 +683,6 @@ void try_advance_write_tensor_from_cb(command_context_t<Addrgen>& cmd_ctx) {
     if (!cb_pages_available_at_front(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages)) {
         return;
     }
-    DPRINT << "CB -> tensor: " << (uint32_t)cmd_ctx.stream_id << "\n";
     DEVICE_PRINT("CB -> tensor: {}\n", cmd_ctx.stream_id);
 
     wrapped_worker_slice_read_context& cmd_specific_ctx = cmd_ctx.cmd_specific_ctx.wrapped_worker_slice_read_ctx;
@@ -867,7 +862,6 @@ void try_advance(command_context_t<Addrgen>& cmd_ctx) {
         case ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR:
             if (cmd_ctx.cmd_specific_ctx.wrapped_worker_slice_read_ctx.offset_into_worker_slice >=
                 cmd_ctx.command_tensor.worker_pages_per_slice) {
-                DPRINT << "t_stream cmd cmpl\n";
                 DEVICE_PRINT("t_stream cmd cmpl\n");
                 cmd_ctx.complete_current_command();
             }
@@ -875,14 +869,12 @@ void try_advance(command_context_t<Addrgen>& cmd_ctx) {
 
         case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC: [[fallthrough]];
         case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
-            DPRINT << "at_inc cmd cmpl\n";
             cmd_ctx.complete_current_command();
             break;
         case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
             // Technically we are implementing semaphore wait as WAIT_MIN. FUTURE work to make separate commands
             if (*reinterpret_cast<volatile uint32_t*>(cmd_ctx.src_addr_info.address) >=
                 cmd_ctx.cmd_specific_ctx.inline_value_ctx.value) {
-                DPRINT << "Completing waitval command\n";
                 DEVICE_PRINT("Completing waitval command\n");
                 cmd_ctx.complete_current_command();
                 invalidate_l1_cache();
@@ -893,7 +885,6 @@ void try_advance(command_context_t<Addrgen>& cmd_ctx) {
         case ttnn::ccl::cmd::CclCommandCode::NOC_WRITE_BURST:
             if (cmd_ctx.cmd_specific_ctx.noc_transfer_burst_ctx.current_noc_transfer ==
                 cmd_ctx.cmd_specific_ctx.noc_transfer_burst_ctx.num_transfers_total) {
-                DPRINT << "noc_burst cmd cmpl\n";
                 DEVICE_PRINT("noc_burst cmd cmpl\n");
                 cmd_ctx.complete_current_command();
             }
@@ -1013,7 +1004,6 @@ void kernel_main() {
     while (stream_done_mask != finish_value) {
         if ((stream_done_mask & 0x1) == 0) {
             if (!operand_0_cmd_ctx.current_command_active()) {
-                DPRINT << "get_cmd0\n";
                 DEVICE_PRINT("get_cmd0\n");
                 operand_0_cmd_ctx.fetch_next_command();
             };
@@ -1023,7 +1013,6 @@ void kernel_main() {
 #ifndef SINGLE_INPUT_MODE
         if ((stream_done_mask & 0x2) == 0) {
             if (!operand_1_cmd_ctx.current_command_active()) {
-                DPRINT << "get_cmd1\n";
                 DEVICE_PRINT("get_cmd1\n");
                 operand_1_cmd_ctx.fetch_next_command();
             }
@@ -1038,6 +1027,5 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
-    DPRINT << "DONE \n";
     DEVICE_PRINT("DONE \n");
 }

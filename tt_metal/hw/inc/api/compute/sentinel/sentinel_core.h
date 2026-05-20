@@ -188,7 +188,6 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
             reconfig_data_format_srca<false, true>(m_srca_cb, cb);
         }
 
-        DPRINT << "reconfig_data_format_srca - ";
         DEVICE_PRINT("reconfig_data_format_srca - ");
         m_srca_cb = cb;
     } else if constexpr (operand == Operand::SRCB) {
@@ -199,7 +198,6 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
             reconfig_data_format_srcb<false, true>(m_srcb_cb, cb);
         }
 
-        DPRINT << "reconfig_data_format_srcb - ";
         DEVICE_PRINT("reconfig_data_format_srcb - ");
         m_srcb_cb = cb;
     } else if constexpr (operand == Operand::PACK) {
@@ -210,15 +208,12 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
             pack_reconfig_data_format(m_pack_cb, cb);
         }
 
-        DPRINT << "pack_reconfig_data_format - ";
         DEVICE_PRINT("pack_reconfig_data_format - ");
         m_pack_cb = cb;
     }
     if (m_enabled) {
-        DPRINT << "happened on line - " << m_last_call_line << ENDL();
         DEVICE_PRINT("happened on line - {}\n", m_last_call_line);
     } else {
-        DPRINT << "should be called before line - " << m_last_call_line << ENDL();
         DEVICE_PRINT("should be called before line - {}\n", m_last_call_line);
     }
 

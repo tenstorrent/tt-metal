@@ -69,10 +69,6 @@ void kernel_main() {
                     expected_val);
 
                 if (!match) {
-                    DPRINT << "Data mismatch at packet " << i << "\n";
-                    DPRINT << "  Mismatch addr: " << mismatch_addr << "\n";
-                    DPRINT << "  Mismatch val: " << mismatch_val << "\n";
-                    DPRINT << "  Expected val: " << expected_val << "\n";
                     DEVICE_PRINT("Data mismatch at packet {}\n", i);
                     DEVICE_PRINT("  Mismatch addr: {}\n", mismatch_addr);
                     DEVICE_PRINT("  Mismatch val: {}\n", mismatch_val);

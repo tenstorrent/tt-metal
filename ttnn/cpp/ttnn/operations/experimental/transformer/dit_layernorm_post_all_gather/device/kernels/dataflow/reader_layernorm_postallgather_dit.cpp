@@ -79,7 +79,6 @@ void kernel_main() {
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         uint32_t stats_tile_idx = tile_row * stats_tiles_cols;
         cb_reserve_back(cb_stats, stats_tiles_cols);
-        DPRINT << "reserve_back stats on tile_row: " << tile_row << ENDL();
         DEVICE_PRINT("reserve_back stats on tile_row: {}\n", tile_row);
         uint32_t stats_wr_ptr = get_write_ptr(cb_stats);
         for (uint32_t st = 0; st < stats_tiles_cols; ++st) {
@@ -123,7 +122,6 @@ void kernel_main() {
         for (uint32_t col_tile = 0; col_tile < Wt; col_tile += block_size) {
             // Input
             cb_reserve_back(cb_inp, block_size);
-            DPRINT << "reserve_back input on tile_row: " << tile_row << " col_tile: " << col_tile << ENDL();
             DEVICE_PRINT("reserve_back input on tile_row: {} col_tile: {}\n", tile_row, col_tile);
             uint32_t inp_wr_ptr = get_write_ptr(cb_inp);
             for (uint32_t i = 0; i < block_size && col_tile + i < Wt; i++) {
@@ -138,8 +136,6 @@ void kernel_main() {
             if (need_new_gamma) {
                 // Read in gamma block-by-block for this batch
                 cb_reserve_back(cb_gamma, block_size);
-                DPRINT << "reserve_back gamma on tile_row: " << tile_row << " col_tile: " << col_tile
-                       << " batch: " << batch_idx << ENDL();
                 DEVICE_PRINT(
                     "reserve_back gamma on tile_row: {} col_tile: {} batch: {}\n", tile_row, col_tile, batch_idx);
                 uint32_t l1_write_addr_g = get_write_ptr(cb_gamma);
@@ -158,8 +154,6 @@ void kernel_main() {
             if (need_new_beta) {
                 // Read in beta block-by-block for this batch
                 cb_reserve_back(cb_beta, block_size);
-                DPRINT << "reserve_back beta on tile_row: " << tile_row << " col_tile: " << col_tile
-                       << " batch: " << batch_idx << ENDL();
                 DEVICE_PRINT(
                     "reserve_back beta on tile_row: {} col_tile: {} batch: {}\n", tile_row, col_tile, batch_idx);
                 uint32_t l1_write_addr_b = get_write_ptr(cb_beta);

@@ -141,13 +141,10 @@ inline void debug_checkpoint_dump_cbs_impl([[maybe_unused]] const char* name) {
 #if defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 1)
     // Math thread: optionally dump dest registers (only Math can access them)
     if constexpr (dump_dest) {
-        DPRINT << "=== CKPT " << name << " dest regs ===" << ENDL();
-        // DEVICE_PRINT header is printed by the calling macro
         uint32_t data_format_reg_field_value = READ_HW_CFG_0_REG_FIELD(ALU_FORMAT_SPEC_REG2_Dstacc);
         if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled)) {
             data_format_reg_field_value = (uint32_t)DataFormat::Float32;
         }
-        DPRINT << FIXED() << SETW(WIDTH) << SETPRECISION(PRECISION);
         uint32_t row = 0;
         for (int face_id = 0; face_id < NUM_FACES_PER_TILE; ++face_id) {
             for (int row_id = 0; row_id < NUM_ROWS_PER_FACE; ++row_id) {
@@ -161,7 +158,6 @@ inline void debug_checkpoint_dump_cbs_impl([[maybe_unused]] const char* name) {
                         dprint_tensix_dest_reg_row_float16(data_format_reg_field_value, row);
                         break;
                     default:
-                        DPRINT << "Unsupported data format: " << data_format_reg_field_value << ENDL();
                         DEVICE_PRINT("Unsupported data format: {}\n", (DataFormat)data_format_reg_field_value);
                         break;
                 }
@@ -173,8 +169,6 @@ inline void debug_checkpoint_dump_cbs_impl([[maybe_unused]] const char* name) {
 #else
     // BRISC, NCRISC, TRISC0 (Unpack), TRISC2 (Pack) print CB metadata.
     uint32_t risc_idx = internal_::get_hw_thread_idx();
-    DPRINT << "=== CKPT " << name << " RISC" << risc_idx << " CBs ===" << ENDL();
-    // DEVICE_PRINT header is printed by the calling macro
 
     constexpr uint32_t max_cb = (num_cbs == 0) ? NUM_CIRCULAR_BUFFERS : num_cbs;
     for (uint32_t cb = 0; cb < max_cb; cb++) {
@@ -183,8 +177,6 @@ inline void debug_checkpoint_dump_cbs_impl([[maybe_unused]] const char* name) {
             continue;
         }
 
-        DPRINT << "CB" << cb << " sz=" << iface.fifo_size << " rd=" << iface.fifo_rd_ptr << " wr=" << iface.fifo_wr_ptr
-               << " ack=" << iface.tiles_acked << " rcv=" << iface.tiles_received << ENDL();
         DEVICE_PRINT(
             "CB{} sz={} rd={} wr={} ack={} rcv={}\n",
             cb,
@@ -199,12 +191,9 @@ inline void debug_checkpoint_dump_cbs_impl([[maybe_unused]] const char* name) {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.fifo_rd_ptr << cb_addr_shift);
             for (uint16_t w = 0; w < words_per_cb; w += 4) {
                 uint16_t chunk = (words_per_cb - w > 4) ? 4 : (words_per_cb - w);
-                DPRINT << "  [" << w << "] ";
                 for (uint16_t j = 0; j < chunk; j++) {
-                    DPRINT << HEX() << data_ptr[w + j] << " ";
                     DEVICE_PRINT("  [{}] {:#010x}\n", (uint32_t)(w + j), data_ptr[w + j]);
                 }
-                DPRINT << DEC() << ENDL();
             }
         }
     }

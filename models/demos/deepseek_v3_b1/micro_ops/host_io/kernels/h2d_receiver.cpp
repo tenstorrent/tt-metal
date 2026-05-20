@@ -112,7 +112,6 @@ FORCE_INLINE void send_pages_over_socket(
 }
 
 void kernel_main() {
-    DPRINT << "Starting h2d receiver kernel" << ENDL();
     DEVICE_PRINT("Starting h2d receiver kernel\n");
     size_t rt_args_idx = 0;
 

@@ -42,9 +42,6 @@ void kernel_main() {
     uint32_t tensor_stride = out_num_tiles_per_tensor_x;
     uint32_t tensor_stride_cum = 0;
 #ifdef DEBUG
-    // DPRINT << "Reader Tile ID Offset: " << in0_tensor_tile_id << ENDL() << ENDL();
-    // DPRINT << "Reader Z Stride: " << z_stride << ENDL();
-    // DPRINT << "Reader Y Stride: " << y_stride << ENDL();
     // DEVICE_PRINT("Reader Tile ID Offset: {}\n\n", in0_tensor_tile_id);
     // DEVICE_PRINT("Reader Z Stride: {}\n", z_stride);
     // DEVICE_PRINT("Reader Y Stride: {}\n", y_stride);
@@ -66,8 +63,6 @@ void kernel_main() {
                     noc.async_read_barrier();
                     cb_in0.push_back(onetile);
 #ifdef DEBUG
-                    // DPRINT << "Reader Tile ID: " << tile_id  + in0_tensor_tile_id << ENDL();
-                    // DPRINT << "Reader Address: " << l1_write_addr_in0 << ENDL() << ENDL();
                     // DEVICE_PRINT("Reader Tile ID: {}\n", tile_id + in0_tensor_tile_id);
                     // DEVICE_PRINT("Reader Address: {}\n\n", l1_write_addr_in0);
 #endif

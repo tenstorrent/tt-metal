@@ -32,7 +32,6 @@ void kernel_main() {
         if (page_id >= chunk_offset + entries_per_core) {
             break;
         }
-        // DPRINT << "producer tile id " << tile_id << " page id " << page_id << ENDL();
         // DEVICE_PRINT("producer tile id {} page id {}\n", tile_id, page_id);
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
@@ -45,9 +44,7 @@ void kernel_main() {
             dfb.push_back(1);
         }
     }
-    // DPRINT << "PFW" << ENDL();
     // DEVICE_PRINT("PFW\n");
     dfb.finish();
-    // DPRINT << "PFD" << ENDL();
     // DEVICE_PRINT("PFD\n");
 }
