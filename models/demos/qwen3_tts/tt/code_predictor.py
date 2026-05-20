@@ -220,11 +220,23 @@ class CodePredictor(LightweightModule):
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         # residual aliases h_tt (caller-owned). Do NOT deallocate it.
         residual = h_tt
-        x = ttnn.rms_norm(h_tt, epsilon=self.rms_norm_eps, weight=lw["input_ln_w"], compute_kernel_config=self.kcfg)
+        x = ttnn.rms_norm(
+            h_tt,
+            epsilon=self.rms_norm_eps,
+            weight=lw["input_ln_w"],
+            compute_kernel_config=self.kcfg,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
-        # QKV (K=1024) keeps default L1_INTERLEAVED — K_tiles=32 caps DRAM-sharded
-        # to ≤16 cores (in0_block_w=2), losing parallelism vs the 128-core default.
-        xqkv = ttnn.matmul(x, lw["wqkv"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
+        # QKV (K=1024) — default L1_INTERLEAVED beats DRAM-sharded by ~17% on this
+        # shape (128 cores vs 80, and in0_block_w=2 setup cost doesn't pay off here).
+        xqkv = ttnn.matmul(
+            x,
+            lw["wqkv"],
+            dtype=self.act_dtype,
+            compute_kernel_config=self.kcfg,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         ttnn.deallocate(x)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
@@ -438,19 +450,29 @@ class CodePredictor(LightweightModule):
             o = o_padded
 
         # Residual + post-norm. residual = caller's h_tt — DO NOT deallocate.
-        h_post = ttnn.add(residual, o, dtype=self.act_dtype)
+        h_post = ttnn.add(residual, o, dtype=self.act_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(o)
 
         residual2 = h_post  # we own h_post → free after MLP residual.
-        h2 = ttnn.rms_norm(h_post, epsilon=self.rms_norm_eps, weight=lw["post_ln_w"], compute_kernel_config=self.kcfg)
+        h2 = ttnn.rms_norm(
+            h_post,
+            epsilon=self.rms_norm_eps,
+            weight=lw["post_ln_w"],
+            compute_kernel_config=self.kcfg,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
-        # gate/up (K=1024) keep default L1_INTERLEAVED — same K-tile cap as QKV.
-        gate_o = ttnn.matmul(h2, lw["gate"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
-        up_o = ttnn.matmul(h2, lw["up"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
+        # gate/up (K=1024) — default L1_INTERLEAVED beats DRAM-sharded (same as QKV).
+        gate_o = ttnn.matmul(
+            h2, lw["gate"], dtype=self.act_dtype, compute_kernel_config=self.kcfg, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        up_o = ttnn.matmul(
+            h2, lw["up"], dtype=self.act_dtype, compute_kernel_config=self.kcfg, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         ttnn.deallocate(h2)
-        gate_silu = ttnn.silu(gate_o)
+        gate_silu = ttnn.silu(gate_o, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(gate_o)
-        gated = ttnn.mul(gate_silu, up_o, dtype=self.act_dtype)
+        gated = ttnn.mul(gate_silu, up_o, dtype=self.act_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(gate_silu)
         ttnn.deallocate(up_o)
         # down (K=3072 = K_tiles=96) wins big with DRAM-sharded.
@@ -477,7 +499,7 @@ class CodePredictor(LightweightModule):
             ttnn.deallocate(mlp_padded)
         else:
             mlp_o = mlp_padded
-        out = ttnn.add(residual2, mlp_o, dtype=self.act_dtype)
+        out = ttnn.add(residual2, mlp_o, dtype=self.act_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(residual2)
         ttnn.deallocate(mlp_o)
         return out, updated_kv
@@ -536,7 +558,13 @@ class CodePredictor(LightweightModule):
             if updated_kvs is not None:
                 updated_kvs.append(updated_kv)
 
-        h_norm = ttnn.rms_norm(h, epsilon=self.rms_norm_eps, weight=self.final_norm_w, compute_kernel_config=self.kcfg)
+        h_norm = ttnn.rms_norm(
+            h,
+            epsilon=self.rms_norm_eps,
+            weight=self.final_norm_w,
+            compute_kernel_config=self.kcfg,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         if own_h:
             ttnn.deallocate(h)
 
@@ -545,7 +573,13 @@ class CodePredictor(LightweightModule):
 
         # Apply lm_head over full hidden (caller indexes last position).
         lm_idx = generation_step - 1
-        logits = ttnn.matmul(h_norm, self.lm_heads[lm_idx], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
+        logits = ttnn.matmul(
+            h_norm,
+            self.lm_heads[lm_idx],
+            dtype=self.act_dtype,
+            compute_kernel_config=self.kcfg,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         ttnn.deallocate(h_norm)
         return logits, updated_kvs
 
