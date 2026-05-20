@@ -53,6 +53,7 @@ class TtSwinAttention:
         self.window_size = list(window_size) if not isinstance(window_size, list) else window_size
         self.shift_size = list(shift_size) if not isinstance(shift_size, list) else shift_size
         self.num_heads = num_heads
+        self.head_dim = dim // num_heads
         self.attn_mask = attn_mask
         self._sdpa_mask = None
         self._compute_config = ttnn.WormholeComputeKernelConfig(
@@ -108,9 +109,6 @@ class TtSwinAttention:
             ttnn.transpose(ttnn.reshape(input_tensor, (B, nH, wH, nW, wW, C)), 2, 3), (B * num_windows, wH * wW, C)
         )
 
-        seq_len = wH * wW
-        head_dim = C // self.num_heads
-
         qkv = ttnn.linear(
             ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             self.parameters["qkv"]["weight"],
@@ -123,32 +121,21 @@ class TtSwinAttention:
         )
         ttnn.deallocate(input_tensor)
 
-        qkv = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        q = ttnn.slice(qkv, [0, 0, 0], [B * num_windows, seq_len, C])
-        k = ttnn.slice(qkv, [0, 0, C], [B * num_windows, seq_len, 2 * C])
-        v = ttnn.slice(qkv, [0, 0, 2 * C], [B * num_windows, seq_len, 3 * C])
+        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+            qkv, num_heads=self.num_heads, transpose_key=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         ttnn.deallocate(qkv)
-
-        # Reshape to multi-head: (B*nW, nh, sl, hd) — K is NOT transposed for fused SDPA
-        q = ttnn.transpose(ttnn.reshape(q, (B * num_windows, seq_len, self.num_heads, head_dim)), 1, 2)
-        k = ttnn.transpose(ttnn.reshape(k, (B * num_windows, seq_len, self.num_heads, head_dim)), 1, 2)
-        v = ttnn.transpose(ttnn.reshape(v, (B * num_windows, seq_len, self.num_heads, head_dim)), 1, 2)
-
-        q = ttnn.to_layout(q, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        k = ttnn.to_layout(k, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v = ttnn.to_layout(v, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         if self._sdpa_mask is None:
             self._prepare_sdpa_mask(num_windows)
 
-        # Fused SDPA: scale*Q@K^T + mask + softmax + @V in one kernel
         output = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
             v,
             attn_mask=self._sdpa_mask,
             is_causal=False,
-            scale=head_dim**-0.5,
+            scale=self.head_dim**-0.5,
             program_config=ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 q_chunk_size=32,
@@ -161,12 +148,10 @@ class TtSwinAttention:
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        output = ttnn.transpose(output, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        output = ttnn.reshape(output, (B * num_windows, seq_len, C))
+        output = ttnn.transformer.concatenate_heads(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         output = ttnn.linear(
-            ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            output,
             self.parameters["proj"]["weight"],
             bias=self.parameters["proj"]["bias"],
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
