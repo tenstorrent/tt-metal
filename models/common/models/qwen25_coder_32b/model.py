@@ -105,52 +105,104 @@ class Qwen25Coder32BConfig:
     rope_table_len: int
 
 
-def _qwen_coder_wh_mlp_matmul_compute_kernel() -> ttnn.WormholeComputeKernelConfig:
-    """HiFi4 lowers L1 circular-buffer footprint vs HiFi2 for wide FF matmuls on Wormhole."""
-    return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
+_QWEN_ATTN_HIFI4_FP32_KERNEL = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+"""HiFi4 + fp32 dest acc for Qwen2.5 attention matmuls (LI_QKV, LI_O, SDPA).
+
+TTTv1 ``DecodersPrecision.accuracy("Qwen2.5-Coder-32B-Instruct")`` resolves to the
+non-Llama / non-Mistral branch in ``model_config.py:160-177`` which forces all attention
+ops to ``HIFI4``. The TTTv2 ``Attention1D`` default is ``HIFI2`` with fp16 accumulation;
+without this override, attention QKV / WO / SDPA produce a broad per-layer drift vs HF
+(same regression debugged on the Qwen2.5-7B port). Used in ``QWEN25_CODER_32B_ACCURACY``.
+"""
 
 
-def _qwen_coder_wh_mlp_decode_matmul_compute_kernel() -> ttnn.WormholeComputeKernelConfig:
-    """HiFi2 decode FF matmuls under ``perf_decode_tuning``; accuracy path keeps HiFi4 prefill kernel."""
-    return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
+_LOFI_COMPUTE_KERNEL_CFG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+"""LoFi + packer L1 acc for the MLP FF1/FF3 matmuls in performance mode.
+
+Mirrors TTTv1 ``DecodersPrecision.performance("Qwen2.5-Coder-32B-Instruct")``: the
+non-Qwen2.5-7B branch at ``model_config.py:208-218`` sets ``FF1_FF3 → BFP4`` and
+``LI_FF1_FF3 → LOFI``. This single delta is the bulk of the perf-mode throughput uplift.
+"""
 
 
-def _qwen_coder_wh_decode_attn_lofi_kernel() -> ttnn.WormholeComputeKernelConfig:
-    """LoFi decode attention matmuls + SDPA when ``perf_decode_tuning`` is enabled (performance demo only)."""
-    return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
+@dataclass(frozen=True)
+class Qwen25Coder32BPrecisionConfig:
+    """Per-layer precision + math-fidelity recipe for Qwen2.5-Coder-32B-Instruct on T3K.
 
+    Mirrors the fields TTTv1's ``DecodersPrecision`` distinguishes for Qwen2.5-Coder-32B.
+    The base model name resolves to ``Qwen2.5-Coder-32B`` (via ``common.get_base_model_name``),
+    which falls into the standard Qwen2.5-family branch — **not** the Qwen2.5-7B / Qwen2.5-VL-7B
+    special case in ``model_config.py:187``. As a result:
 
-def _qwen_coder_wh_attn_hifi4_kernel() -> ttnn.WormholeComputeKernelConfig:
-    """HiFi4 + fp32 dest acc for Qwen2.5 attention matmuls (LI_QKV, LI_O, SDPA).
+      * **Accuracy** (``model_config.py:160-177``): BF16 ``WQKV`` / ``KV_CACHE`` / ``WO`` +
+        ``HIFI4`` on every ``LI_QKV`` / ``SDPA`` / ``LI_O``. FF and LM head stay at engine
+        defaults (BFP8 FF + ``HIFI2_FP16``).
+      * **Performance** (``model_config.py:208-218``, non-7B branch): only ``FF1_FF3 → BFP4``
+        and ``LI_FF1_FF3 → LOFI``. Everything else reverts to TTTv1 defaults
+        (BFP8 attention + ``HIFI2`` attention kernels + BFP8 KV cache).
 
-    Matches the TTTv1 ``ModelArgs.compute_kernel_config_hifi4`` used by both
-    ``ModelOptimizations.performance`` and ``ModelOptimizations.accuracy`` for the
-    Qwen2.5 / Qwen2.5-Coder family (see ``models/tt_transformers/tt/model_config.py``).
-    The TTTv2 ``Attention1D`` defaults are HiFi2 with fp16 accumulation; that silently
-    downgrades attention QKV / WO / SDPA precision for this model and produces a broad
-    per-layer divergence vs HF (same regression mode debugged on the Qwen2.5-7B port).
+    Two module-level recipes are exposed: :data:`QWEN25_CODER_32B_ACCURACY` (default) and
+    :data:`QWEN25_CODER_32B_PERFORMANCE`. Pass one to :meth:`Qwen25Coder32B.from_pretrained`
+    via ``precision=``; use ``dataclasses.replace(QWEN25_CODER_32B_ACCURACY, ...)`` to
+    customize a single field. Defaults below mirror the accuracy recipe so ``Qwen25Coder32BPrecisionConfig()``
+    is equivalent to :data:`QWEN25_CODER_32B_ACCURACY`.
+
+    The ``mlp_w2_dtype`` / ``mlp_ff2_compute_kernel_cfg`` fields are absent because TTTv1 leaves
+    them at engine defaults (``BFP8`` / ``HIFI2_FP16``) in *both* recipes for this model, and
+    those defaults coincide with the TTTv2 ``MLP1D`` defaults.
     """
-    return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-    )
+
+    # Attention weight / KV-cache dtypes. Accuracy overrides BF16; performance keeps BFP8 default.
+    wqkv_dtype: ttnn.DataType = ttnn.bfloat16
+    wo_dtype: ttnn.DataType = ttnn.bfloat16
+    kv_cache_dtype: ttnn.DataType = ttnn.bfloat16
+
+    # MLP FF1/FF3 weight dtype. Accuracy keeps BFP8 default; performance overrides BFP4.
+    mlp_w1_w3_dtype: ttnn.DataType = ttnn.bfloat8_b
+
+    # MLP FF1/FF3 compute kernel. ``None`` → MLP1D default (HIFI2_FP16); performance overrides LOFI.
+    mlp_ff1_3_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+
+    # Attention compute kernels. Accuracy sets HIFI4 + fp32 dest acc on every stage; performance
+    # leaves them at the Attention1D default (HIFI2 fp16 dest acc).
+    attn_li_qkv_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = _QWEN_ATTN_HIFI4_FP32_KERNEL
+    attn_sdpa_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = _QWEN_ATTN_HIFI4_FP32_KERNEL
+    attn_li_o_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = _QWEN_ATTN_HIFI4_FP32_KERNEL
+
+    # Not in TTTv1 DecodersPrecision; TTTv2 accuracy tightens to bf16 to lock in top-1 (matches the
+    # Mistral-7B port). Performance keeps BFP8.
+    lm_head_dtype: ttnn.DataType = ttnn.bfloat16
+
+
+# TTTv1 ``DecodersPrecision.accuracy("Qwen2.5-Coder-32B-Instruct")`` (``model_config.py:160-177``):
+# BF16 attention weights + BF16 KV cache + HIFI4 + fp32_dest_acc on every attention stage.
+# FF and LM head sit at TTTv2 defaults (BFP8 + HIFI2_FP16); LM head tightens to bf16 (TTTv2 addition).
+QWEN25_CODER_32B_ACCURACY = Qwen25Coder32BPrecisionConfig()
+
+# TTTv1 ``DecodersPrecision.performance("Qwen2.5-Coder-32B-Instruct")`` (``model_config.py:208-218``,
+# non-7B branch): FF1_FF3 → BFP4 and LI_FF1_FF3 → LOFI; everything else reverts to engine defaults
+# (BFP8 attention, HIFI2 attention kernels, BFP8 KV cache, BFP8 LM head).
+QWEN25_CODER_32B_PERFORMANCE = Qwen25Coder32BPrecisionConfig(
+    wqkv_dtype=ttnn.bfloat8_b,
+    wo_dtype=ttnn.bfloat8_b,
+    kv_cache_dtype=ttnn.bfloat8_b,
+    mlp_w1_w3_dtype=ttnn.bfloat4_b,
+    mlp_ff1_3_compute_kernel_cfg=_LOFI_COMPUTE_KERNEL_CFG,
+    attn_li_qkv_kernel_cfg=None,
+    attn_sdpa_kernel_cfg=None,
+    attn_li_o_kernel_cfg=None,
+    lm_head_dtype=ttnn.bfloat8_b,
+)
 
 
 def _slice_last_token_tile(x: ttnn.Tensor, last_token_idx: int) -> ttnn.Tensor:
@@ -212,76 +264,33 @@ def _all_gather_rmsnorm_tensor(
 
 @dataclass
 class _Qwen25Coder32BWHTuning:
-    """Wormhole-specific MLP / LM-head / attention tuning resolved at build time.
+    """Wormhole-specific L1 / cutoff tuning resolved at build time.
 
-    Populated for Qwen2.5-Coder-32B-Instruct on T3K (8 devices); otherwise all fields stay ``None``
-    (modules fall back to library defaults).
+    Precision-vs-fidelity knobs live on :class:`Qwen25Coder32BPrecisionConfig`. This
+    dataclass only carries non-mode-dependent L1 footprint controls: MLP prefill cutoff
+    and the optional W1→DRAM spill on decode.
     """
 
     mlp_prefill_len_cutoff: int | None = None
-    mlp_ff_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
     mlp_decode_spill_w1_to_dram: bool = False
-    mlp_decode_ff_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
-    lm_head_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
-    perf_decode_sdpa_cfg: ttnn.SDPAProgramConfig | None = None
-    # Attention prefill compute kernels: always HiFi4 + fp32 dest acc on Qwen
-    # (Attention1D defaults are HiFi2/fp16 acc — too lossy for this model).
-    attn_li_qkv_prefill_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
-    attn_li_o_prefill_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
-    # Attention decode compute kernels: HiFi4 + fp32 dest acc by default; LoFi
-    # under ``perf_decode_tuning`` (performance demo only).
-    attn_li_qkv_decode_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
-    attn_sdpa_decode_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
-    attn_li_o_decode_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
 
 
-def _resolve_qwen_coder_wh_tuning(
-    *, hf_model_id: str, num_dev: int, max_batch_size: int, perf_decode_tuning: bool
-) -> _Qwen25Coder32BWHTuning:
-    """Pick WH tuning knobs for Qwen2.5-Coder-32B-Instruct on T3K.
+def _resolve_qwen_coder_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Qwen25Coder32BWHTuning:
+    """Pick WH L1 tuning knobs for Qwen2.5-Coder-32B-Instruct on T3K.
 
-    Baseline knobs are copied from the Qwen2.5-7B port (accuracy mode): HiFi4 attention
-    with fp32 dest acc, HiFi4 prefill FF, HiFi4 LM head, ``mlp_prefill_len_cutoff=256``,
-    optional W1→DRAM spill on the decode path for large batches. Re-tune empirically if
-    smoke / module tests trip L1 circular-buffer validation on T3K.
+    Mirrors the 7B port's empirical L1 cutoff (``mlp_prefill_len_cutoff=256`` for the wide FF
+    matmul on Wormhole). ``mlp_decode_spill_w1_to_dram`` is currently off on T3K because per-device
+    FF shards (5120×3456 per chip) are smaller than 7B-on-N300; re-evaluate if decode batch-32
+    trips L1 circular-buffer validation.
     """
-    t = _Qwen25Coder32BWHTuning()
-    model_slug = hf_model_id.split("/")[-1]
-    if not (model_slug.startswith("Qwen2.5-Coder-32B") and num_dev == 8):
-        return t
-
-    t.mlp_prefill_len_cutoff = 256
-    t.mlp_ff_compute_kernel_cfg = _qwen_coder_wh_mlp_matmul_compute_kernel()
-    t.mlp_decode_spill_w1_to_dram = max_batch_size >= 16
-    t.lm_head_compute_kernel_cfg = _qwen_coder_wh_mlp_matmul_compute_kernel()
-    t.mlp_decode_ff_compute_kernel_cfg = (
-        _qwen_coder_wh_mlp_decode_matmul_compute_kernel() if perf_decode_tuning else t.mlp_ff_compute_kernel_cfg
+    t = _Qwen25Coder32BWHTuning(
+        mlp_prefill_len_cutoff=256,
+        mlp_decode_spill_w1_to_dram=False,
     )
-
-    # Attention prefill+decode default to HiFi4 + fp32 dest acc on Qwen (matches TTTv1).
-    attn_hifi4 = _qwen_coder_wh_attn_hifi4_kernel()
-    t.attn_li_qkv_prefill_kernel_cfg = attn_hifi4
-    t.attn_li_o_prefill_kernel_cfg = attn_hifi4
-    t.attn_li_qkv_decode_kernel_cfg = attn_hifi4
-    t.attn_sdpa_decode_kernel_cfg = attn_hifi4
-    t.attn_li_o_decode_kernel_cfg = attn_hifi4
-
-    if perf_decode_tuning:
-        lo = _qwen_coder_wh_decode_attn_lofi_kernel()
-        t.perf_decode_sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            exp_approx_mode=True,
-            q_chunk_size=0,
-            k_chunk_size=0,
-        )
-        t.attn_li_qkv_decode_kernel_cfg = lo
-        t.attn_sdpa_decode_kernel_cfg = lo
-        t.attn_li_o_decode_kernel_cfg = lo
     logger.info(
-        f"MLP/LM/attention tuning for {hf_model_id} on {num_dev} device(s): "
-        f"prefill_len_cutoff=256, FF prefill HiFi4, attn prefill+decode HiFi4+fp32, "
-        f"decode spill W1→DRAM={t.mlp_decode_spill_w1_to_dram}, "
-        f"perf_decode_tuning={perf_decode_tuning}"
+        f"L1 tuning for Qwen2.5-Coder-32B on {num_dev} device(s): "
+        f"prefill_len_cutoff={t.mlp_prefill_len_cutoff}, "
+        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}"
     )
     return t
 
@@ -296,9 +305,7 @@ def _build_decoder_layer(
     topology: Any,
     num_dev: int,
     torch_dtype: torch.dtype,
-    wqkv_dtype: ttnn.DataType,
-    mlp_w_dtype: ttnn.DataType,
-    kv_cache_dtype: ttnn.DataType,
+    precision: Qwen25Coder32BPrecisionConfig,
     executor_mode: bool,
     paged_cfg: Qwen25Coder32BPagedAttentionConfig | None,
     cache_path: Path | None,
@@ -308,8 +315,10 @@ def _build_decoder_layer(
     prefix = f"layer{idx}"
 
     wqkv, wo, qn, kn, wqkv_b = weight_utils.attention_wqkv_wo_from_hf_layer(hf_layer.self_attn, num_dev)
-    lazy_wqkv = _lazy(wqkv, dtype=wqkv_dtype, cache=(cache_path / "attn", f"{prefix}_wqkv") if cache_path else None)
-    lazy_wo = _lazy(wo, dtype=wqkv_dtype, cache=(cache_path / "attn", f"{prefix}_wo") if cache_path else None)
+    lazy_wqkv = _lazy(
+        wqkv, dtype=precision.wqkv_dtype, cache=(cache_path / "attn", f"{prefix}_wqkv") if cache_path else None
+    )
+    lazy_wo = _lazy(wo, dtype=precision.wo_dtype, cache=(cache_path / "attn", f"{prefix}_wo") if cache_path else None)
 
     def _qk_norm_cfg(weight: torch.Tensor | None, name: str) -> RMSNorm1DConfig | None:
         if weight is None:
@@ -357,31 +366,34 @@ def _build_decoder_layer(
             use_vllm_paged_kv_cache=executor_mode,
             paged_attention_config=paged_cfg,
             kv_cache=None,
-            kv_cache_dtype=kv_cache_dtype,
-            decode_sdpa_prg_config=wh.perf_decode_sdpa_cfg,
-            li_qkv_decode_compute_kernel_cfg=wh.attn_li_qkv_decode_kernel_cfg,
-            sdpa_decode_compute_kernel_cfg=wh.attn_sdpa_decode_kernel_cfg,
-            li_o_decode_compute_kernel_cfg=wh.attn_li_o_decode_kernel_cfg,
-            li_qkv_prefill_compute_kernel_cfg=wh.attn_li_qkv_prefill_kernel_cfg,
-            li_o_prefill_compute_kernel_cfg=wh.attn_li_o_prefill_kernel_cfg,
+            kv_cache_dtype=precision.kv_cache_dtype,
+            li_qkv_prefill_compute_kernel_cfg=precision.attn_li_qkv_kernel_cfg,
+            li_qkv_decode_compute_kernel_cfg=precision.attn_li_qkv_kernel_cfg,
+            sdpa_decode_compute_kernel_cfg=precision.attn_sdpa_kernel_cfg,
+            li_o_prefill_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
+            li_o_decode_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
         )
     )
 
     w1, w2, w3 = weight_utils.mlp_weights_from_hf_layer(hf_layer.mlp)
     mlp = MLP1D.from_config(
         MLP1DConfig(
-            w1=_lazy(w1, dtype=mlp_w_dtype, cache=(cache_path / "mlp", f"{prefix}_w1") if cache_path else None),
-            w2=_lazy(w2, dtype=mlp_w_dtype, cache=(cache_path / "mlp", f"{prefix}_w2") if cache_path else None),
-            w3=_lazy(w3, dtype=mlp_w_dtype, cache=(cache_path / "mlp", f"{prefix}_w3") if cache_path else None),
+            w1=_lazy(
+                w1, dtype=precision.mlp_w1_w3_dtype, cache=(cache_path / "mlp", f"{prefix}_w1") if cache_path else None
+            ),
+            w2=_lazy(w2, dtype=ttnn.bfloat8_b, cache=(cache_path / "mlp", f"{prefix}_w2") if cache_path else None),
+            w3=_lazy(
+                w3, dtype=precision.mlp_w1_w3_dtype, cache=(cache_path / "mlp", f"{prefix}_w3") if cache_path else None
+            ),
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,
             topology=topology,
             max_batch_size=qcfg.max_batch_size,
             prefill_len_cutoff=wh.mlp_prefill_len_cutoff,
-            ff1_3_compute_kernel_cfg=wh.mlp_ff_compute_kernel_cfg,
-            ff2_compute_kernel_cfg=wh.mlp_ff_compute_kernel_cfg,
-            decode_ff1_3_compute_kernel_cfg=wh.mlp_decode_ff_compute_kernel_cfg,
-            decode_ff2_compute_kernel_cfg=wh.mlp_decode_ff_compute_kernel_cfg,
+            w1_w3_dtype=precision.mlp_w1_w3_dtype,
+            w2_dtype=ttnn.bfloat8_b,
+            ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
+            decode_ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
             decode_spill_w1_to_dram_before_w3=wh.mlp_decode_spill_w1_to_dram,
         )
     )
@@ -430,7 +442,6 @@ def _build_lm_head(
     hf_lm_head: torch.nn.Module,
     qcfg: Qwen25Coder32BConfig,
     lm_head_dtype: ttnn.DataType,
-    lm_head_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None,
     cache_path: Path | None,
 ) -> LMHead1D:
     """Build the vocab-sharded LM head with DRAM-matmul program configs.
@@ -468,7 +479,6 @@ def _build_lm_head(
             max_batch_size=qcfg.max_batch_size,
             lm_head_dtype=lm_head_dtype,
             program_configs=lm_prog_configs,
-            compute_kernel_config=lm_head_compute_kernel_cfg,
             input_memcfg=lm_input_memcfg,
             weights_memcfgs=lm_weights_memcfgs,
         )
@@ -592,13 +602,9 @@ class Qwen25Coder32B(LightweightModule):
         max_seq_len: int = 4096,
         num_layers: int | None = None,
         cache_dir: Path | str | None = None,
-        wqkv_dtype: ttnn.DataType = ttnn.bfloat16,
-        mlp_w_dtype: ttnn.DataType = ttnn.bfloat8_b,
-        kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b,
-        lm_head_dtype: ttnn.DataType = ttnn.bfloat8_b,
+        precision: Qwen25Coder32BPrecisionConfig = QWEN25_CODER_32B_ACCURACY,
         block_size: int = 32,
         executor_mode: bool = False,
-        perf_decode_tuning: bool = False,
     ) -> Qwen25Coder32B:
         """
         Load HF weights on host and build TTNN modules (weights materialize on first forward).
@@ -611,13 +617,13 @@ class Qwen25Coder32B(LightweightModule):
             max_seq_len: KV cache sequence budget (per layer).
             num_layers: If set, truncate stack for smoke tests.
             cache_dir: Optional directory for ``LazyWeight`` tensor caches.
-            kv_cache_dtype: Device dtype for paged KV tensors (executor allocation).
+            precision: Per-layer precision + math-fidelity recipe (see :class:`Qwen25Coder32BPrecisionConfig`).
+                Defaults to :data:`QWEN25_CODER_32B_ACCURACY` (mirrors TTTv1 ``DecodersPrecision.accuracy``
+                for Qwen2.5-Coder-32B). Use :data:`QWEN25_CODER_32B_PERFORMANCE` for TTTv1's perf recipe
+                (BFP4 FF1/FF3 + LOFI), or ``dataclasses.replace(...)`` to customize a single field.
             block_size: Paged attention block size (tokens per block).
             executor_mode: If True, use external paged KV (``set_kv_cache`` + shared executor).
                 If False, internal KV tensors (smoke / ``prefill_from_token_ids`` without executor).
-            perf_decode_tuning: If True, apply decode-only throughput knobs (SDPA exp-approx, LoFi decode
-                attention math, HiFi2 MLP decode FF, no W1 DRAM spill for small batch). Intended for
-                ``optimizations=="performance"`` in the demo; leave False for accuracy mode.
         """
         ttnn.SetDefaultDevice(mesh_device)
         cache_path = Path(cache_dir) if cache_dir else None
@@ -705,12 +711,7 @@ class Qwen25Coder32B(LightweightModule):
             )
         )
 
-        wh = _resolve_qwen_coder_wh_tuning(
-            hf_model_id=hf_model_id,
-            num_dev=num_dev,
-            max_batch_size=max_batch_size,
-            perf_decode_tuning=perf_decode_tuning,
-        )
+        wh = _resolve_qwen_coder_wh_tuning(num_dev=num_dev, max_batch_size=max_batch_size)
 
         layers: list[Qwen25Coder32BDecoderLayer] = [
             _build_decoder_layer(
@@ -722,9 +723,7 @@ class Qwen25Coder32B(LightweightModule):
                 topology=topology,
                 num_dev=num_dev,
                 torch_dtype=torch_dtype,
-                wqkv_dtype=wqkv_dtype,
-                mlp_w_dtype=mlp_w_dtype,
-                kv_cache_dtype=kv_cache_dtype,
+                precision=precision,
                 executor_mode=executor_mode,
                 paged_cfg=paged_cfg,
                 cache_path=cache_path,
@@ -752,8 +751,7 @@ class Qwen25Coder32B(LightweightModule):
             mesh_device=mesh_device,
             hf_lm_head=hf.lm_head,
             qcfg=qcfg,
-            lm_head_dtype=lm_head_dtype,
-            lm_head_compute_kernel_cfg=wh.lm_head_compute_kernel_cfg,
+            lm_head_dtype=precision.lm_head_dtype,
             cache_path=cache_path,
         )
 
@@ -769,7 +767,7 @@ class Qwen25Coder32B(LightweightModule):
                 max_seq_len=max_seq_len,
                 cluster_shape=list(mesh_device.shape),
                 model_cache_path=cache_path,
-                kv_cache_dtype=kv_cache_dtype,
+                kv_cache_dtype=precision.kv_cache_dtype,
             )
         return model
 
