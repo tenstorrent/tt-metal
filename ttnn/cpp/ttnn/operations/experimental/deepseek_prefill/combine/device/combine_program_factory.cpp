@@ -369,24 +369,21 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             "dispatched_buffer_sender");
     }
 
-    // c_3: route_info (reader->writer, 4 x uint32_t per entry)
+    // c_3: merged route_info + output_data (reader -> writer).
+    //   Per-page layout: [0..l1_alignment) = route_info (4 x uint32_t)
+    //                    [l1_alignment..page_size) = output data
+    //   One reserve/push per row replaces the previous c_3 + c_4 pair.
     {
         constexpr uint32_t rw_buffering = 2;
 
         uint32_t route_info_page_size = l1_alignment;
-        tt::tt_metal::CircularBufferConfig route_info_cb_config =
+        uint32_t output_payload_page_size = detail::get_aligned_page_size(output_tensor);
+        uint32_t merged_page_size = route_info_page_size + output_payload_page_size;
+        tt::tt_metal::CircularBufferConfig merged_cb_config =
             tt::tt_metal::CircularBufferConfig(
-                rw_buffering * route_info_page_size, {{tt::CBIndex::c_3, tt::DataFormat::UInt8}})
-                .set_page_size(tt::CBIndex::c_3, route_info_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, route_info_cb_config);
-
-        detail::create_tensor_cb(
-            program,
-            sender_core_grid,
-            output_tensor,  // dispatched_buffer and output_tensor have same page size
-            /*buffering_factor=*/rw_buffering,
-            /*cb_id=*/tt::CBIndex::c_4,
-            "output_for_writer");
+                rw_buffering * merged_page_size, {{tt::CBIndex::c_3, tt::DataFormat::UInt8}})
+                .set_page_size(tt::CBIndex::c_3, merged_page_size);
+        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, merged_cb_config);
     }
 
     // c_5: packet header CB for fabric sends (writer-only)
@@ -414,8 +411,8 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         static_cast<uint32_t>(tt::CBIndex::c_0),  // cb_dispatched_buffer_id
         static_cast<uint32_t>(tt::CBIndex::c_1),  // cb_dispatched_metadata_id
         static_cast<uint32_t>(tt::CBIndex::c_2),  // cb_experts_tok_counter_id
-        static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_route_info_id
-        static_cast<uint32_t>(tt::CBIndex::c_4),  // cb_output_for_writer_id
+        static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_route_info_id (merged route_info + output_data)
+        static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_output_for_writer_id — same CB as route_info (merged)
         static_cast<uint32_t>(tt::CBIndex::c_5),  // cb_packet_header_id
 
         // Page counts (4)
