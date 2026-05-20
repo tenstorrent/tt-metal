@@ -273,13 +273,14 @@ def _matmul_core_grid(mesh_device, sequence_length=None, batch_size=None):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _make_compute_kernel(mesh_device, fidelity, max_seq_len=None, max_batch_size=None):
+def _make_compute_kernel(mesh_device, fidelity, max_seq_len=None, max_batch_size=None, fp32_dest_acc_en=None):
     packer_l1_acc = True
     # B1/S512: fp32_dest_acc_en=False lifts the matmul subblock cap (h*w <= 8
     # instead of 4) and speeds up LN reduction passes (~1.68 µs/call).
-    # All other shapes: conservative fp32_dest_acc_en=True.
+    # All other shapes: conservative fp32_dest_acc_en=True (unless caller overrides).
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    fp32_dest_acc_en = not (max_seq_len == 512 and max_batch == 1)
+    if fp32_dest_acc_en is None:
+        fp32_dest_acc_en = not (max_seq_len == 512 and max_batch == 1)
     return ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
         math_fidelity=fidelity,
@@ -301,7 +302,7 @@ def mlp_wi_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch in (1, 32):
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
-        return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch)
+        return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -316,7 +317,7 @@ def attention_qkv_compute_kernel_config(mesh_device, max_seq_len=None, max_batch
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch in (1, 32):
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
-        return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch)
+        return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -324,7 +325,7 @@ def attention_output_compute_kernel_config(mesh_device, max_seq_len=None, max_ba
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch in (1, 32):
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
-        return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch)
+        return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -344,9 +345,10 @@ def layernorm_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_siz
     # B1/S512: HiFi2 (LoFi regressed test_model PCC 1.0 -> 0.906).
     # bf8b precision at B1/S512 is protected by the bf8b->bf16 fused reshard
     # in norm.py (interleaved_to_sharded with output_dtype=bf16).
+    # B32/S512: HiFi2 too (test_model passes; speeds up LN reduction).
     # All other shapes: HiFi4 (conservative default).
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    if max_seq_len == 512 and max_batch == 1:
+    if max_seq_len == 512 and max_batch in (1, 32):
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch_size)
     return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi4, max_seq_len, max_batch_size)
 
