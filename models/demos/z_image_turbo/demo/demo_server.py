@@ -47,7 +47,7 @@ def main():
     try:
         import readline  # noqa: F401  -- enables history/editing inside input()
     except ImportError:
-        pass
+        pass  # readline unavailable; continue without line-editing support
 
     # 1) Load models + warmup (compile all programs + capture TE, DIT & VAE traces).
     pipeline = ZImageTurbo()

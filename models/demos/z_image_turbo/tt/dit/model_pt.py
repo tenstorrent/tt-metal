@@ -154,25 +154,20 @@ def _patch_rope_for_tt():
     ZImageTransformer2DModel.unpatchify = _unpatchify_xla
     print("Applied XLA-compatible unpatchify patch (tensor-shape reshape, single graph)")
 
-    try:
-        from transformers import masking_utils as _masking_utils
+    from transformers import masking_utils as _masking_utils
 
-        _original_find_packed = _masking_utils.find_packed_sequence_indices
+    def _find_packed_sequence_indices_tt(position_ids: torch.Tensor):
+        first_dummy_value = position_ids[:, :1] - 1
+        position_diff = torch.diff(position_ids, prepend=first_dummy_value, dim=-1)
+        packed_sequence_mask = (position_diff != 1).to(torch.int32).cumsum(-1)
+        from transformers.utils.import_utils import is_tracing
 
-        def _find_packed_sequence_indices_tt(position_ids: torch.Tensor):
-            first_dummy_value = position_ids[:, :1] - 1
-            position_diff = torch.diff(position_ids, prepend=first_dummy_value, dim=-1)
-            packed_sequence_mask = (position_diff != 1).to(torch.int32).cumsum(-1)
-            from transformers.utils.import_utils import is_tracing
+        if not is_tracing(packed_sequence_mask) and (packed_sequence_mask[:, -1] == 0).all():
+            return None
+        return packed_sequence_mask
 
-            if not is_tracing(packed_sequence_mask) and (packed_sequence_mask[:, -1] == 0).all():
-                return None
-            return packed_sequence_mask
-
-        _masking_utils.find_packed_sequence_indices = _find_packed_sequence_indices_tt
-        print("Applied cumsum u8 fix (bool→int32 cast before cumsum in masking_utils)")
-    except AttributeError:
-        pass
+    _masking_utils.find_packed_sequence_indices = _find_packed_sequence_indices_tt
+    print("Applied cumsum u8 fix (bool→int32 cast before cumsum in masking_utils)")
 
 
 def load_model():

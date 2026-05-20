@@ -63,7 +63,7 @@ def run(prompts, steps=9, seed=42, output_dir=".", output=None):
     print("Warming up (compile all programs + capture Metal Traces) ...")
     print(bar)
     t0 = time.time()
-    warmup_image = pipeline.warmup(steps=steps, seed=seed)
+    _ = pipeline.warmup(steps=steps, seed=seed)
     print(f"Warmup done in {time.time() - t0:.1f} s\n")
 
     t_wall = time.time()
@@ -100,7 +100,7 @@ def run(prompts, steps=9, seed=42, output_dir=".", output=None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Z-Image-Turbo — text-to-image on 4x Blackhole P150",
+        description="Z-Image-Turbo — text-to-image on 2x Blackhole P300 (QB2)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""examples:
   python -m models.demos.z_image_turbo.demo.demo "a cat"

@@ -289,7 +289,7 @@ class ZImageTurbo(LightweightModule):
 
         # 1c) Compile VAE programs (first decode, pays consteval cost).
         t0 = time.time()
-        _warmup_image = self._decode_latents_no_trace(compile_latents)
+        _ = self._decode_latents_no_trace(compile_latents)
         print(f"  VAE compile: {(time.time() - t0) * 1000:.0f} ms")
 
         # ── Phase 2: Capture traces (all programs already compiled).
