@@ -18,6 +18,42 @@
   even when weights are wrongly replicated — verify per-device DRAM footprint at
   `__init__` time and load the full layer count before claiming the block is done.
 
+## Parallelism assessment discipline (READ BEFORE ANY TP/DP DESIGN WORK)
+
+Variable names lie. `num_device_groups`, `batch_size_per_device_group`,
+`tt_data_parallel` — these can mean DP, batch routing, or KV-cache sharding
+depending on the model. **Do not infer model parallelism from names, config
+constants, or subagent summaries.**
+
+Before claiming "model X uses TP=N / DP=M / 2D-TP / batch-axis routing",
+verify with the **three-fact chain**:
+
+1. **Weight dims** — `weight.shape` per chip after `ShardTensor2dMesh(dims=...)`.
+   Write out the per-chip tensor shape explicitly.
+2. **Matmul** — the `ttnn.linear` call that uses that weight. What's the
+   input shape per chip? What's the output shape per chip? Is the output a
+   complete result or a partial sum?
+3. **CCL** — the `all_reduce` / `reduce_scatter` / `all_gather` immediately
+   following. What `cluster_axis`? What ring size? What is it summing or
+   gathering, in concrete terms?
+
+If those three don't form a coherent matmul (e.g. partial K-sum → matching
+col-axis all_reduce → complete output), the topology claim is **wrong** —
+no matter how confident the source.
+
+**A col-axis all_reduce(cluster_axis=1) is the signature of cols-as-TP-axis.**
+A model with such a reduce CANNOT be DP across cols, regardless of how many
+"device groups" the config defines. Cols-as-DP means **no col-axis CCL except
+possibly a final logit gather at the LM head**.
+
+PCC passing only means the math is internally consistent. It does NOT mean
+the layout matches your mental model of what the layout is. Subagents
+summarize and compress — their reports are hypotheses, not facts. Read the
+actual code for any claim a downstream design depends on.
+
+When two assessments disagree (yours now vs yours 30 min ago), STOP and
+reconcile before proceeding. Don't rationalize past contradictions.
+
 ## Bring-up Flow
 
 ### Phase 1: Architecture

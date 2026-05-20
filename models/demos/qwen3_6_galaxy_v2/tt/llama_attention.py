@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 
 import ttnn
@@ -255,7 +257,18 @@ class TtLlamaAttention(LightweightModule):
         # MLP layering amplifies the bf8 quantisation noise).  Layer 0
         # (DeltaNet) already kept its own bfloat16 weights so it was unaffected;
         # layer 3 (full_attention) used self.dtype=bf8 for wqkvg / wo.
-        self.dtype = ttnn.bfloat16 if getattr(configuration, "is_qwen36", False) else dtype
+        #
+        # V2-CONFIG-D: optionally override the V2-7b bf16 lock-in to match
+        # llama70b's bf8 attention weights. Per user direction this sweep
+        # treats PCC as data (not a gate) — accept the V2-7b PCC drop and
+        # measure wall-clock recovery from halved DRAM weight reads.
+        _qwen36_attn_bf8 = (
+            getattr(configuration, "is_qwen36", False) and os.environ.get("QWEN36_ATTN_WEIGHTS_BF8", "0") == "1"
+        )
+        if _qwen36_attn_bf8:
+            self.dtype = ttnn.bfloat8_b
+        else:
+            self.dtype = ttnn.bfloat16 if getattr(configuration, "is_qwen36", False) else dtype
         self.qk_norm = configuration.qk_norm
 
         if self.is_qwen36:
@@ -285,6 +298,12 @@ class TtLlamaAttention(LightweightModule):
                     packer_l1_acc=True,
                 ),
             )
+            # V2-CONFIG-C: optionally downgrade FA attention matmuls from
+            # HiFi4 → HiFi2 to match llama70b's production-tuned config.
+            # MLP already uses HiFi2; this flips the ~20 attention sites
+            # that reference self.compute_kernel_config_hifi4 in one shot.
+            if os.environ.get("QWEN36_ATTN_HIFI2", "0") == "1":
+                self.compute_kernel_config_hifi4 = self.compute_kernel_config_hifi2
             self.transformation_mats = transformation_mats
             # qwen3.6's TtQwen36ModelArgs exposes ``model_config`` as a plain
             # attribute (no ``get_model_config()`` helper).
@@ -1708,6 +1727,15 @@ class TtLlamaAttention(LightweightModule):
         """
         cos_tt, sin_tt = rot_mats
 
+        # V2-CONFIG-E: optionally use bf8 output dtype for the FA WO matmul
+        # (matches llama70b WO at line 567 — `dtype=ttnn.bfloat8_b`). WQKVG
+        # stays bf16 to match llama70b WQKV (line 413). DN out_proj also
+        # respects this env var via a parallel branch in
+        # `qwen36_delta_attention.py`. Weights stay bf16 (V2-7b PCC
+        # constraint); only the OUTPUT is bf8 so downstream CCL transfers
+        # half the bytes through the ring.
+        _attn_out_dtype = ttnn.bfloat8_b if os.environ.get("QWEN36_ATTN_OUT_BF8", "0") == "1" else ttnn.bfloat16
+
         orig_shape = list(x.shape)
         if len(orig_shape) == 4:
             B, _, T, H = orig_shape
@@ -1742,7 +1770,7 @@ class TtLlamaAttention(LightweightModule):
             xqkvg_partial_l1 = ttnn.linear(
                 x_sharded,
                 _wqkvg_weight,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat16,  # matches llama70b WQKV (bf16 output, line 413)
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=_wqkvg_progcfg,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
@@ -1756,7 +1784,7 @@ class TtLlamaAttention(LightweightModule):
             xqkvg_partial = ttnn.linear(
                 x_3d,
                 self.wqkvg,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat16,  # matches llama70b WQKV
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
             )
@@ -1982,53 +2010,122 @@ class TtLlamaAttention(LightweightModule):
         # V2-11 (lever D, full-attention variant): attempted to fuse
         # sigmoid(gate_flat) into the multiply via input_tensor_b_activations.
         # Coherency held in 4L tests but degraded across 16 full-attention
-        # layers when combined with DeltaNet's per-layer compounding. Kept
-        # as separate sigmoid + multiply for now.
+        # layers when combined with DeltaNet's per-layer compounding.
+        #
+        # V2-CONFIG-G: re-attempt the fusion under the PCC-is-data policy.
+        # Env-gated so we can A/B between fused and split.
         attn_flat = _qwen36_heads_to_flat(attn_out, B, n_q_pc, T, hd)
         attn_out.deallocate(True)
-        gate_sig = ttnn.sigmoid(gate_flat, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        gate_flat.deallocate(True)
-        gated = ttnn.multiply(attn_flat, gate_sig, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        attn_flat.deallocate(True)
-        gate_sig.deallocate(True)
+        if os.environ.get("QWEN36_GATE_FUSE", "0") == "1":
+            gated = ttnn.multiply(
+                attn_flat,
+                gate_flat,
+                input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            attn_flat.deallocate(True)
+            gate_flat.deallocate(True)
+        else:
+            gate_sig = ttnn.sigmoid(gate_flat, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            gate_flat.deallocate(True)
+            gated = ttnn.multiply(attn_flat, gate_sig, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            attn_flat.deallocate(True)
+            gate_sig.deallocate(True)
 
         # V2-TP / V2-DRAM-P1: WO projection via DRAM-sharded matmul + all-reduce
         # on rows (cluster_axis=0, 8-way ring). Per chip: gated [B, T, 768] ×
         # wo [768, 1280] = partial [B, T, 1280]; row-axis all_reduce completes
         # the head sum → result col-sharded H/4.
-        _wo_progcfg = self.model_config.get("V2TP_WO_PROGCFG")
-        _wo_act_memcfg = self.model_config.get("V2TP_WO_ACT_MEMCFG")
-        _wo_weight = getattr(self, "wo_dram_sharded", None)
-        if _wo_progcfg is not None and _wo_act_memcfg is not None and _wo_weight is not None:
-            gated_sharded = ttnn.to_memory_config(gated, _wo_act_memcfg)
-            gated.deallocate(True)
-            dense_partial_l1 = ttnn.linear(
-                gated_sharded,
-                _wo_weight,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                program_config=_wo_progcfg,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
+        #
+        # V2-CCL-P1: optionally swap the post-WO ``ttnn.all_reduce`` for the
+        # persistent-buffer ``tt_ccl.line_all_reduce(use_optimal_ccl_for_llama=True)``,
+        # mirroring DeltaNet's ``_output_proj_and_reduce`` LAR path. Gated by
+        # env var so we can toggle for bisecting. Needs
+        # ``qwen36_residual_buffers[0]`` (cluster_axis=0 ring=8 reduction)
+        # built by ``_build_qwen36_residual_buffers``; that builder auto-enables
+        # when ``QWEN36_FULLATTN_WO_LAR=1`` so the user only needs the one flag.
+        _use_wo_lar = (
+            os.environ.get("QWEN36_FULLATTN_WO_LAR", "0") == "1"
+            and getattr(self.tt_ccl, "qwen36_residual_buffers", [None, None])[0] is not None
+        )
+        try:
+            _wo_num_links = int(
+                os.environ.get(
+                    "QWEN36_CCL_NUM_LINKS_WO",
+                    os.environ.get("QWEN36_CCL_NUM_LINKS", "1"),
+                )
             )
-            ttnn.deallocate(gated_sharded)
-            dense_partial = ttnn.to_memory_config(dense_partial_l1, ttnn.DRAM_MEMORY_CONFIG)
-            dense_partial_l1.deallocate(True)
-        else:
-            dense_partial = ttnn.linear(
+        except ValueError:
+            _wo_num_links = 1
+
+        if _use_wo_lar:
+            # LAR path: matmul writes directly to width-sharded L1; line_all_reduce
+            # consumes width-sharded input and produces width-sharded output.
+            sharded_memcfg = self.tt_ccl.qwen36_residual_output_memcfgs[0]
+            dense_partial_sharded = ttnn.linear(
                 gated,
                 self.wo,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=_attn_out_dtype,
+                memory_config=sharded_memcfg,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
             )
             gated.deallocate(True)
-        dense_out_full = ttnn.all_reduce(
-            dense_partial,
-            cluster_axis=0,
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        dense_partial.deallocate(True)
+            dense_out_full = self.tt_ccl.line_all_reduce(
+                dense_partial_sharded,
+                cluster_axis=0,
+                num_links=_wo_num_links,
+                memory_config=sharded_memcfg,
+                use_optimal_ccl_for_llama=True,
+                use_qwen36_residual_buffer=True,
+            )
+            dense_partial_sharded.deallocate(True)
+        else:
+            _wo_progcfg = self.model_config.get("V2TP_WO_PROGCFG")
+            _wo_act_memcfg = self.model_config.get("V2TP_WO_ACT_MEMCFG")
+            _wo_weight = getattr(self, "wo_dram_sharded", None)
+            if _wo_progcfg is not None and _wo_act_memcfg is not None and _wo_weight is not None:
+                gated_sharded = ttnn.to_memory_config(gated, _wo_act_memcfg)
+                gated.deallocate(True)
+                dense_partial_l1 = ttnn.linear(
+                    gated_sharded,
+                    _wo_weight,
+                    dtype=_attn_out_dtype,
+                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                    program_config=_wo_progcfg,
+                    compute_kernel_config=self.compute_kernel_config_hifi4,
+                )
+                ttnn.deallocate(gated_sharded)
+                dense_partial = ttnn.to_memory_config(dense_partial_l1, ttnn.DRAM_MEMORY_CONFIG)
+                dense_partial_l1.deallocate(True)
+            else:
+                dense_partial = ttnn.linear(
+                    gated,
+                    self.wo,
+                    dtype=_attn_out_dtype,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_kernel_config_hifi4,
+                )
+                gated.deallocate(True)
+            # Diagnostic (V2-CCL-P1b): optional host-side barrier RIGHT BEFORE
+            # the WO axis-0 all_reduce, to test whether chip-level work
+            # imbalance in the FA pre-RS chain (paged_update_cache + SDPA +
+            # gate + matmul) is what drags the RS kernel duration bimodal.
+            # Tracy on 1L FA decode shows 1280×BF16 RS at 666 µs mean (max
+            # 2785 µs) with bimodal per-chip distribution — but DN's identical-
+            # shape RS runs at 64 µs uniform. Forcing a barrier here lets us
+            # see whether removing chip skew restores the fast RS.
+            #
+            # WARNING: this is a HOST synchronize — breaks trace mode. Eager
+            # only. Env-gated so the trace path is untouched by default.
+            if os.environ.get("QWEN36_FULLATTN_PRE_WO_RS_BARRIER", "0") == "1":
+                ttnn.synchronize_device(self.mesh_device)
+            dense_out_full = ttnn.all_reduce(
+                dense_partial,
+                cluster_axis=0,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            dense_partial.deallocate(True)
 
         if len(list(dense_out_full.shape)) == 4:
             _shape = list(dense_out_full.shape)

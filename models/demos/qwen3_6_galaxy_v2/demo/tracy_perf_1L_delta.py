@@ -283,6 +283,10 @@ def test_demo_perf_1L_delta(bh_glx_mesh):
     decode_times_ms = []
     for step in range(n_total_decodes):
         cur_pos = _T_PREFILL + step
+        # Bracket only the WARM steps with decode_warm_start / stop so the
+        # per-op tracy analysis can isolate steady-state device kernel time.
+        if step == 1:
+            signpost("decode_warm_start")
         t0 = time.perf_counter()
         _do_decode(model, bh_glx_mesh, args, x_decode_cpu, cur_pos)
         ttnn.synchronize_device(bh_glx_mesh)

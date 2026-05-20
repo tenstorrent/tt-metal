@@ -55,7 +55,7 @@ _B = 1
 _T_PREFILL = int(os.environ.get("QWEN36_PERF_T_PREFILL", "128"))
 _H = 5120
 _N_LAYERS = 64
-_DECODE_STEPS = 32  # generate this many tokens via trace replay
+_DECODE_STEPS = int(os.environ.get("QWEN36_DECODE_STEPS", "32"))  # set to ~3 for tracy capture
 _PATTERN = (["linear_attention"] * 3 + ["full_attention"]) * 16
 
 # Paged-attention config — block_size=32 is the tile-aligned default.
@@ -481,11 +481,26 @@ def test_qwen36_64L_decode_intrace_perf(bh_glx_mesh):
     ttnn.synchronize_device(bh_glx_mesh)
 
     # ---- DECODE LOOP ----
+    # Optionally signpost just the warm trace replay (skip step 0 = compile)
+    # so a tracy capture can isolate the warm-only per-op DEVICE KERNEL DURATION
+    # on the production critical path. Always on; signpost is a no-op when
+    # tracy isn't recording.
+    try:
+        from tracy import signpost as _ttp_signpost
+    except ImportError:
+        _ttp_signpost = lambda *a, **k: None
     generated_ids = [first_decode_token]
     decode_t0 = time.time()
 
     for step in range(_DECODE_STEPS):
+        if step == 1:
+            # Flush the per-chip tracy DRAM ring buffer (12000-event limit)
+            # before the warm signpost so the buffer isn't already full from
+            # prefill + compile decode. Mirrors tracy_perf_1L_*.py pattern.
+            ttnn.ReadDeviceProfiler(bh_glx_mesh)
+            _ttp_signpost("trace_warm_start")
         ttnn.execute_trace(bh_glx_mesh, trace_id, cq_id=0, blocking=True)
+    _ttp_signpost("trace_warm_done")
 
     decode_ms = (time.time() - decode_t0) * 1000
     mean_decode_ms = decode_ms / _DECODE_STEPS

@@ -529,6 +529,9 @@ class TT_CCL:
             # V2-CCL-followup: needs the residual_output_memcfg even though
             # it does not use the persistent buffer.
             or os.environ.get("QWEN36_FULLATTN_WO_SHARDED", "0") == "1"
+            # V2-CCL-P1: full-attention WO line_all_reduce path
+            # (see llama_attention.py `_forward_decode_qwen36`).
+            or os.environ.get("QWEN36_FULLATTN_WO_LAR", "0") == "1"
         )
         if not _auto_on:
             return

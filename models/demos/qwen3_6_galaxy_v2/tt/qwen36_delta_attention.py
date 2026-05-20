@@ -244,9 +244,13 @@ class TtQwen36DeltaAttention(LightweightModule):
         self.conv_per_row = self.q_per_row + self.q_per_row + self.v_per_row  # 1280
 
         # --- Compute kernel: HiFi4 + fp32 dest accumulation ---
+        # V2-CONFIG-C: optionally downgrade to HiFi2 to match llama70b's
+        # production-tuned config (its w_out / wqkv all use HiFi2). Same env
+        # var as FA so a single toggle flips both attention block types.
+        _attn_hifi2 = os.environ.get("QWEN36_ATTN_HIFI2", "0") == "1"
         self.compute_kernel = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
+            math_fidelity=ttnn.MathFidelity.HiFi2 if _attn_hifi2 else ttnn.MathFidelity.HiFi4,
+            math_approx_mode=_attn_hifi2,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
@@ -2161,16 +2165,19 @@ class TtQwen36DeltaAttention(LightweightModule):
         except ValueError:
             _do_num_links = 1
 
+        # V2-CONFIG-E: optionally use bf8 output for the DN out_proj matmul
+        # (the residual write — analogous to llama70b WO at line 567 which
+        # uses `dtype=ttnn.bfloat8_b`). Same env var as the FA WO flip in
+        # `llama_attention.py`. The original olmo session-11 lesson said
+        # bf16 was needed to avoid residual-stream quantization, but llama70b
+        # ships with bf8 here — try matching it and measure.
+        _dn_out_dtype = ttnn.bfloat8_b if _os.environ.get("QWEN36_ATTN_OUT_BF8", "0") == "1" else ttnn.bfloat16
+
         if not _use_pbuf:
-            # qwen3.6 residual-stream dtype lock (olmo session-11 lesson):
-            # DeltaNet runs on 48 of 64 layers; its output projection writes
-            # directly into the post-attention residual add. The OUTPUT
-            # activation must stay bfloat16 so the residual stream does not
-            # get quantized at every full-layer boundary.
             partial = ttnn.linear(
                 out_flat,
                 self.w_out,
-                dtype=ttnn.bfloat16,
+                dtype=_dn_out_dtype,
                 memory_config=mem,
                 compute_kernel_config=self.compute_kernel,
             )
@@ -2195,7 +2202,7 @@ class TtQwen36DeltaAttention(LightweightModule):
             partial = ttnn.linear(
                 out_flat,
                 self.w_out,
-                dtype=ttnn.bfloat16,
+                dtype=_dn_out_dtype,
                 memory_config=sharded_memcfg,
                 compute_kernel_config=self.compute_kernel,
             )
@@ -2203,7 +2210,7 @@ class TtQwen36DeltaAttention(LightweightModule):
             partial_dram = ttnn.linear(
                 out_flat,
                 self.w_out,
-                dtype=ttnn.bfloat16,
+                dtype=_dn_out_dtype,
                 memory_config=mem,
                 compute_kernel_config=self.compute_kernel,
             )
