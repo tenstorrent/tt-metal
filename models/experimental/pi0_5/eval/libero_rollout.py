@@ -167,22 +167,21 @@ class Pi0_5LiberoAdapter:
         self.cfg = cfg
         self.device = torch.device("cpu")
 
-        # Optional TTNN trace state. Gated by PI0_LIBERO_TRACE=1. When active,
-        # each `predict_chunk` writes new inputs into persistent on-device
-        # buffers via `ttnn.copy_host_to_device_tensor` and then replays a
-        # captured trace, dropping per-chunk wall-clock from the untraced
-        # ~370 ms toward the trace-perf baseline (~60 ms). The trace is
-        # rebuilt when the (task_desc, num_denoising_steps) key changes —
-        # different prompt -> different lang_mask -> different upstream
-        # mask/RoPE artifacts.
+        # TTNN trace state. On by default for backend=ttnn; opt out with
+        # PI0_LIBERO_TRACE=0. When active, each `predict_chunk` writes new
+        # inputs into persistent on-device buffers via
+        # `ttnn.copy_host_to_device_tensor` and then replays a captured trace,
+        # dropping per-chunk wall-clock from the untraced ~370 ms toward the
+        # trace-perf baseline (~60 ms). The trace is rebuilt when the
+        # (task_desc, num_denoising_steps) key changes — different prompt ->
+        # different lang_mask -> different upstream mask/RoPE artifacts.
+        # Verified accuracy-neutral: traced 40/40 on libero_spatial task 0 and
+        # 40/40 across all four suites × 10 tasks @ 1 ep/task, plus a
+        # byte-identical drift diagnostic (cosim=1.0).
         import os as _os
 
-        self._use_trace = backend == "ttnn" and _os.environ.get("PI0_LIBERO_TRACE", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        )
+        _trace_env = _os.environ.get("PI0_LIBERO_TRACE", "").strip().lower()
+        self._use_trace = backend == "ttnn" and _trace_env not in ("0", "false", "no", "off")
         self._trace_id = None
         self._trace_actions_output = None
         self._trace_key = None
