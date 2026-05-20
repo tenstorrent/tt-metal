@@ -1,6 +1,9 @@
 name: "(Profiler) Choose your pipeline"
 
 on:
+  push:
+    branches:
+      - "tdowdall/profiler-pipeline-reorg"
   schedule:
     - cron: "0 2 * * *" # Run daily at 2am UTC
   workflow_dispatch:
@@ -69,10 +72,10 @@ jobs:
         id: logic
         run: |
           set -e
-          # Schedule events don't carry workflow_dispatch inputs, so the run-*
-          # booleans evaluate as empty. Run every sub-pipeline on schedule.
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            galaxy=false
+          # Schedule events don't carry workflow_dispatch inputs, so
+          # the run-* booleans evaluate as empty. Run every sub-pipeline.
+          if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "push" ]]; then
+            galaxy=true
             t3k=true
             bh=true
             n300=true
