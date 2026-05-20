@@ -176,9 +176,20 @@ def test_pipeline_inference(
                 f"Per-frame scores: {[f'{s:.2f}' for s in scores]}"
             )
 
+    def check_output_with_vbench(prompt, number):
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            output_filename = f"wan_t2v_{width}x{height}_{number}.mp4"
+            try:
+                from models.tt_dit.utils.vbench import assert_vbench_quality
+
+                assert_vbench_quality(output_filename, prompt=prompt)
+            except ImportError:
+                logger.info("VBench not installed, skipping quality check")
+
     if no_prompt:
         frames = run(prompt=prompt, number=0, seed=42)
         check_output_with_clip(prompt, frames)
+        check_output_with_vbench(prompt, 0)
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")
@@ -188,3 +199,4 @@ def test_pipeline_inference(
                 break
             frames = run(prompt=prompt, number=i, seed=i)
             check_output_with_clip(prompt, frames)
+            check_output_with_vbench(prompt, i)
