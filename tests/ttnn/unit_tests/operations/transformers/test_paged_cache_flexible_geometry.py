@@ -85,6 +85,46 @@ def _permute_tile_grid(t, view_block_size, view_head_dim):
     return t.view(N, KV, view_block_size, view_head_dim)
 
 
+def _permute_view_general(t_alloc, view_kv, view_block_size, view_head_dim):
+    """Like ``_permute_tile_grid`` but also reinterprets the kv-heads dimension.
+
+    Per-block tiles are stored linearly in ``(kv_head, bs_tile, hd_tile)`` order; with
+    that linearization the kv-head axis is just the outermost factor of the per-block
+    tile count, so changing it is the same kind of regroup as changing block_size or
+    head_dim. ``_permute_tile_grid`` is the special case where alloc_kv == view_kv.
+
+    Used to verify HMA cross-group sharing where sliding and full layers see one
+    physical buffer through views with different ``num_kv_heads`` (e.g. Gemma4-26B-A4B
+    sliding kv=8 / full kv=2). The per-block element-count invariant
+    ``alloc_kv * alloc_bs * alloc_hd == view_kv * view_bs * view_hd`` must hold.
+    """
+    N, alloc_kv, alloc_block_size, alloc_head_dim = t_alloc.shape
+    TILE = 32
+    assert alloc_block_size % TILE == 0 and alloc_head_dim % TILE == 0, "alloc dims must be tile-aligned"
+    assert view_block_size % TILE == 0 and view_head_dim % TILE == 0, "view dims must be tile-aligned"
+    alloc_BR_t = alloc_block_size // TILE
+    alloc_Wt = alloc_head_dim // TILE
+    view_BR_t = view_block_size // TILE
+    view_Wt = view_head_dim // TILE
+    alloc_total_tiles = alloc_kv * alloc_BR_t * alloc_Wt
+    view_total_tiles = view_kv * view_BR_t * view_Wt
+    assert alloc_total_tiles == view_total_tiles, (
+        f"per-block tile count mismatch: alloc {alloc_kv}*{alloc_BR_t}*{alloc_Wt}={alloc_total_tiles} "
+        f"vs view {view_kv}*{view_BR_t}*{view_Wt}={view_total_tiles}"
+    )
+
+    # Alloc-view (N, KV, BR_t, TILE, Wt, TILE) → tile-grid major (N, KV, BR_t, Wt, TILE, TILE),
+    # then flatten (KV, BR_t, Wt) into a single per-block tile axis.
+    t = t_alloc.view(N, alloc_kv, alloc_BR_t, TILE, alloc_Wt, TILE)
+    t = t.permute(0, 1, 2, 4, 3, 5).contiguous()
+    t = t.reshape(N, alloc_total_tiles, TILE, TILE)
+    # Repack under view layout: (N, view_KV, view_BR_t, view_Wt, TILE, TILE) tile-grid major,
+    # then back to (N, view_KV, view_block_size, view_head_dim).
+    t = t.reshape(N, view_kv, view_BR_t, view_Wt, TILE, TILE)
+    t = t.permute(0, 1, 2, 4, 3, 5).contiguous()
+    return t.reshape(N, view_kv, view_block_size, view_head_dim)
+
+
 # ── paged_update_cache tests ───────────────────────────────────────────────
 
 
@@ -519,6 +559,98 @@ def test_paged_fill_cache_negative_byte_count_mismatch(device):
     page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
     x = torch.randn([1, num_kv_heads, input_seq_len, view_head_dim]).bfloat16().float()
+    xt = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+
+    with pytest.raises(RuntimeError, match="geometry mismatch"):
+        ttnn.experimental.paged_fill_cache(cache_tt, xt, page_table_tt, batch_idx=0, block_size=view_block_size)
+
+
+def test_paged_fill_cache_asymmetric_num_heads_per_block_match(device):
+    """Cache allocated with one ``num_kv_heads``, input filled with a different
+    ``num_kv_heads`` — the canonical Gemma4-26B-A4B / 31B HMA cross-group case
+    where sliding (kv=8, hd=256) and full (kv=2, hd=512) layers share one
+    physical buffer via vLLM's hybrid kv-cache-groups manager.
+
+    Allocates the cache under sliding's spec, fills via the full view, then
+    round-trips through ``_permute_view_general`` (which also reinterprets the
+    kv-head dimension) to verify the kernel laid the writes out where the full
+    view would later read them. Guards the relaxation in
+    ``paged_fill_cache_device_operation.cpp``: the per-block element-count
+    invariant ``input_kv * eff_bs * input_hd == cache_kv * cache_bs * cache_hd``
+    is the real constraint, not the strict ``input_kv == cache_kv``.
+    """
+    torch.manual_seed(14)
+    num_users = 2
+    # Sliding spec (alloc): kv=8, bs=64, hd=256 → 131072 elems/block.
+    cache_kv = 8
+    alloc_block_size = 64
+    alloc_head_dim = 256
+    # Full spec (call view): kv=2, bs=128, hd=512 → also 131072 elems/block.
+    view_kv = 2
+    view_block_size = 128
+    view_head_dim = 512
+    input_seq_len = 128  # exactly one view block per user
+    assert cache_kv * alloc_block_size * alloc_head_dim == view_kv * view_block_size * view_head_dim
+
+    max_num_blocks_per_seq = input_seq_len // view_block_size
+    max_num_blocks = num_users * max_num_blocks_per_seq
+
+    cache_shape = [max_num_blocks, cache_kv, alloc_block_size, alloc_head_dim]
+    cache_torch_alloc = torch.randn(cache_shape).bfloat16().float()
+    cache_tt = ttnn.Tensor(cache_torch_alloc, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(num_users, max_num_blocks_per_seq)
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+    # Reference cache in the view's coordinate system. Re-tile the alloc-layout
+    # randoms into the (view_kv, view_bs, view_hd) layout so the slots the kernel
+    # touches line up with where we expect them in the view.
+    cache_ref_view = _permute_view_general(cache_torch_alloc, view_kv, view_block_size, view_head_dim).clone()
+    for u in range(num_users):
+        x = torch.randn([1, view_kv, input_seq_len, view_head_dim]).bfloat16().float()
+        xt = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+        ttnn.experimental.paged_fill_cache(cache_tt, xt, page_table_tt, batch_idx=u, block_size=view_block_size)
+        for t in range(input_seq_len):
+            vb = t // view_block_size
+            slot = t % view_block_size
+            physical_block = page_table[u, vb].item()
+            cache_ref_view[physical_block, 0:view_kv, slot : slot + 1, :] = x[0, :, t : t + 1, :]
+
+    got_alloc = _read_paged_cache(cache_tt)
+    got_view = _permute_view_general(got_alloc, view_kv, view_block_size, view_head_dim)
+
+    eq, msg = comp_equal(cache_ref_view, got_view)
+    assert eq, f"asymmetric num_heads fill cache round trip mismatch: {msg}"
+
+
+def test_paged_fill_cache_negative_asymmetric_num_heads_byte_count_mismatch(device):
+    """Different ``num_kv_heads`` between cache and input *without* the per-block
+    element count being preserved must still be rejected. Guards against the
+    relaxation accidentally allowing arbitrary mismatched-byte writes.
+    """
+    torch.manual_seed(15)
+    num_users = 2
+    # Cache: 8 * 64 * 256 = 131072 elems/block.
+    cache_kv = 8
+    alloc_block_size = 64
+    alloc_head_dim = 256
+    # Input: 4 * 128 * 512 = 262144 elems/block — twice the cache, mismatched.
+    view_kv = 4
+    view_block_size = 128
+    view_head_dim = 512
+    input_seq_len = 128
+    assert cache_kv * alloc_block_size * alloc_head_dim != view_kv * view_block_size * view_head_dim
+
+    max_num_blocks_per_seq = input_seq_len // view_block_size
+    max_num_blocks = num_users * max_num_blocks_per_seq
+
+    cache_torch = torch.randn([max_num_blocks, cache_kv, alloc_block_size, alloc_head_dim]).bfloat16().float()
+    cache_tt = ttnn.Tensor(cache_torch, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(num_users, max_num_blocks_per_seq)
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+    x = torch.randn([1, view_kv, input_seq_len, view_head_dim]).bfloat16().float()
     xt = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
 
     with pytest.raises(RuntimeError, match="geometry mismatch"):

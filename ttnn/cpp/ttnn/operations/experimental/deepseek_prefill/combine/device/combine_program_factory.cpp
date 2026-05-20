@@ -711,6 +711,15 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     }
 
     std::map<std::string, std::string> writer_defines = fabric_defines;
+    writer_defines["INIT_ZEROS"] = operation_attributes.init_zeros ? "1" : "0";
+
+    // zero_init_writer kernel is launched whenever either:
+    //   (a) init_zeros=True — it does the per-bank zero-init of the output tensor
+    //   (b) is_tile_layout — it runs the post-zero-init untilized-data send loop
+    //                        (consumes cb_untilize_id, writes back to the sender's c_18).
+    // With init_zeros=False on TILE_LAYOUT only (b) applies, so the zero-init CBs/semaphore
+    // are skipped and the kernel is compiled with INIT_ZEROS=0.
+    const bool create_zi_kernel = init_zeros || is_tile_layout;
 
     if (init_zeros) {
         uint32_t noc_max_burst_size;
@@ -739,13 +748,17 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, zi_idle_cb_config);
 
         zi_done_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range_set, 0);
+    }
 
+    if (create_zi_kernel) {
         uint32_t output_aligned_page_size = detail::get_aligned_page_size(output_tensor);
         std::vector<uint32_t> zi_compile_time_args = {
             output_aligned_page_size,
-            num_cores,  // num_sender_cores = num_cores: each idle core signals all sender cores that its zero-init
-                        // portion is done and output pages are initializer with 0 for that chip
-            static_cast<uint32_t>(tt::CBIndex::c_6),
+            // num_sender_cores and cb_zero_buffer_id are only referenced inside the
+            // INIT_ZEROS-gated zero-init phase in the kernel; pass 0 when init_zeros=False
+            // (the c_6 CB is not created in that case so its index is meaningless).
+            init_zeros ? num_cores : 0u,
+            init_zeros ? static_cast<uint32_t>(tt::CBIndex::c_6) : 0u,
         };
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(zi_compile_time_args);
 
@@ -765,6 +778,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
 
         std::map<std::string, std::string> zi_defines;
         zi_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
+        zi_defines["INIT_ZEROS"] = init_zeros ? "1" : "0";
 
         zero_init_kernel_id = tt::tt_metal::CreateKernel(
             program,
@@ -859,33 +873,37 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         sender_noc_coords.emplace_back(noc_coord.x, noc_coord.y);
     }
 
-    // Set runtime args for hybrid idle row cores
-    if (init_zeros) {
+    // Set runtime args for hybrid idle row cores.  Three layouts are possible:
+    //   init_zeros && tile_layout: [output_addr, page_start, page_end, zi_done_sem,
+    //                               (sender_noc_x, sender_noc_y) * num_cores,
+    //                               counter_ready_sem, owning_sender_noc_x, owning_sender_noc_y,
+    //                               data_ready_sem, start_sem, local_core_id]
+    //   init_zeros && row_major:   [output_addr, page_start, page_end, zi_done_sem,
+    //                               (sender_noc_x, sender_noc_y) * num_cores]
+    //   !init_zeros && tile_layout:[output_addr, counter_ready_sem, owning_sender_noc_x,
+    //                               owning_sender_noc_y, data_ready_sem, start_sem, local_core_id]
+    // The kernel guards the zero-init reads with #if INIT_ZEROS so the indices match.
+    if (create_zi_kernel) {
         for (uint32_t idle_idx = 0; idle_idx < num_idle_cores; idle_idx++) {
-            uint32_t row_idx = num_cores + idle_idx;
-            uint32_t page_start = (row_idx * pages_per_core) + std::min(row_idx, remainder_pages);
-            uint32_t page_end = page_start + pages_per_core + (row_idx < remainder_pages ? 1 : 0);
+            std::vector<uint32_t> zi_runtime_args = {output_tensor.buffer()->address()};
 
-            // Each idle core signals all sender cores
-            std::vector<uint32_t> zi_runtime_args = {
-                output_tensor.buffer()->address(),
-                page_start,
-                page_end,
-                zi_done_semaphore_id,
-            };
-            for (const auto& [noc_x, noc_y] : sender_noc_coords) {
-                zi_runtime_args.push_back(noc_x);
-                zi_runtime_args.push_back(noc_y);
+            if (init_zeros) {
+                uint32_t row_idx = num_cores + idle_idx;
+                uint32_t page_start = (row_idx * pages_per_core) + std::min(row_idx, remainder_pages);
+                uint32_t page_end = page_start + pages_per_core + (row_idx < remainder_pages ? 1 : 0);
+                zi_runtime_args.push_back(page_start);
+                zi_runtime_args.push_back(page_end);
+                zi_runtime_args.push_back(zi_done_semaphore_id);
+                // Each idle core signals all sender cores once its zero-init slice is done.
+                for (const auto& [noc_x, noc_y] : sender_noc_coords) {
+                    zi_runtime_args.push_back(noc_x);
+                    zi_runtime_args.push_back(noc_y);
+                }
             }
 
-            // TILE_LAYOUT: append owning-sender info so zero_init_writer can run its send loop
-            // + its c_9 address handshake.  In ROW_MAJOR the trailing args are ignored
-            // (kernel compiled with IS_TILE_LAYOUT=0).
             if (is_tile_layout) {
                 uint32_t s = idle_sender_map[idle_idx];
                 // core_id = this idle core's local index within sender s's group (0..k_s-1).
-                // Compute it by finding idle_idx's position in the sequential ordering of
-                // idle cores that belong to sender s.
                 uint32_t local_core_id = 0;
                 for (uint32_t j = 0; j < idle_idx; j++) {
                     if (idle_sender_map[j] == s) {
