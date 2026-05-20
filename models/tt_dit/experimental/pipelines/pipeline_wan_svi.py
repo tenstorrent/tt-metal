@@ -351,9 +351,18 @@ class WanPipelineSVI(WanPipelineI2VLora):
         else:
             prompts_per_clip = [prompt] * num_clips
 
+        # guidance_scale / guidance_scale_2 may be a single float (same
+        # across clips) or a list of length num_clips. Mirrors upstream's
+        # 4-Clips workflow which uses CFG=2.0 for clips 1-2 and 1.5 for
+        # clips 3-4.
+        gs_per_clip = _as_per_clip(call_kwargs.pop("guidance_scale"), num_clips, "guidance_scale")
+        gs2_per_clip = _as_per_clip(call_kwargs.pop("guidance_scale_2"), num_clips, "guidance_scale_2")
+
         try:
             return self._generate_clips_loop(
                 prompts_per_clip=prompts_per_clip,
+                gs_per_clip=gs_per_clip,
+                gs2_per_clip=gs2_per_clip,
                 anchor_pil=anchor_pil,
                 height=height,
                 width=width,
@@ -373,6 +382,8 @@ class WanPipelineSVI(WanPipelineI2VLora):
         self,
         *,
         prompts_per_clip,
+        gs_per_clip,
+        gs2_per_clip,
         anchor_pil,
         height,
         width,
@@ -388,9 +399,11 @@ class WanPipelineSVI(WanPipelineI2VLora):
 
         for clip_idx, clip_prompt in enumerate(prompts_per_clip):
             seed = base_seed + clip_idx * seed_stride
+            cfg = gs_per_clip[clip_idx]
+            cfg2 = gs2_per_clip[clip_idx]
             logger.info(
                 f"SVI clip {clip_idx + 1}/{num_clips} (seed={seed}, "
-                f"num_motion_latent={self._num_motion_latent}, "
+                f"num_motion_latent={self._num_motion_latent}, cfg={cfg}/{cfg2}, "
                 f"prompt={clip_prompt[:80]!r}...)"
             )
 
@@ -401,6 +414,8 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 width=width,
                 num_frames=num_frames,
                 seed=seed,
+                guidance_scale=cfg,
+                guidance_scale_2=cfg2,
                 return_last_latent=True,
                 anchor_image=anchor_pil,
                 prev_last_latent=prev_last_latent,
@@ -425,6 +440,15 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 )
 
         return _concat_with_overlap(clips, overlap=self._num_overlap_frame)
+
+
+def _as_per_clip(value, num_clips: int, name: str) -> List[float]:
+    """Coerce a scalar or list into a length-``num_clips`` list of floats."""
+    if isinstance(value, (list, tuple)):
+        if len(value) != num_clips:
+            raise ValueError(f"{name} list length {len(value)} != num_clips {num_clips}")
+        return [float(v) for v in value]
+    return [float(value)] * num_clips
 
 
 def _unwrap_image(image_prompt) -> PIL.Image.Image:

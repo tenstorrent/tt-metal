@@ -21,6 +21,16 @@ from models.tt_dit.experimental.pipelines.pipeline_wan_svi import WanPipelineSVI
 from models.tt_dit.utils.test import line_params, ring_params
 
 
+def _parse_cfg(env_val: str, num_clips: int, name: str):
+    """Parse a CFG env var into either a float or a list of floats."""
+    if "||" in env_val:
+        parts = [float(p.strip()) for p in env_val.split("||")]
+        if len(parts) != num_clips:
+            pytest.fail(f"{name} '||'-split into {len(parts)} values but SVI_NUM_CLIPS={num_clips}")
+        return parts
+    return float(env_val)
+
+
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
@@ -74,8 +84,16 @@ def test_long_video(
     regime_default_steps = "50" if regime == "python" else "6"
     regime_default_cfg = "5.0" if regime == "python" else "1.5"
     num_inference_steps = int(os.environ.get("NUM_STEPS", regime_default_steps))
-    guidance_scale = float(os.environ.get("GUIDANCE_SCALE", regime_default_cfg))
-    guidance_scale_2 = float(os.environ.get("GUIDANCE_SCALE_2", str(guidance_scale)))
+    # GUIDANCE_SCALE / GUIDANCE_SCALE_2 accept either a single float or a
+    # ``||``-separated list of length num_clips for per-clip CFG (matches
+    # upstream's 4-Clips workflow which uses 2.0 for clips 1-2 and 1.5
+    # for clips 3-4).
+    guidance_scale = _parse_cfg(os.environ.get("GUIDANCE_SCALE", regime_default_cfg), num_clips, "GUIDANCE_SCALE")
+    guidance_scale_2 = _parse_cfg(
+        os.environ.get("GUIDANCE_SCALE_2", os.environ.get("GUIDANCE_SCALE", regime_default_cfg)),
+        num_clips,
+        "GUIDANCE_SCALE_2",
+    )
 
     pil_image = PIL.Image.open(os.environ.get("PROMPT_IMAGE", "./prompt_image.png"))
     prompt_env = os.environ.get("PROMPT", "A golden retriever running on a sandy beach, waves in the background")
