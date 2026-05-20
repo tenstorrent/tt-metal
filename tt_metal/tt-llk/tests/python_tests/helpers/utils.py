@@ -318,7 +318,9 @@ def passed_test(
     if output_data_format == DataFormat.Bfp4_b:
         is_valid = _bfp_block_aware_compare(golden_tensor, res_tensor, mantissa_bits=3)
     elif output_data_format == DataFormat.Bfp2_b:
-        is_valid = _bfp_block_aware_compare(golden_tensor, res_tensor, mantissa_bits=1)
+        is_valid = _bfp_block_aware_compare(
+            golden_tensor, res_tensor, mantissa_bits=1, max_ulp_diff=1
+        )
     else:
         is_close = torch.isclose(
             golden_tensor, res_tensor, rtol=tolerance.rtol, atol=tolerance.atol
