@@ -19,8 +19,9 @@
   cmd: |
     echo "============= SP1 superpod: copy ttrun.py and rank files ============="
     wget https://raw.githubusercontent.com/tenstorrent/tt-metal/main/ttnn/ttnn/distributed/ttrun.py
-    cp /mnt/models/ref_data/rank_bindings/rev_c_rank_binding_single_pod.yaml .
-    cp /mnt/models/ref_data/rank_bindings/rev_c_rank_file_single_pod .
+    # todo)) download the rank bindings from the main branch once this PR is merged: https://github.com/tenstorrent/tt-metal/pull/44608
+    wget https://raw.githubusercontent.com/tenstorrent/tt-metal/gongyu/fix_sp1_sp4_tests/models/demos/deepseek_v3_b1/scaleout_configs/rev_c/rev_c_rank_binding_single_pod.yaml
+    wget https://raw.githubusercontent.com/tenstorrent/tt-metal/gongyu/fix_sp1_sp4_tests/models/demos/deepseek_v3_b1/scaleout_configs/rev_c/rev_c_rank_file_single_pod
     echo "============= SP4 superpod: copied rank bindings ============="
     for file in "$RANK_BINDINGS_SRC"/*; do
       dst_file="./$(basename "$file")"
@@ -52,54 +53,36 @@
 # BH SP4 Multihost Pipeline Tests (4 connected SP1 = 16 galaxies)
 # ============================================================================
 
-# - name: "Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
-#   cmd: |
-#     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
-#     echo "PIPELINE_HOSTS: $PIPELINE_HOSTS"
+- name: "Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
+  cmd: |
+    echo "============= SP4 superpod: downloading rank bindings ============="
+    # todo)) download the rank bindings from the main branch once this PR is merged: https://github.com/tenstorrent/tt-metal/pull/44608
+    wget https://raw.githubusercontent.com/tenstorrent/tt-metal/gongyu/fix_sp1_sp4_tests/models/demos/deepseek_v3_b1/scaleout_configs/rev_c/rev_c_rank_binding_superpod.yaml
+    wget https://raw.githubusercontent.com/tenstorrent/tt-metal/gongyu/fix_sp1_sp4_tests/models/demos/deepseek_v3_b1/scaleout_configs/rev_c/rev_c_rank_file_superpod
 
-#     echo "============= SP4 superpod: running generate_blitz_decode_pipeline_configs ============="
-#     # python3 /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
-#     #   /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod_ci.yaml
-#     RANK_BINDINGS_SRC=/mnt/models/ref_data/rank_bindings
-#     echo "============= SP4 superpod: source rank bindings ============="
-#     ls -la "$RANK_BINDINGS_SRC"
+    echo "============= SP4 superpod: running tt-run ============="
+    wget https://raw.githubusercontent.com/tenstorrent/tt-metal/main/ttnn/ttnn/distributed/ttrun.py
 
-#     cp "$RANK_BINDINGS_SRC"/* .
+    echo "============= SP4 superpod: setting PIPELINE_HOSTS ============="
+    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 ./ttrun.py \
+      --tcp-interface ens5f0np0 \
+      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --tag-output --wdir /home/user/tt-metal" \
+      --rank-binding rev_c_rank_binding_superpod.yaml \
+      python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
+        --weights real \
+        --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized \
+        --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+        --reference-file /mnt/models/ref_data/output1_reference.txt \
+        --output-file output1_teacher_forcing_results.json \
+        --chunk-accuracy 256
 
-#     echo "============= SP4 superpod: copied rank bindings ============="
-#     for file in "$RANK_BINDINGS_SRC"/*; do
-#       dst_file="./$(basename "$file")"
-#       echo "----- dst: $dst_file -----"
-#       ls -la "$dst_file"
-#       cat "$dst_file"
-#     done
-
-
-#     echo "============= SP4 superpod: running tt-run ============="
-#     wget https://raw.githubusercontent.com/tenstorrent/tt-metal/main/ttnn/ttnn/distributed/ttrun.py
-#     # NOTE: check where the python3 is coming from
-#     echo "============= SP1 superpod: checking python3 location ============="
-#     which python3
-#     ls ./ttrun.py
-
-#     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 ./ttrun.py \
-#       --tcp-interface ens5f0np0 \
-#       --mpi-args "--map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output --wdir /home/user/tt-metal" \
-#       --rank-binding rev_c_rank_binding_superpod.yaml \
-#       python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
-#         --weights real \
-#         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
-#         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized \
-#         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
-#         --reference-file /mnt/models/ref_data/output1_reference.txt \
-#         --output-file output1_teacher_forcing_results.json \
-#         --chunk-accuracy 256
-
-#     echo "============= SP4 superpod: jq output1_teacher_forcing_results.json ============="
-#     jq . output1_teacher_forcing_results.json
-#   skus:
-#     bh_sp4:
-#       timeout: 50
-#   owner_id: U08E1JCMAJF
-#   team: scaleout
-#   sp_config: sp4
+    echo "============= SP4 superpod: jq output1_teacher_forcing_results.json ============="
+    jq . output1_teacher_forcing_results.json
+  skus:
+    bh_sp4:
+      timeout: 50
+  owner_id: U08E1JCMAJF
+  team: scaleout
+  sp_config: sp4
