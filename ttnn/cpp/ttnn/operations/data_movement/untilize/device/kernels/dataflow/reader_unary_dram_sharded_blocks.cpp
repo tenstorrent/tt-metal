@@ -16,7 +16,7 @@ void kernel_main() {
     constexpr uint32_t tiles_per_block = get_compile_time_arg_val(1);
     const uint32_t tile_size_bytes = get_tile_size(cb_id_in0);
 
-    constexpr auto src_args = TensorAccessorArgs<4>();
+    constexpr auto src_args = TensorAccessorArgs<2>();
     const auto accessor_src = TensorAccessor(src_args, src_addr);
     auto shard_pages = accessor_src.shard_pages(start_shard_id);
 
