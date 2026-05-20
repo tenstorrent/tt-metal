@@ -205,7 +205,7 @@ int __attribute__((noinline)) main(void) {
     configure_csr();
     initialize_local_memory();
     noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
-
+    disable_interrupts();
     // No need to call disable_interrupts() here — host disables ERISC interrupts
     // before writing fw_launch_addr (otherwise a pending base FW interrupt could
     // corrupt PC before we got here).

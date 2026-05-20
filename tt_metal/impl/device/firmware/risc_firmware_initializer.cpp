@@ -1124,10 +1124,10 @@ void RiscFirmwareInitializer::initialize_firmware(
             // Ordering: must use write_reg (UC TLB) for both this and fw_launch_addr below — write_core
             // (WC TLB) can coalesce and re-open the race.
             // Only applicable to BH; on other archs num_interrupt_vecs is 0.
-            disable_eth_interrupts(device_id, virtual_core);
 
             if (hal_.get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH ||
                 !rtoptions_.get_enable_2_erisc_mode()) {
+                disable_eth_interrupts(device_id, virtual_core);
                 cluster_.write_reg(
                     &jit_build_config.fw_launch_addr_value,
                     tt_cxy_pair(device_id, virtual_core),
