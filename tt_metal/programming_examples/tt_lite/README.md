@@ -12,10 +12,10 @@ It splits model execution into two phases:
 
 ### Verified Models
 
-| Model | Weights | Output PCC vs TTNN | Top-1 Match |
-|-------|---------|-------------------|-------------|
-| eltwise add (5+3) | N/A | exact (17.0) | N/A |
-| ResNet50 (batch 16, bfloat8_b) | 108 tensors, 28.7 MB | **1.000000** | **16/16 (100%)** |
+| Model | Weights | JIT Cache | Output PCC vs TTNN | Top-1 Match |
+|-------|---------|-----------|-------------------|-------------|
+| eltwise add (5+3) | N/A | N/A | exact (17.0) | N/A |
+| ResNet50 (batch 16, bfloat8_b) | 108 tensors, 28.7 MB | 2585 files, 234 MB | **1.000000** | **16/16 (100%)** |
 
 ## Architecture
 
@@ -29,10 +29,15 @@ It splits model execution into two phases:
  TT-NN: compile, trace capture           read_trace_binary()
        |                                        |
        v                                        v
- export_trace() -> .ttb                  MeshDevice::create()
-  - trace command stream                        |
-  - weight data (raw DRAM bytes)                v
-  - IO buffer metadata                  Allocate all DRAM buffers
+ export_trace() -> .ttb                  extract_jit_cache()  [v1+]
+  - trace command stream                 (restore JIT artifacts before
+  - weight data (raw DRAM bytes)          device init for cache hits)
+  - IO buffer metadata                          |
+  - JIT cache artifacts [v1+]                   v
+                                        MeshDevice::create()
+                                                |
+                                                v
+                                        Allocate all DRAM buffers
                                         (address-ordered, deterministic)
                                                 |
                                                 v
@@ -106,7 +111,7 @@ python tt_metal/programming_examples/tt_lite/capture_resnet50.py \
 ```
 
 This produces:
-- `resnet50.ttb` — trace binary with 108 weight tensors (~30 MB)
+- `resnet50.ttb` — trace binary with 108 weight tensors + JIT cache (~265 MB)
 - `resnet50_ref/input.bin` — raw bfloat16 input data
 - `resnet50_ref/ttnn_trace_output.pt` — TTNN reference output
 - `resnet50_ref/pytorch_reference_output.pt` — PyTorch reference output
@@ -171,7 +176,7 @@ Options:
   --l1-small-size N     Override L1 small size (bytes)
 ```
 
-## .ttb File Format
+## .ttb File Format (v1)
 
 ```
 +------------------------------+
@@ -196,9 +201,23 @@ Options:
 | Trace Buffer Placement       |
 |   addr, page_size, num_pages |
 +------------------------------+
+| JIT Cache Files[] (v1+)      |
+|   count, then for each:      |
+|   path_len, path, data_len,  |
+|   data (raw kernel ELF/obj)  |
++------------------------------+
 ```
 
 Buffer types: `0 = DRAM` (allocated and written by replay), `1 = L1` (trace-managed, skipped).
+
+### JIT Cache Embedding (v1)
+
+The v1 format appends all JIT-compiled kernel artifacts from `~/.cache/tt-metal-cache/`
+to the .ttb. At replay time, `extract_jit_cache()` restores these files **before**
+`MeshDevice::create()`, so the device initialization finds all kernels pre-compiled
+and achieves 100% cache hits. This eliminates the RISC-V cross-compilation step
+entirely, which is critical for environments where the compiler may not be available
+or may run out of memory.
 
 ## Key Design Decisions
 
