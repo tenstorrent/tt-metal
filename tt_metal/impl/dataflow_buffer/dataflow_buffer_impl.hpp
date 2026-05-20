@@ -80,6 +80,13 @@ struct DataflowBufferImpl {
     // Set by set_borrowed_memory_base_addr()
     uint32_t borrowed_addr_ = 0;
 
+    // Aliased DFBs share the same L1 data-buffer
+    // alias_primary_id: set on secondaries; holds the primary's DFB id.
+    // alias_secondary_ids: set on the primary; lists all secondary DFB ids.
+    // The choice of a primary is arbitrary
+    std::optional<uint32_t> alias_primary_id;
+    std::vector<uint32_t>   alias_secondary_ids;
+
     bool borrows_memory() const { return config.borrows_memory; }
 
     void set_borrowed_memory_base_addr(uint32_t new_addr) {
