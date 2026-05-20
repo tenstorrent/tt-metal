@@ -1,0 +1,26 @@
+name: "Bug Escape Probe - 8e823c23 parent"
+on:
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+  packages: write
+  checks: write
+jobs:
+  probe:
+    uses: ./.github/workflows/blackhole-post-commit.yaml
+    with:
+      build-artifact-name: "TTMetal_build_any_22.04_amd64_x86_64-linux-clang-20-libstdcpp_Release_215668f33857a78632b1b53ca7eb3c43ae84c22e_26086481715"
+      wheel-artifact-name: "ttnn-dist-cp310-Release-215668f33857a78632b1b53ca7eb3c43ae84c22e-26086481715"
+      schedule-runs-all-tests: false
+      run-ttnn-unit-tests: true
+      run-ops-unit-tests: true
+      run-models-unit-tests: false
+      run-profiler-regression: false
+      run-umd-unit-tests: false
+      run-tt-cnn-unit-tests: false
+      run-blackhole-multi-card-fast-unit-tests: false
+    secrets: inherit
