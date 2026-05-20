@@ -20,8 +20,32 @@ static inline bool dram_pattern_generated_can_be_reused(uint32_t pattern_id) {
     switch (pattern_id) {
         case DRAM_PATTERN_CHECKERBOARD:
         case DRAM_PATTERN_MARCHING_ONE_BITS:
-        case DRAM_PATTERN_MARCHING_ZERO_BITS: return true;
+        case DRAM_PATTERN_MARCHING_ZERO_BITS:
+        case DRAM_PATTERN_TOGGLE_BITS:
+        case DRAM_PATTERN_BYTEWISE_SSN: return true;
         default: return false;
+    }
+}
+
+static inline uint32_t dram_pattern_reuse_period_words(uint32_t pattern_id) {
+    // Return the word-period for patterns whose generated L1 chunk can be
+    // reused when the next chunk starts at the same phase. A period of 1 means
+    // the chunk is independent of absolute word offset. A period of 0 means
+    // do not reuse generated chunks.
+    switch (pattern_id) {
+        case DRAM_PATTERN_CHECKERBOARD:
+        case DRAM_PATTERN_MARCHING_ONE_BITS:
+        case DRAM_PATTERN_MARCHING_ZERO_BITS: return 1u;
+
+        // dram_pattern_toggle_bits() depends on bit 1 of word_index:
+        // 0,0,1,1 repeated, optionally inverted by pass.
+        case DRAM_PATTERN_TOGGLE_BITS: return 4u;
+
+        // dram_pattern_bytewise_ssn() depends on (word_index / 2) & 0xFF and
+        // word parity, so the full generated sequence repeats every 512 words.
+        case DRAM_PATTERN_BYTEWISE_SSN: return 512u;
+
+        default: return 0u;
     }
 }
 

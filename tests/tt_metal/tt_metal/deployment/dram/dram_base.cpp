@@ -14,6 +14,10 @@
 #include <chrono>
 #include <thread>
 #include <algorithm>
+#include <fstream>
+#include <cctype>
+#include <dirent.h>
+#include <cstdlib>
 #include <umd/device/types/telemetry.hpp>
 
 namespace tt::tt_metal {
@@ -23,6 +27,97 @@ extern std::atomic<bool> g_watchdog_requested;
 
 using namespace std;
 using namespace tt;
+
+static std::string trim_copy(std::string s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+        s.erase(s.begin());
+    }
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+        s.pop_back();
+    }
+    return s;
+}
+
+static std::string read_text_file_trimmed(const std::string& path) {
+    std::ifstream file(path);
+    std::string value;
+    std::getline(file, value);
+    return trim_copy(value);
+}
+
+static const std::vector<std::string>& get_tenstorrent_pci_bdfs_cached() {
+    static const std::vector<std::string> bdfs = []() {
+        std::vector<std::string> out;
+
+        DIR* dir = opendir("/sys/bus/pci/devices");
+        if (dir == nullptr) {
+            return out;
+        }
+
+        while (auto* entry = readdir(dir)) {
+            const std::string bdf = entry->d_name;
+            if (bdf.empty() || bdf[0] == '.') {
+                continue;
+            }
+
+            const std::string base = "/sys/bus/pci/devices/" + bdf;
+            std::string vendor = read_text_file_trimmed(base + "/vendor");
+            std::transform(
+                vendor.begin(), vendor.end(), vendor.begin(), [](unsigned char c) { return std::tolower(c); });
+
+            // Tenstorrent PCI vendor id. Sorted order gives a stable best-effort map:
+            // runtime device_id=0 -> first Tenstorrent BDF, device_id=1 -> second, etc.
+            if (vendor == "0x1e52") {
+                out.push_back(bdf);
+            }
+        }
+
+        closedir(dir);
+        std::sort(out.begin(), out.end());
+        return out;
+    }();
+
+    return bdfs;
+}
+
+static std::string pci_bdf_for_device_id(uint32_t device_id) {
+    const auto& bdfs = get_tenstorrent_pci_bdfs_cached();
+    if (device_id < bdfs.size()) {
+        return bdfs[device_id];
+    }
+    return "unknown";
+}
+
+static std::string device_log_prefix(IDevice* device) {
+    const uint32_t device_id = device->id();
+    return fmt::format("[bdf={}][device_id={}]", pci_bdf_for_device_id(device_id), device_id);
+}
+
+static bool dram_test_verbose_enabled() {
+    const char* env = std::getenv("DRAM_TEST_VERBOSE");
+    return env != nullptr && std::string(env) == "1";
+}
+
+static void log_verbose_dram_work_item(
+    IDevice* device, const CoreCoord& core, const DramWorkItem& job, uint32_t core_job_index, uint32_t core_job_count) {
+    if (!dram_test_verbose_enabled()) {
+        return;
+    }
+
+    log_info(
+        tt::LogTest,
+        "{} subtest={} core_job={}/{} core=({}, {}) bank={} pattern={} pass={} repeat={}",
+        device_log_prefix(device),
+        job.job_id,
+        core_job_index + 1u,
+        core_job_count,
+        core.x,
+        core.y,
+        job.bank_id,
+        pattern_name(job.pattern_id),
+        job.pass_index,
+        job.repeat_index);
+}
 
 [[maybe_unused]]
 static std::vector<DramBankWorkerAssignment> get_optimal_dram_bank_worker_assignments(
@@ -64,9 +159,9 @@ static inline const char* dram_failure_kind_name(uint32_t failure_kind) {
 static void log_dram_failure(IDevice* device, const CoreCoord& core, const DramBaseResult* result) {
     log_info(
         tt::LogTest,
-        "Mismatch on device={} dram_controller={} core {} pattern={} repeat={} pass={}: failures={}, "
+        "{} Mismatch on dram_controller={} core {} pattern={} repeat={} pass={}: failures={}, "
         "first_fail_classified_as={}, write_failures={}, read_failures={}",
-        device->id(),
+        device_log_prefix(device),
         result->bank_id,
         core,
         pattern_name(result->pattern_id),
@@ -86,6 +181,24 @@ static inline void accumulate_result_into_summary(DramRunSummary& summary, const
     summary.suspected_write_error_bytes += result->suspected_write_failures * sizeof(uint32_t);
 
     summary.suspected_read_error_bytes += result->suspected_read_failures * sizeof(uint32_t);
+
+    summary.prepare_ticks += result->prepare_ticks;
+    summary.write_ticks += result->write_ticks;
+    summary.read_ticks += result->read_ticks;
+    summary.generate_ticks += result->generate_ticks;
+    summary.ncrisc_blocked_wait_ticks += result->ncrisc_blocked_wait_ticks;
+    summary.compare_brisc_ticks += result->compare_brisc_ticks;
+    summary.compare_wait_ticks += result->compare_wait_ticks;
+    summary.compare_total_ticks += result->compare_total_ticks;
+    summary.ncrisc_idle_ticks += result->ncrisc_idle_ticks;
+    summary.ncrisc_write_active_ticks += result->ncrisc_write_active_ticks;
+    summary.ncrisc_read_active_ticks += result->ncrisc_read_active_ticks;
+    summary.ncrisc_diag_active_ticks += result->ncrisc_diag_active_ticks;
+    summary.math_generate_active_ticks += result->math_generate_active_ticks;
+    summary.pack_generate_active_ticks += result->pack_generate_active_ticks;
+    summary.math_compare_active_ticks += result->math_compare_active_ticks;
+    summary.pack_compare_active_ticks += result->pack_compare_active_ticks;
+    summary.unpack_compare_active_ticks += result->unpack_compare_active_ticks;
 }
 
 static inline double dram_result_write_error_pct(const DramBaseResult* result) {
@@ -798,8 +911,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
 
     log_info(
         tt::LogTest,
-        "device_id={} persistent queue_capacity={} workers={} total_jobs={}",
-        device->id(),
+        "{} persistent queue_capacity={} workers={} total_jobs={}",
+        device_log_prefix(device),
         queue_capacity,
         worker_cores.size(),
         total_jobs);
@@ -1034,7 +1147,10 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
         job_words.reserve(sizeof(DramWorkItem) / sizeof(uint32_t) * preload);
 
         for (uint32_t j = 0; j < preload; j++) {
-            const uint32_t* p = (const uint32_t*)&core_jobs[j];
+            const DramWorkItem& job = core_jobs[j];
+            log_verbose_dram_work_item(device, r.core, job, j, core_jobs.size());
+
+            const uint32_t* p = (const uint32_t*)&job;
 
             job_words.insert(job_words.end(), p, p + sizeof(DramWorkItem) / sizeof(uint32_t));
         }
@@ -1161,8 +1277,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                     const uint64_t arc_delta = arc_tick - global_prev_arc_tick;
                     log_info(
                         tt::LogTest,
-                        "device_id={} monitor: arc={} delta={} {} jobs={}/{}",
-                        device->id(),
+                        "{} monitor: arc={} delta={} {} jobs={}/{}",
+                        device_log_prefix(device),
                         arc_tick,
                         arc_delta,
                         (all_cores_progressing || all_cores_done) ? "all cores progressing"
@@ -1172,8 +1288,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                 } else {
                     log_info(
                         tt::LogTest,
-                        "device_id={} monitor: arc={} {} jobs={}/{}",
-                        device->id(),
+                        "{} monitor: arc={} {} jobs={}/{}",
+                        device_log_prefix(device),
                         arc_tick,
                         (all_cores_progressing || all_cores_done) ? "all cores progressing"
                                                                   : "some cores not progressing",
@@ -1213,7 +1329,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                     if (print_per_core_monitor) {
                         log_info(
                             tt::LogTest,
-                            "monitor: core=({}, {}) jobs={}/{} hb={} delta={} arc={} delta={} stage={} job_id={}",
+                            "{} monitor: core=({}, {}) jobs={}/{} hb={} delta={} arc={} delta={} stage={} job_id={}",
+                            device_log_prefix(device),
                             r.core.x,
                             r.core.y,
                             status->jobs_completed,
@@ -1245,7 +1362,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                             if (r.stall_watchdog_armed) {
                                 log_info(
                                     tt::LogTest,
-                                    "watchdog disarmed: core=({}, {}) progress resumed",
+                                    "{} watchdog disarmed: core=({}, {}) progress resumed",
+                                    device_log_prefix(device),
                                     r.core.x,
                                     r.core.y);
                             }
@@ -1260,7 +1378,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
 
                                 log_info(
                                     tt::LogTest,
-                                    "watchdog armed: core=({}, {}) reason={} jobs={}/{}",
+                                    "{} watchdog armed: core=({}, {}) reason={} jobs={}/{}",
+                                    device_log_prefix(device),
                                     r.core.x,
                                     r.core.y,
                                     dram_watchdog_reason_name(stall_reason),
@@ -1270,10 +1389,12 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                             } else if ((now - r.stall_watchdog_start_time) >= kStallWatchdogTimeout) {
                                 log_critical(
                                     tt::LogTest,
-                                    "watchdog timeout: core=({}, {}) reason={} stuck_for={}s jobs={}/{} hb={} arc={} "
+                                    "{} watchdog timeout: core=({}, {}) reason={} stuck_for={}s jobs={}/{} hb={} "
+                                    "arc={} "
                                     "stage={} job_id={}; requesting graceful stop. If the test does not exit, "
                                     "terminate the process manually. If the next run cannot acquire the device or "
                                     "topology mapping fails, run: tt-smi -r",
+                                    device_log_prefix(device),
                                     r.core.x,
                                     r.core.y,
                                     dram_watchdog_reason_name(r.stall_watchdog_reason),
@@ -1290,12 +1411,15 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                                 g_watchdog_requested.store(true);
                                 g_stop_requested.store(true);
 
-                                std::thread([core = r.core, delay = kWatchdogGraceExitDelay]() {
+                                std::thread([core = r.core,
+                                             delay = kWatchdogGraceExitDelay,
+                                             prefix = device_log_prefix(device)]() {
                                     std::this_thread::sleep_for(delay);
 
                                     log_critical(
                                         tt::LogTest,
-                                        "watchdog hard-exit: core=({}, {}) exiting process after grace period",
+                                        "{} watchdog hard-exit: core=({}, {}) exiting process after grace period",
+                                        prefix,
                                         core.x,
                                         core.y);
 
@@ -1321,11 +1445,13 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
 
                     constexpr auto kResultPollDelay = std::chrono::milliseconds(20);
                     constexpr auto kNoHeartbeatTimeout = std::chrono::seconds(10);
+                    constexpr auto kResultReadyTimeout = std::chrono::seconds(10);
 
                     bool result_ready = false;
 
                     uint32_t last_heartbeat = status->heartbeat_tick;
                     auto last_heartbeat_change_time = std::chrono::steady_clock::now();
+                    auto result_wait_start_time = last_heartbeat_change_time;
 
                     while (!result_ready) {
                         if (g_stop_requested.load()) {
@@ -1344,8 +1470,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
 
                                 log_info(
                                     tt::LogTest,
-                                    "device_id={} monitor: arc={} delta={} all cores progressing jobs={}/{}",
-                                    device->id(),
+                                    "{} monitor: arc={} delta={} all cores progressing jobs={}/{}",
+                                    device_log_prefix(device),
                                     arc_tick,
                                     arc_delta,
                                     completed_jobs_total,
@@ -1353,8 +1479,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                             } else {
                                 log_info(
                                     tt::LogTest,
-                                    "device_id={} monitor: arc={} all cores progressing jobs={}/{}",
-                                    device->id(),
+                                    "{} monitor: arc={} all cores progressing jobs={}/{}",
+                                    device_log_prefix(device),
                                     arc_tick,
                                     completed_jobs_total,
                                     total_jobs);
@@ -1398,17 +1524,27 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
 
                         const auto now_poll = std::chrono::steady_clock::now();
 
-                        if ((now_poll - last_heartbeat_change_time) >= kNoHeartbeatTimeout) {
+                        const bool result_overdue = status_poll->jobs_completed > done_index &&
+                                                    ((now_poll - result_wait_start_time) >= kResultReadyTimeout);
+
+                        const bool heartbeat_stopped = (now_poll - last_heartbeat_change_time) >= kNoHeartbeatTimeout;
+
+                        if (result_overdue || heartbeat_stopped) {
                             log_info(
                                 tt::LogTest,
-                                "result wait timeout: core={} job={} slot={} no heartbeat change for {}s "
-                                "expected(job_id={}, pattern={}, pass={}, repeat={}, bank={}) got(job_id={}, "
-                                "pattern={}, pass={}, repeat={}, bank={}, words={}, transfers={})",
+                                "{} result wait timeout: core={} job={} slot={} waited={}s heartbeat_idle={}s "
+                                "status_jobs_completed={} expected(job_id={}, pattern={}, pass={}, repeat={}, bank={}) "
+                                "got(job_id={}, pattern={}, pass={}, repeat={}, bank={}, words={}, transfers={}); "
+                                "requesting stop",
+                                device_log_prefix(device),
                                 core_idx,
                                 done_index,
                                 done_slot,
+                                std::chrono::duration_cast<std::chrono::seconds>(now_poll - result_wait_start_time)
+                                    .count(),
                                 std::chrono::duration_cast<std::chrono::seconds>(now_poll - last_heartbeat_change_time)
                                     .count(),
+                                status_poll->jobs_completed,
                                 expected_job.job_id,
                                 expected_job.pattern_id,
                                 expected_job.pass_index,
@@ -1421,6 +1557,10 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                                 result_copy.bank_id,
                                 result_copy.words_checked,
                                 result_copy.transfers);
+
+                            out.summary.pass = false;
+                            g_stop_requested.store(true);
+                            broadcast_stop_to_all_cores();
                             break;
                         }
 
@@ -1434,9 +1574,10 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                     if (!result_ready) {
                         log_info(
                             tt::LogTest,
-                            "result not ready: core={} job={} slot={} expected(job_id={}, pattern={}, pass={}, "
+                            "{} result not ready: core={} job={} slot={} expected(job_id={}, pattern={}, pass={}, "
                             "repeat={}, bank={}) got(job_id={}, pattern={}, pass={}, repeat={}, bank={}, words={}, "
                             "transfers={})",
+                            device_log_prefix(device),
                             core_idx,
                             done_index,
                             done_slot,
@@ -1526,8 +1667,9 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                     if (result->failures > 0u) {
                         log_info(
                             tt::LogTest,
-                            "job {}/{} failed: core=({}, {}) bank={} pattern={} pass={} repeat={} kind={} "
+                            "{} job {}/{} failed: core=({}, {}) bank={} pattern={} pass={} repeat={} kind={} "
                             "first_fail_addr=0x{:08x} write_err={:.6f}% read_err={:.6f}%",
+                            device_log_prefix(device),
                             done_index + 1u,
                             core_jobs.size(),
                             r.core.x,
@@ -1566,7 +1708,9 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
 
                         const uint32_t slot = tail;
                         const uint32_t next_tail = tail + 1u;
-                        const DramWorkItem& next_job = core_jobs[r.jobs_enqueued];
+                        const uint32_t next_job_index = r.jobs_enqueued;
+                        const DramWorkItem& next_job = core_jobs[next_job_index];
+                        log_verbose_dram_work_item(device, r.core, next_job, next_job_index, core_jobs.size());
 
                         MetalContext::instance().get_cluster().write_core(
                             device->id(),
@@ -1624,8 +1768,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
     if (print_persistent_run_start_finish) {
         log_info(
             tt::LogTest,
-            "device_id={} Starting persistent DRAM test: workers={}, total_jobs={}",
-            device->id(),
+            "{} Starting persistent DRAM test: workers={}, total_jobs={}",
+            device_log_prefix(device),
             worker_cores.size(),
             total_jobs);
     }
@@ -1637,8 +1781,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
 
     log_info(
         tt::LogTest,
-        "device_id={} Persistent DRAM test finished: workers={}, total_jobs={}, duration={}",
-        device->id(),
+        "{} Persistent DRAM test finished: workers={}, total_jobs={}, duration={}",
+        device_log_prefix(device),
         worker_cores.size(),
         total_jobs,
         format_duration_seconds(duration_sec));
