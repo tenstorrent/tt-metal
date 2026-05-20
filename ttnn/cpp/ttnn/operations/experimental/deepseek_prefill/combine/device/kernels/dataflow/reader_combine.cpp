@@ -326,11 +326,6 @@ void kernel_main() {
                 if (dst_chip == ROUTE_INFO_SENTINEL) {
                     idle_finished[c] = true;
                     idle_done_count++;
-                    {
-                        // DeviceZoneScopedN("combine-reader-idle-done");
-                        noc_semaphore_inc(idle_credits_noc_addrs[c], 1);
-                        noc_async_atomic_barrier();
-                    }
                     continue;
                 }
 
@@ -361,8 +356,7 @@ void kernel_main() {
                     }
                     cb_push_back(cb_output_for_writer_id, 1);
                 }
-                noc_semaphore_inc(idle_credits_noc_addrs[c], 1);
-                noc_async_atomic_barrier();
+                noc_semaphore_inc<true>(idle_credits_noc_addrs[c], 1);
             }
         }
     }
