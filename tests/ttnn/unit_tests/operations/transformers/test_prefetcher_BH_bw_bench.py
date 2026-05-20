@@ -74,9 +74,9 @@ _BF8_TILE_BYTES = _TILE_BYTES  # kept for backward-compat in derivations below
 _DRAM_CORE_K_BLOCK_W_TILES = int(os.environ.get("BENCH_DRAM_CORE_K_BLOCK_W", "1"))
 
 
-def _expected_push_geometry(path: str):
+def _expected_push_geometry(path: str, num_dram_banks: int):
     """Returns (num_iters_per_layer, page_size_bytes) for each prefetcher path."""
-    n_tiles_per_bank = (_N // _NUM_BANKS) // ttnn.TILE_SIZE
+    n_tiles_per_bank = (_N // num_dram_banks) // ttnn.TILE_SIZE
     n_tiles_per_recv = n_tiles_per_bank // _NUM_RECV_PER_BANK
     k_tiles = _K // ttnn.TILE_SIZE
     if path == "dram_core":
@@ -85,7 +85,7 @@ def _expected_push_geometry(path: str):
         num_iters = k_tiles // kbw
         page_size = kbw * n_tiles_per_recv * _TILE_BYTES
     elif path == "worker_core":
-        num_blocks = _NUM_BANKS * _NUM_RECV_PER_BANK  # = num_senders * num_recv_per_sender
+        num_blocks = num_dram_banks * _NUM_RECV_PER_BANK  # = num_senders * num_recv_per_sender
         block_tiles = k_tiles * n_tiles_per_bank // num_blocks
         num_iters = num_blocks
         page_size = block_tiles * _TILE_BYTES // _NUM_RECV_PER_BANK
@@ -153,11 +153,15 @@ def test_bw_dram_core_prefetcher(device):
 
     ttnn.device.enable_asynchronous_slow_dispatch(device)
 
+    # Query DRAM bank count so the bench runs on harvested BHs (P100 has 7 banks).
+    num_dram_banks = device.dram_grid_size().x
+    num_receivers = num_dram_banks * _NUM_RECV_PER_BANK
+
     num_layers = _bench_layers()
-    num_iters_per_layer, page_size = _expected_push_geometry("dram_core")
+    num_iters_per_layer, page_size = _expected_push_geometry("dram_core", num_dram_banks)
     num_iters_total = num_layers * num_iters_per_layer
 
-    tt_weight = _make_weight(device, _NUM_BANKS)
+    tt_weight = _make_weight(device, num_dram_banks)
 
     # tensor_addrs: unused on DRAM-core path but required by op contract.
     addrs = ttnn.from_torch(
@@ -175,10 +179,10 @@ def test_bw_dram_core_prefetcher(device):
         ),
     )
 
-    # GCB: 8 banks, 2 receivers per bank. Lay out 16 receivers on an 8x2 grid (col=bank, rows 0 and 1).
-    # Workers go up to col 7 on Blackhole, so single-row would overflow.
+    # GCB: receivers laid out as num_dram_banks columns × _NUM_RECV_PER_BANK rows
+    # (col=bank, rows 0..recv_per_bank-1). On P100 banks=7, on P150/P300 banks=8.
     bank_to_receivers = []
-    for b in range(_NUM_BANKS):
+    for b in range(num_dram_banks):
         bank_to_receivers.append(
             (b, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, _NUM_RECV_PER_BANK - 1))}))
         )
@@ -186,7 +190,7 @@ def test_bw_dram_core_prefetcher(device):
     gcb = ttnn.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
 
     logger.info(
-        f"[dram_core_bw] K={_K} N={_N} {_DTYPE_NAME} ring={_NUM_RECEIVERS} num_layers={num_layers} "
+        f"[dram_core_bw] K={_K} N={_N} {_DTYPE_NAME} banks={num_dram_banks} ring={num_receivers} num_layers={num_layers} "
         f"k_block_w={_DRAM_CORE_K_BLOCK_W_TILES} iters/layer={num_iters_per_layer} "
         f"page_size={page_size} gcb_size={gcb_size}"
     )
@@ -205,9 +209,9 @@ def test_bw_dram_core_prefetcher(device):
         ttnn.stop_dram_core_prefetcher(device)
 
     elapsed = _time_one_run(device, sender_fn, consumer_fn)
-    bytes_per_run = num_iters_total * page_size * _NUM_RECEIVERS  # aggregate across all receivers
+    bytes_per_run = num_iters_total * page_size * num_receivers  # aggregate across all receivers
     bw = _gbps(bytes_per_run, elapsed)
-    per_recv_bw = bw / _NUM_RECEIVERS
+    per_recv_bw = bw / num_receivers
     logger.info(
         f"[dram_core_bw] elapsed={elapsed * 1e3:.2f}ms bytes={bytes_per_run / 1e6:.1f}MB "
         f"aggregate_bw={bw:.2f} GB/s per_recv_bw={per_recv_bw:.3f} GB/s"
@@ -221,11 +225,15 @@ def test_bw_workercore_prefetcher(device):
 
     ttnn.device.enable_asynchronous_slow_dispatch(device)
 
+    # Worker-core path is out of scope for the harvested-card adaptation; keep
+    # the unharvested _NUM_BANKS=8 baseline so the bench numbers stay comparable
+    # to historical runs.
+    num_dram_banks = _NUM_BANKS
     num_layers = _bench_layers()
-    num_iters_per_layer, page_size = _expected_push_geometry("worker_core")
+    num_iters_per_layer, page_size = _expected_push_geometry("worker_core", num_dram_banks)
     num_iters_total = num_layers * num_iters_per_layer
 
-    tt_weight = _make_weight(device, _NUM_BANKS)
+    tt_weight = _make_weight(device, num_dram_banks)
 
     # Worker-core senders: row 2 cols 0..7 (sender per bank). Receivers: rows 0..1 cols 0..7.
     sender_core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(_NUM_BANKS - 1, 2))})

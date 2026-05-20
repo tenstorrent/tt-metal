@@ -46,7 +46,7 @@ public:
 
     void start(
         const std::vector<const MeshTensor*>& input_tensors,
-        const GlobalCircularBuffer& gcb,
+        const experimental::GlobalCircularBuffer& gcb,
         const experimental::DramCorePrefetcherConfig& config);
 
     // Block until the per-device programs finish their num_layers loop, then release
@@ -68,7 +68,7 @@ private:
     // the GCB stay alive. The caller's invariant in StartDramCorePrefetcher requires
     // them to outlive stop(); we copy/retain here only as a defense-in-depth measure
     // against accidental destruction races.
-    std::optional<GlobalCircularBuffer> gcb_;
+    std::optional<experimental::GlobalCircularBuffer> gcb_;
 };
 
 }  // namespace distributed

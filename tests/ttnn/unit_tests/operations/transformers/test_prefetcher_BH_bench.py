@@ -82,15 +82,15 @@ _DTYPE_BYTES = {"bfloat16": 2, "bfloat8_b": 1088 / 1024.0}[_DTYPE_NAME]  # avg b
 _L1_BANK_HEADROOM_BYTES = 256 * 1024  # leave 256 KB for matmul + activation + output L1
 
 
-def _matmul_in1_block_size_bytes() -> int:
+def _matmul_in1_block_size_bytes(ring_size: int) -> int:
     """Matmul's receiver fifo_page_size = in0_block_w * per_core_N * tile_bytes.
     in0_block_w (matmul-computed) = K_per_shard_tiles, per_core_N = N_per_recv_tiles."""
-    k_per_shard_tiles = (_K // _RING_SIZE) // ttnn.TILE_SIZE
-    n_per_recv_tiles = (_N // _RING_SIZE) // ttnn.TILE_SIZE
+    k_per_shard_tiles = (_K // ring_size) // ttnn.TILE_SIZE
+    n_per_recv_tiles = (_N // ring_size) // ttnn.TILE_SIZE
     return k_per_shard_tiles * n_per_recv_tiles * int(_DTYPE_BYTES * ttnn.TILE_SIZE * ttnn.TILE_SIZE)
 
 
-def _gcb_size_capped(block_size_bytes: int, max_buffered_blocks: int = 4) -> int:
+def _gcb_size_capped(block_size_bytes: int, ring_size: int, max_buffered_blocks: int = 4) -> int:
     # Matmul receiver needs ~block_size_bytes of L1 for in1_CB (the per-receiver weight slice
     # fully buffered for gather_in0). To fit GCB + in1_CB + other matmul CBs in ~1.4 MB L1,
     # the GCB itself can't exceed ~(1.4 MB - block_size_bytes - matmul overhead).
@@ -98,7 +98,7 @@ def _gcb_size_capped(block_size_bytes: int, max_buffered_blocks: int = 4) -> int
     # (= in1_block_size_bytes). If not, remote_cb_wait_front's wrap-adjustment math fires at
     # the layer boundary and inflates the wait count by (fifo_size % page_size), causing the
     # receiver to wait forever for pages the sender will never push.
-    in1_block_size = _matmul_in1_block_size_bytes()
+    in1_block_size = _matmul_in1_block_size_bytes(ring_size)
     upper_l1 = max(block_size_bytes, 1_400_000 - block_size_bytes - _L1_BANK_HEADROOM_BYTES)
     upper_cb_pages_bytes = 65000 * 16  # 16 B page * <65535 pages = ~1 MB
     upper = min(upper_l1, upper_cb_pages_bytes)
@@ -111,28 +111,30 @@ def _gcb_size_capped(block_size_bytes: int, max_buffered_blocks: int = 4) -> int
     return sized
 
 
-def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, row_offset: int = 0):
+def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int, row_offset: int = 0):
     """Return the CoreRangeSet for bank `bank_idx`'s receivers, laid out as the
     contiguous row-major slice of the ring at positions [b*recv_per_bank, (b+1)*recv_per_bank).
     `row_offset` shifts the whole rectangle down (used by worker-core to put senders on row 0)."""
     cores = []
     for k in range(recv_per_bank):
         ring_pos = bank_idx * recv_per_bank + k
-        col = ring_pos % _RING_COLS
-        row = ring_pos // _RING_COLS + row_offset
+        col = ring_pos % ring_cols
+        row = ring_pos // ring_cols + row_offset
         cores.append(ttnn.CoreRange(ttnn.CoreCoord(col, row), ttnn.CoreCoord(col, row)))
     return ttnn.CoreRangeSet(cores)
 
 
-def _build_program_config(num_kernel_repeats: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+def _build_program_config(
+    num_kernel_repeats: int, ring_size: int, ring_cols: int, ring_rows: int
+) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
     in0_block_w = 1  # The DRISC prefetcher factory hard-codes in0_block_w_tiles=1.
     out_block_h = _M // ttnn.TILE_SIZE
-    out_block_w = _N // _RING_SIZE // ttnn.TILE_SIZE
+    out_block_w = _N // ring_size // ttnn.TILE_SIZE
     out_subblock_w = min(out_block_w, 8)
     while out_subblock_w > 1 and out_block_w % out_subblock_w != 0:
         out_subblock_w -= 1
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(_RING_COLS, _RING_ROWS),
+        compute_with_storage_grid_size=(ring_cols, ring_rows),
         in0_block_w=in0_block_w,
         out_subblock_h=1,
         out_subblock_w=out_subblock_w,
@@ -169,14 +171,17 @@ def test_bench_dram_core_repeats(device):
     ttnn.device.enable_asynchronous_slow_dispatch(device)
 
     num_kernel_repeats = _bench_repeats()
-    num_dram_banks = _NUM_DRAM_BANKS
+    # Query DRAM bank count so the bench runs on harvested BHs too
+    # (P100 has 7 banks; P150/P300 have 8). Receiver rectangle is num_dram_banks columns
+    # × num_receivers_per_bank rows so the layout is always clean.
+    num_dram_banks = device.dram_grid_size().x
     num_receivers_per_bank = _NUM_RECV_PER_BANK
+    ring_size = num_dram_banks * num_receivers_per_bank
+    ring_cols = num_dram_banks
+    ring_rows = num_receivers_per_bank
 
-    # Receivers laid out as a row-major rectangle (_RING_COLS x _RING_ROWS) on worker rows
-    # 0..(_RING_ROWS-1). gather_in0 walks worker_cores_vec in row-major order, so bank b's
-    # receivers must be at row-major-adjacent ring positions [b*recv_per_bank, (b+1)*recv_per_bank).
     receiver_core_range_set = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_RING_COLS - 1, _RING_ROWS - 1))}
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
     )
 
     torch.manual_seed(0xBE7)
@@ -195,7 +200,7 @@ def test_bench_dram_core_repeats(device):
         pt_weight, device=device, dtype=_DTYPE, memory_config=weight_mem_config, layout=ttnn.TILE_LAYOUT
     )
 
-    K_per_shard = _round_up(math.ceil(_K / _RING_SIZE), ttnn.TILE_SIZE)
+    K_per_shard = _round_up(math.ceil(_K / ring_size), ttnn.TILE_SIZE)
     act_mem_config = ttnn.create_sharded_memory_config(
         shape=(_M, K_per_shard),
         core_grid=receiver_core_range_set,
@@ -225,13 +230,17 @@ def test_bench_dram_core_repeats(device):
 
     # bytes/elem: bf16=2, bf8_b≈1.0625 (1088B/tile / 1024 elems/tile)
     block_size_bytes = int((_K * (_N // num_dram_banks) // num_receivers_per_bank) * _DTYPE_BYTES)
-    gcb_size = _gcb_size_capped(block_size_bytes)
-    bank_to_receivers = [(b, _bank_receivers_row_major(b, num_receivers_per_bank)) for b in range(num_dram_banks)]
+    gcb_size = _gcb_size_capped(block_size_bytes, ring_size=ring_size)
+    bank_to_receivers = [
+        (b, _bank_receivers_row_major(b, num_receivers_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
+    ]
     gcb = ttnn.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
 
-    program_config = _build_program_config(num_kernel_repeats)
+    program_config = _build_program_config(
+        num_kernel_repeats, ring_size=ring_size, ring_cols=ring_cols, ring_rows=ring_rows
+    )
     output_mem_config = ttnn.create_sharded_memory_config(
-        shape=(_M, _N // _RING_SIZE),
+        shape=(_M, _N // ring_size),
         core_grid=receiver_core_range_set,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -245,10 +254,14 @@ def test_bench_dram_core_repeats(device):
         dst_full_sync_en=True,
     )
 
-    logger.info(f"[bench] K={_K} N={_N} ring={_RING_SIZE} gcb_size={gcb_size} repeats={num_kernel_repeats}")
+    logger.info(
+        f"[bench] K={_K} N={_N} banks={num_dram_banks} ring={ring_size} gcb_size={gcb_size} repeats={num_kernel_repeats}"
+    )
 
     # Correctness: single-repeat config first.
-    cc_config = _build_program_config(num_kernel_repeats=1)
+    cc_config = _build_program_config(
+        num_kernel_repeats=1, ring_size=ring_size, ring_cols=ring_cols, ring_rows=ring_rows
+    )
     ttnn.start_dram_core_prefetcher(device, [tt_weight, addrs], num_layers=1, global_cb=gcb)
     cc_out = ttnn.linear(
         tt_act,
@@ -310,24 +323,31 @@ def test_bench_workercore_repeats(device):
     ttnn.device.enable_asynchronous_slow_dispatch(device)
 
     num_kernel_repeats = _bench_repeats()
+    # Worker-core path uses the module-level _NUM_DRAM_BANKS=8 (the unharvested topology).
+    # On harvested cards (P100, 7 banks) this still hits the same DRAM-allocation failure
+    # as today; adapting this path is out of scope for the DRAM-core test work.
     num_senders = _NUM_DRAM_BANKS
+    ring_size = _RING_SIZE
+    ring_cols = _RING_COLS
+    ring_rows = _RING_ROWS
 
-    # Receivers as row-major _RING_COLS x _RING_ROWS rectangle on rows 0..(_RING_ROWS-1).
-    # Senders on row _RING_ROWS, one per DRAM bank, in column order.
+    # Receivers as row-major ring_cols x ring_rows rectangle on rows 0..(ring_rows-1).
+    # Senders on row ring_rows, one per DRAM bank, in column order.
     receiver_core_range_set = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_RING_COLS - 1, _RING_ROWS - 1))}
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
     )
     sender_core_range_set = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, _RING_ROWS), ttnn.CoreCoord(num_senders - 1, _RING_ROWS))}
+        {ttnn.CoreRange(ttnn.CoreCoord(0, ring_rows), ttnn.CoreCoord(num_senders - 1, ring_rows))}
     )
 
     # Sender s sends to receivers at row-major-adjacent ring positions [s*recv_per, (s+1)*recv_per).
     sender_receiver_mapping = [
-        (ttnn.CoreCoord(s, _RING_ROWS), _bank_receivers_row_major(s, _NUM_RECV_PER_BANK)) for s in range(num_senders)
+        (ttnn.CoreCoord(s, ring_rows), _bank_receivers_row_major(s, _NUM_RECV_PER_BANK, ring_cols=ring_cols))
+        for s in range(num_senders)
     ]
     # Per-sender, per-block bytes (each sender pushes its share of the weight).
     block_size_bytes = int((_K * (_N // num_senders) // _NUM_RECV_PER_BANK) * _DTYPE_BYTES)
-    gcb_size = _gcb_size_capped(block_size_bytes)
+    gcb_size = _gcb_size_capped(block_size_bytes, ring_size=ring_size)
     gcb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, gcb_size)
 
     torch.manual_seed(0xBE8)
@@ -365,7 +385,7 @@ def test_bench_workercore_repeats(device):
     tt_addrs_cc = _build_tensor_addrs(1)
     tt_addrs = _build_tensor_addrs(num_kernel_repeats)
 
-    K_per_shard = _round_up(math.ceil(_K / _RING_SIZE), ttnn.TILE_SIZE)
+    K_per_shard = _round_up(math.ceil(_K / ring_size), ttnn.TILE_SIZE)
     act_mem_config = ttnn.create_sharded_memory_config(
         shape=(_M, K_per_shard),
         core_grid=receiver_core_range_set,
@@ -377,9 +397,11 @@ def test_bench_workercore_repeats(device):
         pt_act, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config
     )
 
-    program_config = _build_program_config(num_kernel_repeats)
+    program_config = _build_program_config(
+        num_kernel_repeats, ring_size=ring_size, ring_cols=ring_cols, ring_rows=ring_rows
+    )
     output_mem_config = ttnn.create_sharded_memory_config(
-        shape=(_M, _N // _RING_SIZE),
+        shape=(_M, _N // ring_size),
         core_grid=receiver_core_range_set,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -393,10 +415,12 @@ def test_bench_workercore_repeats(device):
         dst_full_sync_en=True,
     )
 
-    logger.info(f"[workercore] K={_K} N={_N} ring={_RING_SIZE} gcb_size={gcb_size} repeats={num_kernel_repeats}")
+    logger.info(f"[workercore] K={_K} N={_N} ring={ring_size} gcb_size={gcb_size} repeats={num_kernel_repeats}")
 
     # Correctness: single-repeat config first.
-    cc_config = _build_program_config(num_kernel_repeats=1)
+    cc_config = _build_program_config(
+        num_kernel_repeats=1, ring_size=ring_size, ring_cols=ring_cols, ring_rows=ring_rows
+    )
     ttnn.dram_prefetcher([tt_weight, tt_addrs_cc], num_layers=1, global_cb=gcb)
     cc_out = ttnn.linear(
         tt_act,

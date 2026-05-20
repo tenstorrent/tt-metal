@@ -98,7 +98,7 @@ uint32_t pick_M(const std::vector<BlockGeom>& geoms, uint32_t num_receivers) {
 // addresses, GCB addresses, and DRISC L1 layout are all device-uniform.
 std::unique_ptr<Program> build_program(
     const std::vector<const MeshTensor*>& input_tensors,
-    const GlobalCircularBuffer& gcb,
+    const experimental::GlobalCircularBuffer& gcb,
     const experimental::DramCorePrefetcherConfig& config) {
     TT_FATAL(input_tensors.size() >= 2, "Need at least one data tensor + the tensor_addrs tensor");
 
@@ -228,7 +228,7 @@ DramCorePrefetcherManager::~DramCorePrefetcherManager() { stop(); }
 
 void DramCorePrefetcherManager::start(
     const std::vector<const MeshTensor*>& input_tensors,
-    const GlobalCircularBuffer& gcb,
+    const experimental::GlobalCircularBuffer& gcb,
     const experimental::DramCorePrefetcherConfig& config) {
     TT_FATAL(
         !is_active(),
@@ -259,7 +259,7 @@ void DramCorePrefetcherManager::stop() {
     }
     for (auto& state : per_device_state_) {
         if (state.device != nullptr && state.program != nullptr) {
-            WaitProgramDone(state.device, *state.program);
+            ::tt::tt_metal::detail::WaitProgramDone(state.device, *state.program);
         }
     }
     per_device_state_.clear();

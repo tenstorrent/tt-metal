@@ -15,7 +15,6 @@
 
 namespace tt::tt_metal {
 
-class GlobalCircularBuffer;
 class MeshTensor;
 
 namespace distributed {
@@ -23,6 +22,8 @@ class MeshDevice;
 }  // namespace distributed
 
 namespace experimental {
+
+class GlobalCircularBuffer;
 
 struct DramCorePrefetcherConfig {
     uint32_t num_layers = 1;

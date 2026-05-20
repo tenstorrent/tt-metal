@@ -48,8 +48,12 @@ from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
-_NUM_DRAM_BANKS = 8
-_RING_COLS = 8
+# DRAM bank count is queried at runtime via `device.dram_grid_size().x`:
+#   - P150/P300 (unharvested): 8 banks → ring=8*recv_per_bank.
+#   - P100 (1 column harvested): 7 banks → ring=7*recv_per_bank.
+# The receiver grid is laid out as `num_dram_banks` columns × `recv_per_bank` rows so the
+# rectangle is always clean. Test names that suggest a fixed ring size (e.g. "r64") refer
+# to the unharvested case; on P100 the same parametrization runs at ring=7*recv_per_bank.
 
 
 def _dram_programmable_enabled() -> bool:
@@ -107,13 +111,13 @@ def test_dram_core_prefetcher_BH_param(device, name, k_tiles_per_shard, n_tiles_
 
     ttnn.device.enable_asynchronous_slow_dispatch(device)
 
-    # ---- Topology ----
-    num_dram_banks = _NUM_DRAM_BANKS
+    # ---- Topology (queries DRAM bank count so the test adapts to harvested BHs) ----
+    num_dram_banks = device.dram_grid_size().x
     num_receivers_per_bank = recv_per_bank
     ring_size = num_dram_banks * num_receivers_per_bank
-    ring_cols = _RING_COLS
-    ring_rows = (ring_size + ring_cols - 1) // ring_cols
-    assert ring_size == ring_cols * ring_rows, f"ring_size {ring_size} not a clean rectangle on {ring_cols}-col grid"
+    ring_cols = num_dram_banks
+    ring_rows = num_receivers_per_bank
+    assert ring_size == ring_cols * ring_rows, f"ring_size {ring_size} != ring_cols {ring_cols} * ring_rows {ring_rows}"
 
     receiver_core_range_set = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}

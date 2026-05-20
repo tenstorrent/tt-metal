@@ -164,6 +164,11 @@ from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer_with_dram_senders,
 )
 
+from ttnn._ttnn.operations.prefetcher import (
+    start_dram_core_prefetcher,
+    stop_dram_core_prefetcher,
+)
+
 from ttnn._ttnn.fabric import (
     FabricConfig,
     FabricReliabilityMode,
