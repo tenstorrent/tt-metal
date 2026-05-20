@@ -253,8 +253,7 @@ def run_hf(
             torch.cuda.manual_seed_all(seed)
 
     with torch.inference_mode():
-        output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
-    output_text = processor.batch_decode(output_ids, skip_special_tokens=True)[0]
+        model.generate(**inputs, max_new_tokens=max_new_tokens)
 
 
 def _devstral_bh_qb_decoders_precision(args):
@@ -391,7 +390,6 @@ def run_tt(
         _embed_dev = hf_inner.get_input_embeddings().weight.device
         input_ids = input_ids.to(_embed_dev)
         pixel_values = pixel_values.to(_embed_dev)
-        image_sizes = image_sizes.to(_embed_dev)
 
         text_cfg = model_args.hf_config.text_config
         if not isinstance(text_cfg, Ministral3Config):

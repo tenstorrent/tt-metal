@@ -10,7 +10,6 @@ from typing import Any, Optional, Tuple
 import numpy as np
 import ttnn
 
-from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.prefetcher import Prefetcher
 
 # Use HfRotarySetupOld + legacy rotary_embedding (new HF rope misrotates Q/K here).
@@ -185,18 +184,23 @@ class TtMinistral3RotaryEmbedding(HfRotarySetup):
         shard_batch_to_mesh_dim: Optional[int] = 1,
         prefetcher: Optional[Prefetcher] = None,
     ) -> None:
-        LightweightModule.__init__(self)
-        if use_qk_fused:
-            raise NotImplementedError("use_qk_fused")
-        # Skip parent __init__ so cos/sin stay HF/YaRN-aligned.
-        self.batch_size = batch_size
-        self.head_dim = head_dim
-        self.max_seq_len = max_seq_len
-        self.device = device
+        rope_theta = float(config.rope_parameters["rope_theta"])
+        super().__init__(
+            device=device,
+            batch_size=batch_size,
+            head_dim=head_dim,
+            max_seq_len=max_seq_len,
+            rope_theta=rope_theta,
+            use_qk_fused=use_qk_fused,
+            datatype=datatype,
+            shard_batch_to_mesh_dim=shard_batch_to_mesh_dim,
+            prefetcher=prefetcher,
+        )
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.prefetcher = prefetcher
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
 
+        # Replace parent get_rot_mats_hf tables with HF/YaRN-aligned Ministral3 NumPy build.
         table_np = np.float32 if datatype == ttnn.bfloat16 else np.float64
         cos_hf, sin_hf = ministral3_hf_cos_sin_tables(head_dim, max_seq_len, config, table_dtype=table_np)
 

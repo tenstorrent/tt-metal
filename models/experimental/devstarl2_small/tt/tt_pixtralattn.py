@@ -167,7 +167,6 @@ class TtMistralImageAttention(LightweightModule):
 
     def _linear_qkv_seq_chunked(self, x_11SH, seq_len: int, max_mm_seq_len: int) -> ttnn.Tensor:
         """Fused QKV ``ttnn.linear`` over the sequence axis; chunk so matmul ``m`` fits L1 CB budget."""
-        original_seq_len = seq_len
         x_11SH, seq_len, original_seq_len = pad_seq_to_chunk_multiple(x_11SH, seq_len, max_mm_seq_len)
         if seq_len <= max_mm_seq_len:
             out = ttnn.linear(
@@ -194,7 +193,6 @@ class TtMistralImageAttention(LightweightModule):
 
     def _linear_wo_seq_chunked(self, attn_output_11SH, seq_len: int, max_mm_seq_len: int) -> ttnn.Tensor:
         """Output ``wo`` linear with the same chunking."""
-        original_seq_len = seq_len
         attn_output_11SH, seq_len, original_seq_len = pad_seq_to_chunk_multiple(
             attn_output_11SH, seq_len, max_mm_seq_len
         )

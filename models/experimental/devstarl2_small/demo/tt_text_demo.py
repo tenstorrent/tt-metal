@@ -39,7 +39,6 @@ from models.experimental.devstarl2_small.devstral_utils import (
     tt_lm_head_logits_block,
     tt_lm_head_logits_last_token,
     tt_prefill_hidden_states_from_ids,
-    tt_prefill_target_seqlen,
     tt_read_decode_traced_hidden,
     tt_read_decode_traced_logits,
     tt_read_decode_traced_token,
@@ -314,8 +313,6 @@ def main():
             pad_token_id = 0
         else:
             pad_token_id = int(pad_token_id)
-
-        target_lm = tt_prefill_target_seqlen(seq_len_lm, int(model_args.n_kv_heads), int(model_args.cluster_shape[1]))
 
         tt_lm_torch = tt_prefill_hidden_states_from_ids(
             input_ids, pad_token_id, mesh_device, tt_model, seq_len_lm, model_args
