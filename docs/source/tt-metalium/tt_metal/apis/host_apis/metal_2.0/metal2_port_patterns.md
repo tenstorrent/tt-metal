@@ -1,6 +1,6 @@
 # Metal 2.0 Op Port — Patterns & Anti-Patterns Catalog
 
-This catalog accumulates patterns and anti-patterns observed during Metal 2.0 op ports. It is referenced from the [Phase 0 audit](port_op_to_metal2_audit.md) for yellow-tier override guidance, from [Phase B of the port recipe](port_op_to_metal2_recipe.md#phase-b--plan-the-spec) for structural-decision reference, and from Phase D for the anti-pattern self-audit checklist.
+This catalog accumulates patterns and anti-patterns observed during Metal 2.0 op ports. It is referenced from the [feasibility audit](port_op_to_metal2_audit.md) for yellow-tier override guidance, from the [port recipe's planning step](port_op_to_metal2_recipe.md#plan-the-spec) for structural-decision reference, and from the recipe's verification step for the anti-pattern self-audit checklist.
 
 Each entry is self-contained. New entries land here as they're discovered during ports.
 
@@ -287,4 +287,4 @@ Two safe paths:
 1. **In-place modification when all consumers are co-migrating.** If every consuming op is being ported to Metal 2.0 in the same PR (or in a bundled set of PRs), modify in place and update each consumer's factory consistently.
 2. **Fork when consumers diverge.** If some consumers remain on legacy and some are on Metal 2.0, fork the shared kernel with a `_metal2`-suffixed copy (e.g., `reader_unary_interleaved_start_id_metal2.cpp`). Reference the new file from the ported factory's `KernelSpec::source`. Plan to delete the legacy copy when all consumers have ported.
 
-A kernel-source change that compiles cleanly for the porting op but breaks a sibling op's CTA layout is one of the failure modes that escapes Phase D's anti-pattern self-audit — it's *not* in the ported op's own files. The Phase A inventory should explicitly note any cross-op kernel sources.
+A kernel-source change that compiles cleanly for the porting op but breaks a sibling op's CTA layout is one of the failure modes that escapes the recipe's anti-pattern self-audit — it's *not* in the ported op's own files. The legacy-inventory step should explicitly note any cross-op kernel sources.
