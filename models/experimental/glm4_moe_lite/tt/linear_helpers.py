@@ -11,6 +11,7 @@ instead of capturing outer scope variables.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Any
 
 import ttnn
@@ -22,10 +23,68 @@ _DOWN_MATMUL_NUM_CORES = 32
 _DOWN_OUT_SUBBLOCK_W = 2
 
 
+@dataclass(frozen=True)
+class Matmul1dProgOverrides:
+    """Optional overrides for ``compute_1d_prog_cfg`` (``None`` = auto)."""
+
+    in0_block_w: int | None = None
+    per_core_M: int | None = None
+    per_core_N: int | None = None
+    out_subblock_w: int | None = None
+    out_subblock_h: int | None = None
+
+
+# LM-head 1D multicast tuning (edit in source; ``None`` = auto heuristics).
+# Defaults for GLM-4.7-Flash full vocab on 110 cores: in0_block_w=4, per_core_M=1 (decode),
+# per_core_N=44, out_subblock_h=1, out_subblock_w=4.
+LM_HEAD_MATMUL_OVERRIDES = Matmul1dProgOverrides(
+    in0_block_w=None,
+    per_core_M=None,
+    per_core_N=None,
+    out_subblock_w=None,
+    out_subblock_h=None,
+)
+
+
+def _auto_in0_block_w(k_tiles: int) -> int:
+    for candidate in (4, 3, 2):
+        if k_tiles % candidate == 0:
+            return candidate
+    return 1
+
+
+def _auto_out_subblock_w(*, per_core_N: int, per_core_M: int, fp32_dest_acc_en: bool) -> tuple[int, int]:
+    """Pick output subblock geometry (h, w) within DST register limits."""
+    out_subblock_h = 1
+    max_subblock_w = 2 if fp32_dest_acc_en else 4
+    out_subblock_w = 1
+    for cand in range(min(max_subblock_w, per_core_N), 0, -1):
+        if per_core_N % cand == 0:
+            out_subblock_w = cand
+            break
+    if per_core_M > 1:
+        for cand in range(min(max_subblock_w, per_core_M), 0, -1):
+            if per_core_M % cand == 0:
+                out_subblock_h = cand
+                break
+    return out_subblock_h, out_subblock_w
+
+
 def compute_1d_prog_cfg(
-    device: Any, b_weight: ttnn.Tensor, m_total: int
+    device: Any,
+    b_weight: ttnn.Tensor,
+    m_total: int,
+    *,
+    fp32_dest_acc_en: bool = False,
+    overrides: Matmul1dProgOverrides | None = None,
 ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-    """Compute 1D multicast program config for decode matmuls (M <= 1 tile)."""
+    """Compute 1D multicast program config for decode-sized matmuls.
+
+    Heuristics target bandwidth-bound ops (e.g. LM head ``32 x 2048 x 154880``):
+    ``in0_block_w`` up to 4 when ``k_tiles`` allows, and ``out_subblock_w`` up to 4
+    when ``per_core_N`` divides evenly (perf report: avoid ``out_subblock_h * w == 1``).
+    """
+    ov = overrides or Matmul1dProgOverrides()
     K = int(b_weight.shape[-2])
     N = int(b_weight.shape[-1])
     m_tiles = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
@@ -39,25 +98,66 @@ def compute_1d_prog_cfg(
         grid_y = max(1, n_tiles // grid_x)
         num_cores = grid_x * grid_y
 
-    per_core_N = max(1, math.ceil(n_tiles / num_cores))
+    if ov.per_core_N is not None:
+        per_core_N = int(ov.per_core_N)
+        if per_core_N <= 0:
+            raise ValueError(f"per_core_N must be positive, got {per_core_N}")
+    else:
+        per_core_N = max(1, math.ceil(n_tiles / num_cores))
 
-    in0_bw = 1
-    for candidate in (4, 3, 2):
-        if k_tiles % candidate == 0:
-            in0_bw = candidate
-            break
+    per_core_M = int(ov.per_core_M) if ov.per_core_M is not None else m_tiles
+
+    if ov.in0_block_w is not None:
+        in0_bw = int(ov.in0_block_w)
+        if k_tiles % in0_bw != 0:
+            raise ValueError(f"in0_block_w={in0_bw} must divide k_tiles={k_tiles}")
+    else:
+        in0_bw = _auto_in0_block_w(k_tiles)
+
+    if ov.out_subblock_w is not None:
+        out_subblock_h = int(ov.out_subblock_h) if ov.out_subblock_h is not None else 1
+        out_subblock_w = int(ov.out_subblock_w)
+    else:
+        out_subblock_h, out_subblock_w = _auto_out_subblock_w(
+            per_core_N=per_core_N, per_core_M=per_core_M, fp32_dest_acc_en=fp32_dest_acc_en
+        )
 
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
         in0_block_w=in0_bw,
-        out_subblock_h=1,
-        out_subblock_w=1,
-        per_core_M=m_tiles,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
         per_core_N=per_core_N,
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=True,
     )
+
+
+def lm_head_linear(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    memory_config: ttnn.MemoryConfig | None = None,
+    overrides: Matmul1dProgOverrides | None = None,
+) -> ttnn.Tensor:
+    """LM head: interleaved activations + weights with tuned 1D multicast program config."""
+    m_total = 1
+    for i in range(len(a.shape) - 1):
+        m_total *= int(a.shape[i])
+    kwargs: dict[str, object] = {
+        "program_config": compute_1d_prog_cfg(
+            device,
+            b,
+            m_total,
+            overrides=overrides or LM_HEAD_MATMUL_OVERRIDES,
+        ),
+    }
+    if memory_config is not None:
+        kwargs["memory_config"] = memory_config
+    return ttnn.linear(a, b, **kwargs)
 
 
 def compute_1d_mlp_down_prog_cfg(
@@ -145,7 +245,7 @@ def mlp_linear(
         for i in range(len(b.shape) - 2):
             b_batch *= int(b.shape[i])
         if m_total <= ttnn.TILE_SIZE and b_batch == 1:
-            kwargs["program_config"] = compute_1d_prog_cfg(device, b, m_total)
+            kwargs["program_config"] = compute_1d_prog_cfg(device, b, m_total, fp32_dest_acc_en=cfg.moe_fp32_acc)
     return ttnn.linear(a, b, **kwargs)
 
 
