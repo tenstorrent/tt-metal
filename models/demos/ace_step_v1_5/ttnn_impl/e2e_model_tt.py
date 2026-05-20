@@ -1169,7 +1169,15 @@ class AceStepE2EModel:
         attn_mask_np = np.asarray(tokens["attention_mask"], dtype=np.float32).reshape(1, -1)
         if self._qwen is None:
             raise RuntimeError("Qwen TTNN encoder was not initialized.")
-        text_hs_tt = self._qwen.forward(input_ids_np, attn_mask_np)
+        # When the DiT body trace is enabled (``ACE_STEP_USE_TRACE=1``), also use the
+        # trace + 2CQ replay path for the Qwen3 caption encoder. Output is bit-equivalent
+        # to ``forward()`` for B=1 (the only path ACE-Step uses) — the existing host
+        # round-trip in ``forward()`` exists only for the B>1 per-user loop. See
+        # :meth:`AceStepQwen3Encoder.forward_traced` for details.
+        if self._trace_state is not None:
+            text_hs_tt = self._qwen.forward_traced(input_ids_np)
+        else:
+            text_hs_tt = self._qwen.forward(input_ids_np, attn_mask_np)
         return text_hs_tt, attn_mask_np
 
     def _ctx_latents_ttnn(self) -> ttnn.Tensor:
