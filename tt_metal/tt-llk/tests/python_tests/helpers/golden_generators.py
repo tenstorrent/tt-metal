@@ -2271,6 +2271,18 @@ class EltwiseBinaryGolden(FidelityMasking):
         # Compute in float32 for better fidelity, then cast back to original dtype.
         return (t1.to(torch.float32) * t2.to(torch.float32)).to(t1.dtype)
 
+    def _gt_int(self, t1, t2):
+        return (t1 > t2).to(torch.int32)
+
+    def _lt_int(self, t1, t2):
+        return (t1 < t2).to(torch.int32)
+
+    def _le_int(self, t1, t2):
+        return (t1 <= t2).to(torch.int32)
+
+    def _ge_int(self, t1, t2):
+        return (t1 >= t2).to(torch.int32)
+
 
 @register_golden
 class BinarySFPUGolden(EltwiseBinaryGolden):
@@ -2281,6 +2293,11 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuElwadd: self._add,
                 MathOperation.SfpuElwsub: self._sub,
                 MathOperation.SfpuElwmul: self._mul,
+                MathOperation.SfpuElwmulInt: self._mul,
+                MathOperation.SfpuGtInt: self._gt_int,
+                MathOperation.SfpuLtInt: self._lt_int,
+                MathOperation.SfpuLeInt: self._le_int,
+                MathOperation.SfpuGeInt: self._ge_int,
                 MathOperation.SfpuXlogy: self._xlogy,
                 MathOperation.SfpuElwRightShift: self._right_shift,
                 MathOperation.SfpuElwLeftShift: self._left_shift,

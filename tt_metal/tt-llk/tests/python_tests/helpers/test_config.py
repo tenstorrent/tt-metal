@@ -242,7 +242,6 @@ class TestConfig:
             case ChipArchitecture.QUASAR:
                 TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-qsr32"
                 TestConfig.ARCH_COMPUTE = "-mcpu=tt-qsr32-tensix"
-                TestConfig.ARCH_SPECIFIC_OPTIONS = "-mno-tt-tensix-optimize-replay"
                 TestConfig.ARCH_DEFINE = "-DARCH_QUASAR"
                 TestConfig.ARCH_LLK_ROOT = "tt_llk_quasar"
                 TestConfig.ARCH = ChipArchitecture.QUASAR

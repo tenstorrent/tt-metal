@@ -229,20 +229,41 @@ TEST_F(ProgramRunParamsTestQuasar, WrongCommonRuntimeArgsCountFails) {
 
 // TODO: Currently, we require that all kernels in a ProgramSpec have params specified.
 // Should relax this to omit kernels with no RTAs or CRTAs.
-TEST_F(ProgramRunParamsTestQuasar, MissingKernelParamsFails) {
+TEST_F(ProgramRunParamsTestQuasar, EmptySchemaKernelOmittedFromRunParamsSucceeds) {
     NodeCoord node{0, 0};
+    // Both kernels have empty RTA/CRTA schemas — neither has anything to supply per enqueue.
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
-    // Only provide params for dm_kernel, missing compute_kernel
+    // Only provide params for dm_kernel; omit compute_kernel.
+    // Since compute_kernel's schema is empty, this should succeed.
     ProgramRunParams params;
     params.kernel_run_params.push_back(MakeKernelRunParams("dm_kernel", node, {}, {}));
-    // Missing: compute_kernel params
+
+    EXPECT_NO_THROW({ SetProgramRunParameters(program, params); });
+}
+
+TEST_F(ProgramRunParamsTestQuasar, NonEmptySchemaKernelMissingFromRunParamsFails) {
+    NodeCoord node{0, 0};
+    // compute_kernel has a non-empty schema (2 vararg RTAs).
+    ProgramSpec spec = MakeSpecWithBothKernelRTAs(
+        node,
+        /*dm_per_node_rtas=*/0,
+        /*dm_common_rtas=*/0,
+        /*compute_per_node_rtas=*/2,
+        /*compute_common_rtas=*/0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Only provide params for dm_kernel; omit compute_kernel.
+    // Since compute_kernel has declared RTAs, this should fail.
+    ProgramRunParams params;
+    params.kernel_run_params.push_back(MakeKernelRunParams("dm_kernel", node, {}, {}));
 
     EXPECT_THAT(
         [&] { SetProgramRunParameters(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
-            "Kernel 'compute_kernel' is registered in the Program but has no runtime parameters")));
+            "Kernel 'compute_kernel' is registered in the Program with a non-empty RTA/CRTA schema "
+            "but has no runtime parameters specified in ProgramRunParams")));
 }
 
 TEST_F(ProgramRunParamsTestQuasar, DuplicateKernelParamsFails) {
@@ -939,6 +960,144 @@ TEST_F(ProgramRunParamsTestQuasar, NamedAndVarargRTAsCoexistSucceeds) {
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
 
     EXPECT_NO_THROW(SetProgramRunParameters(program, params));
+}
+
+// ============================================================================
+// SECTION 4b: Borrowed-Memory DFB Attach Tests (Quasar)
+// ============================================================================
+//
+// These tests cover the runtime attach path for DataflowBuffers that borrow their L1 storage
+// from a TensorParameter (DataflowBufferSpec::borrowed_from). The flow:
+//
+//   1. MakeProgramFromSpec    → DFB added with config.borrows_memory = true; groups not yet
+//                                created; no L1 allocated.
+//   2. finalize_dataflow_buffer_configs (would normally run inside the dispatch pipeline at
+//                                first enqueue) populates per-DFB `groups[].l1_by_core`
+//                                entries with placeholder addr = 0.
+//   3. SetProgramRunParameters / UpdateTensorArgs → AttachBorrowedDFBBuffers resolves the
+//                                bound MeshTensor, extracts its reference-buffer address, and
+//                                calls dfb->set_borrowed_memory_base_addr(addr), which
+//                                overwrites every `groups[].l1_by_core` entry (and any
+//                                populated `core_lookup_` entries) with that address.
+//
+// On mock device we don't run the full dispatch pipeline, so we trigger
+// finalize_dataflow_buffer_configs() explicitly and verify state directly off the
+// DataflowBufferImpl. allocate_dataflow_buffers requires a configured device and isn't needed
+// for these checks — set_borrowed_memory_base_addr iterates `groups[].l1_by_core` regardless.
+
+// Helper: build a ProgramSpec with a borrowed-memory DFB backed by a TensorParameter.
+// DFB default size: 32 bytes (entry_size 16 * num_entries 2); fits inside
+// MakeMinimalTensorParameter's 1x32 BFLOAT16 default (64 bytes).
+inline ProgramSpec MakeBorrowedDFBProgramSpecForRunParams(
+    const std::string& tensor_param_name = "borrowed_tensor",
+    uint32_t dfb_entry_size = 16,
+    uint32_t dfb_num_entries = 2) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "borrowed_dfb_test_program";
+
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer = MakeMinimalDMKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb", dfb_entry_size, dfb_num_entries);
+    dfb.borrowed_from = tensor_param_name;
+
+    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    auto tensor_param = MakeMinimalTensorParameter(tensor_param_name, tt::tt_metal::BufferType::L1);
+    BindTensorParameterToKernel(producer, tensor_param_name, "borrowed_t");
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.tensor_parameters = {tensor_param};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+    return spec;
+}
+
+// Helper: build minimal ProgramRunParams for the borrowed-DFB spec above. Both kernels are
+// MakeMinimalDMKernel (no per-node or common args required), so kernel_run_params entries
+// are empty schemas. Caller supplies the tensor_args entry separately.
+inline ProgramRunParams MakeBorrowedDFBRunParams() {
+    NodeCoord node{0, 0};
+    ProgramRunParams params;
+    params.kernel_run_params.push_back(MakeKernelRunParams("producer", node, {}, {}));
+    params.kernel_run_params.push_back(MakeKernelRunParams("consumer", node, {}, {}));
+    return params;
+}
+
+// Helper: peek at the DFB's per-core L1 base address as written into groups[].l1_by_core.
+// All cores of a single DFB share the same address (lockstep allocation invariant), so
+// returning the first entry is representative.
+inline uint32_t PeekBorrowedDFBAddress(Program& program, const DFBSpecName& dfb_name) {
+    const uint32_t dfb_id = program.impl().get_dfb_handle(dfb_name);
+    const auto dfb = program.impl().get_dataflow_buffer(dfb_id);
+    TT_FATAL(!dfb->groups.empty(), "DFB '{}' has no groups; finalize_dataflow_buffer_configs() not called?", dfb_name);
+    TT_FATAL(!dfb->groups[0].l1_by_core.empty(), "DFB '{}' group 0 is empty", dfb_name);
+    return dfb->groups[0].l1_by_core[0].second;
+}
+
+TEST_F(ProgramRunParamsTestQuasar, BorrowedDFB_BorrowsFlagPropagatesToConfig) {
+    // MakeProgramFromSpec should set config.borrows_memory = true on the device-side DFB
+    // config when (and only when) DataflowBufferSpec::borrowed_from is set.
+    ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunParams();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const uint32_t dfb_id = program.impl().get_dfb_handle("dfb");
+    const auto dfb = program.impl().get_dataflow_buffer(dfb_id);
+    EXPECT_TRUE(dfb->borrows_memory()) << "DFB declared borrowed_from should have config.borrows_memory = true";
+}
+
+TEST_F(ProgramRunParamsTestQuasar, BorrowedDFB_AttachWritesTensorAddressToDFB) {
+    // After SetProgramRunParameters, the bound MeshTensor's address should appear in the
+    // DFB's per-core L1 base address tables (overwriting Almeet's 0 placeholder).
+    ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunParams();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Populate groups[].l1_by_core with placeholder addr = 0. (Normally invoked inside the
+    // dispatch pipeline at first enqueue; we don't enqueue in unit tests.)
+    program.impl().finalize_dataflow_buffer_configs();
+    ASSERT_EQ(PeekBorrowedDFBAddress(program, "dfb"), 0u) << "DFB base addr before attach should be the placeholder 0";
+
+    // Allocate the borrowed tensor and attach via SetProgramRunParameters.
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    ProgramRunParams params = MakeBorrowedDFBRunParams();
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "borrowed_tensor", .tensor = std::cref(tensor)},
+    };
+    SetProgramRunParameters(program, params);
+
+    EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb"), static_cast<uint32_t>(tensor.address()))
+        << "DFB base addr should match the borrowed MeshTensor's address after attach";
+}
+
+TEST_F(ProgramRunParamsTestQuasar, BorrowedDFB_UpdateTensorArgsRefreshesAddress) {
+    // The cache-hit path: UpdateTensorArgs should re-attach the borrowed Buffer, refreshing
+    // the DFB's base address to the new MeshTensor's address.
+    ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunParams();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    MeshTensor tensor1 =
+        MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    ProgramRunParams params = MakeBorrowedDFBRunParams();
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "borrowed_tensor", .tensor = std::cref(tensor1)},
+    };
+    SetProgramRunParameters(program, params);
+    ASSERT_EQ(PeekBorrowedDFBAddress(program, "dfb"), static_cast<uint32_t>(tensor1.address()));
+
+    MeshTensor tensor2 =
+        MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    ASSERT_NE(tensor1.address(), tensor2.address())
+        << "Test pre-condition: two separate allocations should yield distinct addresses";
+
+    std::vector<ProgramRunParams::TensorArg> tensor_args{
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "borrowed_tensor", .tensor = std::cref(tensor2)},
+    };
+    EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args));
+    EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb"), static_cast<uint32_t>(tensor2.address()))
+        << "DFB base addr should refresh to the new MeshTensor's address after UpdateTensorArgs";
 }
 
 // ============================================================================
