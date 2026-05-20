@@ -34,6 +34,45 @@ def test_createdevice_matches_open_device_grid_defaults():
             ttnn.close_device(create_device_handle)
 
 
+def test_dispatch_core_config_defaults_follow_cluster_policy():
+    cluster_type = ttnn._ttnn.cluster.get_cluster_type()
+    config = ttnn.DispatchCoreConfig()
+    eth_default_dispatch_clusters = {
+        ttnn._ttnn.cluster.ClusterType.N300,
+        ttnn._ttnn.cluster.ClusterType.T3K,
+        ttnn._ttnn.cluster.ClusterType.N300_2x2,
+    }
+    expected_type = (
+        ttnn.DispatchCoreType.ETH if cluster_type in eth_default_dispatch_clusters else ttnn.DispatchCoreType.WORKER
+    )
+    assert config.type() == expected_type
+
+    is_blackhole = "blackhole" in ttnn._ttnn.device.get_arch_name()
+    expected_axis = ttnn.DispatchCoreAxis.COL if is_blackhole else ttnn.DispatchCoreAxis.ROW
+    assert config.axis == expected_axis
+
+
+def test_dispatch_core_config_constructor_rules():
+    with pytest.raises(ValueError, match="COL axis is not supported for ETH dispatch core type"):
+        ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH, ttnn.DispatchCoreAxis.COL)
+
+    config = ttnn.DispatchCoreConfig(axis=ttnn.DispatchCoreAxis.COL)
+    assert config.type() == ttnn.DispatchCoreType.WORKER
+    assert config.axis == ttnn.DispatchCoreAxis.COL
+
+    is_blackhole = "blackhole" in ttnn._ttnn.device.get_arch_name()
+    if is_blackhole:
+        with pytest.raises(
+            ValueError, match="ROW dispatch core axis is not supported for blackhole arch unless fabric tensix MUX"
+        ):
+            ttnn.DispatchCoreConfig(
+                axis=ttnn.DispatchCoreAxis.ROW, fabric_tensix_config=ttnn.FabricTensixConfig.DISABLED
+            )
+        assert (
+            ttnn.DispatchCoreConfig(fabric_tensix_config=ttnn.FabricTensixConfig.MUX).axis == ttnn.DispatchCoreAxis.ROW
+        )
+
+
 def test_manage_device():
     """Simple unit test to test device context manager APIs"""
     with ttnn.manage_device(0) as device:

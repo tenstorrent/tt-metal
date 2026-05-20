@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -30,6 +31,7 @@
 
 #include "small_vector_caster.hpp"
 #include "tools/profiler/op_profiler.hpp"
+#include "ttnn/cluster.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -57,10 +59,90 @@ namespace {
 // RegisterProgramRealtimeProfilerCallback. Access only from the Python thread (always under GIL), so no mutex needed.
 std::unordered_map<uint64_t, PyObject*> python_realtime_callback_refs;
 
+bool is_blackhole_arch() {
+    return tt::tt_metal::detail::get_platform_architecture_name().find("blackhole") != std::string::npos;
+}
+
+tt::tt_metal::DispatchCoreType get_default_dispatch_core_type() {
+    const auto cluster_type = ttnn::cluster::get_cluster_type();
+    if (cluster_type == tt::tt_metal::ClusterType::N300 || cluster_type == tt::tt_metal::ClusterType::T3K ||
+        cluster_type == tt::tt_metal::ClusterType::N300_2x2) {
+        return tt::tt_metal::DispatchCoreType::ETH;
+    }
+    return tt::tt_metal::DispatchCoreType::WORKER;
+}
+
+tt::tt_metal::DispatchCoreAxis get_default_dispatch_core_axis(
+    std::optional<tt::tt_fabric::FabricTensixConfig> fabric_tensix_config) {
+    if (is_blackhole_arch()) {
+        if (fabric_tensix_config.value_or(tt::tt_fabric::FabricTensixConfig::DISABLED) ==
+            tt::tt_fabric::FabricTensixConfig::MUX) {
+            return tt::tt_metal::DispatchCoreAxis::ROW;
+        }
+        return tt::tt_metal::DispatchCoreAxis::COL;
+    }
+    return tt::tt_metal::DispatchCoreAxis::ROW;
+}
+
+tt::tt_metal::DispatchCoreConfig create_dispatch_core_config(
+    std::optional<tt::tt_metal::DispatchCoreType> dispatch_core_type = std::nullopt,
+    std::optional<tt::tt_metal::DispatchCoreAxis> dispatch_core_axis = std::nullopt,
+    std::optional<tt::tt_fabric::FabricTensixConfig> fabric_tensix_config = std::nullopt) {
+    if (dispatch_core_type.has_value() && dispatch_core_axis.has_value() &&
+        dispatch_core_type.value() == tt::tt_metal::DispatchCoreType::ETH &&
+        dispatch_core_axis.value() == tt::tt_metal::DispatchCoreAxis::COL) {
+        throw std::invalid_argument("COL axis is not supported for ETH dispatch core type");
+    }
+    if (dispatch_core_axis.has_value() && dispatch_core_axis.value() == tt::tt_metal::DispatchCoreAxis::ROW &&
+        is_blackhole_arch() &&
+        fabric_tensix_config.value_or(tt::tt_fabric::FabricTensixConfig::DISABLED) !=
+            tt::tt_fabric::FabricTensixConfig::MUX) {
+        throw std::invalid_argument(
+            "ROW dispatch core axis is not supported for blackhole arch unless fabric tensix MUX is enabled");
+    }
+
+    if (dispatch_core_type.has_value() && dispatch_core_axis.has_value()) {
+        return tt::tt_metal::DispatchCoreConfig(dispatch_core_type.value(), dispatch_core_axis.value());
+    }
+    if (dispatch_core_type.has_value()) {
+        return tt::tt_metal::DispatchCoreConfig(
+            dispatch_core_type.value(), get_default_dispatch_core_axis(fabric_tensix_config));
+    }
+    if (dispatch_core_axis.has_value()) {
+        if (dispatch_core_axis.value() == tt::tt_metal::DispatchCoreAxis::COL) {
+            return tt::tt_metal::DispatchCoreConfig(tt::tt_metal::DispatchCoreType::WORKER, dispatch_core_axis.value());
+        }
+        return tt::tt_metal::DispatchCoreConfig(get_default_dispatch_core_type(), dispatch_core_axis.value());
+    }
+    return tt::tt_metal::DispatchCoreConfig(
+        get_default_dispatch_core_type(), get_default_dispatch_core_axis(fabric_tensix_config));
+}
+
+tt::tt_metal::DispatchCoreConfig resolve_dispatch_core_config(
+    const std::optional<tt::tt_metal::DispatchCoreConfig>& dispatch_core_config) {
+    if (dispatch_core_config.has_value()) {
+        return dispatch_core_config.value();
+    }
+    return create_dispatch_core_config();
+}
+
 void ttnn_device(nb::module_& mod) {
     mod.def(
         "open_device",
-        &ttnn::open_mesh_device,
+        [](int device_id,
+           size_t l1_small_size,
+           size_t trace_region_size,
+           uint8_t num_command_queues,
+           const std::optional<tt::tt_metal::DispatchCoreConfig>& dispatch_core_config,
+           size_t worker_l1_size) {
+            return ttnn::open_mesh_device(
+                device_id,
+                l1_small_size,
+                trace_region_size,
+                num_command_queues,
+                resolve_dispatch_core_config(dispatch_core_config),
+                worker_l1_size);
+        },
         nb::sig("def open_device(\\*, device_id: int, l1_small_size: int, trace_region_size: int, "
                 "dispatch_core_config: ttnn.device.DispatchCoreConfig, worker_l1_size: int)"),
         nb::kw_only(),
@@ -68,7 +150,7 @@ void ttnn_device(nb::module_& mod) {
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
         nb::arg("num_command_queues") = 1,
-        nb::arg("dispatch_core_config") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
+        nb::arg("dispatch_core_config") = nb::none(),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
         nb::rv_policy::reference,  // cleanup has to happen in c++ land
         R"doc(
@@ -124,17 +206,21 @@ void py_device_module_types(nb::module_& m_device) {
     nb::class_<tt::tt_metal::DispatchCoreConfig>(
         m_device, "DispatchCoreConfig", "Class representing dispatch core configuration.")
         .def(
-            nb::init<>(),
-            "Default constructor initializing type to WORKER and axis to default value on platform architecture.")
-        .def(
-            nb::init<tt::tt_metal::DispatchCoreType>(),
-            "Constructor with specified dispatch core type and default axis on platform architecture.",
-            nb::arg("type"))
-        .def(
-            nb::init<tt::tt_metal::DispatchCoreType, tt::tt_metal::DispatchCoreAxis>(),
-            "Constructor with specified dispatch core type and axis.",
-            nb::arg("type"),
-            nb::arg("axis"));
+            "__init__",
+            [](tt::tt_metal::DispatchCoreConfig* self,
+               std::optional<tt::tt_metal::DispatchCoreType> type,
+               std::optional<tt::tt_metal::DispatchCoreAxis> axis,
+               std::optional<tt::tt_fabric::FabricTensixConfig> fabric_tensix_config) {
+                new (self)
+                    tt::tt_metal::DispatchCoreConfig(create_dispatch_core_config(type, axis, fabric_tensix_config));
+            },
+            nb::arg("type") = nb::none(),
+            nb::arg("axis") = nb::none(),
+            nb::arg("fabric_tensix_config") = nb::none(),
+            "Constructor supporting cluster-aware defaults with optional type/axis/fabric override.")
+        .def("type", [](const tt::tt_metal::DispatchCoreConfig& self) { return self.get_dispatch_core_type(); })
+        .def_prop_ro(
+            "axis", [](const tt::tt_metal::DispatchCoreConfig& self) { return self.get_dispatch_core_axis(); });
 
     nb::class_<SubDevice>(m_device, "SubDevice", "Class describing a sub-device of a Tenstorrent accelerator device.");
 
@@ -207,14 +293,14 @@ void device_module(nb::module_& m_device) {
            uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
-           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
+           const std::optional<tt::tt_metal::DispatchCoreConfig>& dispatch_core_config,
            size_t worker_l1_size) {
             return MeshDevice::create_unit_mesh(
                 device_id,
                 l1_small_size,
                 trace_region_size,
                 num_command_queues,
-                dispatch_core_config,
+                resolve_dispatch_core_config(dispatch_core_config),
                 /*l1_bank_remap=*/{},
                 worker_l1_size);
         },
@@ -231,7 +317,7 @@ void device_module(nb::module_& m_device) {
         nb::arg("num_command_queues") = 1,
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        nb::arg("DispatchCoreConfig") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
+        nb::arg("DispatchCoreConfig") = nb::none(),
         nb::kw_only(),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     m_device.def(
@@ -240,14 +326,14 @@ void device_module(nb::module_& m_device) {
            uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
-           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
+           const std::optional<tt::tt_metal::DispatchCoreConfig>& dispatch_core_config,
            size_t worker_l1_size) {
             return MeshDevice::create_unit_meshes(
                 device_ids,
                 l1_small_size,
                 trace_region_size,
                 num_command_queues,
-                dispatch_core_config,
+                resolve_dispatch_core_config(dispatch_core_config),
                 /*l1_bank_remap=*/{},
                 worker_l1_size);
         },
@@ -264,7 +350,7 @@ void device_module(nb::module_& m_device) {
         nb::arg("num_command_queues") = 1,
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        nb::arg("DispatchCoreConfig") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
+        nb::arg("DispatchCoreConfig") = nb::none(),
         nb::kw_only(),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     m_device.def("CloseDevice", [](MeshDevice* device) { device->close(); }, R"doc(
