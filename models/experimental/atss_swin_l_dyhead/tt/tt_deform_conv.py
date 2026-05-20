@@ -274,21 +274,28 @@ class TtDeformConv2dV2:
         ttnn.deallocate(grid_xy)
 
         # 4. Apply modulation. Mask (1, H, W, K) reshape → (1, H, W*K, 1) is a pure view
-        # (W and K are contiguous, K becomes the new W axis with stride C_in=1). Multiply
-        # samples (1, H, W*K, C_in) by mask (1, H, W*K, 1) with broadcast on the last dim.
-        # Avoids ttnn.repeat_interleave which decomposes into ~9 concat ops per call.
+        # (W and K are contiguous, K becomes the new W axis with stride C_in=1).
+        # Profiling showed the post-multiply TILE→TILE reshape (1, H, W*K, C_in)
+        # → (1, H*W, K*C_in) is a 2.7ms-per-call kernel op (the tile grid has to
+        # re-rasterize because H folds into the row dim while K*C_in folds into the
+        # column dim). For P3 alone (6 calls/iter) that's 16 ms.
+        # Workaround: do the multiply on ROW_MAJOR (where the reshape is a pure view
+        # of the flat byte stream), then reshape, then tilize once before the matmul.
         big_tensor_bytes = H_out * W_out * K * C_in * 2  # bf16
         big_mem_config = ttnn.DRAM_MEMORY_CONFIG if big_tensor_bytes > 4 * 1024 * 1024 else ttnn.L1_MEMORY_CONFIG
 
         if samples.memory_config().buffer_type != ttnn.BufferType.DRAM and big_mem_config == ttnn.DRAM_MEMORY_CONFIG:
             samples = ttnn.to_memory_config(samples, big_mem_config)
 
+        # Ensure mask is ROW_MAJOR so we can multiply with the ROW_MAJOR `samples`.
+        if mask_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
+            mask_nhwc = ttnn.to_layout(mask_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         mask_extended = ttnn.reshape(mask_nhwc, (1, H_out, W_out * K, 1))
+        # Multiply samples (1, H, W*K, C_in) by mask (1, H, W*K, 1) in ROW_MAJOR.
         modulated = ttnn.multiply(samples, mask_extended, memory_config=big_mem_config)
 
-        # 5. Final 1x1 weighted sum via matmul. Reshape (1, H, W*K, C_in) → (1, H*W, K*C_in).
-        # This matches the previous matmul input shape exactly (since the K-axis is now
-        # the innermost-but-one and folds in the same k-major order as batch_output_channels=True).
+        # 5. Final 1x1 weighted sum via matmul. Reshape (1, H, W*K, C_in) → (1, H*W, K*C_in)
+        # is a pure byte-view in ROW_MAJOR (both flatten as [h, w, k, c]). Then tilize once.
         modulated_flat = ttnn.reshape(modulated, (1, H_out * W_out, K * C_in))
         modulated_tiled = ttnn.to_layout(modulated_flat, ttnn.TILE_LAYOUT, memory_config=big_mem_config)
 
