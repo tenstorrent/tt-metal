@@ -46,6 +46,7 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_seamless_m4t_v2_m
 )
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
 from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_seamless_m4t_v2_model_parameters
+from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
 from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import (
     TTSeamlessM4Tv2GenerationOutput,
     TTSeamlessM4Tv2GreedySearchOutput,
@@ -128,16 +129,21 @@ def make_tt_model(device: ttnn.Device, model: torch.nn.Module, cfg, t2u_cfg) -> 
     )
 
 
+def _readback_first_shard(t: ttnn.Tensor) -> torch.Tensor:
+    """Read replicated mesh tensor; delegate to ``to_torch_replicated_first_shard`` in ``tt/common.py``."""
+    return to_torch_replicated_first_shard(t)
+
+
 def _waveform_to_mono_fp32(waveform_tt: ttnn.Tensor, lengths_tt: ttnn.Tensor) -> np.ndarray:
     """Read a TT vocoder waveform back to host as a 1-D fp32 numpy array, trimmed to valid length.
 
     TT vocoder output shape: ``[B, T_max, 1]`` (right-padded with zeros to the batch max). The valid
     sample count per row is in ``lengths_tt`` — we trim to that to drop trailing silence padding.
     """
-    arr = ttnn.to_torch(ttnn.from_device(waveform_tt)).float().squeeze().cpu().numpy()
+    arr = _readback_first_shard(waveform_tt).float().squeeze().cpu().numpy()
     if arr.ndim > 1:
         arr = arr.reshape(-1)
-    valid_len = int(ttnn.to_torch(ttnn.from_device(lengths_tt)).long().reshape(-1)[0].item())
+    valid_len = int(_readback_first_shard(lengths_tt).long().reshape(-1)[0].item())
     if 0 < valid_len <= arr.size:
         arr = arr[:valid_len]
     return arr
@@ -157,7 +163,7 @@ def _save_wav(path: Path, waveform_np: np.ndarray, sample_rate: int) -> None:
 
 def _decode(tokenizer: Any, sequences_tt: ttnn.Tensor) -> str:
     """Read a TT decoder sequence back to host and decode to a single string (special tokens skipped)."""
-    ids = ttnn.to_torch(ttnn.from_device(sequences_tt)).to(torch.int64).cpu()
+    ids = _readback_first_shard(sequences_tt).to(torch.int64).cpu()
     return tokenizer.batch_decode(ids, skip_special_tokens=True)[0]
 
 
@@ -214,8 +220,25 @@ def main() -> None:
     # (``test_code_hifigan.py`` and ``test_seamless_m4t_v2_model.py``). 32768 B works for the
     # text-only path but is not enough for S2ST: speech-encoder + T2U + vocoder chained back-to-back
     # exhausts L1_SMALL before the vocoder's ``_resblock`` conv1d can allocate.
-    device = ttnn.open_device(device_id=0, l1_small_size=65536)
+    #
+    # Open a 1×N mesh over every visible P150 (N=1 on P150, N=4 on BH QB). All ``ttnn.from_torch``
+    # uploads without an explicit mesh_mapper take the auto-replicate path (1×1 host tensor →
+    # 1×N device mesh via ``h2d_as_replicate_tensor_on_1x1_mesh``), so weights, inputs, masks and
+    # control tensors are replicated on every device. Every host readback inside ``tt/`` now
+    # goes through ``to_torch_replicated_first_shard`` (in ``tt/common.py``), which uses
+    # ``ConcatMeshToTensor(dim=0)`` + a leading slice to pull just one device's copy — without
+    # that wiring ``ttnn.to_torch`` would TT_FATAL on the multi-shard replicated tensor.
+    # All N devices run the same generate loop in lock-step; the demo's audio/text outputs are
+    # the device-0 result.
+    from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import open_seamless_mesh_device
+
+    device, mesh_shape = open_seamless_mesh_device()
     ttnn.SetDefaultDevice(device)
+    rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+    print(
+        f"  Demo device: MeshShape({rows}, {cols}) ({rows * cols} P150"
+        f"{'s' if rows * cols > 1 else ''}, replicated forward)"
+    )
 
     try:
         tt_model = make_tt_model(device, model, cfg, t2u_cfg)
@@ -326,7 +349,7 @@ def main() -> None:
     finally:
         if original_default is not None:
             ttnn.SetDefaultDevice(original_default)
-        ttnn.close_device(device)
+        ttnn.close_mesh_device(device)
 
 
 if __name__ == "__main__":

@@ -48,6 +48,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     pad_input_ids_to,
     pad_mask_to,
     tile_align,
+    to_torch_replicated_first_shard,
     tt_position_ids,
 )
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_to_unit import (
@@ -179,7 +180,7 @@ def _read_int_row(scalars_tt: ttnn.Tensor) -> List[int]:
 
     if scalars_tt.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
         scalars_tt = ttnn.to_layout(scalars_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    host = ttnn.to_torch(ttnn.from_device(scalars_tt)).to(_torch.int64).reshape(-1)
+    host = to_torch_replicated_first_shard(scalars_tt).to(_torch.int64).reshape(-1)
     return [int(x) for x in host.tolist()]
 
 
@@ -189,7 +190,7 @@ def _read_int_scalar(scalar_tt: ttnn.Tensor) -> int:
 
     if scalar_tt.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
         scalar_tt = ttnn.to_layout(scalar_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    host = ttnn.to_torch(ttnn.from_device(scalar_tt)).to(_torch.int64).reshape(-1)
+    host = to_torch_replicated_first_shard(scalar_tt).to(_torch.int64).reshape(-1)
     return int(host[0].item())
 
 
@@ -759,7 +760,7 @@ class TTSeamlessM4Tv2Model:
             ttnn.copy(step_tok, rt.token_tt)
             ttnn.deallocate(step_tok)
 
-        tok_cpu = ttnn.to_torch(rt.token_tt).to(torch.int64)
+        tok_cpu = to_torch_replicated_first_shard(rt.token_tt).to(torch.int64)
         pos_cpu = create_position_ids_from_input_ids(tok_cpu, self.pad_token_id, past_key_values_length=position)
         pos_torch = pos_cpu.to(torch.int32)
         ttnn.copy_host_to_device_tensor(
@@ -948,7 +949,7 @@ class TTSeamlessM4Tv2Model:
     ) -> ttnn.Tensor:
         """Single decoder step with KV cache → ``[B, 1, V]`` logits."""
         batch = int(token_ids.shape[0])
-        tok_cpu = ttnn.to_torch(token_ids).to(torch.int64)
+        tok_cpu = to_torch_replicated_first_shard(token_ids).to(torch.int64)
         pos_cpu = create_position_ids_from_input_ids(tok_cpu, self.pad_token_id, past_key_values_length=position)
         pos_tt = ttnn.from_torch(
             pos_cpu.to(torch.int32),
@@ -1590,8 +1591,8 @@ class TTSeamlessM4Tv2Model:
         # small ``[B, S]`` unit grid (batch 1 in practice), then push back once as ``uint32`` ROW.
         import torch as _torch
 
-        unit_host = ttnn.to_torch(ttnn.from_device(unit_ids_argmax)).to(_torch.long)
-        pad_host = ttnn.to_torch(ttnn.from_device(pad_bf)).to(_torch.float32)
+        unit_host = to_torch_replicated_first_shard(unit_ids_argmax).to(_torch.long)
+        pad_host = to_torch_replicated_first_shard(pad_bf).to(_torch.float32)
         ttnn.deallocate(unit_ids_argmax)
         ttnn.deallocate(pad_bf)
 

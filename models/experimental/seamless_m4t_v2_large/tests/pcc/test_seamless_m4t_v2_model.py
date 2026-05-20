@@ -55,7 +55,9 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_text_to_unit impo
     synthetic_t2u_inputs,
 )
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
+from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
 from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_seamless_m4t_v2_model_parameters
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import mesh_default_device, MESH_DEVICE_PARAMETRIZE_FULL
 from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import TTSeamlessM4Tv2Model
 
 PCC_THRESHOLD = 0.99
@@ -198,10 +200,16 @@ def _decoder_seed(cfg: Any, dev: torch.device, *, tgt_lang: str) -> Tuple[torch.
 def _assert_text_logits_pcc(
     ref_logits: torch.Tensor, logits_tt: ttnn.Tensor, *, ctx: str, pcc: float = PCC_THRESHOLD
 ) -> None:
-    """Compare HF text-decoder logits ``[1, dec_seq, vocab]`` vs TTNN readback at PCC ≥ ``pcc``."""
+    """Compare HF text-decoder logits ``[1, dec_seq, vocab]`` vs TTNN readback at PCC ≥ ``pcc``.
+
+    Routes through ``to_torch_replicated_first_shard`` so the same PCC body works on either the
+    single-device ``device`` fixture (1×1 mesh, helper is a bit-identical pass-through) or the
+    multi-device ``mesh_device`` fixture (the test then composes the replicated shards via
+    ``ConcatMeshToTensor(dim=0)`` and slices the first device's copy back out).
+    """
     ref_f = ref_logits.detach().float().cpu()
     _, sd, v = ref_f.shape
-    flat = ttnn.to_torch(ttnn.from_device(logits_tt)).to(torch.bfloat16).contiguous().reshape(-1)
+    flat = to_torch_replicated_first_shard(logits_tt).to(torch.bfloat16).contiguous().reshape(-1)
     sp = flat.numel() // v
     tt_f = flat.reshape(1, sp, v)[:, :sd, :v].contiguous().float().cpu()
     assert tt_f.shape == ref_f.shape, f"{ctx}: shape ref {tuple(ref_f.shape)} vs ttnn {tuple(tt_f.shape)}"
@@ -290,7 +298,7 @@ def _assert_t2u_logits_pcc(
     ttnn.deallocate(attn_tt)
     ttnn.deallocate(char_ids_tt)
 
-    tt_logits = ttnn.to_torch(ttnn.from_device(tt_logits_tt)).to(torch.bfloat16).cpu()
+    tt_logits = to_torch_replicated_first_shard(tt_logits_tt).to(torch.bfloat16).cpu()
     ttnn.deallocate(tt_logits_tt)
 
     v = int(ref_logits_bf16.shape[-1])
@@ -390,13 +398,14 @@ def _forward_and_compare_text_logits(
 
 
 @pytest.mark.timeout(1200)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
-def test_t2tt(device, reset_seeds):
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_FULL, indirect=["mesh_device", "device_params"])
+def test_t2tt(mesh_device, device_params, reset_seeds):
     """T2TT — Text-to-Text Translation. PCC ≥ 0.99 on text-decoder ``lm_head`` logits."""
     _ = reset_seeds
+    _ = device_params
     weights_dir = _weights_dir_or_skip()
     _forward_and_compare_text_logits(
-        device, weights_dir=weights_dir, use_speech_input=False, tgt_lang="eng", ctx="T2TT"
+        mesh_device, weights_dir=weights_dir, use_speech_input=False, tgt_lang="eng", ctx="T2TT"
     )
 
 
@@ -406,12 +415,15 @@ def test_t2tt(device, reset_seeds):
 
 
 @pytest.mark.timeout(1200)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
-def test_s2tt(device, reset_seeds):
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_FULL, indirect=["mesh_device", "device_params"])
+def test_s2tt(mesh_device, device_params, reset_seeds):
     """S2TT — Speech-to-Text Translation. PCC ≥ 0.99 on text-decoder ``lm_head`` logits."""
     _ = reset_seeds
+    _ = device_params
     weights_dir = _weights_dir_or_skip()
-    _forward_and_compare_text_logits(device, weights_dir=weights_dir, use_speech_input=True, tgt_lang="eng", ctx="S2TT")
+    _forward_and_compare_text_logits(
+        mesh_device, weights_dir=weights_dir, use_speech_input=True, tgt_lang="eng", ctx="S2TT"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -420,8 +432,8 @@ def test_s2tt(device, reset_seeds):
 
 
 @pytest.mark.timeout(1200)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
-def test_t2st(device, reset_seeds):
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_FULL, indirect=["mesh_device", "device_params"])
+def test_t2st(mesh_device, device_params, reset_seeds):
     """T2ST — Text-to-Speech Translation. PCC ≥ 0.99 on (text-decoder logits, T2U logits).
 
     The downstream vocoder is validated separately in ``test_code_hifigan.py`` (also PCC ≥ 0.99).
@@ -429,11 +441,13 @@ def test_t2st(device, reset_seeds):
     0.99 bar.
     """
     _ = reset_seeds
+    _ = device_params
     weights_dir = _weights_dir_or_skip()
-    model, tt_model, _ = _forward_and_compare_text_logits(
-        device, weights_dir=weights_dir, use_speech_input=False, tgt_lang="eng", ctx="T2ST"
-    )
-    _assert_t2u_logits_pcc(model, tt_model, device, ctx="T2ST")
+    with mesh_default_device(mesh_device):
+        model, tt_model, _ = _forward_and_compare_text_logits(
+            mesh_device, weights_dir=weights_dir, use_speech_input=False, tgt_lang="eng", ctx="T2ST"
+        )
+        _assert_t2u_logits_pcc(model, tt_model, mesh_device, ctx="T2ST")
 
 
 # ---------------------------------------------------------------------------
@@ -442,18 +456,20 @@ def test_t2st(device, reset_seeds):
 
 
 @pytest.mark.timeout(1200)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
-def test_s2st(device, reset_seeds):
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_FULL, indirect=["mesh_device", "device_params"])
+def test_s2st(mesh_device, device_params, reset_seeds):
     """S2ST — Speech-to-Speech Translation. PCC ≥ 0.99 on (text-decoder logits, T2U logits).
 
     The downstream vocoder is validated separately in ``test_code_hifigan.py`` (also PCC ≥ 0.99).
     """
     _ = reset_seeds
+    _ = device_params
     weights_dir = _weights_dir_or_skip()
-    model, tt_model, _ = _forward_and_compare_text_logits(
-        device, weights_dir=weights_dir, use_speech_input=True, tgt_lang="eng", ctx="S2ST"
-    )
-    _assert_t2u_logits_pcc(model, tt_model, device, ctx="S2ST")
+    with mesh_default_device(mesh_device):
+        model, tt_model, _ = _forward_and_compare_text_logits(
+            mesh_device, weights_dir=weights_dir, use_speech_input=True, tgt_lang="eng", ctx="S2ST"
+        )
+        _assert_t2u_logits_pcc(model, tt_model, mesh_device, ctx="S2ST")
 
 
 # ---------------------------------------------------------------------------
@@ -462,8 +478,8 @@ def test_s2st(device, reset_seeds):
 
 
 @pytest.mark.timeout(1200)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
-def test_asr(device, reset_seeds):
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_FULL, indirect=["mesh_device", "device_params"])
+def test_asr(mesh_device, device_params, reset_seeds):
     """ASR — Automatic Speech Recognition. PCC ≥ 0.99 on text-decoder ``lm_head`` logits.
 
     Same forward dataflow as S2TT (speech-encoder → text-decoder → ``lm_head``); ASR is the special
@@ -471,5 +487,8 @@ def test_asr(device, reset_seeds):
     transcribes rather than translates. Decoder seed: ``[decoder_start_token_id, eng_lang_code_id]``.
     """
     _ = reset_seeds
+    _ = device_params
     weights_dir = _weights_dir_or_skip()
-    _forward_and_compare_text_logits(device, weights_dir=weights_dir, use_speech_input=True, tgt_lang="eng", ctx="ASR")
+    _forward_and_compare_text_logits(
+        mesh_device, weights_dir=weights_dir, use_speech_input=True, tgt_lang="eng", ctx="ASR"
+    )

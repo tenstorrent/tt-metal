@@ -3,7 +3,6 @@
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
 from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
 
@@ -16,6 +15,13 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_text_to_unit impo
     synthetic_t2u_inputs,
 )
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
+from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
+    MESH_DEVICE_PARAMETRIZE_TEXT,
+    from_torch_bfloat16_tile,
+    from_torch_uint32_rm,
+    mesh_default_device,
+)
 from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_text_to_unit_condgen_parameters
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_to_unit import (
     TTSeamlessM4Tv2TextToUnitForConditionalGeneration,
@@ -24,13 +30,10 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_text_to_unit import (
 PCC_THRESHOLD = 0.99
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_seamless_m4t_v2_text_to_unit(device, reset_seeds):
+def _run_text_to_unit_pcc(device) -> None:
     """
-    PCC vs Hugging Face ``SeamlessM4Tv2TextToUnitForConditionalGeneration`` (encoder + decoder + ``lm_head``).
-
-    Uses HF discrete durations as ``reference_discrete_durations`` so TT matches HF unit length while the
-    TT duration stack converges.
+    Shared PCC body. Compares TT vs HF for the full T2U module (encoder + decoder + ``lm_head``).
+    Mesh-safe readbacks go through ``to_torch_replicated_first_shard``.
     """
     try:
         weights_dir = ensure_seamless_m4t_v2_large_weights()
@@ -90,26 +93,9 @@ def test_seamless_m4t_v2_text_to_unit(device, reset_seeds):
         variance_predictor_kernel_size=cfg.variance_predictor_kernel_size,
     )
 
-    inputs_embeds_tt = ttnn.from_torch(
-        inputs_embeds,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    attn_tt = ttnn.from_torch(
-        mask_4d.to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    char_ids_tt = ttnn.from_torch(
-        char_input_ids.to(torch.int32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-    )
+    inputs_embeds_tt = from_torch_bfloat16_tile(device, inputs_embeds)
+    attn_tt = from_torch_bfloat16_tile(device, mask_4d)
+    char_ids_tt = from_torch_uint32_rm(device, char_input_ids)
 
     logits_tt, pad_tt = tt_full.forward(
         inputs_embeds_tt,
@@ -120,11 +106,11 @@ def test_seamless_m4t_v2_text_to_unit(device, reset_seeds):
     )
     Vr = int(ref_logits.shape[2])
     Sr = int(ref_logits.shape[1])
-    flat_logits = ttnn.to_torch(ttnn.from_device(logits_tt)).to(torch.bfloat16).contiguous().reshape(-1)
+    flat_logits = to_torch_replicated_first_shard(logits_tt).to(torch.bfloat16).contiguous().reshape(-1)
     Sp = flat_logits.numel() // Vr
     tt_logits_cpu = flat_logits.reshape(1, Sp, Vr)[:, :Sr, :Vr].contiguous()
 
-    flat_pad = ttnn.to_torch(ttnn.from_device(pad_tt)).to(torch.float32).contiguous().reshape(-1)
+    flat_pad = to_torch_replicated_first_shard(pad_tt).to(torch.float32).contiguous().reshape(-1)
     Spr = int(ref_padding_mask.shape[1])
     tt_pad_cpu = flat_pad.reshape(1, -1)[:, :Spr].contiguous()
 
@@ -140,3 +126,17 @@ def test_seamless_m4t_v2_text_to_unit(device, reset_seeds):
     logger.info(f"SeamlessM4Tv2 text-to-unit PCC logits={msg_logits} padding={msg_pad} (threshold {PCC_THRESHOLD})")
     assert ok_logits, msg_logits
     assert ok_pad, msg_pad
+
+
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_seamless_m4t_v2_text_to_unit(mesh_device, device_params, reset_seeds):
+    """
+    PCC vs Hugging Face ``SeamlessM4Tv2TextToUnitForConditionalGeneration`` (encoder + decoder + ``lm_head``).
+
+    Uses HF discrete durations as ``reference_discrete_durations`` so TT matches HF unit length while the
+    TT duration stack converges.
+    """
+    _ = reset_seeds
+    _ = device_params
+    with mesh_default_device(mesh_device):
+        _run_text_to_unit_pcc(mesh_device)

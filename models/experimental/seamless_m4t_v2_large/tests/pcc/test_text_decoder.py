@@ -22,7 +22,14 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     ones_mask,
     pad_input_ids_to,
     tile_align,
+    to_torch_replicated_first_shard,
     tt_position_ids,
+)
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
+    MESH_DEVICE_PARAMETRIZE_TEXT,
+    from_torch_bfloat16_tile,
+    from_torch_uint32_rm,
+    mesh_default_device,
 )
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
     TTSeamlessM4Tv2Decoder,
@@ -33,8 +40,8 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
 PCC_THRESHOLD = 0.99
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_seamless_m4t_v2_text_decoder_pcc(device, reset_seeds):
+def _run_text_decoder_pcc(device) -> None:
+    """Shared PCC body; mesh-safe readback via ``to_torch_replicated_first_shard``."""
     try:
         weights_dir = ensure_seamless_m4t_v2_large_weights()
     except ImportError as e:
@@ -86,41 +93,11 @@ def test_seamless_m4t_v2_text_decoder_pcc(device, reset_seeds):
         hidden_size=cfg.hidden_size,
     )
 
-    input_ids_tt = ttnn.from_torch(
-        input_ids.to(torch.int32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    position_ids_tt = ttnn.from_torch(
-        position_ids.to(torch.int32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    encoder_tt = ttnn.from_torch(
-        encoder_hidden,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    causal_tt = ttnn.from_torch(
-        causal_mask.to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    cross_tt = ttnn.from_torch(
-        cross_mask.to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_ids_tt = from_torch_uint32_rm(device, input_ids)
+    position_ids_tt = from_torch_uint32_rm(device, position_ids)
+    encoder_tt = from_torch_bfloat16_tile(device, encoder_hidden)
+    causal_tt = from_torch_bfloat16_tile(device, causal_mask)
+    cross_tt = from_torch_bfloat16_tile(device, cross_mask)
 
     out_tt = tt_dec.forward(
         input_ids_tt,
@@ -130,7 +107,7 @@ def test_seamless_m4t_v2_text_decoder_pcc(device, reset_seeds):
         cross_tt,
     )
     tt_cpu = (
-        ttnn.to_torch(ttnn.from_device(out_tt)).to(torch.bfloat16).reshape(batch, seq, cfg.hidden_size).contiguous()
+        to_torch_replicated_first_shard(out_tt).to(torch.bfloat16).reshape(batch, seq, cfg.hidden_size).contiguous()
     )
 
     ok, msg = check_with_pcc(ref, tt_cpu, pcc=PCC_THRESHOLD)
@@ -143,13 +120,16 @@ def test_seamless_m4t_v2_text_decoder_pcc(device, reset_seeds):
     assert ok, msg
 
 
-@pytest.mark.parametrize(
-    "cache_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
-    ids=["bf16_cache", "bf8_cache"],
-)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_seamless_m4t_v2_text_decoder_kv_cache_pcc(device, reset_seeds, cache_dtype):
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_seamless_m4t_v2_text_decoder_pcc(mesh_device, device_params, reset_seeds):
+    _ = reset_seeds
+    _ = device_params
+    with mesh_default_device(mesh_device):
+        _run_text_decoder_pcc(mesh_device)
+
+
+def _run_text_decoder_kv_cache_pcc(device, cache_dtype) -> None:
+    """Shared KV-cache PCC body; mesh-safe readback via ``to_torch_replicated_first_shard``."""
     try:
         weights_dir = ensure_seamless_m4t_v2_large_weights()
     except ImportError as e:
@@ -194,29 +174,11 @@ def test_seamless_m4t_v2_text_decoder_kv_cache_pcc(device, reset_seeds, cache_dt
         cache_dtype=cache_dtype,
     )
 
-    encoder_tt = ttnn.from_torch(
-        encoder_hidden,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    encoder_tt = from_torch_bfloat16_tile(device, encoder_hidden)
     cross_mask_decode = _prepare_4d_attention_mask(enc_mask, torch.bfloat16, tgt_len=1)
-    cross_tt_decode = ttnn.from_torch(
-        cross_mask_decode.to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    cross_tt_decode = from_torch_bfloat16_tile(device, cross_mask_decode)
 
-    prefill_ids_tt = ttnn.from_torch(
-        input_ids[:, :prefill_len].to(torch.int32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    prefill_ids_tt = from_torch_uint32_rm(device, input_ids[:, :prefill_len])
     padded_prefill = tile_align(prefill_len)
     ids_padded = pad_input_ids_to(prefill_ids_tt, padded_prefill, cfg.pad_token_id, device)
     if ids_padded is not prefill_ids_tt:
@@ -225,13 +187,7 @@ def test_seamless_m4t_v2_text_decoder_kv_cache_pcc(device, reset_seeds, cache_dt
     pos_prefill = tt_position_ids(ids_padded, cfg.pad_token_id)
     causal_prefill = build_causal_with_padding_4d(attn_2d, batch, padded_prefill, device)
     ttnn.deallocate(attn_2d)
-    enc_mask_tt = ttnn.from_torch(
-        enc_mask.to(torch.int32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    enc_mask_tt = from_torch_uint32_rm(device, enc_mask)
     cross_prefill = build_cross_attn_mask_4d(enc_mask_tt, tgt_seq=padded_prefill, device=device)
     warm_text_decoder_kv_cache_prefill(
         tt_dec,
@@ -283,20 +239,8 @@ def test_seamless_m4t_v2_text_decoder_kv_cache_pcc(device, reset_seeds, cache_dt
         pos = prefill_len + step
         tok = decode_ids[:, step : step + 1]
         pos_ids = create_position_ids_from_input_ids(tok, cfg.pad_token_id, past_key_values_length=pos)
-        tok_tt = ttnn.from_torch(
-            tok.to(torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        pos_tt = ttnn.from_torch(
-            pos_ids.to(torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        tok_tt = from_torch_uint32_rm(device, tok)
+        pos_tt = from_torch_uint32_rm(device, pos_ids)
         cur_pos = tt_dec.borrow_current_decode_pos_tensor(pos, batch_size=batch)
         out_tt = tt_dec.forward(
             tok_tt,
@@ -311,10 +255,23 @@ def test_seamless_m4t_v2_text_decoder_kv_cache_pcc(device, reset_seeds, cache_dt
             cache_seq_len=pos + 1,
         )
         tt_cpu = (
-            ttnn.to_torch(ttnn.from_device(out_tt)).to(torch.bfloat16).reshape(batch, 1, cfg.hidden_size).contiguous()
+            to_torch_replicated_first_shard(out_tt).to(torch.bfloat16).reshape(batch, 1, cfg.hidden_size).contiguous()
         )
         ok, msg = check_with_pcc(ref_hidden[step], tt_cpu, pcc=PCC_THRESHOLD)
         logger.info(f"SeamlessM4Tv2 text decoder KV-cache decode step {step}: {msg} (threshold {PCC_THRESHOLD})")
         assert ok, msg
 
     ttnn.deallocate(cross_tt_decode)
+
+
+@pytest.mark.parametrize(
+    "cache_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+    ids=["bf16_cache", "bf8_cache"],
+)
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_seamless_m4t_v2_text_decoder_kv_cache_pcc(mesh_device, device_params, reset_seeds, cache_dtype):
+    _ = reset_seeds
+    _ = device_params
+    with mesh_default_device(mesh_device):
+        _run_text_decoder_kv_cache_pcc(mesh_device, cache_dtype)

@@ -12,6 +12,60 @@ import ttnn
 
 from models.common.utility_functions import nearest_32
 
+
+def _mesh_device_for_readback(t: ttnn.Tensor):
+    """Best-effort lookup of the MeshDevice associated with a tensor.
+
+    Device tensors carry the device directly. Host tensors (after ``ttnn.from_device``) lose that
+    pointer, but the demo / perf tests always call ``ttnn.SetDefaultDevice(mesh_device)`` first,
+    so the default device is the right composer target. Returns ``None`` if nothing is set.
+    """
+    if t.storage_type() == ttnn.StorageType.DEVICE:
+        return t.device()
+    try:
+        return ttnn.GetDefaultDevice()
+    except Exception:
+        return None
+
+
+def to_torch_replicated_first_shard(t: ttnn.Tensor) -> Any:
+    """Read a replicated TTNN tensor back to torch, returning only the first device's data.
+
+    The demo / generate path makes per-step host readbacks of replicated control tensors (token
+    IDs, sequence lengths, vocoder cumsums, T2U duration counts, …). On a multi-device mesh every
+    device sees the same control-flow scalars because inputs are replicated and ops are
+    deterministic, so all shards are identical and reading one is sufficient.
+
+    ``ttnn.to_torch`` without a ``mesh_composer`` errors on a tensor with >1 shard
+    (TT_FATAL: "Can't convert a tensor distributed on … mesh to row-major logical tensor.
+    Supply a mesh composer …"), so we wire in ``ConcatMeshToTensor(dim=0)`` and slice the leading
+    per-device chunk off the result. On a 1×1 mesh the composer path is skipped — behaviour is
+    bit-identical to the original ``ttnn.to_torch`` call, so PCC tests (which all run on a
+    single-device fixture) are unaffected.
+
+    Accepts either a device tensor or a host tensor. Host tensors that came from a
+    multi-device ``ttnn.from_device`` retain multi-shard storage; we look up the mesh device via
+    ``GetDefaultDevice`` so we can still attach a composer.
+    """
+    dev = _mesh_device_for_readback(t)
+    num_devices = 1
+    if dev is not None and hasattr(dev, "get_num_devices"):
+        try:
+            num_devices = int(dev.get_num_devices())
+        except Exception:
+            num_devices = 1
+
+    if num_devices > 1 and dev is not None:
+        composer = ttnn.ConcatMeshToTensor(dev, dim=0)
+        out = ttnn.to_torch(t, mesh_composer=composer)
+        if out.dim() >= 1 and out.shape[0] >= num_devices:
+            out = out[: out.shape[0] // num_devices]
+        return out
+
+    host = ttnn.from_device(t) if t.storage_type() == ttnn.StorageType.DEVICE else t
+    return ttnn.to_torch(host)
+
+
 # ``torch.finfo(torch.bfloat16).min`` — the additive-mask "minus infinity" HF uses. Bf16-representable.
 NEG_INF = -3.3895313892515355e38
 
