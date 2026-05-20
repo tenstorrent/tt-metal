@@ -21,6 +21,7 @@ from models.experimental.glm4_moe_lite.tt.decoder_layer_tt import (
     prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt,
     run_decoder_layer_decode_one_step_update_cache_tt,
 )
+from models.experimental.glm4_moe_lite.tt.linear_helpers import lm_head_linear
 from models.experimental.glm4_moe_lite.tt.tt_embedding import run_tt_embedding
 
 
@@ -144,7 +145,7 @@ def mtp_forward_eager(
 
     # 6. shared_head: norm + LM head
     x = mtp_shared_head_norm(x, mode="decode")
-    logits_tt = ttnn.linear(x, mtp_shared_head_w)
+    logits_tt = lm_head_linear(x, mtp_shared_head_w, device=device)
     ttnn.deallocate(x, force=False)
 
     # 7. Argmax -> draft token

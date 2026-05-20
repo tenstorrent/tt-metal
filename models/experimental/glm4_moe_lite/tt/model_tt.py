@@ -37,6 +37,7 @@ from models.experimental.glm4_moe_lite.tt.layer_weights import (
     _linear_weight_tt,
     convert_decoder_layer_weights,
 )
+from models.experimental.glm4_moe_lite.tt.linear_helpers import lm_head_linear
 from models.experimental.glm4_moe_lite.tt.tt_embedding import convert_embedding_weight_to_tt, run_tt_embedding
 from models.experimental.glm4_moe_lite.tt.weights import LazyStateDict, load_glm_lazy_state_dict
 
@@ -939,6 +940,10 @@ class Glm4MoeLiteDenseOnlyTT:
             raise RuntimeError("chunked prefill produced no logits")
         return logits_i
 
+    def _lm_head_linear(self, a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
+        """LM head matmul with tuned interleaved 1D multicast program config."""
+        return lm_head_linear(a, b, device=self.device)
+
     def _extract_logits(
         self,
         x: ttnn.Tensor,
@@ -954,7 +959,7 @@ class Glm4MoeLiteDenseOnlyTT:
 
         t0 = time.perf_counter() if profile_on else 0.0
         x_last = self.final_norm(x_last, mode="decode")
-        logits_tt = ttnn.linear(x_last, self.lm_head_w)
+        logits_tt = self._lm_head_linear(x_last, self.lm_head_w)
         if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
             cluster_axis = None if self.lm_head_tp_axis is None else int(self.lm_head_tp_axis)
             _nl = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
@@ -1119,7 +1124,7 @@ class Glm4MoeLiteDenseOnlyTT:
 
             t0 = time.perf_counter() if profile_on else 0.0
             x_last = self.final_norm(x_last, mode="decode")
-            logits_tt = ttnn.linear(x_last, self.lm_head_w)  # [1,1,1,vocab]
+            logits_tt = self._lm_head_linear(x_last, self.lm_head_w)  # [1,1,1,vocab]
             if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
                 cluster_axis = None if self.lm_head_tp_axis is None else int(self.lm_head_tp_axis)
                 _nl = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
@@ -1250,7 +1255,7 @@ class Glm4MoeLiteDenseOnlyTT:
             x = x_tight
 
             x = self.final_norm(x, mode="decode")
-            logits_tt = ttnn.linear(x, self.lm_head_w)  # [1,1,B,vocab]
+            logits_tt = self._lm_head_linear(x, self.lm_head_w)  # [1,1,B,vocab]
 
             vocab = int(self.hparams.vocab_size)
             if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
@@ -1497,7 +1502,7 @@ class Glm4MoeLiteDenseOnlyTT:
             signpost("lm_head-start")
         t0 = time.perf_counter() if profile_on else 0.0
         x = self.final_norm(x, mode="decode")
-        logits_tt = ttnn.linear(x, self.lm_head_w)  # [1,1,B,vocab]
+        logits_tt = self._lm_head_linear(x, self.lm_head_w)  # [1,1,B,vocab]
         if profile_on:
             decode_profile["head_s"] = decode_profile.get("head_s", 0.0) + (time.perf_counter() - t0)
         if _SIGNPOST_ENABLED:
@@ -1800,7 +1805,7 @@ class Glm4MoeLiteDenseOnlyTT:
 
         # 6. shared_head: norm + LM head
         x = self.mtp_shared_head_norm(x, mode="decode")
-        logits_tt = ttnn.linear(x, self.mtp_shared_head_w)  # [1,1,B,vocab_shard]
+        logits_tt = self._lm_head_linear(x, self.mtp_shared_head_w)  # [1,1,B,vocab_shard]
         ttnn.deallocate(x, force=False)
 
         # 7. Argmax -> draft token
@@ -2502,7 +2507,7 @@ class Glm4MoeLiteDenseOnlyTT:
 
         # 6. shared_head: norm + LM head
         x = self.mtp_shared_head_norm(x, mode="decode")
-        logits_tt = ttnn.linear(x, self.mtp_shared_head_w)
+        logits_tt = self._lm_head_linear(x, self.mtp_shared_head_w)
         ttnn.deallocate(x, force=False)
 
         return logits_tt
@@ -2595,7 +2600,7 @@ class Glm4MoeLiteDenseOnlyTT:
             state.mtp_hidden_tt = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         x = self.final_norm(x, mode="decode")
-        logits_tt = ttnn.linear(x, self.lm_head_w)  # [1,1,B,vocab_shard?]
+        logits_tt = self._lm_head_linear(x, self.lm_head_w)  # [1,1,B,vocab_shard?]
         ttnn.deallocate(x, force=False)
 
         return logits_tt
