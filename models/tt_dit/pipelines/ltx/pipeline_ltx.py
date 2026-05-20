@@ -298,6 +298,14 @@ class LTXPipeline:
         )
         ccl_manager = CCLManager(mesh_device, topology=topology)
 
+        # Enable the in-memory per-op-shape program cache. Idempotent — no-op if
+        # already enabled by tt-metal defaults. Hot denoise ops (matmul, SDPA, RMSNorm
+        # variants) are reused across the 30+ inference steps; without this, each
+        # invocation recompiles the program. Logging the cache size before vs after
+        # one denoise step is the cleanest way to confirm it's actively populating.
+        if hasattr(mesh_device, "enable_program_cache"):
+            mesh_device.enable_program_cache()
+
         pipeline = LTXPipeline(
             mesh_device=mesh_device,
             parallel_config=parallel_config,
@@ -474,6 +482,43 @@ class LTXPipeline:
             if os.path.isdir(full):
                 logger.info(f"sweeping stale cache dir '{full}'")
                 shutil.rmtree(full, ignore_errors=True)
+
+    # ------------------------------------------------------------------
+    # CPU-torch model caches (Gemma encoder/processor + audio decoder/vocoder).
+    # These reference models are constructed fresh by ModelLedger on every call.
+    # We pickle the constructed modules and reuse them across runs. Source hash
+    # invalidates when our tt_dit LTX code changes; users must wipe manually if
+    # they update the LTX-2 reference repo.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _cpu_model_cache_path(subdir: str, key: str) -> str | None:
+        cache_root = os.environ.get("TT_DIT_CACHE_DIR")
+        if not cache_root:
+            return None
+        return os.path.join(cache_root, subdir, f"{key}_src{_ltx_cache_code_hash()}.pt")
+
+    @staticmethod
+    def _sweep_stale_cpu_cache(parent: str, current_basename: str) -> None:
+        if os.environ.get("LTX_CACHE_KEEP_STALE"):
+            return
+        src_idx = current_basename.rfind("_src")
+        if src_idx < 0:
+            return
+        prefix = current_basename[: src_idx + len("_src")]
+        try:
+            entries = os.listdir(parent)
+        except OSError:
+            return
+        for entry in entries:
+            if entry == current_basename or not entry.startswith(prefix) or not entry.endswith(".pt"):
+                continue
+            full = os.path.join(parent, entry)
+            try:
+                os.remove(full)
+                logger.info(f"sweeping stale cpu cache '{full}'")
+            except OSError:
+                pass
 
     def load_transformer(self, state_dict: dict[str, torch.Tensor]) -> None:
         """Load transformer weights from a state dict."""
@@ -912,7 +957,7 @@ class LTXPipeline:
             sys.path.insert(0, "LTX-2/packages/ltx-core/src")
             sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
             torch.cuda.synchronize = lambda *a, **kw: None  # No CUDA on TT host
-            from ltx_pipelines.utils.helpers import encode_prompts
+            from ltx_pipelines.utils.helpers import cleanup_memory
             from ltx_pipelines.utils.model_ledger import ModelLedger
         except ImportError as e:
             raise ImportError(
@@ -920,33 +965,77 @@ class LTXPipeline:
                 "Use load_text_encoder() + __call__() for standalone text encoding."
             ) from e
 
-        # Check embedding cache to skip expensive Gemma encoding
+        # Per-prompt embedding cache: hit early to skip the Gemma run entirely.
         import hashlib
-        import os
 
         cache_dir = os.environ.get("TT_DIT_CACHE_DIR", os.path.expanduser("~/.cache"))
         embed_cache_dir = os.path.join(cache_dir, "ltx-embeddings")
         os.makedirs(embed_cache_dir, exist_ok=True)
 
         cache_key = hashlib.md5("||".join(prompts).encode()).hexdigest()
-        cache_path = os.path.join(embed_cache_dir, f"{cache_key}.pt")
+        embed_cache_path = os.path.join(embed_cache_dir, f"{cache_key}.pt")
 
-        if os.path.exists(cache_path):
-            logger.info(f"Loading cached embeddings from {cache_path}")
-            return torch.load(cache_path, weights_only=False)
+        if os.path.exists(embed_cache_path):
+            logger.info(f"Loading cached embeddings from {embed_cache_path}")
+            return torch.load(embed_cache_path, weights_only=False)
 
-        ledger = ModelLedger(
-            dtype=torch.bfloat16,
-            device=torch.device("cpu"),
-            checkpoint_path=checkpoint_path,
-            gemma_root_path=gemma_path,
-        )
-        results = encode_prompts(prompts, ledger)
-        del ledger
+        # Resolve cache paths for the encoder + processor (pickled torch modules).
+        gemma_name = os.path.basename(os.path.normpath(gemma_path)) or "gemma-unknown"
+        encoder_cache_path = self._cpu_model_cache_path("gemma", f"{gemma_name}_text_encoder")
+        processor_cache_path = self._cpu_model_cache_path("gemma", f"{gemma_name}_embeddings_processor")
 
-        # Cache for future use
-        torch.save(results, cache_path)
-        logger.info(f"Cached embeddings to {cache_path}")
+        ledger = None  # Lazily constructed if either cache misses.
+
+        def _need_ledger():
+            nonlocal ledger
+            if ledger is None:
+                ledger = ModelLedger(
+                    dtype=torch.bfloat16,
+                    device=torch.device("cpu"),
+                    checkpoint_path=checkpoint_path,
+                    gemma_root_path=gemma_path,
+                )
+            return ledger
+
+        # === Text encoder phase ===
+        if encoder_cache_path and os.path.isfile(encoder_cache_path):
+            logger.info(f"loading cached Gemma text encoder from '{encoder_cache_path}'")
+            text_encoder = torch.load(encoder_cache_path, weights_only=False, map_location="cpu")
+        else:
+            text_encoder = _need_ledger().text_encoder()
+            if encoder_cache_path:
+                os.makedirs(os.path.dirname(encoder_cache_path), exist_ok=True)
+                torch.save(text_encoder, encoder_cache_path)
+                self._sweep_stale_cpu_cache(os.path.dirname(encoder_cache_path), os.path.basename(encoder_cache_path))
+                logger.info(f"wrote Gemma text encoder cache to '{encoder_cache_path}'")
+
+        raw_outputs = [text_encoder.encode(p) for p in prompts]
+        torch.cuda.synchronize()
+        del text_encoder
+        cleanup_memory()
+
+        # === Embeddings processor phase ===
+        if processor_cache_path and os.path.isfile(processor_cache_path):
+            logger.info(f"loading cached Gemma embeddings processor from '{processor_cache_path}'")
+            embeddings_processor = torch.load(processor_cache_path, weights_only=False, map_location="cpu")
+        else:
+            embeddings_processor = _need_ledger().gemma_embeddings_processor()
+            if processor_cache_path:
+                os.makedirs(os.path.dirname(processor_cache_path), exist_ok=True)
+                torch.save(embeddings_processor, processor_cache_path)
+                self._sweep_stale_cpu_cache(
+                    os.path.dirname(processor_cache_path), os.path.basename(processor_cache_path)
+                )
+                logger.info(f"wrote Gemma embeddings processor cache to '{processor_cache_path}'")
+
+        results = [embeddings_processor.process_hidden_states(hs, mask) for hs, mask in raw_outputs]
+        del embeddings_processor
+        if ledger is not None:
+            del ledger
+        cleanup_memory()
+
+        torch.save(results, embed_cache_path)
+        logger.info(f"Cached embeddings to {embed_cache_path}")
         return results
 
     def load_vae_decoder(
@@ -1564,9 +1653,45 @@ class LTXPipeline:
             from ltx_core.types import Audio
             from ltx_pipelines.utils.model_ledger import ModelLedger
 
-            ledger = ModelLedger(dtype=torch.bfloat16, device=torch.device("cpu"), checkpoint_path=checkpoint_path)
-            audio_decoder = ledger.audio_decoder()
-            vocoder = ledger.vocoder()
+            ckpt_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
+            audio_decoder_cache_path = self._cpu_model_cache_path(ckpt_name, "audio_decoder")
+            vocoder_cache_path = self._cpu_model_cache_path(ckpt_name, "vocoder")
+
+            ledger = None
+
+            def _need_ledger():
+                nonlocal ledger
+                if ledger is None:
+                    ledger = ModelLedger(
+                        dtype=torch.bfloat16, device=torch.device("cpu"), checkpoint_path=checkpoint_path
+                    )
+                return ledger
+
+            if audio_decoder_cache_path and os.path.isfile(audio_decoder_cache_path):
+                logger.info(f"loading cached audio decoder from '{audio_decoder_cache_path}'")
+                audio_decoder = torch.load(audio_decoder_cache_path, weights_only=False, map_location="cpu")
+            else:
+                audio_decoder = _need_ledger().audio_decoder()
+                if audio_decoder_cache_path:
+                    os.makedirs(os.path.dirname(audio_decoder_cache_path), exist_ok=True)
+                    torch.save(audio_decoder, audio_decoder_cache_path)
+                    self._sweep_stale_cpu_cache(
+                        os.path.dirname(audio_decoder_cache_path), os.path.basename(audio_decoder_cache_path)
+                    )
+                    logger.info(f"wrote audio decoder cache to '{audio_decoder_cache_path}'")
+
+            if vocoder_cache_path and os.path.isfile(vocoder_cache_path):
+                logger.info(f"loading cached vocoder from '{vocoder_cache_path}'")
+                vocoder = torch.load(vocoder_cache_path, weights_only=False, map_location="cpu")
+            else:
+                vocoder = _need_ledger().vocoder()
+                if vocoder_cache_path:
+                    os.makedirs(os.path.dirname(vocoder_cache_path), exist_ok=True)
+                    torch.save(vocoder, vocoder_cache_path)
+                    self._sweep_stale_cpu_cache(
+                        os.path.dirname(vocoder_cache_path), os.path.basename(vocoder_cache_path)
+                    )
+                    logger.info(f"wrote vocoder cache to '{vocoder_cache_path}'")
 
             # Unpatchify: (1, N, 128) → (1, 8, N, 16)
             audio_N = audio_latent.shape[1]
