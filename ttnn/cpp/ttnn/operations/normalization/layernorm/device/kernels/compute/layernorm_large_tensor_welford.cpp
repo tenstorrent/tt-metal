@@ -550,13 +550,37 @@ void kernel_main() {
                 reconfig_data_format_srca(cb_inb, cb_ex2pe);
             }
 
-            // Multiply by 1/(√(Var(X) + ε))
-            reconfig_data_format_srca(fuse_pre_add ? cb_inb : cb_in, cb_ex2pe);
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
+            // Workaround for WH-only LLK bug: binary_dest_reuse_tiles<ELWMUL, DEST_TO_SRCB>
+            // on c_0 (cb_in) silently corrupts when c_29 (multi-buffer-index alias on c_0's
+            // L1 allocation) has unpack_to_dest_mode=UnpackToDestFp32 and fp32_dest_acc_en
+            // is true. Even-indexed DEST half blocks accumulate (output = (1+rsqrt)*(x-mean),
+            // ~1.286x), odd-indexed blocks produce mostly zeros. Some piece of unpacker state
+            // set by c_29's UnpackToDest path leaks into c_0's dest-reuse ELWMUL path; the
+            // standard reconfig_data_format(..., IGNORE) skip-optimization at the start of
+            // the eltwise block doesn't reset whatever state needs resetting. BH works fine.
+            // Stage (x-mean) through cb_xmm and use the standard mul_tiles_bcast_cols path
+            // (no DEST_TO_SRCB reuse), matching the regular layernorm_welford.cpp pattern.
+            tile_regs_commit();
+
+            const uint32_t cb_xmm_intermediate = get_named_compile_time_arg_val("cb_xmm");
+            CircularBuffer cb_xmm_intermediate_obj(cb_xmm_intermediate);
+            pack_reconfig_data_format(cb_xmm_intermediate);
+            cb_xmm_intermediate_obj.reserve_back(block.full_block_size());
+            tile_regs_wait();
             for (auto i : block.local()) {
-                binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                    cb_ex2pe, 0 /*in_tile_index*/, i);
+                pack_tile(i, cb_xmm_intermediate);
             }
+            cb_xmm_intermediate_obj.push_back(block.full_block_size());
+            tile_regs_release();
+
+            reconfig_data_format(cb_xmm_intermediate, cb_ex2pe);
+            mul_bcast_cols_init_short(cb_xmm_intermediate, cb_ex2pe);
+            cb_xmm_intermediate_obj.wait_front(block.full_block_size());
+            tile_regs_acquire();
+            for (auto i : block.local()) {
+                mul_tiles_bcast_cols(cb_xmm_intermediate, cb_ex2pe, i, 0, i);
+            }
+            cb_xmm_intermediate_obj.pop_front(block.full_block_size());
             tile_regs_commit();
 
             if constexpr (!(do_gamma == 1 or do_beta == 1)) {
