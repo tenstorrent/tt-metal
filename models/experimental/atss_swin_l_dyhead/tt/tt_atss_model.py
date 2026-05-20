@@ -268,10 +268,23 @@ class TtATSSModel:
 
     def forward(self, x_ttnn):
         """
-        Full forward: backbone → FPN → DyHead (CPU) → ATSS Head.
-        Input: preprocessed image as ttnn tensor [1, 3, H, W] NCHW.
-        Returns: (cls_scores, bbox_preds, centernesses) as torch tensors.
+        Full forward: backbone → FPN → DyHead → ATSS Head.
+        Returns NCHW torch tensors (cls_scores, bbox_preds, centernesses) ready for postprocess.
+        For the device DyHead path we run forward_device (all on device) then materialize to host;
+        for the hybrid path we use the existing CPU-DyHead path.
         """
+        if isinstance(self.dyhead, TtDyHeadDevice):
+            cls_scores_ttnn, bbox_preds_ttnn, centernesses_ttnn = self.forward_device(x_ttnn)
+            to_torch_kw = {} if self.output_mesh_composer is None else {"mesh_composer": self.output_mesh_composer}
+
+            def _to_nchw(t):
+                return ttnn.to_torch(ttnn.from_device(t), **to_torch_kw).float().permute(0, 3, 1, 2)
+
+            cls_scores = [_to_nchw(t) for t in cls_scores_ttnn]
+            bbox_preds = [_to_nchw(t) for t in bbox_preds_ttnn]
+            centernesses = [_to_nchw(t) for t in centernesses_ttnn]
+            return cls_scores, bbox_preds, centernesses
+
         fpn_feats = self.forward_backbone_fpn(x_ttnn)
         dy_feats = self.forward_dyhead(fpn_feats)
         cls_scores, bbox_preds, centernesses = self.forward_head(dy_feats)
