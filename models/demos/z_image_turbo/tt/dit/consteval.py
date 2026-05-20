@@ -158,9 +158,7 @@ def run_const_evals(weights, device):
 
     weights["_eps_hidden"] = _sf32(1e-6)
     weights["_eps_cap"] = _sf32(1e-6)
-    weights["_eps_qk"] = _sf32(1e-6)
     weights["_scale_hidden"] = _sf32(1.0 / 3840.0)
-    weights["_scale_head"] = _sf32(1.0 / 128.0)
     weights["_one"] = _sbf16(1.0)
     weights["_scale_cap"] = _sf32(1.0 / 2560.0)
 

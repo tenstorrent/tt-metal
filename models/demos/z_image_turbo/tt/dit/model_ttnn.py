@@ -121,11 +121,8 @@ class ZImageTransformerTTNN(LightweightModule):
         self.weights["_cap_pad_token"] = self.weights["cap_pad_token"]
 
         # ── Detect compute grid ────────────────────────────────────────────────
-        try:
-            d = mesh_device.get_device(0) if hasattr(mesh_device, "get_device") else mesh_device
-            self._core_grid = d.compute_with_storage_grid_size()
-        except Exception:
-            self._core_grid = ttnn.CoreCoord(8, 8)
+        d = mesh_device.get_device(0) if hasattr(mesh_device, "get_device") else mesh_device
+        self._core_grid = d.compute_with_storage_grid_size()
         print(f"  Compute grid: {self._core_grid.x}×{self._core_grid.y}")
 
         # ── Pre-process weights for optimized ops ──────────────────────────────
@@ -238,9 +235,9 @@ class ZImageTransformerTTNN(LightweightModule):
             if val is norm_weight:
                 flat_w = self.weights.get(key + "_flat")
                 break
-        if flat_w is None:
-            # Fallback: manual F32 RMSNorm (should not happen after _prep_qk_norm_weights)
-            return self._qk_norm_manual(qk, norm_weight, seq_len, num_heads)
+        assert (
+            flat_w is not None
+        ), "QK norm weight missing preprocessed '_flat' variant — _prep_qk_norm_weights must run first"
 
         qk = self._ensure_tile(qk)
         return ttnn.rms_norm(
@@ -250,24 +247,6 @@ class ZImageTransformerTTNN(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=REDUCE_KERNEL,
         )
-
-    def _qk_norm_manual(self, qk, norm_weight, seq_len, num_heads):
-        """Fallback manual F32 per-head RMSNorm (matches base model_ttnn.py exactly)."""
-        qk_sq = ttnn.pow(qk, 2.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        qk_sum = ttnn.sum(qk_sq, dim=3, keepdim=False, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        qk_sum = ttnn.reshape(qk_sum, [1, seq_len, num_heads, 1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        qk_mean = ttnn.multiply(
-            qk_sum, self.weights["_scale_head"], dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        qk_var = ttnn.add(
-            qk_mean, self.weights["_eps_qk"], dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        qk_rsqrt = ttnn.rsqrt(qk_var, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        qk_r = ttnn.reshape(qk, [1, seq_len, num_heads, HEAD_DIM // 2, 2], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        qk_normed = ttnn.multiply(qk_r, qk_rsqrt, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        w_f32 = ttnn.typecast(norm_weight, ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        qk_normed = ttnn.multiply(qk_normed, w_f32, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.reshape(qk_normed, [1, seq_len, num_heads, HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # ── Optimized attention ────────────────────────────────────────────────────
 
