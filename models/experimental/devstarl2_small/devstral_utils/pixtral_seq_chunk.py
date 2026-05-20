@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import os
 
+import ttnn
+
 from models.common.utility_functions import nearest_32
 
 
@@ -24,3 +26,20 @@ def pixtral_vision_seq_chunk_len(configuration) -> int:
         chunk = max(32, min(int(cfg_chunk), int(cap)))
 
     return chunk
+
+
+def pad_seq_to_chunk_multiple(x: ttnn.Tensor, seq_len: int, chunk: int) -> tuple[ttnn.Tensor, int, int]:
+    """Pad dim=2 to a multiple of ``chunk`` so batched matmul avoids ``ttnn.concat``."""
+    original = seq_len
+    if seq_len <= chunk or seq_len % chunk == 0:
+        return x, seq_len, original
+    padded = ((seq_len + chunk - 1) // chunk) * chunk
+    pad_len = padded - seq_len
+    x = ttnn.pad(x, padding=[(0, 0), (0, 0), (0, pad_len), (0, 0)], value=0.0)
+    return x, padded, original
+
+
+def trim_seq_dim2(x: ttnn.Tensor, original_seq_len: int) -> ttnn.Tensor:
+    if int(x.shape[2]) == original_seq_len:
+        return x
+    return x[:, :, :original_seq_len, :]

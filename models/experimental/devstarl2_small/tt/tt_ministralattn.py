@@ -118,10 +118,10 @@ class TtMinistralAttention(Attention):
         return self.llama_4_scaling_beta is not None and self.original_max_position_embeddings is not None
 
     def _llama4_scale_factor_from_positions_ttnn(self, pos_tt: ttnn.Tensor) -> ttnn.Tensor:
-        """Llama-4 scale factor in float32 (use add(1.0), not ones_like, for trace safety)."""
+        """Llama-4 scale factor in bf16 to avoid fp32 tilize/typecast overhead."""
         orig = float(self.original_max_position_embeddings)
         beta = float(self.llama_4_scaling_beta)
-        pos_f = ttnn.typecast(pos_tt, ttnn.float32)
+        pos_f = ttnn.typecast(pos_tt, ttnn.bfloat16)
         ratio = ttnn.divide(pos_f, orig)
         floored = ttnn.floor(ratio)
         log_term = ttnn.log1p(floored)
