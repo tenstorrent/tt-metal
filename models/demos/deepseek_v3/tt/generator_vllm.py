@@ -148,10 +148,10 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                     prefill_logits, user_slots=[user_id], skip_precompile=True
                 )
                 prefill_logits_sampled_host = self._tokens_from_device(
-                    prefill_logits_sampled_device, self.mesh_device, batch_size_per_row=1
+                    prefill_logits_sampled_device, self.mesh_device, batch_size_per_row=self.batch_size_per_row
                 )
                 # Device-sampling path emits token ids.
-                user_output = prefill_logits_sampled_host[0].to(torch.int64)
+                user_output = prefill_logits_sampled_host[user_id].to(torch.int64)
             else:
                 assert isinstance(prefill_logits, torch.Tensor), "prefill_logits should be a torch.Tensor on host"
                 user_logits = prefill_logits.squeeze(0).squeeze(0)  # [1, 1, S, V] -> [S, V]
