@@ -6,7 +6,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
-#include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
 void kernel_main() {
     // M_tiles, padded_M_tiles, M_blocks_per_core, K_tiles, padded_K_tiles come from runtime args.
@@ -18,22 +17,18 @@ void kernel_main() {
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
     constexpr uint32_t in1_tile_size = get_compile_time_arg_val(6);
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(7);
-    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(8);
-    uint32_t in1_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
-    uint32_t in1_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
-    uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(11));
-    constexpr uint32_t is_output_writer = get_compile_time_arg_val(12);
-    constexpr uint32_t is_injector_core = get_compile_time_arg_val(13);
-    constexpr uint32_t N_chunks = get_compile_time_arg_val(14);
-    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(15);
-    constexpr bool transpose_b = static_cast<bool>(get_compile_time_arg_val(16));
-    constexpr bool use_offset_in1 = static_cast<bool>(get_compile_time_arg_val(17));
-    constexpr bool use_out_offset = static_cast<bool>(get_compile_time_arg_val(18));
+    uint32_t in1_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
+    uint32_t in1_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
+    uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
+    constexpr uint32_t is_output_writer = get_compile_time_arg_val(11);
+    constexpr uint32_t is_injector_core = get_compile_time_arg_val(12);
+    constexpr bool transpose_b = static_cast<bool>(get_compile_time_arg_val(13));
+    constexpr bool use_offset_in1 = static_cast<bool>(get_compile_time_arg_val(14));
+    constexpr bool use_out_offset = static_cast<bool>(get_compile_time_arg_val(15));
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in1_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in2_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_dest_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_dest_noc_y = get_arg_val<uint32_t>(argidx++);
@@ -47,70 +42,34 @@ void kernel_main() {
     // Host passes core.y here; we compute defer_write_k_block from runtime K_num_blocks below.
     const uint32_t core_y_index = get_arg_val<uint32_t>(argidx++);
 
-#ifdef FUSE_TERNARY
-    // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
-    const uint32_t ternary_a_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t ternary_b_addr = get_arg_val<uint32_t>(argidx++);
-#endif  // FUSE_TERNARY
+    const uint32_t out_addr_rt_arg_idx = argidx;  // Output address comes next.
 
-    const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
-
-    // Tensor accessor for input tensor (scalar CTAs 0..18; accessor starts at 19)
-    constexpr auto in1_args = TensorAccessorArgs<19>();
+    // Tensor accessors (scalar CTAs 0..15; tensor accessors start at 16: in1, then output).
+    constexpr auto in1_args = TensorAccessorArgs<16>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
 
-    // Always create tuple of output accessors (size = N_chunks)
-    constexpr uint32_t out_tensor_args_cta_offset = in1_args.next_compile_time_args_offset();
-    constexpr auto outputs_args = make_tensor_accessor_args_tuple<N_chunks, out_tensor_args_cta_offset>();
-    auto outputs_tuple = make_tensor_accessor_tuple_uniform_page_size(outputs_args, out_addr_rt_arg_idx, out_tile_size);
+    constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
+    const auto out_accessor = TensorAccessor(out_args, get_arg_val<uint32_t>(out_addr_rt_arg_idx), out_tile_size);
 
-#ifdef FUSE_BIAS
-    constexpr uint32_t in2_args_cta_offset =
-        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
-    constexpr auto in2_args = TensorAccessorArgs<in2_args_cta_offset>();
-    const auto in2_reader = TensorAccessor(in2_args, in2_addr, in2_tile_size);
-#endif
-
-#ifdef FUSE_TERNARY
-// Calculate offset for ternary_a_args
-#ifdef FUSE_BIAS
-    constexpr uint32_t ternary_a_args_cta_offset = in2_args.next_compile_time_args_offset();
-#else
-    constexpr uint32_t ternary_a_args_cta_offset =
-        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
-#endif
-    constexpr uint32_t cb_id_ternary_a = tt::CBIndex::c_5;
-    constexpr uint32_t cb_id_ternary_b = tt::CBIndex::c_6;
-
-    constexpr uint32_t ternary_a_tile_size = get_tile_size(cb_id_ternary_a);
-    constexpr uint32_t ternary_b_tile_size = get_tile_size(cb_id_ternary_b);
-
-    constexpr auto ternary_a_args = TensorAccessorArgs<ternary_a_args_cta_offset>();
-    constexpr auto ternary_b_args = TensorAccessorArgs<ternary_a_args.next_compile_time_args_offset()>();
-    const auto ternary_a_reader = TensorAccessor(ternary_a_args, ternary_a_addr, ternary_a_tile_size);
-    const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr, ternary_b_tile_size);
-
-#endif  // FUSE_TERNARY
-
-    // Variable-M: read actual M values from runtime args (after output addresses)
+    // Variable-M: read actual M values from runtime args (after output address).
     // OFFSET_M_AXIS overrides M_tiles and M_blocks_per_core from on-device offsets.
-    uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks);
-    const uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 1);
-    uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 2);
+    uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 1);
+    const uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 2);
+    uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 3);
     uint32_t in1_k_offset_tiles = 0U;
     uint32_t parent_K_tiles_stride_in1 = 0U;
     if constexpr (use_offset_in1) {
-        in1_k_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 3);
-        parent_K_tiles_stride_in1 = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 4);
+        in1_k_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 4);
+        parent_K_tiles_stride_in1 = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 5);
     }
     uint32_t out_row_offset_tiles = 0U;
     if constexpr (use_out_offset) {
-        out_row_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 5);
+        out_row_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 6);
     }
     // Variable-K: matmul-K extent from runtime; padded_K and K_num_blocks derived using
     // K_block_tiles (CTA). One cached program services any K value.
     // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from on-device offsets[start..start+2].
-    uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 6);
+    uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 7);
 
 #ifdef OFFSETS_ACTIVE
     // EP path: read offsets from a 1-D UINT32 ROW_MAJOR device tensor. Each flag is
@@ -123,11 +82,9 @@ void kernel_main() {
     //   OFFSET_IN1_K:    sets in1_k_offset_tiles + K_tiles. If OFFSET_IN0_K is not set,
     //                    also publishes K_tiles on cb_ctrl[3] (otherwise dm_in0 publishes).
     {
-        const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 7);
-        const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 8);
-        constexpr uint32_t offsets_args_cta_offset =
-            tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
-        constexpr auto offsets_args = TensorAccessorArgs<offsets_args_cta_offset>();
+        const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 8);
+        const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 9);
+        constexpr auto offsets_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
         const auto offsets_acc = TensorAccessor(offsets_args, offsets_addr);
 
         // Use the in1 CB's L1 write pointer as scratch — unused at kernel startup; the
@@ -145,7 +102,7 @@ void kernel_main() {
         const uint32_t row_end = offsets_stage[offsets_start_index + 1U];
 #ifdef OFFSET_M_AXIS
         {
-            const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 9);
+            const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 10);
             const uint32_t actual_eff_M = (row_end - row_start) / 32U;
             // Empty-expert (actual=0) → M_blocks_per_core=0 (loop skipped). Still clamp
             // M_tiles to >=1 for shape construction (TensorShape2D asserts d0>0).
@@ -191,7 +148,6 @@ void kernel_main() {
     const TensorShape2D in1_shape = transpose_b ? TensorShape2D(N_tiles, K_tiles, padded_N_tiles, padded_K_tiles)
                                                 : TensorShape2D(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
-    const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     const uint32_t defer_write_k_block = compute_defer_write_k_block(core_y_index, Y_AXIS_CORES, K_num_blocks);
@@ -199,32 +155,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
-#ifdef FUSE_BIAS
-    constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
-#endif
-
-#ifdef FUSE_AG
-    // Receiver for ccl fusing
-    MinimalMatmulOpReceiver fused_op_receiver;
-    uint32_t fused_op_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
-    uint32_t num_devices = get_arg_val<uint32_t>(fused_op_rt_args_idx);
-    uint32_t num_k_blocks = get_arg_val<uint32_t>(fused_op_rt_args_idx + 1);
-    uint8_t k_block_device_expected[num_k_blocks]{};
-    uint8_t k_block_device_received[num_k_blocks]{};
-    uint32_t device_k_block_counts[num_devices]{};
-    uint32_t device_k_block_start_ids[num_devices]{};
-    uint32_t forward_k_block_schedule[num_k_blocks]{};
-    if constexpr (is_injector_core) {
-        fused_op_receiver = MinimalMatmulOpReceiver(
-            false,
-            fused_op_rt_args_idx,
-            k_block_device_expected,
-            k_block_device_received,
-            device_k_block_counts,
-            device_k_block_start_ids,
-            forward_k_block_schedule);
-    }
-#endif
 
     volatile tt_l1_ptr uint32_t* in1_valid_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_valid_semaphore_addr);
@@ -254,11 +184,6 @@ void kernel_main() {
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
-#ifdef FUSE_AG
-        if constexpr (is_injector_core) {
-            fused_op_receiver.reset();
-        }
-#endif
 
         k_forward = true;
 
@@ -270,15 +195,9 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
-                        do_deferred_block_write<
-                            M_block_tiles,
-                            N_block_tiles,
-                            N_chunks,
-                            N_tiles_per_chunk,
-                            use_out_offset>(
-                            outputs_tuple,
+                        do_deferred_block_write<M_block_tiles, N_block_tiles, use_out_offset>(
+                            out_accessor,
                             out_shape,
-                            out0_shape,
                             cb_id_out,
                             out_tile_size,
                             defer_write_m_tile,
@@ -294,12 +213,6 @@ void kernel_main() {
 
                 uint32_t in1_start_address = get_write_ptr(cb_id_in1);
                 if constexpr (is_injector_core) {
-#ifdef FUSE_AG
-                    if (is_injector_core) {
-                        k_block =
-                            fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
-                    }
-#endif
                     read_in1_block_sync<K_block_tiles, N_block_tiles, transpose_b, use_offset_in1>(
                         in1_reader,
                         in1_shape,
@@ -343,28 +256,6 @@ void kernel_main() {
                     noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
                 }
             }
-#ifdef FUSE_BIAS
-            if constexpr (!is_output_writer) {
-                read_tiles_by_row(cb_id_in2, in2_reader, n_tile, n_tile_end - n_tile, in2_tile_size, N_block_tiles);
-            }
-#endif
-
-#ifdef FUSE_TERNARY
-            if constexpr (!is_output_writer) {
-                read_ternary_blocks_sync<M_block_tiles, N_block_tiles>(
-                    ternary_a_reader,
-                    ternary_b_reader,
-                    out_shape,
-                    cb_id_ternary_a,
-                    cb_id_ternary_b,
-                    ternary_a_tile_size,
-                    ternary_b_tile_size,
-                    m_tile,
-                    m_tile_end,
-                    n_tile,
-                    n_tile_end);
-            }
-#endif  // FUSE_TERNARY
 
             k_forward = !k_forward;
             // We have an output block to write out
@@ -389,10 +280,9 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
-                    do_final_block_write<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk, use_out_offset>(
-                        outputs_tuple,
+                    do_final_block_write<M_block_tiles, N_block_tiles, use_out_offset>(
+                        out_accessor,
                         out_shape,
-                        out0_shape,
                         cb_id_out,
                         out_tile_size,
                         m_tile,

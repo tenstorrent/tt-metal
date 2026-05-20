@@ -95,11 +95,6 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     auto output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     auto out_tile_size = tt::tile_size(output_data_format);
 
-    // in2 (bias) tile size — unused but kept for compile-time arg layout compatibility
-    auto in2_tile_size = in1_tile_size;
-    // in3 (AG input) tile size — unused but kept for compile-time arg layout compatibility
-    auto in3_tile_size = in1_tile_size;
-
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
@@ -254,7 +249,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         tt::tt_metal::CreateCircularBuffer(program, core_grid, cb_ctrl_cfg);
     }
 
-    // ----- Defines (empty — no FUSE_BIAS, FUSE_TERNARY, FUSE_AG) -----
+    // OFFSETS_ACTIVE / OFFSET_* are the only kernel defines variable_matmul uses today.
     std::map<std::string, std::string> defines;
 
     // On-device offsets (EP). When active, dataflow kernels read
@@ -342,18 +337,14 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         N_blocks_per_core,                                             // 5:  N_blocks_per_core
         in0_tile_size,                                                 // 6:  in_tile_size
         out_tile_size,                                                 // 7:  out_tile_size
-        in2_tile_size,                                                 // 8:  in2_tile_size (dummy, no bias)
-        in0_sender_semaphore_id,                                       // 9:  sender_sem_id
-        in0_receiver_semaphore_id,                                     // 10: receiver_sem_id
-        in0_valid_semaphore_id,                                        // 11: valid_sem_id
-        in0_is_output_writer,                                          // 12: is_output_writer
-        true,                                                          // 13: is_injector_core
-        1U,                                                            // 14: N_chunks (always 1)
-        N_tiles,                                                       // 15: N_tiles_per_chunk
-        in3_tile_size,                                                 // 16: in3_tile_size (dummy, no AG)
-        static_cast<uint32_t>(transpose_a),                            // 17: transpose_a
-        static_cast<uint32_t>(use_offset_in0),                         // 18: use_offset
-        static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 19: use_out_offset
+        in0_sender_semaphore_id,                                       // 8:  sender_sem_id
+        in0_receiver_semaphore_id,                                     // 9:  receiver_sem_id
+        in0_valid_semaphore_id,                                        // 10: valid_sem_id
+        in0_is_output_writer,                                          // 11: is_output_writer
+        true,                                                          // 12: is_injector_core
+        static_cast<uint32_t>(transpose_a),                            // 13: transpose_a
+        static_cast<uint32_t>(use_offset_in0),                         // 14: use_offset
+        static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 15: use_out_offset
     };
     append_accessors(in0_sender_compile_time_args, input_tensor, output_tensor);
     if (in0_needs_offsets) {
@@ -381,18 +372,14 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         N_blocks_per_core,                                             // 5:  N_blocks_per_core
         in0_tile_size,                                                 // 6:  in_tile_size
         out_tile_size,                                                 // 7:  out_tile_size
-        in2_tile_size,                                                 // 8:  in2_tile_size (dummy, no bias)
-        in0_sender_semaphore_id,                                       // 9:  sender_sem_id
-        in0_receiver_semaphore_id,                                     // 10: receiver_sem_id
-        in0_valid_semaphore_id,                                        // 11: valid_sem_id
-        in0_is_output_writer,                                          // 12: is_output_writer
-        false,                                                         // 13: is_injector_core
-        1U,                                                            // 14: N_chunks
-        N_tiles,                                                       // 15: N_tiles_per_chunk
-        in3_tile_size,                                                 // 16: in3_tile_size (dummy, no AG)
-        static_cast<uint32_t>(transpose_a),                            // 17: transpose_a
-        static_cast<uint32_t>(use_offset_in0),                         // 18: use_offset
-        static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 19: use_out_offset
+        in0_sender_semaphore_id,                                       // 8:  sender_sem_id
+        in0_receiver_semaphore_id,                                     // 9:  receiver_sem_id
+        in0_valid_semaphore_id,                                        // 10: valid_sem_id
+        in0_is_output_writer,                                          // 11: is_output_writer
+        false,                                                         // 12: is_injector_core
+        static_cast<uint32_t>(transpose_a),                            // 13: transpose_a
+        static_cast<uint32_t>(use_offset_in0),                         // 14: use_offset
+        static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 15: use_out_offset
     };
     append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensor);
     if (in0_needs_offsets) {
@@ -410,7 +397,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
             .compile_args = in0_receiver_compile_time_args,
             .defines = in0_defines});
 
-    // in1 sender compile-time args (19 scalar + tensor accessor args)
+    // in1 sender compile-time args (16 scalar + tensor accessor args)
     std::vector<uint32_t> in1_sender_compile_time_args = {
         N_tiles,                                                       // 0:  N_tiles
         padded_N_tiles,                                                // 1:  padded_N_tiles
@@ -420,17 +407,14 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         N_blocks_per_core,                                             // 5:  N_blocks_per_core
         in1_tile_size,                                                 // 6:  in1_tile_size
         out_tile_size,                                                 // 7:  out_tile_size
-        in2_tile_size,                                                 // 8:  in2_tile_size (dummy, no bias)
-        in1_sender_semaphore_id,                                       // 9:  sender_sem_id
-        in1_receiver_semaphore_id,                                     // 10: receiver_sem_id
-        in1_valid_semaphore_id,                                        // 11: valid_sem_id
-        in1_is_output_writer,                                          // 12: is_output_writer
-        true,                                                          // 13: is_injector_core
-        1U,                                                            // 14: N_chunks
-        N_tiles,                                                       // 15: N_tiles_per_chunk
-        static_cast<uint32_t>(transpose_b),                            // 16: transpose_b
-        static_cast<uint32_t>(use_offset_in1),                         // 17: use_offset_in1
-        static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 18: use_out_offset
+        in1_sender_semaphore_id,                                       // 8:  sender_sem_id
+        in1_receiver_semaphore_id,                                     // 9:  receiver_sem_id
+        in1_valid_semaphore_id,                                        // 10: valid_sem_id
+        in1_is_output_writer,                                          // 11: is_output_writer
+        true,                                                          // 12: is_injector_core
+        static_cast<uint32_t>(transpose_b),                            // 13: transpose_b
+        static_cast<uint32_t>(use_offset_in1),                         // 14: use_offset_in1
+        static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 15: use_out_offset
     };
     append_accessors(in1_sender_compile_time_args, weight_tensor, output_tensor);
     if (in1_needs_offsets) {
@@ -458,17 +442,14 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         N_blocks_per_core,                                             // 5:  N_blocks_per_core
         in1_tile_size,                                                 // 6:  in1_tile_size
         out_tile_size,                                                 // 7:  out_tile_size
-        in2_tile_size,                                                 // 8:  in2_tile_size (dummy, no bias)
-        in1_sender_semaphore_id,                                       // 9:  sender_sem_id
-        in1_receiver_semaphore_id,                                     // 10: receiver_sem_id
-        in1_valid_semaphore_id,                                        // 11: valid_sem_id
-        in1_is_output_writer,                                          // 12: is_output_writer
-        false,                                                         // 13: is_injector_core
-        1U,                                                            // 14: N_chunks
-        N_tiles,                                                       // 15: N_tiles_per_chunk
-        static_cast<uint32_t>(transpose_b),                            // 16: transpose_b
-        static_cast<uint32_t>(use_offset_in1),                         // 17: use_offset_in1
-        static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 18: use_out_offset
+        in1_sender_semaphore_id,                                       // 8:  sender_sem_id
+        in1_receiver_semaphore_id,                                     // 9:  receiver_sem_id
+        in1_valid_semaphore_id,                                        // 10: valid_sem_id
+        in1_is_output_writer,                                          // 11: is_output_writer
+        false,                                                         // 12: is_injector_core
+        static_cast<uint32_t>(transpose_b),                            // 13: transpose_b
+        static_cast<uint32_t>(use_offset_in1),                         // 14: use_offset_in1
+        static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 15: use_out_offset
     };
     append_accessors(in1_receiver_compile_time_args, weight_tensor, output_tensor);
     if (in1_needs_offsets) {
@@ -578,32 +559,28 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
         // in0 runtime args layout:
         //  0: in0_addr
-        //  1: in2_addr (0, no bias)
-        //  2: in3_addr (0, no AG)
-        //  3: is_sink_core
-        //  4: in0_dest_noc_x
-        //  5: in0_dest_noc_y
-        //  6: in0_sender_noc_x
-        //  7: in0_sender_noc_y
-        //  8: M_start_tile     (in effective-M coord, per-core partition)
-        //  9: M_end_tile
-        // 10: N_start_tile
-        // 11: N_end_tile
-        // 12: defer_write_k_block
-        // 13: out_addr
-        // 14: actual_M_tiles            (= effective_M_tiles)
-        // 15: actual_padded_M_tiles
-        // 16: actual_M_blocks_per_core
-        // 17: in0_row_offset_tiles      (offset into parent input's M axis, in tiles)
-        // 18: parent_M_tiles_stride     (parent M tile count; used as K-row stride for transpose_a)
-        // 19: in0_k_offset_tiles        (offset into parent input's K axis, in tiles)
-        // 20: parent_K_tiles_stride     (parent K tile count; used as M-row stride for non-transpose)
-        // 21: out_row_offset_tiles      (write-at-offset on output parent)
-        // 22: K_tiles                   (variable-K: matmul-K extent in tiles)
+        //  1: is_sink_core
+        //  2: in0_dest_noc_x
+        //  3: in0_dest_noc_y
+        //  4: in0_sender_noc_x
+        //  5: in0_sender_noc_y
+        //  6: M_start_tile     (in effective-M coord, per-core partition)
+        //  7: M_end_tile
+        //  8: N_start_tile
+        //  9: N_end_tile
+        // 10: defer_write_k_block
+        // 11: out_addr
+        // 12: actual_M_tiles            (= effective_M_tiles)
+        // 13: actual_padded_M_tiles
+        // 14: actual_M_blocks_per_core
+        // 15: in0_row_offset_tiles      (offset into parent input's M axis, in tiles)
+        // 16: parent_M_tiles_stride     (parent M tile count; used as K-row stride for transpose_a)
+        // 17: in0_k_offset_tiles        (offset into parent input's K axis, in tiles)
+        // 18: parent_K_tiles_stride     (parent K tile count; used as M-row stride for non-transpose)
+        // 19: out_row_offset_tiles      (write-at-offset on output parent)
+        // 20: K_tiles                   (variable-K: matmul-K extent in tiles)
         std::vector<uint32_t> in0_args = {
             in0_addr,
-            0U,  // in2_addr (no bias)
-            0U,  // in3_addr (no AG)
             static_cast<uint32_t>(is_in0_sink),
             static_cast<uint32_t>(in0_next_core_physical.x),
             static_cast<uint32_t>(in0_next_core_physical.y),
@@ -646,28 +623,26 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
         // in1 runtime args layout:
         //  0: in1_addr
-        //  1: in2_addr (0, no bias)
-        //  2: is_sink_core
-        //  3: dest_noc_x
-        //  4: dest_noc_y
-        //  5: sender_noc_x
-        //  6: sender_noc_y
-        //  7: M_start_tile
-        //  8: M_end_tile
-        //  9: N_start_tile
-        // 10: N_end_tile
-        // 11: defer_write_k_block
-        // 12: out_addr
-        // 13: actual_M_tiles
-        // 14: actual_padded_M_tiles
-        // 15: actual_M_blocks_per_core
-        // 16: in1_k_offset_tiles    (offset into parent weight's K axis, in tiles)
-        // 17: parent_K_tiles_in1    (parent K tile count; row stride for transpose_b)
-        // 18: out_row_offset_tiles  (write-at-offset on output parent)
-        // 19: K_tiles               (variable-K: matmul-K extent in tiles)
+        //  1: is_sink_core
+        //  2: dest_noc_x
+        //  3: dest_noc_y
+        //  4: sender_noc_x
+        //  5: sender_noc_y
+        //  6: M_start_tile
+        //  7: M_end_tile
+        //  8: N_start_tile
+        //  9: N_end_tile
+        // 10: defer_write_k_block
+        // 11: out_addr
+        // 12: actual_M_tiles
+        // 13: actual_padded_M_tiles
+        // 14: actual_M_blocks_per_core
+        // 15: in1_k_offset_tiles    (offset into parent weight's K axis, in tiles)
+        // 16: parent_K_tiles_in1    (parent K tile count; row stride for transpose_b)
+        // 17: out_row_offset_tiles  (write-at-offset on output parent)
+        // 18: K_tiles               (variable-K: matmul-K extent in tiles)
         std::vector<uint32_t> in1_args = {
             in1_addr,
-            0U,  // in2_addr (no bias)
             static_cast<uint32_t>(is_in1_sink),
             static_cast<uint32_t>(in1_next_core_physical.x),
             static_cast<uint32_t>(in1_next_core_physical.y),
@@ -778,31 +753,31 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
 
     // in0 runtime arg indices
     constexpr uint32_t IN0_ADDR_IDX = 0;
-    constexpr uint32_t IN0_M_START_IDX = 8;
-    constexpr uint32_t IN0_M_END_IDX = 9;
-    constexpr uint32_t IN0_OUT_ADDR_IDX = 13;
-    constexpr uint32_t IN0_ACTUAL_M_TILES_IDX = 14;
-    constexpr uint32_t IN0_ACTUAL_PADDED_M_TILES_IDX = 15;
-    constexpr uint32_t IN0_ACTUAL_M_BLOCKS_IDX = 16;
-    constexpr uint32_t IN0_ROW_OFFSET_TILES_IDX = 17;
-    constexpr uint32_t IN0_PARENT_M_TILES_STRIDE_IDX = 18;
-    constexpr uint32_t IN0_K_OFFSET_TILES_IDX = 19;
-    constexpr uint32_t IN0_PARENT_K_TILES_STRIDE_IDX = 20;
-    constexpr uint32_t IN0_OUT_ROW_OFFSET_IDX = 21;
-    constexpr uint32_t IN0_K_TILES_IDX = 22;
+    constexpr uint32_t IN0_M_START_IDX = 6;
+    constexpr uint32_t IN0_M_END_IDX = 7;
+    constexpr uint32_t IN0_OUT_ADDR_IDX = 11;
+    constexpr uint32_t IN0_ACTUAL_M_TILES_IDX = 12;
+    constexpr uint32_t IN0_ACTUAL_PADDED_M_TILES_IDX = 13;
+    constexpr uint32_t IN0_ACTUAL_M_BLOCKS_IDX = 14;
+    constexpr uint32_t IN0_ROW_OFFSET_TILES_IDX = 15;
+    constexpr uint32_t IN0_PARENT_M_TILES_STRIDE_IDX = 16;
+    constexpr uint32_t IN0_K_OFFSET_TILES_IDX = 17;
+    constexpr uint32_t IN0_PARENT_K_TILES_STRIDE_IDX = 18;
+    constexpr uint32_t IN0_OUT_ROW_OFFSET_IDX = 19;
+    constexpr uint32_t IN0_K_TILES_IDX = 20;
 
     // in1 runtime arg indices
     constexpr uint32_t IN1_ADDR_IDX = 0;
-    constexpr uint32_t IN1_M_START_IDX = 7;
-    constexpr uint32_t IN1_M_END_IDX = 8;
-    constexpr uint32_t IN1_OUT_ADDR_IDX = 12;
-    constexpr uint32_t IN1_ACTUAL_M_TILES_IDX = 13;
-    constexpr uint32_t IN1_ACTUAL_PADDED_M_TILES_IDX = 14;
-    constexpr uint32_t IN1_ACTUAL_M_BLOCKS_IDX = 15;
-    constexpr uint32_t IN1_K_OFFSET_TILES_IDX = 16;
-    constexpr uint32_t IN1_PARENT_K_TILES_STRIDE_IDX = 17;
-    constexpr uint32_t IN1_OUT_ROW_OFFSET_IDX = 18;
-    constexpr uint32_t IN1_K_TILES_IDX = 19;
+    constexpr uint32_t IN1_M_START_IDX = 6;
+    constexpr uint32_t IN1_M_END_IDX = 7;
+    constexpr uint32_t IN1_OUT_ADDR_IDX = 11;
+    constexpr uint32_t IN1_ACTUAL_M_TILES_IDX = 12;
+    constexpr uint32_t IN1_ACTUAL_PADDED_M_TILES_IDX = 13;
+    constexpr uint32_t IN1_ACTUAL_M_BLOCKS_IDX = 14;
+    constexpr uint32_t IN1_K_OFFSET_TILES_IDX = 15;
+    constexpr uint32_t IN1_PARENT_K_TILES_STRIDE_IDX = 16;
+    constexpr uint32_t IN1_OUT_ROW_OFFSET_IDX = 17;
+    constexpr uint32_t IN1_K_TILES_IDX = 18;
 
     // Compute runtime arg indices
     constexpr uint32_t COMPUTE_M_START_IDX = 0;
@@ -817,8 +792,8 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
 
     // defer_write_k_block is computed kernel-side from runtime K_num_blocks + Y_AXIS_CORES.
     // Host just passes core.y at that RT-arg slot.
-    constexpr uint32_t IN0_DEFER_WRITE_K_BLOCK_IDX = 12;
-    constexpr uint32_t IN1_DEFER_WRITE_K_BLOCK_IDX = 11;
+    constexpr uint32_t IN0_DEFER_WRITE_K_BLOCK_IDX = 10;
+    constexpr uint32_t IN1_DEFER_WRITE_K_BLOCK_IDX = 10;
 
     // On-device offsets RT-arg indices (appended after K_tiles on each kernel).
     // Must mirror init-path: both in0 and in1 kernels are compiled with the offset defines for
@@ -830,10 +805,10 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     const bool in0_needs_offsets = offsets_active;
     const bool in1_needs_offsets = offsets_active;
     const uint32_t offsets_addr = offsets_active ? tensor_args.offsets_tensor.value().buffer()->address() : 0U;
-    constexpr uint32_t IN0_OFFSETS_ADDR_IDX = 23;  // appended after K_tiles (idx 22).
-    constexpr uint32_t IN0_OFFSETS_START_IDX_IDX = 24;
-    constexpr uint32_t IN1_OFFSETS_ADDR_IDX = 20;
-    constexpr uint32_t IN1_OFFSETS_START_IDX_IDX = 21;
+    constexpr uint32_t IN0_OFFSETS_ADDR_IDX = 21;  // appended after K_tiles (idx 20).
+    constexpr uint32_t IN0_OFFSETS_START_IDX_IDX = 22;
+    constexpr uint32_t IN1_OFFSETS_ADDR_IDX = 19;
+    constexpr uint32_t IN1_OFFSETS_START_IDX_IDX = 20;
 
     for (uint32_t i = 0; i < sv.num_cores; ++i) {
         CoreCoord core = sv.cores.at(i);
