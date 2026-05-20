@@ -1123,7 +1123,7 @@ def test_demo_text(
                     k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                     v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
             generator.prev_page_table = None
-            ttnn.synchronize_device(mesh_device)
+            # ttnn.synchronize_device(mesh_device)
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
         # Use device sampling for all cases when supported (prefill + decode)
