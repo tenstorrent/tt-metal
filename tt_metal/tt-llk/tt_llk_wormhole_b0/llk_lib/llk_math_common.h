@@ -15,9 +15,7 @@ using namespace ckernel::math;
 
 // DO NOT call this unless absolutely necessary
 // Bit 11 enables 32 bit mode for dest as a workaround for budabackend#1372.
-// We need to wait for both math and pack to be fully idle before writing this bit
-// because it affects dest bank access which is shared by both pipelines.
-// Changing it while either pipeline is active can cause a race condition.
+// We need to wait for math to be fully idle before writing this bit.
 inline void _llk_math_dbg_feature_disable_()
 {
     tensix_sync();
@@ -25,7 +23,7 @@ inline void _llk_math_dbg_feature_disable_()
 }
 
 // Clears bit 11 to disable 32 bit mode for dest.
-// Same synchronization is needed here to avoid racing with active pipelines.
+// Same synchronization is needed here to avoid racing.
 inline void _llk_math_dbg_feature_enable_()
 {
     tensix_sync();
