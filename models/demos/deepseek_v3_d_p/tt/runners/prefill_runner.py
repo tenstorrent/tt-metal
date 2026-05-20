@@ -127,9 +127,7 @@ def _is_shutdown() -> bool:
 
 
 def _load_hf_config():
-    model_path = os.environ.get("DEEPSEEK_V3_HF_MODEL")
-    if not model_path:
-        raise RuntimeError("DEEPSEEK_V3_HF_MODEL must be set")
+    model_path = os.environ.get("DEEPSEEK_V3_HF_MODEL") or "models/demos/deepseek_v3/reference"
     logger.info(f"Loading HF config from {model_path}")
     return AutoConfig.from_pretrained(model_path, trust_remote_code=True)
 
@@ -228,7 +226,7 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
     if len(token_ids) < MAX_SEQ_LEN:
         token_ids = token_ids + [1] * (MAX_SEQ_LEN - len(token_ids))
 
-    num_iterations = int(os.environ.get("PREFILL_STANDALONE_ITERS", "5"))
+    num_iterations = int(os.environ.get("PREFILL_STANDALONE_ITERS", "1"))
     iter_times_ms = []
     first_token = None
     for i in range(num_iterations):
