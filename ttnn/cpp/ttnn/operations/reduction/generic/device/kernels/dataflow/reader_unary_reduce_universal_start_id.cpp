@@ -33,19 +33,19 @@ void kernel_main() {
     // prepare_reduce_scaler is a template on the CB id; dfb::scaler converts implicitly.
     dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
-    DataflowBuffer cb_in0(dfb::input);
+    DataflowBuffer dfb_in0(dfb::input);
     auto tensor_accessor = TensorAccessor(ta::input);
 
     constexpr uint32_t onetile = 1;
-    uint32_t tile_bytes = cb_in0.get_tile_size();
+    uint32_t tile_bytes = dfb_in0.get_tile_size();
 
     Noc noc;
 
-    // read a ublock of tiles from src to CB, and then push the ublock to unpacker
+    // read a ublock of tiles from src to DFB, and then push the ublock to unpacker
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {
-        cb_in0.reserve_back(onetile);
-        noc.async_read(tensor_accessor, cb_in0, tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        dfb_in0.reserve_back(onetile);
+        noc.async_read(tensor_accessor, dfb_in0, tile_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_in0.push_back(onetile);
+        dfb_in0.push_back(onetile);
     }
 }
