@@ -333,6 +333,10 @@ def sdpa_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=Non
     if max_seq_len == 512 and max_batch == 1:
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch)
+    if max_seq_len == 512 and max_batch == 32:
+        # HiFi2 (vs HiFi4) speeds up SDPA without dropping PCC below 0.94.
+        fid = ttnn.MathFidelity.HiFi2 if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi4
+        return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch)
     return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi4, max_seq_len, max_batch_size)
 
 
