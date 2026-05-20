@@ -163,7 +163,7 @@ def run_perf_e2e_atss_swinl_dyhead(
 @pytest.mark.parametrize("batch_size_per_device", (1,))
 @pytest.mark.parametrize(
     "resolution, expected_inference_throughput",
-    [((640, 640), 3)],
+    [((1280, 1280), 3)],
 )
 def test_atss_swinl_dyhead_perf_single_device_2cq(
     device,
@@ -193,7 +193,7 @@ def test_atss_swinl_dyhead_perf_single_device_2cq(
 @pytest.mark.parametrize("batch_size_per_device", (1,))
 @pytest.mark.parametrize(
     "resolution, expected_inference_throughput",
-    [((640, 640), 3)],
+    [((1280, 1280), 3)],
 )
 def test_atss_swinl_dyhead_perf_single_device_trace_2cq(
     device,
@@ -221,7 +221,7 @@ def test_atss_swinl_dyhead_perf_single_device_trace_2cq(
 @pytest.mark.parametrize("batch_size_per_device", (1,))
 @pytest.mark.parametrize(
     "resolution, expected_inference_throughput",
-    [((640, 640), 6)],
+    [((1280, 1280), 6)],
 )
 def test_atss_swinl_dyhead_perf_multi_device_2cq(
     mesh_device,

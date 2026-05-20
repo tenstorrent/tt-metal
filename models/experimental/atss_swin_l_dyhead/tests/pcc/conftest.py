@@ -76,7 +76,7 @@ def atss_ref_model(atss_ckpt_path):
 @pytest.fixture(scope="module")
 def sample_input_640():
     torch.manual_seed(42)
-    return torch.randint(0, 256, (1, 3, 640, 640), dtype=torch.float32)
+    return torch.randint(0, 256, (1, 3, 1280, 1280), dtype=torch.float32)
 
 
 @pytest.fixture(scope="module")

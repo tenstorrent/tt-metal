@@ -41,7 +41,7 @@ def test_ttnn_fpn_vs_reference(device, atss_ckpt_path, atss_ref_model):
 
     # Generate backbone features using reference model
     torch.manual_seed(42)
-    sample_input = torch.randint(0, 256, (1, 3, 640, 640), dtype=torch.float32)
+    sample_input = torch.randint(0, 256, (1, 3, 1280, 1280), dtype=torch.float32)
     x = atss_ref_model.preprocess(sample_input)
 
     with torch.no_grad():

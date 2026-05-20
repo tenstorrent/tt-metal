@@ -59,7 +59,7 @@ def mmdet_model():
 def sample_input():
     """Create a deterministic sample input image."""
     torch.manual_seed(42)
-    img = torch.randint(0, 256, (1, 3, 640, 640), dtype=torch.float32)
+    img = torch.randint(0, 256, (1, 3, 1280, 1280), dtype=torch.float32)
     return img
 
 
@@ -132,7 +132,7 @@ class TestReferenceModel:
         with torch.no_grad():
             results = reference_model.predict(
                 sample_input,
-                img_shape=(640, 640),
+                img_shape=(1280, 1280),
                 score_thr=0.3,
             )
 

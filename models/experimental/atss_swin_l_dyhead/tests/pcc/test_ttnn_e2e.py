@@ -37,9 +37,9 @@ def test_ttnn_atss_e2e_pcc(device, atss_ckpt_path, atss_ref_model):
     """
     from models.experimental.atss_swin_l_dyhead.tt.tt_atss_model import TtATSSModel
 
-    # --- Shared input (640x640 → padded to 640x640, already multiple of 128) ---
+    # --- Shared input (1280x1280 → already multiple of 128, no padding needed) ---
     torch.manual_seed(42)
-    INPUT_H, INPUT_W = 640, 640
+    INPUT_H, INPUT_W = 1280, 1280
     sample_input = torch.randint(0, 256, (1, 3, INPUT_H, INPUT_W), dtype=torch.float32)
     x_ref = atss_ref_model.preprocess(sample_input)
     padded_h, padded_w = x_ref.shape[2], x_ref.shape[3]
@@ -149,14 +149,14 @@ def test_ttnn_atss_e2e_pcc(device, atss_ckpt_path, atss_ref_model):
         [c for c in ref_cls],
         [r for r in ref_reg],
         [c for c in ref_cent],
-        img_shape=(640, 640),
+        img_shape=(INPUT_H, INPUT_W),
         score_thr=0.05,
     )
     ttnn_results = atss_postprocess(
         ttnn_cls_rp,
         ttnn_reg_rp,
         ttnn_cent_rp,
-        img_shape=(640, 640),
+        img_shape=(INPUT_H, INPUT_W),
         score_thr=0.05,
     )
 

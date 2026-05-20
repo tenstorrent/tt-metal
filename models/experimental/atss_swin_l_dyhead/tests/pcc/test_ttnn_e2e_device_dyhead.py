@@ -17,7 +17,7 @@ def test_ttnn_atss_e2e_device_pcc(device, atss_ckpt_path, atss_ref_model):
     from models.experimental.atss_swin_l_dyhead.tt.tt_atss_model import TtATSSModel
 
     torch.manual_seed(42)
-    INPUT_H, INPUT_W = 640, 640
+    INPUT_H, INPUT_W = 1280, 1280
     sample_input = torch.randint(0, 256, (1, 3, INPUT_H, INPUT_W), dtype=torch.float32)
     x_ref = atss_ref_model.preprocess(sample_input)
     padded_h, padded_w = x_ref.shape[2], x_ref.shape[3]

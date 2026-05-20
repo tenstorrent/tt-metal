@@ -114,10 +114,10 @@ class TtDyReLU:
         )
         a2 = ttnn.multiply(a2, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        branch1 = ttnn.multiply(feat_nchw, a1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        branch1 = ttnn.add(branch1, b1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        branch2 = ttnn.multiply(feat_nchw, a2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        branch2 = ttnn.add(branch2, b2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        branch1 = ttnn.multiply(feat_nchw, a1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        branch1 = ttnn.add(branch1, b1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        branch2 = ttnn.multiply(feat_nchw, a2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        branch2 = ttnn.add(branch2, b2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         output = ttnn.maximum(branch1, branch2)
         return output
@@ -177,7 +177,7 @@ class TtHybridDyHead:
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.inputs_mesh_mapper,
         )
 
@@ -199,7 +199,7 @@ class TtHybridDyHead:
 
             mid_tt = self._to_device(mid_feat)
             scale_w = scale_attn(mid_tt)
-            sum_feat_tt = ttnn.multiply(mid_tt, scale_w, memory_config=ttnn.L1_MEMORY_CONFIG)
+            sum_feat_tt = ttnn.multiply(mid_tt, scale_w, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             summed_levels = 1
 
             if level > 0:
@@ -212,8 +212,8 @@ class TtHybridDyHead:
 
                 low_tt = self._to_device(low_feat)
                 scale_w_low = scale_attn(low_tt)
-                weighted_low = ttnn.multiply(low_tt, scale_w_low, memory_config=ttnn.L1_MEMORY_CONFIG)
-                sum_feat_tt = ttnn.add(sum_feat_tt, weighted_low, memory_config=ttnn.L1_MEMORY_CONFIG)
+                weighted_low = ttnn.multiply(low_tt, scale_w_low, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                sum_feat_tt = ttnn.add(sum_feat_tt, weighted_low, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 summed_levels += 1
 
             if level < len(x) - 1:
@@ -229,12 +229,12 @@ class TtHybridDyHead:
 
                 high_tt = self._to_device(high_feat)
                 scale_w_high = scale_attn(high_tt)
-                weighted_high = ttnn.multiply(high_tt, scale_w_high, memory_config=ttnn.L1_MEMORY_CONFIG)
-                sum_feat_tt = ttnn.add(sum_feat_tt, weighted_high, memory_config=ttnn.L1_MEMORY_CONFIG)
+                weighted_high = ttnn.multiply(high_tt, scale_w_high, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                sum_feat_tt = ttnn.add(sum_feat_tt, weighted_high, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 summed_levels += 1
 
             if summed_levels > 1:
-                sum_feat_tt = ttnn.multiply(sum_feat_tt, 1.0 / summed_levels, memory_config=ttnn.L1_MEMORY_CONFIG)
+                sum_feat_tt = ttnn.multiply(sum_feat_tt, 1.0 / summed_levels, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             out_tt = task_attn(sum_feat_tt)
             outs.append(self._to_host(out_tt))

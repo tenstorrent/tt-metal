@@ -67,15 +67,15 @@ class TtScaleAttnNHWC:
     def __call__(self, feat_nhwc):
         B, H, W, C = feat_nhwc.shape
         # Average pool over spatial dims (-3, -2)
-        pooled = ttnn.mean(feat_nhwc, dim=(-3, -2), keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
+        pooled = ttnn.mean(feat_nhwc, dim=(-3, -2), keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         pooled = ttnn.reshape(pooled, (B, C))
 
         out = ttnn.matmul(
-            pooled, self.weight, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self._compute_config
+            pooled, self.weight, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self._compute_config
         )
-        out = ttnn.add(out, self.bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-        out = ttnn.relu(out, memory_config=ttnn.L1_MEMORY_CONFIG)
-        out = ttnn.hardsigmoid(out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.add(out, self.bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.relu(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.hardsigmoid(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.reshape(out, (B, 1, 1, 1))
         return out
 
@@ -116,21 +116,21 @@ class TtDyReLUNHWC:
     def __call__(self, feat_nhwc):
         B, H, W, C = feat_nhwc.shape
 
-        pooled = ttnn.mean(feat_nhwc, dim=(-3, -2), keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
+        pooled = ttnn.mean(feat_nhwc, dim=(-3, -2), keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         pooled = ttnn.reshape(pooled, (B, C))
 
         h = ttnn.matmul(
-            pooled, self.weight1, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self._compute_config
+            pooled, self.weight1, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self._compute_config
         )
-        h = ttnn.add(h, self.bias1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        h = ttnn.relu(h, memory_config=ttnn.L1_MEMORY_CONFIG)
+        h = ttnn.add(h, self.bias1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        h = ttnn.relu(h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         coeffs = ttnn.matmul(
-            h, self.weight2, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self._compute_config
+            h, self.weight2, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self._compute_config
         )
-        coeffs = ttnn.add(coeffs, self.bias2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        coeffs = ttnn.hardsigmoid(coeffs, memory_config=ttnn.L1_MEMORY_CONFIG)
-        coeffs = ttnn.add(coeffs, -0.5, memory_config=ttnn.L1_MEMORY_CONFIG)
+        coeffs = ttnn.add(coeffs, self.bias2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        coeffs = ttnn.hardsigmoid(coeffs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        coeffs = ttnn.add(coeffs, -0.5, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         a1, b1, a2, b2 = ttnn.split(coeffs, C, dim=1)
         ttnn.deallocate(coeffs)
@@ -142,14 +142,14 @@ class TtDyReLUNHWC:
         b2 = ttnn.reshape(b2, (B, 1, 1, C))
 
         a1 = ttnn.add(
-            ttnn.multiply(a1, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG), 1.0, memory_config=ttnn.L1_MEMORY_CONFIG
+            ttnn.multiply(a1, 2.0, memory_config=ttnn.DRAM_MEMORY_CONFIG), 1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        a2 = ttnn.multiply(a2, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG)
+        a2 = ttnn.multiply(a2, 2.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        branch1 = ttnn.multiply(feat_nhwc, a1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        branch1 = ttnn.add(branch1, b1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        branch2 = ttnn.multiply(feat_nhwc, a2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        branch2 = ttnn.add(branch2, b2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        branch1 = ttnn.multiply(feat_nhwc, a1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        branch1 = ttnn.add(branch1, b1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        branch2 = ttnn.multiply(feat_nhwc, a2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        branch2 = ttnn.add(branch2, b2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         return ttnn.maximum(branch1, branch2)
 
@@ -167,8 +167,8 @@ def _run_conv2d_nhwc(
         weights_dtype=ttnn.bfloat16,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         deallocate_activation=False,
-        enable_act_double_buffer=True,
-        enable_weights_double_buffer=True,
+        enable_act_double_buffer=False,
+        enable_weights_double_buffer=False,
     )
     grid = device.compute_with_storage_grid_size()
     max_cores = grid.x * grid.y
@@ -196,7 +196,7 @@ def _run_conv2d_nhwc(
         return_weights_and_bias=True,
         dtype=ttnn.bfloat16,
     )
-    output = ttnn.sharded_to_interleaved(output, ttnn.L1_MEMORY_CONFIG)
+    output = ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG)
     output = ttnn.reshape(output, (1, H_out, W_out, out_ch))
     return output, weight_tt, bias_tt, H_out, W_out
 
@@ -352,15 +352,15 @@ def _bilinear_resize_via_grid_sample(device, x_nhwc, target_H, target_W, channel
     needs_pad = padded_C != C
     if needs_pad:
         if x_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
-            x_nhwc = ttnn.to_layout(x_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+            x_nhwc = ttnn.to_layout(x_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x_nhwc = ttnn.pad(x_nhwc, padding=[(0, 0), (0, 0), (0, 0), (0, padded_C - C)], value=0.0)
 
     grid_tt = _get_resize_grid(device, H, W, target_H, target_W)
     if x_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
-        x_nhwc = ttnn.to_layout(x_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x_nhwc = ttnn.to_layout(x_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     out = ttnn.grid_sample(x_nhwc, grid_tt, mode="bilinear", padding_mode="zeros", align_corners=False)
     if needs_pad:
-        out = ttnn.slice(out, [0, 0, 0, 0], [1, target_H, target_W, channels], memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.slice(out, [0, 0, 0, 0], [1, target_H, target_W, channels], memory_config=ttnn.DRAM_MEMORY_CONFIG)
     return out
 
 
@@ -570,15 +570,15 @@ class TtDyHeadBlockDevice:
             compute_config=self.compute_config,
         )  # (1, H, W, 27)
         # Slice into offset (first 18 ch) and mask_logit (last 9 ch)
-        offset = ttnn.slice(out, [0, 0, 0, 0], [1, H, W, self.offset_dim], memory_config=ttnn.L1_MEMORY_CONFIG)
+        offset = ttnn.slice(out, [0, 0, 0, 0], [1, H, W, self.offset_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         mask_logit = ttnn.slice(
             out,
             [0, 0, 0, self.offset_dim],
             [1, H, W, self.offset_dim + self.mask_dim],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(out)
-        mask = ttnn.sigmoid(mask_logit, memory_config=ttnn.L1_MEMORY_CONFIG)
+        mask = ttnn.sigmoid(mask_logit, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(mask_logit)
         return offset, mask
 
@@ -608,7 +608,7 @@ class TtDyHeadBlockDevice:
             mid = self.dcn_mid[level](x_list_nhwc[level], offset_curr, mask_curr)
             mid = self.gn_mid(mid)
             scale_w_mid = self.scale_attn(mid)
-            sum_feat = ttnn.multiply(mid, scale_w_mid, memory_config=ttnn.L1_MEMORY_CONFIG)
+            sum_feat = ttnn.multiply(mid, scale_w_mid, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(scale_w_mid)
             summed_levels = 1
 
@@ -620,10 +620,10 @@ class TtDyHeadBlockDevice:
                 low = self.dcn_low[level](x_list_nhwc[level - 1], offset_curr, mask_curr)
                 low = self.gn_low(low)
                 scale_w_low = self.scale_attn(low)
-                weighted_low = ttnn.multiply(low, scale_w_low, memory_config=ttnn.L1_MEMORY_CONFIG)
+                weighted_low = ttnn.multiply(low, scale_w_low, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(scale_w_low)
                 ttnn.deallocate(low)
-                sum_feat = ttnn.add(sum_feat, weighted_low, memory_config=ttnn.L1_MEMORY_CONFIG)
+                sum_feat = ttnn.add(sum_feat, weighted_low, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(weighted_low)
                 summed_levels += 1
 
@@ -641,17 +641,17 @@ class TtDyHeadBlockDevice:
                 if H_curr != H_next or W_curr != W_next:
                     high = _bilinear_resize_via_grid_sample(self.device, high, H_curr, W_curr, self.out_channels)
                 scale_w_high = self.scale_attn(high)
-                weighted_high = ttnn.multiply(high, scale_w_high, memory_config=ttnn.L1_MEMORY_CONFIG)
+                weighted_high = ttnn.multiply(high, scale_w_high, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(scale_w_high)
                 ttnn.deallocate(high)
                 ttnn.deallocate(offset_resized)
                 ttnn.deallocate(mask_resized)
-                sum_feat = ttnn.add(sum_feat, weighted_high, memory_config=ttnn.L1_MEMORY_CONFIG)
+                sum_feat = ttnn.add(sum_feat, weighted_high, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(weighted_high)
                 summed_levels += 1
 
             if summed_levels > 1:
-                sum_feat = ttnn.multiply(sum_feat, 1.0 / summed_levels, memory_config=ttnn.L1_MEMORY_CONFIG)
+                sum_feat = ttnn.multiply(sum_feat, 1.0 / summed_levels, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             out = self.task_attn(sum_feat)
             outs.append(out)
