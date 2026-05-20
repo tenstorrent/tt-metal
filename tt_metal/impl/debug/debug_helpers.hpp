@@ -147,7 +147,7 @@ inline std::string get_debug_assert_message(
                     (hw_fault_info >> 32) & 0xffffffff);
             } else {
                 return fmt::format(
-                    "hardware fault occurred with casue: {}, additional code: 0x{:08x}, faulting address or "
+                    "hardware fault occurred with cause: {}, additional code: 0x{:08x}, faulting address or "
                     "instruction: 0x{:08x}",
                     enchantum::to_string(static_cast<TriscErrors>((hw_fault_info >> 8) & 0x3f)),
                     hw_fault_info & 0xff,

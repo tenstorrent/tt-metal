@@ -87,9 +87,11 @@ void kernel_main() {
 #ifndef COMPILE_FOR_TRISC
         volatile int32_t* p = (int32_t*)0xffffffffff000000;
 #else
+#if defined(ARCH_QUASAR)
         constexpr uint32_t compute_id = get_arg(args::trisc_id);
         if((hw_idx - NUM_DM_CORES) != compute_id) // test always runs on neo0 cluster
             return;
+#endif
         volatile int32_t* p = (int32_t*)0xff000000;
 #endif
         uint32_t tmp;
@@ -99,7 +101,7 @@ void kernel_main() {
             case 5: tmp = *p; break; // load access fault
             case 6: asm volatile("sw %0, 0x2(x0)" : "=r"(tmp)); break; // store not aligned
             case 7: *p = 0; break; // store access fault
-#ifdef COMPILE_FOR_TRISC
+#if defined(COMPILE_FOR_TRISC) and defined(ARCH_QUASAR)
             case 8: INSTRUCTION_WORD(TT_OP(0xbc, 0)); break; // illegal instruction
             case 9: RISCV_DEBUG_REGS->CHICKEN_BITS |= T6_DEBUG_REGS__CHICKEN_BITS__ALLOW_UNSAFE_SEMPOST_SEMGET_bm;
                     TTI_SEMGET(0, 2); TTI_SEMINIT(3,0,0,2); break; // semaphore

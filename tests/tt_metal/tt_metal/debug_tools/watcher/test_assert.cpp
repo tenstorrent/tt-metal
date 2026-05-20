@@ -251,12 +251,12 @@ static void RunTest(
     }
 
     uint64_t hw_fault_info = 0;
-    // DM errors are using the errror values, as they are directly returned by the hardware
+    // DM errors are using the error values, as they are directly returned by the hardware
     // TRISC errors are spread and have different meanings, so using 5,7 the same as DM (illegal access)
     // and adding new cases 8 and 9.
     if (processor.processor_class == HalProcessorClassType::COMPUTE) {
         switch (hw_assert_cause) {
-            case 5: hw_assert_cause = 0x128; break;
+            case 5:
             case 7: hw_assert_cause = 0x128; break;
             case 8: hw_assert_cause = 0x23bc; break;
             case 9: hw_assert_cause = 0xc03; break;
@@ -278,7 +278,7 @@ static void RunTest(
     const std::string msg = get_debug_assert_message(
         assert_type,
         0,
-        // hard code cause/line info for hW faults, as we know them exactly
+        // hard code cause/line info for HW faults, as we know them exactly
         hw_fault_info << 32 | hw_assert_cause);
     ASSERT_FALSE(msg.empty()) << "Unhandled assert type " << static_cast<int>(assert_type);
 
