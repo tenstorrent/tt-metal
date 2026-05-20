@@ -194,50 +194,6 @@ static void accumulate_bank_summary(DramBankSummary& dst, const DramBaseResult& 
     dst.suspected_read_error_bytes += static_cast<uint64_t>(result.suspected_read_failures) * sizeof(uint32_t);
 }
 
-static std::string format_bank_status(const DramBankSummary& s) {
-    if (s.pass) {
-        return "OK";
-    }
-
-    double write_pct = 0.0;
-    double read_pct = 0.0;
-
-    if (s.checked_bytes > 0) {
-        write_pct = 100.0 * s.suspected_write_error_bytes / s.checked_bytes;
-        read_pct = 100.0 * s.suspected_read_error_bytes / s.checked_bytes;
-    }
-
-    if (s.suspected_write_error_bytes > 0) {
-        return fmt::format("FAIL{}", format_error_pct(write_pct));
-    }
-
-    if (s.suspected_read_error_bytes > 0) {
-        return fmt::format("FAIL{}", format_error_pct(read_pct));
-    }
-
-    return "FAIL";
-}
-
-static std::string make_left_cell(const std::string& text, size_t width) {
-    if (text.size() >= width) {
-        return " " + text + " ";
-    }
-
-    return " " + text + std::string(width - text.size(), ' ') + " ";
-}
-
-static std::string make_center_cell(const std::string& text, size_t width) {
-    if (text.size() >= width) {
-        return " " + text + " ";
-    }
-
-    const size_t padding = width - text.size();
-    const size_t left = padding / 2;
-    const size_t right = padding - left;
-
-    return " " + std::string(left, ' ') + text + std::string(right, ' ') + " ";
-}
-
 static DramChipSummary make_chip_bank_summary(
     IDevice* device, uint32_t num_dram_channels, const DramMultiInstanceSummary& run) {
     DramChipSummary chip{};
@@ -257,81 +213,74 @@ static DramChipSummary make_chip_bank_summary(
     return chip;
 }
 
-static void log_dram_bank_result_table(const DramGalaxySummary& galaxy) {
-    if (galaxy.chips.empty()) {
-        log_info(tt::LogTest, "No DRAM bank result table available.");
+static void log_dram_bank_result_table(const DramGalaxySummary& s) {
+    if (s.chips.empty()) {
         return;
     }
 
-    uint32_t max_banks = 0;
-
-    for (const auto& chip : galaxy.chips) {
-        max_banks = std::max<uint32_t>(max_banks, static_cast<uint32_t>(chip.banks.size()));
+    size_t num_dram_channels = 0;
+    for (const auto& chip : s.chips) {
+        num_dram_channels = std::max(num_dram_channels, chip.banks.size());
     }
 
-    if (max_banks == 0) {
-        log_info(tt::LogTest, "No DRAM bank result table available.");
+    if (num_dram_channels == 0) {
         return;
     }
 
-    std::vector<size_t> bank_widths(max_banks, 0);
-
-    for (uint32_t bank_id = 0; bank_id < max_banks; bank_id++) {
-        bank_widths[bank_id] = fmt::format("D{}", bank_id).size();
-    }
-
-    for (const auto& chip : galaxy.chips) {
-        for (size_t bank_id = 0; bank_id < chip.banks.size(); bank_id++) {
-            bank_widths[bank_id] = std::max(bank_widths[bank_id], format_bank_status(chip.banks[bank_id]).size());
-        }
-    }
-
-    const size_t device_col_width = std::max(std::string("BDF / Device ID").size(), std::string("PCI BDF").size());
+    const size_t bdf_col_width = std::max(std::string("BDF").size(), std::string("0000:00:00.0").size());
+    const size_t device_id_col_width = std::string("Device ID").size();
+    const size_t bank_col_width = 2;
 
     auto make_separator = [&]() {
         std::string sep = "+";
-        sep += std::string(device_col_width + 2, '-') + "+";
-
-        for (uint32_t bank_id = 0; bank_id < max_banks; bank_id++) {
-            sep += std::string(bank_widths[bank_id] + 2, '-') + "+";
+        sep += std::string(bdf_col_width + 2, '-') + "+";
+        sep += std::string(device_id_col_width + 2, '-') + "+";
+        for (size_t bank = 0; bank < num_dram_channels; ++bank) {
+            sep += std::string(bank_col_width + 2, '-') + "+";
         }
-
         return sep;
     };
 
-    const std::string sep = make_separator();
+    auto make_left_cell = [](const std::string& value, size_t width) {
+        return " " + value + std::string(width > value.size() ? width - value.size() : 0, ' ') + " ";
+    };
 
-    std::string header = "|";
-    header += make_left_cell("PCI BDF", device_col_width) + "|";
-
-    for (uint32_t bank_id = 0; bank_id < max_banks; bank_id++) {
-        header += make_center_cell(fmt::format("D{}", bank_id), bank_widths[bank_id]) + "|";
-    }
+    auto make_center_cell = [](const std::string& value, size_t width) {
+        const size_t pad = width > value.size() ? width - value.size() : 0;
+        const size_t left = pad / 2;
+        const size_t right = pad - left;
+        return " " + std::string(left, ' ') + value + std::string(right, ' ') + " ";
+    };
 
     log_info(tt::LogTest, "=== DRAM Bank Result Table ===");
-    log_info(tt::LogTest, "{}", sep);
+    log_info(tt::LogTest, "{}", make_separator());
+
+    std::string header = "|";
+    header += make_left_cell("BDF", bdf_col_width) + "|";
+    header += make_left_cell("Device ID", device_id_col_width) + "|";
+    for (size_t bank = 0; bank < num_dram_channels; ++bank) {
+        header += make_center_cell(fmt::format("D{}", bank), bank_col_width) + "|";
+    }
     log_info(tt::LogTest, "{}", header);
-    log_info(tt::LogTest, "{}", sep);
+    log_info(tt::LogTest, "{}", make_separator());
 
-    for (const auto& chip : galaxy.chips) {
+    for (const auto& chip : s.chips) {
         std::string row = "|";
+        row += make_left_cell(pci_bdf_for_device_id(chip.device_id), bdf_col_width) + "|";
+        row += make_left_cell(fmt::format("{}", chip.device_id), device_id_col_width) + "|";
 
-        row += make_left_cell(pci_bdf_for_device_id(chip.device_id), device_col_width) + "|";
-
-        for (uint32_t bank_id = 0; bank_id < max_banks; bank_id++) {
-            std::string status = "N/A";
-
-            if (bank_id < chip.banks.size()) {
-                status = format_bank_status(chip.banks[bank_id]);
+        for (size_t bank = 0; bank < num_dram_channels; ++bank) {
+            if (bank < chip.banks.size()) {
+                row += make_center_cell(chip.banks[bank].pass ? "OK" : "NO", bank_col_width) + "|";
+            } else {
+                row += make_center_cell("--", bank_col_width) + "|";
             }
-
-            row += make_center_cell(status, bank_widths[bank_id]) + "|";
         }
 
         log_info(tt::LogTest, "{}", row);
     }
 
-    log_info(tt::LogTest, "{}", sep);
+    log_info(tt::LogTest, "{}", make_separator());
 }
 
 static void print_subtest_status(
