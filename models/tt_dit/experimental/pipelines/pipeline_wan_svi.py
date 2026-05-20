@@ -8,16 +8,19 @@ Chains short I2V clips into long videos with latent-space continuity.
 See ``experimental/models/Wan2_2_SVI.md`` for the regime parameters,
 upstream-workflow comparison, and the documented scheduler gap.
 """
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Literal, Optional, Union
 
-import PIL
 import torch
+from diffusers.schedulers import FlowMatchEulerDiscreteScheduler, UniPCMultistepScheduler
 from loguru import logger
+from PIL import Image
 
 from models.tt_dit.experimental.pipelines.pipeline_wan_lora import LoRASpec, WanPipelineI2VLora
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt
+from models.tt_dit.solvers import EulerSolver
 
 Regime = Literal["python", "comfyui"]
 
@@ -32,6 +35,14 @@ _REGIMES = {
         "call_defaults": dict(num_inference_steps=6, guidance_scale=1.5, guidance_scale_2=1.5),
     },
 }
+
+
+@dataclass(frozen=True)
+class _ClipSpec:
+    prompt: str
+    seed: int
+    guidance_scale: float
+    guidance_scale_2: float
 
 
 class WanPipelineSVI(WanPipelineI2VLora):
@@ -74,23 +85,20 @@ class WanPipelineSVI(WanPipelineI2VLora):
             kwargs=kwargs,
         )
 
-        # The base WanPipeline.__init__ unconditionally constructs a
-        # UniPCSolver from `scheduler`, which raises for FlowMatch
-        # schedulers. Swap in a UniPC stand-in so super().__init__ goes
-        # through, then replace _solver with the correct on-device stepper.
-        from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
+        solver_override = self._prepare_scheduler_for_base_init(kwargs)
+        super().__init__(*args, **kwargs)
+        if solver_override is not None:
+            self._solver = solver_override
 
-        real_scheduler = kwargs.get("scheduler")
-        if isinstance(real_scheduler, FlowMatchEulerDiscreteScheduler):
-            from diffusers.schedulers import UniPCMultistepScheduler
+    @staticmethod
+    def _prepare_scheduler_for_base_init(kwargs: dict) -> Optional[EulerSolver]:
+        """Adapt FlowMatch scheduler locally because WanPipeline builds UniPCSolver."""
+        scheduler = kwargs.get("scheduler")
+        if not isinstance(scheduler, FlowMatchEulerDiscreteScheduler):
+            return None
 
-            from ...solvers import EulerSolver
-
-            kwargs["scheduler"] = UniPCMultistepScheduler(use_flow_sigmas=True, prediction_type="flow_prediction")
-            super().__init__(*args, **kwargs)
-            self._solver = EulerSolver(scheduler=real_scheduler)
-        else:
-            super().__init__(*args, **kwargs)
+        kwargs["scheduler"] = UniPCMultistepScheduler(use_flow_sigmas=True, prediction_type="flow_prediction")
+        return EulerSolver(scheduler=scheduler)
 
     @staticmethod
     def _configure_regime(
@@ -114,8 +122,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
             # Matches diffsynth's FlowMatchScheduler("Wan") — plain Euler on a
             # flow-matching schedule, dispatched to EulerSolver downstream.
             if kwargs.get("scheduler") is None:
-                from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
-
                 kwargs["scheduler"] = FlowMatchEulerDiscreteScheduler(shift=shift)
             return
 
@@ -136,8 +142,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
         # on-device port, so we substitute UniPC at the same flow_shift.
         # Visually close, not bit-exact.
         if kwargs.get("scheduler") is None:
-            from diffusers.schedulers import UniPCMultistepScheduler
-
             kwargs["scheduler"] = UniPCMultistepScheduler(
                 use_flow_sigmas=True,
                 prediction_type="flow_prediction",
@@ -152,7 +156,7 @@ class WanPipelineSVI(WanPipelineI2VLora):
     def __call__(
         self,
         *args,
-        anchor_image: Optional[PIL.Image.Image] = None,
+        anchor_image: Optional[Image.Image] = None,
         prev_last_latent: Optional[torch.Tensor] = None,
         **kwargs,
     ):
@@ -175,7 +179,7 @@ class WanPipelineSVI(WanPipelineI2VLora):
         dtype=None,
         device=None,
         latents=None,
-        anchor_image: Optional[PIL.Image.Image] = None,
+        anchor_image: Optional[Image.Image] = None,
         prev_last_latent: Optional[torch.Tensor] = None,
     ):
         if anchor_image is None:
@@ -198,7 +202,7 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 latents=latents,
             )
 
-        anchor_pil = anchor_image if anchor_image is not None else _unwrap_image(image_prompt)
+        anchor_pil = _as_anchor_image(anchor_image if anchor_image is not None else image_prompt)
 
         # Cache the encoded anchor + mask across clips; the encoder is the
         # dominant non-DiT cost per clip (~3-8s on BH 2x4) and the result is
@@ -259,8 +263,9 @@ class WanPipelineSVI(WanPipelineI2VLora):
         self,
         *,
         prompt: Union[str, List[str]],
-        image_prompt,
         num_clips: int,
+        anchor_image: Optional[Image.Image] = None,
+        image_prompt=None,
         num_frames: int = 81,
         height: int = 480,
         width: int = 832,
@@ -271,9 +276,8 @@ class WanPipelineSVI(WanPipelineI2VLora):
     ):
         """Run ``num_clips`` chained I2V generations and return the concat.
 
-        ``prompt`` and ``guidance_scale`` / ``guidance_scale_2`` may each be
-        a single value (broadcast across clips) or a length-``num_clips``
-        list for per-clip overrides.
+        ``anchor_image`` is the persistent SVI reference frame. ``image_prompt``
+        is accepted for compatibility with the base I2V test harness.
         """
         if num_clips < 1:
             raise ValueError("num_clips must be >= 1")
@@ -283,30 +287,23 @@ class WanPipelineSVI(WanPipelineI2VLora):
         for k, v in defaults.items():
             call_kwargs.setdefault(k, v)
 
-        anchor_pil = _unwrap_image(image_prompt)
-
-        if isinstance(prompt, list):
-            if len(prompt) != num_clips:
-                raise ValueError(f"prompt list length {len(prompt)} != num_clips {num_clips}")
-            prompts_per_clip = list(prompt)
-        else:
-            prompts_per_clip = [prompt] * num_clips
-
-        gs_per_clip = _as_per_clip(call_kwargs.pop("guidance_scale"), num_clips, "guidance_scale")
-        gs2_per_clip = _as_per_clip(call_kwargs.pop("guidance_scale_2"), num_clips, "guidance_scale_2")
+        anchor_pil = _as_anchor_image(anchor_image if anchor_image is not None else image_prompt)
+        clip_specs = _make_clip_specs(
+            prompt=prompt,
+            guidance_scale=call_kwargs.pop("guidance_scale"),
+            guidance_scale_2=call_kwargs.pop("guidance_scale_2"),
+            num_clips=num_clips,
+            base_seed=base_seed,
+            seed_stride=seed_stride,
+        )
 
         try:
             return self._generate_clips_loop(
-                prompts_per_clip=prompts_per_clip,
-                gs_per_clip=gs_per_clip,
-                gs2_per_clip=gs2_per_clip,
-                anchor_pil=anchor_pil,
+                clip_specs=clip_specs,
+                anchor_image=anchor_pil,
                 height=height,
                 width=width,
                 num_frames=num_frames,
-                num_clips=num_clips,
-                base_seed=base_seed,
-                seed_stride=seed_stride,
                 partial_output_path=partial_output_path,
                 call_kwargs=call_kwargs,
             )
@@ -318,43 +315,36 @@ class WanPipelineSVI(WanPipelineI2VLora):
     def _generate_clips_loop(
         self,
         *,
-        prompts_per_clip,
-        gs_per_clip,
-        gs2_per_clip,
-        anchor_pil,
+        clip_specs: List[_ClipSpec],
+        anchor_image: Image.Image,
         height,
         width,
         num_frames,
-        num_clips,
-        base_seed,
-        seed_stride,
         partial_output_path,
         call_kwargs,
     ):
         prev_last_latent: Optional[torch.Tensor] = None
         clips: List[torch.Tensor] = []
 
-        for clip_idx, clip_prompt in enumerate(prompts_per_clip):
-            seed = base_seed + clip_idx * seed_stride
-            cfg = gs_per_clip[clip_idx]
-            cfg2 = gs2_per_clip[clip_idx]
+        for clip_idx, spec in enumerate(clip_specs):
             logger.info(
-                f"SVI clip {clip_idx + 1}/{num_clips} (seed={seed}, "
-                f"num_motion_latent={self._num_motion_latent}, cfg={cfg}/{cfg2}, "
-                f"prompt={clip_prompt[:80]!r}...)"
+                f"SVI clip {clip_idx + 1}/{len(clip_specs)} (seed={spec.seed}, "
+                f"num_motion_latent={self._num_motion_latent}, "
+                f"cfg={spec.guidance_scale}/{spec.guidance_scale_2}, "
+                f"prompt={spec.prompt[:80]!r}...)"
             )
 
             result = self(
-                prompt=clip_prompt,
-                image_prompt=[ImagePrompt(image=anchor_pil, frame_pos=0)],
+                prompt=spec.prompt,
+                image_prompt=[ImagePrompt(image=anchor_image, frame_pos=0)],
                 height=height,
                 width=width,
                 num_frames=num_frames,
-                seed=seed,
-                guidance_scale=cfg,
-                guidance_scale_2=cfg2,
+                seed=spec.seed,
+                guidance_scale=spec.guidance_scale,
+                guidance_scale_2=spec.guidance_scale_2,
                 return_last_latent=True,
-                anchor_image=anchor_pil,
+                anchor_image=anchor_image,
                 prev_last_latent=prev_last_latent,
                 **call_kwargs,
             )
@@ -372,15 +362,45 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 partial = _concat_with_overlap(clips, overlap=self._num_overlap_frame)
                 torch.save(partial.detach().cpu(), partial_output_path)
                 logger.info(
-                    f"saved partial output after clip {clip_idx + 1}/{num_clips} "
+                    f"saved partial output after clip {clip_idx + 1}/{len(clip_specs)} "
                     f"({partial.shape[0]} frames) to {partial_output_path}"
                 )
 
         return _concat_with_overlap(clips, overlap=self._num_overlap_frame)
 
 
-def _as_per_clip(value, num_clips: int, name: str) -> List[float]:
-    """Coerce a scalar or list into a length-``num_clips`` list of floats."""
+def _make_clip_specs(
+    *,
+    prompt: Union[str, List[str]],
+    guidance_scale,
+    guidance_scale_2,
+    num_clips: int,
+    base_seed: int,
+    seed_stride: int,
+) -> List[_ClipSpec]:
+    prompts = _broadcast_prompt(prompt, num_clips)
+    cfgs = _broadcast_float(guidance_scale, num_clips, "guidance_scale")
+    cfg2s = _broadcast_float(guidance_scale_2, num_clips, "guidance_scale_2")
+    return [
+        _ClipSpec(
+            prompt=prompts[i],
+            seed=base_seed + i * seed_stride,
+            guidance_scale=cfgs[i],
+            guidance_scale_2=cfg2s[i],
+        )
+        for i in range(num_clips)
+    ]
+
+
+def _broadcast_prompt(prompt: Union[str, List[str]], num_clips: int) -> List[str]:
+    if isinstance(prompt, list):
+        if len(prompt) != num_clips:
+            raise ValueError(f"prompt list length {len(prompt)} != num_clips {num_clips}")
+        return prompt
+    return [prompt] * num_clips
+
+
+def _broadcast_float(value, num_clips: int, name: str) -> List[float]:
     if isinstance(value, (list, tuple)):
         if len(value) != num_clips:
             raise ValueError(f"{name} list length {len(value)} != num_clips {num_clips}")
@@ -388,16 +408,17 @@ def _as_per_clip(value, num_clips: int, name: str) -> List[float]:
     return [float(value)] * num_clips
 
 
-def _unwrap_image(image_prompt) -> PIL.Image.Image:
-    """Coerce the user's image_prompt (PIL, ImagePrompt, or list of either)
-    to a single PIL.Image for use as the SVI anchor."""
-    if isinstance(image_prompt, list):
-        if len(image_prompt) != 1:
+def _as_anchor_image(value) -> Image.Image:
+    """Accept a PIL image or single ImagePrompt/list wrapper from the I2V API."""
+    if isinstance(value, list):
+        if len(value) != 1:
             raise ValueError("SVI supports a single anchor image; got list of length != 1")
-        return _unwrap_image(image_prompt[0])
-    if isinstance(image_prompt, ImagePrompt):
-        return image_prompt.image
-    return image_prompt
+        return _as_anchor_image(value[0])
+    if isinstance(value, ImagePrompt):
+        return value.image
+    if not isinstance(value, Image.Image):
+        raise TypeError("SVI requires anchor_image or image_prompt to be a PIL image")
+    return value
 
 
 def _concat_with_overlap(clips: List[torch.Tensor], *, overlap: int) -> torch.Tensor:
