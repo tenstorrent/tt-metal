@@ -26,6 +26,9 @@ Optional:
                                             /data/scaleout_configs is mounted by default; each host path
                                             is mounted at the same path inside the container
     --rerun-on-retrain                      Rerun validation when Ethernet links are retrained
+    --mpi-interface <iface>                 Network interface to pin MPI to (default: ens5f0np0)
+                                            Passed to --prtemca oob_tcp_if_include and --mca btl_tcp_if_include,
+                                            and forwarded to mpi-docker. Override on non-Markham clusters.
     --help                                  Display this help message and exit
 
 Example:
@@ -46,6 +49,9 @@ FACTORY_DESCRIPTOR_PATH=""
 OUTPUT_DIR="validation_output"
 EXTRA_VOLUMES=(/data/scaleout_configs)
 RERUN_ON_RETRAIN=false
+# Interface names differ between sites; default works on Markham,
+# override elsewhere via --mpi-interface.
+MPI_INTERFACE="ens5f0np0"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -125,6 +131,22 @@ while [[ $# -gt 0 ]]; do
             RERUN_ON_RETRAIN=true
             shift
             ;;
+        --mpi-interface)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --mpi-interface requires a non-empty interface name"
+                exit 1
+            fi
+            MPI_INTERFACE="$2"
+            shift 2
+            ;;
+        --mpi-interface=*)
+            MPI_INTERFACE="${1#--mpi-interface=}"
+            if [[ -z "$MPI_INTERFACE" ]]; then
+                echo "Error: --mpi-interface requires a non-empty interface name"
+                exit 1
+            fi
+            shift
+            ;;
         --help)
             show_help
             exit 0
@@ -169,7 +191,8 @@ run_cluster_validation() {
 
     if [[ $DOCKER_IMAGE == "none" ]]; then
         mpirun --host "$HOSTS" \
-            --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+            --prtemca oob_tcp_if_include "$MPI_INTERFACE" \
+            --mca btl_tcp_if_include "$MPI_INTERFACE" \
             --tag-output \
             ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
@@ -179,6 +202,7 @@ run_cluster_validation() {
     else
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
+            --mpi-interface "$MPI_INTERFACE" \
             "${volume_args[@]}" \
             --host "$HOSTS" \
             ./build/tools/scaleout/run_cluster_validation \
@@ -201,7 +225,8 @@ run_board_reset() {
 
     # Run reset
     mpirun --host "$host_list" \
-        --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+        --prtemca oob_tcp_if_include "$MPI_INTERFACE" \
+        --mca btl_tcp_if_include "$MPI_INTERFACE" \
         --tag-output \
         bash -c 'tt-smi -glx_reset > /dev/null 2>&1; echo "RESET_EXIT_CODE=$?"' > "$output_file"
     mpirun_exit_code=$?
@@ -254,6 +279,7 @@ else
 fi
 echo "Number of iterations: $ITERATIONS"
 echo "Output directory: $OUTPUT_DIR"
+echo "MPI interface: $MPI_INTERFACE"
 echo ""
 
 # Create output directory if it doesn't exist and resolve to an absolute path so

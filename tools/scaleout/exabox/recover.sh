@@ -29,6 +29,9 @@ Optional:
     --factory-descriptor-path <path>        Path to factory system descriptor file (overrides --config defaults;
                                             when provided, cabling and deployment descriptors are ignored)
                                             (8x16 default: /data/scaleout_configs/5xBH_8x16_intrapod/fsd.textproto)
+    --mpi-interface <iface>                 Network interface to pin MPI to (default: ens5f0np0)
+                                            Passed to --prtemca oob_tcp_if_include and --mca btl_tcp_if_include,
+                                            and forwarded to mpi-docker. Override on non-Markham clusters.
     --help                                  Display this help message and exit
 
 Example:
@@ -48,6 +51,9 @@ SLEEP_DURATION=5
 SKIP_RESET=false
 SKIP_VALIDATION=false
 SEND_TRAFFIC=true
+# Interface names differ between sites; default works on Markham,
+# override elsewhere via --mpi-interface.
+MPI_INTERFACE="ens5f0np0"
 
 CABLING_DESCRIPTOR_PATH_DEFAULT="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto"
 DEPLOYMENT_DESCRIPTOR_PATH_DEFAULT="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"
@@ -149,6 +155,22 @@ while [[ $# -gt 0 ]]; do
             FACTORY_DESCRIPTOR_PATH="$2"
             shift 2
             ;;
+        --mpi-interface)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --mpi-interface requires a non-empty interface name"
+                exit 1
+            fi
+            MPI_INTERFACE="$2"
+            shift 2
+            ;;
+        --mpi-interface=*)
+            MPI_INTERFACE="${1#--mpi-interface=}"
+            if [[ -z "$MPI_INTERFACE" ]]; then
+                echo "Error: --mpi-interface requires a non-empty interface name"
+                exit 1
+            fi
+            shift
+            ;;
         --help)
             show_help
             exit 0
@@ -215,13 +237,17 @@ echo "Send traffic: $SEND_TRAFFIC"
 echo "Sleep after reset: ${SLEEP_DURATION}s"
 echo "Skip reset: $SKIP_RESET"
 echo "Skip validation: $SKIP_VALIDATION"
+echo "MPI interface: $MPI_INTERFACE"
 echo "=========================================="
 echo ""
 
 # Step 1: tt-smi reset
 if [[ "$SKIP_RESET" == false ]]; then
     echo "Running tt-smi -glx_reset..."
-    mpirun --host "$HOSTS" --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
+    mpirun --host "$HOSTS" \
+        --prtemca oob_tcp_if_include "$MPI_INTERFACE" \
+        --mca btl_tcp_if_include "$MPI_INTERFACE" \
+        tt-smi -glx_reset
 
     echo ""
     echo "Sleeping ${SLEEP_DURATION}s..."
@@ -243,13 +269,15 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
     if [[ -n "$DOCKER_IMAGE" ]]; then
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
+            --mpi-interface "$MPI_INTERFACE" \
             --volume /data/scaleout_configs \
             --host "$HOSTS" \
             ./build/tools/scaleout/run_cluster_validation \
             "${VALIDATION_ARGS[@]}"
     else
         mpirun --host "$HOSTS" \
-            --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+            --prtemca oob_tcp_if_include "$MPI_INTERFACE" \
+            --mca btl_tcp_if_include "$MPI_INTERFACE" \
             --tag-output \
             ./build/tools/scaleout/run_cluster_validation \
             "${VALIDATION_ARGS[@]}"
