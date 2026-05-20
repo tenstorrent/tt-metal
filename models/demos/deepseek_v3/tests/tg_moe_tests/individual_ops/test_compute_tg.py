@@ -23,7 +23,12 @@ import random
 import pytest
 import torch
 from loguru import logger
-from ttnn.experimental.moe_compute_utils import prepare_w0_w1_tensor_for_moe_compute, prepare_w2_tensor_for_moe_compute
+from ttnn.experimental.moe_compute_utils import (
+    get_weight_core_shard_maps,
+    get_weight_mem_configs,
+    prepare_w0_w1_tensor_for_moe_compute,
+    prepare_w2_tensor_for_moe_compute,
+)
 
 import ttnn
 
@@ -136,47 +141,11 @@ def run_moe_compute_test(
         torch_w1_tensors.append(torch_w1)
         torch_w2_tensors.append(torch_w2)
 
-    in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
-
-    MATMUL_FULL_CORES = {0, 3, 6, 9}
-    MATMUL_PAD_CORES = {1, 2, 4, 5, 7, 8, 10, 11}
-
-    core2dram = {}
-    for dram_bank_id, core_coord in enumerate(in0_core_coords):
-        core2dram[core_coord] = dram_bank_id
-
-    in0_num_cores = len(in0_core_coords)
-    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
-
-    ring2cores = {}
-    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
-        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in MATMUL_PAD_CORES else 0)
-
-    dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
-    dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
-    dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
+    w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(mesh_device, hidden_size, N)
 
     # Prepare and shard weights across devices
     torch_w0_w1_reordered_tensors = [None] * num_devices
     torch_w2_reordered_tensors = [None] * num_devices
-
-    # Convert ring2cores dict to shard_map lists expected by prepare functions
-    # ring2cores format: {ring_pos: (core_coord, dram_bank_id, pad_flag)}
-    # Extract shard sizes based on pad_flag (6 tiles for non-pad, 5 for pad cores)
-    w0_w1_shard_map = [6 if ring2cores[i][2] == 0 else 5 for i in range(len(ring2cores))]
-
-    # For w2, use DeepSeek-specific values
-    # Non-pad cores: (2, 2) - 2 tiles in last group, 2 padding tiles
-    # Pad cores: (3, 1) - 3 tiles in last group, 1 padding tile
-    w2_shard_map = []
-    for i in range(len(ring2cores)):
-        pad_flag = ring2cores[i][2]
-        if pad_flag == 0:
-            # Non-pad cores
-            w2_shard_map.append((2, 2))
-        else:
-            # Pad cores
-            w2_shard_map.append((3, 1))
 
     for e in range(0, experts, 2):
         # Concatenate pairs of experts
@@ -209,35 +178,24 @@ def run_moe_compute_test(
     torch_w2_reordered_tensor = torch.cat(torch_w2_reordered_tensors, dim=0)
 
     # Create DRAM sharded weight tensors
-    w0_w1_shard_height = num_layers * experts_per_device * 3 * hidden_size
-    w0_w1_shard_width = 4 * ttnn.TILE_SIZE
-    w0_w1_shard_spec = ttnn.ShardSpec(
-        dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
-    )
-    w0_w1_memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec
+    w0_w1_mem_config, w2_mem_config, _, _ = get_weight_mem_configs(
+        num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map, w2_shard_map, dram_core_range_set
     )
     tt_w0_w1 = ttnn.from_torch(
         torch_w0_w1_reordered_tensor,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat4_b,
-        memory_config=w0_w1_memory_config,
+        memory_config=w0_w1_mem_config,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
-    w2_shard_height = num_layers * experts_per_device * 5 * (N + 192)
-    w2_shard_width = 4 * ttnn.TILE_SIZE
-    w2_shard_spec = ttnn.ShardSpec(
-        dram_core_range_set, (w2_shard_height, w2_shard_width), ttnn.ShardOrientation.ROW_MAJOR
-    )
-    w2_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
     tt_w2 = ttnn.from_torch(
         torch_w2_reordered_tensor,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat4_b,
-        memory_config=w2_memory_config,
+        memory_config=w2_mem_config,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
@@ -352,6 +310,8 @@ def run_moe_compute_test(
             tt_w2,
             layer_id=layer_id,
             output_height_shard_dim=output_height_shard_dim,
+            intermediate_size=N,
+            has_bias=False,
             cluster_axis=cluster_axis,
             mux_core_range_set=combine_mux_cores,
         )

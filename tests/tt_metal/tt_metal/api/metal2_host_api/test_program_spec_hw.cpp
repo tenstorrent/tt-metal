@@ -13,6 +13,7 @@
 // TODO: Switch to using fast dispatch once the MeshWorkload code paths are added.
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <cstdint>
 #include <vector>
 
@@ -639,6 +640,49 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
 
     ASSERT_EQ(output_data.size(), input_data.size());
     EXPECT_EQ(output_data, input_data);
+}
+
+// ============================================================================
+// Multi-binding RISC-mask Uniformity (Gen1)
+// ============================================================================
+//
+// On Gen1 (WH/BH) the per-kernel risc_mask is a deterministic function of the
+// KernelSpec's config_spec. Multi-binding requires all same-role KernelSpecs to
+// share that mask; mismatched processor placement on the producer (or consumer)
+// side is a user error and must be rejected with an actionable message.
+TEST_F(ProgramSpecHWTest, MultiBindingProducerMaskMismatchFails) {
+    auto mesh_device = devices_.at(0);
+
+    NodeCoord node0{0, 0};
+    NodeCoord node1{0, 1};
+
+    auto producer_g1 = MakeMinimalGen1DMKernel("producer_g1", DataMovementProcessor::RISCV_0);
+    auto producer_g2 = MakeMinimalGen1DMKernel("producer_g2", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalComputeKernel("consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(producer_g1, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(producer_g2, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    ProgramSpec spec;
+    spec.program_id = "multi_binding_mask_mismatch";
+    spec.kernels = {producer_g1, producer_g2, consumer};
+    spec.dataflow_buffers = {dfb};
+    // consumer in both WUs (single-KernelSpec multi-WU membership) → consumer-side mask is fine.
+    // producer_g1 in wu_g1 (RISCV_0); producer_g2 in wu_g2 (RISCV_1) → mismatched producer masks.
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"producer_g1", "consumer"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"producer_g2", "consumer"}),
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB 'dfb' has multiple PRODUCER KernelSpecs ('producer_g1', 'producer_g2') with "
+                                 "mismatched processor placement")));
 }
 
 }  // namespace

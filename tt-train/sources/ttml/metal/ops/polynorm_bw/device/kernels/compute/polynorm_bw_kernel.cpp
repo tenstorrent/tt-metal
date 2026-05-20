@@ -121,6 +121,7 @@ constexpr auto cb_packed_partials_output = tt::CBIndex::c_22;
 constexpr auto cb_weighted_inv_rms_x = tt::CBIndex::c_24;
 constexpr auto cb_weighted_inv_rms_x2 = tt::CBIndex::c_25;
 constexpr auto cb_weighted_inv_rms_x3 = tt::CBIndex::c_26;
+constexpr uint32_t packed_partials_tiles_per_row = 4U;
 
 // --- Tile load / broadcast helpers ---
 
@@ -415,7 +416,7 @@ void emit_packed_partials_for_row() {
     copy_scalar_tile_to_reg(cb_inv_rms_x, reg3);
 
     tile_regs_commit();
-    pack_and_push_block(cb_packed_partials_output, block_size);
+    pack_and_push_block(cb_packed_partials_output, packed_partials_tiles_per_row);
 
     cb_pop_front(cb_sum_xdout, onetile);
     cb_pop_front(cb_sum_x2dout, onetile);

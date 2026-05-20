@@ -309,6 +309,7 @@ def run_fused_throughput_experts_component(
     cluster_axis = 0
     tokens_per_device = num_tokens // mesh_device.shape[cluster_axis]  # e.g., 128 // 4 = 32
 
+    # Extract TT experts from decoder layer
     tt_experts = decoder_layer.mlp.experts
     tt_config = tt_experts.config
 
@@ -409,10 +410,11 @@ def run_fused_throughput_experts_component(
         dev_tensors = ttnn.get_device_tensors(tt_output)
         per_row = [ttnn.to_torch(dev_tensors[r * mesh_cols]) for r in range(mesh_rows)]
         tt_output_torch = torch.cat(per_row, dim=-2)[..., :hidden_size]
+
         assert not torch.isnan(tt_output_torch).any(), "NaN detected in fused expert output"
         assert not torch.isinf(tt_output_torch).any(), "Inf detected in fused expert output"
-        # reference_output: [num_tokens, hidden_size]
 
+        # reference_output: [num_tokens, hidden_size]
         tt_flat = tt_output_torch.reshape(-1, hidden_size)[:num_tokens].float()
         ref_flat = reference_output.reshape(-1, hidden_size)[:num_tokens].float()
 
@@ -422,8 +424,23 @@ def run_fused_throughput_experts_component(
             f"Output range: [{tt_flat.min():.4f}, {tt_flat.max():.4f}]."
         )
     finally:
-        # Always clean up fused config resources
-        pass
+        for attr in [
+            "dispatch_sparse",
+            "dispatch_indices",
+            "dispatch_scores",
+            "combine_preallocated",
+            "tt_dispatch_mapping",
+            "tt_moe_gpt_mapping",
+            "tt_w0_w1",
+            "tt_w2",
+        ]:
+            tensor = getattr(fused_config, attr, None)
+            if tensor is not None:
+                try:
+                    ttnn.deallocate(tensor)
+                except Exception as e:
+                    logger.debug(f"Failed to deallocate {attr}: {e}")
+        ttnn.synchronize_device(mesh_device)
 
 
 def run_experts_component(mesh_device, hidden_shape, config, reference_layer, decoder_layer, is_decode, pcc_threshold):
@@ -779,7 +796,8 @@ def test_decoder(
 
     if should_test("experts"):
         if decoder_layer.mlp.use_throughput_experts:
-            logger.info(f"Testing High Throughput Experts (EP=32) for mesh shape {tuple(mesh_device.shape)}...")
+            logger.info(f"Testing High Throughput Experts (EP=32) for mesh shape {mesh_shape}...")
+            ttnn.synchronize_device(setup["mesh_device"])
             hidden_states_throughput_experts = hidden_states.reshape(1, 1, batch_size * seq_len, -1)
             run_throughput_experts_component(
                 setup["mesh_device"],
