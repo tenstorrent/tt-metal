@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,13 @@ TRACE_CASES = [
 
 def _trace_dir(trace_root: Path, model_id: str, prompt_id: str) -> Path:
     return trace_root / model_trace_id(model_id) / prompt_id
+
+
+def _require_host_io_sweep_env() -> None:
+    if not is_slow_dispatch():
+        pytest.skip("HostIoDecoderStage sweep requires TT_METAL_SLOW_DISPATCH_MODE=1")
+    if os.environ.get("TT_METAL_ALLOCATOR_MODE_HYBRID") != "1":
+        pytest.skip("HostIoDecoderStage sweep requires TT_METAL_ALLOCATOR_MODE_HYBRID=1")
 
 
 def _assert_chunked_trace_is_readable(trace_root: Path, model_id: str, prompt_id: str) -> None:
@@ -132,10 +140,49 @@ def test_load_reference_kv_cache_chunked_trace_layout(trace_root: Path, model_id
 
 
 @pytest.mark.parametrize(("trace_root", "model_id", "prompt_id"), TRACE_CASES)
+def test_run_host_io_decoder_sweep_rank_parallel_config_contract(
+    trace_root: Path, model_id: str, prompt_id: str
+) -> None:
+    if not (_trace_dir(trace_root, model_id, prompt_id) / "index.json").is_file():
+        pytest.skip("chunked 128K trace is not present")
+
+    args = run_host_io_decoder_sweep._build_arg_parser().parse_args(
+        [
+            "--decoder-layer-indices",
+            "4",
+            "5",
+            "6",
+            "7",
+            "--trace-root",
+            str(trace_root),
+            "--model-id",
+            model_id,
+            "--prompt",
+            prompt_id,
+        ]
+    )
+
+    for rank, expected_layer in enumerate([4, 5, 6, 7]):
+        config = run_host_io_decoder_sweep._config_from_args_for_rank(args, rank=rank)
+        assert config.decoder_layer_index == expected_layer
+        assert config.trace_root == trace_root
+        assert config.model_id == model_id
+        assert config.prompt_names == (prompt_id,)
+        assert config.num_replication_slots == 1
+        assert config.validate_hidden_states_cross_trace
+        assert not config.validate_hidden_states_cross_slot
+        assert not config.validate_kv_cache_cross_slot
+        assert not config.validate_kv_cache_cross_trace
+        assert (
+            run_host_io_decoder_sweep._build_device_params(config, layer_parallel=True)["fabric_config"]
+            == ttnn.FabricConfig.FABRIC_2D_TORUS_Y
+        )
+
+
+@pytest.mark.parametrize(("trace_root", "model_id", "prompt_id"), TRACE_CASES)
 def test_run_host_io_decoder_sweep_chunked_trace_smoke(trace_root: Path, model_id: str, prompt_id: str) -> None:
     _assert_chunked_trace_is_readable(trace_root, model_id, prompt_id)
-    if not is_slow_dispatch():
-        pytest.skip("HostIoDecoderStage sweep requires TT_METAL_SLOW_DISPATCH_MODE=1")
+    _require_host_io_sweep_env()
     if ttnn.get_num_devices() < 8:
         pytest.skip("HostIoDecoderStage sweep requires 8 devices (4x2 mesh)")
 
@@ -159,6 +206,52 @@ def test_run_host_io_decoder_sweep_chunked_trace_smoke(trace_root: Path, model_i
             "--validate-kv-cache-cross-trace",
             "--kv-cache-pcc-threshold",
             "0.97",
+            "--no-validate-kv-cache-cross-slot",
+            "--no-dump-hidden-states",
+            "--no-dump-kv-cache",
+        ]
+    )
+    assert exit_code == 0
+
+
+@pytest.mark.parametrize(("trace_root", "model_id", "prompt_id"), TRACE_CASES)
+def test_run_host_io_decoder_sweep_chunked_trace_world_size_4(trace_root: Path, model_id: str, prompt_id: str) -> None:
+    rank_raw = os.environ.get("OMPI_COMM_WORLD_RANK")
+    world_size_raw = os.environ.get("OMPI_COMM_WORLD_SIZE")
+    if rank_raw is None or world_size_raw is None:
+        pytest.skip("world-size-4 smoke must be launched under tt-run/mpirun")
+    rank = int(rank_raw)
+    world_size = int(world_size_raw)
+    if world_size != 4:
+        pytest.skip(f"world-size-4 smoke requires exactly 4 launcher ranks, got {world_size}")
+    assert 0 <= rank < world_size
+
+    _assert_chunked_trace_is_readable(trace_root, model_id, prompt_id)
+    _require_host_io_sweep_env()
+    if ttnn.get_num_devices() < 8:
+        pytest.skip("HostIoDecoderStage sweep requires 8 devices per rank (4x2 mesh)")
+
+    exit_code = run_host_io_decoder_sweep.main(
+        [
+            "--decoder-layer-indices",
+            "4",
+            "5",
+            "6",
+            "7",
+            "--trace-root",
+            str(trace_root),
+            "--model-id",
+            model_id,
+            "--prompt",
+            prompt_id,
+            "--num-decode-steps",
+            "1024",
+            "--num-replication-slots",
+            "1",
+            "--validate-hidden-states-cross-trace",
+            "--pcc-threshold",
+            "0.97",
+            "--no-validate-kv-cache-cross-trace",
             "--no-validate-kv-cache-cross-slot",
             "--no-dump-hidden-states",
             "--no-dump-kv-cache",
