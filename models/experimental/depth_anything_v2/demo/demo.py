@@ -14,6 +14,7 @@ import argparse
 import os
 import traceback
 
+import numpy as np
 import torch
 
 try:
@@ -79,7 +80,19 @@ def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=No
     # Convert pixel_values to ttnn
     tt_pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    # 5. Run Inference
+    # 5. Run PyTorch reference inference
+    print("Running PyTorch reference inference...")
+    with torch.no_grad():
+        torch_output = torch_model(pixel_values).predicted_depth
+
+    ref_np = torch_output.squeeze().cpu().numpy()
+    ref_formatted = (ref_np - ref_np.min()) / (ref_np.max() - ref_np.min() + 1e-8) * 255.0
+    ref_formatted = ref_formatted.astype("uint8")
+    ref_depth_image = Image.fromarray(ref_formatted)
+    ref_depth_image.save("depth_map_output_reference.png")
+    print("PyTorch reference depth map saved to depth_map_output_reference.png")
+
+    # 6. Run TTNN inference on Tenstorrent device
     print("Running inference on Tenstorrent device...")
     try:
         predicted_depth = tt_model(tt_pixel_values)
@@ -95,20 +108,32 @@ def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=No
             align_corners=False,
         ).squeeze()
 
-        output = prediction.detach().cpu().numpy()
-        formatted = (output - output.min()) / (output.max() - output.min()) * 255.0
-        formatted = formatted.astype("uint8")
+        tt_np = prediction.detach().cpu().numpy()
+        tt_formatted = (tt_np - tt_np.min()) / (tt_np.max() - tt_np.min() + 1e-8) * 255.0
+        tt_formatted = tt_formatted.astype("uint8")
 
-        depth_image = Image.fromarray(formatted)
-        output_path = "depth_map_output.png"
-        depth_image.save(output_path)
-        print(f"Depth map saved to {output_path}")
+        tt_depth_image = Image.fromarray(tt_formatted)
+        tt_depth_image.save("depth_map_output_ttnn.png")
+        print("TTNN depth map saved to depth_map_output_ttnn.png")
+
+        # 7. Create side-by-side comparison: Input | PyTorch Reference | TTNN
+        w, h = 256, 256
+        input_resized = image.resize((w, h))
+        ref_resized = ref_depth_image.resize((w, h)).convert("RGB")
+        tt_resized = tt_depth_image.resize((w, h)).convert("RGB")
+
+        comparison = Image.new("RGB", (w * 3, h))
+        comparison.paste(input_resized, (0, 0))
+        comparison.paste(ref_resized, (w, 0))
+        comparison.paste(tt_resized, (w * 2, 0))
+        comparison.save("depth_map_comparison.png")
+        print("Side-by-side comparison saved to depth_map_comparison.png")
 
     except Exception as e:
         print(f"Inference failed: {e}")
         traceback.print_exc()
 
-    # 6. Cleanup
+    # 8. Cleanup
     ttnn.close_device(device)
     print("Device closed.")
 

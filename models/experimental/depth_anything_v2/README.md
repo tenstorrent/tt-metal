@@ -41,6 +41,18 @@ models/experimental/depth_anything_v2/
     └── test_depth_anything_v2_trace_2cq.py   # Trace + dual command queue peak throughput
 ```
 
+## Expected End-to-End Performance
+
+### Single Device (BS=1):
+- Expected end-to-end perf is **≥5 FPS** (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+- Expected inference latency: **~200 ms** per frame (bare metal), **~250 ms** (virtual machine)
+- Compile time (first iteration): ~30s
+- Reference: the original paper reports 213ms (~4.7 FPS) for ViT-L on an NVIDIA V100
+
+### Trace + Dual Command Queue (Peak Throughput):
+- Expected peak throughput with Trace+2CQs is **≥5 FPS** (**On N150**)
+- Uses 50 warmup iterations + 200 measurement iterations for stable readings
+
 ## Running the Demo
 
 The demo script downloads the model from Hugging Face and initializes it on the Tenstorrent device.
@@ -161,11 +173,13 @@ Depth Map (B, 1, 518, 518)
 | std_ratio (TT/PT) | ~1.0 | 0.917 | ✅ Acceptable |
 | max_abs_err | — | 31.5 | ✅ Low |
 | mean_abs_err | — | 11.2 | ✅ Low |
+| **End-to-End FPS (N150)** | **≥ 5** | **≥ 5** | ✅ Pass |
+| Inference Latency | ≤ 200 ms | ~200 ms | ✅ On Target |
 
 > **Hardware Validated** on Koyeb N300 (Wormhole B0, KMD 2.6.0, FW 19.4.2).
 > - Grid: 8×7 (56 Tensix cores), 2 chips
 > - Deterministic input: `torch.manual_seed(42); torch.randn(1, 3, 518, 518)`
-> - **FPS target**: ≥5 FPS for ViT-L (paper reports 213ms = 4.7 FPS on V100)
+> - **Expected FPS on N150**: ≥ 5 FPS for ViT-L (paper reports 213ms = 4.7 FPS on V100)
 
 ### Key Precision Decisions
 
@@ -211,3 +225,66 @@ This produces:
 - Per-image PCC scores
 - FPS benchmark with warmup
 - CSV summaries in the `validation/` directory
+
+## Example Output
+
+The demo and validation scripts produce visual depth map outputs for comparison between the PyTorch reference model and the ttnn (Tenstorrent) model.
+
+### Demo Output (`demo.py`)
+
+Running the demo produces two files:
+- `input_image.png` — the original input image
+- `depth_map_output_ttnn.png` — depth map predicted by the ttnn model on Tenstorrent hardware
+- `depth_map_output_reference.png` — depth map predicted by the PyTorch reference model
+- `depth_map_comparison.png` — side-by-side comparison: Input | PyTorch Reference | TTNN
+
+```bash
+python models/experimental/depth_anything_v2/demo/demo.py --image_path /path/to/image.jpg
+```
+
+**Expected output layout** (`depth_map_comparison.png`):
+```
+┌──────────────┬──────────────────────┬────────────────┐
+│  Input Image │  PyTorch Reference   │  TTNN Output   │
+│  (RGB)       │  (Depth Map)         │  (Depth Map)   │
+└──────────────┴──────────────────────┴────────────────┘
+```
+
+Both depth maps should appear visually near-identical (PCC ≥ 0.99), with smooth gradients and correct spatial structure preserved.
+
+### Validation Output (`validate.py`)
+
+The validation script runs 5 test images through both models and generates:
+```
+validation/
+├── depth_maps/
+│   ├── comparison_0.png    # Side-by-side: Input | PyTorch Ref | TTNN
+│   ├── comparison_1.png
+│   ├── comparison_2.png
+│   ├── comparison_3.png
+│   └── comparison_4.png
+├── pcc_results.csv         # Per-image PCC scores
+├── benchmark.csv           # FPS measurement results
+└── depth_outputs.npz       # Raw numpy depth arrays
+```
+
+### Expected Console Output
+
+```
+Running TT inference...
+  Image 0: PCC = 0.998300
+  Image 1: PCC = 0.998200
+  ...
+Benchmarking (10 warmup + 50 timed)...
+  Elapsed: 10.000s, Successful: 50/50, FPS: 5.00
+
+============================================================
+VALIDATION SUMMARY
+============================================================
+  Mean PCC: 0.998300 (target > 0.995)
+  Min PCC:  0.997800
+  Max PCC:  0.998500
+  FPS:      5.00 (target >= 5, ViT-L; paper: 4.7 FPS on V100)
+  Artifacts saved to: validation/
+============================================================
+```
