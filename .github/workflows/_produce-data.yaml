@@ -98,14 +98,17 @@ on:
 jobs:
   produce-cicd-data:
     # Check if triggered by `workflow_run` with specific conclusion states,
-    # or if it's triggered by `workflow_call` or `workflow_dispatch`
+    # or if it's triggered by `workflow_call` or `workflow_dispatch`.
+    # Skip on forks — secrets (SFTP, Slack) are unavailable there and would
+    # cause failures that spam fork owners with email notifications.
     if: >-
-      ${{ (github.event_name == 'workflow_run' &&
-           (github.event.workflow_run.conclusion == 'success' ||
-            github.event.workflow_run.conclusion == 'failure' ||
-            github.event.workflow_run.conclusion == 'cancelled')) ||
-          github.event_name == 'workflow_call' ||
-          github.event_name == 'workflow_dispatch' }}
+      ${{ github.repository == 'tenstorrent/tt-metal' &&
+          ((github.event_name == 'workflow_run' &&
+            (github.event.workflow_run.conclusion == 'success' ||
+             github.event.workflow_run.conclusion == 'failure' ||
+             github.event.workflow_run.conclusion == 'cancelled')) ||
+           github.event_name == 'workflow_call' ||
+           github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -212,14 +215,17 @@ jobs:
           owner: U0883RN6CRE # William Ly
   test-produce-complete-benchmark-with-environment:
     # Check if triggered by `workflow_run` with specific conclusion states,
-    # or if it's triggered by `workflow_call` or `workflow_dispatch`
+    # or if it's triggered by `workflow_call` or `workflow_dispatch`.
+    # Skip on forks — secrets (SFTP, Slack) are unavailable there and would
+    # cause failures that spam fork owners with email notifications.
     if: >-
-      ${{ (github.event_name == 'workflow_run' &&
-           (github.event.workflow_run.conclusion == 'success' ||
-            github.event.workflow_run.conclusion == 'failure' ||
-            github.event.workflow_run.conclusion == 'cancelled')) ||
-          github.event_name == 'workflow_call' ||
-          github.event_name == 'workflow_dispatch' }}
+      ${{ github.repository == 'tenstorrent/tt-metal' &&
+          ((github.event_name == 'workflow_run' &&
+            (github.event.workflow_run.conclusion == 'success' ||
+             github.event.workflow_run.conclusion == 'failure' ||
+             github.event.workflow_run.conclusion == 'cancelled')) ||
+           github.event_name == 'workflow_call' ||
+           github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

@@ -722,29 +722,40 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     }
 
     // Validate compute kernel unpack_to_dest_mode entries.
-    // Policy:
-    //   - Each entry must reference a DFB the kernel actually binds.
-    //   - For non-FP32 DFBs, the only meaningful mode is Default — UnpackToDestFp32
-    //     is specifically for unpacking Float32 data with full precision, and makes
-    //     no sense for other formats. We allow entries for non-FP32 DFBs only if
-    //     the value is Default (so existing code that spells it out keeps working;
-    //     pure-busywork specifications get flagged if they specify the wrong value).
-    //   - For FP32 DFBs, an entry is REQUIRED. The choice between Default and
-    //     UnpackToDestFp32 matters for FP32 data (precision vs SRCA/B compatibility),
-    //     so the user must make it explicitly.
+    //
+    // UnpackToDestMode only has a meaningful effect when the kernel CONSUMES the
+    // DFB (endpoint_type == CONSUMER), the DFB data format is Float32, and
+    // fp32_dest_acc_en is true. Only in that configuration is there a real choice:
+    //   - Default          → unpack via SrcA/B (~19-bit, full FPU access)
+    //   - UnpackToDestFp32 → direct Unpacker0 → Dest (full FP32, no SrcA/B for this DFB)
+    // Anywhere else, the value is dead config (non-consumer / non-FP32) or
+    // incoherent (UnpackToDestFp32 with fp32_dest_acc_en=false — Dest is 16-bit).
+    //
+    // Rules enforced:
+    //   - Every entry references a DFB the kernel binds.
+    //   - No duplicate entries for the same DFB.
+    //   - UnpackToDestFp32 is allowed only when the (CONSUMER + FP32 + fp32_dest_acc_en)
+    //     triple holds for that DFB binding.
+    //   - When the triple holds for a DFB, an explicit entry is REQUIRED — the two
+    //     values have very different runtime semantics, so we surface the choice in source.
+    //   - Default is silently assumed everywhere else (no entry required, no busywork).
     for (const auto& kernel : spec.kernels) {
         if (!kernel.is_compute_kernel()) {
             continue;
         }
         const auto& compute_config = std::get<ComputeConfiguration>(kernel.config_spec);
 
-        // Quick lookup of DFBs this kernel binds.
+        // Index the kernel's DFB bindings: which are bound, which are consumed.
         std::unordered_set<DFBSpecName> bound_dfbs;
+        std::unordered_set<DFBSpecName> consumed_dfbs;
         for (const auto& binding : kernel.dfb_bindings) {
             bound_dfbs.insert(binding.dfb_spec_name);
+            if (binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
+                consumed_dfbs.insert(binding.dfb_spec_name);
+            }
         }
 
-        // Check each user-supplied entry against the policy.
+        // Validate each user-supplied entry.
         std::unordered_set<DFBSpecName> entries_seen;
         for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
             TT_FATAL(
@@ -752,38 +763,69 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 "Kernel '{}' unpack_to_dest_mode entry references DFB '{}', which the kernel does not bind",
                 kernel.unique_id,
                 dfb_name);
-            entries_seen.insert(dfb_name);
+            TT_FATAL(
+                entries_seen.insert(dfb_name).second,
+                "Kernel '{}' has duplicate unpack_to_dest_mode entries for DFB '{}'",
+                kernel.unique_id,
+                dfb_name);
 
-            const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
+            if (mode == UnpackToDestMode::Default) {
+                continue;  // Default is always allowed.
+            }
+            // mode == UnpackToDestFp32 — require the meaningfulness triple.
+            TT_FATAL(
+                consumed_dfbs.contains(dfb_name),
+                "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
+                "but the kernel does not have a CONSUMER endpoint on this DFB. UnpackToDestFp32 "
+                "configures the unpack path, which is only exercised by consumer bindings. "
+                "Use Default or omit the entry.",
+                kernel.unique_id,
+                dfb_name);
             // If data_format_metadata isn't set, the separate "compute endpoint requires
             // data_format_metadata" check (below) will fail. Defer to that check.
+            const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
             if (!dfb_spec->data_format_metadata.has_value()) {
                 continue;
             }
-            const bool is_fp32 = (dfb_spec->data_format_metadata.value() == tt::DataFormat::Float32);
             TT_FATAL(
-                is_fp32 || mode == UnpackToDestMode::Default,
-                "Kernel '{}' unpack_to_dest_mode entry for non-FP32 DFB '{}' specifies UnpackToDestFp32. "
-                "UnpackToDestFp32 is only meaningful for FP32 data; non-FP32 DFBs must use Default "
-                "(or omit the entry — Default is the implicit value).",
+                dfb_spec->data_format_metadata.value() == tt::DataFormat::Float32,
+                "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
+                "but the DFB data format is not Float32. UnpackToDestFp32 is only meaningful for "
+                "FP32 data. Use Default or omit the entry.",
+                kernel.unique_id,
+                dfb_name);
+            TT_FATAL(
+                compute_config.fp32_dest_acc_en,
+                "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
+                "but fp32_dest_acc_en is false. Full-precision FP32 in the Dest register requires "
+                "fp32_dest_acc_en=true (otherwise Dest is 16-bit and the mode is incoherent).",
                 kernel.unique_id,
                 dfb_name);
         }
 
-        // Every FP32 DFB the kernel binds must have an explicit entry.
+        // Require an explicit entry where the choice is real:
+        // CONSUMER binding + FP32 data format + fp32_dest_acc_en=true.
+        if (!compute_config.fp32_dest_acc_en) {
+            continue;
+        }
         for (const auto& binding : kernel.dfb_bindings) {
+            if (binding.endpoint_type != KernelSpec::DFBEndpointType::CONSUMER) {
+                continue;
+            }
             const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(binding.dfb_spec_name);
             if (!dfb_spec->data_format_metadata.has_value()) {
-                continue;  // Will be caught by the data_format-required check.
+                continue;  // Deferred to the data_format-required check.
             }
             if (dfb_spec->data_format_metadata.value() != tt::DataFormat::Float32) {
                 continue;
             }
             TT_FATAL(
                 entries_seen.contains(binding.dfb_spec_name),
-                "Kernel '{}' binds FP32 DFB '{}' but has no unpack_to_dest_mode entry for it. "
-                "FP32 DFBs require an explicit choice between UnpackToDestMode::Default and "
-                "UnpackToDestMode::UnpackToDestFp32.",
+                "Kernel '{}' consumes FP32 DFB '{}' with fp32_dest_acc_en=true, but has no "
+                "unpack_to_dest_mode entry for it. This configuration requires an explicit choice "
+                "between UnpackToDestMode::Default (unpack via SrcA/B — enables binary FPU ops, "
+                "precision reduced to ~19 bits) and UnpackToDestMode::UnpackToDestFp32 (unpack "
+                "direct to Dest — full FP32 precision, SrcA/B access disabled for this DFB).",
                 kernel.unique_id,
                 binding.dfb_spec_name);
         }
@@ -1022,12 +1064,52 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         spec.program_id,
         spec.remote_dataflow_buffers.size());
 
-    // Borrowed memory is not yet implemented
+    // Validate borrowed-memory DFBs.
+    //
+    // A borrowed-memory DFB names a TensorParameter via DataflowBufferSpec::borrowed_from. The
+    // backing MeshTensor flows through ProgramRunParams::tensor_args at execution time.
+    // We enforce only the safety-relevant checks:
+    //  - the named parameter exists
+    //  - the TensorSpec places storage in L1,
+    //  - the spec is large enough
+    // We don't validate any layout considerations (interleaved vs sharded, page / tile sizes, etc.)
+    // That's on the user; this is an advanced feature.
     for (const auto& dfb : spec.dataflow_buffers) {
+        if (!dfb.borrowed_from.has_value()) {
+            continue;
+        }
+        const TensorParameterName& tp_name = *dfb.borrowed_from;
+        auto it = collected.tensor_parameter_by_name.find(tp_name);
         TT_FATAL(
-            !dfb.uses_borrowed_memory,
-            "DFB '{}' uses borrowed memory, but this feature is not yet implemented",
-            dfb.unique_id);
+            it != collected.tensor_parameter_by_name.end(),
+            "DFB '{}' borrows memory from TensorParameter '{}', but no such TensorParameter is declared in the "
+            "ProgramSpec.",
+            dfb.unique_id,
+            tp_name);
+        const TensorSpec& tensor_spec = it->second->spec;
+        TT_FATAL(
+            tensor_spec.memory_config().buffer_type() == tt::tt_metal::BufferType::L1,
+            "DFB '{}' borrows memory from TensorParameter '{}', but its TensorSpec is not L1-resident (L1 is "
+            "required).",
+            dfb.unique_id,
+            tp_name);
+        // Coarse spec-time sizing check against the TensorSpec's full packed size. No Buffer is
+        // available at spec time, so we can't query the per-bank allocation; the precise per-bank
+        // check fires at attach time in AttachBorrowedDFBBuffers (program_run_params.cpp), where
+        // a Buffer is in hand. For sharded L1 tensors the two checks differ — a DFB can pass
+        // here against the full-tensor size and still fail per-bank later. By design.
+        const size_t dfb_bytes = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
+        const size_t tensor_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+        TT_FATAL(
+            dfb_bytes <= tensor_bytes,
+            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) is larger than its borrowed TensorParameter '{}' "
+            "({} bytes).",
+            dfb.unique_id,
+            dfb.entry_size,
+            dfb.num_entries,
+            dfb_bytes,
+            tp_name,
+            tensor_bytes);
     }
 
     // DFB aliasing is not supported yet
@@ -1786,7 +1868,10 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .enable_implicit_sync = !dfb_spec->disable_implicit_sync,
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
-        .tensix_scope = tensix_scope};
+        .tensix_scope = tensix_scope,
+        // DFB borrowed memory mode is declared at program creation time.
+        // The actual backing memory L1 address is attached at runtime.
+        .borrows_memory = dfb_spec->borrowed_from.has_value()};
 }
 
 // ----------------------------------------------------------------------------
@@ -2126,9 +2211,18 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
 
         // Add the DFB to the ProgramImpl, and register the name -> handle mapping.
         // Allocation nodes are derived from binding kernels' WorkUnitSpec membership.
+        // (For borrowed-memory DFBs, config.borrows_memory was set in MakeDataflowBufferConfig;
+        // the device-side runtime uses that to skip regular L1 allocation.)
         uint32_t dfb_id = program_impl->add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
         program_impl->register_dfb_spec_name(dfb_name, dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
+
+        // Borrowed-memory DFB: record the dfb_id ↔ TensorParameterName binding so that
+        // SetProgramRunParameters / UpdateTensorArgs can resolve and attach the actual L1 Buffer
+        // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
+        if (dfb_spec.borrowed_from.has_value()) {
+            program_impl->register_dfb_borrowed_binding(dfb_id, *dfb_spec.borrowed_from);
+        }
     }
 
     // Create Semaphores and build name -> ID map.
