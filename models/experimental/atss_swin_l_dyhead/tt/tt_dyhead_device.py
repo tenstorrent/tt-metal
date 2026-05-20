@@ -225,16 +225,19 @@ class TtGroupNorm:
         self.C = weight.shape[0]
         assert self.C % num_groups == 0, f"C={self.C} not divisible by num_groups={num_groups}"
         self.C_per_G = self.C // num_groups
-        # gamma, beta in 5D shape (1, 1, 1, G, C_per_G) for direct broadcast against (N, H, W, G, C/G).
-        self.gamma_5d = ttnn.from_torch(
-            weight.reshape(1, 1, 1, num_groups, self.C_per_G).contiguous(),
+        # gamma, beta as 4D (1, 1, 1, C) so we can broadcast against (N, H, W, C) without
+        # reshaping the big tensor to 5D (which forces real data movement when C/G is not
+        # tile-aligned). The per-group reductions are done by transient reshape of small
+        # (N, 1, 1, C) stats tensors to (N, 1, G, C/G).
+        self.gamma_4d = ttnn.from_torch(
+            weight.reshape(1, 1, 1, self.C).contiguous(),
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.beta_5d = ttnn.from_torch(
-            bias.reshape(1, 1, 1, num_groups, self.C_per_G).contiguous(),
+        self.beta_4d = ttnn.from_torch(
+            bias.reshape(1, 1, 1, self.C).contiguous(),
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             device=device,
@@ -247,14 +250,13 @@ class TtGroupNorm:
         G = self.num_groups
         C_per_G = self.C_per_G
 
-        # Pick memory config based on per-tensor size.
-        # Old impl held 5 fp32 tensors of N*H*W*C*4 bytes concurrently (x_fp32, centered,
-        # squared, normalized, out_5d). New impl folds (x-mean)*inv_std*gamma+beta as
-        # x*scale+shift with scale/shift computed per-group (small), reducing the big-tensor
-        # ops from 4 to 2 (the `x²` for variance via E[x²]-mean², and the final addcmul).
+        # Big tensors stay 4D (N, H, W, C). 5D reshape on the big tensor forces real data
+        # movement because C/G=16 is not tile-aligned (TILE_WIDTH=32). Instead, do per-channel
+        # reductions over (H, W), then a cheap per-group reduction on the small (N, 1, 1, C)
+        # stats tensor by transient reshape to (N, 1, G, C/G).
         big_bytes = N * H * W * C * 4
         big_mem = ttnn.L1_MEMORY_CONFIG if big_bytes <= 4 * 1024 * 1024 else ttnn.DRAM_MEMORY_CONFIG
-        small_mem = ttnn.L1_MEMORY_CONFIG  # reductions / scalars always fit in L1
+        small_mem = ttnn.L1_MEMORY_CONFIG  # stats / scalars always fit in L1
 
         # Cast bf16 → fp32, ensure TILE layout for reductions.
         if x_nhwc.dtype != ttnn.float32:
@@ -263,37 +265,50 @@ class TtGroupNorm:
             x_fp32 = x_nhwc
         if x_fp32.layout != ttnn.TILE_LAYOUT:
             x_fp32 = ttnn.to_layout(x_fp32, ttnn.TILE_LAYOUT, memory_config=big_mem)
-        # Reshape to (N, H, W, G, C/G).
-        x_5d = ttnn.reshape(x_fp32, (N, H, W, G, C_per_G))
 
-        # Variance via E[x²] - mean² instead of mean((x-mean)²): avoids materializing the
-        # large `centered` fp32 tensor. One big multiply for x², two reductions on small
-        # tensors after that.
-        mean_x = ttnn.mean(x_5d, dim=(1, 2, 4), keepdim=True, memory_config=small_mem)
-        x_sq = ttnn.multiply(x_5d, x_5d, memory_config=big_mem)
-        mean_x_sq = ttnn.mean(x_sq, dim=(1, 2, 4), keepdim=True, memory_config=small_mem)
+        # Per-channel statistics on the (N, H, W, C) tensor.
+        mean_c = ttnn.mean(x_fp32, dim=(1, 2), keepdim=True, memory_config=small_mem)  # (N,1,1,C)
+        x_sq = ttnn.multiply(x_fp32, x_fp32, memory_config=big_mem)
+        mean_x_sq_c = ttnn.mean(x_sq, dim=(1, 2), keepdim=True, memory_config=small_mem)  # (N,1,1,C)
         ttnn.deallocate(x_sq)
-        var = ttnn.subtract(mean_x_sq, ttnn.multiply(mean_x, mean_x, memory_config=small_mem), memory_config=small_mem)
 
-        inv_std = ttnn.rsqrt(
-            ttnn.add(var, self.epsilon, memory_config=small_mem),
+        # Reduce per-channel statistics to per-group via cheap reshape on (N,1,1,C) → (N,1,G,C/G).
+        # These are 256-element tensors; the reshape + reduction cost is negligible.
+        mean_c_5g = ttnn.reshape(mean_c, (N, 1, G, C_per_G))
+        mean_x_sq_c_5g = ttnn.reshape(mean_x_sq_c, (N, 1, G, C_per_G))
+        mean_g = ttnn.mean(mean_c_5g, dim=(3,), keepdim=True, memory_config=small_mem)  # (N,1,G,1)
+        mean_x_sq_g = ttnn.mean(mean_x_sq_c_5g, dim=(3,), keepdim=True, memory_config=small_mem)  # (N,1,G,1)
+
+        # var_g = E[x²]_g - (E[x]_g)²
+        var_g = ttnn.subtract(
+            mean_x_sq_g,
+            ttnn.multiply(mean_g, mean_g, memory_config=small_mem),
+            memory_config=small_mem,
+        )
+        inv_std_g = ttnn.rsqrt(
+            ttnn.add(var_g, self.epsilon, memory_config=small_mem),
             fast_and_approximate_mode=True,
             memory_config=small_mem,
         )
-        # Fold affine into x: y = x*scale + shift  where
-        #   scale = inv_std * gamma
-        #   shift = beta - mean * scale
-        # Both scale and shift are small (1,1,1,G,C/G) per-group tensors.
-        scale = ttnn.multiply(inv_std, self.gamma_5d, memory_config=small_mem)
-        shift = ttnn.subtract(
-            self.beta_5d,
-            ttnn.multiply(mean_x, scale, memory_config=small_mem),
+        # Broadcast (N,1,G,1) inv_std and (N,1,G,1) mean back to (N,1,1,C) per-channel form.
+        # Reshape to (N,1,G,1) → (N,1,1,G) so it can broadcast against (N,1,1,C) reshaped as
+        # (N,1,G,C/G)? Simpler: build alpha = inv_std_g * gamma_c by reshaping gamma to (N,1,G,C/G)
+        # and broadcasting, then reshape result back to (N,1,1,C).
+        gamma_5g = ttnn.reshape(self.gamma_4d, (1, 1, G, C_per_G))
+        beta_5g = ttnn.reshape(self.beta_4d, (1, 1, G, C_per_G))
+        alpha_5g = ttnn.multiply(inv_std_g, gamma_5g, memory_config=small_mem)  # (N,1,G,C/G), broadcast over last
+        # delta = beta - mean_g * alpha
+        delta_5g = ttnn.subtract(
+            beta_5g,
+            ttnn.multiply(mean_g, alpha_5g, memory_config=small_mem),
             memory_config=small_mem,
         )
-        # One large fp32 op: y = x*scale + shift. addcmul(a,b,c) = a + b*c, so addcmul(shift, x, scale).
-        out_5d = ttnn.addcmul(shift, x_5d, scale, memory_config=big_mem)
-        # Reshape back, cast to bf16 (next ops expect bf16).
-        out_4d = ttnn.reshape(out_5d, (N, H, W, C))
+        # Flatten the per-group axis back to per-channel.
+        alpha_4d = ttnn.reshape(alpha_5g, (1, 1, 1, C))
+        delta_4d = ttnn.reshape(delta_5g, (1, 1, 1, C))
+
+        # Single large op: y = alpha*x + delta (addcmul(a,b,c) = a + b*c)
+        out_4d = ttnn.addcmul(delta_4d, x_fp32, alpha_4d, memory_config=big_mem)
         return ttnn.typecast(out_4d, ttnn.bfloat16, memory_config=big_mem)
 
 
