@@ -12,6 +12,7 @@ transformer_config:
   qk_rope_head_dim: 32
   v_head_dim: 128
   theta: 10000.0
+  moe_type: "sparse"
   # DeepSeek MoE
   n_dense_layers: 2
   inter_dim: 4096
