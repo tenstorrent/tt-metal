@@ -209,6 +209,9 @@ void kernel_main() {
                 uint32_t stride_Wt = output_tensor_Wt[input_idx];
                 if (gather_dim == 3) {
                     output_tile_id_start = actual_sender_chip_id * input_tensor_Wt[input_idx];
+                } else if (gather_dim == 0) {
+                    output_tile_id_start = actual_sender_chip_id * input_batch_head_count[input_idx] *
+                                           input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
                 } else {
                     output_tile_id_start =
                         actual_sender_chip_id * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];

@@ -9,7 +9,7 @@
 
 /**
  * ChainConfig: Runtime args for store-and-forward chain configuration.
- * Mirrors the append_to_args() layout in ring_joint_sdpa_program_factory.cpp.
+ * Mirrors the append_to_args() layouts in ring_joint_sdpa_program_factory.cpp.
  */
 struct ChainConfig {
     bool participates = false;
@@ -31,7 +31,13 @@ struct ChainConfig {
     uint32_t mcast_num_dests = 0;
     uint32_t mcast_sender_wait = 0;
 
-    // Read 18 args in canonical order matching append_to_args()
+    static uint32_t unpack_x(uint32_t xy) { return xy & 0xffff; }
+
+    static uint32_t unpack_y(uint32_t xy) { return xy >> 16; }
+
+    static uint32_t unpack_flags(uint32_t flags, uint32_t mask) { return (flags & mask) != 0; }
+
+    // Read 18 args in canonical order matching append_to_args().
     static ChainConfig read_from_args(uint32_t& argidx) {
         ChainConfig cfg;
         cfg.participates = static_cast<bool>(get_arg_val<uint32_t>(argidx++));
@@ -52,6 +58,51 @@ struct ChainConfig {
         cfg.injector_physical_y = get_arg_val<uint32_t>(argidx++);
         cfg.mcast_num_dests = get_arg_val<uint32_t>(argidx++);
         cfg.mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
+        return cfg;
+    }
+
+    // Read the compact unicast head-chain layout. This is valid when head
+    // multicast is disabled, so only scope, predecessor, successor, and loop
+    // metadata are needed.
+    static ChainConfig read_head_unicast_from_args(uint32_t& argidx) {
+        ChainConfig cfg;
+        const uint32_t flags = get_arg_val<uint32_t>(argidx++);
+        cfg.participates = unpack_flags(flags, 0x1);
+        cfg.is_injector = unpack_flags(flags, 0x2);
+        cfg.is_sink = unpack_flags(flags, 0x4);
+        const uint32_t batch_head = get_arg_val<uint32_t>(argidx++);
+        cfg.batch = batch_head & 0xffff;
+        cfg.head = batch_head >> 16;
+        const uint32_t prev_xy = get_arg_val<uint32_t>(argidx++);
+        cfg.prev_physical_x = unpack_x(prev_xy);
+        cfg.prev_physical_y = unpack_y(prev_xy);
+        const uint32_t next_xy = get_arg_val<uint32_t>(argidx++);
+        cfg.next_physical_x = unpack_x(next_xy);
+        cfg.next_physical_y = unpack_y(next_xy);
+        cfg.next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
+        return cfg;
+    }
+
+    // Read the compact batch-mcast layout. This is only valid for K batch
+    // multicast, where every core in the row participates and sinks are all
+    // non-injector cores.
+    static ChainConfig read_batch_mcast_from_args(uint32_t& argidx) {
+        ChainConfig cfg;
+        cfg.participates = true;
+        const uint32_t flags = get_arg_val<uint32_t>(argidx++);
+        cfg.is_injector = unpack_flags(flags, 0x1);
+        cfg.is_sink = !cfg.is_injector;
+        cfg.mcast_num_dests = flags >> 1;
+        const uint32_t start_xy = get_arg_val<uint32_t>(argidx++);
+        cfg.mcast_start_x = unpack_x(start_xy);
+        cfg.mcast_start_y = unpack_y(start_xy);
+        const uint32_t end_xy = get_arg_val<uint32_t>(argidx++);
+        cfg.mcast_end_x = unpack_x(end_xy);
+        cfg.mcast_end_y = unpack_y(end_xy);
+        const uint32_t injector_xy = get_arg_val<uint32_t>(argidx++);
+        cfg.injector_physical_x = unpack_x(injector_xy);
+        cfg.injector_physical_y = unpack_y(injector_xy);
+        cfg.mcast_sender_wait = cfg.mcast_num_dests;
         return cfg;
     }
 
@@ -262,4 +313,82 @@ private:
     uint32_t tile_bytes_;
     uint32_t next_core_x_;
     uint32_t next_core_y_;
+};
+
+template <>
+class ChainLink<true, false> {
+public:
+    ChainLink(
+        bool /*is_participant*/,
+        bool is_injector,
+        bool /*is_sink*/,
+        uint32_t sender_sem_addr,
+        uint32_t receiver_sem_addr,
+        uint32_t valid_sem_addr,
+        uint32_t signal_target_x,
+        uint32_t signal_target_y,
+        uint32_t /*next_core_x*/,
+        uint32_t /*next_core_y*/,
+        uint32_t mcast_start_x,
+        uint32_t mcast_start_y,
+        uint32_t mcast_end_x,
+        uint32_t mcast_end_y,
+        uint32_t mcast_num_dests,
+        uint32_t /*mcast_sender_wait*/,
+        uint32_t /*chunk_tiles*/,
+        uint32_t /*tile_bytes*/,
+        uint32_t /*chain_batch*/,
+        uint32_t /*chain_head*/,
+        uint32_t next_core_q_chunks) :
+        is_injector_(is_injector),
+        next_core_q_chunks_(next_core_q_chunks),
+        sender_sem_ptr_(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_sem_addr)),
+        receiver_sem_ptr_(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_sem_addr)),
+        valid_sem_addr_(valid_sem_addr),
+        sender_sem_noc_addr_(get_noc_addr(signal_target_x, signal_target_y, sender_sem_addr)),
+        mcast_base_noc_addr_(0),
+        mcast_sem_noc_addr_(0),
+        mcast_num_dests_(mcast_num_dests) {
+        if (valid_sem_addr != 0) {
+            volatile tt_l1_ptr uint32_t* valid_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(valid_sem_addr);
+            *valid_sem_ptr = VALID;
+        }
+
+        if (is_injector_) {
+            mcast_base_noc_addr_ = get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, 0);
+            mcast_sem_noc_addr_ = mcast_base_noc_addr_ | receiver_sem_addr;
+        }
+    }
+
+    bool should_receive(uint32_t, uint32_t) const { return !is_injector_; }
+
+    bool should_forward(uint32_t, uint32_t, uint32_t q_iter_local) const {
+        return is_injector_ && q_iter_local < next_core_q_chunks_;
+    }
+
+    void receive() const {
+        noc_semaphore_set(receiver_sem_ptr_, INVALID);
+        noc_semaphore_inc(sender_sem_noc_addr_, 1);
+        noc_semaphore_wait(receiver_sem_ptr_, VALID);
+    }
+
+    void forward(uint32_t cb_addr, uint32_t num_tiles, uint32_t tile_bytes) const {
+        noc_semaphore_wait(sender_sem_ptr_, mcast_num_dests_);
+        noc_semaphore_set(sender_sem_ptr_, 0);
+        uint64_t mcast_addr = mcast_base_noc_addr_ | cb_addr;
+        noc_async_write_multicast(cb_addr, mcast_addr, num_tiles * tile_bytes, mcast_num_dests_, true);
+        noc_semaphore_set_multicast(valid_sem_addr_, mcast_sem_noc_addr_, mcast_num_dests_);
+        noc_async_writes_flushed();
+    }
+
+private:
+    const bool is_injector_;
+    const uint32_t next_core_q_chunks_;
+    volatile tt_l1_ptr uint32_t* sender_sem_ptr_;
+    volatile tt_l1_ptr uint32_t* receiver_sem_ptr_;
+    uint32_t valid_sem_addr_;
+    uint64_t sender_sem_noc_addr_;
+    uint64_t mcast_base_noc_addr_;
+    uint64_t mcast_sem_noc_addr_;
+    uint32_t mcast_num_dests_;
 };

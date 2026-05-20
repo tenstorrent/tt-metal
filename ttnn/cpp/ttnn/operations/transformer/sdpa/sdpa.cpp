@@ -197,7 +197,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     bool is_balanced,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
+    const std::optional<ttnn::Tensor>& page_table,
+    std::optional<int64_t> chunk_start_idx,
+    bool paged_kv_page_table_is_rank_local) {
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,  // AllGather input
@@ -222,7 +225,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         is_balanced,
         scale,
         compute_kernel_config,
-        core_allocation_strategy);
+        core_allocation_strategy,
+        page_table,
+        chunk_start_idx,
+        paged_kv_page_table_is_rank_local);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],

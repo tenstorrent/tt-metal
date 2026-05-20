@@ -35,6 +35,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
     const auto& gathered_input_tensor_v = tensor_args.gathered_v;
+    const bool is_paged = tensor_args.page_table.has_value();
 
     const std::vector<Tensor> sdpa_input_tensors = {
         input_tensor_q,
@@ -77,8 +78,12 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     // Get shapes
     const auto& q_shape = input_tensor_q.logical_shape();
-    const auto& k_shape = gathered_input_tensor_k.logical_shape();
-    const auto& v_shape = gathered_input_tensor_v.logical_shape();
+    const auto& input_k_shape = tensor_args.input_k.logical_shape();
+    const auto& input_v_shape = tensor_args.input_v.logical_shape();
+    const auto& k_shape = is_paged ? input_k_shape : gathered_input_tensor_k.logical_shape();
+    const auto& v_shape = is_paged ? input_v_shape : gathered_input_tensor_v.logical_shape();
+    const auto& gathered_k_shape = gathered_input_tensor_k.logical_shape();
+    const auto& gathered_v_shape = gathered_input_tensor_v.logical_shape();
     const auto& joint_q_shape = joint_tensor_q.logical_shape();
     const auto& joint_k_shape = joint_tensor_k.logical_shape();
     const auto& joint_v_shape = joint_tensor_v.logical_shape();
@@ -103,7 +108,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto NKH = k_shape[1];
     const auto NVH = v_shape[1];
     const auto N_local = q_shape[2];
-    const auto N_global = k_shape[2];
+    const auto N_global = is_paged ? N_local * args.ring_size : k_shape[2];
     const auto L = joint_q_shape[2];
     const auto DH = q_shape[3];
 
@@ -116,15 +121,100 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         !(args.is_balanced && (N_local / 2) % q_chunk_size != 0),
         "q_chunk_size must divide half of local q seq_len in balanced case");
 
-    TT_FATAL(
-        k_shape[0] == B && v_shape[0] == B && joint_q_shape[0] == B && joint_k_shape[0] == B && joint_v_shape[0] == B,
-        "Batch sizes must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
-        B,
-        k_shape[0],
-        v_shape[0],
-        joint_q_shape[0],
-        joint_k_shape[0],
-        joint_v_shape[0]);
+    if (is_paged) {
+        const auto& page_table = tensor_args.page_table.value();
+        TT_FATAL(page_table.storage_type() == StorageType::DEVICE, "Page table tensor must be on device");
+        TT_FATAL(page_table.buffer() != nullptr, "Page table tensor must be allocated in a buffer on device");
+        TT_FATAL(input_tensor_q.device() == page_table.device(), "Page table must be on the same device as Q");
+        TT_FATAL(page_table.layout() == Layout::ROW_MAJOR, "Page table must be row major");
+        TT_FATAL(page_table.dtype() == DataType::INT32, "Page table must be int32");
+        const auto& page_table_shape = page_table.logical_shape();
+        TT_FATAL(
+            page_table_shape.size() == 2, "Page table must be 2D [batch, num_pages]. Got shape {}", page_table_shape);
+        TT_FATAL(
+            page_table_shape[0] == B,
+            "Page table batch size must match input batch size. Got page table {}, input {}",
+            page_table_shape[0],
+            B);
+        TT_FATAL(args.chunk_start_idx.has_value(), "Paged Ring Joint SDPA requires chunk_start_idx attribute");
+        TT_FATAL(args.chunk_start_idx.value() >= 0, "chunk_start_idx must be non-negative");
+
+        const auto page_block_size = k_shape[2];
+        TT_FATAL(page_block_size > 0, "Paged K page_block_size must be positive");
+        TT_FATAL(
+            page_block_size % tt::constants::TILE_HEIGHT == 0,
+            "Paged K page_block_size must be divisible by TILE_HEIGHT. Got {}",
+            page_block_size);
+        TT_FATAL(
+            args.chunk_start_idx.value() % tt::constants::TILE_HEIGHT == 0,
+            "chunk_start_idx must be divisible by TILE_HEIGHT. Got chunk_start_idx {}, TILE_HEIGHT {}",
+            args.chunk_start_idx.value(),
+            tt::constants::TILE_HEIGHT);
+        TT_FATAL(
+            !args.paged_kv_page_table_is_rank_local || args.chunk_start_idx.value() % page_block_size == 0,
+            "Rank-local paged K/V requires chunk_start_idx to be divisible by page_block_size. Got chunk_start_idx {}, "
+            "page_block_size {}",
+            args.chunk_start_idx.value(),
+            page_block_size);
+        TT_FATAL(
+            input_v_shape[2] == page_block_size,
+            "Paged K and V page_block_size must match. Got K {}, V {}",
+            page_block_size,
+            input_v_shape[2]);
+        TT_FATAL(
+            gathered_k_shape[0] == gathered_v_shape[0],
+            "Paged gathered K/V first dimension must match. Got K {}, V {}",
+            gathered_k_shape[0],
+            gathered_v_shape[0]);
+        const auto total_physical_pages = gathered_k_shape[0];
+        TT_FATAL(
+            total_physical_pages % args.ring_size == 0,
+            "Paged Ring Joint SDPA requires total physical pages to shard evenly across the ring. Got {} pages and "
+            "ring size {}",
+            total_physical_pages,
+            args.ring_size);
+        const auto local_pages_per_rank = total_physical_pages / args.ring_size;
+        TT_FATAL(
+            input_k_shape[0] == local_pages_per_rank && input_v_shape[0] == local_pages_per_rank,
+            "Paged local K/V first dimension must match page_table pages per rank. Got K {}, V {}, pages per rank {}",
+            input_k_shape[0],
+            input_v_shape[0],
+            local_pages_per_rank);
+        TT_FATAL(
+            gathered_k_shape[2] == page_block_size && gathered_v_shape[2] == page_block_size,
+            "Paged gathered K/V page_block_size must match input page_block_size. Got K {}, V {}, input {}",
+            gathered_k_shape[2],
+            gathered_v_shape[2],
+            page_block_size);
+        TT_FATAL(
+            page_table_shape[1] * page_block_size >= args.chunk_start_idx.value() + N_global,
+            "Paged Ring Joint SDPA page table capacity must cover chunk_start_idx + global sequence. Capacity {}, "
+            "chunk_start_idx {}, global sequence {}",
+            page_table_shape[1] * page_block_size,
+            args.chunk_start_idx.value(),
+            N_global);
+    }
+
+    if (!is_paged) {
+        TT_FATAL(
+            k_shape[0] == B && v_shape[0] == B && joint_q_shape[0] == B && joint_k_shape[0] == B &&
+                joint_v_shape[0] == B,
+            "Batch sizes must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+            B,
+            k_shape[0],
+            v_shape[0],
+            joint_q_shape[0],
+            joint_k_shape[0],
+            joint_v_shape[0]);
+    } else {
+        TT_FATAL(
+            joint_q_shape[0] == B && joint_k_shape[0] == B && joint_v_shape[0] == B,
+            "Joint batch sizes must match Q in paged mode. Got Q: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+            B,
+            joint_q_shape[0],
+            joint_k_shape[0],
+            joint_v_shape[0]);
+    }
 
     // Validate head dimensions match
     if (!args.is_causal) {
@@ -146,11 +236,13 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             k_shape[3]);
     }
 
-    TT_FATAL(
-        v_shape[2] == N_global,
-        "V sequence length must be equal to global sequence length. Got V: {}, global sequence length: {}",
-        v_shape[2],
-        N_global);
+    if (!is_paged) {
+        TT_FATAL(
+            v_shape[2] == N_global,
+            "V sequence length must be equal to global sequence length. Got V: {}, global sequence length: {}",
+            v_shape[2],
+            N_global);
+    }
 
     TT_FATAL(
         N_global == N_local * args.ring_size,
@@ -183,17 +275,19 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         joint_v_shape[2]);
 
     // Check shapes based on ring
-    TT_FATAL(
-        q_shape[2] * args.ring_size == k_shape[2],
-        "Q sequence length times ring size must be equal to K sequence length. Got Q: {}, K: {}, ring_size: {}",
-        q_shape[2],
-        k_shape[2],
-        args.ring_size);
-    TT_FATAL(
-        k_shape[2] == v_shape[2],
-        "K sequence length must be equal to V sequence length. Got K: {}, V: {}",
-        k_shape[2],
-        v_shape[2]);
+    if (!is_paged) {
+        TT_FATAL(
+            q_shape[2] * args.ring_size == k_shape[2],
+            "Q sequence length times ring size must be equal to K sequence length. Got Q: {}, K: {}, ring_size: {}",
+            q_shape[2],
+            k_shape[2],
+            args.ring_size);
+        TT_FATAL(
+            k_shape[2] == v_shape[2],
+            "K sequence length must be equal to V sequence length. Got K: {}, V: {}",
+            k_shape[2],
+            v_shape[2]);
+    }
 
     TT_FATAL(NQH == NVH, "Q num_heads must be equal to V num_heads. Got Q: {}, V: {}", NQH, NVH);
     TT_FATAL(NKH == NVH || NKH == 1, "K num_heads must be equal to V num_heads or 1. Got K: {}, V: {}", NKH, NVH);
@@ -265,7 +359,7 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
-    const std::vector<Tensor> input_tensors = {
+    std::vector<Tensor> input_tensors = {
         tensor_args.input_q,
         tensor_args.input_k,
         tensor_args.input_v,
@@ -275,6 +369,9 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.gathered_k,
         tensor_args.gathered_v,
     };
+    if (tensor_args.page_table.has_value()) {
+        input_tensors.push_back(tensor_args.page_table.value());
+    }
     return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
         input_tensors,
         args.joint_strategy,
@@ -283,6 +380,9 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.is_balanced,
         args.logical_n,
         args.ring_size,
+        tensor_args.page_table.has_value(),
+        args.chunk_start_idx,
+        args.paged_kv_page_table_is_rank_local,
         args.compute_kernel_config,
         args.program_config,
         args.ccl_core_grid_offset,
@@ -316,6 +416,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     const auto& gathered_k_shape = tensor_args.gathered_k.logical_shape();
     const auto& v_shape = tensor_args.gathered_v.logical_shape();
     const auto& joint_q_shape = tensor_args.joint_q.logical_shape();
+    const bool is_paged = tensor_args.page_table.has_value();
 
     CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                      : output_tensor.device()->compute_with_storage_grid_size();
@@ -324,7 +425,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     const uint32_t B = q_shape[0];
     const uint32_t NQH = q_shape[1];
     const uint32_t N_local = q_shape[2];
-    const uint32_t N_global = gathered_k_shape[2];
+    const uint32_t N_global = is_paged ? static_cast<uint32_t>(args.logical_n) : gathered_k_shape[2];
     const uint32_t L = joint_q_shape[2];
     const uint32_t DH = q_shape[3];
     const uint32_t DV = v_shape[3];
@@ -369,7 +470,10 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const bool is_balanced,
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
+    const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
+    const std::optional<ttnn::Tensor>& page_table,
+    std::optional<int64_t> chunk_start_idx,
+    bool paged_kv_page_table_is_rank_local) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -420,6 +524,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         is_balanced,
         logical_n,
         num_devices,
+        page_table.has_value() ? chunk_start_idx.value_or(0) : std::optional<int64_t>{},
+        page_table.has_value() ? paged_kv_page_table_is_rank_local : false,
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         std::move(program_config),
         kernel_config_val,
@@ -435,7 +541,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .joint_k = joint_tensor_k,
         .joint_v = joint_tensor_v,
         .gathered_k = persistent_output_buffer_k,
-        .gathered_v = persistent_output_buffer_v};
+        .gathered_v = persistent_output_buffer_v,
+        .page_table = page_table};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

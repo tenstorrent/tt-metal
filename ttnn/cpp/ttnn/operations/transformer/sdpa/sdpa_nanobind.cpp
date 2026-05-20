@@ -47,7 +47,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     CoreCoord ccl_core_grid_offset,
     bool use_column_major_ccl,
     bool is_causal,
-    bool is_balanced) {
+    bool is_balanced,
+    std::optional<ttnn::Tensor> page_table,
+    std::optional<int64_t> chunk_start_idx,
+    bool paged_kv_page_table_is_rank_local) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
     auto outputs = ttnn::transformer::ring_joint_scaled_dot_product_attention(
@@ -74,7 +77,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         is_balanced,
         scale,
         compute_kernel_config,
-        strategy);
+        strategy,
+        page_table,
+        chunk_start_idx,
+        paged_kv_page_table_is_rank_local);
     return outputs;
 }
 
@@ -421,6 +427,12 @@ void bind_sdpa(nb::module_& mod) {
                 If False (default), uses row-major allocation. Defaults to False.
             is_causal (bool): Whether to use causal attention masking. Defaults to False.
             is_balanced (bool): Whether to use balanced attention computation. Defaults to False.
+            page_table (ttnn.Tensor, optional): Row-major INT32 page table [batch, num_pages]. When provided,
+                input_tensor_k/input_tensor_v are paged caches with shape [num_blocks, heads, page_block_size, head_dim].
+            chunk_start_idx (int, optional): Logical token offset for paged K/V. Defaults to 0 in paged mode.
+            paged_kv_page_table_is_rank_local (bool, optional): Set True only when every logical page belonging
+                to a ring rank maps to a physical page owned by the same rank. Defaults to False for arbitrary
+                global page tables.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -457,7 +469,10 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("ccl_core_grid_offset"),
         nb::arg("use_column_major_ccl") = false,
         nb::arg("is_causal").noconvert() = false,
-        nb::arg("is_balanced").noconvert() = false);
+        nb::arg("is_balanced").noconvert() = false,
+        nb::arg("page_table").noconvert() = nb::none(),
+        nb::arg("chunk_start_idx") = nb::none(),
+        nb::arg("paged_kv_page_table_is_rank_local").noconvert() = false);
 
     const auto* exp_ring_joint_doc = R"doc(
         ExpRingJointAttention operation that efficiently performs non-causal attention over two

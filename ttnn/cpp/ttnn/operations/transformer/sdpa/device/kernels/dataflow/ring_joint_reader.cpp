@@ -8,6 +8,88 @@
 #include "chain_link.hpp"
 #include "fused_op_receiver.hpp"
 
+template <bool page_table_is_rank_local, uint32_t block_size_t, uint32_t ring_size>
+FORCE_INLINE void wait_for_paged_chunk_page_owners(
+    RingSDPAOpReceiver& fused_op_receiver,
+    const volatile tt_l1_ptr uint32_t* const page_table_ptr,
+    const uint32_t chunk_start_row,
+    const uint32_t src_rows,
+    const uint32_t local_ring_index,
+    const uint32_t physical_blocks_per_rank,
+    uint32_t& synced_owner_mask) {
+    if constexpr (!page_table_is_rank_local) {
+        ASSERT(physical_blocks_per_rank > 0);
+        ASSERT(src_rows > 0);
+        uint32_t first_virtual_block = chunk_start_row / block_size_t;
+        const uint32_t last_virtual_block = (chunk_start_row + src_rows - 1) / block_size_t;
+        for (uint32_t virtual_block = first_virtual_block; virtual_block <= last_virtual_block; ++virtual_block) {
+            const uint32_t physical_block = static_cast<uint32_t>(page_table_ptr[virtual_block]);
+            const uint32_t owner_ring_id = physical_block / physical_blocks_per_rank;
+            ASSERT(owner_ring_id < ring_size);
+            if constexpr (ring_size <= 32) {
+                const uint32_t owner_bit = 1u << owner_ring_id;
+                if ((synced_owner_mask & owner_bit) != 0) {
+                    continue;
+                }
+                fused_op_receiver.wait_for_ring_id(owner_ring_id);
+                synced_owner_mask |= owner_bit;
+            } else {
+                if (owner_ring_id != local_ring_index) {
+                    fused_op_receiver.wait_for_ring_id(owner_ring_id);
+                }
+            }
+        }
+    }
+}
+
+template <
+    bool transpose,
+    bool page_table_is_rank_local,
+    uint32_t num_heads,
+    uint32_t block_size_t,
+    uint32_t Wt,
+    uint32_t ring_size,
+    typename LocalReaderType,
+    typename GatheredReaderType>
+FORCE_INLINE void fetch_paged_spatial_chunk(
+    RingSDPAOpReceiver& fused_op_receiver,
+    const LocalReaderType& local_reader,
+    const GatheredReaderType& gathered_reader,
+    const uint32_t base_write_ptr,
+    const uint32_t cur_head,
+    const uint32_t chunk_start_row,
+    const uint32_t src_rows,
+    const uint32_t dst_rows,
+    const uint32_t tile_bytes,
+    const volatile tt_l1_ptr uint32_t* const page_table_ptr,
+    const uint32_t local_ring_index,
+    const uint32_t source_ring_index,
+    const uint32_t physical_blocks_per_rank,
+    uint32_t& synced_owner_mask) {
+    wait_for_paged_chunk_page_owners<page_table_is_rank_local, block_size_t, ring_size>(
+        fused_op_receiver,
+        page_table_ptr,
+        chunk_start_row,
+        src_rows,
+        local_ring_index,
+        physical_blocks_per_rank,
+        synced_owner_mask);
+    fetch_paged_chunk_owner_aware_with_padding<transpose, page_table_is_rank_local, num_heads, block_size_t, Wt>(
+        local_reader,
+        gathered_reader,
+        base_write_ptr,
+        cur_head,
+        chunk_start_row,
+        src_rows,
+        dst_rows,
+        tile_bytes,
+        0,
+        page_table_ptr,
+        local_ring_index,
+        source_ring_index,
+        physical_blocks_per_rank);
+}
+
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
@@ -37,8 +119,14 @@ void kernel_main() {
     constexpr uint32_t is_balanced = get_compile_time_arg_val(22);
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
     constexpr uint32_t num_q_readers = get_compile_time_arg_val(25);
+    constexpr bool is_paged = get_compile_time_arg_val(26) == 1;
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(27);
+    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(28);
+    constexpr uint32_t chunk_start_idx_t = get_compile_time_arg_val(29);
+    constexpr uint32_t physical_pages_per_rank = get_compile_time_arg_val(30);
+    constexpr bool paged_kv_page_table_is_rank_local = get_compile_time_arg_val(31) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<26>();
+    constexpr auto q_args = TensorAccessorArgs<32>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -46,6 +134,14 @@ void kernel_main() {
     constexpr auto joint_q_args = TensorAccessorArgs<gathered_v_args.next_compile_time_args_offset()>();
     constexpr auto joint_k_args = TensorAccessorArgs<joint_q_args.next_compile_time_args_offset()>();
     constexpr auto joint_v_args = TensorAccessorArgs<joint_k_args.next_compile_time_args_offset()>();
+    constexpr auto page_table_args = TensorAccessorArgs<joint_v_args.next_compile_time_args_offset()>();
+
+    constexpr bool batch_mcast_enabled = []() {
+        if constexpr (k_uses_batch_chain) {
+            return get_compile_time_arg_val(page_table_args.next_compile_time_args_offset() + 7) == 1;
+        }
+        return false;
+    }();
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -56,19 +152,35 @@ void kernel_main() {
     const uint32_t joint_q_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_k_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_v_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t page_table_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t q_per_core = global_q_end - global_q_start;
 
+    constexpr bool head_mcast_enabled =
+        get_compile_time_arg_val(page_table_args.next_compile_time_args_offset() + 3) == 1;
+
     // Head chain runtime args (always present)
-    const ChainConfig head_cfg = ChainConfig::read_from_args(argidx);
+    ChainConfig head_cfg;
+    if constexpr (head_mcast_enabled) {
+        head_cfg = ChainConfig::read_from_args(argidx);
+    } else {
+        head_cfg = ChainConfig::read_head_unicast_from_args(argidx);
+    }
 
     // Batch chain runtime args (only present when k_uses_batch_chain / NHK == 1)
     ChainConfig batch_cfg;  // default zero-initialized
     uint32_t max_q_per_core = 0;
     if constexpr (k_uses_batch_chain) {
-        batch_cfg = ChainConfig::read_from_args(argidx);
+        if constexpr (batch_mcast_enabled) {
+            batch_cfg = ChainConfig::read_batch_mcast_from_args(argidx);
+        } else {
+            batch_cfg = ChainConfig::read_from_args(argidx);
+        }
         max_q_per_core = get_arg_val<uint32_t>(argidx++);
+        if constexpr (batch_mcast_enabled) {
+            batch_cfg.next_core_q_chunks = max_q_per_core;
+        }
     }
 
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
@@ -80,12 +192,11 @@ void kernel_main() {
     // Compile-time semaphore ids and chain flags are appended after all TensorAccessorArgs()
     // Head chain semaphores (head-level chain, always built)
     uint32_t head_sender_semaphore_addr =
-        get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset()));
+        get_semaphore(get_compile_time_arg_val(page_table_args.next_compile_time_args_offset()));
     uint32_t head_receiver_semaphore_addr =
-        get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 1));
+        get_semaphore(get_compile_time_arg_val(page_table_args.next_compile_time_args_offset() + 1));
     uint32_t head_valid_semaphore_addr =
-        get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 2));
-    constexpr bool head_mcast_enabled = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 3) == 1;
+        get_semaphore(get_compile_time_arg_val(page_table_args.next_compile_time_args_offset() + 2));
 
     // Batch chain semaphores (only present when k_uses_batch_chain / NHK == 1)
     // Initialize to 0; will be overwritten if k_uses_batch_chain
@@ -93,28 +204,20 @@ void kernel_main() {
     uint32_t batch_receiver_semaphore_addr = 0;
     uint32_t batch_valid_semaphore_addr = 0;
 
-    // batch_mcast_enabled: read from compile-time args if present, else false (for template instantiation)
-    constexpr bool batch_mcast_enabled = []() {
-        if constexpr (k_uses_batch_chain) {
-            return get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 7) == 1;
-        }
-        return false;
-    }();
-
     if constexpr (k_uses_batch_chain) {
         batch_sender_semaphore_addr =
-            get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 4));
+            get_semaphore(get_compile_time_arg_val(page_table_args.next_compile_time_args_offset() + 4));
         batch_receiver_semaphore_addr =
-            get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 5));
+            get_semaphore(get_compile_time_arg_val(page_table_args.next_compile_time_args_offset() + 5));
         batch_valid_semaphore_addr =
-            get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 6));
+            get_semaphore(get_compile_time_arg_val(page_table_args.next_compile_time_args_offset() + 6));
     }
 
-    // TODO: CB indices below are hardcoded and duplicated from the program factory.
-    // They should be passed as compile-time args so the factory is the single source of truth.
+    // Keep in sync with the circular buffers created by the program factory.
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
+    constexpr uint32_t cb_page_table = tt::CBIndex::c_13;
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -198,7 +301,6 @@ void kernel_main() {
     const auto joint_q_reader = TensorAccessor(joint_q_args, joint_q_addr);
     const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr);
     const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr);
-
     const auto input_q_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
     const auto input_k_tile_logical = TensorTileShape(B, NHK, local_padded_Nt, DHt);
     const auto input_v_tile_logical = TensorTileShape(B, NH, local_padded_Nt, vDHt);
@@ -221,20 +323,30 @@ void kernel_main() {
 
     /**
      * Iterate over ring indices.
-     * On the first iteration, read from local K, V.
-     * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
+     * Paged K/V with arbitrary global page ownership waits only for the physical owners of pages used by a chunk.
+     * Rank-local page tables use the normal per-ring sync because every logical rank shard maps only to pages owned by
+     * that same ring rank.
      */
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
-    uint32_t half_sequence = num_q_chunks / 2;
+    uint32_t paged_owner_sync_mask = 0;
+    if constexpr (is_paged && !paged_kv_page_table_is_rank_local && ring_size <= 32) {
+        paged_owner_sync_mask = 1u << ring_index;
+    }
+    constexpr uint32_t half_sequence = num_q_chunks / 2;
+    constexpr uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
+    constexpr bool has_joint_kv = num_joint_k_chunks > 0;
+    constexpr bool needs_kv_slices = !is_paged || has_joint_kv;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+        if constexpr (is_paged && !paged_kv_page_table_is_rank_local && ring_size <= 32) {
+            paged_owner_sync_mask |= 1u << ring_id;
+        }
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.
-        const bool do_joint_kv = ring_id == ring_size - 1;
+        const bool do_joint_kv = has_joint_kv && ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;  // Floor division to get tile ID
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
 
@@ -288,7 +400,8 @@ void kernel_main() {
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
-            const bool is_joint_q = q_chunk >= num_local_q_chunks;
+            constexpr bool has_joint_q = num_joint_q_chunks > 0;
+            const bool is_joint_q = has_joint_q && q_chunk >= num_local_q_chunks;
 
             const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
 
@@ -303,11 +416,17 @@ void kernel_main() {
 
             Slice q_slice;
             uint32_t q_end_seq_tile;
-            if (is_joint_q) {
-                // Get row index into the joint Q tensor
-                const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-                q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
-                q_end_seq_tile = Lt;
+            if constexpr (has_joint_q) {
+                if (is_joint_q) {
+                    // Get row index into the joint Q tensor
+                    const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                    q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
+                    q_end_seq_tile = Lt;
+                } else {
+                    // Index into the Q input tensor
+                    q_slice = Slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
+                    q_end_seq_tile = local_padded_Nt;
+                }
             } else {
                 // Index into the Q input tensor
                 q_slice = Slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
@@ -321,13 +440,21 @@ void kernel_main() {
             // fronted in the CB, so we only need to read it once on the first active ring iteration.
             const bool need_q_read = (q_per_core > 1) || !q_pushed;
 
+            volatile tt_l1_ptr uint32_t* page_table_ptr = nullptr;
+            if constexpr (is_paged) {
+                cb_reserve_back(cb_page_table, 1);
+                page_table_ptr = read_page_table_for_batch(
+                    cb_page_table, nb, page_table_args, page_table_addr, page_table_stick_size);
+                cb_push_back(cb_page_table, 1);
+            }
+
             for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
                 /**
                  * Iterate over all KV chunks for this Q chunk.
                  * If this is the last ring ID, we will also read from joint KV.
                  * If this k chunk is in the spatial input and beyond the logical N, we will skip it.
                  */
-                const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
+                const bool kv_chunk_is_joint = has_joint_kv && k_chunk >= num_local_k_chunks;
                 // Global index into the padded KV tensor
                 const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
                 const bool kv_chunk_is_beyond_logical_n = !kv_chunk_is_joint && (kv_global_start_tile >= logical_nt);
@@ -336,78 +463,228 @@ void kernel_main() {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
                     continue;
                 }
+                const uint32_t kv_row_tile_count =
+                    kv_chunk_is_joint ? Sk_chunk_t : std::min(Sk_chunk_t, logical_nt - kv_global_start_tile);
 
                 Slice k_slice;
                 Slice v_slice;
-                uint32_t
-                    end_seq_tile;  // further information to `read_block` to determine whether it should pad with zeros.
-
+                uint32_t end_seq_tile = 0;
                 const uint32_t nk = nq / q_heads_per_k;
-                if (kv_chunk_is_joint) {
-                    const uint32_t joint_k_chunk = k_chunk - num_local_k_chunks;
-                    const uint32_t joint_k_row_start_tile = joint_k_chunk * Sk_chunk_t;
+                if constexpr (needs_kv_slices) {
+                    if (kv_chunk_is_joint) {
+                        const uint32_t joint_k_chunk = k_chunk - num_local_k_chunks;
+                        const uint32_t joint_k_row_start_tile = joint_k_chunk * Sk_chunk_t;
 
-                    k_slice = Slice(nb, nk, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                    v_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, vDHt);
-                    end_seq_tile = Lt;
-                } else {
-                    if (ring_iter == 0) {
-                        // Local KV
-                        const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
-
-                        k_slice = Slice(nb, nk, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                        v_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, vDHt);
-                        end_seq_tile = std::min(logical_nt, local_padded_Nt);
+                        k_slice = Slice(nb, nk, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                        v_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, vDHt);
+                        end_seq_tile = Lt;
                     } else {
-                        // Gathered KV
-                        const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
-                        k_slice = Slice(nb, nk, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
-                        v_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, vDHt);
-                        end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
+                        if (ring_iter == 0) {
+                            // Local KV
+                            const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
+
+                            k_slice =
+                                Slice(nb, nk, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                            v_slice =
+                                Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, vDHt);
+                            end_seq_tile = std::min(logical_nt, local_padded_Nt);
+                        } else {
+                            // Gathered KV
+                            const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
+                            k_slice =
+                                Slice(nb, nk, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
+                            v_slice =
+                                Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, vDHt);
+                            end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
+                        }
                     }
                 }
 
-                // K: either read locally (injector or not participant) or receive from chain
-                if constexpr (k_uses_batch_chain && batch_mcast_enabled) {
-                    // Ensures that compute has completed with the previous K chunk before we overwrite the buffer with
-                    // the next K chunk for mcast.
-                    const uint32_t reserve_tiles = is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
-                    cb_reserve_back(cb_k_in, reserve_tiles);
+                if constexpr (is_paged) {
+                    if constexpr (k_uses_batch_chain && batch_mcast_enabled) {
+                        const uint32_t reserve_tiles = is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
+                        cb_reserve_back(cb_k_in, reserve_tiles);
+                        uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
+                        if (k_chain.should_receive(nb, nq)) {
+                            k_chain.receive();
+                        } else {
+                            if constexpr (has_joint_kv) {
+                                if (kv_chunk_is_joint) {
+                                    fetch_block(
+                                        joint_k_generator,
+                                        k_slice,
+                                        end_seq_tile,
+                                        cb_k_start_address,
+                                        k_tile_bytes,
+                                        true /*transpose*/
+                                    );
+                                    goto k_batch_mcast_forward;
+                                }
+                            }
+                            fetch_paged_spatial_chunk<
+                                true,
+                                paged_kv_page_table_is_rank_local,
+                                NHK,
+                                block_size_t,
+                                DHt,
+                                ring_size>(
+                                fused_op_receiver,
+                                local_k_reader,
+                                gathered_k_reader,
+                                cb_k_start_address,
+                                nk,
+                                chunk_start_idx_t + kv_global_start_tile,
+                                kv_row_tile_count,
+                                Sk_chunk_t,
+                                k_tile_bytes,
+                                page_table_ptr,
+                                ring_index,
+                                ring_id,
+                                physical_pages_per_rank,
+                                paged_owner_sync_mask);
+                        }
+
+                    k_batch_mcast_forward:
+                        if (k_chain.should_forward(nb, nq, q_iter_local)) {
+                            k_chain.forward(cb_k_start_address, k_chunk_tiles, k_tile_bytes);
+                        }
+
+                        if (is_padded_iter) {
+                            continue;
+                        }
+
+                        cb_push_back(cb_k_in, k_chunk_tiles);
+                    } else if constexpr (!k_uses_batch_chain && head_mcast_enabled) {
+                        cb_reserve_back(cb_k_in, k_chunk_tiles);
+                        uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
+                        if (k_chain.should_receive(nb, nq)) {
+                            k_chain.receive();
+                        } else {
+                            if constexpr (has_joint_kv) {
+                                if (kv_chunk_is_joint) {
+                                    fetch_block(
+                                        joint_k_generator,
+                                        k_slice,
+                                        end_seq_tile,
+                                        cb_k_start_address,
+                                        k_tile_bytes,
+                                        true /*transpose*/
+                                    );
+                                    goto k_head_mcast_forward;
+                                }
+                            }
+                            fetch_paged_spatial_chunk<
+                                true,
+                                paged_kv_page_table_is_rank_local,
+                                NHK,
+                                block_size_t,
+                                DHt,
+                                ring_size>(
+                                fused_op_receiver,
+                                local_k_reader,
+                                gathered_k_reader,
+                                cb_k_start_address,
+                                nk,
+                                chunk_start_idx_t + kv_global_start_tile,
+                                kv_row_tile_count,
+                                Sk_chunk_t,
+                                k_tile_bytes,
+                                page_table_ptr,
+                                ring_index,
+                                ring_id,
+                                physical_pages_per_rank,
+                                paged_owner_sync_mask);
+                        }
+
+                    k_head_mcast_forward:
+                        if (k_chain.should_forward(nb, nq, q_iter_local)) {
+                            k_chain.forward(cb_k_start_address, k_chunk_tiles, k_tile_bytes);
+                        }
+                        cb_push_back(cb_k_in, k_chunk_tiles);
+                    } else if (kv_chunk_is_joint) {
+                        cb_reserve_back(cb_k_in, k_chunk_tiles);
+                        uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
+                        fetch_block(
+                            joint_k_generator,
+                            k_slice,
+                            end_seq_tile,
+                            cb_k_start_address,
+                            k_tile_bytes,
+                            true /*transpose*/
+                        );
+                        cb_push_back(cb_k_in, k_chunk_tiles);
+                    } else {
+                        wait_for_paged_chunk_page_owners<paged_kv_page_table_is_rank_local, block_size_t, ring_size>(
+                            fused_op_receiver,
+                            page_table_ptr,
+                            chunk_start_idx_t + kv_global_start_tile,
+                            kv_row_tile_count,
+                            ring_index,
+                            physical_pages_per_rank,
+                            paged_owner_sync_mask);
+                        read_paged_chunk_owner_aware_with_padding<
+                            true,
+                            paged_kv_page_table_is_rank_local,
+                            NHK,
+                            block_size_t,
+                            DHt>(
+                            local_k_reader,
+                            gathered_k_reader,
+                            cb_k_in,
+                            nk,
+                            chunk_start_idx_t + kv_global_start_tile,
+                            kv_row_tile_count,
+                            Sk_chunk_t,
+                            k_tile_bytes,
+                            0,
+                            page_table_ptr,
+                            ring_index,
+                            ring_id,
+                            physical_pages_per_rank);
+                    }
                 } else {
-                    cb_reserve_back(cb_k_in, k_chunk_tiles);
-                }
-                uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
-                if (k_chain.should_receive(nb, nq)) {
-                    k_chain.receive();
-                } else {
-                    // Injector or non-participant: read K from DRAM
-                    // For padded iterations, injector still reads K to broadcast to receivers
-                    fetch_block(
-                        kv_chunk_is_joint ? joint_k_generator
-                                          : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
-                        k_slice,
-                        end_seq_tile,
-                        cb_k_start_address,
-                        k_tile_bytes,
-                        true /*transpose*/
-                    );
-                }
+                    // K: either read locally (injector or not participant) or receive from chain
+                    if constexpr (k_uses_batch_chain && batch_mcast_enabled) {
+                        // Ensures that compute has completed with the previous K chunk before we overwrite the buffer
+                        // with the next K chunk for mcast.
+                        const uint32_t reserve_tiles = is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
+                        cb_reserve_back(cb_k_in, reserve_tiles);
+                    } else {
+                        cb_reserve_back(cb_k_in, k_chunk_tiles);
+                    }
+                    uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
+                    if (k_chain.should_receive(nb, nq)) {
+                        k_chain.receive();
+                    } else {
+                        // Injector or non-participant: read K from DRAM
+                        // For padded iterations, injector still reads K to broadcast to receivers
+                        fetch_block(
+                            kv_chunk_is_joint ? joint_k_generator
+                                              : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
+                            k_slice,
+                            end_seq_tile,
+                            cb_k_start_address,
+                            k_tile_bytes,
+                            true /*transpose*/
+                        );
+                    }
 
-                // Forward K chunk via chain (uses K's data size explicitly)
-                if (k_chain.should_forward(nb, nq, q_iter_local)) {
-                    k_chain.forward(cb_k_start_address, k_chunk_tiles, k_tile_bytes);
-                }
+                    // Forward K chunk via chain (uses K's data size explicitly)
+                    if (k_chain.should_forward(nb, nq, q_iter_local)) {
+                        k_chain.forward(cb_k_start_address, k_chunk_tiles, k_tile_bytes);
+                    }
 
-                // Skip Q, V reads and V forward for padded iterations (K mcast sync only).
-                // Note: cb_push_back is intentionally skipped — without it, the write pointer
-                // doesn't advance, so cb_reserve_back returns the same address each iteration.
-                // This lets the buffer act as a reusable staging area for the mcast.
-                if (is_padded_iter) {
-                    continue;
-                }
+                    // Skip Q, V reads and V forward for padded iterations (K mcast sync only).
+                    // Note: cb_push_back is intentionally skipped — without it, the write pointer
+                    // doesn't advance, so cb_reserve_back returns the same address each iteration.
+                    // This lets the buffer act as a reusable staging area for the mcast.
+                    if (is_padded_iter) {
+                        continue;
+                    }
 
-                // Make K available to compute
-                cb_push_back(cb_k_in, k_chunk_tiles);
+                    // Make K available to compute
+                    cb_push_back(cb_k_in, k_chunk_tiles);
+                }
                 KV_chunks_processed_in_iter++;
 
                 // Download Q on the first K iteration — after K is downloaded and forwarded.
@@ -420,53 +697,130 @@ void kernel_main() {
                             const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
                             const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
                             Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
+                            if constexpr (has_joint_q) {
+                                read_block(
+                                    is_joint_q ? joint_q_generator : q_generator,
+                                    q_sub_slice,
+                                    q_end_seq_tile,
+                                    cb_q_in,
+                                    q_tile_bytes,
+                                    false /*transpose*/,
+                                    q_barrier_threshold);
+                            } else {
+                                read_block(
+                                    q_generator,
+                                    q_sub_slice,
+                                    q_end_seq_tile,
+                                    cb_q_in,
+                                    q_tile_bytes,
+                                    false /*transpose*/,
+                                    q_barrier_threshold);
+                            }
+                        }
+                    } else {
+                        if constexpr (has_joint_q) {
                             read_block(
                                 is_joint_q ? joint_q_generator : q_generator,
-                                q_sub_slice,
+                                q_slice,
+                                q_end_seq_tile,
+                                cb_q_in,
+                                q_tile_bytes,
+                                false /*transpose*/,
+                                q_barrier_threshold);
+                        } else {
+                            read_block(
+                                q_generator,
+                                q_slice,
                                 q_end_seq_tile,
                                 cb_q_in,
                                 q_tile_bytes,
                                 false /*transpose*/,
                                 q_barrier_threshold);
                         }
-                    } else {
-                        read_block(
-                            is_joint_q ? joint_q_generator : q_generator,
-                            q_slice,
-                            q_end_seq_tile,
-                            cb_q_in,
-                            q_tile_bytes,
-                            false /*transpose*/,
-                            q_barrier_threshold);
                     }
                     q_pushed = true;
                 }
 
-                // V: either read locally (injector or not participant) or receive from chain
-                cb_reserve_back(cb_v_in, v_chunk_tiles);
-                uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
-                if (v_chain.should_receive(nb, nq)) {
-                    v_chain.receive();
+                if constexpr (is_paged) {
+                    // Paged V still uses the head chain when this core participates. The injector
+                    // resolves page ownership while fetching into L1; receivers only consume the
+                    // already-materialized CB payload.
+                    cb_reserve_back(cb_v_in, v_chunk_tiles);
+                    uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
+                    if (v_chain.should_receive(nb, nq)) {
+                        v_chain.receive();
+                    } else {
+                        if constexpr (has_joint_kv) {
+                            if (kv_chunk_is_joint) {
+                                fetch_block(
+                                    joint_v_generator,
+                                    v_slice,
+                                    end_seq_tile,
+                                    cb_v_start_address,
+                                    v_tile_bytes,
+                                    false /*transpose*/
+                                );
+                                goto v_head_chain_forward;
+                            }
+                        }
+                        fetch_paged_spatial_chunk<
+                            false,
+                            paged_kv_page_table_is_rank_local,
+                            NH,
+                            block_size_t,
+                            vDHt,
+                            ring_size>(
+                            fused_op_receiver,
+                            local_v_reader,
+                            gathered_v_reader,
+                            cb_v_start_address,
+                            nq,
+                            chunk_start_idx_t + kv_global_start_tile,
+                            kv_row_tile_count,
+                            Sk_chunk_t,
+                            v_tile_bytes,
+                            page_table_ptr,
+                            ring_index,
+                            ring_id,
+                            physical_pages_per_rank,
+                            paged_owner_sync_mask);
+                    }
+
+                v_head_chain_forward:
+                    if (v_chain.should_forward(nb, nq, q_iter_local)) {
+                        v_chain.forward(cb_v_start_address);
+                    }
+                    cb_push_back(cb_v_in, v_chunk_tiles);
                 } else {
-                    fetch_block(
-                        kv_chunk_is_joint ? joint_v_generator
-                                          : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
-                        v_slice,
-                        end_seq_tile,
-                        cb_v_start_address,
-                        v_tile_bytes,
-                        false /*transpose*/
-                    );
-                }
+                    // V: either read locally (injector or not participant) or receive from chain
+                    cb_reserve_back(cb_v_in, v_chunk_tiles);
+                    uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
+                    if (v_chain.should_receive(nb, nq)) {
+                        v_chain.receive();
+                    } else {
+                        fetch_block(
+                            kv_chunk_is_joint ? joint_v_generator
+                                              : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
+                            v_slice,
+                            end_seq_tile,
+                            cb_v_start_address,
+                            v_tile_bytes,
+                            false /*transpose*/
+                        );
+                    }
 
-                // Forward V to next core(s) before push_back — prevents compute from
-                // popping the buffer while the mcast is still reading from it.
-                if (v_chain.should_forward(nb, nq, q_iter_local)) {
-                    v_chain.forward(cb_v_start_address);
-                }
+                    // Forward V to next core(s) before push_back — prevents compute from
+                    // popping the buffer while the mcast is still reading from it.
+                    if (v_chain.should_forward(nb, nq, q_iter_local)) {
+                        v_chain.forward(cb_v_start_address);
+                    }
 
-                // Make V available to compute
-                cb_push_back(cb_v_in, v_chunk_tiles);
+                    // Make V available to compute
+                    cb_push_back(cb_v_in, v_chunk_tiles);
+                }
+            }
+            if constexpr (is_paged) {
+                cb_pop_front(cb_page_table, 1);
             }
         }
         if (KV_chunks_processed_in_iter % 2 == 0) {

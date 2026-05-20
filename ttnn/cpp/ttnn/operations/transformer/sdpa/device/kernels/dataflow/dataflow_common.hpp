@@ -265,6 +265,171 @@ void read_paged_chunk_with_padding(
     cb_push_back(cb_id, num_tiles);
 }
 
+template <uint32_t Wt, typename ReaderType>
+FORCE_INLINE void read_paged_rows_from_reader(
+    const ReaderType& reader,
+    const uint32_t base_write_ptr,
+    const uint32_t start_row,
+    const uint32_t row_count,
+    uint32_t physical_tile_id,
+    const uint32_t outer_ptr_stride,
+    const uint32_t inner_ptr_stride,
+    const uint32_t barrier_threshold,
+    uint32_t& barrier_count) {
+    for (uint32_t row_offset = 0; row_offset < row_count; ++row_offset) {
+        uint32_t write_ptr = base_write_ptr + (start_row + row_offset) * outer_ptr_stride;
+
+        for (uint32_t col = 0; col < Wt; ++col) {
+            noc_async_read_tile(physical_tile_id, reader, write_ptr);
+            physical_tile_id += 1;
+            write_ptr += inner_ptr_stride;
+
+            if (barrier_threshold > 0 && ++barrier_count == barrier_threshold) {
+                noc_async_read_barrier();
+                barrier_count = 0;
+            }
+        }
+    }
+}
+
+template <
+    bool transpose,
+    bool page_table_is_rank_local,
+    uint32_t num_heads,
+    uint32_t block_size_t,
+    uint32_t Wt,
+    typename LocalReaderType,
+    typename GatheredReaderType>
+__attribute__((optimize("Os"))) void fetch_paged_chunk_owner_aware_with_padding(
+    const LocalReaderType& local_reader,
+    const GatheredReaderType& gathered_reader,
+    const uint32_t base_write_ptr,
+    const uint32_t cur_head,
+    const uint32_t chunk_start_row,
+    const uint32_t src_rows,
+    const uint32_t dst_rows,
+    const uint32_t tile_bytes,
+    const uint32_t barrier_threshold,
+    const volatile tt_l1_ptr uint32_t* const page_table_ptr,
+    const uint32_t local_ring_index,
+    const uint32_t source_ring_index,
+    const uint32_t physical_blocks_per_rank) {
+    uint32_t outer_ptr_stride = transpose ? tile_bytes : Wt * tile_bytes;
+    uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
+    constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
+    const uint32_t head_offset = cur_head * block_size_t * Wt;
+    const uint32_t local_block_offset = local_ring_index * physical_blocks_per_rank;
+
+    uint32_t barrier_count = 0;
+    uint32_t virtual_block = chunk_start_row / block_size_t;
+    uint32_t block_row = chunk_start_row % block_size_t;
+
+    if (src_rows > 0) {
+        uint32_t physical_block = static_cast<uint32_t>(page_table_ptr[virtual_block]);
+        bool use_local_reader = source_ring_index == local_ring_index;
+        if constexpr (!page_table_is_rank_local) {
+            use_local_reader = physical_block / physical_blocks_per_rank == local_ring_index;
+        }
+        uint32_t physical_block_offset = use_local_reader ? local_block_offset : 0;
+        uint32_t physical_tile_id =
+            (physical_block - physical_block_offset) * block_stride + head_offset + block_row * Wt;
+
+        uint32_t rows_read = 0;
+        while (rows_read < src_rows) {
+            const uint32_t rows_in_segment = std::min(src_rows - rows_read, block_size_t - block_row);
+            if (use_local_reader) {
+                read_paged_rows_from_reader<Wt>(
+                    local_reader,
+                    base_write_ptr,
+                    rows_read,
+                    rows_in_segment,
+                    physical_tile_id,
+                    outer_ptr_stride,
+                    inner_ptr_stride,
+                    barrier_threshold,
+                    barrier_count);
+            } else {
+                read_paged_rows_from_reader<Wt>(
+                    gathered_reader,
+                    base_write_ptr,
+                    rows_read,
+                    rows_in_segment,
+                    physical_tile_id,
+                    outer_ptr_stride,
+                    inner_ptr_stride,
+                    barrier_threshold,
+                    barrier_count);
+            }
+
+            rows_read += rows_in_segment;
+            if (rows_read < src_rows) {
+                ++virtual_block;
+                physical_block = static_cast<uint32_t>(page_table_ptr[virtual_block]);
+                if constexpr (page_table_is_rank_local) {
+                    use_local_reader = source_ring_index == local_ring_index;
+                } else {
+                    use_local_reader = physical_block / physical_blocks_per_rank == local_ring_index;
+                }
+                physical_block_offset = use_local_reader ? local_block_offset : 0;
+                physical_tile_id = (physical_block - physical_block_offset) * block_stride + head_offset;
+                block_row = 0;
+            }
+        }
+    }
+
+    for (uint32_t row = src_rows; row < dst_rows; ++row) {
+        for (uint32_t col = 0; col < Wt; ++col) {
+            uint32_t tile_id = transpose ? col * dst_rows + row : row * Wt + col;
+            fill_zeros_async(base_write_ptr + tile_id * tile_bytes, tile_bytes);
+        }
+    }
+    noc_async_read_barrier();
+}
+
+template <
+    bool transpose,
+    bool page_table_is_rank_local,
+    uint32_t num_heads,
+    uint32_t block_size_t,
+    uint32_t Wt,
+    typename LocalReaderType,
+    typename GatheredReaderType>
+void read_paged_chunk_owner_aware_with_padding(
+    const LocalReaderType& local_reader,
+    const GatheredReaderType& gathered_reader,
+    const uint32_t cb_id,
+    const uint32_t cur_head,
+    const uint32_t chunk_start_row,
+    const uint32_t src_rows,
+    const uint32_t dst_rows,
+    const uint32_t tile_bytes,
+    const uint32_t barrier_threshold,
+    const volatile tt_l1_ptr uint32_t* const page_table_ptr,
+    const uint32_t local_ring_index,
+    const uint32_t source_ring_index,
+    const uint32_t physical_blocks_per_rank) {
+    const uint32_t num_tiles = dst_rows * Wt;
+    cb_reserve_back(cb_id, num_tiles);
+    const uint32_t base_write_ptr = get_write_ptr(cb_id);
+
+    fetch_paged_chunk_owner_aware_with_padding<transpose, page_table_is_rank_local, num_heads, block_size_t, Wt>(
+        local_reader,
+        gathered_reader,
+        base_write_ptr,
+        cur_head,
+        chunk_start_row,
+        src_rows,
+        dst_rows,
+        tile_bytes,
+        barrier_threshold,
+        page_table_ptr,
+        local_ring_index,
+        source_ring_index,
+        physical_blocks_per_rank);
+
+    cb_push_back(cb_id, num_tiles);
+}
+
 template <uint32_t tile_bytes>
 void copy_tile(uint64_t noc_read_addr_base, uint32_t q_write_ptr_base, uint32_t src_tile_id, uint32_t dst_tile_id) {
     noc_async_read(

@@ -23,6 +23,8 @@ struct RingJointSDPAParams {
     bool is_balanced = false;
     std::size_t logical_n = 0;
     std::size_t ring_size = 0;
+    std::optional<int64_t> chunk_start_idx;
+    bool paged_kv_page_table_is_rank_local = false;
     tt::tt_metal::MemoryConfig output_memory_config;
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -38,6 +40,8 @@ struct RingJointSDPAParams {
         bool is_balanced,
         std::size_t logical_n,
         std::size_t ring_size,
+        std::optional<int64_t> chunk_start_idx,
+        bool paged_kv_page_table_is_rank_local,
         tt::tt_metal::MemoryConfig output_memory_config,
         std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
         DeviceComputeKernelConfig compute_kernel_config,
@@ -50,6 +54,8 @@ struct RingJointSDPAParams {
         is_balanced(is_balanced),
         logical_n(logical_n),
         ring_size(ring_size),
+        chunk_start_idx(chunk_start_idx),
+        paged_kv_page_table_is_rank_local(paged_kv_page_table_is_rank_local),
         output_memory_config(std::move(output_memory_config)),
         program_config(std::move(program_config)),
         compute_kernel_config(compute_kernel_config),
@@ -65,6 +71,10 @@ struct RingJointSDPAParams {
         attrs.emplace_back("is_balanced", is_balanced);
         attrs.emplace_back("logical_n", logical_n);
         attrs.emplace_back("ring_size", ring_size);
+        if (chunk_start_idx.has_value()) {
+            attrs.emplace_back("chunk_start_idx", chunk_start_idx.value());
+        }
+        attrs.emplace_back("paged_kv_page_table_is_rank_local", paged_kv_page_table_is_rank_local);
         attrs.emplace_back("output_memory_config", output_memory_config);
         attrs.emplace_back("compute_kernel_config", compute_kernel_config);
         attrs.emplace_back("ccl_core_grid_offset", ccl_core_grid_offset);
@@ -91,6 +101,7 @@ struct RingJointSDPAInputs {
     Tensor joint_v;
     Tensor gathered_k;
     Tensor gathered_v;
+    std::optional<Tensor> page_table;
 };
 
 // Index constants for RingJointSDPAResult vector

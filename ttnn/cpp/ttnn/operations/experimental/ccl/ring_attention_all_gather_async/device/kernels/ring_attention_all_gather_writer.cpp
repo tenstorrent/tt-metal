@@ -120,6 +120,9 @@ void kernel_main() {
         uint32_t tiles_to_read = input_tile_id_end[input_idx];
         if (gather_dim == 3) {
             tile_id_start = my_chip_id * input_tensor_Wt[input_idx];
+        } else if (gather_dim == 0) {
+            tile_id_start = my_chip_id * input_batch_head_count[input_idx] * input_tensor_Ht[input_idx] *
+                            input_tensor_Wt[input_idx];
         } else {
             tile_id_start = my_chip_id * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
         }
@@ -260,6 +263,9 @@ void kernel_main() {
 
             if (gather_dim == 3) {
                 tile_id_start = actual_slice_chip_id * input_tensor_Wt[input_idx];
+            } else if (gather_dim == 0) {
+                tile_id_start = actual_slice_chip_id * input_batch_head_count[input_idx] * input_tensor_Ht[input_idx] *
+                                input_tensor_Wt[input_idx];
             } else {
                 tile_id_start = actual_slice_chip_id * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
             }
