@@ -93,7 +93,11 @@ class DPMSolverSDESolver(Solver):
         mesh_axes: Sequence[Optional[int]],
         dtype: ttnn.DataType,
         seed: Optional[int] = None,
-        s_noise: float = 1.0,
+        # Defaults to 0 (deterministic 2nd-order DPM++) because the per-step
+        # noise upload currently mismatches the latent's sharded shape on
+        # BH 2x4 mesh ("Invalid subtile broadcast type" in eltwise add).
+        # Stochastic noise is a follow-up once the shape resolution is fixed.
+        s_noise: float = 0.0,
     ) -> None:
         if scheduler is None:
             scheduler = WanDPMSolverSDEScheduler(use_flow_sigmas=True, prediction_type="flow_prediction")

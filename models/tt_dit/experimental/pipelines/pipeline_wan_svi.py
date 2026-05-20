@@ -128,11 +128,10 @@ class WanPipelineSVI(WanPipelineI2VLora):
         self._regime: Regime = regime
         self._num_motion_latent = int(num_motion_latent)
         self._num_overlap_frame = int(num_overlap_frame)
-        # Caches keyed across the clips of a single generate_long_video
-        # call. Set up at the top of generate_long_video and cleared in
-        # its finally block.
-        self._anchor_latents_cache: Optional[tuple] = None  # (template_latents_shape, tt_y_const)
-        self._prompt_embeds_cache: dict = {}
+        # Cache for the anchor VAE encode + mask template across the
+        # clips of a single generate_long_video call. Cleared in the
+        # generate_long_video finally block.
+        self._anchor_latents_cache: Optional[tuple] = None  # (cache_key, tt_y_template)
 
         if regime == "python":
             kwargs["lora_high"] = [LoRASpec(svi_high, 1.0)]
@@ -350,25 +349,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
         else:
             prompts_per_clip = [prompt] * num_clips
 
-        # Pre-encode each unique prompt once so repeated clips skip the
-        # T5 forward. For single-prompt mode that's (N-1) re-encodes
-        # avoided; per-clip prompts get encoded once and reused for the
-        # negative embed (which is the same empty string across clips).
-        self._prepare_text_encoder()
-        negative_prompt = call_kwargs.pop("negative_prompt", "")
-        # CFG state isn't set on the pipeline until __call__ runs, so
-        # derive it from the guidance_scale we'll pass in.
-        do_cfg = float(call_kwargs.get("guidance_scale", 1.0)) > 1.0
-        unique_prompts = list(dict.fromkeys(prompts_per_clip))
-        for unique_prompt in unique_prompts:
-            if unique_prompt not in self._prompt_embeds_cache:
-                pos, neg = self.encode_prompt(
-                    prompt=unique_prompt,
-                    negative_prompt=negative_prompt,
-                    do_classifier_free_guidance=do_cfg,
-                )
-                self._prompt_embeds_cache[unique_prompt] = (pos, neg)
-
         try:
             return self._generate_clips_loop(
                 prompts_per_clip=prompts_per_clip,
@@ -383,10 +363,9 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 call_kwargs=call_kwargs,
             )
         finally:
-            # Drop per-call caches so the next generate_long_video call
-            # can re-encode with a different anchor / prompt set.
+            # Drop the anchor-encode cache so the next generate_long_video
+            # call can re-encode with a different anchor / shape.
             self._anchor_latents_cache = None
-            self._prompt_embeds_cache = {}
 
     def _generate_clips_loop(
         self,
@@ -413,10 +392,8 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 f"prompt={clip_prompt[:80]!r}...)"
             )
 
-            prompt_embeds, negative_prompt_embeds = self._prompt_embeds_cache[clip_prompt]
             result = self(
-                prompt_embeds=prompt_embeds,
-                negative_prompt_embeds=negative_prompt_embeds,
+                prompt=clip_prompt,
                 image_prompt=[ImagePrompt(image=anchor_pil, frame_pos=0)],
                 height=height,
                 width=width,
