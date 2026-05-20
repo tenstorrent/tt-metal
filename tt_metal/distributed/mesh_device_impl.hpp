@@ -72,6 +72,7 @@ struct MeshTraceBuffer;
 class MeshCommandQueueBase;
 class MeshDevice;
 class RealtimeProfilerManager;
+class DramCorePrefetcherManager;
 
 namespace multihost {
 class DistributedContext;
@@ -157,6 +158,11 @@ private:
     // handler). Constructed by init_realtime_profiler_socket() and torn down in close_impl()
     // before the rest of the mesh shutdown so its receiver thread observes a live device.
     std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
+
+    // Owns the DRAM-core (DRISC) prefetcher subsystem. Lazily constructed on first call
+    // to experimental::StartDramCorePrefetcher; torn down in close_impl() before the rest
+    // of the mesh shutdown so any in-flight kernel completes against live resources.
+    std::unique_ptr<DramCorePrefetcherManager> dram_core_prefetcher_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
     // Recursively quiesce all submeshes.
@@ -290,6 +296,10 @@ public:
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
     void trigger_realtime_profiler_sync_check();
     D2HSocket* get_realtime_profiler_socket() const;
+    // Lazily-constructed DRAM-core (DRISC) prefetcher subsystem. The first call materializes
+    // the manager bound to this mesh device; subsequent calls return the same instance.
+    // experimental::StartDramCorePrefetcher / StopDramCorePrefetcher delegate here.
+    DramCorePrefetcherManager& dram_core_prefetcher(MeshDevice* mesh_device);
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     void enable_program_cache() override;

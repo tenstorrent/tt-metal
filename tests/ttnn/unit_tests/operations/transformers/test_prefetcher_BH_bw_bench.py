@@ -192,7 +192,8 @@ def test_bw_dram_core_prefetcher(device):
     )
 
     def sender_fn():
-        ttnn.dram_prefetcher(
+        ttnn.start_dram_core_prefetcher(
+            device,
             [tt_weight, addrs],
             num_layers=num_layers,
             global_cb=gcb,
@@ -201,6 +202,7 @@ def test_bw_dram_core_prefetcher(device):
 
     def consumer_fn():
         ttnn.dram_prefetcher_consumer(device, num_iters=num_iters_total, page_size_bytes=page_size, global_cb=gcb)
+        ttnn.stop_dram_core_prefetcher(device)
 
     elapsed = _time_one_run(device, sender_fn, consumer_fn)
     bytes_per_run = num_iters_total * page_size * _NUM_RECEIVERS  # aggregate across all receivers

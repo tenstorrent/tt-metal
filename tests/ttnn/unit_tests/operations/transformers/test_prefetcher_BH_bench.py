@@ -249,7 +249,7 @@ def test_bench_dram_core_repeats(device):
 
     # Correctness: single-repeat config first.
     cc_config = _build_program_config(num_kernel_repeats=1)
-    ttnn.dram_prefetcher([tt_weight, addrs], num_layers=1, global_cb=gcb)
+    ttnn.start_dram_core_prefetcher(device, [tt_weight, addrs], num_layers=1, global_cb=gcb)
     cc_out = ttnn.linear(
         tt_act,
         tt_weight,
@@ -259,6 +259,7 @@ def test_bench_dram_core_repeats(device):
         dtype=ttnn.bfloat16,
         global_cb=gcb,
     )
+    ttnn.stop_dram_core_prefetcher(device)
     cc_torch = ttnn.to_torch(cc_out)
     expected = pt_act.float() @ pt_weight.float()
     passing, output_str = comp_pcc(expected, cc_torch, 0.99)
@@ -266,8 +267,8 @@ def test_bench_dram_core_repeats(device):
     assert passing, f"[bench] PCC failed: {output_str}"
 
     def run_once():
-        ttnn.dram_prefetcher([tt_weight, addrs], num_layers=num_kernel_repeats, global_cb=gcb)
-        return ttnn.linear(
+        ttnn.start_dram_core_prefetcher(device, [tt_weight, addrs], num_layers=num_kernel_repeats, global_cb=gcb)
+        out = ttnn.linear(
             tt_act,
             tt_weight,
             program_config=program_config,
@@ -276,6 +277,8 @@ def test_bench_dram_core_repeats(device):
             dtype=ttnn.bfloat16,
             global_cb=gcb,
         )
+        ttnn.stop_dram_core_prefetcher(device)
+        return out
 
     # Warmup + 3 timed runs.
     run_once()

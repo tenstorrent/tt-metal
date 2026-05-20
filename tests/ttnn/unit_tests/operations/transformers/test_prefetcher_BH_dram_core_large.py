@@ -225,8 +225,8 @@ def test_dram_core_prefetcher_BH_param(device, name, k_tiles_per_shard, n_tiles_
         dst_full_sync_en=True,
     )
 
-    # ---- Run: prefetcher -> matmul ----
-    ttnn.dram_prefetcher([tt_weight, addrs], num_layers=1, global_cb=gcb)
+    # ---- Run: prefetcher (async) -> matmul (consumes via gcb) -> stop drains ----
+    ttnn.start_dram_core_prefetcher(device, [tt_weight, addrs], num_layers=1, global_cb=gcb)
     tt_out = ttnn.linear(
         tt_act,
         tt_weight,
@@ -236,6 +236,7 @@ def test_dram_core_prefetcher_BH_param(device, name, k_tiles_per_shard, n_tiles_
         dtype=ttnn.bfloat16,
         global_cb=gcb,
     )
+    ttnn.stop_dram_core_prefetcher(device)
 
     # ---- Verify ----
     out_torch = ttnn.to_torch(tt_out)

@@ -120,7 +120,8 @@ def test_dram_core_prefetcher_multi_tensor(device, num_tensors, num_layers):
     )
 
     # Sender: push all `num_tensors` weights through the prefetcher, num_layers times.
-    ttnn.dram_prefetcher(
+    ttnn.start_dram_core_prefetcher(
+        device,
         weights + [addrs],
         num_layers=num_layers,
         global_cb=gcb,
@@ -132,5 +133,6 @@ def test_dram_core_prefetcher_multi_tensor(device, num_tensors, num_layers):
         page_size_bytes=push_page_size,
         global_cb=gcb,
     )
+    ttnn.stop_dram_core_prefetcher(device)
     ttnn.synchronize_device(device)
     logger.info(f"[multi_tensor] num_tensors={num_tensors} num_layers={num_layers} completed cleanly")

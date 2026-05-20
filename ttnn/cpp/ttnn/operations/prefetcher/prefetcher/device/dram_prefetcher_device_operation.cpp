@@ -12,11 +12,7 @@
 namespace ttnn::prim {
 
 DramPrefetcherOperation::program_factory_t DramPrefetcherOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
-    if (args.global_cb.has_value() && tt::tt_metal::experimental::sender_core_type(*args.global_cb) ==
-                                          tt::tt_metal::experimental::SenderCoreType::Dram) {
-        return DramPrefetcherDramCoreProgramFactory{};
-    }
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return DramPrefetcherProgramFactory{};
 }
 
@@ -27,13 +23,11 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
     TT_FATAL(args.num_layers > 0, "Prefetcher must run for at least 1 layer");
     TT_FATAL(args.global_cb.has_value(), "Global circular buffer must be provided");
 
-    if (tt::tt_metal::experimental::sender_core_type(*args.global_cb) ==
-        tt::tt_metal::experimental::SenderCoreType::Dram) {
-        // The GlobalCircularBuffer constructor already validated programmable-DRAM availability
-        // and the DRAM-vs-worker physical-coord collision check. The rest of the validation
-        // (sharding, dtypes, num readers) is delegated to the DRAM-core program factory.
-        return;
-    }
+    TT_FATAL(
+        tt::tt_metal::experimental::sender_core_type(*args.global_cb) !=
+            tt::tt_metal::experimental::SenderCoreType::Dram,
+        "ttnn.dram_prefetcher does not support DRAM-sender GlobalCircularBuffers. Use "
+        "ttnn.start_dram_core_prefetcher / ttnn.stop_dram_core_prefetcher instead.");
 
     const ttnn::Tensor& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
 

@@ -13,9 +13,9 @@
 
 namespace ttnn {
 
-// `global_cb` may be a worker-sender or DRAM-sender GlobalCircularBuffer; the op picks
-// the right program factory based on the experimental
-// `tt::tt_metal::experimental::sender_core_type(*global_cb)` query.
+// Worker-sender prefetcher op. `global_cb` must be a worker-sender GCB; passing a
+// DRAM-sender GCB will TT_FATAL with a redirect to start_dram_core_prefetcher /
+// stop_dram_core_prefetcher (lifecycle API in ttnn/operations/prefetcher).
 ttnn::Tensor dram_prefetcher(
     std::vector<ttnn::Tensor>& tensors,
     uint32_t num_layers,
