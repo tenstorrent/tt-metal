@@ -829,7 +829,9 @@ class TTNNDotsVisionMLP(TTNNModule):
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            hidden_states = ttnn.to_layout(
+                hidden_states, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
 
         mem = ttnn.DRAM_MEMORY_CONFIG
 
@@ -874,7 +876,7 @@ class TTNNDotsVisionMLP(TTNNModule):
             self.tt_fc1_weight,
             bias=self.tt_fc1_bias,
             dtype=ttnn.bfloat8_b,
-            memory_config=mem,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             program_config=gate_up_pc,
         )
@@ -1230,7 +1232,8 @@ class TTNNDotsVisionAttention(TTNNModule):
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
         self.sdpa_compute_kernel_config = _vision_sdpa_compute_config(
-            self.device, math_fidelity=VISION_SDPA_MATH_FIDELITY
+            self.device,
+            math_fidelity=VISION_SDPA_MATH_FIDELITY,
         )
 
         # QKV weights/bias are kept in the native HF "half-half" head_dim
@@ -1275,10 +1278,12 @@ class TTNNDotsVisionAttention(TTNNModule):
         if buf == ttnn.BufferType.DRAM and dt in (ttnn.bfloat8_b, ttnn.bfloat16):
             return ttnn.experimental.nlp_concat_heads(ctx, memory_config=out_mem)
 
-        ctx_l1 = ttnn.typecast(ctx, ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(ctx)
-        ctx_gathered = ttnn.experimental.nlp_concat_heads(ctx_l1, memory_config=out_mem)
-        ttnn.deallocate(ctx_l1)
+        # ctx_l1 = ttnn.typecast(ctx, ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # ttnn.deallocate(ctx)
+        ctx_gathered = ttnn.experimental.nlp_concat_heads(ctx, memory_config=out_mem)
+        # ttnn.deallocate(ctx_l1)
+        ttnn.deallocate(ctx_gathered)
+        return ctx_gathered
         return ttnn.typecast(ctx_gathered, ttnn.bfloat16, memory_config=out_mem)
 
     def _get_sdpa_program_config(self, seq_len: int):
@@ -1380,6 +1385,9 @@ class TTNNDotsVisionAttention(TTNNModule):
             compute_kernel_config=self.sdpa_compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
         if owns_attn_mask:
             ttnn.deallocate(attn_mask)
         if slice_to_logical and pad > 0:
@@ -1395,9 +1403,9 @@ class TTNNDotsVisionAttention(TTNNModule):
         attention_logical_seq_len: int | None = None,
     ) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        mem = ttnn.DRAM_MEMORY_CONFIG
+        # mem = ttnn.DRAM_MEMORY_CONFIG
         s = int(hidden_states.shape[2])
         h = self.num_heads
         hd = self.head_dim
@@ -1910,6 +1918,7 @@ class TTNNDotsPatchMerger(TTNNModule):
                 weight=self.tt_ln_weight,
                 bias=self.tt_ln_bias,
                 epsilon=1e-6,
+                # memory_config=ttnn.L1_MEMORY_CONFIG,
             )
         elif self.tt_ln_weight is not None:
             hidden_states = ttnn.rms_norm(
