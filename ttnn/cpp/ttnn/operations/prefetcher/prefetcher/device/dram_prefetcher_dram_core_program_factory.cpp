@@ -18,6 +18,10 @@ using namespace tt::tt_metal;
 
 namespace {
 constexpr uint32_t kRemoteCBId = 31;
+// Conservative DRISC L1 budget for the two ping-pong stage buffers. BH DRISC L1 is 128 KB
+// total; ~35 KB is reserved for firmware/mailbox/kernel-config, leaving ~93 KB. Reserve some
+// for pages_sent/noc_xy/config (a few KB) -> ~80 KB for stages.
+constexpr uint32_t kDriscL1Budget = 80 * 1024;
 
 inline uint32_t align_up(uint32_t a, uint32_t align) { return (a + align - 1) & ~(align - 1); }
 }  // namespace
@@ -62,9 +66,17 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
     const uint32_t kInBlockWTiles = args.dram_core_k_block_w_tiles;
     TT_FATAL(kInBlockWTiles > 0, "dram_core_k_block_w_tiles must be > 0");
 
+    struct BlockGeom {
+        uint32_t num_blocks;
+        uint32_t dma_block_size;  // bytes/K-block/bank
+        uint32_t push_page_size;  // bytes/K-block/receiver
+        uint32_t n_tiles_per_bank;
+        uint32_t n_tiles_per_receiver;
+        uint32_t bytes_per_tile;
+    };
     // Per-tensor block geometry (all tensors are assumed to share the same K split for the
     // prototype; we pick from the first tensor).
-    auto compute_block_geom = [&](const Tensor& t) {
+    auto compute_block_geom = [&](const Tensor& t) -> BlockGeom {
         const auto shard_shape = t.buffer()->shard_spec().shape();
         const uint32_t bytes_per_tile = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.dtype()));
         const uint32_t k_tiles = shard_shape[0] / tt::constants::TILE_HEIGHT;  // total K tiles in shard
@@ -86,7 +98,38 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
         const uint32_t dma_block_size = kInBlockWTiles * n_tiles_per_bank * bytes_per_tile;
         // Per-receiver, per-block push size = in0_block_w * n_tiles_per_receiver tiles.
         const uint32_t push_page_size = kInBlockWTiles * n_tiles_per_receiver * bytes_per_tile;
-        return std::make_tuple(num_blocks, dma_block_size, push_page_size);
+        return BlockGeom{
+            num_blocks, dma_block_size, push_page_size, n_tiles_per_bank, n_tiles_per_receiver, bytes_per_tile};
+    };
+
+    // Pick num_dma_chunks_per_block (M): smallest M dividing num_receivers such that
+    // 2 * (dma_block_size / M) <= kDriscL1Budget for every tensor.
+    //
+    // M must divide num_receivers because each chunk holds the contiguous slices of
+    // (num_receivers / M) receivers; partial-receiver chunks would split a receiver's
+    // contiguous tile range across chunks, which the per-chunk push can't recover.
+    //
+    // M=1 is the original "one push per K-block to all receivers" behavior; larger M splits
+    // the K-block into M smaller DMA chunks (each pushed to a receiver-subset), trading more
+    // push calls per K-block for a smaller stage buffer footprint.
+    auto pick_M = [&](const std::vector<BlockGeom>& geoms) {
+        for (uint32_t m = 1; m <= num_receivers; ++m) {
+            if (num_receivers % m != 0) {
+                continue;
+            }
+            bool ok = true;
+            for (const auto& g : geoms) {
+                const uint32_t chunk_size = g.dma_block_size / m;
+                if (2 * chunk_size > kDriscL1Budget) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) {
+                return m;
+            }
+        }
+        return 0u;
     };
 
     Program program{};
@@ -105,25 +148,39 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
     cursor += 16;
     cursor = align_up(cursor, l1_alignment);
     const uint32_t stage_a_addr = cursor;
-    // Stage buffer size: largest per-block DMA size across tensors.
-    uint32_t max_block_size = 0;
+
+    // Collect per-tensor block geometry and pick M (num_dma_chunks_per_block).
+    std::vector<BlockGeom> geoms;
+    geoms.reserve(data_tensors.size());
     uint32_t first_num_blocks = 0;
     for (size_t ti = 0; ti < data_tensors.size(); ++ti) {
-        auto [nb, dma_block, push_page] = compute_block_geom(*data_tensors[ti]);
+        auto g = compute_block_geom(*data_tensors[ti]);
         if (ti == 0) {
-            first_num_blocks = nb;
+            first_num_blocks = g.num_blocks;
         }
-        TT_FATAL(nb == first_num_blocks, "All tensors must share the same num_blocks for the prototype");
-        max_block_size = std::max(max_block_size, dma_block);
+        TT_FATAL(g.num_blocks == first_num_blocks, "All tensors must share the same num_blocks for the prototype");
+        geoms.push_back(g);
     }
-    max_block_size = align_up(max_block_size, l1_alignment);
-    cursor += max_block_size;
+    const uint32_t M = pick_M(geoms);
+    TT_FATAL(
+        M > 0,
+        "No valid num_dma_chunks_per_block found: even with M=num_receivers ({}), the per-chunk "
+        "stage buffer ({} B) exceeds half the DRISC L1 budget ({} B). Increase the ring size "
+        "(more receivers per bank) or reduce N_per_bank.",
+        num_receivers,
+        geoms.empty() ? 0 : geoms.front().dma_block_size / num_receivers,
+        kDriscL1Budget);
+
+    // Stage buffer size = largest CHUNK size across tensors (= max dma_block / M).
+    uint32_t max_chunk_size = 0;
+    for (const auto& g : geoms) {
+        max_chunk_size = std::max(max_chunk_size, g.dma_block_size / M);
+    }
+    max_chunk_size = align_up(max_chunk_size, l1_alignment);
+    cursor += max_chunk_size;
     cursor = align_up(cursor, l1_alignment);
     const uint32_t stage_b_addr = cursor;
     const uint32_t kNumBlocks = first_num_blocks;
-
-    // (L1-budget validation removed: hal::get_dev_addr/get_dev_size accessors were refactored.
-    // For kbw>1 experiments, increase the stage buffer count -> hangs/OOMs there, not here.)
 
     // Build one kernel per sender DRAM core.
     for (uint32_t s = 0; s < num_senders; ++s) {
@@ -133,7 +190,7 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
             num_tensors,
             kNumBlocks,
             num_receivers,
-            max_block_size,
+            max_chunk_size,
             stage_a_addr,
             stage_b_addr,
             kRemoteCBId,
@@ -143,6 +200,7 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
             gcb.size(),
             static_cast<uint32_t>(gcb.buffer_address()),
             static_cast<uint32_t>(gcb.pages_sent_worker_l1_base()),
+            M,
         };
 
         KernelHandle kernel_id = CreateKernel(
@@ -164,12 +222,10 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
             rt_args.push_back(static_cast<uint32_t>(t->buffer()->address()));
         }
         for (const auto* t : data_tensors) {
-            auto [_nb, dma_block, _push] = compute_block_geom(*t);
-            rt_args.push_back(dma_block);
+            rt_args.push_back(compute_block_geom(*t).dma_block_size);
         }
         for (const auto* t : data_tensors) {
-            auto [_nb, _dma, push_page] = compute_block_geom(*t);
-            rt_args.push_back(push_page);
+            rt_args.push_back(compute_block_geom(*t).push_page_size);
         }
         const auto& receiver_phys = gcb.receiver_coords_per_sender().at(s);
         for (const auto& c : receiver_phys) {

@@ -4,21 +4,27 @@
 //
 // DRISC prefetcher kernel for the DRAM-core mode of ttnn.dram_prefetcher.
 //
-// Collapses the BRISC reader + NCRISC writer of the worker-core path into a
-// single DRISC kernel.
-//
 // Pipeline (ping-pong DMA + NoC push, 2 buffers, single DMA stream):
-//   - Prologue: issue DMA into buffer A for block 0 (1 outstanding on stream 0).
-//   - Steady state (for each block b, alternating buffer per iter):
-//       1. If there's another block, issue DMA for block b+1 into the OTHER
-//          buffer. Now 2 reads in flight on stream 0; setup runs in parallel
-//          with whatever's still draining.
-//       2. dma_async_read_wait_n(0, 1) -- waits for outstanding to drop to 1.
-//          Since the DMA engine retires in FIFO order, the oldest (block b)
-//          is the one that finished; the newer block b+1 is still in flight.
-//       3. NoC-push the current buffer to all receivers (non-flushing).
-//   - Final iter: no issue, wait_n(0, 0) drains the last read.
-//   - End-of-stream: remote_cb_sender_barrier, restore NoC mode.
+//   Each K-block of the per-bank weight (kbw * N_per_bank * tile_bytes) is
+//   split into `num_dma_chunks_per_block` (M) chunks along the receiver-group
+//   dimension. M must divide num_receivers; each chunk holds the contiguous
+//   slices of (num_receivers / M) receivers. Stage buffer size = dma_block / M.
+//
+//   Per K-block we do M push calls, each pushing (num_receivers/M) receivers
+//   their full per-K-block slice. Between push calls we *rewind* fifo_wr_ptr
+//   to the K-block-start snapshot, so all receivers end up with data at the
+//   same fifo offset. The push function advances fifo_wr_ptr by push_chunk_size
+//   (= one receiver's full slice per K-block) regardless of how many receivers
+//   it iterates, so the net per-K-block advance is exactly push_chunk_size.
+//
+//   M=1 collapses to the original "one DMA per K-block, push to all receivers
+//   in one call" behavior (no rewinding, no iface mutation overhead).
+//
+//   The DMA ping-pongs across all `num_blocks * M` chunks, giving DMA/NoC
+//   overlap both within and across K-blocks — which is what makes M>1 fit
+//   DRISC L1 for FF1-class shapes without sacrificing pipelining.
+//
+//   End-of-stream: remote_cb_sender_barrier, restore NoC mode.
 
 #include <stdint.h>
 
@@ -36,7 +42,7 @@ void kernel_main() {
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
     constexpr uint32_t num_receivers = get_compile_time_arg_val(3);
-    constexpr uint32_t max_block_size = get_compile_time_arg_val(4);    // bytes per block per receiver-row
+    constexpr uint32_t max_chunk_size = get_compile_time_arg_val(4);    // bytes per DMA chunk (doc only)
     constexpr uint32_t stage_buf_addr_a = get_compile_time_arg_val(5);  // ping
     constexpr uint32_t stage_buf_addr_b = get_compile_time_arg_val(6);  // pong
     constexpr uint32_t remote_cb_id = get_compile_time_arg_val(7);
@@ -46,17 +52,23 @@ void kernel_main() {
     constexpr uint32_t fifo_size_per_receiver = get_compile_time_arg_val(11);
     constexpr uint32_t receiver_buffer_address = get_compile_time_arg_val(12);
     constexpr uint32_t remote_pages_sent_worker_l1_addr = get_compile_time_arg_val(13);
+    constexpr uint32_t num_dma_chunks_per_block = get_compile_time_arg_val(14);  // M
+    static_assert(num_dma_chunks_per_block >= 1, "M must be >= 1");
+    constexpr uint32_t num_recv_per_chunk = num_receivers / num_dma_chunks_per_block;
+    static_assert(
+        num_recv_per_chunk * num_dma_chunks_per_block == num_receivers,
+        "num_dma_chunks_per_block must divide num_receivers");
+    (void)max_chunk_size;
 
     // ---- Runtime args ----
-    // Layout:
     //   [0]                 : bank_id (this DRISC's DRAM bank)
     //   [1..1+num_tensors)  : per-tensor bank-local offsets (uint32, into GDDR)
-    //   [...]               : per-tensor dma_block_size (bytes read from GDDR per block)
-    //   [...]               : per-tensor push_page_size (bytes pushed to each receiver per block)
+    //   [...]               : per-tensor dma_block_size (bytes read from GDDR per K-block per bank)
+    //   [...]               : per-tensor push_page_size (bytes pushed to each receiver per K-block)
     //   [...]               : 2 * num_receivers (noc_x, noc_y per receiver)
     uint32_t rt_idx = 0;
     const uint32_t bank_id = get_arg_val<uint32_t>(rt_idx++);
-    (void)bank_id;  // DRISC GDDR is bank-local; address arithmetic does not need it here.
+    (void)bank_id;
 
     const uint32_t tensor_offsets_idx = rt_idx;
     rt_idx += num_tensors;
@@ -65,27 +77,23 @@ void kernel_main() {
     const uint32_t tensor_push_page_sizes_idx = rt_idx;
     rt_idx += num_tensors;
 
-    // ---- One-time L1 setup (mirrors gcb_smoke_sender) ----
-    // 1) Receiver noc_xy table.
+    // ---- One-time L1 setup ----
     volatile tt_l1_ptr uint32_t* noc_xy_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(noc_xy_l1_addr);
     for (uint32_t i = 0; i < num_receivers; ++i) {
         noc_xy_ptr[2 * i] = get_arg_val<uint32_t>(rt_idx++);
         noc_xy_ptr[2 * i + 1] = get_arg_val<uint32_t>(rt_idx++);
     }
-    // 2) Zero pages_sent/acked semaphore region.
     volatile tt_l1_ptr uint32_t* psem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pages_sent_l1_addr);
     const uint32_t psem_uints = (2 * L1_ALIGNMENT * num_receivers) / sizeof(uint32_t);
     for (uint32_t i = 0; i < psem_uints; ++i) {
         psem[i] = 0;
     }
-    // 3) 4-word mock config (only [3] fifo_size is read by sender path).
     volatile tt_l1_ptr uint32_t* cfg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_l1_addr);
     cfg[0] = 1;
     cfg[1] = num_receivers;
     cfg[2] = receiver_buffer_address;
     cfg[3] = fifo_size_per_receiver;
 
-    // 4) RemoteSenderCBInterface.
     RemoteSenderCBInterface& iface = get_remote_sender_cb_interface(remote_cb_id);
     iface.config_ptr = config_l1_addr;
     iface.fifo_start_addr = receiver_buffer_address;
@@ -93,12 +101,10 @@ void kernel_main() {
     iface.receiver_noc_xy_ptr = noc_xy_l1_addr;
     iface.aligned_pages_sent_ptr = pages_sent_l1_addr;
     iface.num_receivers = num_receivers;
-    // DRAM-sender GCB: NOC inc target for pages_sent lives in worker L1, not DRISC L1.
     iface.remote_pages_sent_ptr = remote_pages_sent_worker_l1_addr;
 
     experimental::drisc_set_stream_mode();
 
-    // Read tensor metadata into locals.
     const uint32_t* tensor_offsets = reinterpret_cast<uint32_t*>(get_arg_addr(tensor_offsets_idx));
     const uint32_t* tensor_dma_sizes = reinterpret_cast<uint32_t*>(get_arg_addr(tensor_dma_sizes_idx));
     const uint32_t* tensor_push_page_sizes = reinterpret_cast<uint32_t*>(get_arg_addr(tensor_push_page_sizes_idx));
@@ -108,42 +114,62 @@ void kernel_main() {
         for (uint32_t t = 0; t < num_tensors; ++t) {
             const uint32_t bank_local_base = tensor_offsets[t];
             const uint32_t dma_block_size = tensor_dma_sizes[t];
-            const uint32_t push_page_size = tensor_push_page_sizes[t];
-            // Receivers expect remote_cb pages of `push_page_size` bytes (= in0_block_w_tiles *
-            // n_tiles_per_receiver * bytes_per_tile). Resize the sender CB to match so the
-            // remote_cb_* page accounting lines up.
+            const uint32_t push_page_size = tensor_push_page_sizes[t];  // = tpr_full * tile_bytes
+            const uint32_t dma_chunk_size = dma_block_size / num_dma_chunks_per_block;
+            // push_chunk_size stays at the *full* per-receiver per-K-block slice (push_page_size).
+            // With M>1, each push call still pushes push_page_size bytes per receiver, just to a
+            // subset of receivers. fifo_wr_ptr advances by push_page_size per push call; we rewind
+            // it between chunks within a K-block so the net per-K-block advance is one
+            // push_page_size (one fifo page from the sender's perspective).
             experimental::resize_remote_sender_cb_interface<false>(remote_cb_id, push_page_size, noc_index);
 
-            // Prologue: issue first DMA into buffer A on stream 0.
-            uint32_t src_off = bank_local_base;
-            experimental::dma_async_read(/*stream=*/0, src_off, stage_buf_addr_a, dma_block_size);
-            src_off += dma_block_size;
-            for (uint32_t b = 0; b < num_blocks; ++b) {
-                const uint32_t stage_buf = (b & 1u) == 0 ? stage_buf_addr_a : stage_buf_addr_b;
+            const uint32_t total_chunks = num_blocks * num_dma_chunks_per_block;
 
-                // Issue NEXT block's DMA into the OTHER buffer, all on stream 0. Now 2 reads
-                // are in flight; the engine retires them in FIFO order so the oldest (the one
-                // we're about to consume) finishes first.
+            // Prologue: DMA chunk 0 into stage_a.
+            uint32_t src_off = bank_local_base;
+            experimental::dma_async_read(/*stream=*/0, src_off, stage_buf_addr_a, dma_chunk_size);
+            src_off += dma_chunk_size;
+
+            uint32_t fifo_wr_ptr_snapshot = 0;
+
+            for (uint32_t c = 0; c < total_chunks; ++c) {
+                const uint32_t chunk_in_block = c % num_dma_chunks_per_block;
+
+                if (chunk_in_block == 0) {
+                    // K-block start: reserve space for one push_page_size per receiver (a fifo
+                    // page from sender's view = receiver's fifo_page_size if M=K_per_shard).
+                    // Reserve_back iterates all num_receivers, so make sure iface has the full
+                    // num_receivers + base pointers set.
+                    iface.num_receivers = num_receivers;
+                    iface.receiver_noc_xy_ptr = noc_xy_l1_addr;
+                    iface.aligned_pages_sent_ptr = pages_sent_l1_addr;
+                    iface.remote_pages_sent_ptr = remote_pages_sent_worker_l1_addr;
+                    experimental::remote_cb_reserve_back(remote_cb_id, 1);
+                    fifo_wr_ptr_snapshot = iface.fifo_wr_ptr;
+                    // Switch to per-chunk receiver subset for the push calls in this K-block.
+                    iface.num_receivers = num_recv_per_chunk;
+                }
+
+                const uint32_t stage_buf = (c & 1u) == 0 ? stage_buf_addr_a : stage_buf_addr_b;
+
                 uint32_t outstanding_after_wait = 0;
-                if (b + 1 < num_blocks) {
-                    const uint32_t next_buf = (b & 1u) == 0 ? stage_buf_addr_b : stage_buf_addr_a;
-                    experimental::dma_async_read(/*stream=*/0, src_off, next_buf, dma_block_size);
-                    src_off += dma_block_size;
-                    // After this iter's wait we want 1 outstanding (the read we just issued).
+                if (c + 1 < total_chunks) {
+                    const uint32_t next_buf = (c & 1u) == 0 ? stage_buf_addr_b : stage_buf_addr_a;
+                    experimental::dma_async_read(/*stream=*/0, src_off, next_buf, dma_chunk_size);
+                    src_off += dma_chunk_size;
                     outstanding_after_wait = 1;
                 }
-                // Wait for the older read to retire. Per the gddr_dma.h comment: with 2 reads
-                // in flight, wait_n(stream, 1) drops outstanding from 2 to 1, leaving just the
-                // newly issued one and signalling the older (this iter's buffer) is consumable.
                 experimental::dma_async_read_wait_n(/*stream=*/0, outstanding_after_wait);
 
-                // Reserve, write to all receivers. Each receiver gets `push_page_size` bytes
-                // (its N-tile slice of this K-block) from the stage buffer.
-                experimental::remote_cb_reserve_back(remote_cb_id, 1);
-                // skip_ptr_update=true => posted NoC writes (no per-write ack). Safe here
-                // because the kernel uses noc_async_posted_writes_flushed() below and the
-                // GCB end-of-stream barrier waits on pages_acked. Worker writer gates this
-                // behind enable_performance_mode for multi-chip safety; single-chip BH is fine.
+                // Per-chunk push: rewind fifo_wr_ptr to the K-block start so this push writes to
+                // the same fifo offset as other chunks within this K-block. Point iface at this
+                // chunk's receiver subset.
+                iface.fifo_wr_ptr = fifo_wr_ptr_snapshot;
+                const uint32_t recv_start = chunk_in_block * num_recv_per_chunk;
+                iface.receiver_noc_xy_ptr = noc_xy_l1_addr + recv_start * 2 * sizeof(uint32_t);
+                iface.aligned_pages_sent_ptr = pages_sent_l1_addr + recv_start * 2 * L1_ALIGNMENT;
+                iface.remote_pages_sent_ptr = remote_pages_sent_worker_l1_addr + recv_start * 2 * L1_ALIGNMENT;
+
                 experimental::remote_cb_push_back_and_write_pages<true>(
                     remote_cb_id,
                     stage_buf,
@@ -152,14 +178,15 @@ void kernel_main() {
                     /*coalesced_num_pages_per_row=*/1,
                     /*coalesced_page_size=*/push_page_size,
                     noc_index);
-                // Drain NoC writes before iter b+1 issues a DMA that targets this same
-                // buffer (the DMA target alternates A/B/A/B, so iter b+1 re-DMAs the buffer
-                // iter b pushed from). Without this flush, the new DMA could overwrite L1
-                // while iter b's NoC reads of it are still in flight.
                 noc_async_posted_writes_flushed();
             }
 
             if (t == num_tensors - 1) {
+                // Restore iface to all-receivers for the end-of-stream barrier.
+                iface.num_receivers = num_receivers;
+                iface.receiver_noc_xy_ptr = noc_xy_l1_addr;
+                iface.aligned_pages_sent_ptr = pages_sent_l1_addr;
+                iface.remote_pages_sent_ptr = remote_pages_sent_worker_l1_addr;
                 experimental::remote_cb_sender_barrier(remote_cb_id);
             }
         }
