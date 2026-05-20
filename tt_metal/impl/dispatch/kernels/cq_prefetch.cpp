@@ -2403,7 +2403,7 @@ uint32_t process_relay_linear_packed_h_cmd(uintptr_t cmd_ptr, uint32_t& downstre
 // This function is only valid when called on the H variant
 // It expects the NoC async write state to be initialized to point to the downstream
 static uintptr_t process_relay_inline_all(uintptr_t data_ptr, uintptr_t fence, bool is_exec_buf) {
-    uint32_t length = fence - data_ptr;
+    uint32_t length = static_cast<uint32_t>(fence - data_ptr);
     // Downstream doesn't have FetchQ to tell it how much data to process
     // This packet header just contains the length
     volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* dptr = (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
