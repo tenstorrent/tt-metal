@@ -28,11 +28,9 @@ def search_for_tt_smi_version_in_log_file_(log_file):
                 return regex_match.group(1)
     return None
 
-def search_for_tt_smi_reset_in_log_file_(log_file):
 
-    ts_pattern = re.compile(
-        r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z\s*"
-    )
+def search_for_tt_smi_reset_in_log_file_(log_file):
+    ts_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z\s*")
     # Strip GitHub Actions annotation prefixes like ##[error], ##[warning]
     gh_annotation_pattern = re.compile(r"^##\[[a-z]+\]", re.IGNORECASE)
 
@@ -70,14 +68,18 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
 
     # Check if there is any tt-smi reset activity in this log at all
     has_reset = any(
-        "tt-smi reset" in line.lower() or
-        ("tt_metal_infra" in line.lower() and ".sh" in line.lower())
-        for line in lines
+        "tt-smi reset" in line.lower() or ("tt_metal_infra" in line.lower() and ".sh" in line.lower()) for line in lines
     )
 
     if not has_reset:
-        return [{"tt_smi_reset_attempt": 1, "final_status": "UNKNOWN",
-                 "total_reset_time_sec": None, "error_summary": "No tt-smi reset found"}]
+        return [
+            {
+                "tt_smi_reset_attempt": 1,
+                "final_status": "UNKNOWN",
+                "total_reset_time_sec": None,
+                "error_summary": "No tt-smi reset found",
+            }
+        ]
 
     # Find where the reset section starts
     reset_start_idx = None
@@ -149,8 +151,15 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     else:
         error_summary = None
 
-    return [{"tt_smi_reset_attempt": num_smi_attempts, "final_status": final_status,
-             "total_reset_time_sec": duration, "error_summary": error_summary}]
+    return [
+        {
+            "tt_smi_reset_attempt": num_smi_attempts,
+            "final_status": final_status,
+            "total_reset_time_sec": duration,
+            "error_summary": error_summary,
+        }
+    ]
+
 
 def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int, workflow_attempt: int):
     logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
@@ -591,4 +600,3 @@ def get_tests_from_test_report_path(test_report_path):
     else:
         logger.warning("XML is not pytest junit or gtest format, or no tests were found in the XML, skipping for now")
         return []
-

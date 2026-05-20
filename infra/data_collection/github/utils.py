@@ -69,7 +69,6 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
     pipeline_status = github_pipeline_json["conclusion"]
     workflow_attempt = github_pipeline_json["run_attempt"]
 
-
     return {
         "github_pipeline_id": github_pipeline_id,
         "repository_url": repository_url,

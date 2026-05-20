@@ -61,12 +61,10 @@ def create_cicd_json_for_data_analysis(
         workflow_outputs_dir, github_pipeline_id, github_job_ids
     )
 
-    github_job_id_to_smi_versions, github_job_id_to_smi_resets = (
-        get_github_job_ids_to_tt_smi_versions(
-            workflow_outputs_dir,
-            github_pipeline_id,
-            workflow_attempt,
-        )
+    github_job_id_to_smi_versions, github_job_id_to_smi_resets = get_github_job_ids_to_tt_smi_versions(
+        workflow_outputs_dir,
+        github_pipeline_id,
+        workflow_attempt,
     )
     jobs = []
     tt_smi_resets = []
