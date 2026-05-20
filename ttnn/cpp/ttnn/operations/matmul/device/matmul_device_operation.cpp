@@ -408,6 +408,29 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
         chosen_program_config);
 }
 
+void validate_matmul_fused_operations(
+    const std::optional<Tensor>& optional_bias,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
+    std::visit(
+        [&optional_bias, &fused_activation](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreProgramConfig>) {
+                TT_FATAL(!optional_bias.has_value(), "Bias is not supported for MatmulMultiCoreProgramConfig");
+                TT_FATAL(
+                    !fused_activation.has_value(),
+                    "Fused activation is not supported for MatmulMultiCoreProgramConfig");
+            }
+            if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
+                TT_FATAL(!optional_bias.has_value(), "Bias is not supported for MatmulMultiCoreReuseProgramConfig");
+                TT_FATAL(
+                    !fused_activation.has_value(),
+                    "Fused activation is not supported for MatmulMultiCoreReuseProgramConfig");
+            }
+        },
+        chosen_program_config);
+}
+
 bool get_broadcast_batch(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -758,6 +781,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
     validate_matmul_tile_constraints(input_tensor_a, input_tensor_b, in0_tile, in1_tile, chosen_program_config);
     validate_matmul_block_and_subblock_configuration(attributes, chosen_program_config);
+    validate_matmul_fused_operations(optional_bias, attributes.user_fused_activation, chosen_program_config);
 
     validate_matmul_compute_grid_and_per_core_dims(input_tensor_a, chosen_program_config);
     validate_matmul_sharded_operand_grids_within_program_compute_grid(
