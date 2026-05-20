@@ -4,9 +4,6 @@
 
 #pragma once
 
-#ifndef CKERNEL_DEST_H
-#define CKERNEL_DEST_H 1
-
 #include <cstdint>
 
 #include "cfg_defines.h"
@@ -93,12 +90,6 @@ constexpr void set_dest_unsigned_int_rmw(const int val)
     }
 }
 
-template <ThreadId thread_id, bool is_signed>
-constexpr void set_dest_int8_int16_signed()
-{
-    set_dest_unsigned_int_rmw<thread_id>(is_signed ? 0 : 1);
-}
-
 template <ThreadId thread_id>
 inline void set_dest_int8_int16_signed(bool const is_signed)
 {
@@ -128,12 +119,6 @@ constexpr void set_dest_no_swizzle_rmw(const int val)
     }
 }
 
-template <ThreadId thread_id, bool enable>
-constexpr void set_dest_enable_swizzling()
-{
-    set_dest_no_swizzle_rmw<thread_id>(enable ? 0 : 1);
-}
-
 template <ThreadId thread_id>
 inline void set_dest_enable_swizzling(bool const enable)
 {
@@ -141,5 +126,3 @@ inline void set_dest_enable_swizzling(bool const enable)
 }
 
 } // namespace ckernel
-
-#endif

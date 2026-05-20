@@ -36,8 +36,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t TILE_IDX = 0;
 
     // L1 -> DEST -> L1 round trip through the RISC-V debug dest.
-    dbg_write_dest_tile<MathThreadId>(l1_fmt, TILE_IDX, reinterpret_cast<const void*>(params.buffer_A[0]));
-    dbg_dump_dest_tile<MathThreadId>(l1_fmt, TILE_IDX, reinterpret_cast<void*>(params.buffer_Res[0]));
+    dbg_copy_dest_tile<DbgDestTileOp::Write, MathThreadId>(l1_fmt, TILE_IDX, reinterpret_cast<void*>(params.buffer_A[0]));
+    dbg_copy_dest_tile<DbgDestTileOp::Read, MathThreadId>(l1_fmt, TILE_IDX, reinterpret_cast<void*>(params.buffer_Res[0]));
 }
 
 #endif
