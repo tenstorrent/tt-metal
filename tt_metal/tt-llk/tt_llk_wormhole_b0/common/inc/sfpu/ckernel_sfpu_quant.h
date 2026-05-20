@@ -6,11 +6,13 @@
 
 #include <cstdint>
 
+#include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
 #include "ckernel_sfpu_load_config.h"
 #include "llk_defs.h"
 #include "lltt.h"
+#include "sfpi.h"
 
 namespace ckernel::sfpu
 {
@@ -53,7 +55,9 @@ constexpr std::uint32_t DEQUANT_REPLAY_LEN  = 5;
 //
 // quant_int32 isn't in the LLK init's "configure ADDR_MOD_6 with dest+=2"
 // allow-list (that list covers mul_int32 / max / min / cmp ops), so we have
-// to program it ourselves. Called once by each
+// to program it ourselves. The dest auto-increment of one SFPU dst row
+// (sfpi::SFP_DESTREG_STRIDE == 2 dst-address units) is what walks dst_reg
+// through the face's 4-row x 8-col blocks. Called once by each
 // _init_{quant,requant,dequant}_int32_ since the addrmod state is per-tensix
 // and only needs to be set up once. Replaces sfpi::dst_reg++ in the kernel
 // bodies and lets each loop be purely TTI-issued.
@@ -62,7 +66,7 @@ inline void _quant_kernels_configure_dest_incr_addrmod_()
     addr_mod_t {
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
-        .dest = {.incr = 2},
+        .dest = {.incr = sfpi::SFP_DESTREG_STRIDE},
     }
         .set(ADDR_MOD_6);
 }
@@ -83,13 +87,13 @@ inline void _init_quant_int32_(const std::uint32_t zero_point)
     // The recorded body is the same for both SIGN_MAGNITUDE_FORMAT variants
     // (the int32 in/out format conversion is done by SFPLOAD/SFPSTORE
     // instr_mod0 outside the replay window).
-    _sfpu_load_imm32_(2, zero_point);
+    _sfpu_load_imm32_(p_sfpu::LREG2, zero_point);
     _quant_kernels_configure_dest_incr_addrmod_();
 
     lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN);
     {
         // D(LREG0) = LREG0 * LREG1 + LREG2 (zero point)
-        TTI_SFPMAD(0, 1, 2, 0, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);
         // SFPMAD has a 2-cycle write latency on LREG0 and SFP_STOCH_RND below
         // reads LREG0, so exactly one SFPU pipeline bubble is required. Use
         // TTI_SFPNOP (SFPU NOP) rather than the generic Tensix TTI_NOP so the
@@ -97,8 +101,9 @@ inline void _init_quant_int32_(const std::uint32_t zero_point)
         // only SFPU-pipe opcodes (a hard requirement for replay-buffer
         // playback - the replay buffer feeds the SFPU pipe directly).
         TTI_SFPNOP;
-        // fp32 -> int sign-magnitude. LREG9 holds 0.0 used as the zero descale.
-        TTI_SFP_STOCH_RND(0, 0, 9, 0, 0, 3);
+        // fp32 -> int sign-magnitude. LCONST_0 (LREG9) is the HW-provided 0.0
+        // used as the zero descale.
+        TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0 /*imm8*/, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
     }
 }
 
@@ -112,22 +117,22 @@ inline void _init_requant_int32_(const std::uint32_t zero_point)
     //
     // The recorded body is identical for both SIGN_MAGNITUDE_FORMAT variants;
     // the int32 in/out conversion happens in SFPLOAD/SFPSTORE instr_mod0.
-    _sfpu_load_imm32_(2, zero_point);
+    _sfpu_load_imm32_(p_sfpu::LREG2, zero_point);
     _quant_kernels_configure_dest_incr_addrmod_();
 
     lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN);
     {
         // int32 sign-magnitude (loaded that way regardless of input bit
         // representation, via SFPLOAD instr_mod0) -> fp32.
-        TTI_SFPCAST(0, 0, 0);
+        TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
         // D(LREG0) = LREG0 * LREG1 + LREG2 (zero point)
-        TTI_SFPMAD(0, 1, 2, 0, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);
         // SFPMAD 2-cycle write latency; SFP_STOCH_RND reads LREG0 next.
         // SFPNOP (not TTI_NOP) so the bubble lands in the SFPU pipe and the
         // recorded body contains only SFPU-pipe opcodes.
         TTI_SFPNOP;
-        // fp32 -> int sign-magnitude.
-        TTI_SFP_STOCH_RND(0, 0, 9, 0, 0, 3);
+        // fp32 -> int sign-magnitude. LCONST_0 (LREG9) provides the 0.0 descale.
+        TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0 /*imm8*/, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
     }
 }
 
@@ -140,19 +145,21 @@ inline void _init_dequant_int32_(const std::uint32_t zero_point)
     //
     // The recorded body is identical for both SIGN_MAGNITUDE_FORMAT variants;
     // the int32 input conversion happens in SFPLOAD's instr_mod0.
-    _sfpu_load_imm32_(2, zero_point);
+    _sfpu_load_imm32_(p_sfpu::LREG2, zero_point);
     _quant_kernels_configure_dest_incr_addrmod_();
 
     lltt::record<lltt::NoExec>(DEQUANT_REPLAY_SLOT, DEQUANT_REPLAY_LEN);
     {
         // int32 sign-magnitude -> fp32.
-        TTI_SFPCAST(0, 0, 0);
-        // SFPADD = VA*VB + VC ; with LREG10 = 1.0 this collapses to A + LREG2.
-        TTI_SFPADD(0, 10, 2, 0, 0);
+        TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
+        // SFPADD = VA*VB + VC ; with LCONST_1 (LREG10) = 1.0 this collapses
+        // to A + LREG2 (= A + zero_point as loaded by the caller).
+        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);
         // SFPADD has a 2-cycle write latency on LREG0; SFPMUL reads it next.
         TTI_SFPNOP;
-        // SFPMUL with LREG9 = 0.0 ignored as +C : LREG0 = (A + LREG2) * LREG1.
-        TTI_SFPMUL(0, 1, 9, 0, 0);
+        // SFPMUL with LCONST_0 (LREG9 = 0.0) ignored as +C :
+        // LREG0 = (A + LREG2) * LREG1.
+        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /*mod1*/);
         // SFPMUL has a 2-cycle write latency on LREG0; the SFPSTORE that
         // follows the replay reads it. Keep this NOP inside the recorded
         // body rather than relying on the implicit gap between the replay
@@ -193,10 +200,10 @@ inline void _quant_int32_(const std::uint32_t dst_index_in0, const std::uint32_t
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TT_SFPLOAD(0, InstrModLoadStore::FP32, ADDR_MOD_3, in0_off); // operand A (fp32)
-        TT_SFPLOAD(1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off); // operand B (fp32 scaler)
-        lltt::replay(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN);           // MAD + SFPNOP + STOCH_RND
-        TT_SFPSTORE(0, out_mode, ADDR_MOD_2, out_off);               // store + dst_reg += 2
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_3, in0_off); // operand A (fp32)
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off); // operand B (fp32 scaler)
+        lltt::replay(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN);                       // MAD + SFPNOP + STOCH_RND
+        TT_SFPSTORE(p_sfpu::LREG0, out_mode, ADDR_MOD_2, out_off);               // store + dst_reg += 2
     }
 }
 
@@ -230,10 +237,10 @@ inline void _requant_int32_(const std::uint32_t dst_index_in0, const std::uint32
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TT_SFPLOAD(0, int_mode, ADDR_MOD_3, in0_off);                // operand A (int32 -> sign-magn LREG0)
-        TT_SFPLOAD(1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off); // operand B (fp32 scaler)
-        lltt::replay(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN);       // CAST + MAD + SFPNOP + STOCH_RND
-        TT_SFPSTORE(0, int_mode, ADDR_MOD_2, out_off);               // store (sign-magn -> int_mode bits) + dst_reg += 2
+        TT_SFPLOAD(p_sfpu::LREG0, int_mode, ADDR_MOD_3, in0_off);                // operand A (int32 -> sign-magn LREG0)
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off); // operand B (fp32 scaler)
+        lltt::replay(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN);                   // CAST + MAD + SFPNOP + STOCH_RND
+        TT_SFPSTORE(p_sfpu::LREG0, int_mode, ADDR_MOD_2, out_off);               // store (sign-magn -> int_mode bits) + dst_reg += 2
     }
 }
 
@@ -267,10 +274,10 @@ inline void _dequant_int32_(const std::uint32_t dst_index_in0, const std::uint32
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TT_SFPLOAD(0, in_mode, ADDR_MOD_3, in0_off);                  // operand A (int32 -> sign-magn LREG0)
-        TT_SFPLOAD(1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
-        lltt::replay(DEQUANT_REPLAY_SLOT, DEQUANT_REPLAY_LEN);        // CAST + ADD + SFPNOP + MUL + SFPNOP
-        TT_SFPSTORE(0, InstrModLoadStore::FP32, ADDR_MOD_2, out_off); // store fp32 + dst_reg += 2
+        TT_SFPLOAD(p_sfpu::LREG0, in_mode, ADDR_MOD_3, in0_off);                  // operand A (int32 -> sign-magn LREG0)
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
+        lltt::replay(DEQUANT_REPLAY_SLOT, DEQUANT_REPLAY_LEN);                    // CAST + ADD + SFPNOP + MUL + SFPNOP
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_2, out_off); // store fp32 + dst_reg += 2
     }
 }
 
