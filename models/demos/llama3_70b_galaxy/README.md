@@ -163,15 +163,17 @@ You can try and change the `max_length` parameter on the provided prompt files t
 ### vLLM Model Serving
 Ensure first you have a proper TT-Metal installation. (Optional check: `python -c "import tt_lib"`).
 
-vLLM can be install from the TT fork over at https://github.com/tenstorrent/vllm/tree/dev (make sure you're at `dev` branch).
+vLLM can be installed from the TT fork at https://github.com/tenstorrent/vllm/tree/dev.
 
 Please follow the [README from vLLM](https://github.com/tenstorrent/vllm/blob/dev/plugins/vllm-tt-plugin/README.md) for the latest instructions on how to build vLLM and install the TT plugin.
 
 #### Running the vLLM server
-To run a vLLM server on a Galaxy system with Llama-3.3-70B you can execute the following command:
+For Llama-3.3-70B on Galaxy, the preferred serving path is single-process TT lane mode (`tt_data_parallel_size`) rather than gathered multi-process DP. Run:
 ```
-VLLM_RPC_TIMEOUT=900000 python plugins/vllm-tt-plugin/examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}}'
+MESH_DEVICE=TG TT_LLAMA_TEXT_VER=llama3_70b_galaxy VLLM_RPC_TIMEOUT=900000 python plugins/vllm-tt-plugin/examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --max_num_seqs 32 --async-scheduling --additional-config '{"tt": {"tt_data_parallel_size": 4, "dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 220000000}}'
 ```
+
+`max_num_seqs` is the global engine capacity in this configuration and must be divisible by `tt_data_parallel_size`, so `tt_data_parallel_size=4` with `max_num_seqs=32` runs 8 requests per lane for the same 32-request global concurrency as the older DP=4 setup.
 
 After the server is up and running you can interact with it by sending prompt files.
 
