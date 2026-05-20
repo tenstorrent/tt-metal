@@ -19,6 +19,27 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
+    build_dram_sharded_weight,
+    dram_sharded_program_config,
+    width_sharded_l1_memcfg,
+)
+
+
+def _pick_grid_cp_block_w2(k_tiles: int, n_tiles: int, max_rows: int = 10, max_cols: int = 13):
+    """Pick (rows, cols) so num_cores divides both K_tiles and N_tiles and
+    in0_block_w = K_tiles / num_cores ≥ 2."""
+    max_cores = max_rows * max_cols
+    candidates = [c for c in range(1, max_cores + 1) if k_tiles % c == 0 and n_tiles % c == 0 and (k_tiles // c) >= 2]
+    if not candidates:
+        # Fallback: largest grid that divides both (any block_w).
+        candidates = [c for c in range(1, max_cores + 1) if k_tiles % c == 0 and n_tiles % c == 0]
+    candidates.sort(reverse=True)
+    for cores in candidates:
+        for rows in range(1, max_rows + 1):
+            if cores % rows == 0 and (cores // rows) <= max_cols:
+                return rows, cores // rows
+    return 1, 1
 
 
 class CodePredictor(LightweightModule):
@@ -110,6 +131,21 @@ class CodePredictor(LightweightModule):
             self.input_proj = None
             self.input_proj_bias = None
 
+        # Helper: build DRAM-sharded weight + matching width-sharded in0/out memcfgs
+        # + DRAM-sharded matmul progcfg for a single linear projection. Picks grid
+        # so in0_block_w = K_tiles / num_cores ≥ 2 (halves inner-loop iterations).
+        def _build_sharded(weight_torch_2d):
+            # weight_torch_2d is [N_out, K_in] from state_dict; transpose for K×N.
+            w_kn = weight_torch_2d.transpose(-2, -1).contiguous()
+            ws, k, n_padded = build_dram_sharded_weight(w_kn, device, dtype=ttnn.bfloat16)
+            k_tiles, n_tiles = k // 32, n_padded // 32
+            rows, cols = _pick_grid_cp_block_w2(k_tiles, n_tiles)
+            num_cores = rows * cols
+            progcfg = dram_sharded_program_config(m=32, k=k, n=n_padded, num_cores=num_cores)
+            in0_mc = width_sharded_l1_memcfg(m_tiles=1, k_tiles=k_tiles, num_cores_x=cols, num_cores_y=rows)
+            out_mc = width_sharded_l1_memcfg(m_tiles=1, k_tiles=n_tiles, num_cores_x=cols, num_cores_y=rows)
+            return {"w": ws, "progcfg": progcfg, "in0_mc": in0_mc, "out_mc": out_mc, "n_padded": n_padded}
+
         # per-layer weights — fused QKV plain stack [Q | K | V] for the regular
         # (non-DRAM-sharded) nlp_create_qkv_heads kernel. Q/K rows are RoPE-permuted
         # so rotary_embedding_llama's interleaved format works directly.
@@ -134,6 +170,12 @@ class CodePredictor(LightweightModule):
                     "down": w_to_tt(lw_torch["mlp.down_proj.weight"]),
                     "q_norm_w": norm_w_1d_to_tt(lw_torch["self_attn.q_norm.weight"], HD, permute_rope=True),
                     "k_norm_w": norm_w_1d_to_tt(lw_torch["self_attn.k_norm.weight"], HD, permute_rope=True),
+                    # DRAM-sharded variants for the 5 large linear projections.
+                    "wqkv_sh": _build_sharded(wqkv_plain),
+                    "o_proj_sh": _build_sharded(lw_torch["self_attn.o_proj.weight"]),
+                    "gate_sh": _build_sharded(lw_torch["mlp.gate_proj.weight"]),
+                    "up_sh": _build_sharded(lw_torch["mlp.up_proj.weight"]),
+                    "down_sh": _build_sharded(lw_torch["mlp.down_proj.weight"]),
                 }
             )
 
@@ -180,6 +222,8 @@ class CodePredictor(LightweightModule):
         residual = h_tt
         x = ttnn.rms_norm(h_tt, epsilon=self.rms_norm_eps, weight=lw["input_ln_w"], compute_kernel_config=self.kcfg)
 
+        # QKV (K=1024) keeps default L1_INTERLEAVED — K_tiles=32 caps DRAM-sharded
+        # to ≤16 cores (in0_block_w=2), losing parallelism vs the 128-core default.
         xqkv = ttnn.matmul(x, lw["wqkv"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
         ttnn.deallocate(x)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -369,8 +413,29 @@ class CodePredictor(LightweightModule):
         attn_concat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
 
-        o = ttnn.matmul(attn_concat, lw["o_proj"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
+        attn_sh = ttnn.to_memory_config(attn_concat, lw["o_proj_sh"]["in0_mc"])
         ttnn.deallocate(attn_concat)
+        o_sh = ttnn.linear(
+            attn_sh,
+            lw["o_proj_sh"]["w"],
+            dtype=self.act_dtype,
+            compute_kernel_config=self.kcfg,
+            program_config=lw["o_proj_sh"]["progcfg"],
+            memory_config=lw["o_proj_sh"]["out_mc"],
+        )
+        ttnn.deallocate(attn_sh)
+        o_padded = ttnn.to_memory_config(o_sh, ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(o_sh)
+        if lw["o_proj_sh"]["n_padded"] != self.hidden_size:
+            o = ttnn.slice(
+                o_padded,
+                [0, 0, 0, 0],
+                [o_padded.shape[0], o_padded.shape[1], o_padded.shape[2], self.hidden_size],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(o_padded)
+        else:
+            o = o_padded
 
         # Residual + post-norm. residual = caller's h_tt — DO NOT deallocate.
         h_post = ttnn.add(residual, o, dtype=self.act_dtype)
@@ -379,6 +444,7 @@ class CodePredictor(LightweightModule):
         residual2 = h_post  # we own h_post → free after MLP residual.
         h2 = ttnn.rms_norm(h_post, epsilon=self.rms_norm_eps, weight=lw["post_ln_w"], compute_kernel_config=self.kcfg)
 
+        # gate/up (K=1024) keep default L1_INTERLEAVED — same K-tile cap as QKV.
         gate_o = ttnn.matmul(h2, lw["gate"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
         up_o = ttnn.matmul(h2, lw["up"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
         ttnn.deallocate(h2)
@@ -387,8 +453,30 @@ class CodePredictor(LightweightModule):
         gated = ttnn.mul(gate_silu, up_o, dtype=self.act_dtype)
         ttnn.deallocate(gate_silu)
         ttnn.deallocate(up_o)
-        mlp_o = ttnn.matmul(gated, lw["down"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
+        # down (K=3072 = K_tiles=96) wins big with DRAM-sharded.
+        gated_sh = ttnn.to_memory_config(gated, lw["down_sh"]["in0_mc"])
         ttnn.deallocate(gated)
+        mlp_sh = ttnn.linear(
+            gated_sh,
+            lw["down_sh"]["w"],
+            dtype=self.act_dtype,
+            compute_kernel_config=self.kcfg,
+            program_config=lw["down_sh"]["progcfg"],
+            memory_config=lw["down_sh"]["out_mc"],
+        )
+        ttnn.deallocate(gated_sh)
+        mlp_padded = ttnn.to_memory_config(mlp_sh, ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(mlp_sh)
+        if lw["down_sh"]["n_padded"] != self.hidden_size:
+            mlp_o = ttnn.slice(
+                mlp_padded,
+                [0, 0, 0, 0],
+                [mlp_padded.shape[0], mlp_padded.shape[1], mlp_padded.shape[2], self.hidden_size],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(mlp_padded)
+        else:
+            mlp_o = mlp_padded
         out = ttnn.add(residual2, mlp_o, dtype=self.act_dtype)
         ttnn.deallocate(residual2)
         ttnn.deallocate(mlp_o)
