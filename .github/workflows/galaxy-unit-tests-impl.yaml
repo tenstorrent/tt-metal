@@ -27,6 +27,10 @@ on:
         required: false
         type: string
         default: "topology-6u"
+      runner-label:
+        required: false
+        type: string
+        default: ""
 
 jobs:
   load-test-matrix:
@@ -79,18 +83,24 @@ jobs:
             echo "$FILTERED" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           fi
-      - name: Apply runner labels (topology / extra-tag)
+      - name: Apply runner labels (topology / extra-tag / override)
         id: apply-runner-labels
         run: |
           MATRIX='${{ steps.apply-model-filter.outputs.matrix }}'
-          UPDATED=$(echo "$MATRIX" | jq -c \
-            --arg tag "${{ inputs.extra-tag }}" \
-            --arg topology "${{ inputs.topology }}" \
-            'map(.runs_on |= map(
-              if . == "in-service" then $tag
-              elif startswith("topology-") then $topology
-              else . end
-            ))')
+          if [ -n "${{ inputs.runner-label }}" ]; then
+            UPDATED=$(echo "$MATRIX" | jq -c \
+              --arg label "${{ inputs.runner-label }}" \
+              'map(.runs_on = [$label])')
+          else
+            UPDATED=$(echo "$MATRIX" | jq -c \
+              --arg tag "${{ inputs.extra-tag }}" \
+              --arg topology "${{ inputs.topology }}" \
+              'map(.runs_on |= map(
+                if . == "in-service" then $tag
+                elif startswith("topology-") then $topology
+                else . end
+              ))')
+          fi
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$UPDATED" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT

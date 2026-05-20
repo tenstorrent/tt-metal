@@ -40,6 +40,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      runner-label:
+        required: false
+        type: string
+        default: ""
+        description: "Override runner label (single label, e.g. tt-ubuntu-2204-wh-glx-6u-stable). When set, replaces topology/SKU labels."
   schedule:
     - cron: "0 8 * * *"  # Every day at 8:00 UTC
 
@@ -65,3 +70,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       model: ${{ inputs.model || 'all' }}
       topology: topology-6u
+      runner-label: ${{ inputs.runner-label || '' }}
