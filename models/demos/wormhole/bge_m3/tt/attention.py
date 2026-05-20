@@ -153,10 +153,13 @@ class BgeM3Attention(LightweightModule):
         if self.config.max_batch_size in (1, 32) and self.config.max_seq_len == 512:
             from models.demos.wormhole.bge_m3.tt.custom_ops.fused_qkv_heads.op import bge_qkv_heads_headsplit
 
+            # Batch 32 already has 32×16 = 512 (batch × seq_tile) work units, so we
+            # don't need to further split heads to get good core utilization.
+            head_groups = 4 if self.config.max_batch_size == 32 else self.config.num_heads
             q, k, v = bge_qkv_heads_headsplit(
                 qkv_fused,
                 num_heads=self.config.num_heads,
-                head_groups=self.config.num_heads,
+                head_groups=head_groups,
                 out_memcfg=self.config.create_heads_memcfg,
             )
         else:
