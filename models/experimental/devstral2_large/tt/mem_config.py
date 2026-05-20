@@ -52,11 +52,18 @@ def get_sdpa_decode_program_config(mesh_device) -> ttnn.SDPAProgramConfig:
 
 @lru_cache(maxsize=4)
 def get_sdpa_decode_compute_kernel_config(mesh_device):
-    """SDPA decode: HiFi2 without packer L1 acc (matches tt_transformers HIFI2_NA)."""
+    """SDPA decode: HiFi4 + fp32 dest acc (matches tt_transformers ``compute_kernel_config_sdpa``).
+
+    Per-step decode precision drives 88-layer PCC compounding. ``fp32_dest_acc_en=True`` actually
+    *shrinks* the SDPA-decode K/V/QK circular buffers (chunk = ``dst_size = fp32_dest_acc_en ? 4 : 8``
+    when ``k_chunk_size=0``), so it is strictly L1-safer than the prior HIFI2_NA config and
+    cannot re-trigger the CB overlap fixed by 7e7fe6881a5. ``packer_l1_acc`` stays False (the
+    actual L1-acc-buffer flag) to preserve the L1 budget.
+    """
     cfg = dict(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
     if is_blackhole_mesh(mesh_device):

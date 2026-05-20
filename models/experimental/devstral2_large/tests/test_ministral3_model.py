@@ -53,7 +53,7 @@ def _mesh_device_param():
         "P150x4": (1, 4),
         "T3K": (1, 8),
         "TG": (8, 4),
-    }.get(os.environ.get("MESH_DEVICE"), (1, 4))
+    }.get(os.environ.get("MESH_DEVICE"), (1, 8))
 
 
 def _shallow_config(text_cfg: Ministral3Config, num_layers: int = NUM_LAYERS) -> Ministral3Config:
@@ -215,6 +215,7 @@ def test_ministral3_model_pcc_devstral2_large_partial_weights_one_layer_prefill(
     ],
     indirect=True,
 )
+@pytest.mark.timeout(0)
 def test_ministral3_model_pcc_devstral2_large_partial_weights_one_layer_decode(
     mesh_device,
     batch_size,

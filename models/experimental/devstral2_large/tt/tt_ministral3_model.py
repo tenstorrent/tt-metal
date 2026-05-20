@@ -124,7 +124,13 @@ class TtMinistral3Model:
         hidden_size = self.args.hidden_size
         if mode == "decode":
             batch_size = int(input_ids.shape[0])
-            return ttnn.reshape(hidden_states, (1, 1, batch_size, hidden_size))
+            logical = (1, 1, batch_size, hidden_size)
+            if len(hidden_states.shape) == 4:
+                tile_h = int(hidden_states.shape[-2])
+                if tile_h == batch_size:
+                    return ttnn.reshape(hidden_states, logical)
+                return ttnn.reshape(hidden_states, logical, (1, 1, tile_h, hidden_size))
+            return ttnn.reshape(hidden_states, logical)
         seq_len = int(input_ids.shape[-1])
         return ttnn.reshape(hidden_states, (1, 1, seq_len, hidden_size))
 
