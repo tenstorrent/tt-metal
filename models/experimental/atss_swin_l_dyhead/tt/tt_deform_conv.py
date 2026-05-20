@@ -137,6 +137,7 @@ class TtDeformConv2dV2:
         padding: Tuple[int, int] = (1, 1),
         dilation: Tuple[int, int] = (1, 1),
         align_corners: bool = True,
+        offset_layout: str = "yx",
     ):
         self.device = device
         self.C_in = C_in
@@ -152,11 +153,24 @@ class TtDeformConv2dV2:
         self.padding = padding
         self.dilation = dilation
         self.align_corners = align_corners
+        assert offset_layout in ("yx", "xy"), f"offset_layout must be 'yx' or 'xy', got {offset_layout}"
+        self.offset_layout = offset_layout
 
-        # Precompute base_grid and scale on host, transfer once
+        # Precompute base_grid and scale on host, transfer once. When offset_layout is "xy"
+        # the base_grid is built in (x_k, y_k) interleaved order so the runtime grid_yx -> grid_xy
+        # swap is unneeded (caller is responsible for delivering (dx_k, dy_k) offsets).
         base_grid_torch, scale_torch = _precompute_base_grid_yx_and_scale(
             H_in, W_in, H_out, W_out, kH, kW, stride, padding, dilation, align_corners
         )
+        if offset_layout == "xy":
+            # Reorder last dim from (y_0, x_0, y_1, x_1, ...) to (x_0, y_0, x_1, y_1, ...).
+            base_grid_torch = (
+                base_grid_torch.reshape(1, H_out, W_out, kH * kW, 2)
+                .flip(-1)
+                .reshape(1, H_out, W_out, 2 * kH * kW)
+                .contiguous()
+            )
+            scale_torch = scale_torch.reshape(1, 1, 1, kH * kW, 2).flip(-1).reshape(1, 1, 1, 2 * kH * kW).contiguous()
         self.base_grid = ttnn.from_torch(
             base_grid_torch,
             dtype=ttnn.bfloat16,
@@ -220,20 +234,25 @@ class TtDeformConv2dV2:
         if offset_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
             offset_nhwc = ttnn.to_layout(offset_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # 1. grid_yx = base_grid + offset * scale  (all interleaved in (y, x) order)
+        # 1. grid = base_grid + offset * scale  (interleaved in self.offset_layout order)
         off_scaled = ttnn.multiply(offset_nhwc, self.scale, memory_config=ttnn.L1_MEMORY_CONFIG)
-        grid_yx = ttnn.add(self.base_grid, off_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
+        grid = ttnn.add(self.base_grid, off_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(off_scaled)
 
-        # 2. Swap interleaved (y_k, x_k) → (x_k, y_k) so grid_sample sees (x, y) order.
-        grid_5d = ttnn.reshape(grid_yx, (1, H_out, W_out, K, 2))
-        y_comp = ttnn.slice(grid_5d, [0, 0, 0, 0, 0], [1, H_out, W_out, K, 1])
-        x_comp = ttnn.slice(grid_5d, [0, 0, 0, 0, 1], [1, H_out, W_out, K, 2])
-        grid_xy_5d = ttnn.concat([x_comp, y_comp], dim=4)
-        grid_xy = ttnn.reshape(grid_xy_5d, (1, H_out, W_out, 2 * K))
-        ttnn.deallocate(grid_5d)
-        ttnn.deallocate(y_comp)
-        ttnn.deallocate(x_comp)
+        if self.offset_layout == "yx":
+            # 2. Swap interleaved (y_k, x_k) -> (x_k, y_k) for grid_sample.
+            grid_5d = ttnn.reshape(grid, (1, H_out, W_out, K, 2))
+            y_comp = ttnn.slice(grid_5d, [0, 0, 0, 0, 0], [1, H_out, W_out, K, 1])
+            x_comp = ttnn.slice(grid_5d, [0, 0, 0, 0, 1], [1, H_out, W_out, K, 2])
+            grid_xy_5d = ttnn.concat([x_comp, y_comp], dim=4)
+            grid_xy = ttnn.reshape(grid_xy_5d, (1, H_out, W_out, 2 * K))
+            ttnn.deallocate(grid_5d)
+            ttnn.deallocate(y_comp)
+            ttnn.deallocate(x_comp)
+        else:
+            # base_grid already in XY-interleaved order — grid is the final sample grid.
+            grid_xy = grid
+
         # Ensure grid is ROW_MAJOR for ttnn.grid_sample (it asserts on this).
         if grid_xy.layout != ttnn.ROW_MAJOR_LAYOUT:
             grid_xy = ttnn.to_layout(grid_xy, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)

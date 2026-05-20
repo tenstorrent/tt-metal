@@ -404,22 +404,19 @@ class TtDyHeadBlockDevice:
         self.offset_dim = 2 * self.K  # 18
         self.mask_dim = self.K  # 9
 
-        # spatial_conv_offset weight/bias (256 → 27, 3x3 padding=1)
+        # spatial_conv_offset weight/bias (256 -> 27, 3x3 padding=1).
+        # Permute the first 18 output channels to swap each (dy_k, dx_k) pair into
+        # (dx_k, dy_k), matching our DCNs' offset_layout="xy". Channels 18..26 are
+        # the modulation mask and stay in place.
         scoff = pt_block.spatial_conv_offset
-        self.so_weight = (
-            ttnn.from_torch(
-                torch.permute(scoff.weight.data, (2, 3, 1, 0))
-                .reshape(self.kH * self.kW * in_channels, scoff.weight.shape[0])
-                .contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            if False
-            else self._prep_conv_weight(scoff.weight.data, device)
-        )
-        self.so_bias = self._prep_conv_bias(scoff.bias.data, device)
+        perm = list(range(scoff.weight.shape[0]))  # 27
+        for k in range(self.K):
+            perm[2 * k], perm[2 * k + 1] = perm[2 * k + 1], perm[2 * k]
+        perm_t = torch.as_tensor(perm, dtype=torch.long)
+        scoff_w_perm = scoff.weight.data.index_select(0, perm_t).contiguous()
+        scoff_b_perm = scoff.bias.data.index_select(0, perm_t).contiguous()
+        self.so_weight = self._prep_conv_weight(scoff_w_perm, device)
+        self.so_bias = self._prep_conv_bias(scoff_b_perm, device)
         self.so_out = scoff.weight.shape[0]  # 27
 
         # spatial_conv_{mid, low, high} — one TtDeformConv2dV2 per (level, role)
@@ -449,6 +446,7 @@ class TtDyHeadBlockDevice:
                     stride=(1, 1),
                     padding=(1, 1),
                     dilation=(1, 1),
+                    offset_layout="xy",
                 )
             )
             # low: in=prev level (larger), out=curr level, stride 2
@@ -470,6 +468,7 @@ class TtDyHeadBlockDevice:
                         stride=(2, 2),
                         padding=(1, 1),
                         dilation=(1, 1),
+                        offset_layout="xy",
                     )
                 )
             else:
@@ -493,6 +492,7 @@ class TtDyHeadBlockDevice:
                         stride=(1, 1),
                         padding=(1, 1),
                         dilation=(1, 1),
+                        offset_layout="xy",
                     )
                 )
             else:
