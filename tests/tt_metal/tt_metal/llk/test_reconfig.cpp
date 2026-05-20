@@ -358,10 +358,13 @@ bool single_core_reconfig(
 }
 
 bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    // TWO ops in a single acquire window with reconfig_data_format between them.
-    // Three-op variant is currently broken on Quasar (third add_tiles in one acquire
-    // window produces zero output).
-    constexpr uint32_t kNumOps = 2;
+    // THREE ops in a single acquire window, with reconfig_data_format between each:
+    //   OP[0]: add_tiles(d0, d1) -> dst[0]  [Float16_b srcA/B]
+    //   OP[1]: add_tiles(d2, d3) -> dst[1]  [Float32   srcA/B]   (reconfig Float16_b -> Float32)
+    //   OP[2]: add_tiles(d4, d5) -> dst[2]  [Float16_b srcA/B]   (reconfig Float32   -> Float16_b)
+    // The kernel adds a trailing dummy add_tiles -> dst[3] (not packed) to absorb the
+    // Quasar math->pack drain race for the last in-flight op.
+    constexpr uint32_t kNumOps = 3;
     const uint32_t f16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t f32_tile_size = tt::tile_size(tt::DataFormat::Float32);
     const uint32_t out_bytes = kNumOps * f16_tile_size;
@@ -387,11 +390,14 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     auto inp1_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
     auto inp2_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, mesh_device.get());
     auto inp3_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, mesh_device.get());
+    auto inp4_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
+    auto inp5_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
     auto out_dram = distributed::MeshBuffer::create(out_buf_cfg, f16_dram_cfg, mesh_device.get());
 
-    // OP[0] inputs (inp0/inp1) are Float16_b; OP[1] inputs (inp2/inp3) are Float32, so the
-    // reconfig_data_format call between the two ops actually changes srcA/srcB unpacker
-    // formats from Float16_b to Float32. Output stays Float16_b.
+    // OP[0] inputs (inp0/inp1) are Float16_b; OP[1] inputs (inp2/inp3) are Float32;
+    // OP[2] inputs (inp4/inp5) are Float16_b. The reconfig_data_format calls between ops
+    // exercise both Float16_b -> Float32 and Float32 -> Float16_b unpacker transitions.
+    // Output stays Float16_b.
     tt_metal::experimental::dfb::DataflowBufferConfig f16_input_dfb_cfg = {
         .entry_size = f16_tile_size,
         .num_entries = 1,
@@ -427,15 +433,17 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     const uint32_t inp1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, f16_input_dfb_cfg);
     const uint32_t inp2_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, f32_input_dfb_cfg);
     const uint32_t inp3_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, f32_input_dfb_cfg);
+    const uint32_t inp4_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, f16_input_dfb_cfg);
+    const uint32_t inp5_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, f16_input_dfb_cfg);
     const uint32_t out_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, out_dfb_cfg);
 
-    std::vector<uint32_t> reader_cta = {inp0_dfb, inp1_dfb, inp2_dfb, inp3_dfb};
+    std::vector<uint32_t> reader_cta = {inp0_dfb, inp1_dfb, inp2_dfb, inp3_dfb, inp4_dfb, inp5_dfb};
     std::vector<uint32_t> writer_cta = {out_dfb};
-    std::vector<uint32_t> compute_cta = {inp0_dfb, inp1_dfb, inp2_dfb, inp3_dfb, out_dfb};
+    std::vector<uint32_t> compute_cta = {inp0_dfb, inp1_dfb, inp2_dfb, inp3_dfb, inp4_dfb, inp5_dfb, out_dfb};
 
     auto reader_kernel = tt_metal::experimental::quasar::CreateKernel(
         program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_four_input.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_six_input.cpp",
         core,
         tt_metal::experimental::quasar::QuasarDataMovementConfig{
             .num_threads_per_cluster = 1, .compile_args = reader_cta});
@@ -466,11 +474,15 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
         program_, inp3_dfb, reader_kernel, compute_kernel);
     tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program_, inp4_dfb, reader_kernel, compute_kernel);
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program_, inp5_dfb, reader_kernel, compute_kernel);
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
         program_, out_dfb, compute_kernel, writer_kernel);
 
-    // Random stimulus: U(0, 2) per element. inp0/inp1 are bfloat16 (Float16_b tile),
-    // inp2/inp3 are float32 (Float32 tile). All srcN are vector<uint32_t> (the on-wire
-    // representation each format gets packed into for DRAM transfer).
+    // Random stimulus: U(0, 2) per element. inp0/inp1 and inp4/inp5 are bfloat16
+    // (Float16_b tile); inp2/inp3 are float32 (Float32 tile). All srcN are
+    // vector<uint32_t> (the on-wire representation each format gets packed into for DRAM transfer).
     constexpr int kRandMax = 2;
     auto src0 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1001);
     auto src1 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1002);
@@ -487,11 +499,15 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     };
     auto src2 = gen_random_f32(/*seed=*/0x1003);
     auto src3 = gen_random_f32(/*seed=*/0x1004);
+    auto src4 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1005);
+    auto src5 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1006);
 
     distributed::WriteShard(cq, inp0_dram, src0, zero_coord, false);
     distributed::WriteShard(cq, inp1_dram, src1, zero_coord, false);
     distributed::WriteShard(cq, inp2_dram, src2, zero_coord, false);
     distributed::WriteShard(cq, inp3_dram, src3, zero_coord, false);
+    distributed::WriteShard(cq, inp4_dram, src4, zero_coord, false);
+    distributed::WriteShard(cq, inp5_dram, src5, zero_coord, false);
 
     auto in0 = unpack_uint32_vec_into_bfloat16_vec(src0);
     auto in1 = unpack_uint32_vec_into_bfloat16_vec(src1);
@@ -504,13 +520,16 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     };
     auto in2 = unpack_f32(src2);
     auto in3 = unpack_f32(src3);
+    auto in4 = unpack_uint32_vec_into_bfloat16_vec(src4);
+    auto in5 = unpack_uint32_vec_into_bfloat16_vec(src5);
 
     std::vector<bfloat16> golden(kNumOps * elems_per_tile);
     for (uint32_t e = 0; e < elems_per_tile; ++e) {
-        // OP[0] inputs are bfloat16; OP[1] inputs are float32. Both ops produce bfloat16
-        // output (pack format is Float16_b), so golden is bfloat16-truncated either way.
+        // OP[0] and OP[2] inputs are bfloat16; OP[1] inputs are float32. All ops produce
+        // bfloat16 output (pack format is Float16_b), so golden is bfloat16-truncated either way.
         golden[0 * elems_per_tile + e] = bfloat16(static_cast<float>(in0[e]) + static_cast<float>(in1[e]));
         golden[1 * elems_per_tile + e] = bfloat16(in2[e] + in3[e]);
+        golden[2 * elems_per_tile + e] = bfloat16(static_cast<float>(in4[e]) + static_cast<float>(in5[e]));
     }
     auto packed_golden = pack_vector<uint32_t, bfloat16>(golden);
 
@@ -526,6 +545,10 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
             static_cast<uint32_t>(inp2_dram->address()),
             0u,
             static_cast<uint32_t>(inp3_dram->address()),
+            0u,
+            static_cast<uint32_t>(inp4_dram->address()),
+            0u,
+            static_cast<uint32_t>(inp5_dram->address()),
             0u,
             1u,  // num_tiles
         });
@@ -557,6 +580,10 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         {"OP[1]: add_tiles(d2, d3) -> dst[1]  [Float32 srcA/B, reconfig_data_format Float16_b->Float32]",
          tt::DataFormat::Float32,
          tt::DataFormat::Float32,
+         tt::DataFormat::Float16_b},
+        {"OP[2]: add_tiles(d4, d5) -> dst[2]  [Float16_b srcA/B, reconfig_data_format Float32->Float16_b]",
+         tt::DataFormat::Float16_b,
+         tt::DataFormat::Float16_b,
          tt::DataFormat::Float16_b},
     }};
     auto fmt_to_str = [](tt::DataFormat f) -> const char* {
