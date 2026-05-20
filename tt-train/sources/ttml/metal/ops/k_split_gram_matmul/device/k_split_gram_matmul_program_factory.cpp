@@ -117,7 +117,13 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         best_kb = kb;
         best_mb = mb;
     }
-    TT_FATAL(best_mb > 0, "Cannot fit mcast gram matmul in L1");
+    TT_FATAL(
+        best_mb > 0,
+        "Cannot fit mcast gram matmul in L1 (Mpc={}, K_half={}, L1_BUDGET={} bytes, mirror_out_overhead={} bytes)",
+        Mpc,
+        K_half,
+        L1_BUDGET,
+        mirror_out_overhead);
 
     const uint32_t K_block_tiles = best_kb;
     const uint32_t M_block = best_mb;
