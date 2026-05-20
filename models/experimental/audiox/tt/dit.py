@@ -62,6 +62,7 @@ class TtDiffusionTransformer:
             cross_attend=True,
             dim_in=io_channels,
             dim_out=io_channels,
+            lazy_layers=True,
         )
 
     def __call__(self, x: ttnn.Tensor, t: ttnn.Tensor, cross_attn_cond: ttnn.Tensor) -> ttnn.Tensor:

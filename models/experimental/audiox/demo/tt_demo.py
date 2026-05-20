@@ -17,6 +17,7 @@ Run from the tt-metal root with a connected device:
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -47,6 +48,25 @@ from models.experimental.audiox.utils.loader import (
     remap_oobleck_encoder_state_dict,
     remap_oobleck_decoder_state_dict,
 )
+
+
+def _should_use_local_mesh() -> bool:
+    try:
+        return ttnn.get_num_devices() > ttnn.get_num_pcie_devices()
+    except Exception:
+        return False
+
+
+def open_tt_device(device_id: int):
+    os.environ.setdefault("TT_METAL_SLOW_DISPATCH_MODE", "1")
+    if _should_use_local_mesh():
+        dispatch_core_config = ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER)
+        return ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(1, 1),
+            physical_device_ids=[device_id],
+            dispatch_core_config=dispatch_core_config,
+        )
+    return ttnn.open_device(device_id=device_id)
 
 
 def _to_tt(t: torch.Tensor, device, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
@@ -143,7 +163,7 @@ def run_tt_demo(
     tt_audio_nhwc = tt_decoder(_nct_to_nhwc(tt_latent))
 
     # 7. Pull audio back to CPU, drop the H=1 dim, transpose [B, T, 1, C] -> [B, C, T].
-    audio = ttnn.to_torch(tt_audio_nhwc).squeeze(2).transpose(1, 2).clamp(-1.0, 1.0).cpu()
+    audio = ttnn.to_torch(tt_audio_nhwc).squeeze(2).transpose(1, 2).clamp(-1.0, 1.0).detach().cpu()
     audio = resample_output_audio(
         audio,
         input_sample_rate=_HF_CONFIG["sample_rate"],
@@ -173,7 +193,7 @@ def _parse_args(argv: list) -> argparse.Namespace:
 
 def main(argv: list = None) -> int:
     args = _parse_args(argv if argv is not None else sys.argv[1:])
-    device = ttnn.open_device(device_id=0)
+    device = open_tt_device(device_id=0)
     try:
         out = run_tt_demo(
             checkpoint=args.checkpoint,
