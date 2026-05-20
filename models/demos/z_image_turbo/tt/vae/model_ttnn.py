@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
 """TTNN VAE Decoder model for Tongyi-MAI/Z-Image-Turbo.
 
 Architecture (diffusers AutoencoderKL decoder):
