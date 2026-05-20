@@ -436,6 +436,7 @@ def test_prefill_transformer(
         tp_axis=tp_axis,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
+        lm_head_is_column_parallel=True,
     )
     ttnn.ReadDeviceProfiler(mesh_device)
     ttnn.synchronize_device(mesh_device)
