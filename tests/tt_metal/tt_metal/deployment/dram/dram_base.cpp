@@ -66,7 +66,7 @@ static const std::vector<std::string>& get_tenstorrent_pci_bdfs_cached() {
                 vendor.begin(), vendor.end(), vendor.begin(), [](unsigned char c) { return std::tolower(c); });
 
             // Tenstorrent PCI vendor id. Sorted order gives a stable best-effort map:
-            // runtime device_id=0 -> first Tenstorrent BDF, device_id=1 -> second, etc.
+            // runtime bdf={} device_id=0 -> first Tenstorrent BDF, bdf={} device_id=1 -> second, etc.
             if (vendor == "0x1e52") {
                 out.push_back(bdf);
             }
