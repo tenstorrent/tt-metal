@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Single-WH-card MoE compute test (1x1 mesh, cluster_axis=None).
+Single-card MoE compute test (1x1 mesh, cluster_axis=None). Runs on both WH
+and BH; other arches are skipped at fixture time.
 
 This test exercises the `compute_only=True` bypass path of
 `ttnn.experimental.moe_compute`, which skips the fused selective_reduce_combine
@@ -287,7 +288,6 @@ def _run_moe_compute_single_card_test(
         w2_shard_map,
         dram_core_range_set,
         has_bias=has_bias,
-        mesh_device=mesh_device,
     )
 
     if has_bias:

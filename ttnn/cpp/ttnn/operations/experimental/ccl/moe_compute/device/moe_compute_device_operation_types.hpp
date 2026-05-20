@@ -52,7 +52,7 @@ struct MoEComputeParams {
         ttnn::experimental::prim::detail::MoEActivationFunction::SILU;  // Default to SILU
 
     // Same value as combine_params->axis (single source of truth when combine_params is set).
-    // ComputeOnly path returns nullopt; Full-path call-sites must unwrap with .value()/*.
+    // ComputeOnly path returns nullopt; Full-path call-sites must unwrap with .value().
     std::optional<uint32_t> cluster_axis() const {
         return combine_params.has_value() ? std::optional<uint32_t>{combine_params->axis} : std::nullopt;
     }

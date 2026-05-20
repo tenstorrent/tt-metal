@@ -9,8 +9,11 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstdlib>
+#include <cstring>
 #include <numeric>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -56,12 +59,17 @@ uint32_t resolve_bh_ring_size(std::optional<uint32_t> explicit_value) {
     }
     const char* env = std::getenv("TT_MOE_BH_N");
     if (env != nullptr) {
-        const int parsed = std::atoi(env);
+        // Use from_chars so we reject partial parses ("12foo"), leading/trailing garbage,
+        // and non-numeric strings, instead of std::atoi which silently accepts them.
+        const std::string_view sv{env};
+        uint32_t parsed = 0;
+        const auto [end, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), parsed);
+        const bool fully_consumed = (ec == std::errc{}) && (end == sv.data() + sv.size());
         TT_FATAL(
-            parsed == 8 || parsed == 12 || parsed == 16,
-            "moe_compute: TT_MOE_BH_N={} is not supported (must be 8, 12, or 16)",
+            fully_consumed && (parsed == 8u || parsed == 12u || parsed == 16u),
+            "moe_compute: TT_MOE_BH_N={} is not supported (must be exactly 8, 12, or 16)",
             env);
-        return static_cast<uint32_t>(parsed);
+        return parsed;
     }
     return 12u;  // Default when neither kwarg nor env var is set. See header comment for rationale.
 }
