@@ -1098,8 +1098,13 @@ class WanPipelineS2V(WanPipeline):
             # which prepends ``ref_latents_for_decode`` instead of ``motion_latents``
             # in :meth:`_decode_clip`, so the initial motion latents are never read.
             # Use a zero placeholder of the right latent shape (skips a 8.6 s VAE
-            # encode of 73 zero pixel frames).
-            videos_last_frames = torch.zeros(1, 3, self._MOTION_FRAMES_PIXEL, height, width, dtype=torch.float32)
+            # encode of 73 zero pixel frames). ``videos_last_frames`` is the
+            # pixel-space motion tail that gets re-encoded after each clip; it
+            # used to be eagerly allocated as a ~350 MB fp32 zero tensor but
+            # the initial-zero contribution is always discarded by the slide
+            # (overlap=_MOTION_FRAMES_PIXEL fully covers the buffer), so we
+            # defer creation until the first slide actually needs it.
+            videos_last_frames: Optional[torch.Tensor] = None
             latent_h = height // self.vae_scale_factor_spatial
             latent_w = width // self.vae_scale_factor_spatial
             motion_latents_torch = torch.zeros(
@@ -1160,13 +1165,27 @@ class WanPipelineS2V(WanPipeline):
                 # skip the motion-tail VAE encode entirely (~6.5 s saved).
                 if clip_idx + 1 < num_clips:
                     overlap = min(self._MOTION_FRAMES_PIXEL, image_BCTHW.shape[2])
-                    videos_last_frames = torch.cat(
-                        [
-                            videos_last_frames[:, :, overlap:],
-                            image_BCTHW[:, :, -overlap:],
-                        ],
-                        dim=2,
-                    )
+                    if videos_last_frames is None or overlap >= self._MOTION_FRAMES_PIXEL:
+                        # First slide (or current clip's tail fully covers the
+                        # buffer): the prior ``videos_last_frames[:, :, overlap:]``
+                        # contribution is empty, so just take the current clip's
+                        # tail directly. Pad with zeros on the left only when
+                        # the current clip is short of the motion-frames target.
+                        new_tail = image_BCTHW[:, :, -overlap:]
+                        if overlap < self._MOTION_FRAMES_PIXEL:
+                            zero_pad = torch.zeros(
+                                1, 3, self._MOTION_FRAMES_PIXEL - overlap, height, width, dtype=torch.float32
+                            )
+                            new_tail = torch.cat([zero_pad, new_tail], dim=2)
+                        videos_last_frames = new_tail
+                    else:
+                        videos_last_frames = torch.cat(
+                            [
+                                videos_last_frames[:, :, overlap:],
+                                image_BCTHW[:, :, -overlap:],
+                            ],
+                            dim=2,
+                        )
                     with _stage(f"s2v_clip_{clip_idx}_vae_encode_motion"):
                         motion_latents_torch = self._encode_normalized(videos_last_frames)
 
