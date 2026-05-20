@@ -1352,6 +1352,12 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
 
     uint64_t base_dfb_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (auto& dfb : this->dataflow_buffers_) {
+        // Alias secondaries share the primary's L1 address; skip allocation here
+        // and propagate the address inline after the primary is processed below.
+        if (dfb->alias_primary_id.has_value()) {
+            continue;
+        }
+
         uint32_t alloc_addr;
         if (dfb->borrows_memory()) {
             // Use the address latched by set_borrowed_memory_base_addr()
@@ -1390,6 +1396,19 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
             for (auto& [core, addr] : dfb->groups[gi].l1_by_core) {
                 addr = alloc_addr;
                 dfb->core_lookup_.emplace(core, std::make_pair(gi, alloc_addr));
+            }
+        }
+
+        // Propagate this primary's address to all alias secondaries immediately,
+        // so they share the same L1 region without an additional allocator call.
+        for (uint32_t sec_id : dfb->alias_secondary_ids) {
+            auto& sec = this->dataflow_buffers_[sec_id];
+            sec->core_lookup_.clear();
+            for (size_t gi = 0; gi < sec->groups.size(); gi++) {
+                for (auto& [core, addr] : sec->groups[gi].l1_by_core) {
+                    addr = alloc_addr;
+                    sec->core_lookup_.emplace(core, std::make_pair(gi, alloc_addr));
+                }
             }
         }
     }

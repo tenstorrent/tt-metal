@@ -471,6 +471,23 @@ void ProgramImpl::register_kernel_spec_name(const KernelSpecName& name, KernelHa
     TT_FATAL(inserted, "Duplicate kernel spec name: {}", name);
 }
 
+void ProgramImpl::set_dfb_alias(uint32_t primary_id, uint32_t secondary_id) {
+    TT_FATAL(
+        primary_id < dataflow_buffers_.size(),
+        "set_dfb_alias: primary DFB id {} has not been created yet (only {} DFBs exist). "
+        "Both DFBs must be created via add_dataflow_buffer before aliasing.",
+        primary_id,
+        dataflow_buffers_.size());
+    TT_FATAL(
+        secondary_id < dataflow_buffers_.size(),
+        "set_dfb_alias: secondary DFB id {} has not been created yet (only {} DFBs exist). "
+        "Both DFBs must be created via add_dataflow_buffer before aliasing.",
+        secondary_id,
+        dataflow_buffers_.size());
+    dataflow_buffers_[primary_id]->alias_secondary_ids.push_back(secondary_id);
+    dataflow_buffers_[secondary_id]->alias_primary_id = primary_id;
+}
+
 void ProgramImpl::register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};

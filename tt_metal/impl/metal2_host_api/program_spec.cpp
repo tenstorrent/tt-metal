@@ -1112,12 +1112,75 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             tensor_bytes);
     }
 
-    // DFB aliasing is not supported yet
-    for (const auto& dfb : spec.dataflow_buffers) {
-        TT_FATAL(
-            dfb.alias_with.empty(),
-            "DFB '{}' has a non-empty alias_with, but DFB aliasing is not yet implemented",
-            dfb.unique_id);
+    // Validate DFB alias groups.
+    // Rules:
+    //  1. Mutual declaration: if A lists B, B must list A.
+    //  2. Same total size: entry_size * num_entries must match within a group.
+    //  3. Same kernel bindings: each DFB in the group must be bound to the same
+    //     set of producer and consumer KernelSpec unique_ids.
+    {
+        // Build a name -> spec lookup for convenience.
+        std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_spec_by_name;
+        for (const auto& dfb : spec.dataflow_buffers) {
+            dfb_spec_by_name[dfb.unique_id] = &dfb;
+        }
+
+        auto kernel_ids_for_dfb = [&](const DFBSpecName& name) {
+            std::pair<std::vector<std::string>, std::vector<std::string>> result;
+            for (const auto& rec : collected.dfb_endpoints.at(name).producers) {
+                result.first.push_back(rec.kernel->unique_id);
+            }
+            for (const auto& rec : collected.dfb_endpoints.at(name).consumers) {
+                result.second.push_back(rec.kernel->unique_id);
+            }
+            std::sort(result.first.begin(), result.first.end());
+            std::sort(result.second.begin(), result.second.end());
+            return result;
+        };
+
+        for (const auto& dfb : spec.dataflow_buffers) {
+            if (dfb.alias_with.empty()) {
+                continue;
+            }
+            const uint32_t total_size_a = dfb.entry_size * dfb.num_entries;
+            const auto bindings_a = kernel_ids_for_dfb(dfb.unique_id);
+
+            for (const auto& alias_name : dfb.alias_with) {
+                TT_FATAL(
+                    dfb_spec_by_name.contains(alias_name),
+                    "DFB '{}' lists unknown alias '{}' in alias_with",
+                    dfb.unique_id,
+                    alias_name);
+
+                const DataflowBufferSpec* alias_spec = dfb_spec_by_name.at(alias_name);
+
+                // Rule 1: mutual declaration
+                const bool mutual = std::find(
+                    alias_spec->alias_with.begin(),
+                    alias_spec->alias_with.end(),
+                    dfb.unique_id) != alias_spec->alias_with.end();
+                TT_FATAL(
+                    mutual,
+                    "DFB '{}' lists '{}' as an alias, but '{}' does not list '{}' — alias_with must be mutual",
+                    dfb.unique_id, alias_name, alias_name, dfb.unique_id);
+
+                // Rule 2: same total size
+                const uint32_t total_size_b = alias_spec->entry_size * alias_spec->num_entries;
+                TT_FATAL(
+                    total_size_a == total_size_b,
+                    "Aliased DFBs '{}' and '{}' have different total sizes ({} vs {} bytes). "
+                    "Aliased DFBs must have the same total size (entry_size * num_entries).",
+                    dfb.unique_id, alias_name, total_size_a, total_size_b);
+
+                // Rule 3: same kernel bindings
+                const auto bindings_b = kernel_ids_for_dfb(alias_name);
+                TT_FATAL(
+                    bindings_a == bindings_b,
+                    "Aliased DFBs '{}' and '{}' are bound to different producer/consumer kernels. "
+                    "Aliased DFBs must be bound to the same kernel specs.",
+                    dfb.unique_id, alias_name);
+            }
+        }
     }
 
     // Data format metadata (optional param) MUST be specified for a DFB with a compute endpoint
@@ -2222,6 +2285,31 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
         if (dfb_spec.borrowed_from.has_value()) {
             program_impl->register_dfb_borrowed_binding(dfb_id, *dfb_spec.borrowed_from);
+        }
+    }
+
+    // Wire alias groups: for each DFB that has alias_with entries, make the first
+    // encountered DFB in the group the primary and call set_dfb_alias for each secondary.
+    // handled_as_secondary prevents a DFB from being treated as a primary when it was
+    // already registered as a secondary by an earlier DFB in the group (mutual declaration).
+    {
+        std::unordered_set<DFBSpecName> handled_as_secondary;
+        for (const auto& dfb_spec : spec.dataflow_buffers) {
+            if (handled_as_secondary.count(dfb_spec.unique_id)) {
+                continue;
+            }
+            if (dfb_spec.alias_with.empty()) {
+                continue;
+            }
+            const uint32_t primary_id = dfb_name_to_id.at(dfb_spec.unique_id);
+            for (const auto& alias_name : dfb_spec.alias_with) {
+                if (handled_as_secondary.count(alias_name)) {
+                    continue;
+                }
+                const uint32_t secondary_id = dfb_name_to_id.at(alias_name);
+                program_impl->set_dfb_alias(primary_id, secondary_id);
+                handled_as_secondary.insert(alias_name);
+            }
         }
     }
 

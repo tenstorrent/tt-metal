@@ -857,32 +857,6 @@ TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOversizedFails) {
             ::testing::HasSubstr("is larger than its borrowed TensorParameter")));
 }
 
-// Remove once implemented
-TEST_F(ProgramSpecTestQuasar, DFBAliasingFails) {
-    // DFB aliasing is not yet implemented
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.program_id = "test_program";
-
-    auto producer = MakeMinimalDMKernel("producer");
-    auto consumer = MakeMinimalDMKernel("consumer");
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.alias_with = std::vector<DFBSpecName>{"other_dfb"};  // Not supported yet!
-
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
-
-    spec.kernels = {producer, consumer};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("DFB 'dfb' has a non-empty alias_with, but DFB aliasing is not yet implemented")));
-}
-
 TEST_F(ProgramSpecTestQuasar, SemaphoresSucceed) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
@@ -3038,6 +3012,102 @@ TEST_F(ProgramSpecTestGen1, CompilerIncludePathsForwardedToKernelConfig) {
     const auto built_compute_variant = built_compute->config();
     const auto& built_compute_config = std::get<ComputeConfig>(built_compute_variant);
     EXPECT_EQ(built_compute_config.compiler_include_paths, compute_paths);
+}
+
+// ============================================================================
+// DFB alias validation — negative tests
+// ============================================================================
+
+// Helper: build a minimal 1-producer / 1-consumer ProgramSpec with a single
+// DFB, reusing the Quasar fixture's node coordinate.
+namespace {
+ProgramSpec MakeAliasProgramSpec(
+    const NodeCoord& node,
+    DataflowBufferSpec dfb_a,
+    DataflowBufferSpec dfb_b,
+    const std::optional<std::string>& second_kernel_source = std::nullopt) {
+    ProgramSpec spec;
+
+    KernelSpec producer = MakeMinimalDMKernel("producer_kernel");
+    KernelSpec consumer = MakeMinimalDMKernel("consumer_kernel");
+
+    BindDFBToKernel(producer, dfb_a.unique_id, "out_a", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, dfb_a.unique_id, "in_a", KernelSpec::DFBEndpointType::CONSUMER);
+
+    BindDFBToKernel(producer, dfb_b.unique_id, "out_b", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, dfb_b.unique_id, "in_b", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb_a, dfb_b};
+    spec.work_units = {MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel"})};
+    return spec;
+}
+}  // anonymous namespace
+
+TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnMismatchedTotalSize) {
+    // DFB_A: 512 * 8 = 4096 bytes, DFB_B: 256 * 8 = 2048 bytes — different totals → TT_FATAL
+    auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
+    auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/256, /*num_entries=*/8);
+    dfb_a.alias_with = {"dfb_b"};
+    dfb_b.alias_with = {"dfb_a"};
+
+    const NodeCoord node{0, 0};
+    auto spec = MakeAliasProgramSpec(node, dfb_a, dfb_b);
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("different total sizes")));
+}
+
+TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnNonMutualDeclaration) {
+    // DFB_A lists DFB_B but DFB_B does not list DFB_A → TT_FATAL
+    auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
+    auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/256, /*num_entries=*/16);
+    dfb_a.alias_with = {"dfb_b"};
+    // dfb_b.alias_with intentionally left empty
+
+    const NodeCoord node{0, 0};
+    auto spec = MakeAliasProgramSpec(node, dfb_a, dfb_b);
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("alias_with must be mutual")));
+}
+
+TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnDifferentKernelBindings) {
+    // DFB_A and DFB_B have the same total size but are bound to different kernels → TT_FATAL
+    const NodeCoord node{0, 0};
+
+    auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
+    auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/256, /*num_entries=*/16);
+    dfb_a.alias_with = {"dfb_b"};
+    dfb_b.alias_with = {"dfb_a"};
+
+    // Bind dfb_a to producer_kernel / consumer_kernel as usual
+    KernelSpec producer = MakeMinimalDMKernel("producer_kernel");
+    KernelSpec consumer = MakeMinimalDMKernel("consumer_kernel");
+    // A third kernel that will be the only consumer of dfb_b
+    KernelSpec other = MakeMinimalDMKernel("other_kernel");
+
+    BindDFBToKernel(producer, "dfb_a", "out_a", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb_a", "in_a", KernelSpec::DFBEndpointType::CONSUMER);
+
+    // dfb_b bound to producer_kernel but consumed by a *different* kernel
+    BindDFBToKernel(producer, "dfb_b", "out_b", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(other, "dfb_b", "in_b", KernelSpec::DFBEndpointType::CONSUMER);
+
+    ProgramSpec spec;
+    spec.kernels = {producer, consumer, other};
+    spec.dataflow_buffers = {dfb_a, dfb_b};
+    spec.work_units = {
+        MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel", "other_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("different producer/consumer kernels")));
 }
 
 }  // namespace
