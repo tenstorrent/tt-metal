@@ -4,6 +4,7 @@
 
 #include "softmax_device_operation.hpp"
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 #include <tt-logger/tt-logger.hpp>
@@ -179,6 +180,7 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryGen
     writer_desc.config = WriterConfigDescriptor{};
 
     std::map<std::string, std::string> compute_defines;
+    compute_defines["REDUCE_FORMAT"] = ttnn::kernel_lib::reduce_format_define(data_format);
     compute_defines["SOFTMAX"] = "1";
     // Enable FP32_DEST_ACC_EN for format reconfiguration in moreh compute helpers when using mixed
     // data formats (Bfp8_b input with Float16_b intermediates/mask/scaler) (issue #32934).
