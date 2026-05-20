@@ -241,26 +241,20 @@ class TtDeformConv2dV2:
         )
         ttnn.deallocate(grid_xy)
 
-        # 4. Apply modulation: expand mask from K channels to K*C_in by repeat_interleave.
-        # The intermediate tensors are LARGE (H_out * W_out * K * C_in elements ~= 29 MB for P3@80x80).
-        # Use DRAM for these so we don't OOM the per-core L1 banks.
+        # 4. Apply modulation mask via broadcast multiply.
+        # Reshape to (H*W, K, C_in) and (H*W, K, 1) so the mask broadcasts
+        # across C_in without materializing the full K*C_in expanded tensor.
         big_tensor_bytes = H_out * W_out * K * C_in * 2  # bf16
         big_mem_config = ttnn.DRAM_MEMORY_CONFIG if big_tensor_bytes > 4 * 1024 * 1024 else ttnn.L1_MEMORY_CONFIG
 
-        # Move large intermediates to DRAM if they exceed L1 budget.
         if samples.memory_config().buffer_type != ttnn.BufferType.DRAM and big_mem_config == ttnn.DRAM_MEMORY_CONFIG:
             samples = ttnn.to_memory_config(samples, big_mem_config)
-        mask_expanded = (
-            ttnn.repeat_interleave(mask_nhwc, C_in, dim=-1, memory_config=big_mem_config)
-            if big_mem_config == ttnn.DRAM_MEMORY_CONFIG
-            else ttnn.repeat_interleave(mask_nhwc, C_in, dim=-1)
-        )
-        modulated = ttnn.multiply(samples, mask_expanded, memory_config=big_mem_config)
-        # Note: do NOT explicitly deallocate samples/mask_expanded — Python GC handles it,
-        # and explicit deallocate can invalidate dependent reshape views downstream.
+        samples_3d = ttnn.reshape(samples, (H_out * W_out, K, C_in))
+        mask_3d = ttnn.reshape(mask_nhwc, (H_out * W_out, K, 1))
+        modulated_3d = ttnn.multiply(samples_3d, mask_3d, memory_config=big_mem_config)
 
         # 5. Final 1x1 weighted sum via matmul.
-        modulated_flat = ttnn.reshape(modulated, (1, H_out * W_out, K * C_in))
+        modulated_flat = ttnn.reshape(modulated_3d, (1, H_out * W_out, K * C_in))
         modulated_tiled = ttnn.to_layout(modulated_flat, ttnn.TILE_LAYOUT, memory_config=big_mem_config)
 
         out_flat = ttnn.matmul(

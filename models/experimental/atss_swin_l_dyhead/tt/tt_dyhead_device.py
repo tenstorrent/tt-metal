@@ -209,14 +209,12 @@ def _run_conv2d_nhwc(
 class TtGroupNorm:
     """Custom GroupNorm on NHWC input, computed in **float32** on device.
 
-    ttnn.group_norm hard-asserts bf16 input/output. Empirically (see
-    OPTIMIZATION_REPORT.md §7.6), that bf16 quantization is the dominant
-    per-block precision-loss source — replacing ttnn.group_norm with this fp32
-    custom impl recovers PCC from ~0.8 (at deep blocks) to 0.99+.
+    ttnn.group_norm hard-asserts bf16 input/output. Empirically, that bf16
+    quantization is the dominant per-block precision-loss source — replacing
+    ttnn.group_norm with this fp32 custom impl recovers PCC from ~0.8 to 0.99+.
 
     Uses 5D reshape (N, H, W, G, C/G) + per-group mean/var reductions in fp32,
-    then casts back to bf16 for the next op. Trace-safe: only ttnn ops + cached
-    gamma/beta. ~10 device ops per call vs 1 for ttnn.group_norm.
+    then casts back to bf16 for the next op.
     """
 
     def __init__(self, device, weight: torch.Tensor, bias: torch.Tensor, num_groups: int):
@@ -225,7 +223,6 @@ class TtGroupNorm:
         self.C = weight.shape[0]
         assert self.C % num_groups == 0, f"C={self.C} not divisible by num_groups={num_groups}"
         self.C_per_G = self.C // num_groups
-        # gamma, beta in 5D shape (1, 1, 1, G, C_per_G) for direct broadcast against (N, H, W, G, C/G).
         self.gamma_5d = ttnn.from_torch(
             weight.reshape(1, 1, 1, num_groups, self.C_per_G).contiguous(),
             dtype=ttnn.float32,
@@ -247,17 +244,14 @@ class TtGroupNorm:
         G = self.num_groups
         C_per_G = self.C_per_G
 
-        # Cast bf16 → fp32, ensure TILE layout for reductions.
         if x_nhwc.dtype != ttnn.float32:
             x_fp32 = ttnn.typecast(x_nhwc, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             x_fp32 = x_nhwc
         if x_fp32.layout != ttnn.TILE_LAYOUT:
             x_fp32 = ttnn.to_layout(x_fp32, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # Reshape to (N, H, W, G, C/G).
         x_5d = ttnn.reshape(x_fp32, (N, H, W, G, C_per_G))
 
-        # Per-group mean and variance, reduced over (H, W, C/G).
         mean = ttnn.mean(x_5d, dim=(1, 2, 4), keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         centered = ttnn.subtract(x_5d, mean, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         var = ttnn.mean(
@@ -276,7 +270,6 @@ class TtGroupNorm:
             self.beta_5d,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # Reshape back, cast to bf16 (next ops expect bf16).
         out_4d = ttnn.reshape(out_5d, (N, H, W, C))
         return ttnn.typecast(out_4d, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
