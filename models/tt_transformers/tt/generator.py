@@ -357,26 +357,118 @@ class Generator(WarmupForwardMixin):
         prefill_seq_lens,
         enable_trace=True,
         sampling_params=None,
+        empty_slots=None,
     ):
-        """Dispatch to model's row-sharded batched prefill."""
+        """Dispatch to model's row-sharded batched prefill.
+
+        `_row_sharded_batched_prefill` (called from `row_sharded_batched_prefill`
+        in the model) routes user `i` of the input batch to mesh row
+        `i // (batch_size // num_rows)`. That only matches the
+        `target_row = user_id // max_local_batch_size` formula used by
+        single-user prefill and decode when the incoming batch is large enough
+        to span all rows (`batch_size == num_rows * max_local_batch_size`).
+        For any smaller batch the array-index routing disagrees with decode
+        and produces silent cross-user KV state contamination
+        (tenstorrent/tt-metal#44746).
+
+        Fix: use `empty_slots` (the per-user global slot IDs that vLLM passes
+        through) to compute `target_row = slot // max_local_batch_size` for
+        each user. Group users by target row, pad each row's slot list to
+        `max_per_row` by replicating that row's first real user (so the
+        underlying `row_sharded_batched_prefill` sees an evenly-shaped batch),
+        then reorder the inputs into row-major order. The existing
+        `row_sharded_batched_prefill` array-index routing then maps each
+        position to the correct mesh row.
+        """
         assert (
             self.data_parallel == 1
         ), "Row-sharded batched prefill requires data_parallel=1 (model handles DP internally)"
-        return self.model[0].row_sharded_batched_prefill(
-            tokens,
-            page_table,
+        import torch  # local import; this module already uses torch
+        model_args = self.model_args[0]
+        num_rows = self.model[0].mesh_device.shape[0]
+        max_local_batch_size = (
+            getattr(model_args, "max_local_batch_size", None)
+            or max(len(prompt_lens) // num_rows, 1)
+        )
+        actual_n = len(prompt_lens) if not hasattr(prompt_lens, "shape") else prompt_lens.shape[0]
+        if empty_slots is None:
+            empty_slots = list(range(actual_n))
+
+        # Group users by target_row computed from their global slot.
+        users_by_row = [[] for _ in range(num_rows)]
+        for local_idx, slot in enumerate(empty_slots[:actual_n]):
+            target_row = min(int(slot) // max_local_batch_size, num_rows - 1)
+            users_by_row[target_row].append(local_idx)
+
+        # Pad each row's slot list to max_per_row by replicating its first
+        # real user. Rows that have no real users get a copy of the global
+        # first user (their KV writes go to that row's local cache at the
+        # padding user's block IDs — a different global block than the
+        # padding user's real KV — never read by decode, harmless waste).
+        max_per_row = max((len(g) for g in users_by_row), default=1) or 1
+        fallback = users_by_row[0][0] if users_by_row[0] else 0
+        for r in range(num_rows):
+            if not users_by_row[r]:
+                users_by_row[r] = [fallback]
+            while len(users_by_row[r]) < max_per_row:
+                users_by_row[r].append(users_by_row[r][0])
+
+        new_order = []
+        for r in range(num_rows):
+            new_order.extend(users_by_row[r])
+        # new_order has length max_per_row * num_rows. Each row's slice is
+        # contiguous in row-major order, which matches what
+        # `prepare_row_sharded_prefill_iter`'s `row * users_per_row_total +
+        # iter * upr + u` formula expects (with users_per_row_total =
+        # max_per_row).
+
+        tokens_ord = tokens[new_order]
+        prompt_lens_list = list(prompt_lens)
+        prompt_lens_ord = [prompt_lens_list[i] for i in new_order]
+        prefill_seq_lens_list = list(prefill_seq_lens)
+        prefill_seq_lens_ord = [prefill_seq_lens_list[i] for i in new_order]
+        page_table_ord = page_table[new_order] if page_table is not None else None
+
+        result = self.model[0].row_sharded_batched_prefill(
+            tokens_ord,
+            page_table_ord,
             kv_cache[0],
-            prompt_lens,
-            prefill_seq_lens,
+            prompt_lens_ord,
+            prefill_seq_lens_ord,
             enable_trace=enable_trace,
             sampling_params=sampling_params,
-            model_args=self.model_args[0],
+            model_args=model_args,
             trace_cache={
                 "ids": self.trace_id_prefill,
                 "inputs": self.trace_inputs_prefill,
                 "outputs": self.trace_output_prefill,
             },
         )
+
+        # `row_sharded_batched_prefill` returns either a single tensor of
+        # logits/tokens or a (tokens, log_probs) tuple. Inverse-permute back
+        # to the original user order so the caller sees positions 0..N-1
+        # matching its input ordering.
+        if isinstance(result, tuple):
+            tokens_padded, logprobs_padded = result
+        else:
+            tokens_padded, logprobs_padded = result, None
+
+        inverse_order = [-1] * actual_n
+        for new_pos, orig_idx in enumerate(new_order):
+            if 0 <= orig_idx < actual_n and inverse_order[orig_idx] == -1:
+                inverse_order[orig_idx] = new_pos
+        # Should be fully covered because new_order contains every original
+        # index at least once (its first slot in users_by_row).
+        assert all(p >= 0 for p in inverse_order), (
+            "internal: not all original users covered in new_order"
+        )
+        select_idx = torch.as_tensor(inverse_order, dtype=torch.long)
+        out_tokens = tokens_padded[select_idx]
+        if logprobs_padded is not None:
+            out_logprobs = logprobs_padded[select_idx]
+            return out_tokens, out_logprobs
+        return out_tokens
 
     def _easy_trace_prefill(
         self,
@@ -534,6 +626,7 @@ class Generator(WarmupForwardMixin):
                 prefill_seq_lens=prefill_seq_lens,
                 enable_trace=enable_trace,
                 sampling_params=sampling_params,
+                empty_slots=empty_slots,
             )
 
         # Batched prefill: all prompts share the same padded length so they can
