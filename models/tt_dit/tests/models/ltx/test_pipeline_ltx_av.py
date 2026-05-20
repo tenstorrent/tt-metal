@@ -41,7 +41,7 @@ def _default_gemma() -> str:
 
 @pytest.mark.parametrize(
     "no_prompt",
-    [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
+    [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), True)],
 )
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",

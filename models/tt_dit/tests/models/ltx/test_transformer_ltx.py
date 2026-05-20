@@ -85,7 +85,19 @@ def test_ltx_transformer_block(
     # SPLIT matches production pipeline (rope_type: split in checkpoint)
     torch_block = BasicAVTransformerBlock(idx=0, video=video_cfg, audio=None, rope_type=RefRopeType.SPLIT)
     torch_block.eval()
-    torch_state = torch_block.state_dict()
+    # Deterministic, scaled-down random weights (mirrors test_ltx_transformer_model).
+    # Default Kaiming init + raw-randn temb feeding `(1+scale)*x` modulation chains
+    # in fp32 will intermittently overflow to NaN depending on the global RNG state
+    # at construction time, making this test flaky in the full suite (passes in
+    # isolation, fails after sibling parametrizations consume RNG entropy).
+    WEIGHT_SEED = 1234
+    torch.manual_seed(WEIGHT_SEED)
+    with torch.no_grad():
+        for p in torch_block.parameters():
+            p.copy_(torch.randn(p.shape, dtype=p.dtype) * 0.1)
+    # Snapshot with cloned tensors so TT-side _prepare_torch_state views/permutations
+    # cannot share storage with torch_block parameters.
+    torch_state = {k: v.detach().clone() for k, v in torch_block.state_dict().items()}
 
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
