@@ -542,7 +542,19 @@
 
 - name: Llama 3.1-8B P150 performance
   cmd: |
-    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci and not stress" --max_seq_len 131072
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    if [[ -d /localdev/blackhole_demos/huggingface_data/hub ]]; then
+      export HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/hub
+    else
+      export HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    fi
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
+    if [[ ! -d "${TT_CACHE_PATH}" ]]; then
+      export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
+    fi
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci and not stress" --max_seq_len 131072
   skus:
     bh_p150_perf:
       timeout: 84
@@ -552,7 +564,19 @@
 
 - name: Llama 3.1-8B P150 stress
   cmd: |
-    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "stress" --max_seq_len 131072
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    if [[ -d /localdev/blackhole_demos/huggingface_data/hub ]]; then
+      export HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/hub
+    else
+      export HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    fi
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
+    if [[ ! -d "${TT_CACHE_PATH}" ]]; then
+      export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
+    fi
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "stress" --max_seq_len 131072
   skus:
     bh_p150:
       timeout: 84
@@ -707,14 +731,6 @@
     if [[ ! -d "${TT_CACHE_PATH}" ]]; then
       export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct
     fi
-    echo "[diag] HF_HOME=${HF_HOME}"
-    echo "[diag] HF_HUB_CACHE=${HF_HUB_CACHE}"
-    echo "[diag] HF_MODEL=${HF_MODEL}"
-    echo "[diag] TT_CACHE_PATH=${TT_CACHE_PATH}"
-    ls -la "${HF_HOME}" || true
-    ls -la "${HF_HOME}/meta-llama" || true
-    ls -la "${HF_HOME}/hub" || true
-    ls -la "${TT_CACHE_PATH}" || true
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
   skus:
     bh_llmbox:
@@ -737,14 +753,6 @@
     if [[ ! -d "${TT_CACHE_PATH}" ]]; then
       export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct
     fi
-    echo "[diag] HF_HOME=${HF_HOME}"
-    echo "[diag] HF_HUB_CACHE=${HF_HUB_CACHE}"
-    echo "[diag] HF_MODEL=${HF_MODEL}"
-    echo "[diag] TT_CACHE_PATH=${TT_CACHE_PATH}"
-    ls -la "${HF_HOME}" || true
-    ls -la "${HF_HOME}/meta-llama" || true
-    ls -la "${HF_HOME}/hub" || true
-    ls -la "${TT_CACHE_PATH}" || true
     TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-131072-2-2-1-1-False"
   skus:
     bh_llmbox:
@@ -767,14 +775,6 @@
     if [[ ! -d "${TT_CACHE_PATH}" ]]; then
       export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct
     fi
-    echo "[diag] HF_HOME=${HF_HOME}"
-    echo "[diag] HF_HUB_CACHE=${HF_HUB_CACHE}"
-    echo "[diag] HF_MODEL=${HF_MODEL}"
-    echo "[diag] TT_CACHE_PATH=${TT_CACHE_PATH}"
-    ls -la "${HF_HOME}" || true
-    ls -la "${HF_HOME}/meta-llama" || true
-    ls -la "${HF_HOME}/hub" || true
-    ls -la "${TT_CACHE_PATH}" || true
     TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-131072-2-10-1-1-False"
   skus:
     bh_llmbox:
@@ -808,14 +808,6 @@
     if [[ ! -d "${TT_CACHE_PATH}" ]]; then
       export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct
     fi
-    echo "[diag] HF_HOME=${HF_HOME}"
-    echo "[diag] HF_HUB_CACHE=${HF_HUB_CACHE}"
-    echo "[diag] HF_MODEL=${HF_MODEL}"
-    echo "[diag] TT_CACHE_PATH=${TT_CACHE_PATH}"
-    ls -la "${HF_HOME}" || true
-    ls -la "${HF_HOME}/meta-llama" || true
-    ls -la "${HF_HOME}/hub" || true
-    ls -la "${TT_CACHE_PATH}" || true
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
   skus:
     bh_loudbox:
@@ -826,7 +818,19 @@
 
 - name: qwen3-32b LoudBox batch-32 performance
   cmd: |
-    HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 32768 --timeout=600
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    if [[ -d /localdev/blackhole_demos/huggingface_data/hub ]]; then
+      export HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/hub
+    else
+      export HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    fi
+    export HF_MODEL=Qwen/Qwen3-32B
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen3-32B
+    if [[ ! -d "${TT_CACHE_PATH}" ]]; then
+      export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B
+    fi
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 32768 --timeout=600
   skus:
     bh_loudbox:
       timeout: 84
