@@ -353,15 +353,28 @@ static bool data_check(
         recv_l1_address,
         inputs.size() * sizeof(uint32_t));
 
+    uint32_t first_error = -1;
+    uint32_t last_error = 0;
     uint64_t total_errors = 0;
+
     for (int i = 0; i < inputs.size(); i++) {
         if (inputs[i] != readback_vec[i]) {
-            if (!total_errors) {
-                log_critical(tt::LogTest, "      Mismatch at Core: {}", recv_core);
-            }
-            log_critical(tt::LogTest, "      Mismatch at index: {}", i);
+            uint32_t addr = i * 4;
+            first_error = addr < first_error ? addr : first_error;
+            last_error = addr > last_error ? addr : last_error;
             total_errors++;
         }
+    }
+
+    if (total_errors) {
+        log_critical(
+            tt::LogTest,
+            "      [device: {}, core: {}] {} mismatched words starting at {:08x}, ending at {:08x}",
+            recv_device->id(),
+            recv_core,
+            total_errors,
+            first_error,
+            last_error);
     }
 
     return !total_errors;
@@ -696,7 +709,7 @@ static bool tensix_compare_dram_banks(
     if (total_errors) {
         log_critical(
             tt::LogTest,
-            "      done comparing bank {} and {} with {} mismatched words starting at {:x}, ending at {:x}",
+            "      done comparing bank {} and {} with {} mismatched words starting at {:08x}, ending at {:08x}",
             dram_bank_id0,
             dram_bank_id1,
             total_errors,

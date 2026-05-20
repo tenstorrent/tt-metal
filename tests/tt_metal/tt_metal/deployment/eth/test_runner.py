@@ -8,15 +8,8 @@ import pprint
 import json
 import re
 
-# # with open("testlog2", "r") as f:
-# with open("testfifo", "r") as f:
-#     for l in f:
-#         print(f"l: {l.strip()}")
-
 timeregex = "\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+"
-# 2026-05-18 10:55:52.314 | info     |            Test | Running test using Fast Dispatch (mesh_dispatch_fixture.hpp:119)
 teststart = re.compile("\[\s+RUN\s+\] (.*)")
-# [       OK ] MeshDispatchFixture.TensixDeploymentEthernet00LinkUp (492 ms)
 testend = re.compile("\[\s+([^ ]*)\s+\] (.*) \(.*\)")
 testdevices = re.compile(f"({timeregex}).*Test \| sender device id: (.*), receiver device id: (.*) .*")
 testcores = re.compile(f"({timeregex}).*Test \|   sender core: (.*), receiver core: (.*) .*")
@@ -27,6 +20,10 @@ testbwfail = re.compile(f"({timeregex}).*Test \|       Expected at least: (.*) G
 testsetup = re.compile(f"({timeregex}).*Test \|       set up .*")
 testdatacmp = re.compile(
     f"({timeregex}).*Test \|       done comparing bank (.*) and (.*) with (\d+) "
+    + "mismatched words starting at (.*), ending at (.*) .*"
+)
+testl1datacmp = re.compile(
+    f"({timeregex}).*Test \|       \[device: (.*), core: (.*)\] (.*) "
     + "mismatched words starting at (.*), ending at (.*) .*"
 )
 locinfo = "sdev: \[(.*)\], rdev: \[(.*)\], score: \[(.*)\], rcore: \[(.*)\], processor: \[(.*)\]"
@@ -91,6 +88,7 @@ class EventType(Enum):
     BW = auto()
     BWFAIL = auto()
     DATACMP = auto()
+    L1DATACMP = auto()
     TESTSETUP = auto()
     TESTCHECK = auto()
 
@@ -192,6 +190,29 @@ def parse_bwfail(l: str) -> Optional[Event]:
     return Event(EventType.BWFAIL, {"expected": expected, "actual": actual})
 
 
+def parse_l1datacmp(l: str) -> Optional[Event]:
+    m = testl1datacmp.match(l)
+    if m is None:
+        return None
+
+    dev = m.group(2)
+    core = m.group(3)
+    errors = int(m.group(4))
+    starting = m.group(5)
+    ending = m.group(6)
+    # print(f"\tL1DATACMP {dev}, {core}, {errors}, {starting}, {ending}")
+    return Event(
+        EventType.L1DATACMP,
+        {
+            "dev": dev,
+            "core": core,
+            "errors": errors,
+            "starting": starting,
+            "ending": ending,
+        },
+    )
+
+
 def parse_datacmp(l: str) -> Optional[Event]:
     m = testdatacmp.match(l)
     if m is None:
@@ -253,6 +274,7 @@ def parse_line(l: str) -> Optional[Event]:
     parsers = [
         parse_testdevices,
         parse_teststart,
+        parse_l1datacmp,
         parse_testend,
         parse_datacmp,
         parse_bwfail,
@@ -278,8 +300,7 @@ async def parse_logs_stream(inf: asyncio.StreamReader) -> AsyncIterator[Event]:
         if l == b"":
             break
 
-        line = l.decode("utf-8").strip()
-        r = parse_line(line)
+        r = parse_line(l.decode("utf-8").strip())
         if r is not None:
             yield r
 
@@ -350,6 +371,8 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
             errors.append({"bw": e.extra})
         elif e.typ == EventType.DATACMP:
             errors.append({"data": e.extra})
+        elif e.typ == EventType.L1DATACMP:
+            errors.append({"data": e.extra})
         elif e.typ == EventType.TESTSETUP:
             sdev = rdev = score = rcore = proc = ""
             links = []
@@ -374,12 +397,7 @@ def prepare_filter(tests: list[TestCase]) -> str:
 
 
 async def main():
-    # print("running")
-    filters = prepare_filter([TestCase.BANDWIDTH_BIDIR])
-    filters = prepare_filter([TestCase.STRESS_TEST])
-    # filters = prepare_filter([TestCase.BANDWIDTH_BIDIR, TestCase.DATA_INTEGRITY_BIDIR, TestCase.STRESS_TEST])
     filters = prepare_filter([t for t in TestCase])
-    # print(filters)
     program = "build/test/tt_metal/unit_tests_deployment"
     args = [f"--gtest_filter={filters}"]
 
