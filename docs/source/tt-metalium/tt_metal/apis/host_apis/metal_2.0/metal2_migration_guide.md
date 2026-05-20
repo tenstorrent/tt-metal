@@ -286,6 +286,12 @@ KernelSpec consumer{ /* ... */
 
 Advanced features (aliased DFBs, borrowed-memory DFBs, remote DFBs spanning nodes) are described in `dataflow_buffer_spec.hpp`, but are not yet supported by Metal 2.0.
 
+> **`tile_format_metadata` (the legacy `format_descriptors[i].tile` field).** `DataflowBufferSpec` carries a second optional metadata field, `std::optional<tt::tt_metal::Tile> tile_format_metadata`, that mirrors the legacy `CBFormatDescriptor::tile`. It is load-bearing for non-default tile geometry — tiny tiles, non-32x32, transposed-face, narrow-tile configurations (introduced for matmul tiny tiles in PR #12908). The value threads through the JIT path into per-CB `constexpr uint8_t unpack_tile_r_dim[]` / `unpack_tile_c_dim[]` / `unpack_num_faces[]` (and pack-side equivalents) inside the compute kernel's generated `chlkc_descriptors.h`, where LLK unpacker / packer init reads it.
+>
+> For DFBs holding **standard 32x32 tiles**, the JIT fallback when this field is `nullopt` yields the same generated arrays as setting `Tile()` — so leaving the field unset is observably identical to setting it. Most CBs in most ops are standard 32x32, which is why the field can look vestigial at a glance.
+>
+> **Operational rule for porters:** copy this field from the legacy CB's `format_descriptors[i].tile`. That preserves correctness for any non-default-tile use case and is harmless when the legacy field was `nullopt` or default.
+
 ---
 
 ### SemaphoreSpec
