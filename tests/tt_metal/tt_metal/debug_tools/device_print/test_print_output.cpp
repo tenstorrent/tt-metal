@@ -273,6 +273,24 @@ TEST_F(DevicePrintOutputFixture, PrintReorder) {
     TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_reorder.cpp", messages);
 }
 
+// Verify the DPRINT(format, ...) alias defined in dprint.h produces output identical to
+// DEVICE_PRINT(format, ...). The kernel pairs each DEVICE_PRINT call with an equivalent DPRINT
+// call so the resulting log file must contain two consecutive identical lines for each pair.
+TEST_F(DevicePrintOutputFixture, DprintAliasMatchesDevicePrint) {
+    std::string expected =
+        "no args\n"
+        "no args\n"
+        "one arg: 42\n"
+        "one arg: 42\n"
+        "three args: 1 2 3\n"
+        "three args: 1 2 3\n";
+
+    for (auto& mesh_device : this->devices_) {
+        RunProgram(mesh_device, "tests/tt_metal/tt_metal/test_kernels/device_print/print_dprint_alias.cpp");
+        EXPECT_TRUE(FilesMatchesString(dprint_file_name, expected));
+    }
+}
+
 TEST_F(DevicePrintOutputFixture, PrintInlineFunction) {
     std::vector<std::string> messages = {
         "BEFORE!!!",
