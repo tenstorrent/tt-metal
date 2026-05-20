@@ -280,7 +280,7 @@ ProgramDescriptor WindowedScaledDotProductAttentionDeviceOperation::WindowedSDPA
     class bfloat16 bfloat_identity_scalar(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
 
-    const uint32_t scale_value = std::bit_cast<uint32_t>(scale.value_or(1.0f));
+    const uint32_t scale_packed = std::bit_cast<uint32_t>(scale.value_or(1.0f));
 
     std::vector<uint32_t> reader_compile_time_args = {
         B,
@@ -332,7 +332,7 @@ ProgramDescriptor WindowedScaledDotProductAttentionDeviceOperation::WindowedSDPA
         out_in0_num_subblocks,
         out_in1_num_subblocks,
         out_num_blocks,
-        scale_value,
+        scale_packed,
     };
 
     KernelDescriptor::Defines defines;
