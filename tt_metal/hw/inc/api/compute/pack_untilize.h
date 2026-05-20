@@ -157,12 +157,27 @@ ALWI void pack_untilize_dest_init_skip_remap(
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+<<<<<<< HEAD
     detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, true>(icb, ocb, call_line);
 }
 
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, false>(icb, ocb, call_line);
+=======
+#ifndef ARCH_QUASAR
+    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+        false, false, icb)));  // init must be after configure
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+#else
+    UNPACK((
+        llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn, DST_ACCUM_MODE>(
+            false, false, icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
+#endif
+    pack_untilize_dest_init<block_ct_dim, full_ct_dim>(ocb);
+>>>>>>> d91310961de (consolidated llk_unpack_A APIs to match WH/BH API signature, updated API calls to match in all relevant kernels)
 }
 
 // clang-format off
@@ -202,7 +217,8 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
                 llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
                     c, icb)));
 #else
-            UNPACK((llk_unpack_A(icb, c)));
+            UNPACK(
+                (llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, c)));
             MATH((llk_math_eltwise_unary_datacopy(c, icb)));
 #endif
         }
