@@ -22,7 +22,6 @@ from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_
 def _mel_torch_to_tt_b1tc(device, mel_ncl_bf16: torch.Tensor) -> ttnn.Tensor:
     """``[B, C, T]`` host → ``[B, 1, T, C]`` tile on device."""
     x = mel_ncl_bf16.to(torch.bfloat16).contiguous()
-    # [B, C, T] -> [B, T, C] -> [B, 1, T, C]
     x4 = x.permute(0, 2, 1).unsqueeze(1)
     return ttnn.from_torch(
         x4,
@@ -71,8 +70,6 @@ def test_voxtral_tt_audio_tokenizer_create_smoke(device, reset_seeds):
     except Exception as exc:
         pytest.skip(f"Unable to create VoxtralTTAudioTokenizer: {exc}")
 
-    # Public checkpoints ship decoder weights; encoder ``input_proj`` / ``encoder_blocks`` may be absent.
-    # Keep this as a construction smoke test; per-op PCC tests exercise each TT op separately.
     assert tok.decoder_blocks_0_conv is not None
     assert tok.decoder_blocks_1_layer0 is not None
     assert tok.decoder_blocks_1_layer1 is not None
