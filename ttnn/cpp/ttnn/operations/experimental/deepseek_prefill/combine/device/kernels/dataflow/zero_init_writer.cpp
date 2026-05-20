@@ -184,6 +184,7 @@ void kernel_main() {
 
     uint32_t local_credits = SLOTS_PER_IDLE;
     uint32_t write_slot = 0;
+    constexpr uint32_t TRID_NON_LOCAL_WRITE = 1;
 
     // Snapshot per-expert token counts from the multicasted counter buffer.  This kernel and
     // the compute kernel (untilize_combine) iterate experts/batches the same way reader_untilize
@@ -246,7 +247,7 @@ void kernel_main() {
                     uint32_t dst_topk_indice = metadata[2];
                     uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
                     noc_async_write_page(output_page_idx, output_addr_gen, untilize_row_addr);
-                    noc_async_writes_flushed();
+
                 } else {
                     if (local_credits == 0) {
                         noc_semaphore_wait_min(credits_sem_ptr, 1);
@@ -255,34 +256,37 @@ void kernel_main() {
                         noc_async_atomic_barrier();
                         local_credits += n;
                     }
-
-                    // Write routing metadata (dst_chip, dst_token_idx, dst_topk_indice) to
-                    // sender's c_19 metadata ring slot so sender can read from L1 instead of DRAM.
-                    uint64_t meta_dst_addr =
-                        our_metadata_slice_noc_addr + write_slot * aligned_dispatched_metadata_page_size;
-                    uint32_t meta_src_addr = metadata_read_ptr + t * aligned_dispatched_metadata_page_size;
-                    noc_async_write(meta_src_addr, meta_dst_addr, 12);  // 3 × uint32
-
-                    // Write untilized row data to sender's c_18 receive_buf ring slot.
-                    uint64_t dst_addr = our_slice_noc_addr + write_slot * aligned_output_page_size;
-                    uint32_t off = 0;
                     {
-                        DeviceZoneScopedN("combine-FABRIC-row-write");
-                        while (off < aligned_output_page_size) {
-                            uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
-                                                 ? (uint32_t)NOC_MAX_BURST_SIZE
-                                                 : (aligned_output_page_size - off);
-                            noc_async_write(untilize_row_addr + off, dst_addr + off, chunk);
-                            off += chunk;
+                        DeviceZoneScopedN("combine-FABRIC-FULL-WRITE");
+                        // Write routing metadata (dst_chip, dst_token_idx, dst_topk_indice) to
+                        // sender's c_19 metadata ring slot so sender can read from L1 instead of DRAM.
+                        uint64_t meta_dst_addr =
+                            our_metadata_slice_noc_addr + write_slot * aligned_dispatched_metadata_page_size;
+                        uint32_t meta_src_addr = metadata_read_ptr + t * aligned_dispatched_metadata_page_size;
+                        noc_async_write_one_packet_with_trid(meta_src_addr, meta_dst_addr, 12, TRID_NON_LOCAL_WRITE);
+
+                        // Write untilized row data to sender's c_18 receive_buf ring slot.
+                        uint64_t dst_addr = our_slice_noc_addr + write_slot * aligned_output_page_size;
+                        uint32_t off = 0;
+                        {
+                            DeviceZoneScopedN("combine-FABRIC-row-write");
+                            while (off < aligned_output_page_size) {
+                                uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
+                                                     ? (uint32_t)NOC_MAX_BURST_SIZE
+                                                     : (aligned_output_page_size - off);
+                                noc_async_write_one_packet_with_trid(
+                                    untilize_row_addr + off, dst_addr + off, chunk, TRID_NON_LOCAL_WRITE);
+                                off += chunk;
+                            }
+                            noc_async_write_barrier_with_trid(
+                                TRID_NON_LOCAL_WRITE);  // zone measures only row-data landing
                         }
-                        noc_async_write_barrier();  // ensures both metadata and row data have landed
+
+                        noc_semaphore_inc<true>(sender_data_ready_noc_addr, 1);
+
+                        write_slot = (write_slot + 1) % SLOTS_PER_IDLE;
+                        local_credits--;
                     }
-
-                    noc_semaphore_inc(sender_data_ready_noc_addr, 1);
-                    noc_async_atomic_barrier();
-
-                    write_slot = (write_slot + 1) % SLOTS_PER_IDLE;
-                    local_credits--;
                 }
             }
             // Make sure any local writes that hit only the writes-flushed path complete before
@@ -298,13 +302,13 @@ void kernel_main() {
 
     // All batches processed — send job-done sentinel to sender so it knows this idle
     // core has finished completely.  Uses one ring slot (credit consumed, data_ready++).
-    if (local_credits == 0) {
-        noc_semaphore_wait_min(credits_sem_ptr, 1);
-        uint32_t n = *credits_sem_ptr;
-        noc_semaphore_inc(self_credits_noc_addr, (uint32_t)(-(int32_t)n));
-        noc_async_atomic_barrier();
-        local_credits += n;
-    }
+
+    noc_semaphore_wait_min(credits_sem_ptr, SLOTS_PER_IDLE - local_credits);
+    uint32_t n = *credits_sem_ptr;
+    noc_semaphore_inc(self_credits_noc_addr, (uint32_t)(-(int32_t)n));
+    noc_semaphore_set(counter_ready_sem_ptr, 0);
+    noc_async_atomic_barrier();
+
     uint64_t done_meta_noc = our_metadata_slice_noc_addr + write_slot * aligned_dispatched_metadata_page_size;
     noc_inline_dw_write(done_meta_noc, ROUTE_INFO_SENTINEL);
     noc_async_write_barrier();
