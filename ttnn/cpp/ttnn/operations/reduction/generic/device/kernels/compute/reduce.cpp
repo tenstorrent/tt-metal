@@ -2,16 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Thin wrapper around compute_kernel_lib::reduce<>. When the host defines REDUCE_FORMAT
-// (Int32 or Float32), routes to the SFPU MAX path; otherwise FPU/GMPOOL.
+// Thin wrapper around compute_kernel_lib::reduce<>. The host always defines REDUCE_FORMAT
+// (the input data format); compute_kernel_lib::reduce<> dispatches to SFPU when
+// REDUCE_FORMAT is Int32/Float32 and REDUCE_OP is MAX, otherwise FPU/GMPOOL.
 // MIN on Int32/Float32 is dispatched separately via reduce_sfpu_{h,w}_neg.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-
-#if defined(REDUCE_POST_MUL) && !defined(REDUCE_FORMAT)
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#endif
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
@@ -20,17 +17,19 @@ void kernel_main() {
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
 
+    // SFPU init handles unpacker reconfig itself; the FPU/GMPOOL path needs reduce<> to reconfigure
+    // the input format. Decide once at compile time from REDUCE_FORMAT/REDUCE_OP.
+    constexpr bool is_sfpu_path =
+        compute_kernel_lib::detail::is_sfpu_reduce_format(REDUCE_FORMAT) && REDUCE_OP == PoolType::MAX;
+    constexpr auto reconfig_mode = is_sfpu_path ? compute_kernel_lib::ReduceDataFormatReconfigMode::NONE
+                                                : compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
+
     compute_kernel_lib::reduce<
         REDUCE_OP,
         REDUCE_DIM,
+        REDUCE_FORMAT,
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-#ifdef REDUCE_FORMAT
-        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE,
-        REDUCE_FORMAT
-#else
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT
-#endif
-        >(
+        reconfig_mode>(
         tt::CBIndex::c_0,
         tt::CBIndex::c_2,
         tt::CBIndex::c_3,
@@ -40,14 +39,10 @@ void kernel_main() {
 #ifdef REDUCE_POST_MUL
         // GMPOOL only respects the scaler's exponent for MAX/MIN and SFPU reduce ignores the
         // scaler CB entirely, so both paths apply the user scalar here per output tile.
+        // reduce_post_mul_tile applies typecast-bracketed mul for Int32, plain mul_unary_tile otherwise.
         [](uint32_t dst_idx) {
             constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
-#ifdef REDUCE_FORMAT
-            compute_kernel_lib::detail::sfpu_post_mul_tile<REDUCE_FORMAT>(dst_idx, post_mul_scaler_bits);
-#else
-            binop_with_scalar_tile_init();
-            mul_unary_tile(dst_idx, post_mul_scaler_bits);
-#endif
+            compute_kernel_lib::detail::reduce_post_mul_tile<REDUCE_FORMAT>(dst_idx, post_mul_scaler_bits);
         }
 #else
         compute_kernel_lib::NoOp{}

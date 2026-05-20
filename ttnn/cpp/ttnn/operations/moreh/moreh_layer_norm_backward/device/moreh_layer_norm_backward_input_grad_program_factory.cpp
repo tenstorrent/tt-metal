@@ -8,6 +8,7 @@
 #include "moreh_layer_norm_backward_input_grad_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -194,6 +195,7 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
     } else {
         compute_defines_map["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
     }
+    compute_defines["REDUCE_FORMAT"] = ttnn::kernel_lib::reduce_format_define(cb_data_format);
     if (fp32_dest_acc_en) {
         reader_defines_map["FP32_DEST_ACC_EN"] = "1";
         compute_defines_map["FP32_DEST_ACC_EN"] = "1";

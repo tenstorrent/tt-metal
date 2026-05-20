@@ -71,7 +71,7 @@ void kernel_main() {
          * cb_stats = [sum(x0**2), sum(x1**2), ...]
          * Uses auto-batched STREAMING mode - library handles CB lifecycle
          */
-        compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
+        compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, REDUCE_FORMAT>(
             stats_cb,
             reduce_scalar_cb,
             reduce_result_cb,

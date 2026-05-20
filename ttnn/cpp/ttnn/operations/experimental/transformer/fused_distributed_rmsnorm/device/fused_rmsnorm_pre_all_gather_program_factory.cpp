@@ -10,6 +10,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -122,6 +123,7 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
     const auto* compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/kernels/compute/"
         "rmsnorm_pre_allgather.cpp";
+    const tt::DataFormat compute_reduce_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     const auto cores = corerange_to_cores(core_grid, num_cores, true);
 
@@ -156,6 +158,7 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = core_grid_set;
     compute_kernel_desc.compile_time_args = std::move(compute_args);
+    compute_kernel_desc.defines = {{"REDUCE_FORMAT", ttnn::kernel_lib::reduce_format_define(compute_reduce_format)}};
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

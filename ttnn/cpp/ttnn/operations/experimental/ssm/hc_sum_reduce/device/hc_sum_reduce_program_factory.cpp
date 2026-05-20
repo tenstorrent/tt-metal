@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -154,6 +155,7 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.compile_time_args = std::move(compute_compile_time_args);
+    compute_kernel_desc.defines = {{"REDUCE_FORMAT", ttnn::kernel_lib::reduce_format_define(input_format)}};
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = operation_attributes.math_fidelity, .fp32_dest_acc_en = false, .math_approx_mode = false};
 

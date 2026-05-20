@@ -136,6 +136,7 @@ struct KernelDefines {
         bool rms_norm,
         bool use_welford,
         bool skip_write_back,
+        tt::DataFormat reduce_format,
         const std::optional<operations::unary::UnaryWithParam>& fused_activation = std::nullopt,
         std::optional<tt::tt_metal::DataType> output_dtype = std::nullopt);
 };

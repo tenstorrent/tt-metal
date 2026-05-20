@@ -10,6 +10,7 @@
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 #include "ttnn/operations/math.hpp"
 
 #include <bit>
@@ -253,6 +254,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> compute_defines;
+    compute_defines["REDUCE_FORMAT"] = ttnn::kernel_lib::reduce_format_define(cb_data_format);
     if (gamma.has_value()) {
         reader_defines["FUSE_GAMMA"] = "1";
     }

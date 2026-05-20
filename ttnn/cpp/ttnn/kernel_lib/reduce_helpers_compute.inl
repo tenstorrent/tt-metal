@@ -47,13 +47,18 @@ ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     }
 }
 
-// Post-reduce scaling for the SFPU path. mul_unary_tile is fp32-only, so Int32 is bracketed with
-// typecasts (truncates toward zero on the way back).
-template <DataFormat format>
-ALWI void sfpu_post_mul_tile(uint32_t dst, uint32_t scaler_bits) {
-    static_assert(
-        format == DataFormat::Int32 || format == DataFormat::Float32, "sfpu_post_mul_tile: Int32 or Float32 only");
-    if constexpr (format == DataFormat::Int32) {
+// True if `reduce_format` is an SFPU-eligible format (Int32 or Float32).
+// The full SFPU dispatch (`is_sfpu` inside reduce()) additionally requires reduce_type == MAX,
+// so Float32 SUM/AVG correctly stays on the FPU path.
+constexpr bool is_sfpu_reduce_format(DataFormat f) {
+    return f == DataFormat::Int32 || f == DataFormat::Float32;
+}
+
+// Post-reduce scalar multiply. mul_unary_tile is fp32-only, so Int32 is bracketed with typecasts
+// (truncates toward zero on the way back); all other formats use plain mul_unary_tile.
+template <DataFormat reduce_format>
+ALWI void reduce_post_mul_tile(uint32_t dst, uint32_t scaler_bits) {
+    if constexpr (reduce_format == DataFormat::Int32) {
         typecast_tile_init<(uint32_t)DataFormat::Int32, (uint32_t)DataFormat::Float32>();
         typecast_tile<(uint32_t)DataFormat::Int32, (uint32_t)DataFormat::Float32>(dst);
         binop_with_scalar_tile_init();
@@ -64,11 +69,6 @@ ALWI void sfpu_post_mul_tile(uint32_t dst, uint32_t scaler_bits) {
         binop_with_scalar_tile_init();
         mul_unary_tile(dst, scaler_bits);
     }
-}
-
-// True if `sfpu_format` requests the SFPU reduce path (Int32/Float32 MAX).
-constexpr bool is_sfpu_reduce_format(DataFormat f) {
-    return f == DataFormat::Int32 || f == DataFormat::Float32;
 }
 
 }  // namespace detail
@@ -210,9 +210,9 @@ ALWI void assert_output_dfb_size(uint32_t output_dfb_id, uint32_t total_outputs)
 template <
     PoolType reduce_type,
     ReduceDim reduce_dim,
+    DataFormat reduce_format,
     ReduceInputPolicy input_policy,
     ReduceDataFormatReconfigMode reconfig_mode,
-    DataFormat sfpu_format,
     typename AccumulateT,
     typename PostReduceOp>
 ALWI void reduce(
@@ -271,11 +271,11 @@ ALWI void reduce(
         else { return 0; }
     }());
 
-    // SFPU reduce path: MAX only (MIN dispatches to reduce_sfpu_{h,w}_neg.cpp),
-    // REDUCE_ROW / REDUCE_COL only, WaitAndPopPerTile, no accumulation.
-    constexpr bool is_sfpu = detail::is_sfpu_reduce_format(sfpu_format);
+    // SFPU reduce path: Int32/Float32 MAX only (MIN dispatches to reduce_sfpu_{h,w}_neg.cpp),
+    // REDUCE_ROW / REDUCE_COL only, WaitAndPopPerTile, no accumulation. Float32 SUM/AVG keeps
+    // the FPU path because reduce_type != MAX.
+    constexpr bool is_sfpu = detail::is_sfpu_reduce_format(reduce_format) && reduce_type == PoolType::MAX;
     if constexpr (is_sfpu) {
-        static_assert(reduce_type == PoolType::MAX, "SFPU reduce path: MAX only");
         static_assert(
             reduce_dim == ReduceDim::REDUCE_ROW || reduce_dim == ReduceDim::REDUCE_COL,
             "SFPU reduce path: REDUCE_ROW or REDUCE_COL only");
@@ -432,7 +432,7 @@ ALWI void reduce(
                 if constexpr (is_sfpu) {
                     // SFPU replay state is tied to the DST window; init per acquire.
                     if (Wt > 1) {
-                        detail::sfpu_reduce_max_fold_init<sfpu_format>();
+                        detail::sfpu_reduce_max_fold_init<reduce_format>();
                     }
                 } else {
                     // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
@@ -449,7 +449,7 @@ ALWI void reduce(
                             copy_tile(input_dfb_id, 0, dst_idx);
                         } else {
                             copy_tile(input_dfb_id, 0, sfpu_work_dst);
-                            detail::sfpu_reduce_max_fold_tile<sfpu_format>(
+                            detail::sfpu_reduce_max_fold_tile<reduce_format>(
                                 dst_idx, sfpu_work_dst, dst_idx);
                         }
                         input_dfb.pop_front(onetile);
@@ -482,8 +482,8 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize
                 if constexpr (is_sfpu) {
-                    sfpu_reduce_init<reduce_type, sfpu_format>();
-                    sfpu_reduce<reduce_type, sfpu_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
+                    sfpu_reduce_init<reduce_type, reduce_format>();
+                    sfpu_reduce<reduce_type, reduce_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
                 }
 
                 // Call post-reduce operation (e.g., recip_tile for softmax)
@@ -563,7 +563,7 @@ ALWI void reduce(
                 if constexpr (is_sfpu) {
                     // SFPU replay state is tied to the DST window; init per acquire.
                     if (Ht > 1) {
-                        detail::sfpu_reduce_max_fold_init<sfpu_format>();
+                        detail::sfpu_reduce_max_fold_init<reduce_format>();
                     }
                 } else {
                     // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
@@ -582,7 +582,7 @@ ALWI void reduce(
                                 copy_tile(input_dfb_id, 0, dst_idx);
                             } else {
                                 copy_tile(input_dfb_id, 0, sfpu_work_dst);
-                                detail::sfpu_reduce_max_fold_tile<sfpu_format>(
+                                detail::sfpu_reduce_max_fold_tile<reduce_format>(
                                     dst_idx, sfpu_work_dst, dst_idx);
                             }
                             input_dfb.pop_front(onetile);
@@ -609,9 +609,9 @@ ALWI void reduce(
                 // SFPU intra-tile finalize per output slot
                 if constexpr (is_sfpu) {
                     const uint32_t sfpu_base_dst = get_dst_index(accumulate);
-                    sfpu_reduce_init<reduce_type, sfpu_format>();
+                    sfpu_reduce_init<reduce_type, reduce_format>();
                     for (uint32_t k = 0; k < current_chunk; ++k) {
-                        sfpu_reduce<reduce_type, sfpu_format, reduce_dim>(
+                        sfpu_reduce<reduce_type, reduce_format, reduce_dim>(
                             sfpu_base_dst + k, /*ct_dim=*/1, /*rt_dim=*/1);
                     }
                 }

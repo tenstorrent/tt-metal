@@ -286,7 +286,7 @@ void kernel_main() {
             // Compute cb_dgamma
             if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[y * dy]
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, REDUCE_FORMAT>(
                     cb_ydyadd, cb_scaler, cb_dgamma, compute_kernel_lib::ReduceInputBlockShape::single());
             } else {
                 // Just copy
@@ -311,7 +311,7 @@ void kernel_main() {
             // Compute cb_dbeta
             if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[dy]
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, REDUCE_FORMAT>(
                     cb_dyadd, cb_scaler, cb_dbeta, compute_kernel_lib::ReduceInputBlockShape::single());
             } else {
                 // Just copy

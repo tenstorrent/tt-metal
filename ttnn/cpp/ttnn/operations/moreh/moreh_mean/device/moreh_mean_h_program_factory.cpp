@@ -8,6 +8,7 @@
 #include "moreh_mean_device_operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
@@ -148,6 +149,7 @@ tt::tt_metal::ProgramDescriptor MorehMeanOperation::MorehMeanHFactory::create_de
     auto reduce_op = ReduceOpMath::AVG;
     auto reduce_dim = ReduceOpDim::H;
     auto compute_defines_map = reduce_op_utils::get_defines(reduce_op, reduce_dim);
+    compute_defines_map["REDUCE_FORMAT"] = ttnn::kernel_lib::reduce_format_define(data_format);
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         compute_defines_map["FP32_DEST_ACC_EN"] = "1";

@@ -10,6 +10,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
+
 #include <bit>
 #include <map>
 #include <utility>
@@ -220,6 +222,7 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
 
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     softmax_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
+    softmax_defines["REDUCE_FORMAT"] = ttnn::kernel_lib::reduce_format_define(im_cb_data_format);
     std::string softmax_kernel_path =
         use_large_kernel ? std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax_large_tensor.cpp"
                          : std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax.cpp";

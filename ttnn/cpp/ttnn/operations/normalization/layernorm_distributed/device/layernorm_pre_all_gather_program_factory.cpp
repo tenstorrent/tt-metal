@@ -9,6 +9,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 
 #include <map>
 #include <string>
@@ -140,6 +141,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
     std::map<std::string, std::string> compute_defines;
     reader_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
     compute_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
+    compute_defines["REDUCE_FORMAT"] = ttnn::kernel_lib::reduce_format_define(in_data_format);
 
     std::vector<uint32_t> compute_args = {Wt, block_size};
 
@@ -414,6 +416,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
     std::map<std::string, std::string> compute_defines;
     reader_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
     compute_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
+    compute_defines["REDUCE_FORMAT"] = ttnn::kernel_lib::reduce_format_define(in_data_format);
 
     std::vector<uint32_t> compute_args = {tiles_per_core_x, tiles_per_core_y, block_size, cores_y};
 

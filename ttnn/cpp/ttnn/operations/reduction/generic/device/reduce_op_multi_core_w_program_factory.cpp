@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_op_device_operation.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -148,8 +149,14 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
 
+    // Always pass the input data format to the unified reduce<> template. SFPU vs FPU dispatch
+    // happens inside compute_kernel_lib::reduce<> via REDUCE_FORMAT + REDUCE_OP.
+    reduce_defines["REDUCE_FORMAT"] = ttnn::kernel_lib::reduce_format_define(src0_cb_data_format);
+
+    // Tell the dataflow readers when to reserve one extra DST for the SFPU binary-fold work tile.
+    // Compute-side dispatch uses REDUCE_FORMAT + REDUCE_OP; readers only need a binary flag.
     if (use_sfpu_reduce_path) {
-        reduce_defines["REDUCE_FORMAT"] = a.dtype() == DataType::INT32 ? "DataFormat::Int32" : "DataFormat::Float32";
+        reduce_defines["REDUCE_SFPU_PATH"] = "1";
     }
 
     // Float32 SFPU reduce must unpack source tiles straight into the fp32 DST register.

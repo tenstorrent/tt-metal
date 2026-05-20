@@ -92,7 +92,7 @@ void kernel_main() {
 
 #ifdef REDUCE_POST_MUL
             for (uint32_t k = 0; k < current_chunk; ++k) {
-                compute_kernel_lib::detail::sfpu_post_mul_tile<REDUCE_FORMAT>(k, post_mul_scaler_bits);
+                compute_kernel_lib::detail::reduce_post_mul_tile<REDUCE_FORMAT>(k, post_mul_scaler_bits);
             }
 #endif
 

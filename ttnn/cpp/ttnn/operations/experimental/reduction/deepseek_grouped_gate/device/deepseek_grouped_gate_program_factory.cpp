@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "deepseek_grouped_gate_device_operation.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 
 #include <bit>
 #include <map>
@@ -303,6 +304,7 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
     compute_kernel_desc.compile_time_args = std::move(compute_compile_time_args);
     compute_kernel_desc.named_compile_time_args = KernelDescriptor::NamedCompileTimeArgs(
         compute_named_compile_time_args.begin(), compute_named_compile_time_args.end());
+    compute_kernel_desc.defines = {{"REDUCE_FORMAT", ttnn::kernel_lib::reduce_format_define(scores_data_format)}};
     compute_kernel_desc.config = ComputeConfigDescriptor{.fp32_dest_acc_en = fp32_dest_acc_en};
 
     // Build runtime args per core

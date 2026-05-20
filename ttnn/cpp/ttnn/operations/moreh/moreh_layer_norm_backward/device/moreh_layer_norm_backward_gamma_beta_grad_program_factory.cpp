@@ -8,6 +8,7 @@
 #include "moreh_layer_norm_backward_gamma_beta_grad_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -156,6 +157,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
     std::map<std::string, std::string> compute_defines_map{};
     compute_defines_map["REDUCE_OP"] = "PoolType::SUM";
     compute_defines_map["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";
+    compute_defines_map["REDUCE_FORMAT"] = ttnn::kernel_lib::reduce_format_define(cb_data_format);
     if (fp32_dest_acc_en) {
         reader_defines_map["FP32_DEST_ACC_EN"] = "1";
         compute_defines_map["FP32_DEST_ACC_EN"] = "1";

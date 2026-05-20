@@ -9,6 +9,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
+
 #include <cmath>
 
 using namespace tt::tt_metal;
@@ -272,6 +274,7 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_ranges;
     compute_desc.compile_time_args = compute_args;
+    compute_desc.defines = {{"REDUCE_FORMAT", ttnn::kernel_lib::reduce_format_define(input_cb_data_format)}};
     compute_desc.config = ComputeConfigDescriptor{};
 
     desc.kernels.push_back(std::move(reader_desc));

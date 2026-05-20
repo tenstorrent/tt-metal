@@ -8,6 +8,7 @@
 #include "moreh_clip_grad_norm_step1_device_operation.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -205,6 +206,7 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
     compute_desc.defines = KernelDescriptor::Defines{
         {"REDUCE_OP", "PoolType::SUM"},
         {"REDUCE_DIM", "ReduceDim::REDUCE_SCALAR"},
+        {"REDUCE_FORMAT", ttnn::kernel_lib::reduce_format_define(cb_data_format)},
     };
     compute_desc.config = ComputeConfigDescriptor{};
     compute_desc.runtime_args.reserve(num_cores_to_be_used);

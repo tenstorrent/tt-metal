@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_op_device_operation.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -155,6 +156,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgram
 
     std::map<std::string, std::string> reduce_defines =
         reduce_op_utils::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::HW);
+    reduce_defines["REDUCE_FORMAT"] = ttnn::kernel_lib::reduce_format_define(src0_cb_data_format);
     if (use_post_mul) {
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }

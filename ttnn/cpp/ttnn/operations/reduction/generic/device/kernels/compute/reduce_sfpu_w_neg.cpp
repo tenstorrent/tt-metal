@@ -78,7 +78,7 @@ void kernel_main() {
             negate(acc_dst);
 
 #ifdef REDUCE_POST_MUL
-            compute_kernel_lib::detail::sfpu_post_mul_tile<REDUCE_FORMAT>(acc_dst, post_mul_scaler_bits);
+            compute_kernel_lib::detail::reduce_post_mul_tile<REDUCE_FORMAT>(acc_dst, post_mul_scaler_bits);
 #endif
 
             tile_regs_commit();
