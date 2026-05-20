@@ -95,7 +95,7 @@ ALWI constexpr uint32_t window_2d(uint32_t Ht, uint32_t Wt) noexcept {
 // WaitAndPopPerBlock rejects RowBcast/ColBcast (window > BlockSize — producer
 // can't have only one chunk staged) and BlockIterOffset (caller-managed window
 // shape contradicts chain-owned chunked pop).
-template <CopyTilePolicy P, CbIndexMode M>
+template <InputLifecycle P, CbIndexMode M>
 inline constexpr bool valid_policy_mode_2d_v =
     !(is_bcast_mode_v<M> &&
       (P == CopyTilePolicy::WaitAndPop || P == CopyTilePolicy::WaitAndPopPerBlock)) &&
@@ -135,8 +135,8 @@ struct count_v_helper : std::integral_constant<size_t, (size_t{Pred<Es>::value} 
 // Every CB-reader element must expose:
 //   static constexpr uint32_t cb_a_id();             // primary CB
 //   static constexpr uint32_t cb_b_id();             // secondary CB or 0 if N/A
-//   static constexpr CopyTilePolicy a_policy();
-//   static constexpr CopyTilePolicy b_policy();
+//   static constexpr InputLifecycle a_policy();
+//   static constexpr InputLifecycle b_policy();
 // (default impls below cover non-CB-reader elements.)
 //
 // Every CB-writer element must expose:
@@ -226,7 +226,7 @@ constexpr uint32_t prev_cb_for_idx() {
 
 template <uint32_t Cb,
           Dst DstSlot,
-          CopyTilePolicy Policy,
+          InputLifecycle Policy,
           CbIndexMode IndexMode,
           CopyTileReconfig Reconfig>
 struct CopyTile : CopyTileTag {
@@ -259,8 +259,8 @@ struct CopyTile : CopyTileTag {
     static constexpr CbIndexMode    a_index_mode    = IndexMode;
     static constexpr CbIndexMode    b_index_mode    = CbIndexMode::FirstTile;
     static constexpr Dst            dst_slot        = DstSlot;
-    static constexpr CopyTilePolicy a_policy()      { return Policy; }
-    static constexpr CopyTilePolicy b_policy()      { return CopyTilePolicy::NoWaitNoPop; }
+    static constexpr InputLifecycle a_policy()      { return Policy; }
+    static constexpr InputLifecycle b_policy()      { return CopyTilePolicy::NoWaitNoPop; }
     static constexpr bool           is_upfront      = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
                                                       (Policy == CopyTilePolicy::WaitUpfrontNoPop) ||
                                                       (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd);
@@ -380,7 +380,7 @@ private:
 
 template <uint32_t Cb,
           Dst DstSlot,
-          PackTilePolicy Policy,
+          OutputLifecycle Policy,
           PackTileIndexMode IndexMode,
           PackTileReconfig Reconfig>
 struct PackTile : PackTileTag {
@@ -518,7 +518,7 @@ private:
 template <uint32_t Cb,
           Dst FirstSlot,
           uint32_t NTiles,
-          PackTilePolicy Policy,
+          OutputLifecycle Policy,
           PackTileReconfig Reconfig>
 struct PackTileBlock : PackTileTag {
     static_assert(NTiles >= 1 && NTiles <= DEST_AUTO_LIMIT,
@@ -605,8 +605,8 @@ template <uint32_t CbA,
           BinaryFpuOp Op,
           BroadcastDim Bcast,
           BinaryDataFormatReconfig DfReconfig,
-          CopyTilePolicy APolicy,
-          CopyTilePolicy BPolicy,
+          InputLifecycle APolicy,
+          InputLifecycle BPolicy,
           CbIndexMode AIndex,
           Dst DstSlot,
           CbIndexMode BIndex>
@@ -640,8 +640,8 @@ struct BinaryFpu : BinaryFpuTag {
     static constexpr uint32_t      cb_b_id()  { return CbB; }
     static constexpr CbIndexMode   a_index_mode = AIndex;
     static constexpr CbIndexMode   b_index_mode = BIndex;
-    static constexpr CopyTilePolicy a_policy(){ return APolicy; }
-    static constexpr CopyTilePolicy b_policy(){ return BPolicy; }
+    static constexpr InputLifecycle a_policy(){ return APolicy; }
+    static constexpr InputLifecycle b_policy(){ return BPolicy; }
     static constexpr Dst           dst_slot   = DstSlot;
     static constexpr bool          is_upfront = (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
                                                 (APolicy == CopyTilePolicy::WaitUpfrontNoPop) ||
@@ -889,7 +889,7 @@ template <uint32_t Cb,
           Dst DstIn,
           Dst DstOut,
           DestReuseReconfig Reconfig,
-          CopyTilePolicy Policy,
+          InputLifecycle Policy,
           CbIndexMode IndexMode>
 struct DestReuseBinary : DestReuseBinaryTag {
     static_assert(to_u32(DstIn) < DEST_AUTO_LIMIT && to_u32(DstOut) < DEST_AUTO_LIMIT,
@@ -903,8 +903,8 @@ struct DestReuseBinary : DestReuseBinaryTag {
     static constexpr uint32_t       cb_b_id()         { return 0;  }
     static constexpr CbIndexMode    a_index_mode     = IndexMode;
     static constexpr CbIndexMode    b_index_mode     = CbIndexMode::FirstTile;
-    static constexpr CopyTilePolicy a_policy()        { return Policy; }
-    static constexpr CopyTilePolicy b_policy()        { return CopyTilePolicy::NoWaitNoPop; }
+    static constexpr InputLifecycle a_policy()        { return Policy; }
+    static constexpr InputLifecycle b_policy()        { return CopyTilePolicy::NoWaitNoPop; }
     static constexpr Dst            dst_slot          = DstOut;
     static constexpr bool           is_upfront        = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
                                                         (Policy == CopyTilePolicy::WaitUpfrontNoPop) ||
@@ -1025,7 +1025,7 @@ template <BroadcastDim Dim,
           uint32_t Cb,
           uint32_t CbOut,
           Dst DstSlot,
-          CopyTilePolicy Policy,
+          InputLifecycle Policy,
           UnaryBcastReconfig Reconfig>
 struct UnaryBcast : UnaryBcastTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
@@ -1033,8 +1033,8 @@ struct UnaryBcast : UnaryBcastTag {
 
     static constexpr uint32_t       cb_a_id()         { return Cb; }
     static constexpr uint32_t       cb_b_id()         { return 0;  }
-    static constexpr CopyTilePolicy a_policy()        { return Policy; }
-    static constexpr CopyTilePolicy b_policy()        { return CopyTilePolicy::NoWaitNoPop; }
+    static constexpr InputLifecycle a_policy()        { return Policy; }
+    static constexpr InputLifecycle b_policy()        { return CopyTilePolicy::NoWaitNoPop; }
     static constexpr Dst            dst_slot          = DstSlot;
     static constexpr bool           is_upfront        = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
                                                         (Policy == CopyTilePolicy::WaitUpfrontNoPop) ||
@@ -1244,7 +1244,7 @@ inline constexpr uint32_t chain_lane_width_v = chain_lane_width<Chain>::value;
 // and are incompatible with chain BlockSize > 1 (chain consumes BlockSize tiles per
 // outer iter). The chain `static_assert`s on this predicate when `BlockSize > 1`.
 namespace detail {
-constexpr bool policy_supports_block(CopyTilePolicy p) {
+constexpr bool policy_supports_block(InputLifecycle p) {
     return p == CopyTilePolicy::WaitUpfrontPopAtEnd ||
            p == CopyTilePolicy::WaitUpfrontNoPop ||
            p == CopyTilePolicy::CumulativeWaitPopAtEnd ||

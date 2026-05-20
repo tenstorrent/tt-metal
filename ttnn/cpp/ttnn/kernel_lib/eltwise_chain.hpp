@@ -375,6 +375,11 @@ inline constexpr InputLifecycle HeldStream = {WaitPolicy::PerTile, PopPolicy::No
 // consumer chains in softmax cb_exps (~7 sites).
 inline constexpr InputLifecycle DeferredPop = {WaitPolicy::None, PopPolicy::AtEnd};
 
+// Caller waited externally, chain pops per-tile. Used in some pre-staged
+// (sharded) operand patterns where the chain doesn't re-wait but does drain
+// per-tile. Mapped from legacy CopyTilePolicy::NoWaitPop.
+inline constexpr InputLifecycle NoWaitPop = {WaitPolicy::None, PopPolicy::PerTile};
+
 /// Validates a caller-constructed `InputLifecycle` against the legal set.
 /// Used by every input element's `static_assert` at chain composition.
 /// Half-edge cells (HeldBulk, HeldCumulative, HeldStream, DeferredPop) are
@@ -383,7 +388,8 @@ inline constexpr InputLifecycle DeferredPop = {WaitPolicy::None, PopPolicy::AtEn
 /// rejected — see audit-confirmed cells in eltwise_taxonomy.md.
 constexpr bool is_legal_input_lifecycle(InputLifecycle lc) noexcept {
     return lc == Streaming || lc == Chunked || lc == Bulk || lc == Pipelined || lc == CallerManaged ||
-           lc == BulkDrain || lc == HeldBulk || lc == HeldCumulative || lc == HeldStream || lc == DeferredPop;
+           lc == BulkDrain || lc == HeldBulk || lc == HeldCumulative || lc == HeldStream || lc == DeferredPop ||
+           lc == NoWaitPop;
 }
 
 enum class ReservePolicy : uint8_t {
@@ -419,10 +425,16 @@ inline constexpr OutputLifecycle OutBulkReservePerChunk = {ReservePolicy::Upfron
 // L1-accumulator pack helper (tt-train compute_utils): chain emits pack_tile only,
 // caller wraps the chain with its own reserve+push window. 4 catalog sites.
 inline constexpr OutputLifecycle OutCallerManaged = {ReservePolicy::None, PushPolicy::None};
+// Chain reserves per-tile, caller pushes (rare deferred-push pattern).
+// Mapped from legacy PackTilePolicy::PerTileReserveNoPush.
+inline constexpr OutputLifecycle OutHeldReserve = {ReservePolicy::PerTile, PushPolicy::None};
+// Caller bulk-reserved externally, chain bulk-pushes at end.
+// Mapped from legacy PackTilePolicy::NoReservePushAtEnd.
+inline constexpr OutputLifecycle OutDeferredReserve = {ReservePolicy::None, PushPolicy::AtEnd};
 
 constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
     return lc == OutStreaming || lc == OutChunked || lc == OutBulk || lc == OutBulkReservePerTile ||
-           lc == OutBulkReservePerChunk || lc == OutCallerManaged;
+           lc == OutBulkReservePerChunk || lc == OutCallerManaged || lc == OutHeldReserve || lc == OutDeferredReserve;
 }
 
 /// Per-input operand kind. The output kind is always `Block` (single column
@@ -510,44 +522,22 @@ enum class Legacy : bool { Off = false, On = true };
 // 4. Policy enums — CB lifecycle, indexing, reconfig, broadcast
 // =============================================================================
 
-/// CB-input lifecycle (CopyTile, BinaryFpu A/B operands, DestReuseBinary, UnaryBcast).
-enum class CopyTilePolicy : uint8_t {
-    WaitAndPop,              // per-tile wait + per-tile pop  (default — streaming)
-    WaitNoPop,               // per-tile wait + no pop        (fan-out first / persistent)
-    NoWaitPop,               // no wait     + per-tile pop    (fan-out last / pre-waited single)
-    NoWaitNoPop,             // no wait     + no pop          (caller owns lifecycle / sharded)
-    WaitUpfrontPopAtEnd,     // upfront wait + upfront pop    (block access — BlockIter / Absolute legal)
-    WaitUpfrontNoPop,        // upfront wait + NO pop. Same wait shape as WaitUpfrontPopAtEnd but
-                             // caller keeps the tiles alive past chain exit — used when a
-                             // downstream stage (another chain, a reduce, raw LLK) still needs
-                             // the same CB. Caller is responsible for the final pop. Symmetric
-                             // with CumulativeWaitNoPop but pays the full N wait once at entry
-                             // instead of growing per iter.
-    CumulativeWaitPopAtEnd,  // per-iter cumulative wait (cb_wait_front(cb, i+1)) + bulk pop at end
-                             // (block access with producer streaming: consumer iter i starts as
-                             // soon as producer has pushed i+1 tiles, vs WaitUpfrontPopAtEnd which
-                             // blocks iter 0 on the full N. BlockIter / Absolute / Pinned all
-                             // legal — cumulative wait guarantees tile i present at iter i.)
-    CumulativeWaitNoPop,     // per-iter cumulative wait + NO pop. Same wait shape as
-                             // CumulativeWaitPopAtEnd but caller keeps the tiles alive — used
-                             // when downstream stages (e.g. a sum reduce after the x² stage)
-                             // still need the same CB. Caller is responsible for the final
-                             // pop after the consuming stage(s) finish.
-    WaitAndPopPerBlock,      // per-outer-iter wait `inner_count` + pop `inner_count`.
-                             // Chunked-streaming middle ground between WaitAndPop
-                             // (1 tile in flight) and WaitUpfrontPopAtEnd (all N upfront):
-                             // producer only needs `BlockSize` tiles ahead at any time.
-                             // Pipeline passes the chunk-local index `j` (not `base_tile + j`)
-                             // to exec — `copy_tile(cb, j)` reads the j-th tile of the
-                             // just-waited window. CB front advances one block per outer iter,
-                             // so the visible window is always `[0 .. inner_count)`.
-                             // Index modes: BlockIter (canonical — yields j), FirstTile
-                             // (always slot 0 — useful when reusing the same chunk-local
-                             // tile across lanes). Pinned/Absolute are also accepted but the
-                             // runtime k must lie in `[0, inner_count)` — using them under
-                             // per-block is unusual; prefer BlockIter unless you specifically
-                             // need a chunk-local fixed offset. RowBcast/ColBcast and
-                             // BlockIterOffset are rejected (see valid_policy_mode_2d_v).
+/// Legacy `CopyTilePolicy::X` use-site syntax mapped to the new `InputLifecycle`
+/// named constants. Each old enum value is now a `static constexpr InputLifecycle`
+/// equal to the corresponding new lifecycle constant. Template parameters that
+/// previously took `CopyTilePolicy` should be migrated to `InputLifecycle`.
+/// Existing call sites like `CopyTilePolicy::WaitUpfrontPopAtEnd` continue to
+/// compile (the value is now an InputLifecycle, not an enum value).
+struct CopyTilePolicy {
+    static constexpr InputLifecycle WaitAndPop = Streaming;                     // {PerTile, PerTile}
+    static constexpr InputLifecycle WaitNoPop = HeldStream;                     // {PerTile, None}
+    static constexpr InputLifecycle NoWaitPop = compute_kernel_lib::NoWaitPop;  // {None, PerTile}
+    static constexpr InputLifecycle NoWaitNoPop = CallerManaged;                // {None, None}
+    static constexpr InputLifecycle WaitUpfrontPopAtEnd = Bulk;                 // {Upfront, AtEnd}
+    static constexpr InputLifecycle WaitUpfrontNoPop = HeldBulk;                // {Upfront, None}
+    static constexpr InputLifecycle CumulativeWaitPopAtEnd = Pipelined;         // {Cumulative, AtEnd}
+    static constexpr InputLifecycle CumulativeWaitNoPop = HeldCumulative;       // {Cumulative, None}
+    static constexpr InputLifecycle WaitAndPopPerBlock = Chunked;               // {PerChunk, PerChunk}
 };
 
 /// CB-input tile indexing.
@@ -647,24 +637,17 @@ enum class UnaryBcastReconfig : uint8_t {
     Input,  // reconfigure_unary_bcast(old_icb, new_icb, old_ocb, new_ocb)
 };
 
-/// Pack-side lifecycle. Six values cover all observed pack patterns from the TSV survey.
-enum class PackTilePolicy : uint8_t {
-    PerTileReserveAndPush,    // cb_reserve_back(1); pack; cb_push_back(1)              (default)
-    PerTileReserveNoPush,     // reserve happens; push deferred to caller
-    NoReservePushAtEnd,       // pack into pre-reserved CB; push N at end
-    NoReserveNoPush,          // caller owns reserve+push
-    UpfrontReservePushAtEnd,  // reserve N upfront; pack sequentially; push N at end
-    PerBlockReserveAndPush,   // per-outer-iter reserve `inner_count` + push `inner_count`.
-                              // Chunked-streaming counterpart of `WaitAndPopPerBlock` —
-                              // downstream consumer only needs `BlockSize` slots free, not
-                              // the full N. Pipeline passes chunk-local index `j` so
-                              // `pack_tile(dst, cb, j)` writes the j-th slot of the just-
-                              // reserved window. IndexMode::BlockIter is the canonical
-                              // pairing (writes slots [0..inner_count) of the back of the
-                              // CB); FirstTile is legal but degenerate (every lane writes
-                              // slot 0 — only sensible at BlockSize=1). Pinned/Absolute
-                              // require runtime k in `[0, inner_count)`. BlockIterOffset
-                              // is rejected by the existing assert.
+/// Legacy `PackTilePolicy::X` use-site syntax mapped to the new `OutputLifecycle`
+/// named constants. Each old enum value is now a `static constexpr OutputLifecycle`.
+/// Template parameters that previously took `PackTilePolicy` should be migrated to
+/// `OutputLifecycle`. Existing call sites continue to compile.
+struct PackTilePolicy {
+    static constexpr OutputLifecycle PerTileReserveAndPush = OutStreaming;     // {PerTile, PerTile}
+    static constexpr OutputLifecycle PerTileReserveNoPush = OutHeldReserve;    // {PerTile, None}
+    static constexpr OutputLifecycle NoReservePushAtEnd = OutDeferredReserve;  // {None, AtEnd}
+    static constexpr OutputLifecycle NoReserveNoPush = OutCallerManaged;       // {None, None}
+    static constexpr OutputLifecycle UpfrontReservePushAtEnd = OutBulk;        // {Upfront, AtEnd}
+    static constexpr OutputLifecycle PerBlockReserveAndPush = OutChunked;      // {PerChunk, PerChunk}
 };
 
 /// PackTile output-tile-index mode (mirrors CbIndexMode).
@@ -846,7 +829,7 @@ struct QuaternaryOp : DestOnlyTag {
 template <
     uint32_t Cb,
     Dst DstSlot = Dst::D0,
-    CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
+    InputLifecycle Policy = Streaming,
     CbIndexMode IndexMode = CbIndexMode::FirstTile,
     CopyTileReconfig Reconfig = CopyTileReconfig::Input>
 struct CopyTile;
@@ -857,8 +840,8 @@ template <
     BinaryFpuOp Op = BinaryFpuOp::Add,
     BroadcastDim Bcast = BroadcastDim::None,
     BinaryDataFormatReconfig DfReconfig = BinaryDataFormatReconfig::Input,
-    CopyTilePolicy APolicy = CopyTilePolicy::WaitAndPop,
-    CopyTilePolicy BPolicy = CopyTilePolicy::WaitAndPop,
+    InputLifecycle APolicy = Streaming,
+    InputLifecycle BPolicy = Streaming,
     CbIndexMode AIndex = CbIndexMode::FirstTile,
     Dst DstSlot = Dst::D0,
     CbIndexMode BIndex = AIndex>
@@ -871,7 +854,7 @@ template <
     Dst DstIn = Dst::D0,
     Dst DstOut = Dst::D0,
     DestReuseReconfig Reconfig = DestReuseReconfig::Input,
-    CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
+    InputLifecycle Policy = Streaming,
     CbIndexMode IndexMode = CbIndexMode::FirstTile>
 struct DestReuseBinary;
 
@@ -880,14 +863,14 @@ template <
     uint32_t Cb,
     uint32_t CbOut = 0,
     Dst DstSlot = Dst::D0,
-    CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
+    InputLifecycle Policy = Streaming,
     UnaryBcastReconfig Reconfig = UnaryBcastReconfig::Input>
 struct UnaryBcast;
 
 template <
     uint32_t Cb,
     Dst DstSlot = Dst::D0,
-    PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
+    OutputLifecycle Policy = OutStreaming,
     PackTileIndexMode IndexMode = PackTileIndexMode::FirstTile,
     PackTileReconfig Reconfig = PackTileReconfig::Output>
 struct PackTile;
@@ -896,7 +879,7 @@ template <
     uint32_t Cb,
     Dst FirstSlot,
     uint32_t NTiles,
-    PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
+    OutputLifecycle Policy = OutStreaming,
     PackTileReconfig Reconfig = PackTileReconfig::Output>
 struct PackTileBlock;
 
