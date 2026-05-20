@@ -809,6 +809,48 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     constexpr uint32_t IN1_OFFSETS_ADDR_IDX = 19;
     constexpr uint32_t IN1_OFFSETS_START_IDX_IDX = 20;
 
+    // Sender and receiver kernels share the same RT-arg layout. Only the sender actually
+    // reads in0_addr / in1_addr (the receiver gets data via NOC handshake from the sender),
+    // but writing the addr to both keeps the slot consistent.
+    auto update_in0 = [&](auto& args, uint32_t M_start, uint32_t M_end, uint32_t defer_write_k_block) {
+        args[IN0_ADDR_IDX] = in0_addr;
+        args[IN0_M_START_IDX] = M_start;
+        args[IN0_M_END_IDX] = M_end;
+        args[IN0_OUT_ADDR_IDX] = out_addr;
+        args[IN0_ACTUAL_M_TILES_IDX] = actual_M_tiles;
+        args[IN0_ACTUAL_PADDED_M_TILES_IDX] = actual_padded_M_tiles;
+        args[IN0_ACTUAL_M_BLOCKS_IDX] = actual_M_blocks_per_core;
+        args[IN0_ROW_OFFSET_TILES_IDX] = operation_attributes.in0_row_offset_tiles;
+        args[IN0_PARENT_M_TILES_STRIDE_IDX] = parent_M_tiles;
+        args[IN0_K_OFFSET_TILES_IDX] = operation_attributes.in0_k_offset_tiles;
+        args[IN0_PARENT_K_TILES_STRIDE_IDX] = parent_K_tiles_in0;
+        args[IN0_OUT_ROW_OFFSET_IDX] = operation_attributes.out_row_offset_tiles;
+        args[IN0_K_TILES_IDX] = K_tiles_rt;
+        args[IN0_DEFER_WRITE_K_BLOCK_IDX] = defer_write_k_block;
+        if (in0_needs_offsets) {
+            args[IN0_OFFSETS_ADDR_IDX] = offsets_addr;
+            args[IN0_OFFSETS_START_IDX_IDX] = operation_attributes.offsets_start_index;
+        }
+    };
+    auto update_in1 = [&](auto& args, uint32_t M_start, uint32_t M_end, uint32_t defer_write_k_block) {
+        args[IN1_ADDR_IDX] = in1_addr;
+        args[IN1_M_START_IDX] = M_start;
+        args[IN1_M_END_IDX] = M_end;
+        args[IN1_OUT_ADDR_IDX] = out_addr;
+        args[IN1_ACTUAL_M_TILES_IDX] = actual_M_tiles;
+        args[IN1_ACTUAL_PADDED_M_TILES_IDX] = actual_padded_M_tiles;
+        args[IN1_ACTUAL_M_BLOCKS_IDX] = actual_M_blocks_per_core;
+        args[IN1_K_OFFSET_TILES_IDX] = operation_attributes.in1_k_offset_tiles;
+        args[IN1_PARENT_K_TILES_STRIDE_IDX] = parent_K_tiles_in1;
+        args[IN1_OUT_ROW_OFFSET_IDX] = operation_attributes.out_row_offset_tiles;
+        args[IN1_K_TILES_IDX] = K_tiles_rt;
+        args[IN1_DEFER_WRITE_K_BLOCK_IDX] = defer_write_k_block;
+        if (in1_needs_offsets) {
+            args[IN1_OFFSETS_ADDR_IDX] = offsets_addr;
+            args[IN1_OFFSETS_START_IDX_IDX] = operation_attributes.offsets_start_index;
+        }
+    };
+
     for (uint32_t i = 0; i < sv.num_cores; ++i) {
         CoreCoord core = sv.cores.at(i);
         uint32_t in0_idx = sv.transpose_core_grid ? core.x : core.y;
@@ -821,85 +863,16 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
         // override) using Y_AXIS_CORES — just pass core.y.
         const uint32_t defer_write_k_block = core.y;
 
-        // Update in0 args
-        if (in1_idx == 0) {
-            auto& args = in0_sender_rt[core.x][core.y];
-            args[IN0_ADDR_IDX] = in0_addr;
-            args[IN0_M_START_IDX] = M_start_tile;
-            args[IN0_M_END_IDX] = M_end_tile;
-            args[IN0_OUT_ADDR_IDX] = out_addr;
-            args[IN0_ACTUAL_M_TILES_IDX] = actual_M_tiles;
-            args[IN0_ACTUAL_PADDED_M_TILES_IDX] = actual_padded_M_tiles;
-            args[IN0_ACTUAL_M_BLOCKS_IDX] = actual_M_blocks_per_core;
-            args[IN0_ROW_OFFSET_TILES_IDX] = operation_attributes.in0_row_offset_tiles;
-            args[IN0_PARENT_M_TILES_STRIDE_IDX] = parent_M_tiles;
-            args[IN0_K_OFFSET_TILES_IDX] = operation_attributes.in0_k_offset_tiles;
-            args[IN0_PARENT_K_TILES_STRIDE_IDX] = parent_K_tiles_in0;
-            args[IN0_OUT_ROW_OFFSET_IDX] = operation_attributes.out_row_offset_tiles;
-            args[IN0_K_TILES_IDX] = K_tiles_rt;
-            args[IN0_DEFER_WRITE_K_BLOCK_IDX] = defer_write_k_block;
-            if (in0_needs_offsets) {
-                args[IN0_OFFSETS_ADDR_IDX] = offsets_addr;
-                args[IN0_OFFSETS_START_IDX_IDX] = operation_attributes.offsets_start_index;
-            }
-        } else {
-            auto& args = in0_receiver_rt[core.x][core.y];
-            args[IN0_M_START_IDX] = M_start_tile;
-            args[IN0_M_END_IDX] = M_end_tile;
-            args[IN0_OUT_ADDR_IDX] = out_addr;
-            args[IN0_ACTUAL_M_TILES_IDX] = actual_M_tiles;
-            args[IN0_ACTUAL_PADDED_M_TILES_IDX] = actual_padded_M_tiles;
-            args[IN0_ACTUAL_M_BLOCKS_IDX] = actual_M_blocks_per_core;
-            args[IN0_ROW_OFFSET_TILES_IDX] = operation_attributes.in0_row_offset_tiles;
-            args[IN0_PARENT_M_TILES_STRIDE_IDX] = parent_M_tiles;
-            args[IN0_K_OFFSET_TILES_IDX] = operation_attributes.in0_k_offset_tiles;
-            args[IN0_PARENT_K_TILES_STRIDE_IDX] = parent_K_tiles_in0;
-            args[IN0_OUT_ROW_OFFSET_IDX] = operation_attributes.out_row_offset_tiles;
-            args[IN0_K_TILES_IDX] = K_tiles_rt;
-            args[IN0_DEFER_WRITE_K_BLOCK_IDX] = defer_write_k_block;
-            if (in0_needs_offsets) {
-                args[IN0_OFFSETS_ADDR_IDX] = offsets_addr;
-                args[IN0_OFFSETS_START_IDX_IDX] = operation_attributes.offsets_start_index;
-            }
-        }
-
-        // Update in1 args
-        if (in0_idx == 0) {
-            auto& args = in1_sender_rt[core.x][core.y];
-            args[IN1_ADDR_IDX] = in1_addr;
-            args[IN1_M_START_IDX] = M_start_tile;
-            args[IN1_M_END_IDX] = M_end_tile;
-            args[IN1_OUT_ADDR_IDX] = out_addr;
-            args[IN1_ACTUAL_M_TILES_IDX] = actual_M_tiles;
-            args[IN1_ACTUAL_PADDED_M_TILES_IDX] = actual_padded_M_tiles;
-            args[IN1_ACTUAL_M_BLOCKS_IDX] = actual_M_blocks_per_core;
-            args[IN1_K_OFFSET_TILES_IDX] = operation_attributes.in1_k_offset_tiles;
-            args[IN1_PARENT_K_TILES_STRIDE_IDX] = parent_K_tiles_in1;
-            args[IN1_OUT_ROW_OFFSET_IDX] = operation_attributes.out_row_offset_tiles;
-            args[IN1_K_TILES_IDX] = K_tiles_rt;
-            args[IN1_DEFER_WRITE_K_BLOCK_IDX] = defer_write_k_block;
-            if (in1_needs_offsets) {
-                args[IN1_OFFSETS_ADDR_IDX] = offsets_addr;
-                args[IN1_OFFSETS_START_IDX_IDX] = operation_attributes.offsets_start_index;
-            }
-        } else {
-            auto& args = in1_receiver_rt[core.x][core.y];
-            args[IN1_M_START_IDX] = M_start_tile;
-            args[IN1_M_END_IDX] = M_end_tile;
-            args[IN1_OUT_ADDR_IDX] = out_addr;
-            args[IN1_ACTUAL_M_TILES_IDX] = actual_M_tiles;
-            args[IN1_ACTUAL_PADDED_M_TILES_IDX] = actual_padded_M_tiles;
-            args[IN1_ACTUAL_M_BLOCKS_IDX] = actual_M_blocks_per_core;
-            args[IN1_K_OFFSET_TILES_IDX] = operation_attributes.in1_k_offset_tiles;
-            args[IN1_PARENT_K_TILES_STRIDE_IDX] = parent_K_tiles_in1;
-            args[IN1_OUT_ROW_OFFSET_IDX] = operation_attributes.out_row_offset_tiles;
-            args[IN1_K_TILES_IDX] = K_tiles_rt;
-            args[IN1_DEFER_WRITE_K_BLOCK_IDX] = defer_write_k_block;
-            if (in1_needs_offsets) {
-                args[IN1_OFFSETS_ADDR_IDX] = offsets_addr;
-                args[IN1_OFFSETS_START_IDX_IDX] = operation_attributes.offsets_start_index;
-            }
-        }
+        update_in0(
+            in1_idx == 0 ? in0_sender_rt[core.x][core.y] : in0_receiver_rt[core.x][core.y],
+            M_start_tile,
+            M_end_tile,
+            defer_write_k_block);
+        update_in1(
+            in0_idx == 0 ? in1_sender_rt[core.x][core.y] : in1_receiver_rt[core.x][core.y],
+            M_start_tile,
+            M_end_tile,
+            defer_write_k_block);
 
         // Update compute args
         auto& cargs = compute_rt[core.x][core.y];
