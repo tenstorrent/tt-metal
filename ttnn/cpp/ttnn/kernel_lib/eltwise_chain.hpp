@@ -439,11 +439,19 @@ constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
 
 /// Per-input operand kind. The output kind is always `Block` (single column
 /// in the output matrix), so no enum is defined for the output side.
+///
+/// The first four values are the canonical taxonomy kinds. The remaining
+/// three (Pinned/Absolute/BlockIterOffset) are LEGACY indexing modes
+/// preserved for the CbIndexMode migration — they're deliberately excluded
+/// from the new taxonomy and should NOT be used by new code.
 enum class OperandKind : uint8_t {
-    Block,   // Ht × Wt — walks the full iteration domain
-    Row,     // 1  × Wt — broadcast down rows
-    Col,     // Ht × 1  — broadcast across cols
-    Scalar,  // 1  × 1  — broadcast everywhere
+    Block,            // Ht × Wt — walks the full iteration domain
+    Row,              // 1  × Wt — broadcast down rows
+    Col,              // Ht × 1  — broadcast across cols
+    Scalar,           // 1  × 1  — broadcast everywhere
+    Pinned,           // DEPRECATED — runtime-fixed tile k
+    Absolute,         // DEPRECATED — runtime per-iter tile k
+    BlockIterOffset,  // DEPRECATED — runtime base k + per-iter offset
 };
 
 /// Kind × InputLifecycle compatibility.
@@ -559,22 +567,27 @@ struct CopyTilePolicy {
 /// WaitNoPop, NoWaitPop, NoWaitNoPop, CumulativeWaitPopAtEnd) — caller stages all
 /// broadcast operand tiles before the chain starts. Same constraint as
 /// `binary_op_helpers`' ROW/COL static_assert.
-enum class CbIndexMode : uint8_t {
-    FirstTile,        // always tile 0 of the CB
-    BlockIter,        // 2D: tile (ht*Wt + wt) ; 1D: tile i. Requires non-streaming policy
-                      // (WaitUpfrontPopAtEnd / Cumulative* / NoWaitNoPop) OR
-                      // WaitAndPopPerBlock (i = j chunk-local; CB front advances per block).
-    Pinned,           // fixed runtime k. Under single-tile-window policies, k must be 0.
-    Absolute,         // runtime idx ∈ caller's window. Requires non-streaming policy.
-    RowBcast,         // 2D only: tile wt (B replicated across rows). Requires non-streaming.
-    ColBcast,         // 2D only: tile ht (B replicated across cols). Requires non-streaming.
-    BlockIterOffset,  // runtime k + i (1D) or runtime k + ht*Wt+wt (2D). Requires
-                      // non-streaming policy. Use case: chain runs N tiles per outer
-                      // C++ loop iter; caller passes the outer-iter base via ctor
-                      // (a_tile_idx_ / b_tile_idx_), chain emits b_tile_idx_ + j for
-                      // each inner iter j. Unlocks the "block-streaming consumer with
-                      // global B index" pattern in normalization gamma/beta stages.
-                      // Caller-managed lifecycle (NoWaitNoPop) — chain doesn't wait/pop.
+/// Legacy `CbIndexMode::X` use-site syntax mapped to `OperandKind`. Each old
+/// enum value is now a `static constexpr OperandKind` member. Template
+/// parameters that previously took `CbIndexMode` should be migrated to
+/// `OperandKind`. Existing call sites continue to compile.
+///
+/// Mapping:
+///   FirstTile       → Scalar           (always tile 0 — Scalar kind reads tile 0)
+///   BlockIter       → Block            (walks tiles 0..N-1)
+///   RowBcast        → Row              (1×Wt broadcast operand)
+///   ColBcast        → Col              (Ht×1 broadcast operand)
+///   Pinned          → Pinned (DEPRECATED, legacy OperandKind value)
+///   Absolute        → Absolute (DEPRECATED)
+///   BlockIterOffset → BlockIterOffset (DEPRECATED)
+struct CbIndexMode {
+    static constexpr OperandKind FirstTile = OperandKind::Scalar;
+    static constexpr OperandKind BlockIter = OperandKind::Block;
+    static constexpr OperandKind Pinned = OperandKind::Pinned;
+    static constexpr OperandKind Absolute = OperandKind::Absolute;
+    static constexpr OperandKind RowBcast = OperandKind::Row;
+    static constexpr OperandKind ColBcast = OperandKind::Col;
+    static constexpr OperandKind BlockIterOffset = OperandKind::BlockIterOffset;
 };
 
 /// CopyTile dtype-reconfig.
@@ -650,17 +663,15 @@ struct PackTilePolicy {
     static constexpr OutputLifecycle PerBlockReserveAndPush = OutChunked;      // {PerChunk, PerChunk}
 };
 
-/// PackTile output-tile-index mode (mirrors CbIndexMode).
-enum class PackTileIndexMode : uint8_t {
-    FirstTile,        // always output index 0
-    BlockIter,        // i (loop var). Requires UpfrontReservePushAtEnd / NoReserve* with
-                      // caller-managed window, or PerBlockReserveAndPush (i = j chunk-local).
-    Pinned,           // fixed runtime k.
-    Absolute,         // runtime idx.
-    BlockIterOffset,  // runtime k + i (1D) or runtime k + i_flat (2D). Requires
-                      // NoReserveNoPush so caller owns the bulk reserve/push for the
-                      // output window. Use case: per-outer-iter pack to absolute
-                      // output slots `wt + wtr` matching pre-reserved Wt-wide window.
+/// Legacy `PackTileIndexMode::X` use-site syntax mapped to `OperandKind`.
+/// Output kind is always `Block` per the new taxonomy; legacy values preserved
+/// for the migration of chain dispatch code.
+struct PackTileIndexMode {
+    static constexpr OperandKind FirstTile = OperandKind::Scalar;
+    static constexpr OperandKind BlockIter = OperandKind::Block;
+    static constexpr OperandKind Pinned = OperandKind::Pinned;
+    static constexpr OperandKind Absolute = OperandKind::Absolute;
+    static constexpr OperandKind BlockIterOffset = OperandKind::BlockIterOffset;
 };
 
 /// Pack-side dtype-reconfig.
@@ -830,7 +841,7 @@ template <
     uint32_t Cb,
     Dst DstSlot = Dst::D0,
     InputLifecycle Policy = Streaming,
-    CbIndexMode IndexMode = CbIndexMode::FirstTile,
+    OperandKind IndexMode = OperandKind::Scalar,
     CopyTileReconfig Reconfig = CopyTileReconfig::Input>
 struct CopyTile;
 
@@ -842,9 +853,9 @@ template <
     BinaryDataFormatReconfig DfReconfig = BinaryDataFormatReconfig::Input,
     InputLifecycle APolicy = Streaming,
     InputLifecycle BPolicy = Streaming,
-    CbIndexMode AIndex = CbIndexMode::FirstTile,
+    OperandKind AIndex = OperandKind::Scalar,
     Dst DstSlot = Dst::D0,
-    CbIndexMode BIndex = AIndex>
+    OperandKind BIndex = AIndex>
 struct BinaryFpu;
 
 template <
@@ -855,7 +866,7 @@ template <
     Dst DstOut = Dst::D0,
     DestReuseReconfig Reconfig = DestReuseReconfig::Input,
     InputLifecycle Policy = Streaming,
-    CbIndexMode IndexMode = CbIndexMode::FirstTile>
+    OperandKind IndexMode = OperandKind::Scalar>
 struct DestReuseBinary;
 
 template <
@@ -871,7 +882,7 @@ template <
     uint32_t Cb,
     Dst DstSlot = Dst::D0,
     OutputLifecycle Policy = OutStreaming,
-    PackTileIndexMode IndexMode = PackTileIndexMode::FirstTile,
+    OperandKind IndexMode = OperandKind::Scalar,
     PackTileReconfig Reconfig = PackTileReconfig::Output>
 struct PackTile;
 

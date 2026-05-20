@@ -53,11 +53,11 @@ namespace detail {
 // policies the same way `binary_op_helpers` rejects ROW/SCALAR + WaitAndPopPerTile).
 // =============================================================================
 
-template <CbIndexMode M>
+template <OperandKind M>
 inline constexpr bool is_bcast_mode_v =
     (M == CbIndexMode::RowBcast) || (M == CbIndexMode::ColBcast);
 
-template <CbIndexMode M>
+template <OperandKind M>
 ALWI constexpr uint32_t idx_2d(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t runtime_k) noexcept {
     if constexpr (M == CbIndexMode::FirstTile) { (void)i_flat; (void)ht; (void)wt; (void)runtime_k; return 0; }
     else if constexpr (M == CbIndexMode::BlockIter) { (void)ht; (void)wt; (void)runtime_k; return i_flat; }
@@ -69,7 +69,7 @@ ALWI constexpr uint32_t idx_2d(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32
     else                                             { (void)i_flat; (void)ht; (void)wt; return runtime_k; }
 }
 
-template <CbIndexMode M>
+template <OperandKind M>
 ALWI constexpr uint32_t window_2d(uint32_t Ht, uint32_t Wt) noexcept {
     if constexpr (M == CbIndexMode::BlockIter || M == CbIndexMode::Absolute) return Ht * Wt;
     else if constexpr (M == CbIndexMode::RowBcast) { (void)Ht; return Wt; }
@@ -95,7 +95,7 @@ ALWI constexpr uint32_t window_2d(uint32_t Ht, uint32_t Wt) noexcept {
 // WaitAndPopPerBlock rejects RowBcast/ColBcast (window > BlockSize — producer
 // can't have only one chunk staged) and BlockIterOffset (caller-managed window
 // shape contradicts chain-owned chunked pop).
-template <InputLifecycle P, CbIndexMode M>
+template <InputLifecycle P, OperandKind M>
 inline constexpr bool valid_policy_mode_2d_v =
     !(is_bcast_mode_v<M> &&
       (P == CopyTilePolicy::WaitAndPop || P == CopyTilePolicy::WaitAndPopPerBlock)) &&
@@ -227,7 +227,7 @@ constexpr uint32_t prev_cb_for_idx() {
 template <uint32_t Cb,
           Dst DstSlot,
           InputLifecycle Policy,
-          CbIndexMode IndexMode,
+          OperandKind IndexMode,
           CopyTileReconfig Reconfig>
 struct CopyTile : CopyTileTag {
     // ---- compile-time validation ----
@@ -256,8 +256,8 @@ struct CopyTile : CopyTileTag {
     static constexpr uint32_t       cb              = Cb;
     static constexpr uint32_t       cb_a_id()       { return Cb; }
     static constexpr uint32_t       cb_b_id()       { return 0;  }
-    static constexpr CbIndexMode    a_index_mode    = IndexMode;
-    static constexpr CbIndexMode    b_index_mode    = CbIndexMode::FirstTile;
+    static constexpr OperandKind    a_index_mode    = IndexMode;
+    static constexpr OperandKind    b_index_mode    = CbIndexMode::FirstTile;
     static constexpr Dst            dst_slot        = DstSlot;
     static constexpr InputLifecycle a_policy()      { return Policy; }
     static constexpr InputLifecycle b_policy()      { return CopyTilePolicy::NoWaitNoPop; }
@@ -381,7 +381,7 @@ private:
 template <uint32_t Cb,
           Dst DstSlot,
           OutputLifecycle Policy,
-          PackTileIndexMode IndexMode,
+          OperandKind IndexMode,
           PackTileReconfig Reconfig>
 struct PackTile : PackTileTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
@@ -408,7 +408,7 @@ struct PackTile : PackTileTag {
     static constexpr Dst               pack_dst_slot       = DstSlot;
     static constexpr bool              is_upfront          = (Policy == PackTilePolicy::UpfrontReservePushAtEnd);
     static constexpr bool              uses_per_block_pack = (Policy == PackTilePolicy::PerBlockReserveAndPush);
-    static constexpr PackTileIndexMode index_mode          = IndexMode;
+    static constexpr OperandKind index_mode          = IndexMode;
 
     // Prev-CB fold (D2): PackTile writes pack-side; mark Cb under reconfig only when
     // the user opted into pack reconfig (Output / OutputConditional). Otherwise no
@@ -607,9 +607,9 @@ template <uint32_t CbA,
           BinaryDataFormatReconfig DfReconfig,
           InputLifecycle APolicy,
           InputLifecycle BPolicy,
-          CbIndexMode AIndex,
+          OperandKind AIndex,
           Dst DstSlot,
-          CbIndexMode BIndex>
+          OperandKind BIndex>
 struct BinaryFpu : BinaryFpuTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "BinaryFpu: DEST slot exceeds DEST_AUTO_LIMIT");
@@ -638,8 +638,8 @@ struct BinaryFpu : BinaryFpuTag {
 
     static constexpr uint32_t      cb_a_id()  { return CbA; }
     static constexpr uint32_t      cb_b_id()  { return CbB; }
-    static constexpr CbIndexMode   a_index_mode = AIndex;
-    static constexpr CbIndexMode   b_index_mode = BIndex;
+    static constexpr OperandKind   a_index_mode = AIndex;
+    static constexpr OperandKind   b_index_mode = BIndex;
     static constexpr InputLifecycle a_policy(){ return APolicy; }
     static constexpr InputLifecycle b_policy(){ return BPolicy; }
     static constexpr Dst           dst_slot   = DstSlot;
@@ -890,7 +890,7 @@ template <uint32_t Cb,
           Dst DstOut,
           DestReuseReconfig Reconfig,
           InputLifecycle Policy,
-          CbIndexMode IndexMode>
+          OperandKind IndexMode>
 struct DestReuseBinary : DestReuseBinaryTag {
     static_assert(to_u32(DstIn) < DEST_AUTO_LIMIT && to_u32(DstOut) < DEST_AUTO_LIMIT,
                   "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
@@ -901,8 +901,8 @@ struct DestReuseBinary : DestReuseBinaryTag {
 
     static constexpr uint32_t       cb_a_id()         { return Cb; }
     static constexpr uint32_t       cb_b_id()         { return 0;  }
-    static constexpr CbIndexMode    a_index_mode     = IndexMode;
-    static constexpr CbIndexMode    b_index_mode     = CbIndexMode::FirstTile;
+    static constexpr OperandKind    a_index_mode     = IndexMode;
+    static constexpr OperandKind    b_index_mode     = CbIndexMode::FirstTile;
     static constexpr InputLifecycle a_policy()        { return Policy; }
     static constexpr InputLifecycle b_policy()        { return CopyTilePolicy::NoWaitNoPop; }
     static constexpr Dst            dst_slot          = DstOut;

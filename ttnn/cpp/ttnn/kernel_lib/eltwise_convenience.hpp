@@ -29,7 +29,7 @@ template <
     uint32_t CbOut,
     BroadcastDim Bcast = BroadcastDim::None,
     BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
-    CbIndexMode Idx = CbIndexMode::FirstTile>
+    OperandKind Idx = OperandKind::Scalar>
 ALWI void binary_op(uint32_t n_tiles) {
     eltwise_chain(
         n_tiles,
@@ -43,7 +43,7 @@ template <
     uint32_t CbOut,
     BroadcastDim Bcast = BroadcastDim::None,
     BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
-    CbIndexMode Idx = CbIndexMode::FirstTile>
+    OperandKind Idx = OperandKind::Scalar>
 ALWI void binary_add(uint32_t n) {
     binary_op<BinaryFpuOp::Add, CbA, CbB, CbOut, Bcast, Reconfig, Idx>(n);
 }
@@ -54,7 +54,7 @@ template <
     uint32_t CbOut,
     BroadcastDim Bcast = BroadcastDim::None,
     BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
-    CbIndexMode Idx = CbIndexMode::FirstTile>
+    OperandKind Idx = OperandKind::Scalar>
 ALWI void binary_sub(uint32_t n) {
     binary_op<BinaryFpuOp::Sub, CbA, CbB, CbOut, Bcast, Reconfig, Idx>(n);
 }
@@ -65,7 +65,7 @@ template <
     uint32_t CbOut,
     BroadcastDim Bcast = BroadcastDim::None,
     BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
-    CbIndexMode Idx = CbIndexMode::FirstTile>
+    OperandKind Idx = OperandKind::Scalar>
 ALWI void binary_mul(uint32_t n) {
     binary_op<BinaryFpuOp::Mul, CbA, CbB, CbOut, Bcast, Reconfig, Idx>(n);
 }
@@ -77,7 +77,7 @@ template <
     uint32_t CbIn,
     uint32_t CbOut,
     CopyTileReconfig Reconfig = CopyTileReconfig::Input,
-    CbIndexMode Idx = CbIndexMode::FirstTile>
+    OperandKind Idx = OperandKind::Scalar>
 ALWI void unary(uint32_t n_tiles) {
     static_assert(is_dest_only_op_v<SfpuOp>, "unary<SfpuOp,...>: SfpuOp must be a DEST-only SFPU element");
     eltwise_chain(
@@ -90,7 +90,7 @@ ALWI void unary(uint32_t n_tiles) {
 // ---- SFPU binary streaming (two CB inputs, DEST-DEST SFPU op, one CB output) ----
 // SfpuBinOp must be a DEST-only SFPU binary element (BinaryOp CRTP child),
 // e.g. DivBinary, BinaryMax, BinaryMin.
-template <class SfpuBinOp, uint32_t CbA, uint32_t CbB, uint32_t CbOut, CbIndexMode Idx = CbIndexMode::FirstTile>
+template <class SfpuBinOp, uint32_t CbA, uint32_t CbB, uint32_t CbOut, OperandKind Idx = OperandKind::Scalar>
 ALWI void binary_sfpu(uint32_t n_tiles) {
     static_assert(is_dest_only_op_v<SfpuBinOp>, "binary_sfpu<Op,...>: Op must be a DEST-only SFPU binary element");
     eltwise_chain(
@@ -106,7 +106,7 @@ template <
     uint32_t CbIn,
     uint32_t CbOut,
     CopyTileReconfig Reconfig = CopyTileReconfig::Input,
-    CbIndexMode Idx = CbIndexMode::FirstTile>
+    OperandKind Idx = OperandKind::Scalar>
 ALWI void copy(uint32_t n_tiles) {
     eltwise_chain(
         n_tiles,
@@ -127,7 +127,7 @@ template <
     uint32_t CbOut,
     BroadcastDim Bcast = BroadcastDim::None,
     BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
-    CbIndexMode Idx = CbIndexMode::FirstTile>
+    OperandKind Idx = OperandKind::Scalar>
 ALWI void binary_op(EltwiseShape shape) {
     eltwise_chain(
         shape,
@@ -141,7 +141,7 @@ template <
     uint32_t CbOut,
     BroadcastDim Bcast = BroadcastDim::None,
     BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
-    CbIndexMode Idx = CbIndexMode::FirstTile>
+    OperandKind Idx = OperandKind::Scalar>
 ALWI void binary_add(EltwiseShape shape) {
     binary_op<BinaryFpuOp::Add, CbA, CbB, CbOut, Bcast, Reconfig, Idx>(shape);
 }
@@ -152,7 +152,7 @@ template <
     uint32_t CbOut,
     BroadcastDim Bcast = BroadcastDim::None,
     BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
-    CbIndexMode Idx = CbIndexMode::FirstTile>
+    OperandKind Idx = OperandKind::Scalar>
 ALWI void binary_sub(EltwiseShape shape) {
     binary_op<BinaryFpuOp::Sub, CbA, CbB, CbOut, Bcast, Reconfig, Idx>(shape);
 }
@@ -163,7 +163,7 @@ template <
     uint32_t CbOut,
     BroadcastDim Bcast = BroadcastDim::None,
     BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
-    CbIndexMode Idx = CbIndexMode::FirstTile>
+    OperandKind Idx = OperandKind::Scalar>
 ALWI void binary_mul(EltwiseShape shape) {
     binary_op<BinaryFpuOp::Mul, CbA, CbB, CbOut, Bcast, Reconfig, Idx>(shape);
 }
@@ -173,7 +173,7 @@ template <
     uint32_t CbIn,
     uint32_t CbOut,
     CopyTileReconfig Reconfig = CopyTileReconfig::Input,
-    CbIndexMode Idx = CbIndexMode::FirstTile>
+    OperandKind Idx = OperandKind::Scalar>
 ALWI void unary(EltwiseShape shape) {
     static_assert(is_dest_only_op_v<SfpuOp>, "unary<SfpuOp,...>: SfpuOp must be a DEST-only SFPU element");
     eltwise_chain(
@@ -183,7 +183,7 @@ ALWI void unary(EltwiseShape shape) {
         PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
-template <class SfpuBinOp, uint32_t CbA, uint32_t CbB, uint32_t CbOut, CbIndexMode Idx = CbIndexMode::FirstTile>
+template <class SfpuBinOp, uint32_t CbA, uint32_t CbB, uint32_t CbOut, OperandKind Idx = OperandKind::Scalar>
 ALWI void binary_sfpu(EltwiseShape shape) {
     static_assert(is_dest_only_op_v<SfpuBinOp>, "binary_sfpu<Op,...>: Op must be a DEST-only SFPU binary element");
     eltwise_chain(
@@ -198,7 +198,7 @@ template <
     uint32_t CbIn,
     uint32_t CbOut,
     CopyTileReconfig Reconfig = CopyTileReconfig::Input,
-    CbIndexMode Idx = CbIndexMode::FirstTile>
+    OperandKind Idx = OperandKind::Scalar>
 ALWI void copy(EltwiseShape shape) {
     eltwise_chain(
         shape,
