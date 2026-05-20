@@ -56,25 +56,30 @@ void recip_tile_first_column(uint32_t idst) {
     _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column, idst, VectorMode::C);
 }
 
-// First-column exp with fused scale: exp(scale * x) on column 0 only.
-// Uses _ckernel_sfpu_exp_accurate_ — the same function behind exp_tile<false, true>,
-// so accuracy is identical to the full-tile version. Stride-2 access skips column 1.
-// Combined with VectorMode::C (2 faces instead of 4), this gives 4× fewer SFPU iterations
-// compared to exp_tile<false, true>(idx, VectorMode::RC).
-template <uint16_t scale_bf16>
-void calculate_exponential_first_column() {
+// First-column exp on column 0 only. SFPU does 4 half-face iterations
+// (stride-2 access skips column 1), 4× fewer iterations than full-tile.
+// The fused scale is carried by LREG12 (= scale*(1/log(2))), preloaded by
+// `calculate_exponential_full_face_init<SCALE_EN=true, scaler_fp32>`.
+inline void calculate_exponential_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
-    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-        sfpi::vFloat val = sfpi::dst_reg[0];
-        sfpi::vFloat result = ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true, DST_ACCUM_MODE>(val, scale_bf16);
-        sfpi::dst_reg[0] = result;
-        sfpi::dst_reg += 2;
+
+#ifdef ARCH_BLACKHOLE
+    // If on Blackhole: Overwrite INCRW
+    addr_mod_t{
+        .srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4},  // sfpi::dst_reg += 2
     }
+        .set(ADDR_MOD_6);
+#endif  // ARCH_BLACKHOLE
+
+    ckernel::sfpu::_sfpu_exp_21f_bf16_tti_<
+        /*SCALE_EN*/ false,
+        DST_ACCUM_MODE,
+        /*CLAMP_NEGATIVE*/ false,
+        ITERATIONS_HALF_FACE>(/*unused scale*/ 0);
 }
 
-template <uint16_t scale_bf16>
-void exp_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_exponential_first_column<scale_bf16>, idst, VectorMode::C);
+inline void exp_tile_first_column(uint32_t idst) {
+    _llk_math_eltwise_unary_sfpu_params_(calculate_exponential_first_column, idst, VectorMode::C);
 }
 #endif
 
@@ -178,6 +183,86 @@ void update_cur_row_max_value(
     cb_push_back(cb_cur_max, onetile);
 }
 
+#ifdef TRISC_MATH
+
+template <bool SCALE_EN, int ITERATIONS, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en>
+void calculate_exponential_full_face(const std::uint16_t exp_base_scale_factor) {
+    ckernel::sfpu::_sfpu_exp_21f_bf16_tti_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(
+        exp_base_scale_factor);
+}
+
+// Init that optionally folds the SDPA scale into LREG12 at compile time.
+//   SCALE_EN=true  : LREG12 = scaler_fp32 * (1/log(2)).  Lets the inner SFPU
+//                    loop skip the per-iteration SFPMULI fix-up — saves one
+//                    cycle per iteration. Pair with the (now-unscaled)
+//                    exp_full_tile / exp_tile_first_column wrappers.
+//   SCALE_EN=false : LREG12 = 1/log(2).  Plain unscaled exp; scaler_fp32
+//                    template arg is ignored.
+template <bool SCALE_EN, uint32_t scaler_fp32 = 0>
+inline void calculate_exponential_full_face_init() {
+#ifdef ARCH_BLACKHOLE
+    // _calculate_exponential_tti_bf16_() path:
+    // Auto-increment Dest on ADDR_MOD_6
+    addr_mod_t{
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 2},
+    }
+        .set(ADDR_MOD_6);
+#endif  // ARCH_BLACKHOLE
+
+    if constexpr (SCALE_EN) {
+        // LREG12 = scaler * (1/log(2)) — compile-time fold.
+        constexpr float scale_f = __builtin_bit_cast(float, scaler_fp32);
+        constexpr float scaled_inv_ln2 = scale_f * 1.4426950408889634F;
+        constexpr uint32_t bits = __builtin_bit_cast(uint32_t, scaled_inv_ln2);
+        constexpr uint16_t hi = static_cast<uint16_t>((bits >> 16) & 0xFFFFU);
+        constexpr uint16_t lo = static_cast<uint16_t>(bits & 0xFFFFU);
+
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, hi);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, lo);
+        TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+    } else {
+        // LREG12 = 1/log(2) (0x3FB8AA3B)
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3fb8);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xaa3b);
+        TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+    }
+
+    // LREG13 = c2 = 4.791750143340323e-15f (0x27aca418)
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x27ac);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
+    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+}
+
+#endif  // TRISC_MATH
+
+// Full-tile exp. SFPMULI is never emitted: the scale (if any) is carried by
+// LREG12, preloaded by `exp_full_tile_init<approx, SCALE_EN, scaler_fp32>`.
+inline void exp_full_tile(uint32_t idst) {
+#ifdef TRISC_MATH
+    _llk_math_eltwise_unary_sfpu_params_(
+        calculate_exponential_full_face<
+            /*SCALE_EN*/ false,
+            /*ITERATIONS*/ 8,
+            /*CLAMP_NEGATIVE*/ false,
+            DST_ACCUM_MODE>,
+        idst,
+        VectorMode::RC,
+        /*unused scale*/ 0);
+#endif  // TRISC_MATH
+}
+
+// Forwards SCALE_EN + scaler_fp32 to calculate_exponential_full_face_init.
+// `scaler_fp32` is ignored when SCALE_EN=false.
+template <bool approx, bool SCALE_EN, uint32_t scaler_fp32 = 0>
+inline void exp_full_tile_init() {
+#ifdef TRISC_MATH
+    ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::exponential>(
+        calculate_exponential_full_face_init<SCALE_EN, scaler_fp32>);
+#endif
+}
+
 // Apply exp(scale * (score - max)) in place on Sk_chunk_t attention-weight tiles, and produce
 // the per-row partial chunk sum (sum over the Sk_chunk_t tiles) into cb_cur_exp_sum.
 //
@@ -197,13 +282,16 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t 
 
     // Fused scale+exp: compute exp(scale * (score - max)) in a single SFPU pass.
     constexpr uint16_t scaler_bf16 = static_cast<uint16_t>(scaler_fp32 >> 16);
-    exp_tile_init</* approx */ false, scaler_fp32>();
+    // The init pre-loads LREG12 = scale*(1/log(2)) so the standard polynomial
+    // does scale and exp in one MAD — no SFPMULI per iteration.
+    exp_full_tile_init</*approx*/ false, /*SCALE_EN*/ true, scaler_fp32>();
 
     tile_regs_acquire();
     for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
         sub_tiles_bcast_cols(
             cb_attention_weights, cb_cur_max, /* in0 tile_idx */ n, /* in1 tile_idx */ 0, /* dst_reg_idx */ n);
         exp_tile</* approx */ false, /* scale_en */ true>(n, VectorMode::RC, scaler_bf16);
+	    exp_full_tile(n);
     }
     tile_regs_commit();
 
@@ -319,8 +407,10 @@ void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, 
     // First-column fused scale+exp: exp(scale * (prev_max - cur_max)).
     // Both max values are column vectors, so the result is a column vector —
     // only column 0 has data. Process 4× fewer SFPU iterations than full-tile exp.
-    constexpr uint16_t scaler_bf16 = static_cast<uint16_t>(scaler_fp32 >> 16);
-    MATH((exp_tile_first_column<scaler_bf16>(exp_max_diff_dst_idx)));
+    // Scale is folded into LREG12 by the templated init; the inner loop runs
+    // unscaled.
+    exp_full_tile_init</*approx*/ false, /*SCALE_EN*/ true, scaler_fp32>();
+    MATH((exp_tile_first_column(exp_max_diff_dst_idx)));
     tile_regs_commit();
 
     tile_regs_wait();
