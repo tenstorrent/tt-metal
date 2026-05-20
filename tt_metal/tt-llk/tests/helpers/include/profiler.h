@@ -155,11 +155,6 @@ __attribute__((always_inline)) inline void write_data(std::uint64_t data)
     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(data);
 }
 
-} // namespace llk_profiler
-
-namespace llk_profiler
-{
-
 template <std::uint16_t id16>
 class zone_scoped
 {
