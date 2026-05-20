@@ -569,8 +569,8 @@ class DevicePrintParser:
                 return out
 
             # Kernel was stalled when we entered this iteration. Re-read
-            # and loop: either it has unstalled and produced more data, or it
-            # hasn't yet observed our rpos write and we retry.
+            # and loop: either it has cleared the stall and produced more
+            # data, or it hasn't yet observed our rpos write and we retry.
             aux_raw = read_from_device(
                 location, self.buffer_base, num_bytes=self.aux_size
             )
