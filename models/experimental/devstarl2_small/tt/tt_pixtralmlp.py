@@ -111,7 +111,6 @@ class MistralTTVisionMLP(LightweightModule):
             ttnn.deallocate(w2_in)
             return w2_out
 
-        original_seq_len = seq_len
         if seq_len <= mm_seq_len:
             return run_chunk(x, seq_len)
 

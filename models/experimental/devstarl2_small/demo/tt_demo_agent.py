@@ -903,7 +903,6 @@ def generate_assistant_text_tt(rt: TtAgentRuntime, messages: List[Dict[str, str]
     # ── Multimodal (sticky image): one prefill from merged embeds, then traced decode. ──
     assert pixel_values is not None and image_sizes is not None and image_sizes_list is not None
     pixel_values = pixel_values.to(torch.bfloat16).to(dev)
-    image_sizes = image_sizes.to(dev)
     img_rows = _ensure_multimodal_img_rows(rt, pixel_values, image_sizes_list)
     assert rt.image_token_id is not None
     id_device = input_ids.device
