@@ -90,7 +90,11 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
         distributed::EnqueueWriteMeshBuffer(
             mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer, true);
     } else {
-        for (const auto& coord : distributed::MeshCoordinateRange(mesh_buffer->device()->shape())) {
+        auto* mesh_device = mesh_buffer->device();
+        for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+            if (!mesh_device->is_local(coord)) {
+                continue;
+            }
             tt::tt_metal::detail::WriteToBuffer(*mesh_buffer->get_device_buffer(coord), host_buffer);
         }
     }
