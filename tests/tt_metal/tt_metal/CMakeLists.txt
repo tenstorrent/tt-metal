@@ -106,6 +106,9 @@ set_target_properties(
 file(
     GLOB_RECURSE kernels
     test_kernels/*.cpp
+    test_kernels/*.hpp
+    test_kernels/*.h
+    test_kernels/*.inc
     perf_microbenchmark/routing/kernels/*.cpp
     perf_microbenchmark/routing/kernels/*.hpp
 )
