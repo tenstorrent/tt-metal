@@ -24,7 +24,7 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
             Keyword args:
                 dim (int, optional): Dim to reduce. ``None`` reduces all elements (ROW_MAJOR input only). Default: ``None``.
                 keepdim (bool, optional): Keep reduced dim. Default: ``False``.
-                sub_core_grids (CoreRangeSet, optional): Used only for multi-core ROW_MAJOR last-dim reductions (<= 2 ranges). Not supported on ``argmax_nc``. Default: ``None``.
+                sub_core_grids (CoreRangeSet, optional): Limits execution to a subset of cores. Supported on ROW_MAJOR last-dim reductions (<= 2 ranges) and non-HW dim (``argmax_nc``) reductions. Default: ``None``.
                 use_multicore (bool, optional): Enables multi-core only on ROW_MAJOR last-dim reductions. Default: ``False``.
                 memory_config (ttnn.MemoryConfig, optional): Output memory (INTERLEAVED DRAM/L1). Default: input's memory_config.
                 output_tensor (ttnn.Tensor, optional): Preallocated output (must be UINT32, ROW_MAJOR, INTERLEAVED, same device). Default: ``None``.
@@ -47,14 +47,14 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
               - BFLOAT16/FLOAT32 only (integer dtypes not supported)
               - input may be ROW_MAJOR or TILE (ROW_MAJOR is converted to TILE internally)
               - output is produced in TILE internally and converted to ROW_MAJOR
-              - ``sub_core_grids`` is not supported
+              - ``sub_core_grids`` is supported (pass a single-core ``CoreRangeSet`` to run on one core)
 
             Not supported:
 
             - Sharded tensors (inputs/outputs must be INTERLEAVED)
             - TILE input with ``dim=None``
             - Non-HW dims (``argmax_nc``) with INT/UINT inputs
-            - ``sub_core_grids`` on the non-HW dims (``argmax_nc``) path
+            - Integer dtypes on the non-HW dims (``argmax_nc``) path
             - ``use_multicore=True`` with TILE inputs (multi-core requires ROW_MAJOR input)
         )doc";
 

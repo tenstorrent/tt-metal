@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,6 +21,7 @@ struct ArgMaxNCParams {
     int32_t dim{};
     tt::tt_metal::MemoryConfig output_mem_config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
+    std::optional<CoreRangeSet> sub_core_grids;
 };
 
 struct ArgMaxNCInputs {
@@ -72,6 +73,7 @@ Tensor argmax_nc(
     int32_t dim,
     const std::optional<Tensor>& preallocated_output,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const ttnn::DeviceComputeKernelConfig& compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn::prim

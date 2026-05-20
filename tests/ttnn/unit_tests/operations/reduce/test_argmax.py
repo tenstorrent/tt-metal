@@ -20,98 +20,98 @@ RM = ttnn.ROW_MAJOR_LAYOUT
 TL = ttnn.TILE_LAYOUT
 
 
-def _ac(shape, layout, dim, keepdim, use_mc, dtype):
+def _case(shape, layout, dim, keepdim, use_multicore, dtype):
     """Single argmax test case tuple (readable shorthand for parametrization)."""
-    return (shape, layout, dim, keepdim, use_mc, dtype)
+    return (shape, layout, dim, keepdim, use_multicore, dtype)
 
 
 def _argmax_misc_and_rank_special():
     return [
-        _ac([], RM, None, True, True, torch.bfloat16),
-        _ac([32], RM, -1, False, False, torch.float32),
-        _ac([32, 0], RM, 1, True, True, torch.bfloat16),
-        _ac([64], RM, -1, True, False, torch.bfloat16),
-        _ac([1, 512], RM, -1, True, True, torch.float32),
-        _ac([1, 1024], RM, -1, True, True, torch.int32),
-        _ac([1, 65], RM, -1, True, True, torch.uint8),
-        _ac([8, 10, 129], RM, 2, True, False, torch.bfloat16),
-        _ac([1, 8, 160], RM, -1, False, True, torch.bfloat16),
-        _ac([1, 256, 1024 * 8], RM, -1, False, True, torch.float32),
-        _ac([32, 32, 32, 1], RM, -1, True, True, torch.float32),
-        _ac([128], RM, -1, True, True, torch.float32),
-        _ac([256], RM, -1, False, False, torch.bfloat16),
-        _ac([128], TL, -1, True, False, torch.float32),
-        _ac([256], TL, -1, False, False, torch.bfloat16),
+        _case([], RM, None, True, True, torch.bfloat16),
+        _case([32], RM, -1, False, False, torch.float32),
+        _case([32, 0], RM, 1, True, True, torch.bfloat16),
+        _case([64], RM, -1, True, False, torch.bfloat16),
+        _case([1, 512], RM, -1, True, True, torch.float32),
+        _case([1, 1024], RM, -1, True, True, torch.int32),
+        _case([1, 65], RM, -1, True, True, torch.uint8),
+        _case([8, 10, 129], RM, 2, True, False, torch.bfloat16),
+        _case([1, 8, 160], RM, -1, False, True, torch.bfloat16),
+        _case([1, 256, 1024 * 8], RM, -1, False, True, torch.float32),
+        _case([32, 32, 32, 1], RM, -1, True, True, torch.float32),
+        _case([128], RM, -1, True, True, torch.float32),
+        _case([256], RM, -1, False, False, torch.bfloat16),
+        _case([128], TL, -1, True, False, torch.float32),
+        _case([256], TL, -1, False, False, torch.bfloat16),
     ]
 
 
 def _argmax_row_major_wide_reduce_last_dim():
     return [
-        _ac([64, 128], RM, -1, True, True, torch.float32),
-        _ac([64, 128], RM, -1, False, True, torch.int32),
-        _ac([64, 128], RM, -1, True, False, torch.float32),
-        _ac([32, 64, 128], RM, -1, True, True, torch.float32),
-        _ac([32, 64, 128], RM, -1, True, False, torch.bfloat16),
-        _ac([32, 64, 128], TL, -1, False, False, torch.bfloat16),
-        _ac([16, 32, 64, 128], RM, -1, True, True, torch.bfloat16),
-        _ac([16, 32, 64, 128], RM, -1, True, False, torch.float32),
-        _ac([16, 32, 64, 128], RM, -1, True, True, torch.int32),
-        _ac([16, 32, 64, 128], TL, -1, True, False, torch.bfloat16),
-        _ac([16, 32, 64, 128], TL, -1, False, False, torch.float32),
-        _ac([16, 32, 70, 130], TL, -1, True, False, torch.bfloat16),
-        _ac([16, 32, 70, 130], TL, -1, False, False, torch.bfloat16),
-        _ac([8, 16, 32, 64], RM, -1, True, True, torch.float32),
-        _ac([8, 16, 32, 64], RM, -1, False, True, torch.bfloat16),
-        _ac([4, 8, 16, 32], RM, -1, False, False, torch.float32),
-        _ac([100, 200], RM, -1, True, True, torch.bfloat16),
-        _ac([100, 200], RM, -1, False, False, torch.float32),
-        _ac([50, 100, 200], RM, -1, True, True, torch.int32),
-        _ac([25, 50, 100], RM, -1, False, True, torch.uint8),
-        _ac([12, 24, 48, 96], RM, -1, True, False, torch.bfloat16),
-        _ac([1, 8, 20, 18], TL, -1, True, False, torch.bfloat16),
+        _case([64, 128], RM, -1, True, True, torch.float32),
+        _case([64, 128], RM, -1, False, True, torch.int32),
+        _case([64, 128], RM, -1, True, False, torch.float32),
+        _case([32, 64, 128], RM, -1, True, True, torch.float32),
+        _case([32, 64, 128], RM, -1, True, False, torch.bfloat16),
+        _case([32, 64, 128], TL, -1, False, False, torch.bfloat16),
+        _case([16, 32, 64, 128], RM, -1, True, True, torch.bfloat16),
+        _case([16, 32, 64, 128], RM, -1, True, False, torch.float32),
+        _case([16, 32, 64, 128], RM, -1, True, True, torch.int32),
+        _case([16, 32, 64, 128], TL, -1, True, False, torch.bfloat16),
+        _case([16, 32, 64, 128], TL, -1, False, False, torch.float32),
+        _case([16, 32, 70, 130], TL, -1, True, False, torch.bfloat16),
+        _case([16, 32, 70, 130], TL, -1, False, False, torch.bfloat16),
+        _case([8, 16, 32, 64], RM, -1, True, True, torch.float32),
+        _case([8, 16, 32, 64], RM, -1, False, True, torch.bfloat16),
+        _case([4, 8, 16, 32], RM, -1, False, False, torch.float32),
+        _case([100, 200], RM, -1, True, True, torch.bfloat16),
+        _case([100, 200], RM, -1, False, False, torch.float32),
+        _case([50, 100, 200], RM, -1, True, True, torch.int32),
+        _case([25, 50, 100], RM, -1, False, True, torch.uint8),
+        _case([12, 24, 48, 96], RM, -1, True, False, torch.bfloat16),
+        _case([1, 8, 20, 18], TL, -1, True, False, torch.bfloat16),
     ]
 
 
 def _argmax_nc_hw_mixed_shapes():
     """Non-last dims on TILE and ROW_MAJOR (padding / rank coverage)."""
     return [
-        _ac([4, 32, 32], TL, 0, True, False, torch.bfloat16),
-        _ac([2, 64, 64], TL, -2, True, False, torch.bfloat16),
-        _ac([2, 64, 64], TL, 1, False, False, torch.bfloat16),
-        _ac([1, 70, 130], TL, -2, True, False, torch.bfloat16),
-        _ac([1, 2, 32, 32], TL, 2, True, False, torch.float32),
-        _ac([2, 64, 64], RM, 1, True, False, torch.bfloat16),
-        _ac([2, 64, 64], RM, -2, False, False, torch.bfloat16),
-        _ac([1, 48, 96], RM, -2, True, False, torch.float32),
-        _ac([4, 32, 32], TL, 0, False, False, torch.bfloat16),
-        _ac([4, 32, 32], RM, 0, True, False, torch.bfloat16),
+        _case([4, 32, 32], TL, 0, True, False, torch.bfloat16),
+        _case([2, 64, 64], TL, -2, True, False, torch.bfloat16),
+        _case([2, 64, 64], TL, 1, False, False, torch.bfloat16),
+        _case([1, 70, 130], TL, -2, True, False, torch.bfloat16),
+        _case([1, 2, 32, 32], TL, 2, True, False, torch.float32),
+        _case([2, 64, 64], RM, 1, True, False, torch.bfloat16),
+        _case([2, 64, 64], RM, -2, False, False, torch.bfloat16),
+        _case([1, 48, 96], RM, -2, True, False, torch.float32),
+        _case([4, 32, 32], TL, 0, False, False, torch.bfloat16),
+        _case([4, 32, 32], RM, 0, True, False, torch.bfloat16),
     ]
 
 
 def _argmax_nc_nd_rank4():
     return [
-        _ac([2, 3, 64, 64], TL, 0, True, False, torch.float32),
-        _ac([2, 3, 64, 64], TL, 1, True, False, torch.float32),
-        _ac([2, 3, 64, 64], TL, 1, False, False, torch.float32),
-        _ac([2, 3, 64, 64], TL, -2 - 1, False, False, torch.bfloat16),
-        _ac([2, 3, 64, 64], RM, 1, True, False, torch.bfloat16),
-        _ac([2, 5, 70, 130], TL, 0, True, False, torch.float32),
-        _ac([2, 5, 70, 130], TL, 0, True, False, torch.bfloat16),
-        _ac([2, 5, 70, 130], TL, 1, False, False, torch.bfloat16),
-        _ac([1, 5, 32, 32], TL, 1, False, False, torch.float32),
-        _ac([5, 1, 64, 64], TL, 0, True, False, torch.bfloat16),
-        _ac([3, 5, 256, 256], TL, 0, True, False, torch.bfloat16),
-        _ac([2, 3, 64, 64], TL, 2, True, False, torch.bfloat16),
-        _ac([2, 3, 70, 130], TL, 2, False, False, torch.bfloat16),
+        _case([2, 3, 64, 64], TL, 0, True, False, torch.float32),
+        _case([2, 3, 64, 64], TL, 1, True, False, torch.float32),
+        _case([2, 3, 64, 64], TL, 1, False, False, torch.float32),
+        _case([2, 3, 64, 64], TL, -2 - 1, False, False, torch.bfloat16),
+        _case([2, 3, 64, 64], RM, 1, True, False, torch.bfloat16),
+        _case([2, 5, 70, 130], TL, 0, True, False, torch.float32),
+        _case([2, 5, 70, 130], TL, 0, True, False, torch.bfloat16),
+        _case([2, 5, 70, 130], TL, 1, False, False, torch.bfloat16),
+        _case([1, 5, 32, 32], TL, 1, False, False, torch.float32),
+        _case([5, 1, 64, 64], TL, 0, True, False, torch.bfloat16),
+        _case([3, 5, 256, 256], TL, 0, True, False, torch.bfloat16),
+        _case([2, 3, 64, 64], TL, 2, True, False, torch.bfloat16),
+        _case([2, 3, 70, 130], TL, 2, False, False, torch.bfloat16),
     ]
 
 
 def _argmax_nc_nd_rank5():
     return [
-        _ac([2, 3, 4, 32, 32], TL, 0, True, False, torch.bfloat16),
-        _ac([2, 3, 4, 32, 32], TL, 1, False, False, torch.bfloat16),
-        _ac([2, 3, 4, 32, 32], TL, 2, True, False, torch.float32),
-        _ac([2, 3, 4, 64, 64], TL, 3, True, False, torch.bfloat16),
+        _case([2, 3, 4, 32, 32], TL, 0, True, False, torch.bfloat16),
+        _case([2, 3, 4, 32, 32], TL, 1, False, False, torch.bfloat16),
+        _case([2, 3, 4, 32, 32], TL, 2, True, False, torch.float32),
+        _case([2, 3, 4, 64, 64], TL, 3, True, False, torch.bfloat16),
     ]
 
 

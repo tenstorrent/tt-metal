@@ -78,7 +78,12 @@ bool should_use_nc_path(const Tensor& input, const std::optional<int>& dim, cons
 
 // Run the register-based argmax for a non-HW dim. Returns a ROW_MAJOR UINT32
 // tensor with the user-visible logical output shape.
-Tensor run_argmax_nc(const Tensor& input_tensor, int dim, bool keepdim, const MemoryConfig& output_memory_config) {
+Tensor run_argmax_nc(
+    const Tensor& input_tensor,
+    int dim,
+    bool keepdim,
+    const MemoryConfig& output_memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     using tt::tt_metal::Layout;
 
     // 1) Ensure the input is in TILE layout for the compute kernel.
@@ -96,7 +101,8 @@ Tensor run_argmax_nc(const Tensor& input_tensor, int dim, bool keepdim, const Me
         /*dim=*/dim,
         /*preallocated_output=*/std::nullopt,
         /*output_mem_config=*/output_memory_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        sub_core_grids);
 
     // 3) Convert the TILE UINT32 output back to ROW_MAJOR UINT32.
     Tensor row_major_out = ttnn::to_layout(tile_out, Layout::ROW_MAJOR);
@@ -231,17 +237,10 @@ Tensor argmax(
         return preallocated_tensor;
     }
 
-    // Register-based NC path for reductions along any non-HW dimension. This
-    // uses DST accumulation (similar to fast_reduce_nc).
-    // It does not take sub_core_grids;
-    // use_multicore is also not threaded through (prim::argmax cannot serve this
-    // ROW_MAJOR layout + dim combo either), so callers must omit sub_core_grids.
+    // Register-based NC path for reductions along any non-HW dimension.
+    // Uses DST accumulation (similar to fast_reduce_nc). Supports sub_core_grids.
     if (should_use_nc_path(input_tensor, dim, output_memory_config)) {
-        TT_FATAL(
-            !sub_core_grids.has_value(),
-            "argmax along non-HW dimensions does not support sub_core_grids; only height/width (TILE) reductions "
-            "honor core grid overrides.");
-        Tensor nc_result = run_argmax_nc(input_tensor, dim.value(), keepdim, output_memory_config);
+        Tensor nc_result = run_argmax_nc(input_tensor, dim.value(), keepdim, output_memory_config, sub_core_grids);
         if (optional_output_tensor.has_value()) {
             // nc_result is already on device; copy_to_device is host → device only.
             ttnn::copy(nc_result, optional_output_tensor.value());

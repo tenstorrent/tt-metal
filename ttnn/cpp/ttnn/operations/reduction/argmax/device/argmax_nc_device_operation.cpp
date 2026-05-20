@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -103,13 +103,15 @@ Tensor argmax_nc(
     int32_t dim,
     const std::optional<Tensor>& preallocated_output,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ArgMaxNCDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .dim = dim,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
+        .sub_core_grids = sub_core_grids,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .input = input,

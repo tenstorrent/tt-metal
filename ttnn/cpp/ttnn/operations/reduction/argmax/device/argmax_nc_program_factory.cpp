@@ -81,13 +81,16 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
     // Split work across cores.
     const auto grid = device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = grid.x;
+    const bool use_sub_core_grids = operation_attributes.sub_core_grids.has_value();
     auto
         [num_cores_to_be_used,
          all_cores,
          core_group_1,
          core_group_2,
          num_tiles_per_core_group_1,
-         num_tiles_per_core_group_2] = split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true);
+         num_tiles_per_core_group_2] =
+            use_sub_core_grids ? split_work_to_cores(*operation_attributes.sub_core_grids, num_output_tiles)
+                               : split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true);
 
     // Circular buffers (double-buffered input so the compute kernel can overlap with reader).
     constexpr uint32_t input_cb_depth = 2;
@@ -172,8 +175,18 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
     // Runtime args per core.
     std::vector<CoreCoord> ordered_cores;
     ordered_cores.reserve(num_cores_to_be_used);
-    for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-        ordered_cores.emplace_back(i % num_cores_x, i / num_cores_x);
+    if (use_sub_core_grids) {
+        for (const auto& range : all_cores.ranges()) {
+            for (auto y = range.start_coord.y; y <= range.end_coord.y; ++y) {
+                for (auto x = range.start_coord.x; x <= range.end_coord.x; ++x) {
+                    ordered_cores.emplace_back(x, y);
+                }
+            }
+        }
+    } else {
+        for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
+            ordered_cores.emplace_back(i % num_cores_x, i / num_cores_x);
+        }
     }
 
     const uint32_t dim_is_zero = (normalized_dim == 0) ? 1u : 0u;
