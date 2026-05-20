@@ -51,7 +51,10 @@ class CodePredictor(LightweightModule):
         TILE = ttnn.TILE_LAYOUT
         ROW = ttnn.ROW_MAJOR_LAYOUT
 
-        self.act_dtype = ttnn.float32
+        # bf16 activations (was float32) — drops ~50 TypecastDeviceOperations across
+        # the 5-layer CP block (≈100 µs saving per CP_Prefill / CP_Decode replay).
+        # RoPE / KV cache / SDPA all run native bf16 now.
+        self.act_dtype = ttnn.bfloat16
         self.kcfg = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
