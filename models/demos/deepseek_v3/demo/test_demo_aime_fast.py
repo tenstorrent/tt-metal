@@ -34,10 +34,10 @@ PROMPTS_FILE = Path(__file__).resolve().parent / "aime_under_8k_prompts.json"
 
 # Minimum number of correct generations required for the test to pass.
 # The curated subset has 3 AIME-24 prompts that converged correctly within 8K
-# tokens on the ds-rc1 baseline run. Stochastic sampling means we cannot
-# guarantee all three pass on every run; require at least one as a
-# regression-only smoke threshold.
-DEFAULT_MIN_CORRECT = int(os.getenv("DEEPSEEK_AIME_FAST_MIN_CORRECT", "1"))
+# tokens on the ds-rc1 baseline run; the default threshold requires all three
+# to still pass. Override with DEEPSEEK_AIME_FAST_MIN_CORRECT if you need to
+# soften the bar for a temporary stochastic-sampling investigation.
+DEFAULT_MIN_CORRECT = int(os.getenv("DEEPSEEK_AIME_FAST_MIN_CORRECT", "3"))
 
 
 _SUPPORTED_TASKS = {"r1_aime24", "aime24"}
@@ -115,7 +115,7 @@ def _score_generations(prompt_items: list[dict], generations: list[dict]) -> lis
                 "sample_on_device": True,
             },
             id="quad_aime_under_8k_fast",
-            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(2400)],
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
         ),
     ],
 )

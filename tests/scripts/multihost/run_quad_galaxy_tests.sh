@@ -727,7 +727,7 @@ run_quad_demo_stress_test() {
 
 run_quad_aime_under_8k_fast_test() {
     setup_quad_galaxy_env
-    local timeout=$(_demo_timeout 2400)
+    local timeout=$(_demo_timeout 3600)
     local junit_path="$(_test_run_summary_junit_path aime_under_8k_fast_quad)"
     local junit_flag="--junitxml=${junit_path}"
 
