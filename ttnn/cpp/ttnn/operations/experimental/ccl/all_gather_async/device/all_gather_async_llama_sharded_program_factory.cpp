@@ -254,67 +254,64 @@ ProgramDescriptor build_program_descriptor(
             // drain sync core is the first worker core
             drain_sync_core = mesh_device->worker_core_from_logical_core(core);
         }
-        // Set reader runtime args
-        std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),    // tensor_address0
-            input_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,            // num_tiles_to_read
-            input_first_core_tile_start_offset,  // first_core_tile_start_offset
-            input_tensor_cores_x.size(),         // num_cores
-        };
-        reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
-        reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
-        log_trace(tt::LogOp, "Reader Runtime Args:");
-        for ([[maybe_unused]] const auto& arg : reader_rt_args) {
-            log_trace(tt::LogOp, "\t{}", arg);
+        // Reader: input_tensor is a tensor buffer → BufferBinding (patched on cache hit).
+        KernelDescriptor::RTArgList reader_rt_args;
+        reader_rt_args.push_back(input_tensor.buffer());  // binding
+        reader_rt_args.push_back(input_tensor_shard_num_pages);
+        reader_rt_args.push_back(worker_num_tiles_to_read);
+        reader_rt_args.push_back(input_first_core_tile_start_offset);
+        reader_rt_args.push_back(static_cast<uint32_t>(input_tensor_cores_x.size()));
+        for (uint32_t v : input_tensor_cores_x) {
+            reader_rt_args.push_back(v);
         }
-        desc.kernels[worker_sender_reader_kernel_id].runtime_args.emplace_back(core, std::move(reader_rt_args));
+        for (uint32_t v : input_tensor_cores_y) {
+            reader_rt_args.push_back(v);
+        }
+        desc.kernels[worker_sender_reader_kernel_id].emplace_runtime_args(core, reader_rt_args);
 
-        // Set writer runtime args
+        // Writer: output_tensor binding + workload-scoped semaphores (raw).
         bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
-        std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),    // tensor_address0
-            semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
-            output_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,             // num_tiles_to_read
-            output_first_core_tile_start_offset,  // first_core_tile_start_offset
-            output_tensor_cores_x.size(),         // num_cores
-            wait_output_semaphore,                // wait_output_semaphore
-            reset_global_semaphore,               // reset_global_semaphore
-            drain_sync_core.x,                    // out_ready_sem_noc0_x
-            drain_sync_core.y,                    // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,             // out_ready_sem_wait_value
-            barrier_semaphore.has_value()         // barrier_sem
-                ? barrier_semaphore.value().address()
-                : 0,
-            barrier_core.x,  // barrier_sem_noc0_x
-            barrier_core.y   // barrier_sem_noc0_y
-        };
-        writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
-        writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
-        log_trace(tt::LogOp, "Writer Runtime Args:");
-        for ([[maybe_unused]] const auto& arg : writer_rt_args) {
-            log_trace(tt::LogOp, "\t{}", arg);
-        }
-
-        writer_rt_args.push_back(forward_coord.has_value());
+        std::vector<uint32_t> writer_tail;
+        writer_tail.push_back(forward_coord.has_value());
         if (forward_coord.has_value()) {
             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
+                src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_tail);
         }
-        writer_rt_args.push_back(backward_coord.has_value());
+        writer_tail.push_back(backward_coord.has_value());
         if (backward_coord.has_value()) {
             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
+                src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_tail);
         }
 
-        desc.kernels[worker_sender_writer_kernel_id].runtime_args.emplace_back(core, std::move(writer_rt_args));
+        KernelDescriptor::RTArgList writer_rt_args;
+        writer_rt_args.push_back(output_tensor.buffer());  // binding
+        writer_rt_args.push_back(semaphore.address());     // workload semaphore
+        writer_rt_args.push_back(output_tensor_shard_num_pages);
+        writer_rt_args.push_back(worker_num_tiles_to_read);
+        writer_rt_args.push_back(output_first_core_tile_start_offset);
+        writer_rt_args.push_back(static_cast<uint32_t>(output_tensor_cores_x.size()));
+        writer_rt_args.push_back(static_cast<uint32_t>(wait_output_semaphore));
+        writer_rt_args.push_back(static_cast<uint32_t>(reset_global_semaphore));
+        writer_rt_args.push_back(drain_sync_core.x);
+        writer_rt_args.push_back(drain_sync_core.y);
+        writer_rt_args.push_back(out_ready_sem_wait_value);
+        writer_rt_args.push_back(barrier_semaphore.has_value() ? barrier_semaphore.value().address() : 0u);
+        writer_rt_args.push_back(barrier_core.x);
+        writer_rt_args.push_back(barrier_core.y);
+        for (uint32_t v : output_tensor_cores_x) {
+            writer_rt_args.push_back(v);
+        }
+        for (uint32_t v : output_tensor_cores_y) {
+            writer_rt_args.push_back(v);
+        }
+        writer_rt_args.append(writer_tail);
+        desc.kernels[worker_sender_writer_kernel_id].emplace_runtime_args(core, writer_rt_args);
     }
 
     return desc;

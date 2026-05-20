@@ -167,19 +167,18 @@ ProgramDescriptor build_program_descriptor(
             desc.kernels.push_back(std::move(reader_kernel_desc));
             const KernelHandle reader_kernel_id = desc.kernels.size() - 1;
 
-            std::vector<uint32_t> reader_rt_args = {
-                input_tensor.buffer()->address(),
-                stick_start_id,
-                num_sticks_to_read,
-                input_outer_dim_size,
-                direction ? outer_dims_to_forward : outer_dims_to_backward,
-                outer_dims_from_forward,
-                outer_dims_to_keep_start,
-                outer_dims_to_keep_end,
-                num_sticks_per_outer_dim,
-                args.final_semaphore.address(),
-            };
-            desc.kernels[reader_kernel_id].runtime_args.emplace_back(core, std::move(reader_rt_args));
+            KernelDescriptor::RTArgList reader_rt_args;
+            reader_rt_args.push_back(input_tensor.buffer());  // Buffer* binding
+            reader_rt_args.push_back(stick_start_id);
+            reader_rt_args.push_back(num_sticks_to_read);
+            reader_rt_args.push_back(input_outer_dim_size);
+            reader_rt_args.push_back(direction ? outer_dims_to_forward : outer_dims_to_backward);
+            reader_rt_args.push_back(outer_dims_from_forward);
+            reader_rt_args.push_back(outer_dims_to_keep_start);
+            reader_rt_args.push_back(outer_dims_to_keep_end);
+            reader_rt_args.push_back(num_sticks_per_outer_dim);
+            reader_rt_args.push_back(args.final_semaphore.address());  // workload-scoped semaphore
+            desc.kernels[reader_kernel_id].emplace_runtime_args(core, reader_rt_args);
 
             // Writer
             std::vector<uint32_t> writer_ct_args = {
@@ -201,45 +200,50 @@ ProgramDescriptor build_program_descriptor(
             desc.kernels.push_back(std::move(writer_kernel_desc));
             const KernelHandle writer_kernel_id = desc.kernels.size() - 1;
 
-            std::vector<uint32_t> writer_rt_args = {
-                input_tensor.buffer()->address(),
-                output_tensor.buffer()->address(),
-                page_size,
-                stick_start_id,
-                num_sticks_to_read,
-                output_outer_dim_size,
-                direction ? outer_dims_to_forward : outer_dims_to_backward,
-                outer_dims_to_keep_start,
-                outer_dims_to_keep_end,
-                direction ? outer_dims_from_backward : outer_dims_from_forward,
-                outer_dims_from_forward,
-                num_sticks_per_outer_dim,
-                virtual_core.x,
-                virtual_core.y,
-                args.final_semaphore.address(),
-                true,
-                virtual_opposite_core.x,
-                virtual_opposite_core.y,
-                args.barrier_semaphore.address(),
-            };
+            // Build fabric extras (and trailing has_value flags) in a raw vector,
+            // then assemble the final RTArgList so input/output tensors get
+            // BufferBinding-patched on cache hit.
+            std::vector<uint32_t> writer_tail;
             if (direction) {
-                writer_rt_args.push_back(forward_fabric_node_id.has_value());
+                writer_tail.push_back(forward_fabric_node_id.has_value());
                 if (forward_fabric_node_id.has_value()) {
                     const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
                     tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                        src_fabric_node_id, forward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                        src_fabric_node_id, forward_fabric_node_id.value(), link, desc, core, writer_tail);
                 }
-                writer_rt_args.push_back(false);
+                writer_tail.push_back(false);
             } else {
-                writer_rt_args.push_back(false);
-                writer_rt_args.push_back(backward_fabric_node_id.has_value());
+                writer_tail.push_back(false);
+                writer_tail.push_back(backward_fabric_node_id.has_value());
                 if (backward_fabric_node_id.has_value()) {
                     const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
                     tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                        src_fabric_node_id, backward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                        src_fabric_node_id, backward_fabric_node_id.value(), link, desc, core, writer_tail);
                 }
             }
-            desc.kernels[writer_kernel_id].runtime_args.emplace_back(core, std::move(writer_rt_args));
+
+            KernelDescriptor::RTArgList writer_rt_args;
+            writer_rt_args.push_back(input_tensor.buffer());   // Buffer* binding
+            writer_rt_args.push_back(output_tensor.buffer());  // Buffer* binding
+            writer_rt_args.push_back(page_size);
+            writer_rt_args.push_back(stick_start_id);
+            writer_rt_args.push_back(num_sticks_to_read);
+            writer_rt_args.push_back(output_outer_dim_size);
+            writer_rt_args.push_back(direction ? outer_dims_to_forward : outer_dims_to_backward);
+            writer_rt_args.push_back(outer_dims_to_keep_start);
+            writer_rt_args.push_back(outer_dims_to_keep_end);
+            writer_rt_args.push_back(direction ? outer_dims_from_backward : outer_dims_from_forward);
+            writer_rt_args.push_back(outer_dims_from_forward);
+            writer_rt_args.push_back(num_sticks_per_outer_dim);
+            writer_rt_args.push_back(static_cast<uint32_t>(virtual_core.x));
+            writer_rt_args.push_back(static_cast<uint32_t>(virtual_core.y));
+            writer_rt_args.push_back(args.final_semaphore.address());  // workload-scoped semaphore
+            writer_rt_args.push_back(1u);                              // true (matches prior literal)
+            writer_rt_args.push_back(static_cast<uint32_t>(virtual_opposite_core.x));
+            writer_rt_args.push_back(static_cast<uint32_t>(virtual_opposite_core.y));
+            writer_rt_args.push_back(args.barrier_semaphore.address());
+            writer_rt_args.append(writer_tail);
+            desc.kernels[writer_kernel_id].emplace_runtime_args(core, writer_rt_args);
         }
         stick_start_id += num_sticks_to_read;
     }

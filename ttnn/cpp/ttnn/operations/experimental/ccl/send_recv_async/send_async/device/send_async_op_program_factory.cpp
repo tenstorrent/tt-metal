@@ -201,21 +201,16 @@ ProgramDescriptor build_sender_program_descriptor(
             num_pages_remainder = pages_for_this_core % num_pages_per_packet;
         }
 
-        // Reader RT args.  Index 0 is the input tensor buffer; the rest are
-        // plain uint32_t.  Pushed as raw uint32_t (NOT emplace_runtime_args
-        // with Buffer*): the writer's index-0 is mesh_socket.get_config_buffer()
-        // which is not part of tensor_args and therefore can't be bound.  To
-        // keep behaviour consistent across kernels we keep both on the slow
-        // (rebuild) path and let the framework re-call create_workload_descriptor
-        // on cache hit, which re-reads buffer->address() correctly.
-        std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),  // input_base_addr
-            pages_for_this_core,               // num_pages
-            page_start_offset,                 // page_start_offset
-            num_whole_packets,                 // num_whole_packets
-            num_pages_remainder,               // num_pages_remainder
-        };
-        desc.kernels[reader_kernel_id].runtime_args.emplace_back(sender_core_coord, std::move(reader_rt_args));
+        // Reader: input_tensor buffer is bound (patched on cache hit). The writer's
+        // mesh_socket.get_config_buffer() is workload-scoped (stable across dispatches,
+        // not a tensor) and stays as a raw uint32_t address.
+        KernelDescriptor::RTArgList reader_rt_args;
+        reader_rt_args.push_back(input_tensor.buffer());  // input_base_addr (binding)
+        reader_rt_args.push_back(pages_for_this_core);    // num_pages
+        reader_rt_args.push_back(page_start_offset);      // page_start_offset
+        reader_rt_args.push_back(num_whole_packets);      // num_whole_packets
+        reader_rt_args.push_back(num_pages_remainder);    // num_pages_remainder
+        desc.kernels[reader_kernel_id].emplace_runtime_args(sender_core_coord, reader_rt_args);
 
         // TODO #24995: These parameters should be derived from the expected tensor/socket configuration
         uint32_t bank_id = 0;

@@ -8,6 +8,7 @@
 
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -18,10 +19,10 @@ struct AllToAllAsyncGenericProgram {
     //
     // The init/final barrier GlobalSemaphores are workload-scoped: allocated
     // once in create_workload_descriptor on cache miss and parked in
-    // wd.semaphores so they outlive the cached MeshWorkload.  Addresses are
-    // baked into runtime args every dispatch via the slow-path rebuild (the
-    // framework re-calls create_workload_descriptor on cache hit when there
-    // are no Buffer* bindings to patch).
+    // wd.semaphores so they outlive the cached MeshWorkload.  Their addresses
+    // are stable across dispatches and written as raw uint32_t.  Tensor buffer
+    // addresses (input + output) are patched on cache hit via BufferBindings
+    // (emplace_runtime_args); there is no slow-path rebuild in contract (2).
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const AllToAllAsyncGenericParams& operation_attributes,
         const AllToAllAsyncGenericInputs& tensor_args,

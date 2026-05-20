@@ -132,7 +132,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     //=========================================================================
     std::vector<CoreCoord> combine_cores;
     CoreRangeSet combine_core_range_set;
-    uint32_t output_base_l1_addr = 0;
 
     const auto& tilize_output_tensor = tensor_return_value.at(3);
 
@@ -201,9 +200,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
                 .page_size = output_page_size}},
             .buffer = tilize_output_tensor.buffer(),
         });
-
-        // Output base L1 address
-        output_base_l1_addr = tilize_output_tensor.buffer()->address();
     }
 
     // Note: TensorAccessorArgs are passed to matmul kernels as positional compile args.
@@ -463,7 +459,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         //   [9]  next_physical.y
         //   [10] combine_semaphore_id
         //   [11] k_start_tile
-        //   [12] output_base_l1_addr
+        //   [12] tilize_output_buffer.address() (duplicate binding so cache-hit patches it)
         KernelDescriptor::RTArgList rt_args;
         rt_args.push_back(dram_bank);
         rt_args.push_back(vchannel);
@@ -477,7 +473,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         rt_args.push_back(static_cast<uint32_t>(next_physical.y));
         rt_args.push_back(combine_semaphore_id);
         rt_args.push_back(k_start_tiles[ring_pos]);
-        rt_args.push_back(output_base_l1_addr);
+        rt_args.push_back(tilize_output_buffer);  // same buffer as [5]; second binding keeps [12] patched on cache hit
 
         desc.kernels[dm0_kernel_idx].emplace_runtime_args(core, rt_args);
         desc.kernels[dm1_kernel_idx].emplace_runtime_args(core, rt_args);

@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"

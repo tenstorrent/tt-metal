@@ -1103,6 +1103,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
                 writer_mcast_sender_args.push_back(cinv_pre_bits);
             }
             writer_mcast_sender_args.push_back(i);  // Core ID to limit number of cores to do all gather on
+            // stats address is at index 2 of all_gather_rts; track its final index in writer args.
+            const size_t stats_final_idx_s = writer_mcast_sender_args.size() + 2;
             writer_mcast_sender_args.insert(
                 writer_mcast_sender_args.end(), all_gather_rts.begin(), all_gather_rts.end());
             writer_mcast_sender_args.at(0) = writer_mcast_sender_args.size();
@@ -1117,17 +1119,29 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
                 writer_mcast_post_sender_args.push_back(cinv_bits);
             }
             writer_mcast_post_sender_args.push_back(e.u);
+            // Record the index where gamma_dram_addr lives (within writer_mcast_post_sender_args).
+            const size_t gamma_post_idx = writer_mcast_post_sender_args.size();
             writer_mcast_post_sender_args.push_back(gamma_dram_addr);
             writer_mcast_post_sender_args.push_back(gamma_tile_start_id);
 
             // Add args for write back (reshard)
             writer_mcast_post_sender_args.insert(
                 writer_mcast_post_sender_args.end(), write_back_writer_args.begin(), write_back_writer_args.end());
+            const size_t gamma_final_idx = writer_mcast_sender_args.size() + gamma_post_idx;
             writer_mcast_sender_args.insert(
                 writer_mcast_sender_args.end(),
                 writer_mcast_post_sender_args.begin(),
                 writer_mcast_post_sender_args.end());
             desc.kernels[writer_mcast_sender_idx].runtime_args.emplace_back(core, std::move(writer_mcast_sender_args));
+            // Register tensor buffers as BufferBindings so the framework patches their
+            // addresses on cache hit (contract-2 has no slow-path rebuild). stats is
+            // a required tensor; gamma is optional (skip binding if absent — 0 is fine).
+            desc.kernels[writer_mcast_sender_idx].buffer_bindings.push_back(
+                {core, static_cast<uint32_t>(stats_final_idx_s), stats.value().buffer()});
+            if (gamma.has_value()) {
+                desc.kernels[writer_mcast_sender_idx].buffer_bindings.push_back(
+                    {core, static_cast<uint32_t>(gamma_final_idx), gamma.value().buffer()});
+            }
         } else {
             std::vector<uint32_t> writer_mcast_receiver_args = {0};
             CoreCoord mcast_start, mcast_end;
@@ -1147,23 +1161,33 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
             writer_mcast_receiver_args.push_back(mcast_end.y);
             writer_mcast_receiver_args.push_back(cinv_pre_bits);
             writer_mcast_receiver_args.push_back(i);  // Core ID to limit number of cores to do all gather on
+            // stats address is at index 2 of all_gather_rts; track its final index.
+            const size_t stats_final_idx_r = writer_mcast_receiver_args.size() + 2;
             writer_mcast_receiver_args.insert(
                 writer_mcast_receiver_args.end(), all_gather_rts.begin(), all_gather_rts.end());
             writer_mcast_receiver_args.at(0) = writer_mcast_receiver_args.size();
             std::vector<uint32_t> writer_mcast_post_receiver_args;
             writer_mcast_post_receiver_args.push_back(cinv_bits);
             writer_mcast_post_receiver_args.push_back(e.u);
+            const size_t gamma_post_idx_r = writer_mcast_post_receiver_args.size();
             writer_mcast_post_receiver_args.push_back(gamma_dram_addr);
             writer_mcast_post_receiver_args.push_back(gamma_tile_start_id);
             // Add args for write back (reshard)
             writer_mcast_post_receiver_args.insert(
                 writer_mcast_post_receiver_args.end(), write_back_writer_args.begin(), write_back_writer_args.end());
+            const size_t gamma_final_idx_r = writer_mcast_receiver_args.size() + gamma_post_idx_r;
             writer_mcast_receiver_args.insert(
                 writer_mcast_receiver_args.end(),
                 writer_mcast_post_receiver_args.begin(),
                 writer_mcast_post_receiver_args.end());
             desc.kernels[writer_mcast_receiver_idx].runtime_args.emplace_back(
                 core, std::move(writer_mcast_receiver_args));
+            desc.kernels[writer_mcast_receiver_idx].buffer_bindings.push_back(
+                {core, static_cast<uint32_t>(stats_final_idx_r), stats.value().buffer()});
+            if (gamma.has_value()) {
+                desc.kernels[writer_mcast_receiver_idx].buffer_bindings.push_back(
+                    {core, static_cast<uint32_t>(gamma_final_idx_r), gamma.value().buffer()});
+            }
         }
     }
 

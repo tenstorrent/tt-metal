@@ -14,11 +14,14 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+
+namespace tt::tt_metal {
+struct ProgramDescriptor;
+}  // namespace tt::tt_metal
 
 namespace ttnn::ccl {
 

@@ -21,11 +21,10 @@ struct SendAsyncMeshWorkloadFactory {
     // get_workload_coords; in the descriptor pattern the framework iterates
     // every tensor coord, so we emit a no-op program for non-sender coords.
     //
-    // The MeshSocket lives on SendAsyncParams (caller allocated) so this
-    // factory needs no workload-scoped resources — the socket config buffer
-    // address is written into the writer runtime args every dispatch via the
-    // normal slow-path rebuild (the framework re-calls create_workload_descriptor
-    // on cache hit when there are no Buffer* bindings to patch).
+    // The MeshSocket lives on SendAsyncParams (caller allocated). The reader's
+    // input_tensor address is patched via BufferBinding on cache hit; the writer's
+    // socket-config-buffer address is workload-scoped (stable across dispatches)
+    // so it stays as a raw uint32_t — no rebuild path is available in contract-2.
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const SendAsyncParams& operation_attributes,
         const Tensor& tensor_args,

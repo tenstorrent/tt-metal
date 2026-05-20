@@ -456,60 +456,52 @@ ProgramDescriptor build_program_descriptor(
             drain_sync_core = device->worker_core_from_logical_core(core);
         }
 
-        // Set reader runtime args
-        std::vector<uint32_t> reader_rt_args = {
-            tensor_args.input_tensor.buffer()->address(),  // tensor_address0
-            in_row_tiles,
-            in_col_tiles,
-            input_row_device_stride,
-            input_col_device_stride,
-            input_shard_row_tiles,
-            input_shard_col_tiles,
-            out_row_start,
-            out_col_start,
-        };
-        log_trace(tt::LogOp, "Reader Runtime Args:");
-        for ([[maybe_unused]] const auto& arg : reader_rt_args) {
-            log_trace(tt::LogOp, "\t{}", arg);
-        }
-        desc.kernels[worker_sender_reader_kernel_id].runtime_args.emplace_back(core, std::move(reader_rt_args));
+        // Reader: input_tensor is a tensor buffer → BufferBinding.
+        KernelDescriptor::RTArgList reader_rt_args;
+        reader_rt_args.push_back(tensor_args.input_tensor.buffer());  // Buffer* binding
+        reader_rt_args.push_back(in_row_tiles);
+        reader_rt_args.push_back(in_col_tiles);
+        reader_rt_args.push_back(input_row_device_stride);
+        reader_rt_args.push_back(input_col_device_stride);
+        reader_rt_args.push_back(input_shard_row_tiles);
+        reader_rt_args.push_back(input_shard_col_tiles);
+        reader_rt_args.push_back(out_row_start);
+        reader_rt_args.push_back(out_col_start);
+        desc.kernels[worker_sender_reader_kernel_id].emplace_runtime_args(core, reader_rt_args);
 
-        // Set writer runtime args
+        // Writer: persistent_intermediate/output are tensor buffers → bindings.
+        // Build fabric tail in a raw vector; final RTArgList registers Buffer*.
         bool wait_output_semaphore = (link == 0) && !enable_async_output;
         bool reset_global_semaphore = (link == 0) && !enable_async_output;
-        std::vector<uint32_t> writer_rt_args = {
-            tensor_args.persistent_intermediate_buffer.buffer()->address(),
-            tensor_args.persistent_output_buffer.buffer()->address(),
-            semaphore.address(),
-            out_row_tiles,
-            out_col_tiles,
-            out_row_start,
-            out_col_start,
-            input_shard_row_tiles,
-            input_shard_col_tiles,
-            wait_output_semaphore,
-            reset_global_semaphore,
-            receiver_core_x,
-            receiver_core_y,
-        };
-
-        log_trace(tt::LogOp, "Writer Runtime Args:");
-        for ([[maybe_unused]] const auto& arg : writer_rt_args) {
-            log_trace(tt::LogOp, "\t{}", arg);
-        }
-        writer_rt_args.push_back(forward_fabric_node_id.has_value());
+        std::vector<uint32_t> writer_tail;
+        writer_tail.push_back(forward_fabric_node_id.has_value());
         if (forward_fabric_node_id.has_value()) {
             const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                sender_fabric_node_id, forward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                sender_fabric_node_id, forward_fabric_node_id.value(), link, desc, core, writer_tail);
         }
-        writer_rt_args.push_back(backward_fabric_node_id.has_value());
+        writer_tail.push_back(backward_fabric_node_id.has_value());
         if (backward_fabric_node_id.has_value()) {
             const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                sender_fabric_node_id, backward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                sender_fabric_node_id, backward_fabric_node_id.value(), link, desc, core, writer_tail);
         }
-        desc.kernels[worker_sender_writer_kernel_id].runtime_args.emplace_back(core, std::move(writer_rt_args));
+        KernelDescriptor::RTArgList writer_rt_args;
+        writer_rt_args.push_back(tensor_args.persistent_intermediate_buffer.buffer());  // binding
+        writer_rt_args.push_back(tensor_args.persistent_output_buffer.buffer());        // binding
+        writer_rt_args.push_back(semaphore.address());                                  // workload semaphore
+        writer_rt_args.push_back(out_row_tiles);
+        writer_rt_args.push_back(out_col_tiles);
+        writer_rt_args.push_back(out_row_start);
+        writer_rt_args.push_back(out_col_start);
+        writer_rt_args.push_back(input_shard_row_tiles);
+        writer_rt_args.push_back(input_shard_col_tiles);
+        writer_rt_args.push_back(static_cast<uint32_t>(wait_output_semaphore));
+        writer_rt_args.push_back(static_cast<uint32_t>(reset_global_semaphore));
+        writer_rt_args.push_back(receiver_core_x);
+        writer_rt_args.push_back(receiver_core_y);
+        writer_rt_args.append(writer_tail);
+        desc.kernels[worker_sender_writer_kernel_id].emplace_runtime_args(core, writer_rt_args);
 
         for (uint32_t i = 0; i < receiver_worker_cores.size(); i++) {
             const auto core = receiver_worker_cores[i];
@@ -525,42 +517,40 @@ ProgramDescriptor build_program_descriptor(
                     calculate_strides_and_offsets(
                         in_row_tiles, in_col_tiles, operation_attributes.ring_size, i, operation_attributes.in_dim);
 
-            // Set receiver runtime args
-            std::vector<uint32_t> receiver_reader_rt_args = {
-                tensor_args.persistent_intermediate_buffer.buffer()->address(),
-                tensor_args.input_tensor.buffer()->address(),
-                semaphore.address(),  // Global semaphore for sender i
-                in_row_tiles,
-                in_col_tiles,
-                receiver_input_row_device_stride,
-                receiver_input_col_device_stride,
-                receiver_input_shard_row_tiles,
-                receiver_input_shard_col_tiles,
-                receiver_out_row_start,
-                receiver_out_col_start,
-                out_row_tiles,
-                out_col_tiles,
-                pages_per_packet,
-                i  // Receiver of device at ring_index i
-            };
-            desc.kernels[receiver_reader_kernel_id].runtime_args.emplace_back(core, std::move(receiver_reader_rt_args));
+            // Receiver reader: persistent_intermediate + input_tensor are tensor buffers.
+            KernelDescriptor::RTArgList receiver_reader_rt_args;
+            receiver_reader_rt_args.push_back(tensor_args.persistent_intermediate_buffer.buffer());  // binding
+            receiver_reader_rt_args.push_back(tensor_args.input_tensor.buffer());                    // binding
+            receiver_reader_rt_args.push_back(semaphore.address());  // workload semaphore
+            receiver_reader_rt_args.push_back(in_row_tiles);
+            receiver_reader_rt_args.push_back(in_col_tiles);
+            receiver_reader_rt_args.push_back(receiver_input_row_device_stride);
+            receiver_reader_rt_args.push_back(receiver_input_col_device_stride);
+            receiver_reader_rt_args.push_back(receiver_input_shard_row_tiles);
+            receiver_reader_rt_args.push_back(receiver_input_shard_col_tiles);
+            receiver_reader_rt_args.push_back(receiver_out_row_start);
+            receiver_reader_rt_args.push_back(receiver_out_col_start);
+            receiver_reader_rt_args.push_back(out_row_tiles);
+            receiver_reader_rt_args.push_back(out_col_tiles);
+            receiver_reader_rt_args.push_back(pages_per_packet);
+            receiver_reader_rt_args.push_back(i);  // Receiver of device at ring_index i
+            desc.kernels[receiver_reader_kernel_id].emplace_runtime_args(core, receiver_reader_rt_args);
 
-            std::vector<uint32_t> receiver_writer_rt_args = {
-                tensor_args.persistent_output_buffer.buffer()->address(),
-                in_row_tiles,
-                in_col_tiles,
-                receiver_input_row_device_stride,
-                receiver_input_col_device_stride,
-                receiver_input_shard_row_tiles,
-                receiver_input_shard_col_tiles,
-                receiver_out_row_start,
-                receiver_out_col_start,
-                out_row_tiles,
-                out_col_tiles,
-                pages_per_packet,
-                i  // Receiver of device at ring_index i
-            };
-            desc.kernels[receiver_writer_kernel_id].runtime_args.emplace_back(core, std::move(receiver_writer_rt_args));
+            KernelDescriptor::RTArgList receiver_writer_rt_args;
+            receiver_writer_rt_args.push_back(tensor_args.persistent_output_buffer.buffer());  // binding
+            receiver_writer_rt_args.push_back(in_row_tiles);
+            receiver_writer_rt_args.push_back(in_col_tiles);
+            receiver_writer_rt_args.push_back(receiver_input_row_device_stride);
+            receiver_writer_rt_args.push_back(receiver_input_col_device_stride);
+            receiver_writer_rt_args.push_back(receiver_input_shard_row_tiles);
+            receiver_writer_rt_args.push_back(receiver_input_shard_col_tiles);
+            receiver_writer_rt_args.push_back(receiver_out_row_start);
+            receiver_writer_rt_args.push_back(receiver_out_col_start);
+            receiver_writer_rt_args.push_back(out_row_tiles);
+            receiver_writer_rt_args.push_back(out_col_tiles);
+            receiver_writer_rt_args.push_back(pages_per_packet);
+            receiver_writer_rt_args.push_back(i);  // Receiver of device at ring_index i
+            desc.kernels[receiver_writer_kernel_id].emplace_runtime_args(core, receiver_writer_rt_args);
         }
     }
 

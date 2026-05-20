@@ -260,46 +260,32 @@ ProgramDescriptor build_program_descriptor(
 
     for (uint32_t core_id = 0; core_id < sender_worker_cores.size(); ++core_id) {
         const auto& core = sender_worker_cores[core_id];
-        std::vector<uint32_t> sender_reader_rt_args = {
-            tensor_args.input_tensor.buffer()->address(),
-            device_offsets[core_id % num_blocks_devices].size(),
-        };
+        // Reader: input_tensor is a tensor buffer → binding.
+        KernelDescriptor::RTArgList sender_reader_rt_args;
+        sender_reader_rt_args.push_back(tensor_args.input_tensor.buffer());  // binding
+        sender_reader_rt_args.push_back(static_cast<uint32_t>(device_offsets[core_id % num_blocks_devices].size()));
         for (uint32_t i = 0; i < device_offsets[core_id % num_blocks_devices].size(); ++i) {
             sender_reader_rt_args.push_back(device_offsets[core_id % num_blocks_devices][i]);
             sender_reader_rt_args.push_back(
                 block_starts[core_id % num_blocks_devices][core_id / num_blocks_devices][i]);
             sender_reader_rt_args.push_back(block_ends[core_id % num_blocks_devices][core_id / num_blocks_devices][i]);
         }
-        desc.kernels[sender_reader_kernel_id].runtime_args.emplace_back(core, std::move(sender_reader_rt_args));
+        desc.kernels[sender_reader_kernel_id].emplace_runtime_args(core, sender_reader_rt_args);
 
-        std::vector<uint32_t> sender_writer_rt_args = {
-            tensor_return_value.buffer()->address(),
-            init_barrier_semaphore.address(),
-            final_barrier_semaphore.address(),
-            core_id % num_blocks_devices,
-            core_id / num_blocks_devices,
-            mcast_dest_noc_start_x,
-            mcast_dest_noc_start_y,
-            mcast_dest_noc_end_x,
-            mcast_dest_noc_end_y,
-            mcast_size,
-            drain_sync_core.x,
-            drain_sync_core.y,
-            device_offsets[core_id % num_blocks_devices].size(),
-        };
-
-        for (uint32_t i = 0; i < device_offsets[core_id % num_blocks_devices].size(); ++i) {
-            sender_writer_rt_args.push_back(device_offsets[core_id % num_blocks_devices][i]);
-            sender_writer_rt_args.push_back(
-                block_starts[core_id % num_blocks_devices][core_id / num_blocks_devices][i]);
-            sender_writer_rt_args.push_back(block_ends[core_id % num_blocks_devices][core_id / num_blocks_devices][i]);
-        }
+        // Writer: build the raw vector (incl. fabric extras) first, then graft
+        // tensor_return_value buffer as a binding at position [0] in an RTArgList.
         bool with_forward =
             (num_senders_per_link == 1 || (core_id % num_blocks_devices == 0)) && forward_coord.has_value();
         bool with_backward =
             (num_senders_per_link == 1 || (core_id % num_blocks_devices == 1)) && backward_coord.has_value();
-        sender_writer_rt_args.push_back(with_forward);
-
+        std::vector<uint32_t> sender_writer_tail;
+        // Block descriptors for this core
+        for (uint32_t i = 0; i < device_offsets[core_id % num_blocks_devices].size(); ++i) {
+            sender_writer_tail.push_back(device_offsets[core_id % num_blocks_devices][i]);
+            sender_writer_tail.push_back(block_starts[core_id % num_blocks_devices][core_id / num_blocks_devices][i]);
+            sender_writer_tail.push_back(block_ends[core_id % num_blocks_devices][core_id / num_blocks_devices][i]);
+        }
+        sender_writer_tail.push_back(with_forward);
         if (with_forward) {
             const auto sender_device_fabric_node_id = device->get_fabric_node_id(mesh_coordinate);
             const auto forward_device_fabric_node_id = device->get_fabric_node_id(forward_coord.value());
@@ -309,10 +295,9 @@ ProgramDescriptor build_program_descriptor(
                 core_id / num_senders_per_link,
                 desc,
                 core,
-                sender_writer_rt_args);
+                sender_writer_tail);
         }
-
-        sender_writer_rt_args.push_back(with_backward);
+        sender_writer_tail.push_back(with_backward);
         if (with_backward) {
             const auto sender_device_fabric_node_id = device->get_fabric_node_id(mesh_coordinate);
             const auto backward_device_fabric_node_id = device->get_fabric_node_id(backward_coord.value());
@@ -322,9 +307,25 @@ ProgramDescriptor build_program_descriptor(
                 core_id / num_senders_per_link,
                 desc,
                 core,
-                sender_writer_rt_args);
+                sender_writer_tail);
         }
-        desc.kernels[sender_writer_kernel_id].runtime_args.emplace_back(core, std::move(sender_writer_rt_args));
+
+        KernelDescriptor::RTArgList sender_writer_rt_args;
+        sender_writer_rt_args.push_back(tensor_return_value.buffer());  // binding
+        sender_writer_rt_args.push_back(init_barrier_semaphore.address());
+        sender_writer_rt_args.push_back(final_barrier_semaphore.address());
+        sender_writer_rt_args.push_back(static_cast<uint32_t>(core_id % num_blocks_devices));
+        sender_writer_rt_args.push_back(static_cast<uint32_t>(core_id / num_blocks_devices));
+        sender_writer_rt_args.push_back(mcast_dest_noc_start_x);
+        sender_writer_rt_args.push_back(mcast_dest_noc_start_y);
+        sender_writer_rt_args.push_back(mcast_dest_noc_end_x);
+        sender_writer_rt_args.push_back(mcast_dest_noc_end_y);
+        sender_writer_rt_args.push_back(mcast_size);
+        sender_writer_rt_args.push_back(drain_sync_core.x);
+        sender_writer_rt_args.push_back(drain_sync_core.y);
+        sender_writer_rt_args.push_back(static_cast<uint32_t>(device_offsets[core_id % num_blocks_devices].size()));
+        sender_writer_rt_args.append(sender_writer_tail);
+        desc.kernels[sender_writer_kernel_id].emplace_runtime_args(core, sender_writer_rt_args);
     }
 
     return desc;

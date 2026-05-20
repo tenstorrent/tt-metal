@@ -188,15 +188,10 @@ ProgramDescriptor build_receiver_program_descriptor(
                 num_pages_remainder = pages_for_this_core % num_pages_per_packet;
             }
 
-            std::vector<uint32_t> writer_rt_args = {
-                mesh_socket.get_config_buffer()->address(),
-                output_tensor.buffer()->address(),
-                pages_for_this_core,
-                page_start_offset,
-                num_whole_packets,
-                num_pages_remainder,
-            };
-
+            // Collect the fabric helper extras into a raw scratch vector; the
+            // main writer args use an RTArgList so output_tensor.buffer() is
+            // registered as a BufferBinding (patched on cache hit).
+            std::vector<uint32_t> fabric_extras;
             auto link_indices =
                 tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
             TT_FATAL(!link_indices.empty(), "No link indices found for receiver core");
@@ -208,9 +203,17 @@ ProgramDescriptor build_receiver_program_descriptor(
                 selected_link_index,
                 desc,
                 receiver_core_coord,
-                writer_rt_args);
+                fabric_extras);
 
-            desc.kernels[writer_kernel_id].runtime_args.emplace_back(receiver_core_coord, std::move(writer_rt_args));
+            KernelDescriptor::RTArgList writer_rt_args;
+            writer_rt_args.push_back(mesh_socket.get_config_buffer()->address());  // non-tensor; stable
+            writer_rt_args.push_back(output_tensor.buffer());                      // Buffer* binding
+            writer_rt_args.push_back(pages_for_this_core);
+            writer_rt_args.push_back(page_start_offset);
+            writer_rt_args.push_back(num_whole_packets);
+            writer_rt_args.push_back(num_pages_remainder);
+            writer_rt_args.append(fabric_extras);
+            desc.kernels[writer_kernel_id].emplace_runtime_args(receiver_core_coord, writer_rt_args);
         }
     } else {
         std::vector<uint32_t> reader_compile_args = {
@@ -285,6 +288,8 @@ ProgramDescriptor build_receiver_program_descriptor(
                     mesh_socket.get_config().socket_mem_config.socket_storage_type, receiver_core_coord)[0];
             }
 
+            // Reader has only the non-tensor socket config buffer + fabric extras;
+            // no tensor buffers, so plain raw uint32_t is fine.
             std::vector<uint32_t> reader_rt_args = {
                 mesh_socket.get_config_buffer()->address(),
                 bank_id,
@@ -308,12 +313,11 @@ ProgramDescriptor build_receiver_program_descriptor(
 
             desc.kernels[reader_kernel_id].runtime_args.emplace_back(receiver_core_coord, std::move(reader_rt_args));
 
-            std::vector<uint32_t> writer_rt_args = {
-                output_tensor.buffer()->address(),
-                page_start_offset,
-                pages_for_this_core,
-            };
-            desc.kernels[writer_kernel_id].runtime_args.emplace_back(receiver_core_coord, std::move(writer_rt_args));
+            KernelDescriptor::RTArgList writer_rt_args;
+            writer_rt_args.push_back(output_tensor.buffer());  // Buffer* binding
+            writer_rt_args.push_back(page_start_offset);
+            writer_rt_args.push_back(pages_for_this_core);
+            desc.kernels[writer_kernel_id].emplace_runtime_args(receiver_core_coord, writer_rt_args);
         }
     }
 

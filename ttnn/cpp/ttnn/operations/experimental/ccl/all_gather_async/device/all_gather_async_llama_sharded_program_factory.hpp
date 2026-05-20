@@ -8,6 +8,7 @@
 
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -18,10 +19,10 @@ struct LlamaShardedMeshWorkloadFactory {
     //
     // GlobalSemaphores (semaphore[0], barrier_semaphore) live on
     // AllGatherAsyncParams — caller-allocated, so no workload-scoped semaphore
-    // allocation is needed here.  The absolute addresses are written into the
-    // writer runtime args every dispatch via the normal slow-path rebuild (the
-    // framework re-calls create_workload_descriptor on cache hit when there
-    // are no Buffer* bindings to patch).
+    // allocation is needed here.  Tensor buffer addresses (input/output) are
+    // patched on cache hit via BufferBindings (emplace_runtime_args); semaphore
+    // addresses are stable across dispatches and written as raw uint32_t.
+    // Contract (2) has no slow-path rebuild on cache hit.
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const AllGatherAsyncParams& operation_attributes,
         const AllGatherAsyncInputs& tensor_args,
