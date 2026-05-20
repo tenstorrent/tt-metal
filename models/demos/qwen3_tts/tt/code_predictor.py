@@ -83,6 +83,24 @@ class CodePredictor(LightweightModule):
             packer_l1_acc=True,
         )
 
+        # Sharded NLP head op memcfgs (mirrors talker's _build_sharded_nlp_memcfgs).
+        # CP runs at M_padded=32 for both prefill (real M=2) and decode (real M=1).
+        # nlp_concat_heads input is HEIGHT_SHARDED across num_heads cores
+        # (1 head/core) — drops CP NLPConcat from 1-core to 16-core (20→1.5 µs).
+        _compute_grid = device.compute_with_storage_grid_size()
+        self._cp_concat_grid = ttnn.num_cores_to_corerangeset(self.num_heads, _compute_grid, True)
+        _M = 32
+        self._cp_concat_in_memcfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(self._cp_concat_grid, (_M, self.head_dim), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        self._cp_concat_out_memcfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(self._cp_concat_grid, (_M, self.head_dim), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
         # --- weight format helpers ---
         def _perm_rope_rows(w_2d: torch.Tensor, head_dim: int) -> torch.Tensor:
             out_dim = w_2d.shape[0]
@@ -422,11 +440,15 @@ class CodePredictor(LightweightModule):
         if self.num_kv_groups > 1:
             ttnn.deallocate(v_exp)
 
-        attn_concat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Height-shard attn_out across num_heads cores (1 head/core) so
+        # nlp_concat_heads runs sharded instead of single-core (20→~1.5 µs).
+        attn_out_sh = ttnn.to_memory_config(attn_out, self._cp_concat_in_memcfg)
         ttnn.deallocate(attn_out)
-
-        attn_sh = ttnn.to_memory_config(attn_concat, lw["o_proj_sh"]["in0_mc"])
-        ttnn.deallocate(attn_concat)
+        attn_concat_sh = ttnn.experimental.nlp_concat_heads(attn_out_sh, memory_config=self._cp_concat_out_memcfg)
+        ttnn.deallocate(attn_out_sh)
+        # Reshard into o_proj's width-sharded in0 layout for the sharded matmul.
+        attn_sh = ttnn.to_memory_config(attn_concat_sh, lw["o_proj_sh"]["in0_mc"])
+        ttnn.deallocate(attn_concat_sh)
         o_sh = ttnn.linear(
             attn_sh,
             lw["o_proj_sh"]["w"],
