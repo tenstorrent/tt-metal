@@ -814,6 +814,7 @@ def _run_decoder_layer_pass(
     """Run one decoder layer over the scheduled prompt inputs."""
     num_devices = config.mesh_rows * config.mesh_cols
     layer_prefix = f"layer {layer_position + 1}/{total_layers} (idx={layer_idx})"
+    testing_iteration_label = _testing_iteration_label(testing_iteration, num_testing_iterations)
     logger.info(f"{layer_prefix}: creating " f"{config.mesh_rows}x{config.mesh_cols} submesh ({num_devices} devices)")
     submesh = parent_mesh.create_submesh(ttnn.MeshShape((config.mesh_rows, config.mesh_cols)))
     try:
