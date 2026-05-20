@@ -506,7 +506,7 @@ class TTNNDotsVision2DRoPE:
         if seq_len != expected:
             raise ValueError(f"seq_len={seq_len} != grid_thw total={expected}")
 
-        mem = ttnn.DRAM_MEMORY_CONFIG
+        mem = ttnn.L1_MEMORY_CONFIG
         mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
         sms = self.spatial_merge_size
 
@@ -1275,11 +1275,12 @@ class TTNNDotsVisionAttention(TTNNModule):
         if buf == ttnn.BufferType.DRAM and dt in (ttnn.bfloat8_b, ttnn.bfloat16):
             return ttnn.experimental.nlp_concat_heads(ctx, memory_config=out_mem)
 
-        ctx_l1 = ttnn.typecast(ctx, ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # ctx_l1 = ttnn.typecast(ctx, ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # ttnn.deallocate(ctx)
+        ctx_gathered = ttnn.experimental.nlp_concat_heads(ctx, memory_config=out_mem)
         ttnn.deallocate(ctx)
-        ctx_gathered = ttnn.experimental.nlp_concat_heads(ctx_l1, memory_config=out_mem)
-        ttnn.deallocate(ctx_l1)
-        return ttnn.typecast(ctx_gathered, ttnn.bfloat16, memory_config=out_mem)
+        return ctx_gathered
+        # return ttnn.typecast(ctx_gathered, ttnn.bfloat16, memory_config=out_mem)
 
     def _get_sdpa_program_config(self, seq_len: int):
         """Chunked SDPA program config for the vision tower.
@@ -1467,6 +1468,10 @@ class TTNNDotsVisionAttention(TTNNModule):
             # of ~626-940 KB/core overflow the 1.4 MB per-core budget).
             # Q,K must be DRAM going INTO SDPA anyway (see SDPA note
             # below).
+            # cos/sin are 25 KB/core each (L1_MEMORY_CONFIG from build()).
+            # Moving them to L1 saves ~50 KB/layer of DRAM reads across
+            # both rotary calls; cost is negligible (50 KB stays in L1
+            # for the lifetime of the rope object).
             q = ttnn.experimental.rotary_embedding(q, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             k = ttnn.experimental.rotary_embedding(k, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -1549,7 +1554,11 @@ class TTNNDotsVisionAttention(TTNNModule):
                 ctx_seg = self._sdpa_padded_with_key_mask(q_seg, k_seg, v_seg, seg_len)
                 ctx_segments.append(ctx_seg)
 
-            ctx = ttnn.concat(ctx_segments, dim=2) if len(ctx_segments) > 1 else ctx_segments[0]
+            ctx = (
+                ttnn.concat(ctx_segments, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+                if len(ctx_segments) > 1
+                else ctx_segments[0]
+            )
 
         ctx = self._concat_heads(ctx)
         o_m = int(ctx.shape[0]) * int(ctx.shape[1]) * int(ctx.shape[2])
