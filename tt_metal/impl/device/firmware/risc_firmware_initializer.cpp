@@ -167,19 +167,18 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
 
         for (tt::ChipId device_id : device_ids) {
             ClearNocData(descriptor_->env_impl(), device_id);
-            // Wait for base FW to reach terminal state on all idle ETH cores before
-            // asserting reset so we don't kill it eth_init()
-            if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
-                for (const auto& eth_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
-                    CoreCoord virtual_core =
-                        cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
-                    if (!wait_for_eth_fw_ready(device_id, virtual_core, 20000)) {
-                        TT_THROW(
-                            "Device {}: eth base firmware not ready on core ({},{}), cannot proceed with reset",
-                            device_id,
-                            virtual_core.x,
-                            virtual_core.y);
-                    }
+            // Wait for base FW to finish its eth_init() on all idle ETH cores before
+            // asserting reset (otherwise we kill it mid-init). Note: postcode is read via the
+            // active-eth HAL slot — on BH the layout matches for both active and idle cores.
+            for (const auto& eth_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
+                CoreCoord virtual_core =
+                    cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+                if (!wait_for_eth_fw_ready(device_id, virtual_core, 20000)) {
+                    TT_THROW(
+                        "Device {}: eth base firmware not ready on core ({},{}), cannot proceed with reset",
+                        device_id,
+                        virtual_core.x,
+                        virtual_core.y);
                 }
             }
             reset_cores(device_id);
@@ -328,7 +327,7 @@ void RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(tt::ChipId d
             llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core);
         }
         tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
-        cluster_.assert_risc_reset_at_core_immediate(tt_cxy_pair(device_id, virtual_core), reset_val);
+        cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
     }
 }
 
@@ -339,7 +338,7 @@ void RiscFirmwareInitializer::assert_tensix_workers_impl(tt::ChipId device_id) {
             CoreCoord logical_core(x, y);
             CoreCoord worker_core =
                 cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
-            cluster_.assert_risc_reset_at_core_immediate(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
+            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
         }
     }
 }
@@ -348,7 +347,7 @@ void RiscFirmwareInitializer::assert_inactive_ethernet_cores(tt::ChipId device_i
     for (const auto& logical_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-        cluster_.assert_risc_reset_at_core_immediate(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+        cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
     }
 }
 
@@ -358,8 +357,7 @@ void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
         const auto& soc_d = cluster_.get_soc_desc(device_id);
         for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
             CoreCoord virtual_core{dram_core.x, dram_core.y};
-            cluster_.assert_risc_reset_at_core_immediate(
-                tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
         }
     }
 }
@@ -742,14 +740,22 @@ void RiscFirmwareInitializer::erisc_send_exit_signal(tt::ChipId device_id, CoreC
     }
 }
 
+void RiscFirmwareInitializer::disable_eth_interrupts(tt::ChipId device_id, const CoreCoord& virtual_core) {
+    const uint32_t zero = 0;
+    const auto base = hal_.get_eth_interrupt_mode_base_reg();
+    const auto num_vecs = hal_.get_eth_interrupt_num_vecs();
+    for (uint32_t i = 0; i < num_vecs; i++) {
+        cluster_.write_reg(&zero, tt_cxy_pair(device_id, virtual_core), base + (4 * i));
+    }
+}
+
 bool RiscFirmwareInitializer::wait_for_eth_fw_ready(
     tt::ChipId device_id, const CoreCoord& virtual_core, int timeout_ms) {
     if (cluster_.arch() != ARCH::BLACKHOLE) {
         return true;
     }
     constexpr auto k_sleep_time = std::chrono::microseconds{100};
-    // postcode is the first field of eth_status_t, which is the first field of boot_results_t
-    constexpr uint32_t postcode_addr = tt::umd::blackhole::BOOT_RESULTS_ADDR;
+    const uint32_t postcode_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::POSTCODE);
 
     const auto start_time = std::chrono::steady_clock::now();
 
@@ -1084,7 +1090,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                 reset_val &= ~tt::umd::RiscType::ERISC0;
             }
             if (is_idle_eth or !hal_.get_eth_fw_is_cooperative()) {
-                cluster_.assert_risc_reset_at_core_immediate(tt_cxy_pair(device_id, virtual_core), reset_val);
+                cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
             }
             if (not rtoptions_.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
@@ -1112,19 +1118,20 @@ void RiscFirmwareInitializer::initialize_firmware(
                 cluster_.write_core(data.data(), data.size(), tt_cxy_pair(device_id, virtual_core), ncrisc_halt_addr);
             }
 
+            // Disable ERISC interrupts: base FW interrupts can corrupt PC when we switch to runtime FW.
+            //   - For idle ERISCs, must happen before we write PC and deassert.
+            //   - For active ERISCs, safer if it's done before we switch from base FW to runtime FW.
+            // Ordering: must use write_reg (UC TLB) for both this and fw_launch_addr below — write_core
+            // (WC TLB) can coalesce and re-open the race.
+            // Only applicable to BH; on other archs num_interrupt_vecs is 0.
+            disable_eth_interrupts(device_id, virtual_core);
+
             if (hal_.get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH ||
                 !rtoptions_.get_enable_2_erisc_mode()) {
-                uint32_t zero = 0;
-                const auto interrupt_mode_base = hal_.get_eth_interrupt_mode_base_reg();
-                const auto num_interrupt_vecs = hal_.get_eth_interrupt_num_vecs();
-                for (uint32_t i = 0; i < num_interrupt_vecs; i++) {
-                    cluster_.write_reg(&zero, tt_cxy_pair(device_id, virtual_core), interrupt_mode_base + (4 * i));
-                }
                 cluster_.write_reg(
                     &jit_build_config.fw_launch_addr_value,
                     tt_cxy_pair(device_id, virtual_core),
                     jit_build_config.fw_launch_addr);
-                cluster_.l1_barrier(device_id);
             } else {
                 constexpr uint32_t mailbox_index = 0;
                 tt::llrt::internal_::send_msg_to_eth_mailbox(
@@ -1139,8 +1146,7 @@ void RiscFirmwareInitializer::initialize_firmware(
             break;
         }
         case HalProgrammableCoreType::DRAM: {
-            cluster_.assert_risc_reset_at_core_immediate(
-                tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
             if (not rtoptions_.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
@@ -1329,10 +1335,10 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
                 reset_val |= tt::umd::RiscType::ERISC1;
             }
         }
-        cluster_.deassert_risc_reset_at_core_immediate(tt_cxy_pair(device_id, worker_core), reset_val);
+        cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }
     for (const auto& dram_core : dram_not_done_cores) {
-        cluster_.deassert_risc_reset_at_core_immediate(tt_cxy_pair(device_id, dram_core), tt::umd::RiscType::BRISC);
+        cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), tt::umd::RiscType::BRISC);
     }
 
     log_debug(LogDevice, "Waiting for firmware init complete");

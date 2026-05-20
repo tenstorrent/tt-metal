@@ -139,13 +139,6 @@ public:
         const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start = true) const;
     void assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const;
 
-    // Strict-ordered variants that use write_core_immediate (volatile per-word stores)
-    // instead of the default posted-write (memcpy) path. These prevent the PCIe write-combining
-    // race on Blackhole where a posted deassert can arrive late and clobber firmware's own SR0 write.
-    void deassert_risc_reset_at_core_immediate(
-        const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start = true) const;
-    void assert_risc_reset_at_core_immediate(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const;
-
     void write_dram_vec(
         const void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
     void read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;

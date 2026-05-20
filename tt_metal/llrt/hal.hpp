@@ -117,13 +117,29 @@ enum class FWMailboxMsg : uint8_t {
     RX_LINK_UP,
     // Port Status
     PORT_STATUS,
+    // Postcode
+    POSTCODE,
     // ETH link training status
     TRAIN_STATUS,
     // SerDes reset status
     SERDES_RESET_STATUS,
-    // Live PCS status register address
-    PCS_STATUS_REG,
     // Number of mailbox message types
+    COUNT,
+};
+
+// Hardware debug registers on active ethernet cores.
+// Populated only on archs that expose them (currently BH); callers must check
+// Hal::get_supports_eth_debug_regs() before reading addresses.
+enum class EthDebugReg : uint8_t {
+    // PCS status register
+    PCS_STATUS,
+    // ERISC0 reset PC
+    ERISC0_RESET_PC,
+    // ERISC1 reset PC
+    ERISC1_RESET_PC,
+    // RISC soft reset register
+    RISC_SOFT_RESET,
+    // Number of debug register entries
     COUNT,
 };
 
@@ -157,6 +173,7 @@ private:
     std::vector<DeviceAddr> mem_map_bases_;
     std::vector<uint32_t> mem_map_sizes_;
     std::vector<uint32_t> eth_fw_mailbox_msgs_;
+    std::vector<uint32_t> eth_debug_regs_;
     bool supports_cbs_ = false;
     bool supports_dfbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
@@ -179,7 +196,8 @@ public:
         bool supports_receiving_multicast_cmds,
         dev_msgs::Factory dev_msgs_factory,
         tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory,
-        realtime_profiler_msgs::Factory realtime_profiler_msgs_factory) :
+        realtime_profiler_msgs::Factory realtime_profiler_msgs_factory,
+        std::vector<uint32_t> eth_debug_regs = {}) :
         programmable_core_type_(programmable_core_type),
         core_type_(core_type),
         processor_classes_(std::move(processor_classes)),
@@ -188,6 +206,7 @@ public:
         mem_map_bases_(std::move(mem_map_bases)),
         mem_map_sizes_(std::move(mem_map_sizes)),
         eth_fw_mailbox_msgs_{std::move(eth_fw_mailbox_msgs)},
+        eth_debug_regs_(std::move(eth_debug_regs)),
         supports_cbs_(supports_cbs),
         supports_dfbs_(supports_dfbs),
         supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
@@ -492,7 +511,9 @@ public:
     }
 
     bool get_supports_eth_fw_mailbox() const;
+    bool get_supports_eth_debug_regs() const;
     uint32_t get_eth_fw_mailbox_val(FWMailboxMsg msg) const;
+    uint32_t get_eth_debug_reg_addr(EthDebugReg reg) const;
     uint32_t get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const;
     uint32_t get_eth_fw_mailbox_arg_count() const;
     uint32_t get_eth_fw_mailbox_address(int mailbox_index) const;
@@ -807,6 +828,18 @@ inline uint32_t Hal::get_eth_fw_mailbox_val(FWMailboxMsg msg) const {
     const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
     TT_ASSERT(index < this->core_info_.size());
     return this->core_info_[index].eth_fw_mailbox_msgs_[ttsl::as_underlying_type<FWMailboxMsg>(msg)];
+}
+
+inline bool Hal::get_supports_eth_debug_regs() const {
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    TT_ASSERT(index < this->core_info_.size());
+    return !this->core_info_[index].eth_debug_regs_.empty();
+}
+
+inline uint32_t Hal::get_eth_debug_reg_addr(EthDebugReg reg) const {
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    TT_ASSERT(index < this->core_info_.size());
+    return this->core_info_[index].eth_debug_regs_[ttsl::as_underlying_type<EthDebugReg>(reg)];
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const {

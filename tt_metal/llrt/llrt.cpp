@@ -288,41 +288,43 @@ void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         return;
     }
-    if (get_core_type(device_id, virtual_core) != tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
+    if (!hal.get_supports_eth_debug_regs() ||
+        get_core_type(device_id, virtual_core) != tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
         return;
     }
-    const auto port_status_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::PORT_STATUS);
-    const auto retrain_count_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RETRAIN_COUNT);
-    const auto rx_link_up_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RX_LINK_UP);
-    tt_cxy_pair target{static_cast<size_t>(device_id), virtual_core};
-    uint32_t port_status = 0;
-    tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&port_status, target, port_status_addr);
-    uint32_t retrain_count = 0;
-    tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&retrain_count, target, retrain_count_addr);
-    uint32_t rx_link_up = 0;
-    tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&rx_link_up, target, rx_link_up_addr);
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const tt_cxy_pair target(device_id, virtual_core);
+    auto read_u32 = [&](uint32_t addr) {
+        uint32_t v = 0;
+        cluster.read_reg(&v, target, addr);
+        return v;
+    };
 
-    const auto train_status_addr = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::TRAIN_STATUS);
-    const auto serdes_reset_status_addr = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::SERDES_RESET_STATUS);
-    const auto pcs_status_reg_addr = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::PCS_STATUS_REG);
+    // Bracket all reads with heartbeat samples to detect whether base FW is alive during the dump.
+    const auto heartbeat_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::HEARTBEAT);
+    const uint32_t heartbeat_start = read_u32(heartbeat_addr);
 
-    uint32_t train_status = 0;
-    if (train_status_addr) {
-        tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&train_status, target, train_status_addr);
-    }
-    uint32_t serdes_reset_status = 0;
-    if (serdes_reset_status_addr) {
-        tt::tt_metal::MetalContext::instance().get_cluster().read_reg(
-            &serdes_reset_status, target, serdes_reset_status_addr);
-    }
-    uint32_t pcs_status = 0;
-    if (pcs_status_reg_addr) {
-        tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&pcs_status, target, pcs_status_reg_addr);
-    }
+    const uint32_t port_status = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::PORT_STATUS));
+    const uint32_t retrain_count = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::RETRAIN_COUNT));
+    const uint32_t rx_link_up = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::RX_LINK_UP));
+    const uint32_t train_status = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::TRAIN_STATUS));
+    const uint32_t serdes_reset_status =
+        read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::SERDES_RESET_STATUS));
+    const uint32_t postcode = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::POSTCODE));
+    const uint32_t pcs_status = read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::PCS_STATUS));
+    const uint32_t aerisc_reset_pc = read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::ERISC0_RESET_PC));
+    const uint32_t subordinate_aerisc_reset_pc =
+        read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::ERISC1_RESET_PC));
+    const uint32_t risc_soft_reset = read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::RISC_SOFT_RESET));
+
+    const uint32_t heartbeat_end = read_u32(heartbeat_addr);
+
     log_critical(
         tt::LogMetal,
         "Device {}: Virtual core {}, Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}, "
-        "Train status: {:#x}, PCS status: {:#x}, SerDes reset status: {:#x}",
+        "Train status: {:#x}, PCS status: {:#x}, SerDes reset status: {:#x}, Postcode: {:#x}, "
+        "ERISC0 reset PC: {:#x}, ERISC1 reset PC: {:#x}, RISC soft reset: {:#x}, "
+        "Heartbeat start: {:#x}, Heartbeat end: {:#x}, Heartbeat changed: {}",
         device_id,
         virtual_core.str(),
         port_status,
@@ -330,7 +332,14 @@ void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual
         rx_link_up,
         train_status,
         pcs_status,
-        serdes_reset_status);
+        serdes_reset_status,
+        postcode,
+        aerisc_reset_pc,
+        subordinate_aerisc_reset_pc,
+        risc_soft_reset,
+        heartbeat_start,
+        heartbeat_end,
+        heartbeat_start != heartbeat_end);
 }
 
 }  // namespace
@@ -445,7 +454,7 @@ void send_msg_to_eth_mailbox(
     const auto done_message = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_DONE);
 
     // Check mailbox is empty/ready
-    tt_cxy_pair target{static_cast<size_t>(device_id), virtual_core};
+    tt_cxy_pair target(device_id, virtual_core);
     uint32_t initial_mailbox_val = 0;
     tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&initial_mailbox_val, target, mailbox_addr);
     uint32_t msg_status = initial_mailbox_val & status_mask;
